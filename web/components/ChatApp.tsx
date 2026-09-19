@@ -41,6 +41,7 @@ import {
   writeLastModel,
 } from "../lib/models";
 import ModelPicker from "./ModelPicker";
+import { JieboMark as Mark } from "./JieboMark";
 import { IconAgent, IconAsk, IconPlan, IconShield, IconWrite } from "./chromeIcons";
 
 type ToolCall = {
@@ -278,16 +279,6 @@ const EMPTY_STARTERS = [
   "用 Canvas 概括这个仓库",
 ];
 
-function Mark({ className = "logo" }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="8" fill="#1A4F41" />
-      <rect x="6" y="6" width="13" height="15" rx="3.2" fill="#F3EEE4" />
-      <rect x="13" y="11" width="13" height="15" rx="3.2" fill="#C4A36A" />
-      <circle cx="16" cy="16" r="1.85" fill="#1A4F41" />
-    </svg>
-  );
-}
 
 function attachedFiles(text: string) {
   return [...text.matchAll(/@([^\s]+)/g)].map((match) => match[1]);

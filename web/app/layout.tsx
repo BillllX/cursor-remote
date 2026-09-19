@@ -13,7 +13,20 @@ const sans = Noto_Sans_SC({
 export const metadata: Metadata = {
   title: "接驳",
   description: "网页说话，远端动手。",
-  icons: { icon: "/favicon.svg" },
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "48x48" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: "接驳",
+    statusBarStyle: "default",
+  },
 };
 
 export const viewport: Viewport = {

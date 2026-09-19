@@ -105,6 +105,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   height: 22px;
   display: block;
   flex: none;
+  border-radius: 25%;
+  object-fit: cover;
 }
 
 .brand-title {
