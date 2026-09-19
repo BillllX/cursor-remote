@@ -1,0 +1,33 @@
+[Unit]
+Description=cursor-remote gateway (Cursor SDK local runtime)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=cursor-remote
+Group=cursor-remote
+WorkingDirectory=/opt/cursor-remote-gateway
+EnvironmentFile=/etc/cursor-remote/gateway.env
+Environment=NODE_ENV=production
+Environment=PATH=/var/lib/cursor-remote/.local/bin:/opt/node-v22/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/var/lib/cursor-remote
+Environment=GATEWAY_HOST=127.0.0.1
+Environment=GATEWAY_PORT=8787
+Environment=GATEWAY_PROXY_WEB=0
+Environment=CURSOR_REMOTE_CWD=/var/lib/cursor-remote/workspace
+Environment=CURSOR_REMOTE_STATE_DIR=/var/lib/cursor-remote
+ExecStart=/opt/node-v22/bin/node /opt/cursor-remote-gateway/node_modules/tsx/dist/cli.mjs /opt/cursor-remote-gateway/gateway/src/index.ts
+Restart=always
+RestartSec=5
+MemoryMax=4G
+MemorySwapMax=512M
+OOMPolicy=kill
+OOMScoreAdjust=200
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

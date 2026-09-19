@@ -1,0 +1,25 @@
+{
+  "name": "cursor-remote",
+  "private": true,
+  "description": "Cursor-like web chat. The VPS gateway runs Cursor SDK against a local workspace.",
+  "workspaces": [
+    "web",
+    "gateway"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "PATH=/usr/local/bin:$PATH concurrently -n web,gateway -c cyan,magenta \"npm run dev -w web\" \"npm run dev -w gateway\"",
+    "build": "PATH=/usr/local/bin:$PATH npm run build -w web && PATH=/usr/local/bin:$PATH npm run build -w gateway",
+    "start": "PATH=/usr/local/bin:$PATH concurrently -n web,gateway -c cyan,magenta \"npm run start -w web\" \"npm run start -w gateway\"",
+    "start:gateway": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH bash scripts/run-gateway.sh",
+    "gateway:install": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH bash scripts/install-gateway-keepalive.sh",
+    "tunnel": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH bash scripts/tunnel.sh",
+    "remote-tunnel": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH bash scripts/remote-tunnel.sh",
+    "remote-tunnel:install": "PATH=/opt/homebrew/bin:/usr/local/bin:$PATH bash scripts/install-tunnel-keepalive.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

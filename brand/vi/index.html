@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>接驳 · 视觉识别手册</title>
+  <link rel="icon" href="./favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./tokens.css" />
+  <style>
+    html, body { margin: 0; background: var(--jiebo-paper); color: var(--jiebo-ink); font-family: var(--font-ui); }
+    body { font-size: 16px; line-height: 1.7; }
+    a { color: var(--jiebo-pine); }
+    .page { max-width: 1120px; margin: 0 auto; padding: 48px 32px 96px; }
+    .kicker { font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--jiebo-ink-2); font-weight: 500; }
+    h1, h2, h3 { font-family: var(--font-display); font-weight: 700; line-height: 1.2; margin: 0; }
+    h1 { font-size: 72px; letter-spacing: -0.03em; }
+    h2 { font-size: 32px; margin-bottom: 12px; }
+    h3 { font-size: 20px; }
+    p { margin: 0 0 1em; color: var(--jiebo-ink); }
+    .lede { font-size: 20px; max-width: 38em; color: var(--jiebo-ink-2); }
+    section { padding: 72px 0; border-top: 1px solid var(--jiebo-line); }
+    section:first-of-type { border-top: 0; }
+    .cover { min-height: 88vh; display: grid; grid-template-rows: auto 1fr auto; padding: 24px 0 48px; border-top: 0; }
+    .cover-top { display: flex; justify-content: space-between; align-items: center; }
+    .cover-mark { width: 56px; height: 56px; }
+    .cover-center { display: flex; flex-direction: column; justify-content: end; gap: 24px; padding: 64px 0; }
+    .cover-foot { display: flex; justify-content: space-between; color: var(--jiebo-ink-2); font-size: 13px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+    .grid-6 { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+    .card { background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 16px; padding: 24px; }
+    .muted { color: var(--jiebo-ink-2); }
+    .small { font-size: 13px; line-height: 1.6; }
+    .swatch { border-radius: 16px; overflow: hidden; border: 1px solid var(--jiebo-line); min-height: 140px; display: flex; flex-direction: column; }
+    .swatch-chip { flex: 1; min-height: 88px; }
+    .swatch-meta { background: var(--jiebo-white); padding: 12px 14px; font-size: 13px; }
+    .swatch-meta strong { display: block; font-weight: 500; }
+    .logo-tile { background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 16px; min-height: 180px; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .logo-tile.pine { background: var(--jiebo-pine); color: var(--jiebo-paper); }
+    .logo-tile.ink { background: var(--jiebo-ink); color: var(--jiebo-paper); }
+    .logo-tile.mist { background: var(--jiebo-mist); }
+    .logo-tile svg { width: 72px; height: 72px; }
+    .lockup svg { width: 220px; height: auto; }
+    .dont { background: #f7ece8; border-color: #e4cfc6; }
+    .do { background: #e9f0ea; border-color: #cfe0d3; }
+    .icon-cell { background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 12px; padding: 16px 8px 12px; text-align: center; }
+    .icon-cell svg { width: 24px; height: 24px; color: var(--jiebo-ink); }
+    .icon-cell span { display: block; margin-top: 8px; font-size: 11px; color: var(--jiebo-ink-2); }
+    .type-row { padding: 20px 0; border-bottom: 1px solid var(--jiebo-line); display: grid; grid-template-columns: 140px 1fr; gap: 16px; align-items: baseline; }
+    .type-row .meta { font-size: 12px; color: var(--jiebo-ink-2); }
+    .ui { display: grid; grid-template-columns: 220px 1fr; height: 520px; border: 1px solid var(--jiebo-line); border-radius: 16px; overflow: hidden; background: var(--jiebo-paper); }
+    .ui-side { background: var(--jiebo-mist); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .ui-brand { display: flex; align-items: center; gap: 10px; padding: 6px 4px 14px; }
+    .ui-brand svg { width: 28px; height: 28px; }
+    .ui-brand .t { font-family: var(--font-display); font-size: 18px; font-weight: 700; line-height: 1; }
+    .ui-brand .s { font-size: 11px; color: var(--jiebo-ink-2); letter-spacing: 0.08em; }
+    .ui-item, .ui-new { height: 36px; border-radius: 10px; display: flex; align-items: center; padding: 0 10px; font-size: 13px; }
+    .ui-new { background: var(--jiebo-pine); color: var(--jiebo-paper); }
+    .ui-item.active { background: var(--jiebo-white); }
+    .ui-main { display: flex; flex-direction: column; background: var(--jiebo-paper); }
+    .ui-thread { flex: 1; padding: 28px 32px; display: flex; flex-direction: column; gap: 16px; }
+    .bubble { max-width: 70%; padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.55; }
+    .bubble.user { align-self: flex-end; background: var(--bg-user); }
+    .bubble.bot { align-self: flex-start; }
+    .ui-composer { margin: 0 20px 20px; background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 16px; padding: 12px 12px 12px 16px; display: flex; align-items: end; gap: 12px; }
+    .ui-composer .ph { flex: 1; color: var(--dim); font-size: 14px; padding-bottom: 6px; }
+    .send { width: 36px; height: 36px; border-radius: 10px; background: var(--jiebo-pine); color: var(--jiebo-paper); display: grid; place-items: center; }
+    .send svg { width: 16px; height: 16px; }
+    .rule li { margin: 0 0 8px; }
+    .name-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .name-table th, .name-table td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--jiebo-line); vertical-align: top; }
+    .name-table th { color: var(--jiebo-ink-2); font-weight: 500; font-size: 12px; letter-spacing: 0.08em; }
+    .token { font-family: var(--font-mono); font-size: 12px; }
+    .lib-tag { display: inline-block; font-size: 11px; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 999px; margin-right: 6px; }
+    .lib-tag.use { background: #e9f0ea; color: var(--jiebo-pine-deep); }
+    .lib-tag.ref { background: var(--jiebo-mist); color: var(--jiebo-ink-2); }
+    .lib-tag.no { background: #f7ece8; color: var(--jiebo-clay); }
+    .specimen { background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 16px; padding: 20px; }
+    .specimen h3 { margin-bottom: 14px; font-size: 15px; font-family: var(--font-ui); font-weight: 500; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .btn { height: var(--control-h); padding: 0 14px; border-radius: 12px; border: 1px solid transparent; font: 500 13px/1 var(--font-ui); cursor: default; }
+    .btn-primary { background: var(--jiebo-pine); color: var(--jiebo-paper); }
+    .btn-ghost { background: transparent; border-color: var(--jiebo-line); color: var(--jiebo-ink); }
+    .btn-soft { background: #dce8e3; color: var(--jiebo-pine-deep); }
+    .btn-brass { background: var(--jiebo-brass); color: var(--jiebo-ink); }
+    .btn-danger { background: transparent; border-color: #e4cfc6; color: var(--jiebo-danger); }
+    .field { height: var(--control-h); min-width: 180px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--jiebo-line); background: var(--jiebo-white); color: var(--dim); font-size: 13px; display: flex; align-items: center; }
+    .field:focus-within { outline: none; box-shadow: var(--focus); border-color: var(--jiebo-pine-soft); }
+    .chip { height: 28px; padding: 0 10px; border-radius: 999px; background: var(--jiebo-mist); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+    .chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--jiebo-pine); display: inline-block; }
+    .badge { height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; }
+    .badge-ok { background: #e9f0ea; color: var(--jiebo-ok); }
+    .badge-run { background: #efe4c8; color: #8a6a2a; }
+    .badge-err { background: #f7ece8; color: var(--jiebo-danger); }
+    .tabs { display: flex; gap: 4px; background: var(--jiebo-mist); padding: 4px; border-radius: 12px; }
+    .tab { height: 28px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--jiebo-ink-2); display: flex; align-items: center; }
+    .tab.on { background: var(--jiebo-white); color: var(--jiebo-ink); }
+    .switch { width: 40px; height: 24px; border-radius: 999px; background: var(--jiebo-pine); position: relative; }
+    .switch::after { content: ""; width: 18px; height: 18px; border-radius: 50%; background: var(--jiebo-white); position: absolute; top: 3px; right: 3px; }
+    .switch.off { background: #cfc7b8; }
+    .switch.off::after { right: auto; left: 3px; }
+    .tool { border: 1px solid var(--jiebo-line); border-radius: 12px; padding: 12px 14px; min-width: 220px; }
+    .tool .k { font-size: 11px; color: var(--jiebo-ink-2); letter-spacing: 0.08em; }
+    .tool .v { font-size: 13px; margin-top: 4px; }
+    .menu { width: 200px; background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 12px; padding: 6px; }
+    .menu div { height: 32px; border-radius: 8px; padding: 0 10px; font-size: 13px; display: flex; align-items: center; }
+    .menu div:hover, .menu .on { background: var(--jiebo-mist); }
+    .dialog { width: 280px; background: var(--jiebo-white); border: 1px solid var(--jiebo-line); border-radius: 16px; padding: 18px; }
+    .dialog .ttl { font-family: var(--font-display); font-size: 18px; margin-bottom: 6px; }
+    .links a { display: inline-block; margin-right: 14px; font-size: 13px; }
+    @media (max-width: 800px) {
+      h1 { font-size: 44px; }
+      .grid-2, .grid-3, .grid-4, .grid-6, .ui, .type-row { grid-template-columns: 1fr; }
+      .ui { height: auto; }
+      .page { padding: 24px 18px 64px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="cover">
+      <div class="cover-top">
+        <div class="kicker">Visual Identity · v1</div>
+        <svg class="cover-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#1A4F41"/>
+          <rect x="6" y="6" width="13" height="15" rx="3.2" fill="#F3EEE4"/>
+          <rect x="13" y="11" width="13" height="15" rx="3.2" fill="#C4A36A"/>
+          <circle cx="16" cy="16" r="1.85" fill="#1A4F41"/>
+        </svg>
+      </div>
+      <div class="cover-center">
+        <div class="kicker">品牌手册</div>
+        <h1>接驳</h1>
+        <p class="lede">网页说话，远端动手。这一套 VI 把产品从 Cursor 聊天窗换皮，收成一个可独立对外的中文品牌，供咨询、路演和后续 UI 替换使用。</p>
+      </div>
+      <div class="cover-foot">
+        <span>Jiebo · 远端工作台</span>
+        <span>2026.09 · 草案</span>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">01 定位</div>
+      <h2>它是什么</h2>
+      <p class="lede">接驳是远端工作台。人在浏览器里交代，机器在工作区里改文件、跑命令。浏览器只是席位，不是 IDE。</p>
+      <div class="grid-3" style="margin-top:32px">
+        <div class="card">
+          <h3>沉稳</h3>
+          <p class="small muted">像车间的接驳台，不像硅谷聊天玩具。少装饰，不发光，不堆渐变。</p>
+        </div>
+        <div class="card">
+          <h3>好上手</h3>
+          <p class="small muted">中文先于英文。短句、口语、不把模型名当卖点。</p>
+        </div>
+        <div class="card">
+          <h3>可主张</h3>
+          <p class="small muted">图形、色、字、文案都能独立主张版权，不靠任何现成产品的外形来解释自己。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">02 命名</div>
+      <h2>怎么叫，什么不能叫</h2>
+      <table class="name-table">
+        <tr><th>层级</th><th>用法</th><th>写法</th></tr>
+        <tr><td>主品牌</td><td>产品、窗口标题、咨询材料</td><td>接驳</td></tr>
+        <tr><td>英文名</td><td>域名、代码、对外英文</td><td>Jiebo</td></tr>
+        <tr><td>品类名</td><td>副标题、介绍句</td><td>远端工作台</td></tr>
+        <tr><td>一句</td><td>空状态、封面</td><td>网页说话，远端动手。</td></tr>
+        <tr><td>现有域名</td><td>可继续用，不再当品牌</td><td>aiagentswitcher.com，路径改为 /jiebo</td></tr>
+      </table>
+      <div class="grid-2" style="margin-top:28px">
+        <div class="card do">
+          <h3>可以说</h3>
+          <p class="small">工作区、席位、接上、动手、改文件、跑命令、这台机器。</p>
+        </div>
+        <div class="card dont">
+          <h3>不可以说</h3>
+          <p class="small">Cursor、Cursor Remote、Claude、GPT、Copilot、Agent 堆砌、网页 IDE、复刻、克隆。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">03 标志</div>
+      <h2>榫卯接扣</h2>
+      <p class="lede">两块错位的圆角板扣在一起，中间一枚销。意思是两边接上：浏览器这一头，工作区那一头。不是星星，不是光标，不是三角形。</p>
+      <div class="grid-4" style="margin-top:28px">
+        <div class="logo-tile mist">
+          <svg viewBox="0 0 32 32"><rect x="3" y="4" width="16" height="18" rx="4" fill="#1A4F41"/><rect x="13" y="10" width="16" height="18" rx="4" fill="#1A4F41"/></svg>
+        </div>
+        <div class="logo-tile">
+          <svg viewBox="0 0 32 32"><rect x="3" y="4" width="16" height="18" rx="4" fill="#1A4F41"/><rect x="13" y="10" width="16" height="18" rx="4" fill="#C4A36A"/><circle cx="16" cy="16" r="2.1" fill="#F3EEE4"/></svg>
+        </div>
+        <div class="logo-tile pine">
+          <svg viewBox="0 0 32 32"><rect x="6" y="6" width="13" height="15" rx="3.2" fill="#F3EEE4"/><rect x="13" y="11" width="13" height="15" rx="3.2" fill="#C4A36A"/><circle cx="16" cy="16" r="1.85" fill="#1A4F41"/></svg>
+        </div>
+        <div class="logo-tile ink">
+          <svg viewBox="0 0 32 32"><rect x="3" y="4" width="16" height="18" rx="4" fill="#F3EEE4"/><rect x="13" y="10" width="16" height="18" rx="4" fill="#F3EEE4"/></svg>
+        </div>
+      </div>
+      <p class="small muted" style="margin-top:12px">从左到右：单色标、双色标、应用图标、反白标。</p>
+      <div class="grid-2" style="margin-top:28px">
+        <div class="logo-tile lockup" style="justify-content:flex-start">
+          <svg viewBox="0 0 280 64" width="260">
+            <rect x="4" y="8" width="28" height="32" rx="7" fill="#1A4F41"/>
+            <rect x="12" y="16" width="12" height="14" rx="3" fill="#F3EEE4"/>
+            <rect x="18" y="21" width="12" height="14" rx="3" fill="#C4A36A"/>
+            <circle cx="22" cy="28" r="1.6" fill="#1A4F41"/>
+            <text x="48" y="30" fill="#1C1916" font-family="Noto Serif SC, Songti SC, serif" font-size="22" font-weight="700">接驳</text>
+            <text x="48" y="48" fill="#5C574F" font-family="Noto Sans SC, PingFang SC, sans-serif" font-size="11" letter-spacing="0.12em">远端工作台</text>
+          </svg>
+        </div>
+        <div class="card">
+          <h3>使用规则</h3>
+          <ul class="small muted rule">
+            <li>保护空间 = 标宽的 1/4，四周留白。</li>
+            <li>最小尺寸：标 16px，应用图标 28px，横锁 120px。</li>
+            <li>不要旋转、不要加描边、不要把两块板对齐成一个矩形。</li>
+            <li>不要改成四角星、火花、鼠标箭头。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">04 色彩</div>
+      <h2>暖纸与松绿</h2>
+      <p class="lede">默认浅色。Cursor 是冷黑加冰蓝；接驳是牙白纸、松烟绿、赭金。强调色走绿，不走蓝。</p>
+      <div class="grid-4" style="margin-top:28px">
+        <div class="swatch"><div class="swatch-chip" style="background:#1A4F41"></div><div class="swatch-meta"><strong>松绿 Pine</strong><span class="token">#1A4F41 · --jiebo-pine</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#C4A36A"></div><div class="swatch-meta"><strong>赭金 Brass</strong><span class="token">#C4A36A · --jiebo-brass</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#F3EEE4"></div><div class="swatch-meta"><strong>牙白 Paper</strong><span class="token">#F3EEE4 · --jiebo-paper</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#1C1916"></div><div class="swatch-meta"><strong>松烟 Ink</strong><span class="token">#1C1916 · --jiebo-ink</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#E7E1D4"></div><div class="swatch-meta"><strong>雾色 Mist</strong><span class="token">#E7E1D4 · --jiebo-mist</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#A35C3C"></div><div class="swatch-meta"><strong>赭石 Clay</strong><span class="token">#A35C3C · --jiebo-clay</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#2F7D4A"></div><div class="swatch-meta"><strong>成 OK</strong><span class="token">#2F7D4A · --jiebo-ok</span></div></div>
+        <div class="swatch"><div class="swatch-chip" style="background:#B42318"></div><div class="swatch-meta"><strong>警 Danger</strong><span class="token">#B42318 · --jiebo-danger</span></div></div>
+      </div>
+      <div class="grid-2" style="margin-top:20px">
+        <div class="card do"><h3>要靠近</h3><p class="small">矿物色、纸、木头、铜销。浅色工作面。夜间模式用暖黑 #141512，不是 #181818。</p></div>
+        <div class="card dont"><h3>要避开</h3><p class="small">#181818 + #88c0ff（Cursor）、#10A37F（ChatGPT）、#D97757（Claude）、#0052D9（腾讯蓝）、#07C160（微信绿）。</p></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">05 字体</div>
+      <h2>宋为名，黑为用</h2>
+      <div class="type-row"><div class="meta">品牌名 / 封面<br>Noto Serif SC 700</div><div style="font-family:var(--font-display);font-size:48px;font-weight:700">接驳</div></div>
+      <div class="type-row"><div class="meta">标题<br>Noto Serif SC 700 · 32</div><div style="font-family:var(--font-display);font-size:32px;font-weight:700">网页说话，远端动手</div></div>
+      <div class="type-row"><div class="meta">正文 / UI<br>Noto Sans SC 400 · 16</div><div>在浏览器里交代任务，工作区里的机器去改文件、跑命令。</div></div>
+      <div class="type-row"><div class="meta">代码<br>Noto Sans Mono 13</div><div class="token">ws://host/jiebo/bridge</div></div>
+      <p class="small muted" style="margin-top:16px">不用 Inter、Geist、SF Pro 当品牌字。UI 回退 PingFang SC 可以，但标题必须是宋体。</p>
+    </section>
+
+    <section>
+      <div class="kicker">06 图标</div>
+      <h2>二十四栅格，圆头粗线</h2>
+      <p class="lede">线宽 1.75，圆角端，留 2px 边。不填色、不用火花、不用 Cursor 那套细线图标。</p>
+      <div class="grid-6" style="margin-top:28px">
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span>新会话</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/></svg><span>会话</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h6l2 2h8v8H4V8z"/></svg><span>工作区</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M8 12h8M12 8v8"/><rect x="5" y="5" width="14" height="14" rx="3"/></svg><span>画布</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 10l3 2-3 2M13 14h3"/></svg><span>终端</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M16 8l4 4-4 4M8 8l-4 4 4 4"/></svg><span>接上</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M8 12h8"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="12" r="2.2"/></svg><span>发送</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M14 8v7a4 4 0 11-8 0V7a3 3 0 016 0v8"/></svg><span>附件</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M6 8h12M9 5v6M6 16h12M15 13v6"/></svg><span>设置</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="10" cy="10" r="5.5"/><path d="M14.5 14.5L20 20"/></svg><span>搜索</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M9 7V5h10v14H9v-2"/><path d="M13 12H4m0 0l3-3M4 12l3 3"/></svg><span>退出</span></div>
+        <div class="icon-cell"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M8 8h8M8 12h5"/></svg><span>文件</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">07 界面</div>
+      <h2>浅席，不是暗 IDE</h2>
+      <p class="lede">侧栏雾色，主面牙白，用户气泡淡松绿，发送键是松绿方钮。这是接驳的工作面，不是 Cursor 的聊天窗。</p>
+      <div class="ui" style="margin-top:28px">
+        <aside class="ui-side">
+          <div class="ui-brand">
+            <svg viewBox="0 0 32 32">
+              <rect width="32" height="32" rx="8" fill="#1A4F41"/>
+              <rect x="6" y="6" width="13" height="15" rx="3.2" fill="#F3EEE4"/>
+              <rect x="13" y="11" width="13" height="15" rx="3.2" fill="#C4A36A"/>
+              <circle cx="16" cy="16" r="1.85" fill="#1A4F41"/>
+            </svg>
+            <div>
+              <div class="t">接驳</div>
+              <div class="s">远端工作台</div>
+            </div>
+          </div>
+          <div class="ui-new">新会话</div>
+          <div class="ui-item active">看一下项目结构</div>
+          <div class="ui-item">把构建错误修掉</div>
+          <div class="ui-item">整理发布说明</div>
+        </aside>
+        <div class="ui-main">
+          <div class="ui-thread">
+            <div class="bubble user">看一下这个项目的结构，用中文说。</div>
+            <div class="bubble bot">工作区是一个远端席位。网页只发话，改文件和跑命令都在这台机器上完成。</div>
+          </div>
+          <div class="ui-composer">
+            <div class="ph">交代要做的事</div>
+            <div class="send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 12h8"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="12" r="2.2"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="grid-3" style="margin-top:16px">
+        <div class="card small"><strong>圆角</strong><br>控件 12，卡片 16，不要满屏 8px 方块。</div>
+        <div class="card small"><strong>夜间</strong><br>暖黑 #141512，强调色改松绿浅号 #8FBFB0。</div>
+        <div class="card small"><strong>动效</strong><br>短、线性、不弹。不做光标眨眼和星闪。</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">08 规避</div>
+      <h2>咨询材料里不要出现</h2>
+      <div class="grid-2">
+        <div class="card dont">
+          <h3>图形</h3>
+          <p class="small">四角星 / 火花、旋转菱形、鼠标箭头、VS Code 四格、ChatGPT 绿点、Claude 星芒。</p>
+        </div>
+        <div class="card dont">
+          <h3>界面</h3>
+          <p class="small">近黑侧栏 + 冰蓝链接、Composer 黑洞、Agent 小字、Cursor 式空状态三星标。</p>
+        </div>
+        <div class="card dont">
+          <h3>文案</h3>
+          <p class="small">产品名、仓库名、窗口标题、路径 /cursor-remote、环境变量展示里带 Cursor。</p>
+        </div>
+        <div class="card dont">
+          <h3>邻近品牌</h3>
+          <p class="small">也不要看起来像飞书、微信、腾讯会议或元宝。主色不用腾讯蓝、微信绿。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">09 组件库</div>
+      <h2>借用行为，不借用皮</h2>
+      <p class="lede">网上现成的库分三层：无样式行为、中文组件清单、气质参考。接驳自己出皮。装谁的默认主题，咨询材料就会长成谁家的产品。</p>
+
+      <table class="name-table" style="margin-top:8px">
+        <tr><th>层</th><th>选用</th><th>做法</th></tr>
+        <tr>
+          <td><span class="lib-tag use">采用</span>行为</td>
+          <td><a href="https://base-ui.com/" target="_blank" rel="noreferrer">Base UI</a> · <span class="token">@base-ui/react</span> · MIT</td>
+          <td>Radix 原班人马的后继，无样式、可访问。Dialog / Menu / Popover / Tabs / Switch / Tooltip / Combobox / Accordion / Toast。直接用它，不要再套 shadcn 默认皮。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag use">采用</span>图标</td>
+          <td><a href="https://phosphoricons.com/" target="_blank" rel="noreferrer">Phosphor Icons</a> · MIT</td>
+          <td>Regular 字重，线宽当 token。Lucide 是 shadcn / 多数 AI 编程产品的默认图标，避开。品牌关键符号（接扣、发送）仍用自制 SVG。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag ref">对照</span>清单</td>
+          <td><a href="https://ant.design/components/overview-cn/" target="_blank" rel="noreferrer">Ant Design 6</a></td>
+          <td>中文最全的企业组件地图：Mentions、Upload、Tree、Empty、Message、Form。只对照覆盖面和中文命名，不启用默认蓝 <span class="token">#1677FF</span>。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag ref">对照</span>咨询</td>
+          <td><a href="https://tdesign.tencent.com/react/overview" target="_blank" rel="noreferrer">TDesign React</a></td>
+          <td>腾讯开源企业库，组件分类和 API 习惯可对照。默认皮肤一眼就是腾讯内部产品，咨询材料里不要装、不要截图默认主题。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag ref">参考</span>API</td>
+          <td><a href="https://park-ui.com/docs/theming" target="_blank" rel="noreferrer">Park UI</a> · Ark + Panda · MIT</td>
+          <td>变体模型可抄：solid / subtle / surface / outline / plain。色板用的是 Radix Colors，视觉不要跟。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag ref">参考</span>气质</td>
+          <td><a href="https://ui.bpdm.dev" target="_blank" rel="noreferrer">bpdm/ui</a> 的 paper / mist</td>
+          <td>暖纸浅色、CSS 变量换肤，和接驳最近。尚在 0.1，周下载百余，且默认 Lucide，只看不装。</td>
+        </tr>
+        <tr>
+          <td><span class="lib-tag no">不用</span>皮肤</td>
+          <td>shadcn/ui、Arco、Semi、Ant 默认主题、TDesign 默认主题、assistant-ui</td>
+          <td>不是不能用它们的代码思路，是不能带着它们的默认长相进咨询材料。</td>
+        </tr>
+      </table>
+
+      <p class="links" style="margin:20px 0 8px">
+        <a href="https://base-ui.com/" target="_blank" rel="noreferrer">base-ui.com</a>
+        <a href="https://phosphoricons.com/" target="_blank" rel="noreferrer">phosphoricons.com</a>
+        <a href="https://ant.design/components/overview-cn/" target="_blank" rel="noreferrer">Ant 组件总览</a>
+        <a href="https://tdesign.tencent.com/react/overview" target="_blank" rel="noreferrer">TDesign 概览</a>
+        <a href="https://park-ui.com/docs/theming" target="_blank" rel="noreferrer">Park 主题</a>
+        <a href="https://ui.bpdm.dev" target="_blank" rel="noreferrer">bpdm paper</a>
+      </p>
+
+      <h2 style="margin-top:48px">接驳要哪些件</h2>
+      <p class="lede">产品是远端工作台，不是中后台。v1 只做席位里真正出现的东西，其余等用到再从 Ant / TDesign 清单里补。</p>
+      <table class="name-table">
+        <tr><th>级别</th><th>组件</th><th>行为来源</th></tr>
+        <tr><td>原子</td><td>Button、Input、Textarea、Switch、Badge、Spinner、Tooltip、Icon</td><td>Base UI Switch / Tooltip；其余自绘</td></tr>
+        <tr><td>分子</td><td>Composer、ChatBubble、FileChip、ToolCard、SidebarItem、Tabs、Menu、Dialog、Empty</td><td>Base UI Tabs / Menu / Dialog</td></tr>
+        <tr><td>席位</td><td>Thread、WorkspaceTree、CanvasHost、Login</td><td>自研；树对照 Ant Tree / TDesign Tree，皮仍是接驳</td></tr>
+      </table>
+
+      <h2 style="margin-top:48px">标本</h2>
+      <p class="lede">下面这些就是接驳组件库的长相。圆角 12、松绿主钮、雾色分段、没有冰蓝、没有四角星。</p>
+      <div class="grid-2" style="margin-top:24px">
+        <div class="specimen">
+          <h3>按钮 Button</h3>
+          <div class="row">
+            <button class="btn btn-primary" type="button">新会话</button>
+            <button class="btn btn-soft" type="button">接上</button>
+            <button class="btn btn-ghost" type="button">取消</button>
+            <button class="btn btn-brass" type="button">次要</button>
+            <button class="btn btn-danger" type="button">删除</button>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3>输入 Input / Composer</h3>
+          <div class="row">
+            <div class="field">交代要做的事</div>
+            <button class="btn btn-primary" type="button">发送</button>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3>分段 Tabs · 开关 Switch</h3>
+          <div class="row">
+            <div class="tabs"><div class="tab on">会话</div><div class="tab">工作区</div><div class="tab">画布</div></div>
+            <div class="switch" title="开"></div>
+            <div class="switch off" title="关"></div>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3>标记 Badge · 碎片 Chip</h3>
+          <div class="row">
+            <span class="badge badge-ok">已完成</span>
+            <span class="badge badge-run">改文件</span>
+            <span class="badge badge-err">失败</span>
+            <span class="chip"><i></i>src/app/page.tsx</span>
+            <span class="chip"><i></i>gateway.env</span>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3>工具卡 ToolCard</h3>
+          <div class="row">
+            <div class="tool"><div class="k">READ</div><div class="v">brand/vi/tokens.css</div></div>
+            <div class="tool"><div class="k">SHELL</div><div class="v">npm run dev</div></div>
+          </div>
+        </div>
+        <div class="specimen">
+          <h3>菜单 Menu · 对话框 Dialog</h3>
+          <div class="row" style="align-items:flex-start">
+            <div class="menu">
+              <div class="on">新会话</div>
+              <div>打开工作区</div>
+              <div>退出</div>
+            </div>
+            <div class="dialog">
+              <div class="ttl">删掉这条会话？</div>
+              <p class="small muted">只从这台席位拿掉，工作区文件不动。</p>
+              <div class="row"><button class="btn btn-ghost" type="button">留下</button><button class="btn btn-danger" type="button">删除</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kicker">10 落地</div>
+      <h2>这一版交什么</h2>
+      <table class="name-table">
+        <tr><th>文件</th><th>用途</th></tr>
+        <tr><td class="token">brand/vi/index.html</td><td>本手册，咨询可直接打开</td></tr>
+        <tr><td class="token">logo-mark.svg / logo-mark-color.svg</td><td>单色标、双色标</td></tr>
+        <tr><td class="token">app-icon.svg / favicon.svg</td><td>应用图标与站点图标</td></tr>
+        <tr><td class="token">lockup.svg / wordmark.svg</td><td>横锁与字标</td></tr>
+        <tr><td class="token">tokens.css</td><td>色、字、控件高度、焦点环</td></tr>
+        <tr><td class="token">icons.svg</td><td>自制关键图标</td></tr>
+      </table>
+      <p class="lede" style="margin-top:28px">工程上下一步：<span class="token">@base-ui/react</span> + <span class="token">@phosphor-icons/react</span>，皮肤只吃这套 token。名如果要改，先改手册，再动界面。</p>
+    </section>
+  </div>
+</body>
+</html>

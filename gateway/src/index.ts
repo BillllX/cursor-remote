@@ -1,0 +1,3681 @@
+import { execFileSync } from "node:child_process";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { basename, dirname, relative, resolve } from "node:path";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import type { Duplex } from "node:stream";
+import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
+import { WebSocketServer, WebSocket } from "ws";
+import type { AgentMode, ClientMessage, HistoryTurn, PreviewKind, ServerMessage } from "../../shared/protocol.ts";
+import {
+  buildCrewAgents,
+  crewModelOf,
+  crewRoleOf,
+  isCrewRole,
+  isCrewToolName,
+  workspaceConfinePrompt,
+} from "../../shared/crew.ts";
+import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../shared/preview.ts";
+import {
+  filePayload,
+  matchMediaTenant,
+  sendMediaBuffer,
+  sendMediaFile,
+} from "./media.ts";
+import {
+  allTenants,
+  confinedCwd,
+  getTenant,
+  hasAuth,
+  loadTenants,
+  mediaSecret,
+  requireCwd,
+  resolveTenant,
+  saveDisk,
+  settlePersistedChats,
+  stateDir,
+  type DiskSlot,
+  type Tenant,
+} from "./tenants.ts";
+
+loadDotEnv([
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "../.env"),
+]);
+
+const PORT = Number(process.env.GATEWAY_PORT || 8787);
+const HOST = process.env.GATEWAY_HOST || "127.0.0.1";
+const WEB_URL = new URL(process.env.CURSOR_REMOTE_WEB_ORIGIN || "http://127.0.0.1:3000");
+const PROXY_WEB = !/^(0|false|off|no)$/i.test(process.env.GATEWAY_PROXY_WEB || "1");
+const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
+
+loadTenants();
+let modelsCache: { at: number; ids: string[] } | null = null;
+
+type AgentHandle = Awaited<ReturnType<typeof Agent.create>>;
+type RunHandle = Awaited<ReturnType<AgentHandle["send"]>>;
+
+function isAbortError(err: unknown) {
+  if (!err || typeof err !== "object") return false;
+  const name = (err as { name?: string }).name || "";
+  const message = err instanceof Error ? err.message : String(err);
+  return name === "AbortError" || /aborted/i.test(message);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+async function cancelRun(run: RunHandle | null | undefined) {
+  if (!run?.supports("cancel")) return;
+  try {
+    await withTimeout(run.cancel(), 5_000);
+  } catch (err) {
+    if (!isAbortError(err)) {
+      // Cancel failures / hangs should not take down the gateway.
+    }
+  }
+}
+
+process.on("unhandledRejection", (err) => {
+  if (isAbortError(err)) return;
+  console.error(err);
+});
+process.on("uncaughtException", (err) => {
+  if (isAbortError(err)) return;
+  console.error(err);
+  process.exit(1);
+});
+
+type Checkpoint = {
+  id: string;
+  label: string;
+  commit: string;
+  createdAt: number;
+  gitDir?: string;
+  workTree?: string;
+};
+
+type PendingPrompt = {
+  text: string;
+  model?: string;
+  mode: AgentMode;
+  files?: string[];
+  images?: Array<{ data: string; mimeType: string }>;
+  confirmWrites: boolean;
+  autoApprove: boolean;
+};
+
+type OpenTool = {
+  name: string;
+  args?: unknown;
+  parentCallId?: string;
+  agent?: string;
+  model?: string;
+};
+
+type Slot = {
+  tenantId: string;
+  chatId: string;
+  cwd: string;
+  model?: string;
+  agentId: string | null;
+  agent: AgentHandle | null;
+  run: RunHandle | null;
+  epoch: number;
+  finished: boolean;
+  edited: string[];
+  checkpoints: Checkpoint[];
+  awaitingApproval: boolean;
+  lastShellCallId: string | null;
+  owner: WebSocket | null;
+  approvalWait: ((allow: boolean) => void) | null;
+  approvalSettled: boolean | null;
+  pending: PendingPrompt[];
+  openTools: Map<string, OpenTool>;
+};
+
+type Conn = {
+  cwd: string;
+  model: string;
+  authed: boolean;
+  ip: string;
+  tenant: Tenant | null;
+  slots: Map<string, Slot>;
+  ws: WebSocket;
+};
+
+const liveByTenant = new Map<string, Map<string, Slot>>();
+const conns = new Map<WebSocket, Conn>();
+const namingChats = new Set<string>();
+const namedChats = new Set<string>();
+const loginHits = new Map<string, { count: number; resetAt: number; blockedUntil: number }>();
+const HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+function peerIp(req?: IncomingMessage) {
+  if (!req) return "unknown";
+  const remote = req.socket.remoteAddress || "";
+  const fromLoopback = remote === "127.0.0.1" || remote === "::1" || remote === ":ffff:127.0.0.1";
+  if (fromLoopback) {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.trim()) {
+      const last = forwarded.split(",").map((item) => item.trim()).filter(Boolean).pop();
+      if (last) return last;
+    }
+  }
+  return remote || "unknown";
+}
+
+function loginBlocked(ip: string) {
+  const row = loginHits.get(ip);
+  return Boolean(row && row.blockedUntil > Date.now());
+}
+
+function noteLoginFail(ip: string) {
+  const now = Date.now();
+  const row = loginHits.get(ip) || { count: 0, resetAt: now + 10 * 60_000, blockedUntil: 0 };
+  if (now > row.resetAt) {
+    row.count = 0;
+    row.resetAt = now + 10 * 60_000;
+  }
+  row.count += 1;
+  if (row.count >= 8) row.blockedUntil = now + 10 * 60_000;
+  loginHits.set(ip, row);
+}
+
+function noteLoginOk(ip: string) {
+  loginHits.delete(ip);
+}
+
+function agentSocketPath(url = "/") {
+  const path = (url.split("?")[0] || "/").replace(/\/+$/, "") || "/";
+  return path === "/" || path === "/ws" || path === "/bridge";
+}
+
+function liveSlotsOf(tenant: Tenant): Map<string, Slot> {
+  let map = liveByTenant.get(tenant.id);
+  if (!map) {
+    map = new Map();
+    liveByTenant.set(tenant.id, map);
+  }
+  return map;
+}
+
+function bindTenant(conn: Conn, tenant: Tenant) {
+  conn.tenant = tenant;
+  conn.slots = liveSlotsOf(tenant);
+  conn.cwd = tenant.workspaceRoot;
+  conn.authed = true;
+}
+
+function detachConn(conn: Conn) {
+  if (!conn.tenant) return;
+  persistConn(conn);
+  for (const slot of conn.slots.values()) {
+    if (slot.owner === conn.ws) slot.owner = null;
+  }
+  conn.tenant = null;
+  conn.slots = new Map();
+  conn.authed = false;
+}
+
+function payload(tenant: Tenant, chatId: string | undefined, path: string, file: Parameters<typeof filePayload>[4], diff: boolean) {
+  return filePayload(mediaSecret(), tenant.id, chatId, path, file, diff);
+}
+
+function sanitizeWorkspaceName(raw: string): string | null {
+  const name = raw.trim().replace(/[\\/]+/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!name || name.length > 80) return null;
+  const parts = name.split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
+    return null;
+  }
+  return name;
+}
+
+function listWorkspaceItems(tenant: Tenant): { path: string; name: string }[] {
+  const root = resolve(tenant.workspaceRoot);
+  const skip = new Set(["node_modules", "dist", "coverage", "venv", "__pycache__"]);
+  const byPath = new Map<string, string>();
+  byPath.set(root, basename(root) || root);
+  try {
+    for (const name of readdirSync(root).sort()) {
+      if (name.startsWith(".") || skip.has(name)) continue;
+      const abs = resolve(root, name);
+      try {
+        if (statSync(abs).isDirectory()) byPath.set(abs, name);
+      } catch {
+        // skip unreadable
+      }
+    }
+  } catch {
+    // root missing
+  }
+  for (const slot of tenant.disk.slots) {
+    const cwd = confinedCwd(slot.cwd, root);
+    if (!cwd || byPath.has(cwd)) continue;
+    const rel = relative(root, cwd);
+    byPath.set(cwd, rel || basename(cwd));
+  }
+  return [...byPath.entries()].map(([path, name]) => ({ path, name }));
+}
+
+function emitWorkspaces(ws: WebSocket, tenant: Tenant) {
+  send(ws, {
+    type: "workspaces",
+    root: resolve(tenant.workspaceRoot),
+    items: listWorkspaceItems(tenant),
+  });
+}
+
+function ensureWorkspaceDir(cwd: string) {
+  if (!existsSync(cwd)) mkdirSync(cwd, { recursive: true });
+}
+
+function proxyWeb(req: IncomingMessage, res: ServerResponse) {
+  const headers: Record<string, string | string[] | number | undefined> = {
+    host: WEB_URL.host,
+    "x-forwarded-host": String(req.headers.host || ""),
+    "x-forwarded-proto": String(req.headers["x-forwarded-proto"] || "http"),
+    "x-forwarded-for": peerIp(req),
+  };
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (HOP_HEADERS.has(key.toLowerCase())) continue;
+    headers[key] = value;
+  }
+  const upstream = httpRequest(
+    {
+      protocol: WEB_URL.protocol,
+      hostname: WEB_URL.hostname,
+      port: WEB_URL.port || (WEB_URL.protocol === "https:" ? 443 : 80),
+      path: req.url,
+      method: req.method,
+      headers,
+    },
+    (incoming) => {
+      const outHeaders = { ...incoming.headers };
+      delete outHeaders["transfer-encoding"];
+      res.writeHead(incoming.statusCode || 502, outHeaders);
+      incoming.pipe(res);
+    },
+  );
+  upstream.on("error", () => {
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+    res.end("网页没起来。请先启动 Next（本机 npm run dev，或 VPS 上的 cursor-remote 服务）。");
+  });
+  req.pipe(upstream);
+}
+
+function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+  const headers = { ...req.headers, host: WEB_URL.host };
+  const upstream = httpRequest({
+    protocol: WEB_URL.protocol,
+    hostname: WEB_URL.hostname,
+    port: WEB_URL.port || (WEB_URL.protocol === "https:" ? 443 : 80),
+    path: req.url,
+    method: "GET",
+    headers,
+  });
+  upstream.on("upgrade", (incoming, upSocket, upHead) => {
+    const lines = [`HTTP/1.1 ${incoming.statusCode} ${incoming.statusMessage}`];
+    for (const [key, value] of Object.entries(incoming.headers)) {
+      if (value == null) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) lines.push(`${key}: ${item}`);
+      } else {
+        lines.push(`${key}: ${value}`);
+      }
+    }
+    socket.write(`${lines.join("\r\n")}\r\n\r\n`);
+    if (head.length) upSocket.write(head);
+    if (upHead.length) socket.write(upHead);
+    upSocket.pipe(socket);
+    socket.pipe(upSocket);
+  });
+  upstream.on("error", () => socket.destroy());
+  upstream.end();
+}
+
+function loadDotEnv(files: string[]) {
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (!(key in process.env)) process.env[key] = value;
+    }
+  }
+}
+
+function reply(ws: WebSocket, message: ServerMessage) {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+function send(ws: WebSocket, message: ServerMessage) {
+  const chatId = "chatId" in message && typeof message.chatId === "string" ? message.chatId : "";
+  const conn = conns.get(ws);
+  const owner = chatId && conn ? conn.slots.get(chatId)?.owner : null;
+  const sock =
+    owner && owner.readyState === WebSocket.OPEN
+      ? owner
+      : ws.readyState === WebSocket.OPEN
+        ? ws
+        : null;
+  if (sock) sock.send(JSON.stringify(message));
+}
+
+function parseClient(raw: string): ClientMessage | null {
+  try {
+    const data = JSON.parse(raw) as ClientMessage;
+    if (!data || typeof data !== "object" || typeof data.type !== "string") {
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function persistConn(conn: Conn) {
+  const tenant = conn.tenant;
+  if (!tenant) return;
+  persistTenant(tenant, conn.slots);
+}
+
+function persistTenant(tenant: Tenant, slots = liveSlotsOf(tenant)) {
+  const byId = new Map(tenant.disk.slots.map((item) => [item.chatId, item]));
+  for (const slot of slots.values()) {
+    byId.set(slot.chatId, {
+      chatId: slot.chatId,
+      agentId: slot.agentId,
+      cwd: requireCwd(slot.cwd, tenant.workspaceRoot),
+      model: slot.model,
+      edited: slot.edited,
+      checkpoints: slot.checkpoints,
+    });
+  }
+  tenant.disk.slots = [...byId.values()];
+  saveDisk(tenant);
+}
+
+function chatIdsFrom(chats: unknown[]): Set<string> {
+  const ids = new Set<string>();
+  for (const item of chats) {
+    if (!item || typeof item !== "object") continue;
+    const id = (item as { id?: unknown }).id;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return ids;
+}
+
+function pruneDroppedSlots(tenant: Tenant, keepIds: Set<string>) {
+  if (!keepIds.size) return;
+  const live = liveSlotsOf(tenant);
+  for (const [chatId, slot] of [...live.entries()]) {
+    if (keepIds.has(chatId)) continue;
+    resolveApprovalWait(slot, false);
+    void cancelRun(slot.run);
+    void disposeSlot(slot);
+    live.delete(chatId);
+  }
+  tenant.disk.slots = tenant.disk.slots.filter((item) => keepIds.has(item.chatId));
+}
+
+function chatIdOf(item: unknown): string {
+  if (!item || typeof item !== "object") return "";
+  const id = (item as { id?: unknown }).id;
+  return typeof id === "string" ? id : "";
+}
+
+function tombstoneChat(tenant: Tenant, chatId: string) {
+  if (!chatId) return;
+  tenant.disk.deletedIds = [chatId, ...tenant.disk.deletedIds.filter((id) => id !== chatId)].slice(0, 500);
+  tenant.disk.chats = tenant.disk.chats.filter((item) => chatIdOf(item) !== chatId);
+}
+
+function visibleChats(tenant: Tenant) {
+  if (!tenant.disk.deletedIds.length) return tenant.disk.chats;
+  const gone = new Set(tenant.disk.deletedIds);
+  return tenant.disk.chats.filter((item) => {
+    const id = chatIdOf(item);
+    return !id || !gone.has(id);
+  });
+}
+
+function emitStoredState(ws: WebSocket, tenant: Tenant) {
+  const live = new Set(runningChatIds(tenant));
+  send(ws, {
+    type: "stored_state",
+    chats: visibleChats(tenant).map((item) => (live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0])),
+    rev: tenant.disk.rev,
+    deletedIds: tenant.disk.deletedIds,
+  });
+}
+
+async function forgetChat(conn: Conn, chatId: string) {
+  const tenant = conn.tenant;
+  if (!tenant) return;
+  tombstoneChat(tenant, chatId);
+  const slot = conn.slots.get(chatId);
+  if (slot) {
+    resolveApprovalWait(slot, false);
+    await cancelRun(slot.run);
+    await disposeSlot(slot);
+    conn.slots.delete(chatId);
+  }
+  tenant.disk.slots = tenant.disk.slots.filter((item) => item.chatId !== chatId);
+  pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
+  tenant.disk.rev += 1;
+  persistConn(conn);
+}
+
+function hydrateConn(conn: Conn) {
+  const tenant = conn.tenant;
+  if (!tenant) return;
+  for (const saved of tenant.disk.slots) {
+    if (conn.slots.has(saved.chatId)) continue;
+    conn.slots.set(saved.chatId, makeSlot(tenant, saved.chatId, saved, conn.ws));
+  }
+}
+
+function diskSlot(tenant: Tenant, chatId: string): DiskSlot | undefined {
+  return tenant.disk.slots.find((item) => item.chatId === chatId);
+}
+
+function diskChatCwd(tenant: Tenant, chatId: string): string | undefined {
+  for (const item of tenant.disk.chats) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as { id?: unknown; cwd?: unknown };
+    if (row.id !== chatId || typeof row.cwd !== "string" || !row.cwd.trim()) continue;
+    return row.cwd;
+  }
+}
+
+function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, owner: WebSocket): Slot {
+  return {
+    tenantId: tenant.id,
+    chatId,
+    cwd: requireCwd(diskChatCwd(tenant, chatId) || saved?.cwd, tenant.workspaceRoot),
+    model: saved?.model,
+    agentId: saved?.agentId || null,
+    agent: null,
+    run: null,
+    epoch: 0,
+    finished: true,
+    edited: saved?.edited || [],
+    checkpoints: Array.isArray(saved?.checkpoints) ? (saved.checkpoints as Checkpoint[]) : [],
+    awaitingApproval: false,
+    lastShellCallId: null,
+    owner,
+    approvalWait: null,
+    approvalSettled: null,
+    pending: [],
+    openTools: new Map(),
+  };
+}
+
+function slotOf(conn: Conn, chatId: string): Slot {
+  const tenant = conn.tenant;
+  if (!tenant) throw new Error("先发 hello。");
+  let slot = conn.slots.get(chatId);
+  if (!slot) {
+    slot = makeSlot(tenant, chatId, diskSlot(tenant, chatId), conn.ws);
+    conn.slots.set(chatId, slot);
+  }
+  slot.owner = conn.ws;
+  slot.tenantId = tenant.id;
+  return slot;
+}
+
+function runningChatIds(tenant: Tenant) {
+  return [...liveSlotsOf(tenant).values()]
+    .filter((slot) => (!slot.finished && slot.run) || slot.pending.length)
+    .map((slot) => slot.chatId);
+}
+
+function queuedChatIds(tenant: Tenant) {
+  return [...liveSlotsOf(tenant).values()].filter((slot) => slot.pending.length).map((slot) => slot.chatId);
+}
+
+function globalRunningCount() {
+  let n = 0;
+  for (const tenant of allTenants()) {
+    n += [...liveSlotsOf(tenant).values()].filter((slot) => !slot.finished && slot.run).length;
+  }
+  return n;
+}
+
+function maxRunning() {
+  return Math.max(allTenants().length, 1);
+}
+
+function attachLiveSlots(conn: Conn) {
+  for (const slot of conn.slots.values()) {
+    slot.owner = conn.ws;
+  }
+}
+
+function tenantOwnsChat(tenant: Tenant, chatId: string) {
+  if (!chatId) return false;
+  if (liveSlotsOf(tenant).has(chatId)) return true;
+  if (tenant.disk.slots.some((item) => item.chatId === chatId)) return true;
+  return tenant.disk.chats.some((item) => chatIdOf(item) === chatId);
+}
+
+function chatOwnedByOther(chatId: string, except: Tenant) {
+  if (!chatId) return false;
+  for (const tenant of allTenants()) {
+    if (tenant.id === except.id) continue;
+    if (tenantOwnsChat(tenant, chatId)) return true;
+  }
+  return false;
+}
+
+function resolveApprovalWait(slot: Slot, allow: boolean) {
+  const wait = slot.approvalWait;
+  slot.approvalWait = null;
+  if (wait) {
+    slot.awaitingApproval = false;
+    wait(allow);
+    return;
+  }
+  if (slot.awaitingApproval) {
+    slot.awaitingApproval = false;
+    slot.approvalSettled = allow;
+  }
+}
+
+function waitForApproval(slot: Slot, ms = 120_000) {
+  if (slot.approvalSettled != null) {
+    const value = slot.approvalSettled;
+    slot.approvalSettled = null;
+    return Promise.resolve(value);
+  }
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      if (slot.approvalWait !== done) return;
+      slot.approvalWait = null;
+      slot.awaitingApproval = false;
+      resolve(false);
+    }, ms);
+    const done = (allow: boolean) => {
+      clearTimeout(timer);
+      resolve(allow);
+    };
+    slot.approvalWait = done;
+  });
+}
+
+function cwdOf(conn: Conn, slot: Slot) {
+  const root = conn.tenant?.workspaceRoot || slot.cwd;
+  return requireCwd(slot.cwd || conn.cwd, root);
+}
+
+function cwdForChat(tenant: Tenant, chatId: string) {
+  const fromChat = diskChatCwd(tenant, chatId);
+  if (fromChat) {
+    const next = confinedCwd(fromChat, tenant.workspaceRoot);
+    if (next) return next;
+  }
+  const live = liveSlotsOf(tenant).get(chatId);
+  if (live?.cwd) {
+    const next = confinedCwd(live.cwd, tenant.workspaceRoot);
+    if (next) return next;
+  }
+  const saved = diskSlot(tenant, chatId);
+  if (saved?.cwd) {
+    const next = confinedCwd(saved.cwd, tenant.workspaceRoot);
+    if (next) return next;
+  }
+  return tenant.workspaceRoot;
+}
+
+async function listModels(apiKey: string): Promise<string[]> {
+  if (modelsCache && Date.now() - modelsCache.at < 10 * 60_000) return modelsCache.ids;
+  try {
+    const listed = await Promise.race([
+      Cursor.models.list({ apiKey }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("models timeout")), 4000);
+      }),
+    ]);
+    const ids = listed.map((item) => item.id).filter(Boolean);
+    const next = ids.length ? ids : [DEFAULT_MODEL];
+    modelsCache = { at: Date.now(), ids: next };
+    return next;
+  } catch {
+    return modelsCache?.ids || [DEFAULT_MODEL];
+  }
+}
+
+async function disposeSlot(slot: Slot) {
+  const agent = slot.agent;
+  slot.agent = null;
+  slot.run = null;
+  if (!agent) return;
+  try {
+    await agent[Symbol.asyncDispose]();
+  } catch {
+    // Agent may already be closed.
+  }
+}
+
+async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
+  const apiKey = process.env.CURSOR_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("服务器未配置 CURSOR_API_KEY。写入环境或 .env 后重启 gateway。");
+  }
+  const cwd = cwdOf(conn, slot);
+  if (slot.agent) return slot.agent;
+
+  const modelId = (slot.model || conn.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const catalog = await listModels(apiKey);
+  const local: { cwd: string; sandboxOptions?: { enabled: boolean } } = {
+    cwd,
+    sandboxOptions: { enabled: true },
+  };
+  const base = { apiKey, model: { id: modelId }, local };
+  const withCrew = { ...base, agents: buildCrewAgents(modelId, catalog, cwd) };
+
+  const open = async (agentsOn: boolean) => {
+    const opts = agentsOn ? withCrew : base;
+    if (slot.agentId) return Agent.resume(slot.agentId, opts);
+    return Agent.create(opts);
+  };
+
+  try {
+    slot.agent = await open(true);
+  } catch (err) {
+    console.error("crew agents rejected, retrying without them", err);
+    slot.agent = await open(false);
+  }
+  slot.agentId = slot.agent.agentId;
+  return slot.agent;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function clipHistory(text: string, max: number) {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}\n…`;
+}
+
+function conversationToTurns(conv: unknown[]): HistoryTurn[] {
+  const out: HistoryTurn[] = [];
+  for (const item of conv) {
+    if (!isRecord(item) || item.type === "shellConversationTurn") continue;
+    const user =
+      isRecord(item.userMessage) && typeof item.userMessage.text === "string"
+        ? item.userMessage.text
+        : "";
+    const steps = Array.isArray(item.steps) ? item.steps : [];
+    let assistant = "";
+    let thinking = "";
+    const tools: NonNullable<HistoryTurn["tools"]> = [];
+    for (const step of steps) {
+      if (!isRecord(step)) continue;
+      const msg = step.message;
+      if (step.type === "assistantMessage" && isRecord(msg) && typeof msg.text === "string") {
+        assistant += msg.text;
+      } else if (step.type === "thinkingMessage" && isRecord(msg) && typeof msg.text === "string") {
+        thinking += msg.text;
+      } else if (step.type === "toolCall" && isRecord(msg)) {
+        const name = typeof msg.type === "string" ? msg.type : "tool";
+        const wrap = msg.result;
+        let result: unknown;
+        let status: "completed" | "error" = "completed";
+        if (isRecord(wrap)) {
+          if (wrap.status === "error") status = "error";
+          result = "value" in wrap ? wrap.value : wrap;
+        }
+        tools.push({
+          callId: crypto.randomUUID(),
+          name,
+          args: msg.args,
+          result,
+          status,
+          agent: crewRoleOf(name, msg.args),
+          model: crewModelOf(msg.args),
+        });
+      }
+    }
+    if (!user && !assistant && !tools.length) continue;
+    out.push({
+      id: crypto.randomUUID(),
+      user,
+      assistant: clipHistory(assistant, 80_000),
+      thinking: thinking ? clipHistory(thinking, 20_000) : undefined,
+      tools,
+    });
+  }
+  return out;
+}
+
+async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
+  const agentId = slot.agentId;
+  if (!agentId) return;
+  try {
+    const listed = await Agent.listRuns(agentId, {
+      runtime: "local",
+      cwd: cwdOf(conn, slot),
+      limit: 12,
+    });
+    const turns: HistoryTurn[] = [];
+    for (const run of listed.items) {
+      try {
+        if (typeof run.supports === "function" && !run.supports("conversation")) continue;
+        const conv = await run.conversation();
+        turns.push(...conversationToTurns(conv as unknown[]));
+      } catch {
+        continue;
+      }
+      if (turns.length >= 40) break;
+    }
+    if (turns.length) {
+      send(ws, { type: "history", chatId: slot.chatId, turns: turns.slice(-40) });
+    }
+  } catch {
+    // History is best-effort; local store may not have runs yet.
+  }
+}
+
+function shellToolName(name: string) {
+  return /(shell|bash|terminal|command)/i.test(name);
+}
+
+function rememberShellCall(slot: Slot, name: string, callId: string) {
+  if (shellToolName(name) && callId) slot.lastShellCallId = callId;
+}
+
+function snapshotFromResult(result: unknown): { stdout?: string; stderr?: string } {
+  if (typeof result === "string" && result) return { stdout: result };
+  if (!isRecord(result)) return {};
+  const inner = isRecord(result.value) ? result.value : isRecord(result.result) ? result.result : result;
+  const stdout =
+    typeof inner.stdout === "string"
+      ? inner.stdout
+      : typeof inner.output === "string"
+        ? inner.output
+        : typeof inner.text === "string"
+          ? inner.text
+          : "";
+  const stderr = typeof inner.stderr === "string" ? inner.stderr : "";
+  return {
+    stdout: stdout || undefined,
+    stderr: stderr || undefined,
+  };
+}
+
+function parseShellDelta(event: Record<string, unknown>): {
+  callId: string;
+  stream: "stdout" | "stderr";
+  chunk: string;
+} | null {
+  const callId = String(
+    event.callId || event.call_id || event.toolCallId || event.tool_call_id || event.id || "",
+  );
+  const stream: "stdout" | "stderr" =
+    event.stream === "stderr" || (typeof event.stderr === "string" && event.stderr && !event.stdout)
+      ? "stderr"
+      : "stdout";
+  let chunk = "";
+  if (typeof event.chunk === "string") chunk = event.chunk;
+  else if (typeof event.data === "string") chunk = event.data;
+  else if (typeof event.text === "string") chunk = event.text;
+  else if (stream === "stderr" && typeof event.stderr === "string") chunk = event.stderr;
+  else if (typeof event.stdout === "string") chunk = event.stdout;
+  else if (typeof event.output === "string") chunk = event.output;
+  if (!chunk) return null;
+  return { callId, stream, chunk };
+}
+
+function emitToolOutput(
+  ws: WebSocket,
+  slot: Slot,
+  payload: {
+    callId?: string;
+    stream?: "stdout" | "stderr";
+    chunk?: string;
+    stdout?: string;
+    stderr?: string;
+  },
+) {
+  const callId = payload.callId || slot.lastShellCallId;
+  if (!callId) return;
+  if (!payload.chunk && payload.stdout == null && payload.stderr == null) return;
+  send(ws, {
+    type: "tool-output",
+    chatId: slot.chatId,
+    callId,
+    stream: payload.stream,
+    chunk: payload.chunk,
+    stdout: payload.stdout,
+    stderr: payload.stderr,
+  });
+}
+
+function summarizeToolArgs(args: unknown): unknown {
+  if (args == null || typeof args !== "object") return args;
+  const record = args as Record<string, unknown>;
+  const keep = [
+    "path",
+    "file",
+    "target",
+    "file_path",
+    "command",
+    "pattern",
+    "query",
+    "cwd",
+    "old_string",
+    "new_string",
+    "oldString",
+    "newString",
+    "oldText",
+    "newText",
+    "contents",
+    "content",
+    "diff",
+    "patch",
+    "description",
+    "title",
+    "prompt",
+    "subagent_type",
+    "subagentType",
+    "name",
+    "agent",
+    "model",
+    "readonly",
+  ];
+  const out: Record<string, unknown> = {};
+  for (const key of keep) {
+    if (key in record) out[key] = record[key];
+  }
+  if (typeof out.prompt === "string" && out.prompt.length > 500) {
+    out.prompt = `${out.prompt.slice(0, 500)}\n…`;
+  }
+  return Object.keys(out).length ? out : args;
+}
+
+function pathFromTool(args: unknown): string {
+  if (!args || typeof args !== "object") return "";
+  const record = args as Record<string, unknown>;
+  for (const key of ["path", "file", "target", "file_path"]) {
+    if (typeof record[key] === "string" && record[key]) return record[key];
+  }
+  return "";
+}
+
+function rememberEdit(slot: Slot, name: string, args: unknown, cwd?: string) {
+  if (!isMutatingTool(name, args)) return;
+  const raw = pathFromTool(args);
+  const path = cwd ? workspacePath(cwd, raw) || raw : raw;
+  if (path && !slot.edited.includes(path)) slot.edited.push(path);
+}
+
+function workspacePath(cwd: string, raw: string): string | null {
+  const abs = raw.startsWith("/") ? raw : resolve(cwd, raw);
+  const rel = relative(cwd, abs);
+  if (!rel || rel.startsWith("..")) return null;
+  return rel;
+}
+
+function tenantForCwd(cwd: string): Tenant | undefined {
+  const abs = resolve(cwd);
+  for (const tenant of allTenants()) {
+    if (confinedCwd(abs, tenant.workspaceRoot)) return tenant;
+  }
+}
+
+function shadowGitEnv(cwd: string): Record<string, string> | null {
+  const tenant = tenantForCwd(cwd);
+  if (!tenant) return null;
+  const dir = shadowGitDir(cwd, tenant.stateDir);
+  if (!existsSync(resolve(dir, "HEAD"))) return null;
+  const env = {
+    GIT_DIR: dir,
+    GIT_WORK_TREE: cwd,
+    GIT_INDEX_FILE: resolve(dir, "cursor-remote-index"),
+  };
+  try {
+    git(cwd, ["rev-parse", "--verify", "HEAD"], env);
+    return env;
+  } catch {
+    return null;
+  }
+}
+
+function isTracked(cwd: string, path: string): boolean {
+  const env = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+  if (!gitRoot(cwd) && !env) return false;
+  try {
+    execFileSync("git", ["ls-files", "--error-unmatch", "--", path], {
+      cwd,
+      encoding: "utf8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: env ? { ...process.env, ...env } : process.env,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function undoEdits(cwd: string, paths: string[]): { paths: string[]; error?: string } {
+  if (!paths.length) return { paths: [], error: "这一轮没有记下改过的文件" };
+  const restored: string[] = [];
+  const failed: string[] = [];
+  for (const raw of paths) {
+    const path = workspacePath(cwd, raw);
+    if (!path) continue;
+    try {
+      if (isTracked(cwd, path)) {
+        const env = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+        execFileSync("git", ["checkout", "--", path], {
+          cwd,
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: env ? { ...process.env, ...env } : process.env,
+        });
+        restored.push(path);
+      } else {
+        const abs = resolve(cwd, path);
+        if (existsSync(abs) && statSync(abs).isFile()) unlinkSync(abs);
+        restored.push(path);
+      }
+    } catch {
+      failed.push(path);
+    }
+  }
+  if (!restored.length) {
+    return { paths: [], error: failed.length ? "git 还原失败" : "没有可还原的文件" };
+  }
+  return {
+    paths: restored,
+    error: failed.length ? `部分失败：${failed.join(", ")}` : undefined,
+  };
+}
+
+function gitIdentity(): Record<string, string> {
+  const name = process.env.GIT_AUTHOR_NAME || process.env.CURSOR_REMOTE_GIT_NAME || "cursor-remote";
+  const email =
+    process.env.GIT_AUTHOR_EMAIL || process.env.CURSOR_REMOTE_GIT_EMAIL || "cursor-remote@localhost";
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || name,
+    GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || email,
+  };
+}
+
+function gitBytes(cwd: string, args: string[], extraEnv?: Record<string, string>): Buffer {
+  const ident = gitIdentity();
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "core.quotepath=false",
+      "-c",
+      `user.name=${ident.GIT_AUTHOR_NAME}`,
+      "-c",
+      `user.email=${ident.GIT_AUTHOR_EMAIL}`,
+      ...args,
+    ],
+    {
+      cwd,
+      encoding: "buffer",
+      timeout: 15000,
+      maxBuffer: 80 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ...ident, ...extraEnv },
+    },
+  );
+}
+
+function git(cwd: string, args: string[], extraEnv?: Record<string, string>): string {
+  return gitBytes(cwd, args, extraEnv).toString("utf8").trim();
+}
+
+function shadowGitDir(cwd: string, stateDir: string) {
+  const id = createHash("sha1").update(cwd).digest("hex").slice(0, 16);
+  return resolve(stateDir, "shadow-git", id);
+}
+
+function ensureShadowGit(cwd: string) {
+  const tenant = tenantForCwd(cwd);
+  if (!tenant) throw new Error("工作区不属于任何租户");
+  const dir = shadowGitDir(cwd, tenant.stateDir);
+  mkdirSync(dir, { recursive: true });
+  if (!existsSync(resolve(dir, "HEAD"))) {
+    execFileSync("git", ["init", "--bare", dir], {
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+  const info = resolve(dir, "info");
+  mkdirSync(info, { recursive: true });
+  writeFileSync(
+    resolve(info, "exclude"),
+    ["node_modules/", ".next/", ".git/", ".DS_Store", "*.tsbuildinfo", ".cursor-remote-index"].join("\n") + "\n",
+  );
+  return dir;
+}
+
+function checkpointGit(cwd: string, checkpoint?: Checkpoint): { cwd: string; env: Record<string, string> } {
+  const tenant = tenantForCwd(cwd);
+  if (checkpoint?.gitDir && tenant) {
+    const workTree = confinedCwd(checkpoint.workTree || cwd, tenant.workspaceRoot) || cwd;
+    const gitDir = resolve(checkpoint.gitDir);
+    const rel = relative(tenant.stateDir, gitDir);
+    if (rel && !rel.startsWith("..") && !rel.split(/[/\\]/).includes("..")) {
+      return {
+        cwd: workTree,
+        env: {
+          GIT_DIR: gitDir,
+          GIT_WORK_TREE: workTree,
+          GIT_INDEX_FILE: resolve(gitDir, "cursor-remote-index"),
+        },
+      };
+    }
+  }
+  const root = gitRoot(cwd);
+  if (root) {
+    let gitDir = git(root, ["rev-parse", "--git-dir"]);
+    if (!gitDir.startsWith("/")) gitDir = resolve(root, gitDir);
+    return {
+      cwd: root,
+      env: { GIT_INDEX_FILE: resolve(gitDir, "cursor-remote-index") },
+    };
+  }
+  const gitDir = ensureShadowGit(cwd);
+  return {
+    cwd,
+    env: {
+      GIT_DIR: gitDir,
+      GIT_WORK_TREE: cwd,
+      GIT_INDEX_FILE: resolve(gitDir, "cursor-remote-index"),
+    },
+  };
+}
+
+function publicCheckpoints(slot: Slot) {
+  return slot.checkpoints.map(({ id, label, createdAt }) => ({ id, label, createdAt }));
+}
+
+function sendCheckpoints(ws: WebSocket, slot: Slot) {
+  send(ws, { type: "checkpoints", chatId: slot.chatId, items: publicCheckpoints(slot) });
+}
+
+function pushWorkspace(ws: WebSocket, slot: Slot, conn: Conn, paths: string[] = []) {
+  const cwd = cwdOf(conn, slot);
+  const listed = listWorkspaceFiles(cwd, "");
+  send(ws, {
+    type: "files",
+    chatId: slot.chatId,
+    query: "",
+    paths: listed.paths,
+    status: listed.status,
+    truncated: listed.truncated,
+  });
+  const unique = [...new Set(paths.filter(Boolean))];
+  for (const path of unique) {
+    const file = readWorkspaceFile(cwd, path);
+    send(ws, payload(conn.tenant || getTenant(slot.tenantId)!, slot.chatId, path, file, false));
+    const diff = readWorkspaceDiff(cwd, path);
+    send(ws, payload(conn.tenant || getTenant(slot.tenantId)!, slot.chatId, path, diff, true));
+  }
+}
+
+function createCheckpoint(cwd: string, label: string): Checkpoint {
+  const ctx = checkpointGit(cwd);
+  try {
+    git(ctx.cwd, ["read-tree", "HEAD"], ctx.env);
+  } catch {
+    git(ctx.cwd, ["read-tree", "--empty"], ctx.env);
+  }
+  const listed = listWorkspaceFiles(cwd, "").paths;
+  try {
+    if (listed.length) {
+      for (let i = 0; i < listed.length; i += 200) {
+        git(ctx.cwd, ["add", "-A", "--", ...listed.slice(i, i + 200)], ctx.env);
+      }
+    } else {
+      git(ctx.cwd, ["add", "-A"], ctx.env);
+    }
+    git(ctx.cwd, ["add", "-u"], ctx.env);
+  } catch {
+    git(ctx.cwd, ["add", "-A"], ctx.env);
+  }
+  const tree = git(ctx.cwd, ["write-tree"], ctx.env);
+  const args = ["commit-tree", tree, "-m", `cursor-remote: ${label}`];
+  try {
+    args.splice(2, 0, "-p", git(ctx.cwd, ["rev-parse", "HEAD"], ctx.env));
+  } catch {
+    // empty repo, no parent
+  }
+  const commit = git(ctx.cwd, args, ctx.env);
+  const id = commit.slice(0, 8);
+  git(ctx.cwd, ["update-ref", `refs/cursor-remote/${id}`, commit], ctx.env);
+  if (ctx.env.GIT_DIR) {
+    git(ctx.cwd, ["update-ref", "HEAD", commit], ctx.env);
+  }
+  return {
+    id,
+    label,
+    commit,
+    createdAt: Date.now(),
+    gitDir: ctx.env.GIT_DIR,
+    workTree: ctx.cwd,
+  };
+}
+
+function restoreCheckpoint(
+  cwd: string,
+  checkpoint: Checkpoint,
+  extra: string[] = [],
+): { error?: string } {
+  try {
+    const ctx = checkpointGit(cwd, checkpoint);
+    git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "."], ctx.env);
+    if (ctx.env.GIT_DIR) {
+      git(ctx.cwd, ["update-ref", "HEAD", checkpoint.commit], ctx.env);
+      git(ctx.cwd, ["read-tree", checkpoint.commit], ctx.env);
+    }
+    const keep = new Set(
+      git(ctx.cwd, ["ls-tree", "-z", "-r", "--name-only", checkpoint.commit], ctx.env)
+        .split("\0")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+    const extras = new Set(extra.map((raw) => workspacePath(cwd, raw)).filter(Boolean) as string[]);
+    for (const path of listWorkspaceFiles(cwd, "").paths) extras.add(path);
+    for (const path of extras) {
+      if (!path || keep.has(path)) continue;
+      const abs = resolve(cwd, path);
+      try {
+        if (existsSync(abs) && statSync(abs).isFile()) unlinkSync(abs);
+      } catch {
+        // skip files we cannot remove
+      }
+    }
+    return {};
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : "还原检查点失败" };
+  }
+}
+
+function rollbackToLatestCheckpoint(
+  ws: WebSocket,
+  slot: Slot,
+  conn: Conn,
+  silent = false,
+): { error?: string; restored: boolean } {
+  const cwd = cwdOf(conn, slot);
+  const wanted = slot.checkpoints[0];
+  if (wanted) {
+    const preview = slot.edited.slice();
+    const result = restoreCheckpoint(cwd, wanted, slot.edited);
+    slot.edited = [];
+    if (!result.error) {
+      send(ws, {
+        type: "restored",
+        chatId: slot.chatId,
+        checkpointId: wanted.id,
+        label: wanted.label,
+        silent,
+      });
+      pushWorkspace(ws, slot, conn, silent ? [] : preview);
+    }
+    return { error: result.error, restored: !result.error };
+  }
+  const undone = undoEdits(cwd, slot.edited);
+  slot.edited = [];
+  if (undone.paths.length) {
+    send(ws, {
+      type: "undone",
+      chatId: slot.chatId,
+      paths: undone.paths,
+      error: undone.error,
+    });
+    pushWorkspace(ws, slot, conn, undone.paths);
+  }
+  return { error: undone.error, restored: undone.paths.length > 0 };
+}
+
+type WorkspaceFile = {
+  path: string;
+  content?: string;
+  error?: string;
+  kind?: PreviewKind;
+  mime?: string;
+  size?: number;
+  hasHead?: boolean;
+};
+
+function readWorkspaceFile(cwd: string, raw: string): WorkspaceFile {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  const abs = resolve(cwd, path);
+  try {
+    const st = statSync(abs);
+    if (!st.isFile()) return { path, error: "这不是文件" };
+    const kind = kindFromPath(path);
+    const mime = mimeOf(path, kind);
+    const limit = sizeLimit(kind);
+    if (st.size > limit) {
+      return {
+        path,
+        error: `文件太大（${formatBytes(st.size)}），不在这里打开`,
+        kind,
+        mime,
+        size: st.size,
+      };
+    }
+    if (isByteKind(kind)) {
+      return { path, kind, mime, size: st.size };
+    }
+    if ((kind === "html" || kind === "markdown") && st.size > 400_000) {
+      return { path, kind, mime, size: st.size };
+    }
+    const buf = readFileSync(abs);
+    if (kind === "text" && buf.includes(0)) {
+      return {
+        path,
+        error: "二进制文件，没法预览",
+        kind: "binary",
+        mime: "application/octet-stream",
+        size: st.size,
+      };
+    }
+    return { path, content: buf.toString("utf8"), kind, mime, size: st.size };
+  } catch {
+    return { path, error: "读不了这个文件" };
+  }
+}
+
+function writeWorkspaceFile(
+  cwd: string,
+  raw: string,
+  content: string,
+): { path: string; error?: string } {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  if (content.length > 500_000) return { path, error: "内容超过 500KB，不在这里保存" };
+  const abs = resolve(cwd, path);
+  try {
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+    return { path };
+  } catch (err) {
+    return { path, error: err instanceof Error ? err.message : "写不了这个文件" };
+  }
+}
+
+const MAX_UPLOAD_BYTES = 32 * 1024 * 1024;
+const UPLOAD_DIR = ".cursor-remote/uploads";
+
+function safeUploadName(raw: string): string {
+  const base = basename(raw || "file").replace(/[\\/]/g, "");
+  const cleaned =
+    base.replace(/[\x00-\x1f:*?"<>|]/g, "_").replace(/^\.+/g, "").trim() || "file";
+  return cleaned.slice(0, 120);
+}
+
+function uniqueUploadPath(cwd: string, name: string): string | null {
+  const safe = safeUploadName(name);
+  for (let n = 0; n < 200; n++) {
+    const stem =
+      n === 0
+        ? safe
+        : (() => {
+            const dot = safe.lastIndexOf(".");
+            const head = dot > 0 ? safe.slice(0, dot) : safe;
+            const ext = dot > 0 ? safe.slice(dot) : "";
+            return `${head}-${n}${ext}`;
+          })();
+    const rel = `${UPLOAD_DIR}/${stem}`;
+    if (!workspacePath(cwd, rel)) return null;
+    if (!existsSync(resolve(cwd, rel))) return rel;
+  }
+  return null;
+}
+
+function writeWorkspaceBytes(
+  cwd: string,
+  raw: string,
+  buf: Buffer,
+): { path: string; error?: string; size?: number } {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  if (buf.length > MAX_UPLOAD_BYTES) return { path, error: "文件超过 32MB" };
+  try {
+    mkdirSync(dirname(resolve(cwd, path)), { recursive: true });
+    writeFileSync(resolve(cwd, path), buf);
+    return { path, size: buf.length };
+  } catch (err) {
+    return { path, error: err instanceof Error ? err.message : "写不了这个文件" };
+  }
+}
+
+function mentionBase(raw: string) {
+  return raw.replace(/:\d+(?:-\d+)?$/, "").replace(/\/+$/, "");
+}
+
+function expandAttachments(cwd: string, files: string[]): string {
+  const parts: string[] = [];
+  for (const raw of files.slice(0, 20)) {
+    if (/^diff$/i.test(raw)) {
+      try {
+        const extra = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+        const out = git(cwd, ["diff", "HEAD"], extra);
+        parts.push(
+          out
+            ? `Current uncommitted diff:\n\`\`\`diff\n${out.slice(0, 30_000)}\n\`\`\``
+            : "No uncommitted diff.",
+        );
+      } catch {
+        parts.push("Not a git workspace (no Diff).");
+      }
+      continue;
+    }
+    const path = workspacePath(cwd, mentionBase(raw));
+    if (!path) continue;
+    const abs = resolve(cwd, path);
+    try {
+      const st = statSync(abs);
+      if (st.isDirectory()) {
+        const kids: string[] = [];
+        walkFiles(abs, abs, kids, 0);
+        parts.push(
+          `Folder ${path}/ (${kids.length} files):\n${kids
+            .slice(0, 80)
+            .map((kid) => `- ${path}/${kid}`)
+            .join("\n")}`,
+        );
+        continue;
+      }
+      if (parts.filter((item) => item.startsWith("File ") || item.startsWith("Attached ")).length >= 4) continue;
+      const file = readWorkspaceFile(cwd, path);
+      if (file.content != null) {
+        parts.push(`File ${path}:\n\`\`\`\n${file.content.slice(0, 20_000)}\n\`\`\``);
+      } else if (!file.error) {
+        parts.push(
+          `Attached workspace file ${path} (${file.kind || "binary"}${file.size != null ? `, ${formatBytes(file.size)}` : ""}). It is already in the working directory; read it with tools.`,
+        );
+      }
+    } catch {
+      // skip unreadable attachment
+    }
+  }
+  return parts.join("\n\n");
+}
+
+function runFsOp(
+  cwd: string,
+  op: "create" | "mkdir" | "rename" | "delete",
+  raw: string,
+  to?: string,
+): { path: string; to?: string; error?: string } {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  const abs = resolve(cwd, path);
+  try {
+    if (op === "mkdir") {
+      mkdirSync(abs, { recursive: true });
+      return { path };
+    }
+    if (op === "create") {
+      mkdirSync(dirname(abs), { recursive: true });
+      if (existsSync(abs)) return { path, error: "已经有这个文件" };
+      writeFileSync(abs, "");
+      return { path };
+    }
+    if (op === "rename") {
+      if (!to?.trim()) return { path, error: "缺少新名字" };
+      const dest = workspacePath(cwd, to);
+      if (!dest) return { path, to, error: "新路径不在工作区里" };
+      const destAbs = resolve(cwd, dest);
+      if (existsSync(destAbs)) return { path, to: dest, error: "目标已存在" };
+      mkdirSync(dirname(destAbs), { recursive: true });
+      renameSync(abs, destAbs);
+      return { path, to: dest };
+    }
+    if (op === "delete") {
+      if (!existsSync(abs)) return { path, error: "不存在" };
+      const st = statSync(abs);
+      if (st.isDirectory()) {
+        if (readdirSync(abs).length) return { path, error: "目录不是空的" };
+        rmdirSync(abs);
+      } else {
+        unlinkSync(abs);
+      }
+      return { path };
+    }
+  } catch (err) {
+    return { path, error: err instanceof Error ? err.message : "操作失败" };
+  }
+  return { path, error: "未知操作" };
+}
+
+function readWorkspaceDiff(cwd: string, raw: string): WorkspaceFile {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  const kind = kindFromPath(path);
+  const mime = mimeOf(path, kind);
+  try {
+    if (kind === "image" || kind === "svg") {
+      const abs = resolve(cwd, path);
+      if (!existsSync(abs) || !statSync(abs).isFile()) {
+        return { path, error: "这不是文件", kind, mime };
+      }
+      const size = statSync(abs).size;
+      if (!isTracked(cwd, path)) {
+        return { path, kind, mime, size, hasHead: false };
+      }
+      const env = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+      const out = git(cwd, ["diff", "HEAD", "--", path], env);
+      if (!out) return { path, error: "没有未提交的改动", kind, mime, size };
+      return { path, kind, mime, size, hasHead: true };
+    }
+    if (isByteKind(kind)) {
+      return { path, error: "这类文件没有文本 diff", kind, mime };
+    }
+    if (isTracked(cwd, path)) {
+      const env = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+      const out = git(cwd, ["diff", "HEAD", "--", path], env);
+      if (out) return { path, content: out, kind: "text", mime: "text/x-diff" };
+      return { path, error: "没有未提交的改动", kind };
+    }
+    const file = readWorkspaceFile(cwd, path);
+    if (file.error || file.content == null) {
+      return { path, error: file.error || "读不了这个文件", kind: file.kind, mime: file.mime, size: file.size };
+    }
+    const lines = file.content.split("\n");
+    const body = [
+      `diff --git a/${path} b/${path}`,
+      "new file",
+      "--- /dev/null",
+      `+++ b/${path}`,
+      `@@ -0,0 +1,${Math.max(lines.length, 1)} @@`,
+      ...lines.map((line) => `+${line}`),
+    ].join("\n");
+    return { path, content: body, kind: "text", mime: "text/x-diff", size: file.size };
+  } catch (err) {
+    return { path, error: err instanceof Error ? err.message : "没有 diff", kind, mime };
+  }
+}
+
+const IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function sanitizeImages(
+  images: Array<{ data: string; mimeType: string }> | undefined,
+): Array<{ data: string; mimeType: string }> {
+  if (!images?.length) return [];
+  return images
+    .filter(
+      (img) =>
+        IMAGE_MIME.has(img.mimeType) &&
+        typeof img.data === "string" &&
+        img.data.length > 24 &&
+        img.data.length < 12_000_000,
+    )
+    .slice(0, 5)
+    .map((img) => ({
+      data: img.data.replace(/^data:[^;]+;base64,/, ""),
+      mimeType: img.mimeType,
+    }));
+}
+
+function isMutatingTool(name: string, args: unknown): boolean {
+  const n = name.toLowerCase();
+  if (/todo|createplan/.test(n)) return false;
+  if (/(write|strreplace|apply.?patch|editnotebook|delete|unlink|createfile)/.test(n)) {
+    return true;
+  }
+  if (/(^|[^a-z])edit([^a-z]|$)/.test(n) && !/read/.test(n)) return true;
+  if (/(shell|bash|terminal|command)/.test(n)) {
+    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const cmd = typeof record.command === "string" ? record.command : "";
+    return /(^|\s)(rm|mv|cp|chmod|chown|sudo|mkdir|touch|tee|dd|truncate|git\s+(add|commit|push|reset|checkout)|npm\s+i(nstall)?|pnpm\s+add|yarn\s+add|pip\s+install)\b/i.test(
+      cmd,
+    );
+  }
+  return false;
+}
+
+function toolEscapesWorkspace(cwd: string, name: string, args: unknown): boolean {
+  const raw = pathFromTool(args);
+  if (raw && !workspacePath(cwd, raw)) return true;
+  if (!/(shell|bash|terminal|command)/i.test(name)) return false;
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const working = typeof record.working_directory === "string" ? record.working_directory : "";
+  if (working && !workspacePath(cwd, working)) return true;
+  const cmd = typeof record.command === "string" ? record.command : "";
+  if (!cmd) return false;
+  for (const match of cmd.matchAll(/(?:^|[\s;|&])(?:\d*>{1,2}|tee(?:\s+-a)?)\s*(\/[^\s;|&]+)/g)) {
+    const abs = match[1];
+    if (abs === "/dev/null" || abs.startsWith("/dev/")) continue;
+    if (!workspacePath(cwd, abs)) return true;
+  }
+  return false;
+}
+
+function loadWorkspaceRules(cwd: string): string {
+  const chunks: string[] = [];
+  const take = (rel: string) => {
+    const abs = resolve(cwd, rel);
+    try {
+      if (!existsSync(abs) || !statSync(abs).isFile()) return;
+      const text = readFileSync(abs, "utf8").trim();
+      if (text) chunks.push(`# ${rel}\n${text}`);
+    } catch {
+      // skip unreadable rule files
+    }
+  };
+  take(".cursorrules");
+  take("AGENTS.md");
+  const dir = resolve(cwd, ".cursor/rules");
+  try {
+    if (existsSync(dir) && statSync(dir).isDirectory()) {
+      for (const name of readdirSync(dir).sort()) {
+        if (!/\.(md|mdc)$/i.test(name)) continue;
+        take(`.cursor/rules/${name}`);
+      }
+    }
+  } catch {
+    // no rules directory
+  }
+  return chunks.join("\n\n").slice(0, 16_000);
+}
+
+function wrapPrompt(
+  text: string,
+  mode: AgentMode,
+  files?: string[],
+  rules?: string,
+  cwd?: string,
+): string {
+  let body = text;
+  if (files?.length) {
+    const expanded = cwd ? expandAttachments(cwd, files) : "";
+    body = `The user attached these workspace files as context:\n${files
+      .map((file) => `- ${file}`)
+      .join("\n")}${expanded ? `\n\n${expanded}` : ""}\n\n${text}`;
+  }
+  if (rules?.trim()) {
+    body = `Workspace rules (follow these):\n${rules.trim()}\n\n${body}`;
+  }
+  const bound = cwd ? `${workspaceConfinePrompt(cwd)}\n\n` : "";
+  if (mode === "ask") {
+    return `${bound}ASK MODE (read-only). You must not modify the workspace.
+Do not call write, edit, delete, apply patch, or any mutating shell command (rm, mv, git commit, npm install, etc.).
+If the user wants a change, explain what you would do and stop. Answer in text only.
+Do not spawn subagents. Any suggested change must stay inside the current workspace.
+
+${body}`;
+  }
+  if (mode === "plan") {
+    return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
+方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。
+可以派出 explore 子代理做只读摸底。不要派出 builder 或 reviewer。
+
+${body}`;
+  }
+  return `${bound}CANVAS: If this turn's deliverable is a standalone analytical artifact (table, chart, review, metrics, timeline, architecture comparison), write exactly one file at .cursor-remote/canvases/<kebab-name>.canvas.tsx.
+Import only from "cursor/canvas". Default-export one React component. Embed data inline. No fetch(), no relative imports, no npm packages.
+Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-overview.canvas.tsx). Do not write a canvas for ordinary Q&A or a pure code edit.
+
+CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement), reviewer (cross-review with a different model). Spawn them for parallel investigation or a second pair of eyes. Skip them for a trivial one-file edit. Subagents must also stay inside the current workspace.
+
+${body}`;
+}
+
+function walkFiles(root: string, dir: string, acc: string[], depth: number) {
+  if (depth > 3 || acc.length > 200) return;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of entries) {
+    if (
+      name === "node_modules" ||
+      name === ".git" ||
+      name === ".next" ||
+      name === "dist" ||
+      name === ".loop" ||
+      name === ".cursor" ||
+      name === ".venv" ||
+      name === "venv" ||
+      name === "coverage"
+    ) {
+      continue;
+    }
+    const full = resolve(dir, name);
+    try {
+      const st = statSync(full);
+      if (st.isDirectory()) {
+        if (full !== root && existsSync(resolve(full, ".git"))) continue;
+        walkFiles(root, full, acc, depth + 1);
+      } else acc.push(relative(root, full));
+    } catch {
+      // skip unreadable
+    }
+  }
+}
+
+function gitRoot(cwd: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function gitLetter(xy: string): string {
+  if (xy === "??" || xy.includes("?")) return "U";
+  if (xy.includes("D")) return "D";
+  if (xy.includes("A")) return "A";
+  if (xy.includes("R") || xy.includes("C")) return "R";
+  return "M";
+}
+
+function unescapeGitPath(file: string): string {
+  if (!(file.startsWith('"') && file.endsWith('"'))) return file;
+  const inner = file.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    if (inner[i] === "\\" && i + 1 < inner.length) {
+      const next = inner[i + 1];
+      if (next === '"' || next === "\\") {
+        bytes.push(next.charCodeAt(0));
+        i += 1;
+        continue;
+      }
+      const oct = /^\\([0-7]{3})/.exec(inner.slice(i));
+      if (oct) {
+        bytes.push(Number.parseInt(oct[1], 8));
+        i += oct[0].length - 1;
+        continue;
+      }
+    }
+    bytes.push(inner.charCodeAt(i) & 0xff);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
+function parsePorcelain(out: string, root: string, cwd: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  const nul = out.includes("\0");
+  const chunks = nul ? out.split("\0") : out.split("\n");
+  for (let i = 0; i < chunks.length; i++) {
+    const raw = chunks[i];
+    if (raw.length < 3) continue;
+    const xy = raw.slice(0, 2);
+    let file = unescapeGitPath(raw.slice(3));
+    if ((xy.includes("R") || xy.includes("C")) && nul && i + 1 < chunks.length) {
+      file = unescapeGitPath(chunks[++i]);
+    } else {
+      const arrow = file.lastIndexOf(" -> ");
+      if (arrow >= 0) file = file.slice(arrow + 4);
+    }
+    if (!file) continue;
+    const rel = relative(cwd, resolve(root, file));
+    if (!rel || rel.startsWith("..")) continue;
+    map[rel] = gitLetter(xy);
+  }
+  return map;
+}
+
+function headNames(cwd: string, extra?: Record<string, string>): Set<string> {
+  try {
+    const out = extra
+      ? git(cwd, ["ls-tree", "-z", "-r", "--name-only", "HEAD"], extra)
+      : execFileSync("git", ["ls-files", "-z"], {
+          cwd,
+          encoding: "utf8",
+          timeout: 4000,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+    return new Set(
+      out
+        .split("\0")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function dropGhostStatus(
+  cwd: string,
+  map: Record<string, string>,
+  extra?: Record<string, string>,
+): Record<string, string> {
+  const head = headNames(cwd, extra);
+  const next: Record<string, string> = {};
+  for (const [path, letter] of Object.entries(map)) {
+    if (existsSync(resolve(cwd, path)) || head.has(path)) next[path] = letter;
+  }
+  return next;
+}
+
+function gitStatusMap(cwd: string): Record<string, string> {
+  const run = (root: string, extra?: Record<string, string>) => {
+    const out = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-uall", "-z"], {
+      cwd,
+      encoding: "utf8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: extra ? { ...process.env, ...extra } : process.env,
+    });
+    return dropGhostStatus(cwd, parsePorcelain(out, root, cwd), extra);
+  };
+  const root = gitRoot(cwd);
+  if (root) {
+    try {
+      return run(root);
+    } catch {
+      return {};
+    }
+  }
+  const extra = shadowGitEnv(cwd);
+  if (!extra) return {};
+  try {
+    return run(cwd, extra);
+  } catch {
+    return {};
+  }
+}
+
+function listWorkspaceFiles(
+  cwd: string,
+  query: string,
+): { paths: string[]; status: Record<string, string>; truncated: boolean } {
+  let paths: string[] = [];
+  const root = gitRoot(cwd);
+  const shadow = root ? null : shadowGitEnv(cwd);
+  try {
+    if (root) {
+      const out = execFileSync("git", ["ls-files"], {
+        cwd,
+        encoding: "utf8",
+        timeout: 4000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      paths = out
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } else if (shadow) {
+      paths = git(cwd, ["ls-tree", "-z", "-r", "--name-only", "HEAD"], shadow)
+        .split("\0")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    } else {
+      walkFiles(cwd, cwd, paths, 0);
+    }
+  } catch {
+    walkFiles(cwd, cwd, paths, 0);
+  }
+  const status = gitStatusMap(cwd);
+  paths = paths.filter((path) => existsSync(resolve(cwd, path)));
+  for (const path of Object.keys(status)) {
+    if (status[path] === "D") continue;
+    if (!paths.includes(path) && existsSync(resolve(cwd, path))) paths.push(path);
+  }
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? paths.filter((path) => {
+        const base = path.split("/").pop() || path;
+        return path.toLowerCase().includes(q) || base.toLowerCase().includes(q);
+      })
+    : paths;
+  const dirty = Object.keys(status);
+  const rest = filtered.filter((path) => !status[path]);
+  const ranked = q
+    ? filtered
+    : [...dirty.filter((path) => filtered.includes(path)), ...rest];
+  const sliced = ranked.slice(0, 8000);
+  return { paths: sliced, status, truncated: ranked.length > sliced.length };
+}
+
+function parseSearchHits(raw: string): { path: string; line: number; text: string }[] {
+  const hits: { path: string; line: number; text: string }[] = [];
+  for (const row of raw.split("\n")) {
+    if (!row) continue;
+    const match = /^(.+?):(\d+):(.*)$/.exec(row);
+    if (!match) continue;
+    hits.push({
+      path: match[1].replace(/^\.\//, ""),
+      line: Number(match[2]),
+      text: match[3].replace(/\s+/g, " ").trim().slice(0, 140),
+    });
+    if (hits.length >= 100) break;
+  }
+  return hits;
+}
+
+function searchWorkspace(cwd: string, query: string): { path: string; line: number; text: string }[] {
+  const needle = query.trim();
+  if (!needle || needle.length > 200) return [];
+  const globs = [
+    "--glob",
+    "!.git/**",
+    "--glob",
+    "!node_modules/**",
+    "--glob",
+    "!**/.next/**",
+    "--glob",
+    "!**/dist/**",
+    "--glob",
+    "!**/.venv/**",
+  ];
+  try {
+    const out = execFileSync(
+      "rg",
+      [
+        "-n",
+        "--fixed-strings",
+        "--hidden",
+        "--no-heading",
+        "--color",
+        "never",
+        "--max-count",
+        "24",
+        "--max-filesize",
+        "200K",
+        ...globs,
+        "--",
+        needle,
+        ".",
+      ],
+      {
+        cwd,
+        encoding: "utf8",
+        timeout: 8000,
+        maxBuffer: 2_000_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    return parseSearchHits(out);
+  } catch (err) {
+    const failed = err as { status?: number; stdout?: string };
+    if (failed.status === 1) return parseSearchHits(failed.stdout || "");
+  }
+  try {
+    const extra = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+    const out = execFileSync(
+      "git",
+      ["-c", "core.quotepath=false", "grep", "-n", "-I", "-F", "-e", needle, "--", "."],
+      {
+        cwd,
+        encoding: "utf8",
+        timeout: 8000,
+        maxBuffer: 2_000_000,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: extra ? { ...process.env, ...extra } : process.env,
+      },
+    );
+    return parseSearchHits(out);
+  } catch (err) {
+    const failed = err as { status?: number; stdout?: string };
+    if (failed.status === 1) return parseSearchHits(failed.stdout || "");
+  }
+  const paths: string[] = [];
+  walkFiles(cwd, cwd, paths, 0);
+  const hits: { path: string; line: number; text: string }[] = [];
+  const lower = needle.toLowerCase();
+  for (const path of paths) {
+    const abs = resolve(cwd, path);
+    try {
+      const st = statSync(abs);
+      if (!st.isFile() || st.size > 200_000) continue;
+      const buf = readFileSync(abs);
+      if (buf.includes(0)) continue;
+      const lines = buf.toString("utf8").split("\n");
+      let n = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].toLowerCase().includes(lower)) continue;
+        hits.push({
+          path,
+          line: i + 1,
+          text: lines[i].replace(/\s+/g, " ").trim().slice(0, 140),
+        });
+        n += 1;
+        if (n >= 8 || hits.length >= 100) break;
+      }
+    } catch {
+      // skip unreadable
+    }
+    if (hits.length >= 100) break;
+  }
+  return hits;
+}
+
+function revertHunk(
+  cwd: string,
+  raw: string,
+  hunk: string,
+): { path: string; error?: string } {
+  const path = workspacePath(cwd, raw);
+  if (!path) return { path: raw, error: "路径不在工作区里" };
+  const headerRe = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+  const hunkLines = hunk.split("\n");
+  const atIdx = hunkLines.findIndex((line) => headerRe.test(line));
+  if (atIdx < 0) return { path, error: "看不懂这段 diff" };
+  const header = headerRe.exec(hunkLines[atIdx]);
+  if (!header) return { path, error: "看不懂这段 diff" };
+  const file = readWorkspaceFile(cwd, path);
+  if (file.error || file.content == null) {
+    return { path, error: file.error || "读不了这个文件" };
+  }
+  let i = Number(header[1]) - 1;
+  const lines = file.content.split("\n");
+  const body = hunkLines.slice(atIdx + 1);
+  for (let k = 0; k < body.length; k++) {
+    const row = body[k];
+    if (k === body.length - 1 && row === "") continue;
+    if (row.startsWith("+")) {
+      if (i < 0 || i >= lines.length) return { path, error: "这段 diff 对不上文件" };
+      lines.splice(i, 1);
+    } else if (row.startsWith("-")) {
+      lines.splice(Math.max(i, 0), 0, row.slice(1));
+      i += 1;
+    } else if (row.startsWith("\\")) {
+      continue;
+    } else {
+      i += 1;
+    }
+  }
+  const abs = resolve(cwd, path);
+  const next = lines.join("\n");
+  try {
+    if (!next.trim() && !isTracked(cwd, path)) {
+      if (existsSync(abs) && statSync(abs).isFile()) unlinkSync(abs);
+    } else {
+      writeFileSync(abs, next);
+    }
+  } catch {
+    return { path, error: "写回失败" };
+  }
+  return { path };
+}
+
+function closeOpenTools(ws: WebSocket, slot: Slot, runStatus: string) {
+  if (!slot.openTools) slot.openTools = new Map();
+  if (!slot.openTools.size) return;
+  const failed = /cancel|error/i.test(runStatus);
+  const status = failed ? "error" : "completed";
+  for (const [callId, meta] of slot.openTools) {
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name: meta.name,
+      status,
+      result: failed ? "已中断" : undefined,
+      parentCallId: meta.parentCallId,
+      agent: meta.agent,
+      model: meta.model,
+    });
+  }
+  slot.openTools.clear();
+}
+
+function finishRun(
+  ws: WebSocket,
+  slot: Slot,
+  status: string,
+  durationMs?: number,
+  epoch?: number,
+) {
+  if (epoch != null && slot.epoch !== epoch) return;
+  slot.run = null;
+  if (slot.finished) return;
+  closeOpenTools(ws, slot, status);
+  slot.finished = true;
+  send(ws, {
+    type: "done",
+    chatId: slot.chatId,
+    status,
+    durationMs,
+  });
+}
+
+function sanitizeChatTitle(raw: string) {
+  let title = raw.trim().split(/\r?\n/)[0] || "";
+  title = title.replace(/^[#>*\-\s]+/, "");
+  title = title.replace(/^标题[:：]\s*/, "");
+  title = title.replace(/^["「『“]+|["」』”。！？.!?]+$/g, "").trim();
+  if (title.length > 24) title = title.slice(0, 24).trim();
+  return title;
+}
+
+async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: string) {
+  if (!chatId || namedChats.has(chatId) || namingChats.has(chatId)) return;
+  const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
+  if (!apiKey) return;
+  namingChats.add(chatId);
+  try {
+    const scratch = resolve(tenant.stateDir, "title-scratch");
+    mkdirSync(scratch, { recursive: true });
+    const result = await Agent.prompt(
+      `用户第一条指令：\n${(text || "（附图）").trim().slice(0, 2000)}`,
+      {
+        apiKey,
+        model: { id: DEFAULT_MODEL },
+        local: { cwd: scratch, settingSources: [] },
+        tools: [],
+        systemPrompt:
+          "你给这次对话起一个短标题。只输出标题本身，不要引号、句号或解释。中文优先，最多 16 个字，概括用户想做什么。",
+      },
+    );
+    const title = sanitizeChatTitle(result.result || "");
+    if (!title || title === "新对话") return;
+    namedChats.add(chatId);
+    send(ws, { type: "chat_title", chatId, title });
+  } catch (err) {
+    console.error("titleChat", err instanceof Error ? err.message : err);
+  } finally {
+    namingChats.delete(chatId);
+  }
+}
+
+async function handlePrompt(
+  ws: WebSocket,
+  conn: Conn,
+  slot: Slot,
+  text: string,
+  model?: string,
+  mode: AgentMode = "agent",
+  files?: string[],
+  images?: Array<{ data: string; mimeType: string }>,
+  confirmWrites = false,
+  autoApprove = false,
+  fresh = false,
+) {
+  if (fresh) {
+    await cancelRun(slot.run);
+    slot.epoch += 1;
+    await disposeSlot(slot);
+    slot.agentId = null;
+    slot.run = null;
+    slot.finished = true;
+    slot.edited = [];
+    slot.checkpoints = [];
+    slot.awaitingApproval = false;
+    slot.lastShellCallId = null;
+    slot.pending = [];
+    slot.openTools.clear();
+  }
+  if (slot.run || !slot.finished) {
+    slot.pending.push({
+      text,
+      model,
+      mode,
+      files,
+      images,
+      confirmWrites,
+      autoApprove,
+    });
+    if (slot.pending.length > 8) slot.pending.shift();
+    send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED" });
+    return;
+  }
+
+  if (globalRunningCount() >= maxRunning()) {
+    slot.pending.push({
+      text,
+      model,
+      mode,
+      files,
+      images,
+      confirmWrites,
+      autoApprove,
+    });
+    if (slot.pending.length > 8) slot.pending.shift();
+    send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED", message: "同时跑的任务已满，排队中" });
+    return;
+  }
+
+  const safeImages = sanitizeImages(images);
+  const cwd = cwdOf(conn, slot);
+  const prompt = wrapPrompt(
+    text.trim() || (safeImages.length ? "请看附图。" : ""),
+    mode,
+    files,
+    loadWorkspaceRules(cwd),
+    cwd,
+  );
+  if (!prompt) return;
+
+  const usedModel = (model && model.trim()) || slot.model || conn.model;
+  slot.model = usedModel;
+  conn.model = usedModel;
+
+  const epoch = ++slot.epoch;
+  slot.finished = false;
+  slot.edited = [];
+  slot.awaitingApproval = false;
+  slot.approvalWait = null;
+  slot.approvalSettled = null;
+  slot.lastShellCallId = null;
+  slot.openTools = new Map();
+  let replayApproved = false;
+
+  if (!autoApprove && (mode === "agent" || mode === "plan")) {
+    try {
+      const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      const kind = mode === "plan" ? "Plan" : "Agent";
+      let label = `${kind} · ${stamp}`;
+      if (slot.checkpoints.some((item) => item.label === label)) {
+        label = `${kind} · ${stamp} · ${slot.checkpoints.length + 1}`;
+      }
+      const checkpoint = createCheckpoint(cwd, label);
+      slot.checkpoints.unshift(checkpoint);
+      slot.checkpoints = slot.checkpoints.slice(0, 10);
+      sendCheckpoints(ws, slot);
+      persistConn(conn);
+    } catch (err) {
+      send(ws, {
+        type: "status",
+        chatId: slot.chatId,
+        status: "RUNNING",
+        message: `检查点没记下：${err instanceof Error ? err.message : "未知错误"}`,
+      });
+    }
+  }
+
+  let run: RunHandle | null = null;
+  let blockedAsk = false;
+  const blockedCalls = new Set<string>();
+  const startedCalls = new Set<string>();
+  const crewMeta = new Map<
+    string,
+    { agent?: string; model?: string; parentCallId?: string }
+  >();
+
+  const metaFor = (
+    callId: string,
+    name: string,
+    args: unknown,
+    parentCallId?: string,
+  ) => {
+    const parent = parentCallId ? crewMeta.get(parentCallId) : undefined;
+    const agent = crewRoleOf(name, args) || parent?.agent;
+    const model = crewModelOf(args) || parent?.model;
+    const row = {
+      agent,
+      model,
+      parentCallId: parentCallId || undefined,
+    };
+    crewMeta.set(callId, row);
+    return row;
+  };
+
+  const blockReadonlyWrite = (name: string, args: unknown, callId: string) => {
+    if ((mode !== "ask" && mode !== "plan") || !isMutatingTool(name, args)) return false;
+    if (blockedCalls.has(callId)) return true;
+    blockedAsk = true;
+    blockedCalls.add(callId);
+    const reason =
+      mode === "plan"
+        ? "Plan 模式只出方案，点「执行这个计划」才会改文件。"
+        : "Ask 模式已拦截写操作";
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status: "error",
+      result: reason,
+    });
+    send(ws, {
+      type: "text-delta",
+      chatId: slot.chatId,
+      text:
+        mode === "plan"
+          ? "\n\nPlan 不会改文件。要动手请点这条回复下的「执行这个计划」。"
+          : "\n\nAsk 模式不会改文件或跑会改系统的命令。这次写操作已拦截。",
+    });
+    if (run) void cancelRun(run);
+    return true;
+  };
+
+  const blockUnapprovedWrite = (name: string, args: unknown, callId: string) => {
+    if (mode !== "agent" && mode !== "plan") return false;
+    if (!confirmWrites || autoApprove) return false;
+    if (!isMutatingTool(name, args)) return false;
+    rememberEdit(slot, name, args, cwd);
+    if (slot.awaitingApproval) return true;
+    slot.awaitingApproval = true;
+    const meta = crewMeta.get(callId);
+    send(ws, {
+      type: "approval",
+      chatId: slot.chatId,
+      callId,
+      name,
+      args: summarizeToolArgs(args),
+      parentCallId: meta?.parentCallId,
+      agent: meta?.agent,
+      model: meta?.model,
+    });
+    if (run) void cancelRun(run);
+    return true;
+  };
+
+  const blockOutsideWorkspace = (name: string, args: unknown, callId: string) => {
+    const shell = /(shell|bash|terminal|command)/i.test(name);
+    if (!isMutatingTool(name, args) && !shell) return false;
+    if (!toolEscapesWorkspace(cwd, name, args)) return false;
+    if (blockedCalls.has(callId)) return true;
+    blockedCalls.add(callId);
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status: "error",
+      result: "只能改当前工作区里的文件",
+    });
+    send(ws, {
+      type: "text-delta",
+      chatId: slot.chatId,
+      text: "\n\n这次写操作超出当前工作区，已拦截。",
+    });
+    if (run) void cancelRun(run);
+    return true;
+  };
+
+  const blockCrew = (name: string, args: unknown, callId: string) => {
+    if (!isCrewToolName(name) && !isCrewRole(crewRoleOf(name, args))) return false;
+    const role = crewRoleOf(name, args);
+    let reason = "";
+    if (mode === "ask") reason = "Ask 模式不会派子代理。";
+    else if (mode === "plan" && role && role !== "explore") {
+      reason = "Plan 模式只能派 explore 做只读摸底。";
+    }
+    if (!reason) return false;
+    if (blockedCalls.has(callId)) return true;
+    blockedAsk = true;
+    blockedCalls.add(callId);
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status: "error",
+      result: reason,
+    });
+    send(ws, {
+      type: "text-delta",
+      chatId: slot.chatId,
+      text: `\n\n${reason}`,
+    });
+    if (run) void cancelRun(run);
+    return true;
+  };
+
+  const blockExploreWrite = (
+    name: string,
+    args: unknown,
+    callId: string,
+    parentCallId?: string,
+  ) => {
+    const agent =
+      crewRoleOf(name, args) ||
+      (parentCallId ? crewMeta.get(parentCallId)?.agent : undefined) ||
+      crewMeta.get(callId)?.agent;
+    if (agent !== "explore" || !isMutatingTool(name, args)) return false;
+    if (blockedCalls.has(callId)) return true;
+    blockedAsk = true;
+    blockedCalls.add(callId);
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status: "error",
+      result: "explore 只读，已拦截写操作",
+    });
+    send(ws, {
+      type: "text-delta",
+      chatId: slot.chatId,
+      text: "\n\nexplore 只读，这次写操作已拦截。",
+    });
+    if (run) void cancelRun(run);
+    return true;
+  };
+
+  const startTool = (
+    callId: string,
+    name: string,
+    args: unknown,
+    parentCallId?: string,
+  ) => {
+    if (startedCalls.has(callId)) return;
+    const parent = parentCallId || crewMeta.get(callId)?.parentCallId;
+    const meta = metaFor(callId, name, args, parent);
+    send(ws, {
+      type: "tool-started",
+      chatId: slot.chatId,
+      callId,
+      name,
+      args: summarizeToolArgs(args),
+      parentCallId: meta.parentCallId,
+      agent: meta.agent,
+      model: meta.model,
+    });
+    startedCalls.add(callId);
+    if (!slot.openTools) slot.openTools = new Map();
+    slot.openTools.set(callId, {
+      name,
+      args,
+      parentCallId: meta.parentCallId,
+      agent: meta.agent,
+      model: meta.model,
+    });
+    if (
+      !blockCrew(name, args, callId) &&
+      !blockExploreWrite(name, args, callId, meta.parentCallId) &&
+      !blockReadonlyWrite(name, args, callId) &&
+      !blockUnapprovedWrite(name, args, callId) &&
+      !blockOutsideWorkspace(name, args, callId)
+    ) {
+      rememberEdit(slot, name, args, cwd);
+    }
+    rememberShellCall(slot, name, callId);
+  };
+
+  const finishTool = (
+    callId: string,
+    name: string,
+    status: "completed" | "error",
+    result: unknown,
+    args?: unknown,
+  ) => {
+    if (blockedCalls.has(callId)) return;
+    slot.openTools?.delete(callId);
+    const meta = crewMeta.get(callId);
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status,
+      result,
+      parentCallId: meta?.parentCallId,
+      agent: meta?.agent,
+      model: meta?.model,
+    });
+    if (!slot.awaitingApproval && status !== "error" && isMutatingTool(name, args)) {
+      const raw = pathFromTool(args);
+      const rel = raw ? workspacePath(cwd, raw) || raw : "";
+      pushWorkspace(ws, slot, conn, rel ? [rel] : slot.edited);
+    }
+  };
+
+  const payload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
+
+  try {
+    const agent = await ensureAgent(conn, slot);
+    slot.agentId = agent.agentId;
+    send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
+    send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
+    send(ws, { type: "run_meta", chatId: slot.chatId, model: usedModel, mode });
+
+    run = await agent.send(payload, {
+      model: { id: usedModel },
+      mode: mode === "plan" ? "plan" : "agent",
+      local: { force: true },
+      onDelta: ({ update }) => {
+        const rec = update as {
+          type?: string;
+          callId?: string;
+          text?: string;
+          toolCall?: {
+            name?: string;
+            type?: string;
+            args?: unknown;
+            result?: unknown;
+            status?: string;
+          };
+          event?: Record<string, unknown>;
+          taskUpdate?: {
+            type?: string;
+            callId?: string;
+            toolCall?: {
+              name?: string;
+              type?: string;
+              args?: unknown;
+              result?: unknown;
+              status?: string;
+            };
+            event?: Record<string, unknown>;
+          };
+        };
+        const toolName = (tool?: { name?: string; type?: string }) =>
+          tool?.name || tool?.type || "tool";
+        switch (rec.type) {
+          case "text-delta":
+            if (rec.text) send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
+            break;
+          case "thinking-delta":
+            if (rec.text) send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
+            break;
+          case "tool-call-started":
+            startTool(rec.callId || "", toolName(rec.toolCall), rec.toolCall?.args);
+            break;
+          case "shell-output-delta": {
+            const parsed = parseShellDelta(rec.event || {});
+            if (parsed) {
+              emitToolOutput(ws, slot, {
+                callId: parsed.callId,
+                stream: parsed.stream,
+                chunk: parsed.chunk,
+              });
+            }
+            break;
+          }
+          case "tool-call-completed":
+            finishTool(
+              rec.callId || "",
+              toolName(rec.toolCall),
+              rec.toolCall?.status === "error" ? "error" : "completed",
+              rec.toolCall?.result,
+              rec.toolCall?.args,
+            );
+            break;
+          case "tool-call-delta": {
+            const nested = rec.taskUpdate;
+            if (!nested) break;
+            if (nested.type === "tool-call-started") {
+              startTool(
+                nested.callId || "",
+                toolName(nested.toolCall),
+                nested.toolCall?.args,
+                rec.callId,
+              );
+            } else if (nested.type === "tool-call-completed") {
+              finishTool(
+                nested.callId || "",
+                toolName(nested.toolCall),
+                nested.toolCall?.status === "error" ? "error" : "completed",
+                nested.toolCall?.result,
+                nested.toolCall?.args,
+              );
+            } else if (nested.type === "shell-output-delta") {
+              const parsed = parseShellDelta(nested.event || {});
+              if (parsed) {
+                emitToolOutput(ws, slot, {
+                  callId: parsed.callId,
+                  stream: parsed.stream,
+                  chunk: parsed.chunk,
+                });
+              }
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      },
+    });
+
+    if (slot.epoch !== epoch || slot.finished) {
+      try {
+        await cancelRun(run);
+      } catch {
+        // Stale run after cancel or a newer prompt.
+      }
+      return;
+    }
+    slot.run = run;
+    if (blockedAsk) await cancelRun(run);
+    if (slot.awaitingApproval && !autoApprove) {
+      await cancelRun(run);
+      const allowed = await waitForApproval(slot);
+      if (slot.epoch !== epoch || slot.finished) return;
+      rollbackToLatestCheckpoint(ws, slot, conn, true);
+      if (!allowed) {
+        send(ws, {
+          type: "status",
+          chatId: slot.chatId,
+          status: "CANCELLED",
+          message: "已拒绝写入，已还原到发送前。",
+        });
+        send(ws, {
+          type: "text-delta",
+          chatId: slot.chatId,
+          text: "\n\n已拒绝写入，已还原到发送前。",
+        });
+        finishRun(ws, slot, "cancelled", undefined, epoch);
+        return;
+      }
+      send(ws, {
+        type: "text-delta",
+        chatId: slot.chatId,
+        text: "\n\n已允许写入，按确认后重新执行这一轮。",
+      });
+      replayApproved = true;
+      slot.run = null;
+      slot.finished = true;
+      slot.awaitingApproval = false;
+    }
+
+    if (!replayApproved) {
+    try {
+    for await (const event of run.stream()) {
+      if (event.type === "task" && event.text) {
+        send(ws, { type: "task", chatId: slot.chatId, text: event.text });
+      }
+      if (event.type === "status") {
+        send(ws, {
+          type: "status",
+          chatId: slot.chatId,
+          status: event.status,
+          message: event.message,
+        });
+      }
+      if (event.type === "tool_call" && event.status === "running") {
+        startTool(event.call_id, event.name, event.args);
+        const snap = snapshotFromResult(event.result);
+        if (snap.stdout || snap.stderr) {
+          emitToolOutput(ws, slot, { callId: event.call_id, ...snap });
+        }
+      }
+      if (
+        event.type === "tool_call" &&
+        (event.status === "completed" || event.status === "error")
+      ) {
+        finishTool(event.call_id, event.name, event.status, event.result, event.args);
+      }
+      if (slot.awaitingApproval && !autoApprove) break;
+    }
+    } catch (err) {
+      if (!isAbortError(err)) throw err;
+    }
+
+    if (slot.awaitingApproval && !autoApprove) {
+      await cancelRun(run);
+      const allowed = await waitForApproval(slot);
+      if (slot.epoch !== epoch || slot.finished) return;
+      rollbackToLatestCheckpoint(ws, slot, conn, true);
+      if (!allowed) {
+        send(ws, {
+          type: "status",
+          chatId: slot.chatId,
+          status: "CANCELLED",
+          message: "已拒绝写入，已还原到发送前。",
+        });
+        send(ws, {
+          type: "text-delta",
+          chatId: slot.chatId,
+          text: "\n\n已拒绝写入，已还原到发送前。",
+        });
+        finishRun(ws, slot, "cancelled", undefined, epoch);
+        return;
+      }
+      send(ws, {
+        type: "text-delta",
+        chatId: slot.chatId,
+        text: "\n\n已允许写入，按确认后重新执行这一轮。",
+      });
+      replayApproved = true;
+      slot.run = null;
+      slot.finished = true;
+      slot.awaitingApproval = false;
+    }
+
+    if (!replayApproved) {
+    let result: { status: string; durationMs?: number } = { status: "finished" };
+    try {
+      result = await run.wait();
+    } catch (err) {
+      if (!isAbortError(err)) throw err;
+      result = { status: slot.awaitingApproval ? "approval" : "cancelled" };
+    }
+    if (mode === "ask" && slot.edited.length) {
+      const undone = undoEdits(cwd, slot.edited);
+      slot.edited = [];
+      if (undone.paths.length) {
+        send(ws, {
+          type: "text-delta",
+          chatId: slot.chatId,
+          text: `\n\nAsk 模式已还原误改：${undone.paths.join(", ")}`,
+        });
+        send(ws, {
+          type: "undone",
+          chatId: slot.chatId,
+          paths: undone.paths,
+          error: undone.error,
+        });
+      }
+    } else if (slot.edited.length) {
+      pushWorkspace(ws, slot, conn, slot.edited);
+    }
+    finishRun(
+      ws,
+      slot,
+      slot.awaitingApproval ? "approval" : result.status,
+      result.durationMs,
+      epoch,
+    );
+    }
+    }
+  } catch (err) {
+    if (isAbortError(err) && (replayApproved || slot.awaitingApproval)) {
+      // SDK abort after cancel is expected around confirm-write.
+    } else {
+      const messageText = err instanceof Error ? err.message : "gateway 出错了";
+      send(ws, { type: "error", chatId: slot.chatId, message: messageText });
+      finishRun(ws, slot, "error", undefined, epoch);
+    }
+  } finally {
+    if (!replayApproved) {
+      finishRun(
+        ws,
+        slot,
+        slot.awaitingApproval ? "approval" : "cancelled",
+        undefined,
+        epoch,
+      );
+      const next = slot.pending.shift();
+      if (next && slot.finished && !slot.run) {
+        queueMicrotask(() => {
+          void handlePrompt(
+            ws,
+            conn,
+            slot,
+            next.text,
+            next.model,
+            next.mode,
+            next.files,
+            next.images,
+            next.confirmWrites,
+            next.autoApprove,
+            false,
+          );
+        });
+      } else {
+        kickGlobalQueue();
+      }
+    }
+  }
+  if (replayApproved) {
+    await handlePrompt(
+      ws,
+      conn,
+      slot,
+      text,
+      usedModel,
+      mode,
+      files,
+      images,
+      confirmWrites,
+      true,
+      false,
+    );
+  }
+}
+
+function kickGlobalQueue() {
+  if (globalRunningCount() >= maxRunning()) return;
+  for (const tenant of allTenants()) {
+    for (const slot of liveSlotsOf(tenant).values()) {
+      if (!slot.pending.length || !slot.finished || slot.run) continue;
+      const owner = slot.owner;
+      if (!owner || owner.readyState !== WebSocket.OPEN) continue;
+      const ownerConn = conns.get(owner);
+      if (!ownerConn?.tenant || ownerConn.tenant.id !== tenant.id) continue;
+      const next = slot.pending.shift();
+      if (!next) continue;
+      queueMicrotask(() => {
+        void handlePrompt(
+          owner,
+          ownerConn,
+          slot,
+          next.text,
+          next.model,
+          next.mode,
+          next.files,
+          next.images,
+          next.confirmWrites,
+          next.autoApprove,
+          false,
+        );
+      });
+      return;
+    }
+  }
+}
+
+function uploadCorsOrigin(req: IncomingMessage): string | null {
+  const origin = String(req.headers.origin || "");
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    const host = String(req.headers.host || "").split(":")[0];
+    const name = url.hostname;
+    if (
+      name === host ||
+      name === "localhost" ||
+      name === "127.0.0.1" ||
+      name === "aiagentswitcher.com" ||
+      name.endsWith(".aiagentswitcher.com")
+    ) {
+      return origin;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function applyUploadCors(req: IncomingMessage, res: ServerResponse) {
+  const origin = uploadCorsOrigin(req);
+  if (origin) res.setHeader("access-control-allow-origin", origin);
+  const requested = String(req.headers["access-control-request-headers"] || "")
+    .trim()
+    .toLowerCase();
+  res.setHeader(
+    "access-control-allow-headers",
+    requested || "authorization, content-type",
+  );
+  res.setHeader("access-control-allow-methods", "POST, OPTIONS");
+  res.setHeader("access-control-max-age", "86400");
+  res.setHeader("vary", "origin");
+}
+
+function parseMultipartUpload(buf: Buffer, contentType: string): {
+  token?: string;
+  filename?: string;
+  file?: Buffer;
+} {
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType);
+  const boundary = (match?.[1] || match?.[2] || "").trim();
+  if (!boundary) return {};
+  const sep = Buffer.from(`--${boundary}`);
+  const out: { token?: string; filename?: string; file?: Buffer } = {};
+  let start = buf.indexOf(sep);
+  if (start < 0) return {};
+  start += sep.length;
+  if (buf[start] === 13 && buf[start + 1] === 10) start += 2;
+  const nextSep = Buffer.from(`\r\n--${boundary}`);
+  while (start < buf.length) {
+    if (buf[start] === 45 && buf[start + 1] === 45) break;
+    const headerEnd = buf.indexOf("\r\n\r\n", start);
+    if (headerEnd < 0) break;
+    const headers = buf.slice(start, headerEnd).toString("utf8");
+    const bodyStart = headerEnd + 4;
+    const next = buf.indexOf(nextSep, bodyStart);
+    if (next < 0) break;
+    const body = buf.slice(bodyStart, next);
+    const name = /name="([^"]+)"/i.exec(headers)?.[1] || "";
+    const filename =
+      /filename="([^"]*)"/i.exec(headers)?.[1] ||
+      /filename\*=(?:UTF-8'')?([^;\s]+)/i.exec(headers)?.[1];
+    if (name === "token") out.token = body.toString("utf8");
+    else if (name === "file" || filename != null) {
+      out.file = body;
+      if (filename) out.filename = filename;
+    }
+    start = next + 2 + sep.length;
+    if (buf[start] === 13 && buf[start + 1] === 10) start += 2;
+  }
+  return out;
+}
+
+function readRequestBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(new Error("too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+async function handleUpload(req: IncomingMessage, res: ServerResponse, url: URL) {
+  applyUploadCors(req, res);
+  if (req.method === "OPTIONS") {
+    res.writeHead(200, { "content-type": "text/plain", "content-length": "0" }).end();
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(405, { "content-type": "application/json" }).end(JSON.stringify({ error: "method" }));
+    return;
+  }
+  const chatId = url.searchParams.get("chatId") || "";
+  let name = url.searchParams.get("name") || "file";
+  let buf: Buffer;
+  let formToken = "";
+  try {
+    const raw = await readRequestBody(req, MAX_UPLOAD_BYTES + 256_000);
+    const contentType = String(req.headers["content-type"] || "");
+    if (/multipart\/form-data/i.test(contentType)) {
+      const parsed = parseMultipartUpload(raw, contentType);
+      formToken = parsed.token || "";
+      buf = parsed.file || Buffer.alloc(0);
+      if (parsed.filename) {
+        try {
+          name = decodeURIComponent(parsed.filename);
+        } catch {
+          name = parsed.filename;
+        }
+      }
+      if (!buf.length) {
+        console.warn("upload multipart empty", name, raw.length);
+      }
+    } else {
+      buf = raw;
+    }
+  } catch (err) {
+    const tooBig = err instanceof Error && err.message === "too large";
+    res
+      .writeHead(tooBig ? 413 : 400, { "content-type": "application/json" })
+      .end(JSON.stringify({ error: tooBig ? "文件超过 32MB" : "读不了这个文件" }));
+    return;
+  }
+  const header = String(req.headers.authorization || "");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || "";
+  const token = bearer || formToken.trim();
+  const tenant = resolveTenant(token);
+  if (!tenant) {
+    console.warn("upload unauthorized", req.method, name);
+    res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
+  if (chatId && chatOwnedByOther(chatId, tenant)) {
+    res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "forbidden" }));
+    return;
+  }
+  if (!buf.length) {
+    res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "空文件" }));
+    return;
+  }
+  const cwd = chatId ? cwdForChat(tenant, chatId) : tenant.workspaceRoot;
+  const rel = uniqueUploadPath(cwd, name);
+  if (!rel) {
+    res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "没法在工作区里放下这个文件" }));
+    return;
+  }
+  const written = writeWorkspaceBytes(cwd, rel, buf);
+  if (written.error) {
+    res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: written.error, path: written.path }));
+    return;
+  }
+  console.log("upload", written.path, written.size);
+  res.writeHead(200, { "content-type": "application/json" }).end(
+    JSON.stringify({ path: written.path, size: written.size, name }),
+  );
+}
+
+function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
+  const chatId = url.searchParams.get("chatId") || "";
+  const raw = url.searchParams.get("path") || "";
+  const exp = url.searchParams.get("exp") || "";
+  const sig = url.searchParams.get("sig") || "";
+  const rev = (url.searchParams.get("rev") || "").trim();
+  const header = String(req.headers.authorization || "");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || "";
+  const bearerTenant = bearer ? resolveTenant(bearer) : null;
+  const ticketTenantId = matchMediaTenant(
+    mediaSecret(),
+    allTenants().map((item) => item.id),
+    chatId,
+    exp,
+    sig,
+  );
+  const tenant = bearerTenant || (ticketTenantId ? getTenant(ticketTenantId) : undefined);
+  if (!hasAuth() || !tenant) {
+    res.writeHead(401, { "cache-control": "private, no-store" }).end("unauthorized");
+    return;
+  }
+  if (chatId && chatOwnedByOther(chatId, tenant)) {
+    res.writeHead(403, { "cache-control": "private, no-store" }).end("forbidden");
+    return;
+  }
+  if (!chatId || !raw) {
+    res.writeHead(400).end("missing path");
+    return;
+  }
+  const cwd = cwdForChat(tenant, chatId);
+  const path = workspacePath(cwd, raw);
+  if (!path) {
+    res.writeHead(403).end("path");
+    return;
+  }
+  const kind = kindFromPath(path);
+  const mime = mimeOf(path, kind);
+  if (rev === "HEAD") {
+    const env = gitRoot(cwd) ? undefined : shadowGitEnv(cwd) || undefined;
+    try {
+      const buf = gitBytes(cwd, ["show", `HEAD:${path}`], env);
+      const limit = isByteKind(kind) ? sizeLimit(kind) : Math.max(sizeLimit(kind), 2_000_000);
+      if (buf.length > limit) {
+        res.writeHead(413).end("too large");
+        return;
+      }
+      sendMediaBuffer(req, res, buf, path, mime);
+    } catch {
+      res.writeHead(404).end("not in HEAD");
+    }
+    return;
+  }
+  sendMediaFile(req, res, resolve(cwd, path), path, kind);
+}
+
+function cwdWritable(dir: string) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    accessSync(dir, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function healthPayload() {
+  const tenants = allTenants();
+  const cwdOk = tenants.length ? tenants.every((item) => cwdWritable(item.workspaceRoot)) : false;
+  const stateOk = tenants.length ? tenants.every((item) => cwdWritable(item.stateDir)) : false;
+  const ready = Boolean(hasAuth() && process.env.CURSOR_API_KEY?.trim() && cwdOk && stateOk);
+  return {
+    ok: ready,
+    tenants: tenants.map((item) => item.id),
+    cwdWritable: cwdOk,
+    stateWritable: stateOk,
+    hasApiKey: Boolean(process.env.CURSOR_API_KEY?.trim()),
+    hasAuth: hasAuth(),
+    host: HOST,
+  };
+}
+
+const httpServer = createServer((req, res) => {
+  const url = new URL(req.url || "/", "http://127.0.0.1");
+  if (url.pathname === "/health") {
+    const body = healthPayload();
+    res.writeHead(body.ok ? 200 : 503, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
+    return;
+  }
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media") {
+    handleMedia(req, res, url);
+    return;
+  }
+  if (url.pathname === "/upload") {
+    void handleUpload(req, res, url).catch((err) => {
+      console.error("upload", err instanceof Error ? err.message : err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "上传失败" }));
+      }
+    });
+    return;
+  }
+  if (!PROXY_WEB) {
+    res.writeHead(404).end("not found");
+    return;
+  }
+  proxyWeb(req, res);
+});
+
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (req, socket, head) => {
+  if (agentSocketPath(req.url)) {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+    return;
+  }
+  if (!PROXY_WEB) {
+    socket.destroy();
+    return;
+  }
+  proxyUpgrade(req, socket, head);
+});
+
+wss.on("connection", (ws, req: IncomingMessage) => {
+  const conn: Conn = {
+    cwd: "",
+    model: DEFAULT_MODEL,
+    authed: false,
+    ip: peerIp(req),
+    tenant: null,
+    slots: new Map(),
+    ws,
+  };
+  conns.set(ws, conn);
+
+  ws.on("message", async (data) => {
+    const message = parseClient(String(data));
+    if (!message) return;
+
+    try {
+      if (message.type === "ping") {
+        send(ws, { type: "pong" });
+        return;
+      }
+
+      if (message.type === "hello") {
+        if (loginBlocked(conn.ip)) {
+          send(ws, { type: "auth", ok: false, message: "试太多次了，过几分钟再试。" });
+          return;
+        }
+        if (!hasAuth()) {
+          send(ws, {
+            type: "auth",
+            ok: false,
+            message: "还没设登录密码。写入 tenants.json 或 CURSOR_REMOTE_TOKEN 后重启 gateway。",
+          });
+          return;
+        }
+        const tenant = resolveTenant(message.token || "");
+        if (!tenant) {
+          noteLoginFail(conn.ip);
+          send(ws, { type: "auth", ok: false, message: "密码不对。" });
+          return;
+        }
+        noteLoginOk(conn.ip);
+        if (conn.authed) detachConn(conn);
+        bindTenant(conn, tenant);
+        const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
+        hydrateConn(conn);
+        attachLiveSlots(conn);
+        const cached = modelsCache?.ids?.length ? modelsCache.ids : [DEFAULT_MODEL];
+        const emitReady = (models: string[]) => {
+          send(ws, {
+            type: "ready",
+            cwd: conn.cwd,
+            hasApiKey: Boolean(apiKey),
+            model: conn.model,
+            models,
+            agentId: null,
+            runningChatIds: runningChatIds(tenant),
+            queuedChatIds: queuedChatIds(tenant),
+            workspaceRoot: resolve(tenant.workspaceRoot),
+            tenantId: tenant.id,
+            tenantName: tenant.name,
+          });
+        };
+        emitReady(cached);
+        emitStoredState(ws, tenant);
+        emitWorkspaces(ws, tenant);
+        for (const chatId of runningChatIds(tenant)) {
+          send(ws, { type: "status", chatId, status: "RUNNING" });
+        }
+        for (const slot of conn.slots.values()) {
+          if (slot.checkpoints.length) sendCheckpoints(ws, slot);
+        }
+        if (apiKey) {
+          void listModels(apiKey).then((models) => {
+            if (models.join("\n") !== cached.join("\n")) emitReady(models);
+          });
+        }
+        return;
+      }
+
+      if (!conn.authed || !conn.tenant) {
+        send(ws, { type: "error", message: "先发 hello。" });
+        return;
+      }
+      const tenant = conn.tenant;
+
+      if (message.type === "sync_state") {
+        const clientRev = typeof message.rev === "number" ? message.rev : 0;
+        if (clientRev < tenant.disk.rev) {
+          emitStoredState(ws, tenant);
+          return;
+        }
+        const prevCwd = new Map<string, string>();
+        const prevIds = chatIdsFrom(tenant.disk.chats);
+        for (const item of tenant.disk.chats) {
+          if (!item || typeof item !== "object") continue;
+          const row = item as { id?: unknown; cwd?: unknown };
+          if (typeof row.id === "string" && typeof row.cwd === "string" && row.cwd) {
+            prevCwd.set(row.id, row.cwd);
+          }
+        }
+        const incoming = Array.isArray(message.chats) ? message.chats : [];
+        const incomingIds = chatIdsFrom(incoming);
+        for (const id of prevIds) {
+          if (!incomingIds.has(id)) tombstoneChat(tenant, id);
+        }
+        const gone = new Set(tenant.disk.deletedIds);
+        tenant.disk.chats = incoming
+          .filter((item) => {
+            const id = chatIdOf(item);
+            return !id || !gone.has(id);
+          })
+          .map((item) => {
+          if (!item || typeof item !== "object") return item;
+          const row = item as { id?: unknown; cwd?: unknown };
+          const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
+          const id = typeof row.id === "string" ? row.id : "";
+          const next = wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
+          if (row.cwd === next) return item;
+          return { ...row, cwd: next };
+        });
+        tenant.disk.rev = clientRev;
+        pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
+        persistConn(conn);
+        return;
+      }
+
+      if (message.type === "write_file") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        const written = writeWorkspaceFile(cwd, message.path, message.content);
+        send(ws, {
+          type: "file_written",
+          chatId: message.chatId,
+          path: written.path,
+          error: written.error,
+        });
+        return;
+      }
+
+      if (message.type === "upload_file") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        const raw = typeof message.data === "string" ? message.data : "";
+        const b64 = raw.replace(/^data:[^;]+;base64,/, "");
+        const fail = (error: string) => {
+          send(ws, {
+            type: "file_uploaded",
+            chatId: message.chatId,
+            id: message.id,
+            name: message.name,
+            path: message.name || "",
+            error,
+          });
+        };
+        if (!b64) {
+          fail("没有文件内容");
+          return;
+        }
+        let buf: Buffer;
+        try {
+          buf = Buffer.from(b64, "base64");
+        } catch {
+          fail("文件解码失败");
+          return;
+        }
+        if (!buf.length) {
+          fail("空文件");
+          return;
+        }
+        if (buf.length > MAX_UPLOAD_BYTES) {
+          fail("文件超过 32MB");
+          return;
+        }
+        const rel = uniqueUploadPath(cwd, message.name || "file");
+        if (!rel) {
+          fail("没法在工作区里放下这个文件");
+          return;
+        }
+        const written = writeWorkspaceBytes(cwd, rel, buf);
+        send(ws, {
+          type: "file_uploaded",
+          chatId: message.chatId,
+          id: message.id,
+          name: message.name,
+          path: written.path,
+          error: written.error,
+          size: written.size,
+        });
+        if (!written.error && message.chatId) {
+          pushWorkspace(ws, slotOf(conn, message.chatId), conn, [written.path]);
+        }
+        return;
+      }
+
+      if (message.type === "fs_op") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        const result = runFsOp(cwd, message.op, message.path, message.to);
+        send(ws, {
+          type: "fs_done",
+          chatId: message.chatId,
+          op: message.op,
+          path: result.path,
+          to: result.to,
+          error: result.error,
+        });
+        if (!result.error && message.chatId) {
+          pushWorkspace(ws, slotOf(conn, message.chatId), conn, [result.to || result.path]);
+        }
+        return;
+      }
+
+      if (message.type === "list_files") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        const listed = listWorkspaceFiles(cwd, message.query || "");
+        send(ws, {
+          type: "files",
+          chatId: message.chatId,
+          query: message.query || "",
+          paths: listed.paths,
+          status: listed.status,
+          mention: Boolean(message.mention),
+          truncated: listed.truncated,
+        });
+        return;
+      }
+
+      if (message.type === "search_text") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        send(ws, {
+          type: "search_hits",
+          chatId: message.chatId,
+          query: message.query,
+          hits: searchWorkspace(cwd, message.query),
+        });
+        return;
+      }
+
+      if (message.type === "set_workspace") {
+        const next = confinedCwd(message.cwd || conn.cwd, tenant.workspaceRoot);
+        if (!next) {
+          send(ws, { type: "error", chatId: message.chatId, message: "工作区必须在允许的目录里。" });
+          return;
+        }
+        try {
+          ensureWorkspaceDir(next);
+        } catch {
+          send(ws, { type: "error", chatId: message.chatId, message: "建不了这个工作区目录。" });
+          return;
+        }
+        if (message.chatId) {
+          const slot = slotOf(conn, message.chatId);
+          if (next !== slot.cwd) {
+            slot.cwd = next;
+            await disposeSlot(slot);
+            slot.agentId = null;
+          }
+          persistConn(conn);
+          send(ws, {
+            type: "session",
+            chatId: slot.chatId,
+            agentId: slot.agentId || "",
+            cwd: slot.cwd,
+          });
+        } else {
+          conn.cwd = next;
+          send(ws, { type: "session", chatId: "", agentId: "", cwd: conn.cwd });
+        }
+        emitWorkspaces(ws, tenant);
+        return;
+      }
+
+      if (message.type === "list_workspaces") {
+        emitWorkspaces(ws, tenant);
+        return;
+      }
+
+      if (message.type === "create_workspace") {
+        const name = sanitizeWorkspaceName(message.name);
+        if (!name) {
+          send(ws, { type: "error", message: "工作区名字不合法。" });
+          return;
+        }
+        const next = confinedCwd(resolve(tenant.workspaceRoot, name), tenant.workspaceRoot);
+        if (!next) {
+          send(ws, { type: "error", message: "工作区必须在允许的目录里。" });
+          return;
+        }
+        try {
+          if (existsSync(next) && !statSync(next).isDirectory()) {
+            send(ws, { type: "error", message: "已经有同名文件。" });
+            return;
+          }
+          ensureWorkspaceDir(next);
+        } catch {
+          send(ws, { type: "error", message: "建不了这个工作区目录。" });
+          return;
+        }
+        send(ws, { type: "workspace_created", path: next, name });
+        emitWorkspaces(ws, tenant);
+        return;
+      }
+
+      if (message.type === "resume_session") {
+        const slot = slotOf(conn, message.chatId);
+        const stored = slot.agentId || diskSlot(tenant, slot.chatId)?.agentId || "";
+        if (message.agentId !== stored) {
+          send(ws, { type: "error", chatId: slot.chatId, message: "不能恢复别人的会话。" });
+          return;
+        }
+        send(ws, {
+          type: "session",
+          chatId: slot.chatId,
+          agentId: slot.agentId || "",
+          cwd: cwdOf(conn, slot),
+        });
+        sendCheckpoints(ws, slot);
+        void sendAgentHistory(ws, conn, slot);
+        return;
+      }
+
+      if (message.type === "delete_session") {
+        await forgetChat(conn, message.chatId);
+        emitStoredState(ws, tenant);
+        return;
+      }
+
+      if (message.type === "new_session") {
+        const slot = slotOf(conn, message.chatId);
+        resolveApprovalWait(slot, false);
+        await cancelRun(slot.run);
+        finishRun(ws, slot, "cancelled");
+        await disposeSlot(slot);
+        slot.agentId = null;
+        slot.edited = [];
+        slot.checkpoints = [];
+        slot.pending = [];
+        slot.openTools.clear();
+        const next = message.cwd ? confinedCwd(message.cwd, tenant.workspaceRoot) : null;
+        if (next) {
+          try {
+            ensureWorkspaceDir(next);
+            slot.cwd = next;
+          } catch {
+            send(ws, { type: "error", chatId: slot.chatId, message: "建不了这个工作区目录。" });
+          }
+        }
+        persistConn(conn);
+        send(ws, { type: "session", chatId: slot.chatId, agentId: "", cwd: cwdOf(conn, slot) });
+        send(ws, { type: "status", chatId: slot.chatId, status: "IDLE" });
+        sendCheckpoints(ws, slot);
+        persistConn(conn);
+        return;
+      }
+
+      if (message.type === "approval_reply") {
+        const slot = slotOf(conn, message.chatId);
+        resolveApprovalWait(slot, Boolean(message.allow));
+        return;
+      }
+
+      if (message.type === "cancel") {
+        const slot = slotOf(conn, message.chatId);
+        resolveApprovalWait(slot, false);
+        const alreadyDone = slot.finished;
+        await cancelRun(slot.run);
+        finishRun(ws, slot, "cancelled");
+        if (alreadyDone) {
+          send(ws, { type: "done", chatId: slot.chatId, status: "cancelled" });
+        }
+        return;
+      }
+
+      if (message.type === "drop_queued") {
+        const slot = slotOf(conn, message.chatId);
+        const needle = (message.text || "").trim();
+        if (!needle) slot.pending = [];
+        else {
+          const index = slot.pending.findIndex((item) => item.text.trim() === needle);
+          if (index >= 0) slot.pending.splice(index, 1);
+        }
+        return;
+      }
+
+      if (message.type === "set_model") {
+        const id = message.model.trim();
+        if (id) {
+          conn.model = id;
+          if (message.chatId) slotOf(conn, message.chatId).model = id;
+        }
+        return;
+      }
+
+      if (message.type === "list_checkpoints") {
+        sendCheckpoints(ws, slotOf(conn, message.chatId));
+        return;
+      }
+
+      if (message.type === "read_file") {
+        const cwd = message.chatId
+          ? cwdOf(conn, slotOf(conn, message.chatId))
+          : conn.cwd;
+        const file = message.diff
+          ? readWorkspaceDiff(cwd, message.path)
+          : readWorkspaceFile(cwd, message.path);
+        reply(ws, payload(tenant, message.chatId, message.path, file, Boolean(message.diff)));
+        return;
+      }
+
+      if (message.type === "revert_file") {
+        const slot = slotOf(conn, message.chatId);
+        if (slot.run) {
+          send(ws, {
+            type: "error",
+            chatId: slot.chatId,
+            message: "Agent 还在跑，先停再还原。",
+          });
+          return;
+        }
+        const result = undoEdits(cwdOf(conn, slot), [message.path]);
+        send(ws, {
+          type: "undone",
+          chatId: slot.chatId,
+          paths: result.paths,
+          error: result.error,
+        });
+        if (result.paths.length) {
+          const gone = new Set(result.paths);
+          slot.edited = slot.edited.filter((item) => {
+            const path = workspacePath(cwdOf(conn, slot), item);
+            return !path || !gone.has(path);
+          });
+          pushWorkspace(ws, slot, conn, result.paths);
+        }
+        return;
+      }
+
+      if (message.type === "revert_hunk") {
+        const slot = slotOf(conn, message.chatId);
+        if (slot.run) {
+          send(ws, {
+            type: "error",
+            chatId: slot.chatId,
+            message: "Agent 还在跑，先停再还原。",
+          });
+          return;
+        }
+        const result = revertHunk(cwdOf(conn, slot), message.path, message.hunk);
+        send(ws, {
+          type: "undone",
+          chatId: slot.chatId,
+          paths: result.error ? [] : [result.path],
+          error: result.error,
+        });
+        if (!result.error) pushWorkspace(ws, slot, conn, [result.path]);
+        return;
+      }
+
+      if (message.type === "undo" || message.type === "restore") {
+        const slot = slotOf(conn, message.chatId);
+        if (slot.run) {
+          send(ws, {
+            type: "error",
+            chatId: slot.chatId,
+            message: "Agent 还在跑，先停再撤销。",
+          });
+          return;
+        }
+        const wanted =
+          message.type === "restore"
+            ? slot.checkpoints.find((item) => item.id === message.checkpointId)
+            : slot.checkpoints[0];
+        if (wanted) {
+          const result = restoreCheckpoint(cwdOf(conn, slot), wanted, slot.edited);
+          send(ws, {
+            type: "restored",
+            chatId: slot.chatId,
+            checkpointId: wanted.id,
+            label: wanted.label,
+            error: result.error,
+          });
+          if (!result.error) {
+            const preview = slot.edited.slice();
+            slot.edited = [];
+            pushWorkspace(ws, slot, conn, preview);
+          }
+          persistConn(conn);
+          return;
+        }
+        if (message.type === "restore") {
+          send(ws, {
+            type: "restored",
+            chatId: slot.chatId,
+            checkpointId: message.checkpointId,
+            error: "找不到这个检查点",
+          });
+          return;
+        }
+        const result = undoEdits(cwdOf(conn, slot), slot.edited);
+        send(ws, {
+          type: "undone",
+          chatId: slot.chatId,
+          paths: result.paths,
+          error: result.error,
+        });
+        if (result.paths.length) {
+          slot.edited = [];
+          pushWorkspace(ws, slot, conn, result.paths);
+        }
+        return;
+      }
+
+      if (message.type === "prompt") {
+        const slot = slotOf(conn, message.chatId);
+        await handlePrompt(
+          ws,
+          conn,
+          slot,
+          message.text,
+          message.model,
+          message.mode,
+          message.files,
+          message.images,
+          Boolean(message.confirmWrites),
+          Boolean(message.autoApprove),
+          Boolean(message.fresh),
+        );
+        if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text);
+      }
+    } catch (err) {
+      const messageText =
+        err instanceof CursorAgentError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "gateway 出错了";
+      const chatId = "chatId" in message && message.chatId ? message.chatId : undefined;
+      send(ws, { type: "error", chatId, message: messageText });
+      if (chatId) {
+        const slot = conn.slots.get(chatId);
+        if (slot && !slot.finished) finishRun(ws, slot, "error");
+      }
+    }
+  });
+
+  ws.on("close", () => {
+    if (conn.authed) persistConn(conn);
+    for (const slot of conn.slots.values()) {
+      if (slot.owner === ws) slot.owner = null;
+    }
+    conns.delete(ws);
+  });
+});
+
+httpServer.listen(PORT, HOST, () => {
+  const tenants = allTenants();
+  for (const tenant of tenants) {
+    mkdirSync(tenant.workspaceRoot, { recursive: true });
+    mkdirSync(tenant.stateDir, { recursive: true });
+  }
+  console.log(`cursor-remote gateway  http://${HOST}:${PORT}`);
+  if (tenants.length === 1) {
+    console.log(`工作区                 ${tenants[0].workspaceRoot}`);
+  } else {
+    console.log(`租户                   ${tenants.map((item) => item.id).join(", ") || "(无)"}`);
+  }
+  console.log(`状态目录               ${stateDir()}`);
+  if (PROXY_WEB) console.log(`本机网页               ${WEB_URL.origin}`);
+  if (!process.env.CURSOR_API_KEY?.trim()) {
+    console.warn("缺少 CURSOR_API_KEY：写入环境或 .env 后重启 gateway。");
+  }
+  if (!hasAuth()) {
+    console.warn("缺少登录配置：写入 tenants.json 或 CURSOR_REMOTE_TOKEN 后重启 gateway。");
+  }
+});

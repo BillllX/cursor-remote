@@ -1,0 +1,398 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000100 /* JieboApp.swift */; };
+		A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000101 /* Tokens.swift */; };
+		A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000102 /* JieboMark.swift */; };
+		A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000103 /* JSONValue.swift */; };
+		A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000104 /* Protocol.swift */; };
+		A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */; };
+		A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000106 /* GatewayClient.swift */; };
+		A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000107 /* KeychainStore.swift */; };
+		A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000108 /* ChatModels.swift */; };
+		A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000109 /* ChatStore.swift */; };
+		A1B2C3D4E5F6071829000310 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000110 /* RootView.swift */; };
+		A1B2C3D4E5F6071829000311 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000111 /* LoginView.swift */; };
+		A1B2C3D4E5F6071829000312 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000112 /* SidebarView.swift */; };
+		A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000113 /* ThreadView.swift */; };
+		A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000114 /* ComposerView.swift */; };
+		A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000115 /* ToolCardView.swift */; };
+		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A1B2C3D4E5F6071829000100 /* JieboApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboApp.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000101 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000102 /* JieboMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboMark.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000103 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000104 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000106 /* GatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayClient.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000107 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000108 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000109 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000110 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000111 /* LoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000112 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000113 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000114 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000115 /* ToolCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCardView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A1B2C3D4E5F6071829000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A1B2C3D4E5F6071829000003 = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000005 /* Jiebo */,
+				A1B2C3D4E5F6071829000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000014 /* Jiebo.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000005 /* Jiebo */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000100 /* JieboApp.swift */,
+				A1B2C3D4E5F6071829000006 /* Theme */,
+				A1B2C3D4E5F6071829000007 /* Gateway */,
+				A1B2C3D4E5F6071829000008 /* Auth */,
+				A1B2C3D4E5F6071829000009 /* Session */,
+				A1B2C3D4E5F6071829000010 /* Views */,
+				A1B2C3D4E5F6071829000015 /* Assets.xcassets */,
+				A1B2C3D4E5F6071829000016 /* Info.plist */,
+			);
+			path = Jiebo;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000006 /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000101 /* Tokens.swift */,
+				A1B2C3D4E5F6071829000102 /* JieboMark.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000007 /* Gateway */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000103 /* JSONValue.swift */,
+				A1B2C3D4E5F6071829000104 /* Protocol.swift */,
+				A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */,
+				A1B2C3D4E5F6071829000106 /* GatewayClient.swift */,
+			);
+			path = Gateway;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000008 /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000107 /* KeychainStore.swift */,
+			);
+			path = Auth;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000009 /* Session */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
+				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
+			);
+			path = Session;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000010 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000110 /* RootView.swift */,
+				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
+				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
+				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
+				A1B2C3D4E5F6071829000114 /* ComposerView.swift */,
+				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A1B2C3D4E5F6071829000002 /* Jiebo */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D4E5F6071829000025 /* Build configuration list for PBXNativeTarget "Jiebo" */;
+			buildPhases = (
+				A1B2C3D4E5F6071829000011 /* Sources */,
+				A1B2C3D4E5F6071829000013 /* Frameworks */,
+				A1B2C3D4E5F6071829000012 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Jiebo;
+			productName = Jiebo;
+			productReference = A1B2C3D4E5F6071829000014 /* Jiebo.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A1B2C3D4E5F6071829000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					A1B2C3D4E5F6071829000002 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "Jiebo" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = A1B2C3D4E5F6071829000003;
+			productRefGroup = A1B2C3D4E5F6071829000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A1B2C3D4E5F6071829000002 /* Jiebo */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1B2C3D4E5F6071829000012 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1B2C3D4E5F6071829000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */,
+				A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */,
+				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
+				A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */,
+				A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */,
+				A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */,
+				A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */,
+				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
+				A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */,
+				A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */,
+				A1B2C3D4E5F6071829000310 /* RootView.swift in Sources */,
+				A1B2C3D4E5F6071829000311 /* LoginView.swift in Sources */,
+				A1B2C3D4E5F6071829000312 /* SidebarView.swift in Sources */,
+				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
+				A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */,
+				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A1B2C3D4E5F6071829000020 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A1B2C3D4E5F6071829000021 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		A1B2C3D4E5F6071829000022 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Jiebo/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad;
+				PRODUCT_NAME = Jiebo;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+
+			};
+			name = Debug;
+		};
+		A1B2C3D4E5F6071829000023 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Jiebo/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad;
+				PRODUCT_NAME = Jiebo;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "Jiebo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4E5F6071829000020 /* Debug */,
+				A1B2C3D4E5F6071829000021 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D4E5F6071829000025 /* Build configuration list for PBXNativeTarget "Jiebo" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D4E5F6071829000022 /* Debug */,
+				A1B2C3D4E5F6071829000023 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A1B2C3D4E5F6071829000001 /* Project object */;
+}

@@ -1,0 +1,305 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { homedir } from "node:os";
+import { basename, isAbsolute, relative, resolve } from "node:path";
+
+const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+export type DiskSlot = {
+  chatId: string;
+  agentId: string | null;
+  cwd: string;
+  model?: string;
+  edited: string[];
+  checkpoints: unknown[];
+};
+
+export type DiskState = {
+  chats: unknown[];
+  slots: DiskSlot[];
+  rev: number;
+  deletedIds: string[];
+};
+
+export type Tenant = {
+  id: string;
+  name: string;
+  tokenHash: Buffer;
+  workspaceRoot: string;
+  stateDir: string;
+  stateFile: string;
+  disk: DiskState;
+};
+
+export type TenantsRegistry = {
+  tenants: Tenant[];
+  mode: "file" | "env";
+  file: string | null;
+  mediaSecret: string;
+  derivedMediaSecret: boolean;
+  stateDir: string;
+};
+
+let registry: TenantsRegistry | null = null;
+
+export function stateDir(): string {
+  return resolve(process.env.CURSOR_REMOTE_STATE_DIR || resolve(homedir(), ".cursor-remote"));
+}
+
+export function emptyDisk(): DiskState {
+  return { chats: [], slots: [], rev: 0, deletedIds: [] };
+}
+
+export function loadTenants(): TenantsRegistry {
+  if (registry) return registry;
+  const root = stateDir();
+  const file = findTenantsFile();
+  const media = resolveMediaSecret(file);
+  if (file) {
+    const tenants = loadTenantsFile(file, root);
+    registry = {
+      tenants,
+      mode: "file",
+      file,
+      mediaSecret: media.secret,
+      derivedMediaSecret: media.derived,
+      stateDir: root,
+    };
+  } else {
+    const token = (
+      process.env.CURSOR_REMOTE_TOKEN ||
+      process.env.CURSOR_REMOTE_PASSWORD ||
+      ""
+    ).trim();
+    const tenants = token
+      ? [
+          makeTenant("default", "default", token, {
+            workspaceRoot: resolve(process.env.CURSOR_REMOTE_CWD || `${homedir()}/Projects`),
+            stateDir: root,
+          }),
+        ]
+      : [];
+    registry = {
+      tenants,
+      mode: "env",
+      file: null,
+      mediaSecret: media.secret,
+      derivedMediaSecret: media.derived,
+      stateDir: root,
+    };
+  }
+  for (const tenant of registry.tenants) {
+    mkdirSync(tenant.workspaceRoot, { recursive: true });
+    mkdirSync(tenant.stateDir, { recursive: true });
+    tenant.disk = readDisk(tenant.stateFile);
+  }
+  if (registry.derivedMediaSecret) {
+    console.warn("未设 CURSOR_REMOTE_MEDIA_SECRET：已从本机配置派生预览签名密钥。");
+  }
+  return registry;
+}
+
+export function allTenants(): Tenant[] {
+  return loadTenants().tenants;
+}
+
+export function getTenant(id: string): Tenant | undefined {
+  return allTenants().find((item) => item.id === id);
+}
+
+export function mediaSecret(): string {
+  return loadTenants().mediaSecret;
+}
+
+export function hasAuth(): boolean {
+  return allTenants().length > 0;
+}
+
+export function resolveTenant(token: string): Tenant | null {
+  if (!token) return null;
+  const got = hashToken(token);
+  let matched: Tenant | null = null;
+  for (const tenant of allTenants()) {
+    if (got.length !== tenant.tokenHash.length) continue;
+    if (timingSafeEqual(got, tenant.tokenHash)) matched = tenant;
+  }
+  return matched;
+}
+
+export function confinedCwd(raw: string | undefined, root: string): string | null {
+  const base = resolve(root);
+  const input = (raw || base).trim();
+  if (!input) return null;
+  const next = resolve(isAbsolute(input) ? input : resolve(base, input));
+  if (!inside(next, base)) return null;
+  try {
+    if (existsSync(next)) {
+      const real = realpathSync(next);
+      const realRoot = existsSync(base) ? realpathSync(base) : base;
+      if (!inside(real, realRoot)) return null;
+      return real;
+    }
+  } catch {
+    return null;
+  }
+  return next;
+}
+
+export function requireCwd(raw: string | undefined, root: string): string {
+  return confinedCwd(raw, root) || confinedCwd(root, root) || resolve(root);
+}
+
+export function saveDisk(tenant: Tenant) {
+  try {
+    mkdirSync(tenant.stateDir, { recursive: true });
+    writeFileSync(tenant.stateFile, JSON.stringify(tenant.disk));
+  } catch {
+    // disk full or permission — keep running
+  }
+}
+
+function findTenantsFile(): string | null {
+  const explicit = (process.env.CURSOR_REMOTE_TENANTS_FILE || "").trim();
+  if (explicit) return existsSync(explicit) ? resolve(explicit) : null;
+  const candidates = [
+    "/etc/cursor-remote/tenants.json",
+    resolve(process.cwd(), "tenants.json"),
+    resolve(process.cwd(), "../tenants.json"),
+  ];
+  return candidates.find((item) => existsSync(item)) || null;
+}
+
+function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
+  const raw = JSON.parse(readFileSync(file, "utf8")) as { tenants?: unknown };
+  const rows = Array.isArray(raw.tenants) ? raw.tenants : [];
+  const tenants: Tenant[] = [];
+  const seenId = new Set<string>();
+  const seenHash = new Set<string>();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const rec = row as { id?: unknown; name?: unknown; token?: unknown };
+    const id = typeof rec.id === "string" ? rec.id.trim() : "";
+    const token = typeof rec.token === "string" ? rec.token : "";
+    const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id;
+    if (!ID_RE.test(id)) {
+      throw new Error(`tenants.json：id「${id || "?"}」不合法，只用小写字母、数字和短横线。`);
+    }
+    if (!token.trim()) {
+      throw new Error(`tenants.json：租户 ${id} 没有 token。`);
+    }
+    if (seenId.has(id)) throw new Error(`tenants.json：重复的 id ${id}。`);
+    const digest = hashToken(token).toString("hex");
+    if (seenHash.has(digest)) throw new Error(`tenants.json：租户 ${id} 的口令和别人重复。`);
+    seenId.add(id);
+    seenHash.add(digest);
+    tenants.push(
+      makeTenant(id, name, token, {
+        workspaceRoot: resolve(dataRoot, "tenants", id, "workspace"),
+        stateDir: resolve(dataRoot, "tenants", id),
+      }),
+    );
+  }
+  if (!tenants.length) throw new Error("tenants.json 里没有有效租户。");
+  return tenants;
+}
+
+function makeTenant(
+  id: string,
+  name: string,
+  token: string,
+  paths: { workspaceRoot: string; stateDir: string },
+): Tenant {
+  return {
+    id,
+    name,
+    tokenHash: hashToken(token),
+    workspaceRoot: resolve(paths.workspaceRoot),
+    stateDir: resolve(paths.stateDir),
+    stateFile: resolve(paths.stateDir, "state.json"),
+    disk: emptyDisk(),
+  };
+}
+
+function hashToken(token: string) {
+  return createHash("sha256").update(token).digest();
+}
+
+function resolveMediaSecret(file: string | null): { secret: string; derived: boolean } {
+  const explicit = (process.env.CURSOR_REMOTE_MEDIA_SECRET || "").trim();
+  if (explicit) return { secret: explicit, derived: false };
+  const api = process.env.CURSOR_API_KEY?.trim() || "";
+  let stamp = "none";
+  if (file && existsSync(file)) {
+    try {
+      stamp = String(statSync(file).mtimeMs);
+    } catch {
+      stamp = basename(file);
+    }
+  }
+  return {
+    secret: createHash("sha256").update(`cursor-remote-media\n${api}\n${stamp}`).digest("hex"),
+    derived: true,
+  };
+}
+
+function inside(path: string, root: string) {
+  if (path === root) return true;
+  const rel = relative(root, path);
+  return Boolean(rel) && !rel.startsWith("..") && !rel.split(/[/\\]/).includes("..");
+}
+
+function settlePersistedChats(chats: unknown[]): unknown[] {
+  return chats.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    const chat = item as { turns?: unknown[] };
+    if (!Array.isArray(chat.turns)) return item;
+    let changed = false;
+    const turns = chat.turns.map((turn) => {
+      if (!turn || typeof turn !== "object") return turn;
+      const row = turn as { running?: unknown; queued?: unknown; tools?: unknown[] };
+      const toolsIn = Array.isArray(row.tools) ? row.tools : null;
+      const tools = toolsIn
+        ? toolsIn.map((tool) => {
+            if (!tool || typeof tool !== "object") return tool;
+            const rec = tool as { status?: unknown };
+            if (rec.status !== "running") return tool;
+            changed = true;
+            return { ...rec, status: "error" };
+          })
+        : toolsIn;
+      if (row.running || row.queued) {
+        changed = true;
+        return { ...row, running: false, queued: false, tools: tools ?? row.tools };
+      }
+      if (tools !== toolsIn) return { ...row, tools };
+      return turn;
+    });
+    return changed ? { ...chat, turns } : item;
+  });
+}
+
+function readDisk(file: string): DiskState {
+  try {
+    if (!existsSync(file)) return emptyDisk();
+    const raw = JSON.parse(readFileSync(file, "utf8")) as DiskState;
+    return {
+      chats: settlePersistedChats(Array.isArray(raw.chats) ? raw.chats : []),
+      slots: Array.isArray(raw.slots) ? raw.slots : [],
+      rev: typeof raw.rev === "number" && raw.rev >= 0 ? raw.rev : 0,
+      deletedIds: Array.isArray(raw.deletedIds)
+        ? raw.deletedIds.filter((id): id is string => typeof id === "string" && Boolean(id)).slice(0, 500)
+        : [],
+    };
+  } catch {
+    return emptyDisk();
+  }
+}
+
+export { settlePersistedChats };

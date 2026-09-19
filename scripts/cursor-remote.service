@@ -1,0 +1,20 @@
+[Unit]
+Description=cursor-remote web (path /cursor-remote)
+After=network-online.target nginx.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cursor-remote
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=3020
+Environment=NEXT_PUBLIC_BASE_PATH=/cursor-remote
+Environment=GATEWAY_WS_URL=ws://127.0.0.1:8787
+ExecStart=/usr/local/bin/node server.mjs
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

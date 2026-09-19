@@ -1,0 +1,5 @@
+{
+  "tenants": [
+    { "id": "default", "name": "Default", "token": "change-me-unique-token" }
+  ]
+}

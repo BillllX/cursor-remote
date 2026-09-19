@@ -1,0 +1,78 @@
+/* 接驳 Jiebo — design tokens v1
+   Light is the brand default. Dark is a working mode, not the identity. */
+
+:root {
+  color-scheme: light;
+
+  --jiebo-pine: #1a4f41;
+  --jiebo-pine-deep: #12362d;
+  --jiebo-pine-soft: #8fbfb0;
+  --jiebo-brass: #c4a36a;
+  --jiebo-clay: #a35c3c;
+  --jiebo-paper: #f3eee4;
+  --jiebo-mist: #e7e1d4;
+  --jiebo-white: #fffcfa;
+  --jiebo-ink: #1c1916;
+  --jiebo-ink-2: #5c574f;
+  --jiebo-line: #d4cdbf;
+  --jiebo-ok: #2f7d4a;
+  --jiebo-danger: #b42318;
+
+  --bg: var(--jiebo-paper);
+  --bg-sidebar: var(--jiebo-mist);
+  --bg-panel: var(--jiebo-white);
+  --bg-composer: var(--jiebo-white);
+  --bg-user: #dce8e3;
+  --border: var(--jiebo-line);
+  --border-strong: #c9c0ae;
+  --text: var(--jiebo-ink);
+  --muted: var(--jiebo-ink-2);
+  --dim: #8a8478;
+  --accent: var(--jiebo-pine);
+  --accent-2: var(--jiebo-brass);
+  --danger: var(--jiebo-danger);
+  --ok: var(--jiebo-ok);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --font-display: "Noto Serif SC", "Songti SC", "STSong", serif;
+  --font-ui: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  --font-mono: "Noto Sans Mono", "Source Code Pro", ui-monospace, monospace;
+
+  --shadow: 0 1px 0 rgba(28, 25, 22, 0.04);
+
+  --control-h: 36px;
+  --control-h-lg: 44px;
+  --icon-stroke: 1.75;
+  --focus: 0 0 0 3px color-mix(in srgb, var(--jiebo-pine) 28%, transparent);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #141512;
+  --bg-sidebar: #101210;
+  --bg-panel: #1b1d1a;
+  --bg-composer: #1f211e;
+  --bg-user: #24332e;
+  --border: #2c2f2b;
+  --border-strong: #3a3e38;
+  --text: #ede8de;
+  --muted: #b6b0a4;
+  --dim: #7d786e;
+  --accent: var(--jiebo-pine-soft);
+  --accent-2: var(--jiebo-brass);
+  --danger: #e07068;
+  --ok: #7dce98;
+}
