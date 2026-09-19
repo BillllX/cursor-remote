@@ -25,7 +25,7 @@ import type {
 } from "../lib/protocol";
 import ToolCard, { extractDiff, mutatingTool, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
-import FileTree, { GIT_LABEL } from "./FileTree";
+import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
 import FilePreview, { type PreviewTab } from "./FilePreview";
 import { isCanvasPath } from "../lib/canvas/path";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
@@ -1043,6 +1043,9 @@ export default function ChatApp() {
   const searchShown = useHeldOpen(searchOpen);
   const paletteShown = useHeldOpen(paletteOpen);
   const grepShown = useHeldOpen(grepOpen);
+  const [filesOpen, setFilesOpen] = useState(false);
+  const filesShown = useHeldOpen(filesOpen);
+  const [filesQuery, setFilesQuery] = useState("");
   const [grepHits, setGrepHits] = useState<SearchHit[]>([]);
   const [grepIndex, setGrepIndex] = useState(0);
   const [grepWait, setGrepWait] = useState(false);
@@ -1065,7 +1068,6 @@ export default function ChatApp() {
   ]);
   const [activeId, setActiveId] = useState("boot");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const [demoCanvas, setDemoCanvas] = useState(false);
@@ -1159,6 +1161,7 @@ export default function ChatApp() {
   const paletteOpenRef = useRef(false);
   const threadFindOpenRef = useRef(false);
   const grepOpenRef = useRef(false);
+  const filesOpenRef = useRef(false);
   const grepQRef = useRef("");
   const appliedStoreRef = useRef(false);
   const stateRevRef = useRef(0);
@@ -2333,6 +2336,11 @@ export default function ChatApp() {
           setGrepOpen(false);
           return;
         }
+        if (filesOpenRef.current) {
+          setFilesOpen(false);
+          setFilesQuery("");
+          return;
+        }
         if (searchOpenRef.current) {
           setSearchOpen(false);
           return;
@@ -2398,6 +2406,11 @@ export default function ChatApp() {
     if (!paletteOpen) return;
     if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
   }, [paletteOpen, send, treePaths.length]);
+
+  useEffect(() => {
+    if (!filesOpen) return;
+    if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
+  }, [filesOpen, send, treePaths.length]);
 
   useEffect(() => {
     if (!grepOpen) return;
@@ -2724,6 +2737,15 @@ export default function ChatApp() {
       return;
     }
     openNewChatMenu();
+  }
+
+  function openFilesBrowser() {
+    setFilesQuery("");
+    setFilesOpen(true);
+    setNavOpen(false);
+    setPaletteOpen(false);
+    setSearchOpen(false);
+    setGrepOpen(false);
   }
 
   function selectChat(chat: Chat) {
@@ -3535,6 +3557,7 @@ export default function ChatApp() {
   paletteOpenRef.current = paletteOpen;
   threadFindOpenRef.current = threadFindOpen;
   grepOpenRef.current = grepOpen;
+  filesOpenRef.current = filesOpen;
   grepQRef.current = grepQ;
   const searchHits = searchQ.trim()
     ? chats.filter((chat) => {
@@ -3754,6 +3777,106 @@ export default function ChatApp() {
           </div>
         </div>
       ) : null}
+      {filesShown ? (
+        <div
+          className={`files-overlay${filesOpen ? " open" : ""}`}
+          onClick={() => {
+            setFilesOpen(false);
+            setFilesQuery("");
+          }}
+        >
+          <div
+            className="files-browser"
+            role="dialog"
+            aria-label="文件浏览器"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="files-browser-head">
+              <div className="files-browser-title">
+                <span>文件</span>
+                <span className="files-browser-cwd" title={cwd || workspaceRoot}>
+                  {workspaceLabel(cwd || workspaceRoot, workspaceRoot)}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="files-browser-close"
+                aria-label="关闭文件浏览器"
+                onClick={() => {
+                  setFilesOpen(false);
+                  setFilesQuery("");
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <input
+              autoFocus={filesOpen}
+              className="files-browser-search"
+              placeholder="搜索文件名或路径"
+              value={filesQuery}
+              onChange={(event) => setFilesQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setFilesOpen(false);
+                  setFilesQuery("");
+                }
+              }}
+            />
+            <div className="files-browser-body">
+              {Object.keys(gitStatus).length ? (
+                <div className="changes-list files-browser-changes">
+                  <div className="side-label">改动 · {Object.keys(gitStatus).length}</div>
+                  {Object.entries(gitStatus)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([path, letter]) => (
+                      <button
+                        key={path}
+                        type="button"
+                        className={`tree-file${sameFile(previewPath, path) ? " on" : ""}`}
+                        title={path}
+                        onClick={() => {
+                          openFile(path, undefined, true);
+                          setFilesOpen(false);
+                          setFilesQuery("");
+                        }}
+                      >
+                        <FileGlyph path={path} />
+                        <span className="tree-file-copy">
+                          <span className="tree-file-name">{path.split("/").pop() || path}</span>
+                          <span className="tree-file-path">{path}</span>
+                        </span>
+                        <span className={`git-mark ${letter}`} title={GIT_LABEL[letter] || letter}>
+                          {letter}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              ) : null}
+              <FileTree
+                paths={treePaths}
+                truncated={treeTruncated}
+                status={gitStatus}
+                query={filesQuery}
+                variant="browser"
+                onPick={(path) => {
+                  handlePickFile(path);
+                  setFilesOpen(false);
+                  setFilesQuery("");
+                }}
+                onOpen={(path) => {
+                  openFile(path);
+                  setFilesOpen(false);
+                  setFilesQuery("");
+                }}
+                onCreate={handleTreeCreate}
+                onRename={handleTreeRename}
+                onDelete={handleTreeDelete}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       <button
         type="button"
         className="nav-scrim"
@@ -3944,48 +4067,20 @@ export default function ChatApp() {
             </div>
           ))}
         </div>
-        <details
-          className="side-block tree-block"
-          open={workspaceOpen}
-          onToggle={(event) => setWorkspaceOpen(event.currentTarget.open)}
+        <button
+          type="button"
+          className="side-files-btn"
+          onClick={openFilesBrowser}
         >
-          <summary className="side-label">文件</summary>
-          {workspaceOpen ? (
-            <>
-          {Object.keys(gitStatus).length ? (
-            <div className="changes-list">
-              <div className="side-label">改动 · {Object.keys(gitStatus).length}</div>
-              {Object.entries(gitStatus)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([path, letter]) => (
-                  <button
-                    key={path}
-                    type="button"
-                    className={`tree-file${sameFile(previewPath, path) ? " on" : ""}`}
-                    title={path}
-                    onClick={() => openFile(path, undefined, true)}
-                  >
-                    <span className="tree-file-name">{path}</span>
-                    <span className={`git-mark ${letter}`} title={GIT_LABEL[letter] || letter}>
-                      {letter}
-                    </span>
-                  </button>
-                ))}
-            </div>
-          ) : null}
-          <FileTree
-            paths={treePaths}
-            truncated={treeTruncated}
-            status={gitStatus}
-            onPick={handlePickFile}
-            onOpen={openFile}
-            onCreate={handleTreeCreate}
-            onRename={handleTreeRename}
-            onDelete={handleTreeDelete}
-          />
-            </>
-          ) : null}
-        </details>
+          <span>文件</span>
+          <span className="side-files-meta">
+            {Object.keys(gitStatus).length
+              ? `${Object.keys(gitStatus).length} 处改动`
+              : treePaths.length
+                ? `${treePaths.length}`
+                : "浏览"}
+          </span>
+        </button>
         <div className="side-foot">
           <button
             type="button"
@@ -4041,10 +4136,7 @@ export default function ChatApp() {
             type="button"
             className="pad-bar-btn"
             aria-label="打开文件"
-            onClick={() => {
-              setPaletteQ("");
-              setPaletteOpen(true);
-            }}
+            onClick={openFilesBrowser}
           >
             <svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6">
               <path d="M3.5 2.5h6l3 3v8h-9z" />
@@ -4060,7 +4152,7 @@ export default function ChatApp() {
             <div className="empty-mark">
               <Mark />
             </div>
-            <h1>要做什么？</h1>
+            <h1>从这里开始</h1>
             <p className="empty-lead">网页说话，远端动手。从左侧接着聊，或先打开一个工作区文件。</p>
             {error ? <div className="error-line">{friendlyError(error)}</div> : null}
             {notice ? <div className="notice-line">{notice}</div> : null}
@@ -4068,10 +4160,7 @@ export default function ChatApp() {
               <button
                 type="button"
                 className="empty-chip"
-                onClick={() => {
-                  setPaletteQ("");
-                  setPaletteOpen(true);
-                }}
+                onClick={openFilesBrowser}
               >
                 打开工作区文件
               </button>
@@ -4219,6 +4308,8 @@ export default function ChatApp() {
                       ) : null}
                     </div>
                     )}
+                    <div className="assistant-row">
+                    <span className="bot-avatar" aria-hidden="true">接</span>
                     <div className="assistant">
                       {turn.thinking && (turn.running || formatDuration(turn.durationMs)) ? (
                         <details
@@ -4227,11 +4318,13 @@ export default function ChatApp() {
                           open={turn.running || undefined}
                         >
                           <summary>
+                            <span className={turn.running ? "text-shimmer" : undefined}>
                             {turn.running
                               ? "正在思考"
                               : formatDuration(turn.durationMs)
                                 ? `思考了 ${formatDuration(turn.durationMs)}`
                                 : "思考过程"}
+                            </span>
                           </summary>
                           <pre>
                             <Highlight
@@ -4339,7 +4432,7 @@ export default function ChatApp() {
                             );
                             return (
                               <details
-                                className="tool-pack"
+                                className={`tool-pack${live ? " running" : ""}`}
                                 open={live}
                                 key={group.map((tool) => tool.callId).join("-")}
                               >
@@ -4358,6 +4451,9 @@ export default function ChatApp() {
                                   <span className="tool-kind">Searched</span>
                                   <span className="tool-title">
                                     {searchQuery(group[0]) || "·"}
+                                  </span>
+                                  <span className={`tool-badge${live ? " run" : ""}`}>
+                                    {live ? <span className="text-shimmer">Processing</span> : "Completed"}
                                   </span>
                                 </summary>
                                 {group.map(card)}
@@ -4381,7 +4477,7 @@ export default function ChatApp() {
                             const short = file.split("/").pop() || file;
                             return (
                               <details
-                                className="tool-pack"
+                                className={`tool-pack${live ? " running" : ""}`}
                                 open={live}
                                 key={group.map((tool) => tool.callId).join("-")}
                               >
@@ -4400,6 +4496,9 @@ export default function ChatApp() {
                                   <span className="tool-kind">{packLabel}</span>
                                   <span className="tool-title">
                                     {short} · {group.length} 次
+                                  </span>
+                                  <span className={`tool-badge${live ? " run" : ""}`}>
+                                    {live ? <span className="text-shimmer">Processing</span> : "Completed"}
                                   </span>
                                 </summary>
                                 {group.map(card)}
@@ -4535,6 +4634,7 @@ export default function ChatApp() {
                           </div>
                         );
                       })()}
+                    </div>
                     </div>
                   </article>
                   );
@@ -4766,6 +4866,9 @@ function Composer({
   const [text, setText] = useState(draft);
   const [moreOpen, setMoreOpen] = useState(false);
   const [density, setDensity] = useState<"full" | "mid" | "compact" | "tight">("full");
+  const modesRef = useRef<HTMLDivElement | null>(null);
+  const thumbLive = useRef(false);
+  const [thumb, setThumb] = useState({ x: 0, w: 0, live: false });
   const chips = mentionChips(text);
   const canSend = Boolean(text.trim() || images.length) && !uploading;
   useLayoutEffect(() => {
@@ -4802,6 +4905,30 @@ function Composer({
       observer?.disconnect();
     };
   }, []);
+  useEffect(() => {
+    const root = modesRef.current;
+    if (!root) return;
+    const applyThumb = () => {
+      const activeBtn = root.querySelector<HTMLElement>(".mode-btn.on");
+      if (!activeBtn) return;
+      setThumb({ x: activeBtn.offsetLeft, w: activeBtn.offsetWidth, live: thumbLive.current });
+      if (!thumbLive.current) {
+        requestAnimationFrame(() => {
+          thumbLive.current = true;
+          setThumb((prev) => ({ ...prev, live: true }));
+        });
+      }
+    };
+    applyThumb();
+    const ro = new ResizeObserver(applyThumb);
+    ro.observe(root);
+    root.querySelectorAll(".mode-btn").forEach((btn) => ro.observe(btn));
+    root.addEventListener("transitionend", applyThumb);
+    return () => {
+      ro.disconnect();
+      root.removeEventListener("transitionend", applyThumb);
+    };
+  }, [mode, density]);
   function flushDraft() {
     const el = inputRef.current;
     const value = el ? el.value : text;
@@ -4977,7 +5104,31 @@ function Composer({
       />
       </div>
       <div className="composer-bar">
-        <div className="mode-switch" role="tablist" aria-label="工作方式">
+        <label className="pill icon composer-attach" title="添加文件或图片" aria-label="添加文件或图片">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          <input
+            type="file"
+            multiple
+            className="composer-file-input"
+            onClick={(event) => {
+              event.currentTarget.value = "";
+            }}
+            onChange={(event) => {
+              const list = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+              if (!list.length) return;
+              if (onDropFiles) onDropFiles(list);
+              else onAddImages(list);
+            }}
+          />
+        </label>
+        <div className="mode-switch" role="tablist" aria-label="工作方式" ref={modesRef}>
+          <span
+            className={`mode-thumb${thumb.live ? " live" : ""}`}
+            style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
+            aria-hidden="true"
+          />
           {(["agent", "plan", "ask"] as AgentMode[]).map((item) => (
             <button
               key={item}
@@ -5074,31 +5225,6 @@ function Composer({
             </div>
           ) : null}
         </div>
-        <label className="pill icon composer-attach" title="添加文件或图片" aria-label="添加文件或图片">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path
-              d="M10.2 4.6 5.4 9.4a2.2 2.2 0 1 0 3.1 3.1l5.2-5.2a3.5 3.5 0 0 0-5-5L3.5 7.5a4.8 4.8 0 0 0 6.8 6.8l4.4-4.4"
-              stroke="currentColor"
-              strokeWidth="1.3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-          <input
-            type="file"
-            multiple
-            className="composer-file-input"
-            onClick={(event) => {
-              event.currentTarget.value = "";
-            }}
-            onChange={(event) => {
-              const list = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
-              if (!list.length) return;
-              if (onDropFiles) onDropFiles(list);
-              else onAddImages(list);
-            }}
-          />
-        </label>
         {busy ? (
           <button className="send stop" type="button" onClick={onStop} title="Esc 停止">
             ■

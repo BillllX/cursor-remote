@@ -150,6 +150,7 @@ type Slot = {
   approvalSettled: boolean | null;
   pending: PendingPrompt[];
   openTools: Map<string, OpenTool>;
+  reseed: boolean;
 };
 
 type Conn = {
@@ -551,6 +552,7 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     approvalSettled: null,
     pending: [],
     openTools: new Map(),
+    reseed: false,
   };
 }
 
@@ -700,6 +702,14 @@ async function disposeSlot(slot: Slot) {
   }
 }
 
+function isAgentMissing(err: unknown) {
+  if (!err || typeof err !== "object") return false;
+  const rec = err as { code?: unknown; message?: unknown };
+  if (rec.code === "agent_not_found") return true;
+  const text = [rec.message, err instanceof Error ? err.message : ""].filter(Boolean).join(" ");
+  return /agent[-_ ].*not found/i.test(text) || /agent_not_found/i.test(text);
+}
+
 async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
   const apiKey = process.env.CURSOR_API_KEY?.trim();
   if (!apiKey) {
@@ -717,19 +727,36 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
   const base = { apiKey, model: { id: modelId }, local };
   const withCrew = { ...base, agents: buildCrewAgents(modelId, catalog, cwd) };
 
-  const open = async (agentsOn: boolean) => {
+  const open = async (agentsOn: boolean, resumeId: string | null) => {
     const opts = agentsOn ? withCrew : base;
-    if (slot.agentId) return Agent.resume(slot.agentId, opts);
+    if (resumeId) return Agent.resume(resumeId, opts);
     return Agent.create(opts);
   };
 
+  const openWithCrewFallback = async (resumeId: string | null) => {
+    try {
+      return await open(true, resumeId);
+    } catch (err) {
+      if (isAgentMissing(err)) throw err;
+      console.error("crew agents rejected, retrying without them", err);
+      return await open(false, resumeId);
+    }
+  };
+
+  const resumeId = slot.agentId;
   try {
-    slot.agent = await open(true);
+    slot.agent = await openWithCrewFallback(resumeId);
   } catch (err) {
-    console.error("crew agents rejected, retrying without them", err);
-    slot.agent = await open(false);
+    if (!resumeId || !isAgentMissing(err)) throw err;
+    console.warn("agent missing, opening a new one", { chatId: slot.chatId, agentId: resumeId });
+    await disposeSlot(slot);
+    slot.agentId = null;
+    slot.reseed = true;
+    slot.agent = await openWithCrewFallback(null);
   }
+  if (!resumeId && diskChatTurns(conn.tenant, slot.chatId).length) slot.reseed = true;
   slot.agentId = slot.agent.agentId;
+  persistConn(conn);
   return slot.agent;
 }
 
@@ -740,6 +767,56 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function clipHistory(text: string, max: number) {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n…`;
+}
+
+function diskChatTurns(tenant: Tenant | null | undefined, chatId: string) {
+  if (!tenant || !chatId) return [] as { user: string; assistant: string }[];
+  const chat = tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+  if (!isRecord(chat) || !Array.isArray(chat.turns)) return [];
+  const out: { user: string; assistant: string }[] = [];
+  for (const raw of chat.turns) {
+    if (!isRecord(raw)) continue;
+    const error = typeof raw.error === "string" ? raw.error : "";
+    if (/agent[-_ ].*not found/i.test(error)) continue;
+    const user = typeof raw.user === "string" ? raw.user.trim() : "";
+    const assistant = typeof raw.assistant === "string" ? raw.assistant.trim() : "";
+    if (!user && !assistant) continue;
+    out.push({ user, assistant });
+  }
+  return out;
+}
+
+function attachReseedContext(
+  tenant: Tenant | null | undefined,
+  chatId: string,
+  currentText: string,
+  prompt: string,
+) {
+  const wanted = currentText.trim();
+  const prior = diskChatTurns(tenant, chatId).filter((turn) => {
+    if (!wanted) return Boolean(turn.user || turn.assistant);
+    if (turn.user === wanted && !turn.assistant) return false;
+    return Boolean(turn.user || turn.assistant);
+  });
+  if (!prior.length) return prompt;
+  const pieces: string[] = [];
+  let used = 0;
+  const budget = 24_000;
+  for (const turn of prior.slice(-10).reverse()) {
+    const user = turn.user ? clipHistory(turn.user, 1_500) : "（附图或空消息）";
+    const assistant = turn.assistant ? clipHistory(turn.assistant, 4_000) : "（无文字回复）";
+    const block = `用户：${user}\n助手：${assistant}`;
+    if (used && used + block.length > budget) break;
+    pieces.push(block);
+    used += block.length;
+  }
+  pieces.reverse();
+  return `以下是同一工作区里此前的对话摘录，文件以磁盘为准。请直接接着当前请求继续，不要复述这段说明，也不要说自己是新会话。
+
+${pieces.join("\n\n")}
+
+当前请求：
+${prompt}`;
 }
 
 function conversationToTurns(conv: unknown[]): HistoryTurn[] {
@@ -2192,8 +2269,9 @@ async function handlePrompt(
 
   const safeImages = sanitizeImages(images);
   const cwd = cwdOf(conn, slot);
-  const prompt = wrapPrompt(
-    text.trim() || (safeImages.length ? "请看附图。" : ""),
+  const userText = text.trim() || (safeImages.length ? "请看附图。" : "");
+  let prompt = wrapPrompt(
+    userText,
     mode,
     files,
     loadWorkspaceRules(cwd),
@@ -2467,10 +2545,13 @@ async function handlePrompt(
     }
   };
 
-  const payload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
-
   try {
     const agent = await ensureAgent(conn, slot);
+    if (slot.reseed) {
+      prompt = attachReseedContext(conn.tenant, slot.chatId, userText, prompt);
+      slot.reseed = false;
+    }
+    const payload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
     slot.agentId = agent.agentId;
     send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
     send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });

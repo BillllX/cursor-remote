@@ -290,7 +290,7 @@ export default function ToolCard({
 
   return (
     <details
-      className={`tool kind-${kind}${nested ? " has-crew" : ""}`}
+      className={`tool kind-${kind}${nested ? " has-crew" : ""}${live ? " running" : ""}`}
       open={live}
     >
           <summary>
@@ -313,7 +313,9 @@ export default function ToolCard({
           {title}
           {model ? ` · ${model}` : ""}
         </span>
-        {live ? <span className="tool-live">…</span> : null}
+        <span className={`tool-badge${live ? " run" : tool.status === "error" ? " err" : ""}`}>
+          {live ? <span className="text-shimmer">Processing</span> : tool.status === "error" ? "Error" : "Completed"}
+        </span>
         {tool.review === "accepted" ? <span className="tool-review-done">已保留</span> : null}
         {tool.review === "rejected" ? <span className="tool-review-done">已还原</span> : null}
       </summary>

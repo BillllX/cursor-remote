@@ -1,20 +1,13 @@
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
-import { Noto_Sans_SC, Noto_Serif_SC } from "next/font/google";
+import { Noto_Sans_SC } from "next/font/google";
 import "./globals.css";
 
 const sans = Noto_Sans_SC({
   subsets: ["latin"],
-  weight: ["400", "500", "700"],
+  weight: ["400", "500", "600", "700"],
   display: "swap",
   variable: "--font-sans",
-});
-
-const serif = Noto_Serif_SC({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-  variable: "--font-serif",
 });
 
 export const metadata: Metadata = {
@@ -27,7 +20,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#f3eee4",
+  themeColor: "#fafafa",
 };
 
 export default function RootLayout({
@@ -36,7 +29,7 @@ export default function RootLayout({
   children: ReactNode;
 }) {
   return (
-    <html lang="zh-CN" className={`${sans.variable} ${serif.variable}`}>
+    <html lang="zh-CN" className={sans.variable}>
       <body>
         <script
           dangerouslySetInnerHTML={{
