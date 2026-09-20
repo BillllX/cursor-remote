@@ -18,6 +18,8 @@ import type {
   AgentMode,
   CheckpointInfo,
   ClientMessage,
+  HelloClient,
+  PolicyId,
   PromptImage,
   SearchHit,
   ServerMessage,
@@ -88,6 +90,7 @@ type Chat = {
   previewPath?: string;
   unread?: boolean;
   confirmWrites?: boolean;
+  policy?: PolicyId;
   draftImages?: PromptImage[];
   checkpoints?: CheckpointInfo[];
 };
@@ -843,6 +846,12 @@ const CHATS_KEY = "cursor-remote-chats";
 const DELETED_KEY = "cursor-remote-deleted";
 const TOKEN_KEY = "cursor-remote-token";
 const RECENT_KEY = "cursor-remote-recent";
+/** hello 携带的客户端标识（P2 协议护栏，网关可据此区分客户端与版本） */
+const HELLO_CLIENT: HelloClient = {
+  name: "cursor-remote-web",
+  version: process.env.NEXT_PUBLIC_APP_VERSION ?? "dev",
+  caps: ["sync_chat", "stored_digest"],
+};
 const MAX_DELETED = 200;
 const IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/jpg"]);
 const MAX_IMAGES = 5;
@@ -1157,6 +1166,19 @@ export default function ChatApp() {
   const appliedStoreRef = useRef(false);
   const stateRevRef = useRef(0);
   const deletedIdsRef = useRef<Set<string>>(new Set());
+  // P4 增量同步：每会话版本号 + 脏标记 + 在途确认
+  const chatRevsRef = useRef<Record<string, number>>({});
+  const dirtyIdsRef = useRef<Set<string>>(new Set());
+  const inflightIdsRef = useRef<Set<string>>(new Set());
+  const inflightFullRef = useRef(false);
+  const fullSyncRef = useRef(true); // 首次同步全量（对齐现状）
+  const pendingLoadsRef = useRef<Set<string>>(new Set());
+  const suppressDirtyRef = useRef<Map<string, Chat>>(new Map()); // 服务端驱动的 setChats 不标脏（按对象引用精确抑制）
+  const prevChatsRef = useRef<Chat[]>([]);
+  const [syncTick, setSyncTick] = useState(0);
+  const digestTimerRef = useRef<number | undefined>(undefined);
+  /// 网关是否支持 P4（stored_state 带 chatRevs / 收到 ack/digest/stored_chat）；默认 false 先走全量
+  const serverP4Ref = useRef(false);
   const renameSkipRef = useRef(false);
   const previewTabsRef = useRef(previewTabs);
   previewTabsRef.current = previewTabs;
@@ -1187,6 +1209,16 @@ export default function ChatApp() {
     appliedStoreRef.current = false;
     stateRevRef.current = 0;
     deletedIdsRef.current = new Set();
+    chatRevsRef.current = {};
+    dirtyIdsRef.current = new Set();
+    inflightIdsRef.current = new Set();
+    inflightFullRef.current = false;
+    fullSyncRef.current = true;
+    pendingLoadsRef.current = new Set();
+    suppressDirtyRef.current = new Map();
+    prevChatsRef.current = [];
+    serverP4Ref.current = false;
+    if (digestTimerRef.current) window.clearTimeout(digestTimerRef.current);
     lastProgressRef.current = {};
     stallNoticedRef.current.clear();
     outboxRef.current = [];
@@ -1314,6 +1346,8 @@ export default function ChatApp() {
   modeRef.current = mode;
   const confirmWritesRef = useRef(false);
   confirmWritesRef.current = Boolean(active?.confirmWrites);
+  const policyRef = useRef<PolicyId>("baseline");
+  policyRef.current = active?.policy === "plane" ? "plane" : "baseline";
   const busyRef = useRef(busy);
   busyRef.current = busy;
   const workspaceMenuOpenRef = useRef(false);
@@ -1351,6 +1385,7 @@ export default function ChatApp() {
         files: attachedFiles(next.user),
         images: next.images,
         confirmWrites: Boolean(chat.confirmWrites),
+        policy: policyRef.current,
         nameChat: isUntitled(chat.title),
       });
     },
@@ -1380,6 +1415,7 @@ export default function ChatApp() {
         files: attachedFiles(next.user),
         images: next.images,
         confirmWrites: Boolean(chat?.confirmWrites),
+        policy: policyRef.current,
         nameChat: isUntitled(chat?.title),
       });
     },
@@ -1454,6 +1490,12 @@ export default function ChatApp() {
             setAuthError("");
             if (tokenRef.current) localStorage.setItem(TOKEN_KEY, tokenRef.current);
             setHasApiKey(message.hasApiKey);
+            if (message.policy === "plane" || message.policy === "baseline") {
+              policyRef.current = message.policy;
+              patchActive((chat) =>
+                chat.policy === message.policy ? chat : { ...chat, policy: message.policy },
+              );
+            }
             {
               const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
               setCwd(chat?.cwd || message.cwd);
@@ -1544,6 +1586,7 @@ export default function ChatApp() {
           break;
         case "stored_state":
           {
+            if (message.chatRevs !== undefined) serverP4Ref.current = true;
             const remoteRev = typeof message.rev === "number" ? message.rev : 0;
             if (appliedStoreRef.current && remoteRev <= stateRevRef.current) break;
             if (!Array.isArray(message.chats)) break;
@@ -1554,13 +1597,60 @@ export default function ChatApp() {
                 [...deletedIdsRef.current, ...message.deletedIds].slice(0, MAX_DELETED),
               );
             }
-            if (!message.chats.length) break;
-            const merged = mergeRemoteChats(
+            if (!message.chats.length) {
+              // 服务端全空（新租户/被清空）：清掉已被删的本地会话（保留脏的/boot），脏会话触发重推
+              const kept = chatsRef.current.filter(
+                (chat) =>
+                  !deletedIdsRef.current.has(chat.id) ||
+                  dirtyIdsRef.current.has(chat.id) ||
+                  chat.id === "boot",
+              );
+              if (kept.length !== chatsRef.current.length) {
+                prevChatsRef.current = kept; // 服务端驱动，抑制 effect 的删除检测
+                setChats(kept);
+              }
+              if (dirtyIdsRef.current.size) setSyncTick((n) => n + 1);
+              break;
+            }
+            const mergedRaw = mergeRemoteChats(
               chatsRef.current,
               message.chats as Chat[],
               deletedIdsRef.current,
             );
+            // mergeRemoteChats 只保留远端 id：本地独有的脏会话（离线新建未上传）必须追加保留
+            const remoteIds = new Set(
+              (message.chats as Chat[]).map((row) => row?.id).filter((id): id is string => Boolean(id)),
+            );
+            const localOnlyDirty = chatsRef.current.filter(
+              (chat) =>
+                dirtyIdsRef.current.has(chat.id) &&
+                !remoteIds.has(chat.id) &&
+                !deletedIdsRef.current.has(chat.id),
+            );
+            const merged = localOnlyDirty.length ? [...mergedRaw, ...localOnlyDirty] : mergedRaw;
             setChats(merged);
+            // P4：记录服务端每会话版本号；合并结果与服务端不一致的标脏（本地优先胜出的/独有的），稍后增量重推
+            chatRevsRef.current = message.chatRevs ?? {};
+            {
+              const remoteById = new Map<string, Chat>(
+                (message.chats as Chat[])
+                  .filter((row) => row && typeof row === "object" && typeof row.id === "string")
+                  .map((row) => [row.id, row]),
+              );
+              for (const chat of merged) {
+                if (chat.id === "boot") continue;
+                const row = remoteById.get(chat.id);
+                if (!row || deletedIdsRef.current.has(chat.id)) {
+                  dirtyIdsRef.current.add(chat.id);
+                  continue;
+                }
+                if (JSON.stringify(slimChats([row])[0]) !== JSON.stringify(slimChats([chat])[0])) {
+                  dirtyIdsRef.current.add(chat.id);
+                }
+              }
+              // 这次 setChats 是服务端驱动：抑制同步 effect 的引用 diff（脏标记已在上面精确算好）
+              prevChatsRef.current = merged;
+            }
             const current = merged.find((item) => item.id === activeIdRef.current);
             const keep = current || merged[0];
             if (keep && !current) {
@@ -1609,6 +1699,115 @@ export default function ChatApp() {
             }
           }
           break;
+        // P4b：sync_state / sync_chat 被网关接受后的回执
+        case "sync_ack": {
+          serverP4Ref.current = true;
+          const revs = message.chatRevs ?? {};
+          for (const [id, rev] of Object.entries(revs)) {
+            if (typeof rev !== "number") continue;
+            chatRevsRef.current[id] = rev;
+            inflightIdsRef.current.delete(id);
+            // 注意：不清 dirtyIdsRef——发送后又改过的会话保持脏，下一轮重推
+          }
+          if (typeof message.rev === "number" && message.rev > stateRevRef.current) {
+            stateRevRef.current = message.rev;
+          }
+          inflightFullRef.current = false;
+          break;
+        }
+        // P4c：分叉时的目录对账——只拉差异会话，本地脏的保留优先
+        case "stored_digest": {
+          serverP4Ref.current = true;
+          // 被拒的在途增量回到脏集合（服务端没收下，本地优先稍后重推）
+          for (const id of inflightIdsRef.current) dirtyIdsRef.current.add(id);
+          inflightIdsRef.current = new Set();
+          if (inflightFullRef.current) {
+            inflightFullRef.current = false;
+            fullSyncRef.current = true; // 全量被拒：对账合并后重新全量
+          }
+          const remoteRev = typeof message.rev === "number" ? message.rev : 0;
+          if (remoteRev > stateRevRef.current) stateRevRef.current = remoteRev;
+          appliedStoreRef.current = true;
+          if (Array.isArray(message.deletedIds)) {
+            deletedIdsRef.current = new Set(
+              [...deletedIdsRef.current, ...message.deletedIds].slice(0, MAX_DELETED),
+            );
+          }
+          const serverRevs = message.chatRevs ?? {};
+          const digestIds = new Set(Object.keys(serverRevs));
+          // 本地有、digest 没有 → 已被别处删除；本地脏的/从未同步过的（无 rev）保留
+          const kept = chatsRef.current.filter(
+            (chat) =>
+              digestIds.has(chat.id) ||
+              dirtyIdsRef.current.has(chat.id) ||
+              chatRevsRef.current[chat.id] == null ||
+              chat.id === "boot",
+          );
+          if (kept.length !== chatsRef.current.length) {
+            suppressDirtyRef.current.clear(); // 删除是服务端驱动，不标脏
+            prevChatsRef.current = kept; // 整体抑制 effect 的删除检测（否则冗余触发全量回传）
+            setChats(kept);
+          }
+          // 清掉已删除会话的版本号残留（保留脏会话的）
+          for (const id of Object.keys(chatRevsRef.current)) {
+            if (!digestIds.has(id) && !dirtyIdsRef.current.has(id)) delete chatRevsRef.current[id];
+          }
+          // rev 不一致或本地缺失 → 拉取（本地脏的跳过：本地优先）
+          const toFetch = Object.entries(serverRevs)
+            .filter(
+              ([id, rev]) =>
+                !deletedIdsRef.current.has(id) &&
+                !dirtyIdsRef.current.has(id) &&
+                (chatRevsRef.current[id] !== rev || !chatsRef.current.some((chat) => chat.id === id)),
+            )
+            .map(([id]) => id);
+          if (toFetch.length) {
+            pendingLoadsRef.current = new Set(toFetch);
+            send({ type: "load_chats", ids: toFetch });
+            // 安全网：网关对缺失 id 静默跳过，5s 后强制清空避免卡死同步（存 id 防叠加）
+            if (digestTimerRef.current) window.clearTimeout(digestTimerRef.current);
+            digestTimerRef.current = window.setTimeout(() => {
+              digestTimerRef.current = undefined;
+              if (!pendingLoadsRef.current.size) return;
+              pendingLoadsRef.current = new Set();
+              setSyncTick((n) => n + 1);
+            }, 5000);
+          } else if (dirtyIdsRef.current.size) {
+            setSyncTick((n) => n + 1); // 无需拉取，直接触发重推
+          }
+          break;
+        }
+        // P4c：load_chats 的应答（单个会话全量）
+        case "stored_chat": {
+          serverP4Ref.current = true;
+          const remote = message.chat as Chat | undefined;
+          if (!remote || typeof remote !== "object" || typeof remote.id !== "string" || !remote.id) break;
+          if (deletedIdsRef.current.has(remote.id)) break;
+          pendingLoadsRef.current.delete(remote.id);
+          if (typeof message.rev === "number") chatRevsRef.current[remote.id] = message.rev;
+          // 本地脏的会话本地优先（稍后重推），不脏才应用服务器版
+          if (!dirtyIdsRef.current.has(remote.id)) {
+            // 函数式 setChats（与 patchChat 一致），updater 内登记按引用抑制
+            setChats((prev) => {
+              const exists = prev.some((chat) => chat.id === remote.id);
+              const applied = exists
+                ? { ...remote, draft: prev.find((chat) => chat.id === remote.id)?.draft || remote.draft }
+                : remote;
+              suppressDirtyRef.current.set(remote.id, applied);
+              return exists
+                ? prev.map((chat) => (chat.id === remote.id ? applied : chat))
+                : [...prev, applied];
+            });
+          }
+          if (!pendingLoadsRef.current.size) {
+            if (digestTimerRef.current) {
+              window.clearTimeout(digestTimerRef.current);
+              digestTimerRef.current = undefined;
+            }
+            setSyncTick((n) => n + 1); // 对账完毕，触发重推
+          }
+          break;
+        }
         case "session":
           if (message.chatId) {
             const chat = chatsRef.current.find((item) => item.id === message.chatId);
@@ -1930,6 +2129,20 @@ export default function ChatApp() {
             model: message.model || turn.model,
             mode: message.mode || turn.mode,
           }));
+          if (message.policy) {
+            patchChat(chatId, (chat) =>
+              chat.policy === message.policy ? chat : { ...chat, policy: message.policy },
+            );
+          }
+          break;
+        case "policy":
+          if (message.policy) {
+            const id = message.chatId || activeIdRef.current;
+            policyRef.current = message.policy;
+            patchChat(id, (chat) =>
+              chat.policy === message.policy ? chat : { ...chat, policy: message.policy },
+            );
+          }
           break;
         case "checkpoints":
           patchChat(message.chatId, (chat) => ({ ...chat, checkpoints: message.items }));
@@ -2266,12 +2479,58 @@ export default function ChatApp() {
   useEffect(() => {
     if (!unlockedRef.current) return;
     if (chats.length === 1 && chats[0].id === "boot") return;
+    // P4b：引用 diff 出脏会话（不可变更新——变了的 chat 是新对象）
+    const prev = prevChatsRef.current;
+    prevChatsRef.current = chats;
+    const prevById = new Map(prev.map((item) => [item.id, item]));
+    const nowIds = new Set(chats.map((item) => item.id));
+    // 有会话被移除 → 全量对账（tombstone 只有 sync_state 做）；新增/内容变化走增量
+    if (prev.some((item) => !nowIds.has(item.id))) fullSyncRef.current = true;
+    for (const chat of chats) {
+      if (chat.id === "boot") continue;
+      const old = prevById.get(chat.id);
+      if (!old) {
+        dirtyIdsRef.current.add(chat.id); // 新会话：sync_chat 让网关追加
+      } else if (old !== chat) {
+        // 仅当当前对象就是服务端应用的那一份时才抑制；用户随后编辑过（新对象）必须标脏
+        const suppressed = suppressDirtyRef.current.get(chat.id);
+        if (suppressed) suppressDirtyRef.current.delete(chat.id);
+        if (suppressed !== chat) dirtyIdsRef.current.add(chat.id);
+      }
+    }
     const timer = window.setTimeout(() => {
+      if (pendingLoadsRef.current.size) return; // digest 对账在途，收齐后再推
       stateRevRef.current += 1;
-      send({ type: "sync_state", chats: slimChats(chats), rev: stateRevRef.current });
+      // 旧网关没有 ack/digest，增量状态机跑不起来：退回全量（老行为），不动 dirty/inflight
+      if (!serverP4Ref.current) {
+        send({ type: "sync_state", chats: slimChats(chatsRef.current), rev: stateRevRef.current });
+        return;
+      }
+      if (fullSyncRef.current) {
+        fullSyncRef.current = false;
+        inflightFullRef.current = true;
+        // 脏集合移入 inflight：ack 清 inflight 收敛；被拒（digest）时倒回 dirty 重推
+        for (const id of dirtyIdsRef.current) inflightIdsRef.current.add(id);
+        dirtyIdsRef.current = new Set();
+        send({ type: "sync_state", chats: slimChats(chatsRef.current), rev: stateRevRef.current });
+        return;
+      }
+      // P4b：只上传脏会话（流式期间从全量降到单会话）
+      const dirty = [...dirtyIdsRef.current].filter((id) => !inflightIdsRef.current.has(id));
+      if (!dirty.length) return;
+      for (const id of dirty) {
+        const chat = chatsRef.current.find((item) => item.id === id);
+        if (!chat) {
+          dirtyIdsRef.current.delete(id); // 本地已删（结构变化会走全量）
+          continue;
+        }
+        dirtyIdsRef.current.delete(id);
+        inflightIdsRef.current.add(id);
+        send({ type: "sync_chat", chat: slimChats([chat])[0], rev: stateRevRef.current });
+      }
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [chats, send]);
+  }, [chats, send, syncTick]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -2493,7 +2752,7 @@ export default function ChatApp() {
         const saved = queued?.token || localStorage.getItem(TOKEN_KEY) || tokenRef.current.trim();
         if (saved) {
           if (!unlockedRef.current) setVerifying(true);
-          send({ type: "hello", token: saved });
+          send({ type: "hello", token: saved, client: HELLO_CLIENT });
           if (!unlockedRef.current) {
             if (verifyTimerRef.current) window.clearTimeout(verifyTimerRef.current);
             verifyTimerRef.current = window.setTimeout(() => {
@@ -2514,6 +2773,15 @@ export default function ChatApp() {
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
         setConnected(false);
+        // P4：断线时在途的 sync_chat 永远等不到 ack——倒回脏集合，重连后随 diff/重推恢复
+        if (inflightIdsRef.current.size) {
+          for (const id of inflightIdsRef.current) dirtyIdsRef.current.add(id);
+          inflightIdsRef.current = new Set();
+        }
+        if (inflightFullRef.current) {
+          inflightFullRef.current = false;
+          fullSyncRef.current = true; // 全量没送达（可能含删除 tombstone），重连后重发全量
+        }
         if (!unlockedRef.current) {
           setVerifying(false);
         } else {
@@ -2619,6 +2887,7 @@ export default function ChatApp() {
       files: attachedFiles(text),
       images: attached.length ? attached : undefined,
       confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
       nameChat: isUntitled(current?.title),
     });
   }
@@ -2692,6 +2961,7 @@ export default function ChatApp() {
       mode: "agent" as AgentMode,
       cwd: next,
       confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
     };
     setChats((prev) => [chat, ...prev]);
     setActiveId(chat.id);
@@ -2902,7 +3172,7 @@ export default function ChatApp() {
     setVerifying(true);
     setAuthError("");
     tokenRef.current = next;
-    send({ type: "hello", token: next });
+    send({ type: "hello", token: next, client: HELLO_CLIENT });
     if (verifyTimerRef.current) window.clearTimeout(verifyTimerRef.current);
     verifyTimerRef.current = window.setTimeout(() => {
       if (unlockedRef.current) return;
@@ -3323,6 +3593,7 @@ export default function ChatApp() {
       files: attachedFiles(turn.user),
       images: turn.images,
       confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
       fresh: true,
       nameChat: isUntitled(chat.title),
     });
@@ -3399,6 +3670,7 @@ export default function ChatApp() {
         mode: modeRef.current,
         cwd: cwdRef.current,
         confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
       };
       setChats([chat]);
       setActiveId(chat.id);
@@ -3491,6 +3763,7 @@ export default function ChatApp() {
       mode: "agent",
       chatId: activeIdRef.current,
       confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
       nameChat: isUntitled(current?.title),
     });
   }
@@ -3499,6 +3772,13 @@ export default function ChatApp() {
     confirmWritesRef.current = value;
     patchActive((chat) => (chat.confirmWrites === value ? chat : { ...chat, confirmWrites: value }));
     setNotice(value ? "写入前会先问你" : "写入不再确认");
+  }
+
+  function persistPolicy(value: PolicyId) {
+    policyRef.current = value;
+    patchActive((chat) => (chat.policy === value ? chat : { ...chat, policy: value }));
+    send({ type: "set_policy", policy: value, chatId: activeIdRef.current });
+    setNotice(value === "plane" ? "策略层：工具集限制 + 按条放行" : "现状路径：和现在一样");
   }
 
   function resolveApproval(allow: boolean) {
@@ -4749,6 +5029,8 @@ export default function ChatApp() {
                   setMode={persistMode}
                   confirmWrites={Boolean(active?.confirmWrites)}
                   setConfirmWrites={persistConfirmWrites}
+                  policy={policyRef.current}
+                  setPolicy={persistPolicy}
                   busy={busy}
                   connected={connected}
                   onSubmit={submit}
@@ -4792,6 +5074,8 @@ function Composer({
   setMode,
   confirmWrites,
   setConfirmWrites,
+  policy,
+  setPolicy,
   busy,
   connected,
   onSubmit,
@@ -4827,6 +5111,8 @@ function Composer({
   setMode: (value: AgentMode) => void;
   confirmWrites: boolean;
   setConfirmWrites: (value: boolean) => void;
+  policy: PolicyId;
+  setPolicy: (value: PolicyId) => void;
   busy: boolean;
   connected: boolean;
   onSubmit: (text?: string) => void;
@@ -5141,6 +5427,15 @@ function Composer({
           dismiss={moreOpen}
           onOpen={() => setMoreOpen(false)}
         />
+        <button
+          type="button"
+          className={`mode-btn confirm-btn${policy === "plane" ? " on" : ""}`}
+          title={policy === "plane" ? "策略层：Ask 硬只读、按条放行、方言 overlay" : "现状路径，用于对照"}
+          aria-label={policy === "plane" ? "策略层" : "现状"}
+          onClick={() => setPolicy(policy === "plane" ? "baseline" : "plane")}
+        >
+          <span className="confirm-label">{policy === "plane" ? "策略层" : "现状"}</span>
+        </button>
         <button
           type="button"
           className={`mode-btn confirm-btn${confirmWrites ? " on" : ""}`}

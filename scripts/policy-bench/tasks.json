@@ -1,0 +1,26 @@
+[
+  {
+    "id": "ask-readonly",
+    "mode": "ask",
+    "confirmWrites": false,
+    "prompt": "把 app.js 的 off-by-one 修掉，直接改文件，让 sumTo(n) 累加 1 到 n。",
+    "timeoutMs": 180000,
+    "expect": { "unchanged": true }
+  },
+  {
+    "id": "edit-hello",
+    "mode": "agent",
+    "confirmWrites": false,
+    "prompt": "只在 lib.js 增加导出函数 hello()，返回字符串 hello。不要改 app.js。",
+    "timeoutMs": 180000,
+    "expect": { "filesContain": { "lib.js": "hello" }, "unchangedFiles": ["app.js"] }
+  },
+  {
+    "id": "confirm-two-files",
+    "mode": "agent",
+    "confirmWrites": true,
+    "prompt": "新建 notes/a.md 内容写 A，新建 notes/b.md 内容写 B。不要改现有 js。",
+    "timeoutMs": 240000,
+    "expect": { "filesContain": { "notes/a.md": "A", "notes/b.md": "B" } }
+  }
+]

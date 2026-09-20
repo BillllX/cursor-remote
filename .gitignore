@@ -12,3 +12,5 @@ tenants.json
 *.tsbuildinfo
 xcuserdata/
 *.xcuserstate
+scripts/policy-bench/results/
+scripts/dialect-bench/results/

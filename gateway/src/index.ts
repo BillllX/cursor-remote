@@ -11,7 +11,17 @@ import {
 import type { Duplex } from "node:stream";
 import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
 import { WebSocketServer, WebSocket } from "ws";
-import type { AgentMode, ClientMessage, HistoryTurn, PreviewKind, ServerMessage } from "../../shared/protocol.ts";
+import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage } from "../../shared/protocol.ts";
+import {
+  askDisallowedTools,
+  defaultPolicy,
+  isPlane,
+  isPolicyProtectedPath,
+  parsePolicy,
+  planDisallowedTools,
+  toolFingerprint,
+} from "../../shared/policy.ts";
+import { dialectOverlay } from "../../shared/dialect.ts";
 import {
   buildCrewAgents,
   crewModelOf,
@@ -121,6 +131,15 @@ type PendingPrompt = {
   images?: Array<{ data: string; mimeType: string }>;
   confirmWrites: boolean;
   autoApprove: boolean;
+  policy: PolicyId;
+  dialect: boolean;
+};
+
+type RunStats = {
+  toolStarts: number;
+  intercepts: number;
+  approvals: number;
+  replays: number;
 };
 
 type OpenTool = {
@@ -151,6 +170,11 @@ type Slot = {
   pending: PendingPrompt[];
   openTools: Map<string, OpenTool>;
   reseed: boolean;
+  policy: PolicyId;
+  approvedKeys: Set<string>;
+  approvalCallId: string | null;
+  runStats: RunStats;
+  dialect: boolean;
 };
 
 type Conn = {
@@ -161,6 +185,11 @@ type Conn = {
   tenant: Tenant | null;
   slots: Map<string, Slot>;
   ws: WebSocket;
+  /** hello.client.maxMessageBytes：单条 WS 消息接收上限（0 = 不限，iOS 约 1MiB） */
+  maxMessageBytes: number;
+  /** hello.client.caps：客户端能力集（"sync_chat" / "stored_digest"） */
+  caps: Set<string>;
+  policy: PolicyId;
 };
 
 const liveByTenant = new Map<string, Map<string, Slot>>();
@@ -472,6 +501,55 @@ function tombstoneChat(tenant: Tenant, chatId: string) {
   if (!chatId) return;
   tenant.disk.deletedIds = [chatId, ...tenant.disk.deletedIds.filter((id) => id !== chatId)].slice(0, 500);
   tenant.disk.chats = tenant.disk.chats.filter((item) => chatIdOf(item) !== chatId);
+  delete tenant.disk.chatRevs[chatId];
+}
+
+/// 全量 chatRevs 视图：没有记录的老会话补 0（迁移期），保证 digest/stored_state 一致
+function effectiveChatRevs(tenant: Tenant): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const item of tenant.disk.chats) {
+    const id = chatIdOf(item);
+    if (id) out[id] = tenant.disk.chatRevs[id] ?? 0;
+  }
+  return out;
+}
+
+/// 会话条数硬顶（P4 审核）：sync_chat 可追加未知 id，无上限会被死循环/恶意客户端打爆磁盘
+const MAX_STORED_CHATS = 500;
+
+/// 规范化 JSON 序列化（对象键排序），用于变更检测——
+/// 避免 Swift(JSONSerialization) 与 JS(插入序) 的键序差异把相同内容误判为 changed
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
+  return `{${entries.join(",")}}`;
+}
+
+/// chatRevs 裁剪到当前存活会话集（P4 审核）：gone 过滤/旧状态残留的脏 key 随 persist 一直带着
+function pruneChatRevs(tenant: Tenant) {
+  const live = new Set(chatIdsFrom(tenant.disk.chats));
+  for (const id of Object.keys(tenant.disk.chatRevs)) {
+    if (!live.has(id)) delete tenant.disk.chatRevs[id];
+  }
+}
+
+/// sync 被接受后向同租户其他支持 digest 的连接广播目录（P4 审核：多设备实时对账，
+/// 否则对端要等自己 rev 分叉才发现变化，互相覆盖）。旧客户端无 caps 不收。
+function broadcastDigest(tenant: Tenant, except: WebSocket) {
+  for (const other of conns.values()) {
+    if (other.ws === except || !other.authed || other.tenant?.id !== tenant.id) continue;
+    if (!other.caps.has("stored_digest")) continue;
+    send(other.ws, {
+      type: "stored_digest",
+      rev: tenant.disk.rev,
+      deletedIds: tenant.disk.deletedIds,
+      chatRevs: effectiveChatRevs(tenant),
+    });
+  }
 }
 
 function visibleChats(tenant: Tenant) {
@@ -483,14 +561,45 @@ function visibleChats(tenant: Tenant) {
   });
 }
 
-function emitStoredState(ws: WebSocket, tenant: Tenant) {
+function storedStatePayload(tenant: Tenant) {
   const live = new Set(runningChatIds(tenant));
-  send(ws, {
-    type: "stored_state",
+  return {
+    type: "stored_state" as const,
     chats: visibleChats(tenant).map((item) => (live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0])),
     rev: tenant.disk.rev,
     deletedIds: tenant.disk.deletedIds,
-  });
+    chatRevs: effectiveChatRevs(tenant),
+  };
+}
+
+/// 分叉时的状态对齐：支持 digest 的客户端发目录（P4c），否则全量 stored_state（含 deferral 护栏）
+function emitStateSync(ws: WebSocket, tenant: Tenant) {
+  const conn = conns.get(ws);
+  if (conn?.caps.has("stored_digest")) {
+    send(ws, {
+      type: "stored_digest",
+      rev: tenant.disk.rev,
+      deletedIds: tenant.disk.deletedIds,
+      chatRevs: effectiveChatRevs(tenant),
+    });
+    return;
+  }
+  emitStoredState(ws, tenant);
+}
+
+function emitStoredState(ws: WebSocket, tenant: Tenant) {
+  const payload = storedStatePayload(tenant);
+  const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+  if (limit > 0) {
+    const bytes = Buffer.byteLength(JSON.stringify(payload));
+    if (bytes > limit) {
+      // 客户端收不了这么大的单条 WS 消息（iOS URLSessionWebSocketTask 约 1MiB），改走 HTTP /state
+      console.log("stored_state deferred", tenant.id, bytes, ">", limit);
+      send(ws, { type: "stored_state_deferred", rev: tenant.disk.rev });
+      return;
+    }
+  }
+  send(ws, payload);
 }
 
 async function forgetChat(conn: Conn, chatId: string) {
@@ -553,6 +662,11 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     pending: [],
     openTools: new Map(),
     reseed: false,
+    policy: defaultPolicy(),
+    approvedKeys: new Set(),
+    approvalCallId: null,
+    runStats: { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 },
+    dialect: true,
   };
 }
 
@@ -625,6 +739,12 @@ function resolveApprovalWait(slot: Slot, allow: boolean) {
     slot.awaitingApproval = false;
     slot.approvalSettled = allow;
   }
+}
+
+function rememberApproved(slot: Slot) {
+  const id = slot.approvalCallId;
+  const tool = id ? slot.openTools.get(id) : undefined;
+  if (tool) slot.approvedKeys.add(toolFingerprint(tool.name, tool.args));
 }
 
 function waitForApproval(slot: Slot, ms = 120_000) {
@@ -725,7 +845,15 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
     sandboxOptions: { enabled: true },
   };
   const base = { apiKey, model: { id: modelId }, local };
-  const withCrew = { ...base, agents: buildCrewAgents(modelId, catalog, cwd) };
+  const withCrew = {
+    ...base,
+    agents: buildCrewAgents(
+      modelId,
+      catalog,
+      cwd,
+      slot.dialect === false ? undefined : dialectOverlay,
+    ),
+  };
 
   const open = async (agentsOn: boolean, resumeId: string | null) => {
     const opts = agentsOn ? withCrew : base;
@@ -1421,6 +1549,7 @@ function writeWorkspaceFile(
 ): { path: string; error?: string } {
   const path = workspacePath(cwd, raw);
   if (!path) return { path: raw, error: "路径不在工作区里" };
+  if (isPolicyProtectedPath(path)) return { path, error: "不能改策略文件" };
   if (content.length > 500_000) return { path, error: "内容超过 500KB，不在这里保存" };
   const abs = resolve(cwd, path);
   try {
@@ -1468,6 +1597,7 @@ function writeWorkspaceBytes(
 ): { path: string; error?: string; size?: number } {
   const path = workspacePath(cwd, raw);
   if (!path) return { path: raw, error: "路径不在工作区里" };
+  if (isPolicyProtectedPath(path)) return { path, error: "不能改策略文件" };
   if (buf.length > MAX_UPLOAD_BYTES) return { path, error: "文件超过 32MB" };
   try {
     mkdirSync(dirname(resolve(cwd, path)), { recursive: true });
@@ -1539,6 +1669,9 @@ function runFsOp(
 ): { path: string; to?: string; error?: string } {
   const path = workspacePath(cwd, raw);
   if (!path) return { path: raw, error: "路径不在工作区里" };
+  if (isPolicyProtectedPath(path) || (to && isPolicyProtectedPath(to))) {
+    return { path, to, error: "不能改策略文件" };
+  }
   const abs = resolve(cwd, path);
   try {
     if (op === "mkdir") {
@@ -2168,6 +2301,12 @@ function finishRun(
     chatId: slot.chatId,
     status,
     durationMs,
+    policy: slot.policy,
+    toolStarts: slot.runStats.toolStarts,
+    intercepts: slot.runStats.intercepts,
+    approvals: slot.runStats.approvals,
+    replays: slot.runStats.replays,
+    dialect: slot.dialect,
   });
 }
 
@@ -2222,7 +2361,11 @@ async function handlePrompt(
   confirmWrites = false,
   autoApprove = false,
   fresh = false,
+  policy?: PolicyId,
+  dialect?: boolean,
 ) {
+  const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
+  const nextDialect = dialect !== false;
   if (fresh) {
     await cancelRun(slot.run);
     slot.epoch += 1;
@@ -2246,6 +2389,8 @@ async function handlePrompt(
       images,
       confirmWrites,
       autoApprove,
+      policy: nextPolicy,
+      dialect: nextDialect,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED" });
@@ -2261,6 +2406,8 @@ async function handlePrompt(
       images,
       confirmWrites,
       autoApprove,
+      policy: nextPolicy,
+      dialect: nextDialect,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED", message: "同时跑的任务已满，排队中" });
@@ -2270,6 +2417,17 @@ async function handlePrompt(
   const safeImages = sanitizeImages(images);
   const cwd = cwdOf(conn, slot);
   const userText = text.trim() || (safeImages.length ? "请看附图。" : "");
+  const usedModel = (model && model.trim()) || slot.model || conn.model;
+  if (slot.policy !== nextPolicy || slot.dialect !== nextDialect) {
+    await disposeSlot(slot);
+    slot.agentId = null;
+    slot.reseed = true;
+  }
+  slot.policy = nextPolicy;
+  conn.policy = nextPolicy;
+  slot.dialect = nextDialect;
+  slot.model = usedModel;
+  conn.model = usedModel;
   let prompt = wrapPrompt(
     userText,
     mode,
@@ -2277,11 +2435,9 @@ async function handlePrompt(
     loadWorkspaceRules(cwd),
     cwd,
   );
+  const extra = nextDialect ? dialectOverlay(usedModel) : "";
+  if (extra) prompt = `${prompt}\n\n${extra}`;
   if (!prompt) return;
-
-  const usedModel = (model && model.trim()) || slot.model || conn.model;
-  slot.model = usedModel;
-  conn.model = usedModel;
 
   const epoch = ++slot.epoch;
   slot.finished = false;
@@ -2290,7 +2446,10 @@ async function handlePrompt(
   slot.approvalWait = null;
   slot.approvalSettled = null;
   slot.lastShellCallId = null;
+  slot.approvalCallId = null;
   slot.openTools = new Map();
+  if (autoApprove) slot.runStats.replays += 1;
+  else slot.runStats = { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 };
   let replayApproved = false;
 
   if (!autoApprove && (mode === "agent" || mode === "plan")) {
@@ -2348,6 +2507,7 @@ async function handlePrompt(
     if (blockedCalls.has(callId)) return true;
     blockedAsk = true;
     blockedCalls.add(callId);
+    slot.runStats.intercepts += 1;
     const reason =
       mode === "plan"
         ? "Plan 模式只出方案，点「执行这个计划」才会改文件。"
@@ -2376,9 +2536,12 @@ async function handlePrompt(
     if (mode !== "agent" && mode !== "plan") return false;
     if (!confirmWrites || autoApprove) return false;
     if (!isMutatingTool(name, args)) return false;
+    if (isPlane(slot.policy) && slot.approvedKeys.has(toolFingerprint(name, args))) return false;
     rememberEdit(slot, name, args, cwd);
     if (slot.awaitingApproval) return true;
     slot.awaitingApproval = true;
+    slot.approvalCallId = callId;
+    slot.runStats.approvals += 1;
     const meta = crewMeta.get(callId);
     send(ws, {
       type: "approval",
@@ -2497,6 +2660,7 @@ async function handlePrompt(
       model: meta.model,
     });
     startedCalls.add(callId);
+    slot.runStats.toolStarts += 1;
     if (!slot.openTools) slot.openTools = new Map();
     slot.openTools.set(callId, {
       name,
@@ -2555,13 +2719,29 @@ async function handlePrompt(
     slot.agentId = agent.agentId;
     send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
     send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
-    send(ws, { type: "run_meta", chatId: slot.chatId, model: usedModel, mode });
+    send(ws, {
+      type: "run_meta",
+      chatId: slot.chatId,
+      model: usedModel,
+      mode,
+      policy: slot.policy,
+      dialect: slot.dialect,
+    });
 
-    run = await agent.send(payload, {
+    const sendOpts: {
+      model: { id: string };
+      mode: "plan" | "agent";
+      local: { force: boolean };
+      disallowedTools?: string[];
+    } = {
       model: { id: usedModel },
       mode: mode === "plan" ? "plan" : "agent",
       local: { force: true },
-      onDelta: ({ update }) => {
+    };
+    if (isPlane(slot.policy) && mode === "ask") sendOpts.disallowedTools = askDisallowedTools();
+    if (isPlane(slot.policy) && mode === "plan") sendOpts.disallowedTools = planDisallowedTools();
+
+    const onDelta = ({ update }: { update: unknown }) => {
         const rec = update as {
           type?: string;
           callId?: string;
@@ -2652,8 +2832,18 @@ async function handlePrompt(
           default:
             break;
         }
-      },
-    });
+      };
+
+    const startSend = async (opts: typeof sendOpts) =>
+      agent.send(payload, { ...opts, onDelta });
+    try {
+      run = await startSend(sendOpts);
+    } catch (err) {
+      if (!sendOpts.disallowedTools) throw err;
+      console.error("disallowedTools rejected, retrying without them", err);
+      const { disallowedTools: _drop, ...rest } = sendOpts;
+      run = await startSend(rest);
+    }
 
     if (slot.epoch !== epoch || slot.finished) {
       try {
@@ -2690,6 +2880,7 @@ async function handlePrompt(
         chatId: slot.chatId,
         text: "\n\n已允许写入，按确认后重新执行这一轮。",
       });
+      rememberApproved(slot);
       replayApproved = true;
       slot.run = null;
       slot.finished = true;
@@ -2754,6 +2945,7 @@ async function handlePrompt(
         chatId: slot.chatId,
         text: "\n\n已允许写入，按确认后重新执行这一轮。",
       });
+      rememberApproved(slot);
       replayApproved = true;
       slot.run = null;
       slot.finished = true;
@@ -2828,6 +3020,8 @@ async function handlePrompt(
             next.confirmWrites,
             next.autoApprove,
             false,
+            next.policy,
+            next.dialect,
           );
         });
       } else {
@@ -2846,8 +3040,10 @@ async function handlePrompt(
       files,
       images,
       confirmWrites,
-      true,
+      !isPlane(slot.policy),
       false,
+      slot.policy,
+      slot.dialect,
     );
   }
 }
@@ -2876,6 +3072,8 @@ function kickGlobalQueue() {
           next.confirmWrites,
           next.autoApprove,
           false,
+          next.policy,
+          next.dialect,
         );
       });
       return;
@@ -3107,6 +3305,19 @@ function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
   sendMediaFile(req, res, resolve(cwd, path), path, kind);
 }
 
+/// GET /state：stored_state 的 HTTP 版，给收不了超大 WS 消息的客户端（iOS 约 1MiB 上限）
+function handleState(req: IncomingMessage, res: ServerResponse) {
+  const header = String(req.headers.authorization || "");
+  const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || "";
+  const tenant = bearer ? resolveTenant(bearer) : null;
+  if (!hasAuth() || !tenant) {
+    res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
+  res.end(JSON.stringify(storedStatePayload(tenant)));
+}
+
 function cwdWritable(dir: string) {
   try {
     mkdirSync(dir, { recursive: true });
@@ -3145,6 +3356,10 @@ const httpServer = createServer((req, res) => {
     handleMedia(req, res, url);
     return;
   }
+  if (req.method === "GET" && url.pathname === "/state") {
+    handleState(req, res);
+    return;
+  }
   if (url.pathname === "/upload") {
     void handleUpload(req, res, url).catch((err) => {
       console.error("upload", err instanceof Error ? err.message : err);
@@ -3161,7 +3376,21 @@ const httpServer = createServer((req, res) => {
   proxyWeb(req, res);
 });
 
-const wss = new WebSocketServer({ noServer: true });
+// perMessageDeflate：WS 帧压缩（JSON 文本 10-20x），浏览器/ws 自动协商；
+// 不支持扩展的客户端（iOS URLSessionWebSocketTask 不协商扩展）会优雅回落为不压缩。
+// 注意：ws 的 threshold 只在关闭 context takeover 时生效； takeover 还会让每连接常驻 zlib 窗口，一并关掉。
+const wss = new WebSocketServer({
+  noServer: true,
+  // 大文件走 HTTP /upload；WS 帧只需要覆盖 sync_state 全量（约几 MB）加余量
+  maxPayload: 16 * 1024 * 1024,
+  perMessageDeflate: {
+    serverNoContextTakeover: true,
+    clientNoContextTakeover: true,
+    serverMaxWindowBits: 10,
+    concurrencyLimit: 10,
+    threshold: 1024,
+  },
+});
 
 httpServer.on("upgrade", (req, socket, head) => {
   if (agentSocketPath(req.url)) {
@@ -3186,6 +3415,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
     tenant: null,
     slots: new Map(),
     ws,
+    maxMessageBytes: 0,
+    caps: new Set(),
+    policy: defaultPolicy(),
   };
   conns.set(ws, conn);
 
@@ -3220,6 +3452,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         }
         noteLoginOk(conn.ip);
         if (conn.authed) detachConn(conn);
+        // 客户端声明的单条消息接收上限（iOS URLSessionWebSocketTask 约 1MiB）；0 = 不限
+        const declared = Number(message.client?.maxMessageBytes) || 0;
+        conn.maxMessageBytes = declared > 0 ? Math.min(declared, 8 * 1024 * 1024) : 0;
+        conn.caps = new Set(
+          Array.isArray(message.client?.caps)
+            ? message.client.caps.filter((item): item is string => typeof item === "string")
+            : [],
+        );
         bindTenant(conn, tenant);
         const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
         hydrateConn(conn);
@@ -3238,6 +3478,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             workspaceRoot: resolve(tenant.workspaceRoot),
             tenantId: tenant.id,
             tenantName: tenant.name,
+            policy: conn.policy || defaultPolicy(),
           });
         };
         emitReady(cached);
@@ -3266,19 +3507,21 @@ wss.on("connection", (ws, req: IncomingMessage) => {
       if (message.type === "sync_state") {
         const clientRev = typeof message.rev === "number" ? message.rev : 0;
         if (clientRev < tenant.disk.rev) {
-          emitStoredState(ws, tenant);
+          emitStateSync(ws, tenant);
           return;
         }
         const prevCwd = new Map<string, string>();
+        const prevJson = new Map<string, string>();
         const prevIds = chatIdsFrom(tenant.disk.chats);
         for (const item of tenant.disk.chats) {
           if (!item || typeof item !== "object") continue;
           const row = item as { id?: unknown; cwd?: unknown };
-          if (typeof row.id === "string" && typeof row.cwd === "string" && row.cwd) {
-            prevCwd.set(row.id, row.cwd);
+          if (typeof row.id === "string" && row.id) {
+            if (typeof row.cwd === "string" && row.cwd) prevCwd.set(row.id, row.cwd);
+            prevJson.set(row.id, stableStringify(item));
           }
         }
-        const incoming = Array.isArray(message.chats) ? message.chats : [];
+        const incoming = (Array.isArray(message.chats) ? message.chats : []).slice(0, MAX_STORED_CHATS);
         const incomingIds = chatIdsFrom(incoming);
         for (const id of prevIds) {
           if (!incomingIds.has(id)) tombstoneChat(tenant, id);
@@ -3290,17 +3533,97 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             return !id || !gone.has(id);
           })
           .map((item) => {
-          if (!item || typeof item !== "object") return item;
-          const row = item as { id?: unknown; cwd?: unknown };
-          const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
-          const id = typeof row.id === "string" ? row.id : "";
-          const next = wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
-          if (row.cwd === next) return item;
-          return { ...row, cwd: next };
-        });
+            if (!item || typeof item !== "object") return item;
+            const row = item as { id?: unknown; cwd?: unknown };
+            const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
+            const id = typeof row.id === "string" ? row.id : "";
+            const next = wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
+            if (row.cwd === next) return item;
+            return { ...row, cwd: next };
+          });
         tenant.disk.rev = clientRev;
+        // P4c：按会话变更检测（规范化序列化，键序无关），只给真正变了的会话记新版本号
+        for (const item of tenant.disk.chats) {
+          const id = chatIdOf(item);
+          if (!id) continue;
+          if (prevJson.get(id) !== stableStringify(item)) {
+            tenant.disk.chatRevs[id] = clientRev;
+          }
+        }
+        pruneChatRevs(tenant);
         pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
         persistConn(conn);
+        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: effectiveChatRevs(tenant) });
+        broadcastDigest(tenant, ws); // 多设备实时对账
+        return;
+      }
+
+      // P4b：单会话增量上传——只替换/追加这一条，不做 tombstone（结构变化仍走 sync_state）
+      if (message.type === "sync_chat") {
+        const clientRev = typeof message.rev === "number" ? message.rev : 0;
+        if (clientRev < tenant.disk.rev) {
+          emitStateSync(ws, tenant);
+          return;
+        }
+        const id = chatIdOf(message.chat);
+        if (!id) return;
+        if (tenant.disk.deletedIds.includes(id)) {
+          // 已删除的会话不接受内容更新；ack 带上该 id 让客户端收敛 inflight（空表会泄漏）
+          send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
+          return;
+        }
+        const prev = tenant.disk.chats.find((item) => chatIdOf(item) === id);
+        // cwd 限定：与 sync_state 同一套（新值优先，其次旧值，最后租户根）
+        let next = message.chat;
+        if (next && typeof next === "object") {
+          const row = next as { cwd?: unknown };
+          const prevRow = prev && typeof prev === "object" ? (prev as { cwd?: unknown }) : {};
+          const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
+          const fallback = typeof prevRow.cwd === "string" ? confinedCwd(prevRow.cwd, tenant.workspaceRoot) : null;
+          const cwd = wanted || fallback || tenant.workspaceRoot;
+          if (row.cwd !== cwd) next = { ...next, cwd };
+        }
+        const changed = stableStringify(prev ?? null) !== stableStringify(next);
+        if (changed && !prev && tenant.disk.chats.length >= MAX_STORED_CHATS) {
+          // 条数硬顶：追加新会话被拒（替换既有会话不受限），回 ack 让客户端收敛 inflight
+          console.warn("sync_chat 拒绝：会话数超上限", tenant.id, MAX_STORED_CHATS);
+          send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
+          return;
+        }
+        // 先写 rev 再落盘（P4 审核：崩溃窗口不能出现「新内容旧 rev」）；幂等重推也落盘，
+        // 否则 rev 只在内存里，重启后对账分叉
+        tenant.disk.chatRevs[id] = clientRev;
+        tenant.disk.rev = clientRev;
+        if (changed) {
+          tenant.disk.chats = prev
+            ? tenant.disk.chats.map((item) => (chatIdOf(item) === id ? next : item))
+            : [...tenant.disk.chats, next];
+        }
+        persistConn(conn);
+        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
+        if (changed) broadcastDigest(tenant, ws); // 多设备实时对账
+        return;
+      }
+
+      // P4c：stored_digest 后按需拉取单个会话全量
+      if (message.type === "load_chats") {
+        const ids = (Array.isArray(message.ids) ? message.ids : [])
+          .filter((item): item is string => typeof item === "string" && Boolean(item))
+          .slice(0, 200); // 上限防滥用；正常分叉差异只有几条
+        const gone = new Set(tenant.disk.deletedIds);
+        const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+        for (const id of ids) {
+          if (gone.has(id)) continue;
+          const chat = tenant.disk.chats.find((item) => chatIdOf(item) === id);
+          if (!chat) continue;
+          const payload = { type: "stored_chat" as const, chat, rev: tenant.disk.chatRevs[id] ?? 0 };
+          // 单条同样过接收上限护栏：超限回落 deferred，客户端走 HTTP /state 全量
+          if (limit > 0 && Buffer.byteLength(JSON.stringify(payload)) > limit) {
+            send(ws, { type: "stored_state_deferred", rev: tenant.disk.rev });
+            continue;
+          }
+          send(ws, payload);
+        }
         return;
       }
 
@@ -3697,6 +4020,23 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
 
+      if (message.type === "set_policy") {
+        const next = parsePolicy(message.policy, conn.policy);
+        conn.policy = next;
+        if (message.chatId) {
+          const slot = slotOf(conn, message.chatId);
+          if (slot.policy !== next) {
+            slot.policy = next;
+            slot.approvedKeys.clear();
+            await disposeSlot(slot);
+            slot.agentId = null;
+            slot.reseed = true;
+          }
+        }
+        send(ws, { type: "policy", policy: next, chatId: message.chatId });
+        return;
+      }
+
       if (message.type === "prompt") {
         const slot = slotOf(conn, message.chatId);
         await handlePrompt(
@@ -3711,6 +4051,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           Boolean(message.confirmWrites),
           Boolean(message.autoApprove),
           Boolean(message.fresh),
+          parsePolicy(message.policy, conn.policy),
+          message.dialect,
         );
         if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text);
       }

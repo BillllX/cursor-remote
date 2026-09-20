@@ -1,3 +1,5 @@
+import { crewChinesePrompt, usesChineseDialect } from "./dialect.ts";
+
 export const CREW_ROLES = ["explore", "builder", "reviewer"] as const;
 export type CrewRole = (typeof CREW_ROLES)[number];
 
@@ -13,7 +15,7 @@ export const CREW_LABEL: Record<CrewRole, string> = {
   reviewer: "交叉审",
 };
 
-function vendorHint(id: string): string {
+export function vendorHint(id: string): string {
   const n = id.trim().toLowerCase();
   if (!n) return "other";
   if (n.includes("grok") || n.startsWith("xai")) return "xai";
@@ -124,27 +126,56 @@ export function buildCrewAgents(
   lead: string,
   catalog: string[],
   cwd?: string,
+  overlayFor?: (modelId: string) => string,
 ): Record<string, CrewAgentDef> {
   const exploreModel = pickExplore(lead, catalog);
   const reviewerModel = pickReviewer(lead, catalog);
   const bound = cwd ? `${workspaceConfinePrompt(cwd)} ` : "";
+  const extra = (model: { id: string } | "inherit") => {
+    const id = model === "inherit" ? lead : model.id;
+    const text = overlayFor?.(id)?.trim();
+    return text ? `${text} ` : "";
+  };
+  const promptOf = (
+    role: CrewRole,
+    model: { id: string } | "inherit",
+    english: string,
+  ) => {
+    const id = model === "inherit" ? lead : model.id;
+    if (usesChineseDialect(id)) {
+      return crewChinesePrompt(role, bound, extra(model).trim());
+    }
+    return `${bound}${extra(model)}${english}`;
+  };
   return {
     explore: {
       description:
         "Read-only explorer. Use to search the current workspace, map files, and gather context in parallel without editing. Stay inside the working directory.",
-      prompt: `${bound}You are a read-only codebase explorer. Search and read files inside the working directory. Do not edit, write, delete, or run mutating shell commands. Do not look for or propose changes outside this workspace. Return a concise map of relevant files and findings.`,
+      prompt: promptOf(
+        "explore",
+        exploreModel,
+        "You are a read-only codebase explorer. Search and read files inside the working directory. Do not edit, write, delete, or run mutating shell commands. Do not look for or propose changes outside this workspace. Return a concise map of relevant files and findings.",
+      ),
       model: exploreModel,
     },
     builder: {
       description:
         "Implementer. Use to make the actual code changes and run commands after the plan is clear. All edits must stay inside the working directory.",
-      prompt: `${bound}You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace.`,
+      prompt: promptOf(
+        "builder",
+        "inherit",
+        "You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace.",
+      ),
       model: "inherit",
     },
     reviewer: {
       description:
         "Cross-reviewer. Use after edits to inspect the diff for bugs, regressions, and missed cases. Prefer a second opinion, not a rewrite. Only review files in this workspace.",
-      prompt: `${bound}You review the current workspace changes. Read the diff and surrounding code inside this working directory. List concrete issues. Do not rewrite the feature unless you find a critical bug you can fix in a few lines. Do not expand scope or touch files outside this workspace.`,
+      prompt: promptOf(
+        "reviewer",
+        reviewerModel,
+        "You review the current workspace changes. Read the diff and surrounding code inside this working directory. List concrete issues. Do not rewrite the feature unless you find a critical bug you can fix in a few lines. Do not expand scope or touch files outside this workspace.",
+      ),
       model: reviewerModel,
     },
   };

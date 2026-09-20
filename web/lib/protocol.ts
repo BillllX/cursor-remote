@@ -1,11 +1,21 @@
 export type AgentMode = "agent" | "plan" | "ask";
 
+/** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
+export type PolicyId = "baseline" | "plane";
+
 export type PromptImage = { data: string; mimeType: string };
 
 export type CheckpointInfo = { id: string; label: string; createdAt: number };
 
+// maxMessageBytes：客户端单条 WS 消息接收上限（iOS URLSessionWebSocketTask 约 1MiB）。
+// 网关对超限的大消息（目前只有 stored_state）改发 stored_state_deferred，客户端走 HTTP /state 拉取。
+// caps：客户端能力集。已知值：
+//   "sync_chat"     —— 支持单会话增量上传（sync_chat）与 sync_ack 回执
+//   "stored_digest" —— 分叉时收 stored_digest 目录 + load_chats 按需拉取，而不是全量 stored_state
+export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
+
 export type ClientMessage =
-  | { type: "hello"; token?: string }
+  | { type: "hello"; token?: string; client?: HelloClient }
   | { type: "set_workspace"; cwd: string; chatId?: string; create?: boolean }
   | { type: "list_workspaces" }
   | { type: "create_workspace"; name: string }
@@ -21,6 +31,9 @@ export type ClientMessage =
       autoApprove?: boolean;
       fresh?: boolean;
       nameChat?: boolean;
+      policy?: PolicyId;
+      /** 缺省 true。false 时关掉中文系方言 overlay，给 dialect-bench 对照用 */
+      dialect?: boolean;
     }
   | { type: "cancel"; chatId: string }
   | { type: "drop_queued"; chatId: string; text?: string }
@@ -53,7 +66,12 @@ export type ClientMessage =
       chatId?: string;
     }
   | { type: "sync_state"; chats: unknown[]; rev?: number }
+  // 单会话增量上传（P4b）：只带变化的那个会话；删除/新建等结构变化仍走 sync_state
+  | { type: "sync_chat"; chat: unknown; rev?: number }
+  // stored_digest 后按需拉取单个会话全量（P4c）
+  | { type: "load_chats"; ids: string[] }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
+  | { type: "set_policy"; policy: PolicyId; chatId?: string }
   | { type: "ping" };
 
 export type PreviewKind =
@@ -108,11 +126,12 @@ export type ServerMessage =
       workspaceRoot?: string;
       tenantId?: string;
       tenantName?: string;
+      policy?: PolicyId;
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
   | { type: "workspace_created"; path: string; name: string }
   | { type: "session"; chatId: string; agentId: string; cwd: string }
-  | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode }
+  | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }
   | { type: "text-delta"; chatId: string; text: string }
   | { type: "thinking-delta"; chatId: string; text: string }
   | ({
@@ -145,7 +164,14 @@ export type ServerMessage =
       chatId: string;
       status: string;
       durationMs?: number;
+      policy?: PolicyId;
+      toolStarts?: number;
+      intercepts?: number;
+      approvals?: number;
+      replays?: number;
+      dialect?: boolean;
     }
+  | { type: "policy"; policy: PolicyId; chatId?: string }
   | { type: "files"; query: string; paths: string[]; status?: Record<string, string>; mention?: boolean; truncated?: boolean; chatId?: string }
   | { type: "search_hits"; query: string; hits: SearchHit[]; chatId?: string }
   | {
@@ -180,7 +206,15 @@ export type ServerMessage =
       error?: string;
       chatId?: string;
     }
-  | { type: "stored_state"; chats: unknown[]; rev?: number; deletedIds?: string[] }
+  | { type: "stored_state"; chats: unknown[]; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
+  // stored_state 超过客户端 maxMessageBytes 时的替代通知：客户端应 HTTP GET /state 拉全量
+  | { type: "stored_state_deferred"; rev?: number }
+  // sync_state / sync_chat 被接受后的回执（P4b）：携带服务端最新 rev 与相关会话的 chatRev
+  | { type: "sync_ack"; rev?: number; chatRevs?: Record<string, number> }
+  // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
+  | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
+  // load_chats 的应答：单个会话全量
+  | { type: "stored_chat"; chat: unknown; rev?: number }
   | { type: "auth"; ok: boolean; message?: string }
   | {
       type: "tool-output";

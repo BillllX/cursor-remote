@@ -26,6 +26,8 @@ export type DiskState = {
   slots: DiskSlot[];
   rev: number;
   deletedIds: string[];
+  /** P4c：每个会话的服务端版本号（与 rev 同一计数器），用于 stored_digest 增量对账 */
+  chatRevs: Record<string, number>;
 };
 
 export type Tenant = {
@@ -54,7 +56,7 @@ export function stateDir(): string {
 }
 
 export function emptyDisk(): DiskState {
-  return { chats: [], slots: [], rev: 0, deletedIds: [] };
+  return { chats: [], slots: [], rev: 0, deletedIds: [], chatRevs: {} };
 }
 
 export function loadTenants(): TenantsRegistry {
@@ -289,13 +291,28 @@ function readDisk(file: string): DiskState {
   try {
     if (!existsSync(file)) return emptyDisk();
     const raw = JSON.parse(readFileSync(file, "utf8")) as DiskState;
+    const chats = settlePersistedChats(Array.isArray(raw.chats) ? raw.chats : []);
+    // chatRevs 裁剪到存活会话（P4 审核）：旧状态里 chats∩deletedIds 等残留 key 不带回内存
+    const liveIds = new Set(
+      chats
+        .map((item) => (item && typeof item === "object" ? (item as { id?: unknown }).id : null))
+        .filter((id): id is string => typeof id === "string" && Boolean(id)),
+    );
     return {
-      chats: settlePersistedChats(Array.isArray(raw.chats) ? raw.chats : []),
+      chats,
       slots: Array.isArray(raw.slots) ? raw.slots : [],
       rev: typeof raw.rev === "number" && raw.rev >= 0 ? raw.rev : 0,
       deletedIds: Array.isArray(raw.deletedIds)
         ? raw.deletedIds.filter((id): id is string => typeof id === "string" && Boolean(id)).slice(0, 500)
         : [],
+      chatRevs:
+        raw.chatRevs && typeof raw.chatRevs === "object" && !Array.isArray(raw.chatRevs)
+          ? Object.fromEntries(
+              Object.entries(raw.chatRevs).filter(
+                ([k, v]) => typeof v === "number" && v >= 0 && liveIds.has(k),
+              ),
+            )
+          : {},
     };
   } catch {
     return emptyDisk();
