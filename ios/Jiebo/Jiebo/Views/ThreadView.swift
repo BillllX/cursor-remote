@@ -4,6 +4,7 @@ struct ThreadView: View {
     @Environment(ChatStore.self) private var store
 
     var body: some View {
+        @Bindable var store = store
         VStack(spacing: 0) {
             header
             if !store.notice.isEmpty {
@@ -16,6 +17,19 @@ struct ThreadView: View {
             ComposerView()
         }
         .background(JieboColor.paper.ignoresSafeArea())
+        // @文件 链接 → Quick Look；其他链接走系统
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == "jiebo-file",
+                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+                  let path = components.queryItems?.first(where: { $0.name == "path" })?.value
+            else { return .systemAction }
+            store.openMention(path)
+            return .handled
+        })
+        .sheet(item: $store.previewFile, onDismiss: store.closePreview) { file in
+            QuickLookView(file: file)
+                .ignoresSafeArea()
+        }
     }
 
     private var header: some View {
@@ -30,6 +44,23 @@ struct ThreadView: View {
                     .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
             }
             Spacer()
+            if store.previewLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(JieboColor.dim)
+            }
+            if store.canUndo {
+                Button(action: store.undoLast) {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(JieboColor.ink2)
+                        .frame(width: 30, height: 30)
+                        .background(JieboColor.mist)
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("还原上一轮的改动")
+            }
             if store.busy {
                 ProgressView()
                     .tint(JieboColor.pine)
@@ -66,17 +97,47 @@ struct ThreadView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("对着远端工作区说话。")
-                .font(JieboFont.display(28))
+        VStack(spacing: 16) {
+            Spacer(minLength: 40)
+            Text("从这里开始")
+                .font(JieboFont.display(34))
+                .tracking(-1.2)
                 .foregroundStyle(JieboColor.ink)
             Text("消息经东京站送到 gateway，Agent 在那台机器上改文件、跑命令。")
                 .font(JieboFont.ui(16))
                 .foregroundStyle(JieboColor.ink2)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 8) {
+                ForEach(starters, id: \.self) { text in
+                    Button {
+                        store.saveDraft(text)
+                    } label: {
+                        Text(text)
+                            .font(JieboFont.ui(13))
+                            .foregroundStyle(JieboColor.ink)
+                            .padding(.horizontal, 14)
+                            .frame(height: 36)
+                            .background(JieboColor.white)
+                            .clipShape(Capsule())
+                            .overlay(
+                                Capsule().stroke(JieboColor.borderStrong, lineWidth: 1)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 8)
+            Spacer(minLength: 40)
         }
-        .padding(.top, 48)
-        .frame(maxWidth: 560, alignment: .leading)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
     }
+
+    private let starters = [
+        "看看这个工作区里有什么",
+        "把最近的改动讲一讲",
+        "跑一下测试，看看过没过",
+    ]
 
     private func banner(_ text: String, color: Color) -> some View {
         Text(text)
@@ -124,16 +185,18 @@ private struct TurnView: View {
                 ApprovalCard(tool: pending)
             }
             if !turn.assistant.isEmpty {
-                Text(markdown(turn.assistant))
-                    .font(JieboFont.ui(16))
-                    .foregroundStyle(JieboColor.ink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(alignment: .top, spacing: 12) {
+                    BotAvatar()
+                    Text(markdown(linkMentions(turn.assistant)))
+                        .font(JieboFont.ui(16))
+                        .foregroundStyle(JieboColor.ink)
+                        .tint(JieboColor.pine)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
-            if let task = turn.task, turn.running, turn.assistant.isEmpty {
-                Text(task)
-                    .font(JieboFont.ui(14))
-                    .foregroundStyle(JieboColor.dim)
+            if turn.running, turn.assistant.isEmpty {
+                ShimmerText(text: turn.task?.nilIfEmpty ?? "正在想…")
             }
             if let error = turn.error, !error.isEmpty {
                 Text(friendlyError(error))
@@ -151,6 +214,65 @@ private struct TurnView: View {
     private func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+
+    /// 把正文里的 @路径 转成可点链接（jiebo-file://open?path=…），由 openURL 拦截打开 Quick Look。
+    /// 对齐网页 splitCiteParts：字符集排除 @: 与 CJK 标点，:行号/-区间 只显示不进路径；
+    /// 跳过 ``` 围栏与行内 `代码` 段；只链接「像文件」的 token（isFileMention）。
+    private func linkMentions(_ text: String) -> String {
+        // group1=前导空白 group2=路径 group3=:行号后缀（可选，仅显示用）
+        let regex = try? NSRegularExpression(pattern: #"(^|\s)@([^\s@:，。；、！？,;!?)]+)((?::\d+(?:-\d+)?)?)"#)
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "&#+=") // query 里这些字符必须编码，否则 openURL 侧解析会断
+        var inFence = false
+        return text.components(separatedBy: "\n").map { line in
+            if line.hasPrefix("```") { inFence.toggle(); return line }
+            guard !inFence, let regex else { return line }
+            // 按反引号切段，只处理非代码段（偶数段）
+            let segments = line.components(separatedBy: "`")
+            var rebuilt: [String] = []
+            for (index, segment) in segments.enumerated() {
+                guard index % 2 == 0, !segment.isEmpty else {
+                    rebuilt.append(segment)
+                    continue
+                }
+                rebuilt.append(linkMentionsInSegment(segment, regex: regex, allowed: allowed))
+            }
+            return rebuilt.joined(separator: "`")
+        }.joined(separator: "\n")
+    }
+
+    private func linkMentionsInSegment(_ segment: String, regex: NSRegularExpression, allowed: CharacterSet) -> String {
+        let matches = regex.matches(in: segment, range: NSRange(segment.startIndex..., in: segment))
+        guard !matches.isEmpty else { return segment }
+        var out = ""
+        var cursor = segment.startIndex
+        for match in matches {
+            guard let full = Range(match.range, in: segment),
+                  let pathRange = Range(match.range(at: 2), in: segment),
+                  let suffixRange = Range(match.range(at: 3), in: segment)
+            else { continue }
+            let path = String(segment[pathRange])
+            guard TurnView.isFileMention(path) else { continue }
+            let suffix = String(segment[suffixRange]) // :12-34 仅显示
+            out += segment[cursor ..< full.lowerBound]
+            let leading = segment[full].first.map { $0 == " " || $0 == "\t" ? String($0) : "" } ?? ""
+            let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+            out += "\(leading)[@\(path)\(suffix)](jiebo-file://open?path=\(encoded))"
+            cursor = full.upperBound
+        }
+        out += segment[cursor...]
+        return out
+    }
+
+    /// 对齐网页 isFileMention：含 . / : 或常见无扩展名文件
+    static func isFileMention(_ token: String) -> Bool {
+        if token.lowercased() == "diff" || token.hasSuffix("/") { return true }
+        if token.range(of: #"[./:]"#, options: .regularExpression) != nil { return true }
+        return token.range(
+            of: #"^(readme|license|makefile|dockerfile|changelog|gemfile|procfile|jenkinsfile)(\.[a-z0-9]+)?$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil
     }
 }
 

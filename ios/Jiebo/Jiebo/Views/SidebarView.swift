@@ -12,7 +12,7 @@ struct SidebarView: View {
                     Text("接驳")
                         .font(JieboFont.display(22))
                         .foregroundStyle(JieboColor.ink)
-                    Text(store.connected ? workspaceName(store.cwd.isEmpty ? store.workspaceRoot : store.cwd) : "正在重连…")
+                    Text(store.connected ? subtitle : "正在重连…")
                         .font(JieboFont.ui(12))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
@@ -62,7 +62,7 @@ struct SidebarView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : JieboColor.mist)
+                    .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : Color.clear)
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             store.deleteChat(chat.id)
@@ -86,10 +86,15 @@ struct SidebarView: View {
             }
             .padding(16)
         }
-        .background(JieboColor.mist.ignoresSafeArea())
+        .background(JieboColor.sidebar.ignoresSafeArea())
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspaceSheet()
         }
+    }
+
+    private var subtitle: String {
+        let base = workspaceName(store.cwd.isEmpty ? store.workspaceRoot : store.cwd)
+        return store.tenantName.isEmpty ? base : "\(store.tenantName) · \(base)"
     }
 }
 

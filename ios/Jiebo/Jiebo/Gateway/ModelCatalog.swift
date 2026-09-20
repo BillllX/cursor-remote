@@ -113,7 +113,3 @@ enum ModelCatalog {
         return list.first ?? next.nilIfEmpty ?? want.nilIfEmpty ?? defaultModel
     }
 }
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

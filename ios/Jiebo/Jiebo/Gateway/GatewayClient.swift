@@ -5,6 +5,17 @@ final class GatewayClient {
     var onOpen: (() -> Void)?
     var onMessage: ((ServerMessage) -> Void)?
     var onClose: (() -> Void)?
+    /// outbox 拒收时的回调（原因文案，给 banner）
+    var onDrop: ((String) -> Void)?
+
+    /// outbox 单条 payload 上限：超过的消息入队也大概率发不出去，只费内存
+    private static let outboxPayloadLimit = 8 * 1024 * 1024
+
+    /// 入队项：消息 + 入队时已序列化的 payload（flush 时直接复用，避免二次序列化）
+    private struct Queued {
+        let message: ClientMessage
+        let payload: Data
+    }
 
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
@@ -13,8 +24,7 @@ final class GatewayClient {
     private var retryTimer: Timer?
     private var generation = 0
     private var closedByUser = false
-    private var outbox: [ClientMessage] = []
-    private var pendingHello: ClientMessage?
+    private var outbox: [Queued] = []
     private var url: URL = GatewayConfig.production
     private var didAnnounceOpen = false
 
@@ -26,22 +36,42 @@ final class GatewayClient {
 
     func disconnect() {
         closedByUser = true
-        pendingHello = nil
         outbox = []
         retryTimer?.invalidate()
         pingTimer?.invalidate()
         generation += 1
+        didAnnounceOpen = false
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        session?.invalidateAndCancel()
+        session = nil
     }
 
+    func clearOutbox() {
+        outbox = []
+    }
+
+    var isOpen: Bool { didAnnounceOpen && task?.state == .running }
+
     func send(_ message: ClientMessage) {
-        if case .hello = message {
-            pendingHello = message
-        }
-        guard let task, task.state == .running else {
-            if case .hello = message { return }
-            outbox.append(message)
+        var isHello = false
+        if case .hello = message { isHello = true }
+        guard let task, task.state == .running, didAnnounceOpen else {
+            // hello 只在 onOpen 回调里发（握手完成后），连接未就绪时直接丢弃
+            if isHello { return }
+            // 上传 payload 太大，不进 outbox（调用方走超时/失败路径）
+            if case .uploadFile = message { return }
+            // 序列化一次：测大小 + 存 payload（flush 时复用，避免二次序列化）
+            guard let data = try? message.json().data() else { return }
+            // outbox 护栏：单条超限拒绝入队
+            if data.count > Self.outboxPayloadLimit {
+                // syncState 静默丢弃：下一次 scheduleSync 全量重发即自愈，无需打扰用户
+                if case .syncState = message { return }
+                let mb = (data.count + 1_048_575) / 1_048_576
+                onDrop?("这条没发出去：消息太大（约 \(mb)MB），连上后请重发。")
+                return
+            }
+            outbox.append(Queued(message: message, payload: data))
             if outbox.count > 50 { outbox.removeFirst(outbox.count - 50) }
             return
         }
@@ -49,12 +79,11 @@ final class GatewayClient {
     }
 
     func flushOutbox() {
-        guard let task, task.state == .running else { return }
+        guard let task, task.state == .running, didAnnounceOpen else { return }
         let pending = outbox
         outbox = []
-        for message in pending {
-            if case .hello = message { continue }
-            transmit(message, on: task)
+        for item in pending {
+            transmit(item.payload, on: task)
         }
     }
 
@@ -65,6 +94,7 @@ final class GatewayClient {
         didAnnounceOpen = false
         let current = generation
         task?.cancel(with: .goingAway, reason: nil)
+        session?.invalidateAndCancel()
 
         let delegate = SocketDelegate()
         delegate.onOpen = { [weak self] in
@@ -87,9 +117,6 @@ final class GatewayClient {
         task = socket
         socket.resume()
         listen(socket, generation: current)
-        if let hello = pendingHello {
-            transmit(hello, on: socket)
-        }
     }
 
     private func handleOpen(generation: Int) {
@@ -97,9 +124,6 @@ final class GatewayClient {
         didAnnounceOpen = true
         startPing()
         onOpen?()
-        if let hello = pendingHello, let task {
-            transmit(hello, on: task)
-        }
     }
 
     private func listen(_ socket: URLSessionWebSocketTask, generation: Int) {
@@ -136,6 +160,7 @@ final class GatewayClient {
         guard self.generation == generation else { return }
         pingTimer?.invalidate()
         task = nil
+        didAnnounceOpen = false
         onClose?()
         guard !closedByUser else { return }
         retryTimer?.invalidate()
@@ -157,11 +182,18 @@ final class GatewayClient {
     }
 
     private func transmit(_ message: ClientMessage, on socket: URLSessionWebSocketTask) {
-        guard let data = try? message.json().data(), let text = String(data: data, encoding: .utf8) else { return }
+        guard let data = try? message.json().data() else { return }
+        transmit(data, on: socket)
+    }
+
+    private func transmit(_ data: Data, on socket: URLSessionWebSocketTask) {
+        guard let text = String(data: data, encoding: .utf8) else { return }
         socket.send(.string(text)) { [weak self] error in
             if error != nil {
                 Task { @MainActor in
                     guard let self else { return }
+                    // 旧 socket 的异步发送错误不该拆当前连接（重连后迟到的失败回调）
+                    guard socket === self.task else { return }
                     self.handleClose(generation: self.generation)
                 }
             }

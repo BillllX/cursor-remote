@@ -30,6 +30,12 @@ enum JSONValue: Sendable, Hashable {
         return Int(number)
     }
 
+    /// { string: number } → [String: Int]（chatRevs 映射用）
+    var intMap: [String: Int]? {
+        guard let object else { return nil }
+        return object.compactMapValues(\.int)
+    }
+
     var object: [String: JSONValue]? {
         if case .object(let value) = self { return value }
         return nil

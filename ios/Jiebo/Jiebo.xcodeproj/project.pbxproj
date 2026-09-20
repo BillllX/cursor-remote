@@ -23,10 +23,17 @@
 		A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000113 /* ThreadView.swift */; };
 		A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000114 /* ComposerView.swift */; };
 		A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000115 /* ToolCardView.swift */; };
+		A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000116 /* Uploader.swift */; };
+		A1B2C3D4E5F6071829000317 /* Crew.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000117 /* Crew.swift */; };
+		A1B2C3D4E5F6071829000318 /* QuickLookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000118 /* QuickLookView.swift */; };
+		A1B2C3D4E5F6071829000319 /* FileBrowserSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000119 /* FileBrowserSheet.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000100 /* JieboApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000101 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000102 /* JieboMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboMark.swift; sourceTree = "<group>"; };
@@ -43,9 +50,10 @@
 		A1B2C3D4E5F6071829000113 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000114 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000115 /* ToolCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCardView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000116 /* Uploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Uploader.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000117 /* Crew.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Crew.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000118 /* QuickLookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000119 /* FileBrowserSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -106,6 +114,7 @@
 				A1B2C3D4E5F6071829000104 /* Protocol.swift */,
 				A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */,
 				A1B2C3D4E5F6071829000106 /* GatewayClient.swift */,
+				A1B2C3D4E5F6071829000116 /* Uploader.swift */,
 			);
 			path = Gateway;
 			sourceTree = "<group>";
@@ -123,6 +132,7 @@
 			children = (
 				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
 				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
+				A1B2C3D4E5F6071829000117 /* Crew.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -136,6 +146,8 @@
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
 				A1B2C3D4E5F6071829000114 /* ComposerView.swift */,
 				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
+				A1B2C3D4E5F6071829000118 /* QuickLookView.swift */,
+				A1B2C3D4E5F6071829000119 /* FileBrowserSheet.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -168,7 +180,7 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 1500;
-				LastUpgradeCheck = 1500;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A1B2C3D4E5F6071829000002 = {
 						CreatedOnToolsVersion = 15.0;
@@ -226,6 +238,10 @@
 				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
 				A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */,
 				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
+				A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */,
+				A1B2C3D4E5F6071829000317 /* Crew.swift in Sources */,
+				A1B2C3D4E5F6071829000318 /* QuickLookView.swift in Sources */,
+				A1B2C3D4E5F6071829000319 /* FileBrowserSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -237,12 +253,31 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -265,6 +300,7 @@
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
@@ -275,12 +311,31 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
@@ -296,6 +351,7 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;
 			};
@@ -332,7 +388,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 2;
-
 			};
 			name = Debug;
 		};
@@ -367,7 +422,6 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 2;
-
 			};
 			name = Release;
 		};

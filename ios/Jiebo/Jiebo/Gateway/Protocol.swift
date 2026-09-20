@@ -27,6 +27,40 @@ struct PromptImage: Sendable, Hashable {
     var mimeType: String
 }
 
+/// hello 携带的客户端标识（P2 协议护栏：网关可据此区分客户端与版本）
+struct ClientInfo: Sendable, Equatable {
+    var name: String
+    var version: String
+    /// 单条 WS 消息接收上限：URLSessionWebSocketTask 超过约 1MiB 会以「信息太长」断连，
+    /// 声明后网关对超限的 stored_state 改发 stored_state_deferred，走 HTTP /state 拉取
+    var maxMessageBytes: Int?
+    /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）
+    var caps: [String]
+
+    static var current: ClientInfo {
+        var limit = 900_000
+        #if DEBUG
+        // 调试开关：defaults write ai.jiebo.ipad jiebo.maxMessageBytes -int 1 可强制走 deferred 路径
+        if let override = UserDefaults.standard.object(forKey: "jiebo.maxMessageBytes") as? Int {
+            limit = override
+        }
+        #endif
+        return ClientInfo(
+            name: "jiebo-ios",
+            version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
+            maxMessageBytes: limit,
+            caps: ["sync_chat", "stored_digest"]
+        )
+    }
+
+    var json: JSONValue {
+        var object: [String: JSONValue] = ["name": .string(name), "version": .string(version)]
+        if let maxMessageBytes { object["maxMessageBytes"] = .number(Double(maxMessageBytes)) }
+        object["caps"] = .array(caps.map { .string($0) })
+        return .object(object)
+    }
+}
+
 enum ClientMessage {
     case hello(token: String?)
     case setWorkspace(cwd: String, chatId: String?, create: Bool?)
@@ -42,7 +76,8 @@ enum ClientMessage {
         confirmWrites: Bool?,
         autoApprove: Bool?,
         fresh: Bool?,
-        nameChat: Bool?
+        nameChat: Bool?,
+        policy: String?
     )
     case cancel(chatId: String)
     case dropQueued(chatId: String, text: String?)
@@ -52,13 +87,22 @@ enum ClientMessage {
     case resumeSession(chatId: String, agentId: String)
     case syncState(chats: JSONValue, rev: Int?)
     case approvalReply(chatId: String, callId: String, allow: Bool)
+    case setPolicy(policy: String, chatId: String?)
+    case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
+    case listFiles(query: String?, chatId: String?, mention: Bool?)
+    case undo(chatId: String)
     case ping
+    /// P4b：单会话增量上传（只带变化的那个会话）
+    case syncChat(chat: JSONValue, rev: Int)
+    /// P4c：stored_digest 后按需拉取单个会话全量
+    case loadChats(ids: [String])
 
     func json() -> JSONValue {
         switch self {
         case .hello(let token):
             var object: [String: JSONValue] = ["type": .string("hello")]
             if let token, !token.isEmpty { object["token"] = .string(token) }
+            object["client"] = ClientInfo.current.json
             return .object(object)
         case .setWorkspace(let cwd, let chatId, let create):
             var object: [String: JSONValue] = ["type": .string("set_workspace"), "cwd": .string(cwd)]
@@ -69,7 +113,7 @@ enum ClientMessage {
             return .object(["type": .string("list_workspaces")])
         case .createWorkspace(let name):
             return .object(["type": .string("create_workspace"), "name": .string(name)])
-        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat):
+        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy):
             var object: [String: JSONValue] = [
                 "type": .string("prompt"),
                 "text": .string(text),
@@ -85,6 +129,7 @@ enum ClientMessage {
             if let autoApprove { object["autoApprove"] = .bool(autoApprove) }
             if let fresh { object["fresh"] = .bool(fresh) }
             if let nameChat { object["nameChat"] = .bool(nameChat) }
+            if let policy { object["policy"] = .string(policy) }
             return .object(object)
         case .cancel(let chatId):
             return .object(["type": .string("cancel"), "chatId": .string(chatId)])
@@ -115,8 +160,34 @@ enum ClientMessage {
                 "callId": .string(callId),
                 "allow": .bool(allow),
             ])
+        case .setPolicy(let policy, let chatId):
+            var object: [String: JSONValue] = ["type": .string("set_policy"), "policy": .string(policy)]
+            if let chatId { object["chatId"] = .string(chatId) }
+            return .object(object)
+        case .uploadFile(let chatId, let name, let data, let mimeType, let id):
+            var object: [String: JSONValue] = [
+                "type": .string("upload_file"),
+                "chatId": .string(chatId),
+                "name": .string(name),
+                "data": .string(data),
+            ]
+            if let mimeType { object["mimeType"] = .string(mimeType) }
+            if let id { object["id"] = .string(id) }
+            return .object(object)
+        case .listFiles(let query, let chatId, let mention):
+            var object: [String: JSONValue] = ["type": .string("list_files")]
+            if let query { object["query"] = .string(query) }
+            if let chatId { object["chatId"] = .string(chatId) }
+            if let mention { object["mention"] = .bool(mention) }
+            return .object(object)
+        case .undo(let chatId):
+            return .object(["type": .string("undo"), "chatId": .string(chatId)])
         case .ping:
             return .object(["type": .string("ping")])
+        case .syncChat(let chat, let rev):
+            return .object(["type": .string("sync_chat"), "chat": chat, "rev": .number(Double(rev))])
+        case .loadChats(let ids):
+            return .object(["type": .string("load_chats"), "ids": .array(ids.map { .string($0) })])
         }
     }
 }
@@ -148,10 +219,22 @@ enum ServerMessage {
     case error(chatId: String?, message: String)
     case approval(chatId: String, callId: String, name: String, args: JSONValue?)
     case done(chatId: String, status: String, durationMs: Double?)
-    case storedState(chats: [JSONValue], rev: Int?, deletedIds: [String])
+    /// chatRevs 为 nil 表示网关是旧版（不支持 P4 增量），客户端应回落全量 sync_state
+    case storedState(chats: [JSONValue], rev: Int?, deletedIds: [String], chatRevs: [String: Int]?)
+    /// stored_state 超过 maxMessageBytes 时的替代通知：应 HTTP GET /state 拉全量
+    case storedStateDeferred(rev: Int?)
+    /// P4b：sync_state / sync_chat 被接受后的回执
+    case syncAck(rev: Int?, chatRevs: [String: Int])
+    /// P4c：分叉时的目录推送（比对 chatRevs 后用 loadChats 拉差异会话）
+    case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
+    /// P4c：load_chats 的应答（单个会话全量）
+    case storedChat(chat: JSONValue, rev: Int?)
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
     case chatTitle(chatId: String, title: String)
+    case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
+    case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?)
+    case undone(chatId: String, paths: [String], error: String?)
     case pong
     case ignored(String)
 
@@ -171,6 +254,12 @@ enum ServerMessage {
              .chatTitle(let chatId, _):
             return chatId
         case .status(let chatId, _, _), .error(let chatId, _):
+            return chatId
+        case .fileUploaded(_, let chatId, _, _, _, _):
+            return chatId
+        case .files(_, _, _, _, let chatId):
+            return chatId
+        case .undone(let chatId, _, _):
             return chatId
         default:
             return nil
@@ -257,14 +346,51 @@ enum ServerMessage {
             return .storedState(
                 chats: object["chats"]?.array ?? [],
                 rev: object["rev"]?.int,
-                deletedIds: object["deletedIds"]?.array?.compactMap(\.string) ?? []
+                deletedIds: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
+                chatRevs: object["chatRevs"]?.intMap
             )
+        case "stored_state_deferred":
+            return .storedStateDeferred(rev: object["rev"]?.int)
+        case "sync_ack":
+            return .syncAck(rev: object["rev"]?.int, chatRevs: object["chatRevs"]?.intMap ?? [:])
+        case "stored_digest":
+            return .storedDigest(
+                rev: object["rev"]?.int,
+                deletedIds: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
+                chatRevs: object["chatRevs"]?.intMap ?? [:]
+            )
+        case "stored_chat":
+            guard let chat = object["chat"] else { return .ignored("") }
+            return .storedChat(chat: chat, rev: object["rev"]?.int)
         case "auth":
             return .auth(ok: object["ok"]?.bool ?? false, message: object["message"]?.string)
         case "history":
             return .history(chatId: chatId, turns: object["turns"]?.array ?? [])
         case "chat_title":
             return .chatTitle(chatId: chatId, title: object["title"]?.string ?? "")
+        case "files":
+            return .files(
+                query: object["query"]?.string ?? "",
+                paths: object["paths"]?.array?.compactMap(\.string) ?? [],
+                mention: object["mention"]?.bool ?? false,
+                truncated: object["truncated"]?.bool ?? false,
+                chatId: object["chatId"]?.string
+            )
+        case "undone":
+            return .undone(
+                chatId: chatId,
+                paths: object["paths"]?.array?.compactMap(\.string) ?? [],
+                error: object["error"]?.string
+            )
+        case "file_uploaded":
+            return .fileUploaded(
+                path: object["path"]?.string ?? "",
+                chatId: object["chatId"]?.string,
+                name: object["name"]?.string,
+                error: object["error"]?.string,
+                size: object["size"]?.number,
+                id: object["id"]?.string
+            )
         case "pong":
             return .pong
         default:
@@ -286,5 +412,52 @@ enum GatewayConfig {
         }
         #endif
         return production
+    }
+
+    /// HTTP 上传通道：wss→https、/bridge→/upload（nginx 已反代，36MB 流式）
+    static var uploadURL: URL {
+        derive(path: "/upload")
+    }
+
+    /// /media 预览票据通道（P3 用）
+    static var mediaBaseURL: URL {
+        derive(path: "/media")
+    }
+
+    /// stored_state 的 HTTP 拉取通道（WS 单条消息超 maxMessageBytes 时的兜底）
+    static var stateURL: URL {
+        derive(path: "/state")
+    }
+
+    /// 带查询参数的 /media 下载地址（Bearer 鉴权在请求头里加）
+    static func mediaURL(path: String, chatId: String) -> URL {
+        var components = URLComponents(url: mediaBaseURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "path", value: path),
+            URLQueryItem(name: "chatId", value: chatId),
+        ]
+        return components?.url ?? mediaBaseURL
+    }
+
+    /// 从 ws(s)://host[:port][前缀]/bridge 派生 http(s)://host[:port][前缀]<path>。
+    /// 只替换末尾 /bridge（对齐网页 .replace(/\/bridge$/, ...)），保留可能存在的部署前缀。
+    private static func derive(path: String) -> URL {
+        let ws = url
+        var components = URLComponents(url: ws, resolvingAgainstBaseURL: false)
+        switch ws.scheme {
+        case "ws": components?.scheme = "http"
+        case "wss": components?.scheme = "https"
+        default: break
+        }
+        // 容忍尾斜杠：/bridge/ 与 /bridge 都认
+        let wsPath = (components?.path ?? "").replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
+        if wsPath.hasSuffix("/bridge") {
+            components?.path = String(wsPath.dropLast("/bridge".count)) + path
+        } else {
+            components?.path = wsPath + path
+        }
+        components?.query = nil
+        if let derived = components?.url { return derived }
+        return URL(string: "https://jiebo.aiagentswitcher.com\(path)")!
     }
 }

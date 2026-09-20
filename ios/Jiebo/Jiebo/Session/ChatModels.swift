@@ -15,9 +15,9 @@ struct ToolCall: Identifiable, Hashable {
 
     var summary: String {
         let path = args?.string(in: "path", "file", "target", "file_path", "target_file")
-            ?? result?.string(in: "path", "file")
+            ?? result?.string(in: "path", "file") ?? ""
         if !path.isEmpty { return path }
-        let query = args?.string(in: "pattern", "query", "globPattern", "glob", "glob_pattern", "command", "cmd")
+        let query = args?.string(in: "pattern", "query", "globPattern", "glob", "glob_pattern", "command", "cmd") ?? ""
         if !query.isEmpty { return query }
         return name
     }
@@ -58,6 +58,12 @@ struct PendingTool: Hashable {
     var args: JSONValue?
 }
 
+/// 正在上传的附件（完成后从列表移除，@path 写进草稿）
+struct UploadItem: Identifiable, Hashable {
+    var id: String
+    var name: String
+}
+
 struct Turn: Identifiable, Hashable {
     var id: String
     var user: String
@@ -73,6 +79,13 @@ struct Turn: Identifiable, Hashable {
     var status: String?
     var durationMs: Double?
     var pendingTool: PendingTool?
+    /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
+    var extra: [String: JSONValue] = [:]
+
+    static let knownKeys: Set<String> = [
+        "id", "user", "assistant", "thinking", "tools", "task", "error",
+        "running", "queued", "mode", "model", "status", "durationMs",
+    ]
 
     static func blank(user: String, model: String?, mode: AgentMode?, running: Bool) -> Turn {
         Turn(
@@ -94,26 +107,27 @@ struct Turn: Identifiable, Hashable {
     }
 
     func json() -> JSONValue {
-        var object: [String: JSONValue] = [
-            "id": .string(id),
-            "user": .string(user),
-            "assistant": .string(assistant),
-            "thinking": .string(thinking),
-            "tools": .array(tools.map { tool in
-                var row: [String: JSONValue] = [
-                    "callId": .string(tool.callId),
-                    "name": .string(tool.name),
-                    "status": .string(tool.status == "running" ? "error" : tool.status),
-                ]
-                if let args = tool.args { row["args"] = args }
-                if let result = tool.result { row["result"] = result }
-                if let parentCallId = tool.parentCallId { row["parentCallId"] = .string(parentCallId) }
-                if let agent = tool.agent { row["agent"] = .string(agent) }
-                if let model = tool.model { row["model"] = .string(model) }
-                return .object(row)
-            }),
-            "running": .bool(false),
-        ]
+        var object = extra
+        object["id"] = .string(id)
+        object["user"] = .string(user)
+        object["assistant"] = .string(assistant)
+        object["thinking"] = .string(thinking)
+        object["tools"] = .array(tools.map { tool in
+            var row: [String: JSONValue] = [
+                "callId": .string(tool.callId),
+                "name": .string(tool.name),
+                "status": .string(tool.status == "running" ? "error" : tool.status),
+            ]
+            if let args = tool.args { row["args"] = args }
+            if let result = tool.result { row["result"] = result }
+            if let parentCallId = tool.parentCallId { row["parentCallId"] = .string(parentCallId) }
+            if let agent = tool.agent { row["agent"] = .string(agent) }
+            if let model = tool.model { row["model"] = .string(model) }
+            return .object(row)
+        })
+        object["running"] = .bool(false)
+        // queued 只在 true 时写（缺失即 false 语义），与 from() 对称，避免运行态在 diff 中被掩盖
+        if queued { object["queued"] = .bool(true) }
         if let task { object["task"] = .string(task) }
         if let error { object["error"] = .string(error) }
         if let mode { object["mode"] = .string(mode.rawValue) }
@@ -156,7 +170,8 @@ struct Turn: Identifiable, Hashable {
             model: object["model"]?.string,
             status: object["status"]?.string,
             durationMs: object["durationMs"]?.number,
-            pendingTool: nil
+            pendingTool: nil,
+            extra: object.filter { !Turn.knownKeys.contains($0.key) }
         )
     }
 
@@ -190,6 +205,13 @@ struct ChatSession: Identifiable, Hashable {
     var cwd: String?
     var unread: Bool
     var confirmWrites: Bool
+    var policy: String
+    /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
+    var extra: [String: JSONValue] = [:]
+
+    static let knownKeys: Set<String> = [
+        "id", "title", "turns", "agentId", "draft", "model", "mode", "cwd", "unread", "confirmWrites", "policy",
+    ]
 
     var isUntitled: Bool { title.isEmpty || title == "新对话" }
     var preview: String {
@@ -209,7 +231,8 @@ struct ChatSession: Identifiable, Hashable {
             mode: mode,
             cwd: cwd,
             unread: false,
-            confirmWrites: false
+            confirmWrites: false,
+            policy: "baseline"
         )
     }
 
@@ -219,14 +242,14 @@ struct ChatSession: Identifiable, Hashable {
     }
 
     func json() -> JSONValue {
-        var object: [String: JSONValue] = [
-            "id": .string(id),
-            "title": .string(title),
-            "turns": .array(turns.map { $0.json() }),
-            "draft": .string(draft),
-            "mode": .string(mode.rawValue),
-            "confirmWrites": .bool(confirmWrites),
-        ]
+        var object = extra
+        object["id"] = .string(id)
+        object["title"] = .string(title)
+        object["turns"] = .array(turns.map { $0.json() })
+        object["draft"] = .string(draft)
+        object["mode"] = .string(mode.rawValue)
+        object["confirmWrites"] = .bool(confirmWrites)
+        object["policy"] = .string(policy)
         if let agentId { object["agentId"] = .string(agentId) }
         if let model { object["model"] = .string(model) }
         if let cwd { object["cwd"] = .string(cwd) }
@@ -245,7 +268,9 @@ struct ChatSession: Identifiable, Hashable {
             mode: object["mode"]?.string.flatMap(AgentMode.init(rawValue:)) ?? .agent,
             cwd: object["cwd"]?.string,
             unread: object["unread"]?.bool ?? false,
-            confirmWrites: object["confirmWrites"]?.bool ?? false
+            confirmWrites: object["confirmWrites"]?.bool ?? false,
+            policy: object["policy"]?.string == "plane" ? "plane" : "baseline",
+            extra: object.filter { !ChatSession.knownKeys.contains($0.key) }
         )
     }
 }
