@@ -74,7 +74,7 @@ struct ThreadView: View {
             }
         }
         .sheet(item: $store.previewFile, onDismiss: store.closePreview) { file in
-            QuickLookView(file: file)
+            QuickLookView(file: file, onClose: { store.dismissPreviewFile() })
                 .ignoresSafeArea()
         }
     }

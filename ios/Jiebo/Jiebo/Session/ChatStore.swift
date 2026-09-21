@@ -683,6 +683,11 @@ final class ChatStore {
         setPreviewFile(nil)
     }
 
+    /// Quick Look「完成」按钮入口：主动关 sheet（temp 清理由 setPreviewFile/onDismiss 链负责）
+    func dismissPreviewFile() {
+        setPreviewFile(nil)
+    }
+
     // MARK: P5 - 预览面板
 
     /// 入口（@链接/文件浏览器）：面板可渲染的进面板（P5c 起含富媒体），只有 binary 走 Quick Look
