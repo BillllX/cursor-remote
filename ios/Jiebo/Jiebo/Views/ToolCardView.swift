@@ -1,32 +1,63 @@
 import SwiftUI
 
 struct ToolCardView: View {
+    @Environment(ChatStore.self) private var store
     var tool: ToolCall
     @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(tool.kind.label)
-                    .font(JieboFont.mono(13))
-                    .fontWeight(.medium)
-                    .foregroundStyle(JieboColor.ink)
-                // crew 徽章：子代理角色（摸仓库/改代码/交叉审）+ 模型（过 ModelCatalog 美化，对齐网页 modelLabel）
-                let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
-                if !crew.isEmpty {
-                    Text(crew + (tool.model?.nilIfEmpty.map { " · \(ModelCatalog.label(for: $0))" } ?? ""))
-                        .font(JieboFont.ui(10, weight: .medium))
-                        .foregroundStyle(JieboColor.brass)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(JieboColor.brass.opacity(0.14))
-                        .clipShape(Capsule())
+                // 展开/收起做成独立 Button：容器挂 onTapGesture 会和内部按钮抢手势（P5a 页签同款坑）
+                Button {
+                    withAnimation(.easeOut(duration: 0.28)) {
+                        expanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(tool.kind.label)
+                            .font(JieboFont.mono(13))
+                            .fontWeight(.medium)
+                            .foregroundStyle(JieboColor.ink)
+                        // crew 徽章：子代理角色（摸仓库/改代码/交叉审）+ 模型（过 ModelCatalog 美化，对齐网页 modelLabel）
+                        let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
+                        if !crew.isEmpty {
+                            Text(crew + (tool.model?.nilIfEmpty.map { " · \(ModelCatalog.label(for: $0))" } ?? ""))
+                                .font(JieboFont.ui(10, weight: .medium))
+                                .foregroundStyle(JieboColor.brass)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(JieboColor.brass.opacity(0.14))
+                                .clipShape(Capsule())
+                        }
+                        Text(tool.summary)
+                            .font(JieboFont.mono(12))
+                            .foregroundStyle(JieboColor.ink2)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
                 }
-                Text(tool.summary)
-                    .font(JieboFont.mono(12))
-                    .foregroundStyle(JieboColor.ink2)
-                    .lineLimit(1)
-                Spacer()
+                .buttonStyle(.plain)
+                .accessibilityLabel(expanded ? "收起工具结果" : "展开工具结果")
+                // P5b：edit/write 工具给文件入口——按类型路由（diff 页签/原文页签/Quick Look）
+                if tool.kind.isMutating,
+                   let path = ChatStore.toolPath(args: tool.args, result: tool.result),
+                   !path.isEmpty
+                {
+                    Button {
+                        store.openToolFile(path)
+                    } label: {
+                        Image(systemName: "plus.forwardslash.minus")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(JieboColor.brass)
+                            .frame(width: 26, height: 26)
+                            .background(JieboColor.brass.opacity(0.12))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("打开 \(path)")
+                }
                 badge
             }
             if expanded, let result = tool.result {
@@ -44,12 +75,6 @@ struct ToolCardView: View {
             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         )
-        .contentShape(Rectangle())
-        .onTapGesture {
-            withAnimation(.easeOut(duration: 0.28)) {
-                expanded.toggle()
-            }
-        }
     }
 
     /// 对齐 web 的 .tool-badge：右侧 999px 状态丸

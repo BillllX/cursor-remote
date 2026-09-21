@@ -12,20 +12,39 @@ struct FileBrowserSheet: View {
         NavigationStack {
             List {
                 ForEach(filtered, id: \.self) { path in
-                    Button {
-                        onPick(path)
-                        dismiss()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text((path as NSString).lastPathComponent)
-                                .font(JieboFont.ui(14, weight: .medium))
-                                .foregroundStyle(JieboColor.ink)
-                            Text(path)
-                                .font(JieboFont.mono(11))
-                                .foregroundStyle(JieboColor.dim)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                    // 两个并列 Button，不嵌套——List 行里 Button 套 Button 的命中测试不可靠
+                    HStack(spacing: 4) {
+                        Button {
+                            onPick(path)
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text((path as NSString).lastPathComponent)
+                                    .font(JieboFont.ui(14, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink)
+                                Text(path)
+                                    .font(JieboFont.mono(11))
+                                    .foregroundStyle(JieboColor.dim)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        // 眼睛：直接预览（不进草稿）
+                        Button {
+                            store.openPreview(path)
+                            dismiss()
+                        } label: {
+                            Image(systemName: "eye")
+                                .font(.system(size: 13))
+                                .foregroundStyle(JieboColor.dim)
+                                .frame(width: 32, height: 32)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel("预览 \(path)")
                     }
                     .listRowBackground(Color.clear)
                 }

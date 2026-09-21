@@ -14,18 +14,65 @@ struct ThreadView: View {
                 banner(friendlyError(store.bannerError), color: JieboColor.danger)
             }
             thread
+            // P5b：agent 改完文件的待看入口（面板关着时不硬弹，点 pill 才进）
+            if !store.pendingDiffPaths.isEmpty {
+                Button(action: store.openDiffs) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus.forwardslash.minus")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(JieboColor.brass)
+                        Text("\(store.pendingDiffPaths.count) 个文件有改动")
+                            .font(JieboFont.ui(12, weight: .medium))
+                        Text("查看")
+                            .font(JieboFont.ui(12, weight: .semibold))
+                            .foregroundStyle(JieboColor.brass)
+                    }
+                    .foregroundStyle(JieboColor.ink)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(JieboColor.mist)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(JieboColor.brass.opacity(0.35), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 6)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             ComposerView()
         }
+        .animation(.easeInOut(duration: 0.22), value: store.pendingDiffPaths.isEmpty)
         .background(JieboColor.paper.ignoresSafeArea())
-        // @文件 链接 → Quick Look；其他链接走系统
+        // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
         .environment(\.openURL, OpenURLAction { url in
             guard url.scheme == "jiebo-file",
                   let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let path = components.queryItems?.first(where: { $0.name == "path" })?.value
             else { return .systemAction }
-            store.openMention(path)
+            store.openPreview(path)
             return .handled
         })
+        // P5 预览面板：右侧 overlay，点外部收起。
+        // ZStack 常驻、两个孩子各挂 transition——插入/删除的是谁，transition 就得挂在谁身上
+        .overlay(alignment: .trailing) {
+            GeometryReader { geo in
+                ZStack(alignment: .trailing) {
+                    if store.previewPanelOpen {
+                        Color.black.opacity(0.3)
+                            .ignoresSafeArea()
+                            .onTapGesture { store.dismissPreviewPanel() }
+                            .transition(.opacity)
+                    }
+                    if let tab = store.activePreviewTab {
+                        PreviewPanelView(tab: tab)
+                            // 始终留 15% 外部点击带（极窄 Stage Manager 窗口也不顶满）
+                            .frame(width: min(540, geo.size.width * 0.85))
+                            .transition(.move(edge: .trailing))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: store.previewPanelOpen)
+            }
+        }
         .sheet(item: $store.previewFile, onDismiss: store.closePreview) { file in
             QuickLookView(file: file)
                 .ignoresSafeArea()
@@ -216,7 +263,7 @@ private struct TurnView: View {
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
 
-    /// 把正文里的 @路径 转成可点链接（jiebo-file://open?path=…），由 openURL 拦截打开 Quick Look。
+    /// 把正文里的 @路径 转成可点链接（jiebo-file://open?path=…），由 openURL 拦截打开预览面板。
     /// 对齐网页 splitCiteParts：字符集排除 @: 与 CJK 标点，:行号/-区间 只显示不进路径；
     /// 跳过 ``` 围栏与行内 `代码` 段；只链接「像文件」的 token（isFileMention）。
     private func linkMentions(_ text: String) -> String {

@@ -50,6 +50,14 @@ final class ChatStore {
     private var mentionQuery: String?
     private var mentionTask: Task<Void, Never>?
 
+    // MARK: P5 - 预览面板（右侧 overlay，对齐网页 FilePreview）
+    /// 打开的预览页签（上限 8，超出挤掉最旧的，对齐网页 slice(-8)）
+    var previewTabs: [PreviewTab] = []
+    /// 当前选中页签；非 nil 即面板打开
+    var previewActivePath: String?
+    var previewPanelOpen: Bool { previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath } }
+    var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
+
     var active: ChatSession? { chats.first { $0.id == activeId } }
     var busy: Bool { active?.turns.contains(where: \.running) == true }
     var canSend: Bool {
@@ -102,6 +110,27 @@ final class ChatStore {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(300))
                 self?.login()
+            }
+        }
+        // 开发便利：defaults write ai.jiebo.ipad jiebo.previewPath -string <path> 登录后自动打开预览面板（截图/调试用）；
+        // 前缀 "diff:" 直接开 diff 页签
+        if let debugRaw = UserDefaults.standard.string(forKey: "jiebo.previewPath")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !debugRaw.isEmpty
+        {
+            let wantDiff = debugRaw.hasPrefix("diff:")
+            let debugPath = wantDiff ? String(debugRaw.dropFirst(5)) : debugRaw
+            Task { @MainActor [weak self] in
+                // 等 stored_state 应用完再开（否则 activeId 还是 boot）
+                for _ in 0 ..< 40 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard let self, self.appliedStore, self.unlocked else { continue }
+                    if wantDiff {
+                        self.openPreviewTab(path: debugPath, diff: true)
+                    } else {
+                        self.openPreview(debugPath)
+                    }
+                    break
+                }
             }
         }
         #endif
@@ -296,6 +325,7 @@ final class ChatStore {
     /// 所有改 activeId 的路径（select/startChat/deleteChat/storedState）都必须走这里。
     private func swapActive(to newId: String) {
         guard newId != activeId else { return }
+        let oldCwd = active?.cwd
         persistDraft()
         imagesByChat[activeId] = pendingImages // 待发图片跟会话走
         activeId = newId
@@ -303,6 +333,162 @@ final class ChatStore {
         previewTask?.cancel() // 在途预览不带到新会话；取消分支早返回不会自己复位 loading
         previewLoading = false
         requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
+        // 工作区按会话走：cwd 变了，页签内容按新工作区重拉（页签保留，路径仍有效）
+        if active?.cwd != oldCwd { reloadPreviewTabs() }
+    }
+
+    /// 切工作区后重拉所有打开的页签（对齐网页 per-chat tabs 的意图：内容不能跨工作区复用）
+    private func reloadPreviewTabs() {
+        for index in previewTabs.indices {
+            previewTabs[index].content = nil
+            previewTabs[index].error = nil
+            // 媒体字段也是旧工作区的票据，一并清掉（否则切工作区后还加载旧文件）
+            previewTabs[index].url = nil
+            previewTabs[index].headUrl = nil
+            previewTabs[index].media = nil
+            previewTabs[index].mime = nil
+            previewTabs[index].size = nil
+            previewTabs[index].loading = true
+            send(.readFile(path: previewTabs[index].path, chatId: activeId, diff: previewTabs[index].diff))
+            armPreviewWatchdog(path: previewTabs[index].path)
+        }
+    }
+
+    /// loading 看门狗：outbox 挤掉/服务端丢包时给页签一个出口（网页 2.5s×4 重试的简化版）
+    private func armPreviewWatchdog(path: String) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, let index = self.previewTabs.firstIndex(where: { $0.path == path }) else { return }
+            let tab = self.previewTabs[index]
+            if tab.loading, tab.content == nil, tab.error == nil {
+                self.previewTabs[index].loading = false
+                self.previewTabs[index].error = "读取超时。点重试再试一次。"
+            }
+        }
+    }
+
+    // MARK: P5b - diff 联动
+
+    /// agent 改过、还没看过的文件（有序去重；点 pill 进入面板后清空）
+    var pendingDiffPaths: [String] = []
+
+    /// mutating 工具完成后的联动：静默备好 diff 页签；面板已打开才抢焦点（对齐网页自动开 diff 的意图，
+    /// 但 overlay 会盖住会话，不能在面板关着时硬弹）
+    func trackEditedFile(_ rawPath: String) {
+        let path = relToCwd(rawPath)
+        guard !path.isEmpty else { return }
+        // 8 签挤掉最旧时若挤掉的是 active 签，面板会静默关闭——先记下用户本来在不在看
+        let wasOpen = previewPanelOpen
+        let kind = previewKind(of: path)
+        // binary 面板渲染不了——只计待看，pill/工具卡点进来走 Quick Look
+        guard kind.panelRenderable else {
+            if !(wasOpen && previewActivePath == path) {
+                pendingDiffPaths.removeAll { $0 == path }
+                pendingDiffPaths.append(path)
+            }
+            return
+        }
+        // 网页对 canvas/markdown/html/pdf/audio 跳过 diff——这些类型 diff 视图没意义；
+        // video 走 diff 会被网关拒（isByteKind）；image/svg 从 P5c 起支持双图对照，不再跳过
+        let skipDiff: Bool = switch kind {
+        case .canvas, .markdown, .html, .pdf, .audio, .video: true
+        default: false
+        }
+        let wantDiff = !skipDiff
+        if let index = previewTabs.firstIndex(where: { $0.path == path }) {
+            var tab = previewTabs[index]
+            if wantDiff && !tab.diff {
+                tab.diff = true
+                tab.content = nil
+                tab.error = nil
+                tab.url = nil // 与 openPreviewTab/togglePreviewDiff 一致：升级窗口别拿旧图误标「新文件」
+                tab.headUrl = nil
+            }
+            tab.loading = true
+            previewTabs[index] = tab
+            send(.readFile(path: path, chatId: activeId, diff: tab.diff))
+            armPreviewWatchdog(path: path)
+        } else {
+            previewTabs.append(PreviewTab(path: path, kind: kind, diff: wantDiff, content: nil, error: nil, loading: true, url: nil, media: nil))
+            if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
+            send(.readFile(path: path, chatId: activeId, diff: wantDiff))
+            armPreviewWatchdog(path: path)
+        }
+        if wasOpen {
+            previewActivePath = path // 面板开着才跟焦点（用 wasOpen：挤掉 active 签后面板已关，不能误判）
+        }
+        // 用户正盯着这个 diff 就不计待看；重复编辑挪到尾部（openDiffs 聚焦最新）
+        if !(wasOpen && previewActivePath == path) {
+            pendingDiffPaths.removeAll { $0 == path }
+            pendingDiffPaths.append(path)
+        }
+    }
+
+    /// 工具卡「看改动」入口：归一路径后按类型路由——skipDiff 类型走 openPreview
+    /// （markdown/html/canvas 开原文页签，pdf/audio 面板播放，binary 转 Quick Look），
+    /// image/svg 开 diff 页签做双图对照（P5c），其余文本开 diff 页签
+    func openToolFile(_ rawPath: String) {
+        let path = relToCwd(rawPath)
+        guard !path.isEmpty else { return }
+        pendingDiffPaths.removeAll { $0 == path } // 看过即销账（含走 Quick Look 的 binary）
+        switch previewKind(of: path) {
+        case .canvas, .markdown, .html, .pdf, .audio, .video:
+            openPreview(path)
+        default:
+            openPreviewTab(path: path, diff: true)
+        }
+    }
+
+    /// pill 入口：打开面板聚焦最近改动，清空待看清单
+    func openDiffs() {
+        guard let latest = pendingDiffPaths.last else { return }
+        pendingDiffPaths = []
+        // 走 openToolFile：skipDiff 类型（image/svg 等）路由到原文/Quick Look，
+        // 不会把已有页签升级成「Binary files differ」死页签；页签被挤掉也能重建
+        openToolFile(latest)
+    }
+
+    /// canvas 页签的 源码/画布 切换（P5d）
+    func toggleCanvasSource(_ path: String) {
+        guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { return }
+        previewTabs[index].showSource.toggle()
+    }
+
+    /// 头部 diff/原文 切换
+    func togglePreviewDiff(_ path: String) {
+        guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { return }
+        let next = !previewTabs[index].diff
+        previewTabs[index].diff = next
+        previewTabs[index].content = nil
+        previewTabs[index].error = nil
+        previewTabs[index].url = nil // 清掉旧媒体地址，避免切换期间闪旧图
+        previewTabs[index].headUrl = nil
+        previewTabs[index].loading = true
+        send(.readFile(path: path, chatId: activeId, diff: next))
+        armPreviewWatchdog(path: path)
+    }
+
+    /// 工具参数/结果里提取文件路径（对齐网页 toolPath 的字段集）。
+    /// string(in:) 无命中返回 ""，必须 nilIfEmpty 才能回退到 result
+    static func toolPath(args: JSONValue?, result: JSONValue?) -> String? {
+        args?.string(in: "path", "file", "target", "file_path", "uri").nilIfEmpty
+            ?? result?.string(in: "path", "file", "file_path").nilIfEmpty
+    }
+
+    /// 绝对路径转工作区相对（对齐网页 relToCwd：反斜杠归一、去尾斜杠、去前导 ./）；
+    /// 不在工作区里的返回归一化后的原路径；path == cwd 返回空串
+    private func relToCwd(_ path: String) -> String {
+        var p = path.replacingOccurrences(of: "\\", with: "/")
+        while p.hasSuffix("/") { p.removeLast() }
+        if p.hasPrefix("./") { p.removeFirst(2) }
+        guard let cwdRaw = active?.cwd?.nilIfEmpty ?? workspaceRoot.nilIfEmpty else { return p }
+        var root = cwdRaw.replacingOccurrences(of: "\\", with: "/")
+        while root.hasSuffix("/") { root.removeLast() }
+        if p == root { return "" }
+        if !root.isEmpty, p.hasPrefix(root + "/") {
+            return String(p.dropFirst(root.count + 1))
+        }
+        return p
     }
 
     func deleteChat(_ id: String) {
@@ -495,6 +681,118 @@ final class ChatStore {
     func closePreview() {
         guard previewFile == nil else { return }
         setPreviewFile(nil)
+    }
+
+    // MARK: P5 - 预览面板
+
+    /// 入口（@链接/文件浏览器）：面板可渲染的进面板（P5c 起含富媒体），只有 binary 走 Quick Look
+    func openPreview(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 与 openMention 同一套入口守卫（对齐网页 isOpenableMention）：空串/目录/精确 "diff" 不进面板
+        guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else {
+            if !trimmed.isEmpty { flash("这类内容暂不支持预览") }
+            return
+        }
+        let kind = previewKind(of: trimmed)
+        if kind.panelRenderable {
+            openPreviewTab(path: trimmed, kind: kind, diff: false)
+        } else {
+            openMention(trimmed) // binary：Quick Look 全屏
+        }
+    }
+
+    /// 打开/激活预览页签并发起 read_file；页签上限 8，超出挤掉最旧的（对齐网页 slice(-8)）。
+    /// 绝对路径先归一到工作区相对（工具卡传来的可能是绝对路径；相对路径原样通过）
+    func openPreviewTab(path rawPath: String, kind: PreviewKind? = nil, diff: Bool) {
+        let path = relToCwd(rawPath)
+        let resolved = kind ?? previewKind(of: path)
+        pendingDiffPaths.removeAll { $0 == path } // 用户显式看过即销账
+        if let index = previewTabs.firstIndex(where: { $0.path == path }) {
+            var tab = previewTabs[index]
+            previewActivePath = path
+            if diff && !tab.diff {
+                // diff 状态升级：内容含义变了，必须重拉；清掉旧媒体地址避免误标「新文件」/闪旧图
+                tab.diff = true
+                tab.content = nil
+                tab.error = nil
+                tab.url = nil
+                tab.headUrl = nil
+                tab.loading = true
+                previewTabs[index] = tab
+                send(.readFile(path: path, chatId: activeId, diff: true))
+                armPreviewWatchdog(path: path)
+            } else if tab.content == nil && tab.error == nil && !tab.loading && tab.mediaURL == nil {
+                // 媒体页签已有 url 就不重发（content 恒 nil，重发只会白拉一趟）
+                previewTabs[index].loading = true
+                send(.readFile(path: path, chatId: activeId, diff: tab.diff))
+                armPreviewWatchdog(path: path)
+            }
+            return
+        }
+        previewTabs.append(PreviewTab(path: path, kind: resolved, diff: diff, content: nil, error: nil, loading: true, url: nil, media: nil))
+        if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
+        previewActivePath = path
+        send(.readFile(path: path, chatId: activeId, diff: diff))
+        armPreviewWatchdog(path: path)
+    }
+
+    func selectPreviewTab(_ path: String) {
+        if previewTabs.contains(where: { $0.path == path }) {
+            previewActivePath = path
+            pendingDiffPaths.removeAll { $0 == path }
+        }
+    }
+
+    func closePreviewTab(_ path: String) {
+        previewTabs.removeAll { $0.path == path }
+        pendingDiffPaths.removeAll { $0 == path } // 关签即视为已处理，pill 不再挂这个路径
+        if previewActivePath == path { previewActivePath = previewTabs.last?.path }
+    }
+
+    func dismissPreviewPanel() {
+        previewActivePath = nil
+    }
+
+    /// 错误页重试
+    func retryPreviewTab(_ path: String) {
+        guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { return }
+        previewTabs[index].error = nil
+        previewTabs[index].loading = true
+        send(.readFile(path: path, chatId: activeId, diff: previewTabs[index].diff))
+        armPreviewWatchdog(path: path)
+    }
+
+    /// 大文本的 HTTP 水合（对齐网页 fetchPreviewText）：file_content 只给 url 时经票据拉正文
+    private func hydratePreviewText(path: String) {
+        guard let tab = previewTabs.first(where: { $0.path == path }),
+              let url = tab.mediaURL
+        else { return }
+        let tenantAtStart = tenantId
+        Task {
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 60
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard (200 ..< 300).contains(code), let text = String(data: data, encoding: .utf8) else {
+                    throw PreviewError.http(code)
+                }
+                guard tenantId == tenantAtStart,
+                      let index = previewTabs.firstIndex(where: { $0.path == path }),
+                      previewTabs[index].content == nil // 期间 WS 已补上 content 的不覆盖
+                else { return }
+                previewTabs[index].content = text
+                previewTabs[index].error = nil // 清掉可能的陈旧错误（双 Task 竞态）
+                previewTabs[index].loading = false
+            } catch {
+                guard tenantId == tenantAtStart,
+                      let index = previewTabs.firstIndex(where: { $0.path == path }),
+                      previewTabs[index].content == nil // 已有内容时不盖错误
+                else { return }
+                previewTabs[index].loading = false
+                previewTabs[index].error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
     }
 
     // MARK: 单颗 undo
@@ -858,11 +1156,26 @@ final class ChatStore {
                 next.tools.append(ToolCall(callId: callId, name: name, args: args, result: nil, status: "running", parentCallId: parent, agent: agent, model: toolModel))
                 return next
             }
+            // P5b：工具一启动就把路径累计进待看清单（不发 read_file、不开页签），
+            // 让用户在慢工具执行中也能看到「有文件正在被改」（对齐网页 tool-started peek 的意图）
+            if id == activeId, ToolKind.from(name: name, args: args).isMutating,
+               active?.confirmWrites != true,
+               let rawPath = Self.toolPath(args: args, result: nil)
+            {
+                let path = relToCwd(rawPath)
+                // 正在看这个文件的 diff 就不计；重复编辑挪尾部
+                if !path.isEmpty, !(previewPanelOpen && previewActivePath == path) {
+                    pendingDiffPaths.removeAll { $0 == path }
+                    pendingDiffPaths.append(path)
+                }
+            }
         case .toolCompleted(let id, let callId, let name, let status, let result, let parent, let agent, let toolModel):
+            var toolArgs: JSONValue?
             patchOpen(id) { turn in
                 var next = turn
                 let existing = next.tools.first { $0.callId == callId }
                 if existing?.status == "error", status == "completed" { return turn }
+                toolArgs = existing?.args
                 next.tools.removeAll { $0.callId == callId }
                 next.tools.append(ToolCall(
                     callId: callId,
@@ -875,6 +1188,15 @@ final class ChatStore {
                     model: existing?.model ?? toolModel
                 ))
                 return next
+            }
+            // P5b：mutating 工具完成后静默准备 diff 页签（对齐网页的自动开 diff，但适配 overlay 形态：
+            // 面板已开才抢焦点，否则只累计 pendingDiffs 由用户点 pill 进入）。
+            // 对齐网页：confirmWrites 门槛只在 tool-started（批准后改动已落盘，完成后仍应能看 diff）
+            if id == activeId, status == "completed",
+               ToolKind.from(name: name, args: toolArgs).isMutating,
+               let rawPath = Self.toolPath(args: toolArgs, result: result)
+            {
+                trackEditedFile(rawPath)
             }
         case .toolOutput(let id, let callId, let stream, let chunk, let stdout, let stderr):
             patchRunning(id) { turn in
@@ -983,6 +1305,49 @@ final class ChatStore {
                     appendMention(path, to: targetId)
                     flash("已上传 \(name ?? path)")
                 }
+            }
+        case .fileContent(let path, let msgChatId, let content, let error, let diff, let kind, let mime, let size, let url, let headUrl, let media):
+            // 工作区按会话走：只收当前会话的回包（切会话后迟到的旧工作区回包丢弃，看门狗给出口）
+            if let msgChatId, !msgChatId.isEmpty, msgChatId != activeId { break }
+            guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { break }
+            var tab = previewTabs[index]
+            tab.loading = false
+            if let error {
+                if tab.diff && error == "没有未提交的改动" {
+                    // 对齐网页：diff 没内容时自动回落全文重拉；清掉旧 diff 文本避免回落期以代码视图闪渲染
+                    tab.diff = false
+                    tab.content = nil
+                    tab.error = nil
+                    tab.loading = true
+                    previewTabs[index] = tab
+                    send(.readFile(path: path, chatId: activeId, diff: false))
+                    armPreviewWatchdog(path: path)
+                    break
+                }
+                // 对齐网页：「读不了/不是文件/不在工作区」改写为友好文案 + notice
+                if error.contains("读不了") || error.contains("不是文件") || error.contains("不在工作区") {
+                    if tab.content == nil { tab.error = "文件已不在当前工作区，换工作区后再打开，或关掉这个预览。" }
+                    flash("\(path) 已不在工作区")
+                } else if tab.content == nil {
+                    tab.error = error // 已有内容时静默保留旧内容（对齐网页）
+                }
+            } else {
+                tab.error = nil
+                if let kind, let parsed = PreviewKind(rawValue: kind) { tab.kind = parsed }
+                tab.diff = diff
+                tab.url = url
+                tab.headUrl = headUrl
+                tab.media = media
+                tab.mime = mime
+                tab.size = size
+                tab.chatId = msgChatId ?? activeId // 票据签发会话（签名绑 chatId，视图拼 mediaSrc 要用它）
+                if let content { tab.content = content }
+            }
+            previewTabs[index] = tab
+            // 大文本（markdown/html/canvas 超限时）可能只回 url 不回 content：走 HTTP 票据水合；
+            // diff 页签不水合；媒体类（needsMediaURL）由媒体视图直接加载 URL，不能当文本拉
+            if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
+                hydratePreviewText(path: tab.path)
             }
         case .files(let query, let paths, let mention, let truncated, let filesChatId):
             // 只接收当前会话的（对齐网页端 chatId 过滤）
@@ -1213,6 +1578,9 @@ final class ChatStore {
         digestTimeoutTask?.cancel()
         serverSupportsP4 = false
         deletedIds.removeAll()
+        previewTabs = []
+        previewActivePath = nil
+        pendingDiffPaths = []
         runningChatIds = []
         queuedChatIds = []
         showThinkingIds = []

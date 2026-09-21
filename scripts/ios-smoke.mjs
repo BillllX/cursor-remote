@@ -211,6 +211,27 @@ async function main() {
   const mediaNoAuth = await fetch(`${mediaBase}?path=${encodeURIComponent(mediaPath || "x.txt")}&chatId=${encodeURIComponent(chatId)}`);
   step(mediaNoAuth.status === 401, "/media 无 token 拒 401", `status=${mediaNoAuth.status}`);
 
+  // 4c2. P5：read_file 文本 + diff 模式（iOS 预览面板的协议底座）
+  // 用刚上传成功的文件（回包里的真实路径，网关去重改名也不怕）：未跟踪文件 diff 模式应合成 new-file diff
+  const notePath = uploaded.path;
+  send({ type: "read_file", path: notePath, chatId });
+  const fc = await waitFor((m) => m.type === "file_content" && m.path === notePath && !m.diff, "file_content");
+  step(
+    typeof fc?.content === "string" && fc.content.includes("冒烟"),
+    "read_file 返回文本内容",
+    fc?.error || (fc ? `${fc.content?.length ?? 0}B kind=${fc.kind ?? "?"}` : "超时"),
+  );
+  send({ type: "read_file", path: notePath, chatId, diff: true });
+  const fcd = await waitFor((m) => m.type === "file_content" && m.path === notePath && m.diff === true, "file_content(diff)");
+  step(
+    typeof fcd?.content === "string" && fcd.content.startsWith("diff --git"),
+    "read_file diff 模式合成 new-file diff",
+    fcd?.error || (fcd ? `${fcd.content?.length ?? 0}B` : "超时"),
+  );
+  send({ type: "read_file", path: "no/such/file.txt", chatId });
+  const fcMiss = await waitFor((m) => m.type === "file_content" && m.path === "no/such/file.txt", "file_content(404)");
+  step(Boolean(fcMiss?.error), "read_file 不存在的路径回报错", fcMiss?.error || "未报错");
+
   // 4d. P3：undo 协议（无可还原改动时也应回 undone，而不是断连/沉默）
   send({ type: "undo", chatId });
   const undone = await waitFor((m) => m.type === "undone", "undone");

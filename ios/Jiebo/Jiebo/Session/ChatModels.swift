@@ -40,6 +40,9 @@ enum ToolKind: String {
         return .other
     }
 
+    /// 会改文件的工具（对齐网页 mutatingTool：edit/write 才自动开 diff）
+    var isMutating: Bool { self == .edit || self == .write }
+
     var label: String {
         switch self {
         case .read: return "读取"

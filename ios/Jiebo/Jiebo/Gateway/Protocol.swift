@@ -27,6 +27,12 @@ struct PromptImage: Sendable, Hashable {
     var mimeType: String
 }
 
+/// /media 下载票据（file_content 带过来，签名过期由网关校验）
+struct MediaTicket: Sendable, Hashable {
+    var exp: Double
+    var sig: String
+}
+
 /// hello 携带的客户端标识（P2 协议护栏：网关可据此区分客户端与版本）
 struct ClientInfo: Sendable, Equatable {
     var name: String
@@ -90,6 +96,8 @@ enum ClientMessage {
     case setPolicy(policy: String, chatId: String?)
     case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
     case listFiles(query: String?, chatId: String?, mention: Bool?)
+    /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content
+    case readFile(path: String, chatId: String?, diff: Bool)
     case undo(chatId: String)
     case ping
     /// P4b：单会话增量上传（只带变化的那个会话）
@@ -180,6 +188,11 @@ enum ClientMessage {
             if let chatId { object["chatId"] = .string(chatId) }
             if let mention { object["mention"] = .bool(mention) }
             return .object(object)
+        case .readFile(let path, let chatId, let diff):
+            var object: [String: JSONValue] = ["type": .string("read_file"), "path": .string(path)]
+            if let chatId { object["chatId"] = .string(chatId) }
+            if diff { object["diff"] = .bool(true) }
+            return .object(object)
         case .undo(let chatId):
             return .object(["type": .string("undo"), "chatId": .string(chatId)])
         case .ping:
@@ -234,6 +247,21 @@ enum ServerMessage {
     case chatTitle(chatId: String, title: String)
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
     case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?)
+    /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
+    /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
+    case fileContent(
+        path: String,
+        chatId: String?,
+        content: String?,
+        error: String?,
+        diff: Bool,
+        kind: String?,
+        mime: String?,
+        size: Double?,
+        url: String?,
+        headUrl: String?,
+        media: MediaTicket?
+    )
     case undone(chatId: String, paths: [String], error: String?)
     case pong
     case ignored(String)
@@ -258,6 +286,8 @@ enum ServerMessage {
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
         case .files(_, _, _, _, let chatId):
+            return chatId
+        case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _):
             return chatId
         case .undone(let chatId, _, _):
             return chatId
@@ -376,6 +406,24 @@ enum ServerMessage {
                 truncated: object["truncated"]?.bool ?? false,
                 chatId: object["chatId"]?.string
             )
+        case "file_content":
+            let ticketRow = object["media"]?.object
+            return .fileContent(
+                path: object["path"]?.string ?? "",
+                chatId: object["chatId"]?.string,
+                content: object["content"]?.string,
+                error: object["error"]?.string,
+                diff: object["diff"]?.bool ?? false,
+                kind: object["kind"]?.string,
+                mime: object["mime"]?.string,
+                size: object["size"]?.number,
+                url: object["url"]?.string,
+                headUrl: object["headUrl"]?.string,
+                media: ticketRow.flatMap { row in
+                    guard let exp = row["exp"]?.number, let sig = row["sig"]?.string else { return nil }
+                    return MediaTicket(exp: exp, sig: sig)
+                }
+            )
         case "undone":
             return .undone(
                 chatId: chatId,
@@ -439,6 +487,42 @@ enum GatewayConfig {
         return components?.url ?? mediaBaseURL
     }
 
+    /// file_content 的 url 字段是相对地址（/media?... 已带票据查询）：补上 scheme+host 即可用
+    static func resolveHTTP(_ relative: String) -> URL? {
+        guard relative.hasPrefix("/") else { return URL(string: relative) }
+        let base = derive(path: "")
+        return URL(string: "\(base.absoluteString)\(relative)")
+    }
+
+    /// canvas 运行时（P5d）：web 与 gateway 同域部署（nginx location / → cursor_web），
+    /// 本地 dev 网关不服务 web 路由 → 返回 nil，上层降级源码视图。
+    /// DEBUG 下可用 UserDefaults "jiebo.canvasRuntime" 显式指向本地 web dev server 做端到端验证。
+    static var canvasRuntimeURL: URL? {
+        #if DEBUG
+        if let override = UserDefaults.standard.string(forKey: "jiebo.canvasRuntime")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty,
+           let url = URL(string: override)
+        {
+            return url
+        }
+        #endif
+        guard let host = url.host?.lowercased() else { return nil }
+        if isLocalGatewayHost(host) { return nil }
+        return derive(path: "/canvas-runtime")
+    }
+
+    /// 本地/局域网网关不服务 web 路由（/canvas-runtime 在 web 应用上）：
+    /// loopback、.local、私网段（真机 DEBUG 走局域网 IP）都降级源码视图
+    private static func isLocalGatewayHost(_ host: String) -> Bool {
+        if host == "127.0.0.1" || host == "localhost" || host == "::1" || host.hasSuffix(".local") { return true }
+        if host.hasPrefix("192.168.") || host.hasPrefix("10.") || host.hasPrefix("169.254.") { return true }
+        if host.hasPrefix("172.") {
+            let second = host.dropFirst(4).prefix(while: { $0.isNumber })
+            if let block = Int(second), (16 ... 31).contains(block) { return true }
+        }
+        return false
+    }
+
     /// 从 ws(s)://host[:port][前缀]/bridge 派生 http(s)://host[:port][前缀]<path>。
     /// 只替换末尾 /bridge（对齐网页 .replace(/\/bridge$/, ...)），保留可能存在的部署前缀。
     private static func derive(path: String) -> URL {
@@ -449,10 +533,12 @@ enum GatewayConfig {
         case "wss": components?.scheme = "https"
         default: break
         }
-        // 容忍尾斜杠：/bridge/ 与 /bridge 都认
+        // 容忍尾斜杠：/bridge/ 与 /bridge 都认；本地直连网关挂 /ws 也要换掉
         let wsPath = (components?.path ?? "").replacingOccurrences(of: "/+$", with: "", options: .regularExpression)
         if wsPath.hasSuffix("/bridge") {
             components?.path = String(wsPath.dropLast("/bridge".count)) + path
+        } else if wsPath.hasSuffix("/ws") {
+            components?.path = String(wsPath.dropLast("/ws".count)) + path
         } else {
             components?.path = wsPath + path
         }
