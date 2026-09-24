@@ -56,6 +56,15 @@ sudo nginx -t && sudo systemctl reload nginx
 sudo systemctl start cursor-remote-gateway
 ```
 
+日常部署（VPS 上是 git 仓库，用只读 deploy key 拉取）：
+
+```bash
+git push origin main   # 本机
+ssh root@<vps> 'cd /opt/cursor-remote-gateway && git pull && systemctl restart cursor-remote-gateway'
+```
+
+重启会打断所有在跑的 Agent，挑维护窗口。`gateway/src/` 与 `shared/` 必须一起更新（tsx 直接跑源码，缺文件会起不来）。
+
 ## 本机开发
 
 ```bash

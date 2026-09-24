@@ -1271,20 +1271,6 @@ final class ChatStore {
                 }
             }
         case .error(let id, let text):
-            // 旧网关兼容（生产未部署 resume 宽容化前）：「不能恢复别人的会话」= 本地 agentId 陈旧。
-            // 旧网关错误只有 message 文案、没有 code 字段，文案匹配是唯一信号——生产部署新网关后此 shim 可删。
-            // 自愈：清掉该会话的 agentId（下次点选不再发 resume，对话本身没坏），
-            // 且不把进行中的 turn 误标成 error——resume 被拒不是对话失败
-            if text.contains("不能恢复别人的会话") {
-                let target = id ?? activeId
-                patch(target) { chat in
-                    var next = chat
-                    next.agentId = nil
-                    return next
-                }
-                flash("会话状态已刷新，可以正常继续")
-                break
-            }
             bannerError = friendlyError(text)
             let target = id ?? activeId
             runningChatIds.removeAll { $0 == target }
