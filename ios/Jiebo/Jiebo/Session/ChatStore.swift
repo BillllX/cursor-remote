@@ -17,6 +17,8 @@ final class ChatStore {
     var workspaceRoot = ""
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
+    /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
+    var fileBrowserOpen = false
     var creatingWorkspace = false
     var newWorkspaceName = ""
     var model = ModelCatalog.defaultModel
@@ -36,6 +38,8 @@ final class ChatStore {
     /// 当前会话工作区的文件索引（list_files query:"" 的全量结果）
     var fileIndex: [String] = []
     var treeTruncated = false
+    /// git 状态（M/A/D/U/R），key 为相对 cwd 的路径；与 fileIndex 同批更新（P7 文件树徽章）
+    var gitStatus: [String: String] = [:]
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
     /// Quick Look 预览中的文件（sheet 驱动）
@@ -268,7 +272,7 @@ final class ChatStore {
         workspaceSheetOpen = false
         creatingWorkspace = false
         persistDraft()
-        if let existing = chats.first(where: { $0.isUntitled && $0.turns.isEmpty && samePath($0.cwd ?? workspaceRoot, next) }) {
+        if let existing = chats.first(where: { $0.isUntitled && $0.turns.isEmpty && sameCwd($0.cwd?.nilIfEmpty ?? groupRoot, next) }) {
             select(existing.id)
             patch(existing.id) { chat in
                 var nextChat = chat
@@ -333,8 +337,15 @@ final class ChatStore {
         previewTask?.cancel() // 在途预览不带到新会话；取消分支早返回不会自己复位 loading
         previewLoading = false
         requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
-        // 工作区按会话走：cwd 变了，页签内容按新工作区重拉（页签保留，路径仍有效）
-        if active?.cwd != oldCwd { reloadPreviewTabs() }
+        // 工作区按会话走：cwd 变了，页签内容按新工作区重拉（页签保留，路径仍有效）。
+        // 与下方清空判断同用 sameCwd（字符串级归一）——/foo 与 /foo/ 不该白打一遍 read_file
+        if !sameCwd(active?.cwd, oldCwd) {
+            reloadPreviewTabs()
+            // P7：跨工作区切换时先清空文件索引/git 徽章——新索引到达前不串旧工作区的徽章与「N 处改动」
+            fileIndex = []
+            gitStatus = [:]
+            treeTruncated = false
+        }
     }
 
     /// 切工作区后重拉所有打开的页签（对齐网页 per-chat tabs 的意图：内容不能跨工作区复用）
@@ -348,6 +359,9 @@ final class ChatStore {
             previewTabs[index].media = nil
             previewTabs[index].mime = nil
             previewTabs[index].size = nil
+            // cwd 快照同步刷新：内容来自新工作区，副标题不能还拼旧 cwd。
+            // 注意用 active?.cwd——swapActive 先切 activeId 再调本函数，store.cwd 此刻可能还是旧值
+            previewTabs[index].cwd = active?.cwd ?? cwd
             previewTabs[index].loading = true
             send(.readFile(path: previewTabs[index].path, chatId: activeId, diff: previewTabs[index].diff))
             armPreviewWatchdog(path: previewTabs[index].path)
@@ -409,7 +423,7 @@ final class ChatStore {
             send(.readFile(path: path, chatId: activeId, diff: tab.diff))
             armPreviewWatchdog(path: path)
         } else {
-            previewTabs.append(PreviewTab(path: path, kind: kind, diff: wantDiff, content: nil, error: nil, loading: true, url: nil, media: nil))
+            previewTabs.append(PreviewTab(path: path, kind: kind, diff: wantDiff, content: nil, error: nil, loading: true, url: nil, media: nil, cwd: cwd))
             if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
             send(.readFile(path: path, chatId: activeId, diff: wantDiff))
             armPreviewWatchdog(path: path)
@@ -734,7 +748,7 @@ final class ChatStore {
             }
             return
         }
-        previewTabs.append(PreviewTab(path: path, kind: resolved, diff: diff, content: nil, error: nil, loading: true, url: nil, media: nil))
+        previewTabs.append(PreviewTab(path: path, kind: resolved, diff: diff, content: nil, error: nil, loading: true, url: nil, media: nil, cwd: cwd))
         if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
         previewActivePath = path
         send(.readFile(path: path, chatId: activeId, diff: diff))
@@ -1130,7 +1144,10 @@ final class ChatStore {
             patch(target) { chat in
                 var next = chat
                 if !sessionCwd.isEmpty { next.cwd = sessionCwd }
-                if !agentId.isEmpty { next.agentId = agentId }
+                // agentId 空串也要落（对齐网页 agentId || undefined）：gateway 在换工作区/新会话/
+                // 宽容化 resume 时会回空 agentId，表示「旧 agent 已回收」——不清掉就会拿着陈旧的
+                // agentId 反复 resume 失败（旧网关：「不能恢复别人的会话」）
+                next.agentId = agentId.nilIfEmpty
                 return next
             }
             if target == activeId, !sessionCwd.isEmpty { cwd = sessionCwd }
@@ -1198,10 +1215,15 @@ final class ChatStore {
             // 面板已开才抢焦点，否则只累计 pendingDiffs 由用户点 pill 进入）。
             // 对齐网页：confirmWrites 门槛只在 tool-started（批准后改动已落盘，完成后仍应能看 diff）
             if id == activeId, status == "completed",
-               ToolKind.from(name: name, args: toolArgs).isMutating,
-               let rawPath = Self.toolPath(args: toolArgs, result: result)
+               ToolKind.from(name: name, args: toolArgs).isMutating
             {
-                trackEditedFile(rawPath)
+                // P7：mutating 工具完成后重拉文件索引——git 徽章/文件树不 stale。
+                // 新 gateway 在 mutating tool 完成时已 pushWorkspace 主动推 files，这里是兜底旧网关
+                //（对齐网页 tool-completed 后重发 list_files；此前只在 select/ready/undone 拉取）
+                requestFileIndex()
+                if let rawPath = Self.toolPath(args: toolArgs, result: result) {
+                    trackEditedFile(rawPath)
+                }
             }
         case .toolOutput(let id, let callId, let stream, let chunk, let stdout, let stderr):
             patchRunning(id) { turn in
@@ -1249,6 +1271,20 @@ final class ChatStore {
                 }
             }
         case .error(let id, let text):
+            // 旧网关兼容（生产未部署 resume 宽容化前）：「不能恢复别人的会话」= 本地 agentId 陈旧。
+            // 旧网关错误只有 message 文案、没有 code 字段，文案匹配是唯一信号——生产部署新网关后此 shim 可删。
+            // 自愈：清掉该会话的 agentId（下次点选不再发 resume，对话本身没坏），
+            // 且不把进行中的 turn 误标成 error——resume 被拒不是对话失败
+            if text.contains("不能恢复别人的会话") {
+                let target = id ?? activeId
+                patch(target) { chat in
+                    var next = chat
+                    next.agentId = nil
+                    return next
+                }
+                flash("会话状态已刷新，可以正常继续")
+                break
+            }
             bannerError = friendlyError(text)
             let target = id ?? activeId
             runningChatIds.removeAll { $0 == target }
@@ -1354,7 +1390,7 @@ final class ChatStore {
             if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let paths, let mention, let truncated, let filesChatId):
+        case .files(let query, let paths, let status, let mention, let truncated, let filesChatId):
             // 只接收当前会话的（对齐网页端 chatId 过滤）
             if let filesChatId, !filesChatId.isEmpty, filesChatId != activeId { break }
             if mention {
@@ -1371,6 +1407,7 @@ final class ChatStore {
             } else {
                 fileIndex = paths
                 treeTruncated = truncated
+                gitStatus = status
             }
         case .undone(_, let paths, let error):
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
@@ -1596,6 +1633,8 @@ final class ChatStore {
         uploads = []
         fileIndex = []
         treeTruncated = false
+        gitStatus = [:]
+        fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
         mentionQuery = nil
         mentionTask?.cancel()
         mentionSuggestions = []
@@ -1779,7 +1818,8 @@ final class ChatStore {
         }
     }
 
-    private func flash(_ text: String) {
+    /// 顶条通知（3.5s 自动消）。P7 起文件浏览器等视图也用，放开为 internal
+    func flash(_ text: String) {
         notice = text
         noticeTask?.cancel()
         noticeTask = Task {
@@ -1788,10 +1828,6 @@ final class ChatStore {
             notice = ""
         }
     }
-}
-
-private func samePath(_ a: String, _ b: String) -> Bool {
-    URL(fileURLWithPath: a).standardizedFileURL.path == URL(fileURLWithPath: b).standardizedFileURL.path
 }
 
 private func mergeOutput(_ result: JSONValue?, stream: String?, chunk: String?, stdout: String?, stderr: String?) -> JSONValue {

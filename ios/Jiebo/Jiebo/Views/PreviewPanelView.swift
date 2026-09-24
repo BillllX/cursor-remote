@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// P5 预览面板本体（页签条 + 头部 + 内容）。
-/// 遮罩与滑入动画由 ThreadView 的 overlay 持有——transition 必须挂在被插入/删除的那一层上。
+/// P6 起遮罩与滑入动画由 WorkbenchView（RootView）的 overlay 持有——transition 必须挂在被插入/删除的那一层上。
 struct PreviewPanelView: View {
     @Environment(ChatStore.self) private var store
     let tab: PreviewTab
@@ -13,7 +13,7 @@ struct PreviewPanelView: View {
             Divider().overlay(JieboColor.line)
             header
             Divider().overlay(JieboColor.line)
-            content
+            PreviewContentView(tab: tab)
         }
         .frame(maxHeight: .infinity)
         .background(JieboColor.white)
@@ -69,7 +69,7 @@ struct PreviewPanelView: View {
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(JieboColor.dim)
                     .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
+                    .hitTarget(34) // P6：页签条高度受限，命中框扩到 34（视觉不变）
             }
             .buttonStyle(.plain)
             .accessibilityLabel("关闭 \(item.filename)")
@@ -98,7 +98,9 @@ struct PreviewPanelView: View {
                             .clipShape(Capsule())
                     }
                 }
-                Text(tab.path)
+                // P6：副标题给工作区绝对路径（中段截断）——path==filename 时不再三遍重复同一文件名；
+                // cwd 用页签打开时的快照（页签全局存活，store.cwd 随活跃会话变）
+                Text(headerSubtitle)
                     .font(JieboFont.mono(11))
                     .foregroundStyle(JieboColor.dim)
                     .lineLimit(1)
@@ -117,6 +119,7 @@ struct PreviewPanelView: View {
                         .frame(width: 30, height: 30)
                         .background(tab.diff ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget() // P6：视觉 30，命中 44
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.diff ? "查看原文" : "查看改动")
@@ -133,6 +136,7 @@ struct PreviewPanelView: View {
                         .frame(width: 30, height: 30)
                         .background(tab.showSource ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
@@ -148,6 +152,7 @@ struct PreviewPanelView: View {
                         .frame(width: 30, height: 30)
                         .background(JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("用系统打开 \(tab.filename)")
@@ -162,6 +167,7 @@ struct PreviewPanelView: View {
                         .frame(width: 30, height: 30)
                         .background(JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget()
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
@@ -175,6 +181,7 @@ struct PreviewPanelView: View {
                     .frame(width: 30, height: 30)
                     .background(JieboColor.mist)
                     .clipShape(Circle())
+                    .hitTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("关闭预览面板")
@@ -183,10 +190,25 @@ struct PreviewPanelView: View {
         .padding(.vertical, 10)
     }
 
+    /// 头部副标题：绝对路径（cwd 快照拼接，尾斜杠/已是绝对路径都兜底）
+    private var headerSubtitle: String {
+        if tab.path.hasPrefix("/") { return tab.path }
+        let base = tab.cwd ?? store.cwd
+        if base.isEmpty { return tab.path }
+        return base.hasSuffix("/") ? base + tab.path : "\(base)/\(tab.path)"
+    }
+}
+
+/// P7：内容区（loading/error/按 kind 路由渲染）从 PreviewPanelView 抽出——
+/// 预览面板与文件浏览器右栏共用同一份，行为不分叉（评审共识：右栏不重写预览管线）。
+struct PreviewContentView: View {
+    @Environment(ChatStore.self) private var store
+    let tab: PreviewTab
+
     // MARK: 内容区
 
     @ViewBuilder
-    private var content: some View {
+    var body: some View {
         if tab.loading, tab.content == nil, tab.mediaURL == nil {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
@@ -207,6 +229,7 @@ struct PreviewPanelView: View {
                 Button("重试") { store.retryPreviewTab(tab.path) }
                     .font(JieboFont.ui(13, weight: .medium))
                     .foregroundStyle(JieboColor.pine)
+                    .hitTarget()
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -215,8 +238,10 @@ struct PreviewPanelView: View {
             // P5c 富媒体：票据 URL 直接渲染，不需要 content
             case .image:
                 ImageFileView(url: tab.mediaURL, headUrl: tab.headMediaURL, diff: tab.diff, caption: mediaCaption)
+                    .id(tab.path) // 页签级 @State 隔离（zoomed/scale/natural 不串图，对齐 html/canvas 分支）
             case .svg:
                 SVGFileView(url: tab.mediaURL, headUrl: tab.headMediaURL, diff: tab.diff, caption: mediaCaption)
+                    .id(tab.path) // 页签级 @State 隔离（reloadNonce 自愈预算不串页签）
             case .pdf:
                 PDFFileView(url: tab.mediaURL)
                     .background(JieboColor.paper)
@@ -230,6 +255,7 @@ struct PreviewPanelView: View {
                 // 不直接 load 票据 URL——避免文档获得 gateway origin（对齐网页 iframe 唯一源沙箱）
                 if let text = tab.content {
                     HTMLFileView(content: text, path: tab.path, chatId: tab.chatId ?? store.activeId, media: tab.media)
+                        .id(tab.path) // 页签级 @State 隔离（错误/源码态不串页签，对齐 canvas 分支）
                 } else {
                     loadingView // 大 html 正在 hydratePreviewText 拉文本
                 }
@@ -268,6 +294,7 @@ struct PreviewPanelView: View {
                 switch tab.kind {
                 case .markdown:
                     MarkdownFileView(content: text, path: tab.path, chatId: tab.chatId ?? store.activeId, media: tab.media)
+                        .id(tab.path) // 页签级 @State 隔离（对齐 canvas 分支）
                 default:
                     // text / canvas（P5d 前按源码）都走代码视图
                     CodeFileView(content: text)
@@ -325,6 +352,7 @@ struct CodeFileView: View {
                         Text(line.isEmpty ? " " : line)
                             .font(JieboFont.mono(12))
                             .foregroundStyle(JieboColor.ink)
+                            .textSelection(.enabled) // P6：代码行可选中复制（行号列不选）
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.vertical, 1)
@@ -412,7 +440,7 @@ struct DiffFileView: View {
 
     private func foreground(_ kind: RowKind) -> Color {
         switch kind {
-        case .meta: return JieboColor.ink2 // dim 在 paper 上对比度只有 ~2.4:1，太糊
+        case .meta: return JieboColor.ink2 // meta 行用 ink2 保证可读（dim 历史上只有 ~2.4:1，P6 已抬到 ~4.7:1，这里沿用 ink2 不动）
         case .hunk: return JieboColor.brass
         case .add: return JieboColor.ok
         case .del: return JieboColor.danger
@@ -442,7 +470,8 @@ struct MarkdownFileView: View {
     var body: some View {
         Group {
             if let renderedHtml {
-                SandboxWebView(html: renderedHtml)
+                // P6：失败给错误占位 + 查看源码（P6 前 SandboxWebView 首屏被导航策略误杀，静默白屏）
+                SandboxPreviewView(html: renderedHtml, source: content)
             } else {
                 // 转换完成前先给加载态，避免大 md 闪一帧空白
                 ProgressView().controlSize(.small).tint(JieboColor.dim)
@@ -472,7 +501,8 @@ struct HTMLFileView: View {
     var body: some View {
         Group {
             if let rewritten {
-                SandboxWebView(html: rewritten)
+                // P6：失败给错误占位 + 查看源码（P6 前 SandboxWebView 首屏被导航策略误杀，静默白屏）
+                SandboxPreviewView(html: rewritten, source: content)
             } else {
                 ProgressView().controlSize(.small).tint(JieboColor.dim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

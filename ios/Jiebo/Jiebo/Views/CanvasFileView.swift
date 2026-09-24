@@ -65,15 +65,22 @@ struct CanvasFileView: View {
                             .foregroundStyle(JieboColor.ink2)
                             .multilineTextAlignment(.center)
                         HStack(spacing: 16) {
+                            // P6：源码是可落地的出口，升为主按钮；重试降为次按钮
+                            Button("查看源码", action: onFallback)
+                                .padding(.horizontal, 14)
+                                .frame(height: 32)
+                                .background(JieboColor.pine)
+                                .foregroundStyle(JieboColor.paper)
+                                .clipShape(Capsule())
+                                .hitTarget()
                             Button("重试") {
                                 status = .loading
                                 errorText = nil
                                 didReady = false
                                 boot += 1 // .id 变化 → 重建 WebView 重新加载运行时
                             }
-                            .foregroundStyle(JieboColor.pine)
-                            Button("查看源码", action: onFallback)
-                                .foregroundStyle(JieboColor.pine)
+                            .foregroundStyle(JieboColor.ink2)
+                            .hitTarget()
                         }
                         .font(JieboFont.ui(13, weight: .medium))
                     } else {

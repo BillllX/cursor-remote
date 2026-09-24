@@ -2,6 +2,9 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
+    /// P7b：折叠的工作区集合（默认展开，只记负向状态；含活跃会话的组强制展开）。
+    /// 初始值在 .task 里装载——@State 默认表达式每次视图 init 都求值，JSON 解码不该跟着 body 高频跑
+    @State private var collapsed: Set<String> = []
 
     var body: some View {
         @Bindable var store = store
@@ -25,6 +28,7 @@ struct SidebarView: View {
                         .frame(width: 36, height: 36)
                         .background(JieboColor.mist)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .hitTarget() // P6：视觉 36，命中 44
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut("n", modifiers: .command)
@@ -35,39 +39,22 @@ struct SidebarView: View {
             .padding(.bottom, 12)
 
             List {
-                ForEach(store.chats) { chat in
-                    Button {
-                        store.select(chat.id)
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            Circle()
-                                .fill(chat.turns.contains(where: \.running) ? JieboColor.pine : (chat.unread ? JieboColor.brass : .clear))
-                                .frame(width: 8, height: 8)
-                                .padding(.top, 7)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(chat.title)
-                                    .font(JieboFont.ui(15, weight: chat.unread ? .semibold : .medium))
-                                    .foregroundStyle(JieboColor.ink)
-                                    .lineLimit(1)
-                                if !chat.preview.isEmpty {
-                                    Text(chat.preview)
-                                        .font(JieboFont.ui(12))
-                                        .foregroundStyle(JieboColor.dim)
-                                        .lineLimit(2)
-                                }
-                            }
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.vertical, 4)
-                        .contentShape(Rectangle())
+                let groups = store.workspaceGroups // body 里只算一遍（@Observable 不缓存计算属性）
+                let dupNames = duplicateNames(in: groups)
+                if groups.count <= 1 {
+                    // 单组：隐藏组头，观感=扁平列表（零打扰渐进）
+                    ForEach(groups.first?.chats ?? []) { chat in
+                        chatRow(chat)
                     }
-                    .buttonStyle(.plain)
-                    .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : Color.clear)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            store.deleteChat(chat.id)
-                        } label: {
-                            Label("删除", systemImage: "trash")
+                } else {
+                    ForEach(groups) { group in
+                        // 组头是普通 row 而非 Section header——iOS 17+ List 会丢掉零 row 的
+                        // 空 section（含 header），折叠后组头会消失/点不着（评审 Grok M4）
+                        groupHeader(group, duplicate: dupNames.contains(group.name))
+                        if !isCollapsed(group) {
+                            ForEach(group.chats) { chat in
+                                chatRow(chat)
+                            }
                         }
                     }
                 }
@@ -75,10 +62,28 @@ struct SidebarView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
 
-            HStack {
+            HStack(spacing: 14) {
                 Button("退出登录", action: store.logout)
                     .font(JieboFont.ui(13))
                     .foregroundStyle(JieboColor.ink2)
+                // P7a：文件浏览器入口（浏览导向；对齐网页 side-files-btn，meta 给改动数/文件数）
+                Button {
+                    store.fileBrowserOpen = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "folder")
+                            .font(.system(size: 12))
+                        Text("文件")
+                            .font(JieboFont.ui(13))
+                        Text(filesMeta)
+                            .font(JieboFont.ui(11))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .foregroundStyle(JieboColor.ink2)
+                    .hitTarget()
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("浏览工作区文件")
                 Spacer()
                 Circle()
                     .fill(store.connected ? JieboColor.ok : JieboColor.clay)
@@ -90,6 +95,143 @@ struct SidebarView: View {
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspaceSheet()
         }
+        .task {
+            collapsed = Self.loadCollapsed()
+        }
+    }
+
+    // MARK: P7b 工作区分组
+
+    /// 组名重复（两个工作区末段同名很常见）→ 组头补路径副标题
+    private func duplicateNames(in groups: [WorkspaceGroup]) -> Set<String> {
+        Set(Dictionary(grouping: groups, by: \.name).filter { $0.value.count > 1 }.keys)
+    }
+
+    /// 含活跃会话的组强制展开（否则选中项被折进组头里不可见）
+    private func isCollapsed(_ group: WorkspaceGroup) -> Bool {
+        if group.chats.contains(where: { $0.id == store.activeId }) { return false }
+        return collapsed.contains(group.key)
+    }
+
+    @ViewBuilder
+    private func groupHeader(_ group: WorkspaceGroup, duplicate: Bool) -> some View {
+        let active = group.chats.contains(where: { $0.id == store.activeId })
+        Button {
+            if group.chats.isEmpty {
+                store.startChat(in: group.path) // 空组：点击直达新建（对齐 web 空组保留的意图）
+            } else if !active {
+                // 含活跃会话的组不接受折叠：点了没反应会像 bug，且写入 collapsed 会「记仇」
+                //（活跃会话移走后组莫名其妙自动折叠）——chevron 置灰表达不可点
+                if collapsed.contains(group.key) { collapsed.remove(group.key) } else { collapsed.insert(group.key) }
+                Self.saveCollapsed(collapsed)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if !group.chats.isEmpty {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(active ? JieboColor.dim.opacity(0.5) : JieboColor.dim)
+                        .rotationEffect(.degrees(isCollapsed(group) ? 0 : 90))
+                }
+                Text(group.name)
+                    .font(JieboFont.ui(12, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink2)
+                    .lineLimit(1)
+                if duplicate {
+                    Text(group.path)
+                        .font(JieboFont.mono(10))
+                        .foregroundStyle(JieboColor.dim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                if group.chats.contains(where: { $0.turns.contains(where: \.running) }) {
+                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
+                }
+                if group.chats.isEmpty {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                } else {
+                    Text("\(group.chats.count)")
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            }
+            .padding(.vertical, 2)
+            .frame(minHeight: 32)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .accessibilityLabel(group.chats.isEmpty ? "在 \(group.name) 新建会话" : "\(group.name)，\(group.chats.count) 个会话")
+        // 活跃组头点击是 no-op（不接受折叠），给 VoiceOver 用户一句解释，别点了没反应（Kimi R2 MINOR）
+        .accessibilityHint(active && !group.chats.isEmpty ? "含当前会话，不能折叠" : "")
+    }
+
+    // MARK: 会话行（与原扁平列表一致）
+
+    private func chatRow(_ chat: ChatSession) -> some View {
+        Button {
+            store.select(chat.id)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Circle()
+                    .fill(chat.turns.contains(where: \.running) ? JieboColor.pine : (chat.unread ? JieboColor.brass : .clear))
+                    .frame(width: 8, height: 8)
+                    .padding(.top, 7)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(chat.title)
+                        .font(JieboFont.ui(15, weight: chat.unread ? .semibold : .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    if !chat.preview.isEmpty {
+                        Text(chat.preview)
+                            .font(JieboFont.ui(12))
+                            .foregroundStyle(JieboColor.dim)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+            .frame(minHeight: 44) // P6：会话行触控高度达标（HIG 44）
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : Color.clear)
+        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button(role: .destructive) {
+                store.deleteChat(chat.id)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    // MARK: 折叠状态持久化（UserDefaults 存 JSON，key=normPath；路径漂移后 key 失效无害，默认展开兜底）
+
+    private static let collapsedKey = "sidebar.collapsedWorkspaces"
+
+    private static func loadCollapsed() -> Set<String> {
+        guard let data = UserDefaults.standard.data(forKey: collapsedKey),
+              let list = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return Set(list)
+    }
+
+    private static func saveCollapsed(_ set: Set<String>) {
+        let list = Array(set)
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: collapsedKey)
+    }
+
+    // MARK: 杂项
+
+    /// 文件入口 meta（对齐网页 side-files-meta：改动数 > 文件数 > 「浏览」）
+    private var filesMeta: String {
+        if !store.gitStatus.isEmpty { return "\(store.gitStatus.count) 处改动" }
+        if !store.fileIndex.isEmpty { return "\(store.fileIndex.count)" }
+        return "浏览"
     }
 
     private var subtitle: String {

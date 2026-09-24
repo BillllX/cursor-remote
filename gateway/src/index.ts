@@ -3815,7 +3815,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const slot = slotOf(conn, message.chatId);
         const stored = slot.agentId || diskSlot(tenant, slot.chatId)?.agentId || "";
         if (message.agentId !== stored) {
-          send(ws, { type: "error", chatId: slot.chatId, message: "不能恢复别人的会话。" });
+          // 宽容化（P7 后）：agentId 陈旧不再报错「不能恢复别人的会话」——resume 只是状态重挂，
+          // 客户端拿着旧 agentId（agent 被轮换/多端同步延迟/跨环境残留）需要的是纠正而非拒绝。
+          // 回当前真实状态（stored 为空时 agentId:"" → 客户端清掉陈旧值自愈），会话照常可用。
+          send(ws, { type: "session", chatId: slot.chatId, agentId: stored, cwd: cwdOf(conn, slot) });
+          if (stored) {
+            sendCheckpoints(ws, slot);
+            void sendAgentHistory(ws, conn, slot);
+          }
           return;
         }
         send(ws, {

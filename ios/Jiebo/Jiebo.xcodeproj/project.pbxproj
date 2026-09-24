@@ -30,8 +30,11 @@
 		A1B2C3D4E5F6071829000320 /* Preview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000120 /* Preview.swift */; };
 		A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000121 /* PreviewPanelView.swift */; };
 		A1B2C3D4E5F6071829000322 /* MediaPreviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000122 /* MediaPreviewViews.swift */; };
-		A1B2C3D4E5F6071829000324 /* CanvasFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000124 /* CanvasFileView.swift */; };
 		A1B2C3D4E5F6071829000323 /* HtmlRewrite.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */; };
+		A1B2C3D4E5F6071829000324 /* CanvasFileView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000124 /* CanvasFileView.swift */; };
+		A1B2C3D4E5F6071829000325 /* WorkspaceGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */; };
+		A1B2C3D4E5F6071829000326 /* FileTreeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000126 /* FileTreeView.swift */; };
+		A1B2C3D4E5F6071829000327 /* FileBrowserCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000127 /* FileBrowserCover.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -62,8 +65,11 @@
 		A1B2C3D4E5F6071829000120 /* Preview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000121 /* PreviewPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPanelView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000122 /* MediaPreviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewViews.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000124 /* CanvasFileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasFileView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HtmlRewrite.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000124 /* CanvasFileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasFileView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceGroups.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000126 /* FileTreeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000127 /* FileBrowserCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBrowserCover.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -145,6 +151,7 @@
 				A1B2C3D4E5F6071829000117 /* Crew.swift */,
 				A1B2C3D4E5F6071829000120 /* Preview.swift */,
 				A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */,
+				A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -163,6 +170,8 @@
 				A1B2C3D4E5F6071829000121 /* PreviewPanelView.swift */,
 				A1B2C3D4E5F6071829000122 /* MediaPreviewViews.swift */,
 				A1B2C3D4E5F6071829000124 /* CanvasFileView.swift */,
+				A1B2C3D4E5F6071829000126 /* FileTreeView.swift */,
+				A1B2C3D4E5F6071829000127 /* FileBrowserCover.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -262,6 +271,9 @@
 				A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */,
 				A1B2C3D4E5F6071829000322 /* MediaPreviewViews.swift in Sources */,
 				A1B2C3D4E5F6071829000324 /* CanvasFileView.swift in Sources */,
+				A1B2C3D4E5F6071829000325 /* WorkspaceGroups.swift in Sources */,
+				A1B2C3D4E5F6071829000326 /* FileTreeView.swift in Sources */,
+				A1B2C3D4E5F6071829000327 /* FileBrowserCover.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -384,6 +396,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8M43BMB6J8;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Jiebo/Info.plist;
@@ -418,6 +431,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8M43BMB6J8;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Jiebo/Info.plist;

@@ -52,31 +52,21 @@ struct ThreadView: View {
             store.openPreview(path)
             return .handled
         })
-        // P5 预览面板：右侧 overlay，点外部收起。
-        // ZStack 常驻、两个孩子各挂 transition——插入/删除的是谁，transition 就得挂在谁身上
-        .overlay(alignment: .trailing) {
-            GeometryReader { geo in
-                ZStack(alignment: .trailing) {
-                    if store.previewPanelOpen {
-                        Color.black.opacity(0.3)
-                            .ignoresSafeArea()
-                            .onTapGesture { store.dismissPreviewPanel() }
-                            .transition(.opacity)
-                    }
-                    if let tab = store.activePreviewTab {
-                        PreviewPanelView(tab: tab)
-                            // 始终留 15% 外部点击带（极窄 Stage Manager 窗口也不顶满）
-                            .frame(width: min(540, geo.size.width * 0.85))
-                            .transition(.move(edge: .trailing))
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: store.previewPanelOpen)
-            }
-        }
-        .sheet(item: $store.previewFile, onDismiss: store.closePreview) { file in
+        // P6：预览面板 overlay 上移到 WorkbenchView（RootView）——遮罩盖住侧栏 + detail，
+        // 不再只压对话列导致标题被切断；宽度拖拽手柄也在那层
+        .sheet(item: previewFileBinding, onDismiss: store.closePreview) { file in
             QuickLookView(file: file, onClose: { store.dismissPreviewFile() })
                 .ignoresSafeArea()
         }
+    }
+
+    /// P7：文件浏览器 cover 打开期间本层不 present QL——cover 自己挂了同一 previewFile 的 sheet，
+    /// 两层抢同一个 item 会 present 失败/连闪（Grok R2 MINOR）。cover 关闭后绑定自动恢复。
+    private var previewFileBinding: Binding<PreviewFile?> {
+        Binding(
+            get: { store.fileBrowserOpen ? nil : store.previewFile },
+            set: { store.previewFile = $0 }
+        )
     }
 
     private var header: some View {
@@ -104,6 +94,7 @@ struct ThreadView: View {
                         .frame(width: 30, height: 30)
                         .background(JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget() // P6：视觉 30，命中 44
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("还原上一轮的改动")

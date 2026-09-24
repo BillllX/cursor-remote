@@ -13,7 +13,8 @@ enum JieboColor {
     static let userBubble = Color(light: 0xF4F4F5, dark: 0x24332E) // --bg-user
     static let ink = Color(light: 0x171717, dark: 0xEDE8DE) // --text
     static let ink2 = Color(light: 0x737373, dark: 0xB6B0A4) // --muted
-    static let dim = Color(light: 0xA3A3A3, dark: 0x7D786E) // --dim
+    // P6：浅色 0xA3A3A3 在 paper 上对比度仅 ~2.4:1（WCAG AA 小字要 4.5:1）；0x6E6E6E 在 paper 上 ≈ 4.7:1 留余量
+    static let dim = Color(light: 0x6E6E6E, dark: 0x7D786E) // --dim
     static let line = Color(light: 0xECECEC, dark: 0x2C2F2B) // --border
     static let borderStrong = Color(light: 0xE4E4E7, dark: 0x3A3E38) // --border-strong
     static let hoverStrong = Color(light: 0xECECEE, dark: 0x2C2F2B) // mode thumb
@@ -82,6 +83,15 @@ enum JieboRadius {
     static let md: CGFloat = 12
     static let lg: CGFloat = 16
     static let xl: CGFloat = 24 // composer dock（对齐网页 --radius: 24px）
+}
+
+extension View {
+    /// P6：HIG 最小触控热区 44×44。挂在「视觉 frame + background + clipShape」之后——
+    /// 绘制的图形不变，但布局占用会扩到 44（相邻控件间距相应变大，这是 HIG 达标的预期取舍）。
+    /// 页签条等高度受限处传更小的值。假设调用方用 .buttonStyle(.plain)（其他样式会覆盖 contentShape）。
+    func hitTarget(_ size: CGFloat = 44) -> some View {
+        frame(minWidth: size, minHeight: size).contentShape(Rectangle())
+    }
 }
 
 /// 思考状态的流光文字（对齐 web 的 .text-shimmer：4s 线性循环，reduceMotion 降级为静态）

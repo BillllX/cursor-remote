@@ -78,6 +78,8 @@ struct PreviewTab: Identifiable, Hashable {
     var size: Double?
     /// 签发 media 票据的会话 id（票据签名绑 chatId；切到同 cwd 的别的会话后不能用新 activeId 配旧票据）
     var chatId: String?
+    /// 打开页签时的 cwd 快照（P6：previewTabs 全局存活，store.cwd 随活跃会话变——副标题路径不能用活 cwd 现拼）
+    var cwd: String?
     /// canvas 页签的「源码/画布」切换（P5d；true=看源码）
     var showSource: Bool = false
 

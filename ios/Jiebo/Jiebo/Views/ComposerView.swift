@@ -51,6 +51,7 @@ struct ComposerView: View {
                         .frame(width: 32, height: 32)
                         .background(store.canSend ? JieboColor.pine : JieboColor.mist)
                         .clipShape(Circle())
+                        .hitTarget() // P6：视觉 32，命中 44
                 }
                 .buttonStyle(.plain)
                 .disabled(!store.canSend)
@@ -159,6 +160,7 @@ struct ComposerView: View {
                 .frame(width: 32, height: 32)
                 .background(JieboColor.mist)
                 .clipShape(Circle())
+                .hitTarget()
         }
         .accessibilityLabel("添加附件")
     }
@@ -177,6 +179,7 @@ struct ComposerView: View {
             .frame(height: 32)
             .background(on ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .hitTarget() // P6：视觉 32 高，命中 44
         }
         .accessibilityLabel(on ? "写入前确认" : "自动写入")
     }
@@ -191,6 +194,7 @@ struct ComposerView: View {
                 .frame(height: 32)
                 .background(plane ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                .hitTarget()
         }
         .accessibilityLabel(plane ? "策略层" : "现状路径")
     }
@@ -263,7 +267,7 @@ struct ComposerView: View {
                                     .matchedGeometryEffect(id: "mode-thumb", in: modeThumb)
                             }
                         }
-                        .contentShape(Rectangle())
+                        .hitTarget() // P6：滑块视觉 32 高不变，命中 44
                 }
                 .buttonStyle(.plain)
             }
@@ -298,6 +302,7 @@ struct ComposerView: View {
             .frame(height: 32)
             .background(JieboColor.mist)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .hitTarget()
         }
     }
 }
