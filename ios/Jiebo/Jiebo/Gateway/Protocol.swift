@@ -105,8 +105,9 @@ enum ClientMessage {
     case syncChat(chat: JSONValue, rev: Int)
     /// P4c：stored_digest 后按需拉取单个会话全量
     case loadChats(ids: [String])
-    /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页
-    case loadChat(chatId: String, from: Int?)
+    /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页。
+    /// nonce 为分页代际标记（网关原样回显）：降级/重启分页后旧链迟到页据此丢弃（Kimi R2 M1）
+    case loadChat(chatId: String, from: Int?, nonce: Int?)
 
     func json() -> JSONValue {
         switch self {
@@ -204,9 +205,10 @@ enum ClientMessage {
             return .object(["type": .string("sync_chat"), "chat": chat, "rev": .number(Double(rev))])
         case .loadChats(let ids):
             return .object(["type": .string("load_chats"), "ids": .array(ids.map { .string($0) })])
-        case .loadChat(let chatId, let from):
+        case .loadChat(let chatId, let from, let nonce):
             var obj: [String: JSONValue] = ["type": .string("load_chat"), "chatId": .string(chatId)]
             if let from { obj["from"] = .number(Double(from)) }
+            if let nonce { obj["nonce"] = .number(Double(nonce)) }
             return .object(obj)
         }
     }
@@ -249,8 +251,8 @@ enum ServerMessage {
     case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
     /// P4c：load_chats 的应答（单个会话全量——slim 客户端也是全量：digest 对账是跨设备 turns 更新唯一通道）
     case storedChat(chat: JSONValue, rev: Int?)
-    /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有）
-    case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool)
+    /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有；nonce 回显请求代际）
+    case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool, nonce: Int?)
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
     case chatTitle(chatId: String, title: String)
@@ -300,7 +302,7 @@ enum ServerMessage {
             return chatId
         case .undone(let chatId, _, _):
             return chatId
-        case .chatTurns(let chatId, _, _, _):
+        case .chatTurns(let chatId, _, _, _, _):
             return chatId
         default:
             return nil
@@ -409,7 +411,8 @@ enum ServerMessage {
                 chatId: chatId,
                 turns: object["turns"]?.array ?? [],
                 from: object["from"]?.int ?? 0,
-                hasMore: object["hasMore"]?.bool ?? false
+                hasMore: object["hasMore"]?.bool ?? false,
+                nonce: object["nonce"]?.int
             )
         case "auth":
             return .auth(ok: object["ok"]?.bool ?? false, message: object["message"]?.string)

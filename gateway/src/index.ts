@@ -3835,6 +3835,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
       // 单条巨 turn 也能撑爆 WS 帧，必须按字节组页（评审 GLM m4 / Grok M5）
       if (message.type === "load_chat") {
         const id = typeof message.chatId === "string" ? message.chatId : "";
+        // 分页代际 nonce 原样回显（Kimi R2 M1）：客户端降级/重启分页后靠它丢弃旧链迟到页
+        const nonce =
+          typeof message.nonce === "number" && Number.isFinite(message.nonce) ? message.nonce : undefined;
         const gone = tenant.disk.deletedIds.includes(id);
         const chat = id && !gone ? tenant.disk.chats.find((item) => chatIdOf(item) === id) : null;
         const all =
@@ -3867,7 +3870,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const settledPage = runningChatIds(tenant).includes(id)
           ? page
           : (settlePersistedChats([{ turns: page }])[0] as { turns: unknown[] }).turns;
-        send(ws, { type: "chat_turns", chatId: id, turns: settledPage, from, hasMore: from > 0, total: all.length });
+        send(ws, { type: "chat_turns", chatId: id, turns: settledPage, from, hasMore: from > 0, total: all.length, nonce });
         return;
       }
 

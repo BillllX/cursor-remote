@@ -113,10 +113,11 @@ async function main() {
     "slim 客户端 load_chats 回全量 turns", `n=${sc.chat?.turns?.length}`);
 
   // 2. load_chat 分页：末页 → 向前翻到底（共 96 条：40 + 40 + 16；巨 turn 在末页）
-  slim2.send({ type: "load_chat", chatId });
+  slim2.send({ type: "load_chat", chatId, nonce: 7 }); // nonce：分页代际标记，应原样回显（Kimi R2 M1）
   const p1 = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId, "page1");
   step(p1.turns.length === 40 && p1.from === TURNS + 1 - 40 && p1.hasMore === true && p1.total === TURNS + 1,
     "load_chat 末页 40 条", `from=${p1.from} hasMore=${p1.hasMore} total=${p1.total}`);
+  step(p1.nonce === 7, "chat_turns 回显 nonce（分页代际校验）", `nonce=${p1.nonce}`);
   // 巨 turn 是最后一条（turns[95]）：应被 clip 且体积远小于原文
   const big = p1.turns.find((t) => t && t.id === "big");
   step(!!big && big.clipped === true && String(big.user || "").length < BIG.length / 4,

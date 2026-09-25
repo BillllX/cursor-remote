@@ -92,6 +92,9 @@ final class ChatStore {
     private var pendingHistory: [String: [Turn]] = [:]
     /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
     private var loadedPageTurnCounts: [String: Int] = [:]
+    /// P8 slim：每会话分页代际（单调递增，会话内不复用）。load_chat 携带、chat_turns 回显，
+    /// 降级/重启分页后旧链迟到页凭 nonce 不匹配丢弃——成员资格守卫挡不住同步重注册（Kimi R2 M1）
+    private var loadEpochs: [String: Int] = [:]
     /// P8 slim：turns 未加载完就发了消息的会话——加载完成后必须补一次全量 sync，
     /// 否则加载期间的 sync（无 turns 键）会把 dirty 清掉，新 turn 永不落盘（Grok 评审 M2）
     private var localTurnsPendingSync = Set<String>()
@@ -367,8 +370,9 @@ final class ChatStore {
         guard let chat = chats.first(where: { $0.id == chatId }),
               !chat.turnsComplete,
               !loadingChatIds.contains(chatId) else { return }
+        loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1 // 新分页链起新代际
         loadingChatIds.insert(chatId)
-        send(.loadChat(chatId: chatId, from: nil))
+        send(.loadChat(chatId: chatId, from: nil, nonce: loadEpochs[chatId]))
     }
 
     /// 切工作区后重拉所有打开的页签（对齐网页 per-chat tabs 的意图：内容不能跨工作区复用）
@@ -1383,7 +1387,11 @@ final class ChatStore {
                 break
             }
             applyHistory(chatId: id, incoming: incoming)
-        case .chatTurns(let chatId, let rows, let from, let hasMore):
+        case .chatTurns(let chatId, let rows, let from, let hasMore, let nonce):
+            // 代际校验必须在成员资格之前（Kimi R2 M1）：deferred 降级/断线重启后旧链迟到页
+            // 与重注册的新链都能过成员资格守卫；nonce 不匹配即旧代际，丢弃且不动当前加载状态。
+            // 无 nonce（不回显的旧实现）按兼容放行——旧网关本就不支持 load_chat，不会到此
+            if let nonce, nonce != loadEpochs[chatId] ?? 0 { break }
             // 在途校验：会话已删 / 全量 stored_chat 已取消加载 → 丢弃迟到页
             guard loadingChatIds.contains(chatId),
                   let index = chats.firstIndex(where: { $0.id == chatId }),
@@ -1401,7 +1409,7 @@ final class ChatStore {
             chats[index].turns = fresh + chats[index].turns
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
             if hasMore {
-                send(.loadChat(chatId: chatId, from: from)) // 继续向前翻 turns[..<from]
+                send(.loadChat(chatId: chatId, from: from, nonce: loadEpochs[chatId])) // 继续向前翻 turns[..<from]
             } else {
                 chats[index].turnsComplete = true
                 loadingChatIds.remove(chatId)
@@ -1628,6 +1636,10 @@ final class ChatStore {
             // P8 slim：远端是元数据壳（无 turns 键）→ 只合元数据，本地 turns/加载状态不动。
             // 不能走下方权重比较——壳的权重恒 0，本地有内容就永远本地胜出，会吞掉别端的元数据更新
             if !chat.turnsComplete {
+                // 脏会话本地全赢（含改名类元数据编辑，否则被壳静默吞掉）；
+                // 仅待回推（pendingSync）的壳走下方正常合并即可——它本就保本地 turns/加载状态，
+                // 元数据跟远端走，完成回推时不会带旧元数据误覆盖
+                if dirtyChatIds.contains(chat.id) { return current }
                 var slim = chat
                 slim.turns = current.turns
                 slim.turnsComplete = current.turnsComplete
@@ -1635,8 +1647,11 @@ final class ChatStore {
                 slim.agentId = current.agentId ?? chat.agentId
                 return slim
             }
-            // 远端全量、本地是壳：直接采用远端（本地没有可保留的正文）
+            // 远端全量、本地是壳：直接采用远端（本地没有可保留的正文）。
+            // 本地优先例外：脏/待回推新 turn 的壳被远端全量（含真空会话的 turns:[] 行）覆盖会
+            // 丢本地内容且 localTurnsPendingSync 无释放路径（Kimi R2 MINOR1）
             if !current.turnsComplete {
+                if hasLocalPriority(chat.id) { return current }
                 var next = chat
                 next.cwd = current.cwd ?? chat.cwd
                 next.draft = current.draft.isEmpty ? chat.draft : current.draft
@@ -1777,6 +1792,7 @@ final class ChatStore {
         deletedIds.removeAll()
         loadingChatIds = []
         loadedPageTurnCounts = [:]
+        loadEpochs = [:]
         localTurnsPendingSync = []
         pendingHistory = [:]
         previewTabs = []

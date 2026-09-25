@@ -73,8 +73,9 @@ export type ClientMessage =
   | { type: "sync_chat"; chat: unknown; rev?: number }
   // stored_digest 后按需拉取单个会话全量（P4c）
   | { type: "load_chats"; ids: string[] }
-  // slim_state 客户端的会话内容分页（P8）：from 省略=最后一页，否则拉 turns[..<from] 的上一页
-  | { type: "load_chat"; chatId: string; from?: number }
+  // slim_state 客户端的会话内容分页（P8）：from 省略=最后一页，否则拉 turns[..<from] 的上一页。
+  // nonce：客户端分页代际标记，网关在 chat_turns 原样回显——降级/重启分页后旧链迟到页据此丢弃
+  | { type: "load_chat"; chatId: string; from?: number; nonce?: number }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
   | { type: "ping" };
@@ -220,8 +221,9 @@ export type ServerMessage =
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
   // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）
   | { type: "stored_chat"; chat: unknown; rev?: number }
-  // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记
-  | { type: "chat_turns"; chatId: string; turns: unknown[]; from: number; hasMore: boolean; total: number }
+  // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记；
+  // nonce 回显请求的 nonce（客户端分页代际校验，见 load_chat）
+  | { type: "chat_turns"; chatId: string; turns: unknown[]; from: number; hasMore: boolean; total: number; nonce?: number }
   | { type: "auth"; ok: boolean; message?: string }
   | {
       type: "tool-output";
