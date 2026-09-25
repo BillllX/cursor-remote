@@ -561,11 +561,80 @@ function visibleChats(tenant: Tenant) {
   });
 }
 
-function storedStatePayload(tenant: Tenant) {
+/// P8：slim_state 客户端的会话元数据视图——剥掉 turns（内容走 load_chat 分页），
+/// 补响应期计算的 preview（不落盘，避免 digest 抖动）。真空会话保留 turns:[]：
+/// 客户端按「有无 turns 键」区分「真空（已完整）」与「有内容未加载」（评审 GLM M3）
+function chatPreviewOf(turns: unknown[]): string {
+  for (let i = turns.length - 1; i >= 0; i -= 1) {
+    const turn = turns[i];
+    if (!turn || typeof turn !== "object") continue;
+    const row = turn as { user?: unknown; assistant?: unknown };
+    const text =
+      (typeof row.user === "string" && row.user.trim()) ||
+      (typeof row.assistant === "string" && row.assistant.trim()) ||
+      "";
+    if (text) return text.slice(0, 100);
+  }
+  return "";
+}
+
+function slimChat(item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const row = item as Record<string, unknown>;
+  const turns = Array.isArray(row.turns) ? row.turns : [];
+  const rest = { ...row };
+  delete rest.turns;
+  delete rest.preview; // 不信持久化里的旧值，响应期重算
+  if (!turns.length) return { ...rest, turns: [] };
+  return { ...rest, preview: chatPreviewOf(turns) };
+}
+
+/// load_chat 组页时单条 turn 超预算的兜底截断：砍长字符串字段并打 clipped 标记。
+/// 截断副本只用于展示——sync_chat 回传时网关按 id 回退服务端完整版（见 sync_chat 合并），截断内容不会回写落盘
+function clipTurnForPage(turn: unknown, budget: number): unknown {
+  if (!turn || typeof turn !== "object") return turn;
+  const row = { ...(turn as Record<string, unknown>) };
+  const cap = 64 * 1024;
+  for (const key of ["thinking", "assistant", "user"]) {
+    const value = row[key];
+    if (typeof value === "string" && value.length > cap) row[key] = `${value.slice(0, cap)}…（过长已截断）`;
+  }
+  if (Array.isArray(row.tools)) {
+    row.tools = row.tools.map((tool) => {
+      if (!tool || typeof tool !== "object") return tool;
+      const t = { ...(tool as Record<string, unknown>) };
+      for (const key of ["result", "args"]) {
+        const value = t[key];
+        if (typeof value === "string" && value.length > cap) {
+          t[key] = `${value.slice(0, cap)}…（过长已截断）`;
+        } else if (value && typeof value === "object" && Buffer.byteLength(JSON.stringify(value)) > cap) {
+          t[key] = { truncated: true, note: "内容过长，完整版见网页端" };
+        }
+      }
+      return t;
+    });
+  }
+  row.clipped = true;
+  // 极端情况截完仍超预算（海量短字段）：换成占位 turn，保住 id 让客户端页码不断——总比撑爆 WS 断连强
+  if (Buffer.byteLength(JSON.stringify(row)) > budget) {
+    return {
+      id: (turn as { id?: unknown }).id,
+      user: "",
+      assistant: "（此条消息过大，无法在此设备显示，完整版见网页端）",
+      clipped: true,
+    };
+  }
+  return row;
+}
+
+function storedStatePayload(tenant: Tenant, slim = false) {
   const live = new Set(runningChatIds(tenant));
+  const chats = visibleChats(tenant).map((item) =>
+    live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0],
+  );
   return {
     type: "stored_state" as const,
-    chats: visibleChats(tenant).map((item) => (live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0])),
+    chats: slim ? chats.map(slimChat) : chats,
     rev: tenant.disk.rev,
     deletedIds: tenant.disk.deletedIds,
     chatRevs: effectiveChatRevs(tenant),
@@ -588,8 +657,9 @@ function emitStateSync(ws: WebSocket, tenant: Tenant) {
 }
 
 function emitStoredState(ws: WebSocket, tenant: Tenant) {
-  const payload = storedStatePayload(tenant);
-  const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+  const conn = conns.get(ws);
+  const payload = storedStatePayload(tenant, conn?.caps.has("slim_state") ?? false);
+  const limit = conn?.maxMessageBytes ?? 0;
   if (limit > 0) {
     const bytes = Buffer.byteLength(JSON.stringify(payload));
     if (bytes > limit) {
@@ -3394,6 +3464,7 @@ function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
 }
 
 /// GET /state：stored_state 的 HTTP 版，给收不了超大 WS 消息的客户端（iOS 约 1MiB 上限）
+/// ?slim=1：与 WS hello 的 slim_state cap 对齐（HTTP 无连接态，靠参数传递）
 function handleState(req: IncomingMessage, res: ServerResponse) {
   const header = String(req.headers.authorization || "");
   const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || "";
@@ -3402,8 +3473,9 @@ function handleState(req: IncomingMessage, res: ServerResponse) {
     res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
     return;
   }
+  const slim = new URL(req.url || "/", "http://127.0.0.1").searchParams.get("slim") === "1";
   res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
-  res.end(JSON.stringify(storedStatePayload(tenant)));
+  res.end(JSON.stringify(storedStatePayload(tenant, slim)));
 }
 
 function cwdWritable(dir: string) {
@@ -3677,6 +3749,30 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           const cwd = wanted || fallback || tenant.workspaceRoot;
           if (row.cwd !== cwd) next = { ...next, cwd };
         }
+        // P8 slim 合并：incoming 没有 turns 键 = 元数据更新，保留服务端 turns
+        //（键缺失 ≠ 清空，空数组才是清空；web 永远带 turns 走全量替换，不受影响）。
+        // incoming 带 turns 时，clipped 标记的 turn 是 load_chat 分页的截断展示副本——
+        // 按 id 回退服务端完整版，截断内容不允许回写落盘
+        if (next && typeof next === "object" && prev && typeof prev === "object") {
+          const row = next as Record<string, unknown>;
+          const prevTurns = (prev as { turns?: unknown }).turns;
+          if (Array.isArray(prevTurns)) {
+            if (!("turns" in row)) {
+              next = { ...row, turns: prevTurns };
+            } else if (Array.isArray(row.turns)) {
+              const fullById = new Map(
+                prevTurns.map((t) => [t && typeof t === "object" ? (t as { id?: unknown }).id : null, t]),
+              );
+              next = {
+                ...row,
+                turns: row.turns.map((t) => {
+                  if (!t || typeof t !== "object" || (t as { clipped?: unknown }).clipped !== true) return t;
+                  return fullById.get((t as { id?: unknown }).id) ?? t;
+                }),
+              };
+            }
+          }
+        }
         const changed = stableStringify(prev ?? null) !== stableStringify(next);
         if (changed && !prev && tenant.disk.chats.length >= MAX_STORED_CHATS) {
           // 条数硬顶：追加新会话被拒（替换既有会话不受限），回 ack 让客户端收敛 inflight
@@ -3705,7 +3801,10 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           .filter((item): item is string => typeof item === "string" && Boolean(item))
           .slice(0, 200); // 上限防滥用；正常分叉差异只有几条
         const gone = new Set(tenant.disk.deletedIds);
-        const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+        const connNow = conns.get(ws);
+        const limit = connNow?.maxMessageBytes ?? 0;
+        // 注意：load_chats 对 slim 客户端也回全量——它只服务 digest 差异对账（通常单会话），
+        // 是跨设备 turns 更新的唯一通道；slim 只作用于 stored_state 启动全量
         for (const id of ids) {
           if (gone.has(id)) continue;
           const chat = tenant.disk.chats.find((item) => chatIdOf(item) === id);
@@ -3718,6 +3817,42 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           }
           send(ws, payload);
         }
+        return;
+      }
+
+      // P8：slim 客户端的会话内容分页——from 省略=最后一页，否则返回 turns[..<from] 的上一页。
+      // 条数（40）与字节（接收上限 80%）双上限：落盘 turns 没有 history 路径的 80KB clip，
+      // 单条巨 turn 也能撑爆 WS 帧，必须按字节组页（评审 GLM m4 / Grok M5）
+      if (message.type === "load_chat") {
+        const id = typeof message.chatId === "string" ? message.chatId : "";
+        const gone = tenant.disk.deletedIds.includes(id);
+        const chat = id && !gone ? tenant.disk.chats.find((item) => chatIdOf(item) === id) : null;
+        const all =
+          chat && typeof chat === "object" && Array.isArray((chat as { turns?: unknown }).turns)
+            ? (chat as { turns: unknown[] }).turns
+            : [];
+        const to =
+          typeof message.from === "number" && Number.isFinite(message.from)
+            ? Math.max(0, Math.min(Math.floor(message.from), all.length))
+            : all.length;
+        const declared = conn.maxMessageBytes;
+        const budget = declared > 0 ? Math.floor(declared * 0.8) : 800 * 1024;
+        const page: unknown[] = [];
+        let bytes = 0;
+        let from = to;
+        while (from > 0 && page.length < 40) {
+          let turn = all[from - 1];
+          let size = Buffer.byteLength(JSON.stringify(turn));
+          if (size > budget) {
+            turn = clipTurnForPage(turn, budget);
+            size = Buffer.byteLength(JSON.stringify(turn));
+          }
+          if (bytes + size > budget && page.length > 0) break;
+          page.unshift(turn);
+          bytes += size;
+          from -= 1;
+        }
+        send(ws, { type: "chat_turns", chatId: id, turns: page, from, hasMore: from > 0, total: all.length });
         return;
       }
 

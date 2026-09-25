@@ -55,13 +55,14 @@ extension ChatStore {
         // 两遍：先标出「活跃空会话所在组」——同组里活跃空会话优先于先出现的非活跃空会话
         //（单遍写法在 [非活跃空, 活跃空] 顺序下同组会留两条，GLM R2 MINOR）
         let activeEmptyKeys: Set<String> = chats
-            .filter { $0.id == activeId && $0.title == "新对话" && $0.turns.isEmpty }
+            .filter { $0.id == activeId && $0.title == "新对话" && $0.turnsComplete && $0.turns.isEmpty }
             .map { normPath($0.cwd?.nilIfEmpty ?? groupRoot) }
             .reduce(into: []) { $0.insert($1) }
         var keep = Set<String>()
         var seenEmpty = Set<String>()
         for chat in chats {
-            let empty = chat.title == "新对话" && chat.turns.isEmpty
+            // P8 slim：turnsComplete=false 的是「未加载」不是「真空」，不能参与空会话去重
+            let empty = chat.title == "新对话" && chat.turnsComplete && chat.turns.isEmpty
             if !empty {
                 keep.insert(chat.id)
                 continue

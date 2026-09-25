@@ -160,7 +160,7 @@ struct SidebarView: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
-                if group.chats.contains(where: { $0.turns.contains(where: \.running) }) {
+                if group.chats.contains(where: { $0.turns.contains(where: \.running) || store.runningChatIds.contains($0.id) }) {
                     Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
                 }
                 if group.chats.isEmpty {
@@ -193,7 +193,7 @@ struct SidebarView: View {
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Circle()
-                    .fill(chat.turns.contains(where: \.running) ? JieboColor.pine : (chat.unread ? JieboColor.brass : .clear))
+                    .fill(chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id) ? JieboColor.pine : (chat.unread ? JieboColor.brass : .clear))
                     .frame(width: 8, height: 8)
                     .padding(.top, 7)
                 VStack(alignment: .leading, spacing: 4) {

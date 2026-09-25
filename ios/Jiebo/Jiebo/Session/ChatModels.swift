@@ -209,17 +209,23 @@ struct ChatSession: Identifiable, Hashable {
     var unread: Bool
     var confirmWrites: Bool
     var policy: String
+    /// P8 slim：turns 是否已完整加载。slim stored_chat 不带 turns 键 → false，内容走 load_chat 分页补齐
+    var turnsComplete: Bool = true
+    /// P8 slim：网关随元数据下发的摘要（turns 未加载时供侧栏显示；不随 json() 回写，防 digest 抖动）
+    var serverPreview: String?
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
 
     static let knownKeys: Set<String> = [
         "id", "title", "turns", "agentId", "draft", "model", "mode", "cwd", "unread", "confirmWrites", "policy",
+        "preview",
     ]
 
     var isUntitled: Bool { title.isEmpty || title == "新对话" }
     var preview: String {
         turns.last(where: { !$0.user.isEmpty })?.user
             ?? turns.last(where: { !$0.assistant.isEmpty })?.assistant
+            ?? serverPreview
             ?? ""
     }
 
@@ -248,7 +254,11 @@ struct ChatSession: Identifiable, Hashable {
         var object = extra
         object["id"] = .string(id)
         object["title"] = .string(title)
-        object["turns"] = .array(turns.map { $0.json() })
+        // P8 slim：turns 未完整加载时不写 turns 键——网关按「键缺失=保留服务端 turns」处理，
+        // 避免把部分页当全量回推砍掉服务端尾部（键缺失≠清空，空数组才是清空）
+        if turnsComplete {
+            object["turns"] = .array(turns.map { $0.json() })
+        }
         object["draft"] = .string(draft)
         object["mode"] = .string(mode.rawValue)
         object["confirmWrites"] = .bool(confirmWrites)
@@ -273,6 +283,9 @@ struct ChatSession: Identifiable, Hashable {
             unread: object["unread"]?.bool ?? false,
             confirmWrites: object["confirmWrites"]?.bool ?? false,
             policy: object["policy"]?.string == "plane" ? "plane" : "baseline",
+            // P8 slim：有 turns 键（含空数组）= 完整；缺键 = 元数据壳，内容待 load_chat 分页
+            turnsComplete: object["turns"] != nil,
+            serverPreview: object["preview"]?.string,
             extra: object.filter { !ChatSession.knownKeys.contains($0.key) }
         )
     }

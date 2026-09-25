@@ -123,8 +123,20 @@ struct ThreadView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
-                    if let chat = store.active, chat.turns.isEmpty {
+                    if let chat = store.active, chat.turns.isEmpty, chat.turnsComplete {
+                        // 未加载完的壳（!turnsComplete）不算空会话——由下方遮罩覆盖
                         emptyState
+                    }
+                    if let chat = store.active, !chat.turnsComplete, !chat.turns.isEmpty {
+                        // 分页加载更早内容的轻提示（不抢滚动，对齐「分段加载」的可感知性）
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("正在加载更早的内容…")
+                                .font(JieboFont.ui(12))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
                     }
                     ForEach(store.active?.turns ?? []) { turn in
                         TurnView(turn: turn)
@@ -182,6 +194,19 @@ struct ThreadView: View {
                     .padding(.bottom, 10)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .accessibilityLabel("滚动到最新消息")
+                }
+            }
+            .overlay {
+                // P8 slim：会话内容分页加载遮罩（只盖住对话区，侧栏/输入框可操作）
+                if let chat = store.active, !chat.turnsComplete, chat.turns.isEmpty {
+                    VStack(spacing: 12) {
+                        ProgressView().controlSize(.large)
+                        Text("正在加载会话…")
+                            .font(JieboFont.ui(13, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(JieboColor.paper.opacity(0.92))
                 }
             }
             .animation(.easeInOut(duration: 0.18), value: atBottom)

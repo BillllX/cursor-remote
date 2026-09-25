@@ -40,7 +40,8 @@ struct ClientInfo: Sendable, Equatable {
     /// 单条 WS 消息接收上限：URLSessionWebSocketTask 超过约 1MiB 会以「信息太长」断连，
     /// 声明后网关对超限的 stored_state 改发 stored_state_deferred，走 HTTP /state 拉取
     var maxMessageBytes: Int?
-    /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）
+    /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）+ slim_state（P8 懒加载：
+    /// stored_state/stored_chat 只给元数据，内容走 load_chat 分页；sync_chat 可不写 turns 键）
     var caps: [String]
 
     static var current: ClientInfo {
@@ -55,7 +56,7 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest"]
+            caps: ["sync_chat", "stored_digest", "slim_state"]
         )
     }
 
@@ -104,6 +105,8 @@ enum ClientMessage {
     case syncChat(chat: JSONValue, rev: Int)
     /// P4c：stored_digest 后按需拉取单个会话全量
     case loadChats(ids: [String])
+    /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页
+    case loadChat(chatId: String, from: Int?)
 
     func json() -> JSONValue {
         switch self {
@@ -201,6 +204,10 @@ enum ClientMessage {
             return .object(["type": .string("sync_chat"), "chat": chat, "rev": .number(Double(rev))])
         case .loadChats(let ids):
             return .object(["type": .string("load_chats"), "ids": .array(ids.map { .string($0) })])
+        case .loadChat(let chatId, let from):
+            var obj: [String: JSONValue] = ["type": .string("load_chat"), "chatId": .string(chatId)]
+            if let from { obj["from"] = .number(Double(from)) }
+            return .object(obj)
         }
     }
 }
@@ -240,8 +247,10 @@ enum ServerMessage {
     case syncAck(rev: Int?, chatRevs: [String: Int])
     /// P4c：分叉时的目录推送（比对 chatRevs 后用 loadChats 拉差异会话）
     case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
-    /// P4c：load_chats 的应答（单个会话全量）
+    /// P4c：load_chats 的应答（单个会话全量；slim 客户端为剥 turns 的元数据）
     case storedChat(chat: JSONValue, rev: Int?)
+    /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有）
+    case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool)
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
     case chatTitle(chatId: String, title: String)
@@ -392,6 +401,14 @@ enum ServerMessage {
         case "stored_chat":
             guard let chat = object["chat"] else { return .ignored("") }
             return .storedChat(chat: chat, rev: object["rev"]?.int)
+        case "chat_turns":
+            guard let chatId = object["chatId"]?.string else { return .ignored("") }
+            return .chatTurns(
+                chatId: chatId,
+                turns: object["turns"]?.array ?? [],
+                from: object["from"]?.int ?? 0,
+                hasMore: object["hasMore"]?.bool ?? false
+            )
         case "auth":
             return .auth(ok: object["ok"]?.bool ?? false, message: object["message"]?.string)
         case "history":
@@ -473,9 +490,12 @@ enum GatewayConfig {
         derive(path: "/media")
     }
 
-    /// stored_state 的 HTTP 拉取通道（WS 单条消息超 maxMessageBytes 时的兜底）
+    /// stored_state 的 HTTP 拉取通道（WS 单条消息超 maxMessageBytes 时的兜底）。
+    /// slim=1：与 WS cap 对齐——slim 客户端走 HTTP 回落时也只拿元数据壳（Grok 评审 MINOR4）
     static var stateURL: URL {
-        derive(path: "/state")
+        var url = derive(path: "/state")
+        url.append(queryItems: [URLQueryItem(name: "slim", value: "1")])
+        return url
     }
 
     /// 带查询参数的 /media 下载地址（Bearer 鉴权在请求头里加）

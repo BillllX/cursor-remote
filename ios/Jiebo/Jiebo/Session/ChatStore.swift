@@ -83,8 +83,13 @@ final class ChatStore {
     private var serverSupportsP4 = false
     private var deletedIds = Set<String>()
     private var lastModel = ""
-    private var runningChatIds: [String] = []
+    /// 运行中/排队会话 id（侧栏运行点也读它：slim 会话没 turns，不能靠 turns.contains(running)）
+    var runningChatIds: [String] = []
     private var queuedChatIds: [String] = []
+    /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）
+    var loadingChatIds: Set<String> = []
+    /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
+    private var pendingHistory: [String: [Turn]] = [:]
     private var syncTask: Task<Void, Never>?
     private var verifyTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
@@ -270,7 +275,7 @@ final class ChatStore {
         workspaceSheetOpen = false
         creatingWorkspace = false
         persistDraft()
-        if let existing = chats.first(where: { $0.isUntitled && $0.turns.isEmpty && sameCwd($0.cwd?.nilIfEmpty ?? groupRoot, next) }) {
+        if let existing = chats.first(where: { $0.isUntitled && $0.turnsComplete && $0.turns.isEmpty && sameCwd($0.cwd?.nilIfEmpty ?? groupRoot, next) }) {
             select(existing.id)
             patch(existing.id) { chat in
                 var nextChat = chat
@@ -343,6 +348,17 @@ final class ChatStore {
             fileIndex = []
             treeTruncated = false
         }
+        ensureTurnsLoaded(newId) // P8 slim：点开的会话若只有元数据壳，启动分页加载
+    }
+
+    /// P8 slim：会话 turns 未加载时启动分页加载（幂等）。from=nil 拉最后一页，
+    /// 之后按响应的 from/hasMore 一页页向前翻（见 .chatTurns 处理）。
+    func ensureTurnsLoaded(_ chatId: String) {
+        guard let chat = chats.first(where: { $0.id == chatId }),
+              !chat.turnsComplete,
+              !loadingChatIds.contains(chatId) else { return }
+        loadingChatIds.insert(chatId)
+        send(.loadChat(chatId: chatId, from: nil))
     }
 
     /// 切工作区后重拉所有打开的页签（对齐网页 per-chat tabs 的意图：内容不能跨工作区复用）
@@ -523,6 +539,8 @@ final class ChatStore {
         send(.deleteSession(chatId: id))
         deletedIds.insert(id)
         imagesByChat[id] = nil
+        loadingChatIds.remove(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
+        pendingHistory[id] = nil
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
             let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: lastModel.nilIfEmpty ?? model, mode: mode)
@@ -1135,11 +1153,22 @@ final class ChatStore {
                 if let index = chats.firstIndex(where: { $0.id == remote.id }) {
                     var mergedChat = remote
                     mergedChat.draft = chats[index].draft.isEmpty ? remote.draft : chats[index].draft
+                    // P8 slim：元数据壳（无 turns 键）不得清空已加载正文——只更新元数据；
+                    // 全量到达则取消在途分页（迟到页由 loadingChatIds 校验丢弃）
+                    if !remote.turnsComplete {
+                        mergedChat.turns = chats[index].turns
+                        mergedChat.turnsComplete = chats[index].turnsComplete
+                    } else {
+                        loadingChatIds.remove(remote.id)
+                    }
                     chats[index] = mergedChat
                 } else {
                     chats.append(remote)
                 }
-                if remote.id == activeId { applySession(remote) }
+                if remote.id == activeId {
+                    applySession(chats.first { $0.id == remote.id } ?? remote)
+                    ensureTurnsLoaded(remote.id)
+                }
             }
             if pendingChatLoads.isEmpty { scheduleSync() } // 对账完毕，把本地脏的推上去
         case .workspaces(_, let items):
@@ -1307,14 +1336,34 @@ final class ChatStore {
         case .history(let id, let rows):
             let incoming = rows.compactMap(Turn.from)
             guard !incoming.isEmpty else { break }
-            patch(id) { chat in
-                var next = chat
-                if next.turns.isEmpty {
-                    next.turns = incoming
-                } else if incoming.count > next.turns.count {
-                    next.turns = incoming
+            // P8 slim：turns 未加载完时，history（fresh UUID）与 load_chat 页（持久 id）
+            // id 空间不同，直接合并会重复/覆盖——暂存，加载完成后按老规则应用
+            if let chat = chats.first(where: { $0.id == id }), !chat.turnsComplete {
+                pendingHistory[id] = incoming
+                break
+            }
+            applyHistory(chatId: id, incoming: incoming)
+        case .chatTurns(let chatId, let rows, let from, let hasMore):
+            // 在途校验：会话已删 / 全量 stored_chat 已取消加载 → 丢弃迟到页
+            guard loadingChatIds.contains(chatId),
+                  let index = chats.firstIndex(where: { $0.id == chatId }),
+                  !deletedIds.contains(chatId) else {
+                loadingChatIds.remove(chatId)
+                break
+            }
+            // 页合并直接改 chats[index]，不走 patch()——加载不是本地编辑，不能误标脏触发回推
+            let page = rows.compactMap(Turn.from)
+            let existing = Set(chats[index].turns.map(\.id))
+            let fresh = page.filter { !existing.contains($0.id) }
+            chats[index].turns = fresh + chats[index].turns
+            if hasMore {
+                send(.loadChat(chatId: chatId, from: from)) // 继续向前翻 turns[..<from]
+            } else {
+                chats[index].turnsComplete = true
+                loadingChatIds.remove(chatId)
+                if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
+                    applyHistory(chatId: chatId, incoming: pending)
                 }
-                return next
             }
         case .chatTitle(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1455,6 +1504,19 @@ final class ChatStore {
         }
     }
 
+    /// agent 历史 backfill 应用（老规则：本地空直接整表替换；incoming 更多才替换）
+    private func applyHistory(chatId id: String, incoming: [Turn]) {
+        patch(id) { chat in
+            var next = chat
+            if next.turns.isEmpty {
+                next.turns = incoming
+            } else if incoming.count > next.turns.count {
+                next.turns = incoming
+            }
+            return next
+        }
+    }
+
     private func applySession(_ chat: ChatSession?) {
         guard let chat else { return }
         draft = chat.draft
@@ -1496,6 +1558,24 @@ final class ChatStore {
         let localById = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         return remote.map { chat in
             guard let current = localById[chat.id] else { return chat }
+            // P8 slim：远端是元数据壳（无 turns 键）→ 只合元数据，本地 turns/加载状态不动。
+            // 不能走下方权重比较——壳的权重恒 0，本地有内容就永远本地胜出，会吞掉别端的元数据更新
+            if !chat.turnsComplete {
+                var slim = chat
+                slim.turns = current.turns
+                slim.turnsComplete = current.turnsComplete
+                slim.draft = current.draft.isEmpty ? chat.draft : current.draft
+                slim.agentId = current.agentId ?? chat.agentId
+                return slim
+            }
+            // 远端全量、本地是壳：直接采用远端（本地没有可保留的正文）
+            if !current.turnsComplete {
+                var next = chat
+                next.cwd = current.cwd ?? chat.cwd
+                next.draft = current.draft.isEmpty ? chat.draft : current.draft
+                next.agentId = current.agentId ?? chat.agentId
+                return next
+            }
             let localWeight = current.turns.reduce(0) { $0 + $1.user.count + $1.assistant.count }
             let remoteWeight = chat.turns.reduce(0) { $0 + $1.user.count + $1.assistant.count }
             if current.turns.contains(where: \.running) || localWeight > remoteWeight {
@@ -1583,6 +1663,9 @@ final class ChatStore {
             // 旧网关没有 ack/digest，增量状态机跑不起来：退回全量 sync_state（老行为）。
             // 不动 dirty/inflight——dirty 保持非空，每次编辑都触发全量，与 P4 前一致。
             guard serverSupportsP4 else {
+                // 防御：slim 壳（!turnsComplete）只会来自支持 P4 的新网关，正常到不了这里；
+                // 真出现说明状态不一致——sync_state 是全量替换，缺 turns 键会把服务端正文抹掉，宁可不推
+                guard !chats.contains(where: { !$0.turnsComplete && $0.id != "boot" }) else { return }
                 stateRev += 1
                 send(.syncState(chats: .array(chats.map { $0.json() }), rev: stateRev))
                 return
@@ -1622,6 +1705,8 @@ final class ChatStore {
         digestTimeoutTask?.cancel()
         serverSupportsP4 = false
         deletedIds.removeAll()
+        loadingChatIds = []
+        pendingHistory = [:]
         previewTabs = []
         previewActivePath = nil
         pendingDiffPaths = []
@@ -1719,8 +1804,19 @@ final class ChatStore {
             }
             // rev 未变且本地不脏 → 内容必然一致，跳过序列化比较（全量 diff 的短路）
             if let oldRev = oldRevs[chat.id], oldRev == chatRevs[chat.id] { continue }
-            if ChatSession.from(row)?.json() != chat.json() {
-                dirtyChatIds.insert(chat.id)
+            // P8 slim：一方缺 turns（元数据壳）时按元数据比较——壳 json() 不写 turns 键，
+            // 本地完整版带 turns，直接比必假差异 → sync_chat 风暴
+            if var serverChat = ChatSession.from(row) {
+                var localChat = chat
+                if !serverChat.turnsComplete || !localChat.turnsComplete {
+                    serverChat.turns = []
+                    serverChat.turnsComplete = false
+                    localChat.turns = []
+                    localChat.turnsComplete = false
+                }
+                if serverChat.json() != localChat.json() {
+                    dirtyChatIds.insert(chat.id)
+                }
             }
         }
         if !dirtyChatIds.isEmpty { scheduleSync() }
@@ -1730,6 +1826,7 @@ final class ChatStore {
         if let keep = chats.first(where: { $0.id == activeId }) {
             applySession(keep)
         }
+        ensureTurnsLoaded(activeId) // P8 slim：active 是壳就启动分页（含重连后在途丢失的重启）
         markLive(running: runningChatIds, queued: queuedChatIds)
     }
 
