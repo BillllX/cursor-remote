@@ -1912,6 +1912,20 @@ export default function ChatApp() {
               };
             });
           }
+          if (
+            message.status === "FINISHED" ||
+            message.status === "ERROR" ||
+            message.status === "CANCELLED" ||
+            message.status === "EXPIRED"
+          ) {
+            const settled =
+              message.status === "ERROR" || message.status === "EXPIRED"
+                ? "error"
+                : message.status === "CANCELLED"
+                  ? "cancelled"
+                  : "finished";
+            patchOpenTurnIn(chatId, (turn) => settleTurn(turn, settled));
+          }
           if (/已拒绝写入/.test(message.message || "")) {
             patchChat(chatId, (chat) => {
               const last = [...chat.turns].reverse().find((turn) => turn.running || turn.pendingTool || turn.tools.length);

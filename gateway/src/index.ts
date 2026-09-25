@@ -1879,6 +1879,8 @@ ${body}`;
 Import only from "cursor/canvas". Default-export one React component. Embed data inline. No fetch(), no relative imports, no npm packages.
 Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-overview.canvas.tsx). Do not write a canvas for ordinary Q&A or a pure code edit.
 
+命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
+
 CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement), reviewer (cross-review with a different model). Spawn them for parallel investigation or a second pair of eyes. Skip them for a trivial one-file edit. Subagents must also stay inside the current workspace.
 
 ${body}`;
@@ -2741,6 +2743,27 @@ async function handlePrompt(
     if (isPlane(slot.policy) && mode === "ask") sendOpts.disallowedTools = askDisallowedTools();
     if (isPlane(slot.policy) && mode === "plan") sendOpts.disallowedTools = planDisallowedTools();
 
+    const runWatch: {
+      turnEnded: boolean;
+      quiet?: ReturnType<typeof setTimeout>;
+      stop?: () => void;
+    } = { turnEnded: false };
+    const clearRunQuiet = () => {
+      if (!runWatch.quiet) return;
+      clearTimeout(runWatch.quiet);
+      runWatch.quiet = undefined;
+    };
+    // 模型这一轮已经结束、又没有新输出时，stream 有时不再关闭，前端会一直停在「正在动手」。
+    const noteRunActivity = (continuing: boolean) => {
+      if (continuing) {
+        runWatch.turnEnded = false;
+        clearRunQuiet();
+        return;
+      }
+      if (!runWatch.turnEnded) return;
+      clearRunQuiet();
+      runWatch.quiet = setTimeout(() => runWatch.stop?.(), 8_000);
+    };
     const onDelta = ({ update }: { update: unknown }) => {
         const rec = update as {
           type?: string;
@@ -2771,15 +2794,23 @@ async function handlePrompt(
           tool?.name || tool?.type || "tool";
         switch (rec.type) {
           case "text-delta":
+            noteRunActivity(true);
             if (rec.text) send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
             break;
           case "thinking-delta":
+            noteRunActivity(true);
             if (rec.text) send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
             break;
           case "tool-call-started":
+            noteRunActivity(true);
             startTool(rec.callId || "", toolName(rec.toolCall), rec.toolCall?.args);
             break;
+          case "turn-ended":
+            runWatch.turnEnded = true;
+            noteRunActivity(false);
+            break;
           case "shell-output-delta": {
+            noteRunActivity(false);
             const parsed = parseShellDelta(rec.event || {});
             if (parsed) {
               emitToolOutput(ws, slot, {
@@ -2791,6 +2822,7 @@ async function handlePrompt(
             break;
           }
           case "tool-call-completed":
+            noteRunActivity(false);
             finishTool(
               rec.callId || "",
               toolName(rec.toolCall),
@@ -2803,6 +2835,7 @@ async function handlePrompt(
             const nested = rec.taskUpdate;
             if (!nested) break;
             if (nested.type === "tool-call-started") {
+              noteRunActivity(true);
               startTool(
                 nested.callId || "",
                 toolName(nested.toolCall),
@@ -2810,6 +2843,7 @@ async function handlePrompt(
                 rec.callId,
               );
             } else if (nested.type === "tool-call-completed") {
+              noteRunActivity(false);
               finishTool(
                 nested.callId || "",
                 toolName(nested.toolCall),
@@ -2818,6 +2852,7 @@ async function handlePrompt(
                 nested.toolCall?.args,
               );
             } else if (nested.type === "shell-output-delta") {
+              noteRunActivity(false);
               const parsed = parseShellDelta(nested.event || {});
               if (parsed) {
                 emitToolOutput(ws, slot, {
@@ -2888,9 +2923,35 @@ async function handlePrompt(
     }
 
     if (!replayApproved) {
+    let streamStatus: string | undefined;
+    const terminalStatus = new Set(["FINISHED", "ERROR", "CANCELLED", "EXPIRED"]);
+    const iterator = run.stream()[Symbol.asyncIterator]();
+    const stopped = new Promise<void>((resolve) => {
+      runWatch.stop = resolve;
+    });
     try {
-    for await (const event of run.stream()) {
+    while (true) {
+      const pending = iterator.next().then(
+        (value) => ({ kind: "event" as const, value }),
+        (err: unknown) => ({ kind: "error" as const, err }),
+      );
+      const next = await Promise.race([
+        pending,
+        stopped.then(() => ({ kind: "quiet" as const })),
+      ]);
+      if (next.kind === "quiet") {
+        streamStatus = streamStatus || "FINISHED";
+        send(ws, { type: "status", chatId: slot.chatId, status: streamStatus });
+        break;
+      }
+      if (next.kind === "error") {
+        if (!isAbortError(next.err)) throw next.err;
+        break;
+      }
+      if (next.value.done) break;
+      const event = next.value.value;
       if (event.type === "task" && event.text) {
+        noteRunActivity(true);
         send(ws, { type: "task", chatId: slot.chatId, text: event.text });
       }
       if (event.type === "status") {
@@ -2900,8 +2961,13 @@ async function handlePrompt(
           status: event.status,
           message: event.message,
         });
+        if (terminalStatus.has(event.status)) {
+          streamStatus = event.status;
+          break;
+        }
       }
       if (event.type === "tool_call" && event.status === "running") {
+        noteRunActivity(true);
         startTool(event.call_id, event.name, event.args);
         const snap = snapshotFromResult(event.result);
         if (snap.stdout || snap.stderr) {
@@ -2912,12 +2978,21 @@ async function handlePrompt(
         event.type === "tool_call" &&
         (event.status === "completed" || event.status === "error")
       ) {
+        noteRunActivity(false);
         finishTool(event.call_id, event.name, event.status, event.result, event.args);
       }
       if (slot.awaitingApproval && !autoApprove) break;
     }
     } catch (err) {
       if (!isAbortError(err)) throw err;
+    } finally {
+      clearRunQuiet();
+      runWatch.stop = undefined;
+      try {
+        await iterator.return?.();
+      } catch {
+        // stream already closed
+      }
     }
 
     if (slot.awaitingApproval && !autoApprove) {
@@ -2953,12 +3028,25 @@ async function handlePrompt(
     }
 
     if (!replayApproved) {
-    let result: { status: string; durationMs?: number } = { status: "finished" };
+    const normalizeRunStatus = (status?: string) => {
+      const key = (status || "finished").toLowerCase();
+      if (key === "expired") return "error";
+      if (key === "canceled") return "cancelled";
+      return key;
+    };
+    let result: { status: string; durationMs?: number } = {
+      status: normalizeRunStatus(streamStatus),
+    };
     try {
-      result = await run.wait();
+      const waited = await withTimeout(run.wait(), 8_000);
+      result = { status: normalizeRunStatus(waited.status), durationMs: waited.durationMs };
     } catch (err) {
-      if (!isAbortError(err)) throw err;
-      result = { status: slot.awaitingApproval ? "approval" : "cancelled" };
+      const timedOut = err instanceof Error && err.message === "timeout";
+      if (!timedOut && !isAbortError(err)) throw err;
+      if (timedOut) await cancelRun(run);
+      result = {
+        status: slot.awaitingApproval ? "approval" : normalizeRunStatus(streamStatus),
+      };
     }
     if (mode === "ask" && slot.edited.length) {
       const undone = undoEdits(cwd, slot.edited);

@@ -1266,6 +1266,12 @@ final class ChatStore {
                     }
                     return next
                 }
+            } else if status == "FINISHED" || status == "ERROR" || status == "CANCELLED" || status == "EXPIRED" {
+                let target = id ?? activeId
+                runningChatIds.removeAll { $0 == target }
+                queuedChatIds.removeAll { $0 == target }
+                let settled = (status == "ERROR" || status == "EXPIRED") ? "error" : (status == "CANCELLED" ? "cancelled" : "finished")
+                patchOpen(target) { $0.settled(status: settled) }
             }
         case .error(let id, let text):
             bannerError = friendlyError(text)
