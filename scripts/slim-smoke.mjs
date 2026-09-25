@@ -54,9 +54,9 @@ function client(name, caps, maxMessageBytes = 64 * 1024 * 1024) {
     const ss = await waitFor((m) => m.type === "stored_state" || m.type === "stored_digest", `${name} 首帧状态`);
     return ss;
   };
-  // sync_chat + 等 ack；被拒（rev 落后 → 回状态帧）时刷新 rev 重试一次
+  // sync_chat + 等 ack；被拒（rev 落后 → 回状态帧）时刷新 rev 重试（dev 租户上可能有别的客户端争用 rev）
   const syncChat = async (chat, label) => {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
       stateRev += 1;
       send({ type: "sync_chat", chat, rev: stateRev });
       const got = await waitFor(
@@ -162,9 +162,42 @@ async function main() {
   const hrow = (http.chats || []).find((c) => c && c.id === chatId);
   step(res.ok && !!hrow && !("turns" in hrow) && typeof hrow.preview === "string", "HTTP /state?slim=1 同样剥 turns 补 preview");
 
+  // 7. Kimi 设计评审修补回归：
+  //    a) load_chat 页过 settle——磁盘 running 残留（非 live 会话）不能下发成永远转圈
+  //    b) preview 对齐 iOS「user 优先」语义（assistant 收尾时仍显示最后的提问）
+  //    c) 新会话 sync_chat 缺 turns 键 → 服务端补 turns:[]（web chat.turns.map 不踩空）
+  const k2 = `slim-kimi-${randomUUID().slice(0, 8)}`;
+  await seed.syncChat({
+    id: k2, title: "残留", draft: "", mode: "agent", policy: "baseline",
+    turns: [
+      { id: "a", user: "早些时候的问题", assistant: "答", thinking: "", tools: [] },
+      { id: "b", user: "", assistant: "半截输出", thinking: "", tools: [], running: true },
+    ],
+  }, "k2-seed");
+  slim2.send({ type: "load_chat", chatId: k2 });
+  const kp = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === k2, "k2 page");
+  const rt = kp.turns.find((t) => t && t.id === "b");
+  step(!!rt && !rt.running, "load_chat 页过 settle：非 live 会话 running 残留被收尾", rt ? `running=${rt.running}` : "缺 turn b");
+  const res2 = await fetch(WS_URL.replace(/^ws/, "http").replace(/\/bridge$/, "/state?slim=1"), {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  const http2 = await res2.json();
+  const k2row = (http2.chats || []).find((c) => c && c.id === k2);
+  step(k2row?.preview === "早些时候的问题", "preview 对齐 iOS user 优先语义", JSON.stringify(k2row?.preview));
+  const k3 = `slim-kimi-${randomUUID().slice(0, 8)}`;
+  await slim2.syncChat({ id: k3, title: "无turns新会话", draft: "", mode: "agent", policy: "baseline" }, "k3");
+  const res3 = await fetch(WS_URL.replace(/^ws/, "http").replace(/\/bridge$/, "/state"), {
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
+  const http3 = await res3.json();
+  const k3row = (http3.chats || []).find((c) => c && c.id === k3);
+  step(!!k3row && Array.isArray(k3row.turns) && k3row.turns.length === 0, "新会话缺 turns 键 → 服务端补 turns:[]");
+
   // 清场：删掉冒烟会话
   for (const c of [seed, slim2, slim3]) {
-    try { c.send({ type: "delete_session", chatId }); c.send({ type: "delete_session", chatId: emptyId }); } catch {}
+    try {
+      for (const id of [chatId, emptyId, k2, k3]) c.send({ type: "delete_session", chatId: id });
+    } catch {}
     c.ws.close();
   }
   console.log(failed ? `\n${failed} 项失败` : "\n全部通过");

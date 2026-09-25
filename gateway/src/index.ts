@@ -565,15 +565,15 @@ function visibleChats(tenant: Tenant) {
 /// 补响应期计算的 preview（不落盘，避免 digest 抖动）。真空会话保留 turns:[]：
 /// 客户端按「有无 turns 键」区分「真空（已完整）」与「有内容未加载」（评审 GLM M3）
 function chatPreviewOf(turns: unknown[]): string {
-  for (let i = turns.length - 1; i >= 0; i -= 1) {
-    const turn = turns[i];
-    if (!turn || typeof turn !== "object") continue;
-    const row = turn as { user?: unknown; assistant?: unknown };
-    const text =
-      (typeof row.user === "string" && row.user.trim()) ||
-      (typeof row.assistant === "string" && row.assistant.trim()) ||
-      "";
-    if (text) return text.slice(0, 100);
+  // 与 iOS preview 语义逐字对齐：先倒序找最后一条非空 user，没有再倒序找 assistant
+  //（不是「最后一条非空消息」——assistant 收尾的会话也应显示最后的提问）
+  for (const key of ["user", "assistant"] as const) {
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const turn = turns[i];
+      if (!turn || typeof turn !== "object") continue;
+      const text = (turn as Record<string, unknown>)[key];
+      if (typeof text === "string" && text.trim()) return text.slice(0, 100);
+    }
   }
   return "";
 }
@@ -3753,9 +3753,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         //（键缺失 ≠ 清空，空数组才是清空；web 永远带 turns 走全量替换，不受影响）。
         // incoming 带 turns 时，clipped 标记的 turn 是 load_chat 分页的截断展示副本——
         // 按 id 回退服务端完整版，截断内容不允许回写落盘
-        if (next && typeof next === "object" && prev && typeof prev === "object") {
+        if (next && typeof next === "object") {
           const row = next as Record<string, unknown>;
-          const prevTurns = (prev as { turns?: unknown }).turns;
+          const prevTurns = prev && typeof prev === "object" ? (prev as { turns?: unknown }).turns : undefined;
           if (Array.isArray(prevTurns)) {
             if (!("turns" in row)) {
               next = { ...row, turns: prevTurns };
@@ -3771,6 +3771,10 @@ wss.on("connection", (ws, req: IncomingMessage) => {
                 }),
               };
             }
+          } else if (!("turns" in row)) {
+            // 新会话且缺 turns 键：补空数组——磁盘 chat 永远带 turns 键，
+            // web 端 chat.turns.map 不踩空（Kimi 设计评审 MINOR10）
+            next = { ...row, turns: [] };
           }
         }
         const changed = stableStringify(prev ?? null) !== stableStringify(next);
@@ -3852,7 +3856,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           bytes += size;
           from -= 1;
         }
-        send(ws, { type: "chat_turns", chatId: id, turns: page, from, hasMore: from > 0, total: all.length });
+        // 与 stored_state 同口径的 settle：非 live 会话的磁盘 running 残留（崩溃遗留）
+        // 不能原样下发，否则 iOS 上永远转圈（Kimi 设计评审 MINOR6）
+        const settledPage = runningChatIds(tenant).includes(id)
+          ? page
+          : (settlePersistedChats([{ turns: page }])[0] as { turns: unknown[] }).turns;
+        send(ws, { type: "chat_turns", chatId: id, turns: settledPage, from, hasMore: from > 0, total: all.length });
         return;
       }
 

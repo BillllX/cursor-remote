@@ -1299,7 +1299,10 @@ final class ChatStore {
         case .status(let id, let status, let text):
             if let text, !text.isEmpty { flash(text) }
             if status == "RUNNING" || status == "CREATING" {
-                patch(id ?? activeId) { chat in
+                let target = id ?? activeId
+                // slim 会话没有 turns 可标 running——运行点靠 runningChatIds 驱动，必须回填
+                if !runningChatIds.contains(target) { runningChatIds.append(target) }
+                patch(target) { chat in
                     guard let index = chat.turns.lastIndex(where: { !$0.user.isEmpty || $0.running }) else { return chat }
                     var next = chat
                     if !next.turns[index].running {
