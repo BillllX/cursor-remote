@@ -121,6 +121,9 @@ async function main() {
   const big = p1.turns.find((t) => t && t.id === "big");
   step(!!big && big.clipped === true && String(big.user || "").length < BIG.length / 4,
     "巨 turn 被 clipped 截断", big ? `len=${String(big.user || "").length} clipped=${big.clipped}` : "缺 big");
+  // 组页的核心保证：整页字节 ≤ 80% 接收上限（slim2 声明 1MB）
+  const p1Bytes = Buffer.byteLength(JSON.stringify(p1));
+  step(p1Bytes <= Math.floor(1_048_576 * 0.8), "页字节 ≤ 80% 帧预算", `${p1Bytes}B`);
   slim2.send({ type: "load_chat", chatId, from: p1.from });
   const p2 = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from < p1.from, "page2");
   step(p2.turns.length === 40 && p2.from === TURNS + 1 - 80 && p2.hasMore === true, "load_chat 第二页", `from=${p2.from}`);
@@ -183,6 +186,15 @@ async function main() {
   step(frow?.title === "分页冒烟·改名", "元数据改名已落盘");
   step(!!fbig && fbig.user === BIG, "clipped turn 回退保护：服务端仍是完整原文", fbig ? `len=${String(fbig.user).length}` : "缺 big");
 
+  // 5b. 单会话全量超接收上限 → load_chats 回 stored_state_deferred（Kimi M2 触发面；
+  //     iOS 侧收到后把待拉会话降级为壳走 load_chat 分页——Swift 逻辑脚本测不到，这里钉死网关行为）
+  const tiny = client("tiny", ["sync_chat", "stored_digest", "slim_state"], 200_000);
+  await tiny.hello();
+  tiny.send({ type: "load_chats", ids: [chatId] });
+  const def = await tiny.waitFor((m) => m.type === "stored_state_deferred", "tiny deferred");
+  step(def.type === "stored_state_deferred", "超大会话 load_chats → deferred 回落");
+  tiny.ws.close();
+
   // 6. HTTP /state?slim=1
   const res = await fetch(WS_URL.replace(/^ws/, "http").replace(/\/bridge$/, "/state?slim=1"), {
     headers: { authorization: `Bearer ${TOKEN}` },
@@ -221,6 +233,18 @@ async function main() {
   const http3 = await res3.json();
   const k3row = (http3.chats || []).find((c) => c && c.id === k3);
   step(!!k3row && Array.isArray(k3row.turns) && k3row.turns.length === 0, "新会话缺 turns 键 → 服务端补 turns:[]");
+
+  // 8. 核心不变量的另一半（Kimi 评审 MINOR6）：键缺失=保留，空数组才是清空
+  await slim2.syncChat({ id: chatId, title: "分页冒烟·清空", turns: [], draft: "", mode: "agent", policy: "baseline" }, "clear");
+  slim2.send({ type: "load_chat", chatId });
+  const cleared = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId, "load after clear");
+  step(cleared.total === 0 && cleared.turns.length === 0 && cleared.hasMore === false,
+    "sync_chat turns:[] → 服务端清空", `total=${cleared.total}`);
+
+  // 8b. load_chat 未知/不存在 chatId → 空页终止信号（不回包会卡死客户端加载循环）
+  slim2.send({ type: "load_chat", chatId: "no-such-chat" });
+  const none = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === "no-such-chat", "load unknown");
+  step(none.total === 0 && none.turns.length === 0 && none.hasMore === false, "load_chat 未知会话 → 空页终止");
 
   // 清场：删掉冒烟会话
   for (const c of [seed, slim2, slim3]) {

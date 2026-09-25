@@ -300,6 +300,8 @@ enum ServerMessage {
             return chatId
         case .undone(let chatId, _, _):
             return chatId
+        case .chatTurns(let chatId, _, _, _):
+            return chatId
         default:
             return nil
         }

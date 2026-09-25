@@ -549,10 +549,7 @@ final class ChatStore {
         send(.deleteSession(chatId: id))
         deletedIds.insert(id)
         imagesByChat[id] = nil
-        loadingChatIds.remove(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
-        loadedPageTurnCounts[id] = nil
-        localTurnsPendingSync.remove(id)
-        pendingHistory[id] = nil
+        dropChatState(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
             let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: lastModel.nilIfEmpty ?? model, mode: mode)
@@ -1155,9 +1152,21 @@ final class ChatStore {
             // stored_state 太大（超 maxMessageBytes）走 HTTP /state；rev 不新就跳过。
             // 但 digest 在途时（load_chats 单条超限的回落）digest 已抬过 rev，不能被短路挡住
             if pendingChatLoads.isEmpty, let rev, appliedStore, rev <= stateRev { break }
+            // Kimi 评审 M2：digest 判出的变更会话单条超接收上限——HTTP 回落拿的是 slim 壳
+            // （且 rev 已被 digest 收敛，applyStoredState 会早退整帧丢弃），壳合并保留本地
+            // 旧 turns 会造成永久 stale。直接把待拉会话降级为壳：内容改走 load_chat 分页补齐
+            // （分页有字节双上限，超大会话也能载），HTTP 全量只负责刷新元数据/chatRevs
+            for id in pendingChatLoads {
+                guard !dirtyChatIds.contains(id), // 本地脏的本地优先，等回推
+                      let index = chats.firstIndex(where: { $0.id == id }) else { continue }
+                chats[index].turns = []
+                chats[index].turnsComplete = false
+                dropChatState(id) // 在途分页作废（旧内容的页），迟到页由 .chatTurns 校验丢弃
+            }
             pendingChatLoads = []
             digestTimeoutTask?.cancel()
             scheduleStateFetch()
+            ensureTurnsLoaded(activeId) // active 被降级就立即重启分页
         case .syncAck(let rev, let ackRevs):
             // P4b 回执：确认服务端收下了这些会话
             serverSupportsP4 = true
@@ -1187,7 +1196,7 @@ final class ChatStore {
                         mergedChat.turns = chats[index].turns
                         mergedChat.turnsComplete = chats[index].turnsComplete
                     } else {
-                        loadingChatIds.remove(remote.id)
+                        dropChatState(remote.id) // 全量到达取消在途分页 + 清暂存（迟到页由校验丢弃）
                     }
                     chats[index] = mergedChat
                 } else {
@@ -1382,7 +1391,10 @@ final class ChatStore {
                 loadingChatIds.remove(chatId)
                 break
             }
-            // 页合并直接改 chats[index]，不走 patch()——加载不是本地编辑，不能误标脏触发回推
+            // 页合并直接改 chats[index]，不走 patch()——加载不是本地编辑，不能误标脏触发回推。
+            // 已知限制（Kimi 评审 MINOR4）：from 是位置游标，假设服务端 turns append-only——
+            // 分页中途他端增删会索引漂移（去重防重不防漏）；漂移靠 digest→stored_chat 全量
+            // 替换（或 deferred 降级重载）自愈，不在这里做复杂对账
             let page = rows.compactMap(Turn.from)
             let existing = Set(chats[index].turns.map(\.id))
             let fresh = page.filter { !existing.contains($0.id) }
@@ -1592,6 +1604,14 @@ final class ChatStore {
             }
             return next
         }
+    }
+
+    /// 会话从列表消失（远端删除/全量替换取消分页）时清理其分页/暂存状态（Kimi 评审 MINOR5）
+    private func dropChatState(_ id: String) {
+        loadingChatIds.remove(id)
+        loadedPageTurnCounts[id] = nil
+        pendingHistory[id] = nil
+        localTurnsPendingSync.remove(id)
     }
 
     private func merge(local: [ChatSession], remote: [ChatSession]) -> [ChatSession] {
@@ -1817,6 +1837,8 @@ final class ChatStore {
             // 服务端全空（新租户/被清空）：清掉已被删的本地会话（保留脏的/boot），脏会话触发重推
             let kept = chats.filter { !deletedIds.contains($0.id) || dirtyChatIds.contains($0.id) || $0.id == "boot" }
             if kept.count != chats.count {
+                let keptIds = Set(kept.map(\.id))
+                for chat in chats where !keptIds.contains(chat.id) { dropChatState(chat.id) }
                 chats = kept
                 if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
                     swapActive(to: first.id)
@@ -1838,7 +1860,10 @@ final class ChatStore {
         let localOnlyDirty = chats.filter {
             dirtyChatIds.contains($0.id) && !remoteIds.contains($0.id) && !deletedIds.contains($0.id)
         }
+        let preMergeIds = Set(chats.map(\.id))
         chats = merge(local: chats, remote: remote) + localOnlyDirty
+        let keptIds = Set(chats.map(\.id))
+        for id in preMergeIds where !keptIds.contains(id) { dropChatState(id) } // 远端删除的会话清分页/暂存
         // 合并结果与服务端不一致的（本地优先胜出的/本地独有的）标脏，随后 sync_chat 增量重推。
         // 比较前把服务端行过一遍 from→json 归一化默认值，避免字段缺失造成的假差异。
         for chat in chats where chat.id != "boot" {
@@ -1906,6 +1931,8 @@ final class ChatStore {
                 || chat.id == "boot"
         }
         if kept.count != chats.count {
+            let keptIds = Set(kept.map(\.id))
+            for chat in chats where !keptIds.contains(chat.id) { dropChatState(chat.id) }
             chats = kept
             if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
                 swapActive(to: first.id)
