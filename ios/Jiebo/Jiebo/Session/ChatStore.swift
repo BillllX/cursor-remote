@@ -1157,7 +1157,7 @@ final class ChatStore {
             // 旧 turns 会造成永久 stale。直接把待拉会话降级为壳：内容改走 load_chat 分页补齐
             // （分页有字节双上限，超大会话也能载），HTTP 全量只负责刷新元数据/chatRevs
             for id in pendingChatLoads {
-                guard !dirtyChatIds.contains(id), // 本地脏的本地优先，等回推
+                guard !hasLocalPriority(id), // 本地脏/有未回推新 turn 的本地优先，等回推
                       let index = chats.firstIndex(where: { $0.id == id }) else { continue }
                 chats[index].turns = []
                 chats[index].turnsComplete = false
@@ -1185,8 +1185,8 @@ final class ChatStore {
             guard let remote = ChatSession.from(value), !deletedIds.contains(remote.id) else { break }
             pendingChatLoads.remove(remote.id)
             if let rev { chatRevs[remote.id] = rev }
-            // 本地脏的会话本地优先（稍后重推），不脏才应用服务器版
-            if !dirtyChatIds.contains(remote.id) {
+            // 本地优先（脏/有未回推新 turn）的会话不应用服务器版，稍后重推
+            if !hasLocalPriority(remote.id) {
                 if let index = chats.firstIndex(where: { $0.id == remote.id }) {
                     var mergedChat = remote
                     mergedChat.draft = chats[index].draft.isEmpty ? remote.draft : chats[index].draft
@@ -1614,6 +1614,13 @@ final class ChatStore {
         localTurnsPendingSync.remove(id)
     }
 
+    /// 本地优先门闩：显式脏 + 加载期间发过消息（Grok R2 M1——后者 turns 未齐时 sync 不带正文，
+    /// ack 会把显式脏清掉，但本地新 turn 必须等分页完成后全量回推；此期间远端全量/降级/拉取
+    /// 都不得覆盖本地，否则新 turn 被抹且回推标记丢失）
+    private func hasLocalPriority(_ id: String) -> Bool {
+        dirtyChatIds.contains(id) || localTurnsPendingSync.contains(id)
+    }
+
     private func merge(local: [ChatSession], remote: [ChatSession]) -> [ChatSession] {
         let localById = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         return remote.map { chat in
@@ -1769,6 +1776,8 @@ final class ChatStore {
         serverSupportsP4 = false
         deletedIds.removeAll()
         loadingChatIds = []
+        loadedPageTurnCounts = [:]
+        localTurnsPendingSync = []
         pendingHistory = [:]
         previewTabs = []
         previewActivePath = nil
@@ -1835,7 +1844,7 @@ final class ChatStore {
         let remote = rows.compactMap(ChatSession.from).filter { !deletedIds.contains($0.id) }
         guard !remote.isEmpty else {
             // 服务端全空（新租户/被清空）：清掉已被删的本地会话（保留脏的/boot），脏会话触发重推
-            let kept = chats.filter { !deletedIds.contains($0.id) || dirtyChatIds.contains($0.id) || $0.id == "boot" }
+            let kept = chats.filter { !deletedIds.contains($0.id) || hasLocalPriority($0.id) || $0.id == "boot" }
             if kept.count != chats.count {
                 let keptIds = Set(kept.map(\.id))
                 for chat in chats where !keptIds.contains(chat.id) { dropChatState(chat.id) }
@@ -1892,7 +1901,7 @@ final class ChatStore {
         // P8 slim 对账：slim 行看不到 turns——断线期间别端正文变更（chatRev 前进）本地感知不到，
         // 已加载会话的 turns 已陈旧：作废重载（脏会话本地优先跳过；壳本来就未完成无需处理）。
         // 网关只在内容真变时才前进 chatRevs，纯元数据/未读类本地脏不会误触发。
-        for chat in chats where chat.id != "boot" && chat.turnsComplete && !dirtyChatIds.contains(chat.id) {
+        for chat in chats where chat.id != "boot" && chat.turnsComplete && !hasLocalPriority(chat.id) {
             guard let row = rowsById[chat.id], row.object?["turns"] == nil else { continue } // 只看 slim 行
             guard let oldRev = oldRevs[chat.id], let newRev = chatRevs[chat.id], newRev > oldRev else { continue }
             guard let index = chats.firstIndex(where: { $0.id == chat.id }) else { continue }
@@ -1926,7 +1935,7 @@ final class ChatStore {
         // 本地有、digest 没有 → 已被别处删除；本地脏的/从未同步过的（无 rev）保留
         let kept = chats.filter { chat in
             digestIds.contains(chat.id)
-                || dirtyChatIds.contains(chat.id)
+                || hasLocalPriority(chat.id)
                 || chatRevs[chat.id] == nil
                 || chat.id == "boot"
         }
@@ -1939,10 +1948,10 @@ final class ChatStore {
                 applySession(first)
             }
         }
-        // rev 不一致或本地缺失 → 拉取（本地脏的跳过：本地优先）
+        // rev 不一致或本地缺失 → 拉取（本地优先的跳过：本地优先）
         var toFetch: [String] = []
         for (id, serverRev) in serverRevs {
-            guard !deletedIds.contains(id), !dirtyChatIds.contains(id) else { continue }
+            guard !deletedIds.contains(id), !hasLocalPriority(id) else { continue }
             let missing = !chats.contains(where: { $0.id == id })
             if missing || chatRevs[id] != serverRev {
                 toFetch.append(id)
