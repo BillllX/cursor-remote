@@ -5,6 +5,9 @@ struct SidebarView: View {
     /// P7b：折叠的工作区集合（默认展开，只记负向状态；含活跃会话的组强制展开）。
     /// 初始值在 .task 里装载——@State 默认表达式每次视图 init 都求值，JSON 解码不该跟着 body 高频跑
     @State private var collapsed: Set<String> = []
+    /// P8：重命名目标（alert presenting 驱动）
+    @State private var renameTarget: ChatSession?
+    @State private var renameDraft = ""
 
     var body: some View {
         @Bindable var store = store
@@ -61,6 +64,18 @@ struct SidebarView: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            // P8：重命名 alert（swipe/长按菜单共用入口）
+            .alert("重命名会话", isPresented: renamePresented, presenting: renameTarget) { chat in
+                TextField("会话标题", text: $renameDraft)
+                    .textInputAutocapitalization(.sentences)
+                Button("取消", role: .cancel) { renameTarget = nil }
+                Button("确定") {
+                    store.renameChat(chat.id, to: renameDraft)
+                    renameTarget = nil
+                }
+            } message: { chat in
+                Text(chat.title)
+            }
 
             HStack(spacing: 14) {
                 Button("退出登录", action: store.logout)
@@ -207,7 +222,32 @@ struct SidebarView: View {
             } label: {
                 Label("删除", systemImage: "trash")
             }
+            Button {
+                renameDraft = chat.isUntitled ? "" : chat.title
+                renameTarget = chat
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            .tint(JieboColor.brass)
         }
+        .contextMenu {
+            Button {
+                renameDraft = chat.isUntitled ? "" : chat.title
+                renameTarget = chat
+            } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            Button(role: .destructive) {
+                store.deleteChat(chat.id)
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    /// alert isPresented 绑定（presenting: 需要 Bool 驱动）
+    private var renamePresented: Binding<Bool> {
+        Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
     }
 
     // MARK: 折叠状态持久化（UserDefaults 存 JSON，key=normPath；路径漂移后 key 失效无害，默认展开兜底）

@@ -15,6 +15,8 @@ struct FileBrowserCover: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var filter = ""
+    /// P8：左栏文件树可收起，预览尽量占满（用户决定；默认展开）
+    @State private var treeHidden = false
 
     var body: some View {
         @Bindable var store = store
@@ -24,16 +26,32 @@ struct FileBrowserCover: View {
                     treeColumn
                 } else {
                     HStack(spacing: 0) {
-                        treeColumn
-                            .frame(width: 340)
-                        Divider().overlay(JieboColor.line)
+                        if !treeHidden {
+                            treeColumn
+                                .frame(width: 340)
+                            Divider().overlay(JieboColor.line)
+                        }
                         rightPane
                     }
                 }
             }
+            .animation(.easeInOut(duration: 0.2), value: treeHidden)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if sizeClass != .compact {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            treeHidden.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                                .hitTarget()
+                        }
+                        .accessibilityLabel(treeHidden ? "显示文件列表" : "隐藏文件列表")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
                         .hitTarget()

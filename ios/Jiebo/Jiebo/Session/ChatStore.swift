@@ -502,6 +502,20 @@ final class ChatStore {
         return p
     }
 
+    /// 重命名（对齐 web commitRename）：空标题忽略；已命名的会话不许改回「新对话」（那是未命名标记）；
+    /// patch 会标脏并走 sync_chat 增量推送，多设备随 digest 对账同步
+    func renameChat(_ id: String, to rawTitle: String) {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        patch(id) { chat in
+            if chat.title == title { return chat }
+            if title == "新对话", !chat.isUntitled { return chat }
+            var next = chat
+            next.title = title
+            return next
+        }
+    }
+
     func deleteChat(_ id: String) {
         if let doomed = chats.first(where: { $0.id == id }), doomed.turns.contains(where: \.running) {
             send(.cancel(chatId: id))

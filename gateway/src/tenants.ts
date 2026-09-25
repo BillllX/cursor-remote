@@ -80,9 +80,11 @@ export function loadTenants(): TenantsRegistry {
       process.env.CURSOR_REMOTE_PASSWORD ||
       ""
     ).trim();
+    // 单租户 env 模式的显示名：CURSOR_REMOTE_NAME（侧栏「名字 · 工作区」用），缺省回退 id
+    const displayName = (process.env.CURSOR_REMOTE_NAME || "").trim() || "default";
     const tenants = token
       ? [
-          makeTenant("default", "default", token, {
+          makeTenant("default", displayName, token, {
             workspaceRoot: resolve(process.env.CURSOR_REMOTE_CWD || `${homedir()}/Projects`),
             stateDir: root,
           }),

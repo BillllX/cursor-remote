@@ -109,6 +109,16 @@ struct ThreadView: View {
         .padding(.bottom, 10)
     }
 
+    // MARK: 对话流（P8：滚动跟随改造）
+
+    /// 用户是否停在底部——在底部时流式输出才自动跟随；不在底部不抢滚动，亮「显示最新」按钮
+    @State private var atBottom = true
+    /// 滚动视口高度（overlay 探针量得），与底部锚点的 maxY 比较得出 atBottom
+    @State private var viewportHeight: CGFloat = 0
+    /// atBottom=false 的 0.15s 去抖：流式增长瞬间锚点会先被顶出视口、跟随滚动再收回，
+    /// 不去抖「显示最新」按钮会在每次流式输出时闪一下
+    @State private var bottomDebounce: Task<Void, Never>?
+
     private var thread: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -120,17 +130,90 @@ struct ThreadView: View {
                         TurnView(turn: turn)
                             .id(turn.id)
                     }
-                    Color.clear.frame(height: 1).id("thread-end")
+                    // 底部锚点兼任位置探针
+                    Color.clear
+                        .frame(height: 1)
+                        .id("thread-end")
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onAppear { noteEndPosition(geo.frame(in: .named("threadScroll")).maxY) }
+                                    .onChange(of: geo.frame(in: .named("threadScroll")).maxY) { _, y in
+                                        noteEndPosition(y)
+                                    }
+                            }
+                        )
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
             }
-            .onChange(of: store.active?.turns.last?.assistant) { _, _ in
+            .coordinateSpace(name: "threadScroll")
+            .overlay(
+                // 视口高度探针（转屏/分屏会变）
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { viewportHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in viewportHeight = h }
+                }
+                .allowsHitTesting(false)
+            )
+            .overlay(alignment: .bottom) {
+                if !atBottom {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            proxy.scrollTo("thread-end", anchor: .bottom)
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 11, weight: .bold))
+                            Text("显示最新")
+                                .font(JieboFont.ui(12, weight: .semibold))
+                        }
+                        .foregroundStyle(JieboColor.ink)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(JieboColor.white)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .accessibilityLabel("滚动到最新消息")
+                }
+            }
+            .animation(.easeInOut(duration: 0.18), value: atBottom)
+            .onChange(of: store.active?.turns.last?.assistant) { _, _ in followBottom(proxy) }
+            .onChange(of: store.active?.turns.count) { _, _ in followBottom(proxy) }
+            .onChange(of: store.activeId) { _, _ in
+                // 切会话：直接落底（不动画）并复位跟随状态
+                bottomDebounce?.cancel()
+                atBottom = true
                 proxy.scrollTo("thread-end", anchor: .bottom)
             }
-            .onChange(of: store.active?.turns.count) { _, _ in
-                proxy.scrollTo("thread-end", anchor: .bottom)
-            }
+            .onAppear { proxy.scrollTo("thread-end", anchor: .bottom) }
+        }
+    }
+
+    /// 跟随流式输出：只有用户本来就在底部时才滚；不在底部保持阅读位置（按钮兜底）
+    private func followBottom(_ proxy: ScrollViewProxy) {
+        guard atBottom else { return }
+        proxy.scrollTo("thread-end", anchor: .bottom)
+    }
+
+    private func noteEndPosition(_ endMaxY: CGFloat) {
+        if endMaxY <= viewportHeight + 32 {
+            bottomDebounce?.cancel()
+            atBottom = true
+            return
+        }
+        bottomDebounce?.cancel()
+        bottomDebounce = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            atBottom = false
         }
     }
 
