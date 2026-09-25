@@ -3353,7 +3353,13 @@ const httpServer = createServer((req, res) => {
     return;
   }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media") {
-    handleMedia(req, res, url);
+    try {
+      handleMedia(req, res, url);
+    } catch (err) {
+      console.error("media", err instanceof Error ? err.message : err);
+      if (!res.headersSent) res.writeHead(500).end("media failed");
+      else res.destroy();
+    }
     return;
   }
   if (req.method === "GET" && url.pathname === "/state") {

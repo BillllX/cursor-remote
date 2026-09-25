@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, openSync, readSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import type { MediaTicket, PreviewKind } from "../../shared/protocol.ts";
@@ -121,21 +121,56 @@ function parseRange(header: string | undefined, size: number) {
   return { start, end: Math.min(end, size - 1) };
 }
 
-function filenameOf(path: string) {
-  return basename(path).replace(/[\r\n"]/g, "_") || "file";
+function contentDisposition(path: string) {
+  // Node 拒绝 header 里的非 Latin-1 字符；中文文件名会让 writeHead 抛 ERR_INVALID_CHAR，
+  // 再被 uncaughtException 带去 process.exit，整台网关一起重连。
+  const base = basename(path).replace(/[\r\n"]/g, "_").trim() || "file";
+  const ascii = base.replace(/[^\x20-\x7e]/g, "_") || "file";
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(base)}`;
+}
+
+function imageMimeFrom(buf: Buffer, fallback: string) {
+  if (!fallback.startsWith("image/") || fallback.includes("svg")) return fallback;
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return "image/png";
+  }
+  if (buf.length >= 6 && buf.subarray(0, 3).toString("ascii") === "GIF") return "image/gif";
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buf.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return fallback;
+}
+
+function sniffFileMime(abs: string, fallback: string) {
+  if (!fallback.startsWith("image/") || fallback.includes("svg")) return fallback;
+  const fd = openSync(abs, "r");
+  try {
+    const buf = Buffer.alloc(16);
+    const n = readSync(fd, buf, 0, 16, 0);
+    return imageMimeFrom(buf.subarray(0, n), fallback);
+  } catch {
+    return fallback;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 function headersFor(
   mime: string,
   size: number,
-  filename: string,
+  path: string,
   range: { start: number; end: number } | null,
 ) {
   const headers: Record<string, string | number> = {
     "content-type": mime,
     "accept-ranges": "bytes",
     "cache-control": "private, no-store",
-    "content-disposition": `inline; filename="${filename}"`,
+    "content-disposition": contentDisposition(path),
     "x-content-type-options": "nosniff",
   };
   if (range) {
@@ -161,7 +196,8 @@ export function sendMediaBuffer(
     return;
   }
   const status = range ? 206 : 200;
-  res.writeHead(status, headersFor(mime, buf.length, filenameOf(path), range));
+  const type = imageMimeFrom(buf.subarray(0, 16), mime);
+  res.writeHead(status, headersFor(type, buf.length, path, range));
   if (req.method === "HEAD") {
     res.end();
     return;
@@ -190,7 +226,7 @@ export function sendMediaFile(
     res.writeHead(413).end("too large");
     return;
   }
-  const mime = mimeOf(path, kind);
+  const mime = sniffFileMime(abs, mimeOf(path, kind));
   const range = parseRange(req.headers.range, st.size);
   if (req.headers.range && !range) {
     res.writeHead(416, { "content-range": `bytes */${st.size}` });
@@ -198,7 +234,7 @@ export function sendMediaFile(
     return;
   }
   const status = range ? 206 : 200;
-  res.writeHead(status, headersFor(mime, st.size, filenameOf(path), range));
+  res.writeHead(status, headersFor(mime, st.size, path, range));
   if (req.method === "HEAD") {
     res.end();
     return;
