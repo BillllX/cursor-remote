@@ -115,12 +115,10 @@ struct FileBrowserCover: View {
 
             FileTreeView(
                 paths: store.fileIndex,
-                status: store.gitStatus,
                 truncated: store.treeTruncated,
                 filter: filter,
                 selectedPath: store.previewActivePath,
                 onOpen: openFile,
-                onOpenDiff: openDiff,
                 onPick: pickFile,
                 onCopyPath: copyPath,
                 onQuickLook: { store.openMention($0) } // 二进制/系统导出逃生门
@@ -189,27 +187,6 @@ struct FileBrowserCover: View {
             }
         } else {
             store.openPreview(path)
-        }
-    }
-
-    /// 改动清单点按：开 diff 页签（对齐网页改动清单看 diff 的语义；U 文件无 diff 会自动降级原文）
-    private func openDiff(_ path: String) {
-        // 面板渲染不了的类型走 Quick Look/系统导出。注意 previewKind 纯按扩展名分类，
-        // 未知扩展一律落 .text——本地判不出真二进制（.binary 只能由服务端 fileContent 回填），
-        // 所以 zip 等实际仍会发 read_file(diff:)，由网关回 "Binary files differ" 或错误页：与 web 一致
-        guard previewKind(of: path).panelRenderable else {
-            store.openMention(path)
-            return
-        }
-        if sizeClass == .compact {
-            let chatId = store.activeId
-            dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard !store.fileBrowserOpen, store.activeId == chatId else { return }
-                store.openPreviewTab(path: path, diff: true)
-            }
-        } else {
-            store.openPreviewTab(path: path, diff: true)
         }
     }
 

@@ -246,7 +246,7 @@ enum ServerMessage {
     case history(chatId: String, turns: [JSONValue])
     case chatTitle(chatId: String, title: String)
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
-    case files(query: String, paths: [String], status: [String: String], mention: Bool, truncated: Bool, chatId: String?)
+    case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?)
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
     /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
     case fileContent(
@@ -285,7 +285,7 @@ enum ServerMessage {
             return chatId
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
-        case .files(_, _, _, _, _, let chatId):
+        case .files(_, _, _, _, let chatId):
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _):
             return chatId
@@ -399,12 +399,10 @@ enum ServerMessage {
         case "chat_title":
             return .chatTitle(chatId: chatId, title: object["title"]?.string ?? "")
         case "files":
-            // status：git 状态（M/A/D/U/R），key 为相对 cwd 的路径；旧网关不回 → 空表降级
-            let status = object["status"]?.object?.compactMapValues(\.string) ?? [:]
+            // 网关还会回 git status（M/A/D/U/R），iOS 自 P7 后决定不展示改动，忽略该字段
             return .files(
                 query: object["query"]?.string ?? "",
                 paths: object["paths"]?.array?.compactMap(\.string) ?? [],
-                status: status,
                 mention: object["mention"]?.bool ?? false,
                 truncated: object["truncated"]?.bool ?? false,
                 chatId: object["chatId"]?.string

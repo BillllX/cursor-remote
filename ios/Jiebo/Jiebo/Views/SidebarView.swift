@@ -227,9 +227,8 @@ struct SidebarView: View {
 
     // MARK: 杂项
 
-    /// 文件入口 meta（对齐网页 side-files-meta：改动数 > 文件数 > 「浏览」）
+    /// 文件入口 meta：文件数 > 「浏览」（P7 曾显示「N 处改动」，后按产品决定撤掉 git 状态展示）
     private var filesMeta: String {
-        if !store.gitStatus.isEmpty { return "\(store.gitStatus.count) 处改动" }
         if !store.fileIndex.isEmpty { return "\(store.fileIndex.count)" }
         return "浏览"
     }

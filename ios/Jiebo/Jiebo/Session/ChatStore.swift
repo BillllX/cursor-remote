@@ -38,8 +38,6 @@ final class ChatStore {
     /// 当前会话工作区的文件索引（list_files query:"" 的全量结果）
     var fileIndex: [String] = []
     var treeTruncated = false
-    /// git 状态（M/A/D/U/R），key 为相对 cwd 的路径；与 fileIndex 同批更新（P7 文件树徽章）
-    var gitStatus: [String: String] = [:]
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
     /// Quick Look 预览中的文件（sheet 驱动）
@@ -341,9 +339,8 @@ final class ChatStore {
         // 与下方清空判断同用 sameCwd（字符串级归一）——/foo 与 /foo/ 不该白打一遍 read_file
         if !sameCwd(active?.cwd, oldCwd) {
             reloadPreviewTabs()
-            // P7：跨工作区切换时先清空文件索引/git 徽章——新索引到达前不串旧工作区的徽章与「N 处改动」
+            // P7：跨工作区切换时先清空文件索引——新索引到达前不串旧工作区的内容
             fileIndex = []
-            gitStatus = [:]
             treeTruncated = false
         }
     }
@@ -1376,7 +1373,7 @@ final class ChatStore {
             if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let paths, let status, let mention, let truncated, let filesChatId):
+        case .files(let query, let paths, let mention, let truncated, let filesChatId):
             // 只接收当前会话的（对齐网页端 chatId 过滤）
             if let filesChatId, !filesChatId.isEmpty, filesChatId != activeId { break }
             if mention {
@@ -1393,7 +1390,6 @@ final class ChatStore {
             } else {
                 fileIndex = paths
                 treeTruncated = truncated
-                gitStatus = status
             }
         case .undone(_, let paths, let error):
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
@@ -1619,7 +1615,6 @@ final class ChatStore {
         uploads = []
         fileIndex = []
         treeTruncated = false
-        gitStatus = [:]
         fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
         mentionQuery = nil
         mentionTask?.cancel()

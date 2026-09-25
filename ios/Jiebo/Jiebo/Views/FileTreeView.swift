@@ -4,7 +4,7 @@ import SwiftUI
 // 逐行移植 web FileTree.tsx 的核心算法：
 // - toTree：扁平相对路径 → 树（8000 条硬顶，对齐 gateway slice(0, 8000)）
 // - flatten：手动展开行——不用 OutlineGroup（控不了「depth<1 默认开 / 搜索时全展开」，大列表还整树刷新）
-// - git 徽章：status key 与树路径同为相对 cwd 路径，直接查表（对齐 web dirtyLetter/dirDirty）
+// （P7 曾移植 git 徽章/改动清单，后按产品决定撤掉——只展示文件本身）
 
 struct FileNode: Identifiable, Hashable {
     let name: String
@@ -63,46 +63,6 @@ enum FileTreeBuilder {
         walk(tree, depth: 0)
         return rows
     }
-
-    /// 目录脏标记：任一后代在 gitStatus 里即脏。
-    /// 实现是「沿 status key 标祖先」（O(改动数 × 深度)），与 web dirDirty（沿树节点递归）有个
-    /// 有意的分叉：D/R 的旧路径不在树里，web 不会标其父目录，这里会——收起目录不吞删除改动，
-    /// 与改动清单的兜底逻辑自洽（评审确认按增强处理）。
-    static func dirtyDirs(status: [String: String]) -> Set<String> {
-        var out = Set<String>()
-        for path in status.keys {
-            var p = path
-            while let i = p.lastIndex(of: "/") {
-                p = String(p[..<i])
-                if !out.insert(p).inserted { break }
-            }
-        }
-        return out
-    }
-}
-
-// MARK: git 徽章
-
-/// 对齐 web GIT_LABEL（M/A/D/U/R）
-func gitLabel(_ letter: String) -> String {
-    switch letter {
-    case "M": return "已修改"
-    case "A": return "新文件"
-    case "D": return "已删除"
-    case "U": return "未跟踪"
-    case "R": return "已重命名"
-    default: return letter
-    }
-}
-
-/// 徽章配色：D 红、A/U 绿、M/R 铜（评审共识；色觉友好靠字母不只靠颜色）
-func gitColor(_ letter: String) -> Color {
-    switch letter {
-    case "D": return JieboColor.danger
-    case "A", "U": return JieboColor.ok
-    case "M", "R": return JieboColor.brass
-    default: return JieboColor.ink2
-    }
 }
 
 // MARK: 文件 glyph（SF Symbols 版，对齐 web glyphKind 的类型集）
@@ -132,18 +92,15 @@ func fileGlyph(_ path: String, isDir: Bool, open: Bool) -> String {
 
 // MARK: - 树视图
 
-/// Finder 式文件树：改动清单 + 展开行 + git 徽章 + 长按菜单。
+/// Finder 式文件树：展开行 + 长按菜单。
 /// 单击文件 = 预览（onOpen）；@引用 在长按菜单（浏览导向入口；引用导向走 Composer 的扁平 sheet——入口分流）。
 struct FileTreeView: View {
     let paths: [String]
-    let status: [String: String]
     let truncated: Bool
     let filter: String
     /// 当前右栏预览中的路径（高亮选中行）
     let selectedPath: String?
     let onOpen: (String) -> Void
-    /// 改动清单点按：开 diff 页签（D 文件看删除 diff；U 文件无 diff 时网关回「没有未提交的改动」自动降级原文）
-    let onOpenDiff: (String) -> Void
     let onPick: (String) -> Void
     let onCopyPath: (String) -> Void
     let onQuickLook: (String) -> Void
@@ -153,12 +110,10 @@ struct FileTreeView: View {
     @State private var tree: [FileNode] = []
 
     var body: some View {
-        // rows/dirty 一次 body 只求值一遍（flatten 是 O(全树)，选中行高亮等高频重建不该翻倍）
+        // rows 一次 body 只求值一遍（flatten 是 O(全树)，选中行高亮等高频重建不该翻倍）
         let rows = self.rows
-        let dirty = FileTreeBuilder.dirtyDirs(status: status)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                changesList
                 if rows.isEmpty {
                     Text(filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件")
                         .font(JieboFont.ui(13))
@@ -167,7 +122,7 @@ struct FileTreeView: View {
                         .padding(.top, 40)
                 } else {
                     ForEach(rows) { row in
-                        rowView(row, dirtyDirs: dirty)
+                        rowView(row)
                     }
                 }
                 if (truncated || paths.count > 8000) && filter.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -203,52 +158,10 @@ struct FileTreeView: View {
         tree = FileTreeBuilder.toTree(filtered)
     }
 
-    // MARK: 改动清单（对齐 web files-browser 的「改动 · N」：D 文件不在树里，这里兜底可见；
-    // 搜索时不隐藏——D 文件搜不到，清单是唯一入口，按 query 过滤即可）
-
-    @ViewBuilder
-    private var changesList: some View {
-        let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        let entries = status.filter { q.isEmpty || $0.key.lowercased().contains(q) }
-            .sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending } // 对齐 web localeCompare（大写/中文路径顺序一致）
-        if !entries.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("改动 · \(entries.count)")
-                    .font(JieboFont.ui(11, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-                    .padding(.bottom, 4)
-                ForEach(entries, id: \.key) { path, letter in
-                    Button {
-                        onOpenDiff(path)
-                    } label: {
-                        HStack(spacing: 8) {
-                            gitMark(letter)
-                            Text(path)
-                                .font(JieboFont.mono(12))
-                                .foregroundStyle(JieboColor.ink2)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 5)
-                        .frame(minHeight: 32)
-                        .background(selectedPath == path ? JieboColor.userBubble : Color.clear)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                Divider().overlay(JieboColor.line).padding(.vertical, 6)
-            }
-        }
-    }
-
     // MARK: 行
 
     @ViewBuilder
-    private func rowView(_ row: FileTreeBuilder.Row, dirtyDirs: Set<String>) -> some View {
+    private func rowView(_ row: FileTreeBuilder.Row) -> some View {
         let node = row.node
         let isOpen = node.isDir && (expandAll || (openDirs[node.path] ?? (row.depth < 1)))
         Button {
@@ -267,12 +180,6 @@ struct FileTreeView: View {
                     .font(JieboFont.ui(13, weight: node.isDir ? .medium : .regular))
                     .foregroundStyle(node.isDir ? JieboColor.ink : JieboColor.ink2)
                     .lineLimit(1)
-                if let letter = status[node.path] {
-                    gitMark(letter)
-                } else if node.isDir, dirtyDirs.contains(node.path) {
-                    // 目录脏点：收起状态下改动不被吞（对齐 web dirDirty）
-                    Circle().fill(JieboColor.brass).frame(width: 5, height: 5)
-                }
                 Spacer(minLength: 0)
                 if node.isDir {
                     Image(systemName: "chevron.right")
@@ -298,12 +205,5 @@ struct FileTreeView: View {
                 Button { onQuickLook(node.path) } label: { Label("用系统打开", systemImage: "arrow.up.forward.app") }
             }
         }
-    }
-
-    private func gitMark(_ letter: String) -> some View {
-        Text(letter)
-            .font(JieboFont.mono(10))
-            .foregroundStyle(gitColor(letter))
-            .accessibilityLabel(gitLabel(letter))
     }
 }
