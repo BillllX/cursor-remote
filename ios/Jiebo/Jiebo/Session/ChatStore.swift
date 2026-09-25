@@ -90,6 +90,11 @@ final class ChatStore {
     var loadingChatIds: Set<String> = []
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
     private var pendingHistory: [String: [Turn]] = [:]
+    /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
+    private var loadedPageTurnCounts: [String: Int] = [:]
+    /// P8 slim：turns 未加载完就发了消息的会话——加载完成后必须补一次全量 sync，
+    /// 否则加载期间的 sync（无 turns 键）会把 dirty 清掉，新 turn 永不落盘（Grok 评审 M2）
+    private var localTurnsPendingSync = Set<String>()
     private var syncTask: Task<Void, Never>?
     private var verifyTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
@@ -198,6 +203,11 @@ final class ChatStore {
             next.unread = false
             next.turns.append(turn)
             return next
+        }
+        // P8 slim：turns 未加载完时的本地新 turn——加载完成前若 sync 被触发（无 turns 键），
+        // dirty 会被清掉导致此 turn 永不落盘；登记后由分页完成分支补全量回推（Grok 评审 M2）
+        if chats.first(where: { $0.id == chatId })?.turnsComplete == false {
+            localTurnsPendingSync.insert(chatId)
         }
         let mentions = ChatStore.extractMentions(text)
         send(.prompt(
@@ -540,6 +550,8 @@ final class ChatStore {
         deletedIds.insert(id)
         imagesByChat[id] = nil
         loadingChatIds.remove(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
+        loadedPageTurnCounts[id] = nil
+        localTurnsPendingSync.remove(id)
         pendingHistory[id] = nil
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
@@ -1028,6 +1040,22 @@ final class ChatStore {
                 self.dirtyChatIds.formUnion(self.inflightChatIds)
                 self.inflightChatIds = []
             }
+            // P8 slim：在途分页随断线丢失，loadingChatIds 不清会永久卡死加载（Grok 评审 M1）。
+            // 重启分页必须剥掉已 prepend 的页前缀（保留本地新发后缀）：留着半截从末页重拉，
+            // 服务端新增尾部会被去重逻辑当 fresh 插到数组头，顺序错乱
+            if !self.loadingChatIds.isEmpty {
+                for id in self.loadingChatIds {
+                    guard let index = self.chats.firstIndex(where: { $0.id == id }) else { continue }
+                    let pageCount = self.loadedPageTurnCounts[id] ?? 0
+                    if pageCount > 0, pageCount <= self.chats[index].turns.count {
+                        self.chats[index].turns = Array(self.chats[index].turns.dropFirst(pageCount))
+                    } else if pageCount > self.chats[index].turns.count {
+                        self.chats[index].turns = []
+                    }
+                }
+                self.loadingChatIds = []
+                self.loadedPageTurnCounts = [:]
+            }
             if !self.unlocked {
                 self.verifying = false
             } else {
@@ -1359,11 +1387,20 @@ final class ChatStore {
             let existing = Set(chats[index].turns.map(\.id))
             let fresh = page.filter { !existing.contains($0.id) }
             chats[index].turns = fresh + chats[index].turns
+            loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
             if hasMore {
                 send(.loadChat(chatId: chatId, from: from)) // 继续向前翻 turns[..<from]
             } else {
                 chats[index].turnsComplete = true
                 loadingChatIds.remove(chatId)
+                loadedPageTurnCounts[chatId] = nil
+                chats[index].serverPreview = nil // 正文齐了，侧栏预览回到本地计算（GLM 评审 m4）
+                // 加载期间发过消息：当时的 sync 无 turns 键、dirty 已被清——现在 turns 齐了，
+                // 必须补一次全量回推，否则本地新 turn 永不落盘（Grok 评审 M2）
+                if localTurnsPendingSync.remove(chatId) != nil {
+                    dirtyChatIds.insert(chatId)
+                    scheduleSync()
+                }
                 if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
                     applyHistory(chatId: chatId, incoming: pending)
                 }
@@ -1609,6 +1646,9 @@ final class ChatStore {
             if let index = next.turns.lastIndex(where: \.running) {
                 next.turns[index] = update(next.turns[index])
             } else if let index = next.turns.indices.last,
+                      // slim 壳分页期间不把 delta 挂到已加载的旧尾 turn——正常路径 delta 只回发起端
+                      // （本端 send 前已 append running turn，走上面 if 分支），这是别端运行场景的防御（GLM 评审 M2）
+                      next.turnsComplete,
                       !next.turns[index].user.isEmpty,
                       next.turns[index].status == nil || next.turns[index].queued || runningChatIds.contains(id) || queuedChatIds.contains(id) {
                 var turn = next.turns[index]
@@ -1761,6 +1801,7 @@ final class ChatStore {
             // rev 不新（如断线重连后服务端还没收到我们的 sync_chat）：
             // 内容不应用，但断线时倒回 dirty 的在途会话必须有人重推，否则会永久搁置
             if !dirtyChatIds.isEmpty { scheduleSync() }
+            ensureTurnsLoaded(activeId) // 断线丢失的在途分页在此重启（onClose 已清 loadingChatIds）
             return
         }
         deleted.forEach { deletedIds.insert($0) }
@@ -1783,6 +1824,7 @@ final class ChatStore {
                 }
             }
             if !dirtyChatIds.isEmpty { scheduleSync() }
+            ensureTurnsLoaded(activeId)
             return
         }
         // 合并前记住服务端原始行（按 id），用于合并后的差异标脏
@@ -1821,6 +1863,16 @@ final class ChatStore {
                     dirtyChatIds.insert(chat.id)
                 }
             }
+        }
+        // P8 slim 对账：slim 行看不到 turns——断线期间别端正文变更（chatRev 前进）本地感知不到，
+        // 已加载会话的 turns 已陈旧：作废重载（脏会话本地优先跳过；壳本来就未完成无需处理）。
+        // 网关只在内容真变时才前进 chatRevs，纯元数据/未读类本地脏不会误触发。
+        for chat in chats where chat.id != "boot" && chat.turnsComplete && !dirtyChatIds.contains(chat.id) {
+            guard let row = rowsById[chat.id], row.object?["turns"] == nil else { continue } // 只看 slim 行
+            guard let oldRev = oldRevs[chat.id], let newRev = chatRevs[chat.id], newRev > oldRev else { continue }
+            guard let index = chats.firstIndex(where: { $0.id == chat.id }) else { continue }
+            chats[index].turns = []
+            chats[index].turnsComplete = false
         }
         if !dirtyChatIds.isEmpty { scheduleSync() }
         if chats.contains(where: { $0.id == activeId }) == false, let first = chats.first {

@@ -3765,9 +3765,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
               );
               next = {
                 ...row,
-                turns: row.turns.map((t) => {
-                  if (!t || typeof t !== "object" || (t as { clipped?: unknown }).clipped !== true) return t;
-                  return fullById.get((t as { id?: unknown }).id) ?? t;
+                turns: row.turns.flatMap((t) => {
+                  if (!t || typeof t !== "object" || (t as { clipped?: unknown }).clipped !== true) return [t];
+                  // 残片按 id 回退服务端完整版；id 对不上（服务端没有）则丢弃——
+                  // 保留残片会把截断占位内容永久落盘（GLM 评审 M1）
+                  const full = fullById.get((t as { id?: unknown }).id);
+                  return full ? [full] : [];
                 }),
               };
             }
@@ -3785,16 +3788,19 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           return;
         }
         // 先写 rev 再落盘（P4 审核：崩溃窗口不能出现「新内容旧 rev」）；幂等重推也落盘，
-        // 否则 rev 只在内存里，重启后对账分叉
-        tenant.disk.chatRevs[id] = clientRev;
+        // 否则 rev 只在内存里，重启后对账分叉。
+        // chatRevs[id] 只在内容真变时前进（P8 审核：无变化 sync 也 bump 的话，其他端重连时
+        // 会把纯元数据/未读类本地脏误判成正文变更，整会话作废重载）
         tenant.disk.rev = clientRev;
         if (changed) {
+          tenant.disk.chatRevs[id] = clientRev;
           tenant.disk.chats = prev
             ? tenant.disk.chats.map((item) => (chatIdOf(item) === id ? next : item))
             : [...tenant.disk.chats, next];
         }
         persistConn(conn);
-        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
+        // ack 回报服务端真实 chatRev（无变化时不前进），客户端对账口径与 digest 一致
+        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: tenant.disk.chatRevs[id] ?? clientRev } });
         if (changed) broadcastDigest(tenant, ws); // 多设备实时对账
         return;
       }

@@ -85,7 +85,7 @@ async function main() {
   // 0. 播种：全量客户端 sync_chat 写入 96 条 turns
   const seed = client("seed", ["sync_chat", "stored_digest"]);
   await seed.hello();
-  await seed.syncChat({ id: chatId, title: "分页冒烟", turns: makeTurns(), draft: "", mode: "agent", policy: "baseline" }, "seed");
+  const ackSeed = await seed.syncChat({ id: chatId, title: "分页冒烟", turns: makeTurns(), draft: "", mode: "agent", policy: "baseline" }, "seed");
   step(true, "播种 96 条 turns");
 
   // 1. slim 客户端：stored_state 非空会话无 turns 键、有 preview；空会话保留 turns:[]
@@ -101,9 +101,16 @@ async function main() {
   const row = rows?.find((c) => c && c.id === chatId);
   const emptyRow = rows?.find((c) => c && c.id === emptyId);
   step(!!row && !("turns" in row), "slim stored_state：非空会话剥掉 turns 键");
-  step(!!row && typeof row.preview === "string" && row.preview.length > 0 && row.preview.length <= 120,
-    "slim stored_state：补 preview 摘要（≤120 字）", `len=${row?.preview?.length}`);
+  step(!!row && typeof row.preview === "string" && row.preview.length > 0 && row.preview.length <= 100,
+    "slim stored_state：补 preview 摘要（≤100 字）", `len=${row?.preview?.length}`);
   step(!!emptyRow && Array.isArray(emptyRow.turns) && emptyRow.turns.length === 0, "slim stored_state：真空会话保留 turns:[]");
+
+  // 1b. slim 客户端 load_chats 仍回全量（digest 对账是跨设备 turns 更新唯一通道；Grok 评审 MINOR1 注释固化）
+  //（用 slim3：slim2 的 1MB 上限装不下含巨 turn 的全量，会回落 deferred）
+  slim3.send({ type: "load_chats", ids: [chatId] });
+  const sc = await slim3.waitFor((m) => m.type === "stored_chat" && m.chat?.id === chatId, "slim load_chats");
+  step(Array.isArray(sc.chat?.turns) && sc.chat.turns.length === TURNS + 1,
+    "slim 客户端 load_chats 回全量 turns", `n=${sc.chat?.turns?.length}`);
 
   // 2. load_chat 分页：末页 → 向前翻到底（共 96 条：40 + 40 + 16；巨 turn 在末页）
   slim2.send({ type: "load_chat", chatId });
@@ -121,15 +128,36 @@ async function main() {
   const p3 = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from < p2.from, "page3");
   step(p3.from === 0 && p3.hasMore === false, "load_chat 到底 hasMore=false", `from=${p3.from} n=${p3.turns.length}`);
 
+  // 2b. from 边界（Grok 评审 MINOR4 盲区）：0/负数 → 空页 hasMore=false；超 total → 夹到末页
+  slim2.send({ type: "load_chat", chatId, from: 0 });
+  const b0 = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from === 0, "from=0");
+  step(b0.turns.length === 0 && b0.hasMore === false, "from=0 → 空页终止", `n=${b0.turns.length} hasMore=${b0.hasMore}`);
+  slim2.send({ type: "load_chat", chatId, from: -5 });
+  const bn = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from === 0, "from=-5");
+  step(bn.turns.length === 0 && bn.hasMore === false, "from 负数 → 夹到 0 空页", `n=${bn.turns.length}`);
+  slim2.send({ type: "load_chat", chatId, from: 99999 });
+  const bb = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from === TURNS + 1 - 40, "from=99999");
+  step(bb.turns.length === 40 && bb.hasMore === true, "from 超 total → 夹到末页", `from=${bb.from} n=${bb.turns.length}`);
+
   // 3. sync_chat 不写 turns 键 → 服务端 turns 保留（元数据改名）
-  await slim2.syncChat({ id: chatId, title: "分页冒烟·改名", draft: "", mode: "agent", policy: "baseline" }, "rename");
+  const ackRename = await slim2.syncChat({ id: chatId, title: "分页冒烟·改名", draft: "", mode: "agent", policy: "baseline" }, "rename");
   slim2.send({ type: "load_chat", chatId });
   const after = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId, "load after rename");
   step(after.total === TURNS + 1, "sync_chat 缺 turns 键：服务端正文保留", `total=${after.total}`);
+  step(typeof ackRename.chatRevs?.[chatId] === "number" && ackRename.chatRevs[chatId] > (ackSeed.chatRevs?.[chatId] ?? 0),
+    "真变更 sync 前进 chatRevs", `seed=${ackSeed.chatRevs?.[chatId]} rename=${ackRename.chatRevs?.[chatId]}`);
 
-  // 4. sync_chat 带 clipped turn（混在全量 turns 里，对齐 iOS 真实回推）→ 按 id 回退服务端完整版
-  const withClipped = makeTurns().map((t) => (t.id === "big" ? { id: "big", clipped: true, user: "截断残片", assistant: "", thinking: "", tools: [] } : t));
-  await slim2.syncChat({ id: chatId, title: "分页冒烟·改名", turns: withClipped, draft: "", mode: "agent", policy: "baseline" }, "clipped");
+  // 4. sync_chat 带 clipped turn（混在全量 turns 里，对齐 iOS 真实回推）→ 按 id 回退服务端完整版；
+  //    服务端没有的 clipped id（幽灵残片）直接丢弃，不把截断占位落盘（GLM 评审 M1）。
+  //    回退/丢弃后内容与磁盘一致 → changed=false → chatRevs 不前进（无变化 sync 不 bump，
+  //    否则其他端重连会把纯元数据脏误判成正文变更而整会话作废重载）
+  const withClipped = [
+    ...makeTurns().map((t) => (t.id === "big" ? { id: "big", clipped: true, user: "截断残片", assistant: "", thinking: "", tools: [] } : t)),
+    { id: "ghost", clipped: true, user: "幽灵残片", assistant: "", thinking: "", tools: [] },
+  ];
+  const ackClipped = await slim2.syncChat({ id: chatId, title: "分页冒烟·改名", turns: withClipped, draft: "", mode: "agent", policy: "baseline" }, "clipped");
+  step(ackClipped.chatRevs?.[chatId] === ackRename.chatRevs?.[chatId],
+    "无变化 sync 不前进 chatRevs", `rename=${ackRename.chatRevs?.[chatId]} clipped=${ackClipped.chatRevs?.[chatId]}`);
 
   // 5. 非 slim 客户端全量校验：turns 在、big 是完整原文、标题是改名后
   //（maxMessageBytes 给 64MB：全量含 900KB 巨 turn，1MB 会触发 stored_state_deferred 回落）
@@ -151,6 +179,7 @@ async function main() {
   const frow = (fs.chats || []).find((c) => c && c.id === chatId);
   const fbig = frow?.turns?.find((t) => t && t.id === "big");
   step(!!frow && Array.isArray(frow.turns) && frow.turns.length === TURNS + 1, "非 slim 客户端仍拿全量 turns", `n=${frow?.turns?.length}`);
+  step(!frow?.turns?.some((t) => t && t.id === "ghost"), "幽灵 clipped turn 被丢弃，未落盘（GLM M1）");
   step(frow?.title === "分页冒烟·改名", "元数据改名已落盘");
   step(!!fbig && fbig.user === BIG, "clipped turn 回退保护：服务端仍是完整原文", fbig ? `len=${String(fbig.user).length}` : "缺 big");
 

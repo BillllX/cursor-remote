@@ -12,7 +12,8 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 // caps：客户端能力集。已知值：
 //   "sync_chat"     —— 支持单会话增量上传（sync_chat）与 sync_ack 回执
 //   "stored_digest" —— 分叉时收 stored_digest 目录 + load_chats 按需拉取，而不是全量 stored_state
-//   "slim_state"    —— stored_state/stored_chat 只给元数据（剥 turns，补 preview），内容走 load_chat 分页；
+//   "slim_state"    —— stored_state 只给元数据（剥 turns，补 preview），内容走 load_chat 分页；
+//                      stored_chat（load_chats 应答）仍回全量——digest 对账是跨设备 turns 更新唯一通道
 //                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
 
@@ -217,7 +218,7 @@ export type ServerMessage =
   | { type: "sync_ack"; rev?: number; chatRevs?: Record<string, number> }
   // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
-  // load_chats 的应答：单个会话全量（slim_state 客户端为剥 turns 的元数据）
+  // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）
   | { type: "stored_chat"; chat: unknown; rev?: number }
   // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记
   | { type: "chat_turns"; chatId: string; turns: unknown[]; from: number; hasMore: boolean; total: number }

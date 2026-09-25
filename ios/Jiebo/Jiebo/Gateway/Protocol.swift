@@ -247,7 +247,7 @@ enum ServerMessage {
     case syncAck(rev: Int?, chatRevs: [String: Int])
     /// P4c：分叉时的目录推送（比对 chatRevs 后用 loadChats 拉差异会话）
     case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
-    /// P4c：load_chats 的应答（单个会话全量；slim 客户端为剥 turns 的元数据）
+    /// P4c：load_chats 的应答（单个会话全量——slim 客户端也是全量：digest 对账是跨设备 turns 更新唯一通道）
     case storedChat(chat: JSONValue, rev: Int?)
     /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有）
     case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool)
