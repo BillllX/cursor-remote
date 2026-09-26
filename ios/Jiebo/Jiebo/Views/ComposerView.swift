@@ -6,6 +6,7 @@ struct ComposerView: View {
     @Environment(ChatStore.self) private var store
     @FocusState private var focused: Bool
     @State private var photoItems: [PhotosPickerItem] = []
+    @State private var photoPickerOpen = false
     @State private var filePickerOpen = false
     @State private var fileBrowserOpen = false
     @Namespace private var modeThumb
@@ -76,8 +77,9 @@ struct ComposerView: View {
             photoItems = []
             Task {
                 var prepared: [PendingImage] = []
+                var failed = 0
                 for item in items {
-                    guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+                    guard let data = try? await item.loadTransferable(type: Data.self) else { failed += 1; continue }
                     let mime = item.supportedContentTypes.first?.preferredMIMEType
                     // 压缩 + base64 预计算放后台线程（单张 100-300ms，避免卡主 actor）
                     let image = await Task.detached(priority: .userInitiated) {
@@ -85,11 +87,15 @@ struct ComposerView: View {
                     }.value
                     if let image {
                         prepared.append(image)
+                    } else {
+                        failed += 1
                     }
                 }
                 store.addPendingImages(prepared)
+                if failed > 0 { store.flash("\(failed) 张图片读取失败，换一张试试") }
             }
         }
+        .photosPicker(isPresented: $photoPickerOpen, selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images)
         .fileImporter(isPresented: $filePickerOpen, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
                 store.attachFiles(urls)
@@ -140,7 +146,11 @@ struct ComposerView: View {
 
     private var attachMenu: some View {
         Menu {
-            PhotosPicker(selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images) {
+            // PhotosPicker 不能直接嵌在 Menu 内容里：iPadOS 上菜单关闭后选择器视图随之销毁，
+            // 表现为点了「照片」没反应或选完不回传——改用 isPresented 修饰符挂在稳定视图上
+            Button {
+                photoPickerOpen = true
+            } label: {
                 Label("照片", systemImage: "photo")
             }
             Button {
