@@ -83,7 +83,18 @@ export type ClientMessage =
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
   // 管理员查询全部租户的使用统计（P9）：仅 tenants.json 里 admin: true 的租户可用
   | { type: "admin_stats" }
-  | { type: "ping" };
+  | { type: "ping" }
+  // 产品 Loop（见 docs/IDE.md）：挂在某个会话上的重复任务。L1 只定消息形状，调度在 L2
+  | {
+      type: "loop_start";
+      chatId: string;
+      goal: string;
+      intervalSec: number;
+      maxTicks?: number;
+      model?: string;
+      mode?: AgentMode;
+    }
+  | { type: "loop_stop"; chatId: string };
 
 export type PreviewKind =
   | "text"
@@ -124,6 +135,28 @@ export type HistoryTurn = {
   }>;
 };
 
+export type LoopStatus = "idle" | "armed" | "running" | "stopped";
+
+export type LoopTickStatus = "ran" | "skipped" | "stopped" | "error";
+
+export type LoopTick = {
+  chatId: string;
+  tick: number;
+  status: LoopTickStatus;
+  summary: string;
+};
+
+export type LoopState = {
+  chatId: string;
+  status: LoopStatus;
+  goal: string;
+  intervalSec: number;
+  tick: number;
+  maxTicks?: number;
+  lastSummary?: string;
+  nextAt?: number;
+};
+
 export type ServerMessage =
   | {
       type: "ready";
@@ -140,6 +173,8 @@ export type ServerMessage =
       /** P9：当前租户是否管理员（tenants.json 里 admin: true）——客户端据此显示统计入口 */
       admin?: boolean;
       policy?: PolicyId;
+      /** 未停止的产品 Loop。L2 起随 ready 下发；L1 字段先占位 */
+      loops?: LoopState[];
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
   | { type: "workspace_created"; path: string; name: string }
@@ -255,6 +290,8 @@ export type ServerMessage =
   | { type: "chat_title"; chatId: string; title: string }
   // admin_stats 的应答（P9）：全租户使用统计
   | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[] }
+  | ({ type: "loop_state" } & LoopState)
+  | ({ type: "loop_tick" } & LoopTick)
   | { type: "pong" };
 
 /** P9：单租户使用统计。estTokens 按字符估算（≈4 字符/token，英文偏向；中文 1 字符≈1-2 token，

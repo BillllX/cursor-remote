@@ -143,8 +143,11 @@ enum ClientMessage {
     case setPolicy(policy: String, chatId: String?)
     case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
     case listFiles(query: String?, chatId: String?, mention: Bool?)
+    case searchText(query: String, chatId: String?)
+    case revertFile(chatId: String, path: String)
     /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content
     case readFile(path: String, chatId: String?, diff: Bool)
+    case writeFile(path: String, content: String, chatId: String?)
     case undo(chatId: String)
     case ping
     /// P4b：单会话增量上传（只带变化的那个会话）
@@ -156,6 +159,9 @@ enum ClientMessage {
     case loadChat(chatId: String, from: Int?, nonce: Int?)
     /// P9：管理员查询全租户使用统计（非管理员会被网关拒绝）
     case adminStats
+    /// 产品 Loop（docs/IDE.md L1）：开始 / 停止。调度在 L2，这里只发消息
+    case loopStart(chatId: String, goal: String, intervalSec: Int, maxTicks: Int?, model: String?, mode: AgentMode?)
+    case loopStop(chatId: String)
 
     func json() -> JSONValue {
         switch self {
@@ -243,10 +249,28 @@ enum ClientMessage {
             if let chatId { object["chatId"] = .string(chatId) }
             if let mention { object["mention"] = .bool(mention) }
             return .object(object)
+        case .searchText(let query, let chatId):
+            var object: [String: JSONValue] = ["type": .string("search_text"), "query": .string(query)]
+            if let chatId { object["chatId"] = .string(chatId) }
+            return .object(object)
+        case .revertFile(let chatId, let path):
+            return .object([
+                "type": .string("revert_file"),
+                "chatId": .string(chatId),
+                "path": .string(path),
+            ])
         case .readFile(let path, let chatId, let diff):
             var object: [String: JSONValue] = ["type": .string("read_file"), "path": .string(path)]
             if let chatId { object["chatId"] = .string(chatId) }
             if diff { object["diff"] = .bool(true) }
+            return .object(object)
+        case .writeFile(let path, let content, let chatId):
+            var object: [String: JSONValue] = [
+                "type": .string("write_file"),
+                "path": .string(path),
+                "content": .string(content),
+            ]
+            if let chatId { object["chatId"] = .string(chatId) }
             return .object(object)
         case .undo(let chatId):
             return .object(["type": .string("undo"), "chatId": .string(chatId)])
@@ -263,7 +287,71 @@ enum ClientMessage {
             return .object(obj)
         case .adminStats:
             return .object(["type": .string("admin_stats")])
+        case .loopStart(let chatId, let goal, let intervalSec, let maxTicks, let model, let mode):
+            var object: [String: JSONValue] = [
+                "type": .string("loop_start"),
+                "chatId": .string(chatId),
+                "goal": .string(goal),
+                "intervalSec": .number(Double(intervalSec)),
+            ]
+            if let maxTicks { object["maxTicks"] = .number(Double(maxTicks)) }
+            if let model { object["model"] = .string(model) }
+            if let mode { object["mode"] = .string(mode.rawValue) }
+            return .object(object)
+        case .loopStop(let chatId):
+            return .object(["type": .string("loop_stop"), "chatId": .string(chatId)])
         }
+    }
+}
+
+struct LoopSnapshot: Sendable, Hashable, Identifiable {
+    var chatId: String
+    var status: String
+    var goal: String
+    var intervalSec: Int
+    var tick: Int
+    var maxTicks: Int?
+    var lastSummary: String?
+    var nextAt: Double?
+    var id: String { chatId }
+
+    static func from(_ row: [String: JSONValue]?) -> LoopSnapshot? {
+        guard let row, let chatId = row["chatId"]?.string, !chatId.isEmpty else { return nil }
+        return LoopSnapshot(
+            chatId: chatId,
+            status: row["status"]?.string ?? "",
+            goal: row["goal"]?.string ?? "",
+            intervalSec: row["intervalSec"]?.int ?? 0,
+            tick: row["tick"]?.int ?? 0,
+            maxTicks: row["maxTicks"]?.int,
+            lastSummary: row["lastSummary"]?.string,
+            nextAt: row["nextAt"]?.number
+        )
+    }
+}
+
+func gitLetters(_ value: JSONValue?) -> [String: String] {
+    guard let raw = value?.object else { return [:] }
+    var status: [String: String] = [:]
+    for (path, letter) in raw {
+        if let letter = letter.string, !letter.isEmpty { status[path] = letter }
+    }
+    return status
+}
+
+struct SearchHit: Sendable, Hashable, Identifiable {
+    var path: String
+    var line: Int
+    var text: String
+    var id: String { "\(path):\(line):\(text)" }
+
+    static func from(_ value: JSONValue) -> SearchHit? {
+        guard let object = value.object, let path = object["path"]?.string, !path.isEmpty else { return nil }
+        return SearchHit(
+            path: path,
+            line: object["line"]?.int ?? 0,
+            text: object["text"]?.string ?? ""
+        )
     }
 }
 
@@ -279,7 +367,8 @@ enum ServerMessage {
         workspaceRoot: String?,
         tenantId: String?,
         tenantName: String?,
-        admin: Bool
+        admin: Bool,
+        loops: [LoopSnapshot]
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
@@ -312,8 +401,21 @@ enum ServerMessage {
     case chatTitle(chatId: String, title: String)
     /// P9：admin_stats 应答（仅管理员收得到）
     case adminStats(tenants: [AdminTenantStats], serverTime: Double)
+    case loopState(
+        chatId: String,
+        status: String,
+        goal: String,
+        intervalSec: Int,
+        tick: Int,
+        maxTicks: Int?,
+        lastSummary: String?,
+        nextAt: Double?
+    )
+    case loopTick(chatId: String, tick: Int, status: String, summary: String)
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
-    case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?)
+    case fileWritten(path: String, chatId: String?, error: String?)
+    case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?, status: [String: String])
+    case searchHits(query: String, hits: [SearchHit], chatId: String?)
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
     /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
     case fileContent(
@@ -352,7 +454,7 @@ enum ServerMessage {
             return chatId
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
-        case .files(_, _, _, _, let chatId):
+        case .files(_, _, _, _, let chatId, _):
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _):
             return chatId
@@ -384,7 +486,8 @@ enum ServerMessage {
                 workspaceRoot: object["workspaceRoot"]?.string,
                 tenantId: object["tenantId"]?.string,
                 tenantName: object["tenantName"]?.string,
-                admin: object["admin"]?.bool ?? false
+                admin: object["admin"]?.bool ?? false,
+                loops: object["loops"]?.array?.compactMap { LoopSnapshot.from($0.object) } ?? []
             )
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in
@@ -477,18 +580,43 @@ enum ServerMessage {
             return .history(chatId: chatId, turns: object["turns"]?.array ?? [])
         case "chat_title":
             return .chatTitle(chatId: chatId, title: object["title"]?.string ?? "")
+        case "loop_state":
+            return .loopState(
+                chatId: object["chatId"]?.string ?? "",
+                status: object["status"]?.string ?? "",
+                goal: object["goal"]?.string ?? "",
+                intervalSec: object["intervalSec"]?.int ?? 0,
+                tick: object["tick"]?.int ?? 0,
+                maxTicks: object["maxTicks"]?.int,
+                lastSummary: object["lastSummary"]?.string,
+                nextAt: object["nextAt"]?.number
+            )
+        case "loop_tick":
+            return .loopTick(
+                chatId: object["chatId"]?.string ?? "",
+                tick: object["tick"]?.int ?? 0,
+                status: object["status"]?.string ?? "",
+                summary: object["summary"]?.string ?? ""
+            )
         case "admin_stats":
             return .adminStats(
                 tenants: object["tenants"]?.array?.compactMap(AdminTenantStats.from) ?? [],
                 serverTime: object["serverTime"]?.number ?? 0
             )
         case "files":
-            // 网关还会回 git status（M/A/D/U/R），iOS 自 P7 后决定不展示改动，忽略该字段
+            // 网关附带 git status（M/A/D/U/R），全量清单时写入 gitStatus
             return .files(
                 query: object["query"]?.string ?? "",
                 paths: object["paths"]?.array?.compactMap(\.string) ?? [],
                 mention: object["mention"]?.bool ?? false,
                 truncated: object["truncated"]?.bool ?? false,
+                chatId: object["chatId"]?.string,
+                status: gitLetters(object["status"])
+            )
+        case "search_hits":
+            return .searchHits(
+                query: object["query"]?.string ?? "",
+                hits: object["hits"]?.array?.compactMap(SearchHit.from) ?? [],
                 chatId: object["chatId"]?.string
             )
         case "file_content":
@@ -513,6 +641,12 @@ enum ServerMessage {
             return .undone(
                 chatId: chatId,
                 paths: object["paths"]?.array?.compactMap(\.string) ?? [],
+                error: object["error"]?.string
+            )
+        case "file_written":
+            return .fileWritten(
+                path: object["path"]?.string ?? "",
+                chatId: object["chatId"]?.string,
                 error: object["error"]?.string
             )
         case "file_uploaded":

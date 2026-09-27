@@ -72,7 +72,17 @@ export type ClientMessage =
   | { type: "load_chats"; ids: string[] }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
-  | { type: "ping" };
+  | { type: "ping" }
+  | {
+      type: "loop_start";
+      chatId: string;
+      goal: string;
+      intervalSec: number;
+      maxTicks?: number;
+      model?: string;
+      mode?: AgentMode;
+    }
+  | { type: "loop_stop"; chatId: string };
 
 export type PreviewKind =
   | "text"
@@ -113,6 +123,28 @@ export type HistoryTurn = {
   }>;
 };
 
+export type LoopStatus = "idle" | "armed" | "running" | "stopped";
+
+export type LoopTickStatus = "ran" | "skipped" | "stopped" | "error";
+
+export type LoopTick = {
+  chatId: string;
+  tick: number;
+  status: LoopTickStatus;
+  summary: string;
+};
+
+export type LoopState = {
+  chatId: string;
+  status: LoopStatus;
+  goal: string;
+  intervalSec: number;
+  tick: number;
+  maxTicks?: number;
+  lastSummary?: string;
+  nextAt?: number;
+};
+
 export type ServerMessage =
   | {
       type: "ready";
@@ -127,6 +159,7 @@ export type ServerMessage =
       tenantId?: string;
       tenantName?: string;
       policy?: PolicyId;
+      loops?: LoopState[];
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
   | { type: "workspace_created"; path: string; name: string }
@@ -237,4 +270,6 @@ export type ServerMessage =
       silent?: boolean;
     }
   | { type: "chat_title"; chatId: string; title: string }
+  | ({ type: "loop_state" } & LoopState)
+  | ({ type: "loop_tick" } & LoopTick)
   | { type: "pong" };

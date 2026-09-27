@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
+    var collapse: () -> Void = {}
     /// P9：展开的工作区集合（默认收起，只记正向状态；含活跃会话的组强制展开）。
     /// P7b 曾是负向 collapsed 集合，P9 按产品决定翻转默认——旧 key 在 .task 里清掉。
     /// 初始值在 .task 里装载——@State 默认表达式每次视图 init 都求值，JSON 解码不该跟着 body 高频跑
@@ -27,6 +28,17 @@ struct SidebarView: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                Button(action: collapse) {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(width: 36, height: 36)
+                        .background(JieboColor.mist)
+                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .hitTarget()
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("收起侧栏")
                 Button(action: store.openNewChat) {
                     Image(systemName: "plus")
                         .font(.system(size: 16, weight: .semibold))
@@ -80,29 +92,14 @@ struct SidebarView: View {
                 Text(chat.title)
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 10) {
                 Button("退出登录", action: store.logout)
                     .font(JieboFont.ui(13))
                     .foregroundStyle(JieboColor.ink2)
-                // P7a：文件浏览器入口（浏览导向；对齐网页 side-files-btn，meta 给改动数/文件数）
-                Button {
-                    store.fileBrowserOpen = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 12))
-                        Text("文件")
-                            .font(JieboFont.ui(13))
-                        Text(filesMeta)
-                            .font(JieboFont.ui(11))
-                            .foregroundStyle(JieboColor.dim)
-                    }
-                    .foregroundStyle(JieboColor.ink2)
-                    .hitTarget()
+                ForEach(ToolLayer.allCases) { layer in
+                    toolButton(layer)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("浏览工作区文件")
-                // P9：管理员入口——全租户使用统计 + API key 估算消耗
+                Spacer()
                 if store.isAdmin {
                     Button {
                         adminStatsOpen = true
@@ -119,7 +116,6 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("查看使用统计")
                 }
-                Spacer()
                 Circle()
                     .fill(store.connected ? JieboColor.ok : JieboColor.clay)
                     .frame(width: 8, height: 8)
@@ -307,10 +303,31 @@ struct SidebarView: View {
 
     // MARK: 杂项
 
-    /// 文件入口 meta：文件数 > 「浏览」（P7 曾显示「N 处改动」，后按产品决定撤掉 git 状态展示）
-    private var filesMeta: String {
-        if !store.fileIndex.isEmpty { return "\(store.fileIndex.count)" }
-        return "浏览"
+    private func toolButton(_ layer: ToolLayer) -> some View {
+        let on = store.toolLayer == layer
+        let marked = layer == .loop && loopLive
+        return Button {
+            store.toggleTool(layer)
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: layer.symbol)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(on ? JieboColor.paper : JieboColor.ink2)
+                    .frame(width: 32, height: 32)
+                    .background(on ? JieboColor.pine : JieboColor.mist)
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                if marked {
+                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6).offset(x: 2, y: -2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(layer.title)
+    }
+
+    private var loopLive: Bool {
+        guard let row = store.loops[store.activeId] else { return false }
+        return row.status == "armed" || row.status == "running"
     }
 
     private var subtitle: String {
@@ -379,5 +396,97 @@ private struct WorkspaceSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+struct LoopSheet: View {
+    @Environment(ChatStore.self) private var store
+    @State private var goal = ""
+    @State private var interval = "900"
+    @State private var maxTicks = ""
+
+    private var row: LoopSnapshot? { store.loops[store.activeId] }
+
+    private var live: Bool {
+        guard let row else { return false }
+        return row.status == "armed" || row.status == "running"
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("每拍要做的事。做完时让它在最后一行写 LOOP_DONE", text: $goal, axis: .vertical)
+                    .lineLimit(3...6)
+                TextField("间隔（秒）", text: $interval)
+                    .keyboardType(.numberPad)
+                TextField("最多拍数，可空", text: $maxTicks)
+                    .keyboardType(.numberPad)
+            }
+            Section {
+                if !store.loopError.isEmpty {
+                    Text(store.loopError)
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.clay)
+                }
+                if let row {
+                    Text(statusLine(row))
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.ink2)
+                } else {
+                    Text("还没开始。关掉 App 也会继续，重新打开后状态还在。")
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            }
+            Section {
+                Button("开始") { start() }
+                    .disabled(live)
+                Button("停止", role: .destructive) { store.stopActiveLoop() }
+                    .disabled(!live)
+            }
+        }
+        .onAppear { refill() }
+        .onChange(of: store.activeId) { _, _ in refill() }
+    }
+
+    private func refill() {
+        if let row, row.status != "stopped", row.status != "idle" {
+            goal = row.goal
+            interval = String(row.intervalSec)
+            maxTicks = row.maxTicks.map(String.init) ?? ""
+        } else {
+            goal = ""
+            interval = "900"
+            maxTicks = ""
+        }
+    }
+
+    private func start() {
+        let cap = maxTicks.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = cap.isEmpty ? nil : Int(cap)
+        if !cap.isEmpty, parsed == nil {
+            store.loopError = "最多拍数要是整数"
+            return
+        }
+        let secondsText = interval.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let seconds = Int(secondsText) else {
+            store.loopError = "间隔要是整数"
+            return
+        }
+        store.startActiveLoop(goal: goal, intervalSec: seconds, maxTicks: parsed)
+    }
+
+    private func statusLine(_ row: LoopSnapshot) -> String {
+        let state: String
+        switch row.status {
+        case "running": state = "正在跑"
+        case "armed": state = "等待下一拍"
+        case "stopped": state = "已停止"
+        default: state = "空闲"
+        }
+        var line = "\(state) · 第 \(row.tick) 拍"
+        if let max = row.maxTicks { line += " / \(max)" }
+        if let summary = row.lastSummary, !summary.isEmpty { line += " · \(summary)" }
+        return line
     }
 }

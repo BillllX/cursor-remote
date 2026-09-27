@@ -3,6 +3,49 @@ import Observation
 import Photos
 import UIKit
 
+enum ToolLayer: String, CaseIterable, Identifiable {
+    case files, search, git, terminal, loop
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .files: return "文件"
+        case .search: return "搜索"
+        case .git: return "Git"
+        case .terminal: return "终端"
+        case .loop: return "Loop"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .files: return "folder"
+        case .search: return "magnifyingglass"
+        case .git: return "arrow.triangle.branch"
+        case .terminal: return "terminal"
+        case .loop: return "arrow.triangle.2.circlepath"
+        }
+    }
+}
+
+struct ShellEntry: Identifiable, Hashable {
+    var id: String
+    var command: String
+    var output: String
+    var running: Bool
+}
+
+private enum ContentDiscard {
+    case closeContent
+    case closeTool
+    case switchTool(ToolLayer)
+    case openFile(String)
+    case openDiff(String)
+    case selectChat(String)
+    case deleteChat(String)
+}
+
 @Observable
 @MainActor
 final class ChatStore {
@@ -26,6 +69,66 @@ final class ChatStore {
     var model = ModelCatalog.defaultModel
     var models: [String] = [ModelCatalog.defaultModel]
     var mode: AgentMode = .agent
+    /// L4：当前租户的产品 Loop，按会话
+    var loops: [String: LoopSnapshot] = [:]
+    var searchQuery = ""
+    var searchHits: [SearchHit] = []
+    var searchLoading = false
+    private var searchTask: Task<Void, Never>?
+    private var searchEpoch = 0
+    var searchNameHits: [String] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return [] }
+        return Array(fileIndex.filter { $0.lowercased().contains(query) }.prefix(40))
+    }
+    var shellEntries: [ShellEntry] {
+        guard let turns = active?.turns else { return [] }
+        var rows: [ShellEntry] = []
+        for turn in turns {
+            for tool in turn.tools where tool.kind == .shell {
+                let stdout = tool.result?.object?["stdout"]?.string ?? ""
+                let stderr = tool.result?.object?["stderr"]?.string ?? ""
+                let output = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+                let command = tool.args?.string(in: "command", "cmd").nilIfEmpty ?? tool.summary
+                rows.append(ShellEntry(
+                    id: tool.callId,
+                    command: command,
+                    output: output,
+                    running: tool.status == "running"
+                ))
+            }
+        }
+        return rows
+    }
+    /// 当前工具浮层。同一时间只开一个，再点一次关闭
+    var toolLayer: ToolLayer?
+    /// I2：叠在工具层上的内容。换路径即替换，关掉回到工具层
+    var gitStatus: [String: String] = [:]
+    var contentPath: String?
+    var contentDiff = false
+    var contentKind: PreviewKind = .text
+    var contentOriginal = ""
+    var contentDraft = ""
+    var contentLoading = false
+    var contentError: String?
+    /// 网关 write_file 超过 500KB 会拒绝。这种文件只读，避免显示能保存。
+    var contentOversized = false
+    /// 关闭或换文件前，先问要不要丢掉未保存的修改
+    var contentDiscardPrompt = false
+    var contentDirty: Bool { contentPath != nil && !contentOversized && contentDraft != contentOriginal }
+    /// 打开内容时的会话。保存和读回都用它，避免切会话后写到另一个工作区
+    private var contentChatId: String?
+    /// 内容层读取代际。换文件后，迟到的 HTTP 水合不能写进新文件
+    private var contentLoadEpoch = 0
+    /// 已发出、还没对上 file_written 的正文快照。回包只把基线设成这份快照，之后的新输入仍算未保存
+    private var contentSaves: [(path: String, snapshot: String)] = []
+    private var contentDiscardFollowup: ContentDiscard?
+    private var suppressContentDiscard = false
+    private static let contentSaveLimit = 500_000
+    /// 打开内容层之前右侧预览的焦点。内容层自己的页签不能把预览留在对话右侧
+    private var contentRestorePreview: String?
+    /// 表单盖住主区时，校验和网关拒绝要画在 sheet 里
+    var loopError = ""
     var hasApiKey = true
     var draft = ""
     var showThinkingIds: Set<String> = []
@@ -59,7 +162,9 @@ final class ChatStore {
     var previewTabs: [PreviewTab] = []
     /// 当前选中页签；非 nil 即面板打开
     var previewActivePath: String?
-    var previewPanelOpen: Bool { previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath } }
+    var previewPanelOpen: Bool {
+        contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
+    }
     var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
 
     var active: ChatSession? { chats.first { $0.id == activeId } }
@@ -367,6 +472,12 @@ final class ChatStore {
 
     func select(_ id: String) {
         guard id != activeId else { return }
+        let nextCwd = chats.first { $0.id == id }?.cwd
+        if contentPath != nil, !sameCwd(nextCwd, active?.cwd), contentDirty, !suppressContentDiscard {
+            contentDiscardFollowup = .selectChat(id)
+            contentDiscardPrompt = true
+            return
+        }
         swapActive(to: id)
         mentionQuery = nil
         mentionTask?.cancel()
@@ -383,6 +494,16 @@ final class ChatStore {
     /// 所有改 activeId 的路径（select/startChat/deleteChat/storedState）都必须走这里。
     private func swapActive(to newId: String) {
         guard newId != activeId else { return }
+        let nextCwd = chats.first { $0.id == newId }?.cwd
+        if contentPath != nil, !sameCwd(nextCwd, active?.cwd) {
+            let prompted = suppressContentDiscard
+            let dirty = contentDirty
+            let wasSuppressing = suppressContentDiscard
+            suppressContentDiscard = true
+            closeContentLayer()
+            suppressContentDiscard = wasSuppressing
+            if dirty, !prompted { flash("未保存的修改已丢掉") }
+        }
         let oldCwd = active?.cwd
         persistDraft()
         imagesByChat[activeId] = pendingImages // 待发图片跟会话走
@@ -397,6 +518,10 @@ final class ChatStore {
         exportTask?.cancel() // P10：在途导出同样不带到新会话（Grok R1 M1）——页签虽全局存活，
         exportLoading = false // 但「下载中切会话」是被动场景，完成时弹 sheet 会打断新上下文
         requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
+        searchHits = []
+        if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            scheduleSearch()
+        }
         // 工作区按会话走：cwd 变了，页签内容按新工作区重拉（页签保留，路径仍有效）。
         // 与下方清空判断同用 sameCwd（字符串级归一）——/foo 与 /foo/ 不该白打一遍 read_file
         if !sameCwd(active?.cwd, oldCwd) {
@@ -404,6 +529,7 @@ final class ChatStore {
             // P7：跨工作区切换时先清空文件索引——新索引到达前不串旧工作区的内容
             fileIndex = []
             treeTruncated = false
+            gitStatus = [:]
         }
         ensureTurnsLoaded(newId) // P8 slim：点开的会话若只有元数据壳，启动分页加载
     }
@@ -593,6 +719,17 @@ final class ChatStore {
     }
 
     func deleteChat(_ id: String) {
+        if contentChatId == id, contentPath != nil {
+            if contentDirty, !suppressContentDiscard {
+                contentDiscardFollowup = .deleteChat(id)
+                contentDiscardPrompt = true
+                return
+            }
+            let wasSuppressing = suppressContentDiscard
+            suppressContentDiscard = true
+            closeContentLayer()
+            suppressContentDiscard = wasSuppressing
+        }
         if let doomed = chats.first(where: { $0.id == id }), doomed.turns.contains(where: \.running) {
             send(.cancel(chatId: id))
         }
@@ -975,6 +1112,17 @@ final class ChatStore {
                 previewTabs[index] = tab
                 send(.readFile(path: path, chatId: activeId, diff: true))
                 armPreviewWatchdog(path: path)
+            } else if !diff && tab.diff {
+                // 从对照回到文件本身：清掉 diff 媒体，否则图片/svg 会继续显示对照
+                tab.diff = false
+                tab.content = nil
+                tab.error = nil
+                tab.url = nil
+                tab.headUrl = nil
+                tab.loading = true
+                previewTabs[index] = tab
+                send(.readFile(path: path, chatId: activeId, diff: false))
+                armPreviewWatchdog(path: path)
             } else if tab.content == nil && tab.error == nil && !tab.loading && tab.mediaURL == nil {
                 // 媒体页签已有 url 就不重发（content 恒 nil，重发只会白拉一趟）
                 previewTabs[index].loading = true
@@ -1288,7 +1436,7 @@ final class ChatStore {
         }
 
         switch message {
-        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin):
+        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops):
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
@@ -1317,6 +1465,7 @@ final class ChatStore {
             models = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels
             runningChatIds = running
             queuedChatIds = queued
+            loops = Dictionary(readyLoops.filter { $0.status != "stopped" && $0.status != "idle" }.map { ($0.chatId, $0) }, uniquingKeysWith: { _, new in new })
             let nextModel = ModelCatalog.resolve(
                 preferred: current?.sessionModel ?? lastModel.nilIfEmpty ?? model,
                 ids: models,
@@ -1347,6 +1496,24 @@ final class ChatStore {
         case .adminStats(let rows, _):
             adminStats = rows
             adminStatsAt = Date()
+        case .loopState(let chatId, let status, let goal, let intervalSec, let tick, let maxTicks, let lastSummary, let nextAt):
+            guard !chatId.isEmpty else { break }
+            loops[chatId] = LoopSnapshot(
+                chatId: chatId,
+                status: status,
+                goal: goal,
+                intervalSec: intervalSec,
+                tick: tick,
+                maxTicks: maxTicks,
+                lastSummary: lastSummary,
+                nextAt: nextAt
+            )
+        case .loopTick(let chatId, let tick, let status, let summary):
+            guard var row = loops[chatId] else { break }
+            row.tick = tick
+            row.lastSummary = summary
+            if status == "stopped" { row.status = "stopped" }
+            loops[chatId] = row
         case .storedState(let rows, let rev, let deleted, let serverRevs):
             applyStoredState(rows: rows, rev: rev, deleted: deleted, chatRevs: serverRevs)
         case .storedStateDeferred(let rev):
@@ -1559,6 +1726,9 @@ final class ChatStore {
             }
         case .error(let id, let text):
             bannerError = friendlyError(text)
+            if toolLayer == .loop, text.contains("Loop") {
+                loopError = friendlyError(text)
+            }
             let target = id ?? activeId
             runningChatIds.removeAll { $0 == target }
             queuedChatIds.removeAll { $0 == target }
@@ -1631,6 +1801,20 @@ final class ChatStore {
                 next.title = trimmed
                 return next
             }
+        case .fileWritten(let path, let writtenChatId, let error):
+            if let writtenChatId, !writtenChatId.isEmpty,
+               writtenChatId != activeId, writtenChatId != contentChatId { break }
+            let written = relToCwd(path)
+            guard let index = contentSaves.firstIndex(where: { $0.path == path || $0.path == written }) else { break }
+            let save = contentSaves.remove(at: index)
+            guard contentPath == save.path else { break }
+            if let error {
+                flash(error)
+            } else {
+                contentOriginal = save.snapshot
+                contentError = nil
+                flash(contentDraft == save.snapshot ? "已保存" : "已保存。之后的修改还没写入")
+            }
         case .fileUploaded(let path, let chatId, let name, let error, _, let id):
             // 超时后迟到的回包：丢弃（用户已看到失败提示，草稿不应再被污染）
             if let id, expiredUploadIds.remove(id) != nil { break }
@@ -1657,9 +1841,39 @@ final class ChatStore {
                 }
             }
         case .fileContent(let path, let msgChatId, let content, let error, let diff, let kind, let mime, let size, let url, let headUrl, let media):
-            // 工作区按会话走：只收当前会话的回包（切会话后迟到的旧工作区回包丢弃，看门狗给出口）
-            if let msgChatId, !msgChatId.isEmpty, msgChatId != activeId { break }
-            guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { break }
+            let forActive = msgChatId?.isEmpty != false || msgChatId == activeId
+            let forContent = msgChatId == contentChatId && contentChatId != nil
+            if !forActive, !forContent { break }
+            if forContent || forActive, contentPath == path, diff, contentDiff {
+                contentLoading = false
+                if let error {
+                    contentError = error
+                } else if let content {
+                    contentOversized = false
+                    contentKind = .text
+                    contentOriginal = content
+                    contentDraft = content
+                } else if kind == "image" || kind == "svg" || contentKind == .image || contentKind == .svg {
+                    contentLoading = false
+                    contentError = nil
+                } else {
+                    contentError = "读不到这次改动"
+                }
+            } else if forContent || forActive, contentPath == path, !diff, (contentKind == .text || contentKind == .markdown) {
+                if let error {
+                    contentLoading = false
+                    contentError = error
+                } else if let content {
+                    acceptContentText(content)
+                } else if let url, !url.isEmpty {
+                    contentLoadEpoch += 1
+                    hydrateContentText(path: path, urlString: url, epoch: contentLoadEpoch)
+                } else {
+                    contentLoading = false
+                    contentError = "读不到这个文件"
+                }
+            }
+            guard forActive, let index = previewTabs.firstIndex(where: { $0.path == path }) else { break }
             var tab = previewTabs[index]
             tab.loading = false
             if let error {
@@ -1699,7 +1913,7 @@ final class ChatStore {
             if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let paths, let mention, let truncated, let filesChatId):
+        case .files(let query, let paths, let mention, let truncated, let filesChatId, let status):
             // 只接收当前会话的（对齐网页端 chatId 过滤）
             if let filesChatId, !filesChatId.isEmpty, filesChatId != activeId { break }
             if mention {
@@ -1716,7 +1930,14 @@ final class ChatStore {
             } else {
                 fileIndex = paths
                 treeTruncated = truncated
+                if query.isEmpty { gitStatus = status }
             }
+        case .searchHits(let query, let hits, let hitsChatId):
+            if let hitsChatId, !hitsChatId.isEmpty, hitsChatId != activeId { break }
+            let current = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard query.trimmingCharacters(in: .whitespacesAndNewlines) == current else { break }
+            searchHits = hits
+            searchLoading = false
         case .undone(_, let paths, let error):
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
             guard chatId == activeId else { break }
@@ -1724,11 +1945,303 @@ final class ChatStore {
                 notice = error
             } else {
                 notice = paths.isEmpty ? "没有可还原的改动" : "已还原 \(paths.joined(separator: ", "))"
+                if let path = contentPath, paths.contains(where: { relToCwd($0) == path || $0 == path }) {
+                    let was = suppressContentDiscard
+                    suppressContentDiscard = true
+                    closeContentLayer()
+                    suppressContentDiscard = was
+                }
             }
             requestFileIndex()
         case .pong, .ignored:
             break
         }
+    }
+
+    func toggleTool(_ layer: ToolLayer) {
+        if contentDirty, !suppressContentDiscard {
+            contentDiscardFollowup = toolLayer == layer ? .closeTool : .switchTool(layer)
+            contentDiscardPrompt = true
+            return
+        }
+        if toolLayer == .loop, layer != .loop { loopError = "" }
+        if toolLayer == layer {
+            toolLayer = nil
+            closeContentLayer()
+            if layer == .loop { loopError = "" }
+            return
+        }
+        closeContentLayer()
+        toolLayer = layer
+        if layer == .files || layer == .search || layer == .git { requestFileIndex() }
+    }
+
+    /// 文件名走本地索引，内容走 search_text。空查询不发请求。
+    func scheduleSearch() {
+        searchTask?.cancel()
+        searchEpoch += 1
+        let epoch = searchEpoch
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            searchHits = []
+            searchLoading = false
+            return
+        }
+        searchLoading = true
+        searchHits = []
+        let chatId = activeId
+        searchTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, searchEpoch == epoch else { return }
+            send(.searchText(query: query, chatId: chatId))
+        }
+    }
+
+    /// 文件树点开：文本和 Markdown 可编辑，图片 / HTML / Canvas 等只读，二进制走 Quick Look。
+    /// 换文件替换内容层，不另开右侧预览。
+    func openContentFile(_ rawPath: String) {
+        let path = relToCwd(rawPath.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !path.isEmpty, !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
+        let kind = previewKind(of: path)
+        if !kind.panelRenderable {
+            openMention(path)
+            return
+        }
+        if contentPath == path, contentError == nil, !contentDiff { return }
+        if contentDirty, !suppressContentDiscard {
+            contentDiscardFollowup = .openFile(path)
+            contentDiscardPrompt = true
+            return
+        }
+        if contentPath == nil {
+            contentRestorePreview = previewPanelOpen ? previewActivePath : nil
+        }
+        if contentPath != path { contentSaves.removeAll() }
+        contentLoadEpoch += 1
+        let epoch = contentLoadEpoch
+        contentChatId = activeId
+        contentPath = path
+        contentDiff = false
+        contentKind = kind
+        contentError = nil
+        contentOversized = false
+        contentOriginal = ""
+        contentDraft = ""
+        if kind == .text || kind == .markdown {
+            contentLoading = true
+            send(.readFile(path: path, chatId: contentChatId, diff: false))
+            armContentWatchdog(path: path, epoch: epoch)
+        } else {
+            contentLoading = false
+            openPreviewTab(path: path, kind: kind, diff: false)
+            previewActivePath = contentRestorePreview
+        }
+    }
+
+    /// Git 列表点开：diff 叠在工具层上。图片走预览页签，其余把 diff 文本放进内容层。
+    func openContentDiff(_ rawPath: String) {
+        let path = relToCwd(rawPath.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !path.isEmpty, !path.hasSuffix("/") else { return }
+        if contentPath == path, contentDiff, contentError == nil { return }
+        if contentDirty, !suppressContentDiscard {
+            contentDiscardFollowup = .openDiff(path)
+            contentDiscardPrompt = true
+            return
+        }
+        if contentPath == nil {
+            contentRestorePreview = previewPanelOpen ? previewActivePath : nil
+        }
+        if contentPath != path { contentSaves.removeAll() }
+        contentLoadEpoch += 1
+        let epoch = contentLoadEpoch
+        let kind = previewKind(of: path)
+        contentChatId = activeId
+        contentPath = path
+        contentDiff = true
+        contentKind = kind
+        contentError = nil
+        contentOversized = false
+        contentOriginal = ""
+        contentDraft = ""
+        if kind == .image || kind == .svg {
+            contentLoading = false
+            openPreviewTab(path: path, kind: kind, diff: true)
+            previewActivePath = contentRestorePreview
+        } else {
+            contentLoading = true
+            send(.readFile(path: path, chatId: contentChatId, diff: true))
+            armContentWatchdog(path: path, epoch: epoch)
+        }
+    }
+
+    func keepContentDiff() {
+        guard let path = contentPath, contentDiff else { return }
+        contentDiff = false
+        contentPath = nil
+        openContentFile(path)
+    }
+
+    var contentRevertPrompt = false
+
+    func revertContentFile() {
+        guard let path = contentPath else { return }
+        let chatId = contentChatId ?? activeId
+        guard chats.contains(where: { $0.id == chatId }) else {
+            flash("这个会话已经不在了，没法还原")
+            return
+        }
+        send(.revertFile(chatId: chatId, path: path))
+    }
+
+    func closeContentLayer() {
+        if contentDirty, !suppressContentDiscard {
+            contentDiscardFollowup = .closeContent
+            contentDiscardPrompt = true
+            return
+        }
+        contentLoadEpoch += 1
+        contentSaves.removeAll()
+        contentChatId = nil
+        contentPath = nil
+        contentOriginal = ""
+        contentDraft = ""
+        contentLoading = false
+        contentError = nil
+        contentOversized = false
+        contentDiff = false
+    }
+
+    func confirmContentDiscard() {
+        let followup = contentDiscardFollowup
+        contentDiscardPrompt = false
+        contentDiscardFollowup = nil
+        suppressContentDiscard = true
+        switch followup {
+        case .closeContent, nil:
+            closeContentLayer()
+        case .closeTool:
+            toolLayer = nil
+            loopError = ""
+            closeContentLayer()
+        case .switchTool(let layer):
+            if toolLayer == .loop, layer != .loop { loopError = "" }
+            closeContentLayer()
+            toolLayer = layer
+            if layer == .files || layer == .search || layer == .git { requestFileIndex() }
+        case .openFile(let path):
+            openContentFile(path)
+        case .openDiff(let path):
+            openContentDiff(path)
+        case .selectChat(let id):
+            select(id)
+        case .deleteChat(let id):
+            deleteChat(id)
+        }
+        suppressContentDiscard = false
+    }
+
+    func cancelContentDiscard() {
+        contentDiscardPrompt = false
+        contentDiscardFollowup = nil
+    }
+
+    func saveContentLayer() {
+        guard let path = contentPath, contentDirty, !contentOversized,
+              (contentKind == .text || contentKind == .markdown) else { return }
+        guard let chatId = contentChatId, chats.contains(where: { $0.id == chatId }) else {
+            flash("这个会话已经不在了，没法保存")
+            return
+        }
+        let snapshot = contentDraft
+        if snapshot.utf16.count > Self.contentSaveLimit {
+            flash("内容超过 500KB，不在这里保存")
+            return
+        }
+        contentSaves.append((path: path, snapshot: snapshot))
+        send(.writeFile(path: path, content: snapshot, chatId: chatId))
+    }
+
+    private func acceptContentText(_ text: String) {
+        contentLoading = false
+        contentError = nil
+        let edited = contentDraft != contentOriginal
+        if !edited, text.utf16.count > Self.contentSaveLimit {
+            contentOversized = true
+            contentOriginal = text
+            contentDraft = text
+            return
+        }
+        contentOversized = false
+        contentOriginal = text
+        if !edited { contentDraft = text }
+    }
+
+    private func hydrateContentText(path: String, urlString: String, epoch: Int) {
+        guard let url = GatewayConfig.resolveHTTP(urlString) else {
+            contentLoading = false
+            contentError = "读不到这个文件"
+            return
+        }
+        let tenantAtStart = tenantId
+        Task { @MainActor [weak self] in
+            do {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 60
+                let (data, response) = try await URLSession.shared.data(for: request)
+                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                guard (200 ..< 300).contains(code), let text = String(data: data, encoding: .utf8) else {
+                    throw PreviewError.http(code)
+                }
+                guard let self, self.tenantId == tenantAtStart, self.contentLoadEpoch == epoch, self.contentPath == path else { return }
+                self.acceptContentText(text)
+            } catch {
+                guard let self, self.tenantId == tenantAtStart, self.contentLoadEpoch == epoch, self.contentPath == path else { return }
+                self.contentLoading = false
+                self.contentError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    private func armContentWatchdog(path: String, epoch: Int) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, self.contentLoadEpoch == epoch, self.contentPath == path, self.contentLoading else { return }
+            self.contentLoading = false
+            self.contentError = "读取超时。点重试再试一次。"
+        }
+    }
+
+    func startActiveLoop(goal: String, intervalSec: Int, maxTicks: Int?) {
+        let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            loopError = "Loop 需要一段目标"
+            return
+        }
+        if trimmed.count > 4000 {
+            loopError = "Loop 目标超过 4000 字"
+            return
+        }
+        if !(30...86_400).contains(intervalSec) {
+            loopError = "间隔要在 30 秒到 24 小时之间"
+            return
+        }
+        if let maxTicks, !(1...100).contains(maxTicks) {
+            loopError = "最多 1 到 100 拍"
+            return
+        }
+        loopError = ""
+        send(.loopStart(
+            chatId: activeId,
+            goal: trimmed,
+            intervalSec: intervalSec,
+            maxTicks: maxTicks,
+            model: model,
+            mode: mode
+        ))
+    }
+
+    func stopActiveLoop() {
+        send(.loopStop(chatId: activeId))
     }
 
     private func send(_ message: ClientMessage) {
@@ -1998,6 +2511,18 @@ final class ChatStore {
         runningChatIds = []
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
+        loops = [:]
+        loopError = ""
+        toolLayer = nil
+        searchTask?.cancel()
+        searchQuery = ""
+        searchHits = []
+        searchLoading = false
+        suppressContentDiscard = true
+        closeContentLayer()
+        suppressContentDiscard = false
+        contentDiscardPrompt = false
+        contentDiscardFollowup = nil
         adminStats = []
         adminStatsAt = nil
         showThinkingIds = []
@@ -2008,6 +2533,7 @@ final class ChatStore {
         uploads = []
         fileIndex = []
         treeTruncated = false
+        gitStatus = [:]
         fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
         mentionQuery = nil
         mentionTask?.cancel()

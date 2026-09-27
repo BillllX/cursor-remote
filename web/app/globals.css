@@ -175,8 +175,58 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .side-actions {
   display: grid;
-  grid-template-columns: 1fr 36px;
+  grid-template-columns: 1fr 36px 36px;
   gap: 8px;
+}
+
+.loop-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  width: min(420px, calc(100vw - 32px));
+}
+
+.loop-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.loop-goal {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+}
+
+.loop-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted, #71717a);
+}
+
+.loop-meta {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted, #71717a);
+}
+
+.loop-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.loop-actions .new-chat {
+  flex: 1;
+}
+
+.grep-chat.on {
+  border-color: var(--text);
 }
 
 .workspace-picker {
@@ -2313,6 +2363,13 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .file-preview-tab.on {
   background: var(--bg-panel);
   color: var(--text);
+}
+
+.file-preview-tab.dirty .file-preview-tab-name::before {
+  content: "●";
+  color: #c4553a;
+  margin-right: 4px;
+  font-size: 10px;
 }
 
 .file-preview-tab.diff .file-preview-tab-name::after {
@@ -4722,4 +4779,182 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 nextjs-portal {
   display: none !important;
+}
+
+.activity-bar {
+  display: none;
+}
+
+.git-empty {
+  color: var(--dim);
+  font-size: 13px;
+  padding: 16px 14px;
+}
+
+@media (min-width: 960px) {
+  .app.ide {
+    grid-template-columns: 52px minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .app.ide .activity-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 0;
+    padding: 10px 4px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+  }
+
+  .app.ide .activity-bar button {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1.2;
+    border-radius: 8px;
+    padding: 8px 2px;
+    cursor: pointer;
+  }
+
+  .app.ide .activity-bar button.on {
+    background: var(--hover-strong);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .app.ide .sidebar {
+    position: relative;
+    transform: none;
+    width: auto;
+    inset: auto;
+    z-index: 1;
+    box-shadow: none;
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 0;
+  }
+
+  .app.ide .nav-scrim,
+  .app.ide .pad-bar {
+    display: none;
+  }
+
+  .app.ide .main {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .app.ide .main.with-preview,
+  .app.ide .main.with-preview.with-canvas {
+    grid-template-columns: minmax(280px, 1.25fr) minmax(300px, 0.85fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app.ide .main.with-preview .file-preview {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+
+  .app.ide .main.with-preview .main-col {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .app.ide .main.with-preview .composer-dock {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .app.ide.pane-files .sidebar,
+  .app.ide.pane-git .sidebar,
+  .app.ide.pane-search .sidebar,
+  .app.ide.pane-loop .sidebar {
+    display: none;
+  }
+
+  .app.ide.pane-files > .files-overlay.open,
+  .app.ide.pane-git > .files-overlay.open,
+  .app.ide.pane-search > .search-overlay.open,
+  .app.ide.pane-loop > .search-overlay.open {
+    position: relative;
+    inset: auto;
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+    display: flex;
+    padding: 0;
+    background: var(--bg-sidebar);
+    opacity: 1;
+    pointer-events: auto;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    place-items: stretch;
+  }
+
+  .app.ide.pane-files .files-browser,
+  .app.ide.pane-git .files-browser,
+  .app.ide.pane-search .search-box,
+  .app.ide.pane-loop .loop-box {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .app.ide.pane-search .search-list {
+    min-height: 0;
+    overflow: auto;
+    flex: 1;
+  }
+
+  .app.ide.pane-files .files-browser-changes,
+  .app.ide.pane-git .file-tree,
+  .app.ide.pane-git .tree-empty,
+  .app.ide.pane-git .files-browser-search {
+    display: none;
+  }
+
+  /* 921–1366 精细指针下，旧的 :has(.main.with-preview) 会把三列压成抽屉。ide 必须压过它。 */
+  .app.ide:has(.main.with-preview) {
+    grid-template-columns: 52px minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .app.ide:has(.main.with-preview) .sidebar,
+  .app.ide.nav-ready:has(.main.with-preview) .sidebar,
+  .app.ide.nav-open:has(.main.with-preview) .sidebar {
+    position: relative;
+    inset: auto;
+    z-index: 1;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+    grid-column: 2;
+    grid-row: 1;
+    padding-top: 20px;
+    padding-bottom: 16px;
+  }
+
+  .app.ide:has(.main.with-preview) .pad-bar-nav,
+  .app.ide.nav-open:has(.main.with-preview) .nav-scrim {
+    display: none;
+  }
+
+  .app.ide:has(.main.with-preview) .main.with-preview,
+  .app.ide:has(.main.with-preview) .main.with-preview.preview-max,
+  .app.ide:has(.main.with-preview) .main.with-preview.with-canvas,
+  .app.ide:has(.main.with-preview) .main.with-preview.with-canvas.preview-max {
+    grid-template-columns: minmax(280px, 1.25fr) minmax(300px, 0.85fr);
+  }
 }

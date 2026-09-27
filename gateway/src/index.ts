@@ -68,6 +68,7 @@ import {
   type ChatHistoryItem,
   type ExternalProvider,
 } from "./providers.ts";
+import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
 
 loadDotEnv([
   resolve(process.cwd(), ".env"),
@@ -178,6 +179,8 @@ type Slot = {
   chatId: string;
   cwd: string;
   model?: string;
+  /** 该会话最近一次 prompt 的模式；Loop 没指定 mode 时沿用 */
+  mode?: AgentMode;
   agentId: string | null;
   agent: AgentHandle | null;
   run: RunHandle | null;
@@ -195,6 +198,10 @@ type Slot = {
   reseed: boolean;
   /** P11：第三方模型在途请求的取消柄（Cursor run 走 slot.run，这条路径没有 RunHandle） */
   externalAbort: AbortController | null;
+  /** L2：Loop 本拍收集助手文本 / 错误 / 收尾状态，仅调度期间设置 */
+  captureText?: (text: string) => void;
+  captureError?: (text: string) => void;
+  captureDone?: (status: string) => void;
   policy: PolicyId;
   approvedKeys: Set<string>;
   approvalCallId: string | null;
@@ -456,7 +463,19 @@ function send(ws: WebSocket, message: ServerMessage) {
       : ws.readyState === WebSocket.OPEN
         ? ws
         : null;
+  const capturing = chatId ? capturingSlot(chatId) : undefined;
+  if (message.type === "text-delta") capturing?.captureText?.(message.text);
+  if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
+  if (message.type === "done") capturing?.captureDone?.(message.status);
   if (sock) sock.send(JSON.stringify(message));
+}
+
+function capturingSlot(chatId: string): Slot | undefined {
+  for (const map of liveByTenant.values()) {
+    const slot = map.get(chatId);
+    if (slot && (slot.captureText || slot.captureError)) return slot;
+  }
+  return undefined;
 }
 
 function parseClient(raw: string): ClientMessage | null {
@@ -701,6 +720,8 @@ async function forgetChat(conn: Conn, chatId: string) {
   const tenant = conn.tenant;
   if (!tenant) return;
   tombstoneChat(tenant, chatId);
+  const stopped = stopLoop(tenant.id, chatId);
+  if (stopped) publishLoop(tenant.id, { type: "loop_state", ...stopped });
   const slot = conn.slots.get(chatId);
   if (slot) {
     resolveApprovalWait(slot, false);
@@ -2597,7 +2618,8 @@ async function handlePrompt(
   policy?: PolicyId,
   dialect?: boolean,
   history?: ChatHistoryItem[],
-) {
+  enqueue = true,
+): Promise<void | "busy"> {
   const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
   const nextDialect = dialect !== false;
   // P11：history 白名单——只放行 user/assistant 的字符串文本，
@@ -2621,6 +2643,7 @@ async function handlePrompt(
     slot.openTools.clear();
   }
   if (slot.run || slot.externalAbort || !slot.finished) {
+    if (!enqueue) return "busy";
     slot.pending.push({
       text,
       model,
@@ -2639,6 +2662,7 @@ async function handlePrompt(
   }
 
   if (globalRunningCount() >= maxRunning()) {
+    if (!enqueue) return "busy";
     slot.pending.push({
       text,
       model,
@@ -2669,6 +2693,7 @@ async function handlePrompt(
   conn.policy = nextPolicy;
   slot.dialect = nextDialect;
   slot.model = usedModel;
+  slot.mode = mode;
   conn.model = usedModel;
   let prompt = wrapPrompt(
     userText,
@@ -3861,6 +3886,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             tenantName: tenant.name,
             admin: tenant.admin,
             policy: conn.policy || defaultPolicy(),
+            loops: loopsForTenant(tenant.id),
           });
         };
         emitReady(cached);
@@ -3885,6 +3911,39 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
       const tenant = conn.tenant;
+
+      if (message.type === "loop_start") {
+        const result = startLoop({
+          tenantId: tenant.id,
+          chatId: message.chatId,
+          goal: message.goal,
+          intervalSec: message.intervalSec,
+          maxTicks: message.maxTicks,
+          model: message.model,
+          mode: message.mode,
+        });
+        if ("error" in result) {
+          send(ws, { type: "error", chatId: message.chatId, message: result.error });
+          return;
+        }
+        publishLoop(tenant.id, { type: "loop_state", ...result.state });
+        return;
+      }
+
+      if (message.type === "loop_stop") {
+        const state = stopLoop(tenant.id, message.chatId);
+        publishLoop(tenant.id, {
+          type: "loop_state",
+          chatId: message.chatId,
+          status: "stopped",
+          goal: state?.goal ?? "",
+          intervalSec: state?.intervalSec ?? 0,
+          tick: state?.tick ?? 0,
+          maxTicks: state?.maxTicks,
+          lastSummary: state?.lastSummary ?? "没有在跑的 Loop。",
+        });
+        return;
+      }
 
       // P9：管理员查询全租户使用统计。Cursor 官方无 API key 用量端点，
       // 数据来自网关自计量（usage.ts）+ 实时 disk/连接数。
@@ -4591,6 +4650,91 @@ wss.on("connection", (ws, req: IncomingMessage) => {
     conns.delete(ws);
   });
 });
+
+function openConn(tenantId: string): Conn | undefined {
+  for (const conn of conns.values()) {
+    if (conn.authed && conn.tenant?.id === tenantId && conn.ws.readyState === WebSocket.OPEN) return conn;
+  }
+  return undefined;
+}
+
+function loopBusy(tenantId: string, chatId: string): false | string {
+  const tenant = getTenant(tenantId);
+  if (!tenant) return false;
+  const slot = liveSlotsOf(tenant).get(chatId);
+  if (slot && (slot.pending.length > 0 || !slot.finished)) {
+    return "会话还在跑，本拍顺延。";
+  }
+  if (globalRunningCount() >= maxRunning()) return "同时跑的任务已满，本拍顺延。";
+  return false;
+}
+
+async function dispatchLoop(job: LoopJob) {
+  const conn = openConn(job.tenantId);
+  if (!conn) return { text: "", error: "offline" as const };
+  const tenant = conn.tenant;
+  const previous = tenant ? liveSlotsOf(tenant).get(job.chatId) : undefined;
+  const previousOwner = previous?.owner ?? null;
+  const slot = slotOf(conn, job.chatId);
+  if (previousOwner && previousOwner.readyState === WebSocket.OPEN) slot.owner = previousOwner;
+  let text = "";
+  let error = "";
+  let doneStatus = "";
+  const prevText = slot.captureText;
+  const prevErr = slot.captureError;
+  const prevDone = slot.captureDone;
+  slot.captureText = (chunk) => {
+    text += chunk;
+    prevText?.(chunk);
+  };
+  slot.captureError = (chunk) => {
+    error = chunk;
+    prevErr?.(chunk);
+  };
+  slot.captureDone = (status) => {
+    doneStatus = status;
+    prevDone?.(status);
+  };
+  let outcome: void | "busy" = undefined;
+  try {
+    outcome = await handlePrompt(
+      conn.ws,
+      conn,
+      slot,
+      job.text,
+      job.model,
+      job.mode ?? slot.mode ?? "agent",
+      undefined,
+      undefined,
+      false,
+      false,
+      false,
+      slot.policy,
+      slot.dialect,
+      undefined,
+      false,
+    );
+  } finally {
+    slot.captureText = prevText;
+    slot.captureError = prevErr;
+    slot.captureDone = prevDone;
+  }
+  // 没开跑、被取消、或 epoch 失配没有 done：不当成一拍，也不留在 pending 里等 drain 再跑
+  if (outcome === "busy" || !doneStatus || doneStatus === "cancelled" || doneStatus === "approval") {
+    return { text: "", error: "deferred" as const };
+  }
+  // Cursor 收尾是 finished，第三方是 completed。两条都算真正跑完的一拍
+  if (doneStatus !== "completed" && doneStatus !== "finished") return { text, error: error || doneStatus };
+  return { text };
+}
+
+function publishLoop(tenantId: string, message: ServerMessage) {
+  for (const conn of conns.values()) {
+    if (conn.authed && conn.tenant?.id === tenantId) reply(conn.ws, message);
+  }
+}
+
+bindLoops({ busy: loopBusy, dispatch: dispatchLoop, publish: publishLoop });
 
 httpServer.listen(PORT, HOST, () => {
   const tenants = allTenants();

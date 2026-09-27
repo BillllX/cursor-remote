@@ -23,6 +23,7 @@ import type {
   PromptImage,
   SearchHit,
   ServerMessage,
+  LoopState,
   HistoryTurn,
 } from "../lib/protocol";
 import ToolCard, { extractDiff, mutatingTool, toolKind, toolPath } from "./ToolCard";
@@ -1039,6 +1040,15 @@ export default function ChatApp() {
   const [threadFindQ, setThreadFindQ] = useState("");
   const [threadFindIndex, setThreadFindIndex] = useState(0);
   const [grepOpen, setGrepOpen] = useState(false);
+  const [loopOpen, setLoopOpen] = useState(false);
+  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "loop">("chats");
+  const [wideIDE, setWideIDE] = useState(false);
+  const wideIDERef = useRef(false);
+  wideIDERef.current = wideIDE;
+  const [loopGoal, setLoopGoal] = useState("");
+  const [loopInterval, setLoopInterval] = useState("900");
+  const [loopMax, setLoopMax] = useState("");
+  const [loops, setLoops] = useState<Record<string, LoopState & { tickStatus?: string }>>({});
   const [grepQ, setGrepQ] = useState("");
   const searchShown = useHeldOpen(searchOpen);
   const paletteShown = useHeldOpen(paletteOpen);
@@ -1053,6 +1063,10 @@ export default function ChatApp() {
   const [renameDraft, setRenameDraft] = useState("");
   const [checkpoints, setCheckpoints] = useState<CheckpointInfo[]>([]);
   const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
+  const [previewDrafts, setPreviewDrafts] = useState<Record<string, string>>({});
+  const previewDraftsRef = useRef<Record<string, string>>({});
+  const saveSnapshotRef = useRef<Record<string, string>>({});
+  previewDraftsRef.current = previewDrafts;
   const [previewPath, setPreviewPath] = useState("");
   const [previewMax, setPreviewMax] = useState(false);
   const [fileHits, setFileHits] = useState<string[]>([]);
@@ -1067,6 +1081,21 @@ export default function ChatApp() {
     { id: "boot", title: "新对话", turns: [] },
   ]);
   const [activeId, setActiveId] = useState("boot");
+  const loopsRef = useRef(loops);
+  loopsRef.current = loops;
+  useEffect(() => {
+    if (!loopOpen) return;
+    const row = loopsRef.current[activeId];
+    if (row && row.status !== "stopped" && row.status !== "idle") {
+      setLoopGoal(row.goal);
+      setLoopInterval(String(row.intervalSec));
+      setLoopMax(row.maxTicks ? String(row.maxTicks) : "");
+    } else {
+      setLoopGoal("");
+      setLoopInterval("900");
+      setLoopMax("");
+    }
+  }, [loopOpen, activeId]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [navReady, setNavReady] = useState(false);
@@ -1161,6 +1190,7 @@ export default function ChatApp() {
   const paletteOpenRef = useRef(false);
   const threadFindOpenRef = useRef(false);
   const grepOpenRef = useRef(false);
+  const loopOpenRef = useRef(false);
   const filesOpenRef = useRef(false);
   const grepQRef = useRef("");
   const appliedStoreRef = useRef(false);
@@ -1502,6 +1532,14 @@ export default function ChatApp() {
             }
             if (message.workspaceRoot) setWorkspaceRoot(message.workspaceRoot);
             else setWorkspaceRoot((prev) => prev || message.cwd);
+            {
+              const next: Record<string, LoopState> = {};
+              for (const row of message.loops || []) {
+                if (!row?.chatId || row.status === "stopped" || row.status === "idle") continue;
+                next[row.chatId] = row;
+              }
+              setLoops(next);
+            }
             setChats((prev) => {
               const keep = [...(message.runningChatIds || []), ...(message.queuedChatIds || [])];
               const queued = new Set(message.queuedChatIds || []);
@@ -1884,6 +1922,42 @@ export default function ChatApp() {
           break;
         case "pong":
           break;
+        case "loop_state":
+          setLoops((prev) => {
+            if (!message.chatId) return prev;
+            const prevRow = prev[message.chatId];
+            return {
+              ...prev,
+              [message.chatId]: {
+                chatId: message.chatId,
+                status: message.status,
+                goal: message.goal,
+                intervalSec: message.intervalSec,
+                tick: message.tick,
+                maxTicks: message.maxTicks,
+                lastSummary: message.lastSummary,
+                nextAt: message.nextAt,
+                tickStatus: prevRow?.tickStatus,
+              },
+            };
+          });
+          break;
+        case "loop_tick":
+          setLoops((prev) => {
+            const row = prev[message.chatId];
+            if (!row) return prev;
+            return {
+              ...prev,
+              [message.chatId]: {
+                ...row,
+                tick: message.tick,
+                lastSummary: message.summary,
+                tickStatus: message.status,
+                status: message.status === "stopped" ? "stopped" : row.status,
+              },
+            };
+          });
+          break;
         case "chat_title": {
           const title = message.title.trim();
           if (!message.chatId || !title) break;
@@ -2222,6 +2296,18 @@ export default function ChatApp() {
               media: message.media,
             };
             if (typeof message.content === "string") putPreviewText(message.path, message.content);
+            const rel = relToCwd(message.path, cwd) || message.path;
+            const draft = previewDraftsRef.current[rel] ?? previewDraftsRef.current[message.path];
+            if (
+              typeof message.content === "string" &&
+              draft != null &&
+              draft !== message.content &&
+              message.content !== saveSnapshotRef.current[rel] &&
+              message.content !== saveSnapshotRef.current[message.path]
+            ) {
+              const name = rel.split("/").pop() || rel;
+              setNotice(`${name} 在磁盘上有新内容，未保存的修改还留着`);
+            }
             setPreviewTabs((prev) => {
               const idx = prev.findIndex((tab) => match(tab.path));
               if (idx < 0) {
@@ -2262,7 +2348,28 @@ export default function ChatApp() {
             setError(message.error);
             break;
           }
-          setNotice(`已保存 ${message.path}`);
+          {
+            const rel = relToCwd(message.path, cwd) || message.path;
+            const pending = saveSnapshotRef.current[rel] ?? saveSnapshotRef.current[message.path];
+            const draft = previewDraftsRef.current[rel] ?? previewDraftsRef.current[message.path];
+            delete saveSnapshotRef.current[rel];
+            delete saveSnapshotRef.current[message.path];
+            if (pending != null) saveSnapshotRef.current[rel] = pending;
+            if (pending != null && (draft == null || draft === pending)) {
+              setPreviewDrafts((prev) => {
+                if (!(rel in prev) && !(message.path in prev)) return prev;
+                const next = { ...prev };
+                delete next[rel];
+                delete next[message.path];
+                return next;
+              });
+              setNotice(`已保存 ${rel}`);
+            } else if (pending != null) {
+              setNotice(`已保存 ${rel}。之后的修改还没写入`);
+            } else {
+              setNotice(`已保存 ${message.path}`);
+            }
+          }
           send({ type: "list_files", query: "", chatId: activeIdRef.current });
           send({
             type: "read_file",
@@ -2598,11 +2705,18 @@ export default function ChatApp() {
         }
         if (grepOpenRef.current) {
           setGrepOpen(false);
+          if (wideIDERef.current) setSidePane("chats");
+          return;
+        }
+        if (loopOpenRef.current) {
+          setLoopOpen(false);
+          if (wideIDERef.current) setSidePane("chats");
           return;
         }
         if (filesOpenRef.current) {
           setFilesOpen(false);
           setFilesQuery("");
+          if (wideIDERef.current) setSidePane("chats");
           return;
         }
         if (searchOpenRef.current) {
@@ -2628,6 +2742,7 @@ export default function ChatApp() {
         setPaletteOpen(false);
         setThreadFindOpen(false);
         setGrepOpen(false);
+        setLoopOpen(false);
         setSearchOpen(true);
         setSearchQ("");
       }
@@ -2636,6 +2751,7 @@ export default function ChatApp() {
         setSearchOpen(false);
         setThreadFindOpen(false);
         setGrepOpen(false);
+        setLoopOpen(false);
         setPaletteOpen((open) => !open);
         setPaletteQ("");
         setPaletteIndex(0);
@@ -2646,7 +2762,9 @@ export default function ChatApp() {
           setSearchOpen(false);
           setPaletteOpen(false);
           setThreadFindOpen(false);
+          setLoopOpen(false);
           setGrepOpen(true);
+          if (wideIDERef.current) setSidePane("search");
           return;
         }
         const node = event.target;
@@ -2670,6 +2788,14 @@ export default function ChatApp() {
     if (!paletteOpen) return;
     if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
   }, [paletteOpen, send, treePaths.length]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(min-width: 960px)");
+    const apply = () => setWideIDE(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
 
   useEffect(() => {
     if (!filesOpen) return;
@@ -3016,11 +3142,38 @@ export default function ChatApp() {
 
   function openFilesBrowser() {
     setFilesQuery("");
-    setFilesOpen(true);
-    setNavOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
     setPaletteOpen(false);
     setSearchOpen(false);
-    setGrepOpen(false);
+    if (wideIDERef.current) setSidePane("files");
+    setFilesOpen(true);
+  }
+
+  function chooseSide(pane: "chats" | "files" | "search" | "git" | "loop") {
+    if (!wideIDERef.current) {
+      if (pane === "chats") setNavOpen(true);
+      if (pane === "files" || pane === "git") openFilesBrowser();
+      if (pane === "search") {
+        setPaletteOpen(false);
+        setLoopOpen(false);
+        setGrepOpen(true);
+      }
+      if (pane === "loop") {
+        setGrepOpen(false);
+        setLoopOpen(true);
+      }
+      return;
+    }
+    setSidePane(pane);
+    setNavOpen(false);
+    setSearchOpen(false);
+    setPaletteOpen(false);
+    setThreadFindOpen(false);
+    setFilesOpen(pane === "files" || pane === "git");
+    setGrepOpen(pane === "search");
+    setLoopOpen(pane === "loop");
+    if (pane === "files") setFilesQuery("");
   }
 
   function selectChat(chat: Chat) {
@@ -3565,7 +3718,25 @@ export default function ChatApp() {
   }
 
   function saveFile(path: string, content: string) {
+    const rel = relToCwd(path, cwdRef.current) || path;
+    saveSnapshotRef.current[rel] = content;
     send({ type: "write_file", path, content, chatId: activeIdRef.current });
+  }
+
+  function dropPreviewDraft(path: string) {
+    setPreviewDrafts((prev) => {
+      if (!(path in prev)) return prev;
+      const next = { ...prev };
+      delete next[path];
+      return next;
+    });
+  }
+
+  function previewDraftDirty(path: string) {
+    const draft = previewDraftsRef.current[path];
+    if (draft == null) return false;
+    const tab = previewTabsRef.current?.find((item) => sameFile(item.path, path));
+    return draft !== (tab?.content ?? "");
   }
 
   function retryTurn(turn: Turn) {
@@ -3739,6 +3910,11 @@ export default function ChatApp() {
   }
 
   function closePreviewTab(path: string) {
+    if (previewDraftDirty(path)) {
+      const name = path.split("/").pop() || path;
+      if (!window.confirm(`关掉 ${name}？未保存的修改会丢掉。`)) return;
+    }
+    dropPreviewDraft(path);
     setPreviewTabs((prev) => {
       const next = prev.filter((tab) => !sameFile(tab.path, path));
       if (!next.length) setPreviewMax(false);
@@ -3842,6 +4018,7 @@ export default function ChatApp() {
   paletteOpenRef.current = paletteOpen;
   threadFindOpenRef.current = threadFindOpen;
   grepOpenRef.current = grepOpen;
+  loopOpenRef.current = loopOpen;
   filesOpenRef.current = filesOpen;
   grepQRef.current = grepQ;
   const searchHits = searchQ.trim()
@@ -3908,7 +4085,28 @@ export default function ChatApp() {
   }
 
   return (
-    <div className={`app${navOpen ? " nav-open" : ""}${navReady ? " nav-ready" : ""}`}>
+    <div className={`app${navOpen ? " nav-open" : ""}${navReady ? " nav-ready" : ""}${wideIDE ? ` ide pane-${sidePane}` : ""}${previewTabs.length ? " has-editor" : ""}`}>
+      <nav className="activity-bar" aria-label="活动栏">
+        {(
+          [
+            ["chats", "对话"],
+            ["files", "文件"],
+            ["search", "搜索"],
+            ["git", "Git"],
+            ["loop", "Loop"],
+          ] as const
+        ).map(([pane, label]) => (
+          <button
+            key={pane}
+            type="button"
+            className={sidePane === pane ? "on" : ""}
+            aria-pressed={sidePane === pane}
+            onClick={() => chooseSide(pane)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
       {searchShown ? (
         <div className={`search-overlay${searchOpen ? " open" : ""}`} onClick={() => setSearchOpen(false)}>
           <div
@@ -3999,8 +4197,116 @@ export default function ChatApp() {
           </div>
         </div>
       ) : null}
+      {loopOpen ? (
+        <div className="search-overlay open" onClick={() => { if (wideIDE && sidePane === "loop") return; setLoopOpen(false); }}>
+          <form
+            className="search-box loop-box"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const goal = loopGoal.trim();
+              const intervalSec = Math.round(Number(loopInterval));
+              const maxTicks = loopMax.trim() ? Math.round(Number(loopMax)) : undefined;
+              if (!goal) {
+                setNotice("Loop 需要一段目标");
+                return;
+              }
+              if (goal.length > 4000) {
+                setNotice("Loop 目标超过 4000 字");
+                return;
+              }
+              if (!Number.isInteger(intervalSec) || intervalSec < 30 || intervalSec > 86400) {
+                setNotice("间隔要在 30 秒到 24 小时之间");
+                return;
+              }
+              if (maxTicks != null && (!Number.isInteger(maxTicks) || maxTicks < 1 || maxTicks > 100)) {
+                setNotice("最多 1 到 100 拍");
+                return;
+              }
+              send({
+                type: "loop_start",
+                chatId: activeId,
+                goal,
+                intervalSec,
+                maxTicks,
+                model,
+                mode,
+              });
+            }}
+          >
+            <div className="loop-title">Loop · 当前对话</div>
+            <textarea
+              className="loop-goal"
+              rows={4}
+              placeholder="每拍要做的事。做完时让它在最后一行写 LOOP_DONE"
+              value={loopGoal}
+              onChange={(event) => setLoopGoal(event.target.value)}
+            />
+            <label className="loop-field">
+              间隔（秒）
+              <input
+                className="side-input"
+                inputMode="numeric"
+                value={loopInterval}
+                onChange={(event) => setLoopInterval(event.target.value)}
+              />
+            </label>
+            <label className="loop-field">
+              最多拍数，可空
+              <input
+                className="side-input"
+                inputMode="numeric"
+                value={loopMax}
+                onChange={(event) => setLoopMax(event.target.value)}
+              />
+            </label>
+            {loops[activeId] ? (
+              <div className="loop-meta">
+                {loops[activeId].status === "running"
+                  ? "正在跑"
+                  : loops[activeId].status === "armed"
+                    ? "等待下一拍"
+                    : loops[activeId].status === "stopped"
+                      ? "已停止"
+                      : "空闲"}
+                {" · "}第 {loops[activeId].tick} 拍
+                {loops[activeId].maxTicks ? ` / ${loops[activeId].maxTicks}` : ""}
+                {loops[activeId].tickStatus === "skipped"
+                  ? " · 顺延"
+                  : loops[activeId].tickStatus === "error"
+                    ? " · 出错"
+                    : ""}
+                {loops[activeId].lastSummary ? ` · ${loops[activeId].lastSummary}` : ""}
+              </div>
+            ) : (
+              <div className="loop-meta">还没开始。关上网页也会继续，重新打开后状态还在。</div>
+            )}
+            <div className="loop-actions">
+              <button
+                className="new-chat"
+                type="submit"
+                disabled={
+                  !!loops[activeId] &&
+                  loops[activeId].status !== "stopped" &&
+                  loops[activeId].status !== "idle"
+                }
+              >
+                开始
+              </button>
+              <button
+                className="new-chat"
+                type="button"
+                disabled={!loops[activeId] || loops[activeId].status === "stopped"}
+                onClick={() => send({ type: "loop_stop", chatId: activeId })}
+              >
+                停止
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
       {grepShown ? (
-        <div className={`search-overlay${grepOpen ? " open" : ""}`} onClick={() => setGrepOpen(false)}>
+        <div className={`search-overlay${grepOpen ? " open" : ""}`} onClick={() => { if (wideIDE && sidePane === "search") return; setGrepOpen(false); }}>
           <div className="search-box grep-box" onClick={(event) => event.stopPropagation()}>
             <input
               autoFocus={grepOpen}
@@ -4025,7 +4331,7 @@ export default function ChatApp() {
                   event.preventDefault();
                   const hit = grepHits[grepHi];
                   openFile(hit.path, hit.line, false);
-                  setGrepOpen(false);
+                  if (!wideIDERef.current) setGrepOpen(false);
                 }
               }}
             />
@@ -4041,7 +4347,7 @@ export default function ChatApp() {
                       className={`search-item file-hit${index === grepHi ? " active" : ""}`}
                       onClick={() => {
                         openFile(hit.path, hit.line, false);
-                        setGrepOpen(false);
+                        if (!wideIDERef.current) setGrepOpen(false);
                       }}
                     >
                       <span className="search-item-name">
@@ -4066,6 +4372,7 @@ export default function ChatApp() {
         <div
           className={`files-overlay${filesOpen ? " open" : ""}`}
           onClick={() => {
+            if (wideIDE && (sidePane === "files" || sidePane === "git")) return;
             setFilesOpen(false);
             setFilesQuery("");
           }}
@@ -4078,7 +4385,7 @@ export default function ChatApp() {
           >
             <div className="files-browser-head">
               <div className="files-browser-title">
-                <span>文件</span>
+                <span>{sidePane === "git" && wideIDE ? "Git" : "文件"}</span>
                 <span className="files-browser-cwd" title={cwd || workspaceRoot}>
                   {workspaceLabel(cwd || workspaceRoot, workspaceRoot)}
                 </span>
@@ -4088,6 +4395,7 @@ export default function ChatApp() {
                 className="files-browser-close"
                 aria-label="关闭文件浏览器"
                 onClick={() => {
+                  if (wideIDE) setSidePane("chats");
                   setFilesOpen(false);
                   setFilesQuery("");
                 }}
@@ -4108,7 +4416,7 @@ export default function ChatApp() {
                 }
               }}
             />
-            <div className="files-browser-body">
+            <div className={`files-browser-body${wideIDE && sidePane === "git" ? " git-only" : ""}`}>
               {Object.keys(gitStatus).length ? (
                 <div className="changes-list files-browser-changes">
                   <div className="side-label">改动 · {Object.keys(gitStatus).length}</div>
@@ -4122,8 +4430,10 @@ export default function ChatApp() {
                         title={path}
                         onClick={() => {
                           openFile(path, undefined, true);
-                          setFilesOpen(false);
-                          setFilesQuery("");
+                          if (!wideIDERef.current) {
+                            setFilesOpen(false);
+                            setFilesQuery("");
+                          }
                         }}
                       >
                         <FileGlyph path={path} />
@@ -4137,6 +4447,8 @@ export default function ChatApp() {
                       </button>
                     ))}
                 </div>
+              ) : wideIDE && sidePane === "git" ? (
+                <div className="git-empty">工作区干净</div>
               ) : null}
               <FileTree
                 paths={treePaths}
@@ -4146,13 +4458,17 @@ export default function ChatApp() {
                 variant="browser"
                 onPick={(path) => {
                   handlePickFile(path);
-                  setFilesOpen(false);
-                  setFilesQuery("");
+                  if (!wideIDERef.current) {
+                    setFilesOpen(false);
+                    setFilesQuery("");
+                  }
                 }}
                 onOpen={(path) => {
                   openFile(path);
-                  setFilesOpen(false);
-                  setFilesQuery("");
+                  if (!wideIDERef.current) {
+                    setFilesOpen(false);
+                    setFilesQuery("");
+                  }
                 }}
                 onCreate={handleTreeCreate}
                 onRename={handleTreeRename}
@@ -4196,6 +4512,21 @@ export default function ChatApp() {
             + 新对话
           </button>
           <button
+            className={`new-chat grep-chat${loopOpen ? " open" : ""}${loops[activeId] && loops[activeId].status !== "stopped" && loops[activeId].status !== "idle" ? " on" : ""}`}
+            type="button"
+            title="Loop"
+            onClick={() => {
+              setSearchOpen(false);
+              setPaletteOpen(false);
+              setThreadFindOpen(false);
+              setGrepOpen(false);
+              if (wideIDE) setSidePane("loop");
+              setLoopOpen(true);
+            }}
+          >
+            ↺
+          </button>
+          <button
             className="new-chat grep-chat"
             type="button"
             title="搜代码 ⌘⇧F"
@@ -4203,6 +4534,8 @@ export default function ChatApp() {
               setSearchOpen(false);
               setPaletteOpen(false);
               setThreadFindOpen(false);
+              setLoopOpen(false);
+              if (wideIDE) setSidePane("search");
               setGrepOpen(true);
             }}
           >
@@ -4947,9 +5280,25 @@ export default function ChatApp() {
             onSelect={setPreviewPath}
             onCloseTab={closePreviewTab}
             onCloseAll={() => {
+              const dirty = previewTabsRef.current.filter((tab) => previewDraftDirty(tab.path));
+              if (dirty.length && !window.confirm(`关掉 ${dirty.length} 个未保存的标签？修改会丢掉。`)) return;
+              setPreviewDrafts({});
               setPreviewTabs([]);
               setPreviewPath("");
               setPreviewMax(false);
+            }}
+            drafts={previewDrafts}
+            onDraft={(path, value) => {
+              setPreviewDrafts((prev) => {
+                if (value == null) {
+                  if (!(path in prev)) return prev;
+                  const next = { ...prev };
+                  delete next[path];
+                  return next;
+                }
+                if (prev[path] === value) return prev;
+                return { ...prev, [path]: value };
+              });
             }}
             expanded={previewMax}
             onToggleExpand={() => setPreviewMax((open) => !open)}

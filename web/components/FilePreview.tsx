@@ -109,6 +109,8 @@ export default function FilePreview({
   onKeep,
   onRejectHunk,
   onSave,
+  drafts,
+  onDraft,
   canRevert,
   chatId,
   onCanvasAction,
@@ -129,6 +131,8 @@ export default function FilePreview({
   onKeep?: (path: string) => void;
   onRejectHunk?: (path: string, hunk: string) => void;
   onSave?: (path: string, content: string) => void;
+  drafts?: Record<string, string>;
+  onDraft?: (path: string, value: string | null) => void;
   canRevert?: boolean;
   chatId?: string;
   onCanvasAction?: (action: CanvasAction, path: string) => void;
@@ -141,8 +145,17 @@ export default function FilePreview({
   const searchRef = useRef<HTMLInputElement | null>(null);
   const [query, setQuery] = useState("");
   const [hit, setHit] = useState(0);
-  const [editing, setEditing] = useState(false);
-  const [editDraft, setEditDraft] = useState("");
+  const [editingLocal, setEditingLocal] = useState(false);
+  const [editDraftLocal, setEditDraftLocal] = useState("");
+  const externalDrafts = Boolean(onDraft);
+  const editing = externalDrafts
+    ? Object.prototype.hasOwnProperty.call(drafts || {}, active?.path || "")
+    : editingLocal;
+  const editDraft = externalDrafts
+    ? active && drafts
+      ? (drafts[active.path] ?? "")
+      : ""
+    : editDraftLocal;
   const [askSel, setAskSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [viewMode, setViewMode] = useState<"live" | "source">("live");
   const [canvasError, setCanvasError] = useState<string | null>(null);
@@ -159,11 +172,14 @@ export default function FilePreview({
   useEffect(() => {
     setQuery("");
     setHit(0);
-    setEditing(false);
     setAskSel(null);
     setViewMode("live");
     setCanvasError(null);
-  }, [activePath]);
+    if (!onDraft) {
+      setEditingLocal(false);
+      setEditDraftLocal("");
+    }
+  }, [activePath, onDraft]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -243,7 +259,7 @@ export default function FilePreview({
         {tabs.map((tab) => (
           <div
             key={tab.path}
-            className={`file-preview-tab${sameTab(tab.path, active.path) ? " on" : ""}${tab.diff ? " diff" : ""}${tabKind(tab.path, tab.kind) === "canvas" || isCanvasPath(tab.path) ? " canvas" : ""}`}
+            className={`file-preview-tab${sameTab(tab.path, active.path) ? " on" : ""}${tab.diff ? " diff" : ""}${tabKind(tab.path, tab.kind) === "canvas" || isCanvasPath(tab.path) ? " canvas" : ""}${drafts && Object.prototype.hasOwnProperty.call(drafts, tab.path) && drafts[tab.path] !== (tab.content ?? "") ? " dirty" : ""}`}
           >
             <button
               type="button"
@@ -320,15 +336,25 @@ export default function FilePreview({
               <button
                 type="button"
                 className="pill on"
-                disabled={editDraft === active.content}
-                onClick={() => {
-                  onSave(active.path, editDraft);
-                  setEditing(false);
-                }}
+                disabled={editDraft === (active.content ?? "")}
+                onClick={() => onSave?.(active.path, editDraft)}
               >
                 保存
               </button>
-              <button type="button" className="pill" onClick={() => setEditing(false)}>
+              <button
+                type="button"
+                className="pill"
+                onClick={() => {
+                  if (
+                    editDraft !== (active.content ?? "") &&
+                    !window.confirm(`放弃 ${active.path.split("/").pop()} 里未保存的修改？`)
+                  ) {
+                    return;
+                  }
+                  if (onDraft) onDraft(active.path, null);
+                  else setEditingLocal(false);
+                }}
+              >
                 取消
               </button>
             </>
@@ -337,8 +363,12 @@ export default function FilePreview({
               type="button"
               className="pill"
               onClick={() => {
-                setEditDraft(active.content || "");
-                setEditing(true);
+                const next = active.content || "";
+                if (onDraft) onDraft(active.path, next);
+                else {
+                  setEditDraftLocal(next);
+                  setEditingLocal(true);
+                }
               }}
             >
               编辑
@@ -471,16 +501,25 @@ export default function FilePreview({
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            onChange={(event) => setEditDraft(event.target.value)}
+            onChange={(event) => {
+              if (onDraft && active) onDraft(active.path, event.target.value);
+              else setEditDraftLocal(event.target.value);
+            }}
             onKeyDown={(event) => {
               if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
                 event.preventDefault();
-                if (onSave && editDraft !== active.content) onSave(active.path, editDraft);
-                setEditing(false);
+                if (onSave && editDraft !== (active.content ?? "")) onSave(active.path, editDraft);
               }
               if (event.key === "Escape") {
                 event.preventDefault();
-                setEditing(false);
+                if (
+                  editDraft !== (active.content ?? "") &&
+                  !window.confirm(`放弃 ${active.path.split("/").pop()} 里未保存的修改？`)
+                ) {
+                  return;
+                }
+                if (onDraft && active) onDraft(active.path, null);
+                else setEditingLocal(false);
               }
             }}
           />

@@ -1,0 +1,14 @@
+{
+  "running": false,
+  "inProgress": false,
+  "startedAt": null,
+  "rotation": ["kimi-k3-max", "glm-5.2-high", "grok-4.7-xhigh-fast"],
+  "rotationIndex": 1,
+  "lastSlice": "W2",
+  "note": "循环已停。W2 已勾选。下一刀本来是 W3 搜索进侧栏。",
+  "wake": {
+    "sentinel": "AGENT_LOOP_WAKE_IDE",
+    "fallbackSec": 180,
+    "prompt": "读 /Users/billxuopenclaw/Projects/cursor-remote/docs/IDE.md 第 4 节和 docs/ide-loop-state.json。若 running 为 false 则停止，不要再武装心跳。若 inProgress 为 true 且 startedAt 距现在不足 90 分钟，本拍跳过，只重新武装 3 分钟心跳。否则执行第一个未勾选切片：用 rotation[rotationIndex % rotation.length] 实现并验证。然后同时请 kimi-k3-max、glm-5.2-high、grok-4.7-xhigh-fast 评审。三个都是 PASS 或 PASS_WITH_MINOR 才勾选、rotationIndex 加 1（超过名单长度则回到 0）、inProgress 设为 false，并武装下一拍（sleep 180 后打印哨兵和本 prompt）。任一 FAIL 或仍有 CRITICAL/MAJOR 就当拍修完，只复审没通过的模型，通过前不要做下一刀，也不要武装心跳。不要 git commit。"
+  }
+}
