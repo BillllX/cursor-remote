@@ -46,6 +46,7 @@ import {
   mediaSecret,
   requireCwd,
   resolveTenant,
+  sandboxEnabledForTenant,
   saveDisk,
   settlePersistedChats,
   stateDir,
@@ -65,6 +66,11 @@ const PROXY_WEB = !/^(0|false|off|no)$/i.test(process.env.GATEWAY_PROXY_WEB || "
 const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
 
 loadTenants();
+for (const tenant of allTenants()) {
+  if (!sandboxEnabledForTenant(tenant)) {
+    console.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);
+  }
+}
 let modelsCache: { at: number; ids: string[] } | null = null;
 
 type AgentHandle = Awaited<ReturnType<typeof Agent.create>>;
@@ -910,9 +916,10 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
 
   const modelId = (slot.model || conn.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const catalog = await listModels(apiKey);
+  const sandbox = sandboxEnabledForTenant(conn.tenant);
   const local: { cwd: string; sandboxOptions?: { enabled: boolean } } = {
     cwd,
-    sandboxOptions: { enabled: true },
+    sandboxOptions: { enabled: sandbox },
   };
   const base = { apiKey, model: { id: modelId }, local };
   const withCrew = {

@@ -118,6 +118,18 @@ export function getTenant(id: string): Tenant | undefined {
   return allTenants().find((item) => item.id === id);
 }
 
+function tenantSlug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** BillXu 的 Agent 不进沙箱。其余租户维持沙箱。 */
+export function sandboxEnabledForTenant(
+  tenant: { id: string; name: string } | null | undefined,
+): boolean {
+  if (!tenant) return true;
+  return tenantSlug(tenant.id) !== "billxu" && tenantSlug(tenant.name) !== "billxu";
+}
+
 export function mediaSecret(): string {
   return loadTenants().mediaSecret;
 }
