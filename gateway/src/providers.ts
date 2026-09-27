@@ -116,6 +116,43 @@ export function externalModelIds(): string[] {
 export type ChatHistoryItem = { role: "user" | "assistant"; text: string };
 
 /**
+ * MiniMax-M2 的思考链不走 reasoning_content 字段，而是内联在 content 的
+ * <think>...</think> 标签里——流式拆分到 thinking 通道，否则用户看到原始标签。
+ * 标签可能跨 delta（如 "<thi"+"nk>"），缓冲尾部保留「模式长-1」字符防切半；
+ * 不输出 <think> 的模型透明转发（仅拖尾几字符，流式体验不受影响）。
+ */
+class ThinkSplitter {
+  private buf = "";
+  private inThink = false;
+  constructor(
+    private onText: (s: string) => void,
+    private onThinking: (s: string) => void,
+  ) {}
+  push(delta: string) {
+    this.buf += delta;
+    for (;;) {
+      const tag = this.inThink ? "</think>" : "<think>";
+      const at = this.buf.indexOf(tag);
+      if (at < 0) {
+        const keep = Math.min(tag.length - 1, this.buf.length);
+        const emit = this.buf.slice(0, this.buf.length - keep);
+        if (emit) (this.inThink ? this.onThinking : this.onText)(emit);
+        this.buf = this.buf.slice(this.buf.length - keep);
+        return;
+      }
+      const before = this.buf.slice(0, at);
+      if (before) (this.inThink ? this.onThinking : this.onText)(before);
+      this.buf = this.buf.slice(at + tag.length);
+      this.inThink = !this.inThink;
+    }
+  }
+  flush() {
+    if (this.buf) (this.inThink ? this.onThinking : this.onText)(this.buf);
+    this.buf = "";
+  }
+}
+
+/**
  * 流式 chat completions：SSE → onText/onThinking 回调。
  * 返回累计输出字符数（计量用）；取消/错误抛给调用方。
  */
@@ -174,6 +211,7 @@ export async function streamChatCompletions(opts: {
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
+  const splitter = new ThinkSplitter(onText, onThinking);
   let buffer = "";
   for (;;) {
     const { done, value } = await reader.read();
@@ -196,10 +234,11 @@ export async function streamChatCompletions(opts: {
         };
         const delta = json.choices?.[0]?.delta;
         if (delta?.reasoning_content) onThinking(delta.reasoning_content);
-        if (delta?.content) onText(delta.content);
+        if (delta?.content) splitter.push(delta.content);
       } catch {
         // 半截 JSON（跨帧）/心跳注释——丢帧不致命
       }
     }
   }
+  splitter.flush();
 }
