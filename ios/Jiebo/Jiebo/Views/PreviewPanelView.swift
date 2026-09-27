@@ -144,7 +144,7 @@ struct PreviewPanelView: View {
             // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
             if tab.kind == .image, !tab.diff {
                 Button {
-                    store.saveImageToPhotos(path: tab.path)
+                    store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
                 } label: {
                     Image(systemName: "square.and.arrow.down.on.square")
                         .font(.system(size: 12, weight: .medium))
@@ -155,13 +155,14 @@ struct PreviewPanelView: View {
                         .hitTarget()
                 }
                 .buttonStyle(.plain)
+                .disabled(store.exportLoading) // 与分享按钮同一互斥位（GLM R1 M2）
                 .accessibilityLabel("保存 \(tab.filename) 到相册")
             }
             // P10：全类型分享（文本用内联 content 写 temp，媒体/大文件走 /media 下载）——
             // 系统分享 sheet 覆盖存文件/存相册/隔空投送；替代原媒体类的 Quick Look 逃生门
             //（QL 全屏预览仍可从文件树长按菜单进）
             Button {
-                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff)
+                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
             } label: {
                 Group {
                     if store.exportLoading {

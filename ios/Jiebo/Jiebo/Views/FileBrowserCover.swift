@@ -57,9 +57,23 @@ struct FileBrowserCover: View {
                         .hitTarget()
                 }
             }
-            // cover 自己画一条通知条——store.notice 的横幅在 ThreadView，cover 背后用户看不见
+            // cover 自己画通知/错误条——store.notice/bannerError 的横幅在 ThreadView，cover 背后用户看不见。
+            // 错误（红）优先于通知（绿）：导出/存相册失败走 bannerError（Grok R1 M3）
             .overlay(alignment: .top) {
-                if !store.notice.isEmpty {
+                if !store.bannerError.isEmpty {
+                    Text(friendlyError(store.bannerError))
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.danger)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(JieboColor.white)
+                        .clipShape(Capsule())
+                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                        .padding(.top, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .animation(.easeInOut(duration: 0.2), value: store.bannerError.isEmpty)
+                        .allowsHitTesting(false)
+                } else if !store.notice.isEmpty {
                     Text(store.notice)
                         .font(JieboFont.ui(13))
                         .foregroundStyle(JieboColor.ink)
@@ -174,7 +188,7 @@ struct FileBrowserCover: View {
                     // P10：导出（与预览面板头部同款；图片多一个「存相册」）
                     if tab.kind == .image, !tab.diff {
                         Button {
-                            store.saveImageToPhotos(path: tab.path)
+                            store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
                         } label: {
                             Image(systemName: "square.and.arrow.down.on.square")
                                 .font(.system(size: 12, weight: .medium))
@@ -185,10 +199,11 @@ struct FileBrowserCover: View {
                                 .hitTarget()
                         }
                         .buttonStyle(.plain)
+                        .disabled(store.exportLoading)
                         .accessibilityLabel("保存 \(tab.filename) 到相册")
                     }
                     Button {
-                        store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff)
+                        store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
                     } label: {
                         Group {
                             if store.exportLoading {
