@@ -414,6 +414,7 @@ final class ChatStore {
             // cwd 快照同步刷新：内容来自新工作区，副标题不能还拼旧 cwd。
             // 注意用 active?.cwd——swapActive 先切 activeId 再调本函数，store.cwd 此刻可能还是旧值
             previewTabs[index].cwd = active?.cwd ?? cwd
+            previewTabs[index].chatId = activeId // 票据将绑新会话（Kimi R2 N1：导出按旧会话 cwd 会拿错文件）
             previewTabs[index].loading = true
             send(.readFile(path: previewTabs[index].path, chatId: activeId, diff: previewTabs[index].diff))
             armPreviewWatchdog(path: previewTabs[index].path)
@@ -471,11 +472,12 @@ final class ChatStore {
                 tab.headUrl = nil
             }
             tab.loading = true
+            tab.chatId = activeId // 重读即重签，票据绑当前会话（Kimi R2 N1）
             previewTabs[index] = tab
             send(.readFile(path: path, chatId: activeId, diff: tab.diff))
             armPreviewWatchdog(path: path)
         } else {
-            previewTabs.append(PreviewTab(path: path, kind: kind, diff: wantDiff, content: nil, error: nil, loading: true, url: nil, media: nil, cwd: cwd))
+            previewTabs.append(PreviewTab(path: path, kind: kind, diff: wantDiff, content: nil, error: nil, loading: true, url: nil, media: nil, chatId: activeId, cwd: cwd))
             if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
             send(.readFile(path: path, chatId: activeId, diff: wantDiff))
             armPreviewWatchdog(path: path)
@@ -814,6 +816,7 @@ final class ChatStore {
         guard !token.isEmpty else { return }
         exportTask?.cancel()
         exportLoading = true
+        bannerError = "" // 清旧错误：cover 顶条红优先于绿，不清的话成功 flash 被旧错误挡住（Grok R2 M1）
         let chatId = chatId ?? activeId
         let tenantAtStart = tenantId
         let filename = (path as NSString).lastPathComponent
@@ -856,12 +859,20 @@ final class ChatStore {
         guard !token.isEmpty else { return }
         exportTask?.cancel()
         exportLoading = true
+        bannerError = "" // 同 exportPreview（Grok R2 M1）
         let chatId = chatId ?? activeId
         let tenantAtStart = tenantId
         exportTask = Task {
             do {
                 let data = try await downloadData(path: path, chatId: chatId, token: token)
                 guard !Task.isCancelled, tenantId == tenantAtStart else { return }
+                // 仅校验可解码（不用于写入——写入走 addResource(data:) 保原字节）；
+                // 损坏图/ico 等 Photos 不收的格式在这里给中文文案，不露 PHPhotosErrorDomain 原文（Grok R2 N1）
+                guard UIImage(data: data) != nil else {
+                    exportLoading = false
+                    bannerError = "图片数据读不出来，没法存相册"
+                    return
+                }
                 // Photos 框架：权限明确、错误可抛（UIImageWriteToSavedPhotosAlbum 的
                 // selector 回调有 delegate 存活坑，且权限拒绝时静默）。
                 // addOnly 只回 authorized/denied/restricted，无 .limited（GLM R1 N4）
