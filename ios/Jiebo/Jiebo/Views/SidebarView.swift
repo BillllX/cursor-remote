@@ -134,8 +134,11 @@ struct SidebarView: View {
             AdminStatsView()
         }
         .task {
-            expanded = Self.loadExpanded()
+            expanded = Self.loadExpanded(for: store.tenantId)
             UserDefaults.standard.removeObject(forKey: Self.legacyCollapsedKey) // P9：清 P7b 旧 key
+        }
+        .onChange(of: store.tenantId) { _, next in
+            expanded = Self.loadExpanded(for: next) // 租户切换：展开集按租户隔离（Kimi R1 N4）
         }
     }
 
@@ -162,7 +165,7 @@ struct SidebarView: View {
                 // 含活跃会话的组不接受折叠：点了没反应会像 bug，且写入展开集会「记仇」
                 //（活跃会话移走后组状态莫名其妙变化）——chevron 置灰表达不可点
                 if expanded.contains(group.key) { expanded.remove(group.key) } else { expanded.insert(group.key) }
-                Self.saveExpanded(expanded)
+                Self.saveExpanded(expanded, for: store.tenantId)
             }
         } label: {
             HStack(spacing: 6) {
@@ -276,19 +279,22 @@ struct SidebarView: View {
 
     // MARK: 展开状态持久化（UserDefaults 存 JSON，key=normPath；路径漂移后 key 失效无害，默认收起兜底）
 
-    private static let expandedKey = "sidebar.expandedWorkspaces"
+    /// 按租户隔离（与 lastActiveChatId 同口径）；空租户（未连接）退化为全局 key
+    private static func expandedKey(for tenantId: String) -> String {
+        tenantId.isEmpty ? "sidebar.expandedWorkspaces" : "sidebar.expandedWorkspaces.\(tenantId)"
+    }
     /// P7b 的负向 key：语义与新默认一致（收起），直接废弃清理
     private static let legacyCollapsedKey = "sidebar.collapsedWorkspaces"
 
-    private static func loadExpanded() -> Set<String> {
-        guard let data = UserDefaults.standard.data(forKey: expandedKey),
+    private static func loadExpanded(for tenantId: String) -> Set<String> {
+        guard let data = UserDefaults.standard.data(forKey: expandedKey(for: tenantId)),
               let list = try? JSONDecoder().decode([String].self, from: data) else { return [] }
         return Set(list)
     }
 
-    private static func saveExpanded(_ set: Set<String>) {
+    private static func saveExpanded(_ set: Set<String>, for tenantId: String) {
         let list = Array(set)
-        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: expandedKey)
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: expandedKey(for: tenantId))
     }
 
     // MARK: 杂项

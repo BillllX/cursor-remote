@@ -254,8 +254,9 @@ export type ServerMessage =
   | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[] }
   | { type: "pong" };
 
-/** P9：单租户使用统计。estTokens 按字符估算（≈4 字符/token）——Cursor 官方不暴露
- *  API key 用量端点（api.cursor.com 只有 agents/runs/models 等），此为网关自计量的相对消耗 */
+/** P9：单租户使用统计。estTokens 按字符估算（≈4 字符/token，英文偏向；中文 1 字符≈1-2 token，
+ *  中文场景实际消耗约为估算值的 2-4 倍）——Cursor 官方不暴露 API key 用量端点
+ * （api.cursor.com 只有 agents/runs/models 等），此为网关自计量的相对消耗 */
 export type AdminTenantStats = {
   id: string;
   name: string;
@@ -266,13 +267,14 @@ export type AdminTenantStats = {
   chats: number;
   /** 累计用户消息数（prompt 条数，含排队） */
   turns: number;
-  /** 累计 agent 运行次数（一次 confirm-writes 重放算两次——两次都真实消耗 API） */
+  /** 累计 agent 运行完成次数（按 finishRun 计；confirm-writes 被拦截的首次运行手动收尾、
+   *  不经 finishRun，故「拦截+重放」实际计 1 次——相对消耗口径，非精确 API 调用数） */
   runs: number;
   /** 累计工具调用完成数 */
   toolCalls: number;
   /** 累计运行时长（毫秒） */
   runMs: number;
-  /** 累计用户输入字符数 */
+  /** 累计用户输入字符数（仅文本；纯图 prompt 计 0，图像 token 不在口径内） */
   inChars: number;
   /** 累计助手输出字符数（text + thinking） */
   outChars: number;

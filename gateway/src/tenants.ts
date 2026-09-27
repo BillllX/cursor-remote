@@ -208,7 +208,7 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     const token = typeof rec.token === "string" ? rec.token : "";
     const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id;
-    const admin = rec.admin === true;
+    const admin = rec.admin === true || rec.admin === "true"; // 手写 json 易写成字符串，宽容解析
     if (!ID_RE.test(id)) {
       throw new Error(`tenants.json：id「${id || "?"}」不合法，只用小写字母、数字和短横线。`);
     }

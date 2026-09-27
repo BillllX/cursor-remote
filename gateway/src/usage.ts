@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stateDir } from "./tenants.js";
 
@@ -7,6 +7,14 @@ import { stateDir } from "./tenants.js";
  * /v0/usage、/v0/billing 等均 404），网关只能自计量相对消耗：
  * turns/runs/toolCalls/runMs 是硬指标；inChars/outChars 按字符累计，
  * estTokens = chars/4 是粗估（UI 必须标注「估算」）。
+ *
+ * 口径说明（评审共识，均为可接受的近似）：
+ * - turns：prompt 分发即计，含排队/无 key 被拒/纯图（纯图 inChars 计 0）；
+ * - runs：按 finishRun 完成次数计，含 cancelled/error；confirm-writes 被拦截的
+ *   首次运行手动收尾不经 finishRun，「拦截+重放」计 1 次；titleChat 起标题计 1 次；
+ * - toolCalls：只计已完成的工具调用（run 中断时未完成的 openTools 不计）；
+ * - inChars：仅用户原文，不含 system prompt/工作区规则/工具结果回灌；
+ * - outChars：text + thinking + 标题，不含工具调用参数（写文件参数是输出大头，未计）。
  *
  * 持久化：stateDir/usage.json，2s 节流写盘（密集事件不推迟落盘）+ SIGTERM/SIGINT/exit 兜底 flush。
  * 文件损坏/缺字段时容错为零值——统计丢了不影响主流程。
@@ -158,7 +166,10 @@ export function flushUsage(): void {
       version: 1,
       tenants: Object.fromEntries(recs.entries()),
     };
-    writeFileSync(file, JSON.stringify(payload));
+    // tmp + rename 原子替换：避免 SIGKILL/断电写一半损坏整份计量（load 虽容错但会丢全部历史）
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(payload));
+    renameSync(tmp, file);
   } catch {
     // 磁盘满/权限——统计丢了不影响主流程
   }

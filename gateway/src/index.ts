@@ -2472,11 +2472,13 @@ async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: st
     const title = sanitizeChatTitle(result.result || "");
     if (!title || title === "新对话") return;
     namedChats.add(chatId);
+    noteOutput(tenant.id, title.length); // 标题输出也走同一 API key
     send(ws, { type: "chat_title", chatId, title });
   } catch (err) {
     console.error("titleChat", err instanceof Error ? err.message : err);
   } finally {
     namingChats.delete(chatId);
+    noteRun(tenant.id); // 起标题是一次真实 agent 调用（Kimi R1 M3），成败都计
   }
 }
 

@@ -60,7 +60,7 @@ struct AdminStatsView: View {
             }
             .padding(.vertical, 6)
         } header: {
-            Text("API Key 总消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened))} 更新" } ?? ""))
+            Text("API Key 估算消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened))} 更新" } ?? ""))
         }
     }
 
@@ -124,7 +124,7 @@ struct AdminStatsView: View {
 
     private var footer: some View {
         Section {
-            Text("token 为按字符估算（≈4 字符/token），反映各账号的相对消耗；Cursor 官方未提供 API key 账单查询。")
+            Text("token 为按字符估算（英文 ≈4 字符/token；中文 1 字符 ≈1-2 token，中文场景实际消耗约为估算值的 2-4 倍），反映各账号的相对消耗；Cursor 官方未提供 API key 账单查询。")
                 .font(JieboFont.ui(11))
                 .foregroundStyle(JieboColor.dim)
         }

@@ -1117,7 +1117,6 @@ final class ChatStore {
 
         switch message {
         case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin):
-            isAdmin = admin // P9：管理员才显示统计入口
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
@@ -1127,6 +1126,7 @@ final class ChatStore {
                     UserDefaults.standard.set(nextTenant, forKey: tenantKey)
                 }
             }
+            isAdmin = admin // P9：管理员才显示统计入口（须在 resetTenantSession 之后，否则被其清回 false）
             if let name = readyTenantName?.nilIfEmpty {
                 tenantName = name
             }
@@ -1572,8 +1572,7 @@ final class ChatStore {
         if chats.isEmpty {
             let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: model, mode: mode)
             chats = [chat]
-            activeId = chat.id
-            pendingImages = [] // 旧会话已不存在，待发图无归属
+            swapActive(to: chat.id) // P9：统一入口——持久化 lastActive、置换草稿/待发图归属
             send(.newSession(chatId: chat.id, cwd: chat.cwd))
         }
     }
@@ -1913,7 +1912,11 @@ final class ChatStore {
             restoreLastActiveIfNeeded() // P9：远端为空也先尝试恢复（本地脏会话可能就是上次活跃的）
             if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
                 swapActive(to: first.id)
-                applySession(first)
+            }
+            // restore/fallback 之后统一 applySession（GLM R1 M1：漏调会让草稿/模式/工作区不载入，
+            // 用户再输入时 persistDraft 把空草稿写回恢复的会话——数据丢失）
+            if let keep = chats.first(where: { $0.id == activeId }) {
+                applySession(keep)
             }
             if !dirtyChatIds.isEmpty { scheduleSync() }
             ensureTurnsLoaded(activeId)
