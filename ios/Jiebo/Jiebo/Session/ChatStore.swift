@@ -104,7 +104,14 @@ final class ChatStore {
     private var stallTask: Task<Void, Never>?
     private var lastProgress = Date()
     private let tenantKey = "jiebo.tenantId"
+    /// P9：最后活跃会话是否已在本次启动恢复过（只恢复一次，重连/后续 stored_state 不再抢）
+    private var didRestoreLastActive = false
     private var pendingUploads: [String: CheckedContinuation<String, Error>] = [:]
+
+    /// P9：最后活跃会话按租户隔离持久化（登出不清——下次登录同租户要能直接打开）
+    private var lastChatKey: String? {
+        tenantId.isEmpty ? nil : "jiebo.lastActiveChatId.\(tenantId)"
+    }
 
     func start() {
         guard !started else { return }
@@ -349,6 +356,10 @@ final class ChatStore {
         persistDraft()
         imagesByChat[activeId] = pendingImages // 待发图片跟会话走
         activeId = newId
+        // P9：持久化最后活跃会话（boot 占位不记）；下次启动 applyStoredState 后恢复
+        if newId != "boot", let key = lastChatKey {
+            UserDefaults.standard.set(newId, forKey: key)
+        }
         pendingImages = imagesByChat[newId] ?? []
         previewTask?.cancel() // 在途预览不带到新会话；取消分支早返回不会自己复位 loading
         previewLoading = false
@@ -1783,6 +1794,7 @@ final class ChatStore {
         workspaces = []
         stateRev = 0
         appliedStore = false
+        didRestoreLastActive = false // P9：换租户后重新允许恢复（新租户有自己的 lastChatKey）
         chatRevs = [:]
         dirtyChatIds = []
         inflightChatIds = []
@@ -1839,6 +1851,21 @@ final class ChatStore {
         }
     }
 
+    /// P9：启动后首次合并出会话列表时恢复上次活跃会话。
+    /// 只在 activeId 还是 boot 占位时动手（用户已手动切换/重连场景不抢）；
+    /// stored id 已被删则什么都不做，交给调用处的默认回落（第一个会话）。
+    /// applySession 不在此调——主分支合并后有统一的 applySession(active)（它有 set_workspace 副作用，不能重发）。
+    private func restoreLastActiveIfNeeded() {
+        guard !didRestoreLastActive else { return }
+        didRestoreLastActive = true
+        guard activeId == "boot",
+              let key = lastChatKey,
+              let stored = UserDefaults.standard.string(forKey: key),
+              stored != "boot",
+              chats.contains(where: { $0.id == stored }) else { return }
+        swapActive(to: stored)
+    }
+
     /// stored_state 应用逻辑（WS 直推与 HTTP /state 拉取共用）
     private func applyStoredState(rows: [JSONValue], rev: Int?, deleted: [String], chatRevs serverRevs: [String: Int]?) {
         if serverRevs != nil { serverSupportsP4 = true }
@@ -1865,10 +1892,11 @@ final class ChatStore {
                 let keptIds = Set(kept.map(\.id))
                 for chat in chats where !keptIds.contains(chat.id) { dropChatState(chat.id) }
                 chats = kept
-                if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
-                    swapActive(to: first.id)
-                    applySession(first)
-                }
+            }
+            restoreLastActiveIfNeeded() // P9：远端为空也先尝试恢复（本地脏会话可能就是上次活跃的）
+            if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
+                swapActive(to: first.id)
+                applySession(first)
             }
             if !dirtyChatIds.isEmpty { scheduleSync() }
             ensureTurnsLoaded(activeId)
@@ -1925,6 +1953,7 @@ final class ChatStore {
             chats[index].turnsComplete = false
         }
         if !dirtyChatIds.isEmpty { scheduleSync() }
+        restoreLastActiveIfNeeded() // P9：默认回落前先恢复上次活跃会话
         if chats.contains(where: { $0.id == activeId }) == false, let first = chats.first {
             swapActive(to: first.id)
         }

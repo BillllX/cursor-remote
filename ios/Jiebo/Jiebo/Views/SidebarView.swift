@@ -2,9 +2,10 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
-    /// P7b：折叠的工作区集合（默认展开，只记负向状态；含活跃会话的组强制展开）。
+    /// P9：展开的工作区集合（默认收起，只记正向状态；含活跃会话的组强制展开）。
+    /// P7b 曾是负向 collapsed 集合，P9 按产品决定翻转默认——旧 key 在 .task 里清掉。
     /// 初始值在 .task 里装载——@State 默认表达式每次视图 init 都求值，JSON 解码不该跟着 body 高频跑
-    @State private var collapsed: Set<String> = []
+    @State private var expanded: Set<String> = []
     /// P8：重命名目标（alert presenting 驱动）
     @State private var renameTarget: ChatSession?
     @State private var renameDraft = ""
@@ -111,7 +112,8 @@ struct SidebarView: View {
             WorkspaceSheet()
         }
         .task {
-            collapsed = Self.loadCollapsed()
+            expanded = Self.loadExpanded()
+            UserDefaults.standard.removeObject(forKey: Self.legacyCollapsedKey) // P9：清 P7b 旧 key
         }
     }
 
@@ -122,10 +124,10 @@ struct SidebarView: View {
         Set(Dictionary(grouping: groups, by: \.name).filter { $0.value.count > 1 }.keys)
     }
 
-    /// 含活跃会话的组强制展开（否则选中项被折进组头里不可见）
+    /// 含活跃会话的组强制展开（否则选中项被折进组头里不可见）；其余组默认收起（P9）
     private func isCollapsed(_ group: WorkspaceGroup) -> Bool {
         if group.chats.contains(where: { $0.id == store.activeId }) { return false }
-        return collapsed.contains(group.key)
+        return !expanded.contains(group.key)
     }
 
     @ViewBuilder
@@ -135,10 +137,10 @@ struct SidebarView: View {
             if group.chats.isEmpty {
                 store.startChat(in: group.path) // 空组：点击直达新建（对齐 web 空组保留的意图）
             } else if !active {
-                // 含活跃会话的组不接受折叠：点了没反应会像 bug，且写入 collapsed 会「记仇」
-                //（活跃会话移走后组莫名其妙自动折叠）——chevron 置灰表达不可点
-                if collapsed.contains(group.key) { collapsed.remove(group.key) } else { collapsed.insert(group.key) }
-                Self.saveCollapsed(collapsed)
+                // 含活跃会话的组不接受折叠：点了没反应会像 bug，且写入展开集会「记仇」
+                //（活跃会话移走后组状态莫名其妙变化）——chevron 置灰表达不可点
+                if expanded.contains(group.key) { expanded.remove(group.key) } else { expanded.insert(group.key) }
+                Self.saveExpanded(expanded)
             }
         } label: {
             HStack(spacing: 6) {
@@ -250,19 +252,21 @@ struct SidebarView: View {
         Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
     }
 
-    // MARK: 折叠状态持久化（UserDefaults 存 JSON，key=normPath；路径漂移后 key 失效无害，默认展开兜底）
+    // MARK: 展开状态持久化（UserDefaults 存 JSON，key=normPath；路径漂移后 key 失效无害，默认收起兜底）
 
-    private static let collapsedKey = "sidebar.collapsedWorkspaces"
+    private static let expandedKey = "sidebar.expandedWorkspaces"
+    /// P7b 的负向 key：语义与新默认一致（收起），直接废弃清理
+    private static let legacyCollapsedKey = "sidebar.collapsedWorkspaces"
 
-    private static func loadCollapsed() -> Set<String> {
-        guard let data = UserDefaults.standard.data(forKey: collapsedKey),
+    private static func loadExpanded() -> Set<String> {
+        guard let data = UserDefaults.standard.data(forKey: expandedKey),
               let list = try? JSONDecoder().decode([String].self, from: data) else { return [] }
         return Set(list)
     }
 
-    private static func saveCollapsed(_ set: Set<String>) {
+    private static func saveExpanded(_ set: Set<String>) {
         let list = Array(set)
-        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: collapsedKey)
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: expandedKey)
     }
 
     // MARK: 杂项
