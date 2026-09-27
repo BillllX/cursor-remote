@@ -1452,6 +1452,27 @@ function pushWorkspace(ws: WebSocket, slot: Slot, conn: Conn, paths: string[] = 
   }
 }
 
+/** 聊天目录在 git 工作区里的相对路径。根目录本身返回空串。 */
+function workspacePrefix(root: string, cwd: string): string {
+  const rel = relative(resolve(root), resolve(cwd)).replace(/\\/g, "/");
+  if (!rel || rel === ".") return "";
+  if (rel === ".." || rel.startsWith("../") || rel.split("/").includes("..")) {
+    throw new Error("检查点工作区不在仓库内");
+  }
+  return rel;
+}
+
+/** 把检查点树里的仓库路径收成聊天目录内的相对路径。仓库外的路径丢掉。 */
+function cwdPathFromTree(treePath: string, prefix: string): string | null {
+  const norm = treePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!norm) return null;
+  if (!prefix) return norm;
+  if (norm === prefix) return null;
+  const lead = `${prefix}/`;
+  if (!norm.startsWith(lead)) return null;
+  return norm.slice(lead.length);
+}
+
 function createCheckpoint(cwd: string, label: string): Checkpoint {
   const ctx = checkpointGit(cwd);
   try {
@@ -1459,7 +1480,11 @@ function createCheckpoint(cwd: string, label: string): Checkpoint {
   } catch {
     git(ctx.cwd, ["read-tree", "--empty"], ctx.env);
   }
-  const listed = listWorkspaceFiles(cwd, "").paths;
+  // 子目录只快照自己。add -A 打在仓库根上会把兄弟项目卷进来，还原时再按根路径删文件。
+  const prefix = workspacePrefix(ctx.cwd, cwd);
+  const listed = prefix
+    ? [prefix]
+    : listWorkspaceFiles(cwd, "").paths;
   try {
     if (listed.length) {
       for (let i = 0; i < listed.length; i += 200) {
@@ -1468,8 +1493,9 @@ function createCheckpoint(cwd: string, label: string): Checkpoint {
     } else {
       git(ctx.cwd, ["add", "-A"], ctx.env);
     }
-    git(ctx.cwd, ["add", "-u"], ctx.env);
+    git(ctx.cwd, ["add", "-u", "--", ...(prefix ? [prefix] : ["."])], ctx.env);
   } catch {
+    if (prefix) throw new Error("子目录检查点没记下，已停止，避免快照整个仓库");
     git(ctx.cwd, ["add", "-A"], ctx.env);
   }
   const tree = git(ctx.cwd, ["write-tree"], ctx.env);
@@ -1502,17 +1528,34 @@ function restoreCheckpoint(
 ): { error?: string } {
   try {
     const ctx = checkpointGit(cwd, checkpoint);
-    git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "."], ctx.env);
+    const prefix = workspacePrefix(ctx.cwd, cwd);
+    if (prefix) {
+      git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "--", prefix], ctx.env);
+    } else {
+      git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "."], ctx.env);
+    }
     if (ctx.env.GIT_DIR) {
       git(ctx.cwd, ["update-ref", "HEAD", checkpoint.commit], ctx.env);
       git(ctx.cwd, ["read-tree", checkpoint.commit], ctx.env);
     }
+    const treePaths = git(ctx.cwd, ["ls-tree", "-z", "-r", "--name-only", checkpoint.commit], ctx.env)
+      .split("\0")
+      .map((line) => line.trim())
+      .filter(Boolean);
     const keep = new Set(
-      git(ctx.cwd, ["ls-tree", "-z", "-r", "--name-only", checkpoint.commit], ctx.env)
-        .split("\0")
-        .map((line) => line.trim())
-        .filter(Boolean),
+      treePaths
+        .map((name) => cwdPathFromTree(name, prefix))
+        .filter((name): name is string => Boolean(name)),
     );
+    const treeHasScope = prefix
+      ? treePaths.some((name) => name === prefix || name.startsWith(`${prefix}/`))
+      : treePaths.length > 0;
+    if (prefix && !treeHasScope) {
+      return { error: "检查点里没有这个目录的文件，已停止删除。" };
+    }
+    if (treeHasScope && keep.size === 0) {
+      return { error: "检查点路径对不上当前目录，已停止删除文件。" };
+    }
     const extras = new Set(extra.map((raw) => workspacePath(cwd, raw)).filter(Boolean) as string[]);
     for (const path of listWorkspaceFiles(cwd, "").paths) extras.add(path);
     for (const path of extras) {
