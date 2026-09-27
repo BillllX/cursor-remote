@@ -704,6 +704,8 @@ async function forgetChat(conn: Conn, chatId: string) {
   const slot = conn.slots.get(chatId);
   if (slot) {
     resolveApprovalWait(slot, false);
+    slot.pending = []; // 删除会话不续跑排队消息（旧 external 栈返回后 drain 会扑空，Grok R2）
+    slot.epoch += 1; // 过期门：旧栈 finishRun/drainPending 一律失效
     await cancelRun(slot.run);
     await disposeSlot(slot);
     conn.slots.delete(chatId);
@@ -2702,8 +2704,9 @@ async function handlePrompt(
       epoch: slot.epoch,
       cwd,
     });
-    // 与 cursor 路径同一 drain 口径——否则排队消息永久滞留、超上限被静默丢弃（Kimi 评审 C1）
-    drainPending(ws, conn, slot);
+    // 与 cursor 路径同一 drain 口径——否则排队消息永久滞留、超上限被静默丢弃（Kimi 评审 C1）；
+    // epoch 守卫挡 fresh/new_session 后返回的过期栈（Grok R2）
+    drainPending(ws, conn, slot, epoch);
     return;
   }
 
@@ -3357,7 +3360,7 @@ async function handlePrompt(
         undefined,
         epoch,
       );
-      drainPending(ws, conn, slot);
+      drainPending(ws, conn, slot, epoch);
     }
   }
   if (replayApproved) {
@@ -3379,10 +3382,15 @@ async function handlePrompt(
   }
 }
 
-/** run 收尾后排空 pending：本 slot 有空位直接续跑下一条，否则让全局队列找空位（P11 抽取：cursor 与第三方路径同一口径） */
-function drainPending(ws: WebSocket, conn: Conn, slot: Slot) {
-  const next = slot.pending.shift();
+/** run 收尾后排空 pending：本 slot 有空位直接续跑下一条，否则让全局队列找空位（P11 抽取：cursor 与第三方路径同一口径）。
+ *  epoch 守卫：过期栈（fresh/new_session 后返回的旧 run）不得碰 pending——
+ *  否则 shift 掉新 run 的排队消息又调度失败 = 静默丢消息（Grok R2 MAJOR）。
+ *  peek-then-shift：条件失败时消息留队首，等当前 run 收尾再排。 */
+function drainPending(ws: WebSocket, conn: Conn, slot: Slot, epoch?: number) {
+  if (epoch != null && slot.epoch !== epoch) return;
+  const next = slot.pending[0];
   if (next && slot.finished && !slot.run && !slot.externalAbort) {
+    slot.pending.shift();
     queueMicrotask(() => {
       void handlePrompt(
         ws,
@@ -3401,7 +3409,7 @@ function drainPending(ws: WebSocket, conn: Conn, slot: Slot) {
         next.history,
       );
     });
-  } else {
+  } else if (!next) {
     kickGlobalQueue();
   }
 }
@@ -4330,6 +4338,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         resolveApprovalWait(slot, false);
         await cancelRun(slot.run);
         finishRun(ws, slot, "cancelled");
+        slot.epoch += 1; // 过期门：旧 external 栈返回后 finishRun/drainPending 一律失效（Grok R2）
         await disposeSlot(slot);
         slot.agentId = null;
         slot.edited = [];
