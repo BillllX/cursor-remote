@@ -3387,7 +3387,12 @@ async function handlePrompt(
  *  否则 shift 掉新 run 的排队消息又调度失败 = 静默丢消息（Grok R2 MAJOR）。
  *  peek-then-shift：条件失败时消息留队首，等当前 run 收尾再排。 */
 function drainPending(ws: WebSocket, conn: Conn, slot: Slot, epoch?: number) {
-  if (epoch != null && slot.epoch !== epoch) return;
+  // 失配 = 新栈已接管/slot 已重置：本栈不得碰 pending，但容量可能已释放
+  // （new_session/fresh/delete），kick 一下让全局排队的其他 slot 补位（Grok R3 m1）
+  if (epoch != null && slot.epoch !== epoch) {
+    kickGlobalQueue();
+    return;
+  }
   const next = slot.pending[0];
   if (next && slot.finished && !slot.run && !slot.externalAbort) {
     slot.pending.shift();
@@ -4336,14 +4341,16 @@ wss.on("connection", (ws, req: IncomingMessage) => {
       if (message.type === "new_session") {
         const slot = slotOf(conn, message.chatId);
         resolveApprovalWait(slot, false);
+        // 过期门+清队列提到 cancelRun 之前：cancel 让出期间旧栈若以旧 epoch 走完
+        // finishRun/drain，会把 pending 推进 microtask 拦不住（Grok R3 m2，对齐 forgetChat）
+        slot.epoch += 1;
+        slot.pending = [];
         await cancelRun(slot.run);
         finishRun(ws, slot, "cancelled");
-        slot.epoch += 1; // 过期门：旧 external 栈返回后 finishRun/drainPending 一律失效（Grok R2）
         await disposeSlot(slot);
         slot.agentId = null;
         slot.edited = [];
         slot.checkpoints = [];
-        slot.pending = [];
         slot.openTools.clear();
         const next = message.cwd ? confinedCwd(message.cwd, tenant.workspaceRoot) : null;
         if (next) {
