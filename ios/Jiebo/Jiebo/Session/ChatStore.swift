@@ -206,6 +206,8 @@ final class ChatStore {
         ensureActiveChat()
         let chatId = activeId
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
+        // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
+        let history = ChatStore.externalHistory(model: model, turns: active?.turns ?? [])
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
         let turn = Turn.blank(user: text.isEmpty ? "（附图）" : text, model: model, mode: mode, running: !busy)
         draft = ""
@@ -237,9 +239,24 @@ final class ChatStore {
             autoApprove: nil,
             fresh: nil,
             nameChat: untitled,
-            policy: active?.policy
+            policy: active?.policy,
+            history: history
         ))
         markProgress(chatId)
+    }
+
+    /// P11：第三方模型（id 形如 "provider:model"）无状态，历史随 prompt 上行；
+    /// 截断口径与网关一致：最近 12 条、每条 3000 字符；排队/空消息跳过
+    static func externalHistory(model: String?, turns: [Turn]) -> [HistoryItem]? {
+        guard let model, model.contains(":") else { return nil }
+        var items: [HistoryItem] = []
+        for t in turns where !t.queued {
+            let user = t.user.trimmingCharacters(in: .whitespacesAndNewlines)
+            let assistant = t.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !user.isEmpty { items.append(HistoryItem(role: "user", text: String(user.prefix(3000)))) }
+            if !assistant.isEmpty { items.append(HistoryItem(role: "assistant", text: String(assistant.prefix(3000)))) }
+        }
+        return items.isEmpty ? nil : Array(items.suffix(12))
     }
 
     /// 与网页端同一规则：草稿里的 @路径 在发送时抽成 files 数组

@@ -22,7 +22,9 @@ enum ModelCatalog {
         let lower = raw.lowercased()
         if lower == "auto" || lower == "auto-smart" { return "Auto" }
         if lower == "default" { return "Default" }
-        let stripped = raw.replacingOccurrences(of: "^cursor-", with: "", options: .regularExpression)
+        // P11：第三方模型 id 形如 "provider:model"——显示时去掉 provider 前缀
+        let withoutProvider = raw.contains(":") ? String(raw.split(separator: ":", maxSplits: 1).last ?? "") : raw
+        let stripped = withoutProvider.replacingOccurrences(of: "^cursor-", with: "", options: .regularExpression)
         var out: [String] = []
         let acronyms = ["gpt": "GPT", "glm": "GLM", "ai": "AI", "xai": "xAI"]
         for part in stripped.split(separator: "-").map(String.init) where !part.isEmpty {
@@ -51,6 +53,11 @@ enum ModelCatalog {
     static func vendor(of id: String) -> String {
         let n = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if n.isEmpty { return "other" }
+        // P11：第三方模型 id 形如 "provider:model"——厂商直接取前缀（如 "minimax:MiniMax-M2" → "minimax"）
+        if let colon = n.firstIndex(of: ":") {
+            let prefix = String(n.prefix(upTo: colon))
+            if !prefix.isEmpty { return prefix }
+        }
         if n.contains("grok") || n.hasPrefix("xai") { return "xai" }
         if n == "auto" || n == "auto-smart" || n == "default" || n.hasPrefix("composer") || n == "cursor-small" || n.hasPrefix("cursor-fast") {
             return "cursor"
@@ -74,7 +81,7 @@ enum ModelCatalog {
     }
 
     static func groups(from ids: [String]) -> [Group] {
-        let order = ["cursor", "anthropic", "openai", "google", "xai", "zhipu", "moonshot", "deepseek", "alibaba", "meta", "mistral", "other"]
+        let order = ["cursor", "anthropic", "openai", "google", "xai", "zhipu", "moonshot", "deepseek", "alibaba", "meta", "mistral", "minimax", "other"]
         let labels = [
             "cursor": "Cursor",
             "anthropic": "Anthropic",
@@ -87,6 +94,7 @@ enum ModelCatalog {
             "alibaba": "阿里",
             "meta": "Meta",
             "mistral": "Mistral",
+            "minimax": "MiniMax",
             "other": "其他",
         ]
         var seen = Set<String>()

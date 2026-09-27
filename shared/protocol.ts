@@ -37,6 +37,9 @@ export type ClientMessage =
       policy?: PolicyId;
       /** 缺省 true。false 时关掉中文系方言 overlay，给 dialect-bench 对照用 */
       dialect?: boolean;
+      /** P11：第三方模型（model 带 provider: 前缀）的会话历史——客户端是内容权威源，
+       *  网关无状态，随 prompt 上行最近若干条 user/assistant 文本；Cursor 路径忽略 */
+      history?: { role: "user" | "assistant"; text: string }[];
     }
   | { type: "cancel"; chatId: string }
   | { type: "drop_queued"; chatId: string; text?: string }

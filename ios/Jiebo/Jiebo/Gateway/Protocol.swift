@@ -27,6 +27,12 @@ struct PromptImage: Sendable, Hashable {
     var mimeType: String
 }
 
+/// P11：第三方模型的会话历史条目（prompt.history；客户端是内容权威源，网关无状态）
+struct HistoryItem: Sendable, Hashable {
+    var role: String // "user" | "assistant"
+    var text: String
+}
+
 /// /media 下载票据（file_content 带过来，签名过期由网关校验）
 struct MediaTicket: Sendable, Hashable {
     var exp: Double
@@ -123,7 +129,8 @@ enum ClientMessage {
         autoApprove: Bool?,
         fresh: Bool?,
         nameChat: Bool?,
-        policy: String?
+        policy: String?,
+        history: [HistoryItem]?
     )
     case cancel(chatId: String)
     case dropQueued(chatId: String, text: String?)
@@ -166,7 +173,7 @@ enum ClientMessage {
             return .object(["type": .string("list_workspaces")])
         case .createWorkspace(let name):
             return .object(["type": .string("create_workspace"), "name": .string(name)])
-        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy):
+        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy, let history):
             var object: [String: JSONValue] = [
                 "type": .string("prompt"),
                 "text": .string(text),
@@ -183,6 +190,9 @@ enum ClientMessage {
             if let fresh { object["fresh"] = .bool(fresh) }
             if let nameChat { object["nameChat"] = .bool(nameChat) }
             if let policy { object["policy"] = .string(policy) }
+            if let history, !history.isEmpty {
+                object["history"] = .array(history.map { .object(["role": .string($0.role), "text": .string($0.text)]) })
+            }
             return .object(object)
         case .cancel(let chatId):
             return .object(["type": .string("cancel"), "chatId": .string(chatId)])

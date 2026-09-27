@@ -61,6 +61,13 @@ import {
   usageRec,
   usageSnapshot,
 } from "./usage.ts";
+import {
+  externalModelIds,
+  externalRoute,
+  streamChatCompletions,
+  type ChatHistoryItem,
+  type ExternalProvider,
+} from "./providers.ts";
 
 loadDotEnv([
   resolve(process.cwd(), ".env"),
@@ -147,6 +154,8 @@ type PendingPrompt = {
   autoApprove: boolean;
   policy: PolicyId;
   dialect: boolean;
+  /** P11：第三方模型的会话历史（客户端权威，随 prompt 上行） */
+  history?: ChatHistoryItem[];
 };
 
 type RunStats = {
@@ -184,6 +193,8 @@ type Slot = {
   pending: PendingPrompt[];
   openTools: Map<string, OpenTool>;
   reseed: boolean;
+  /** P11：第三方模型在途请求的取消柄（Cursor run 走 slot.run，这条路径没有 RunHandle） */
+  externalAbort: AbortController | null;
   policy: PolicyId;
   approvedKeys: Set<string>;
   approvalCallId: string | null;
@@ -746,6 +757,7 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     pending: [],
     openTools: new Map(),
     reseed: false,
+    externalAbort: null,
     policy: defaultPolicy(),
     approvedKeys: new Set(),
     approvalCallId: null,
@@ -2450,6 +2462,84 @@ function sanitizeChatTitle(raw: string) {
   return title;
 }
 
+/** P11：第三方 OpenAI 兼容模型的问答 run——SSE 流映射成现有 text/thinking-delta 事件，
+ *  iOS 端 turn 组装与 Cursor run 完全同一条链路。无工具，不产生 edited/checkpoint。 */
+async function runExternalChat(
+  ws: WebSocket,
+  slot: Slot,
+  ext: { provider: ExternalProvider; model: string; full: string },
+  input: {
+    text: string;
+    images: Array<{ data: string; mimeType: string }>;
+    history: ChatHistoryItem[];
+    epoch: number;
+    cwd: string;
+  },
+) {
+  const { epoch } = input;
+  const t0 = Date.now();
+  send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
+  send(ws, {
+    type: "run_meta",
+    chatId: slot.chatId,
+    model: ext.full,
+    mode: "ask", // 第三方一律按问答对待（无工具），UI 不显示工具相关徽标
+    policy: slot.policy,
+    dialect: false,
+  });
+  if (input.images.length && !ext.provider.vision) {
+    send(ws, {
+      type: "error",
+      chatId: slot.chatId,
+      message: `${ext.provider.name} 这个模型不收图片（providers.json 里 vision: true 才放行）。`,
+    });
+    finishRun(ws, slot, "error", Date.now() - t0, epoch);
+    return;
+  }
+  const rules = loadWorkspaceRules(input.cwd);
+  const system = [
+    "你是「接驳」客户端里的问答助手。你没有工具，读不了也改不了工作区文件——只能根据对话内容回答。",
+    `用户的工作区路径：${input.cwd}。`,
+    rules ? `工作区规则：\n${rules}` : "",
+    "回答用中文（除非用户用别的语言提问），代码块标语言。",
+  ].filter(Boolean).join("\n");
+  const abort = new AbortController();
+  slot.externalAbort = abort;
+  try {
+    await streamChatCompletions({
+      provider: ext.provider,
+      model: ext.model,
+      system,
+      history: input.history,
+      text: input.text,
+      images: input.images,
+      signal: abort.signal,
+      onText: (delta) => {
+        send(ws, { type: "text-delta", chatId: slot.chatId, text: delta });
+        noteOutput(slot.tenantId, delta.length); // P9 计量：与 Cursor run 同口径
+      },
+      onThinking: (delta) => {
+        send(ws, { type: "thinking-delta", chatId: slot.chatId, text: delta });
+        noteOutput(slot.tenantId, delta.length);
+      },
+    });
+    finishRun(ws, slot, "completed", Date.now() - t0, epoch);
+  } catch (err) {
+    if (isAbortError(err)) {
+      finishRun(ws, slot, "cancelled", Date.now() - t0, epoch);
+    } else {
+      send(ws, {
+        type: "error",
+        chatId: slot.chatId,
+        message: err instanceof Error ? err.message : "第三方模型调用失败",
+      });
+      finishRun(ws, slot, "error", Date.now() - t0, epoch);
+    }
+  } finally {
+    if (slot.externalAbort === abort) slot.externalAbort = null;
+  }
+}
+
 async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: string) {
   if (!chatId || namedChats.has(chatId) || namingChats.has(chatId)) return;
   const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
@@ -2497,6 +2587,7 @@ async function handlePrompt(
   fresh = false,
   policy?: PolicyId,
   dialect?: boolean,
+  history?: ChatHistoryItem[],
 ) {
   const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
   const nextDialect = dialect !== false;
@@ -2525,6 +2616,7 @@ async function handlePrompt(
       autoApprove,
       policy: nextPolicy,
       dialect: nextDialect,
+      history,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED" });
@@ -2542,6 +2634,7 @@ async function handlePrompt(
       autoApprove,
       policy: nextPolicy,
       dialect: nextDialect,
+      history,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED", message: "同时跑的任务已满，排队中" });
@@ -2584,6 +2677,21 @@ async function handlePrompt(
   slot.openTools = new Map();
   if (autoApprove) slot.runStats.replays += 1;
   else slot.runStats = { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 };
+
+  // P11：第三方 OpenAI 兼容模型（"minimax:MiniMax-M2" 等）——纯问答：
+  // 无工具/检查点/confirm-writes；历史由客户端随 prompt 上行（iOS 是会话内容权威源）
+  const external = externalRoute(usedModel);
+  if (external) {
+    await runExternalChat(ws, slot, external, {
+      text: userText,
+      images: safeImages,
+      history: history ?? [],
+      epoch: slot.epoch,
+      cwd,
+    });
+    return;
+  }
+
   let replayApproved = false;
 
   if (!autoApprove && (mode === "agent" || mode === "plan")) {
@@ -3251,6 +3359,7 @@ async function handlePrompt(
             false,
             next.policy,
             next.dialect,
+            next.history,
           );
         });
       } else {
@@ -3303,6 +3412,7 @@ function kickGlobalQueue() {
           false,
           next.policy,
           next.dialect,
+          next.history,
         );
       });
       return;
@@ -3709,7 +3819,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             cwd: conn.cwd,
             hasApiKey: Boolean(apiKey),
             model: conn.model,
-            models,
+            models: [...models, ...externalModelIds()], // P11：第三方模型（provider:model）合并下发
             agentId: null,
             runningChatIds: runningChatIds(tenant),
             queuedChatIds: queuedChatIds(tenant),
@@ -4233,6 +4343,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const slot = slotOf(conn, message.chatId);
         resolveApprovalWait(slot, false);
         const alreadyDone = slot.finished;
+        slot.externalAbort?.abort(); // P11：第三方在途请求（无 RunHandle，走 AbortController）
         await cancelRun(slot.run);
         finishRun(ws, slot, "cancelled");
         if (alreadyDone) {
@@ -4416,6 +4527,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           Boolean(message.fresh),
           parsePolicy(message.policy, conn.policy),
           message.dialect,
+          message.history,
         );
         if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text);
       }
