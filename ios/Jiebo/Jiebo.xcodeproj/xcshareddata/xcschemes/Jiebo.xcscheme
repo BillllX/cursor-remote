@@ -17,7 +17,7 @@
                BlueprintIdentifier = "A1B2C3D4E5F6071829000002"
                BuildableName = "Jiebo.app"
                BlueprintName = "Jiebo"
-               ReferencedContainer = "container:0.xcodeproj">
+               ReferencedContainer = "container:Jiebo.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,7 +46,7 @@
             BlueprintIdentifier = "A1B2C3D4E5F6071829000002"
             BuildableName = "Jiebo.app"
             BlueprintName = "Jiebo"
-            ReferencedContainer = "container:0.xcodeproj">
+            ReferencedContainer = "container:Jiebo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -63,7 +63,7 @@
             BlueprintIdentifier = "A1B2C3D4E5F6071829000002"
             BuildableName = "Jiebo.app"
             BlueprintName = "Jiebo"
-            ReferencedContainer = "container:0.xcodeproj">
+            ReferencedContainer = "container:Jiebo.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

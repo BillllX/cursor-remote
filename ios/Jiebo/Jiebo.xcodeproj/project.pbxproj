@@ -211,7 +211,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "0" */;
+			buildConfigurationList = A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "Jiebo" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
@@ -462,7 +462,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "0" */ = {
+		A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "Jiebo" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A1B2C3D4E5F6071829000020 /* Debug */,
