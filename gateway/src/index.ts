@@ -781,7 +781,8 @@ function slotOf(conn: Conn, chatId: string): Slot {
 
 function runningChatIds(tenant: Tenant) {
   return [...liveSlotsOf(tenant).values()]
-    .filter((slot) => (!slot.finished && slot.run) || slot.pending.length)
+    // P11：externalAbort 非空 = 第三方在途（无 RunHandle）——也算 running，否则重连丢运行态
+    .filter((slot) => (!slot.finished && (slot.run || slot.externalAbort)) || slot.pending.length)
     .map((slot) => slot.chatId);
 }
 
@@ -792,7 +793,9 @@ function queuedChatIds(tenant: Tenant) {
 function globalRunningCount() {
   let n = 0;
   for (const tenant of allTenants()) {
-    n += [...liveSlotsOf(tenant).values()].filter((slot) => !slot.finished && slot.run).length;
+    n += [...liveSlotsOf(tenant).values()].filter(
+      (slot) => !slot.finished && (slot.run || slot.externalAbort),
+    ).length;
   }
   return n;
 }
@@ -910,6 +913,10 @@ async function disposeSlot(slot: Slot) {
   const agent = slot.agent;
   slot.agent = null;
   slot.run = null;
+  // P11：第三方在途请求一并取消（new_session/fresh/delete 都走这里）——
+  // 不 abort 的话旧流 delta 无 epoch 门可挡，会混进新会话（Grok 评审 C1）
+  slot.externalAbort?.abort();
+  slot.externalAbort = null;
   if (!agent) return;
   try {
     await agent[Symbol.asyncDispose]();
@@ -2591,6 +2598,12 @@ async function handlePrompt(
 ) {
   const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
   const nextDialect = dialect !== false;
+  // P11：history 白名单——只放行 user/assistant 的字符串文本，
+  // 防客户端注入 system/tool 角色覆盖网关系统约束（Grok 评审 M5）
+  const safeHistory = (history ?? []).filter(
+    (h): h is ChatHistoryItem =>
+      !!h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string",
+  );
   if (fresh) {
     await cancelRun(slot.run);
     slot.epoch += 1;
@@ -2605,7 +2618,7 @@ async function handlePrompt(
     slot.pending = [];
     slot.openTools.clear();
   }
-  if (slot.run || !slot.finished) {
+  if (slot.run || slot.externalAbort || !slot.finished) {
     slot.pending.push({
       text,
       model,
@@ -2616,7 +2629,7 @@ async function handlePrompt(
       autoApprove,
       policy: nextPolicy,
       dialect: nextDialect,
-      history,
+      history: safeHistory,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED" });
@@ -2634,7 +2647,7 @@ async function handlePrompt(
       autoApprove,
       policy: nextPolicy,
       dialect: nextDialect,
-      history,
+      history: safeHistory,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED", message: "同时跑的任务已满，排队中" });
@@ -2685,10 +2698,12 @@ async function handlePrompt(
     await runExternalChat(ws, slot, external, {
       text: userText,
       images: safeImages,
-      history: history ?? [],
+      history: safeHistory,
       epoch: slot.epoch,
       cwd,
     });
+    // 与 cursor 路径同一 drain 口径——否则排队消息永久滞留、超上限被静默丢弃（Kimi 评审 C1）
+    drainPending(ws, conn, slot);
     return;
   }
 
@@ -3342,29 +3357,7 @@ async function handlePrompt(
         undefined,
         epoch,
       );
-      const next = slot.pending.shift();
-      if (next && slot.finished && !slot.run) {
-        queueMicrotask(() => {
-          void handlePrompt(
-            ws,
-            conn,
-            slot,
-            next.text,
-            next.model,
-            next.mode,
-            next.files,
-            next.images,
-            next.confirmWrites,
-            next.autoApprove,
-            false,
-            next.policy,
-            next.dialect,
-            next.history,
-          );
-        });
-      } else {
-        kickGlobalQueue();
-      }
+      drainPending(ws, conn, slot);
     }
   }
   if (replayApproved) {
@@ -3386,11 +3379,38 @@ async function handlePrompt(
   }
 }
 
+/** run 收尾后排空 pending：本 slot 有空位直接续跑下一条，否则让全局队列找空位（P11 抽取：cursor 与第三方路径同一口径） */
+function drainPending(ws: WebSocket, conn: Conn, slot: Slot) {
+  const next = slot.pending.shift();
+  if (next && slot.finished && !slot.run && !slot.externalAbort) {
+    queueMicrotask(() => {
+      void handlePrompt(
+        ws,
+        conn,
+        slot,
+        next.text,
+        next.model,
+        next.mode,
+        next.files,
+        next.images,
+        next.confirmWrites,
+        next.autoApprove,
+        false,
+        next.policy,
+        next.dialect,
+        next.history,
+      );
+    });
+  } else {
+    kickGlobalQueue();
+  }
+}
+
 function kickGlobalQueue() {
   if (globalRunningCount() >= maxRunning()) return;
   for (const tenant of allTenants()) {
     for (const slot of liveSlotsOf(tenant).values()) {
-      if (!slot.pending.length || !slot.finished || slot.run) continue;
+      if (!slot.pending.length || !slot.finished || slot.run || slot.externalAbort) continue;
       const owner = slot.owner;
       if (!owner || owner.readyState !== WebSocket.OPEN) continue;
       const ownerConn = conns.get(owner);

@@ -105,10 +105,22 @@ enum ModelCatalog {
             seen.insert(key)
             buckets[vendor(of: key), default: []].append(Item(id: key, name: prettyName(key)))
         }
-        return order.compactMap { vendor in
-            guard let models = buckets[vendor], !models.isEmpty else { return nil }
-            return Group(vendor: vendor, label: labels[vendor] ?? vendor, models: models)
+        var result = order.compactMap { vendor in
+            buckets[vendor].flatMap { $0.isEmpty ? nil : Group(vendor: vendor, label: labels[vendor] ?? vendor, models: $0) }
         }
+        // P11：providers.json 可配任意第三方前缀——order 之外的 vendor 也要显示，
+        // 插到「其他」之前（否则模型在选择器里不可见，Kimi 评审 M3）
+        let known = Set(order)
+        for vendor in buckets.keys.sorted() where !known.contains(vendor) {
+            guard let models = buckets[vendor], !models.isEmpty else { continue }
+            let group = Group(vendor: vendor, label: labels[vendor] ?? vendor, models: models)
+            if let otherAt = result.firstIndex(where: { $0.vendor == "other" }) {
+                result.insert(group, at: otherAt)
+            } else {
+                result.append(group)
+            }
+        }
+        return result
     }
 
     static func resolve(preferred: String?, ids: [String], fallback: String) -> String {

@@ -206,40 +206,66 @@ export async function streamChatCompletions(opts: {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`${provider.name} 接口 ${res.status}：${body.slice(0, 200) || res.statusText}`);
+    // 脱敏：部分厂商错误体会回显 key 片段（GLM/Grok 评审 m1）——不进客户端错误气泡
+    const safe = body.slice(0, 200).replace(/sk-[A-Za-z0-9_-]{6,}/g, "sk-***").replace(/eyJ[A-Za-z0-9_.-]{10,}/g, "eyJ***");
+    throw new Error(`${provider.name} 接口 ${res.status}：${safe || res.statusText}`);
   }
   if (!res.body) throw new Error(`${provider.name} 接口没有返回流`);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const splitter = new ThinkSplitter(onText, onThinking);
+  // SSE 帧处理：兼容 \n\n 与 \r\n\r\n 分帧（SSE 规范允许 CRLF——只认 \n\n 会静默吞掉整流，Kimi/Grok 评审 M2）
+  const FRAME_RE = /\r?\n\r?\n/;
+  const handleFrame = (frame: string) => {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data || data.trim() === "[DONE]") return;
+    let json: { choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }> };
+    try {
+      json = JSON.parse(data);
+    } catch {
+      return; // 半截 JSON（跨帧）/心跳注释——丢帧不致命
+    }
+    // 回调在 JSON.parse 外调用：回调异常不该被「丢帧」catch 吞掉（Kimi 评审 MINOR 2）
+    const delta = json.choices?.[0]?.delta;
+    if (delta?.reasoning_content) onThinking(delta.reasoning_content);
+    if (delta?.content) splitter.push(delta.content);
+  };
+  // 停滞保护：provider 长时间无数据（连接半开）时主动断开，不让 run 永远挂着（GLM 评审 M2）
+  const IDLE_MS = 120_000;
+  const readChunk = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            void reader.cancel().catch(() => {});
+            reject(new Error(`${provider.name} 流 ${IDLE_MS / 1000}s 无数据，判定停滞断开`));
+          }, IDLE_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
   let buffer = "";
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readChunk();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    // SSE 按双换行分帧；行首 "data:"，[DONE] 结束
-    let sep: number;
-    while ((sep = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      const data = frame
-        .split("\n")
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart())
-        .join("\n");
-      if (!data || data === "[DONE]") continue;
-      try {
-        const json = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
-        };
-        const delta = json.choices?.[0]?.delta;
-        if (delta?.reasoning_content) onThinking(delta.reasoning_content);
-        if (delta?.content) splitter.push(delta.content);
-      } catch {
-        // 半截 JSON（跨帧）/心跳注释——丢帧不致命
-      }
+    let match: RegExpExecArray | null;
+    while ((match = FRAME_RE.exec(buffer))) {
+      const frame = buffer.slice(0, match.index);
+      buffer = buffer.slice(match.index + match[0].length);
+      handleFrame(frame);
     }
   }
+  // 流结束：buffer 残余（尾帧无空行结尾）兜底解析一次，不静默丢内容
+  if (buffer.trim()) handleFrame(buffer);
   splitter.flush();
 }

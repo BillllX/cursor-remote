@@ -246,11 +246,13 @@ final class ChatStore {
     }
 
     /// P11：第三方模型（id 形如 "provider:model"）无状态，历史随 prompt 上行；
-    /// 截断口径与网关一致：最近 12 条、每条 3000 字符；排队/空消息跳过
+    /// 截断口径与网关一致：最近 12 条、每条 3000 字符；排队/出错/空消息跳过
+    /// （error turn 的残缺回复不进上下文，GLM/Grok 评审 m3）。
+    /// 注意：history 在提交时组装——排队期间完成的 turn 不在其内（客户端权威设计的固有权衡）
     static func externalHistory(model: String?, turns: [Turn]) -> [HistoryItem]? {
         guard let model, model.contains(":") else { return nil }
         var items: [HistoryItem] = []
-        for t in turns where !t.queued {
+        for t in turns where !t.queued && t.error == nil {
             let user = t.user.trimmingCharacters(in: .whitespacesAndNewlines)
             let assistant = t.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
             if !user.isEmpty { items.append(HistoryItem(role: "user", text: String(user.prefix(3000)))) }
