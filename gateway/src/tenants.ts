@@ -34,6 +34,9 @@ export type Tenant = {
   id: string;
   name: string;
   tokenHash: Buffer;
+  /** P9：管理员可查询全租户使用统计（admin_stats）。tenants.json 里 admin: true；
+   * env 单租户模式默认 true（自己部署自己看） */
+  admin: boolean;
   workspaceRoot: string;
   stateDir: string;
   stateFile: string;
@@ -87,6 +90,7 @@ export function loadTenants(): TenantsRegistry {
           makeTenant("default", displayName, token, {
             workspaceRoot: resolve(process.env.CURSOR_REMOTE_CWD || `${homedir()}/Projects`),
             stateDir: root,
+            admin: true, // env 单租户模式：部署者即管理员
           }),
         ]
       : [];
@@ -200,10 +204,11 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
   const seenHash = new Set<string>();
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
-    const rec = row as { id?: unknown; name?: unknown; token?: unknown };
+    const rec = row as { id?: unknown; name?: unknown; token?: unknown; admin?: unknown };
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     const token = typeof rec.token === "string" ? rec.token : "";
     const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id;
+    const admin = rec.admin === true;
     if (!ID_RE.test(id)) {
       throw new Error(`tenants.json：id「${id || "?"}」不合法，只用小写字母、数字和短横线。`);
     }
@@ -219,6 +224,7 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
       makeTenant(id, name, token, {
         workspaceRoot: resolve(dataRoot, "tenants", id, "workspace"),
         stateDir: resolve(dataRoot, "tenants", id),
+        admin,
       }),
     );
   }
@@ -230,12 +236,13 @@ function makeTenant(
   id: string,
   name: string,
   token: string,
-  paths: { workspaceRoot: string; stateDir: string },
+  paths: { workspaceRoot: string; stateDir: string; admin: boolean },
 ): Tenant {
   return {
     id,
     name,
     tokenHash: hashToken(token),
+    admin: paths.admin,
     workspaceRoot: resolve(paths.workspaceRoot),
     stateDir: resolve(paths.stateDir),
     stateFile: resolve(paths.stateDir, "state.json"),

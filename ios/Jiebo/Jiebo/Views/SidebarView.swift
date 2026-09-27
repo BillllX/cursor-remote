@@ -9,6 +9,8 @@ struct SidebarView: View {
     /// P8：重命名目标（alert presenting 驱动）
     @State private var renameTarget: ChatSession?
     @State private var renameDraft = ""
+    /// P9：管理员统计面板
+    @State private var adminStatsOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -100,6 +102,23 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("浏览工作区文件")
+                // P9：管理员入口——全租户使用统计 + API key 估算消耗
+                if store.isAdmin {
+                    Button {
+                        adminStatsOpen = true
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chart.bar")
+                                .font(.system(size: 12))
+                            Text("统计")
+                                .font(JieboFont.ui(13))
+                        }
+                        .foregroundStyle(JieboColor.ink2)
+                        .hitTarget()
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("查看使用统计")
+                }
                 Spacer()
                 Circle()
                     .fill(store.connected ? JieboColor.ok : JieboColor.clay)
@@ -110,6 +129,9 @@ struct SidebarView: View {
         .background(JieboColor.sidebar.ignoresSafeArea())
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspaceSheet()
+        }
+        .sheet(isPresented: $adminStatsOpen) {
+            AdminStatsView()
         }
         .task {
             expanded = Self.loadExpanded()

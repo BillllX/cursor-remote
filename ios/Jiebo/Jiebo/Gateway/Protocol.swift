@@ -33,6 +33,45 @@ struct MediaTicket: Sendable, Hashable {
     var sig: String
 }
 
+/// P9：单租户使用统计（admin_stats 应答的行）。estTokens 是网关按字符估算（≈4 字符/token），
+/// 非 Cursor 官方账单——官方未暴露 API key 用量端点
+struct AdminTenantStats: Sendable, Hashable, Identifiable {
+    var id: String
+    var name: String
+    var admin: Bool
+    var online: Int
+    var chats: Int
+    var turns: Int
+    var runs: Int
+    var toolCalls: Int
+    var runMs: Double
+    var inChars: Int
+    var outChars: Int
+    var estTokens: Int
+    var firstSeenAt: Double
+    var lastActiveAt: Double
+
+    static func from(_ json: JSONValue) -> AdminTenantStats? {
+        guard let row = json.object, let id = row["id"]?.string else { return nil }
+        return AdminTenantStats(
+            id: id,
+            name: row["name"]?.string ?? id,
+            admin: row["admin"]?.bool ?? false,
+            online: row["online"]?.int ?? 0,
+            chats: row["chats"]?.int ?? 0,
+            turns: row["turns"]?.int ?? 0,
+            runs: row["runs"]?.int ?? 0,
+            toolCalls: row["toolCalls"]?.int ?? 0,
+            runMs: row["runMs"]?.number ?? 0,
+            inChars: row["inChars"]?.int ?? 0,
+            outChars: row["outChars"]?.int ?? 0,
+            estTokens: row["estTokens"]?.int ?? 0,
+            firstSeenAt: row["firstSeenAt"]?.number ?? 0,
+            lastActiveAt: row["lastActiveAt"]?.number ?? 0
+        )
+    }
+}
+
 /// hello 携带的客户端标识（P2 协议护栏：网关可据此区分客户端与版本）
 struct ClientInfo: Sendable, Equatable {
     var name: String
@@ -108,6 +147,8 @@ enum ClientMessage {
     /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页。
     /// nonce 为分页代际标记（网关原样回显）：降级/重启分页后旧链迟到页据此丢弃（Kimi R2 M1）
     case loadChat(chatId: String, from: Int?, nonce: Int?)
+    /// P9：管理员查询全租户使用统计（非管理员会被网关拒绝）
+    case adminStats
 
     func json() -> JSONValue {
         switch self {
@@ -210,6 +251,8 @@ enum ClientMessage {
             if let from { obj["from"] = .number(Double(from)) }
             if let nonce { obj["nonce"] = .number(Double(nonce)) }
             return .object(obj)
+        case .adminStats:
+            return .object(["type": .string("admin_stats")])
         }
     }
 }
@@ -225,7 +268,8 @@ enum ServerMessage {
         queuedChatIds: [String],
         workspaceRoot: String?,
         tenantId: String?,
-        tenantName: String?
+        tenantName: String?,
+        admin: Bool
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
@@ -256,6 +300,8 @@ enum ServerMessage {
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
     case chatTitle(chatId: String, title: String)
+    /// P9：admin_stats 应答（仅管理员收得到）
+    case adminStats(tenants: [AdminTenantStats], serverTime: Double)
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
     case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?)
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
@@ -327,7 +373,8 @@ enum ServerMessage {
                 queuedChatIds: object["queuedChatIds"]?.array?.compactMap(\.string) ?? [],
                 workspaceRoot: object["workspaceRoot"]?.string,
                 tenantId: object["tenantId"]?.string,
-                tenantName: object["tenantName"]?.string
+                tenantName: object["tenantName"]?.string,
+                admin: object["admin"]?.bool ?? false
             )
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in
@@ -420,6 +467,11 @@ enum ServerMessage {
             return .history(chatId: chatId, turns: object["turns"]?.array ?? [])
         case "chat_title":
             return .chatTitle(chatId: chatId, title: object["title"]?.string ?? "")
+        case "admin_stats":
+            return .adminStats(
+                tenants: object["tenants"]?.array?.compactMap(AdminTenantStats.from) ?? [],
+                serverTime: object["serverTime"]?.number ?? 0
+            )
         case "files":
             // 网关还会回 git status（M/A/D/U/R），iOS 自 P7 后决定不展示改动，忽略该字段
             return .files(

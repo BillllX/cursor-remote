@@ -86,6 +86,10 @@ final class ChatStore {
     /// 运行中/排队会话 id（侧栏运行点也读它：slim 会话没 turns，不能靠 turns.contains(running)）
     var runningChatIds: [String] = []
     private var queuedChatIds: [String] = []
+    /// P9：当前租户是否管理员（ready 带下来）；管理员统计面板数据
+    var isAdmin = false
+    var adminStats: [AdminTenantStats] = []
+    var adminStatsAt: Date?
     /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）
     var loadingChatIds: Set<String> = []
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
@@ -332,6 +336,12 @@ final class ChatStore {
         send(.createWorkspace(name: name))
         newWorkspaceName = ""
         creatingWorkspace = false
+    }
+
+    /// P9：管理员拉全租户统计（非管理员发了也会被网关拒，入口按 isAdmin 隐藏）
+    func requestAdminStats() {
+        guard isAdmin else { return }
+        send(.adminStats)
     }
 
     func select(_ id: String) {
@@ -1106,7 +1116,8 @@ final class ChatStore {
         }
 
         switch message {
-        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName):
+        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin):
+            isAdmin = admin // P9：管理员才显示统计入口
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
@@ -1161,6 +1172,9 @@ final class ChatStore {
                 authError = messageText ?? "密码不对。"
                 KeychainStore.delete()
             }
+        case .adminStats(let rows, _):
+            adminStats = rows
+            adminStatsAt = Date()
         case .storedState(let rows, let rev, let deleted, let serverRevs):
             applyStoredState(rows: rows, rev: rev, deleted: deleted, chatRevs: serverRevs)
         case .storedStateDeferred(let rev):
@@ -1812,6 +1826,9 @@ final class ChatStore {
         pendingDiffPaths = []
         runningChatIds = []
         queuedChatIds = []
+        isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
+        adminStats = []
+        adminStatsAt = nil
         showThinkingIds = []
         bannerError = ""
         notice = ""

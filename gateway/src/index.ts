@@ -53,6 +53,14 @@ import {
   type DiskSlot,
   type Tenant,
 } from "./tenants.ts";
+import {
+  noteOutput,
+  noteRun,
+  noteToolCall,
+  noteTurn,
+  usageRec,
+  usageSnapshot,
+} from "./usage.ts";
 
 loadDotEnv([
   resolve(process.cwd(), ".env"),
@@ -2418,6 +2426,7 @@ function finishRun(
   if (slot.finished) return;
   closeOpenTools(ws, slot, status);
   slot.finished = true;
+  noteRun(slot.tenantId, durationMs); // P9 计量：finished 门保证一次 run 只计一次
   send(ws, {
     type: "done",
     chatId: slot.chatId,
@@ -2811,7 +2820,10 @@ async function handlePrompt(
     args?: unknown,
   ) => {
     if (blockedCalls.has(callId)) return;
-    slot.openTools?.delete(callId);
+    // P9 计量：onDelta 与 run.stream() 两通道都会 finishTool 同一 callId——
+    // openTools.delete 只有首次返回 true，凭它保证一次调用只计一次
+    const wasOpen = slot.openTools?.delete(callId) === true;
+    if (wasOpen) noteToolCall(slot.tenantId);
     const meta = crewMeta.get(callId);
     send(ws, {
       type: "tool-completed",
@@ -2915,11 +2927,17 @@ async function handlePrompt(
         switch (rec.type) {
           case "text-delta":
             noteRunActivity(true);
-            if (rec.text) send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
+            if (rec.text) {
+              send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
+              noteOutput(slot.tenantId, rec.text.length); // P9 计量：模型输出
+            }
             break;
           case "thinking-delta":
             noteRunActivity(true);
-            if (rec.text) send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
+            if (rec.text) {
+              send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
+              noteOutput(slot.tenantId, rec.text.length); // P9 计量：thinking 也烧 token
+            }
             break;
           case "tool-call-started":
             noteRunActivity(true);
@@ -3677,6 +3695,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             : [],
         );
         bindTenant(conn, tenant);
+        usageRec(tenant.id); // P9：建行 + touch lastActiveAt（登录即活动）
         const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
         hydrateConn(conn);
         attachLiveSlots(conn);
@@ -3694,6 +3713,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             workspaceRoot: resolve(tenant.workspaceRoot),
             tenantId: tenant.id,
             tenantName: tenant.name,
+            admin: tenant.admin,
             policy: conn.policy || defaultPolicy(),
           });
         };
@@ -3719,6 +3739,39 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
       const tenant = conn.tenant;
+
+      // P9：管理员查询全租户使用统计。Cursor 官方无 API key 用量端点，
+      // 数据来自网关自计量（usage.ts）+ 实时 disk/连接数。
+      if (message.type === "admin_stats") {
+        if (!tenant.admin) {
+          send(ws, { type: "error", message: "需要管理员权限。" });
+          return;
+        }
+        const rows = allTenants().map((item) => {
+          const usage = usageSnapshot(item.id);
+          const online = [...conns.values()].filter(
+            (other) => other.authed && other.tenant?.id === item.id,
+          ).length;
+          return {
+            id: item.id,
+            name: item.name,
+            admin: item.admin,
+            online,
+            chats: item.disk.chats.length,
+            turns: usage.turns,
+            runs: usage.runs,
+            toolCalls: usage.toolCalls,
+            runMs: usage.runMs,
+            inChars: usage.inChars,
+            outChars: usage.outChars,
+            estTokens: Math.round((usage.inChars + usage.outChars) / 4),
+            firstSeenAt: usage.firstSeenAt,
+            lastActiveAt: usage.lastActiveAt,
+          };
+        });
+        send(ws, { type: "admin_stats", serverTime: Date.now(), tenants: rows });
+        return;
+      }
 
       if (message.type === "sync_state") {
         const clientRev = typeof message.rev === "number" ? message.rev : 0;
@@ -4343,6 +4396,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
 
       if (message.type === "prompt") {
         const slot = slotOf(conn, message.chatId);
+        // P9 计量：一条用户消息记一个 turn（排队也算——用户确实发了）；
+        // 埋点在分发处而非 handlePrompt，pending 重放不会重复计数
+        noteTurn(tenant.id, (message.text || "").length);
         await handlePrompt(
           ws,
           conn,

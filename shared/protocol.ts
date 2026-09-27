@@ -78,6 +78,8 @@ export type ClientMessage =
   | { type: "load_chat"; chatId: string; from?: number; nonce?: number }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
+  // 管理员查询全部租户的使用统计（P9）：仅 tenants.json 里 admin: true 的租户可用
+  | { type: "admin_stats" }
   | { type: "ping" };
 
 export type PreviewKind =
@@ -132,6 +134,8 @@ export type ServerMessage =
       workspaceRoot?: string;
       tenantId?: string;
       tenantName?: string;
+      /** P9：当前租户是否管理员（tenants.json 里 admin: true）——客户端据此显示统计入口 */
+      admin?: boolean;
       policy?: PolicyId;
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
@@ -246,4 +250,34 @@ export type ServerMessage =
       silent?: boolean;
     }
   | { type: "chat_title"; chatId: string; title: string }
+  // admin_stats 的应答（P9）：全租户使用统计
+  | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[] }
   | { type: "pong" };
+
+/** P9：单租户使用统计。estTokens 按字符估算（≈4 字符/token）——Cursor 官方不暴露
+ *  API key 用量端点（api.cursor.com 只有 agents/runs/models 等），此为网关自计量的相对消耗 */
+export type AdminTenantStats = {
+  id: string;
+  name: string;
+  admin: boolean;
+  /** 当前在线连接数 */
+  online: number;
+  /** 现存会话数（实时读 disk） */
+  chats: number;
+  /** 累计用户消息数（prompt 条数，含排队） */
+  turns: number;
+  /** 累计 agent 运行次数（一次 confirm-writes 重放算两次——两次都真实消耗 API） */
+  runs: number;
+  /** 累计工具调用完成数 */
+  toolCalls: number;
+  /** 累计运行时长（毫秒） */
+  runMs: number;
+  /** 累计用户输入字符数 */
+  inChars: number;
+  /** 累计助手输出字符数（text + thinking） */
+  outChars: number;
+  /** (inChars + outChars) / 4 的估算 token 量 */
+  estTokens: number;
+  firstSeenAt: number;
+  lastActiveAt: number;
+};

@@ -247,6 +247,53 @@ async function main() {
   const none = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === "no-such-chat", "load unknown");
   step(none.total === 0 && none.turns.length === 0 && none.hasMore === false, "load_chat 未知会话 → 空页终止");
 
+  // 9. P9 admin_stats：ready 带 admin 标志；管理员查询返回全租户统计行（env 单租户默认管理员）
+  const adminCli = client("admin", ["sync_chat"]);
+  await adminCli.hello();
+  const readyMsg = adminCli.inbox.find((m) => m.type === "ready");
+  step(readyMsg?.admin === true, "ready 带 admin: true（env 单租户默认管理员）", `admin=${readyMsg?.admin}`);
+  adminCli.send({ type: "admin_stats" });
+  const stats = await adminCli.waitFor((m) => m.type === "admin_stats", "admin_stats");
+  const statRow = (stats.tenants || []).find((t) => t && t.id);
+  step(Array.isArray(stats.tenants) && stats.tenants.length >= 1, "admin_stats 返回租户行", `n=${stats.tenants?.length}`);
+  step(!!statRow && typeof statRow.turns === "number" && typeof statRow.runs === "number"
+    && typeof statRow.toolCalls === "number" && typeof statRow.estTokens === "number"
+    && typeof statRow.lastActiveAt === "number" && typeof statRow.online === "number"
+    && typeof statRow.chats === "number" && typeof statRow.name === "string",
+    "统计行字段齐全（turns/runs/toolCalls/estTokens/online/chats/lastActiveAt）");
+  step(!!statRow && statRow.online >= 1, "在线连接数 ≥ 1（本连接）", `online=${statRow?.online}`);
+  step(!!statRow && statRow.lastActiveAt > 0, "lastActiveAt 已记录（hello 即活动）");
+  adminCli.ws.close();
+
+  // 9b. 非管理员被拒（仅当提供 SMOKE_USER_TOKEN——生产多租户冒烟用）
+  if (process.env.SMOKE_USER_TOKEN) {
+    const plain = new WebSocket(WS_URL, { maxPayload: 128 * 1024 * 1024 });
+    const plainInbox = [];
+    plain.on("message", (raw) => { try { plainInbox.push(JSON.parse(raw.toString())); } catch {} });
+    await new Promise((resolve, reject) => { plain.once("open", resolve); plain.once("error", reject); });
+    plain.send(JSON.stringify({ type: "hello", token: process.env.SMOKE_USER_TOKEN, client: { name: "plain" } }));
+    const plainReady = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("plain ready 超时")), 15_000);
+      const scan = () => {
+        const hit = plainInbox.find((m) => m.type === "ready");
+        if (hit) { clearTimeout(timer); resolve(hit); }
+      };
+      plain.on("message", scan); scan();
+    });
+    step(plainReady.admin !== true, "非管理员 ready 不带 admin 标志", `admin=${plainReady.admin}`);
+    plain.send(JSON.stringify({ type: "admin_stats" }));
+    const denied = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("admin_stats 拒绝超时")), 15_000);
+      const scan = () => {
+        const hit = plainInbox.find((m) => m.type === "error" || m.type === "admin_stats");
+        if (hit) { clearTimeout(timer); resolve(hit); }
+      };
+      plain.on("message", scan); scan();
+    });
+    step(denied.type === "error" && /管理员/.test(denied.message || ""), "非管理员 admin_stats 被拒", denied.message || denied.type);
+    plain.close();
+  }
+
   // 清场：删掉冒烟会话
   for (const c of [seed, slim2, slim3]) {
     try {
