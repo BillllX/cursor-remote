@@ -14,5 +14,7 @@
 	</dict>
 	<key>UIRequiresPersistentWiFi</key>
 	<true/>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>把预览的图片保存到相册</string>
 </dict>
 </plist>

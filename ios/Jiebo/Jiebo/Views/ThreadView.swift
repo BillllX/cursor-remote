@@ -58,6 +58,10 @@ struct ThreadView: View {
             QuickLookView(file: file, onClose: { store.dismissPreviewFile() })
                 .ignoresSafeArea()
         }
+        // P10：分享 sheet（与 QL 同一套 cover 期间不抢守卫）
+        .sheet(item: exportFileBinding, onDismiss: store.closeExport) { file in
+            ActivityView(items: [file.url])
+        }
     }
 
     /// P7：文件浏览器 cover 打开期间本层不 present QL——cover 自己挂了同一 previewFile 的 sheet，
@@ -66,6 +70,14 @@ struct ThreadView: View {
         Binding(
             get: { store.fileBrowserOpen ? nil : store.previewFile },
             set: { store.previewFile = $0 }
+        )
+    }
+
+    /// P10：同上——cover 期间分享 sheet 由 FileBrowserCover 自己 present
+    private var exportFileBinding: Binding<PreviewFile?> {
+        Binding(
+            get: { store.fileBrowserOpen ? nil : store.exportFile },
+            set: { store.exportFile = $0 }
         )
     }
 

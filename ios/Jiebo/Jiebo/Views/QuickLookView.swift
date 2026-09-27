@@ -45,6 +45,18 @@ struct QuickLookView: UIViewControllerRepresentable {
     }
 }
 
+/// P10：系统分享 sheet（UIActivityViewController）的 SwiftUI 封装——
+/// 存文件/存相册/隔空投送/发送全交给系统。以 .sheet 呈现（formSheet），iPad 上无需 popover 源。
+struct ActivityView: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
 private final class CloseableQLPreviewController: QLPreviewController {
     private let onClose: () -> Void
 

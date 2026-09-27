@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import Photos
+import UIKit
 
 @Observable
 @MainActor
@@ -700,19 +702,7 @@ final class ChatStore {
         let tenantAtStart = tenantId
         previewTask = Task {
             do {
-                var request = URLRequest(url: GatewayConfig.mediaURL(path: trimmed, chatId: chatId))
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                request.timeoutInterval = 60
-                let (data, response) = try await URLSession.shared.data(for: request)
-                try Task.checkCancellation()
-                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                guard (200 ..< 300).contains(code) else {
-                    throw PreviewError.http(code)
-                }
-                guard data.count <= 32 * 1024 * 1024 else { throw PreviewError.tooLarge }
-                let temp = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("jiebo-preview-\(UUID().uuidString)-\((trimmed as NSString).lastPathComponent)")
-                try data.write(to: temp)
+                let temp = try await downloadToTemp(path: trimmed, chatId: chatId, token: token)
                 // 下载途中切了会话/租户：删掉 temp 静默退出，不在新上下文弹预览
                 guard !Task.isCancelled, tenantId == tenantAtStart, activeId == chatId else {
                     try? FileManager.default.removeItem(at: temp)
@@ -727,6 +717,28 @@ final class ChatStore {
                 bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             }
         }
+    }
+
+    /// /media 下载的公共段（openMention / exportPreview / saveImageToPhotos 共用）；
+    /// 纯 IO，不含租户/会话守卫——调用方按自己的语义决定下载完成后是否还该呈现
+    private func downloadData(path: String, chatId: String, token: String) async throws -> Data {
+        var request = URLRequest(url: GatewayConfig.mediaURL(path: path, chatId: chatId))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Task.checkCancellation()
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(code) else { throw PreviewError.http(code) }
+        guard data.count <= 32 * 1024 * 1024 else { throw PreviewError.tooLarge }
+        return data
+    }
+
+    private func downloadToTemp(path: String, chatId: String, token: String, tempName: String? = nil) async throws -> URL {
+        let data = try await downloadData(path: path, chatId: chatId, token: token)
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jiebo-preview-\(UUID().uuidString)-\(tempName ?? (path as NSString).lastPathComponent)")
+        try data.write(to: temp)
+        return temp
     }
 
     /// 预览失败文案（独立于 UploadError，避免「预览失败：上传失败」串味）
@@ -763,6 +775,109 @@ final class ChatStore {
     /// Quick Look「完成」按钮入口：主动关 sheet（temp 清理由 setPreviewFile/onDismiss 链负责）
     func dismissPreviewFile() {
         setPreviewFile(nil)
+    }
+
+    // MARK: P10 - 预览导出（分享 / 存相册）
+
+    /// 待分享的文件（temp，系统分享 sheet 的 activityItem）；dismiss 后删除
+    var exportFile: PreviewFile?
+    var exportLoading = false
+    private var lastExportURL: URL?
+    private var exportTask: Task<Void, Never>?
+
+    /// 分享任意预览文件：文本类直接用已内联的 content 写 temp（省一次下载），
+    /// 媒体/大文件走 /media 下载。temp 文件名保留原扩展名，分享 sheet 才能识别 UTType。
+    func exportPreview(path rawPath: String, content: String?, isDiff: Bool = false) {
+        let path = relToCwd(rawPath)
+        guard !path.isEmpty, !path.hasSuffix("/") else { return }
+        let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return }
+        exportTask?.cancel()
+        exportLoading = true
+        let chatId = activeId
+        let tenantAtStart = tenantId
+        let filename = (path as NSString).lastPathComponent
+        exportTask = Task {
+            do {
+                let temp: URL
+                if let content {
+                    // diff 页签的 content 是 unified diff 文本，加 .diff 后缀让接收方按纯文本打开
+                    let name = isDiff ? "\(filename).diff" : filename
+                    temp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("jiebo-export-\(UUID().uuidString)-\(name)")
+                    try Data(content.utf8).write(to: temp)
+                } else {
+                    temp = try await downloadToTemp(path: path, chatId: chatId, token: token)
+                }
+                guard !Task.isCancelled, tenantId == tenantAtStart else {
+                    try? FileManager.default.removeItem(at: temp)
+                    return
+                }
+                exportLoading = false
+                setExportFile(PreviewFile(url: temp, name: filename))
+            } catch {
+                guard !Task.isCancelled else { return }
+                exportLoading = false
+                guard tenantId == tenantAtStart else { return }
+                bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// 图片一键存相册（PNG 数据直存，无损；权限由系统在写入时弹）
+    func saveImageToPhotos(path rawPath: String) {
+        let path = relToCwd(rawPath)
+        guard !path.isEmpty else { return }
+        let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return }
+        exportTask?.cancel()
+        exportLoading = true
+        let chatId = activeId
+        let tenantAtStart = tenantId
+        exportTask = Task {
+            do {
+                let data = try await downloadData(path: path, chatId: chatId, token: token)
+                guard !Task.isCancelled, tenantId == tenantAtStart else { return }
+                guard let image = UIImage(data: data) else {
+                    exportLoading = false
+                    bannerError = "图片数据读不出来，没法存相册"
+                    return
+                }
+                // Photos 框架：权限明确、错误可抛（UIImageWriteToSavedPhotosAlbum 的
+                // selector 回调有 delegate 存活坑，且权限拒绝时静默）
+                let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+                guard status == .authorized || status == .limited else {
+                    exportLoading = false
+                    bannerError = "没有相册写入权限——去系统设置 → 接驳 → 照片 里打开"
+                    return
+                }
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetCreationRequest.creationRequestForAsset(from: image)
+                }
+                exportLoading = false
+                flash("已存到相册")
+            } catch {
+                guard !Task.isCancelled else { return }
+                exportLoading = false
+                guard tenantId == tenantAtStart else { return }
+                bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            }
+        }
+    }
+
+    /// 写 exportFile 的唯一入口：先删旧 temp 再换新的（同 setPreviewFile 的防泄漏链）
+    private func setExportFile(_ file: PreviewFile?) {
+        if let old = lastExportURL, old != file?.url {
+            try? FileManager.default.removeItem(at: old)
+        }
+        lastExportURL = file?.url
+        exportFile = file
+    }
+
+    /// 分享 sheet onDismiss 入口（SwiftUI 已先置 nil；同 closePreview 的旧 sheet 守卫）
+    func closeExport() {
+        guard exportFile == nil else { return }
+        setExportFile(nil)
     }
 
     // MARK: P5 - 预览面板
@@ -1843,6 +1958,9 @@ final class ChatStore {
         previewTask?.cancel()
         setPreviewFile(nil) // 强制关预览（closePreview 有 dismiss 竞态守卫，这里绕过）
         previewLoading = false
+        exportTask?.cancel() // P10：导出状态一并清（temp 由 setExportFile 链删除）
+        setExportFile(nil)
+        exportLoading = false
         expiredUploadIds = []
         stateFetchTask?.cancel()
         let orphans = pendingUploads

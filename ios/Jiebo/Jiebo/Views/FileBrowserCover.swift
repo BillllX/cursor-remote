@@ -83,6 +83,10 @@ struct FileBrowserCover: View {
             QuickLookView(file: file, onClose: { store.dismissPreviewFile() })
                 .ignoresSafeArea()
         }
+        // P10：分享 sheet 同 QL 一样挂 cover 自己（ThreadView 的 sheet 在 cover 背后弹不出来）
+        .sheet(item: $store.exportFile, onDismiss: store.closeExport) { file in
+            ActivityView(items: [file.url])
+        }
     }
 
     /// 标题给当前工作区名，防迷失（sheet 期间切不了会话，文件一定是这个工作区的）。
@@ -167,6 +171,42 @@ struct FileBrowserCover: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
+                    // P10：导出（与预览面板头部同款；图片多一个「存相册」）
+                    if tab.kind == .image, !tab.diff {
+                        Button {
+                            store.saveImageToPhotos(path: tab.path)
+                        } label: {
+                            Image(systemName: "square.and.arrow.down.on.square")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(width: 30, height: 30)
+                                .background(JieboColor.mist)
+                                .clipShape(Circle())
+                                .hitTarget()
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("保存 \(tab.filename) 到相册")
+                    }
+                    Button {
+                        store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff)
+                    } label: {
+                        Group {
+                            if store.exportLoading {
+                                ProgressView().controlSize(.small).tint(JieboColor.dim)
+                            } else {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink2)
+                            }
+                        }
+                        .frame(width: 30, height: 30)
+                        .background(JieboColor.mist)
+                        .clipShape(Circle())
+                        .hitTarget()
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+                    .accessibilityLabel("分享 \(tab.filename)")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)

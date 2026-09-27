@@ -141,12 +141,12 @@ struct PreviewPanelView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
             }
-            // 媒体类的系统逃生门（对齐网页的「下载」pill）：Quick Look 里可分享/导出/存相册
-            if tab.kind.needsMediaURL {
+            // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
+            if tab.kind == .image, !tab.diff {
                 Button {
-                    store.openMention(tab.path)
+                    store.saveImageToPhotos(path: tab.path)
                 } label: {
-                    Image(systemName: "square.and.arrow.up")
+                    Image(systemName: "square.and.arrow.down.on.square")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                         .frame(width: 30, height: 30)
@@ -155,8 +155,31 @@ struct PreviewPanelView: View {
                         .hitTarget()
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("用系统打开 \(tab.filename)")
+                .accessibilityLabel("保存 \(tab.filename) 到相册")
             }
+            // P10：全类型分享（文本用内联 content 写 temp，媒体/大文件走 /media 下载）——
+            // 系统分享 sheet 覆盖存文件/存相册/隔空投送；替代原媒体类的 Quick Look 逃生门
+            //（QL 全屏预览仍可从文件树长按菜单进）
+            Button {
+                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff)
+            } label: {
+                Group {
+                    if store.exportLoading {
+                        ProgressView().controlSize(.small).tint(JieboColor.dim)
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                }
+                .frame(width: 30, height: 30)
+                .background(JieboColor.mist)
+                .clipShape(Circle())
+                .hitTarget()
+            }
+            .buttonStyle(.plain)
+            .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+            .accessibilityLabel("分享 \(tab.filename)")
             if tab.content != nil {
                 Button {
                     UIPasteboard.general.string = tab.content
