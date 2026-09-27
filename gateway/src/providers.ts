@@ -5,9 +5,10 @@ import { stateDir } from "./tenants.js";
 /**
  * P11：第三方 OpenAI 兼容模型接入（MiniMax / GLM / Kimi / Grok 等）。
  *
- * 配置：stateDir/providers.json（生产放 /etc/cursor-remote/providers.json，
- * 与 tenants.json 同级——stateDir env 指向 /etc/cursor-remote 时天然同级）。
- * key 不下发客户端；模型 id 以 `provider:model` 编码混进 ready.models
+ * 配置：stateDir/providers.json（即 CURSOR_REMOTE_STATE_DIR 指向的目录，
+ * 生产为 /var/lib/cursor-remote/providers.json；注意服务跑在 cursor-remote
+ * 用户下，文件属主要给对该用户）。key 不下发客户端；模型 id 以
+ * `provider:model` 编码混进 ready.models
  * （如 "minimax:MiniMax-M2"），iOS 选中后 prompt.model 原样回传，网关按前缀路由。
  *
  * 能力边界：纯问答——无工具、无检查点、无 confirm-writes；历史由客户端
