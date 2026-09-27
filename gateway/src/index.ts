@@ -2455,6 +2455,7 @@ async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: st
   const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
   if (!apiKey) return;
   namingChats.add(chatId);
+  const titleT0 = Date.now();
   try {
     const scratch = resolve(tenant.stateDir, "title-scratch");
     mkdirSync(scratch, { recursive: true });
@@ -2478,7 +2479,7 @@ async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: st
     console.error("titleChat", err instanceof Error ? err.message : err);
   } finally {
     namingChats.delete(chatId);
-    noteRun(tenant.id); // 起标题是一次真实 agent 调用（Kimi R1 M3），成败都计
+    noteRun(tenant.id, Date.now() - titleT0); // 起标题是一次真实 agent 调用（Kimi R1 M3），成败都计
   }
 }
 

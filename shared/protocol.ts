@@ -268,7 +268,8 @@ export type AdminTenantStats = {
   /** 累计用户消息数（prompt 条数，含排队） */
   turns: number;
   /** 累计 agent 运行完成次数（按 finishRun 计；confirm-writes 被拦截的首次运行手动收尾、
-   *  不经 finishRun，故「拦截+重放」实际计 1 次——相对消耗口径，非精确 API 调用数） */
+   *  不经 finishRun，故「拦截+重放」实际计 1 次；titleChat 起标题也不经 finishRun、
+   *  单独计 1 次——相对消耗口径，非精确 API 调用数） */
   runs: number;
   /** 累计工具调用完成数 */
   toolCalls: number;
@@ -276,7 +277,7 @@ export type AdminTenantStats = {
   runMs: number;
   /** 累计用户输入字符数（仅文本；纯图 prompt 计 0，图像 token 不在口径内） */
   inChars: number;
-  /** 累计助手输出字符数（text + thinking） */
+  /** 累计助手输出字符数（text + thinking + 会话标题；不含工具调用参数） */
   outChars: number;
   /** (inChars + outChars) / 4 的估算 token 量 */
   estTokens: number;

@@ -287,9 +287,17 @@ struct SidebarView: View {
     private static let legacyCollapsedKey = "sidebar.collapsedWorkspaces"
 
     private static func loadExpanded(for tenantId: String) -> Set<String> {
-        guard let data = UserDefaults.standard.data(forKey: expandedKey(for: tenantId)),
-              let list = try? JSONDecoder().decode([String].self, from: data) else { return [] }
-        return Set(list)
+        if let data = UserDefaults.standard.data(forKey: expandedKey(for: tenantId)),
+           let list = try? JSONDecoder().decode([String].self, from: data) { return Set(list) }
+        // 一次性迁移：P9 首版的全局 key → per-tenant（否则老用户升级后展开状态全丢）
+        if !tenantId.isEmpty, let data = UserDefaults.standard.data(forKey: expandedKey(for: "")),
+           let list = try? JSONDecoder().decode([String].self, from: data) {
+            let set = Set(list)
+            saveExpanded(set, for: tenantId)
+            UserDefaults.standard.removeObject(forKey: expandedKey(for: ""))
+            return set
+        }
+        return []
     }
 
     private static func saveExpanded(_ set: Set<String>, for tenantId: String) {

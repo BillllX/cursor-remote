@@ -168,8 +168,12 @@ export function flushUsage(): void {
     };
     // tmp + rename 原子替换：避免 SIGKILL/断电写一半损坏整份计量（load 虽容错但会丢全部历史）
     const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(payload));
-    renameSync(tmp, file);
+    try {
+      writeFileSync(tmp, JSON.stringify(payload));
+      renameSync(tmp, file);
+    } catch {
+      writeFileSync(file, JSON.stringify(payload)); // 某些挂载盘 rename 不可靠：回退直写，别让计量永久停更
+    }
   } catch {
     // 磁盘满/权限——统计丢了不影响主流程
   }
