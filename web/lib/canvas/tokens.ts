@@ -248,6 +248,43 @@ export function applyWorkbenchSurfaces(
   };
 }
 
+export type JieboCanvasSurfaces = {
+  bg: string;
+  sidebar: string;
+  panel: string;
+  text: string;
+  muted: string;
+  border: string;
+  accent: string;
+  user: string;
+  fillFg: string;
+};
+
+/** 把应用配色铺进画布宿主。分类色（图表绿/红/黄）保持语义，不跟配色漂移。 */
+export function applyJieboSurfaces(palette: CanvasPalette, surfaces: JieboCanvasSurfaces): CanvasPalette {
+  return {
+    ...palette,
+    foreground: surfaces.text,
+    foregroundSecondary: surfaces.muted,
+    foregroundTertiary: surfaces.muted,
+    foregroundQuaternary: surfaces.border,
+    editor: surfaces.bg,
+    chrome: surfaces.sidebar,
+    sidebar: surfaces.sidebar,
+    elevated: surfaces.panel,
+    strokePrimary: surfaces.border,
+    strokeSecondary: surfaces.border,
+    strokeTertiary: surfaces.border,
+    strokeFocused: surfaces.accent,
+    accent: surfaces.accent,
+    buttonBackground: surfaces.accent,
+    buttonForeground: surfaces.fillFg,
+    buttonHoverBackground: surfaces.accent,
+    link: surfaces.accent,
+    fillSecondary: surfaces.user,
+  };
+}
+
 export function applyPrimaryColor(palette: CanvasPalette, primary: string): CanvasPalette {
   if (!/^#([0-9a-f]{6}|[0-9a-f]{3})$/i.test(primary)) return palette;
   return {
@@ -259,10 +296,14 @@ export function applyPrimaryColor(palette: CanvasPalette, primary: string): Canv
   };
 }
 
-export function buildHostTokens(kind: string, overrides?: CanvasHostThemeOverrides) {
+export function buildHostTokens(
+  kind: string,
+  overrides?: CanvasHostThemeOverrides & { surfaces?: JieboCanvasSurfaces },
+) {
   const light = kind === "light" || kind === "hc-light";
   let palette = light ? canvasPaletteLight : canvasPaletteDark;
   const category = light ? categoryPaletteLight : categoryPaletteDark;
+  if (overrides?.surfaces) palette = applyJieboSurfaces(palette, overrides.surfaces);
   if (overrides?.editorBackground || overrides?.editorForeground) {
     palette = applyWorkbenchSurfaces(palette, overrides);
   }

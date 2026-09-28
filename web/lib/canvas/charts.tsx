@@ -68,7 +68,8 @@ function toneColor(tone: ChartTone | undefined, index: number, theme: ReturnType
   if (tone === "warning") return theme.category.yellow;
   if (tone === "info") return theme.category.blue;
   if (tone === "neutral") return theme.category.gray;
-  return chartColorSequence[index % chartColorSequence.length];
+  if (index === 0) return theme.accent.primary;
+  return chartColorSequence[(index - 1) % chartColorSequence.length];
 }
 
 function formatVal(value: number, prefix = "", suffix = "") {

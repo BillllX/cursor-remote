@@ -3,7 +3,7 @@ import WebKit
 
 // P5d canvas：WKWebView 加载同域部署的 /canvas-runtime（网页 CanvasHost 的 iOS 版宿主）。
 // 协议对齐 web/components/CanvasHost.tsx + CanvasRuntime.tsx：
-//   宿主 → 运行时：window.postMessage({type:"canvas:load", seq, source, path, chatId})
+//   宿主 → 运行时：window.postMessage({type:"canvas:load", seq, source, path, chatId, palette, theme})
 //   运行时 → 宿主：canvas:ready / canvas:loaded(seq) / canvas:error(message) / canvas:action(action, path)
 // 运行时页面在 WKWebView 里是顶层 frame，window.parent === window，
 // 所以运行时的 postMessage 以 message 事件回环到自身——注入用户脚本把 canvas:* 转发给 Swift；
@@ -29,12 +29,26 @@ struct CanvasFileView: View {
 
     enum Status { case loading, ready, error }
 
+    private var canvasPalette: String { JieboTheme.shared.palette.rawValue }
+
+    private var canvasThemeKind: String {
+        switch JieboTheme.shared.appearance {
+        case .light: return "light"
+        case .dark: return "dark"
+        case .system: return colorScheme == .dark ? "dark" : "light"
+        }
+    }
+
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
             CanvasWebView(
                 source: source,
                 path: path,
                 chatId: chatId,
+                palette: canvasPalette,
+                themeKind: canvasThemeKind,
                 onReady: { didReady = true },
                 onLoaded: {
                     status = .ready
@@ -127,6 +141,8 @@ private struct CanvasWebView: UIViewRepresentable {
     let source: String
     let path: String
     let chatId: String
+    let palette: String
+    let themeKind: String
     let onReady: () -> Void
     let onLoaded: () -> Void
     let onError: (String?) -> Void
@@ -153,7 +169,7 @@ private struct CanvasWebView: UIViewRepresentable {
         config.userContentController.addUserScript(bridge)
         config.userContentController.add(context.coordinator, name: "canvas")
         let webView = WKWebView(frame: .zero, configuration: config)
-        // 运行时跟当前明暗（buildHostTheme），透明底 + 面板 paper 衬底，避免过滚时闪边
+        // 运行时跟当前配色（buildHostTheme），透明底 + 面板 paper 衬底，避免过滚时闪边
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -251,7 +267,7 @@ private struct CanvasWebView: UIViewRepresentable {
         }
 
         func pushLoad(_ webView: WKWebView, force: Bool) {
-            let identity = "\(parent.path)\u{0}\(parent.chatId)\u{0}\(parent.source)"
+            let identity = "\(parent.path)\u{0}\(parent.chatId)\u{0}\(parent.source)\u{0}\(parent.palette)\u{0}\(parent.themeKind)"
             if !force, identity == lastSentIdentity { return }
             lastSentIdentity = identity
             sendLoad(webView)
@@ -267,6 +283,8 @@ private struct CanvasWebView: UIViewRepresentable {
                 "source": source,
                 "path": parent.path,
                 "chatId": parent.chatId,
+                "palette": parent.palette,
+                "theme": parent.themeKind,
             ]
             // arguments 传递，避免字符串插值拼 JS（payload 作为 JS 变量注入）
             webView.callAsyncJavaScript(

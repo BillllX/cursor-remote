@@ -21,7 +21,19 @@ type LoadMessage = {
   source?: string;
   path?: string;
   chatId?: string;
+  palette?: string;
+  theme?: string;
 };
+
+function applyCanvasTheme(data: LoadMessage) {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+  if (data.palette) root.dataset.palette = data.palette;
+  if (data.theme === "light" || data.theme === "dark") {
+    root.dataset.theme = data.theme;
+    root.style.colorScheme = data.theme;
+  }
+}
 
 class CanvasBoundary extends Component<
   { reset: string; children: ReactNode; onError: (message: string) => void },
@@ -72,15 +84,19 @@ export default function CanvasRuntime() {
   const [seq, setSeq] = useState<number | undefined>();
   const [load, setLoad] = useState(0);
   const [kind, setKind] = useState("dark");
+  const [palette, setPalette] = useState("neutral");
   useLayoutEffect(() => {
     const root = document.documentElement;
-    const read = () => setKind(root.dataset.theme === "light" ? "light" : "dark");
+    const read = () => {
+      setKind(root.dataset.theme === "light" ? "light" : "dark");
+      setPalette(root.dataset.palette || "neutral");
+    };
     read();
     const observer = new MutationObserver(read);
-    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme", "data-palette"] });
     return () => observer.disconnect();
   }, []);
-  const theme = useMemo(() => buildHostTheme(kind), [kind]);
+  const theme = useMemo(() => buildHostTheme(kind, { palette }), [kind, palette]);
 
   const post = useCallback((payload: Record<string, unknown>) => {
     window.parent.postMessage(payload, "*");
@@ -95,6 +111,7 @@ export default function CanvasRuntime() {
       apply(data);
     }
     function apply(data: LoadMessage) {
+      applyCanvasTheme(data);
       const next = data.source || "";
       if (!next.trim()) return;
       gotLoad = true;

@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { paletteSurfaces } from "../theme";
 import {
   buildHostTokens,
   type CanvasPalette,
@@ -39,9 +40,16 @@ type HostValue = {
 
 const HostCtx = createContext<HostValue | null>(null);
 
-export function buildHostTheme(kind = "dark", overrides?: { primary?: string }): CanvasHostTheme {
-  const { tokens, palette } = buildHostTokens(kind, overrides);
-  return { ...tokens, kind, tokens, palette };
+export function buildHostTheme(
+  kind = "dark",
+  options?: { primary?: string; palette?: string | null },
+): CanvasHostTheme {
+  const light = kind === "light" || kind === "hc-light";
+  const { tokens, palette } = buildHostTokens(light ? "light" : "dark", {
+    primary: options?.primary,
+    surfaces: paletteSurfaces(options?.palette, light ? "light" : "dark"),
+  });
+  return { ...tokens, kind: light ? "light" : "dark", tokens, palette };
 }
 
 export function CanvasRuntimeProvider({
@@ -65,10 +73,12 @@ export function CanvasRuntimeProvider({
 export function useHostTheme(): CanvasHostTheme {
   const host = useContext(HostCtx);
   if (host) return host.theme;
-  if (typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: light)").matches) {
-    return buildHostTheme("light");
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    const kind = root.dataset.theme === "light" ? "light" : "dark";
+    return buildHostTheme(kind, { palette: root.dataset.palette || "neutral" });
   }
-  return buildHostTheme("dark");
+  return buildHostTheme("dark", { palette: "neutral" });
 }
 
 export function useCanvasState<T>(key: string, defaultValue: T): [T, SetCanvasState<T>] {
