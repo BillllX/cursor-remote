@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var collapse: () -> Void = {}
     /// P9：展开的工作区集合（默认收起，只记正向状态；含活跃会话的组强制展开）。
     /// P7b 曾是负向 collapsed 集合，P9 按产品决定翻转默认——旧 key 在 .task 里清掉。
@@ -12,6 +13,7 @@ struct SidebarView: View {
     @State private var renameDraft = ""
     /// P9：管理员统计面板
     @State private var adminStatsOpen = false
+    @State private var deleteTarget: ChatSession?
 
     var body: some View {
         @Bindable var store = store
@@ -19,15 +21,29 @@ struct SidebarView: View {
             HStack(spacing: 10) {
                 JieboMark(size: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("接驳")
+                    Text(store.currentWorkspaceName)
                         .font(JieboFont.display(22))
                         .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Text(store.connected ? subtitle : "正在重连…")
                         .font(JieboFont.ui(12))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                 }
-                Spacer()
+                Spacer(minLength: 8)
+                Button(action: store.openWorkspaceSwitcher) {
+                    Image(systemName: "square.stack.3d.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(width: 36, height: 36)
+                        .background(JieboColor.mist)
+                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
+                        .hitTarget()
+                }
+                .buttonStyle(PressScaleButtonStyle())
+                .accessibilityLabel("切换工作区")
                 Button(action: collapse) {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 15, weight: .semibold))
@@ -35,45 +51,41 @@ struct SidebarView: View {
                         .frame(width: 36, height: 36)
                         .background(JieboColor.mist)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
                         .hitTarget()
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressScaleButtonStyle())
                 .accessibilityLabel("收起侧栏")
-                Button(action: store.openNewChat) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                        .frame(width: 36, height: 36)
-                        .background(JieboColor.mist)
-                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                        .hitTarget() // P6：视觉 36，命中 44
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut("n", modifiers: .command)
-                .accessibilityLabel("新对话")
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 12)
 
+            Button(action: store.openNewChat) {
+                Label("新对话", systemImage: "plus")
+                    .font(JieboFont.ui(14, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 40)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(store.currentWorkspacePath.isEmpty)
+            .keyboardShortcut("n", modifiers: .command)
+            .accessibilityLabel("在当前工作区新建对话")
+
             List {
-                let groups = store.workspaceGroups // body 里只算一遍（@Observable 不缓存计算属性）
-                let dupNames = duplicateNames(in: groups)
-                if groups.count <= 1 {
-                    // 单组：隐藏组头，观感=扁平列表（零打扰渐进）
-                    ForEach(groups.first?.chats ?? []) { chat in
-                        chatRow(chat)
-                    }
+                let chats = store.currentWorkspaceChats
+                if chats.isEmpty {
+                    Text("这个工作区还没有会话")
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.dim)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 } else {
-                    ForEach(groups) { group in
-                        // 组头是普通 row 而非 Section header——iOS 17+ List 会丢掉零 row 的
-                        // 空 section（含 header），折叠后组头会消失/点不着（评审 Grok M4）
-                        groupHeader(group, duplicate: dupNames.contains(group.name))
-                        if !isCollapsed(group) {
-                            ForEach(group.chats) { chat in
-                                chatRow(chat)
-                            }
-                        }
+                    ForEach(chats) { chat in
+                        chatRow(chat)
                     }
                 }
             }
@@ -91,38 +103,65 @@ struct SidebarView: View {
             } message: { chat in
                 Text(chat.title)
             }
-
-            HStack(spacing: 10) {
-                Button("退出登录", action: store.logout)
-                    .font(JieboFont.ui(13))
-                    .foregroundStyle(JieboColor.ink2)
-                ForEach(ToolLayer.allCases) { layer in
-                    toolButton(layer)
+            .alert("删除这个会话？", isPresented: deletePresented, presenting: deleteTarget) { chat in
+                Button("删除", role: .destructive) {
+                    store.deleteChat(chat.id)
+                    deleteTarget = nil
                 }
-                Spacer()
-                if store.isAdmin {
-                    Button {
-                        adminStatsOpen = true
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "chart.bar")
-                                .font(.system(size: 12))
-                            Text("统计")
-                                .font(JieboFont.ui(13))
-                        }
-                        .foregroundStyle(JieboColor.ink2)
-                        .hitTarget()
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("查看使用统计")
-                }
-                Circle()
-                    .fill(store.connected ? JieboColor.ok : JieboColor.clay)
-                    .frame(width: 8, height: 8)
+                Button("取消", role: .cancel) { deleteTarget = nil }
+            } message: { chat in
+                Text("「\(chat.title)」会从这台设备上的列表里去掉。")
             }
-            .padding(16)
+
+            VStack(spacing: 8) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(ToolLayer.allCases) { layer in
+                            toolButton(layer, labeled: true)
+                        }
+                    }
+                    HStack(spacing: 4) {
+                        ForEach(ToolLayer.allCases) { layer in
+                            toolButton(layer, labeled: false)
+                        }
+                    }
+                }
+                HStack(spacing: 10) {
+                    Button("退出登录", action: store.logout)
+                        .font(JieboFont.ui(13))
+                        .foregroundStyle(JieboColor.ink2)
+                    Spacer()
+                    if store.isAdmin {
+                        Button {
+                            adminStatsOpen = true
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "chart.bar")
+                                    .font(.system(size: 12))
+                                Text("统计")
+                                    .font(JieboFont.ui(13))
+                            }
+                            .foregroundStyle(JieboColor.ink2)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("查看使用统计")
+                    }
+                    ZStack {
+                        Circle().fill(JieboColor.clay)
+                        Circle().fill(JieboColor.ok).opacity(store.connected ? 1 : 0)
+                    }
+                    .frame(width: 8, height: 8)
+                    .animation(JieboMotion.fade(reduceMotion), value: store.connected)
+                    .accessibilityLabel(store.connected ? "已连接" : "未连接")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(JieboColor.sidebar)
         }
         .background(JieboColor.sidebar.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(removing: .sidebarToggle)
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspaceSheet()
         }
@@ -154,6 +193,7 @@ struct SidebarView: View {
     @ViewBuilder
     private func groupHeader(_ group: WorkspaceGroup, duplicate: Bool) -> some View {
         let active = group.chats.contains(where: { $0.id == store.activeId })
+        let running = group.chats.contains(where: { $0.turns.contains(where: \.running) || store.runningChatIds.contains($0.id) })
         Button {
             if group.chats.isEmpty {
                 store.startChat(in: group.path) // 空组：点击直达新建（对齐 web 空组保留的意图）
@@ -170,6 +210,7 @@ struct SidebarView: View {
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(active ? JieboColor.dim.opacity(0.5) : JieboColor.dim)
                         .rotationEffect(.degrees(isCollapsed(group) ? 0 : 90))
+                        .animation(.easeOut(duration: 0.2), value: isCollapsed(group))
                 }
                 Text(group.name)
                     .font(JieboFont.ui(12, weight: .semibold))
@@ -183,8 +224,9 @@ struct SidebarView: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 0)
-                if group.chats.contains(where: { $0.turns.contains(where: \.running) || store.runningChatIds.contains($0.id) }) {
+                if running {
                     Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
+                        .transition(.opacity)
                 }
                 if group.chats.isEmpty {
                     Image(systemName: "plus")
@@ -196,6 +238,7 @@ struct SidebarView: View {
                         .foregroundStyle(JieboColor.dim)
                 }
             }
+            .animation(JieboMotion.fade(reduceMotion), value: running)
             .padding(.vertical, 2)
             .frame(minHeight: 32)
             .contentShape(Rectangle())
@@ -215,10 +258,14 @@ struct SidebarView: View {
             store.select(chat.id)
         } label: {
             HStack(alignment: .top, spacing: 10) {
+                let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
+                let marked = live || chat.unread
                 Circle()
-                    .fill(chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id) ? JieboColor.pine : (chat.unread ? JieboColor.brass : .clear))
+                    .fill(live ? JieboColor.pine : JieboColor.brass)
+                    .opacity(marked ? 1 : 0)
                     .frame(width: 8, height: 8)
                     .padding(.top, 7)
+                    .animation(JieboMotion.fade(reduceMotion), value: marked)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(chat.title)
                         .font(JieboFont.ui(15, weight: chat.unread ? .semibold : .medium))
@@ -239,9 +286,10 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : Color.clear)
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+        .animation(JieboMotion.fade(reduceMotion), value: chat.id == store.activeId)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
-                store.deleteChat(chat.id)
+                deleteTarget = chat
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -261,7 +309,7 @@ struct SidebarView: View {
                 Label("重命名", systemImage: "pencil")
             }
             Button(role: .destructive) {
-                store.deleteChat(chat.id)
+                deleteTarget = chat
             } label: {
                 Label("删除", systemImage: "trash")
             }
@@ -269,6 +317,10 @@ struct SidebarView: View {
     }
 
     /// alert isPresented 绑定（presenting: 需要 Bool 驱动）
+    private var deletePresented: Binding<Bool> {
+        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
+    }
+
     private var renamePresented: Binding<Bool> {
         Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
     }
@@ -303,26 +355,42 @@ struct SidebarView: View {
 
     // MARK: 杂项
 
-    private func toolButton(_ layer: ToolLayer) -> some View {
-        let on = store.toolLayer == layer
+    private func toolButton(_ layer: ToolLayer, labeled: Bool) -> some View {
+        let on = store.toolSelected(layer)
         let marked = layer == .loop && loopLive
         return Button {
             store.toggleTool(layer)
         } label: {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: layer.symbol)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(on ? JieboColor.paper : JieboColor.ink2)
-                    .frame(width: 32, height: 32)
-                    .background(on ? JieboColor.pine : JieboColor.mist)
-                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                if marked {
-                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6).offset(x: 2, y: -2)
+            VStack(spacing: 3) {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: layer.symbol)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(on ? JieboColor.paper : JieboColor.ink2)
+                        .frame(width: 28, height: 28)
+                        .background(on ? JieboColor.pine : JieboColor.mist)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .animation(JieboMotion.fade(reduceMotion), value: on)
+                    Circle()
+                        .fill(on ? JieboColor.paper : JieboColor.pine)
+                        .frame(width: 6, height: 6)
+                        .offset(x: 2, y: -2)
+                        .opacity(marked ? 1 : 0)
+                        .animation(JieboMotion.fade(reduceMotion), value: marked)
+                }
+                if labeled {
+                    Text(layer.title)
+                        .font(JieboFont.ui(10, weight: on ? .semibold : .medium))
+                        .foregroundStyle(on ? JieboColor.ink : JieboColor.dim)
+                        .lineLimit(1)
                 }
             }
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(layer.title)
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private var loopLive: Bool {
@@ -331,8 +399,7 @@ struct SidebarView: View {
     }
 
     private var subtitle: String {
-        let base = workspaceName(store.cwd.isEmpty ? store.workspaceRoot : store.cwd)
-        return store.tenantName.isEmpty ? base : "\(store.tenantName) · \(base)"
+        store.tenantName.isEmpty ? "接驳" : "接驳 · \(store.tenantName)"
     }
 }
 
@@ -347,7 +414,7 @@ private struct WorkspaceSheet: View {
                 Section("工作区") {
                     ForEach(store.workspaces) { item in
                         Button {
-                            store.startChat(in: item.path)
+                            store.switchWorkspace(to: item.path)
                             dismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
@@ -363,7 +430,7 @@ private struct WorkspaceSheet: View {
                     }
                     if store.workspaces.isEmpty {
                         Button {
-                            store.startChat(in: store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot)
+                            store.switchWorkspace(to: store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot)
                             dismiss()
                         } label: {
                             Text(store.workspaceRoot.isEmpty ? "正在读取工作区…" : workspaceName(store.workspaceRoot))
@@ -387,7 +454,7 @@ private struct WorkspaceSheet: View {
                     }
                 }
             }
-            .navigationTitle("新对话")
+            .navigationTitle("切换工作区")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -418,9 +485,9 @@ struct LoopSheet: View {
                 TextField("每拍要做的事。做完时让它在最后一行写 LOOP_DONE", text: $goal, axis: .vertical)
                     .lineLimit(3...6)
                 TextField("间隔（秒）", text: $interval)
-                    .keyboardType(.numberPad)
+                    .keyboardType(.numbersAndPunctuation)
                 TextField("最多拍数，可空", text: $maxTicks)
-                    .keyboardType(.numberPad)
+                    .keyboardType(.numbersAndPunctuation)
             }
             Section {
                 if !store.loopError.isEmpty {

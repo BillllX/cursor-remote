@@ -2163,7 +2163,7 @@ function headNames(cwd: string, extra?: Record<string, string>): Set<string> {
   try {
     const out = extra
       ? git(cwd, ["ls-tree", "-z", "-r", "--name-only", "HEAD"], extra)
-      : execFileSync("git", ["ls-files", "-z"], {
+      : execFileSync("git", ["-c", "core.quotepath=false", "ls-files", "-z"], {
           cwd,
           encoding: "utf8",
           timeout: 4000,
@@ -2230,14 +2230,15 @@ function listWorkspaceFiles(
   const shadow = root ? null : shadowGitEnv(cwd);
   try {
     if (root) {
-      const out = execFileSync("git", ["ls-files"], {
+      // quotepath 默认会把中文路径收成 "\345\256..."，后面的 existsSync 对不上磁盘，整批被丢掉。
+      const out = execFileSync("git", ["-c", "core.quotepath=false", "ls-files", "-z"], {
         cwd,
         encoding: "utf8",
         timeout: 4000,
         stdio: ["ignore", "pipe", "ignore"],
       });
       paths = out
-        .split("\n")
+        .split("\0")
         .map((line) => line.trim())
         .filter(Boolean);
     } else if (shadow) {

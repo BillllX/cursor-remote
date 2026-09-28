@@ -4,7 +4,14 @@ import UniformTypeIdentifiers
 
 struct ComposerView: View {
     @Environment(ChatStore.self) private var store
+    /// 外部递增时把光标放进输入框（空会话快捷句）。
+    var focusNonce: Int = 0
     @FocusState private var focused: Bool
+    /// 打字只改这里。直接绑 store.draft 会让整段对话每次按键都重绘。
+    @State private var text = ""
+    @State private var persistTask: Task<Void, Never>?
+    /// 自己写回 store.draft 时不要再灌进输入框，否则会把后打的字盖掉。
+    @State private var ignoreDraftEcho: String?
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var photoPickerOpen = false
     @State private var filePickerOpen = false
@@ -14,64 +21,70 @@ struct ComposerView: View {
 
     var body: some View {
         @Bindable var store = store
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                attachMenu
-                modePicker
-                modelPicker
-                Spacer()
-                policyToggle
-                confirmToggle
-                if store.busy {
-                    Button("停止", action: store.stop)
-                        .font(JieboFont.ui(14, weight: .medium))
-                        .foregroundStyle(JieboColor.danger)
-                }
-            }
+        VStack(alignment: .leading, spacing: 8) {
             attachmentStrip
             mentionStrip
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("跟远端说…", text: $store.draft, axis: .vertical)
-                    .font(JieboFont.ui(16))
-                    .lineLimit(1...8)
-                    .focused($focused)
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 6)
-                    .onChange(of: store.draft) { _, value in
-                        store.saveDraft(value)
-                    }
-                    .onKeyPress(keys: [.return]) { press in
-                        if press.modifiers.contains(.shift) { return .ignored }
-                        store.submit()
-                        return .handled
-                    }
-                Button(action: store.submit) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(store.canSend ? JieboColor.paper : JieboColor.dim)
-                        .frame(width: 32, height: 32)
-                        .background(store.canSend ? JieboColor.pine : JieboColor.mist)
-                        .clipShape(Circle())
-                        .hitTarget() // P6：视觉 32，命中 44
+            TextField("跟远端说…", text: $text, axis: .vertical)
+                .font(JieboFont.ui(17))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(1...8)
+                .focused($focused)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
+                .onChange(of: text) { _, value in
+                    store.updateMentions(for: value)
+                    schedulePersist()
                 }
-                .buttonStyle(.plain)
-                .disabled(!store.canSend)
-                .keyboardShortcut(.return, modifiers: .command)
-                .accessibilityLabel("发送")
+                .onKeyPress(keys: [.return]) { press in
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    commitAndSend()
+                    return .handled
+                }
+            controls
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text("Return 发送，Shift+Return 换行")
+                    .font(JieboFont.ui(11))
+                    .foregroundStyle(JieboColor.dim)
+                    .padding(.horizontal, 6)
+                    .transition(.opacity)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 10)
         .background(JieboColor.composer)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
-                .stroke(JieboColor.borderStrong, lineWidth: 1)
+                .stroke(focused ? JieboColor.ink.opacity(0.22) : JieboColor.borderStrong, lineWidth: focused ? 1.5 : 1)
         )
+        .shadow(color: .black.opacity(focused ? 0.08 : 0.03), radius: focused ? 18 : 8, y: focused ? 8 : 3)
         .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 14)
+        .background(alignment: .top) {
+            LinearGradient(
+                colors: [JieboColor.paper.opacity(0), JieboColor.paper],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 28)
+            .offset(y: -28)
+            .allowsHitTesting(false)
+        }
         .background(JieboColor.paper)
+        .onAppear { text = store.draft }
+        .onChange(of: store.activeId) { _, _ in
+            persistTask?.cancel()
+            text = store.draft
+        }
+        .onChange(of: store.draft) { _, value in
+            if value == ignoreDraftEcho { return }
+            if value != text { text = value }
+        }
+        .onChange(of: focusNonce) { _, _ in
+            focused = true
+        }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
@@ -140,8 +153,110 @@ struct ComposerView: View {
                 }
                 .padding(.horizontal, 2)
             }
-            .transition(.opacity)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
+    }
+
+    private var canSendNow: Bool {
+        store.uploads.isEmpty
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.pendingImages.isEmpty)
+    }
+
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            ignoreDraftEcho = text
+            store.saveDraft(text)
+        }
+    }
+
+    private func commitAndSend() {
+        persistTask?.cancel()
+        ignoreDraftEcho = ""
+        store.saveDraft(text)
+        store.submit()
+        text = store.draft
+    }
+
+    private var controls: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 8) {
+                attachMenu
+                modePicker
+                modelPicker
+                policyToggle
+                confirmToggle
+                Spacer(minLength: 8)
+                sendCluster(enabled: canSendNow)
+            }
+            HStack(alignment: .center, spacing: 8) {
+                attachMenu
+                modePicker
+                modelPicker
+                moreMenu
+                Spacer(minLength: 8)
+                sendCluster(enabled: canSendNow)
+            }
+        }
+    }
+
+    private func sendCluster(enabled: Bool) -> some View {
+        HStack(spacing: 8) {
+            if store.busy {
+                Button(action: store.stop) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(JieboColor.paper)
+                        .frame(width: 32, height: 32)
+                        .background(JieboColor.danger)
+                        .clipShape(Circle())
+                        .hitTarget()
+                }
+                .buttonStyle(PressScaleButtonStyle())
+                .accessibilityLabel("停止")
+                .transition(.scale.combined(with: .opacity))
+            }
+            Button(action: commitAndSend) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(enabled ? JieboColor.paper : JieboColor.dim)
+                    .frame(width: 32, height: 32)
+                    .background(enabled ? JieboColor.pine : JieboColor.mist)
+                    .clipShape(Circle())
+                    .shadow(color: enabled ? JieboColor.pine.opacity(0.28) : .clear, radius: 8, y: 3)
+                    .scaleEffect(enabled ? 1 : 0.94)
+                    .animation(JieboMotion.snappy(reduceMotion), value: enabled)
+                    .hitTarget()
+            }
+            .buttonStyle(PressScaleButtonStyle(enabled: enabled))
+            .disabled(!enabled)
+            .keyboardShortcut(.return, modifiers: .command)
+            .accessibilityLabel("发送")
+        }
+    }
+
+    private var moreMenu: some View {
+        let plane = store.active?.policy == "plane"
+        let confirm = store.active?.confirmWrites == true
+        return Menu {
+            Button(action: store.togglePolicy) {
+                Label(plane ? "正在用策略层" : "切到策略层", systemImage: plane ? "checkmark" : "circle")
+            }
+            Button(action: store.toggleConfirmWrites) {
+                Label(confirm ? "写入前逐条确认" : "自动写入", systemImage: confirm ? "checkmark.shield.fill" : "checkmark.shield")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(width: 32, height: 32)
+                .background(JieboColor.mist)
+                .clipShape(Circle())
+                .hitTarget()
+        }
+        .accessibilityLabel("更多")
     }
 
     private var attachMenu: some View {
@@ -256,6 +371,7 @@ struct ComposerView: View {
                 }
                 .padding(.vertical, 2)
             }
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -287,7 +403,7 @@ struct ComposerView: View {
         .overlay(
             Capsule().stroke(JieboColor.line, lineWidth: 1)
         )
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: store.mode)
+        .animation(JieboMotion.snappy(reduceMotion), value: store.mode)
     }
 
     private var modelPicker: some View {
@@ -304,14 +420,16 @@ struct ComposerView: View {
                 Text(ModelCatalog.label(for: store.model))
                     .font(JieboFont.ui(13, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
+            .frame(maxWidth: 180)
             .background(JieboColor.mist)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .clipShape(Capsule())
             .hitTarget()
         }
     }

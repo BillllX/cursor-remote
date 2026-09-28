@@ -85,6 +85,37 @@ enum JieboRadius {
     static let xl: CGFloat = 24 // composer dock（对齐网页 --radius: 24px）
 }
 
+/// 对话区在 iPad 上的阅读宽度。再宽就居中，避免一行拉满横屏。
+enum JieboMeasure {
+    static let thread: CGFloat = 820
+    static let bubble: CGFloat = 520
+}
+
+enum JieboMotion {
+    static func panel(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.05)
+    }
+
+    static func snappy(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.22)
+    }
+
+    static func fade(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.22)
+    }
+}
+
+struct PressScaleButtonStyle: ButtonStyle {
+    var enabled: Bool = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.9 : 1)
+            .animation(reduceMotion ? nil : .spring(duration: 0.22, bounce: 0.2), value: configuration.isPressed)
+    }
+}
+
 extension View {
     /// P6：HIG 最小触控热区 44×44。挂在「视觉 frame + background + clipShape」之后——
     /// 绘制的图形不变，但布局占用会扩到 44（相邻控件间距相应变大，这是 HIG 达标的预期取舍）。

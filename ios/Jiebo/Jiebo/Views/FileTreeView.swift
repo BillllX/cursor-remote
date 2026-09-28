@@ -95,6 +95,7 @@ func fileGlyph(_ path: String, isDir: Bool, open: Bool) -> String {
 /// Finder 式文件树：展开行 + 长按菜单。
 /// 单击文件 = 预览（onOpen）；@引用 在长按菜单（浏览导向入口；引用导向走 Composer 的扁平 sheet——入口分流）。
 struct FileTreeView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let paths: [String]
     let truncated: Bool
     let filter: String
@@ -186,6 +187,7 @@ struct FileTreeView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(JieboColor.dim)
                         .rotationEffect(.degrees(isOpen ? 90 : 0))
+                        .animation(JieboMotion.snappy(reduceMotion), value: isOpen)
                 }
             }
             .padding(.leading, 14 + CGFloat(row.depth) * 16)
@@ -193,6 +195,7 @@ struct FileTreeView: View {
             .padding(.vertical, 5)
             .frame(minHeight: 32)
             .background(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
+            .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

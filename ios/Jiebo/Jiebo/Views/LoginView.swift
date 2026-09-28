@@ -2,7 +2,12 @@ import SwiftUI
 
 struct LoginView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
+
+    private var canEnter: Bool {
+        !store.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !store.verifying
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -27,8 +32,9 @@ struct LoginView: View {
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(focused ? JieboColor.ink.opacity(0.28) : JieboColor.line, lineWidth: focused ? 1.5 : 1)
                         )
+                        .animation(JieboMotion.fade(reduceMotion), value: focused)
                         .focused($focused)
                         .onSubmit { store.login() }
                     if !store.authError.isEmpty {
@@ -39,14 +45,14 @@ struct LoginView: View {
                     Button(action: store.login) {
                         Text(store.verifying ? "正在验证…" : "进入")
                             .font(JieboFont.ui(16, weight: .semibold))
+                            .foregroundStyle(JieboColor.paper)
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
+                            .background(canEnter || store.verifying ? JieboColor.pine : JieboColor.pineSoft)
+                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(JieboColor.paper)
-                    .background(store.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? JieboColor.pineSoft : JieboColor.pine)
-                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-                    .disabled(store.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.verifying)
+                    .buttonStyle(PressScaleButtonStyle(enabled: canEnter))
+                    .disabled(!canEnter)
                     Text(store.connected ? "已连上服务器" : "正在连 gateway…")
                         .font(JieboFont.ui(13))
                         .foregroundStyle(JieboColor.dim)

@@ -3,6 +3,30 @@ import Observation
 import Photos
 import UIKit
 
+/// 文件浮层左栏的筛选。搜索和 Git 不再另开滑层。
+enum FileBrowserPane: String, CaseIterable, Identifiable {
+    case files, search, git
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .files: return "文件"
+        case .search: return "搜索"
+        case .git: return "改动"
+        }
+    }
+
+    init?(_ layer: ToolLayer) {
+        switch layer {
+        case .files: self = .files
+        case .search: self = .search
+        case .git: self = .git
+        default: return nil
+        }
+    }
+}
+
 enum ToolLayer: String, CaseIterable, Identifiable {
     case files, search, git, terminal, loop
 
@@ -42,6 +66,7 @@ private enum ContentDiscard {
     case switchTool(ToolLayer)
     case openFile(String)
     case openDiff(String)
+    case openFileBrowser
     case selectChat(String)
     case deleteChat(String)
 }
@@ -64,6 +89,7 @@ final class ChatStore {
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
     var fileBrowserOpen = false
+    var fileBrowserPane: FileBrowserPane = .files
     var creatingWorkspace = false
     var newWorkspaceName = ""
     var model = ModelCatalog.defaultModel
@@ -163,7 +189,8 @@ final class ChatStore {
     /// 当前选中页签；非 nil 即面板打开
     var previewActivePath: String?
     var previewPanelOpen: Bool {
-        contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
+        // 文件浮层开着时，内容画在浮层右栏，不再同时从右侧弹出另一块
+        !fileBrowserOpen && contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
     }
     var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
 
@@ -413,10 +440,33 @@ final class ChatStore {
     }
 
     func openNewChat() {
+        let path = currentWorkspacePath
+        guard !path.isEmpty else {
+            openWorkspaceSwitcher()
+            return
+        }
+        startChat(in: path)
+    }
+
+    func openWorkspaceSwitcher() {
         send(.listWorkspaces)
         creatingWorkspace = false
         newWorkspaceName = ""
         workspaceSheetOpen = true
+    }
+
+    /// 切到这个工作区：有会话就打开最近的一条，没有就新建。
+    func switchWorkspace(to path: String) {
+        let next = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !next.isEmpty else { return }
+        workspaceSheetOpen = false
+        creatingWorkspace = false
+        let key = normPath(next)
+        if let chat = sidebarChats.first(where: { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }) {
+            if chat.id != activeId { select(chat.id) }
+            return
+        }
+        startChat(in: next)
     }
 
     func startChat(in path: String) {
@@ -648,7 +698,7 @@ final class ChatStore {
         case .canvas, .markdown, .html, .pdf, .audio, .video:
             openPreview(path)
         default:
-            openPreviewTab(path: path, diff: true)
+            openPreview(path, diff: true)
         }
     }
 
@@ -684,8 +734,8 @@ final class ChatStore {
     /// 工具参数/结果里提取文件路径（对齐网页 toolPath 的字段集）。
     /// string(in:) 无命中返回 ""，必须 nilIfEmpty 才能回退到 result
     static func toolPath(args: JSONValue?, result: JSONValue?) -> String? {
-        args?.string(in: "path", "file", "target", "file_path", "uri").nilIfEmpty
-            ?? result?.string(in: "path", "file", "file_path").nilIfEmpty
+        args?.string(in: "path", "file", "target", "file_path", "uri", "filename", "image_path", "imagePath", "output_path", "outputPath").nilIfEmpty
+            ?? result?.string(in: "path", "file", "file_path", "filename", "image_path", "imagePath", "output_path", "outputPath").nilIfEmpty
     }
 
     /// 绝对路径转工作区相对（对齐网页 relToCwd：反斜杠归一、去尾斜杠、去前导 ./）；
@@ -766,11 +816,33 @@ final class ChatStore {
     }
 
     func saveDraft(_ value: String) {
-        draft = value
-        refreshMentionSuggestions()
+        if draft != value { draft = value }
+        updateMentions(for: value)
         guard let index = chats.firstIndex(where: { $0.id == activeId }) else { return }
         if chats[index].draft != value {
             chats[index].draft = value
+        }
+    }
+
+    /// 打字时只更新 @ 候选，不把草稿写进会话列表。
+    func updateMentions(for text: String) {
+        guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
+            if mentionQuery != nil { mentionQuery = nil }
+            mentionTask?.cancel()
+            if !mentionSuggestions.isEmpty { mentionSuggestions = [] }
+            return
+        }
+        let tail = String(text[range.lowerBound...])
+        let queryString = String(tail.drop(while: { $0 != "@" }).dropFirst())
+        guard queryString != mentionQuery else { return }
+        mentionQuery = queryString
+        mentionTask?.cancel()
+        let next = ChatStore.rankMentions(fileIndex, query: queryString)
+        if next != mentionSuggestions { mentionSuggestions = next }
+        mentionTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            self?.send(.listFiles(query: queryString, chatId: self?.activeId, mention: true))
         }
     }
 
@@ -778,24 +850,7 @@ final class ChatStore {
 
     /// 检测草稿尾部的 @查询（对齐网页 mentionAt，iOS 简化只看文本末尾）
     private func refreshMentionSuggestions() {
-        guard let range = draft.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
-            mentionQuery = nil
-            mentionTask?.cancel()
-            mentionSuggestions = []
-            return
-        }
-        let tail = String(draft[range.lowerBound...])
-        let queryString = String(tail.drop(while: { $0 != "@" }).dropFirst())
-        guard queryString != mentionQuery else { return }
-        mentionQuery = queryString
-        mentionTask?.cancel()
-        // 本地索引先秒出候选，同时问网关要更全的（debounce 150ms）
-        mentionSuggestions = ChatStore.rankMentions(fileIndex, query: queryString)
-        mentionTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            guard !Task.isCancelled else { return }
-            self?.send(.listFiles(query: queryString, chatId: self?.activeId, mention: true))
-        }
+        updateMentions(for: draft)
     }
 
     /// 点选候选：把草稿尾部的 @查询 替换成 @路径（保留查询前的空白分隔）
@@ -1076,19 +1131,38 @@ final class ChatStore {
 
     // MARK: P5 - 预览面板
 
-    /// 入口（@链接/文件浏览器）：面板可渲染的进面板（P5c 起含富媒体），只有 binary 走 Quick Look
-    func openPreview(_ path: String) {
+    /// 从对话点文件：先把文件浮层打开，再读内容。浮层已经开着就直接读。
+    func openPreview(_ path: String, diff: Bool = false) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        // 与 openMention 同一套入口守卫（对齐网页 isOpenableMention）：空串/目录/精确 "diff" 不进面板
         guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else {
             if !trimmed.isEmpty { flash("这类内容暂不支持预览") }
             return
         }
+        let warm = fileBrowserOpen
+        fileBrowserPane = .files
+        fileBrowserOpen = true
+        let load = { [weak self] in
+            self?.loadPreview(trimmed, diff: diff)
+        }
+        if warm {
+            load()
+        } else {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(320))
+                load()
+            }
+        }
+    }
+
+    /// 浮层已经在屏幕上时读文件。binary 仍走 Quick Look。
+    func loadPreview(_ path: String, diff: Bool) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else { return }
         let kind = previewKind(of: trimmed)
         if kind.panelRenderable {
-            openPreviewTab(path: trimmed, kind: kind, diff: false)
+            openPreviewTab(path: trimmed, kind: kind, diff: diff)
         } else {
-            openMention(trimmed) // binary：Quick Look 全屏
+            openMention(trimmed)
         }
     }
 
@@ -1958,7 +2032,20 @@ final class ChatStore {
         }
     }
 
+    func toolSelected(_ layer: ToolLayer) -> Bool {
+        switch layer {
+        case .files: return fileBrowserOpen && fileBrowserPane == .files
+        case .search: return fileBrowserOpen && fileBrowserPane == .search
+        case .git: return fileBrowserOpen && fileBrowserPane == .git
+        default: return toolLayer == layer
+        }
+    }
+
     func toggleTool(_ layer: ToolLayer) {
+        if let pane = FileBrowserPane(layer) {
+            toggleFileBrowser(pane)
+            return
+        }
         if contentDirty, !suppressContentDiscard {
             contentDiscardFollowup = toolLayer == layer ? .closeTool : .switchTool(layer)
             contentDiscardPrompt = true
@@ -1973,7 +2060,31 @@ final class ChatStore {
         }
         closeContentLayer()
         toolLayer = layer
-        if layer == .files || layer == .search || layer == .git { requestFileIndex() }
+    }
+
+    /// 文件、搜索、改动都进同一张全屏浮层，左栏切换筛选。
+    func toggleFileBrowser(_ pane: FileBrowserPane = .files) {
+        if fileBrowserOpen, fileBrowserPane == pane {
+            fileBrowserOpen = false
+            return
+        }
+        let browserLayer = toolLayer == .files || toolLayer == .search || toolLayer == .git
+        if browserLayer, contentDirty, !suppressContentDiscard {
+            fileBrowserPane = pane
+            contentDiscardFollowup = .openFileBrowser
+            contentDiscardPrompt = true
+            return
+        }
+        if browserLayer {
+            let was = suppressContentDiscard
+            suppressContentDiscard = true
+            closeContentLayer()
+            suppressContentDiscard = was
+            toolLayer = nil
+        }
+        fileBrowserPane = pane
+        fileBrowserOpen = true
+        requestFileIndex()
     }
 
     /// 文件名走本地索引，内容走 search_text。空查询不发请求。
@@ -2124,10 +2235,22 @@ final class ChatStore {
             loopError = ""
             closeContentLayer()
         case .switchTool(let layer):
+            if let pane = FileBrowserPane(layer) {
+                toolLayer = nil
+                closeContentLayer()
+                fileBrowserPane = pane
+                fileBrowserOpen = true
+                requestFileIndex()
+                break
+            }
             if toolLayer == .loop, layer != .loop { loopError = "" }
             closeContentLayer()
             toolLayer = layer
-            if layer == .files || layer == .search || layer == .git { requestFileIndex() }
+        case .openFileBrowser:
+            toolLayer = nil
+            closeContentLayer()
+            fileBrowserOpen = true
+            requestFileIndex()
         case .openFile(let path):
             openContentFile(path)
         case .openDiff(let path):

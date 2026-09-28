@@ -13,45 +13,41 @@ import UIKit
 struct FileBrowserCover: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @FocusState private var searchFocused: Bool
     @State private var filter = ""
-    /// P8：左栏文件树可收起，预览尽量占满（用户决定；默认展开）
-    @State private var treeHidden = false
+    /// 窄窗先关掉浮层，等浮层消失再打开预览，避免两层 sheet 抢同一个文件。
+    @State private var pendingPreview: (path: String, chatId: String, diff: Bool)?
 
     var body: some View {
         @Bindable var store = store
         NavigationStack {
             Group {
-                if sizeClass == .compact {
-                    treeColumn
-                } else {
-                    HStack(spacing: 0) {
-                        if !treeHidden {
-                            treeColumn
-                                .frame(width: 340)
-                            Divider().overlay(JieboColor.line)
+                if store.activePreviewTab != nil {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Button {
+                                store.dismissPreviewPanel()
+                            } label: {
+                                Label("文件", systemImage: "chevron.left")
+                                    .font(JieboFont.ui(15, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink)
+                            }
+                            .buttonStyle(.plain)
+                            Spacer()
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                         rightPane
                     }
+                } else {
+                    treeColumn
                 }
             }
-            .animation(.easeInOut(duration: 0.2), value: treeHidden)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.activePreviewTab != nil)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if sizeClass != .compact {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            treeHidden.toggle()
-                        } label: {
-                            Image(systemName: "sidebar.left")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(JieboColor.ink2)
-                                .hitTarget()
-                        }
-                        .accessibilityLabel(treeHidden ? "显示文件列表" : "隐藏文件列表")
-                    }
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }
                         .hitTarget()
@@ -90,6 +86,21 @@ struct FileBrowserCover: View {
             }
         }
         .onAppear { store.requestFileIndex() } // 打开时刷新（web 只在空时才拉；这里每次拉，更新鲜，成本一次 list_files）
+        .onDisappear {
+            guard let pending = pendingPreview else { return }
+            pendingPreview = nil
+            let path = pending.path
+            let chatId = pending.chatId
+            let diff = pending.diff
+            Task { @MainActor in
+                guard store.activeId == chatId else { return }
+                if diff {
+                    store.openPreviewTab(path: path, diff: true)
+                } else {
+                    store.openPreview(path)
+                }
+            }
+        }
         // Quick Look 挂在 cover 自己身上——ThreadView 的 sheet 在 cover 背后，弹不出来
         // （ThreadView 侧已用绑定守卫在 cover 期间不抢 present，故这里无需 onDisappear 兜底清理——
         //   无条件清理反而会误杀进 cover 前已开的 QL，Grok R2 MINOR）
@@ -119,6 +130,30 @@ struct FileBrowserCover: View {
 
     private var treeColumn: some View {
         VStack(spacing: 0) {
+            Picker("筛选", selection: Bindable(store).fileBrowserPane) {
+                ForEach(FileBrowserPane.allCases) { pane in
+                    Text(pane.title).tag(pane)
+                }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 4)
+
+            switch store.fileBrowserPane {
+            case .files:
+                fileTree
+            case .search:
+                SearchToolView(onOpen: { openFile($0) })
+            case .git:
+                GitToolView(onOpen: { openFile($0, diff: true) })
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var fileTree: some View {
+        VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13))
@@ -128,6 +163,7 @@ struct FileBrowserCover: View {
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .focused($searchFocused)
                 if !filter.isEmpty {
                     Button {
                         filter = ""
@@ -144,6 +180,11 @@ struct FileBrowserCover: View {
             .padding(.vertical, 8)
             .background(JieboColor.mist)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                    .stroke(searchFocused ? JieboColor.ink.opacity(0.28) : Color.clear, lineWidth: searchFocused ? 1.5 : 0)
+            )
+            .animation(JieboMotion.fade(reduceMotion), value: searchFocused)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
@@ -154,7 +195,7 @@ struct FileBrowserCover: View {
                 truncated: store.treeTruncated,
                 filter: filter,
                 selectedPath: store.previewActivePath,
-                onOpen: openFile,
+                onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,
                 onQuickLook: { store.openMention($0) } // 二进制/系统导出逃生门
@@ -246,21 +287,8 @@ struct FileBrowserCover: View {
 
     // MARK: 动作
 
-    private func openFile(_ path: String) {
-        if sizeClass == .compact {
-            // 单栏退化：预览面板（overlay）接管。先 dismiss 再延迟一拍打开——
-            // binary 走 openMention 异步下载，若快于 dismiss 动画，previewFile 置位时
-            // cover 正在消失，cover/ThreadView 双 sheet 绑定会 present 失败
-            let chatId = store.activeId
-            dismiss()
-            // 可取消性守卫（Grok R2 MINOR）：0.35s 内用户若已切会话/重开浏览器，丢弃这次打开
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard !store.fileBrowserOpen, store.activeId == chatId else { return }
-                store.openPreview(path) // 守卫 + 二进制路由 Quick Look 都在里面
-            }
-        } else {
-            store.openPreview(path)
-        }
+    private func openFile(_ path: String, diff: Bool = false) {
+        store.loadPreview(path, diff: diff)
     }
 
     private func pickFile(_ path: String) {

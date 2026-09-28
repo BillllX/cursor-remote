@@ -19,34 +19,51 @@ struct RootView: View {
 
 struct WorkbenchView: View {
     @Environment(ChatStore.self) private var store
-    /// P6：预览面板宽度（左缘拖拽可调，320 ~ 90% 窗口宽）
-    @State private var panelWidth: CGFloat = 540
-    @GestureState private var panelDrag: CGFloat = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
         @Bindable var store = store
         HStack(spacing: 0) {
-            if columnVisibility == .detailOnly {
-                CollapsedSidebarRail(expand: { columnVisibility = .all })
-            }
+            // 图标栏一直挂着，只改宽度。收起时不必等分栏动画结束再创建，图标就不会晚一拍才出现。
+            CollapsedSidebarRail(expand: {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                    columnVisibility = .all
+                }
+            })
+            .frame(width: columnVisibility == .detailOnly ? 56 : 0)
+            .clipped()
+            .allowsHitTesting(columnVisibility == .detailOnly)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: columnVisibility == .detailOnly)
             NavigationSplitView(columnVisibility: $columnVisibility) {
-                SidebarView(collapse: { columnVisibility = .detailOnly })
+                SidebarView(collapse: {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                        columnVisibility = .detailOnly
+                    }
+                })
                     .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
             } detail: {
                 ZStack(alignment: .leading) {
                     ThreadView()
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
+                            .id(layer)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                 }
+                .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
             }
             .navigationSplitViewStyle(.balanced)
+            // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
+            .toolbar(removing: .sidebarToggle)
         }
         .background(JieboColor.paper)
         // P7a：文件浏览器 cover 挂在工作台根（NSV 之外）——从侧栏列弹 fullScreenCover 会继承
         // 侧栏的 compact sizeClass，双栏永远出不来；QL sheet 同理盖在 cover 之上
-        .fullScreenCover(isPresented: $store.fileBrowserOpen) {
+        .fullScreenCover(isPresented: $store.fileBrowserOpen, onDismiss: {
+            // 关掉文件浮层后不要再从右侧弹出同一份预览，否则两层会错开
+            store.dismissPreviewPanel()
+        }) {
             FileBrowserCover()
         }
         #if DEBUG
@@ -57,70 +74,12 @@ struct WorkbenchView: View {
             }
         }
         #endif
-        // P5 预览面板：右侧 overlay，点外部收起。P6 从 ThreadView 上移到这里——
-        // 遮罩盖住侧栏 + detail，面板从整个工作台右缘滑出，不再把对话列挤断。
-        // ZStack 常驻、两个孩子各挂 transition——插入/删除的是谁，transition 就得挂在谁身上
-        .overlay(alignment: .trailing) {
-            GeometryReader { geo in
-                ZStack(alignment: .trailing) {
-                    if store.previewPanelOpen {
-                        Color.black.opacity(0.3)
-                            .ignoresSafeArea()
-                            .onTapGesture { store.dismissPreviewPanel() }
-                            .transition(.opacity)
-                    }
-                    if let tab = store.activePreviewTab {
-                        PreviewPanelView(tab: tab)
-                            // 始终留 10% 外部点击带（极窄 Stage Manager 窗口也不顶满）
-                            .frame(width: clampedWidth(geo))
-                            .transition(.move(edge: .trailing))
-                            .overlay(alignment: .leading) { dragHandle(geo) }
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: store.previewPanelOpen)
-            }
-            // 面板关着时整个 overlay 不吞手势（常驻 GeometryReader 盖着侧栏+detail）
-            .allowsHitTesting(store.previewPanelOpen)
-        }
-    }
-
-    private func clampedWidth(_ geo: GeometryProxy) -> CGFloat {
-        let maxW = geo.size.width * 0.9
-        // 极窄窗口（maxW < 320）时下限自动让位，保证 10% 点击带还在
-        return min(max(panelWidth - panelDrag, min(320, maxW)), maxW)
-    }
-
-    /// 面板左缘的拖拽手柄：16pt 隐形热区（半移到面板外，不压内容左缘）+ 3pt 抓柄指示
-    private func dragHandle(_ geo: GeometryProxy) -> some View {
-        RoundedRectangle(cornerRadius: 1.5)
-            .fill(JieboColor.line)
-            .frame(width: 3, height: 36)
-            .frame(width: 16, height: 160, alignment: .leading)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 2)
-                    .updating($panelDrag) { value, state, _ in state = value.translation.width }
-                    .onEnded { value in
-                        let maxW = geo.size.width * 0.9
-                        panelWidth = min(max(panelWidth - value.translation.width, min(320, maxW)), maxW)
-                    }
-            )
-            .frame(maxHeight: .infinity, alignment: .center)
-            .offset(x: -8) // 热区半移出面板，避免盖住内容左缘（代码行号列）的滚动/选择起点
-            .accessibilityLabel("拖拽调整预览面板宽度")
-            .accessibilityAdjustableAction { direction in
-                let maxW = geo.size.width * 0.9
-                switch direction {
-                case .increment: panelWidth = min(panelWidth + 40, maxW)
-                case .decrement: panelWidth = max(panelWidth - 40, min(320, maxW))
-                @unknown default: break
-                }
-            }
     }
 }
 
 struct CollapsedSidebarRail: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var expand: () -> Void
     @State private var adminOpen = false
 
@@ -128,7 +87,7 @@ struct CollapsedSidebarRail: View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
             ForEach(ToolLayer.allCases) { layer in
-                railButton(layer.symbol, label: layer.title, marked: layer == .loop && loopLive, on: store.toolLayer == layer) {
+                railButton(layer.symbol, label: layer.title, marked: layer == .loop && loopLive, on: store.toolSelected(layer)) {
                     store.toggleTool(layer)
                 }
             }
@@ -136,10 +95,14 @@ struct CollapsedSidebarRail: View {
             if store.isAdmin {
                 railButton("chart.bar", label: "统计") { adminOpen = true }
             }
-            Circle()
-                .fill(store.connected ? JieboColor.ok : JieboColor.clay)
-                .frame(width: 8, height: 8)
-                .padding(.bottom, 12)
+            ZStack {
+                Circle().fill(JieboColor.clay)
+                Circle().fill(JieboColor.ok).opacity(store.connected ? 1 : 0)
+            }
+            .frame(width: 8, height: 8)
+            .animation(JieboMotion.fade(reduceMotion), value: store.connected)
+            .padding(.bottom, 12)
+            .accessibilityLabel(store.connected ? "已连接" : "未连接")
         }
         .padding(.top, 16)
         .frame(width: 56)
@@ -164,22 +127,24 @@ struct CollapsedSidebarRail: View {
                     .frame(width: 36, height: 36)
                     .background(on ? JieboColor.pine : JieboColor.mist)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                if marked {
-                    Circle()
-                        .fill(JieboColor.pine)
-                        .frame(width: 6, height: 6)
-                        .offset(x: 2, y: -2)
-                }
+                    .animation(JieboMotion.fade(reduceMotion), value: on)
+                Circle()
+                    .fill(JieboColor.pine)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 2, y: -2)
+                    .opacity(marked ? 1 : 0)
+                    .animation(JieboMotion.fade(reduceMotion), value: marked)
             }
             .hitTarget()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(label)
     }
 }
 
 struct ToolLayerOverlay: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let layer: ToolLayer
 
     var body: some View {
@@ -236,12 +201,15 @@ struct ToolLayerOverlay: View {
                         layerBody
                         if store.contentPath != nil {
                             ContentLayerView()
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
+                    .animation(JieboMotion.panel(reduceMotion), value: store.contentPath != nil)
                 }
                 .frame(width: narrow ? geo.size.width : min(420, geo.size.width * 0.5))
                 .frame(maxHeight: .infinity)
                 .background(JieboColor.paper)
+                .shadow(color: .black.opacity(narrow ? 0 : 0.12), radius: 24, x: 8, y: 0)
                 if !narrow {
                     Color.black.opacity(0.18)
                         .contentShape(Rectangle())
@@ -407,7 +375,10 @@ struct ContentLayerView: View {
 
 struct SearchToolView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
+    /// 在文件浮层里打开预览；不传则仍走内容层。
+    var onOpen: ((String) -> Void)? = nil
 
     private var query: String {
         store.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -422,6 +393,12 @@ struct SearchToolView: View {
                 .foregroundStyle(JieboColor.ink)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(focused ? JieboColor.ink.opacity(0.28) : Color.clear)
+                        .frame(height: focused ? 1.5 : 0)
+                }
+                .animation(JieboMotion.fade(reduceMotion), value: focused)
                 .onChange(of: store.searchQuery) { _, _ in
                     store.scheduleSearch()
                 }
@@ -455,7 +432,7 @@ struct SearchToolView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(store.searchNameHits, id: \.self) { path in
                         Button {
-                            store.openContentFile(path)
+                            openHit(path)
                         } label: {
                             hitLabel(title: path, detail: "文件名")
                         }
@@ -463,7 +440,7 @@ struct SearchToolView: View {
                     }
                     ForEach(Array(store.searchHits.enumerated()), id: \.offset) { _, hit in
                         Button {
-                            store.openContentFile(hit.path)
+                            openHit(hit.path)
                         } label: {
                             hitLabel(
                                 title: hit.line > 0 ? "\(hit.path):\(hit.line)" : hit.path,
@@ -478,6 +455,14 @@ struct SearchToolView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func openHit(_ path: String) {
+        if let onOpen {
+            onOpen(path)
+        } else {
+            store.openContentFile(path)
         }
     }
 
@@ -503,6 +488,7 @@ struct SearchToolView: View {
 
 struct GitToolView: View {
     @Environment(ChatStore.self) private var store
+    var onOpen: ((String) -> Void)? = nil
 
     private var paths: [String] { store.gitStatus.keys.sorted() }
 
@@ -518,7 +504,11 @@ struct GitToolView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(paths, id: \.self) { path in
                         Button {
-                            store.openContentDiff(path)
+                            if let onOpen {
+                                onOpen(path)
+                            } else {
+                                store.openContentDiff(path)
+                            }
                         } label: {
                             HStack(spacing: 8) {
                                 Text(store.gitStatus[path] ?? "")

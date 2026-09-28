@@ -41,7 +41,23 @@ struct ToolCardView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(expanded ? "收起工具结果" : "展开工具结果")
                 // P5b：edit/write 工具给文件入口——按类型路由（diff 页签/原文页签/Quick Look）
-                if tool.kind.isMutating,
+                if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
+                    let imagePath = Self.imagePath(tool)
+                    Button {
+                        if let imagePath { store.openPreview(imagePath) }
+                    } label: {
+                        Label(imagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
+                            .font(JieboFont.ui(12, weight: .medium))
+                            .foregroundStyle(JieboColor.ink)
+                            .padding(.horizontal, 8)
+                            .frame(height: 26)
+                            .background(JieboColor.mist)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(imagePath == nil)
+                    .accessibilityLabel(imagePath == nil ? "正在生成图片" : "预览 \(imagePath ?? "")")
+                } else if tool.kind.isMutating,
                    let path = ChatStore.toolPath(args: tool.args, result: tool.result),
                    !path.isEmpty
                 {
@@ -62,10 +78,21 @@ struct ToolCardView: View {
                 badge
             }
             if expanded, let result = tool.result {
-                Text(clip(result.pretty(4_000)))
-                    .font(JieboFont.mono(11))
-                    .foregroundStyle(JieboColor.ink2)
-                    .textSelection(.enabled)
+                let full = result.pretty(8_000)
+                let shown = clip(full)
+                ScrollView {
+                    Text(shown)
+                        .font(JieboFont.mono(12))
+                        .foregroundStyle(JieboColor.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 240)
+                if full.count > 2_000 {
+                    Text("只显示前 2000 字，一共 \(full.count) 字")
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                }
             }
         }
         .padding(12)
@@ -76,6 +103,7 @@ struct ToolCardView: View {
             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
     }
 
     /// 对齐 web 的 .tool-badge：右侧 999px 状态丸
@@ -99,6 +127,21 @@ struct ToolCardView: View {
             .padding(.vertical, 2)
             .background(bg)
             .clipShape(Capsule())
+    }
+
+    static func isImageTool(_ tool: ToolCall) -> Bool {
+        let name = tool.name.lowercased()
+        return name.contains("generateimage") || name.contains("generate_image") || name.contains("image_gen")
+    }
+
+    /// 生图工具，或结果路径本身就是图片。
+    static func imagePath(_ tool: ToolCall) -> String? {
+        guard let raw = ChatStore.toolPath(args: tool.args, result: tool.result)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty
+        else { return nil }
+        let kind = previewKind(of: raw)
+        if isImageTool(tool) || kind == .image || kind == .svg { return raw }
+        return nil
     }
 
     private func clip(_ text: String) -> String {

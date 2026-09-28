@@ -112,4 +112,27 @@ extension ChatStore {
             return WorkspaceGroup(key: key, path: entry.path, name: entry.name, chats: entry.chats)
         }
     }
+
+    /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd / 根目录。
+    var currentWorkspacePath: String {
+        active?.cwd?.nilIfEmpty ?? cwd.nilIfEmpty ?? workspaceRoot
+    }
+
+    var currentWorkspaceName: String {
+        let path = currentWorkspacePath
+        if path.isEmpty { return "工作区" }
+        let name = workspaceLabel(path, root: groupRoot)
+        let leaf = workspaceName(path)
+        let duplicated = workspaces.filter { workspaceName($0.path) == leaf }.count > 1
+        guard duplicated else { return name }
+        let parent = workspaceName((path as NSString).deletingLastPathComponent)
+        if parent.isEmpty || parent == leaf { return name }
+        return "\(parent)/\(name)"
+    }
+
+    /// 只含当前工作区的会话。侧栏不再把所有工作区叠在一张列表里。
+    var currentWorkspaceChats: [ChatSession] {
+        let key = normPath(currentWorkspacePath.nilIfEmpty ?? groupRoot)
+        return sidebarChats.filter { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }
+    }
 }
