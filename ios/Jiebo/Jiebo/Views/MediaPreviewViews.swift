@@ -297,7 +297,8 @@ struct SVGFileView: View {
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html,body{margin:0;height:100%;background:#FAFAFA}
+        <style>html{color-scheme:light dark}html,body{margin:0;height:100%;background:#FAFAFA}
+        @media (prefers-color-scheme: dark){html,body{background:#141512}}
         body{display:flex;align-items:center;justify-content:center}
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
         <body><img src="\(src)"></body><!-- \(nonce) --></html>
@@ -313,8 +314,16 @@ struct SVGFileView: View {
 /// 对齐网页 iframe sandbox（无 allow-same-origin）的隔离强度
 struct SandboxWebView: UIViewRepresentable {
     let html: String?
-    /// 不透明白底防加载闪黑（SVG 包装页自带 #FAFAFA 底，用默认 true 即可）
+    /// 不透明底防加载闪黑。颜色跟当前配色的明暗。
     var opaque: Bool = true
+
+    private static var pageColor: UIColor {
+        UIColor { traits in
+            let palette = JieboTheme.shared.palette
+            let ink = traits.userInterfaceStyle == .dark ? palette.dark : palette.light
+            return UIColor(hex: ink.bg)
+        }
+    }
     /// P6：加载失败上抛（HTML/Markdown 预览据此显示错误占位 + 查看源码逃生门）
     var onFail: ((String) -> Void)? = nil
 
@@ -326,13 +335,18 @@ struct SandboxWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = opaque
-        webView.scrollView.backgroundColor = opaque ? .white : .clear
+        webView.backgroundColor = opaque ? Self.pageColor : .clear
+        webView.scrollView.backgroundColor = opaque ? Self.pageColor : .clear
         context.coordinator.onFail = onFail
         load(into: webView, coordinator: context.coordinator)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        if opaque {
+            webView.backgroundColor = Self.pageColor
+            webView.scrollView.backgroundColor = Self.pageColor
+        }
         context.coordinator.onFail = onFail
         // 内容随页签切换可能变化；Coordinator 记录已加载标识避免重复加载（html 用整串当 key，不赌 hash）
         let key = html.map { "html:\($0)" } ?? ""

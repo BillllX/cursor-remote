@@ -4,6 +4,7 @@ import {
   Component,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useState,
   type ComponentType,
@@ -70,7 +71,16 @@ export default function CanvasRuntime() {
   const [chatId, setChatId] = useState("");
   const [seq, setSeq] = useState<number | undefined>();
   const [load, setLoad] = useState(0);
-  const theme = useMemo(() => buildHostTheme("dark"), []);
+  const [kind, setKind] = useState("dark");
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const read = () => setKind(root.dataset.theme === "light" ? "light" : "dark");
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => observer.disconnect();
+  }, []);
+  const theme = useMemo(() => buildHostTheme(kind), [kind]);
 
   const post = useCallback((payload: Record<string, unknown>) => {
     window.parent.postMessage(payload, "*");

@@ -82,6 +82,7 @@ struct CollapsedSidebarRail: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var expand: () -> Void
     @State private var adminOpen = false
+    @State private var themeOpen = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -92,17 +93,15 @@ struct CollapsedSidebarRail: View {
                 }
             }
             Spacer()
+            railButton("square.stack.3d.up", label: "切换工作区", action: store.openWorkspaceSwitcher)
+            railButton("paintpalette", label: "主题") { themeOpen = true }
             if store.isAdmin {
-                railButton("chart.bar", label: "统计") { adminOpen = true }
+                railButton("chart.bar", label: "查看使用统计") { adminOpen = true }
             }
-            ZStack {
-                Circle().fill(JieboColor.clay)
-                Circle().fill(JieboColor.ok).opacity(store.connected ? 1 : 0)
-            }
-            .frame(width: 8, height: 8)
-            .animation(JieboMotion.fade(reduceMotion), value: store.connected)
-            .padding(.bottom, 12)
-            .accessibilityLabel(store.connected ? "已连接" : "未连接")
+            ConnectionDot(connected: store.connected)
+                .padding(.top, 4)
+            railButton("rectangle.portrait.and.arrow.right", label: "退出登录", tint: JieboColor.danger, action: store.logout)
+                .padding(.bottom, 12)
         }
         .padding(.top, 16)
         .frame(width: 56)
@@ -111,6 +110,9 @@ struct CollapsedSidebarRail: View {
         .sheet(isPresented: $adminOpen) {
             AdminStatsView()
         }
+        .sheet(isPresented: $themeOpen) {
+            ThemeSettingsSheet()
+        }
     }
 
     private var loopLive: Bool {
@@ -118,12 +120,19 @@ struct CollapsedSidebarRail: View {
         return row.status == "armed" || row.status == "running"
     }
 
-    private func railButton(_ symbol: String, label: String, marked: Bool = false, on: Bool = false, action: @escaping () -> Void) -> some View {
+    private func railButton(
+        _ symbol: String,
+        label: String,
+        marked: Bool = false,
+        on: Bool = false,
+        tint: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(on ? JieboColor.paper : JieboColor.ink)
+                    .foregroundStyle(on ? JieboColor.paper : (tint ?? JieboColor.ink))
                     .frame(width: 36, height: 36)
                     .background(on ? JieboColor.pine : JieboColor.mist)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))

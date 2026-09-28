@@ -106,7 +106,8 @@ func markdownToHtmlDocument(_ markdown: String, fromFile: String, toSrc: (String
     <!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-    body { font: 15px/1.65 -apple-system, sans-serif; color: #1A1A1A; margin: 16px; }
+    :root { color-scheme: light dark; }
+    body { font: 15px/1.65 -apple-system, sans-serif; color: #1A1A1A; background: #FAFAFA; margin: 16px; }
     h1, h2, h3, h4 { line-height: 1.3; margin: 1.1em 0 0.5em; }
     h1 { font-size: 1.5em; } h2 { font-size: 1.3em; } h3 { font-size: 1.15em; }
     code { font-family: ui-monospace, monospace; font-size: 0.88em; background: #F5F5F5; padding: 1px 5px; border-radius: 4px; }
@@ -118,6 +119,13 @@ func markdownToHtmlDocument(_ markdown: String, fromFile: String, toSrc: (String
     ul, ol { padding-left: 1.4em; }
     hr { border: none; border-top: 1px solid #ECECEC; margin: 1.2em 0; }
     table { border-collapse: collapse; } td, th { border: 1px solid #ECECEC; padding: 4px 10px; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #EDE8DE; background: #141512; }
+      code, pre { background: #1F211E; }
+      blockquote { border-left-color: #2C2F2B; color: #B6B0A4; }
+      a { color: #8FBFB0; }
+      hr, td, th { border-color: #2C2F2B; }
+    }
     </style></head><body>\(body)</body></html>
     """
     return rewriteHtml(source: html, fromFile: fromFile, toSrc: toSrc)

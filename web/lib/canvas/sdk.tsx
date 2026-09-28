@@ -860,7 +860,7 @@ export function Select({ value, onChange, options, placeholder, disabled, style 
       value={value ?? ""}
       disabled={disabled}
       onChange={(event) => onChange?.(event.target.value)}
-      style={mergeStyle({ ...fieldStyle(theme), colorScheme: "dark" }, style)}
+      style={mergeStyle({ ...fieldStyle(theme), colorScheme: theme.kind === "light" ? "light" : "dark" }, style)}
     >
       {placeholder ? (
         <option value="" disabled>

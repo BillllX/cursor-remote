@@ -14,6 +14,7 @@ struct SidebarView: View {
     /// P9：管理员统计面板
     @State private var adminStatsOpen = false
     @State private var deleteTarget: ChatSession?
+    @State private var themeOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -126,33 +127,14 @@ struct SidebarView: View {
                         }
                     }
                 }
-                HStack(spacing: 10) {
-                    Button("退出登录", action: store.logout)
-                        .font(JieboFont.ui(13))
-                        .foregroundStyle(JieboColor.ink2)
-                    Spacer()
+                HStack(spacing: 6) {
+                    footerIcon("paintpalette", label: "主题") { themeOpen = true }
                     if store.isAdmin {
-                        Button {
-                            adminStatsOpen = true
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: "chart.bar")
-                                    .font(.system(size: 12))
-                                Text("统计")
-                                    .font(JieboFont.ui(13))
-                            }
-                            .foregroundStyle(JieboColor.ink2)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("查看使用统计")
+                        footerIcon("chart.bar", label: "查看使用统计") { adminStatsOpen = true }
                     }
-                    ZStack {
-                        Circle().fill(JieboColor.clay)
-                        Circle().fill(JieboColor.ok).opacity(store.connected ? 1 : 0)
-                    }
-                    .frame(width: 8, height: 8)
-                    .animation(JieboMotion.fade(reduceMotion), value: store.connected)
-                    .accessibilityLabel(store.connected ? "已连接" : "未连接")
+                    Spacer(minLength: 8)
+                    ConnectionDot(connected: store.connected)
+                    footerIcon("rectangle.portrait.and.arrow.right", label: "退出登录", tint: JieboColor.danger, action: store.logout)
                 }
             }
             .padding(.horizontal, 12)
@@ -164,6 +146,9 @@ struct SidebarView: View {
         .toolbar(removing: .sidebarToggle)
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspaceSheet()
+        }
+        .sheet(isPresented: $themeOpen) {
+            ThemeSettingsSheet()
         }
         .sheet(isPresented: $adminStatsOpen) {
             AdminStatsView()
@@ -354,6 +339,26 @@ struct SidebarView: View {
     }
 
     // MARK: 杂项
+
+    /// 低频账号操作。工作工具在上面一行，这里从左到右按重要程度：主题、统计，连接状态，退出在最右。
+    private func footerIcon(
+        _ symbol: String,
+        label: String,
+        tint: Color = JieboColor.ink2,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 36, height: 36)
+                .background(JieboColor.mist)
+                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(label)
+    }
 
     private func toolButton(_ layer: ToolLayer, labeled: Bool) -> some View {
         let on = store.toolSelected(layer)
@@ -555,5 +560,87 @@ struct LoopSheet: View {
         if let max = row.maxTicks { line += " / \(max)" }
         if let summary = row.lastSummary, !summary.isEmpty { line += " · \(summary)" }
         return line
+    }
+}
+
+struct ConnectionDot: View {
+    var connected: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Circle().fill(JieboColor.clay)
+            Circle().fill(JieboColor.ok).opacity(connected ? 1 : 0)
+        }
+        .frame(width: 8, height: 8)
+        .animation(JieboMotion.fade(reduceMotion), value: connected)
+        .accessibilityLabel(connected ? "已连接" : "未连接")
+    }
+}
+
+struct ThemeSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    private var theme: JieboTheme { JieboTheme.shared }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("外观")
+                        .font(JieboFont.ui(12))
+                        .foregroundStyle(JieboColor.dim)
+                    Picker("外观", selection: Bindable(theme).appearance) {
+                        ForEach(JieboAppearance.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+
+                    Text("配色")
+                        .font(JieboFont.ui(12))
+                        .foregroundStyle(JieboColor.dim)
+                    VStack(spacing: 4) {
+                        ForEach(JieboPalette.allCases) { palette in
+                            Button {
+                                theme.palette = palette
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Circle()
+                                        .fill(palette.swatch)
+                                        .frame(width: 12, height: 12)
+                                        .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
+                                    Text(palette.title)
+                                        .font(JieboFont.ui(15))
+                                        .foregroundStyle(JieboColor.ink)
+                                    Spacer()
+                                    if theme.palette == palette {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(JieboColor.pine)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(height: 40)
+                                .background(theme.palette == palette ? JieboColor.userBubble : Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(JieboColor.paper)
+            .navigationTitle("主题")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

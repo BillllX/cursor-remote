@@ -153,8 +153,7 @@ private struct CanvasWebView: UIViewRepresentable {
         config.userContentController.addUserScript(bridge)
         config.userContentController.add(context.coordinator, name: "canvas")
         let webView = WKWebView(frame: .zero, configuration: config)
-        // 运行时是深色主题（buildHostTheme("dark")），白底会在过滚/未铺满时闪边；
-        // 透明底 + 面板 paper 衬底，与 loading/error 盖层一致
+        // 运行时跟当前明暗（buildHostTheme），透明底 + 面板 paper 衬底，避免过滚时闪边
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear

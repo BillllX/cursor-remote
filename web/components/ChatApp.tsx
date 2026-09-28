@@ -35,6 +35,7 @@ import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
 import { isWideKind, kindFromPath, preferHttpText, tabKind } from "../lib/preview";
 import { fetchPreviewText, peekPreviewText, putPreviewText } from "../lib/previewCache";
+import { APPEARANCES, PALETTES, applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
 import {
   DEFAULT_MODEL,
   modelLabel,
@@ -1097,6 +1098,7 @@ export default function ChatApp() {
     }
   }, [loopOpen, activeId]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themeChoice, setThemeChoice] = useState<{ palette: PaletteId; appearance: AppearanceId } | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [navReady, setNavReady] = useState(false);
   const [demoCanvas, setDemoCanvas] = useState(false);
@@ -1105,6 +1107,15 @@ export default function ChatApp() {
     const id = window.requestAnimationFrame(() => setNavReady(true));
     return () => window.cancelAnimationFrame(id);
   }, []);
+
+  useEffect(() => {
+    setThemeChoice(readThemeChoice());
+  }, []);
+
+  useEffect(() => {
+    if (!themeChoice) return;
+    applyJieboTheme(themeChoice.palette, themeChoice.appearance);
+  }, [themeChoice]);
 
   const closeNav = useCallback(() => setNavOpen(false), []);
   const closePreview = useCallback(() => setPreviewMax(false), []);
@@ -4717,6 +4728,48 @@ export default function ChatApp() {
           </button>
           {settingsOpen ? (
             <div className="side-settings">
+              <div className="theme-settings">
+                <div className="theme-label">外观</div>
+                <div className="theme-seg" role="group" aria-label="外观">
+                  {APPEARANCES.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={themeChoice?.appearance === item.id ? "on" : ""}
+                      aria-pressed={themeChoice?.appearance === item.id}
+                      onClick={() =>
+                        setThemeChoice((current) => ({
+                          palette: current?.palette || readThemeChoice().palette,
+                          appearance: item.id,
+                        }))
+                      }
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="theme-label">配色</div>
+                <div className="theme-list" role="listbox" aria-label="配色">
+                  {PALETTES.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="option"
+                      aria-selected={themeChoice?.palette === item.id}
+                      className={themeChoice?.palette === item.id ? "on" : ""}
+                      onClick={() =>
+                        setThemeChoice((current) => ({
+                          palette: item.id,
+                          appearance: current?.appearance || readThemeChoice().appearance,
+                        }))
+                      }
+                    >
+                      <span className="theme-dot" data-palette={item.id} />
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="workspace-path" title={cwd}>
                 {cwd || workspaceRoot || "工作区"}
               </div>

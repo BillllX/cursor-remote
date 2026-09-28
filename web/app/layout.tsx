@@ -2,6 +2,9 @@ import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
 import { Noto_Sans_SC } from "next/font/google";
 import "./globals.css";
+import "./themes.css";
+import ThemeSync from "../components/ThemeSync";
+import { THEME_BOOT } from "../lib/theme";
 
 const sans = Noto_Sans_SC({
   subsets: ["latin"],
@@ -42,8 +45,12 @@ export default function RootLayout({
   children: ReactNode;
 }) {
   return (
-    <html lang="zh-CN" className={sans.variable}>
+    <html lang="zh-CN" className={sans.variable} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
+      </head>
       <body>
+        <ThemeSync />
         <script
           dangerouslySetInnerHTML={{
             __html:
