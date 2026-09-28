@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { crewLabel } from "../lib/crew";
 import { modelLabel } from "../lib/models";
 
@@ -369,5 +369,154 @@ export default function ToolCard({
       ) : null}
       {nested ? <div className="tool-crew">{nested}</div> : null}
     </details>
+  );
+}
+
+export type AskedOption = { id: string; label: string };
+export type AskedQuestion = {
+  id: string;
+  prompt: string;
+  allowMultiple: boolean;
+  options: AskedOption[];
+};
+
+export function parseAskQuestions(
+  name: string,
+  args: unknown,
+): { title: string; questions: AskedQuestion[] } | null {
+  if (!/ask.?question/i.test(name)) return null;
+  const record = asRecord(args);
+  if (!Array.isArray(record.questions)) return null;
+  const questions: AskedQuestion[] = [];
+  record.questions.forEach((item, index) => {
+    const row = asRecord(item);
+    const prompt = typeof row.prompt === "string" ? row.prompt.trim() : "";
+    if (!prompt) return;
+    const id = typeof row.id === "string" && row.id ? row.id : `q${index}`;
+    const allowMultiple = row.allowMultiple === true || row.allow_multiple === true;
+    const options = (Array.isArray(row.options) ? row.options : []).flatMap((option, optIndex) => {
+      const opt = asRecord(option);
+      const label = typeof opt.label === "string" ? opt.label.trim() : "";
+      if (!label) return [];
+      const optionId = typeof opt.id === "string" && opt.id ? opt.id : `o${optIndex}`;
+      return [{ id: optionId, label }];
+    });
+    questions.push({ id, prompt, allowMultiple, options });
+  });
+  if (!questions.length) return null;
+  const title = typeof record.title === "string" ? record.title.trim() : "";
+  return { title, questions };
+}
+
+export function formatAskAnswer(
+  title: string,
+  questions: AskedQuestion[],
+  picks: Record<string, string[]>,
+  notes: Record<string, string>,
+): string {
+  const lines = [`对「${title || "刚才的问题"}」的回答：`];
+  questions.forEach((question, index) => {
+    const chosen = question.options
+      .filter((option) => (picks[question.id] || []).includes(option.id))
+      .map((option) => option.label);
+    const note = (notes[question.id] || "").trim();
+    let answer = chosen.join("、");
+    if (note) answer = answer ? `${answer}（${note}）` : note;
+    lines.push(`${index + 1}. ${question.prompt}`);
+    lines.push(`回答：${answer}`);
+  });
+  lines.push("");
+  lines.push("请按这些回答继续。");
+  return lines.join("\n");
+}
+
+export function QuestionCard({
+  asked,
+  canAnswer,
+  onAnswer,
+}: {
+  asked: { title: string; questions: AskedQuestion[] };
+  canAnswer: boolean;
+  onAnswer: (text: string) => void;
+}) {
+  const [picks, setPicks] = useState<Record<string, string[]>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const ready = asked.questions.every((question) => {
+    const chosen = picks[question.id] || [];
+    return chosen.length > 0 || Boolean((notes[question.id] || "").trim());
+  });
+  const toggle = (question: AskedQuestion, optionId: string) => {
+    setPicks((prev) => {
+      const current = prev[question.id] || [];
+      const next = question.allowMultiple
+        ? current.includes(optionId)
+          ? current.filter((id) => id !== optionId)
+          : [...current, optionId]
+        : current.length === 1 && current[0] === optionId
+          ? []
+          : [optionId];
+      return { ...prev, [question.id]: next };
+    });
+  };
+  return (
+    <section className="ask-card">
+      <h3>{asked.title || "需要你选一下"}</h3>
+      <p className="ask-lead">
+        {canAnswer
+          ? "这一轮停在提问上。选好后会接着做。"
+          : "模型问了这些问题。"}
+      </p>
+      {asked.questions.map((question, index) => (
+        <div className="ask-q" key={question.id}>
+          <p>
+            {asked.questions.length > 1 ? `${index + 1}. ` : ""}
+            {question.prompt}
+          </p>
+          {canAnswer ? (
+            <>
+              {question.options.map((option) => {
+                const on = (picks[question.id] || []).includes(option.id);
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={`ask-opt${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    onClick={() => toggle(question, option.id)}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+              <textarea
+                className="ask-note"
+                rows={2}
+                placeholder={question.options.length ? "也可以补充一句" : "写下回答"}
+                value={notes[question.id] || ""}
+                onChange={(event) =>
+                  setNotes((prev) => ({ ...prev, [question.id]: event.target.value }))
+                }
+              />
+            </>
+          ) : (
+            question.options.map((option) => (
+              <span className="ask-opt" key={option.id}>
+                {option.label}
+              </span>
+            ))
+          )}
+        </div>
+      ))}
+      {canAnswer ? (
+        <button
+          type="button"
+          className="ask-send"
+          disabled={!ready}
+          onClick={() => onAnswer(formatAskAnswer(asked.title, asked.questions, picks, notes))}
+        >
+          按这个回答继续
+        </button>
+      ) : null}
+    </section>
   );
 }

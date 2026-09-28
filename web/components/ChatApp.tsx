@@ -26,7 +26,7 @@ import type {
   LoopState,
   HistoryTurn,
 } from "../lib/protocol";
-import ToolCard, { extractDiff, mutatingTool, toolKind, toolPath } from "./ToolCard";
+import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
 import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
 import FilePreview, { type PreviewTab } from "./FilePreview";
@@ -5017,6 +5017,18 @@ export default function ChatApp() {
                           }
                         }
                         const card = (tool: (typeof visible)[number]) => {
+                          const asked = parseAskQuestions(tool.name, tool.args);
+                          if (asked) {
+                            const last = turnIndex === active.turns.length - 1;
+                            return (
+                              <QuestionCard
+                                key={tool.callId}
+                                asked={asked}
+                                canAnswer={last && !turn.running && !turn.queued}
+                                onAnswer={(text) => submit(text)}
+                              />
+                            );
+                          }
                           const nested = kids.get(tool.callId);
                           const nestedLive = Boolean(
                             turn.running && nested?.some((item) => item.status === "running"),

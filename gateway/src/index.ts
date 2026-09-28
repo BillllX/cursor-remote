@@ -1228,6 +1228,49 @@ function emitToolOutput(
   });
 }
 
+function isAskQuestionTool(name: string): boolean {
+  return /ask.?question/i.test(name);
+}
+
+/// 提问工具的选项必须原样送到客户端。通用摘要会把 questions 丢掉，界面就只剩一次突然结束。
+function presentToolArgs(name: string, args: unknown): unknown {
+  if (!isAskQuestionTool(name)) return summarizeToolArgs(args);
+  const asked = sanitizeAskArgs(args);
+  return asked ?? summarizeToolArgs(args);
+}
+
+function sanitizeAskArgs(args: unknown): { title: string; questions: unknown[] } | null {
+  const record =
+    args && typeof args === "object" ? (args as Record<string, unknown>) : null;
+  const nested =
+    record?.args && typeof record.args === "object"
+      ? (record.args as Record<string, unknown>)
+      : null;
+  const source = nested?.questions ? nested : record;
+  if (!source) return null;
+  const raw = Array.isArray(source.questions) ? source.questions : [];
+  const questions = raw.slice(0, 8).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    const prompt = typeof row.prompt === "string" ? row.prompt.slice(0, 500) : "";
+    if (!prompt) return [];
+    const id = typeof row.id === "string" && row.id ? row.id.slice(0, 80) : prompt.slice(0, 40);
+    const allowMultiple = row.allow_multiple === true || row.allowMultiple === true;
+    const options = (Array.isArray(row.options) ? row.options : []).slice(0, 12).flatMap((option) => {
+      if (!option || typeof option !== "object") return [];
+      const opt = option as Record<string, unknown>;
+      const label = typeof opt.label === "string" ? opt.label.slice(0, 200) : "";
+      if (!label) return [];
+      const optionId = typeof opt.id === "string" && opt.id ? opt.id.slice(0, 80) : label.slice(0, 40);
+      return [{ id: optionId, label }];
+    });
+    return [{ id, prompt, allowMultiple, options }];
+  });
+  if (!questions.length) return null;
+  const title = typeof source.title === "string" ? source.title.slice(0, 200) : "";
+  return { title, questions };
+}
+
 function summarizeToolArgs(args: unknown): unknown {
   if (args == null || typeof args !== "object") return args;
   const record = args as Record<string, unknown>;
@@ -2940,7 +2983,7 @@ async function handlePrompt(
       chatId: slot.chatId,
       callId,
       name,
-      args: summarizeToolArgs(args),
+      args: presentToolArgs(name, args),
       parentCallId: meta.parentCallId,
       agent: meta.agent,
       model: meta.model,

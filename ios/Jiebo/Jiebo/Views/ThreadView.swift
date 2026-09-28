@@ -11,16 +11,21 @@ struct ThreadView: View {
         @Bindable var store = store
         VStack(spacing: 0) {
             header
-            if !store.notice.isEmpty {
-                banner(store.notice, color: JieboColor.pine)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 0) {
+                if !store.notice.isEmpty {
+                    banner(store.notice, color: JieboColor.pine)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                if !store.bannerError.isEmpty {
+                    banner(friendlyError(store.bannerError), color: JieboColor.danger)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
-            if !store.bannerError.isEmpty {
-                banner(friendlyError(store.bannerError), color: JieboColor.danger)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+            .animation(JieboMotion.fade(reduceMotion), value: store.notice.isEmpty)
+            .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
             thread
             // P5b：agent 改完文件的待看入口（面板关着时不硬弹，点 pill 才进）
+            Group {
             if !store.pendingDiffPaths.isEmpty {
                 Button(action: store.openDiffs) {
                     HStack(spacing: 6) {
@@ -45,13 +50,14 @@ struct ThreadView: View {
                 .padding(.bottom, 6)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: store.pendingDiffPaths.isEmpty)
             ComposerView(focusNonce: composerFocusNonce)
+                // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
+                .transaction { $0.animation = nil }
         }
         .frame(maxWidth: JieboMeasure.thread)
         .frame(maxWidth: .infinity)
-        .animation(JieboMotion.fade(reduceMotion), value: store.pendingDiffPaths.isEmpty)
-        .animation(JieboMotion.fade(reduceMotion), value: store.notice.isEmpty)
-        .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
         .background(JieboColor.paper.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
@@ -143,15 +149,15 @@ struct ThreadView: View {
 
     /// 停在底部时才跟随流式输出。用户往上拖超过一段距离后松开跟随。
     @State private var stickToBottom = true
-    /// 键盘或转屏刚改变视口时，先别把跟随关掉
-    @State private var holdStickUntil = Date.distantPast
-    /// 滚动视口高度（overlay 探针量得），与底部锚点的 maxY 比较得出是否还在底部
+    /// 滚动视口高度，与底部锚点的 maxY 比较得出是否还在底部
     @State private var viewportHeight: CGFloat = 0
     /// 程序在滚到底时，几何探针的中间帧不能把跟随关掉
     @State private var scrollingProgrammatically = false
     @State private var followTask: Task<Void, Never>?
 
     private var thread: some View {
+        // 外层先量出视口宽。不锁宽的话，计划里的长行会按「不折行」的理想高度去撑滚动区，看起来到底了，下面还有一大段。
+        GeometryReader { geo in
         ScrollViewReader { proxy in
             ScrollView {
                 // 不用 LazyVStack：流式增高时未实现的底部锚点会让 scrollTo 落空，跟随就断。
@@ -171,8 +177,12 @@ struct ThreadView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                     }
-                    ForEach(store.active?.turns ?? []) { turn in
-                        TurnView(turn: turn)
+                    let turns = store.active?.turns ?? []
+                    ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
+                        TurnView(
+                            turn: turn,
+                            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued
+                        )
                             .id(turn.id)
                             .transition(.opacity.combined(with: .offset(y: 10)))
                     }
@@ -191,61 +201,64 @@ struct ThreadView: View {
                         )
                 }
                 .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
+                .frame(width: geo.size.width, alignment: .topLeading)
             }
             .scrollDismissesKeyboard(.interactively)
             .coordinateSpace(name: "threadScroll")
-            .overlay(
-                // 视口高度探针（转屏/分屏会变）
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { viewportHeight = geo.size.height }
-                        .onChange(of: geo.size.height) { _, h in viewportHeight = h }
-                }
-                .allowsHitTesting(false)
-            )
+            .onAppear { viewportHeight = geo.size.height }
+            .onChange(of: geo.size.height) { _, h in viewportHeight = h }
+            .onChange(of: geo.size.width) { _, _ in
+                // 侧栏或转屏改变折行，高度会变，停在底部时再对齐一次
+                followBottom(proxy)
+            }
             .overlay(alignment: .bottom) {
-                if !stickToBottom {
-                    Button {
-                        stickToBottom = true
-                        followBottom(proxy, animated: true)
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "arrow.down")
-                                .font(.system(size: 11, weight: .bold))
-                            Text("显示最新")
-                                .font(JieboFont.ui(12, weight: .semibold))
+                Group {
+                    if !stickToBottom {
+                        Button {
+                            stickToBottom = true
+                            followBottom(proxy, animated: true)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 11, weight: .bold))
+                                Text("显示最新")
+                                    .font(JieboFont.ui(12, weight: .semibold))
+                            }
+                            .foregroundStyle(JieboColor.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(JieboColor.white)
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
                         }
-                        .foregroundStyle(JieboColor.ink)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(JieboColor.white)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                        .buttonStyle(.plain)
+                        .padding(.bottom, store.pendingDiffPaths.isEmpty ? 10 : 52)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .accessibilityLabel("滚动到最新消息")
                     }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, store.pendingDiffPaths.isEmpty ? 10 : 52)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .accessibilityLabel("滚动到最新消息")
                 }
+                .animation(JieboMotion.fade(reduceMotion), value: stickToBottom)
             }
             .overlay {
                 // P8 slim：会话内容分页加载遮罩（只盖住对话区，侧栏/输入框可操作）
-                if showThreadLoading {
-                    VStack(spacing: 12) {
-                        ProgressView().controlSize(.large)
-                        Text("正在加载会话…")
-                            .font(JieboFont.ui(13, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
+                Group {
+                    if showThreadLoading {
+                        VStack(spacing: 12) {
+                            ProgressView().controlSize(.large)
+                            Text("正在加载会话…")
+                                .font(JieboFont.ui(13, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(JieboColor.paper.opacity(0.92))
+                        .transition(.opacity)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(JieboColor.paper.opacity(0.92))
-                    .transition(.opacity)
                 }
+                .animation(JieboMotion.fade(reduceMotion), value: showThreadLoading)
             }
-            .animation(JieboMotion.fade(reduceMotion), value: showThreadLoading)
-            .animation(JieboMotion.fade(reduceMotion), value: stickToBottom)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12).onChanged { value in
                     // 手指向下拖是在离开底部、看更早的内容
@@ -258,7 +271,6 @@ struct ThreadView: View {
             .onChange(of: store.active?.turns.count) { _, _ in followBottom(proxy) }
             .onChange(of: liveTail) { _, _ in followBottom(proxy) }
             .onChange(of: viewportHeight) { _, _ in
-                holdStickUntil = Date().addingTimeInterval(0.4)
                 followBottom(proxy)
             }
             .onChange(of: store.activeId) { _, id in
@@ -273,6 +285,7 @@ struct ThreadView: View {
                 stickToBottom = true
                 followBottom(proxy)
             }
+        }
         }
     }
 
@@ -292,8 +305,9 @@ struct ThreadView: View {
         }
         followTask?.cancel()
         followTask = Task { @MainActor in
-            // 工具卡和正文是后一帧才撑开高度的，补滚两次才落得住底
-            for delay in [40, 140] {
+            // 计划正文是逐行排的，高度常常晚于前两帧才定下来。停早了会落在旧高度上。
+            // 间隔累加后大约落在 40 / 140 / 320 / 700 毫秒。
+            for delay in [40, 100, 180, 380] {
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard !Task.isCancelled, stickToBottom else { return }
                 var transaction = Transaction()
@@ -322,12 +336,9 @@ struct ThreadView: View {
             if gap <= 72 { stickToBottom = true }
             return
         }
-        // 答复进行中只靠手势取消跟随。工具卡一插入就会把底锚点顶出视口，不能当成用户离开了底部。
-        let replying = store.active?.turns.last?.running == true
+        // 长方案折行后底锚点会先被顶出视口。这不是用户离开底部，离开只认手势。
         if gap <= 64 {
             stickToBottom = true
-        } else if gap > 160, !replying, Date() > holdStickUntil {
-            stickToBottom = false
         }
     }
 
@@ -406,6 +417,7 @@ struct ThreadView: View {
 private struct TurnView: View {
     @Environment(ChatStore.self) private var store
     var turn: Turn
+    var canAnswer = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -444,7 +456,11 @@ private struct TurnView: View {
                 )
             }
             ForEach(turn.tools) { tool in
-                ToolCardView(tool: tool)
+                if let asked = AskedForm.parse(tool) {
+                    QuestionCardView(asked: asked, canAnswer: canAnswer)
+                } else {
+                    ToolCardView(tool: tool)
+                }
             }
             if let pending = turn.pendingTool {
                 ApprovalCard(tool: pending)
@@ -615,7 +631,6 @@ private struct AssistantMessage: View {
                         .foregroundStyle(JieboColor.ink)
                         .textSelection(.enabled)
                         .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
                         .background(JieboColor.mist)
@@ -702,7 +717,6 @@ private struct ProseLines: View {
                 .tint(JieboColor.pine)
                 .textSelection(.enabled)
                 .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

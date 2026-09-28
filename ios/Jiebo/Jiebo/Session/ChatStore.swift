@@ -326,6 +326,13 @@ final class ChatStore {
         client.disconnect()
     }
 
+    func answerQuestion(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        draft = trimmed
+        submit()
+    }
+
     func submit() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let images = pendingImages

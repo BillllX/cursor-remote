@@ -12,6 +12,8 @@ struct ComposerView: View {
     @State private var persistTask: Task<Void, Never>?
     /// 自己写回 store.draft 时不要再灌进输入框，否则会把后打的字盖掉。
     @State private var ignoreDraftEcho: String?
+    /// 工具栏宽度。只在宽度变化时重选布局，避免每个字都把两套控件量一遍。
+    @State private var controlsWidth: CGFloat = 0
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var photoPickerOpen = false
     @State private var filePickerOpen = false
@@ -32,7 +34,9 @@ struct ComposerView: View {
                 .padding(.horizontal, 6)
                 .padding(.vertical, 8)
                 .onChange(of: text) { _, value in
-                    store.updateMentions(for: value)
+                    if value.contains("@") || !store.mentionSuggestions.isEmpty {
+                        store.updateMentions(for: value)
+                    }
                     schedulePersist()
                 }
                 .onKeyPress(keys: [.return]) { press in
@@ -52,13 +56,16 @@ struct ComposerView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .padding(.bottom, 10)
-        .background(JieboColor.composer)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous))
-        .overlay(
+        .background {
+            // 阴影画在底上，不要挂在输入框这一层。挂在上面的话每个字都会连阴影一起重绘。
             RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
-                .stroke(focused ? JieboColor.ink.opacity(0.22) : JieboColor.borderStrong, lineWidth: focused ? 1.5 : 1)
-        )
-        .shadow(color: .black.opacity(focused ? 0.08 : 0.03), radius: focused ? 18 : 8, y: focused ? 8 : 3)
+                .fill(JieboColor.composer)
+                .shadow(color: .black.opacity(focused ? 0.08 : 0.03), radius: focused ? 18 : 8, y: focused ? 8 : 3)
+                .overlay(
+                    RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
+                        .stroke(focused ? JieboColor.ink.opacity(0.22) : JieboColor.borderStrong, lineWidth: focused ? 1.5 : 1)
+                )
+        }
         .padding(.horizontal, 20)
         .padding(.top, 4)
         .padding(.bottom, 14)
@@ -181,23 +188,26 @@ struct ComposerView: View {
     }
 
     private var controls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: 8) {
-                attachMenu
-                modePicker
-                modelPicker
+        HStack(alignment: .center, spacing: 8) {
+            attachMenu
+            modePicker
+            modelPicker
+            if controlsWidth >= 640 {
                 policyToggle
                 confirmToggle
-                Spacer(minLength: 8)
-                sendCluster(enabled: canSendNow)
-            }
-            HStack(alignment: .center, spacing: 8) {
-                attachMenu
-                modePicker
-                modelPicker
+            } else {
                 moreMenu
-                Spacer(minLength: 8)
-                sendCluster(enabled: canSendNow)
+            }
+            Spacer(minLength: 8)
+            sendCluster(enabled: canSendNow)
+        }
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { controlsWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, width in
+                        if abs(width - controlsWidth) > 1 { controlsWidth = width }
+                    }
             }
         }
     }
