@@ -1,0 +1,311 @@
+import SwiftUI
+
+/// iPhone（以及 iPad 上窄到 compact 的窗口）：打开就是当前对话。
+/// 会话和五个工具在左边抽屉里。工作区列表从抽屉顶进入，主题只在那一页的最底下。
+struct PhoneWorkbench: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drawerOpen = false
+    @State private var workspacesOpen = false
+    @State private var preferredRunning = false
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            ThreadView(phoneChrome: true, openDrawer: {
+                withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
+            })
+            if let layer = store.toolLayer {
+                ToolLayerOverlay(layer: layer)
+                    .id(layer)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+            if drawerOpen {
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
+                    .onTapGesture { closeDrawer() }
+                    .transition(.opacity)
+                PhoneDrawer(close: closeDrawer, openWorkspaces: {
+                    closeDrawer()
+                    withAnimation(JieboMotion.panel(reduceMotion)) { workspacesOpen = true }
+                })
+                .transition(.move(edge: .leading))
+            }
+            if workspacesOpen {
+                PhoneWorkspaceList(close: {
+                    withAnimation(JieboMotion.panel(reduceMotion)) { workspacesOpen = false }
+                })
+                .transition(.move(edge: .trailing))
+                .zIndex(2)
+            }
+        }
+        .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
+        .animation(JieboMotion.panel(reduceMotion), value: drawerOpen)
+        .animation(JieboMotion.panel(reduceMotion), value: workspacesOpen)
+        .task { preferRunningChat() }
+    }
+
+    private func closeDrawer() {
+        withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = false }
+    }
+
+    /// 这个工作区里如果有正在跑的会话，打开时优先它。只做一次，不抢后来的手动切换。
+    private func preferRunningChat() {
+        guard !preferredRunning else { return }
+        preferredRunning = true
+        let running = store.currentWorkspaceChats.first {
+            store.runningChatIds.contains($0.id) || $0.turns.contains(where: \.running)
+        }
+        if let running, running.id != store.activeId {
+            store.select(running.id)
+        }
+    }
+}
+
+private struct PhoneDrawer: View {
+    @Environment(ChatStore.self) private var store
+    var close: () -> Void
+    var openWorkspaces: () -> Void
+
+    private var loopLive: Bool {
+        guard let row = store.loops[store.activeId] else { return false }
+        return row.status == "armed" || row.status == "running"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: openWorkspaces) {
+                HStack(spacing: 10) {
+                    JieboMark(size: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(store.currentWorkspaceName)
+                            .font(JieboFont.display(17))
+                            .foregroundStyle(JieboColor.ink)
+                            .lineLimit(1)
+                        Text(store.connected ? "工作区" : "正在重连…")
+                            .font(JieboFont.ui(11))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("工作区列表")
+
+            drawerRow("plus", "新对话") {
+                store.openNewChat()
+                close()
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(store.currentWorkspaceChats) { chat in
+                        chatRow(chat)
+                    }
+                    Text("这个工作区")
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                        .padding(.bottom, 4)
+                    ForEach(ToolLayer.allCases) { layer in
+                        toolRow(layer)
+                    }
+                }
+                .padding(.bottom, 24)
+            }
+        }
+        .frame(maxWidth: 320)
+        .frame(maxHeight: .infinity)
+        .frame(width: 300)
+        .background(JieboColor.sidebar.ignoresSafeArea())
+        .gesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.width < -60 { close() }
+                }
+        )
+    }
+
+    private func chatRow(_ chat: ChatSession) -> some View {
+        let selected = chat.id == store.activeId
+        let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
+        return Button {
+            store.select(chat.id)
+            close()
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(live ? JieboColor.ok : Color.clear)
+                    .frame(width: 6, height: 6)
+                Text(chat.title)
+                    .font(JieboFont.ui(15, weight: .medium))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(selected ? JieboColor.paper : JieboColor.ink)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 40)
+            .background(selected ? JieboColor.pine : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(chat.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func toolRow(_ layer: ToolLayer) -> some View {
+        let marked = layer == .loop && loopLive
+        return drawerRow(layer.symbol, layer.title, marked: marked) {
+            store.toggleTool(layer)
+            close()
+        }
+    }
+
+    private func drawerRow(_ symbol: String, _ title: String, marked: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 22)
+                Text(title)
+                    .font(JieboFont.ui(15))
+                Spacer(minLength: 0)
+                if marked {
+                    Circle().fill(JieboColor.ok).frame(width: 6, height: 6)
+                }
+            }
+            .foregroundStyle(JieboColor.ink)
+            .padding(.horizontal, 16)
+            .frame(minHeight: 40)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct PhoneWorkspaceList: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var close: () -> Void
+    @State private var themeOpen = false
+    @State private var theme = JieboTheme.shared
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: close) {
+                    Label("对话", systemImage: "chevron.left")
+                        .font(JieboFont.ui(15, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Text("工作区")
+                    .font(JieboFont.display(17))
+                Spacer()
+                Color.clear.frame(width: 52, height: 1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            ScrollView {
+                VStack(spacing: 0) {
+                    if store.workspaces.isEmpty {
+                        workspaceRow(name: store.currentWorkspaceName, path: store.currentWorkspacePath, current: true)
+                    }
+                    ForEach(store.workspaces) { item in
+                        workspaceRow(
+                            name: item.name,
+                            path: item.path,
+                            current: sameCwd(item.path, store.currentWorkspacePath)
+                        )
+                    }
+                }
+            }
+
+            if store.creatingWorkspace {
+                HStack {
+                    TextField("名称", text: $store.newWorkspaceName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("创建", action: store.createWorkspace)
+                        .disabled(store.newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            } else {
+                Button("新建工作区") { store.creatingWorkspace = true }
+                    .font(JieboFont.ui(14))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+            }
+
+            Button {
+                themeOpen = true
+            } label: {
+                Text("主题 · \(theme.palette.title)")
+                    .font(JieboFont.ui(13))
+                    .foregroundStyle(JieboColor.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
+            Button(action: store.logout) {
+                Text("退出登录")
+                    .font(JieboFont.ui(13))
+                    .foregroundStyle(JieboColor.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 28)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(JieboColor.paper.ignoresSafeArea())
+        .sheet(isPresented: $themeOpen) {
+            ThemeSettingsSheet()
+        }
+        .onAppear {
+            store.openWorkspaceSwitcher()
+            store.workspaceSheetOpen = false
+        }
+    }
+
+    private func workspaceRow(name: String, path: String, current: Bool) -> some View {
+        Button {
+            store.switchWorkspace(to: path)
+            close()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "folder")
+                    .foregroundStyle(JieboColor.dim)
+                Text(name)
+                    .font(JieboFont.ui(16, weight: current ? .semibold : .regular))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if current {
+                    Text("正在用")
+                        .font(JieboFont.ui(12))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(path.isEmpty)
+    }
+}

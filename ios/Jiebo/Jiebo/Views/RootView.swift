@@ -19,10 +19,35 @@ struct RootView: View {
 
 struct WorkbenchView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     var body: some View {
+        Group {
+            if sizeClass == .compact {
+                PhoneWorkbench()
+            } else {
+                padWorkbench
+            }
+        }
+        .background(JieboColor.paper)
+        .fullScreenCover(isPresented: Bindable(store).fileBrowserOpen, onDismiss: {
+            store.dismissPreviewPanel()
+        }) {
+            FileBrowserCover()
+        }
+        #if DEBUG
+        .onAppear {
+            if ProcessInfo.processInfo.arguments.contains("--open-file-browser") {
+                store.fileBrowserOpen = true
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var padWorkbench: some View {
         @Bindable var store = store
         HStack(spacing: 0) {
             // 图标栏一直挂着，只改宽度。收起时不必等分栏动画结束再创建，图标就不会晚一拍才出现。
@@ -57,23 +82,50 @@ struct WorkbenchView: View {
             // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
             .toolbar(removing: .sidebarToggle)
         }
-        .background(JieboColor.paper)
-        // P7a：文件浏览器 cover 挂在工作台根（NSV 之外）——从侧栏列弹 fullScreenCover 会继承
-        // 侧栏的 compact sizeClass，双栏永远出不来；QL sheet 同理盖在 cover 之上
-        .fullScreenCover(isPresented: $store.fileBrowserOpen, onDismiss: {
-            // 关掉文件浮层后不要再从右侧弹出同一份预览，否则两层会错开
-            store.dismissPreviewPanel()
-        }) {
-            FileBrowserCover()
-        }
-        #if DEBUG
-        // UI 冒烟钩子：simctl launch ... --open-file-browser 直接打开文件浏览器（截图验证用）
-        .onAppear {
-            if ProcessInfo.processInfo.arguments.contains("--open-file-browser") {
-                store.fileBrowserOpen = true
+        .task {
+            #if DEBUG
+            guard ProcessInfo.processInfo.arguments.contains("--motion-demo") else { return }
+            for _ in 0 ..< 40 {
+                try? await Task.sleep(for: .milliseconds(250))
+                if store.unlocked { break }
             }
+            guard store.unlocked else { return }
+            let home = store.activeId
+            for mode in [AgentMode.agent, .plan, .ask, .agent] {
+                withAnimation(JieboMotion.snappy(false)) {
+                    store.chooseMode(mode)
+                }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+            if let other = store.currentWorkspaceChats.first(where: { $0.id != home })?.id {
+                withAnimation(JieboMotion.fade(false)) {
+                    store.select(other)
+                }
+                try? await Task.sleep(for: .milliseconds(800))
+                withAnimation(JieboMotion.fade(false)) {
+                    store.select(home)
+                }
+                try? await Task.sleep(for: .milliseconds(700))
+            }
+            // 收起/展开侧栏：触发分栏与图标栏宽度动画
+            withAnimation(.easeOut(duration: 0.22)) {
+                // 通过 toggle 工具层 Loop 的选中底淡入（不打开文件浮层）
+                store.toggleTool(.loop)
+            }
+            try? await Task.sleep(for: .milliseconds(650))
+            withAnimation(.easeOut(duration: 0.22)) {
+                if store.toolLayer == .loop { store.toggleTool(.loop) }
+            }
+            try? await Task.sleep(for: .milliseconds(500))
+            withAnimation(JieboMotion.snappy(false)) {
+                store.chooseMode(.plan)
+            }
+            try? await Task.sleep(for: .milliseconds(600))
+            withAnimation(JieboMotion.snappy(false)) {
+                store.chooseMode(.agent)
+            }
+            #endif
         }
-        #endif
     }
 }
 
@@ -162,9 +214,21 @@ struct ToolLayerOverlay: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     HStack {
-                        Text(store.contentPath.map { ($0 as NSString).lastPathComponent } ?? layer.title)
+                        if narrow {
+                            Button {
+                                closeTopLayer()
+                            } label: {
+                                Label(store.contentPath == nil ? "对话" : layer.title, systemImage: "chevron.left")
+                                    .font(JieboFont.ui(15, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(store.contentPath == nil ? "回到对话" : "返回")
+                        }
+                        Text(store.contentPath.map { ($0 as NSString).lastPathComponent } ?? (narrow ? "" : layer.title))
                             .font(JieboFont.ui(16))
                             .foregroundStyle(JieboColor.ink)
+                            .lineLimit(1)
                         Spacer()
                         if store.contentDiff {
                             Button("保留") { store.keepContentDiff() }
@@ -178,21 +242,18 @@ struct ToolLayerOverlay: View {
                                 .font(JieboFont.ui(14, weight: .medium))
                                 .foregroundStyle(JieboColor.pine)
                         }
-                        Button {
-                            if store.contentPath != nil {
-                                store.closeContentLayer()
-                            } else {
-                                store.toolLayer = nil
-                                store.loopError = ""
+                        if !narrow {
+                            Button {
+                                closeTopLayer()
+                            } label: {
+                                Image(systemName: store.contentPath == nil ? "xmark" : "chevron.left")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(JieboColor.ink2)
+                                    .frame(width: 32, height: 32)
                             }
-                        } label: {
-                            Image(systemName: store.contentPath == nil ? "xmark" : "chevron.left")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(JieboColor.ink2)
-                                .frame(width: 32, height: 32)
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(store.contentPath == nil ? "关闭" : "返回")
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(store.contentPath == nil ? "关闭" : "返回")
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -222,16 +283,10 @@ struct ToolLayerOverlay: View {
                 if !narrow {
                     Color.black.opacity(0.18)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            if store.contentPath != nil {
-                                store.closeContentLayer()
-                            } else {
-                                store.toolLayer = nil
-                                store.loopError = ""
-                            }
-                        }
+                        .onTapGesture { closeTopLayer() }
                 }
             }
+            .gesture(edgeDismiss)
         }
         .alert("放弃未保存的修改？", isPresented: Bindable(store).contentDiscardPrompt) {
             Button("放弃", role: .destructive) { store.confirmContentDiscard() }
@@ -245,6 +300,23 @@ struct ToolLayerOverlay: View {
         } message: {
             Text("未提交的改动会丢掉。")
         }
+    }
+
+    private func closeTopLayer() {
+        if store.contentPath != nil {
+            store.closeContentLayer()
+        } else {
+            store.toolLayer = nil
+            store.loopError = ""
+        }
+    }
+
+    private var edgeDismiss: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                guard value.startLocation.x < 28, value.translation.width > 70 else { return }
+                closeTopLayer()
+            }
     }
 
     @ViewBuilder

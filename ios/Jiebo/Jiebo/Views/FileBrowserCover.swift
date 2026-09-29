@@ -12,12 +12,21 @@ import UIKit
 /// - compact 宽度（Stage Manager 窄窗/Slide Over）退化单栏：点文件 dismiss + 预览面板接管
 struct FileBrowserCover: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
     @State private var filter = ""
     /// 窄窗先关掉浮层，等浮层消失再打开预览，避免两层 sheet 抢同一个文件。
     @State private var pendingPreview: (path: String, chatId: String, diff: Bool)?
+
+    private var edgeDismiss: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onEnded { value in
+                guard sizeClass == .compact, value.startLocation.x < 28, value.translation.width > 70 else { return }
+                dismiss()
+            }
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -48,11 +57,23 @@ struct FileBrowserCover: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成") { dismiss() }
+                if sizeClass == .compact {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Label("对话", systemImage: "chevron.left")
+                        }
                         .hitTarget()
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完成") { dismiss() }
+                            .hitTarget()
+                    }
                 }
             }
+            .gesture(edgeDismiss)
             // cover 自己画通知/错误条——store.notice/bannerError 的横幅在 ThreadView，cover 背后用户看不见。
             // 错误（红）优先于通知（绿）：导出/存相册失败走 bannerError（Grok R1 M3）
             .overlay(alignment: .top) {

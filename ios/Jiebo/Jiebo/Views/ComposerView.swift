@@ -45,7 +45,7 @@ struct ComposerView: View {
                     return .handled
                 }
             controls
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if controlsWidth >= 420, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("Return 发送，Shift+Return 换行")
                     .font(JieboFont.ui(11))
                     .foregroundStyle(JieboColor.dim)
@@ -190,8 +190,13 @@ struct ComposerView: View {
     private var controls: some View {
         HStack(alignment: .center, spacing: 8) {
             attachMenu
-            modePicker
-            modelPicker
+            if controlsWidth >= 420 {
+                modePicker
+                modelPicker(maxWidth: 180)
+            } else {
+                compactMode
+                modelPicker(maxWidth: 108)
+            }
             if controlsWidth >= 640 {
                 policyToggle
                 confirmToggle
@@ -421,7 +426,26 @@ struct ComposerView: View {
         .animation(JieboMotion.snappy(reduceMotion), value: store.mode)
     }
 
-    private var modelPicker: some View {
+    private var compactMode: some View {
+        Menu {
+            ForEach(AgentMode.allCases, id: \.self) { item in
+                Button(item.label) { store.chooseMode(item) }
+            }
+        } label: {
+            Text(store.mode.label)
+                .font(JieboFont.ui(13, weight: .medium))
+                .foregroundStyle(JieboColor.paper)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(JieboColor.pine)
+                .clipShape(Capsule())
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel("模式 \(store.mode.label)")
+    }
+
+    private func modelPicker(maxWidth: CGFloat) -> some View {
         Menu {
             ForEach(ModelCatalog.groups(from: store.models)) { group in
                 Section(group.label) {
@@ -442,7 +466,7 @@ struct ComposerView: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .frame(maxWidth: 180)
+            .frame(maxWidth: maxWidth)
             .background(JieboColor.mist)
             .clipShape(Capsule())
             .hitTarget()

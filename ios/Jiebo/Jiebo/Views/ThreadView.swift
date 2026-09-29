@@ -3,6 +3,9 @@ import SwiftUI
 struct ThreadView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 窄屏：标题栏是菜单、会话名和新对话，不画 iPad 的大标题。
+    var phoneChrome = false
+    var openDrawer: () -> Void = {}
     @State private var composerFocusNonce = 0
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State private var motionChatId = ""
@@ -99,7 +102,99 @@ struct ThreadView: View {
         )
     }
 
+    @ViewBuilder
     private var header: some View {
+        if phoneChrome {
+            phoneHeader
+        } else {
+            padHeader
+        }
+    }
+
+    private var phoneSubtitle: String {
+        if !store.connected { return "正在重连…" }
+        let place = store.currentWorkspaceName
+        return store.hasApiKey ? "\(place) · \(store.mode.label)" : "服务器还没配 API Key"
+    }
+
+    private var phoneStatus: String? {
+        if let row = store.loops[store.activeId], row.status == "armed" || row.status == "running" {
+            if let summary = row.lastSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+                return "Loop · 第 \(row.tick) 拍 · \(summary)"
+            }
+            return "Loop · 第 \(row.tick) 拍"
+        }
+        if store.busy { return "正在回复" }
+        return nil
+    }
+
+    private var phoneHeader: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                phoneIcon("line.3.horizontal", label: "菜单", action: openDrawer)
+                VStack(spacing: 1) {
+                    Text(store.active?.title ?? "新对话")
+                        .font(JieboFont.display(17))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    Text(phoneSubtitle)
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                if store.canUndo {
+                    phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动", action: store.undoLast)
+                }
+                phoneIcon("plus", label: "新对话", action: store.openNewChat)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+            .padding(.bottom, phoneStatus == nil ? 8 : 4)
+            if let phoneStatus {
+                Button {
+                    if store.loops[store.activeId] != nil { store.toggleTool(.loop) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Circle().fill(JieboColor.ok).frame(width: 6, height: 6)
+                        Text(phoneStatus)
+                            .font(JieboFont.ui(12))
+                            .foregroundStyle(JieboColor.ink)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(JieboColor.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(store.loops[store.activeId] == nil)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func phoneIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(JieboColor.ink)
+                .frame(width: 32, height: 32)
+                .background(JieboColor.mist)
+                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(label)
+    }
+
+    private var padHeader: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.active?.title ?? "新对话")
