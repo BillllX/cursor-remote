@@ -274,6 +274,7 @@ export default function FileTree({
   variant = "panel",
   onPick,
   onOpen,
+  onCopyPath,
   onCreate,
   onRename,
   onDelete,
@@ -285,6 +286,7 @@ export default function FileTree({
   variant?: "panel" | "browser";
   onPick: (path: string) => void;
   onOpen?: (path: string) => void;
+  onCopyPath?: (path: string) => void;
   onCreate?: (path: string, kind: "file" | "dir") => void;
   onRename?: (from: string, to: string) => void;
   onDelete?: (path: string, dir: boolean) => void;
@@ -529,6 +531,28 @@ export default function FileTree({
           style={{ left: menu.x, top: menu.y }}
           onClick={(event) => event.stopPropagation()}
         >
+          {menu.dir ? null : (
+            <button
+              type="button"
+              onClick={() => {
+                const path = menu.path;
+                setMenu(null);
+                onPick(path);
+              }}
+            >
+              引用到草稿
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              const path = menu.path;
+              setMenu(null);
+              onCopyPath?.(path);
+            }}
+          >
+            复制路径
+          </button>
           <button
             type="button"
             onClick={() => startCreate(menu.dir ? menu.path : parentPath(menu.path), "file")}

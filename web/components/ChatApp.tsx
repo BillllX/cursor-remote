@@ -25,11 +25,12 @@ import type {
   ServerMessage,
   LoopState,
   HistoryTurn,
+  AdminTenantStats,
 } from "../lib/protocol";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
 import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
-import FilePreview, { type PreviewTab } from "./FilePreview";
+import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview";
 import { isCanvasPath } from "../lib/canvas/path";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
@@ -46,7 +47,7 @@ import {
 } from "../lib/models";
 import ModelPicker from "./ModelPicker";
 import { JieboMark as Mark } from "./JieboMark";
-import { IconAgent, IconAsk, IconPlan, IconShield, IconWrite } from "./chromeIcons";
+import { IconAgent, IconAsk, IconPlan, IconRail, IconShield, IconWrite } from "./chromeIcons";
 
 type ToolCall = {
   callId: string;
@@ -762,6 +763,81 @@ function mergeToolOutput(
   return rec;
 }
 
+function shellCommand(tool: ToolCall): string {
+  const args = tool.args && typeof tool.args === "object" ? (tool.args as Record<string, unknown>) : {};
+  for (const key of ["command", "cmd"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return tool.name;
+}
+
+function shellText(result: unknown): string {
+  if (result == null) return "";
+  if (typeof result === "string") return result;
+  if (typeof result !== "object") return "";
+  const record = result as Record<string, unknown>;
+  const inner =
+    record.result && typeof record.result === "object" ? (record.result as Record<string, unknown>) : record;
+  const pick = (...keys: string[]) => {
+    for (const key of keys) {
+      const value = inner[key];
+      if (typeof value === "string" && value) return value;
+    }
+    return "";
+  };
+  return [pick("stdout", "output", "out", "text"), pick("stderr", "err")].filter(Boolean).join("\n");
+}
+
+function fmtTokens(value: number) {
+  if (value >= 10_000) return `${(value / 10_000).toFixed(1)} 万`;
+  return String(value);
+}
+
+function fmtCount(value: number) {
+  if (value >= 10_000) return `${(value / 10_000).toFixed(1)} 万`;
+  return value.toLocaleString("zh-CN");
+}
+
+function fmtDuration(ms: number) {
+  const total = Math.floor(ms / 1000);
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} 分 ${total % 60} 秒`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} 小时 ${minutes % 60} 分`;
+}
+
+function fmtRelative(epochMs: number) {
+  if (!(epochMs > 0)) return "—";
+  const seconds = (Date.now() - epochMs) / 1000;
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return `${Math.floor(seconds / 86_400)} 天前`;
+}
+
+function fmtClock(epochMs: number) {
+  if (!(epochMs > 0)) return "";
+  return new Date(epochMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function shellRows(turns: Turn[]): { id: string; command: string; output: string; running: boolean }[] {
+  const rows: { id: string; command: string; output: string; running: boolean }[] = [];
+  for (const turn of turns) {
+    for (const tool of turn.tools) {
+      if (toolKind(tool.name, tool.args) !== "shell") continue;
+      rows.push({
+        id: tool.callId,
+        command: shellCommand(tool),
+        output: shellText(tool.result),
+        running: tool.status === "running",
+      });
+    }
+  }
+  return rows;
+}
+
 function historyToTurns(items: HistoryTurn[]): Turn[] {
   return items.map((item) => ({
     id: item.id || uid(),
@@ -1042,7 +1118,8 @@ export default function ChatApp() {
   const [threadFindIndex, setThreadFindIndex] = useState(0);
   const [grepOpen, setGrepOpen] = useState(false);
   const [loopOpen, setLoopOpen] = useState(false);
-  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "loop">("chats");
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop">("chats");
   const [wideIDE, setWideIDE] = useState(false);
   const wideIDERef = useRef(false);
   wideIDERef.current = wideIDE;
@@ -1050,10 +1127,15 @@ export default function ChatApp() {
   const [loopInterval, setLoopInterval] = useState("900");
   const [loopMax, setLoopMax] = useState("");
   const [loops, setLoops] = useState<Record<string, LoopState & { tickStatus?: string }>>({});
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminStats, setAdminStats] = useState<AdminTenantStats[]>([]);
+  const [adminStatsAt, setAdminStatsAt] = useState<number | null>(null);
   const [grepQ, setGrepQ] = useState("");
   const searchShown = useHeldOpen(searchOpen);
   const paletteShown = useHeldOpen(paletteOpen);
   const grepShown = useHeldOpen(grepOpen);
+  const terminalShown = useHeldOpen(terminalOpen);
   const [filesOpen, setFilesOpen] = useState(false);
   const filesShown = useHeldOpen(filesOpen);
   const [filesQuery, setFilesQuery] = useState("");
@@ -1066,6 +1148,7 @@ export default function ChatApp() {
   const [previewTabs, setPreviewTabs] = useState<PreviewTab[]>([]);
   const [previewDrafts, setPreviewDrafts] = useState<Record<string, string>>({});
   const previewDraftsRef = useRef<Record<string, string>>({});
+  const draftsByChatRef = useRef<Record<string, Record<string, string>>>({});
   const saveSnapshotRef = useRef<Record<string, string>>({});
   previewDraftsRef.current = previewDrafts;
   const [previewPath, setPreviewPath] = useState("");
@@ -1126,6 +1209,15 @@ export default function ChatApp() {
     () => chats.find((chat) => chat.id === activeId) ?? chats[0],
     [chats, activeId],
   );
+  const shellEntries = useMemo(() => shellRows(active?.turns ?? []), [active?.turns]);
+  const shellTail = shellEntries.at(-1);
+  const shellTailKey = shellTail ? `${shellTail.id}\0${shellTail.output}` : "";
+  useEffect(() => {
+    if (!terminalOpen) return;
+    const node = terminalLogRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+  }, [terminalOpen, shellTailKey]);
   const sidebarChats = useMemo(() => {
     const keep = new Set<string>();
     const seenEmpty = new Set<string>();
@@ -1202,6 +1294,9 @@ export default function ChatApp() {
   const threadFindOpenRef = useRef(false);
   const grepOpenRef = useRef(false);
   const loopOpenRef = useRef(false);
+  const terminalOpenRef = useRef(false);
+  const adminOpenRef = useRef(false);
+  const terminalLogRef = useRef<HTMLDivElement>(null);
   const filesOpenRef = useRef(false);
   const grepQRef = useRef("");
   const appliedStoreRef = useRef(false);
@@ -1276,6 +1371,12 @@ export default function ChatApp() {
     setGitStatus({});
     setImages([]);
     setError("");
+    setPreviewDrafts({});
+    draftsByChatRef.current = {};
+    setIsAdmin(false);
+    setAdminOpen(false);
+    setAdminStats([]);
+    setAdminStatsAt(null);
   }
 
   const send = useCallback((message: ClientMessage) => {
@@ -1522,6 +1623,12 @@ export default function ChatApp() {
               resetTenantSession();
             }
             if (nextTenant) tenantIdRef.current = nextTenant;
+            setIsAdmin(Boolean(message.admin));
+            if (!message.admin) {
+              setAdminOpen(false);
+              setAdminStats([]);
+              setAdminStatsAt(null);
+            }
             const reconnected = unlockedRef.current;
             if (reconnected) setNotice("已重新连上服务器");
             unlockedRef.current = true;
@@ -1968,6 +2075,10 @@ export default function ChatApp() {
               },
             };
           });
+          break;
+        case "admin_stats":
+          setAdminStats(message.tenants || []);
+          setAdminStatsAt(message.serverTime || Date.now());
           break;
         case "chat_title": {
           const title = message.title.trim();
@@ -2705,6 +2816,10 @@ export default function ChatApp() {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       if (event.key === "Escape") {
+        if (adminOpenRef.current) {
+          setAdminOpen(false);
+          return;
+        }
         if (workspaceMenuOpenRef.current) {
           setWorkspaceMenuOpen(false);
           setWorkspaceCreating(false);
@@ -2721,6 +2836,11 @@ export default function ChatApp() {
         }
         if (loopOpenRef.current) {
           setLoopOpen(false);
+          if (wideIDERef.current) setSidePane("chats");
+          return;
+        }
+        if (terminalOpenRef.current) {
+          setTerminalOpen(false);
           if (wideIDERef.current) setSidePane("chats");
           return;
         }
@@ -2754,6 +2874,7 @@ export default function ChatApp() {
         setThreadFindOpen(false);
         setGrepOpen(false);
         setLoopOpen(false);
+        setTerminalOpen(false);
         setSearchOpen(true);
         setSearchQ("");
       }
@@ -2763,6 +2884,7 @@ export default function ChatApp() {
         setThreadFindOpen(false);
         setGrepOpen(false);
         setLoopOpen(false);
+        setTerminalOpen(false);
         setPaletteOpen((open) => !open);
         setPaletteQ("");
         setPaletteIndex(0);
@@ -2774,6 +2896,7 @@ export default function ChatApp() {
           setPaletteOpen(false);
           setThreadFindOpen(false);
           setLoopOpen(false);
+          setTerminalOpen(false);
           setGrepOpen(true);
           if (wideIDERef.current) setSidePane("search");
           return;
@@ -2815,6 +2938,7 @@ export default function ChatApp() {
 
   useEffect(() => {
     if (!grepOpen) return;
+    if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
     if (!grepQ.trim()) {
       setGrepHits([]);
       setGrepWait(false);
@@ -2826,7 +2950,7 @@ export default function ChatApp() {
       send({ type: "search_text", query: grepQ.trim(), chatId: activeIdRef.current });
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [grepOpen, grepQ, send]);
+  }, [grepOpen, grepQ, send, treePaths.length]);
 
   useEffect(() => {
     return () => {
@@ -3102,6 +3226,17 @@ export default function ChatApp() {
       selectChat({ ...keep, cwd: next });
       return;
     }
+    const leavingId = activeIdRef.current;
+    const leaving = chatsRef.current.find((item) => item.id === leavingId);
+    const cross = Boolean(leaving) && !sameCwd(leaving?.cwd || workspaceRoot, next);
+    const dirty = dirtyDraftMap();
+    if (cross && Object.keys(dirty).length) {
+      setNotice("未保存的修改已丢掉");
+      draftsByChatRef.current[leavingId] = {};
+    } else {
+      draftsByChatRef.current[leavingId] = dirty;
+    }
+    setPreviewDrafts({});
     stashView();
     const chat = {
       id: uid(),
@@ -3155,24 +3290,32 @@ export default function ChatApp() {
     setFilesQuery("");
     setGrepOpen(false);
     setLoopOpen(false);
+    setTerminalOpen(false);
     setPaletteOpen(false);
     setSearchOpen(false);
     if (wideIDERef.current) setSidePane("files");
     setFilesOpen(true);
   }
 
-  function chooseSide(pane: "chats" | "files" | "search" | "git" | "loop") {
+  function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop") {
     if (!wideIDERef.current) {
       if (pane === "chats") setNavOpen(true);
       if (pane === "files" || pane === "git") openFilesBrowser();
       if (pane === "search") {
         setPaletteOpen(false);
         setLoopOpen(false);
+        setTerminalOpen(false);
         setGrepOpen(true);
       }
       if (pane === "loop") {
         setGrepOpen(false);
+        setTerminalOpen(false);
         setLoopOpen(true);
+      }
+      if (pane === "terminal") {
+        setGrepOpen(false);
+        setLoopOpen(false);
+        setTerminalOpen(true);
       }
       return;
     }
@@ -3184,10 +3327,19 @@ export default function ChatApp() {
     setFilesOpen(pane === "files" || pane === "git");
     setGrepOpen(pane === "search");
     setLoopOpen(pane === "loop");
+    setTerminalOpen(pane === "terminal");
     if (pane === "files") setFilesQuery("");
   }
 
   function selectChat(chat: Chat) {
+    if (chat.id !== activeIdRef.current) {
+      const leaving = chatsRef.current.find((item) => item.id === activeIdRef.current);
+      const cross =
+        Boolean(leaving) && !sameCwd(leaving?.cwd || workspaceRoot, chat.cwd || workspaceRoot);
+      if (cross && !confirmDiscardDirty()) return;
+      draftsByChatRef.current[activeIdRef.current] = cross ? {} : dirtyDraftMap();
+      setPreviewDrafts({ ...(draftsByChatRef.current[chat.id] || {}) });
+    }
     stashView();
     setNavOpen(false);
     setActiveId(chat.id);
@@ -3376,6 +3528,12 @@ export default function ChatApp() {
     resetTenantSession();
     pendingHelloRef.current = null;
     wsRef.current?.close();
+  }
+
+  function openAdminStats() {
+    if (!isAdmin) return;
+    setAdminOpen(true);
+    send({ type: "admin_stats" });
   }
 
   function rememberLastModel(value: string) {
@@ -3729,9 +3887,44 @@ export default function ChatApp() {
   }
 
   function saveFile(path: string, content: string) {
+    if (content.length > PREVIEW_SAVE_LIMIT) {
+      setNotice("内容超过 500KB，不在这里保存");
+      return;
+    }
+    const chatId = activeIdRef.current;
+    if (!chatsRef.current.some((chat) => chat.id === chatId)) {
+      setNotice("这个会话已经不在了，没法保存");
+      return;
+    }
     const rel = relToCwd(path, cwdRef.current) || path;
     saveSnapshotRef.current[rel] = content;
-    send({ type: "write_file", path, content, chatId: activeIdRef.current });
+    send({ type: "write_file", path, content, chatId });
+  }
+
+  function dirtyDraftMap() {
+    const out: Record<string, string> = {};
+    for (const tab of previewTabsRef.current) {
+      const draft = previewDraftsRef.current[tab.path];
+      if (draft != null && draft !== (tab.content ?? "")) out[tab.path] = draft;
+    }
+    return out;
+  }
+
+  function confirmDiscardDirty() {
+    const dirty = previewTabsRef.current.filter((tab) => previewDraftDirty(tab.path));
+    if (!dirty.length) return true;
+    const ok =
+      dirty.length === 1
+        ? window.confirm("放弃未保存的修改？这个文件里还有没保存的修改。")
+        : window.confirm(`放弃未保存的修改？有 ${dirty.length} 个文件还没保存。`);
+    if (!ok) return false;
+    const drop = new Set(dirty.map((tab) => tab.path));
+    setPreviewDrafts((prev) => {
+      const next = { ...prev };
+      for (const path of drop) delete next[path];
+      return next;
+    });
+    return true;
   }
 
   function dropPreviewDraft(path: string) {
@@ -3846,6 +4039,19 @@ export default function ChatApp() {
   }
 
   function deleteChat(id: string) {
+    const stored = draftsByChatRef.current[id] || {};
+    const activeDirty = id === activeIdRef.current && Object.keys(dirtyDraftMap()).length > 0;
+    const storedDirty = id !== activeIdRef.current && Object.keys(stored).length > 0;
+    if (activeDirty && !confirmDiscardDirty()) return;
+    if (storedDirty) {
+      const count = Object.keys(stored).length;
+      const ok =
+        count === 1
+          ? window.confirm("放弃未保存的修改？这个文件里还有没保存的修改。")
+          : window.confirm(`放弃未保存的修改？有 ${count} 个文件还没保存。`);
+      if (!ok) return;
+    }
+    delete draftsByChatRef.current[id];
     if (renameId === id) setRenameId(null);
     deletedIdsRef.current = rememberDeleted(deletedIdsRef.current, id);
     const doomed = chatsRef.current.find((chat) => chat.id === id);
@@ -3878,6 +4084,7 @@ export default function ChatApp() {
       setImages([]);
       setCheckpoints([]);
       setPreviewTabs([]);
+      setPreviewDrafts({});
       setPreviewPath("");
       setPreviewMax(false);
       send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
@@ -3912,6 +4119,7 @@ export default function ChatApp() {
       }
     }
     setPreviewTabs([]);
+    setPreviewDrafts({ ...(draftsByChatRef.current[chat.id] || {}) });
     setPreviewPath("");
     setPreviewMax(false);
     setThreadFindOpen(false);
@@ -4030,6 +4238,8 @@ export default function ChatApp() {
   threadFindOpenRef.current = threadFindOpen;
   grepOpenRef.current = grepOpen;
   loopOpenRef.current = loopOpen;
+  terminalOpenRef.current = terminalOpen;
+  adminOpenRef.current = adminOpen;
   filesOpenRef.current = filesOpen;
   grepQRef.current = grepQ;
   const searchHits = searchQ.trim()
@@ -4058,7 +4268,12 @@ export default function ChatApp() {
     return out.slice(0, 80);
   })();
   const paletteHi = Math.min(paletteIndex, Math.max(0, paletteHits.length - 1));
-  const grepHi = Math.min(grepIndex, Math.max(0, grepHits.length - 1));
+  const grepNameHits = (() => {
+    const q = grepQ.trim().toLowerCase();
+    if (!q) return [] as string[];
+    return treePaths.filter((path) => path.toLowerCase().includes(q)).slice(0, 40);
+  })();
+  const grepHi = Math.min(grepIndex, Math.max(0, grepNameHits.length + grepHits.length - 1));
   const threadFindHits =
     threadFindOpen && threadFindQ.trim() && active
       ? active.turns.filter((turn) => {
@@ -4078,6 +4293,9 @@ export default function ChatApp() {
     if (!id || !threadRef.current) return;
     threadRef.current.querySelector(`[data-turn="${id}"]`)?.scrollIntoView({ block: "center" });
   }, [threadFindOpen, threadFindHi, threadFindQ, activeId]);
+
+  const loopRow = loops[activeId];
+  const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
 
   if (!unlocked && !demoCanvas) {
     return (
@@ -4104,20 +4322,102 @@ export default function ChatApp() {
             ["files", "文件"],
             ["search", "搜索"],
             ["git", "Git"],
+            ["terminal", "终端"],
             ["loop", "Loop"],
           ] as const
         ).map(([pane, label]) => (
           <button
             key={pane}
             type="button"
-            className={sidePane === pane ? "on" : ""}
+            className={`${sidePane === pane ? "on" : ""}${pane === "loop" && loopLive ? " live" : ""}`}
             aria-pressed={sidePane === pane}
+            aria-label={label}
             onClick={() => chooseSide(pane)}
           >
-            {label}
+            <IconRail name={pane} />
+            {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
           </button>
         ))}
+        {isAdmin ? (
+          <button type="button" className="activity-admin" aria-label="查看使用统计" onClick={openAdminStats}>
+            <IconRail name="stats" />
+          </button>
+        ) : null}
       </nav>
+      {adminOpen ? (
+        <div className="search-overlay open" onClick={() => setAdminOpen(false)}>
+          <div className="search-box admin-box" onClick={(event) => event.stopPropagation()}>
+            <div className="admin-head">
+              <div className="loop-title">使用统计</div>
+              <div className="admin-head-actions">
+                <button type="button" className="logout-btn" onClick={openAdminStats}>
+                  刷新
+                </button>
+                <button type="button" className="logout-btn" onClick={() => setAdminOpen(false)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            {adminStats.length ? (
+              <div className="admin-body">
+                <div className="admin-section">
+                  <div className="admin-section-label">
+                    API Key 估算消耗{adminStatsAt ? ` · ${fmtClock(adminStatsAt)} 更新` : ""}
+                  </div>
+                  <div className="admin-summary">
+                    <div>
+                      <strong>{fmtTokens(adminStats.reduce((sum, row) => sum + row.estTokens, 0))}</strong>
+                      <span>估算 token</span>
+                    </div>
+                    <div>
+                      <strong>{fmtCount(adminStats.reduce((sum, row) => sum + row.turns, 0))}</strong>
+                      <span>消息</span>
+                    </div>
+                    <div>
+                      <strong>{fmtCount(adminStats.reduce((sum, row) => sum + row.runs, 0))}</strong>
+                      <span>运行</span>
+                    </div>
+                    <div>
+                      <strong>{fmtDuration(adminStats.reduce((sum, row) => sum + row.runMs, 0))}</strong>
+                      <span>运行时长</span>
+                    </div>
+                  </div>
+                </div>
+                {adminStats.map((row) => (
+                  <div key={row.id} className="admin-section">
+                    <div className="admin-section-label">
+                      <span className={`admin-online${row.online > 0 ? " on" : ""}`} />
+                      {row.name}
+                      {row.admin ? <span className="admin-badge">管理员</span> : null}
+                      {row.online > 0 ? <span className="admin-online-count">{row.online} 在线</span> : null}
+                    </div>
+                    <div className="admin-row"><span>会话</span><span>{row.chats}</span></div>
+                    <div className="admin-row">
+                      <span>消息 / 运行 / 工具</span>
+                      <span>{fmtCount(row.turns)} / {fmtCount(row.runs)} / {fmtCount(row.toolCalls)}</span>
+                    </div>
+                    <div className="admin-row"><span>运行时长</span><span>{fmtDuration(row.runMs)}</span></div>
+                    <div className="admin-row">
+                      <span>输入 / 输出</span>
+                      <span>{fmtCount(row.inChars)} / {fmtCount(row.outChars)} 字符</span>
+                    </div>
+                    <div className="admin-row"><span>估算 token</span><span>{fmtTokens(row.estTokens)}</span></div>
+                    <div className="admin-row"><span>最后活跃</span><span>{fmtRelative(row.lastActiveAt)}</span></div>
+                  </div>
+                ))}
+                <p className="admin-note">
+                  token 为按字符估算（英文 ≈4 字符/token；中文 1 字符 ≈1-2 token，中文场景实际消耗约为估算值的 2-4 倍），反映各账号的相对消耗；Cursor 官方未提供 API key 账单查询。
+                </p>
+              </div>
+            ) : (
+              <div className="terminal-empty">
+                <div>暂无数据</div>
+                <div className="loop-meta">连上服务器后自动拉取。</div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       {searchShown ? (
         <div className={`search-overlay${searchOpen ? " open" : ""}`} onClick={() => setSearchOpen(false)}>
           <div
@@ -4316,64 +4616,121 @@ export default function ChatApp() {
           </form>
         </div>
       ) : null}
+      {terminalShown ? (
+        <div
+          className={`search-overlay${terminalOpen ? " open" : ""}`}
+          onClick={() => {
+            if (wideIDE && sidePane === "terminal") return;
+            setTerminalOpen(false);
+          }}
+        >
+          <div className="search-box terminal-box" onClick={(event) => event.stopPropagation()}>
+            <div className="loop-title">终端 · 当前对话</div>
+            {shellEntries.length ? (
+              <div className="terminal-log" ref={terminalLogRef}>
+                {shellEntries.map((row) => (
+                  <div key={row.id} className="terminal-row">
+                    <div className="terminal-cmd">$ {row.command}</div>
+                    <pre className={`terminal-out${row.output ? "" : " muted"}`}>
+                      {row.output || (row.running ? "正在跑…" : "没有输出")}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="terminal-empty">
+                <div>这个会话还没有 shell 输出</div>
+                <div className="loop-meta">让 Agent 跑一条命令，输出会出现在这里。</div>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
       {grepShown ? (
         <div className={`search-overlay${grepOpen ? " open" : ""}`} onClick={() => { if (wideIDE && sidePane === "search") return; setGrepOpen(false); }}>
           <div className="search-box grep-box" onClick={(event) => event.stopPropagation()}>
             <input
               autoFocus={grepOpen}
               className="search-input"
-              placeholder="在工作区里搜文本"
+              placeholder="搜文件名或内容"
               value={grepQ}
               onChange={(event) => {
                 setGrepQ(event.target.value);
                 setGrepIndex(0);
               }}
               onKeyDown={(event) => {
+                const total = grepNameHits.length + grepHits.length;
                 if (event.key === "Escape") setGrepOpen(false);
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setGrepIndex((index) => Math.min(index + 1, Math.max(0, grepHits.length - 1)));
+                  setGrepIndex((index) => Math.min(index + 1, Math.max(0, total - 1)));
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
                   setGrepIndex((index) => Math.max(index - 1, 0));
                 }
-                if (event.key === "Enter" && grepHits[grepHi]) {
+                if (event.key === "Enter" && total) {
                   event.preventDefault();
-                  const hit = grepHits[grepHi];
-                  openFile(hit.path, hit.line, false);
+                  if (grepHi < grepNameHits.length) {
+                    openFile(grepNameHits[grepHi]);
+                  } else {
+                    const hit = grepHits[grepHi - grepNameHits.length];
+                    if (hit) openFile(hit.path, hit.line, false);
+                  }
                   if (!wideIDERef.current) setGrepOpen(false);
                 }
               }}
             />
             <div className="search-list">
               {grepQ.trim() ? (
-                grepWait ? (
-                  <div className="search-item">正在搜索…</div>
-                ) : grepHits.length ? (
-                  grepHits.map((hit, index) => (
-                    <button
-                      key={`${hit.path}:${hit.line}:${index}`}
-                      type="button"
-                      className={`search-item file-hit${index === grepHi ? " active" : ""}`}
-                      onClick={() => {
-                        openFile(hit.path, hit.line, false);
-                        if (!wideIDERef.current) setGrepOpen(false);
-                      }}
-                    >
-                      <span className="search-item-name">
-                        {hit.path.split("/").pop()}
-                        <span className="search-item-line">:{hit.line}</span>
-                      </span>
-                      <span className="search-item-snip">{hit.text}</span>
-                      <span className="search-item-dir">{hit.path.includes("/") ? hit.path.slice(0, hit.path.lastIndexOf("/")) : "."}</span>
-                    </button>
-                  ))
+                !grepNameHits.length && !grepHits.length ? (
+                  grepWait ? (
+                    <div className="search-item">正在搜索…</div>
+                  ) : (
+                    <div className="search-item">文件名和内容里都没有「{grepQ.trim()}」</div>
+                  )
                 ) : (
-                  <div className="search-item">没有匹配的内容</div>
+                  <>
+                    {grepNameHits.map((path, index) => (
+                      <button
+                        key={`name:${path}`}
+                        type="button"
+                        className={`search-item file-hit${index === grepHi ? " active" : ""}`}
+                        onClick={() => {
+                          openFile(path);
+                          if (!wideIDERef.current) setGrepOpen(false);
+                        }}
+                      >
+                        <span className="search-item-name">{path.split("/").pop()}</span>
+                        <span className="search-item-dir">文件名</span>
+                      </button>
+                    ))}
+                    {grepHits.map((hit, index) => {
+                      const at = grepNameHits.length + index;
+                      return (
+                        <button
+                          key={`${hit.path}:${hit.line}:${index}`}
+                          type="button"
+                          className={`search-item file-hit${at === grepHi ? " active" : ""}`}
+                          onClick={() => {
+                            openFile(hit.path, hit.line, false);
+                            if (!wideIDERef.current) setGrepOpen(false);
+                          }}
+                        >
+                          <span className="search-item-name">
+                            {hit.path.split("/").pop()}
+                            <span className="search-item-line">:{hit.line}</span>
+                          </span>
+                          <span className="search-item-snip">{hit.text}</span>
+                          <span className="search-item-dir">{hit.path.includes("/") ? hit.path.slice(0, hit.path.lastIndexOf("/")) : "."}</span>
+                        </button>
+                      );
+                    })}
+                    {grepWait ? <div className="search-item">正在搜索内容…</div> : null}
+                  </>
                 )
               ) : (
-                <div className="search-item">输入关键字，在文件内容里找 · 最多 100 条</div>
+                <div className="search-item">搜文件名或内容</div>
               )}
             </div>
           </div>
@@ -4481,6 +4838,17 @@ export default function ChatApp() {
                     setFilesQuery("");
                   }
                 }}
+                onCopyPath={(path) => {
+                  const clip = navigator.clipboard;
+                  if (!clip?.writeText) {
+                    setNotice("复制失败");
+                    return;
+                  }
+                  void clip.writeText(path).then(
+                    () => setNotice("已复制路径"),
+                    () => setNotice("复制失败"),
+                  );
+                }}
                 onCreate={handleTreeCreate}
                 onRename={handleTreeRename}
                 onDelete={handleTreeDelete}
@@ -4522,39 +4890,45 @@ export default function ChatApp() {
           >
             + 新对话
           </button>
-          <button
-            className={`new-chat grep-chat${loopOpen ? " open" : ""}${loops[activeId] && loops[activeId].status !== "stopped" && loops[activeId].status !== "idle" ? " on" : ""}`}
-            type="button"
-            title="Loop"
-            onClick={() => {
-              setSearchOpen(false);
-              setPaletteOpen(false);
-              setThreadFindOpen(false);
-              setGrepOpen(false);
-              if (wideIDE) setSidePane("loop");
-              setLoopOpen(true);
-            }}
-          >
-            ↺
-          </button>
-          <button
-            className="new-chat grep-chat"
-            type="button"
-            title="搜代码 ⌘⇧F"
-            onClick={() => {
-              setSearchOpen(false);
-              setPaletteOpen(false);
-              setThreadFindOpen(false);
-              setLoopOpen(false);
-              if (wideIDE) setSidePane("search");
-              setGrepOpen(true);
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <circle cx="7" cy="7" r="4.25" stroke="currentColor" strokeWidth="1.4" />
-              <path d="M10.4 10.4 14 14" stroke="currentColor" strokeWidth="1.4" />
-            </svg>
-          </button>
+          <div className="side-tools" role="toolbar" aria-label="工具">
+            {(
+              [
+                ["files", "文件"],
+                ["search", "搜索"],
+                ["git", "Git"],
+                ["terminal", "终端"],
+                ["loop", "Loop"],
+              ] as const
+            ).map(([pane, label]) => {
+              const on = wideIDE
+                ? sidePane === pane
+                : pane === "search"
+                  ? grepOpen
+                  : pane === "terminal"
+                    ? terminalOpen
+                    : pane === "loop"
+                      ? loopOpen
+                      : pane === "git"
+                        ? false
+                        : filesOpen;
+              return (
+                <button
+                  key={pane}
+                  type="button"
+                  className={`side-tool${on ? " on" : ""}`}
+                  aria-label={label}
+                  aria-pressed={on}
+                  onClick={() => chooseSide(pane)}
+                >
+                  <span className="side-tool-icon">
+                    <IconRail name={pane} size={14} />
+                    {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
+                  </span>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
           </div>
           {workspaceMenuOpen ? (
             <div className="workspace-menu">
@@ -4711,6 +5085,11 @@ export default function ChatApp() {
           </span>
         </button>
         <div className="side-foot">
+          {isAdmin ? (
+            <button type="button" className="side-foot-btn" onClick={openAdminStats}>
+              查看使用统计
+            </button>
+          ) : null}
           <button
             type="button"
             className="side-foot-btn"

@@ -17,6 +17,8 @@ import {
   IconQuote,
 } from "./chromeIcons";
 
+export const PREVIEW_SAVE_LIMIT = 500_000;
+
 export type PreviewTab = {
   path: string;
   content?: string;
@@ -226,6 +228,13 @@ export default function FilePreview({
       );
   const mediaKind = kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio";
   const showSource = !live && !(mediaKind && kind !== "svg");
+  const savedText = active.content ?? "";
+  const draftDirty = editing && editDraft !== savedText;
+  const oversized =
+    !active.diff &&
+    (kind === "text" || kind === "markdown") &&
+    savedText.length > PREVIEW_SAVE_LIMIT &&
+    !draftDirty;
   const downloadHref = previewSrc(active.url);
   const bodyClass = [
     "file-preview-body",
@@ -316,26 +325,32 @@ export default function FilePreview({
           </button>
         ) : null}
         {!live && onKeep && active.diff ? (
-          <button type="button" className="pill" title="留下这些改动" onClick={() => onKeep(active.path)}>
+          <button type="button" className="pill pill-text" title="留下这些改动" onClick={() => onKeep(active.path)}>
             保留
           </button>
         ) : null}
         {!live && onRevert && canRevert ? (
           <button
             type="button"
-            className="pill"
+            className="pill pill-text"
             title="把这个文件还原到 HEAD / 删掉未跟踪文件"
             onClick={() => onRevert(active.path)}
           >
             还原
           </button>
         ) : null}
-        {!live && onSave && !active.diff && active.content != null ? (
+        {oversized ? (
+          <span className="preview-save-state dirty">超过 500KB，这里只能看，不能保存</span>
+        ) : null}
+        {!live && onSave && !active.diff && active.content != null && !oversized ? (
           editing ? (
             <>
+              <span className={`preview-save-state${draftDirty ? " dirty" : ""}`}>
+                {draftDirty ? "未保存" : "已保存"}
+              </span>
               <button
                 type="button"
-                className="pill on"
+                className="pill pill-text on"
                 disabled={editDraft === (active.content ?? "")}
                 onClick={() => onSave?.(active.path, editDraft)}
               >
@@ -343,7 +358,7 @@ export default function FilePreview({
               </button>
               <button
                 type="button"
-                className="pill"
+                className="pill pill-text"
                 onClick={() => {
                   if (
                     editDraft !== (active.content ?? "") &&
@@ -361,7 +376,7 @@ export default function FilePreview({
           ) : (
             <button
               type="button"
-              className="pill"
+              className="pill pill-text"
               onClick={() => {
                 const next = active.content || "";
                 if (onDraft) onDraft(active.path, next);
@@ -410,7 +425,7 @@ export default function FilePreview({
           </span>
         ) : null}
         {downloadHref ? (
-          <a className="pill" href={downloadHref} download={active.path.split("/").pop()}>
+          <a className="pill pill-text" href={downloadHref} download={active.path.split("/").pop()}>
             下载
           </a>
         ) : null}

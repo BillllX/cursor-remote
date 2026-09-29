@@ -107,6 +107,34 @@ export function IconClose({ size = 14 }: { size?: number }) {
   );
 }
 
+export function IconRail({
+  name,
+  size = 16,
+}: {
+  name: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats";
+  size?: number;
+}) {
+  const d =
+    name === "chats"
+      ? "M3 3.5h10v9H3zM6.2 3.5v9"
+      : name === "files"
+        ? "M2.8 5.2h3.6L7.6 3.6H13.2v8.8H2.8z"
+        : name === "search"
+          ? "M7.2 11.2a4 4 0 1 1 0-8 4 4 0 0 1 0 8ZM10.4 10.4 13.2 13.2"
+          : name === "git"
+            ? "M5 3.6v8.8M5 6.2c2.2 0 3.6-1.2 6-1.2v3.2c-2.4 0-3.8 1.2-6 1.2M5 4.2a1.1 1.1 0 1 0 .01 0M11 8.8a1.1 1.1 0 1 0 .01 0"
+            : name === "terminal"
+              ? "M3.4 4.8 7 8l-3.6 3.2M8.4 12.2h4.2"
+              : name === "loop"
+                ? "M11.4 5.2A4.2 4.2 0 0 0 4.6 6.4M4.6 10.8A4.2 4.2 0 0 0 11.4 9.6M11.4 3.4v2.2H9.2M4.6 12.6V10.4H6.8"
+                : "M3.4 12.4V8.6M8 12.4V5.2M12.6 12.4V3.6";
+  return (
+    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d={d} stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function IconCollapse({ size = 14 }: { size?: number }) {
   return (
     <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">

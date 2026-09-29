@@ -72,6 +72,7 @@ export type ClientMessage =
   | { type: "load_chats"; ids: string[] }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
+  | { type: "admin_stats" }
   | { type: "ping" }
   | {
       type: "loop_start";
@@ -158,6 +159,8 @@ export type ServerMessage =
       workspaceRoot?: string;
       tenantId?: string;
       tenantName?: string;
+      /** 当前租户是否管理员。只有管理员看得到使用统计。 */
+      admin?: boolean;
       policy?: PolicyId;
       loops?: LoopState[];
     }
@@ -270,6 +273,24 @@ export type ServerMessage =
       silent?: boolean;
     }
   | { type: "chat_title"; chatId: string; title: string }
+  | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[] }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
   | { type: "pong" };
+
+export type AdminTenantStats = {
+  id: string;
+  name: string;
+  admin: boolean;
+  online: number;
+  chats: number;
+  turns: number;
+  runs: number;
+  toolCalls: number;
+  runMs: number;
+  inChars: number;
+  outChars: number;
+  estTokens: number;
+  firstSeenAt: number;
+  lastActiveAt: number;
+};
