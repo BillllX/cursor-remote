@@ -393,13 +393,13 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   top: auto;
   z-index: 20;
   display: grid;
-  gap: 2px;
-  margin-top: 4px;
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-sidebar);
-  box-shadow: var(--shadow);
+  gap: 0;
+  margin-top: 0;
+  padding: 6px 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .workspace-menu-hint {
@@ -420,13 +420,26 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   background: transparent;
   color: var(--text);
   text-align: left;
-  border-radius: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
+  border-radius: 0;
+  padding: 0 16px;
+  min-height: 48px;
+  font-size: 16px;
+  font-weight: 400;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
+}
+
+.workspace-menu-item.on {
+  font-weight: 600;
+}
+
+.workspace-menu-folder {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--dim);
 }
 
 .workspace-menu-name {
@@ -438,8 +451,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .workspace-menu-check {
-  color: var(--muted);
+  color: var(--dim);
   flex: none;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .workspace-menu-item:hover,
@@ -488,12 +503,80 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .chat-group-label {
-  font-size: 11px;
-  color: var(--dim);
-  padding: 6px 12px 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 12px;
+  overflow: hidden;
+}
+
+.chat-group-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-group-label {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.chat-group-label.locked {
+  cursor: default;
+}
+
+.chat-group-chevron {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  color: var(--dim);
+  background: currentColor;
+  clip-path: polygon(30% 12%, 78% 50%, 30% 88%, 30% 12%);
+  transform: none;
+  transition: transform 160ms ease;
+}
+
+.chat-group-label.open .chat-group-chevron {
+  transform: rotate(90deg);
+}
+
+.chat-group-label.locked .chat-group-chevron {
+  opacity: 0.45;
+}
+
+.chat-group-path,
+.workspace-menu-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.chat-group-live {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.chat-group-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--dim);
 }
 
 .chats {
@@ -2166,25 +2249,21 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .file-tree {
   overflow: auto;
   max-height: 22vh;
-  font-size: 12px;
-}
-
-.tree-truncated {
-  padding: 6px 8px 8px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
+  padding: 6px 0;
+  font-size: 13px;
 }
 
 .tree-dir > summary {
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
-  padding: 3px 8px;
+  min-height: 32px;
+  padding: 5px 12px 5px 0;
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 8px;
+  gap: 6px;
   list-style: none;
+  font-weight: 500;
 }
 
 .tree-dir > summary::-webkit-details-marker,
@@ -2196,15 +2275,17 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .tree-file {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
   width: 100%;
+  min-height: 32px;
   text-align: left;
   border: 0;
   background: transparent;
   color: var(--muted);
-  padding: 3px 8px;
-  font-size: 12px;
+  padding: 5px 12px 5px 0;
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .tree-file-name {
@@ -2216,74 +2297,54 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .tree-glyph {
   flex: none;
-  width: 16px;
-  height: 16px;
-  margin-top: 1px;
+  width: 18px;
+  height: 18px;
+  margin-top: 0;
+  color: var(--muted);
 }
 
 .tree-glyph.dir {
   color: #c4a36a;
 }
 
-.tree-glyph.ts {
-  color: #3178c6;
+.tree-chevron {
+  margin-left: auto;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  color: var(--dim);
+  transition: transform 160ms ease;
 }
 
-.tree-glyph.js {
-  color: #b45309;
+.tree-dir[open] > summary .tree-chevron {
+  transform: rotate(90deg);
 }
 
+.tree-glyph.ts,
+.tree-glyph.js,
 .tree-glyph.json,
 .tree-glyph.config,
-.tree-glyph.file {
-  color: #737373;
-}
-
-.tree-glyph.md {
-  color: #525252;
-}
-
-.tree-glyph.css {
-  color: #7c3aed;
-}
-
-.tree-glyph.html {
-  color: #ea580c;
-}
-
-.tree-glyph.image {
-  color: #16a34a;
-}
-
-.tree-glyph.pdf {
-  color: #dc2626;
-}
-
-.tree-glyph.py {
-  color: #2563eb;
-}
-
+.tree-glyph.file,
+.tree-glyph.md,
+.tree-glyph.css,
+.tree-glyph.html,
+.tree-glyph.image,
+.tree-glyph.pdf,
+.tree-glyph.py,
 .tree-glyph.code,
 .tree-glyph.sh,
-.tree-glyph.canvas {
-  color: var(--text);
-}
-
-.tree-glyph.audio {
-  color: #0f766e;
-}
-
+.tree-glyph.canvas,
+.tree-glyph.audio,
 .tree-glyph.video {
-  color: #9a3412;
+  color: var(--muted);
 }
 
 .tree-dir > summary .tree-file-name {
   flex: 1;
 }
 
-.tree-file .git-mark,
-.tree-dir > summary .git-mark {
-  margin-left: auto;
+.file-tree .git-mark {
+  display: none;
 }
 
 .git-mark {
@@ -2317,19 +2378,18 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .tree-file.on,
-.tree-dir.on > summary,
+.tree-dir.on > summary {
+  background: var(--bg-user);
+}
+
 .tree-file:hover,
 .tree-dir > summary:hover {
-  color: var(--text);
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-.file-tree:focus {
-  outline: 1px solid var(--border);
-}
-
+.file-tree:focus,
 .file-tree:focus-visible {
-  outline: 1px solid var(--ok);
+  outline: none;
 }
 
 .tree-actions {
@@ -2354,15 +2414,17 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .tree-rename {
-  width: calc(100% - 8px);
+  width: 100%;
   min-width: 0;
-  border: 1px solid var(--ok);
-  background: var(--bg-user);
+  height: 22px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-size: 13px;
+  padding: 0 2px;
+  border-radius: 0;
 }
 
 .tree-menu {
@@ -2408,8 +2470,16 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .tree-empty {
   color: var(--dim);
-  font-size: 11px;
-  padding: 4px 2px;
+  font-size: 13px;
+  text-align: center;
+  padding: 40px 14px 10px;
+}
+
+.tree-truncated {
+  padding: 10px 14px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .file-preview {
@@ -3306,16 +3376,16 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .file-tree-browser .tree-file,
 .file-tree-browser .tree-dir > summary {
   align-items: center;
-  min-height: 36px;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  border-radius: 8px;
+  min-height: 32px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  border-radius: 0;
 }
 
 .file-tree-browser .tree-glyph {
   width: 18px;
   height: 18px;
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .tree-file-copy {
@@ -3327,18 +3397,14 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .file-tree-browser .tree-file-name,
 .file-tree-browser .tree-dir > summary .tree-file-name {
-  white-space: normal;
-  overflow: visible;
-  text-overflow: unset;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
 }
 
 .tree-file-path {
-  color: var(--dim);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  display: none;
 }
 
 .search-input {
@@ -3984,9 +4050,9 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   .file-tree-browser .tree-file,
   .file-tree-browser .tree-dir > summary,
   .files-browser-changes .tree-file {
-    min-height: 48px;
-    padding-top: 12px;
-    padding-bottom: 12px;
+    min-height: 32px;
+    padding-top: 5px;
+    padding-bottom: 5px;
   }
 
   .files-browser-body .tree-action,

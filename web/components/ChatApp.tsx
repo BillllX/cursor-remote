@@ -590,6 +590,14 @@ function preferChatCwd(current?: string, incoming?: string) {
   return incoming;
 }
 
+function FolderMark() {
+  return (
+    <svg className="workspace-menu-folder" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M2 3.8h4.2l1.2 1.4H14v7.2c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V3.8Z" fill="currentColor" />
+    </svg>
+  );
+}
+
 function workspaceLabel(path: string, root: string) {
   const abs = normPath(path);
   const base = normPath(root);
@@ -1180,6 +1188,7 @@ export default function ChatApp() {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceCreating, setWorkspaceCreating] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [token, setToken] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -1365,6 +1374,23 @@ export default function ChatApp() {
       (group) => group.chats.length || (root && !sameCwd(group.path, root)),
     );
   }, [sidebarChats, workspaces, workspaceRoot, cwd]);
+
+  const duplicateGroupNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const group of workspaceGroups) counts.set(group.name, (counts.get(group.name) || 0) + 1);
+    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [workspaceGroups]);
+
+  const menuWorkspaces = useMemo(
+    () => [...recentWorkspaces, ...catalogWorkspaces],
+    [recentWorkspaces, catalogWorkspaces],
+  );
+
+  const duplicateMenuNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of menuWorkspaces) counts.set(item.name, (counts.get(item.name) || 0) + 1);
+    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [menuWorkspaces]);
 
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
@@ -5052,46 +5078,30 @@ export default function ChatApp() {
           </div>
           {workspaceMenuOpen ? (
             <div className="workspace-menu">
-              <div className="workspace-menu-hint">先选工作区，这个对话只能在里面写文件</div>
-              {recentWorkspaces.length ? (
-                <>
-                  <div className="workspace-menu-label">最近</div>
-                  {recentWorkspaces.map((item) => (
-                    <button
-                      key={`recent-${item.path}`}
-                      type="button"
-                      className={`workspace-menu-item${sameCwd(item.path, cwd) ? " on" : ""}`}
-                      onClick={() => startChatIn(item.path)}
-                    >
-                      <span className="workspace-menu-name">{item.name}</span>
-                      {sameCwd(item.path, cwd) ? <span className="workspace-menu-check">✓</span> : null}
-                    </button>
-                  ))}
-                </>
-              ) : null}
-              {catalogWorkspaces.length ? (
-                <>
-                  <div className="workspace-menu-label">目录</div>
-                  {catalogWorkspaces.map((item) => (
-                    <button
-                      key={item.path}
-                      type="button"
-                      className="workspace-menu-item"
-                      onClick={() => startChatIn(item.path)}
-                    >
-                      <span className="workspace-menu-name">{item.name}</span>
-                    </button>
-                  ))}
-                </>
-              ) : null}
+              {menuWorkspaces.map((item) => (
+                <button
+                  key={item.path}
+                  type="button"
+                  className={`workspace-menu-item${sameCwd(item.path, cwd) ? " on" : ""}`}
+                  onClick={() => startChatIn(item.path)}
+                >
+                  <FolderMark />
+                  <span className="workspace-menu-name">{item.name}</span>
+                  {duplicateMenuNames.has(item.name) ? (
+                    <span className="workspace-menu-path">{item.path}</span>
+                  ) : null}
+                  {sameCwd(item.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
+                </button>
+              ))}
               {!recentWorkspaces.length && !catalogWorkspaces.length && workspaceRoot ? (
                 <button
                   type="button"
                   className="workspace-menu-item on"
                   onClick={() => startChatIn(workspaceRoot)}
                 >
+                  <FolderMark />
                   <span className="workspace-menu-name">{workspaceLabel(workspaceRoot, workspaceRoot)}</span>
-                  <span className="workspace-menu-check">✓</span>
+                  <span className="workspace-menu-check">正在用</span>
                 </button>
               ) : null}
               {workspaceCreating ? (
@@ -5126,12 +5136,45 @@ export default function ChatApp() {
           ) : null}
         </div>
         <div className="chats">
-          {workspaceGroups.map((group) => (
+          {workspaceGroups.map((group) => {
+            const key = normPath(group.path);
+            const holdsActive = group.chats.some((chat) => chat.id === activeId);
+            const open = holdsActive || expandedGroups.has(key);
+            return (
             <div key={group.path} className="chat-group">
-              <div className="chat-group-label" title={group.path}>
-                {group.name}
-              </div>
-              {group.chats.map((chat) => (
+              <button
+                type="button"
+                className={`chat-group-label${open ? " open" : ""}${holdsActive ? " locked" : ""}`}
+                title={group.path}
+                onClick={() => {
+                  if (!group.chats.length) {
+                    startChatIn(group.path);
+                    return;
+                  }
+                  if (holdsActive) return;
+                  setExpandedGroups((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  });
+                }}
+              >
+                {group.chats.length ? <span className="chat-group-chevron" aria-hidden="true" /> : null}
+                <span className="chat-group-name">{group.name}</span>
+                {duplicateGroupNames.has(group.name) ? (
+                  <span className="chat-group-path">{group.path}</span>
+                ) : null}
+                {group.chats.some((chat) => chat.turns.some((turn) => turn.running)) ? (
+                  <span className="chat-group-live" />
+                ) : null}
+                {group.chats.length ? (
+                  <span className="chat-group-count">{group.chats.length}</span>
+                ) : (
+                  <span className="chat-group-count">+</span>
+                )}
+              </button>
+              {open ? group.chats.map((chat) => (
             <div
               key={chat.id}
               className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${chat.unread && chat.id !== activeId ? " unread" : ""}`}
@@ -5186,9 +5229,10 @@ export default function ChatApp() {
                 ×
               </button>
             </div>
-              ))}
+              )) : null}
             </div>
-          ))}
+            );
+          })}
         </div>
         <button
           type="button"

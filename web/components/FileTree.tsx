@@ -255,6 +255,18 @@ export function FileGlyph({
   );
 }
 
+function rowPad(depth: number) {
+  return 14 + depth * 16;
+}
+
+function TreeChevron() {
+  return (
+    <svg className="tree-chevron" viewBox="0 0 10 10" aria-hidden="true">
+      <path d="M3.2 1.6 6.8 5 3.2 8.4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function parentPath(path: string) {
   const i = path.lastIndexOf("/");
   return i >= 0 ? path.slice(0, i) : "";
@@ -466,7 +478,7 @@ export default function FileTree({
   if (!tree.length && !creating) {
     return (
       <div className="tree-empty">
-        {query.trim() ? "没有匹配的文件" : "没有文件列表"}
+        <div className="tree-empty-copy">{query.trim() ? "没有匹配的文件" : "没有文件列表"}</div>
         {onCreate && !query.trim() ? (
           <button type="button" className="tree-empty-add" onClick={() => startCreate("", "file")}>
             新建文件
@@ -581,7 +593,7 @@ export default function FileTree({
         </div>
       ) : null}
       {truncated ? (
-        <div className="tree-truncated">文件很多，只列出一部分。用搜索或 @ 打开其余的。</div>
+        <div className="tree-truncated">工作区文件太多，清单被截断了，用搜索缩小范围。</div>
       ) : null}
     </div>
   );
@@ -678,7 +690,7 @@ function Branch({
         <summary
           data-tree-path={node.path}
           tabIndex={-1}
-          style={{ paddingLeft: 8 + depth * 10 }}
+          style={{ paddingLeft: rowPad(depth) }}
           onClick={(event) => {
             event.preventDefault();
             onCursor(node.path);
@@ -701,6 +713,7 @@ function Branch({
             </>
           )}
           {dirDirty(node, status) ? <span className="git-mark dir" title="目录里有改动">•</span> : null}
+          <TreeChevron />
         </summary>
         {opened ? (
           <>
@@ -711,7 +724,7 @@ function Branch({
                 onChange={onNameDraft}
                 onCommit={onCommitCreate}
                 onCancel={onCancelCreate}
-                pad={18 + (depth + 1) * 10}
+                pad={rowPad(depth + 1)}
               />
             ) : null}
             {node.children.map((child) => (
@@ -749,7 +762,7 @@ function Branch({
       <div
         data-tree-path={node.path}
         className={`tree-file${on ? " on" : ""}`}
-        style={{ paddingLeft: 18 + depth * 10 }}
+        style={{ paddingLeft: rowPad(depth) }}
       >
         <NameInput
           kind="rename"
@@ -767,7 +780,7 @@ function Branch({
       data-tree-path={node.path}
       tabIndex={-1}
       className={`tree-file${on ? " on" : ""}`}
-      style={{ paddingLeft: 18 + depth * 10 }}
+      style={{ paddingLeft: rowPad(depth) }}
       onClick={() => {
         onCursor(node.path);
         onOpen ? onOpen(node.path) : onPick(node.path);
