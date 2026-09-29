@@ -62,6 +62,18 @@ import {
   usageSnapshot,
 } from "./usage.ts";
 import {
+  applyStreamEvent,
+  clipSnapshot,
+  diskSnapshot,
+  isStreamEvent,
+  markFromTranscript,
+  mergeUploadedTurns,
+  readRunMark,
+  snapshotMessage,
+  upsertTranscriptTurn,
+  type RunTranscript,
+} from "./runlog.ts";
+import {
   externalModelIds,
   externalRoute,
   streamChatCompletions,
@@ -157,6 +169,8 @@ type PendingPrompt = {
   dialect: boolean;
   /** P11：第三方模型的会话历史（客户端权威，随 prompt 上行） */
   history?: ChatHistoryItem[];
+  /** 客户端回合 id。排队重放时带回，避免和另一轮缓冲混在一起 */
+  turnId?: string;
 };
 
 type RunStats = {
@@ -207,6 +221,9 @@ type Slot = {
   approvalCallId: string | null;
   runStats: RunStats;
   dialect: boolean;
+  /** 这一轮还没被客户端确认的正文。断线后靠它补快照 */
+  transcript?: RunTranscript;
+  runFlush?: ReturnType<typeof setTimeout>;
 };
 
 type Conn = {
@@ -455,19 +472,175 @@ function reply(ws: WebSocket, message: ServerMessage) {
 
 function send(ws: WebSocket, message: ServerMessage) {
   const chatId = "chatId" in message && typeof message.chatId === "string" ? message.chatId : "";
-  const conn = conns.get(ws);
-  const owner = chatId && conn ? conn.slots.get(chatId)?.owner : null;
-  const sock =
-    owner && owner.readyState === WebSocket.OPEN
-      ? owner
-      : ws.readyState === WebSocket.OPEN
-        ? ws
-        : null;
+  const slot = chatId ? slotByChat(chatId) : undefined;
+  if (slot?.transcript && isStreamEvent(message.type)) applyStreamEvent(slot.transcript, message);
   const capturing = chatId ? capturingSlot(chatId) : undefined;
   if (message.type === "text-delta") capturing?.captureText?.(message.text);
   if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
   if (message.type === "done") capturing?.captureDone?.(message.status);
+  // 流式事件跟当前 owner。应答仍回发起连接，避免翻页或写文件被另一台设备抢走。
+  const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
+  const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
   if (sock) sock.send(JSON.stringify(message));
+}
+
+function slotByChat(chatId: string): Slot | undefined {
+  let found: Slot | undefined;
+  for (const map of liveByTenant.values()) {
+    const slot = map.get(chatId);
+    if (!slot) continue;
+    if (slot.transcript) return slot;
+    found = slot;
+  }
+  return found;
+}
+
+function stopRunFlush(slot: Slot) {
+  if (!slot.runFlush) return;
+  clearTimeout(slot.runFlush);
+  slot.runFlush = undefined;
+}
+
+function armRunFlush(slot: Slot) {
+  stopRunFlush(slot);
+  slot.runFlush = setTimeout(() => {
+    slot.runFlush = undefined;
+    const transcript = slot.transcript;
+    if (!transcript || transcript.epoch !== slot.epoch || transcript.phase !== "running") return;
+    flushTranscript(slot, false);
+    if (slot.transcript?.phase === "running" && slot.transcript.epoch === slot.epoch) armRunFlush(slot);
+  }, 3_000);
+}
+
+function openTranscript(slot: Slot, turnId: string | undefined, userText: string, epoch: number) {
+  slot.transcript = {
+    turnId: turnId?.trim() || crypto.randomUUID(),
+    userText,
+    assistant: "",
+    thinking: "",
+    tools: [],
+    phase: "running",
+    epoch,
+  };
+  armRunFlush(slot);
+}
+
+function continueTranscript(slot: Slot, epoch: number) {
+  if (!slot.transcript) return;
+  slot.transcript.epoch = epoch;
+  slot.transcript.phase = "running";
+  slot.transcript.awaitingApproval = undefined;
+  slot.transcript.status = undefined;
+  armRunFlush(slot);
+}
+
+function flushTranscript(slot: Slot, broadcast: boolean) {
+  const tenant = getTenant(slot.tenantId);
+  const transcript = slot.transcript;
+  if (!tenant || !transcript) return;
+  if (transcript.epoch !== slot.epoch) return;
+  if (tenant.disk.deletedIds.includes(slot.chatId)) return;
+  const mark = markFromTranscript(transcript);
+  let chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId);
+  if (!chat) {
+    if (tenant.disk.chats.length >= MAX_STORED_CHATS) return;
+    chat = { id: slot.chatId, title: "新对话", turns: [], cwd: slot.cwd };
+    tenant.disk.chats = [...tenant.disk.chats, chat];
+  }
+  if (!chat || typeof chat !== "object") return;
+  const row = chat as Record<string, unknown>;
+  const turns = Array.isArray(row.turns) ? row.turns : [];
+  row.turns = upsertTranscriptTurn(turns, transcript);
+  row.runMark = mark;
+  if (broadcast && transcript.phase === "done") {
+    tenant.disk.rev += 1;
+    tenant.disk.chatRevs[slot.chatId] = tenant.disk.rev;
+  }
+  persistTenant(tenant);
+  if (broadcast && transcript.phase === "done") {
+    broadcastDigest(tenant, null as unknown as WebSocket);
+  }
+}
+
+function queuedRows(slot: Slot) {
+  return slot.pending
+    .filter((item) => item.text.trim() || item.turnId)
+    .map((item) => ({ turnId: item.turnId, userText: item.text }));
+}
+
+function emitRunSnapshots(ws: WebSocket, tenant: Tenant) {
+  const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+  const covered = new Set<string>();
+  for (const slot of liveSlotsOf(tenant).values()) {
+    if (slot.transcript && slot.transcript.epoch === slot.epoch) {
+      covered.add(slot.chatId);
+      const queued = queuedRows(slot);
+      const full = snapshotMessage(slot.chatId, slot.transcript, queued);
+      const clipped = clipSnapshot(full, limit);
+      if (clipped.type === "run_snapshot" && clipped.clipped) flushTranscript(slot, false);
+      send(ws, clipped);
+      continue;
+    }
+    if (!slot.pending.length) continue;
+    covered.add(slot.chatId);
+    send(ws, {
+      type: "run_snapshot",
+      chatId: slot.chatId,
+      phase: "done",
+      userText: "",
+      assistant: "",
+      queued: queuedRows(slot),
+    });
+  }
+  for (const chat of tenant.disk.chats) {
+    const id = chatIdOf(chat);
+    const mark = readRunMark(chat);
+    if (!id || !mark || covered.has(id)) continue;
+    const turns =
+      chat && typeof chat === "object" && Array.isArray((chat as { turns?: unknown }).turns)
+        ? ((chat as { turns: unknown[] }).turns)
+        : [];
+    const full = diskSnapshot(id, mark, turns, mark.phase === "running");
+    send(ws, clipSnapshot(full, limit));
+  }
+}
+
+function protectChatUpload(
+  tenant: Tenant,
+  chatId: string,
+  incoming: unknown,
+  turnsProvided: boolean,
+): unknown {
+  if (!incoming || typeof incoming !== "object") return incoming;
+  const prev = tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+  const slot = liveSlotsOf(tenant).get(chatId);
+  const transcript = slot?.transcript && slot.transcript.epoch === slot.epoch ? slot.transcript : null;
+  let baseTurns: unknown[] =
+    prev && typeof prev === "object" && Array.isArray((prev as { turns?: unknown }).turns)
+      ? (prev as { turns: unknown[] }).turns
+      : [];
+  if (transcript) baseTurns = upsertTranscriptTurn(baseTurns, transcript);
+  const mark = transcript ? markFromTranscript(transcript) : readRunMark(prev);
+  const row = { ...(incoming as Record<string, unknown>) };
+  if (!turnsProvided) {
+    if (baseTurns.length || mark) row.turns = baseTurns;
+    if (mark) row.runMark = mark;
+    return row;
+  }
+  const incomingTurns = Array.isArray(row.turns) ? row.turns : [];
+  const merged = mergeUploadedTurns(baseTurns, incomingTurns, mark);
+  row.turns = transcript ? upsertTranscriptTurn(merged.turns, transcript) : merged.turns;
+  const stillRunning = Boolean(transcript && transcript.phase === "running");
+  if (merged.clearMark && !stillRunning) {
+    delete row.runMark;
+    if (slot?.transcript?.phase === "done") {
+      stopRunFlush(slot);
+      slot.transcript = undefined;
+    }
+  } else if (mark) {
+    row.runMark = mark;
+  }
+  return row;
 }
 
 function capturingSlot(chatId: string): Slot | undefined {
@@ -726,6 +899,8 @@ async function forgetChat(conn: Conn, chatId: string) {
   if (slot) {
     resolveApprovalWait(slot, false);
     slot.pending = []; // 删除会话不续跑排队消息（旧 external 栈返回后 drain 会扑空，Grok R2）
+    stopRunFlush(slot);
+    slot.transcript = undefined;
     slot.epoch += 1; // 过期门：旧栈 finishRun/drainPending 一律失效
     await cancelRun(slot.run);
     await disposeSlot(slot);
@@ -2526,6 +2701,9 @@ function finishRun(
     replays: slot.runStats.replays,
     dialect: slot.dialect,
   });
+  const approval = status === "approval";
+  if (!approval) stopRunFlush(slot);
+  flushTranscript(slot, !approval);
 }
 
 function sanitizeChatTitle(raw: string) {
@@ -2664,6 +2842,8 @@ async function handlePrompt(
   dialect?: boolean,
   history?: ChatHistoryItem[],
   enqueue = true,
+  turnId?: string,
+  keepTranscript = false,
 ): Promise<void | "busy"> {
   const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
   const nextDialect = dialect !== false;
@@ -2700,6 +2880,7 @@ async function handlePrompt(
       policy: nextPolicy,
       dialect: nextDialect,
       history: safeHistory,
+      turnId,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED" });
@@ -2719,6 +2900,7 @@ async function handlePrompt(
       policy: nextPolicy,
       dialect: nextDialect,
       history: safeHistory,
+      turnId,
     });
     if (slot.pending.length > 8) slot.pending.shift();
     send(ws, { type: "status", chatId: slot.chatId, status: "QUEUED", message: "同时跑的任务已满，排队中" });
@@ -2752,6 +2934,8 @@ async function handlePrompt(
   if (!prompt) return;
 
   const epoch = ++slot.epoch;
+  if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
+  else openTranscript(slot, turnId, userText, epoch);
   slot.finished = false;
   slot.edited = [];
   slot.awaitingApproval = false;
@@ -3448,6 +3632,10 @@ async function handlePrompt(
       false,
       slot.policy,
       slot.dialect,
+      undefined,
+      true,
+      slot.transcript?.turnId,
+      true,
     );
   }
 }
@@ -3482,6 +3670,9 @@ function drainPending(ws: WebSocket, conn: Conn, slot: Slot, epoch?: number) {
         next.policy,
         next.dialect,
         next.history,
+        true,
+        next.turnId,
+        false,
       );
     });
   } else if (!next) {
@@ -3516,6 +3707,9 @@ function kickGlobalQueue() {
           next.policy,
           next.dialect,
           next.history,
+          true,
+          next.turnId,
+          false,
         );
       });
       return;
@@ -3943,6 +4137,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         for (const slot of conn.slots.values()) {
           if (slot.checkpoints.length) sendCheckpoints(ws, slot);
         }
+        emitRunSnapshots(ws, tenant);
         if (apiKey) {
           void listModels(apiKey).then((models) => {
             if (models.join("\n") !== cached.join("\n")) emitReady(models);
@@ -4057,8 +4252,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
             const id = typeof row.id === "string" ? row.id : "";
             const next = wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
-            if (row.cwd === next) return item;
-            return { ...row, cwd: next };
+            const withCwd = row.cwd === next ? item : { ...row, cwd: next };
+            const provided = Boolean(item && typeof item === "object" && Array.isArray((item as { turns?: unknown }).turns));
+            return protectChatUpload(tenant, id, withCwd, provided);
           });
         tenant.disk.rev = clientRev;
         // P4c：按会话变更检测（规范化序列化，键序无关），只给真正变了的会话记新版本号
@@ -4133,6 +4329,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             next = { ...row, turns: [] };
           }
         }
+        const turnsProvided = Boolean(
+          message.chat &&
+            typeof message.chat === "object" &&
+            Array.isArray((message.chat as { turns?: unknown }).turns),
+        );
+        next = protectChatUpload(tenant, id, next, turnsProvided);
         const changed = stableStringify(prev ?? null) !== stableStringify(next);
         if (changed && !prev && tenant.disk.chats.length >= MAX_STORED_CHATS) {
           // 条数硬顶：追加新会话被拒（替换既有会话不受限），回 ack 让客户端收敛 inflight
@@ -4668,6 +4870,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           parsePolicy(message.policy, conn.policy),
           message.dialect,
           message.history,
+          true,
+          message.turnId,
         );
         if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text);
       }

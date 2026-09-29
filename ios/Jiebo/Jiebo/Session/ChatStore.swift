@@ -228,6 +228,14 @@ final class ChatStore {
     var loadingChatIds: Set<String> = []
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
     private var pendingHistory: [String: [Turn]] = [:]
+    /// 快照到达时分页还没完成：先暂存，正文齐了再按 turnId 盖上
+    private var pendingSnapshots: [String: ServerMessage] = [:]
+    /// ready 之后、快照之前的增量丢掉，避免拼到半截正文上
+    private var awaitSnapshot = Set<String>()
+    private var sawSnapshot = Set<String>()
+    /// 快照超限、正文改走分页时，先攒着随后的增量
+    private var snapshotHold = Set<String>()
+    private var heldDeltas: [String: [String]] = [:]
     /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
     private var loadedPageTurnCounts: [String: Int] = [:]
     /// P8 slim：每会话分页代际（单调递增，会话内不复用）。load_chat 携带、chat_turns 回显，
@@ -379,7 +387,8 @@ final class ChatStore {
             fresh: nil,
             nameChat: untitled,
             policy: active?.policy,
-            history: history
+            history: history,
+            turnId: turn.id
         ))
         markProgress(chatId)
     }
@@ -1479,6 +1488,11 @@ final class ChatStore {
                 self.loadingChatIds = []
                 self.loadedPageTurnCounts = [:]
             }
+            self.awaitSnapshot = []
+            self.sawSnapshot = []
+            self.snapshotHold = []
+            self.heldDeltas = [:]
+            self.pendingSnapshots = [:]
             if !self.unlocked {
                 self.verifying = false
             } else {
@@ -1555,6 +1569,9 @@ final class ChatStore {
             model = nextModel
             rememberModel(nextModel)
             markLive(running: running, queued: queued)
+            for id in running where !sawSnapshot.contains(id) {
+                awaitSnapshot.insert(id)
+            }
             if let current, current.id != "boot", current.model != nextModel {
                 patch(current.id) { chat in
                     var next = chat
@@ -1685,12 +1702,18 @@ final class ChatStore {
                 return next
             }
         case .textDelta(let id, let text):
+            if awaitSnapshot.contains(id) { break }
+            if snapshotHold.contains(id) {
+                heldDeltas[id, default: []].append(text)
+                break
+            }
             patchRunning(id) { turn in
                 var next = turn
                 next.assistant += text
                 return next
             }
         case .thinkingDelta(let id, let text):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
                 next.thinking += text
@@ -1698,6 +1721,7 @@ final class ChatStore {
             }
             showThinkingIds.insert(id)
         case .toolStarted(let id, let callId, let name, let args, let parent, let agent, let toolModel):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
                 next.tools.removeAll { $0.callId == callId }
@@ -1718,6 +1742,7 @@ final class ChatStore {
                 }
             }
         case .toolCompleted(let id, let callId, let name, let status, let result, let parent, let agent, let toolModel):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             var toolArgs: JSONValue?
             patchOpen(id) { turn in
                 var next = turn
@@ -1752,6 +1777,7 @@ final class ChatStore {
                 }
             }
         case .toolOutput(let id, let callId, let stream, let chunk, let stdout, let stderr):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
                 if let index = next.tools.firstIndex(where: { $0.callId == callId }) {
@@ -1771,12 +1797,14 @@ final class ChatStore {
                 return next
             }
         case .task(let id, let text):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
                 next.task = text
                 return next
             }
         case .approval(let id, let callId, let name, let args):
+            if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
                 next.pendingTool = PendingTool(callId: callId, name: name, args: args)
@@ -1825,6 +1853,45 @@ final class ChatStore {
                 turn.settled(status: status, durationMs: duration)
             }
             scheduleSync()
+        case .runSnapshot(
+            let id, let turnId, let phase, let status, let userText, let assistant, let thinking,
+            let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
+        ):
+            awaitSnapshot.remove(id)
+            sawSnapshot.insert(id)
+            if clipped {
+                snapshotHold.insert(id)
+                if let index = chats.firstIndex(where: { $0.id == id }) {
+                    if let turnId, !turnId.isEmpty {
+                        chats[index].turns.removeAll { $0.id == turnId }
+                    }
+                    chats[index].turnsComplete = false
+                }
+                pendingSnapshots[id] = message
+                ensureTurnsLoaded(id)
+                break
+            }
+            if let chat = chats.first(where: { $0.id == id }), !chat.turnsComplete {
+                pendingSnapshots[id] = message
+                snapshotHold.insert(id)
+                break
+            }
+            applyRunSnapshot(
+                chatId: id,
+                turnId: turnId,
+                phase: phase,
+                status: status,
+                userText: userText,
+                assistant: assistant,
+                thinking: thinking,
+                tools: tools,
+                task: task,
+                model: runModel,
+                mode: runMode,
+                awaitingApproval: awaitingApproval,
+                queued: queued,
+                durationMs: duration
+            )
         case .history(let id, let rows):
             let incoming = rows.compactMap(Turn.from)
             guard !incoming.isEmpty else { break }
@@ -1871,6 +1938,41 @@ final class ChatStore {
                 }
                 if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
                     applyHistory(chatId: chatId, incoming: pending)
+                }
+                if let snap = pendingSnapshots.removeValue(forKey: chatId) {
+                    snapshotHold.remove(chatId)
+                    if case .runSnapshot(
+                        _, let turnId, let phase, let status, let userText, let assistant, let thinking,
+                        let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
+                    ) = snap, !clipped {
+                        applyRunSnapshot(
+                            chatId: chatId,
+                            turnId: turnId,
+                            phase: phase,
+                            status: status,
+                            userText: userText,
+                            assistant: assistant,
+                            thinking: thinking,
+                            tools: tools,
+                            task: task,
+                            model: runModel,
+                            mode: runMode,
+                            awaitingApproval: awaitingApproval,
+                            queued: queued,
+                            durationMs: duration
+                        )
+                    }
+                    let chunks = heldDeltas.removeValue(forKey: chatId) ?? []
+                    if !chunks.isEmpty {
+                        let extra = chunks.joined()
+                        patch(chatId) { chat in
+                            var next = chat
+                            if let index = next.turns.indices.last {
+                                next.turns[index].assistant += extra
+                            }
+                            return next
+                        }
+                    }
                 }
             }
         case .chatTitle(let id, let title):
@@ -2403,17 +2505,167 @@ final class ChatStore {
         }
     }
 
-    /// agent 历史 backfill 应用（老规则：本地空直接整表替换；incoming 更多才替换）
-    private func applyHistory(chatId id: String, incoming: [Turn]) {
-        patch(id) { chat in
+    /// 快照是累计全文：按 turnId 替换，不拼到旧正文后面。done 时无论正文是否更长都收尾。
+    private func applyRunSnapshot(
+        chatId: String,
+        turnId: String?,
+        phase: String,
+        status: String?,
+        userText: String,
+        assistant: String,
+        thinking: String,
+        tools: [JSONValue],
+        task: String?,
+        model: String?,
+        mode: AgentMode?,
+        awaitingApproval: JSONValue?,
+        queued: [JSONValue],
+        durationMs: Double?
+    ) {
+        patch(chatId) { chat in
             var next = chat
-            if next.turns.isEmpty {
-                next.turns = incoming
-            } else if incoming.count > next.turns.count {
-                next.turns = incoming
+            let skipBody = (turnId ?? "").isEmpty && userText.isEmpty && assistant.isEmpty
+            if !skipBody {
+                var index = turnId.flatMap { id in next.turns.firstIndex(where: { $0.id == id }) }
+                if index == nil, !userText.isEmpty {
+                    let fp = Self.userFingerprint(userText)
+                    index = next.turns.indices.reversed().first(where: { Self.userFingerprint(next.turns[$0].user) == fp })
+                }
+                let parsedTools = tools.compactMap(Self.toolFromSnapshot)
+                if let index {
+                    var row = next.turns[index]
+                    if assistant.count >= row.assistant.count { row.assistant = assistant }
+                    if thinking.count >= row.thinking.count { row.thinking = thinking }
+                    if parsedTools.count >= row.tools.count { row.tools = parsedTools }
+                    if let task { row.task = task }
+                    if let model { row.model = model }
+                    if let mode { row.mode = mode }
+                    row.running = phase == "running"
+                    row.queued = false
+                    if phase == "running", let awaitingApproval, let object = awaitingApproval.object {
+                        row.pendingTool = PendingTool(
+                            callId: object["callId"]?.string ?? "",
+                            name: object["name"]?.string ?? "",
+                            args: object["args"]
+                        )
+                    } else {
+                        row.pendingTool = nil
+                    }
+                    if phase == "done" {
+                        row = row.settled(status: status ?? "finished", durationMs: durationMs)
+                    }
+                    next.turns[index] = row
+                } else {
+                    var row = Turn.blank(user: userText, model: model, mode: mode, running: phase == "running")
+                    if let turnId, !turnId.isEmpty { row.id = turnId }
+                    row.assistant = assistant
+                    row.thinking = thinking
+                    row.tools = parsedTools
+                    row.task = task
+                    row.queued = false
+                    if phase == "done" {
+                        row = row.settled(status: status ?? "finished", durationMs: durationMs)
+                    }
+                    next.turns.append(row)
+                }
+            }
+            for item in queued {
+                guard let object = item.object else { continue }
+                let queuedId = object["turnId"]?.string
+                let queuedText = object["userText"]?.string ?? ""
+                if let queuedId, next.turns.contains(where: { $0.id == queuedId }) { continue }
+                let fp = Self.userFingerprint(queuedText)
+                if !fp.isEmpty, next.turns.contains(where: { Self.userFingerprint($0.user) == fp && ($0.queued || $0.running) }) {
+                    continue
+                }
+                var row = Turn.blank(user: queuedText, model: nil, mode: nil, running: false)
+                if let queuedId, !queuedId.isEmpty { row.id = queuedId }
+                row.running = false
+                row.queued = true
+                next.turns.append(row)
             }
             return next
         }
+    }
+
+    private static func userFingerprint(_ text: String) -> String {
+        let collapsed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return String(collapsed.prefix(240))
+    }
+
+    private static func toolFromSnapshot(_ value: JSONValue) -> ToolCall? {
+        guard let row = value.object else { return nil }
+        return ToolCall(
+            callId: row["callId"]?.string ?? UUID().uuidString.lowercased(),
+            name: row["name"]?.string ?? "",
+            args: row["args"],
+            result: row["result"],
+            status: row["status"]?.string ?? "completed",
+            parentCallId: row["parentCallId"]?.string,
+            agent: row["agent"]?.string,
+            model: row["model"]?.string
+        )
+    }
+
+    /// 已结束的回合按用户原文从后往前配对，取更长的助手正文。进行中的回合留给快照。
+    private func applyHistory(chatId id: String, incoming: [Turn]) {
+        patch(id) { chat in
+            var next = chat
+            next.turns = Self.mergeHistory(local: chat.turns, incoming: incoming)
+            return next
+        }
+    }
+
+    private static func mergeHistory(local: [Turn], incoming: [Turn]) -> [Turn] {
+        let localHas = local.contains {
+            !$0.user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.tools.isEmpty
+        }
+        if !localHas { return incoming }
+        var merged = local
+        var used = Set<Int>()
+        var prefix: [Turn] = []
+        var seenLocal = false
+        for remote in incoming {
+            let finger = userFingerprint(remote.user)
+            if finger.isEmpty { continue }
+            let index = merged.indices.reversed().first { !used.contains($0) && userFingerprint(merged[$0].user) == finger }
+            if let index {
+                used.insert(index)
+                seenLocal = true
+                if merged[index].running { continue }
+                var row = merged[index]
+                if remote.assistant.count > row.assistant.count { row.assistant = remote.assistant }
+                if remote.thinking.count > row.thinking.count { row.thinking = remote.thinking }
+                row.tools = mergeHistoryTools(local: row.tools, remote: remote.tools)
+                merged[index] = row
+            } else if !seenLocal {
+                var row = remote
+                row.running = false
+                row.queued = false
+                prefix.append(row)
+            }
+        }
+        return prefix + merged
+    }
+
+    private static func mergeHistoryTools(local: [ToolCall], remote: [ToolCall]) -> [ToolCall] {
+        var out = local
+        for tool in remote {
+            if let index = out.firstIndex(where: { $0.callId == tool.callId || ($0.name == tool.name && $0.args == tool.args) }) {
+                if out[index].result == nil, tool.result != nil {
+                    out[index].result = tool.result
+                    if tool.status != "running" { out[index].status = tool.status }
+                }
+            } else {
+                var copy = tool
+                if copy.status == "running" { copy.status = "completed" }
+                out.append(copy)
+            }
+        }
+        return out
     }
 
     private func applySession(_ chat: ChatSession?) {
@@ -2427,7 +2679,7 @@ final class ChatStore {
             cwd = path
             send(.setWorkspace(cwd: path, chatId: chat.id, create: nil))
         }
-        if let agentId = chat.agentId, !agentId.isEmpty {
+        if let agentId = chat.agentId, !agentId.isEmpty, !runningChatIds.contains(chat.id) {
             send(.resumeSession(chatId: chat.id, agentId: agentId))
         }
     }
@@ -2635,6 +2887,11 @@ final class ChatStore {
         loadEpochs = [:]
         localTurnsPendingSync = []
         pendingHistory = [:]
+        pendingSnapshots = [:]
+        awaitSnapshot = []
+        sawSnapshot = []
+        snapshotHold = []
+        heldDeltas = [:]
         previewTabs = []
         previewActivePath = nil
         pendingDiffPaths = []

@@ -40,6 +40,8 @@ export type ClientMessage =
       /** P11：第三方模型（model 带 provider: 前缀）的会话历史——客户端是内容权威源，
        *  网关无状态，随 prompt 上行最近若干条 user/assistant 文本；Cursor 路径忽略 */
       history?: { role: "user" | "assistant"; text: string }[];
+      /** 客户端本地回合 id。网关用它对齐缓冲、快照和落盘，避免靠用户原文配对 */
+      turnId?: string;
     }
   | { type: "cancel"; chatId: string }
   | { type: "drop_queued"; chatId: string; text?: string }
@@ -277,6 +279,24 @@ export type ServerMessage =
       stderr?: string;
     }
   | { type: "history"; chatId: string; turns: HistoryTurn[] }
+  | {
+      type: "run_snapshot";
+      chatId: string;
+      turnId?: string;
+      phase: "running" | "done";
+      status?: string;
+      userText: string;
+      assistant: string;
+      thinking?: string;
+      tools?: HistoryTurn["tools"];
+      task?: string;
+      model?: string;
+      mode?: AgentMode;
+      awaitingApproval?: { callId: string; name: string; args?: unknown };
+      queued?: Array<{ turnId?: string; userText: string }>;
+      durationMs?: number;
+      clipped?: boolean;
+    }
   | { type: "undone"; chatId: string; paths: string[]; error?: string }
   | { type: "checkpoints"; chatId: string; items: CheckpointInfo[] }
   | {

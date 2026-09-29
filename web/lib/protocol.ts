@@ -34,6 +34,8 @@ export type ClientMessage =
       policy?: PolicyId;
       /** 缺省 true。false 时关掉中文系方言 overlay，给 dialect-bench 对照用 */
       dialect?: boolean;
+      /** 客户端本地回合 id。网关用它对齐缓冲、快照和落盘 */
+      turnId?: string;
     }
   | { type: "cancel"; chatId: string }
   | { type: "drop_queued"; chatId: string; text?: string }
@@ -262,6 +264,24 @@ export type ServerMessage =
       stderr?: string;
     }
   | { type: "history"; chatId: string; turns: HistoryTurn[] }
+  | {
+      type: "run_snapshot";
+      chatId: string;
+      turnId?: string;
+      phase: "running" | "done";
+      status?: string;
+      userText: string;
+      assistant: string;
+      thinking?: string;
+      tools?: HistoryTurn["tools"];
+      task?: string;
+      model?: string;
+      mode?: AgentMode;
+      awaitingApproval?: { callId: string; name: string; args?: unknown };
+      queued?: Array<{ turnId?: string; userText: string }>;
+      durationMs?: number;
+      clipped?: boolean;
+    }
   | { type: "undone"; chatId: string; paths: string[]; error?: string }
   | { type: "checkpoints"; chatId: string; items: CheckpointInfo[] }
   | {

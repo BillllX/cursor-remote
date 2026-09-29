@@ -130,7 +130,8 @@ enum ClientMessage {
         fresh: Bool?,
         nameChat: Bool?,
         policy: String?,
-        history: [HistoryItem]?
+        history: [HistoryItem]?,
+        turnId: String?
     )
     case cancel(chatId: String)
     case dropQueued(chatId: String, text: String?)
@@ -179,7 +180,7 @@ enum ClientMessage {
             return .object(["type": .string("list_workspaces")])
         case .createWorkspace(let name):
             return .object(["type": .string("create_workspace"), "name": .string(name)])
-        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy, let history):
+        case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy, let history, let turnId):
             var object: [String: JSONValue] = [
                 "type": .string("prompt"),
                 "text": .string(text),
@@ -199,6 +200,7 @@ enum ClientMessage {
             if let history, !history.isEmpty {
                 object["history"] = .array(history.map { .object(["role": .string($0.role), "text": .string($0.text)]) })
             }
+            if let turnId, !turnId.isEmpty { object["turnId"] = .string(turnId) }
             return .object(object)
         case .cancel(let chatId):
             return .object(["type": .string("cancel"), "chatId": .string(chatId)])
@@ -398,6 +400,23 @@ enum ServerMessage {
     case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool, nonce: Int?)
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
+    case runSnapshot(
+        chatId: String,
+        turnId: String?,
+        phase: String,
+        status: String?,
+        userText: String,
+        assistant: String,
+        thinking: String,
+        tools: [JSONValue],
+        task: String?,
+        model: String?,
+        mode: AgentMode?,
+        awaitingApproval: JSONValue?,
+        queued: [JSONValue],
+        durationMs: Double?,
+        clipped: Bool
+    )
     case chatTitle(chatId: String, title: String)
     /// P9：admin_stats 应答（仅管理员收得到）
     case adminStats(tenants: [AdminTenantStats], serverTime: Double)
@@ -448,6 +467,7 @@ enum ServerMessage {
              .approval(let chatId, _, _, _),
              .done(let chatId, _, _),
              .history(let chatId, _),
+             .runSnapshot(let chatId, _, _, _, _, _, _, _, _, _, _, _, _, _, _),
              .chatTitle(let chatId, _):
             return chatId
         case .status(let chatId, _, _), .error(let chatId, _):
@@ -578,6 +598,24 @@ enum ServerMessage {
             return .auth(ok: object["ok"]?.bool ?? false, message: object["message"]?.string)
         case "history":
             return .history(chatId: chatId, turns: object["turns"]?.array ?? [])
+        case "run_snapshot":
+            return .runSnapshot(
+                chatId: chatId,
+                turnId: object["turnId"]?.string,
+                phase: object["phase"]?.string ?? "running",
+                status: object["status"]?.string,
+                userText: object["userText"]?.string ?? "",
+                assistant: object["assistant"]?.string ?? "",
+                thinking: object["thinking"]?.string ?? "",
+                tools: object["tools"]?.array ?? [],
+                task: object["task"]?.string,
+                model: object["model"]?.string,
+                mode: object["mode"]?.string.flatMap(AgentMode.init(rawValue:)),
+                awaitingApproval: object["awaitingApproval"],
+                queued: object["queued"]?.array ?? [],
+                durationMs: object["durationMs"]?.number,
+                clipped: object["clipped"]?.bool ?? false
+            )
         case "chat_title":
             return .chatTitle(chatId: chatId, title: object["title"]?.string ?? "")
         case "loop_state":

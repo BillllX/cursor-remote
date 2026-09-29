@@ -884,6 +884,92 @@ function mergeTools(local: Turn["tools"], remote: Turn["tools"]): Turn["tools"] 
   return out;
 }
 
+function userFingerprint(text: string) {
+  return text.trim().replace(/\s+/g, " ").slice(0, 240);
+}
+
+function applyRunSnapshot(turns: Turn[], message: Extract<ServerMessage, { type: "run_snapshot" }>): Turn[] {
+  const next = turns.slice();
+  const queued = message.queued || [];
+  const skipBody = !message.turnId && !message.userText && !message.assistant;
+  if (!skipBody) {
+    let index = message.turnId ? next.findIndex((turn) => turn.id === message.turnId) : -1;
+    if (index < 0 && message.userText) {
+      const fp = userFingerprint(message.userText);
+      for (let i = next.length - 1; i >= 0; i -= 1) {
+        if (userFingerprint(next[i].user) === fp) {
+          index = i;
+          break;
+        }
+      }
+    }
+    const tools = (message.tools || []).map((tool) => ({
+      callId: tool.callId,
+      name: tool.name,
+      args: tool.args,
+      result: tool.result,
+      status: tool.status,
+      parentCallId: tool.parentCallId,
+      agent: tool.agent,
+      model: tool.model,
+    }));
+    if (index < 0) {
+      const created: Turn = {
+        id: message.turnId || uid(),
+        user: message.userText,
+        assistant: message.clipped ? "" : message.assistant,
+        thinking: message.clipped ? "" : message.thinking || "",
+        tools: message.clipped ? [] : tools,
+        task: message.task,
+        running: message.phase === "running",
+        queued: false,
+        mode: message.mode,
+        model: message.model,
+        status: message.phase === "done" ? message.status : undefined,
+        durationMs: message.durationMs,
+        pendingTool: message.awaitingApproval,
+      };
+      next.push(message.phase === "done" ? settleTurn(created, message.status || "finished", message.durationMs) : created);
+    } else {
+      const cur = next[index];
+      const replaced: Turn = {
+        ...cur,
+        assistant: message.clipped || message.assistant.length < cur.assistant.length ? cur.assistant : message.assistant,
+        thinking:
+          message.clipped || (message.thinking || "").length < (cur.thinking || "").length
+            ? cur.thinking
+            : message.thinking || "",
+        tools: message.clipped || tools.length < cur.tools.length ? cur.tools : tools,
+        task: message.task || cur.task,
+        model: message.model || cur.model,
+        mode: message.mode || cur.mode,
+        running: message.phase === "running",
+        queued: false,
+        pendingTool: message.phase === "running" ? message.awaitingApproval : undefined,
+      };
+      next[index] =
+        message.phase === "done"
+          ? settleTurn(replaced, message.status || "finished", message.durationMs)
+          : replaced;
+    }
+  }
+  for (const item of queued) {
+    if (item.turnId && next.some((turn) => turn.id === item.turnId)) continue;
+    const fp = userFingerprint(item.userText);
+    if (fp && next.some((turn) => userFingerprint(turn.user) === fp && (turn.queued || turn.running))) continue;
+    next.push({
+      id: item.turnId || uid(),
+      user: item.userText,
+      assistant: "",
+      thinking: "",
+      tools: [],
+      running: false,
+      queued: true,
+    });
+  }
+  return next;
+}
+
 function mergeHistoryTurns(local: Turn[], incoming: Turn[]): Turn[] {
   if (!incoming.length) return local;
   const localHasContent = local.some(
@@ -1504,6 +1590,10 @@ export default function ChatApp() {
   const previewWantedRef = useRef<Set<string>>(new Set());
   const previewTriesRef = useRef<Record<string, number>>({});
   const httpHydratedRef = useRef<Set<string>>(new Set());
+  const runningIdsRef = useRef<Set<string>>(new Set());
+  const holdSnapshotRef = useRef<Set<string>>(new Set());
+  const sawSnapshotRef = useRef<Set<string>>(new Set());
+  const resumedRef = useRef<Set<string>>(new Set());
 
   const flushQueue = useCallback(
     (chatId: string) => {
@@ -1529,6 +1619,7 @@ export default function ChatApp() {
         confirmWrites: Boolean(chat.confirmWrites),
         policy: policyRef.current,
         nameChat: isUntitled(chat.title),
+        turnId: next.id,
       });
     },
     [patchChat, send],
@@ -1559,6 +1650,7 @@ export default function ChatApp() {
         confirmWrites: Boolean(chat?.confirmWrites),
         policy: policyRef.current,
         nameChat: isUntitled(chat?.title),
+        turnId: next.id,
       });
     },
     [patchChat, send],
@@ -1699,8 +1791,14 @@ export default function ChatApp() {
               if (chat?.cwd && chat.cwd !== message.cwd) {
                 send({ type: "set_workspace", cwd: chat.cwd, chatId: chat.id });
               }
-              const live = message.runningChatIds?.includes(chat?.id || "") ?? false;
-              if (chat?.agentId && !live && !reconnected) {
+              const liveIds = new Set(message.runningChatIds || []);
+              runningIdsRef.current = liveIds;
+              for (const id of liveIds) {
+                if (!sawSnapshotRef.current.has(id)) holdSnapshotRef.current.add(id);
+              }
+              const live = liveIds.has(chat?.id || "");
+              if (chat?.agentId && !live && !resumedRef.current.has(chat.id)) {
+                resumedRef.current.add(chat.id);
                 send({ type: "resume_session", chatId: chat.id, agentId: chat.agentId });
               }
             }
@@ -1850,7 +1948,8 @@ export default function ChatApp() {
                 setPreviewMax(false);
               }
             }
-            if (keep?.agentId && !keep.turns.length) {
+            if (keep?.agentId && !runningIdsRef.current.has(keep.id) && !resumedRef.current.has(keep.id)) {
+              resumedRef.current.add(keep.id);
               send({ type: "resume_session", chatId: keep.id, agentId: keep.agentId });
             }
           }
@@ -2019,6 +2118,7 @@ export default function ChatApp() {
           }
           break;
         case "tool-output":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => {
             const tools = [...turn.tools];
             const index = tools.findIndex((tool) => tool.callId === message.callId);
@@ -2133,19 +2233,30 @@ export default function ChatApp() {
             });
           }
           break;
+        case "run_snapshot":
+          holdSnapshotRef.current.delete(message.chatId);
+          sawSnapshotRef.current.add(message.chatId);
+          patchChat(message.chatId, (chat) => {
+            const turns = applyRunSnapshot(chat.turns, message);
+            return turns === chat.turns ? chat : { ...chat, turns };
+          });
+          break;
         case "text-delta":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => ({
             ...turn,
             assistant: turn.assistant + message.text,
           }));
           break;
         case "thinking-delta":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => ({
             ...turn,
             thinking: turn.thinking + message.text,
           }));
           break;
         case "tool-started":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => {
             const tools = turn.tools.filter((tool) => tool.callId !== message.callId);
             tools.push({
@@ -2202,6 +2313,7 @@ export default function ChatApp() {
           }
           break;
         case "tool-completed":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchOpenTurnIn(chatId, (turn) => {
             const existing = turn.tools.find((tool) => tool.callId === message.callId);
             if (existing?.status === "error" && message.status === "completed") {
@@ -2272,9 +2384,11 @@ export default function ChatApp() {
           }
           break;
         case "task":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => ({ ...turn, task: message.text }));
           break;
         case "approval":
+          if (holdSnapshotRef.current.has(chatId)) break;
           patchRunningTurnIn(chatId, (turn) => ({
             ...turn,
             pendingTool: { callId: message.callId, name: message.name, args: message.args },
@@ -3048,6 +3162,9 @@ export default function ChatApp() {
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
         setConnected(false);
+        holdSnapshotRef.current.clear();
+        sawSnapshotRef.current.clear();
+        resumedRef.current.clear();
         // P4：断线时在途的 sync_chat 永远等不到 ack——倒回脏集合，重连后随 diff/重推恢复
         if (inflightIdsRef.current.size) {
           for (const id of inflightIdsRef.current) dirtyIdsRef.current.add(id);
@@ -3164,6 +3281,7 @@ export default function ChatApp() {
       confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
       nameChat: isUntitled(current?.title),
+      turnId: turn.id,
     });
   }
 
@@ -3985,6 +4103,7 @@ export default function ChatApp() {
       policy: policyRef.current,
       fresh: true,
       nameChat: isUntitled(chat.title),
+      turnId: next.id,
     });
   }
 
@@ -4174,6 +4293,7 @@ export default function ChatApp() {
       confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
       nameChat: isUntitled(current?.title),
+      turnId: next.id,
     });
   }
 
