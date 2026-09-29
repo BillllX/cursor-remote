@@ -1,0 +1,47 @@
+{
+  "running": true,
+  "target": 95,
+  "focus": ["ui", "motion", "composer", "touch", "density", "hierarchy"],
+  "constraint": "不改结构。导航、分栏、文件单独浮层、输入框排布、工具层层级都保持现状。只做颜色、间距、字号、阴影和动画。",
+  "tick": 22,
+  "device": "iPad Air 13-inch (M4) simulator, portrait",
+  "interval_seconds": 180,
+  "rubric": {
+    "ui": "在现有结构上打分：间距、色彩、字号、气泡、空态、浮层质感、侧栏。",
+    "motion": "有录屏或 pressed 态证据时可上 95；仅静止截图时不超过 82。",
+    "composer": "输入区主次对比、模式/模型/发送可达性、次级控件克制。",
+    "touch": "44pt 热区、误触、按压反馈。",
+    "density": "工具日志/相关文件 vs 最终答案的视觉权重。",
+    "hierarchy": "侧栏 / 主线程 / 输入三区地面分层；选中态。"
+  },
+  "baseline": {
+    "ui": 88,
+    "motion": 81,
+    "composer": 78,
+    "touch": 81,
+    "density": 80,
+    "hierarchy": 85,
+    "overall": 83
+  },
+  "scores": {
+    "ui": 96,
+    "motion": 82,
+    "composer": 95,
+    "touch": 95,
+    "density": 95,
+    "hierarchy": 95,
+    "overall": 93
+  },
+  "scores_note": "拍21 四模型中位数（motion 按静止截图封顶 82；GLM 给 motion 96 未采纳）。拍22 侧栏 #E8E8EA、相关文件再降权、附件/模型 PressScale 后静态维预估维持≥95。",
+  "queue": [
+    "录有交互的 motion 短片（模式滑块/思考展开/侧栏选中/相关文件按压）解锁 motion≥95",
+    "若仍有维 <95：按多模型 GAPS 再拍一刀"
+  ],
+  "next": "拍23：优先拿到带交互的 motion 录屏；用 2+ 模型复审 motion。其余维已达共识 ≥95 则冻结。",
+  "notes": [
+    "拍17–20：工具卡退让、Composer 主次、侧栏竖条、思考 chevron、耗时戳、分栏线、终稿行距。",
+    "拍21：相关文件次级化+hitTarget、代码块降权、次级字号11、mode/新对话 PressScale、sidebar #F3F3F4、动效时长收紧。",
+    "拍22：sidebar #E8E8EA、相关文件再降（32高/0.35 mist）、附件/模型/更多 PressScale。",
+    "阻塞：无 Simulator 窗口句柄时无法自动点按录屏；需本机可见 Simulator 或手点录一段。"
+  ]
+}

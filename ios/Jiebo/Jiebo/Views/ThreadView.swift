@@ -386,7 +386,7 @@ struct ThreadView: View {
                     .overlay(Capsule().stroke(JieboColor.borderStrong, lineWidth: 1))
                     .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressScaleButtonStyle())
         }
         return Group {
             if axis == .horizontal {
@@ -416,8 +416,10 @@ struct ThreadView: View {
 
 private struct TurnView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var turn: Turn
     var canAnswer = false
+    @State private var thinkingOpen = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -428,7 +430,7 @@ private struct TurnView: View {
                         .font(JieboFont.ui(16))
                         .foregroundStyle(JieboColor.ink)
                         .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
+                        .padding(.vertical, 12)
                         .background(JieboColor.userBubble)
                         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
@@ -436,23 +438,45 @@ private struct TurnView: View {
                 }
             }
             if !turn.thinking.isEmpty {
-                DisclosureGroup("思考") {
-                    Text(turn.thinking)
-                        .font(JieboFont.ui(13))
-                        .foregroundStyle(JieboColor.ink2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        withAnimation(JieboMotion.snappy(reduceMotion)) {
+                            thinkingOpen.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(JieboColor.ink2)
+                                .rotationEffect(.degrees(thinkingOpen ? 90 : 0))
+                            Text("思考")
+                                .font(JieboFont.ui(13, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(PressScaleButtonStyle())
+                    .accessibilityLabel(thinkingOpen ? "收起思考" : "展开思考")
+                    if thinkingOpen {
+                        Text(turn.thinking)
+                            .font(JieboFont.ui(13))
+                            .foregroundStyle(JieboColor.ink2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
                 }
-                .font(JieboFont.ui(13, weight: .medium))
-                .foregroundStyle(JieboColor.dim)
-                .tint(JieboColor.pine)
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(JieboColor.white)
+                .background(JieboColor.mist.opacity(0.4))
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
+                        .stroke(JieboColor.line.opacity(0.7), lineWidth: 0.5)
                 )
             }
             ForEach(turn.tools) { tool in
@@ -468,7 +492,14 @@ private struct TurnView: View {
             if !turn.assistant.isEmpty {
                 HStack(alignment: .top, spacing: 12) {
                     BotAvatar()
-                    AssistantMessage(text: linkMentions(turn.assistant))
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let duration = formatDuration(turn.durationMs).nilIfEmpty, !turn.running {
+                            Text(duration)
+                                .font(JieboFont.ui(12, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        AssistantMessage(text: linkMentions(turn.assistant))
+                    }
                 }
             }
             if turn.running {
@@ -482,9 +513,9 @@ private struct TurnView: View {
             }
             let files = relatedFiles(turn)
             if !files.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("相关文件")
-                        .font(JieboFont.ui(12, weight: .medium))
+                        .font(JieboFont.ui(11, weight: .regular))
                         .foregroundStyle(JieboColor.dim)
                     ForEach(files, id: \.self) { path in
                         Button {
@@ -492,34 +523,41 @@ private struct TurnView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Image(systemName: fileGlyph(path, isDir: false, open: false))
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(JieboColor.ink2)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(JieboColor.dim)
                                     .frame(width: 18)
                                 Text((path as NSString).lastPathComponent)
-                                    .font(JieboFont.ui(14, weight: .medium))
-                                    .foregroundStyle(JieboColor.ink)
+                                    .font(JieboFont.ui(13, weight: .regular))
+                                    .foregroundStyle(JieboColor.ink2)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
                             .padding(.horizontal, 10)
-                            .frame(height: 36)
-                            .background(JieboColor.white)
+                            .frame(height: 32)
+                            // 更轻的次表面，六连不抢终稿
+                            .background(JieboColor.mist.opacity(0.35))
                             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                    .stroke(JieboColor.line, lineWidth: 1)
+                                    .stroke(JieboColor.line.opacity(0.55), lineWidth: 0.5)
                             )
+                            .hitTarget()
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(PressScaleButtonStyle())
                         .accessibilityLabel("预览 \(path)")
                     }
                 }
                 .padding(.leading, 40)
             }
-            if let duration = formatDuration(turn.durationMs).nilIfEmpty, !turn.running {
+            // 无助手正文时耗时仍贴在轮次底部，用 ink2 保证可读
+            if turn.assistant.isEmpty,
+               let duration = formatDuration(turn.durationMs).nilIfEmpty,
+               !turn.running
+            {
                 Text(duration)
-                    .font(JieboFont.ui(11))
-                    .foregroundStyle(JieboColor.dim)
+                    .font(JieboFont.ui(12, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .padding(.leading, 40)
             }
         }
     }
@@ -633,8 +671,12 @@ private struct AssistantMessage: View {
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
-                        .background(JieboColor.mist)
+                        .background(JieboColor.mist.opacity(0.55))
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line.opacity(0.7), lineWidth: 0.5)
+                        )
                 case .prose(let prose):
                     ProseLines(text: prose)
                 }
@@ -690,10 +732,10 @@ private struct ProseLines: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
                 if line.allSatisfy({ $0 == " " || $0 == "\t" }) {
-                    Color.clear.frame(height: 8)
+                    Color.clear.frame(height: 10)
                 } else {
                     lineRow(line)
                 }

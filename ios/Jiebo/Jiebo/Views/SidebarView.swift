@@ -68,10 +68,10 @@ struct SidebarView: View {
                     .foregroundStyle(JieboColor.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
-                    .frame(minHeight: 40)
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(PressScaleButtonStyle())
             .disabled(store.currentWorkspacePath.isEmpty)
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("在当前工作区新建对话")
@@ -142,6 +142,13 @@ struct SidebarView: View {
             .background(JieboColor.sidebar)
         }
         .background(JieboColor.sidebar.ignoresSafeArea())
+        // 与主区地面分层：右侧 1pt 冷灰分栏线（栏宽不变）
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(JieboColor.line.opacity(0.9))
+                .frame(width: 1)
+                .allowsHitTesting(false)
+        }
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
         .sheet(isPresented: $store.workspaceSheetOpen) {
@@ -239,10 +246,16 @@ struct SidebarView: View {
     // MARK: 会话行（与原扁平列表一致）
 
     private func chatRow(_ chat: ChatSession) -> some View {
-        Button {
+        let selected = chat.id == store.activeId
+        return Button {
             store.select(chat.id)
         } label: {
             HStack(alignment: .top, spacing: 10) {
+                // 选中态 2pt 品牌竖条（行高不变）
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .frame(width: 2)
+                    .padding(.vertical, 2)
                 let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
                 let marked = live || chat.unread
                 Circle()
@@ -266,12 +279,18 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
             .padding(.vertical, 4)
+            .padding(.horizontal, 8)
             .frame(minHeight: 44) // P6：会话行触控高度达标（HIG 44）
             .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(selected ? JieboColor.userBubble.opacity(0.92) : Color.clear)
+            )
         }
         .buttonStyle(.plain)
-        .listRowBackground(chat.id == store.activeId ? JieboColor.userBubble : Color.clear)
-        .animation(JieboMotion.fade(reduceMotion), value: chat.id == store.activeId)
+        .listRowBackground(Color.clear)
+        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+        .animation(JieboMotion.fade(reduceMotion), value: selected)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 deleteTarget = chat

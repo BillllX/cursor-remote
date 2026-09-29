@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ToolCardView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tool: ToolCall
     @State private var expanded = false
 
@@ -16,9 +17,9 @@ struct ToolCardView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Text(tool.kind.label)
-                            .font(JieboFont.mono(13))
+                            .font(JieboFont.mono(12))
                             .fontWeight(.medium)
-                            .foregroundStyle(JieboColor.ink)
+                            .foregroundStyle(JieboColor.ink2)
                         // crew 徽章：子代理角色（摸仓库/改代码/交叉审）+ 模型（过 ModelCatalog 美化，对齐网页 modelLabel）
                         let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
                         if !crew.isEmpty {
@@ -31,8 +32,8 @@ struct ToolCardView: View {
                                 .clipShape(Capsule())
                         }
                         Text(tool.summary)
-                            .font(JieboFont.mono(12))
-                            .foregroundStyle(JieboColor.ink2)
+                            .font(JieboFont.mono(11))
+                            .foregroundStyle(JieboColor.dim)
                             .lineLimit(1)
                         Spacer(minLength: 0)
                     }
@@ -97,16 +98,18 @@ struct ToolCardView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(JieboColor.white)
+        // 退为次级表面：mist 底 + 细描边，阴影收到更浅，避免和终稿同权
+        .background(JieboColor.mist.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
+                .stroke(JieboColor.line.opacity(0.85), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
+        .shadow(color: .black.opacity(0.025), radius: 4, y: 1)
+        .animation(JieboMotion.fade(reduceMotion), value: tool.status)
     }
 
-    /// 对齐 web 的 .tool-badge：右侧 999px 状态丸
+    /// 对齐 web 的 .tool-badge：右侧 999px 状态丸；完成态用次级绿
     @ViewBuilder
     private var badge: some View {
         switch tool.status {
@@ -115,13 +118,13 @@ struct ToolCardView: View {
         case "error":
             badgeView("出错", fg: JieboColor.danger, bg: JieboColor.dangerBg)
         default:
-            badgeView("完成", fg: JieboColor.ok, bg: JieboColor.okBg)
+            badgeView("完成", fg: JieboColor.okSoft, bg: JieboColor.okBgSoft)
         }
     }
 
     private func badgeView(_ text: String, fg: Color, bg: Color) -> some View {
         Text(text)
-            .font(JieboFont.ui(11, weight: .medium))
+            .font(JieboFont.ui(11, weight: .regular))
             .foregroundStyle(fg)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)

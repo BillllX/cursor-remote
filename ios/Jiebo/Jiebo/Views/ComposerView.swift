@@ -60,7 +60,7 @@ struct ComposerView: View {
             // 阴影画在底上，不要挂在输入框这一层。挂在上面的话每个字都会连阴影一起重绘。
             RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
                 .fill(JieboColor.composer)
-                .shadow(color: .black.opacity(focused ? 0.08 : 0.03), radius: focused ? 18 : 8, y: focused ? 8 : 3)
+                .shadow(color: .black.opacity(focused ? 0.10 : 0.05), radius: focused ? 20 : 12, y: focused ? 8 : 6)
                 .overlay(
                     RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
                         .stroke(focused ? JieboColor.ink.opacity(0.22) : JieboColor.borderStrong, lineWidth: focused ? 1.5 : 1)
@@ -231,11 +231,11 @@ struct ComposerView: View {
             Button(action: commitAndSend) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(enabled ? JieboColor.paper : JieboColor.dim)
+                    .foregroundStyle(enabled ? JieboColor.paper : JieboColor.dim.opacity(0.45))
                     .frame(width: 32, height: 32)
-                    .background(enabled ? JieboColor.pine : JieboColor.mist)
+                    .background(enabled ? JieboColor.pine : JieboColor.mist.opacity(0.55))
                     .clipShape(Circle())
-                    .shadow(color: enabled ? JieboColor.pine.opacity(0.28) : .clear, radius: 8, y: 3)
+                    .shadow(color: enabled ? JieboColor.pine.opacity(0.32) : .clear, radius: enabled ? 10 : 0, y: enabled ? 4 : 0)
                     .scaleEffect(enabled ? 1 : 0.94)
                     .animation(JieboMotion.snappy(reduceMotion), value: enabled)
                     .hitTarget()
@@ -266,6 +266,7 @@ struct ComposerView: View {
                 .clipShape(Circle())
                 .hitTarget()
         }
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel("更多")
     }
 
@@ -297,6 +298,7 @@ struct ComposerView: View {
                 .clipShape(Circle())
                 .hitTarget()
         }
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel("添加附件")
     }
 
@@ -305,17 +307,19 @@ struct ComposerView: View {
         return Button(action: store.toggleConfirmWrites) {
             HStack(spacing: 4) {
                 Image(systemName: on ? "checkmark.shield.fill" : "checkmark.shield")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .regular))
                 Text(on ? "逐条确认" : "自动写入")
-                    .font(JieboFont.ui(12, weight: .medium))
+                    .font(JieboFont.ui(11, weight: .regular))
             }
-            .foregroundStyle(on ? JieboColor.brass : JieboColor.dim)
+            // 次级：关态 ink2 可读、无填充；开态浅 brass；字号 11 让出主焦点给模式/模型
+            .foregroundStyle(on ? JieboColor.brass : JieboColor.ink2)
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(on ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
+            .background(on ? JieboColor.brass.opacity(0.10) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
             .hitTarget() // P6：视觉 32 高，命中 44
         }
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(on ? "写入前确认" : "自动写入")
     }
 
@@ -323,14 +327,15 @@ struct ComposerView: View {
         let plane = store.active?.policy == "plane"
         return Button(action: store.togglePolicy) {
             Text(plane ? "策略层" : "现状")
-                .font(JieboFont.ui(12, weight: .medium))
-                .foregroundStyle(plane ? JieboColor.brass : JieboColor.dim)
+                .font(JieboFont.ui(11, weight: .regular))
+                .foregroundStyle(plane ? JieboColor.brass : JieboColor.ink2)
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(plane ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
+                .background(plane ? JieboColor.brass.opacity(0.10) : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                 .hitTarget()
         }
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(plane ? "策略层" : "现状路径")
     }
 
@@ -405,7 +410,7 @@ struct ComposerView: View {
                         }
                         .hitTarget() // P6：滑块视觉 32 高不变，命中 44
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressScaleButtonStyle())
             }
         }
         .padding(2)
@@ -442,5 +447,6 @@ struct ComposerView: View {
             .clipShape(Capsule())
             .hitTarget()
         }
+        .buttonStyle(PressScaleButtonStyle())
     }
 }

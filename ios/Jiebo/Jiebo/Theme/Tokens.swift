@@ -35,7 +35,8 @@ enum JieboPalette: String, CaseIterable, Identifiable {
     var light: JieboSurfaces {
         switch self {
         case .neutral:
-            JieboSurfaces(bg: 0xFAFAFA, sidebar: 0xFAFAFA, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xECECEC, accent: 0x171717, user: 0xF4F4F5)
+            // sidebar 相对 paper 肉眼可辨的一档灰（栏宽不动）
+            JieboSurfaces(bg: 0xFAFAFA, sidebar: 0xE8E8EA, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xE0E0E4, accent: 0x171717, user: 0xF0F0F2)
         case .paper:
             JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEFE9DD, panel: 0xFFFCFA, text: 0x1C1916, muted: 0x5C574F, border: 0xD4CDBF, accent: 0x1A4F41, user: 0xE7E1D4)
         case .sand:
@@ -150,9 +151,12 @@ enum JieboColor {
 
     static let brass = Color(light: 0xC4A36A, dark: 0xC4A36A)
     static let ok = Color(light: 0x16A34A, dark: 0x7DCE98)
+    /// 工具卡「完成」次级绿：比 ok 降饱和，避免和终稿抢权
+    static let okSoft = Color(light: 0x3D8F5A, dark: 0x6A9E7A)
     static let danger = Color(light: 0xDC2626, dark: 0xE07068)
     static let clay = danger
     static let okBg = Color(light: 0xDCFCE7, dark: 0x16301F)
+    static let okBgSoft = Color(light: 0xE8F5EC, dark: 0x14241A)
     static let run = Color(light: 0x2563EB, dark: 0x7AA5F8)
     static let runBg = Color(light: 0xDBEAFE, dark: 0x1B2942)
     static let dangerBg = Color(light: 0xFEE2E2, dark: 0x3A1D1B)
@@ -220,11 +224,12 @@ enum JieboMotion {
     }
 
     static func snappy(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .spring(duration: 0.32, bounce: 0.22)
+        // 统一约 120ms 量级手感；chevron/模式滑块共用
+        reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.18)
     }
 
     static func fade(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.22)
+        reduceMotion ? nil : .easeOut(duration: 0.16)
     }
 }
 
@@ -234,8 +239,8 @@ struct PressScaleButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.9 : 1)
-            .animation(reduceMotion ? nil : .spring(duration: 0.22, bounce: 0.2), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.92 : 1)
+            .animation(reduceMotion ? nil : .spring(duration: 0.18, bounce: 0.16), value: configuration.isPressed)
     }
 }
 
