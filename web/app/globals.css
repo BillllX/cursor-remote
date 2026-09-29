@@ -2379,7 +2379,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .tree-file.on,
 .tree-dir.on > summary {
-  background: var(--bg-user);
+  background: color-mix(in srgb, var(--text) 14%, var(--bg-sidebar));
 }
 
 .tree-file:hover,
@@ -2394,17 +2394,20 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .tree-actions {
   display: flex;
-  gap: 6px;
-  padding: 0 2px 6px;
+  align-items: center;
+  gap: 16px;
+  padding: 2px 14px 8px;
 }
 
 .tree-action,
 .tree-empty-add {
   border: 0;
   background: transparent;
-  color: var(--muted);
-  font-size: 11px;
-  padding: 2px 0;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  min-height: 32px;
+  padding: 0;
   cursor: pointer;
 }
 
@@ -3373,6 +3376,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   max-height: none;
 }
 
+.file-tree-browser .tree-actions {
+  display: none;
+}
+
 .file-tree-browser .tree-file,
 .file-tree-browser .tree-dir > summary {
   align-items: center;
@@ -4057,8 +4064,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
   .files-browser-body .tree-action,
   .files-browser-body .tree-empty-add {
-    min-height: 44px;
-    font-size: 15px;
+    min-height: 32px;
+    font-size: 13px;
   }
 
   .composer-menu,
