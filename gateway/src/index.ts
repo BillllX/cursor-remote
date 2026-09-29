@@ -24,11 +24,17 @@ import {
 import { dialectOverlay } from "../../shared/dialect.ts";
 import {
   buildCrewAgents,
-  crewModelOf,
+  crewAgentToken,
   crewRoleOf,
   isCrewRole,
   isCrewToolName,
+  pickReviewPanel,
+  resolveCrewModel,
+  reviewPanelPrompt,
+  rosterKey,
+  wantsMultiModelReview,
   workspaceConfinePrompt,
+  type ReviewBinding,
 } from "../../shared/crew.ts";
 import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../shared/preview.ts";
 import {
@@ -221,6 +227,8 @@ type Slot = {
   approvalCallId: string | null;
   runStats: RunStats;
   dialect: boolean;
+  /** 已登记、且彼此模型不同的评审子代理。undefined 表示还没跟目录对齐过。 */
+  reviewRoster?: ReviewBinding[];
   /** 这一轮还没被客户端确认的正文。断线后靠它补快照 */
   transcript?: RunTranscript;
   runFlush?: ReturnType<typeof setTimeout>;
@@ -679,6 +687,7 @@ function persistTenant(tenant: Tenant, slots = liveSlotsOf(tenant)) {
       model: slot.model,
       edited: slot.edited,
       checkpoints: slot.checkpoints,
+      reviewRoster: slot.reviewRoster,
     });
   }
   tenant.disk.slots = [...byId.values()];
@@ -961,7 +970,21 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     approvalCallId: null,
     runStats: { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 },
     dialect: true,
+    reviewRoster: rosterFromDisk(saved?.reviewRoster),
   };
+}
+
+function rosterFromDisk(raw: DiskSlot["reviewRoster"]): ReviewBinding[] | undefined {
+  if (!Array.isArray(raw)) return;
+  const rows: ReviewBinding[] = [];
+  for (const item of raw) {
+    if (!item || typeof item.name !== "string" || typeof item.modelId !== "string") continue;
+    const name = item.name.trim();
+    const modelId = item.modelId.trim();
+    if (!name || !modelId) continue;
+    rows.push({ name, modelId });
+  }
+  return raw.length ? rows : undefined;
 }
 
 function slotOf(conn: Conn, chatId: string): Slot {
@@ -1147,29 +1170,37 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
     sandboxOptions: { enabled: sandbox },
   };
   const base = { apiKey, model: { id: modelId }, local };
-  const withCrew = {
-    ...base,
-    agents: buildCrewAgents(
-      modelId,
-      catalog,
-      cwd,
-      slot.dialect === false ? undefined : dialectOverlay,
-    ),
-  };
+  const overlay = slot.dialect === false ? undefined : dialectOverlay;
+  const panel = [...(slot.reviewRoster ?? pickReviewPanel(modelId, catalog))];
 
-  const open = async (agentsOn: boolean, resumeId: string | null) => {
-    const opts = agentsOn ? withCrew : base;
+  const open = async (next: ReviewBinding[] | null, resumeId: string | null) => {
+    const opts = next
+      ? { ...base, agents: buildCrewAgents(modelId, catalog, cwd, overlay, next) }
+      : base;
     if (resumeId) return Agent.resume(resumeId, opts);
     return Agent.create(opts);
   };
 
+  // 某个评审模型被拒时丢掉这一个再试，保留 explore / builder 和其余评审。
+  // Agent.resume 会不会吃进新的 agents 没有类型保证，名单变化时上层会另开 agent。
   const openWithCrewFallback = async (resumeId: string | null) => {
-    try {
-      return await open(true, resumeId);
-    } catch (err) {
-      if (isAgentMissing(err)) throw err;
-      console.error("crew agents rejected, retrying without them", err);
-      return await open(false, resumeId);
+    let next = panel;
+    let bare = false;
+    while (true) {
+      try {
+        return await open(bare ? null : next, resumeId);
+      } catch (err) {
+        if (isAgentMissing(err)) throw err;
+        if (bare) throw err;
+        if (next.length) {
+          const dropped = next[next.length - 1];
+          console.error("drop reviewer after crew reject", dropped.modelId, err);
+          next = next.slice(0, -1);
+          continue;
+        }
+        console.error("crew agents rejected, retrying without them", err);
+        bare = true;
+      }
     }
   };
 
@@ -1188,6 +1219,23 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
   slot.agentId = slot.agent.agentId;
   persistConn(conn);
   return slot.agent;
+}
+
+async function syncReviewRoster(conn: Conn, slot: Slot, lead: string) {
+  const apiKey = process.env.CURSOR_API_KEY?.trim();
+  const catalog = apiKey ? await listModels(apiKey) : [];
+  const next = pickReviewPanel(lead, catalog);
+  const known = slot.reviewRoster;
+  const same = known ? rosterKey(known) === rosterKey(next) : false;
+  if (same) return;
+  const stale = known !== undefined || Boolean(slot.agent || slot.agentId);
+  if (stale && (slot.agent || slot.agentId)) {
+    if (slot.agent) await disposeSlot(slot);
+    slot.agentId = null;
+    slot.reseed = true;
+  }
+  slot.reviewRoster = next;
+  if (stale) persistConn(conn);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1249,7 +1297,7 @@ ${pieces.join("\n\n")}
 ${prompt}`;
 }
 
-function conversationToTurns(conv: unknown[]): HistoryTurn[] {
+function conversationToTurns(conv: unknown[], roster?: ReviewBinding[]): HistoryTurn[] {
   const out: HistoryTurn[] = [];
   for (const item of conv) {
     if (!isRecord(item) || item.type === "shellConversationTurn") continue;
@@ -1284,7 +1332,7 @@ function conversationToTurns(conv: unknown[]): HistoryTurn[] {
           result,
           status,
           agent: crewRoleOf(name, msg.args),
-          model: crewModelOf(msg.args),
+          model: resolveCrewModel(name, msg.args, roster),
         });
       }
     }
@@ -1314,7 +1362,7 @@ async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
       try {
         if (typeof run.supports === "function" && !run.supports("conversation")) continue;
         const conv = await run.conversation();
-        turns.push(...conversationToTurns(conv as unknown[]));
+        turns.push(...conversationToTurns(conv as unknown[], slot.reviewRoster));
       } catch {
         continue;
       }
@@ -2236,6 +2284,7 @@ function wrapPrompt(
   files?: string[],
   rules?: string,
   cwd?: string,
+  panel: ReviewBinding[] = [],
 ): string {
   let body = text;
   if (files?.length) {
@@ -2259,7 +2308,8 @@ ${body}`;
   if (mode === "plan") {
     return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
 方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。
-可以派出 explore 子代理做只读摸底。不要派出 builder 或 reviewer。
+可以派出 explore 子代理做只读摸底。不要派出 builder。
+${reviewPanelPrompt(panel)}
 
 ${body}`;
   }
@@ -2270,7 +2320,8 @@ Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-ov
 
 命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
 
-CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement), reviewer (cross-review with a different model). Spawn them for parallel investigation or a second pair of eyes. Skip them for a trivial one-file edit. Subagents must also stay inside the current workspace.
+CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement). Subagents must stay inside the current workspace.
+${reviewPanelPrompt(panel)}
 
 ${body}`;
 }
@@ -2826,6 +2877,113 @@ async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: st
   }
 }
 
+function clipReviewError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : "评审失败";
+  return raw.replace(/cursor_[A-Za-z0-9_-]+/g, "cursor_…").slice(0, 300);
+}
+
+function reviewsForLead(rows: Array<{ name: string; modelId: string; ok: boolean; text: string }>): string {
+  if (!rows.length) return "";
+  const body = rows
+    .map((row) => `## ${row.name}（${row.modelId}）\n${row.ok ? row.text : `这次没评成：${row.text}`}`)
+    .join("\n\n");
+  return [
+    "",
+    "网关已经用不同模型分别评审过上面的内容。你只汇总一致结论、分歧和必须先改的点。",
+    "不要再派 reviewer 或 review-* 重复评审，也不要说你又调用了这些模型。",
+    body,
+  ].join("\n");
+}
+
+async function runReviewPanel(
+  ws: WebSocket,
+  conn: Conn,
+  slot: Slot,
+  panel: ReviewBinding[],
+  userText: string,
+  cwd: string,
+  apiKey: string,
+  epoch: number,
+): Promise<string> {
+  const sandbox = sandboxEnabledForTenant(conn.tenant);
+  const source = userText.length > 24_000 ? `${userText.slice(0, 24_000)}\n…（原文过长，已截断）` : userText;
+  send(ws, {
+    type: "text-delta",
+    chatId: slot.chatId,
+    text: `正在用 ${panel.map((row) => row.modelId).join("、")} 分别评审。\n\n`,
+  });
+  const jobs = panel.map(async (row) => {
+    const callId = crypto.randomUUID();
+    if (slot.finished || slot.epoch !== epoch) return null;
+    const args = { subagent_type: row.name, description: `${row.modelId} 评审` };
+    if (!slot.openTools) slot.openTools = new Map();
+    slot.openTools.set(callId, { name: "task", args, agent: "reviewer", model: row.modelId });
+    slot.runStats.toolStarts += 1;
+    send(ws, {
+      type: "tool-started",
+      chatId: slot.chatId,
+      callId,
+      name: "task",
+      args,
+      agent: "reviewer",
+      model: row.modelId,
+    });
+    const started = Date.now();
+    const finish = (status: "completed" | "error", result: string) => {
+      slot.openTools?.delete(callId);
+      if (slot.epoch !== epoch) return;
+      noteToolCall(slot.tenantId);
+      if (status === "completed") noteOutput(slot.tenantId, result.length);
+      noteRun(slot.tenantId, Date.now() - started);
+      send(ws, {
+        type: "tool-completed",
+        chatId: slot.chatId,
+        callId,
+        name: "task",
+        status,
+        result,
+        agent: "reviewer",
+        model: row.modelId,
+      });
+    };
+    try {
+      const result = await Promise.race([
+        Agent.prompt(
+          [
+            `你是独立评审，绑定模型 ${row.modelId}。只评审，不要改文件，不要派子代理。`,
+            workspaceConfinePrompt(cwd),
+            "对照仓库里的相关代码。列出具体问题，按 CRITICAL / MAJOR / MINOR。没有问题的部分直接说可行。用中文。",
+            "",
+            "要评审的内容：",
+            source,
+          ].join("\n"),
+          {
+            apiKey,
+            model: { id: row.modelId },
+            local: { cwd, sandboxOptions: { enabled: sandbox } },
+            disallowedTools: ["edit", "delete", "shell", "task", "mcp", "applyAgentDiff", "generateImage"],
+          },
+        ),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("评审超时")), 4 * 60_000);
+        }),
+      ]);
+      if (slot.finished || slot.epoch !== epoch) return null;
+      const text = (result.result || "").trim() || result.error?.message || "没有返回正文";
+      const ok = result.status === "finished" && Boolean(result.result?.trim());
+      finish(ok ? "completed" : "error", text);
+      return { name: row.name, modelId: row.modelId, ok, text };
+    } catch (err) {
+      if (slot.finished || slot.epoch !== epoch) return null;
+      const text = clipReviewError(err);
+      finish("error", text);
+      return { name: row.name, modelId: row.modelId, ok: false, text };
+    }
+  });
+  const rows = (await Promise.all(jobs)).filter((row): row is NonNullable<typeof row> => Boolean(row));
+  return reviewsForLead(rows);
+}
+
 async function handlePrompt(
   ws: WebSocket,
   conn: Conn,
@@ -2922,12 +3080,15 @@ async function handlePrompt(
   slot.model = usedModel;
   slot.mode = mode;
   conn.model = usedModel;
+  const externalEarly = externalRoute(usedModel);
+  if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
   let prompt = wrapPrompt(
     userText,
     mode,
     files,
     loadWorkspaceRules(cwd),
     cwd,
+    slot.reviewRoster || [],
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
@@ -2949,8 +3110,15 @@ async function handlePrompt(
 
   // P11：第三方 OpenAI 兼容模型（"minimax:MiniMax-M2" 等）——纯问答：
   // 无工具/检查点/confirm-writes；历史由客户端随 prompt 上行（iOS 是会话内容权威源）
-  const external = externalRoute(usedModel);
+  const external = externalEarly;
   if (external) {
+    if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
+      send(ws, {
+        type: "text-delta",
+        chatId: slot.chatId,
+        text: "当前模型是第三方纯问答，不能分别调用目录里的其他模型。下面只由这一个模型回答。\n\n",
+      });
+    }
     await runExternalChat(ws, slot, external, {
       text: userText,
       images: safeImages,
@@ -3006,7 +3174,9 @@ async function handlePrompt(
   ) => {
     const parent = parentCallId ? crewMeta.get(parentCallId) : undefined;
     const agent = crewRoleOf(name, args) || parent?.agent;
-    const model = crewModelOf(args) || parent?.model;
+    const model =
+      resolveCrewModel(name, args, slot.reviewRoster) ||
+      (crewAgentToken(name, args) ? undefined : parent?.model);
     const row = {
       agent,
       model,
@@ -3099,8 +3269,8 @@ async function handlePrompt(
     const role = crewRoleOf(name, args);
     let reason = "";
     if (mode === "ask") reason = "Ask 模式不会派子代理。";
-    else if (mode === "plan" && role && role !== "explore") {
-      reason = "Plan 模式只能派 explore 做只读摸底。";
+    else if (mode === "plan" && role === "builder") {
+      reason = "Plan 模式不会派 builder 改代码。";
     }
     if (!reason) return false;
     if (blockedCalls.has(callId)) return true;
@@ -3227,6 +3397,22 @@ async function handlePrompt(
   };
 
   try {
+    if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
+      const panel = slot.reviewRoster || [];
+      const apiKey = process.env.CURSOR_API_KEY?.trim();
+      if (panel.length < 2) {
+        send(ws, {
+          type: "text-delta",
+          chatId: slot.chatId,
+          text: "目录里除了当前模型，没有足够的其他模型可以并行评审。\n\n",
+        });
+        prompt +=
+          "\n\n目录里除了当前模型，没有足够的其他模型可以并行评审。直接告诉用户，不要用同一个模型假装多家。";
+      } else if (apiKey) {
+        prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch);
+        if (slot.finished || slot.epoch !== epoch) return;
+      }
+    }
     const agent = await ensureAgent(conn, slot);
     if (slot.reseed) {
       prompt = attachReseedContext(conn.tenant, slot.chatId, userText, prompt);

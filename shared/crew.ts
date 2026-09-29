@@ -69,8 +69,99 @@ function pickReviewer(lead: string, catalog: string[]): { id: string } | "inheri
   return "inherit";
 }
 
+export type ReviewBinding = { name: string; modelId: string };
+
+const PANEL_CAP = 4;
+const VENDOR_RANK = [
+  "anthropic",
+  "openai",
+  "google",
+  "xai",
+  "zhipu",
+  "moonshot",
+  "deepseek",
+  "alibaba",
+  "cursor",
+  "other",
+];
+
+function isLiteModel(id: string): boolean {
+  return /(^|-)(fast|small|mini|nano)(-|$)/i.test(id);
+}
+
+export function rosterKey(rows: ReviewBinding[]): string {
+  return rows.map((row) => `${row.name}=${row.modelId}`).join("|");
+}
+
+/** 从目录里挑最多 4 个、彼此不同的评审模型。主模型本身不进名单。 */
+export function pickReviewPanel(lead: string, catalog: string[]): ReviewBinding[] {
+  const leadKey = lead.trim().toLowerCase();
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of catalog) {
+    const id = raw.trim();
+    const key = id.toLowerCase();
+    if (!id || id.includes(":") || key === leadKey || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(id);
+  }
+  const byVendor = new Map<string, string[]>();
+  for (const id of unique) {
+    const vendor = vendorHint(id);
+    const list = byVendor.get(vendor) || [];
+    list.push(id);
+    byVendor.set(vendor, list);
+  }
+  const best = (ids: string[]) => ids.find((id) => !isLiteModel(id)) || ids[0];
+  const leadVendor = vendorHint(lead);
+  const order = [...VENDOR_RANK.filter((vendor) => vendor !== leadVendor), leadVendor];
+  const picked: string[] = [];
+  for (const vendor of order) {
+    const ids = byVendor.get(vendor);
+    if (!ids?.length) continue;
+    picked.push(best(ids));
+    if (picked.length >= PANEL_CAP) break;
+  }
+  if (picked.length < 2) {
+    for (const id of unique) {
+      if (picked.some((item) => item.toLowerCase() === id.toLowerCase())) continue;
+      picked.push(id);
+      if (picked.length >= 2) break;
+    }
+  }
+  return picked.map((modelId, index) => ({
+    name: index === 0 ? "reviewer" : `review-${index + 1}`,
+    modelId,
+  }));
+}
+
+export function reviewPanelPrompt(panel: ReviewBinding[]): string {
+  if (!panel.length) return "";
+  const lines = panel.map((row) => `- ${row.name} → ${row.modelId}`).join("\n");
+  return [
+    "评审名单：每个名字绑定一个不同的模型。同一个名字再派一次，用的还是同一个模型。",
+    lines,
+    "用户要求不同模型一起评审时，网关会直接调用这份名单。你不要再把这些名字各派一遍。",
+    "只是改完想要第二双眼睛时，只派 reviewer 一次。",
+  ].join("\n");
+}
+
+export function wantsMultiModelReview(text: string): boolean {
+  const compact = text.replace(/\s+/g, "");
+  if (!/评审|审查|审一下|审这个|review/i.test(compact)) return false;
+  return /多个模型|不同模型|多模型|各模型|各个模型|几家模型|多家模型|分别评审|共同评审|multiple models|different models/i.test(
+    compact,
+  );
+}
+
 export function isCrewRole(value: string | undefined | null): value is CrewRole {
   return value === "explore" || value === "builder" || value === "reviewer";
+}
+
+export function normalizeCrewRole(value: string | undefined | null): CrewRole | undefined {
+  const n = value?.trim().toLowerCase() || "";
+  if (n === "explore" || n === "builder" || n === "reviewer") return n;
+  if (n === "review" || /^review-\d+$/.test(n) || /^reviewer-\d+$/.test(n)) return "reviewer";
 }
 
 export function isCrewToolName(name: string): boolean {
@@ -78,25 +169,41 @@ export function isCrewToolName(name: string): boolean {
   return n === "task" || n === "agent" || isCrewRole(n);
 }
 
-export function crewRoleOf(name: string, args?: unknown): CrewRole | undefined {
-  const n = name.trim().toLowerCase();
-  if (isCrewRole(n)) return n;
+const CREW_ARG_KEYS = [
+  "subagent_type",
+  "subagentType",
+  "subagent",
+  "agent",
+  "name",
+  "type",
+  "role",
+];
+
+export function crewAgentToken(name: string, args?: unknown): string | undefined {
+  const direct = name.trim().toLowerCase();
+  if (direct && direct !== "task" && direct !== "agent" && normalizeCrewRole(direct)) return direct;
   if (!args || typeof args !== "object") return;
   const record = args as Record<string, unknown>;
-  for (const key of [
-    "subagent_type",
-    "subagentType",
-    "subagent",
-    "agent",
-    "name",
-    "type",
-    "role",
-  ]) {
+  for (const key of CREW_ARG_KEYS) {
     const value = record[key];
-    if (typeof value === "string" && isCrewRole(value.trim().toLowerCase())) {
-      return value.trim().toLowerCase() as CrewRole;
-    }
+    if (typeof value !== "string") continue;
+    const token = value.trim().toLowerCase();
+    if (normalizeCrewRole(token)) return token;
   }
+}
+
+export function crewRoleOf(name: string, args?: unknown): CrewRole | undefined {
+  const token = crewAgentToken(name, args);
+  return token ? normalizeCrewRole(token) : undefined;
+}
+
+export function resolveCrewModel(
+  name: string,
+  args: unknown,
+  roster?: ReviewBinding[],
+): string | undefined {
+  const bound = roster?.find((row) => row.name === crewAgentToken(name, args))?.modelId;
+  return crewModelOf(args) || bound;
 }
 
 export function crewModelOf(args?: unknown): string | undefined {
@@ -127,9 +234,10 @@ export function buildCrewAgents(
   catalog: string[],
   cwd?: string,
   overlayFor?: (modelId: string) => string,
+  reviewers?: ReviewBinding[],
 ): Record<string, CrewAgentDef> {
   const exploreModel = pickExplore(lead, catalog);
-  const reviewerModel = pickReviewer(lead, catalog);
+  const panel = reviewers ?? pickReviewPanel(lead, catalog);
   const bound = cwd ? `${workspaceConfinePrompt(cwd)} ` : "";
   const extra = (model: { id: string } | "inherit") => {
     const id = model === "inherit" ? lead : model.id;
@@ -147,7 +255,26 @@ export function buildCrewAgents(
     }
     return `${bound}${extra(model)}${english}`;
   };
-  return {
+  const reviewOf = (name: string, model: { id: string } | "inherit"): CrewAgentDef => {
+    const id = model === "inherit" ? lead : model.id;
+    const stamp =
+      model === "inherit"
+        ? "不要再派子代理。"
+        : `你绑定的模型是 ${id}。不要再派子代理，也不要自称别的模型。`;
+    return {
+      description:
+        model === "inherit"
+          ? "Cross-reviewer. Use once after edits for a second look. Only review files in this workspace."
+          : `Cross-reviewer bound to ${id}. Spawning ${name} again still uses ${id}. Only review files in this workspace.`,
+      prompt: `${promptOf(
+        "reviewer",
+        model,
+        "You review the plan or diff you are given. Read surrounding code inside this working directory. List concrete issues. Do not rewrite the feature unless you find a critical bug you can fix in a few lines. Do not expand scope or touch files outside this workspace.",
+      )} ${stamp}`,
+      model,
+    };
+  };
+  const agents: Record<string, CrewAgentDef> = {
     explore: {
       description:
         "Read-only explorer. Use to search the current workspace, map files, and gather context in parallel without editing. Stay inside the working directory.",
@@ -168,15 +295,11 @@ export function buildCrewAgents(
       ),
       model: "inherit",
     },
-    reviewer: {
-      description:
-        "Cross-reviewer. Use after edits to inspect the diff for bugs, regressions, and missed cases. Prefer a second opinion, not a rewrite. Only review files in this workspace.",
-      prompt: promptOf(
-        "reviewer",
-        reviewerModel,
-        "You review the current workspace changes. Read the diff and surrounding code inside this working directory. List concrete issues. Do not rewrite the feature unless you find a critical bug you can fix in a few lines. Do not expand scope or touch files outside this workspace.",
-      ),
-      model: reviewerModel,
-    },
   };
+  if (panel.length) {
+    for (const row of panel) agents[row.name] = reviewOf(row.name, { id: row.modelId });
+  } else {
+    agents.reviewer = reviewOf("reviewer", pickReviewer(lead, catalog));
+  }
+  return agents;
 }

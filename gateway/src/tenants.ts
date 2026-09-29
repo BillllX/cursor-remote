@@ -19,6 +19,8 @@ export type DiskSlot = {
   model?: string;
   edited: string[];
   checkpoints: unknown[];
+  /** 该会话已登记的评审子代理。缺省表示升级前的旧会话，下次要重建 agent。 */
+  reviewRoster?: { name: string; modelId: string }[];
 };
 
 export type DiskState = {

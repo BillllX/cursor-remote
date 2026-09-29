@@ -10,9 +10,18 @@ export function isCrewRole(value: string | undefined | null): value is CrewRole 
   return value === "explore" || value === "builder" || value === "reviewer";
 }
 
+function normalizeCrewRole(value: string | undefined | null): CrewRole | undefined {
+  const n = value?.trim().toLowerCase() || "";
+  if (n === "explore" || n === "builder" || n === "reviewer") return n;
+  if (n === "review" || /^review-\d+$/.test(n) || /^reviewer-\d+$/.test(n)) return "reviewer";
+}
+
 export function crewRoleOf(name: string, args?: unknown): CrewRole | undefined {
-  const n = name.trim().toLowerCase();
-  if (isCrewRole(n)) return n;
+  const direct = name.trim().toLowerCase();
+  if (direct && direct !== "task" && direct !== "agent") {
+    const role = normalizeCrewRole(direct);
+    if (role) return role;
+  }
   if (!args || typeof args !== "object") return;
   const record = args as Record<string, unknown>;
   for (const key of [
@@ -25,14 +34,14 @@ export function crewRoleOf(name: string, args?: unknown): CrewRole | undefined {
     "role",
   ]) {
     const value = record[key];
-    if (typeof value === "string" && isCrewRole(value.trim().toLowerCase())) {
-      return value.trim().toLowerCase() as CrewRole;
-    }
+    if (typeof value !== "string") continue;
+    const role = normalizeCrewRole(value);
+    if (role) return role;
   }
 }
 
 export function crewLabel(name: string, args?: unknown, agent?: string): string {
-  const role = (isCrewRole(agent) ? agent : undefined) || crewRoleOf(name, args);
+  const role = normalizeCrewRole(agent) || crewRoleOf(name, args);
   if (role) return CREW_LABEL[role];
   return "";
 }
