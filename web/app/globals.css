@@ -541,7 +541,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   background: currentColor;
   clip-path: polygon(30% 12%, 78% 50%, 30% 88%, 30% 12%);
   transform: none;
-  transition: transform 160ms ease;
+  transition: transform var(--dur-micro) var(--ease-out);
 }
 
 .chat-group-label.open .chat-group-chevron {
@@ -2113,6 +2113,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   padding: 6px;
   box-shadow: 0 10px 28px rgba(28, 25, 22, 0.12);
   z-index: 40;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+  transform-origin: top left;
 }
 
 .model-menu-group + .model-menu-group {
@@ -2313,7 +2315,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   width: 10px;
   height: 10px;
   color: var(--dim);
-  transition: transform 160ms ease;
+  transition: transform var(--dur-micro) var(--ease-out);
 }
 
 .tree-dir[open] > summary .tree-chevron {
@@ -2375,6 +2377,15 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .git-mark.dir {
   color: #e2b340;
   font-size: 14px;
+}
+
+.tree-file,
+.tree-dir > summary,
+.workspace-menu-item,
+.chat-group-label {
+  transition:
+    background var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
 }
 
 .tree-file.on,
@@ -2439,6 +2450,19 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border-radius: 8px;
   padding: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  animation: jiebo-pop 150ms var(--ease-out) both;
+  transform-origin: top left;
+}
+
+@keyframes jiebo-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .tree-menu button {
@@ -3175,6 +3199,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   box-shadow: var(--shadow);
   z-index: 8;
   display: grid;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+  transform-origin: bottom right;
 }
 
 .composer-menu-label {
@@ -4810,6 +4836,12 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   .files-browser,
   .composer-menu,
   .model-menu,
+  .tree-menu,
+  .tree-file,
+  .tree-dir > summary,
+  .tree-chevron,
+  .chat-group-chevron,
+  .workspace-menu-item,
   .preview-reopen,
   .mode-thumb,
   .mode-btn,
