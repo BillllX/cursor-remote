@@ -219,14 +219,21 @@ private struct PhoneWorkspaceList: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    if store.workspaces.isEmpty {
-                        workspaceRow(name: store.currentWorkspaceName, path: store.currentWorkspacePath, current: true)
+                    let root = store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot
+                    let userItems = store.workspaces.filter { $0.user || sameCwd($0.path, root) }
+                    let rest = store.workspaces.filter { item in !userItems.contains(where: { sameCwd($0.path, item.path) }) }
+                    if userItems.isEmpty {
+                        workspaceRow(name: "USER", path: root, current: sameCwd(root, store.currentWorkspacePath), user: true)
                     }
-                    ForEach(store.workspaces) { item in
+                    ForEach(userItems) { item in
+                        workspaceRow(name: "USER", path: item.path, current: sameCwd(item.path, store.currentWorkspacePath), user: true)
+                    }
+                    ForEach(rest) { item in
                         workspaceRow(
                             name: item.name,
                             path: item.path,
-                            current: sameCwd(item.path, store.currentWorkspacePath)
+                            current: sameCwd(item.path, store.currentWorkspacePath),
+                            user: false
                         )
                     }
                 }
@@ -282,18 +289,26 @@ private struct PhoneWorkspaceList: View {
         }
     }
 
-    private func workspaceRow(name: String, path: String, current: Bool) -> some View {
+    private func workspaceRow(name: String, path: String, current: Bool, user: Bool) -> some View {
         Button {
             store.switchWorkspace(to: path)
             close()
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .foregroundStyle(JieboColor.dim)
-                Text(name)
-                    .font(JieboFont.ui(16, weight: current ? .semibold : .regular))
-                    .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1)
+                Image(systemName: user ? "person.crop.rectangle" : "folder")
+                    .foregroundStyle(user ? JieboColor.pine : JieboColor.dim)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                        .font(JieboFont.ui(16, weight: user || current ? .semibold : .regular))
+                        .foregroundStyle(user ? JieboColor.pine : JieboColor.ink)
+                        .lineLimit(1)
+                    if user {
+                        Text("全部子工作区 · 网站只在这里公开")
+                            .font(JieboFont.ui(11))
+                            .foregroundStyle(JieboColor.dim)
+                            .lineLimit(1)
+                    }
+                }
                 Spacer(minLength: 0)
                 if current {
                     Text("正在用")
@@ -302,7 +317,9 @@ private struct PhoneWorkspaceList: View {
                 }
             }
             .padding(.horizontal, 16)
-            .frame(minHeight: 48)
+            .frame(minHeight: user ? 58 : 48)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(user ? JieboColor.pine.opacity(0.10) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

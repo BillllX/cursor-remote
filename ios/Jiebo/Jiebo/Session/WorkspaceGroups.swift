@@ -15,15 +15,13 @@ func sameCwd(_ a: String?, _ b: String?) -> Bool {
     normPath(a ?? "") == normPath(b ?? "")
 }
 
-/// 工作区显示名：root 下的子工作区显示相对子路径（比只取末段信息量大）；root 本身显示末段
-///（对齐 web workspaceLabel）
+/// 工作区显示名：root 下的子工作区显示相对子路径；用户根目录固定叫 USER。
 func workspaceLabel(_ path: String, root: String) -> String {
     let abs = normPath(path)
     let base = normPath(root)
-    if abs.isEmpty { return base.split(separator: "/").last.map(String.init) ?? "工作区" }
-    if base.isEmpty || abs == base {
-        return base.split(separator: "/").last.map(String.init) ?? (abs.isEmpty ? "工作区" : abs)
-    }
+    if abs.isEmpty { return base.isEmpty ? "工作区" : "USER" }
+    if base.isEmpty { return abs.split(separator: "/").last.map(String.init) ?? abs }
+    if abs == base { return "USER" }
     if abs.hasPrefix(base + "/") { return String(abs.dropFirst(base.count + 1)) }
     return abs.split(separator: "/").last.map(String.init) ?? abs
 }
@@ -35,6 +33,7 @@ struct WorkspaceGroup: Identifiable {
     let key: String
     let path: String
     let name: String
+    let user: Bool
     let chats: [ChatSession]
 
     var id: String { key }
@@ -85,15 +84,16 @@ extension ChatStore {
     var workspaceGroups: [WorkspaceGroup] {
         let root = groupRoot
         let known: [WorkspaceItem] = workspaces.isEmpty
-            ? (root.nilIfEmpty.map { [WorkspaceItem(path: $0, name: workspaceLabel($0, root: $0))] } ?? [])
+            ? (root.nilIfEmpty.map { [WorkspaceItem(path: $0, name: "USER", user: true)] } ?? [])
             : workspaces
         var order: [String] = []
-        var byKey: [String: (path: String, name: String, chats: [ChatSession])] = [:]
+        var byKey: [String: (path: String, name: String, user: Bool, chats: [ChatSession])] = [:]
         for item in known {
             let key = normPath(item.path)
             // 同 key 重复项：后写覆盖（对齐 web Map 语义），但组序保首次位置不跳动
             if byKey[key] == nil { order.append(key) }
-            byKey[key] = (item.path, item.name, byKey[key]?.chats ?? [])
+            let user = item.user || sameCwd(item.path, root)
+            byKey[key] = (item.path, user ? "USER" : item.name, user, byKey[key]?.chats ?? [])
         }
         for chat in sidebarChats {
             let path = chat.cwd?.nilIfEmpty ?? root
@@ -101,16 +101,16 @@ extension ChatStore {
             if byKey[key] != nil {
                 byKey[key]?.chats.append(chat)
             } else {
-                byKey[key] = (path, workspaceLabel(path, root: root), [chat])
+                let user = sameCwd(path, root)
+                byKey[key] = (path, user ? "USER" : workspaceLabel(path, root: root), user, [chat])
                 order.append(key)
             }
         }
-        return order.compactMap { key -> WorkspaceGroup? in
+        let groups = order.compactMap { key -> WorkspaceGroup? in
             guard let entry = byKey[key] else { return nil }
-            // 对齐 web：空组只保留非 root 的（root 空组没意义——当前就在 root）
-            guard !entry.chats.isEmpty || (!root.isEmpty && !sameCwd(entry.path, root)) else { return nil }
-            return WorkspaceGroup(key: key, path: entry.path, name: entry.name, chats: entry.chats)
+            return WorkspaceGroup(key: key, path: entry.path, name: entry.name, user: entry.user, chats: entry.chats)
         }
+        return groups.sorted { $0.user && !$1.user }
     }
 
     /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd / 根目录。

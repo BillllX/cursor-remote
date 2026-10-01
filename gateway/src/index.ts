@@ -22,7 +22,7 @@ import {
   toolFingerprint,
 } from "../../shared/policy.ts";
 import { dialectOverlay } from "../../shared/dialect.ts";
-import { PUBLISH_AGENT_PROMPT } from "../../shared/publishPrompt.ts";
+import { PUBLISH_AGENT_PROMPT, PUBLISH_DENIED_PROMPT } from "../../shared/publishPrompt.ts";
 import {
   buildCrewAgents,
   crewAgentToken,
@@ -358,11 +358,17 @@ function sanitizeWorkspaceName(raw: string): string | null {
   return name;
 }
 
-function listWorkspaceItems(tenant: Tenant): { path: string; name: string }[] {
+function isUserWorkspace(cwd: string, root: string) {
+  const next = confinedCwd(cwd, root);
+  const base = confinedCwd(root, root);
+  return Boolean(next && base && next === base);
+}
+
+function listWorkspaceItems(tenant: Tenant): { path: string; name: string; user?: boolean }[] {
   const root = resolve(tenant.workspaceRoot);
   const skip = new Set(["node_modules", "dist", "coverage", "venv", "__pycache__"]);
   const byPath = new Map<string, string>();
-  byPath.set(root, basename(root) || root);
+  byPath.set(root, "USER");
   try {
     for (const name of readdirSync(root).sort()) {
       if (name.startsWith(".") || skip.has(name)) continue;
@@ -382,7 +388,9 @@ function listWorkspaceItems(tenant: Tenant): { path: string; name: string }[] {
     const rel = relative(root, cwd);
     byPath.set(cwd, rel || basename(cwd));
   }
-  return [...byPath.entries()].map(([path, name]) => ({ path, name }));
+  return [...byPath.entries()].map(([path, name]) =>
+    path === root ? { path, name: "USER", user: true as const } : { path, name },
+  );
 }
 
 function emitWorkspaces(ws: WebSocket, tenant: Tenant) {
@@ -2304,6 +2312,7 @@ function wrapPrompt(
   rules?: string,
   cwd?: string,
   panel: ReviewBinding[] = [],
+  atUserRoot = false,
 ): string {
   let body = text;
   if (files?.length) {
@@ -2328,7 +2337,7 @@ ${body}`;
   if (mode === "plan") {
     return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
 方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。
-不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。
+${atUserRoot ? "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。网站只能在这个 USER 工作区里做。" : "不要执行 jiebo-publish，也不要把它写进方案。对外网站只能在 USER 工作区里创建。"}
 可以派出 explore 子代理做只读摸底。不要派出 builder。
 ${reviewPanelPrompt(panel)}
 
@@ -2341,7 +2350,7 @@ Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-ov
 
 命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
 
-${PUBLISH_AGENT_PROMPT}
+${atUserRoot ? PUBLISH_AGENT_PROMPT : PUBLISH_DENIED_PROMPT}
 
 CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement). Subagents must stay inside the current workspace.
 ${reviewPanelPrompt(panel)}
@@ -3105,6 +3114,7 @@ async function handlePrompt(
   conn.model = usedModel;
   const externalEarly = externalRoute(usedModel);
   if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
+  const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
   let prompt = wrapPrompt(
     userText,
     mode,
@@ -3112,6 +3122,7 @@ async function handlePrompt(
     loadWorkspaceRules(cwd),
     cwd,
     slot.reviewRoster || [],
+    atUserRoot,
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
@@ -3207,6 +3218,29 @@ async function handlePrompt(
     };
     crewMeta.set(callId, row);
     return row;
+  };
+
+  const blockOffRootPublish = (name: string, args: unknown, callId: string) => {
+    if (!shellPublishes(name, args)) return false;
+    const root = conn.tenant?.workspaceRoot;
+    if (root && isUserWorkspace(cwd, root)) return false;
+    if (blockedCalls.has(callId)) return true;
+    blockedCalls.add(callId);
+    send(ws, {
+      type: "tool-completed",
+      chatId: slot.chatId,
+      callId,
+      name,
+      status: "error",
+      result: "对外网站只能在 USER 工作区里创建。",
+    });
+    send(ws, {
+      type: "text-delta",
+      chatId: slot.chatId,
+      text: "\n\n对外网站只能在 USER 工作区里创建。换到那个会话再做。",
+    });
+    if (run) void cancelRun(run);
+    return true;
   };
 
   const blockReadonlyWrite = (name: string, args: unknown, callId: string) => {
@@ -3379,6 +3413,7 @@ async function handlePrompt(
     if (
       !blockCrew(name, args, callId) &&
       !blockExploreWrite(name, args, callId, meta.parentCallId) &&
+      !blockOffRootPublish(name, args, callId) &&
       !blockReadonlyWrite(name, args, callId) &&
       !blockUnapprovedWrite(name, args, callId) &&
       !blockOutsideWorkspace(name, args, callId)

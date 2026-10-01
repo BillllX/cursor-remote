@@ -178,7 +178,7 @@ export type ServerMessage =
       /** 未停止的产品 Loop。L2 起随 ready 下发；L1 字段先占位 */
       loops?: LoopState[];
     }
-  | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
+  | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
   | { type: "session"; chatId: string; agentId: string; cwd: string }
   | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }

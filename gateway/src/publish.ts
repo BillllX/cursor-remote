@@ -613,6 +613,15 @@ export function createPublishController(options: {
     return best ? { tenant: best.tenant, cwd: best.cwd } : null;
   }
 
+  function atUserRoot(cwd: string, tenant: PublishTenant) {
+    return real(cwd) === real(tenant.workspaceRoot);
+  }
+
+  const offRoot = {
+    status: 403,
+    body: { ok: false, message: "对外网站只能在 USER 工作区里创建。换到用户根目录下的会话再执行 jiebo-publish。" },
+  };
+
   function messageFor(slot: Slot, listening: boolean) {
     const ticket = issueTicket(options.ticketSecret(), slot.tenantId, slot.gen, ticketTtlMs);
     const url = publicUrl(scheme(), host(), slot.tenantId, ticket);
@@ -665,6 +674,7 @@ export function createPublishController(options: {
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
     if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
     const existing = slots.get(found.tenant.id);
     const slot = existing ? await ensureAlive(found.tenant, existing) : null;
     if (!slot) return { status: 200, body: { ok: true, listening: false, message: "还没有公开的服务。" } };
@@ -677,6 +687,7 @@ export function createPublishController(options: {
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
     if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
     const slot = slots.get(found.tenant.id);
     if (!slot) return { status: 200, body: { ok: true, message: "当前没有公开的服务。" } };
     if (!alive(slot.pid)) {
@@ -700,6 +711,7 @@ export function createPublishController(options: {
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
     if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
     if (!existsSync(found.cwd) || !statSync(found.cwd).isDirectory()) {
       return { status: 400, body: { ok: false, message: "工作目录不存在。" } };
     }

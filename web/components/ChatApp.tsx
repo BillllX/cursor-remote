@@ -590,10 +590,10 @@ function preferChatCwd(current?: string, incoming?: string) {
   return incoming;
 }
 
-function FolderMark() {
+function FolderMark({ className = "workspace-menu-folder" }: { className?: string }) {
   return (
-    <svg className="workspace-menu-folder" viewBox="0 0 16 16" aria-hidden="true">
-      <path d="M2 3.8h4.2l1.2 1.4H14v7.2c0 .6-.4 1-1 1H3c-.6 0-1-.4-1-1V3.8Z" fill="currentColor" />
+    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M1.6 4.1h4.2l1.15 1.3H14.3v6.6c0 .6-.42 1-1 1H2.6c-.58 0-1-.4-1-1V4.1Z" fill="currentColor" />
     </svg>
   );
 }
@@ -601,8 +601,9 @@ function FolderMark() {
 function workspaceLabel(path: string, root: string) {
   const abs = normPath(path);
   const base = normPath(root);
-  if (!abs) return base.split("/").filter(Boolean).pop() || "工作区";
-  if (!base || abs === base) return base.split("/").filter(Boolean).pop() || abs || "工作区";
+  if (!abs) return base ? "USER" : "工作区";
+  if (!base) return abs.split("/").filter(Boolean).pop() || abs;
+  if (abs === base) return "USER";
   if (abs.startsWith(`${base}/`)) return abs.slice(base.length + 1);
   return abs.split("/").filter(Boolean).pop() || abs;
 }
@@ -1184,7 +1185,7 @@ export default function ChatApp() {
   const [hasApiKey, setHasApiKey] = useState(true);
   const [cwd, setCwd] = useState("");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [workspaces, setWorkspaces] = useState<{ path: string; name: string }[]>([]);
+  const [workspaces, setWorkspaces] = useState<{ path: string; name: string; user?: boolean }[]>([]);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceCreating, setWorkspaceCreating] = useState(false);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
@@ -1333,17 +1334,19 @@ export default function ChatApp() {
 
   const recentWorkspaces = useMemo(() => {
     const seen = new Set<string>();
-    const out: { path: string; name: string }[] = [];
+    const out: { path: string; name: string; user?: boolean }[] = [];
     for (const chat of chats) {
       const path = chat.cwd || workspaceRoot;
       if (!path) continue;
       const key = normPath(path);
       if (seen.has(key) || !inWorkspaceRoot(path, workspaceRoot || path)) continue;
       seen.add(key);
-      out.push({ path, name: workspaceLabel(path, workspaceRoot) });
+      const known = workspaces.find((item) => sameCwd(item.path, path));
+      const user = Boolean(known?.user) || sameCwd(path, workspaceRoot);
+      out.push({ path, name: user ? "USER" : known?.name || workspaceLabel(path, workspaceRoot), user });
     }
     return out;
-  }, [chats, workspaceRoot]);
+  }, [chats, workspaceRoot, workspaces]);
 
   const catalogWorkspaces = useMemo(() => {
     const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
@@ -1363,16 +1366,22 @@ export default function ChatApp() {
       const cur = byPath.get(key);
       if (cur) cur.chats.push(chat);
       else {
+        const path = chat.cwd || root;
+        const user = sameCwd(path, root);
         byPath.set(key, {
-          path: chat.cwd || root,
-          name: workspaceLabel(chat.cwd || root, root),
+          path,
+          name: user ? "USER" : workspaceLabel(path, root),
+          user,
           chats: [chat],
         });
       }
     }
-    return [...byPath.values()].filter(
-      (group) => group.chats.length || (root && !sameCwd(group.path, root)),
-    );
+    const groups = [...byPath.values()].map((group) => {
+      const user = Boolean(group.user) || sameCwd(group.path, root);
+      return { ...group, user, name: user ? "USER" : group.name };
+    });
+    groups.sort((a, b) => Number(Boolean(b.user)) - Number(Boolean(a.user)));
+    return groups.filter((group) => group.chats.length || group.user || (root && !sameCwd(group.path, root)));
   }, [sidebarChats, workspaces, workspaceRoot, cwd]);
 
   const duplicateGroupNames = useMemo(() => {
@@ -1384,6 +1393,16 @@ export default function ChatApp() {
   const menuWorkspaces = useMemo(
     () => [...recentWorkspaces, ...catalogWorkspaces],
     [recentWorkspaces, catalogWorkspaces],
+  );
+  const userMenuWorkspace = useMemo(
+    () =>
+      menuWorkspaces.find((item) => item.user) ||
+      (workspaceRoot ? { path: workspaceRoot, name: "USER", user: true as const } : null),
+    [menuWorkspaces, workspaceRoot],
+  );
+  const otherMenuWorkspaces = useMemo(
+    () => menuWorkspaces.filter((item) => !item.user && !sameCwd(item.path, userMenuWorkspace?.path)),
+    [menuWorkspaces, userMenuWorkspace],
   );
 
   const duplicateMenuNames = useMemo(() => {
@@ -5078,7 +5097,22 @@ export default function ChatApp() {
           </div>
           {workspaceMenuOpen ? (
             <div className="workspace-menu">
-              {menuWorkspaces.map((item) => (
+              {userMenuWorkspace ? (
+                <>
+                  <button
+                    type="button"
+                    className={`workspace-menu-item user${sameCwd(userMenuWorkspace.path, cwd) ? " on" : ""}`}
+                    onClick={() => startChatIn(userMenuWorkspace.path)}
+                  >
+                    <FolderMark />
+                    <span className="workspace-menu-name">USER</span>
+                    <span className="workspace-menu-user">全部</span>
+                    {sameCwd(userMenuWorkspace.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
+                  </button>
+                  <p className="workspace-menu-note">能看全部子工作区。网站只在这里公开。</p>
+                </>
+              ) : null}
+              {otherMenuWorkspaces.map((item) => (
                 <button
                   key={item.path}
                   type="button"
@@ -5093,17 +5127,6 @@ export default function ChatApp() {
                   {sameCwd(item.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
                 </button>
               ))}
-              {!recentWorkspaces.length && !catalogWorkspaces.length && workspaceRoot ? (
-                <button
-                  type="button"
-                  className="workspace-menu-item on"
-                  onClick={() => startChatIn(workspaceRoot)}
-                >
-                  <FolderMark />
-                  <span className="workspace-menu-name">{workspaceLabel(workspaceRoot, workspaceRoot)}</span>
-                  <span className="workspace-menu-check">正在用</span>
-                </button>
-              ) : null}
               {workspaceCreating ? (
                 <form
                   className="workspace-create"
@@ -5141,7 +5164,7 @@ export default function ChatApp() {
             const holdsActive = group.chats.some((chat) => chat.id === activeId);
             const open = holdsActive || expandedGroups.has(key);
             return (
-            <div key={group.path} className="chat-group">
+            <div key={group.path} className={`chat-group${group.user ? " user" : ""}`}>
               <button
                 type="button"
                 className={`chat-group-label${open ? " open" : ""}${holdsActive ? " locked" : ""}`}
@@ -5160,8 +5183,10 @@ export default function ChatApp() {
                   });
                 }}
               >
-                {group.chats.length ? <span className="chat-group-chevron" aria-hidden="true" /> : null}
+                {group.chats.length ? <span className="chat-group-chevron" aria-hidden="true" /> : <span className="chat-group-chevron spacer" aria-hidden="true" />}
+                <FolderMark className="chat-group-folder" />
                 <span className="chat-group-name">{group.name}</span>
+                {group.user ? <span className="chat-group-user">全部</span> : null}
                 {duplicateGroupNames.has(group.name) ? (
                   <span className="chat-group-path">{group.path}</span>
                 ) : null}

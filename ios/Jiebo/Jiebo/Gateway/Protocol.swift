@@ -19,6 +19,7 @@ enum AgentMode: String, Sendable, Hashable, CaseIterable {
 struct WorkspaceItem: Sendable, Hashable, Identifiable {
     var path: String
     var name: String
+    var user: Bool = false
     var id: String { path }
 }
 
@@ -512,7 +513,11 @@ enum ServerMessage {
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in
                 guard let row = item.object, let path = row["path"]?.string else { return nil }
-                return WorkspaceItem(path: path, name: row["name"]?.string ?? URL(fileURLWithPath: path).lastPathComponent)
+                return WorkspaceItem(
+                    path: path,
+                    name: row["name"]?.string ?? URL(fileURLWithPath: path).lastPathComponent,
+                    user: row["user"]?.bool ?? false
+                )
             } ?? []
             return .workspaces(root: object["root"]?.string ?? "", items: items)
         case "workspace_created":

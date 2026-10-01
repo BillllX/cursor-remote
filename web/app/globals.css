@@ -435,6 +435,65 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   font-weight: 600;
 }
 
+.workspace-menu-item.user {
+  margin: 4px 8px 0;
+  padding-left: 8px;
+  border-radius: 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-sidebar));
+  box-shadow: inset 2px 0 0 var(--accent);
+  font-weight: 600;
+}
+
+.workspace-menu-item.user:hover,
+.workspace-menu-item.user.on {
+  background: color-mix(in srgb, var(--accent) 24%, var(--bg-sidebar));
+}
+
+.workspace-menu-item.user .workspace-menu-folder {
+  color: var(--accent);
+}
+
+.workspace-menu-user,
+.chat-group-user {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-sidebar));
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.workspace-menu-note {
+  margin: 0;
+  padding: 2px 16px 8px 42px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dim);
+}
+
+.chat-group.user {
+  margin: 0 0 4px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.chat-group.user .chat-group-label {
+  margin: 2px 8px 0;
+  padding: 2px 8px;
+  border-radius: 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-sidebar));
+}
+
+.chat-group.user .chat-group-folder,
+.chat-group.user .chat-group-chevron {
+  color: var(--accent);
+}
+
 .workspace-menu-folder {
   flex: none;
   width: 16px;
@@ -514,6 +573,13 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   overflow: hidden;
 }
 
+.chat-group-folder {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
 .chat-group-name {
   min-width: 0;
   overflow: hidden;
@@ -550,6 +616,15 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .chat-group-label.locked .chat-group-chevron {
   opacity: 0.45;
+}
+
+.chat-group-chevron.spacer {
+  visibility: hidden;
+}
+
+.chat-group .chat-item {
+  margin-left: 28px;
+  width: calc(100% - 28px);
 }
 
 .chat-group-path,

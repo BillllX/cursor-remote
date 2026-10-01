@@ -166,7 +166,7 @@ export type ServerMessage =
       policy?: PolicyId;
       loops?: LoopState[];
     }
-  | { type: "workspaces"; root: string; items: { path: string; name: string }[] }
+  | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
   | { type: "session"; chatId: string; agentId: string; cwd: string }
   | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }

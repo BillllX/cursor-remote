@@ -1679,7 +1679,8 @@ final class ChatStore {
             if workspaceRoot.isEmpty, let first = items.first { workspaceRoot = first.path }
         case .workspaceCreated(let path, let name):
             if !workspaces.contains(where: { $0.path == path }) {
-                workspaces.insert(WorkspaceItem(path: path, name: name), at: 0)
+                let index = workspaces.firstIndex(where: { !$0.user }) ?? workspaces.count
+                workspaces.insert(WorkspaceItem(path: path, name: name), at: index)
             }
             startChat(in: path)
         case .session(let id, let agentId, let sessionCwd):

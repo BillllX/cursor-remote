@@ -248,6 +248,14 @@ async function main() {
     });
     check(outsideRes.status === 400, "工作区外的目录被接受了");
 
+    const nested = join(alpha.workspaceRoot, "nested");
+    mkdirSync(nested);
+    const nestedStart = await post(port, "/jiebo-publish/v1/start", alphaToken, {
+      cwd: nested,
+      command,
+    });
+    check(nestedStart.status === 403 && (nestedStart.json?.message || "").includes("USER"), "子工作区被允许公开网站");
+
     const badName = await post(port, "/jiebo-publish/v1/start", badToken, {
       cwd: bad.workspaceRoot,
       command,
