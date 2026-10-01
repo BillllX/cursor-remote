@@ -17,6 +17,10 @@ fi
 
 id cursor-remote >/dev/null 2>&1 || useradd --system --home "$DATA_ROOT" --shell /usr/sbin/nologin cursor-remote
 mkdir -p "$DATA_ROOT/workspace" "$DATA_ROOT/tenants" "$DATA_ROOT/.local/bin" /etc/cursor-remote "$APP_ROOT"
+chmod 755 "${ROOT}/scripts/jiebo-publish.mjs"
+mkdir -p /usr/local/bin
+ln -sfn "${APP_ROOT}/scripts/jiebo-publish.mjs" "$DATA_ROOT/.local/bin/jiebo-publish"
+ln -sfn "${APP_ROOT}/scripts/jiebo-publish.mjs" /usr/local/bin/jiebo-publish
 chown -R cursor-remote:cursor-remote "$DATA_ROOT"
 chown -R cursor-remote:cursor-remote "$APP_ROOT"
 

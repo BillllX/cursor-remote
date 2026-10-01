@@ -1,4 +1,5 @@
 import { crewChinesePrompt, usesChineseDialect } from "./dialect.ts";
+import { PUBLISH_BUILDER_EN } from "./publishPrompt.ts";
 
 export const CREW_ROLES = ["explore", "builder", "reviewer"] as const;
 export type CrewRole = (typeof CREW_ROLES)[number];
@@ -291,7 +292,7 @@ export function buildCrewAgents(
       prompt: promptOf(
         "builder",
         "inherit",
-        "You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace.",
+        `You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace. ${PUBLISH_BUILDER_EN}`,
       ),
       model: "inherit",
     },

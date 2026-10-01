@@ -87,6 +87,24 @@ npm run dev
 | web（VPS） | 3020 → `/cursor-remote` | 公网聊天界面 |
 | gateway（VPS） | 8787 | 收动作、调 Cursor SDK、读写工作区 |
 
+## 对外预览
+
+每个租户一条路径，挂在这台机器已经有证书的主机名上。东京是 `https://jiebo.aiagentswitcher.com/p/<id>/`，上海是 `https://aiagentswitcher.com/p/<id>/`。网页和 iPad 不用改。Agent 在工作区里执行：
+
+```bash
+jiebo-publish start -- npm run dev -- --host '$HOST' --port '$PORT' --base '$BASE_PATH/'
+jiebo-publish status
+jiebo-publish stop
+```
+
+命令会分配 `127.0.0.1` 上 20000–20999 的端口，注入 `HOST`、`PORT` 和 `BASE_PATH`（形如 `/p/<id>`），并把带票据的地址打出来。打开这个地址会种下只属于该路径的 cookie。没有票据的人打不开。网站必须挂在 `BASE_PATH` 下，浏览器里的脚本和样式才会回到这条路径。一个人同时只公开一个服务，口令只对应该工作区。30 分钟没有访问会停掉；开着的 WebSocket 算访问。systemd 重启 gateway 会把这些进程一起停掉，不会自动再拉起；进程如果还活着，gateway 只重新接上。这些进程算在 gateway 的内存限额里。只监听 0.0.0.0 或 :: 的进程不会被公开。
+
+一次性准备（不用按人申请，也不用新域名）：
+
+- `gateway.env` 里 `JIEBO_PUBLISH_HOST` 写成这台机器现有的主机名，例如 `jiebo.aiagentswitcher.com` 或 `aiagentswitcher.com`
+- `sudo python3 scripts/insert-nginx-publish.py && sudo nginx -t && sudo systemctl reload nginx`，把 `/p/` 反代进这个主机名已有的 443 站点
+- 安装脚本会把 `jiebo-publish` 链到 `/usr/local/bin` 和 `/var/lib/cursor-remote/.local/bin`
+
 ## 它不会做什么
 
 - 不复刻完整 IDE

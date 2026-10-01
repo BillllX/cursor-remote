@@ -22,6 +22,7 @@ import {
   toolFingerprint,
 } from "../../shared/policy.ts";
 import { dialectOverlay } from "../../shared/dialect.ts";
+import { PUBLISH_AGENT_PROMPT } from "../../shared/publishPrompt.ts";
 import {
   buildCrewAgents,
   crewAgentToken,
@@ -87,6 +88,7 @@ import {
   type ExternalProvider,
 } from "./providers.ts";
 import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
+import { createPublishController } from "./publish.ts";
 
 loadDotEnv([
   resolve(process.cwd(), ".env"),
@@ -106,6 +108,16 @@ for (const tenant of allTenants()) {
   }
 }
 let modelsCache: { at: number; ids: string[] } | null = null;
+
+const publish = createPublishController({
+  tenants: () =>
+    allTenants().map((tenant) => ({
+      id: tenant.id,
+      workspaceRoot: tenant.workspaceRoot,
+      stateDir: tenant.stateDir,
+    })),
+  ticketSecret: mediaSecret,
+});
 
 type AgentHandle = Awaited<ReturnType<typeof Agent.create>>;
 type RunHandle = Awaited<ReturnType<AgentHandle["send"]>>;
@@ -2216,6 +2228,13 @@ function sanitizeImages(
     }));
 }
 
+function shellPublishes(name: string, args: unknown) {
+  if (!/(shell|bash|terminal|command)/i.test(name)) return false;
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const cmd = typeof record.command === "string" ? record.command : "";
+  return /(?:^|[\s;|&`'"(])(?:\S*\/)?jiebo-publish\b/.test(cmd);
+}
+
 function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
@@ -2300,6 +2319,7 @@ function wrapPrompt(
   if (mode === "ask") {
     return `${bound}ASK MODE (read-only). You must not modify the workspace.
 Do not call write, edit, delete, apply patch, or any mutating shell command (rm, mv, git commit, npm install, etc.).
+Do not run jiebo-publish.
 If the user wants a change, explain what you would do and stop. Answer in text only.
 Do not spawn subagents. Any suggested change must stay inside the current workspace.
 
@@ -2308,6 +2328,7 @@ ${body}`;
   if (mode === "plan") {
     return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
 方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。
+不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。
 可以派出 explore 子代理做只读摸底。不要派出 builder。
 ${reviewPanelPrompt(panel)}
 
@@ -2319,6 +2340,8 @@ Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-ov
 画布颜色跟应用主题走：只用 cursor/canvas 组件和 useHostTheme() 上色，不要写死 hex、rgb、hsl，也不要另做一套深浅色。宿主会套上用户当前的配色。
 
 命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
+
+${PUBLISH_AGENT_PROMPT}
 
 CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement). Subagents must stay inside the current workspace.
 ${reviewPanelPrompt(panel)}
@@ -3187,7 +3210,7 @@ async function handlePrompt(
   };
 
   const blockReadonlyWrite = (name: string, args: unknown, callId: string) => {
-    if ((mode !== "ask" && mode !== "plan") || !isMutatingTool(name, args)) return false;
+    if ((mode !== "ask" && mode !== "plan") || (!isMutatingTool(name, args) && !shellPublishes(name, args))) return false;
     if (blockedCalls.has(callId)) return true;
     blockedAsk = true;
     blockedCalls.add(callId);
@@ -4169,6 +4192,7 @@ function healthPayload() {
 }
 
 const httpServer = createServer((req, res) => {
+  if (publish.handleHttp(req, res)) return;
   const url = new URL(req.url || "/", "http://127.0.0.1");
   if (url.pathname === "/health") {
     const body = healthPayload();
@@ -4223,6 +4247,7 @@ const wss = new WebSocketServer({
 });
 
 httpServer.on("upgrade", (req, socket, head) => {
+  if (publish.handleUpgrade(req, socket, head)) return;
   if (agentSocketPath(req.url)) {
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit("connection", ws, req);
@@ -5172,6 +5197,7 @@ function publishLoop(tenantId: string, message: ServerMessage) {
 bindLoops({ busy: loopBusy, dispatch: dispatchLoop, publish: publishLoop });
 
 httpServer.listen(PORT, HOST, () => {
+  publish.boot();
   const tenants = allTenants();
   for (const tenant of tenants) {
     mkdirSync(tenant.workspaceRoot, { recursive: true });
