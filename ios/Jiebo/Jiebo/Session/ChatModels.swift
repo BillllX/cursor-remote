@@ -9,6 +9,8 @@ struct ToolCall: Identifiable, Hashable {
     var parentCallId: String?
     var agent: String?
     var model: String?
+    /// 网页 tool.review：accepted 保留，rejected 还原。空着表示这轮还能整体处理。
+    var review: String?
     var id: String { callId }
 
     var kind: ToolKind { ToolKind.from(name: name, args: args) }
@@ -21,6 +23,11 @@ struct ToolCall: Identifiable, Hashable {
         if !query.isEmpty { return query }
         return name
     }
+}
+
+func toolFilePath(args: JSONValue?, result: JSONValue?) -> String? {
+    args?.string(in: "path", "file", "target", "file_path", "uri", "filename", "image_path", "imagePath", "output_path", "outputPath").nilIfEmpty
+        ?? result?.string(in: "path", "file", "file_path", "filename", "image_path", "imagePath", "output_path", "outputPath").nilIfEmpty
 }
 
 enum ToolKind: String {
@@ -82,13 +89,35 @@ struct Turn: Identifiable, Hashable {
     var status: String?
     var durationMs: Double?
     var pendingTool: PendingTool?
+    /// 随这条消息发出的图片（base64），气泡里回显。
+    var images: [PromptImage] = []
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
 
     static let knownKeys: Set<String> = [
         "id", "user", "assistant", "thinking", "tools", "task", "error",
-        "running", "queued", "mode", "model", "status", "durationMs",
+        "running", "queued", "mode", "model", "status", "durationMs", "images",
     ]
+
+    /// 这一轮改过的文件，去重后按出现顺序。
+    var editPaths: [String] {
+        var paths: [String] = []
+        for tool in tools where tool.kind.isMutating {
+            let path = toolFilePath(args: tool.args, result: tool.result) ?? ""
+            if !path.isEmpty, !paths.contains(path) { paths.append(path) }
+        }
+        return paths
+    }
+
+    var writesRejected: Bool {
+        (assistant + "\n" + (status ?? "")).contains("已拒绝写入")
+    }
+
+    /// 改动还没逐项点过保留或还原，整轮条才出现。
+    var needsFileReview: Bool {
+        !running && !queued && !writesRejected && !editPaths.isEmpty
+            && tools.contains { $0.kind.isMutating && ($0.review ?? "").isEmpty }
+    }
 
     static func blank(user: String, model: String?, mode: AgentMode?, running: Bool) -> Turn {
         Turn(
@@ -126,6 +155,7 @@ struct Turn: Identifiable, Hashable {
             if let parentCallId = tool.parentCallId { row["parentCallId"] = .string(parentCallId) }
             if let agent = tool.agent { row["agent"] = .string(agent) }
             if let model = tool.model { row["model"] = .string(model) }
+            if let review = tool.review, !review.isEmpty { row["review"] = .string(review) }
             return .object(row)
         })
         object["running"] = .bool(false)
@@ -137,6 +167,11 @@ struct Turn: Identifiable, Hashable {
         if let model { object["model"] = .string(model) }
         if let status { object["status"] = .string(status) }
         if let durationMs { object["durationMs"] = .number(durationMs) }
+        if !images.isEmpty {
+            object["images"] = .array(images.map {
+                .object(["data": .string($0.data), "mimeType": .string($0.mimeType)])
+            })
+        }
         return .object(object)
     }
 
@@ -156,7 +191,8 @@ struct Turn: Identifiable, Hashable {
                 status: status,
                 parentCallId: row["parentCallId"]?.string,
                 agent: row["agent"]?.string,
-                model: row["model"]?.string
+                model: row["model"]?.string,
+                review: row["review"]?.string
             )
         } ?? []
         return Turn(
@@ -174,6 +210,13 @@ struct Turn: Identifiable, Hashable {
             status: object["status"]?.string,
             durationMs: object["durationMs"]?.number,
             pendingTool: nil,
+            images: object["images"]?.array?.compactMap { item -> PromptImage? in
+                guard let row = item.object,
+                      let data = row["data"]?.string, !data.isEmpty,
+                      let mime = row["mimeType"]?.string, !mime.isEmpty
+                else { return nil }
+                return PromptImage(data: data, mimeType: mime)
+            } ?? [],
             extra: object.filter { !Turn.knownKeys.contains($0.key) }
         )
     }

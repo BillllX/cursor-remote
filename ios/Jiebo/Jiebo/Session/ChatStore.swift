@@ -188,9 +188,11 @@ final class ChatStore {
     var previewTabs: [PreviewTab] = []
     /// 当前选中页签；非 nil 即面板打开
     var previewActivePath: String?
+    /// 网页 preview-max：收起后页签还在，点「预览」芯片再展开。
+    var previewExpanded = false
     var previewPanelOpen: Bool {
         // 文件浮层开着时，内容画在浮层右栏，不再同时从右侧弹出另一块
-        !fileBrowserOpen && contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
+        previewExpanded && !fileBrowserOpen && contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
     }
     var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
 
@@ -336,6 +338,112 @@ final class ChatStore {
         client.disconnect()
     }
 
+    func editTurn(_ turnId: String) {
+        guard !busy else {
+            flash("等当前这条跑完再编辑")
+            return
+        }
+        guard let chat = active, let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
+        let turn = chat.turns[index]
+        let text = turn.user
+        patch(chat.id) { item in
+            var next = item
+            next.turns = Array(item.turns.prefix(index))
+            next.agentId = nil
+            return next
+        }
+        send(.newSession(chatId: chat.id, cwd: chat.cwd))
+        draft = text == "（附图）" ? "" : text
+        pendingImages = turn.images.compactMap { image in
+            guard let data = Data(base64Encoded: image.data), !data.isEmpty else { return nil }
+            return PendingImage(data: data, mimeType: image.mimeType, base64: image.data)
+        }
+    }
+
+    func retryTurn(_ turnId: String) {
+        guard client.isOpen else { return }
+        guard !busy else {
+            flash("等当前这条跑完再重试")
+            return
+        }
+        guard let chat = active, let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
+        let turn = chat.turns[index]
+        let visible = turn.user == "（附图）" && !turn.images.isEmpty ? "" : turn.user
+        var next = Turn.blank(user: turn.user, model: turn.model ?? model, mode: turn.mode ?? mode, running: true)
+        next.id = turn.id
+        next.images = turn.images
+        let prior = Array(chat.turns.prefix(index))
+        let history = ChatStore.externalHistory(model: next.model, turns: prior)
+        let mentions = ChatStore.extractMentions(turn.user)
+        patch(chat.id) { item in
+            var row = item
+            row.turns = prior + [next]
+            row.agentId = nil
+            return row
+        }
+        send(.prompt(
+            text: visible,
+            model: next.model,
+            mode: next.mode,
+            chatId: chat.id,
+            files: mentions.isEmpty ? nil : mentions,
+            images: turn.images.isEmpty ? nil : turn.images,
+            confirmWrites: chat.confirmWrites,
+            autoApprove: nil,
+            fresh: true,
+            nameChat: chat.isUntitled,
+            policy: chat.policy,
+            history: history,
+            turnId: next.id
+        ))
+        markProgress(chat.id)
+    }
+
+    func applyPlan(_ turnId: String) {
+        guard client.isOpen, !busy else {
+            if busy { flash("等当前这条跑完再执行") }
+            return
+        }
+        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        chooseMode(.agent)
+        let visible = "执行这个计划"
+        let text = "请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n\(turn.assistant.prefix(4000))"
+        let next = Turn.blank(user: visible, model: model, mode: .agent, running: true)
+        patch(chat.id) { item in
+            var row = item
+            row.turns.append(next)
+            row.mode = .agent
+            return row
+        }
+        flash("按计划开始执行")
+        send(.prompt(
+            text: text,
+            model: model,
+            mode: .agent,
+            chatId: chat.id,
+            files: nil,
+            images: nil,
+            confirmWrites: chat.confirmWrites,
+            autoApprove: nil,
+            fresh: nil,
+            nameChat: chat.isUntitled,
+            policy: chat.policy,
+            history: ChatStore.externalHistory(model: model, turns: chat.turns),
+            turnId: next.id
+        ))
+        markProgress(chat.id)
+    }
+
+    func dropQueuedTurn(_ turnId: String) {
+        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId && $0.queued }) else { return }
+        patch(chat.id) { item in
+            var next = item
+            next.turns.removeAll { $0.id == turnId }
+            return next
+        }
+        send(.dropQueued(chatId: chat.id, text: turn.user))
+    }
+
     func answerQuestion(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -358,7 +466,8 @@ final class ChatStore {
         // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
         let history = ChatStore.externalHistory(model: model, turns: active?.turns ?? [])
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
-        let turn = Turn.blank(user: text.isEmpty ? "（附图）" : text, model: model, mode: mode, running: !busy)
+        var turn = Turn.blank(user: text.isEmpty ? "（附图）" : text, model: model, mode: mode, running: !busy)
+        turn.images = images.map(\.promptImage)
         draft = ""
         pendingImages = []
         imagesByChat[chatId] = nil
@@ -471,6 +580,11 @@ final class ChatStore {
         creatingWorkspace = false
         newWorkspaceName = ""
         workspaceSheetOpen = true
+    }
+
+    /// 只刷新工作区列表，给侧栏「新对话」菜单用，不打开另一张表。
+    func refreshWorkspaces() {
+        send(.listWorkspaces)
     }
 
     /// 切到这个工作区：有会话就打开最近的一条，没有就新建。
@@ -586,6 +700,9 @@ final class ChatStore {
         exportTask?.cancel() // P10：在途导出同样不带到新会话（Grok R1 M1）——页签虽全局存活，
         exportLoading = false // 但「下载中切会话」是被动场景，完成时弹 sheet 会打断新上下文
         requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
+        checkpoints = []
+        notedCheckpointId = nil
+        refreshCheckpoints()
         searchHits = []
         if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             scheduleSearch()
@@ -1149,27 +1266,26 @@ final class ChatStore {
 
     // MARK: P5 - 预览面板
 
-    /// 从对话点文件：先把文件浮层打开，再读内容。浮层已经开着就直接读。
+    /// 从对话点文件：停在对话旁边，不把人带进文件浏览器。浏览器已经开着就在里面读。
     func openPreview(_ path: String, diff: Bool = false) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else {
             if !trimmed.isEmpty { flash("这类内容暂不支持预览") }
             return
         }
-        let warm = fileBrowserOpen
-        fileBrowserPane = .files
-        fileBrowserOpen = true
-        let load = { [weak self] in
-            self?.loadPreview(trimmed, diff: diff)
+        if !fileBrowserOpen { previewExpanded = true }
+        loadPreview(trimmed, diff: diff)
+    }
+
+    func expandPreview() {
+        if previewActivePath == nil || !previewTabs.contains(where: { $0.path == previewActivePath }) {
+            previewActivePath = previewTabs.last?.path
         }
-        if warm {
-            load()
-        } else {
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(320))
-                load()
-            }
-        }
+        previewExpanded = previewActivePath != nil
+    }
+
+    func collapsePreview() {
+        previewExpanded = false
     }
 
     /// 浮层已经在屏幕上时读文件。binary 仍走 Quick Look。
@@ -1193,6 +1309,7 @@ final class ChatStore {
         if let index = previewTabs.firstIndex(where: { $0.path == path }) {
             var tab = previewTabs[index]
             previewActivePath = path
+            previewExpanded = true
             if diff && !tab.diff {
                 // diff 状态升级：内容含义变了，必须重拉；清掉旧媒体地址避免误标「新文件」/闪旧图
                 tab.diff = true
@@ -1226,6 +1343,7 @@ final class ChatStore {
         previewTabs.append(PreviewTab(path: path, kind: resolved, diff: diff, content: nil, error: nil, loading: true, url: nil, media: nil, cwd: cwd))
         if previewTabs.count > 8 { previewTabs.removeFirst(previewTabs.count - 8) }
         previewActivePath = path
+        previewExpanded = true
         send(.readFile(path: path, chatId: activeId, diff: diff))
         armPreviewWatchdog(path: path)
     }
@@ -1241,6 +1359,7 @@ final class ChatStore {
         previewTabs.removeAll { $0.path == path }
         pendingDiffPaths.removeAll { $0 == path } // 关签即视为已处理，pill 不再挂这个路径
         if previewActivePath == path { previewActivePath = previewTabs.last?.path }
+        if previewTabs.isEmpty { previewExpanded = false }
     }
 
     func dismissPreviewPanel() {
@@ -1300,6 +1419,67 @@ final class ChatStore {
     func undoLast() {
         guard canUndo else { return }
         send(.undo(chatId: activeId))
+    }
+
+    func keepTurnFiles(_ turnId: String) {
+        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        let paths = turn.editPaths
+        markTurnReview(turnId, review: "accepted", onlyEmpty: true)
+        if let path = paths.last { openPreview(path) }
+    }
+
+    func restoreTurnFiles(_ turnId: String) {
+        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        let paths = turn.editPaths.map { relToCwd($0) }.filter { !$0.isEmpty }
+        guard !paths.isEmpty else { return }
+        let last = chat.turns.reversed().first { !$0.queued && !$0.editPaths.isEmpty }
+        if last?.id == turnId {
+            send(.undo(chatId: chat.id))
+        } else {
+            for path in paths {
+                send(.revertFile(chatId: chat.id, path: path))
+            }
+        }
+        markTurnReview(turnId, review: "rejected", onlyEmpty: false)
+    }
+
+    private func markTurnReview(_ turnId: String, review: String, onlyEmpty: Bool) {
+        guard let chat = active else { return }
+        patch(chat.id) { item in
+            var row = item
+            row.turns = row.turns.map { turn in
+                guard turn.id == turnId else { return turn }
+                var next = turn
+                next.tools = turn.tools.map { tool in
+                    var copy = tool
+                    guard copy.kind.isMutating else { return copy }
+                    if onlyEmpty, !(copy.review ?? "").isEmpty { return copy }
+                    copy.review = review
+                    return copy
+                }
+                return next
+            }
+            return row
+        }
+    }
+
+    // MARK: 检查点
+
+    var checkpoints: [CheckpointInfo] = []
+    private var notedCheckpointId: String?
+
+    func refreshCheckpoints() {
+        guard client.isOpen, activeId != "boot" else { return }
+        send(.listCheckpoints(chatId: activeId))
+    }
+
+    func restoreCheckpoint(_ id: String) {
+        guard client.isOpen else { return }
+        guard !busy else {
+            flash("等当前这条跑完再还原")
+            return
+        }
+        send(.restore(chatId: activeId, checkpointId: id))
     }
 
     // MARK: 附件与图片
@@ -1858,6 +2038,7 @@ final class ChatStore {
                 turn.settled(status: status, durationMs: duration)
             }
             scheduleSync()
+            if id == activeId { refreshCheckpoints() }
         case .runSnapshot(
             let id, let turnId, let phase, let status, let userText, let assistant, let thinking,
             let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
@@ -2126,6 +2307,29 @@ final class ChatStore {
             guard query.trimmingCharacters(in: .whitespacesAndNewlines) == current else { break }
             searchHits = hits
             searchLoading = false
+        case .checkpoints(let id, let items):
+            guard id.isEmpty || id == activeId else { break }
+            checkpoints = items
+            if let newest = items.first,
+               newest.id != notedCheckpointId,
+               Date().timeIntervalSince1970 * 1000 - newest.createdAt < 5000
+            {
+                notedCheckpointId = newest.id
+                flash("已记下检查点 \(newest.label)")
+            }
+        case .restored(_, _, let label, let error, let silent):
+            guard chatId == activeId else { break }
+            if silent {
+                requestFileIndex()
+                break
+            }
+            if let error, !error.isEmpty {
+                notice = error
+            } else {
+                notice = "已还原检查点 \(label?.nilIfEmpty ?? "")"
+            }
+            requestFileIndex()
+            reloadPreviewTabs()
         case .undone(_, let paths, let error):
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
             guard chatId == activeId else { break }

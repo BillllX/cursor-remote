@@ -24,9 +24,15 @@ struct ComposerView: View {
     var body: some View {
         @Bindable var store = store
         VStack(alignment: .leading, spacing: 8) {
+            if let pending = pendingApproval {
+                approvalBar(pending)
+            }
+            if !queuedTurns.isEmpty {
+                queueBar
+            }
             attachmentStrip
             mentionStrip
-            TextField("跟远端说…", text: $text, axis: .vertical)
+            TextField(placeholder, text: $text, axis: .vertical)
                 .font(JieboFont.ui(17))
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1...8)
@@ -58,28 +64,27 @@ struct ComposerView: View {
         .padding(.bottom, 10)
         .background {
             // 阴影画在底上，不要挂在输入框这一层。挂在上面的话每个字都会连阴影一起重绘。
-            RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
+            RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
                 .fill(JieboColor.composer)
+                .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
+                .shadow(color: JieboColor.ink.opacity(focused ? 0.16 : 0.1), radius: focused ? 16 : 14, y: 8)
                 .overlay(
-                    RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
-                        .stroke(focused ? JieboColor.ink.opacity(0.35) : JieboColor.line, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
+                        .stroke(focused ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1)
                 )
         }
         .padding(.horizontal, 16)
-        .padding(.top, 4)
-        .padding(.bottom, 14)
-        .background(alignment: .top) {
-            Rectangle()
-                .fill(JieboColor.line)
-                .frame(height: 1)
-                .offset(y: -1)
-                .allowsHitTesting(false)
-        }
+        .padding(.top, 8)
+        .padding(.bottom, 16)
         .background(JieboColor.paper)
-        .onAppear { text = store.draft }
+        .onAppear {
+            text = store.draft
+            store.refreshCheckpoints()
+        }
         .onChange(of: store.activeId) { _, _ in
             persistTask?.cancel()
             text = store.draft
+            store.refreshCheckpoints()
         }
         .onChange(of: store.draft) { _, value in
             if value == ignoreDraftEcho { return }
@@ -121,6 +126,85 @@ struct ComposerView: View {
             FileBrowserSheet { path in
                 store.appendMentionToDraft(path)
             }
+        }
+    }
+
+    private var pendingApproval: PendingTool? {
+        store.active?.turns.reversed().first { $0.pendingTool != nil }?.pendingTool
+    }
+
+    private var queuedTurns: [Turn] {
+        store.active?.turns.filter(\.queued) ?? []
+    }
+
+    private func approvalBar(_ tool: PendingTool) -> some View {
+        let path = tool.args?.string(in: "path", "file", "target_file", "file_path", "target") ?? ""
+        let target = path.isEmpty ? tool.name : path
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("要改文件：\(target)。允许会先还原再写；拒绝还原到发送前。")
+                .font(JieboFont.ui(13))
+                .foregroundStyle(JieboColor.ink)
+            HStack(spacing: 8) {
+                Button("允许") { store.replyToApproval(allow: true) }
+                    .buttonStyle(.plain)
+                    .font(JieboFont.ui(13, weight: .semibold))
+                    .foregroundStyle(JieboColor.fillFg)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(JieboColor.pine)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Button("拒绝") { store.replyToApproval(allow: false) }
+                    .buttonStyle(.plain)
+                    .font(JieboFont.ui(13, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(JieboColor.mist)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(JieboColor.runBg.opacity(0.65))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var queueBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(queuedTurns) { turn in
+                    HStack(spacing: 6) {
+                        Text("排队 · \(String(turn.user.prefix(24)))")
+                            .font(JieboFont.ui(12))
+                            .foregroundStyle(JieboColor.ink)
+                            .lineLimit(1)
+                        Button {
+                            store.dropQueuedTurn(turn.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundStyle(JieboColor.dim)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("去掉这条排队")
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background(JieboColor.white)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    private var placeholder: String {
+        if !store.connected { return "正在连服务器…" }
+        if store.busy { return "正在动手，Enter 会排队" }
+        switch store.mode {
+        case .ask: return "问一句，不改文件，@ 引用"
+        case .plan: return "描述任务，只出方案，@ 引用"
+        case .agent: return "交代要做的事，@ 引用文件"
         }
     }
 
@@ -255,7 +339,20 @@ struct ComposerView: View {
                 Label(plane ? "正在用策略层" : "切到策略层", systemImage: plane ? "checkmark" : "circle")
             }
             Button(action: store.toggleConfirmWrites) {
-                Label(confirm ? "写入前逐条确认" : "自动写入", systemImage: confirm ? "checkmark.shield.fill" : "checkmark.shield")
+                Label(confirm ? "确认写" : "直写", systemImage: confirm ? "checkmark.shield.fill" : "checkmark.shield")
+            }
+            Button(action: store.undoLast) {
+                Label("撤销上一次", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!store.canUndo)
+            if store.checkpoints.isEmpty {
+                Button(store.mode == .ask ? "只问不会打检查点" : "动手或出方案时会记下检查点") {}
+                    .disabled(true)
+            } else {
+                ForEach(store.checkpoints) { item in
+                    Button("还原 · \(item.label)") { store.restoreCheckpoint(item.id) }
+                        .disabled(store.busy)
+                }
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -310,7 +407,7 @@ struct ComposerView: View {
             HStack(spacing: 4) {
                 Image(systemName: on ? "checkmark.shield.fill" : "checkmark.shield")
                     .font(.system(size: 11, weight: .regular))
-                Text(on ? "逐条确认" : "自动写入")
+                Text(on ? "确认写" : "直写")
                     .font(JieboFont.ui(11, weight: .regular))
             }
             // 次级：关态 ink2 可读、无填充；开态浅 brass；字号 11 让出主焦点给模式/模型

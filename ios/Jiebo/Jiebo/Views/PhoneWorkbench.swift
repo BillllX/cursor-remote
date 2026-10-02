@@ -37,10 +37,22 @@ struct PhoneWorkbench: View {
                 .transition(.move(edge: .trailing))
                 .zIndex(2)
             }
+            if store.previewPanelOpen, let tab = store.activePreviewTab {
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
+                    .onTapGesture { store.collapsePreview() }
+                    .transition(.opacity)
+                PreviewPanelView(tab: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(JieboColor.white)
+                    .transition(.move(edge: .trailing))
+                    .zIndex(3)
+            }
         }
         .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
         .animation(JieboMotion.panel(reduceMotion), value: drawerOpen)
         .animation(JieboMotion.panel(reduceMotion), value: workspacesOpen)
+        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
         .task { preferRunningChat() }
     }
 
@@ -75,17 +87,17 @@ private struct PhoneDrawer: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: openWorkspaces) {
                 HStack(spacing: 10) {
-                    JieboMark(size: 28)
+                    JieboMark(size: 22)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(store.currentWorkspaceName)
+                        Text("接驳")
                             .font(JieboFont.display(17))
-                            .tracking(-0.3)
+                            .tracking(0.34)
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
-                        Text(store.connected ? "工作区" : "正在重连…")
-                            .font(JieboFont.ui(11, weight: .medium))
-                            .tracking(0.4)
+                        Text(store.connected ? store.currentWorkspaceName : "正在重连…")
+                            .font(JieboFont.ui(12))
                             .foregroundStyle(JieboColor.dim)
+                            .lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
@@ -146,25 +158,31 @@ private struct PhoneDrawer: View {
             close()
         } label: {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(live ? JieboColor.ok : Color.clear)
-                    .frame(width: 6, height: 6)
                 Text(chat.title)
-                    .font(JieboFont.ui(15, weight: .medium))
+                    .font(JieboFont.ui(14, weight: chat.unread ? .semibold : .medium))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if live {
+                    Text("跑")
+                        .font(JieboFont.ui(10, weight: .medium))
+                        .foregroundStyle(JieboColor.run)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(JieboColor.runBg)
+                        .clipShape(Capsule())
+                } else if chat.unread {
+                    Circle().fill(JieboColor.pine).frame(width: 6, height: 6)
+                }
             }
             .foregroundStyle(JieboColor.ink)
             .padding(.horizontal, 12)
-            .frame(minHeight: 40)
-            .background(selected ? JieboColor.ink.opacity(0.06) : Color.clear)
+            .frame(minHeight: 36)
+            .background(selected ? JieboColor.white : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(selected ? JieboColor.ink : Color.clear)
-                    .frame(width: 2)
-                    .padding(.vertical, 8)
-            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(selected ? JieboColor.line : Color.clear, lineWidth: 1)
+            )
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
         }

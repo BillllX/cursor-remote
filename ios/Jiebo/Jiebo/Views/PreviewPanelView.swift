@@ -198,9 +198,9 @@ struct PreviewPanelView: View {
                 .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
             }
             Button {
-                store.dismissPreviewPanel()
+                store.collapsePreview()
             } label: {
-                Image(systemName: "xmark")
+                Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(JieboColor.ink2)
                     .frame(width: 30, height: 30)
@@ -209,7 +209,7 @@ struct PreviewPanelView: View {
                     .hitTarget()
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("关闭预览面板")
+            .accessibilityLabel("收起预览")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

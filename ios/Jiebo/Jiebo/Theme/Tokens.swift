@@ -15,12 +15,13 @@ struct JieboSurfaces {
 }
 
 enum JieboPalette: String, CaseIterable, Identifiable {
-    case neutral, paper, sand, pine, cool, ink, night, clay
+    case jiebo, neutral, paper, sand, pine, cool, ink, night, clay
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .jiebo: "接驳"
         case .neutral: "中性"
         case .paper: "纸墨"
         case .sand: "暖砂"
@@ -32,11 +33,27 @@ enum JieboPalette: String, CaseIterable, Identifiable {
         }
     }
 
+    /// 网页把输入底、次级字色、粗边从主表面里拆开。多数配色三者分别等于面板、弱字、细边。
+    func extras(dark: Bool) -> (composer: UInt32, dim: UInt32, borderStrong: UInt32) {
+        let ink = dark ? self.dark : self.light
+        switch self {
+        case .jiebo:
+            return dark
+                ? (0x1F211E, 0x8A8478, 0x3A3E38)
+                : (0xFFFDFA, 0x746D62, 0xCDC4B4)
+        case .neutral where !dark:
+            return (ink.panel, ink.muted, 0xE4E4E7)
+        default:
+            return (ink.panel, ink.muted, ink.border)
+        }
+    }
+
     var light: JieboSurfaces {
         switch self {
+        case .jiebo:
+            JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEBE5D9, panel: 0xFFFCF8, text: 0x1C1916, muted: 0x5C574F, border: 0xDDD5C7, accent: 0x1A4F41, user: 0xE2EBE4)
         case .neutral:
-            // sidebar 相对 paper 肉眼可辨的一档灰（栏宽不动）
-            JieboSurfaces(bg: 0xF7F7F8, sidebar: 0xF2F2F3, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xE4E4E7, accent: 0x171717, user: 0xF0F0F2)
+            JieboSurfaces(bg: 0xF7F7F8, sidebar: 0xF2F2F3, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xECECEC, accent: 0x171717, user: 0xF4F4F5)
         case .paper:
             JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEFE9DD, panel: 0xFFFCFA, text: 0x1C1916, muted: 0x5C574F, border: 0xD4CDBF, accent: 0x1A4F41, user: 0xE7E1D4)
         case .sand:
@@ -56,6 +73,8 @@ enum JieboPalette: String, CaseIterable, Identifiable {
 
     var dark: JieboSurfaces {
         switch self {
+        case .jiebo:
+            JieboSurfaces(bg: 0x141512, sidebar: 0x101210, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x22322C)
         case .neutral:
             JieboSurfaces(bg: 0x161714, sidebar: 0x0E0F0C, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x24332E)
         case .paper:
@@ -114,12 +133,25 @@ final class JieboTheme {
 
     static let paletteKey = "jiebo.theme"
     static let appearanceKey = "jiebo.appearance"
+    /// 旧版默认写过「中性」。对齐网页品牌默认时，只迁这一次。
+    static let brandDefaultKey = "jiebo.theme.brandDefault"
 
     private init() {
         let storedPalette = UserDefaults.standard.string(forKey: Self.paletteKey) ?? ""
-        palette = JieboPalette(rawValue: storedPalette) ?? .neutral
         let storedAppearance = UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
+        let branded = UserDefaults.standard.bool(forKey: Self.brandDefaultKey)
+        let resolved: JieboPalette
+        if !branded && (storedPalette.isEmpty || storedPalette == JieboPalette.neutral.rawValue) {
+            resolved = .jiebo
+        } else {
+            resolved = JieboPalette(rawValue: storedPalette) ?? .jiebo
+        }
+        palette = resolved
         appearance = JieboAppearance(rawValue: storedAppearance) ?? .system
+        if !branded {
+            UserDefaults.standard.set(true, forKey: Self.brandDefaultKey)
+            UserDefaults.standard.set(resolved.rawValue, forKey: Self.paletteKey)
+        }
     }
 }
 
@@ -136,36 +168,54 @@ enum JieboColor {
     static var paper: Color { surface(\.bg) }
     static var mist: Color { surface(\.user) }
     static var white: Color { surface(\.panel) }
-    static var composer: Color { surface(\.panel) }
+    static var composer: Color { extra(\.composer) }
     static var sidebar: Color { surface(\.sidebar) }
     static var userBubble: Color { surface(\.user) }
     static var ink: Color { surface(\.text) }
     static var ink2: Color { surface(\.muted) }
-    static var dim: Color { surface(\.muted) }
+    static var dim: Color { extra(\.dim) }
     static var line: Color { surface(\.border) }
-    static var borderStrong: Color { surface(\.border) }
+    static var borderStrong: Color { extra(\.borderStrong) }
+    /// 实心按钮上的字。浅色用面板色，深色用页面底。
+    static var fillFg: Color {
+        let palette = JieboTheme.shared.palette
+        return Color(uiColor: UIColor { traits in
+            let dark = traits.userInterfaceStyle == .dark
+            let ink = dark ? palette.dark : palette.light
+            return UIColor(hex: dark ? ink.bg : ink.panel)
+        })
+    }
+
+    private static func extra(_ key: KeyPath<(composer: UInt32, dim: UInt32, borderStrong: UInt32), UInt32>) -> Color {
+        let palette = JieboTheme.shared.palette
+        return Color(uiColor: UIColor { traits in
+            let dark = traits.userInterfaceStyle == .dark
+            return UIColor(hex: palette.extras(dark: dark)[keyPath: key])
+        })
+    }
     static var hoverStrong: Color { surface(\.border) }
     static var pine: Color { surface(\.accent) }
     static var pineDeep: Color { surface(\.accent) }
-    static let pineSoft = Color(light: 0xD4D4D4, dark: 0x3A3E38)
+    static let pineSoft = Color(light: 0x8FBFB0, dark: 0x8FBFB0)
 
     static let brass = Color(light: 0xC4A36A, dark: 0xC4A36A)
-    static let ok = Color(light: 0x16A34A, dark: 0x7DCE98)
+    static let ok = Color(light: 0x2F7D4A, dark: 0x7DCE98)
     /// 工具卡「完成」次级绿：比 ok 降饱和，避免和终稿抢权
     static let okSoft = Color(light: 0x3D8F5A, dark: 0x6A9E7A)
-    static let danger = Color(light: 0xDC2626, dark: 0xE07068)
-    static let clay = danger
-    static let okBg = Color(light: 0xDCFCE7, dark: 0x16301F)
-    static let okBgSoft = Color(light: 0xE8F5EC, dark: 0x14241A)
-    static let run = Color(light: 0x2563EB, dark: 0x7AA5F8)
-    static let runBg = Color(light: 0xDBEAFE, dark: 0x1B2942)
-    static let dangerBg = Color(light: 0xFEE2E2, dark: 0x3A1D1B)
+    static let danger = Color(light: 0xB42318, dark: 0xE07068)
+    static let clay = Color(light: 0xA35C3C, dark: 0xE09478)
+    static let okBg = Color(light: 0xE1EEE3, dark: 0x16301F)
+    static let okBgSoft = Color(light: 0xE5EFE5, dark: 0x14241A)
+    /// 进行中用赭金，不用蓝色。与网页 --run 一致。
+    static let run = Color(light: 0x8A6526, dark: 0xD4B47A)
+    static let runBg = Color(light: 0xF2E8D2, dark: 0x2C2617)
+    static let dangerBg = Color(light: 0xF8E5E0, dark: 0x3A1D1B)
 }
 
 enum JieboFont {
-    /// 新语言是无衬线（Noto Sans SC / PingFang），display 不再用宋体
+    /// 标题用宋体，对应网页 --font-display（Noto Serif SC，系统回落 Songti SC）。
     static func display(_ size: CGFloat) -> Font {
-        .system(size: size, weight: .semibold, design: .default)
+        .custom("Songti SC", size: size).weight(.bold)
     }
 
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -239,8 +289,8 @@ struct PressScaleButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.92 : 1)
-            .animation(reduceMotion ? nil : .spring(duration: 0.18, bounce: 0.16), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.98 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.09), value: configuration.isPressed)
     }
 }
 
@@ -297,10 +347,10 @@ struct BotAvatar: View {
     var body: some View {
         Text("接")
             .font(JieboFont.ui(11, weight: .semibold))
-            .foregroundStyle(JieboColor.ink2)
+            .foregroundStyle(JieboColor.pine)
             .frame(width: 28, height: 28)
-            .background(JieboColor.mist)
-            .clipShape(Circle())
+            .background(JieboColor.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.top, 2)
             .accessibilityHidden(true)
     }

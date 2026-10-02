@@ -28,6 +28,12 @@ struct PromptImage: Sendable, Hashable {
     var mimeType: String
 }
 
+struct CheckpointInfo: Sendable, Hashable, Identifiable {
+    var id: String
+    var label: String
+    var createdAt: Double
+}
+
 /// P11：第三方模型的会话历史条目（prompt.history；客户端是内容权威源，网关无状态）
 struct HistoryItem: Sendable, Hashable {
     var role: String // "user" | "assistant"
@@ -209,6 +215,8 @@ enum ClientMessage {
     case listFiles(query: String?, chatId: String?, mention: Bool?)
     case searchText(query: String, chatId: String?)
     case revertFile(chatId: String, path: String)
+    case listCheckpoints(chatId: String)
+    case restore(chatId: String, checkpointId: String)
     /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content
     case readFile(path: String, chatId: String?, diff: Bool)
     case writeFile(path: String, content: String, chatId: String?)
@@ -323,6 +331,14 @@ enum ClientMessage {
                 "type": .string("revert_file"),
                 "chatId": .string(chatId),
                 "path": .string(path),
+            ])
+        case .listCheckpoints(let chatId):
+            return .object(["type": .string("list_checkpoints"), "chatId": .string(chatId)])
+        case .restore(let chatId, let checkpointId):
+            return .object([
+                "type": .string("restore"),
+                "chatId": .string(chatId),
+                "checkpointId": .string(checkpointId),
             ])
         case .readFile(let path, let chatId, let diff):
             var object: [String: JSONValue] = ["type": .string("read_file"), "path": .string(path)]
@@ -514,6 +530,8 @@ enum ServerMessage {
         media: MediaTicket?
     )
     case undone(chatId: String, paths: [String], error: String?)
+    case checkpoints(chatId: String, items: [CheckpointInfo])
+    case restored(chatId: String, checkpointId: String?, label: String?, error: String?, silent: Bool)
     case pong
     case ignored(String)
 
@@ -541,7 +559,9 @@ enum ServerMessage {
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _):
             return chatId
-        case .undone(let chatId, _, _):
+        case .undone(let chatId, _, _),
+             .checkpoints(let chatId, _),
+             .restored(let chatId, _, _, _, _):
             return chatId
         case .chatTurns(let chatId, _, _, _, _):
             return chatId
@@ -748,6 +768,24 @@ enum ServerMessage {
                 chatId: chatId,
                 paths: object["paths"]?.array?.compactMap(\.string) ?? [],
                 error: object["error"]?.string
+            )
+        case "checkpoints":
+            let items = object["items"]?.array?.compactMap { item -> CheckpointInfo? in
+                guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+                return CheckpointInfo(
+                    id: id,
+                    label: row["label"]?.string?.nilIfEmpty ?? id,
+                    createdAt: row["createdAt"]?.number ?? 0
+                )
+            } ?? []
+            return .checkpoints(chatId: chatId, items: items)
+        case "restored":
+            return .restored(
+                chatId: chatId,
+                checkpointId: object["checkpointId"]?.string,
+                label: object["label"]?.string,
+                error: object["error"]?.string,
+                silent: object["silent"]?.bool ?? false
             )
         case "file_written":
             return .fileWritten(

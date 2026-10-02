@@ -16,18 +16,15 @@ struct ToolCardView: View {
                     }
                 } label: {
                     HStack(spacing: 8) {
-                        Text(tool.kind.label)
-                            .font(JieboFont.mono(12))
+                        Image(systemName: kindSymbol)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(statusColor)
+                            .frame(width: 16, height: 16)
+                        Text(verb)
+                            .font(JieboFont.mono(13))
                             .fontWeight(.medium)
-                            .foregroundStyle(JieboColor.ink2)
-                        // crew 徽章：子代理角色（摸仓库/改代码/交叉审）+ 模型（过 ModelCatalog 美化，对齐网页 modelLabel）
-                        let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
-                        if !crew.isEmpty {
-                            Text(crew + (tool.model?.nilIfEmpty.map { " · \(ModelCatalog.label(for: $0))" } ?? ""))
-                                .font(JieboFont.ui(10, weight: .medium))
-                                .foregroundStyle(JieboColor.brass)
-                        }
-                        Text(tool.summary)
+                            .foregroundStyle(JieboColor.ink)
+                        Text(titleLine)
                             .font(JieboFont.mono(11))
                             .foregroundStyle(JieboColor.dim)
                             .lineLimit(1)
@@ -74,34 +71,68 @@ struct ToolCardView: View {
                 }
                 badge
             }
-            if expanded, let result = tool.result {
-                let full = result.pretty(8_000)
-                let shown = clip(full)
-                ScrollView {
-                    Text(shown)
-                        .font(JieboFont.mono(12))
-                        .foregroundStyle(JieboColor.ink)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 240)
-                if full.count > 2_000 {
-                    Text("只显示前 2000 字，一共 \(full.count) 字")
-                        .font(JieboFont.ui(11))
-                        .foregroundStyle(JieboColor.dim)
-                }
+            if expanded {
+                ToolDetail(tool: tool)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        // 退为次级表面：mist 底 + 细描边，阴影收到更浅，避免和终稿同权
         .background(Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                .stroke(JieboColor.line.opacity(0.85), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous)
+                .stroke(JieboColor.line, lineWidth: 1)
         )
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
+        .onAppear {
+            if tool.status == "running" { expanded = true }
+        }
+        .onChange(of: tool.status) { _, status in
+            if status == "running" { expanded = true }
+        }
+    }
+
+    private var titleLine: String {
+        let summary = tool.summary
+        guard let model = tool.model?.nilIfEmpty else { return summary }
+        let name = ModelCatalog.label(for: model)
+        return summary.isEmpty ? name : "\(summary) · \(name)"
+    }
+
+    /// 和网页工具卡同一套动词、状态字。子代理角色占动词位。
+    private var verb: String {
+        let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
+        if !crew.isEmpty { return crew }
+        switch tool.kind {
+        case .shell: return "Ran"
+        case .search: return "Searched"
+        case .edit: return "Edited"
+        case .write: return "Wrote"
+        case .read: return "Read"
+        case .other:
+            if tool.name.range(of: "task", options: .caseInsensitive) != nil { return "Task" }
+            return tool.name.isEmpty ? "Tool" : tool.name
+        }
+    }
+
+    private var kindSymbol: String {
+        switch tool.kind {
+        case .search: "magnifyingglass"
+        case .read: "doc.text"
+        case .edit: "pencil"
+        case .write: "square.and.pencil"
+        case .shell: "terminal"
+        case .other: "wrench.and.screwdriver"
+        }
+    }
+
+    private var statusColor: Color {
+        switch tool.status {
+        case "running": JieboColor.run
+        case "error": JieboColor.danger
+        default: JieboColor.ok
+        }
     }
 
     /// 状态只留字，不再用绿色胶囊。
@@ -109,11 +140,11 @@ struct ToolCardView: View {
     private var badge: some View {
         switch tool.status {
         case "running":
-            badgeView("运行中", fg: JieboColor.run)
+            badgeView("Processing", fg: JieboColor.run)
         case "error":
-            badgeView("出错", fg: JieboColor.danger)
+            badgeView("Error", fg: JieboColor.danger)
         default:
-            badgeView("完成", fg: JieboColor.okSoft)
+            badgeView("Completed", fg: JieboColor.ok)
         }
     }
 
@@ -141,6 +172,155 @@ struct ToolCardView: View {
     private func clip(_ text: String) -> String {
         if text.count <= 2_000 { return text }
         return String(text.prefix(2_000)) + "\n…"
+    }
+}
+
+/// 展开后的工具内容：改文件画 diff，命令拆成命令行和输出，其余仍是原文。
+private struct ToolDetail: View {
+    var tool: ToolCall
+
+    var body: some View {
+        let diff = Self.extractDiff(tool)
+        let shell = tool.kind == .shell ? Self.extractShell(tool) : nil
+        VStack(alignment: .leading, spacing: 6) {
+            if tool.result == nil, tool.status == "running", diff.unified.isEmpty, diff.before.isEmpty, diff.after.isEmpty {
+                Text("正在跑…")
+                    .font(JieboFont.ui(12))
+                    .foregroundStyle(JieboColor.dim)
+            } else if !diff.unified.isEmpty {
+                DiffLines(lines: Self.unifiedLines(diff.unified))
+            } else if !diff.before.isEmpty || !diff.after.isEmpty {
+                DiffLines(lines: Self.pairLines(before: diff.before, after: diff.after))
+            } else if let shell, shell.hasOutput || !shell.command.isEmpty {
+                if !shell.command.isEmpty {
+                    Text("$ \(shell.command)")
+                        .font(JieboFont.mono(12))
+                        .foregroundStyle(JieboColor.ink2)
+                        .textSelection(.enabled)
+                }
+                if let exit = shell.exit {
+                    Text("exit \(exit)")
+                        .font(JieboFont.mono(11))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if !shell.stdout.isEmpty {
+                    Text(clip(shell.stdout))
+                        .font(JieboFont.mono(12))
+                        .foregroundStyle(JieboColor.ink)
+                        .textSelection(.enabled)
+                }
+                if !shell.stderr.isEmpty {
+                    Text(clip(shell.stderr))
+                        .font(JieboFont.mono(12))
+                        .foregroundStyle(JieboColor.danger)
+                        .textSelection(.enabled)
+                }
+            } else if let result = tool.result {
+                Text(clip(result.pretty(8_000)))
+                    .font(JieboFont.mono(12))
+                    .foregroundStyle(JieboColor.ink)
+                    .textSelection(.enabled)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func clip(_ text: String) -> String {
+        if text.count <= 2_000 { return text }
+        return String(text.prefix(2_000)) + "\n…"
+    }
+
+    private struct ShellBits {
+        var command: String
+        var stdout: String
+        var stderr: String
+        var exit: String?
+        var hasOutput: Bool { !stdout.isEmpty || !stderr.isEmpty || exit != nil }
+    }
+
+    private struct DiffBits {
+        var before: String
+        var after: String
+        var unified: String
+    }
+
+    private static func extractShell(_ tool: ToolCall) -> ShellBits {
+        let command = tool.args?.string(in: "command", "cmd") ?? ""
+        let result = tool.result
+        var stdout = result?.string(in: "stdout", "output", "out", "text") ?? ""
+        if stdout.isEmpty, case .string(let raw) = result { stdout = raw }
+        return ShellBits(
+            command: command,
+            stdout: stdout,
+            stderr: result?.string(in: "stderr", "err", "errorMessage") ?? "",
+            exit: result?.string(in: "exitCode", "exit_code", "code", "status").nilIfEmpty
+        )
+    }
+
+    private static func extractDiff(_ tool: ToolCall) -> DiffBits {
+        let before = tool.args?.string(in: "old_string", "oldString", "oldText").nilIfEmpty
+            ?? tool.result?.string(in: "old_string", "oldString", "before", "original")
+            ?? ""
+        let after = tool.args?.string(in: "new_string", "newString", "newText", "contents", "content").nilIfEmpty
+            ?? tool.result?.string(in: "new_string", "newString", "after", "updated", "contents", "content")
+            ?? ""
+        var unified = tool.args?.string(in: "diff", "patch").nilIfEmpty
+            ?? tool.result?.string(in: "diff", "patch")
+            ?? ""
+        if unified.isEmpty, case .string(let raw) = tool.result, raw.range(of: #"^(diff |@@ |\+|-)"#, options: .regularExpression) != nil {
+            unified = raw
+        }
+        if tool.kind != .edit && tool.kind != .write {
+            return DiffBits(before: "", after: "", unified: "")
+        }
+        return DiffBits(before: before, after: after, unified: unified)
+    }
+
+    private static func unifiedLines(_ text: String) -> [(kind: String, text: String)] {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            let row = String(line)
+            if row.hasPrefix("+"), !row.hasPrefix("+++") { return ("add", row) }
+            if row.hasPrefix("-"), !row.hasPrefix("---") { return ("del", row) }
+            return ("same", row)
+        }
+    }
+
+    private static func pairLines(before: String, after: String) -> [(kind: String, text: String)] {
+        let old = before.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let new = after.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var rows: [(kind: String, text: String)] = []
+        let count = max(old.count, new.count)
+        let cap = min(count, 80)
+        for index in 0..<cap {
+            let a = index < old.count ? old[index] : nil
+            let b = index < new.count ? new[index] : nil
+            if a == b, let a { rows.append(("same", " \(a)")) }
+            else {
+                if let a { rows.append(("del", "-\(a)")) }
+                if let b { rows.append(("add", "+\(b)")) }
+            }
+        }
+        if count > cap { rows.append(("same", "…")) }
+        return rows
+    }
+}
+
+private struct DiffLines: View {
+    var lines: [(kind: String, text: String)]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(lines.prefix(200).enumerated()), id: \.offset) { _, line in
+                    Text(line.text.isEmpty ? " " : line.text)
+                        .font(JieboFont.mono(12))
+                        .foregroundStyle(line.kind == "add" ? JieboColor.ok : line.kind == "del" ? JieboColor.danger : JieboColor.ink2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(line.kind == "add" ? JieboColor.okBg : line.kind == "del" ? JieboColor.dangerBg : Color.clear)
+                }
+            }
+        }
+        .frame(maxHeight: 240)
     }
 }
 

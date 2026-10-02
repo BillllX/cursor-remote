@@ -196,7 +196,11 @@ struct AdminStatsView: View {
 
     static func fmtCycle(_ epochMs: Double) -> String {
         let date = Date(timeIntervalSince1970: epochMs / 1000)
-        return date.formatted(.dateTime.month(.numeric).day(.numeric).timeZone(.gmt))
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "zh_CN")
+        fmt.timeZone = TimeZone(secondsFromGMT: 0)
+        fmt.setLocalizedDateFormatFromTemplate("Md")
+        return fmt.string(from: date)
     }
 
     static func fmtOnDemand(_ row: CursorOnDemand) -> String {
