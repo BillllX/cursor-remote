@@ -487,8 +487,8 @@ export function searchMemory(ref: TenantRef, query: string, opts: { at?: string;
 
 /** 条目的 id+rev 决定索引内容；lastUsedAt 之类不影响索引 */
 function memoryIndex(ref: TenantRef, data: EntriesFile) {
-  const key = `${entriesFile(ref)}:${data.rev}:${fingerprint(data.entries.map((entry) => `${entry.id}:${entry.rev}`))}`;
-  return cachedIndex(key, () =>
+  const key = `${data.rev}:${fingerprint(data.entries.map((entry) => `${entry.id}:${entry.rev}`))}`;
+  return cachedIndex(entriesFile(ref), key, () =>
     data.entries.map((entry) => ({
       topic: entry.topic,
       text: `${entry.kind} ${entry.text} ${(entry.supplements ?? []).join(" ")}`,

@@ -70,15 +70,20 @@ export function recoverApprovals(ref: TenantRef) {
   return stale;
 }
 
+const SUMMARY_KEYS = ["command", "path", "file", "file_path", "filePath", "target_file", "targetFile", "target", "uri", "url", "server", "tool", "toolName", "name"];
+
+/** 只取路径、命令、目标这类白名单字段；参数里的文件内容、补丁一律不落盘、不广播 */
 export function summarizeArgs(args: unknown) {
   if (!args || typeof args !== "object") return "";
   const row = args as Record<string, unknown>;
-  for (const key of ["command", "path", "file", "target_file", "filePath"]) {
-    if (typeof row[key] === "string" && row[key]) return clip(String(row[key]), 400);
+  const parts: string[] = [];
+  for (const key of SUMMARY_KEYS) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) parts.push(value.trim());
+    if (parts.length >= 2) break;
   }
-  try {
-    return clip(JSON.stringify(row), 400);
-  } catch {
-    return "";
+  if (!parts.length && Array.isArray(row.paths)) {
+    parts.push(row.paths.filter((item): item is string => typeof item === "string").slice(0, 3).join("、"));
   }
+  return clip(parts.join(" · "), 400);
 }

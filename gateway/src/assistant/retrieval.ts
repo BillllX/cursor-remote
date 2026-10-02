@@ -365,20 +365,22 @@ export function buildIndex(docs: RetrievalDoc[]): RetrievalIndex {
   };
 }
 
-const cache = new Map<string, RetrievalIndex>();
-const CACHE_SIZE = 4;
+/** 每个槽位（租户 + 索引种类）只留最新一版，租户之间互不挤占 */
+const cache = new Map<string, { key: string; index: RetrievalIndex }>();
+const CACHE_SLOTS = 64;
 
-/** 按调用方给的键（文档集版本）缓存索引 */
-export function cachedIndex(key: string, docs: () => RetrievalDoc[]) {
-  const hit = cache.get(key);
-  if (hit) {
-    cache.delete(key);
-    cache.set(key, hit);
-    return hit;
+/** slot 标识文档集归属，key 是该文档集的版本；版本变了就重建 */
+export function cachedIndex(slot: string, key: string, docs: () => RetrievalDoc[]) {
+  const hit = cache.get(slot);
+  if (hit && hit.key === key) {
+    cache.delete(slot);
+    cache.set(slot, hit);
+    return hit.index;
   }
   const index = buildIndex(docs());
-  cache.set(key, index);
-  while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
+  cache.delete(slot);
+  cache.set(slot, { key, index });
+  while (cache.size > CACHE_SLOTS) cache.delete(cache.keys().next().value!);
   return index;
 }
 
@@ -449,26 +451,34 @@ export function retrieve(index: RetrievalIndex, query: string, opts: RetrieveOpt
   }
 
   const entity = new Float64Array(n);
+  // 查询带了具体日期时，只同月份不算命中闸门，只做排序加分
+  const specificDate = [...qEntities].some((e) => e.startsWith("d:") || e.startsWith("md:"));
+  const entityGate = new Uint8Array(n);
   for (let i = 0; i < n; i += 1) {
     if (!allowed[i]) continue;
     let score = topicScore(index.topics[i], qPlain, strongTerms);
+    let gate = score > 0;
     if (!qEntities.size) {
       entity[i] = score;
+      entityGate[i] = gate ? 1 : 0;
       continue;
     }
     const docEntities = (index.entities[i] ??= entitiesOf(index.texts[i]));
     for (const e of qEntities) {
-      if (docEntities.has(e)) score += ENTITY_WEIGHT[e.slice(0, e.indexOf(":"))] ?? 1;
-      else if (e.startsWith("q:") && index.texts[i].includes(e.slice(2))) score += ENTITY_WEIGHT.q;
+      const hit = docEntities.has(e) || (e.startsWith("q:") && index.texts[i].includes(e.slice(2)));
+      if (!hit) continue;
+      score += ENTITY_WEIGHT[e.slice(0, e.indexOf(":"))] ?? 1;
+      if (!(specificDate && e.startsWith("m:"))) gate = true;
     }
     entity[i] = score;
+    entityGate[i] = gate ? 1 : 0;
   }
 
   const shortQuery = unigrams.length > 0 && unigrams.length <= 3;
   const candidates: number[] = [];
   for (let i = 0; i < n; i += 1) {
     if (!allowed[i]) continue;
-    const pass = strongHits[i] > 0 || (shortQuery && unigramHits[i] === unigrams.length) || cosine[i] >= MIN_COSINE || entity[i] > 0;
+    const pass = strongHits[i] > 0 || (shortQuery && unigramHits[i] === unigrams.length) || cosine[i] >= MIN_COSINE || entityGate[i] > 0;
     if (pass) candidates.push(i);
   }
   if (!candidates.length) return [];
@@ -479,7 +489,9 @@ export function retrieve(index: RetrievalIndex, query: string, opts: RetrieveOpt
   rankInto(fused, candidates, entity, 0);
   const limit = opts.limit ?? 12;
   const byScore = (a: number, b: number) => fused[b] - fused[a] || bm25[b] - bm25[a] || cosine[b] - cosine[a];
-  let ranked = candidates.sort(byScore);
+  // 过了闸门但三路都没给名次（常见词、余弦低于排序线）：没有相关性证据，不返回
+  let ranked = candidates.filter((doc) => fused[doc] > 0).sort(byScore);
+  if (!ranked.length) return [];
   const priorWeight = opts.priorWeight ?? DEFAULT_PRIOR_WEIGHT;
   if (opts.prior && priorWeight > 0) {
     // 先验最多加 priorWeight：比第 limit 名低出这么多的文档加了也进不了前列，不用算

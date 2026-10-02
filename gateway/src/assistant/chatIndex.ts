@@ -14,16 +14,17 @@ type IndexFile = { turns: IndexedTurn[] };
 
 const MAX_TURNS = 5000;
 
-/** 每次写索引加一，检索缓存靠它判断文档集变了没有（抹片段可能不改长度） */
-let writes = 0;
+/** 按索引文件计写入次数，检索缓存靠它判断文档集变了没有（抹片段可能不改长度） */
+const writes = new Map<string, number>();
 
 function file(ref: TenantRef) {
   return assistantPath(ref, "chat-index", "index.json");
 }
 
 function save(ref: TenantRef, data: IndexFile) {
-  writes += 1;
-  writeJson(file(ref), data);
+  const path = file(ref);
+  writes.set(path, (writes.get(path) ?? 0) + 1);
+  writeJson(path, data);
 }
 
 export function indexTurn(ref: TenantRef, row: Omit<IndexedTurn, "at" | "external">) {
@@ -71,8 +72,9 @@ export function searchChats(ref: TenantRef, query: string, limit = 8) {
   const terms = splitTerms(query);
   if (!terms.length) return [];
   const data = readJson<IndexFile>(file(ref), { turns: [] });
-  const key = `${file(ref)}:${writes}:${fingerprint(data.turns.map((t) => `${t.chatId}:${t.turn}:${t.at}:${t.user.length}:${t.assistant.length}`))}`;
-  const index = cachedIndex(key, () => data.turns.map((turn) => ({ topic: turn.title, text: `${turn.user}\n${turn.assistant}` })));
+  const path = file(ref);
+  const key = `${writes.get(path) ?? 0}:${fingerprint(data.turns.map((t) => `${t.chatId}:${t.turn}:${t.at}:${t.user.length}:${t.assistant.length}`))}`;
+  const index = cachedIndex(path, key, () => data.turns.map((turn) => ({ topic: turn.title, text: `${turn.user}\n${turn.assistant}` })));
   const now = Date.now();
   const snippetTerms = [...terms, ...tokenize(query).filter((term) => term.length > 1)];
   return retrieve(index, query, { limit, prior: (i) => Math.exp(-Math.max(0, now - data.turns[i].at) / (30 * 86_400_000)) }).map(

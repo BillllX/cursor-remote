@@ -417,6 +417,16 @@ try {
   const d = delegations.createDelegation(aref, { parentChatId: "p1", childChatId: "c1", workspace: "ws", title: "改 README", task: "改", mode: "foreground" });
   const a1 = approvals.addApproval(aref, { chatId: "c1", callId: "k1", tool: "edit", summary: approvals.summarizeArgs({ path: "README.md", content: "x".repeat(5000) }), delegationId: d.id, parentChatId: "p1" }, 1000);
   check(a1.summary === "README.md" && a1.expiresAt === 1000 + 24 * 3_600_000, "委派审批：落盘摘要只有路径，24 小时到期");
+  const leak = approvals.summarizeArgs({ target: "notes/a.md", content: "机密正文", patch: "+ 机密补丁" });
+  check(leak === "notes/a.md" && approvals.summarizeArgs({ content: "机密正文" }) === "", "委派审批：摘要只取路径类字段，不带文件内容");
+  const octIndex = retrieval.buildIndex([
+    { topic: "出差", text: "2026-10-15 去杭州出差" },
+    { topic: "杂事", text: "十月交房租" },
+  ]);
+  const octHits = retrieval.retrieve(octIndex, "10月15日").map((hit) => hit.index);
+  check(octHits[0] === 0 && !octHits.includes(1), "检索：查具体日期时，只同月份的条目不放进结果");
+  check(retrieval.retrieve(octIndex, "十月").some((hit) => hit.index === 1), "检索：只查月份时，同月份的条目照常命中");
+  check(retrieval.retrieve(octIndex, "量子力学").length === 0, "检索：无关查询返回空");
   const a2 = approvals.addApproval(aref, { chatId: "c1", callId: "k2", tool: "shell", summary: "npm test", delegationId: d.id }, 2000);
   check(approvals.listApprovals(aref).length === 1 && approvals.listApprovals(aref)[0].id === a2.id, "委派审批：同一子会话只留最新一项");
   check(approvals.findApproval(aref, "c1", "k2")?.tool === "shell" && !approvals.findApproval(aref, "c1", "k1"), "委派审批：按会话和调用查找");
