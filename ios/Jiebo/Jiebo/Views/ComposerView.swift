@@ -18,6 +18,12 @@ struct ComposerView: View {
     @State private var photoPickerOpen = false
     @State private var filePickerOpen = false
     @State private var fileBrowserOpen = false
+    /// 长按输入框说话
+    @State private var dictation = VoiceDictation()
+    @State private var holdTask: Task<Void, Never>?
+    @State private var pressing = false
+    /// 按住时上滑超过阈值：松手就丢掉这段录音
+    @State private var voiceCancelArmed = false
     @Namespace private var modeThumb
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -32,6 +38,10 @@ struct ComposerView: View {
             }
             attachmentStrip
             mentionStrip
+            if dictation.active {
+                voicePanel
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             TextField(placeholder, text: $text, axis: .vertical)
                 .font(JieboFont.ui(17))
                 .foregroundStyle(JieboColor.ink)
@@ -39,6 +49,16 @@ struct ComposerView: View {
                 .focused($focused)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 8)
+                .overlay {
+                    // 没在打字时盖一层：点一下进入输入，长按说话。键盘起来后长按仍是系统的选字
+                    if !focused || dictation.active {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(holdToTalk)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .accessibilityHint("长按说话，松开后转成文字")
                 .onChange(of: text) { _, value in
                     if value.contains("@") || !store.mentionSuggestions.isEmpty {
                         store.updateMentions(for: value)
@@ -81,7 +101,14 @@ struct ComposerView: View {
             text = store.draft
             store.refreshCheckpoints()
         }
+        .onDisappear {
+            holdTask?.cancel()
+            dictation.cancel()
+        }
+        .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
         .onChange(of: store.activeId) { _, _ in
+            holdTask?.cancel()
+            dictation.cancel()
             persistTask?.cancel()
             text = store.draft
             store.refreshCheckpoints()
@@ -198,13 +225,112 @@ struct ComposerView: View {
         }
     }
 
+    // MARK: - 长按说话
+
+    /// 按下 0.35 秒开始录音；松手把文字填进输入框；按住上滑取消；没到时间就松手算点一下
+    private var holdToTalk: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if !pressing {
+                    pressing = true
+                    voiceCancelArmed = false
+                    holdTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        guard !Task.isCancelled, pressing else { return }
+                        await beginVoice()
+                    }
+                }
+                guard dictation.active else { return }
+                let armed = value.translation.height < -60
+                if armed != voiceCancelArmed {
+                    voiceCancelArmed = armed
+                    UISelectionFeedbackGenerator().selectionChanged()
+                }
+            }
+            .onEnded { value in
+                pressing = false
+                holdTask?.cancel()
+                holdTask = nil
+                switch dictation.phase {
+                case .idle:
+                    let moved = abs(value.translation.width) + abs(value.translation.height)
+                    if moved < 12 { focused = true }
+                case .starting:
+                    dictation.cancel()
+                case .recording:
+                    if voiceCancelArmed {
+                        dictation.cancel()
+                    } else {
+                        Task { @MainActor in insertTranscript(await dictation.finish()) }
+                    }
+                case .finishing:
+                    break
+                }
+                voiceCancelArmed = false
+            }
+    }
+
+    private func beginVoice() async {
+        focused = false
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if let message = await dictation.start() {
+            store.flash(message)
+        }
+        // 权限弹窗、开音频期间已经松手：start 会自己收掉，这里不再留着录音
+        if !pressing, dictation.phase == .recording { dictation.cancel() }
+    }
+
+    private func insertTranscript(_ spoken: String) {
+        guard !spoken.isEmpty else {
+            store.flash("没听清，再说一次")
+            return
+        }
+        text = text.isEmpty ? spoken : text + spoken
+        schedulePersist()
+        focused = true
+    }
+
+    private var voicePanel: some View {
+        let finishing = dictation.phase == .finishing
+        let tint = voiceCancelArmed ? JieboColor.danger : JieboColor.pine
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                VoiceLevelBars(level: dictation.level, tint: tint, live: dictation.phase == .recording)
+                Text(voiceHint(finishing: finishing))
+                    .font(JieboFont.ui(12, weight: .medium))
+                    .foregroundStyle(voiceCancelArmed ? JieboColor.danger : JieboColor.ink2)
+                Spacer(minLength: 0)
+                if finishing { ProgressView().controlSize(.small) }
+            }
+            Text(dictation.transcript.isEmpty ? "请说话…" : dictation.transcript)
+                .font(JieboFont.ui(15))
+                .foregroundStyle(dictation.transcript.isEmpty ? JieboColor.dim : JieboColor.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(6)
+        }
+        .padding(10)
+        .background(voiceCancelArmed ? JieboColor.dangerBg : JieboColor.pine.opacity(0.08))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(tint.opacity(0.35), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private func voiceHint(finishing: Bool) -> String {
+        if finishing { return "正在转文字…" }
+        if dictation.phase == .starting { return "准备录音…" }
+        return voiceCancelArmed ? "松开取消" : "松开填入输入框 · 上滑取消"
+    }
+
     private var placeholder: String {
         if !store.connected { return "正在连服务器…" }
         if store.busy { return "正在动手，Enter 会排队" }
         switch store.mode {
-        case .ask: return "问一句，不改文件，@ 引用"
-        case .plan: return "描述任务，只出方案，@ 引用"
-        case .agent: return "交代要做的事，@ 引用文件"
+        case .ask: return "问一句，不改文件，@ 引用 · 长按说话"
+        case .plan: return "描述任务，只出方案 · 长按说话"
+        case .agent: return "交代要做的事，@ 引用 · 长按说话"
         }
     }
 
@@ -575,5 +701,27 @@ struct ComposerView: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
+    }
+}
+
+/// 录音时的五根音量条
+private struct VoiceLevelBars: View {
+    var level: CGFloat
+    var tint: Color
+    var live: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let weights: [CGFloat] = [0.45, 0.8, 1, 0.7, 0.5]
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(weights.indices, id: \.self) { index in
+                Capsule()
+                    .fill(tint)
+                    .frame(width: 3, height: 4 + 14 * (live ? level : 0) * weights[index])
+            }
+        }
+        .frame(width: 27, height: 18)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: level)
     }
 }
