@@ -168,7 +168,7 @@ struct SidebarView: View {
         .toolbar(.hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
         .sheet(isPresented: $store.workspaceSheetOpen) {
-            WorkspaceSheet()
+            WorkspacePickerSheet()
         }
         .sheet(isPresented: $themeOpen) {
             ThemeSettingsSheet()
@@ -497,56 +497,113 @@ struct SidebarView: View {
     }
 }
 
-private struct WorkspaceSheet: View {
+/// 切换工作区（iPad 侧栏与手机抽屉共用）。由 store.workspaceSheetOpen 驱动，系统表单样式：
+/// 当前项打勾，新建走右上角 + 和 alert，不夹带主题、退出这类账号操作。
+struct WorkspacePickerSheet: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         @Bindable var store = store
+        let items = store.subWorkspaces
+        let duplicates = Set(Dictionary(grouping: items, by: \.name).filter { $0.value.count > 1 }.keys)
         NavigationStack {
             List {
-                Section("工作区") {
-                    ForEach(store.subWorkspaces) { item in
-                        Button {
-                            store.switchWorkspace(to: item.path)
-                            dismiss()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.name)
-                                    .font(JieboFont.ui(16, weight: .medium))
-                                    .foregroundStyle(JieboColor.ink)
-                                Text(item.path)
-                                    .font(JieboFont.mono(12))
+                if items.isEmpty {
+                    Section {
+                        if store.workspaces.isEmpty {
+                            HStack(spacing: 10) {
+                                ProgressView()
+                                Text("正在读取工作区…")
+                                    .font(JieboFont.ui(15))
                                     .foregroundStyle(JieboColor.dim)
-                                    .lineLimit(1)
                             }
+                        } else {
+                            Text("还没有子工作区，点右上角 + 新建一个。")
+                                .font(JieboFont.ui(15))
+                                .foregroundStyle(JieboColor.dim)
                         }
                     }
-                }
-                Section {
-                    if store.creatingWorkspace {
-                        HStack {
-                            TextField("名称", text: $store.newWorkspaceName)
-                                .onSubmit { store.createWorkspace() }
-                            Button("创建", action: store.createWorkspace)
-                                .disabled(store.newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                } else {
+                    Section {
+                        ForEach(items) { item in
+                            row(item, showPath: duplicates.contains(item.name))
                         }
-                    } else {
-                        Button("新建工作区") {
-                            store.creatingWorkspace = true
-                        }
+                    } footer: {
+                        Text("切过去会打开那里最近的对话，没有就新建一个。")
                     }
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle("切换工作区")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        store.newWorkspaceName = ""
+                        store.creatingWorkspace = true
+                    } label: {
+                        Image(systemName: "plus")
+                    }
+                    .accessibilityLabel("新建工作区")
+                }
+            }
+            .alert("新建工作区", isPresented: $store.creatingWorkspace) {
+                TextField("名称", text: $store.newWorkspaceName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button("取消", role: .cancel) { store.newWorkspaceName = "" }
+                Button("创建", action: store.createWorkspace)
+                    .disabled(store.newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } message: {
+                Text("会在你的根目录下建一个同名文件夹，建好后直接进去。")
             }
         }
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func row(_ item: WorkspaceItem, showPath: Bool) -> some View {
+        let current = sameCwd(item.path, store.currentWorkspacePath)
+        return Button {
+            store.switchWorkspace(to: item.path)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(JieboColor.brass)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.name)
+                        .font(JieboFont.ui(16, weight: current ? .semibold : .regular))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    if showPath {
+                        Text(item.path)
+                            .font(JieboFont.mono(11))
+                            .foregroundStyle(JieboColor.dim)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 8)
+                if current {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                }
+            }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(current ? .isSelected : [])
     }
 }
 
