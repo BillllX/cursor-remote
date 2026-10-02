@@ -139,6 +139,7 @@ const PROXY_WEB = !/^(0|false|off|no)$/i.test(process.env.GATEWAY_PROXY_WEB || "
 const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
 /** 工具正文落盘上限。高于网页卡片的 1.2 万展示截断，diff 字段仍留得住。 */
 const TOOL_TEXT_CAP = 24_000;
+const TOOL_TEXT_MARK = "\n…（过长已截断）";
 
 loadTenants();
 for (const tenant of allTenants()) {
@@ -928,8 +929,6 @@ function slimChat(item: unknown): unknown {
   if (!turns.length) return { ...rest, turns: [] };
   return { ...rest, preview: chatPreviewOf(turns) };
 }
-
-const TOOL_TEXT_MARK = "\n…（过长已截断）";
 
 function capStoredString(value: string, hit: { n: number }): string {
   if (value.length <= TOOL_TEXT_CAP) return value;
