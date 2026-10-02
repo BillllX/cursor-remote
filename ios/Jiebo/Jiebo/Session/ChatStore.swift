@@ -585,7 +585,7 @@ final class ChatStore {
 
     func openNewChat() {
         let path = currentWorkspacePath
-        guard !path.isEmpty else {
+        guard !path.isEmpty, !isUserRoot(path) else {
             openWorkspaceSwitcher()
             return
         }
@@ -610,6 +610,10 @@ final class ChatStore {
         guard !next.isEmpty else { return }
         workspaceSheetOpen = false
         creatingWorkspace = false
+        if isUserRoot(next) {
+            openAssistantEntry()
+            return
+        }
         let key = normPath(next)
         if let chat = sidebarChats.first(where: { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }) {
             if chat.id != activeId { select(chat.id) }
@@ -618,9 +622,14 @@ final class ChatStore {
         startChat(in: next)
     }
 
+    /// 新对话只能开在子工作区；USER 根目录留给助理会话
     func startChat(in path: String) {
         let next = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
+        guard !isUserRoot(next) else {
+            openWorkspaceSwitcher()
+            return
+        }
         pendingAssistantOpen = false
         workspaceSheetOpen = false
         creatingWorkspace = false

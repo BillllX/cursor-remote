@@ -269,16 +269,7 @@ private struct PhoneWorkspaceList: View {
 
             ScrollView {
                 VStack(spacing: 0) {
-                    let root = store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot
-                    let userItems = store.workspaces.filter { $0.user || sameCwd($0.path, root) }
-                    let rest = store.workspaces.filter { item in !userItems.contains(where: { sameCwd($0.path, item.path) }) }
-                    if userItems.isEmpty {
-                        workspaceRow(name: store.assistantName, path: root, current: sameCwd(root, store.currentWorkspacePath), user: true)
-                    }
-                    ForEach(userItems) { item in
-                        workspaceRow(name: store.assistantName, path: item.path, current: sameCwd(item.path, store.currentWorkspacePath), user: true)
-                    }
-                    ForEach(rest) { item in
+                    ForEach(store.subWorkspaces) { item in
                         workspaceRow(
                             name: item.name,
                             path: item.path,

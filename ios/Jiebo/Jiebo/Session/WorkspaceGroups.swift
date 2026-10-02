@@ -107,16 +107,30 @@ extension ChatStore {
                 order.append(key)
             }
         }
-        let groups = order.compactMap { key -> WorkspaceGroup? in
-            guard let entry = byKey[key] else { return nil }
+        // USER 根目录只承载助理会话，由置顶入口代替，不进工作区分组
+        return order.compactMap { key -> WorkspaceGroup? in
+            guard let entry = byKey[key], !isUserRoot(entry.path) else { return nil }
             return WorkspaceGroup(key: key, path: entry.path, name: entry.name, user: entry.user, chats: entry.chats)
         }
-        return groups.sorted { $0.user && !$1.user }
     }
 
-    /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd / 根目录。
+    /// USER 根目录：只承载助理会话。ready 前 workspaceRoot 为空，一律不算
+    func isUserRoot(_ path: String?) -> Bool {
+        !workspaceRoot.isEmpty && sameCwd(path, workspaceRoot)
+    }
+
+    /// 可以开新对话的子工作区（不含 USER 根目录）
+    var subWorkspaces: [WorkspaceItem] {
+        workspaces.filter { !$0.user && !isUserRoot($0.path) }
+    }
+
+    /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd。
+    /// 落在 USER 根目录（助理会话）时退回最近用过的子工作区，没有子工作区才返回根目录。
     var currentWorkspacePath: String {
-        active?.cwd?.nilIfEmpty ?? cwd.nilIfEmpty ?? workspaceRoot
+        let path = active?.cwd?.nilIfEmpty ?? cwd.nilIfEmpty ?? workspaceRoot
+        guard isUserRoot(path) else { return path }
+        let recent = sidebarChats.lazy.compactMap { $0.cwd?.nilIfEmpty }.first { !self.isUserRoot($0) }
+        return recent ?? subWorkspaces.first?.path ?? path
     }
 
     var currentWorkspaceName: String {
@@ -133,7 +147,9 @@ extension ChatStore {
 
     /// 只含当前工作区的会话。侧栏不再把所有工作区叠在一张列表里。
     var currentWorkspaceChats: [ChatSession] {
-        let key = normPath(currentWorkspacePath.nilIfEmpty ?? groupRoot)
+        let path = currentWorkspacePath.nilIfEmpty ?? groupRoot
+        if isUserRoot(path) { return [] }
+        let key = normPath(path)
         return sidebarChats.filter { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }
     }
 }

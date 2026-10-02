@@ -1487,8 +1487,8 @@ export default function ChatApp() {
       const user = Boolean(group.user) || sameCwd(group.path, root);
       return { ...group, user, name: user ? assistantName : group.name };
     });
-    groups.sort((a, b) => Number(Boolean(b.user)) - Number(Boolean(a.user)));
-    return groups.filter((group) => group.chats.length || group.user || (root && !sameCwd(group.path, root)));
+    // USER 根目录只承载助理会话，由侧栏置顶入口代替，不进工作区分组
+    return groups.filter((group) => !group.user && (!root || !sameCwd(group.path, root)));
   }, [assistantName, sidebarChats, workspaces, workspaceRoot, cwd]);
 
   const duplicateGroupNames = useMemo(() => {
@@ -1501,15 +1501,10 @@ export default function ChatApp() {
     () => [...recentWorkspaces, ...catalogWorkspaces],
     [recentWorkspaces, catalogWorkspaces],
   );
-  const userMenuWorkspace = useMemo(
-    () =>
-      menuWorkspaces.find((item) => item.user) ||
-      (workspaceRoot ? { path: workspaceRoot, name: assistantName, user: true as const } : null),
-    [assistantName, menuWorkspaces, workspaceRoot],
-  );
+  // 新对话只能开在子工作区；USER 根目录留给助理会话
   const otherMenuWorkspaces = useMemo(
-    () => menuWorkspaces.filter((item) => !item.user && !sameCwd(item.path, userMenuWorkspace?.path)),
-    [menuWorkspaces, userMenuWorkspace],
+    () => menuWorkspaces.filter((item) => !item.user && !(workspaceRoot && sameCwd(item.path, workspaceRoot))),
+    [menuWorkspaces, workspaceRoot],
   );
 
   const duplicateMenuNames = useMemo(() => {
@@ -3512,8 +3507,11 @@ export default function ChatApp() {
   }
 
   function startChatIn(path: string) {
-    const next = path.trim() || workspaceRoot;
-    if (!next) return;
+    const next = path.trim();
+    if (!next || (workspaceRoot && sameCwd(next, workspaceRoot))) {
+      openNewChatMenu();
+      return;
+    }
     persistMode("agent");
     const nextModel = lastModelRef.current || modelRef.current;
     const empties = chatsRef.current.filter(
@@ -5399,21 +5397,6 @@ export default function ChatApp() {
           </div>
           {workspaceMenuOpen ? (
             <div className="workspace-menu">
-              {userMenuWorkspace ? (
-                <>
-                  <button
-                    type="button"
-                    className={`workspace-menu-item user${sameCwd(userMenuWorkspace.path, cwd) ? " on" : ""}`}
-                    onClick={() => startChatIn(userMenuWorkspace.path)}
-                  >
-                    <FolderMark />
-                    <span className="workspace-menu-name">{assistantName}</span>
-                    <span className="workspace-menu-user">全部</span>
-                    {sameCwd(userMenuWorkspace.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
-                  </button>
-                  <p className="workspace-menu-note">能看全部子工作区。网站只在这里公开。</p>
-                </>
-              ) : null}
               {otherMenuWorkspaces.map((item) => (
                 <button
                   key={item.path}
@@ -5466,7 +5449,7 @@ export default function ChatApp() {
             const holdsActive = group.chats.some((chat) => chat.id === activeId);
             const open = holdsActive || expandedGroups.has(key);
             return (
-            <div key={group.path} className={`chat-group${group.user ? " user" : ""}`}>
+            <div key={group.path} className="chat-group">
               <button
                 type="button"
                 className={`chat-group-label${open ? " open" : ""}${holdsActive ? " locked" : ""}`}
@@ -5488,7 +5471,6 @@ export default function ChatApp() {
                 {group.chats.length ? <span className="chat-group-chevron" aria-hidden="true" /> : <span className="chat-group-chevron spacer" aria-hidden="true" />}
                 <FolderMark className="chat-group-folder" />
                 <span className="chat-group-name">{group.name}</span>
-                {group.user ? <span className="chat-group-user">全部</span> : null}
                 {duplicateGroupNames.has(group.name) ? (
                   <span className="chat-group-path">{group.path}</span>
                 ) : null}

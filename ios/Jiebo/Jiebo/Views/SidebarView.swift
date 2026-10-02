@@ -225,17 +225,6 @@ struct SidebarView: View {
                     .tracking(0.4)
                     .foregroundStyle(JieboColor.ink2)
                     .lineLimit(1)
-                if group.user {
-                    Text("全部")
-                        .font(JieboFont.ui(10, weight: .semibold))
-                        .foregroundStyle(JieboColor.dim)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                }
                 if duplicate {
                     Text(group.path)
                         .font(JieboFont.mono(10))
@@ -456,17 +445,22 @@ struct SidebarView: View {
     }
 
     private var newChatMenu: some View {
-        let root = store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot
-        let items = store.workspaces.isEmpty && !root.isEmpty
-            ? [WorkspaceItem(path: root, name: store.assistantName, user: true)]
-            : store.workspaces
+        let items = store.subWorkspaces
         return VStack(alignment: .leading, spacing: 2) {
             if items.isEmpty {
-                Text("正在读取工作区…")
-                    .font(JieboFont.ui(12))
-                    .foregroundStyle(JieboColor.dim)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                Button {
+                    newMenuOpen = false
+                    store.openWorkspaceSwitcher()
+                } label: {
+                    Text(store.workspaces.isEmpty ? "正在读取工作区…" : "还没有子工作区，新建一个")
+                        .font(JieboFont.ui(12))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.workspaces.isEmpty)
             } else {
                 ForEach(items) { item in
                     let current = sameCwd(item.path, store.currentWorkspacePath)
@@ -478,7 +472,7 @@ struct SidebarView: View {
                             Image(systemName: "folder")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(JieboColor.brass)
-                            Text(item.user || sameCwd(item.path, root) ? store.assistantName : item.name)
+                            Text(item.name)
                                 .font(JieboFont.ui(13, weight: current ? .semibold : .regular))
                                 .foregroundStyle(JieboColor.ink)
                                 .lineLimit(1)
@@ -511,46 +505,8 @@ private struct WorkspaceSheet: View {
         @Bindable var store = store
         NavigationStack {
             List {
-                let root = store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot
-                let userItems = store.workspaces.filter { $0.user || sameCwd($0.path, root) }
-                let rest = store.workspaces.filter { item in !userItems.contains(where: { sameCwd($0.path, item.path) }) }
-                Section {
-                    if userItems.isEmpty {
-                        Button {
-                            store.switchWorkspace(to: root)
-                            dismiss()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(root.isEmpty ? "正在读取工作区…" : store.assistantName)
-                                    .font(JieboFont.ui(16, weight: .semibold))
-                                    .foregroundStyle(JieboColor.pine)
-                                Text("能看全部子工作区。网站只在这里公开。")
-                                    .font(JieboFont.ui(12))
-                                    .foregroundStyle(JieboColor.dim)
-                            }
-                        }
-                        .disabled(root.isEmpty)
-                    }
-                    ForEach(userItems) { item in
-                        Button {
-                            store.switchWorkspace(to: item.path)
-                            dismiss()
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(store.assistantName)
-                                    .font(JieboFont.ui(16, weight: .semibold))
-                                    .foregroundStyle(JieboColor.pine)
-                                Text("能看全部子工作区。网站只在这里公开。")
-                                    .font(JieboFont.ui(12))
-                                    .foregroundStyle(JieboColor.dim)
-                                    .lineLimit(2)
-                            }
-                        }
-                        .listRowBackground(JieboColor.pine.opacity(0.10))
-                    }
-                }
                 Section("工作区") {
-                    ForEach(rest) { item in
+                    ForEach(store.subWorkspaces) { item in
                         Button {
                             store.switchWorkspace(to: item.path)
                             dismiss()
