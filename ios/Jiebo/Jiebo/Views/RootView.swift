@@ -35,6 +35,9 @@ struct WorkbenchView: View {
         .fullScreenCover(isPresented: Bindable(store).fileBrowserOpen) {
             FileBrowserCover()
         }
+        .sheet(isPresented: Bindable(store).assistantOpen) {
+            AssistantView()
+        }
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--open-file-browser") {
@@ -146,6 +149,9 @@ struct CollapsedSidebarRail: View {
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
+            railButton("sparkles", label: "助理", marked: store.assistantBadgeCount > 0) {
+                store.assistantOpen = true
+            }
             ForEach(ToolLayer.allCases) { layer in
                 railButton(layer.symbol, label: layer.title, marked: layer == .loop && loopLive, on: store.toolSelected(layer)) {
                     store.toggleTool(layer)

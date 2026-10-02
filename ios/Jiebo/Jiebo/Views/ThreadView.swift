@@ -58,6 +58,14 @@ struct ThreadView: View {
             }
             }
             .animation(JieboMotion.fade(reduceMotion), value: store.pendingDiffPaths.isEmpty)
+            let delegated = store.assistantApprovals(forParent: store.activeId)
+            Group {
+                if let approval = delegated.first {
+                    delegatedApprovalBanner(approval, more: delegated.count - 1)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
             ComposerView(focusNonce: composerFocusNonce)
                 // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
                 .transaction { $0.animation = nil }
@@ -107,6 +115,45 @@ struct ThreadView: View {
         .sheet(item: exportFileBinding, onDismiss: store.closeExport) { file in
             ActivityView(items: [file.url])
         }
+    }
+
+    /// 本会话派出去的委派子会话停在审批上：在输入框上方直接作答
+    private func delegatedApprovalBanner(_ approval: AssistantApproval, more: Int) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "hand.raised")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(JieboColor.brass)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(more > 0 ? "委派待批 · \(approval.tool)（另有 \(more) 条）" : "委派待批 · \(approval.tool)")
+                    .font(JieboFont.ui(12, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1)
+                if !approval.summary.isEmpty {
+                    Text(approval.summary)
+                        .font(JieboFont.mono(11))
+                        .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            Spacer(minLength: 4)
+            AssistantPillButton(title: "拒绝", tint: JieboColor.danger) {
+                store.answerAssistantApproval(approval, allow: false)
+            }
+            AssistantPillButton(title: "批准", filled: true) {
+                store.answerAssistantApproval(approval, allow: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(JieboColor.mist)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(JieboColor.brass.opacity(0.35), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
     }
 
     /// P7：文件浏览器 cover 打开期间本层不 present QL——cover 自己挂了同一 previewFile 的 sheet，

@@ -86,6 +86,10 @@ final class ChatStore {
     var cwd = ""
     var workspaceRoot = ""
     var assistantName = AssistantDefaults.name
+    /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
+    var assistantState: AssistantState?
+    /// 助理面板（sheet 挂在 WorkbenchView，侧栏/图标栏/抽屉都能开）
+    var assistantOpen = false
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -651,6 +655,86 @@ final class ChatStore {
     func requestAdminStats() {
         guard isAdmin else { return }
         send(.adminStats)
+    }
+
+    // MARK: 个人助理
+
+    /// 入口角标：未读收件箱 + 待批
+    var assistantBadgeCount: Int {
+        guard let state = assistantState else { return 0 }
+        return state.unreadInbox + state.approvals.count
+    }
+
+    /// 停在审批上的委派子会话里，父会话是 parentId 的那些
+    func assistantApprovals(forParent parentId: String) -> [AssistantApproval] {
+        guard let state = assistantState, !parentId.isEmpty else { return [] }
+        let delegationIds = Set(state.delegations.filter { $0.parentChatId == parentId }.map(\.id))
+        return state.approvals.filter { approval in
+            if let delegationId = approval.delegationId, delegationIds.contains(delegationId) { return true }
+            return approval.parentChatId == parentId
+        }
+    }
+
+    func requestAssistant(memory: Bool = false) {
+        send(.assistantGet(memory: memory))
+    }
+
+    func assistantOp(_ op: String, args: [String: JSONValue] = [:]) {
+        send(.assistantOp(op: op, args: args, reqId: UUID().uuidString))
+    }
+
+    func answerAssistantApproval(_ approval: AssistantApproval, allow: Bool) {
+        assistantOp("approval_answer", args: [
+            "chatId": .string(approval.chatId),
+            "callId": .string(approval.callId),
+            "allow": .bool(allow),
+        ])
+        assistantState?.approvals.removeAll { $0.id == approval.id }
+    }
+
+    func openAssistantInboxItem(_ item: AssistantInboxItem) {
+        if !item.read {
+            assistantOp("inbox_read", args: ["ids": .array([.string(item.id)])])
+            if let index = assistantState?.inbox.firstIndex(where: { $0.id == item.id }) {
+                assistantState?.inbox[index].read = true
+            }
+        }
+        if let chatId = item.chatId { openAssistantChat(chatId) }
+    }
+
+    /// 打开助理关联的会话（委派子会话、收件箱条目）。本机还没同步到的会话不切，避免 activeId 指向空壳
+    func openAssistantChat(_ chatId: String) {
+        guard chats.contains(where: { $0.id == chatId }) else {
+            flash("这个会话还没同步到本机")
+            return
+        }
+        assistantOpen = false
+        select(chatId)
+    }
+
+    func setAssistantMemoryPaused(_ paused: Bool) {
+        assistantOp("memory_settings", args: ["paused": .bool(paused)])
+        assistantState?.memory?.paused = paused
+    }
+
+    private func applyDelegationState(_ delegation: AssistantDelegation, approval: AssistantApproval?) {
+        guard var state = assistantState else { return }
+        if let index = state.delegations.firstIndex(where: { $0.id == delegation.id }) {
+            state.delegations[index] = delegation
+        } else {
+            state.delegations.insert(delegation, at: 0)
+        }
+        if let approval {
+            if let index = state.approvals.firstIndex(where: { $0.id == approval.id }) {
+                state.approvals[index] = approval
+            } else {
+                state.approvals.append(approval)
+            }
+        }
+        if delegation.status != "awaiting" {
+            state.approvals.removeAll { $0.delegationId == delegation.id }
+        }
+        assistantState = state
     }
 
     func select(_ id: String) {
@@ -1772,6 +1856,7 @@ final class ChatStore {
             client.flushOutbox()
             send(.listWorkspaces)
             requestFileIndex()
+            requestAssistant(memory: assistantState?.memory != nil)
         case .auth(let ok, let messageText):
             if !ok {
                 unlocked = false
@@ -2351,6 +2436,35 @@ final class ChatStore {
                 }
             }
             requestFileIndex()
+        case .assistantState(let state):
+            var next = state
+            // 别的连接触发的推送可能不带记忆：记忆页已加载过就留着旧的，等下一次带记忆的推送覆盖
+            if next.memory == nil { next.memory = assistantState?.memory }
+            assistantState = next
+        case .assistantResult(_, let op, let ok, let error, _):
+            if !ok {
+                flash(error ?? "助理操作失败（\(op)）")
+            } else if op == "memory_save" {
+                flash("已记住")
+            } else if op == "memory_purge" {
+                flash("已彻底删除")
+            }
+        case .inboxItem(let item):
+            guard assistantState != nil else { break }
+            if let index = assistantState?.inbox.firstIndex(where: { $0.id == item.id }) {
+                assistantState?.inbox[index] = item
+            } else {
+                assistantState?.inbox.insert(item, at: 0)
+            }
+        case .delegationState(let delegation, let approval):
+            applyDelegationState(delegation, approval: approval)
+        case .memoryWritten(_, let entry):
+            if let index = assistantState?.memory?.entries.firstIndex(where: { $0.id == entry.id }) {
+                assistantState?.memory?.entries[index] = entry
+            } else if assistantState?.memory != nil {
+                assistantState?.memory?.entries.insert(entry, at: 0)
+            }
+            flash("\(assistantName) 记住了：\(entry.topic.nilIfEmpty ?? String(entry.text.prefix(24)))")
         case .pong, .ignored:
             break
         }
@@ -3113,6 +3227,8 @@ final class ChatStore {
         runningChatIds = []
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
+        assistantState = nil
+        assistantOpen = false
         loops = [:]
         loopError = ""
         toolLayer = nil

@@ -116,6 +116,12 @@ private struct PhoneDrawer: View {
                 close()
             }
 
+            drawerRow("sparkles", store.assistantBadgeCount > 0 ? "助理 (\(store.assistantBadgeCount))" : "助理", marked: store.assistantBadgeCount > 0) {
+                close()
+                store.assistantOpen = true
+            }
+            .padding(.top, 4)
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(store.currentWorkspaceChats) { chat in

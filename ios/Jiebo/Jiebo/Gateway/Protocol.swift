@@ -234,6 +234,10 @@ enum ClientMessage {
     /// 产品 Loop（docs/IDE.md L1）：开始 / 停止。调度在 L2，这里只发消息
     case loopStart(chatId: String, goal: String, intervalSec: Int, maxTicks: Int?, model: String?, mode: AgentMode?)
     case loopStop(chatId: String)
+    /// 个人助理：拉今日页状态。memory=true 时一并下发记忆全量，之后的推送也带记忆
+    case assistantGet(memory: Bool)
+    /// 个人助理操作（inbox_read / todo_add / memory_* / approval_answer …），args 由网关逐项校验
+    case assistantOp(op: String, args: [String: JSONValue], reqId: String?)
 
     func json() -> JSONValue {
         switch self {
@@ -381,6 +385,15 @@ enum ClientMessage {
             return .object(object)
         case .loopStop(let chatId):
             return .object(["type": .string("loop_stop"), "chatId": .string(chatId)])
+        case .assistantGet(let memory):
+            var object: [String: JSONValue] = ["type": .string("assistant_get")]
+            if memory { object["memory"] = .bool(true) }
+            return .object(object)
+        case .assistantOp(let op, let args, let reqId):
+            var object: [String: JSONValue] = ["type": .string("assistant_op"), "op": .string(op)]
+            if !args.isEmpty { object["args"] = .object(args) }
+            if let reqId { object["reqId"] = .string(reqId) }
+            return .object(object)
         }
     }
 }
@@ -438,6 +451,303 @@ struct SearchHit: Sendable, Hashable, Identifiable {
 
 enum AssistantDefaults {
     static let name = "小驳"
+}
+
+// MARK: 个人助理（assistant_state 及增量）。kind/status 等枚举一律存 String：网关加新值不能让整条消息解不出来
+
+struct AssistantInboxItem: Sendable, Hashable, Identifiable {
+    var id: String
+    var kind: String
+    var title: String
+    var body: String
+    var createdAt: Double
+    var read: Bool
+    var chatId: String?
+    var scheduleId: String?
+    var delegationId: String?
+
+    static func from(_ json: JSONValue) -> AssistantInboxItem? {
+        guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return AssistantInboxItem(
+            id: id,
+            kind: row["kind"]?.string ?? "info",
+            title: row["title"]?.string ?? "",
+            body: row["body"]?.string ?? "",
+            createdAt: row["createdAt"]?.number ?? 0,
+            read: row["read"]?.bool ?? false,
+            chatId: row["chatId"]?.string?.nilIfEmpty,
+            scheduleId: row["scheduleId"]?.string?.nilIfEmpty,
+            delegationId: row["delegationId"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct AssistantMemoryEntry: Sendable, Hashable, Identifiable {
+    var id: String
+    var rev: Int
+    var topic: String
+    var kind: String
+    var text: String
+    /// "user_said" | "inferred"
+    var basis: String
+    var confidence: Double
+    var sourceChatId: String?
+    var createdAt: String
+    var updatedAt: String
+    /// 网关用 null 表示「有效」，字段缺失也按有效算
+    var invalidAt: String?
+    var invalidReason: String?
+
+    var isValid: Bool { invalidAt?.isEmpty ?? true }
+    var inferred: Bool { basis == "inferred" }
+
+    static func from(_ json: JSONValue) -> AssistantMemoryEntry? {
+        guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return AssistantMemoryEntry(
+            id: id,
+            rev: row["rev"]?.int ?? 0,
+            topic: row["topic"]?.string ?? "",
+            kind: row["kind"]?.string ?? "",
+            text: row["text"]?.string ?? "",
+            basis: row["basis"]?.string ?? "user_said",
+            confidence: row["confidence"]?.number ?? 0,
+            sourceChatId: row["source"]?.object?["chatId"]?.string?.nilIfEmpty,
+            createdAt: row["createdAt"]?.string ?? "",
+            updatedAt: row["updatedAt"]?.string ?? "",
+            invalidAt: row["invalidAt"]?.string?.nilIfEmpty,
+            invalidReason: row["invalidReason"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct AssistantDelegation: Sendable, Hashable, Identifiable {
+    var id: String
+    var parentChatId: String?
+    var childChatId: String
+    var workspace: String
+    var title: String
+    /// "foreground" | "background"
+    var mode: String
+    /// "running" | "awaiting" | "done" | "failed"
+    var status: String
+    var createdAt: Double
+    var endedAt: Double?
+    var result: String?
+
+    static func from(_ json: JSONValue) -> AssistantDelegation? {
+        guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return AssistantDelegation(
+            id: id,
+            parentChatId: row["parentChatId"]?.string?.nilIfEmpty,
+            childChatId: row["childChatId"]?.string ?? "",
+            workspace: row["workspace"]?.string ?? "",
+            title: row["title"]?.string ?? "",
+            mode: row["mode"]?.string ?? "background",
+            status: row["status"]?.string ?? "running",
+            createdAt: row["createdAt"]?.number ?? 0,
+            endedAt: row["endedAt"]?.number,
+            result: row["result"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct AssistantApproval: Sendable, Hashable, Identifiable {
+    var id: String
+    var chatId: String
+    var callId: String
+    var tool: String
+    /// 参数摘要，不含文件全文
+    var summary: String
+    var delegationId: String?
+    var parentChatId: String?
+    var createdAt: Double
+    var expiresAt: Double
+
+    static func from(_ json: JSONValue) -> AssistantApproval? {
+        guard let row = json.object,
+              let chatId = row["chatId"]?.string, !chatId.isEmpty,
+              let callId = row["callId"]?.string, !callId.isEmpty
+        else { return nil }
+        return AssistantApproval(
+            id: row["id"]?.string?.nilIfEmpty ?? "\(chatId):\(callId)",
+            chatId: chatId,
+            callId: callId,
+            tool: row["tool"]?.string ?? "",
+            summary: row["summary"]?.string ?? "",
+            delegationId: row["delegationId"]?.string?.nilIfEmpty,
+            parentChatId: row["parentChatId"]?.string?.nilIfEmpty,
+            createdAt: row["createdAt"]?.number ?? 0,
+            expiresAt: row["expiresAt"]?.number ?? 0
+        )
+    }
+}
+
+struct AssistantTodo: Sendable, Hashable, Identifiable {
+    var id: String
+    var text: String
+    var due: String?
+    var done: Bool
+    var doneAt: Double?
+    var createdAt: Double
+
+    static func from(_ json: JSONValue) -> AssistantTodo? {
+        guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return AssistantTodo(
+            id: id,
+            text: row["text"]?.string ?? "",
+            due: row["due"]?.string?.nilIfEmpty,
+            done: row["done"]?.bool ?? false,
+            doneAt: row["doneAt"]?.number,
+            createdAt: row["createdAt"]?.number ?? 0
+        )
+    }
+}
+
+struct AssistantSchedule: Sendable, Hashable, Identifiable {
+    var id: String
+    var title: String
+    /// "prompt" | "brief" | "remind"
+    var kind: String
+    var cron: String
+    var tz: String
+    var prompt: String
+    var enabled: Bool
+    var nextAt: Double?
+    var lastStatus: String?
+    var failCount: Int
+    var pausedReason: String?
+
+    static func from(_ json: JSONValue) -> AssistantSchedule? {
+        guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return AssistantSchedule(
+            id: id,
+            title: row["title"]?.string ?? "",
+            kind: row["kind"]?.string ?? "prompt",
+            cron: row["cron"]?.string ?? "",
+            tz: row["tz"]?.string ?? "",
+            prompt: row["prompt"]?.string ?? "",
+            enabled: row["enabled"]?.bool ?? false,
+            nextAt: row["nextAt"]?.number,
+            lastStatus: row["lastStatus"]?.string?.nilIfEmpty,
+            failCount: row["failCount"]?.int ?? 0,
+            pausedReason: row["pausedReason"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct AssistantRun: Sendable, Hashable, Identifiable {
+    var runId: String
+    var origin: String
+    var label: String
+    var status: String
+    var startedAt: Double
+    var endedAt: Double?
+    var summary: String?
+    var error: String?
+    var id: String { runId }
+
+    static func from(_ json: JSONValue) -> AssistantRun? {
+        guard let row = json.object, let runId = row["runId"]?.string, !runId.isEmpty else { return nil }
+        return AssistantRun(
+            runId: runId,
+            origin: row["origin"]?.string ?? "",
+            label: row["label"]?.string ?? "",
+            status: row["status"]?.string ?? "",
+            startedAt: row["startedAt"]?.number ?? 0,
+            endedAt: row["endedAt"]?.number,
+            summary: row["summary"]?.string?.nilIfEmpty,
+            error: row["error"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct AssistantBackground: Sendable, Hashable {
+    var model: String
+    var ok: Bool
+    var reason: String?
+}
+
+struct AssistantBrief: Sendable, Hashable {
+    var day: String
+    var text: String
+}
+
+struct AssistantMemory: Sendable, Hashable {
+    /// 网关 CORE_FIELDS 的顺序；fields 里多出来的键排在后面
+    static let coreFieldKeys = ["关于我", "偏好", "近况", "人物"]
+
+    var rev: Int
+    var coreRev: Int
+    var coreFields: [String: String]
+    var entries: [AssistantMemoryEntry]
+    var paused: Bool
+    var coreTokens: Int
+    var coreBudget: Int
+
+    var orderedCoreKeys: [String] {
+        Self.coreFieldKeys + coreFields.keys.filter { !Self.coreFieldKeys.contains($0) }.sorted()
+    }
+
+    static func from(_ json: JSONValue) -> AssistantMemory? {
+        guard let row = json.object else { return nil }
+        let core = row["core"]?.object
+        var fields: [String: String] = [:]
+        for (key, value) in core?["fields"]?.object ?? [:] {
+            if let text = value.string { fields[key] = text }
+        }
+        return AssistantMemory(
+            rev: row["rev"]?.int ?? 0,
+            coreRev: core?["rev"]?.int ?? 0,
+            coreFields: fields,
+            entries: row["entries"]?.array?.compactMap(AssistantMemoryEntry.from) ?? [],
+            paused: row["settings"]?.object?["paused"]?.bool ?? false,
+            coreTokens: row["coreTokens"]?.int ?? 0,
+            coreBudget: row["coreBudget"]?.int ?? 0
+        )
+    }
+}
+
+struct AssistantState: Sendable, Hashable {
+    var name: String
+    var background: AssistantBackground
+    var pushKey: String?
+    var inbox: [AssistantInboxItem]
+    var todos: [AssistantTodo]
+    var schedules: [AssistantSchedule]
+    var delegations: [AssistantDelegation]
+    var approvals: [AssistantApproval]
+    var runs: [AssistantRun]
+    var brief: AssistantBrief?
+    /// 只有发过 assistant_get(memory: true) 的连接才带
+    var memory: AssistantMemory?
+
+    var unreadInbox: Int { inbox.filter { !$0.read }.count }
+
+    static func from(_ json: JSONValue) -> AssistantState? {
+        guard let row = json.object else { return nil }
+        let background = row["background"]?.object
+        let brief = row["brief"]?.object.flatMap { item -> AssistantBrief? in
+            guard let text = item["text"]?.string else { return nil }
+            return AssistantBrief(day: item["day"]?.string ?? "", text: text)
+        }
+        return AssistantState(
+            name: row["name"]?.string?.nilIfEmpty ?? AssistantDefaults.name,
+            background: AssistantBackground(
+                model: background?["model"]?.string ?? "",
+                ok: background?["ok"]?.bool ?? false,
+                reason: background?["reason"]?.string?.nilIfEmpty
+            ),
+            pushKey: row["pushKey"]?.string?.nilIfEmpty,
+            inbox: row["inbox"]?.array?.compactMap(AssistantInboxItem.from) ?? [],
+            todos: row["todos"]?.array?.compactMap(AssistantTodo.from) ?? [],
+            schedules: row["schedules"]?.array?.compactMap(AssistantSchedule.from) ?? [],
+            delegations: row["delegations"]?.array?.compactMap(AssistantDelegation.from) ?? [],
+            approvals: row["approvals"]?.array?.compactMap(AssistantApproval.from) ?? [],
+            runs: row["runs"]?.array?.compactMap(AssistantRun.from) ?? [],
+            brief: brief,
+            memory: row["memory"].flatMap(AssistantMemory.from)
+        )
+    }
 }
 
 enum ServerMessage {
@@ -537,6 +847,13 @@ enum ServerMessage {
     case undone(chatId: String, paths: [String], error: String?)
     case checkpoints(chatId: String, items: [CheckpointInfo])
     case restored(chatId: String, checkpointId: String?, label: String?, error: String?, silent: Bool)
+    /// 个人助理全量状态（替换本地）
+    case assistantState(AssistantState)
+    case assistantResult(reqId: String?, op: String, ok: Bool, error: String?, data: JSONValue?)
+    case inboxItem(AssistantInboxItem)
+    /// 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带
+    case delegationState(delegation: AssistantDelegation, approval: AssistantApproval?)
+    case memoryWritten(chatId: String?, entry: AssistantMemoryEntry)
     case pong
     case ignored(String)
 
@@ -808,6 +1125,26 @@ enum ServerMessage {
                 size: object["size"]?.number,
                 id: object["id"]?.string
             )
+        case "assistant_state":
+            guard let state = object["state"].flatMap(AssistantState.from) else { return .ignored(type) }
+            return .assistantState(state)
+        case "assistant_result":
+            return .assistantResult(
+                reqId: object["reqId"]?.string,
+                op: object["op"]?.string ?? "",
+                ok: object["ok"]?.bool ?? false,
+                error: object["error"]?.string?.nilIfEmpty,
+                data: object["data"]
+            )
+        case "inbox_item":
+            guard let item = object["item"].flatMap(AssistantInboxItem.from) else { return .ignored(type) }
+            return .inboxItem(item)
+        case "delegation_state":
+            guard let delegation = object["delegation"].flatMap(AssistantDelegation.from) else { return .ignored(type) }
+            return .delegationState(delegation: delegation, approval: object["approval"].flatMap(AssistantApproval.from))
+        case "memory_written":
+            guard let entry = object["entry"].flatMap(AssistantMemoryEntry.from) else { return .ignored(type) }
+            return .memoryWritten(chatId: object["chatId"]?.string?.nilIfEmpty, entry: entry)
         case "pong":
             return .pong
         default:
