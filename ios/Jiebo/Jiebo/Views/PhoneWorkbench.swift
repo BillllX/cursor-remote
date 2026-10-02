@@ -79,10 +79,12 @@ private struct PhoneDrawer: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(store.currentWorkspaceName)
                             .font(JieboFont.display(17))
+                            .tracking(-0.3)
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
                         Text(store.connected ? "工作区" : "正在重连…")
-                            .font(JieboFont.ui(11))
+                            .font(JieboFont.ui(11, weight: .medium))
+                            .tracking(0.4)
                             .foregroundStyle(JieboColor.dim)
                     }
                     Spacer(minLength: 0)
@@ -97,7 +99,7 @@ private struct PhoneDrawer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("工作区列表")
 
-            drawerRow("plus", "新对话") {
+            drawerRow("plus", "新对话", boxed: true) {
                 store.openNewChat()
                 close()
             }
@@ -108,7 +110,8 @@ private struct PhoneDrawer: View {
                         chatRow(chat)
                     }
                     Text("这个工作区")
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.ui(11, weight: .medium))
+                        .tracking(0.6)
                         .foregroundStyle(JieboColor.dim)
                         .padding(.horizontal, 16)
                         .padding(.top, 14)
@@ -124,6 +127,9 @@ private struct PhoneDrawer: View {
         .frame(maxHeight: .infinity)
         .frame(width: 300)
         .background(JieboColor.sidebar.ignoresSafeArea())
+        .overlay(alignment: .trailing) {
+            Rectangle().fill(JieboColor.line).frame(width: 1)
+        }
         .gesture(
             DragGesture(minimumDistance: 20)
                 .onEnded { value in
@@ -148,11 +154,17 @@ private struct PhoneDrawer: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(selected ? JieboColor.paper : JieboColor.ink)
+            .foregroundStyle(JieboColor.ink)
             .padding(.horizontal, 12)
             .frame(minHeight: 40)
-            .background(selected ? JieboColor.pine : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(selected ? JieboColor.ink.opacity(0.06) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 1, style: .continuous)
+                    .fill(selected ? JieboColor.ink : Color.clear)
+                    .frame(width: 2)
+                    .padding(.vertical, 8)
+            }
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
         }
@@ -163,18 +175,24 @@ private struct PhoneDrawer: View {
 
     private func toolRow(_ layer: ToolLayer) -> some View {
         let marked = layer == .loop && loopLive
-        return drawerRow(layer.symbol, layer.title, marked: marked) {
+        return drawerRow(layer.symbol, layer.title, marked: marked, iconBox: true) {
             store.toggleTool(layer)
             close()
         }
     }
 
-    private func drawerRow(_ symbol: String, _ title: String, marked: Bool = false, action: @escaping () -> Void) -> some View {
+    private func drawerRow(_ symbol: String, _ title: String, marked: Bool = false, boxed: Bool = false, iconBox: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
                     .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 22)
+                    .frame(width: iconBox ? 28 : 22, height: iconBox ? 28 : nil)
+                    .overlay {
+                        if iconBox {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        }
+                    }
                 Text(title)
                     .font(JieboFont.ui(15))
                 Spacer(minLength: 0)
@@ -183,8 +201,15 @@ private struct PhoneDrawer: View {
                 }
             }
             .foregroundStyle(JieboColor.ink)
-            .padding(.horizontal, 16)
-            .frame(minHeight: 40)
+            .padding(.horizontal, boxed ? 12 : 16)
+            .frame(minHeight: boxed ? 36 : 40)
+            .overlay {
+                if boxed {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                }
+            }
+            .padding(.horizontal, boxed ? 16 : 0)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -296,11 +321,11 @@ private struct PhoneWorkspaceList: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: user ? "person.crop.rectangle" : "folder")
-                    .foregroundStyle(user ? JieboColor.pine : JieboColor.dim)
+                    .foregroundStyle(JieboColor.dim)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(name)
                         .font(JieboFont.ui(16, weight: user || current ? .semibold : .regular))
-                        .foregroundStyle(user ? JieboColor.pine : JieboColor.ink)
+                        .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     if user {
                         Text("全部子工作区 · 网站只在这里公开")
@@ -319,7 +344,13 @@ private struct PhoneWorkspaceList: View {
             .padding(.horizontal, 16)
             .frame(minHeight: user ? 58 : 48)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(user ? JieboColor.pine.opacity(0.10) : Color.clear)
+            .background(Color.clear)
+            .overlay {
+                if user {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

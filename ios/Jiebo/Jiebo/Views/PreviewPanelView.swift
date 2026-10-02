@@ -20,7 +20,6 @@ struct PreviewPanelView: View {
         .overlay(alignment: .leading) {
             Rectangle().fill(JieboColor.line).frame(width: 1)
         }
-        .shadow(color: .black.opacity(0.12), radius: 18, x: -6, y: 0)
     }
 
     // MARK: 页签条
@@ -75,7 +74,7 @@ struct PreviewPanelView: View {
             .accessibilityLabel("关闭 \(item.filename)")
         }
         .padding(.trailing, 4)
-        .background(isActive ? JieboColor.white : Color.clear)
+        .background(isActive ? JieboColor.ink.opacity(0.06) : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
     }
 
@@ -95,7 +94,7 @@ struct PreviewPanelView: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(JieboColor.brass.opacity(0.12))
-                            .clipShape(Capsule())
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                 }
                 // P6：副标题给工作区绝对路径（中段截断）——path==filename 时不再三遍重复同一文件名；
@@ -115,10 +114,11 @@ struct PreviewPanelView: View {
                 } label: {
                     Image(systemName: "plus.forwardslash.minus")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(tab.diff ? JieboColor.brass : JieboColor.ink2)
+                        .foregroundStyle(tab.diff ? JieboColor.ink : JieboColor.ink2)
                         .frame(width: 30, height: 30)
-                        .background(tab.diff ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
+                        .background(tab.diff ? JieboColor.ink.opacity(0.06) : Color.clear)
                         .clipShape(Circle())
+                        .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
                         .hitTarget() // P6：视觉 30，命中 44
                 }
                 .buttonStyle(.plain)
@@ -132,10 +132,11 @@ struct PreviewPanelView: View {
                 } label: {
                     Image(systemName: "chevron.left.forwardslash.chevron.right")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(tab.showSource ? JieboColor.brass : JieboColor.ink2)
+                        .foregroundStyle(tab.showSource ? JieboColor.ink : JieboColor.ink2)
                         .frame(width: 30, height: 30)
-                        .background(tab.showSource ? JieboColor.brass.opacity(0.12) : JieboColor.mist)
+                        .background(tab.showSource ? JieboColor.ink.opacity(0.06) : Color.clear)
                         .clipShape(Circle())
+                        .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
                         .hitTarget()
                 }
                 .buttonStyle(.plain)

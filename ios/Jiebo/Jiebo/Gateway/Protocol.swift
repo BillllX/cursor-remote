@@ -9,9 +9,9 @@ enum AgentMode: String, Sendable, Hashable, CaseIterable {
 
     var label: String {
         switch self {
-        case .agent: return "代理"
-        case .plan: return "计划"
-        case .ask: return "询问"
+        case .agent: return "动手"
+        case .plan: return "方案"
+        case .ask: return "只问"
         }
     }
 }

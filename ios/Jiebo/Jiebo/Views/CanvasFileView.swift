@@ -83,9 +83,13 @@ struct CanvasFileView: View {
                             Button("查看源码", action: onFallback)
                                 .padding(.horizontal, 14)
                                 .frame(height: 32)
-                                .background(JieboColor.pine)
-                                .foregroundStyle(JieboColor.paper)
-                                .clipShape(Capsule())
+                                .foregroundStyle(JieboColor.ink)
+                                .background(Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(JieboColor.line, lineWidth: 1)
+                                )
                                 .hitTarget()
                             Button("重试") {
                                 status = .loading
@@ -93,7 +97,15 @@ struct CanvasFileView: View {
                                 didReady = false
                                 boot += 1 // .id 变化 → 重建 WebView 重新加载运行时
                             }
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
                             .foregroundStyle(JieboColor.ink2)
+                            .background(Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(JieboColor.line, lineWidth: 1)
+                            )
                             .hitTarget()
                         }
                         .font(JieboFont.ui(13, weight: .medium))

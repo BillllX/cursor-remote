@@ -98,27 +98,23 @@ type Chat = {
   checkpoints?: CheckpointInfo[];
 };
 
+const ONLINE_ORIGIN = "https://jiebo.aiagentswitcher.com";
+const ONLINE_GATEWAY_WS = "wss://jiebo.aiagentswitcher.com/bridge";
+
 function gatewayUrl() {
-  if (typeof window === "undefined") return "ws://127.0.0.1:8787";
   const explicit = process.env.NEXT_PUBLIC_GATEWAY_WS;
   if (explicit) return explicit;
+  // 本地 Next（:3000）也走线上网关，不连本机 8787
+  if (typeof window === "undefined" || window.location.port === "3000") return ONLINE_GATEWAY_WS;
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  // 本地 Next 在 :3000，浏览器直连本机 gateway
-  if (window.location.port === "3000") {
-    const port = process.env.NEXT_PUBLIC_GATEWAY_PORT || "8787";
-    return `${protocol}//${window.location.hostname}:${port}`;
-  }
-  // 公网：直连 nginx 反代后的 gateway（/bridge → /ws）
   const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
   return `${protocol}//${window.location.host}${base}/bridge`;
 }
 
 function uploadUrl(chatId: string, name: string) {
   const query = `chatId=${encodeURIComponent(chatId)}&name=${encodeURIComponent(name)}`;
-  if (typeof window === "undefined") return `/upload?${query}`;
-  if (window.location.port === "3000") {
-    const port = process.env.NEXT_PUBLIC_GATEWAY_PORT || "8787";
-    return `${window.location.protocol}//${window.location.hostname}:${port}/upload?${query}`;
+  if (typeof window === "undefined" || window.location.port === "3000") {
+    return `${ONLINE_ORIGIN}/upload?${query}`;
   }
   const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
   return `${base}/upload?${query}`;

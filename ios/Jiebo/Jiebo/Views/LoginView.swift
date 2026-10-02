@@ -19,6 +19,7 @@ struct LoginView: View {
                     JieboMark(size: 56)
                     Text("接驳")
                         .font(JieboFont.display(36))
+                        .tracking(-0.8)
                         .foregroundStyle(JieboColor.ink)
                     Text("网页说话，远端动手。先输入密码。")
                         .font(JieboFont.ui(16))
@@ -45,11 +46,15 @@ struct LoginView: View {
                     Button(action: store.login) {
                         Text(store.verifying ? "正在验证…" : "进入")
                             .font(JieboFont.ui(16, weight: .semibold))
-                            .foregroundStyle(JieboColor.paper)
+                            .foregroundStyle(canEnter || store.verifying ? JieboColor.paper : JieboColor.ink2)
                             .frame(maxWidth: .infinity)
                             .frame(height: 44)
-                            .background(canEnter || store.verifying ? JieboColor.pine : JieboColor.pineSoft)
+                            .background(canEnter || store.verifying ? JieboColor.pine : JieboColor.mist)
                             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                                    .stroke(canEnter || store.verifying ? Color.clear : JieboColor.line, lineWidth: 1)
+                            )
                     }
                     .buttonStyle(PressScaleButtonStyle(enabled: canEnter))
                     .disabled(!canEnter)

@@ -23,12 +23,14 @@ struct SidebarView: View {
                 JieboMark(size: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.currentWorkspaceName)
-                        .font(JieboFont.display(22))
+                        .font(JieboFont.display(20))
+                        .tracking(-0.45)
                         .foregroundStyle(sameCwd(store.currentWorkspacePath, store.groupRoot) ? JieboColor.pine : JieboColor.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Text(store.connected ? subtitle : "正在重连…")
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.ui(11, weight: .medium))
+                        .tracking(0.3)
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                 }
@@ -36,11 +38,14 @@ struct SidebarView: View {
                 Button(action: store.openWorkspaceSwitcher) {
                     Image(systemName: "square.stack.3d.up")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
+                        .foregroundStyle(JieboColor.ink2)
                         .frame(width: 36, height: 36)
-                        .background(JieboColor.mist)
+                        .background(Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                        .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
                         .hitTarget()
                 }
                 .buttonStyle(PressScaleButtonStyle())
@@ -48,11 +53,14 @@ struct SidebarView: View {
                 Button(action: collapse) {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
+                        .foregroundStyle(JieboColor.ink2)
                         .frame(width: 36, height: 36)
-                        .background(JieboColor.mist)
+                        .background(Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                        .shadow(color: .black.opacity(0.06), radius: 4, y: 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
                         .hitTarget()
                 }
                 .buttonStyle(PressScaleButtonStyle())
@@ -67,9 +75,14 @@ struct SidebarView: View {
                     .font(JieboFont.ui(14, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 44)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    )
                     .contentShape(Rectangle())
+                    .padding(.horizontal, 16)
             }
             .buttonStyle(PressScaleButtonStyle())
             .disabled(store.currentWorkspacePath.isEmpty)
@@ -134,7 +147,7 @@ struct SidebarView: View {
                     }
                     Spacer(minLength: 8)
                     ConnectionDot(connected: store.connected)
-                    footerIcon("rectangle.portrait.and.arrow.right", label: "退出登录", tint: JieboColor.danger, action: store.logout)
+                    footerIcon("rectangle.portrait.and.arrow.right", label: "退出登录", action: store.logout)
                 }
             }
             .padding(.horizontal, 12)
@@ -205,17 +218,20 @@ struct SidebarView: View {
                         .animation(.easeOut(duration: 0.2), value: isCollapsed(group))
                 }
                 Text(group.name)
-                    .font(JieboFont.ui(12, weight: .semibold))
-                    .foregroundStyle(group.user ? JieboColor.pine : JieboColor.ink2)
+                    .font(JieboFont.ui(11, weight: .medium))
+                    .tracking(0.4)
+                    .foregroundStyle(JieboColor.ink2)
                     .lineLimit(1)
                 if group.user {
                     Text("全部")
                         .font(JieboFont.ui(10, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
+                        .foregroundStyle(JieboColor.dim)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(JieboColor.pine.opacity(0.12))
-                        .clipShape(Capsule())
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
                 }
                 if duplicate {
                     Text(group.path)
@@ -245,7 +261,7 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(group.user ? JieboColor.pine.opacity(0.10) : Color.clear)
+        .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .accessibilityLabel(group.chats.isEmpty ? "在 \(group.name) 新建会话" : "\(group.name)，\(group.chats.count) 个会话")
         // 活跃组头点击是 no-op（不接受折叠），给 VoiceOver 用户一句解释，别点了没反应（Kimi R2 MINOR）
@@ -262,7 +278,7 @@ struct SidebarView: View {
             HStack(alignment: .top, spacing: 10) {
                 // 选中态 2pt 品牌竖条（行高不变）
                 RoundedRectangle(cornerRadius: 1, style: .continuous)
-                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .fill(selected ? JieboColor.ink : Color.clear)
                     .frame(width: 2)
                     .padding(.vertical, 2)
                 let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
@@ -292,8 +308,8 @@ struct SidebarView: View {
             .frame(minHeight: 44) // P6：会话行触控高度达标（HIG 44）
             .contentShape(Rectangle())
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(selected ? JieboColor.userBubble.opacity(0.92) : Color.clear)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? JieboColor.ink.opacity(0.06) : Color.clear)
             )
         }
         .buttonStyle(.plain)
@@ -380,8 +396,12 @@ struct SidebarView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(tint)
                 .frame(width: 36, height: 36)
-                .background(JieboColor.mist)
+                .background(Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                )
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
@@ -398,13 +418,24 @@ struct SidebarView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: layer.symbol)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(on ? JieboColor.paper : JieboColor.ink2)
+                        .foregroundStyle(on ? JieboColor.ink : JieboColor.ink2)
                         .frame(width: 28, height: 28)
-                        .background(on ? JieboColor.pine : JieboColor.mist)
+                        .background(on ? JieboColor.ink.opacity(0.06) : Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
+                        .overlay(alignment: .leading) {
+                            if on {
+                                Rectangle()
+                                    .fill(JieboColor.ink)
+                                    .frame(width: 2)
+                            }
+                        }
                         .animation(JieboMotion.fade(reduceMotion), value: on)
                     Circle()
-                        .fill(on ? JieboColor.paper : JieboColor.pine)
+                        .fill(JieboColor.ok)
                         .frame(width: 6, height: 6)
                         .offset(x: 2, y: -2)
                         .opacity(marked ? 1 : 0)

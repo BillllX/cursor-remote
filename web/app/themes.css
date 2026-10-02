@@ -15,8 +15,8 @@ html[data-palette] {
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #141512;
-  --bg-sidebar: #101210;
+  --bg: #161714;
+  --bg-sidebar: #0e0f0c;
   --bg-panel: #1b1d1a;
   --bg-user: #24332e;
   --border: #2c2f2b;
@@ -39,7 +39,7 @@ html[data-palette] {
   --warn-fg: #e0b570;
   --warn-border: #5a4a2a;
   --mark-bg: #3a3218;
-  --shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+  --shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
 }
 
 [data-palette="paper"][data-theme="light"] {

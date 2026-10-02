@@ -60,24 +60,20 @@ struct ComposerView: View {
             // 阴影画在底上，不要挂在输入框这一层。挂在上面的话每个字都会连阴影一起重绘。
             RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
                 .fill(JieboColor.composer)
-                .shadow(color: .black.opacity(focused ? 0.10 : 0.05), radius: focused ? 20 : 12, y: focused ? 8 : 6)
                 .overlay(
                     RoundedRectangle(cornerRadius: JieboRadius.xl, style: .continuous)
-                        .stroke(focused ? JieboColor.ink.opacity(0.22) : JieboColor.borderStrong, lineWidth: focused ? 1.5 : 1)
+                        .stroke(focused ? JieboColor.ink.opacity(0.35) : JieboColor.line, lineWidth: 1)
                 )
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 16)
         .padding(.top, 4)
         .padding(.bottom, 14)
         .background(alignment: .top) {
-            LinearGradient(
-                colors: [JieboColor.paper.opacity(0), JieboColor.paper],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: 28)
-            .offset(y: -28)
-            .allowsHitTesting(false)
+            Rectangle()
+                .fill(JieboColor.line)
+                .frame(height: 1)
+                .offset(y: -1)
+                .allowsHitTesting(false)
         }
         .background(JieboColor.paper)
         .onAppear { text = store.draft }
@@ -152,7 +148,7 @@ struct ComposerView: View {
                                 .padding(.horizontal, 10)
                                 .frame(height: 30)
                                 .background(JieboColor.mist)
-                                .clipShape(Capsule())
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("引用 \(path)")
@@ -240,7 +236,6 @@ struct ComposerView: View {
                     .frame(width: 32, height: 32)
                     .background(enabled ? JieboColor.pine : JieboColor.mist.opacity(0.55))
                     .clipShape(Circle())
-                    .shadow(color: enabled ? JieboColor.pine.opacity(0.32) : .clear, radius: enabled ? 10 : 0, y: enabled ? 4 : 0)
                     .scaleEffect(enabled ? 1 : 0.94)
                     .animation(JieboMotion.snappy(reduceMotion), value: enabled)
                     .hitTarget()
@@ -267,8 +262,9 @@ struct ComposerView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(JieboColor.ink2)
                 .frame(width: 32, height: 32)
-                .background(JieboColor.mist)
+                .background(Color.clear)
                 .clipShape(Circle())
+                .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
@@ -299,8 +295,9 @@ struct ComposerView: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(JieboColor.ink2)
                 .frame(width: 32, height: 32)
-                .background(JieboColor.mist)
+                .background(Color.clear)
                 .clipShape(Circle())
+                .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
@@ -408,8 +405,8 @@ struct ComposerView: View {
                         .frame(height: 32)
                         .background {
                             if store.mode == item {
-                                Capsule()
-                                    .fill(JieboColor.hoverStrong)
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(JieboColor.ink.opacity(0.06))
                                     .matchedGeometryEffect(id: "mode-thumb", in: modeThumb)
                             }
                         }
@@ -419,9 +416,10 @@ struct ComposerView: View {
             }
         }
         .padding(2)
-        .clipShape(Capsule())
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
-            Capsule().stroke(JieboColor.line, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(JieboColor.line, lineWidth: 1)
         )
         .animation(JieboMotion.snappy(reduceMotion), value: store.mode)
     }
@@ -434,11 +432,15 @@ struct ComposerView: View {
         } label: {
             Text(store.mode.label)
                 .font(JieboFont.ui(13, weight: .medium))
-                .foregroundStyle(JieboColor.paper)
+                .foregroundStyle(JieboColor.ink)
                 .padding(.horizontal, 10)
                 .frame(height: 32)
-                .background(JieboColor.pine)
-                .clipShape(Capsule())
+                .background(Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                )
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
@@ -467,8 +469,12 @@ struct ComposerView: View {
             .padding(.horizontal, 10)
             .frame(height: 32)
             .frame(maxWidth: maxWidth)
-            .background(JieboColor.mist)
-            .clipShape(Capsule())
+            .background(Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())

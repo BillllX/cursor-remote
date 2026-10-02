@@ -36,7 +36,7 @@ enum JieboPalette: String, CaseIterable, Identifiable {
         switch self {
         case .neutral:
             // sidebar 相对 paper 肉眼可辨的一档灰（栏宽不动）
-            JieboSurfaces(bg: 0xFAFAFA, sidebar: 0xE8E8EA, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xE0E0E4, accent: 0x171717, user: 0xF0F0F2)
+            JieboSurfaces(bg: 0xF7F7F8, sidebar: 0xF2F2F3, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xE4E4E7, accent: 0x171717, user: 0xF0F0F2)
         case .paper:
             JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEFE9DD, panel: 0xFFFCFA, text: 0x1C1916, muted: 0x5C574F, border: 0xD4CDBF, accent: 0x1A4F41, user: 0xE7E1D4)
         case .sand:
@@ -57,7 +57,7 @@ enum JieboPalette: String, CaseIterable, Identifiable {
     var dark: JieboSurfaces {
         switch self {
         case .neutral:
-            JieboSurfaces(bg: 0x141512, sidebar: 0x101210, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x24332E)
+            JieboSurfaces(bg: 0x161714, sidebar: 0x0E0F0C, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x24332E)
         case .paper:
             JieboSurfaces(bg: 0x1C1916, sidebar: 0x161310, panel: 0x221F1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x3A352D, accent: 0x8FBFB0, user: 0x2A3A32)
         case .sand:
@@ -209,12 +209,12 @@ enum JieboRadius {
     static let sm: CGFloat = 8
     static let md: CGFloat = 12
     static let lg: CGFloat = 16
-    static let xl: CGFloat = 24 // composer dock（对齐网页 --radius: 24px）
+    static let xl: CGFloat = 12 // composer dock（对齐网页 --radius: 12px）
 }
 
 /// 对话区在 iPad 上的阅读宽度。再宽就居中，避免一行拉满横屏。
 enum JieboMeasure {
-    static let thread: CGFloat = 820
+    static let thread: CGFloat = 680
     static let bubble: CGFloat = 520
 }
 

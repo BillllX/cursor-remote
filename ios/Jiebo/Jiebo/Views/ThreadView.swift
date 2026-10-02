@@ -16,7 +16,7 @@ struct ThreadView: View {
             header
             VStack(spacing: 0) {
                 if !store.notice.isEmpty {
-                    banner(store.notice, color: JieboColor.pine)
+                    banner(store.notice, color: JieboColor.dim)
                         .transition(.move(edge: .top).combined(with: .opacity))
                 }
                 if !store.bannerError.isEmpty {
@@ -45,9 +45,11 @@ struct ThreadView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(JieboColor.mist)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(JieboColor.brass.opacity(0.35), lineWidth: 1))
-                    .shadow(color: .black.opacity(0.10), radius: 6, y: 3)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(JieboColor.brass.opacity(0.35), lineWidth: 1)
+                    )
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 6)
@@ -135,10 +137,12 @@ struct ThreadView: View {
                 VStack(spacing: 1) {
                     Text(store.active?.title ?? "新对话")
                         .font(JieboFont.display(17))
+                        .tracking(-0.3)
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     Text(phoneSubtitle)
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.ui(11, weight: .medium))
+                        .tracking(0.3)
                         .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
                         .lineLimit(1)
                 }
@@ -199,10 +203,12 @@ struct ThreadView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.active?.title ?? "新对话")
                     .font(JieboFont.display(26))
+                    .tracking(-0.6)
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)
                 Text(store.hasApiKey ? store.mode.label : "服务器还没配 API Key")
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.ui(12, weight: .medium))
+                    .tracking(0.4)
                     .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
             }
             Spacer()
@@ -325,8 +331,11 @@ struct ThreadView: View {
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .background(JieboColor.white)
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(JieboColor.line, lineWidth: 1)
+                            )
                             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
                         }
                         .buttonStyle(.plain)
@@ -450,9 +459,10 @@ struct ThreadView: View {
                 .tracking(-1.2)
                 .foregroundStyle(JieboColor.ink)
             Text("消息经东京站送到 gateway，Agent 在那台机器上改文件、跑命令。")
-                .font(JieboFont.ui(16))
-                .foregroundStyle(JieboColor.ink2)
+                .font(JieboFont.ui(15))
+                .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
             ViewThatFits(in: .horizontal) {
                 starterRow(axis: .horizontal)
                 starterRow(axis: .vertical)
@@ -477,9 +487,11 @@ struct ThreadView: View {
                     .padding(.horizontal, 14)
                     .frame(height: 36)
                     .background(JieboColor.white)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(JieboColor.borderStrong, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(JieboColor.borderStrong, lineWidth: 1)
+                    )
             }
             .buttonStyle(PressScaleButtonStyle())
         }
@@ -503,9 +515,13 @@ struct ThreadView: View {
             .font(JieboFont.ui(13))
             .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(color.opacity(0.08))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
     }
 }
 
@@ -526,9 +542,12 @@ private struct TurnView: View {
                         .foregroundStyle(JieboColor.ink)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 12)
-                        .background(JieboColor.userBubble)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .shadow(color: .black.opacity(0.05), radius: 8, y: 2)
+                        .background(JieboColor.ink.opacity(0.06))
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
                         .frame(maxWidth: JieboMeasure.bubble, alignment: .trailing)
                 }
             }
@@ -567,7 +586,7 @@ private struct TurnView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(JieboColor.mist.opacity(0.4))
+                .background(Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
@@ -610,8 +629,9 @@ private struct TurnView: View {
             if !files.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("相关文件")
-                        .font(JieboFont.ui(11, weight: .regular))
+                        .font(JieboFont.ui(11, weight: .medium))
                         .foregroundStyle(JieboColor.dim)
+                        .tracking(0.4)
                     ForEach(files, id: \.self) { path in
                         Button {
                             store.openPreview(path)
@@ -620,22 +640,20 @@ private struct TurnView: View {
                                 Image(systemName: fileGlyph(path, isDir: false, open: false))
                                     .font(.system(size: 12))
                                     .foregroundStyle(JieboColor.dim)
-                                    .frame(width: 18)
+                                    .frame(width: 16)
                                 Text((path as NSString).lastPathComponent)
-                                    .font(JieboFont.ui(13, weight: .regular))
+                                    .font(JieboFont.mono(12))
                                     .foregroundStyle(JieboColor.ink2)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
                             }
-                            .padding(.horizontal, 10)
-                            .frame(height: 32)
-                            // 更轻的次表面，六连不抢终稿
-                            .background(JieboColor.mist.opacity(0.35))
-                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                    .stroke(JieboColor.line.opacity(0.55), lineWidth: 0.5)
-                            )
+                            .padding(.horizontal, 2)
+                            .frame(height: 28)
+                            .overlay(alignment: .bottom) {
+                                Rectangle()
+                                    .fill(JieboColor.line.opacity(0.8))
+                                    .frame(height: 0.5)
+                            }
                             .hitTarget()
                         }
                         .buttonStyle(PressScaleButtonStyle())
@@ -758,20 +776,36 @@ private struct AssistantMessage: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
-                case .code(let code):
-                    Text(Self.expandTabs(code.isEmpty ? " " : code))
-                        .font(JieboFont.mono(13))
-                        .foregroundStyle(JieboColor.ink)
-                        .textSelection(.enabled)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(JieboColor.mist.opacity(0.55))
-                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line.opacity(0.7), lineWidth: 0.5)
-                        )
+                case .code(let code, let lang):
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !lang.isEmpty {
+                            Text(lang)
+                                .font(JieboFont.mono(11))
+                                .foregroundStyle(JieboColor.dim)
+                                .tracking(0.4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 8)
+                                .padding(.bottom, 6)
+                            Rectangle()
+                                .fill(JieboColor.line)
+                                .frame(height: 0.5)
+                        }
+                        Text(Self.expandTabs(code.isEmpty ? " " : code))
+                            .font(JieboFont.mono(12))
+                            .foregroundStyle(JieboColor.ink)
+                            .textSelection(.enabled)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                    }
+                    .background(Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    )
                 case .prose(let prose):
                     ProseLines(text: prose)
                 }
@@ -782,13 +816,14 @@ private struct AssistantMessage: View {
 
     private enum Block {
         case prose(String)
-        case code(String)
+        case code(String, lang: String)
     }
 
     private var blocks: [Block] {
         var result: [Block] = []
         var prose: [String] = []
         var code: [String] = []
+        var lang = ""
         var inCode = false
         func flushProse() {
             let joined = prose.joined(separator: "\n")
@@ -800,18 +835,20 @@ private struct AssistantMessage: View {
         for line in text.components(separatedBy: "\n") {
             if line.hasPrefix("```") {
                 if inCode {
-                    result.append(.code(code.joined(separator: "\n")))
+                    result.append(.code(code.joined(separator: "\n"), lang: lang))
                     code = []
+                    lang = ""
                     inCode = false
                 } else {
                     flushProse()
+                    lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                     inCode = true
                 }
                 continue
             }
             if inCode { code.append(line) } else { prose.append(line) }
         }
-        if inCode { result.append(.code(code.joined(separator: "\n"))) }
+        if inCode { result.append(.code(code.joined(separator: "\n"), lang: lang)) }
         flushProse()
         if result.isEmpty { result.append(.prose(text)) }
         return result
@@ -827,16 +864,92 @@ private struct ProseLines: View {
     let text: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(Array(text.components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
-                if line.allSatisfy({ $0 == " " || $0 == "\t" }) {
-                    Color.clear.frame(height: 10)
-                } else {
-                    lineRow(line)
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                switch segment {
+                case .lines(let lines):
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            if line.allSatisfy({ $0 == " " || $0 == "\t" }) {
+                                Color.clear.frame(height: 10)
+                            } else {
+                                lineRow(line)
+                            }
+                        }
+                    }
+                case .table(let headers, let rows):
+                    HairlineTable(headers: headers, rows: rows)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private enum Segment {
+        case lines([String])
+        case table(headers: [String], rows: [[String]])
+    }
+
+    private var segments: [Segment] {
+        let lines = text.components(separatedBy: "\n")
+        var result: [Segment] = []
+        var prose: [String] = []
+        var index = 0
+        func flush() {
+            if !prose.isEmpty {
+                result.append(.lines(prose))
+                prose = []
+            }
+        }
+        while index < lines.count {
+            if let parsed = Self.parseTable(lines, from: index) {
+                flush()
+                result.append(.table(headers: parsed.headers, rows: parsed.rows))
+                index = parsed.next
+            } else {
+                prose.append(lines[index])
+                index += 1
+            }
+        }
+        flush()
+        if result.isEmpty { result.append(.lines(lines)) }
+        return result
+    }
+
+    private static func parseTable(_ lines: [String], from start: Int) -> (headers: [String], rows: [[String]], next: Int)? {
+        guard start + 1 < lines.count, isRow(lines[start]), isSeparator(lines[start + 1]) else { return nil }
+        let headers = cells(lines[start])
+        guard headers.count >= 2 else { return nil }
+        var rows: [[String]] = []
+        var index = start + 2
+        while index < lines.count, isRow(lines[index]), !isSeparator(lines[index]) {
+            rows.append(cells(lines[index]))
+            index += 1
+        }
+        return (headers, rows, index)
+    }
+
+    private static func isRow(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("|") && trimmed.dropFirst().contains("|")
+    }
+
+    private static func isSeparator(_ line: String) -> Bool {
+        let parts = cells(line)
+        guard parts.count >= 2 else { return false }
+        return parts.allSatisfy { part in
+            let marks = part.filter { !$0.isWhitespace }
+            return !marks.isEmpty && marks.allSatisfy { $0 == "-" || $0 == ":" }
+        }
+    }
+
+    private static func cells(_ line: String) -> [String] {
+        var trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+        if trimmed.hasSuffix("|") { trimmed.removeLast() }
+        return trimmed.split(separator: "|", omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
     }
 
     private func lineRow(_ line: String) -> some View {
@@ -844,11 +957,18 @@ private struct ProseLines: View {
         let indent = expanded.prefix { $0 == " " }.count
         let body = String(expanded.dropFirst(indent))
         let heading = headingLevel(of: body)
+        let item = listItem(of: body)
         return HStack(alignment: .firstTextBaseline, spacing: 0) {
             if indent > 0 {
                 Color.clear.frame(width: CGFloat(indent) * 8)
             }
-            Text(Self.inline(heading?.rest ?? body))
+            if let item {
+                Text(item.marker)
+                    .font(JieboFont.ui(13, weight: .medium))
+                    .foregroundStyle(JieboColor.dim)
+                    .frame(width: 22, alignment: .leading)
+            }
+            Text(Self.inline(item?.rest ?? heading?.rest ?? body))
                 .font(heading == nil ? JieboFont.ui(16) : JieboFont.ui(headingSize(heading!.level), weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .tint(JieboColor.pine)
@@ -856,6 +976,17 @@ private struct ProseLines: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func listItem(of line: String) -> (marker: String, rest: String)? {
+        if line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ") {
+            return ("•", String(line.dropFirst(2)))
+        }
+        let digits = line.prefix { $0.isNumber }
+        guard !digits.isEmpty else { return nil }
+        let after = line.dropFirst(digits.count)
+        guard after.hasPrefix(". ") else { return nil }
+        return ("\(digits).", String(after.dropFirst(2)))
     }
 
     private func headingLevel(of line: String) -> (level: Int, rest: String)? {
@@ -875,11 +1006,69 @@ private struct ProseLines: View {
         }
     }
 
-    private static func inline(_ text: String) -> AttributedString {
+    fileprivate static func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .inlineOnlyPreservingWhitespace
         )
         return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+}
+
+/// 对话里的 Markdown 表。表头比单元格更淡，文件名用等宽，行与行之间只留发丝线。
+private struct HairlineTable: View {
+    let headers: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            row(headers, header: true, last: rows.isEmpty)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                row(fit(cells), header: false, last: index == rows.count - 1)
+            }
+        }
+        .padding(.top, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func fit(_ cells: [String]) -> [String] {
+        let count = headers.count
+        if cells.count == count { return cells }
+        if cells.count > count { return Array(cells.prefix(count)) }
+        return cells + Array(repeating: "", count: count - cells.count)
+    }
+
+    private func row(_ cells: [String], header: Bool, last: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
+                Text(ProseLines.inline(cell))
+                    .font(font(index: index, header: header))
+                    .foregroundStyle(color(index: index, header: header))
+                    .tracking(header ? 0.4 : 0)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.vertical, 7)
+        .overlay(alignment: .bottom) {
+            if !last {
+                Rectangle()
+                    .fill(JieboColor.line)
+                    .frame(height: header ? 1 : 0.5)
+            }
+        }
+    }
+
+    private func font(index: Int, header: Bool) -> Font {
+        if header { return JieboFont.ui(11, weight: .medium) }
+        if index == 0 { return JieboFont.mono(12) }
+        return JieboFont.ui(14)
+    }
+
+    private func color(index: Int, header: Bool) -> Color {
+        if header { return JieboColor.dim }
+        if index == 0 { return JieboColor.ink2 }
+        return JieboColor.ink
     }
 }
 
@@ -910,7 +1099,7 @@ private struct ApprovalCard: View {
                     .padding(.horizontal, 16)
                     .frame(height: 36)
                     .background(JieboColor.pine)
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 Button("拒绝") { store.replyToApproval(allow: false) }
                     .buttonStyle(.plain)
                     .font(JieboFont.ui(14, weight: .medium))
@@ -918,7 +1107,7 @@ private struct ApprovalCard: View {
                     .padding(.horizontal, 16)
                     .frame(height: 36)
                     .background(JieboColor.mist)
-                    .clipShape(Capsule())
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
         .padding(14)

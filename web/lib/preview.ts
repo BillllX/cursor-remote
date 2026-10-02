@@ -53,12 +53,18 @@ export function formatBytes(size: number) {
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
+const ONLINE_ORIGIN = "https://jiebo.aiagentswitcher.com";
+
+function originBase() {
+  if (typeof window !== "undefined" && window.location.port === "3000") return ONLINE_ORIGIN;
+  return process.env.NEXT_PUBLIC_BASE_PATH || "";
+}
+
 export function previewSrc(url?: string) {
   if (!url) return "";
   if (/^https?:\/\//i.test(url) || url.startsWith("blob:")) return url;
-  const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
   const path = url.startsWith("/") ? url : `/${url}`;
-  return `${base}${path}`;
+  return `${originBase()}${path}`;
 }
 
 export function mediaSrc(path: string, chatId: string, media?: MediaTicket, rev?: string) {
@@ -70,8 +76,7 @@ export function mediaSrc(path: string, chatId: string, media?: MediaTicket, rev?
     sig: media.sig,
   });
   if (rev) q.set("rev", rev);
-  const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
-  return `${base}/media?${q}`;
+  return `${originBase()}/media?${q}`;
 }
 
 export function resolveAssetPath(fromFile: string, href: string): string | null {

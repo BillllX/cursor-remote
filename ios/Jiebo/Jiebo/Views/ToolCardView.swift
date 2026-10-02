@@ -26,10 +26,6 @@ struct ToolCardView: View {
                             Text(crew + (tool.model?.nilIfEmpty.map { " · \(ModelCatalog.label(for: $0))" } ?? ""))
                                 .font(JieboFont.ui(10, weight: .medium))
                                 .foregroundStyle(JieboColor.brass)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(JieboColor.brass.opacity(0.14))
-                                .clipShape(Capsule())
                         }
                         Text(tool.summary)
                             .font(JieboFont.mono(11))
@@ -99,37 +95,32 @@ struct ToolCardView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // 退为次级表面：mist 底 + 细描边，阴影收到更浅，避免和终稿同权
-        .background(JieboColor.mist.opacity(0.55))
+        .background(Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(JieboColor.line.opacity(0.85), lineWidth: 0.5)
         )
-        .shadow(color: .black.opacity(0.025), radius: 4, y: 1)
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
     }
 
-    /// 对齐 web 的 .tool-badge：右侧 999px 状态丸；完成态用次级绿
+    /// 状态只留字，不再用绿色胶囊。
     @ViewBuilder
     private var badge: some View {
         switch tool.status {
         case "running":
-            badgeView("运行中", fg: JieboColor.run, bg: JieboColor.runBg)
+            badgeView("运行中", fg: JieboColor.run)
         case "error":
-            badgeView("出错", fg: JieboColor.danger, bg: JieboColor.dangerBg)
+            badgeView("出错", fg: JieboColor.danger)
         default:
-            badgeView("完成", fg: JieboColor.okSoft, bg: JieboColor.okBgSoft)
+            badgeView("完成", fg: JieboColor.okSoft)
         }
     }
 
-    private func badgeView(_ text: String, fg: Color, bg: Color) -> some View {
+    private func badgeView(_ text: String, fg: Color) -> some View {
         Text(text)
-            .font(JieboFont.ui(11, weight: .regular))
+            .font(JieboFont.mono(11))
             .foregroundStyle(fg)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2)
-            .background(bg)
-            .clipShape(Capsule())
     }
 
     static func isImageTool(_ tool: ToolCall) -> Bool {

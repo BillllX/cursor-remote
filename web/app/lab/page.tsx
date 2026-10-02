@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { JieboMark as Mark } from "../../components/JieboMark";
 
-type Mode = "代理" | "询问" | "计划";
+type Mode = "动手" | "方案" | "只问";
 
 type ToolState = "idle" | "running" | "done";
 
@@ -82,7 +82,7 @@ export default function LabPage() {
   ]);
   const [activeId, setActiveId] = useState("new");
   const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<Mode>("代理");
+  const [mode, setMode] = useState<Mode>("动手");
   const [toolOpen, setToolOpen] = useState(true);
   const [toolState, setToolState] = useState<ToolState>("done");
   const [justDone, setJustDone] = useState(false);
@@ -185,7 +185,7 @@ export default function LabPage() {
     inputRef.current?.focus();
   };
 
-  const modes = useMemo(() => ["代理", "询问", "计划"] as Mode[], []);
+  const modes = useMemo(() => ["动手", "方案", "只问"] as Mode[], []);
   const thumbLive = useRef(false);
 
   useEffect(() => {

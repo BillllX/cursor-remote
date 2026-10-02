@@ -152,7 +152,7 @@ struct CollapsedSidebarRail: View {
             }
             ConnectionDot(connected: store.connected)
                 .padding(.top, 4)
-            railButton("rectangle.portrait.and.arrow.right", label: "退出登录", tint: JieboColor.danger, action: store.logout)
+            railButton("rectangle.portrait.and.arrow.right", label: "退出登录", action: store.logout)
                 .padding(.bottom, 12)
         }
         .padding(.top, 16)
@@ -184,10 +184,21 @@ struct CollapsedSidebarRail: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(on ? JieboColor.paper : (tint ?? JieboColor.ink))
+                    .foregroundStyle(on ? JieboColor.ink : (tint ?? JieboColor.ink2))
                     .frame(width: 36, height: 36)
-                    .background(on ? JieboColor.pine : JieboColor.mist)
+                    .background(on ? JieboColor.ink.opacity(0.06) : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    )
+                    .overlay(alignment: .leading) {
+                        if on {
+                            Rectangle()
+                                .fill(JieboColor.ink)
+                                .frame(width: 2)
+                        }
+                    }
                     .animation(JieboMotion.fade(reduceMotion), value: on)
                 Circle()
                     .fill(JieboColor.pine)
@@ -233,10 +244,26 @@ struct ToolLayerOverlay: View {
                         if store.contentDiff {
                             Button("保留") { store.keepContentDiff() }
                                 .font(JieboFont.ui(14, weight: .medium))
-                                .foregroundStyle(JieboColor.pine)
+                                .foregroundStyle(JieboColor.ink)
+                                .padding(.horizontal, 10)
+                                .frame(height: 28)
+                                .background(Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(JieboColor.line, lineWidth: 1)
+                                )
                             Button("还原") { store.contentRevertPrompt = true }
                                 .font(JieboFont.ui(14, weight: .medium))
-                                .foregroundStyle(JieboColor.clay)
+                                .foregroundStyle(JieboColor.ink2)
+                                .padding(.horizontal, 10)
+                                .frame(height: 28)
+                                .background(Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(JieboColor.line, lineWidth: 1)
+                                )
                         } else if store.contentDirty {
                             Button("保存") { store.saveContentLayer() }
                                 .font(JieboFont.ui(14, weight: .medium))
@@ -261,11 +288,15 @@ struct ToolLayerOverlay: View {
                     if !store.notice.isEmpty {
                         Text(store.notice)
                             .font(JieboFont.ui(13))
-                            .foregroundStyle(JieboColor.ink)
+                            .foregroundStyle(JieboColor.dim)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(JieboColor.mist)
+                            .background(Color.clear)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(JieboColor.line, lineWidth: 1)
+                            )
                     }
                     ZStack {
                         layerBody
@@ -279,7 +310,9 @@ struct ToolLayerOverlay: View {
                 .frame(width: narrow ? geo.size.width : min(420, geo.size.width * 0.5))
                 .frame(maxHeight: .infinity)
                 .background(JieboColor.paper)
-                .shadow(color: .black.opacity(narrow ? 0 : 0.12), radius: 24, x: 8, y: 0)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(JieboColor.line).frame(width: 1)
+                }
                 if !narrow {
                     Color.black.opacity(0.18)
                         .contentShape(Rectangle())
