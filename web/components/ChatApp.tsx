@@ -1867,7 +1867,10 @@ export default function ChatApp() {
             else setWorkspaceRoot((prev) => prev || message.cwd);
             setAssistantName(message.assistantName?.trim() || DEFAULT_ASSISTANT_NAME);
             send({ type: "assistant_get" });
-            if (inboxDeepLink) setAssistantOpen(true);
+            if (inboxDeepLink) {
+              if (wideIDERef.current) chooseSide("assistant");
+              else setAssistantOpen(true);
+            }
             {
               const next: Record<string, LoopState> = {};
               for (const row of message.loops || []) {
@@ -3615,10 +3618,13 @@ export default function ChatApp() {
 
   function openChatById(chatId: string) {
     const chat = chatsRef.current.find((row) => row.id === chatId);
-    if (chat) {
-      selectChat(chat);
-      setAssistantOpen(false);
-    } else setNotice("这个会话还没同步到本机，稍后再试。");
+    if (!chat) {
+      setNotice("这个会话还没同步到本机，稍后再试。");
+      return;
+    }
+    selectChat(chat);
+    if (wideIDERef.current && sidePane === "assistant") chooseSide("chats");
+    else setAssistantOpen(false);
   }
 
   function answerDelegation(approval: AssistantApproval, allow: boolean) {
@@ -3626,12 +3632,17 @@ export default function ChatApp() {
   }
 
   function openAssistantInboxItem(item: { chatId?: string; id: string }) {
-    if (item.chatId) {
-      const chat = chatsRef.current.find((row) => row.id === item.chatId);
-      if (chat) selectChat(chat);
+    setInboxDeepLink(undefined);
+    const chat = item.chatId ? chatsRef.current.find((row) => row.id === item.chatId) : undefined;
+    if (!chat) {
+      // 没有关联会话（提醒、简报）或会话还没同步：留在收件箱里看正文
+      if (wideIDERef.current) chooseSide("assistant");
+      else setAssistantOpen(true);
+      return;
     }
-    setAssistantOpen(true);
-    setInboxDeepLink(item.id);
+    selectChat(chat);
+    // 宽屏时助理留在侧栏列，主区换成这个会话；窄屏关掉浮层才能看见会话
+    if (!wideIDERef.current) setAssistantOpen(false);
   }
 
   function selectChat(chat: Chat) {
@@ -4601,6 +4612,7 @@ export default function ChatApp() {
 
   const loopRow = loops[activeId];
   const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
+  const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
 
   if (!unlocked && !demoCanvas) {
     return (
@@ -4624,26 +4636,30 @@ export default function ChatApp() {
         {(
           [
             ["chats", "对话"],
-            ["assistant", assistantName],
             ["files", "文件"],
             ["search", "搜索"],
             ["git", "Git"],
             ["terminal", "终端"],
             ["loop", "Loop"],
+            ["assistant", `${assistantName} · 助理`],
           ] as const
-        ).map(([pane, label]) => (
-          <button
-            key={pane}
-            type="button"
-            className={`${sidePane === pane ? "on" : ""}${pane === "loop" && loopLive ? " live" : ""}${pane === "assistant" && assistantOpen ? " on" : ""}`}
-            aria-pressed={sidePane === pane}
-            aria-label={label}
-            onClick={() => chooseSide(pane)}
-          >
-            <IconRail name={pane} />
-            {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
-          </button>
-        ))}
+        ).map(([pane, label]) => {
+          const marked = (pane === "loop" && loopLive) || (pane === "assistant" && assistantBadge > 0);
+          return (
+            <button
+              key={pane}
+              type="button"
+              className={`${sidePane === pane ? "on" : ""}${marked ? " live" : ""}`}
+              aria-pressed={sidePane === pane}
+              aria-label={label}
+              title={label}
+              onClick={() => chooseSide(pane)}
+            >
+              <IconRail name={pane} />
+              {marked ? <span className="loop-live" /> : null}
+            </button>
+          );
+        })}
         {isAdmin ? (
           <button type="button" className="activity-admin" aria-label="查看使用统计" onClick={openAdminStats}>
             <IconRail name="stats" />
@@ -4831,9 +4847,11 @@ export default function ChatApp() {
       ) : null}
       <AssistantPanel
         open={assistantOpen}
+        docked={wideIDE && sidePane === "assistant"}
         onClose={() => {
-          setAssistantOpen(false);
           setInboxDeepLink(undefined);
+          if (wideIDE && sidePane === "assistant") chooseSide("chats");
+          else setAssistantOpen(false);
         }}
         name={assistantName}
         state={assistantState}
@@ -5231,12 +5249,12 @@ export default function ChatApp() {
           <div className="side-tools" role="toolbar" aria-label="工具">
             {(
               [
-                ["assistant", "助理"],
                 ["files", "文件"],
                 ["search", "搜索"],
                 ["git", "Git"],
                 ["terminal", "终端"],
                 ["loop", "Loop"],
+                ["assistant", "助理"],
               ] as const
             ).map(([pane, label]) => {
               const on = wideIDE
@@ -5263,7 +5281,7 @@ export default function ChatApp() {
                 >
                   <span className="side-tool-icon">
                     <IconRail name={pane} size={14} />
-                    {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
+                    {(pane === "loop" && loopLive) || (pane === "assistant" && assistantBadge > 0) ? <span className="loop-live" /> : null}
                   </span>
                   {label}
                 </button>
@@ -6151,7 +6169,7 @@ export default function ChatApp() {
                   return mine.map((row) => {
                     const approval = assistantState?.approvals.find((item) => item.delegationId === row.id);
                     return (
-                      <div className="approval-row delegation-row" key={row.id}>
+                      <div className={`approval-row delegation-row${approval ? "" : " idle"}`} key={row.id}>
                         <span>
                           委派「{row.title}」→ {row.workspace} · {DELEGATION_STATUS[row.status]}
                           {approval ? `：要${approval.tool === "shell" ? "跑命令" : "改文件"} ${approval.summary}` : ""}

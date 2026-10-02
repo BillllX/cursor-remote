@@ -236,9 +236,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   gap: 8px;
 }
 
+/* 侧栏底部工具：文件、搜索、Git、终端、Loop、助理，顺序和活动栏一致 */
 .side-tools {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -5618,7 +5619,8 @@ nextjs-portal {
   .app.ide.pane-git .sidebar,
   .app.ide.pane-search .sidebar,
   .app.ide.pane-terminal .sidebar,
-  .app.ide.pane-loop .sidebar {
+  .app.ide.pane-loop .sidebar,
+  .app.ide.pane-assistant .sidebar {
     display: none;
   }
 
@@ -5626,7 +5628,8 @@ nextjs-portal {
   .app.ide.pane-git > .files-overlay.open,
   .app.ide.pane-search > .search-overlay.open,
   .app.ide.pane-terminal > .search-overlay.open,
-  .app.ide.pane-loop > .search-overlay.open {
+  .app.ide.pane-loop > .search-overlay.open,
+  .app.ide.pane-assistant > .assistant-overlay.open {
     position: relative;
     inset: auto;
     grid-column: 2;
@@ -5647,7 +5650,8 @@ nextjs-portal {
   .app.ide.pane-git .files-browser,
   .app.ide.pane-search .search-box,
   .app.ide.pane-terminal .terminal-box,
-  .app.ide.pane-loop .loop-box {
+  .app.ide.pane-loop .loop-box,
+  .app.ide.pane-assistant .assistant-box {
     width: 100%;
     height: 100%;
     max-width: none;
@@ -5779,137 +5783,196 @@ nextjs-portal {
   }
 }
 
-/* ── 个人助理面板 ── */
+/* ── 个人助理：和 Loop、终端同一套壳（search-box + loop-*），宽屏收进侧栏列 ── */
 .assistant-box {
-  max-width: min(520px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  width: min(440px, calc(100vw - 32px));
   max-height: min(82vh, 720px);
-  overflow: auto;
   text-align: left;
 }
+
+.app.ide.pane-assistant .assistant-box {
+  background: var(--bg-sidebar);
+}
+
 .assistant-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 10px;
 }
-.assistant-sub {
-  font-size: 12px;
-  color: var(--muted);
-  margin-top: 4px;
+
+.assistant-head-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
+
 .assistant-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 12px;
 }
-.assistant-tab {
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.assistant-tab.on {
-  border-color: var(--accent);
+
+.assistant-notice {
   color: var(--accent);
 }
-.assistant-pane {
+
+.assistant-body {
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
-.assistant-section h3 {
-  font-size: 13px;
-  margin: 0 0 6px;
+
+.assistant-section {
+  display: grid;
+  gap: 8px;
 }
-.assistant-muted {
-  font-size: 12px;
-  color: var(--muted);
-  margin: 0;
-}
-.assistant-notice {
-  font-size: 12px;
-  color: var(--accent);
-  margin: 0 0 8px;
-}
+
 .assistant-pre {
   white-space: pre-wrap;
-  font-family: var(--font-sans);
   font-size: 13px;
-  margin: 0;
-  line-height: 1.45;
+  line-height: 1.5;
+  color: var(--text);
 }
+
 .assistant-list {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  gap: 6px;
 }
-.assistant-list.compact li {
-  font-size: 12px;
-}
-.assistant-list li {
+
+.assistant-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 8px 10px;
+  background: var(--bg-panel);
+  color: var(--text);
   font-size: 13px;
 }
-.assistant-row-form,
+
+.assistant-item.muted {
+  color: var(--dim);
+}
+
+.assistant-item-btn {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms var(--ease-out), border-color 160ms var(--ease-out);
+}
+
+.assistant-item-btn:hover {
+  background: var(--hover);
+}
+
+.assistant-item-btn.unread {
+  border-color: var(--accent-line);
+}
+
+.assistant-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-item-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-item-btn.unread .assistant-item-title {
+  font-weight: 600;
+}
+
+.assistant-item-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-inline-form {
+  display: flex;
+  gap: 8px;
+}
+
+.assistant-inline-form .side-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-inline-form .new-chat {
+  flex: none;
+}
+
+.assistant-col-form {
+  display: grid;
+  gap: 8px;
+}
+
 .assistant-row-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+  gap: 6px;
 }
-.assistant-col-form {
-  display: flex;
-  flex-direction: column;
+
+.assistant-core {
+  display: grid;
   gap: 8px;
 }
-.assistant-tag {
-  display: inline-block;
-  margin-left: 6px;
-  font-size: 11px;
+
+.assistant-approval {
+  margin-bottom: 0;
+}
+
+/* chat-mark 的色调变体：只用主题里的 ok / danger / warn 三组 */
+.chat-mark.ok {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.chat-mark.danger {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.chat-mark.warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.chat-mark:not(.run):not(.ok):not(.danger):not(.warn):not(.unread) {
+  background: var(--hover);
   color: var(--muted);
 }
-.assistant-inbox {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+
+.pill.danger {
+  color: var(--danger);
 }
-.assistant-inbox-btn {
-  width: 100%;
-  text-align: left;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
-  background: var(--surface-2);
-  cursor: pointer;
+
+.pill.danger:hover {
+  background: var(--danger-bg);
 }
-.assistant-inbox li.unread .assistant-inbox-btn {
-  border-color: var(--accent);
-}
-.assistant-inbox-title {
-  display: block;
-  font-weight: 600;
-  font-size: 13px;
-}
-.assistant-inbox-body {
-  display: block;
-  font-size: 12px;
+
+/* 父会话输入框上方的委派条：没有待批时是中性信息，有待批才用 approval-row 的提醒色 */
+.delegation-row.idle {
+  border-color: var(--border);
+  background: var(--bg-panel);
   color: var(--muted);
-  margin-top: 4px;
-}
-.assistant-core p {
-  margin: 2px 0 8px;
-  font-size: 13px;
 }

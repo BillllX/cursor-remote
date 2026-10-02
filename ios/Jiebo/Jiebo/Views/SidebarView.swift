@@ -73,36 +73,6 @@ struct SidebarView: View {
             .keyboardShortcut("n", modifiers: .command)
             .accessibilityLabel("新对话")
 
-            Button {
-                store.assistantOpen = true
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                    Text("助理")
-                        .font(JieboFont.ui(13, weight: .medium))
-                        .foregroundStyle(JieboColor.ink)
-                    Text(store.assistantName)
-                        .font(JieboFont.ui(12))
-                        .foregroundStyle(JieboColor.dim)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    AssistantBadge(count: store.assistantBadgeCount)
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 36)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
-                )
-                .contentShape(Rectangle())
-                .padding(.horizontal, 14)
-                .padding(.top, 6)
-            }
-            .buttonStyle(PressScaleButtonStyle())
-            .accessibilityLabel(store.assistantBadgeCount > 0 ? "助理，\(store.assistantBadgeCount) 条待处理" : "助理")
-
             if newMenuOpen {
                 newChatMenu
                     .padding(.horizontal, 14)
@@ -436,7 +406,7 @@ struct SidebarView: View {
 
     private func toolButton(_ layer: ToolLayer, labeled: Bool) -> some View {
         let on = store.toolSelected(layer)
-        let marked = layer == .loop && loopLive
+        let marked = (layer == .loop && loopLive) || (layer == .assistant && store.assistantBadgeCount > 0)
         return Button {
             store.toggleTool(layer)
         } label: {

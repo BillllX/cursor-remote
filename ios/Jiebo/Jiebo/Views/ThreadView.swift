@@ -118,41 +118,45 @@ struct ThreadView: View {
     }
 
     /// 本会话派出去的委派子会话停在审批上：在输入框上方直接作答
+    /// 样式与输入框里的待批条（ComposerView.approvalBar）一致，只是按钮用委派的「批准 / 拒绝」
     private func delegatedApprovalBanner(_ approval: AssistantApproval, more: Int) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "hand.raised")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(JieboColor.brass)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(more > 0 ? "委派待批 · \(approval.tool)（另有 \(more) 条）" : "委派待批 · \(approval.tool)")
-                    .font(JieboFont.ui(12, weight: .semibold))
+        let tool = approval.tool.nilIfEmpty ?? "工具调用"
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(more > 0 ? "委派要用 \(tool)（另有 \(more) 条待批）" : "委派要用 \(tool)")
+                .font(JieboFont.ui(13))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(1)
+            if !approval.summary.isEmpty {
+                Text(approval.summary)
+                    .font(JieboFont.mono(12))
+                    .foregroundStyle(JieboColor.ink2)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            HStack(spacing: 8) {
+                Button("批准") { store.answerAssistantApproval(approval, allow: true) }
+                    .buttonStyle(.plain)
+                    .font(JieboFont.ui(13, weight: .semibold))
+                    .foregroundStyle(JieboColor.fillFg)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(JieboColor.pine)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Button("拒绝") { store.answerAssistantApproval(approval, allow: false) }
+                    .buttonStyle(.plain)
+                    .font(JieboFont.ui(13, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1)
-                if !approval.summary.isEmpty {
-                    Text(approval.summary)
-                        .font(JieboFont.mono(11))
-                        .foregroundStyle(JieboColor.ink2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            Spacer(minLength: 4)
-            AssistantPillButton(title: "拒绝", tint: JieboColor.danger) {
-                store.answerAssistantApproval(approval, allow: false)
-            }
-            AssistantPillButton(title: "批准", filled: true) {
-                store.answerAssistantApproval(approval, allow: true)
+                    .padding(.horizontal, 12)
+                    .frame(height: 32)
+                    .background(JieboColor.mist)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(JieboColor.mist)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(JieboColor.runBg.opacity(0.65))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(JieboColor.brass.opacity(0.35), lineWidth: 1)
-        )
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
 

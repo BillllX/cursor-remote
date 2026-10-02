@@ -28,7 +28,7 @@ enum FileBrowserPane: String, CaseIterable, Identifiable {
 }
 
 enum ToolLayer: String, CaseIterable, Identifiable {
-    case files, search, git, terminal, loop
+    case files, search, git, terminal, loop, assistant
 
     var id: String { rawValue }
 
@@ -39,6 +39,7 @@ enum ToolLayer: String, CaseIterable, Identifiable {
         case .git: return "Git"
         case .terminal: return "终端"
         case .loop: return "Loop"
+        case .assistant: return "助理"
         }
     }
 
@@ -49,6 +50,7 @@ enum ToolLayer: String, CaseIterable, Identifiable {
         case .git: return "arrow.triangle.branch"
         case .terminal: return "terminal"
         case .loop: return "arrow.triangle.2.circlepath"
+        case .assistant: return "sparkles"
         }
     }
 }
@@ -88,8 +90,6 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState?
-    /// 助理面板（sheet 挂在 WorkbenchView，侧栏/图标栏/抽屉都能开）
-    var assistantOpen = false
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -708,7 +708,7 @@ final class ChatStore {
             flash("这个会话还没同步到本机")
             return
         }
-        assistantOpen = false
+        toolLayer = nil
         select(chatId)
     }
 
@@ -3228,7 +3228,6 @@ final class ChatStore {
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
         assistantState = nil
-        assistantOpen = false
         loops = [:]
         loopError = ""
         toolLayer = nil

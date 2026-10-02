@@ -35,9 +35,6 @@ struct WorkbenchView: View {
         .fullScreenCover(isPresented: Bindable(store).fileBrowserOpen) {
             FileBrowserCover()
         }
-        .sheet(isPresented: Bindable(store).assistantOpen) {
-            AssistantView()
-        }
         #if DEBUG
         .onAppear {
             if ProcessInfo.processInfo.arguments.contains("--open-file-browser") {
@@ -149,11 +146,8 @@ struct CollapsedSidebarRail: View {
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
-            railButton("sparkles", label: "助理", marked: store.assistantBadgeCount > 0) {
-                store.assistantOpen = true
-            }
             ForEach(ToolLayer.allCases) { layer in
-                railButton(layer.symbol, label: layer.title, marked: layer == .loop && loopLive, on: store.toolSelected(layer)) {
+                railButton(layer.symbol, label: layer.title, marked: marked(layer), on: store.toolSelected(layer)) {
                     store.toggleTool(layer)
                 }
             }
@@ -183,6 +177,10 @@ struct CollapsedSidebarRail: View {
     private var loopLive: Bool {
         guard let row = store.loops[store.activeId] else { return false }
         return row.status == "armed" || row.status == "running"
+    }
+
+    private func marked(_ layer: ToolLayer) -> Bool {
+        (layer == .loop && loopLive) || (layer == .assistant && store.assistantBadgeCount > 0)
     }
 
     private func railButton(
@@ -387,6 +385,8 @@ struct ToolLayerOverlay: View {
             TerminalToolView()
         case .loop:
             LoopSheet()
+        case .assistant:
+            AssistantView()
         }
     }
 

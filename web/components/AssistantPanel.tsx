@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AssistantDelegation, AssistantMemoryEntry, AssistantOp, AssistantState, ClientMessage } from "../lib/protocol";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
@@ -13,8 +13,18 @@ export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = 
   failed: "失败",
 };
 
+/** 状态标签沿用侧栏会话的 chat-mark 小标，色调只用主题里的 run / ok / danger / warn */
+const DELEGATION_TONE: Record<AssistantDelegation["status"], string> = {
+  running: "run",
+  awaiting: "warn",
+  done: "ok",
+  failed: "danger",
+};
+
 type Props = {
   open: boolean;
+  /** 宽屏 IDE 下收在侧栏列里：点遮罩不关，标题栏不显示关闭 */
+  docked: boolean;
   onClose: () => void;
   name: string;
   state: AssistantState | null;
@@ -29,8 +39,22 @@ function uid() {
   return crypto.randomUUID();
 }
 
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="assistant-section">
+      <div className="side-label">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+function Empty({ children }: { children: ReactNode }) {
+  return <div className="loop-meta">{children}</div>;
+}
+
 export default function AssistantPanel({
   open,
+  docked,
   onClose,
   name,
   state,
@@ -97,7 +121,7 @@ export default function AssistantPanel({
   if (!open) return null;
 
   function purge(entry: AssistantMemoryEntry) {
-    if (!window.confirm(`彻底删除「${entry.topic}」？摘要、简报、收件箱和会话索引里的相关片段也会一起抹掉，不能恢复。`)) return;
+    if (!window.confirm(`彻底删除「${entry.topic}」？摘要、简报、收件箱和会话索引里的相关片段会一起抹掉，不能恢复。`)) return;
     op("memory_purge", { id: entry.id });
   }
 
@@ -110,24 +134,26 @@ export default function AssistantPanel({
   const brief = state?.brief?.text?.trim();
 
   return (
-    <div className="search-overlay open" onClick={onClose}>
+    <div className="search-overlay open assistant-overlay" onClick={docked ? undefined : onClose}>
       <div className="search-box assistant-box" onClick={(event) => event.stopPropagation()} role="dialog" aria-label={`${name} · 助理`}>
         <div className="assistant-head">
-          <div>
-            <div className="loop-title">{name}</div>
-            <div className="assistant-sub">
+          <div className="assistant-head-text">
+            <div className="loop-title">{name} · 助理</div>
+            <div className="loop-meta">
               后台 {state?.background.model || "grok-4.7"} · {backgroundOk ? "就绪" : state?.background.reason || "未就绪"}
             </div>
           </div>
-          <button type="button" className="ghost-btn" onClick={onClose} aria-label="关闭">
-            关闭
-          </button>
+          {docked ? null : (
+            <button type="button" className="logout-btn" onClick={onClose}>
+              关闭
+            </button>
+          )}
         </div>
         <div className="assistant-tabs" role="tablist">
           {(
             [
-              ["today", "今日"],
-              ["inbox", unread ? `收件箱 (${unread})` : "收件箱"],
+              ["today", approvals.length ? `今日 · ${approvals.length}` : "今日"],
+              ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
               ["memory", "记忆"],
               ["notify", "通知"],
             ] as const
@@ -137,7 +163,7 @@ export default function AssistantPanel({
               type="button"
               role="tab"
               aria-selected={tab === id}
-              className={`assistant-tab${tab === id ? " on" : ""}`}
+              className={`pill${tab === id ? " on" : ""}`}
               onClick={() => {
                 setTab(id);
                 if (id === "memory") setMemoryLoaded(true);
@@ -147,149 +173,152 @@ export default function AssistantPanel({
             </button>
           ))}
         </div>
-        {notice ? <p className="assistant-notice">{notice}</p> : null}
+        {notice ? <div className="loop-meta assistant-notice">{notice}</div> : null}
 
-        {tab === "today" ? (
-          <div className="assistant-pane">
-            {approvals.length ? (
-              <section className="assistant-section">
-                <h3>待批 ({approvals.length})</h3>
-                <ul className="assistant-list">
+        <div className="assistant-body">
+          {tab === "today" ? (
+            <>
+              {approvals.length ? (
+                <Section title="待批">
                   {approvals.map((item) => {
                     const owner = state?.delegations.find((row) => row.id === item.delegationId);
                     return (
-                      <li key={item.id}>
-                        <strong>{owner?.title || "委派"}</strong>
-                        <span className="assistant-tag">{item.tool === "shell" ? "跑命令" : "改文件"}</span>
-                        <p>{item.summary || item.tool}</p>
-                        <div className="assistant-row-actions">
-                          <button type="button" className="primary" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: true })}>
-                            批准
-                          </button>
-                          <button type="button" className="ghost-btn" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: false })}>
-                            拒绝
-                          </button>
-                          <button type="button" className="ghost-btn" onClick={() => onOpenChat(item.chatId)}>
-                            看子会话
+                      <div key={item.id} className="approval-row assistant-approval">
+                        <span>
+                          委派「{owner?.title || "未命名"}」要{item.tool === "shell" ? "跑命令" : "改文件"}
+                          {item.summary ? `：${item.summary}` : ""}
+                        </span>
+                        <button type="button" className="pill" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: true })}>
+                          批准
+                        </button>
+                        <button type="button" className="pill" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: false })}>
+                          拒绝
+                        </button>
+                        <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
+                          看子会话
+                        </button>
+                      </div>
+                    );
+                  })}
+                </Section>
+              ) : null}
+              <Section title="简报">
+                {brief ? <div className="assistant-pre">{brief}</div> : <Empty>今天还没有简报。每日简报的日程到点后会生成。</Empty>}
+              </Section>
+              <Section title="待办">
+                <form
+                  className="assistant-inline-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const text = todoDraft.trim();
+                    if (!text) return;
+                    op("todo_add", { text });
+                    setTodoDraft("");
+                  }}
+                >
+                  <input className="side-input" value={todoDraft} onChange={(e) => setTodoDraft(e.target.value)} placeholder="加一条待办" />
+                  <button type="submit" className="new-chat primary">
+                    添加
+                  </button>
+                </form>
+                {todosOpen.length ? (
+                  <ul className="assistant-list">
+                    {todosOpen.map((todo) => (
+                      <li key={todo.id} className="assistant-item">
+                        <div className="assistant-item-head">
+                          <span className="assistant-item-title">{todo.text}</span>
+                          {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
+                          <button type="button" className="pill" onClick={() => op("todo_done", { id: todo.id })}>
+                            完成
                           </button>
                         </div>
                       </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ) : null}
-            {brief ? (
-              <section className="assistant-section">
-                <h3>简报</h3>
-                <pre className="assistant-pre">{brief}</pre>
-              </section>
+                    ))}
+                  </ul>
+                ) : (
+                  <Empty>没有未完成的待办。</Empty>
+                )}
+              </Section>
+              <Section title="日程">
+                {state?.schedules?.length ? (
+                  <ul className="assistant-list">
+                    {state.schedules.map((row) => (
+                      <li key={row.id} className="assistant-item">
+                        <div className="assistant-item-head">
+                          <span className="assistant-item-title">{row.title}</span>
+                          <span className={`chat-mark ${row.enabled ? "ok" : "warn"}`}>{row.enabled ? "启用" : "暂停"}</span>
+                        </div>
+                        <div className="loop-meta">
+                          {row.cron}
+                          {row.pausedReason ? ` · ${row.pausedReason}` : ""}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Empty>还没有日程。</Empty>
+                )}
+              </Section>
+              <Section title="委派">
+                {state?.delegations?.length ? (
+                  <ul className="assistant-list">
+                    {state.delegations.slice(0, 8).map((row) => (
+                      <li key={row.id}>
+                        <button type="button" className="assistant-item assistant-item-btn" onClick={() => onOpenChat(row.childChatId)}>
+                          <div className="assistant-item-head">
+                            <span className="assistant-item-title">{row.title}</span>
+                            <span className={`chat-mark ${DELEGATION_TONE[row.status] ?? ""}`}>{DELEGATION_STATUS[row.status] ?? row.status}</span>
+                          </div>
+                          <div className="loop-meta">{row.workspace}</div>
+                          {row.result ? <div className="assistant-item-body">{row.result.slice(0, 200)}</div> : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Empty>还没有委派。在对话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
+                )}
+              </Section>
+            </>
+          ) : null}
+
+          {tab === "inbox" ? (
+            state?.inbox.length ? (
+              <ul className="assistant-list">
+                {state.inbox.map((item) => (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className={`assistant-item assistant-item-btn${item.read ? "" : " unread"}`}
+                      onClick={() => {
+                        if (!item.read) {
+                          op("inbox_read", { ids: [item.id] });
+                          void closeInboxNotification(item.id);
+                        }
+                        onOpenInboxItem(item);
+                      }}
+                    >
+                      <div className="assistant-item-head">
+                        {item.read ? null : <span className="chat-mark unread">未读</span>}
+                        <span className="assistant-item-title">{item.title}</span>
+                      </div>
+                      <div className="loop-meta">{new Date(item.createdAt).toLocaleString()}</div>
+                      <div className="assistant-item-body">{item.body.slice(0, 240)}</div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <p className="assistant-muted">今天还没有简报。定时任务会在设定时刻生成。</p>
-            )}
-            <section className="assistant-section">
-              <h3>待办</h3>
-              <form
-                className="assistant-row-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const text = todoDraft.trim();
-                  if (!text) return;
-                  op("todo_add", { text });
-                  setTodoDraft("");
-                }}
-              >
-                <input className="side-input" value={todoDraft} onChange={(e) => setTodoDraft(e.target.value)} placeholder="加一条待办" />
-                <button type="submit" className="primary">
-                  添加
-                </button>
-              </form>
-              {todosOpen.length ? (
-                <ul className="assistant-list">
-                  {todosOpen.map((todo) => (
-                    <li key={todo.id}>
-                      <span>{todo.text}</span>
-                      {todo.due ? <span className="assistant-tag">{todo.due}</span> : null}
-                      <button type="button" className="ghost-btn" onClick={() => op("todo_done", { id: todo.id })}>
-                        完成
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="assistant-muted">没有未完成的待办。</p>
-              )}
-            </section>
-            {state?.schedules?.length ? (
-              <section className="assistant-section">
-                <h3>日程</h3>
-                <ul className="assistant-list compact">
-                  {state.schedules.map((row) => (
-                    <li key={row.id}>
-                      <strong>{row.title}</strong>
-                      <span className="assistant-muted">
-                        {row.cron} · {row.enabled ? "启用" : "暂停"}
-                        {row.pausedReason ? ` · ${row.pausedReason}` : ""}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-            {state?.delegations?.length ? (
-              <section className="assistant-section">
-                <h3>委派</h3>
-                <ul className="assistant-list compact">
-                  {state.delegations.slice(0, 8).map((row) => (
-                    <li key={row.id}>
-                      <button type="button" className="assistant-inbox-btn" onClick={() => onOpenChat(row.childChatId)}>
-                        <span className="assistant-inbox-title">
-                          {row.title} · {DELEGATION_STATUS[row.status] ?? row.status} · {row.workspace}
-                        </span>
-                        {row.result ? <span className="assistant-inbox-body">{row.result.slice(0, 200)}</span> : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-          </div>
-        ) : null}
+              <Empty>收件箱是空的。提醒、委派结果和待批会出现在这里。</Empty>
+            )
+          ) : null}
 
-        {tab === "inbox" ? (
-          <div className="assistant-pane">
-            {!state?.inbox.length ? <p className="assistant-muted">收件箱是空的。</p> : null}
-            <ul className="assistant-inbox">
-              {state?.inbox.map((item) => (
-                <li key={item.id} className={item.read ? "read" : "unread"}>
-                  <button
-                    type="button"
-                    className="assistant-inbox-btn"
-                    onClick={() => {
-                      if (!item.read) {
-                        op("inbox_read", { ids: [item.id] });
-                        void closeInboxNotification(item.id);
-                      }
-                      onOpenInboxItem(item);
-                    }}
-                  >
-                    <span className="assistant-inbox-title">{item.title}</span>
-                    <span className="assistant-muted">{new Date(item.createdAt).toLocaleString()}</span>
-                    <span className="assistant-inbox-body">{item.body.slice(0, 240)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {tab === "memory" ? (
-          <div className="assistant-pane">
-            {!state?.memory ? <p className="assistant-muted">正在加载记忆…</p> : null}
-            {state?.memory ? (
+          {tab === "memory" ? (
+            !state?.memory ? (
+              <Empty>正在加载记忆…</Empty>
+            ) : (
               <>
-                <section className="assistant-section">
-                  <h3>核心档案</h3>
+                <Section title="核心档案">
                   {coreDraft ? (
                     <form
                       className="assistant-col-form"
@@ -300,58 +329,52 @@ export default function AssistantPanel({
                       }}
                     >
                       {Object.keys(state.memory.core.fields).map((key) => (
-                        <label key={key} className="assistant-col-form">
-                          <strong>{key}</strong>
-                          <textarea
-                            className="loop-goal"
-                            rows={3}
-                            value={coreDraft[key] ?? ""}
-                            onChange={(e) => setCoreDraft({ ...coreDraft, [key]: e.target.value })}
-                          />
+                        <label key={key} className="loop-field">
+                          {key}
+                          <textarea className="loop-goal" rows={3} value={coreDraft[key] ?? ""} onChange={(e) => setCoreDraft({ ...coreDraft, [key]: e.target.value })} />
                         </label>
                       ))}
-                      <div className="assistant-row-actions">
-                        <button type="submit" className="primary">
+                      <div className="loop-actions">
+                        <button type="submit" className="new-chat primary">
                           保存档案
                         </button>
-                        <button type="button" className="ghost-btn" onClick={() => setCoreDraft(null)}>
+                        <button type="button" className="new-chat" onClick={() => setCoreDraft(null)}>
                           取消
                         </button>
                       </div>
                     </form>
                   ) : (
                     <>
-                      <div className="assistant-core">
-                        {Object.entries(state.memory.core.fields).map(([key, value]) =>
-                          value.trim() ? (
-                            <div key={key}>
-                              <strong>{key}</strong>
-                              <p>{value}</p>
-                            </div>
-                          ) : null,
-                        )}
+                      {Object.entries(state.memory.core.fields).some(([, value]) => value.trim()) ? (
+                        <div className="assistant-core">
+                          {Object.entries(state.memory.core.fields).map(([key, value]) =>
+                            value.trim() ? (
+                              <div key={key}>
+                                <div className="loop-field">{key}</div>
+                                <div className="assistant-item-body">{value}</div>
+                              </div>
+                            ) : null,
+                          )}
+                        </div>
+                      ) : (
+                        <Empty>核心档案还是空的。它会在每次对话开头注入。</Empty>
+                      )}
+                      <div className="loop-meta">
+                        约 {state.memory.coreTokens}/{state.memory.coreBudget} token
+                        {state.memory.settings.paused ? " · 记忆已暂停：模型不写新记忆，对话里也不注入" : ""}
                       </div>
                       <div className="assistant-row-actions">
-                        <button type="button" className="ghost-btn" onClick={() => setCoreDraft({ ...state.memory!.core.fields })}>
+                        <button type="button" className="pill" onClick={() => setCoreDraft({ ...state.memory!.core.fields })}>
                           编辑档案
                         </button>
-                        <button
-                          type="button"
-                          className="ghost-btn"
-                          onClick={() => op("memory_settings", { paused: !state.memory!.settings.paused })}
-                        >
+                        <button type="button" className="pill" onClick={() => op("memory_settings", { paused: !state.memory!.settings.paused })}>
                           {state.memory.settings.paused ? "恢复记忆" : "暂停记忆"}
                         </button>
                       </div>
                     </>
                   )}
-                  <p className="assistant-muted">
-                    约 {state.memory.coreTokens}/{state.memory.coreBudget} token
-                    {state.memory.settings.paused ? " · 记忆已暂停：模型不写新记忆，对话里也不注入" : ""}
-                  </p>
-                </section>
-                <section className="assistant-section">
-                  <h3>新增</h3>
+                </Section>
+                <Section title="新增">
                   <form
                     className="assistant-col-form"
                     onSubmit={(event) => {
@@ -363,85 +386,90 @@ export default function AssistantPanel({
                       setNotice("已保存。");
                     }}
                   >
-                    <input className="side-input" value={memTopic} onChange={(e) => setMemTopic(e.target.value)} placeholder="主题" />
+                    <input className="side-input" value={memTopic} onChange={(e) => setMemTopic(e.target.value)} placeholder="主题，例如：饮食" />
                     <textarea className="loop-goal" rows={3} value={memText} onChange={(e) => setMemText(e.target.value)} placeholder="要记住的内容" />
-                    <button type="submit" className="primary">
-                      保存
-                    </button>
+                    <div className="loop-actions">
+                      <button type="submit" className="new-chat primary">
+                        保存
+                      </button>
+                    </div>
                   </form>
-                </section>
-                <section className="assistant-section">
-                  <h3>条目 ({validEntries.length})</h3>
-                  <ul className="assistant-list">
-                    {validEntries.slice(0, 200).map((entry) =>
-                      editing?.id === entry.id ? (
-                        <li key={entry.id}>
-                          <form
-                            className="assistant-col-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              if (!editing.topic.trim() || !editing.text.trim()) return;
-                              op("memory_edit", { id: entry.id, rev: editing.rev, topic: editing.topic.trim(), text: editing.text.trim() });
-                              setEditing(null);
-                            }}
-                          >
-                            <input className="side-input" value={editing.topic} onChange={(e) => setEditing({ ...editing, topic: e.target.value })} />
-                            <textarea className="loop-goal" rows={3} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+                </Section>
+                <Section title={`条目 · ${validEntries.length}`}>
+                  {validEntries.length ? (
+                    <ul className="assistant-list">
+                      {validEntries.slice(0, 200).map((entry) =>
+                        editing?.id === entry.id ? (
+                          <li key={entry.id} className="assistant-item">
+                            <form
+                              className="assistant-col-form"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                if (!editing.topic.trim() || !editing.text.trim()) return;
+                                op("memory_edit", { id: entry.id, rev: editing.rev, topic: editing.topic.trim(), text: editing.text.trim() });
+                                setEditing(null);
+                              }}
+                            >
+                              <input className="side-input" value={editing.topic} onChange={(e) => setEditing({ ...editing, topic: e.target.value })} />
+                              <textarea className="loop-goal" rows={3} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
+                              <div className="loop-actions">
+                                <button type="submit" className="new-chat primary">
+                                  保存
+                                </button>
+                                <button type="button" className="new-chat" onClick={() => setEditing(null)}>
+                                  取消
+                                </button>
+                              </div>
+                            </form>
+                          </li>
+                        ) : (
+                          <li key={entry.id} className="assistant-item">
+                            <div className="assistant-item-head">
+                              <span className="assistant-item-title">{entry.topic}</span>
+                              <span className={`chat-mark ${entry.basis === "inferred" ? "run" : "ok"}`}>{entry.basis === "inferred" ? "推断" : "你说的"}</span>
+                              {entry.validUntil ? <span className="chat-mark">到 {entry.validUntil}</span> : null}
+                            </div>
+                            <div className="assistant-item-body">{entry.text.slice(0, 300)}</div>
                             <div className="assistant-row-actions">
-                              <button type="submit" className="primary">
-                                保存
+                              <button type="button" className="pill" onClick={() => setEditing({ id: entry.id, rev: entry.rev, topic: entry.topic, text: entry.text })}>
+                                编辑
                               </button>
-                              <button type="button" className="ghost-btn" onClick={() => setEditing(null)}>
-                                取消
+                              <button type="button" className="pill" onClick={() => op("memory_invalidate", { id: entry.id })}>
+                                标失效
+                              </button>
+                              <button type="button" className="pill" onClick={() => op("memory_forget", { id: entry.id })}>
+                                遗忘
+                              </button>
+                              <button type="button" className="pill danger" onClick={() => purge(entry)}>
+                                彻底删除
                               </button>
                             </div>
-                          </form>
-                        </li>
-                      ) : (
-                        <li key={entry.id}>
-                          <strong>{entry.topic}</strong>
-                          <span className="assistant-tag">{entry.basis === "inferred" ? "推断" : "你说的"}</span>
-                          {entry.validUntil ? <span className="assistant-tag">到 {entry.validUntil}</span> : null}
-                          <p>{entry.text.slice(0, 300)}</p>
-                          <div className="assistant-row-actions">
-                            <button
-                              type="button"
-                              className="ghost-btn"
-                              onClick={() => setEditing({ id: entry.id, rev: entry.rev, topic: entry.topic, text: entry.text })}
-                            >
-                              编辑
-                            </button>
-                            <button type="button" className="ghost-btn" onClick={() => op("memory_invalidate", { id: entry.id })}>
-                              标失效
-                            </button>
-                            <button type="button" className="ghost-btn" onClick={() => op("memory_forget", { id: entry.id })}>
-                              遗忘
-                            </button>
-                            <button type="button" className="ghost-btn" onClick={() => purge(entry)}>
-                              彻底删除
-                            </button>
-                          </div>
-                        </li>
-                      ),
-                    )}
-                  </ul>
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  ) : (
+                    <Empty>还没有记忆。在对话里说“记住……”，或在上面手动加一条。</Empty>
+                  )}
                   {invalidEntries.length ? (
-                    <button type="button" className="ghost-btn" onClick={() => setShowInvalid(!showInvalid)}>
-                      {showInvalid ? "收起已失效" : `已失效 (${invalidEntries.length})`}
+                    <button type="button" className="pill" onClick={() => setShowInvalid(!showInvalid)}>
+                      {showInvalid ? "收起已失效" : `已失效 · ${invalidEntries.length}`}
                     </button>
                   ) : null}
                   {showInvalid ? (
-                    <ul className="assistant-list compact">
+                    <ul className="assistant-list">
                       {invalidEntries.slice(0, 100).map((entry) => (
-                        <li key={entry.id}>
-                          <strong>{entry.topic}</strong>
-                          <span className="assistant-muted">{entry.invalidReason || "已失效"}</span>
-                          <p>{entry.text.slice(0, 200)}</p>
+                        <li key={entry.id} className="assistant-item muted">
+                          <div className="assistant-item-head">
+                            <span className="assistant-item-title">{entry.topic}</span>
+                            <span className="chat-mark">{entry.invalidReason || "已失效"}</span>
+                          </div>
+                          <div className="assistant-item-body">{entry.text.slice(0, 200)}</div>
                           <div className="assistant-row-actions">
-                            <button type="button" className="ghost-btn" onClick={() => op("memory_restore", { id: entry.id })}>
+                            <button type="button" className="pill" onClick={() => op("memory_restore", { id: entry.id })}>
                               恢复
                             </button>
-                            <button type="button" className="ghost-btn" onClick={() => purge(entry)}>
+                            <button type="button" className="pill danger" onClick={() => purge(entry)}>
                               彻底删除
                             </button>
                           </div>
@@ -449,31 +477,31 @@ export default function AssistantPanel({
                       ))}
                     </ul>
                   ) : null}
-                  <button type="button" className="ghost-btn" onClick={() => op("memory_export")}>
+                  <button type="button" className="new-chat" onClick={() => op("memory_export")}>
                     导出只读快照到 .jiebo/memory-export/
                   </button>
-                </section>
+                </Section>
               </>
-            ) : null}
-          </div>
-        ) : null}
+            )
+          ) : null}
 
-        {tab === "notify" ? (
-          <div className="assistant-pane">
-            <p className="assistant-muted">推送待批、委派结果、提醒和每日简报。记忆写入和普通进度不推。</p>
-            <div className="assistant-row-actions">
-              <button type="button" className="primary" disabled={busy === "push"} onClick={() => void enablePush()}>
-                开启浏览器通知
-              </button>
-              <button type="button" className="ghost-btn" onClick={() => op("push_test")}>
-                发测试
-              </button>
-            </div>
-            {typeof window !== "undefined" && !(window.matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone) ? (
-              <p className="assistant-muted">iPhone 上把网页「添加到主屏幕」后，后台推送更可靠。</p>
-            ) : null}
-          </div>
-        ) : null}
+          {tab === "notify" ? (
+            <Section title="浏览器通知">
+              <Empty>推送待批、委派结果、提醒和每日简报。记忆写入和普通进度不推。</Empty>
+              <div className="loop-actions">
+                <button type="button" className="new-chat primary" disabled={busy === "push"} onClick={() => void enablePush()}>
+                  开启浏览器通知
+                </button>
+                <button type="button" className="new-chat" onClick={() => op("push_test")}>
+                  发测试
+                </button>
+              </div>
+              {typeof window !== "undefined" && !(window.matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone) ? (
+                <Empty>iPhone 上把网页「添加到主屏幕」后，后台推送更可靠。</Empty>
+              ) : null}
+            </Section>
+          ) : null}
+        </div>
       </div>
     </div>
   );

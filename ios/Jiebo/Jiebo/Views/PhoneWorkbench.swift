@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// iPhone（以及 iPad 上窄到 compact 的窗口）：打开就是当前对话。
-/// 会话和五个工具在左边抽屉里。工作区列表从抽屉顶进入，主题只在那一页的最底下。
+/// 会话和工具入口在左边抽屉里。工作区列表从抽屉顶进入，主题只在那一页的最底下。
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -116,12 +116,6 @@ private struct PhoneDrawer: View {
                 close()
             }
 
-            drawerRow("sparkles", store.assistantBadgeCount > 0 ? "助理 (\(store.assistantBadgeCount))" : "助理", marked: store.assistantBadgeCount > 0) {
-                close()
-                store.assistantOpen = true
-            }
-            .padding(.top, 4)
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(store.currentWorkspaceChats) { chat in
@@ -198,7 +192,7 @@ private struct PhoneDrawer: View {
     }
 
     private func toolRow(_ layer: ToolLayer) -> some View {
-        let marked = layer == .loop && loopLive
+        let marked = (layer == .loop && loopLive) || (layer == .assistant && store.assistantBadgeCount > 0)
         return drawerRow(layer.symbol, layer.title, marked: marked, iconBox: true) {
             store.toggleTool(layer)
             close()
