@@ -699,6 +699,10 @@ function protectChatUpload(
   if (transcript) baseTurns = upsertTranscriptTurn(baseTurns, transcript);
   const mark = transcript ? markFromTranscript(transcript) : readRunMark(prev);
   const row = { ...(incoming as Record<string, unknown>) };
+  if (isAssistantChat(tenant, chatId)) {
+    row.title = assistantName(tenant);
+    row.assistant = true;
+  }
   if (!turnsProvided) {
     if (baseTurns.length || mark) row.turns = baseTurns;
     if (mark) row.runMark = mark;
@@ -5033,14 +5037,15 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             prevJson.set(row.id, stableStringify(item));
           }
         }
-        const incoming = (Array.isArray(message.chats) ? message.chats : []).slice(0, MAX_STORED_CHATS);
-        const incomingIds = chatIdsFrom(incoming);
+        // 助理会话不占 MAX_STORED_CHATS 名额；客户端漏带时用服务端那份，不能被墓碑化
         const assistantId = assistantChatIdOf(tenant);
-        const assistantRow = tenant.disk.chats.find((item) => chatIdOf(item) === assistantId);
-        if (assistantRow && !incomingIds.has(assistantId)) {
-          incoming.unshift(assistantRow);
-          incomingIds.add(assistantId);
-        }
+        const uploaded: unknown[] = Array.isArray(message.chats) ? message.chats : [];
+        const assistantRow =
+          uploaded.find((item) => chatIdOf(item) === assistantId) ??
+          tenant.disk.chats.find((item) => chatIdOf(item) === assistantId);
+        const incoming = uploaded.filter((item) => chatIdOf(item) !== assistantId).slice(0, MAX_STORED_CHATS);
+        if (assistantRow) incoming.unshift(assistantRow);
+        const incomingIds = chatIdsFrom(incoming);
         for (const id of prevIds) {
           if (!incomingIds.has(id)) tombstoneChat(tenant, id);
         }
@@ -5142,7 +5147,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         );
         next = protectChatUpload(tenant, id, next, turnsProvided);
         const changed = stableStringify(prev ?? null) !== stableStringify(next);
-        if (changed && !prev && tenant.disk.chats.length >= MAX_STORED_CHATS) {
+        const stored = tenant.disk.chats.filter((item) => !isAssistantChat(tenant, chatIdOf(item))).length;
+        if (changed && !prev && !isAssistantChat(tenant, id) && stored >= MAX_STORED_CHATS) {
           // 条数硬顶：追加新会话被拒（替换既有会话不受限），回 ack 让客户端收敛 inflight
           console.warn("sync_chat 拒绝：会话数超上限", tenant.id, MAX_STORED_CHATS);
           send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
