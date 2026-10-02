@@ -293,10 +293,41 @@ export type ServerMessage =
       silent?: boolean;
     }
   | { type: "chat_title"; chatId: string; title: string }
-  | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[] }
+  | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[]; cursor?: CursorBill }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
   | { type: "pong" };
+
+/** 当前 CURSOR_API_KEY 的官方账单，口径与 Cursor CLI `/usage` 相同。
+ *  套餐内三项是已用百分比；spendCents / limitCents 是美分。Enterprise 通常没有百分比，
+ *  只有本 Key 在当前账期的 spendCents。 */
+export type CursorOnDemand = {
+  kind: "fixed" | "unlimited" | "disabled" | "unavailable";
+  usedCents: number;
+  /** kind 为 fixed 时的上限，单位美分 */
+  limitCents?: number;
+};
+
+export type CursorBill = {
+  ok: boolean;
+  error?: string;
+  plan?: string;
+  /** 账期起止，Unix 毫秒 */
+  cycleStart?: number;
+  cycleEnd?: number;
+  /** 套餐内已用百分比（0–100） */
+  includedPercent?: number;
+  autoPercent?: number;
+  apiPercent?: number;
+  /** 这把 API Key 在当前账期的花费，单位美分 */
+  spendCents?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  onDemand?: CursorOnDemand;
+  models?: { name: string; spendCents: number }[];
+  fetchedAt: number;
+};
 
 export type AdminTenantStats = {
   id: string;

@@ -60,6 +60,7 @@ import {
   type DiskSlot,
   type Tenant,
 } from "./tenants.ts";
+import { cursorBill } from "./cursorBill.ts";
 import {
   noteOutput,
   noteRun,
@@ -4431,8 +4432,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
 
-      // P9：管理员查询全租户使用统计。Cursor 官方无 API key 用量端点，
-      // 数据来自网关自计量（usage.ts）+ 实时 disk/连接数。
+      // P9：管理员查询全租户使用统计。租户行是网关自计量；
+      // cursor 是当前 CURSOR_API_KEY 的官方账单（与 CLI /usage 同一接口）。
       if (message.type === "admin_stats") {
         if (!tenant.admin) {
           send(ws, { type: "error", message: "需要管理员权限。" });
@@ -4460,7 +4461,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             lastActiveAt: usage.lastActiveAt,
           };
         });
-        send(ws, { type: "admin_stats", serverTime: Date.now(), tenants: rows });
+        const cursor = await cursorBill(process.env.CURSOR_API_KEY?.trim() || "");
+        send(ws, { type: "admin_stats", serverTime: Date.now(), tenants: rows, cursor });
         return;
       }
 

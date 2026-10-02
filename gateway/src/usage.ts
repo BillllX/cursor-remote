@@ -3,8 +3,8 @@ import { resolve } from "node:path";
 import { stateDir } from "./tenants.js";
 
 /**
- * P9：每租户使用计量。Cursor 官方不暴露 API key 用量端点（api.cursor.com 的
- * /v0/usage、/v0/billing 等均 404），网关只能自计量相对消耗：
+ * P9：每租户使用计量。官方账单按当前 API Key 走 cursorBill.ts（CLI /usage 的同一接口）。
+ * 这里仍是网关自计量的相对消耗，用来比较各租户：
  * turns/runs/toolCalls/runMs 是硬指标；inChars/outChars 按字符累计，
  * estTokens = chars/4 是粗估（UI 必须标注「估算」）。
  *

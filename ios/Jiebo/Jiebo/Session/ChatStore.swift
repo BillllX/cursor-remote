@@ -224,6 +224,8 @@ final class ChatStore {
     var isAdmin = false
     var adminStats: [AdminTenantStats] = []
     var adminStatsAt: Date?
+    /// 当前服务器 API Key 的 Cursor 官方账单（admin_stats.cursor）
+    var cursorBill: CursorBill?
     /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）
     var loadingChatIds: Set<String> = []
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
@@ -1542,6 +1544,7 @@ final class ChatStore {
                 }
             }
             isAdmin = admin // P9：管理员才显示统计入口（须在 resetTenantSession 之后，否则被其清回 false）
+            if !admin { cursorBill = nil }
             if let name = readyTenantName?.nilIfEmpty {
                 tenantName = name
             }
@@ -1591,9 +1594,10 @@ final class ChatStore {
                 authError = messageText ?? "密码不对。"
                 KeychainStore.delete()
             }
-        case .adminStats(let rows, _):
+        case .adminStats(let rows, _, let bill):
             adminStats = rows
             adminStatsAt = Date()
+            cursorBill = bill
         case .loopState(let chatId, let status, let goal, let intervalSec, let tick, let maxTicks, let lastSummary, let nextAt):
             guard !chatId.isEmpty else { break }
             loops[chatId] = LoopSnapshot(
@@ -2912,6 +2916,7 @@ final class ChatStore {
         contentDiscardPrompt = false
         contentDiscardFollowup = nil
         adminStats = []
+        cursorBill = nil
         adminStatsAt = nil
         showThinkingIds = []
         bannerError = ""

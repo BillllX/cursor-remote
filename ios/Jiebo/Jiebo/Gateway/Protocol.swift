@@ -40,8 +40,70 @@ struct MediaTicket: Sendable, Hashable {
     var sig: String
 }
 
+/// 当前 API Key 的官方账单，口径与 Cursor CLI `/usage` 相同。金额单位是美分。
+struct CursorOnDemand: Sendable, Hashable {
+    var kind: String
+    var usedCents: Double
+    var limitCents: Double?
+}
+
+struct CursorModelSpend: Sendable, Hashable, Identifiable {
+    var id: String { name }
+    var name: String
+    var spendCents: Double
+}
+
+struct CursorBill: Sendable, Hashable {
+    var ok: Bool
+    var error: String?
+    var plan: String?
+    var cycleStart: Double
+    var cycleEnd: Double
+    var includedPercent: Double?
+    var autoPercent: Double?
+    var apiPercent: Double?
+    var spendCents: Double?
+    var inputTokens: Double?
+    var outputTokens: Double?
+    var onDemand: CursorOnDemand?
+    var models: [CursorModelSpend]
+    var fetchedAt: Double
+
+    static func from(_ json: JSONValue) -> CursorBill? {
+        guard let row = json.object else { return nil }
+        let demand = row["onDemand"]?.object.flatMap { item -> CursorOnDemand? in
+            guard let kind = item["kind"]?.string else { return nil }
+            return CursorOnDemand(
+                kind: kind,
+                usedCents: item["usedCents"]?.number ?? 0,
+                limitCents: item["limitCents"]?.number
+            )
+        }
+        let models = row["models"]?.array?.compactMap { item -> CursorModelSpend? in
+            guard let name = item["name"]?.string, !name.isEmpty else { return nil }
+            return CursorModelSpend(name: name, spendCents: item["spendCents"]?.number ?? 0)
+        } ?? []
+        return CursorBill(
+            ok: row["ok"]?.bool ?? false,
+            error: row["error"]?.string,
+            plan: row["plan"]?.string,
+            cycleStart: row["cycleStart"]?.number ?? 0,
+            cycleEnd: row["cycleEnd"]?.number ?? 0,
+            includedPercent: row["includedPercent"]?.number,
+            autoPercent: row["autoPercent"]?.number,
+            apiPercent: row["apiPercent"]?.number,
+            spendCents: row["spendCents"]?.number,
+            inputTokens: row["inputTokens"]?.number,
+            outputTokens: row["outputTokens"]?.number,
+            onDemand: demand,
+            models: models,
+            fetchedAt: row["fetchedAt"]?.number ?? 0
+        )
+    }
+}
+
 /// P9：单租户使用统计（admin_stats 应答的行）。estTokens 是网关按字符估算（≈4 字符/token），
-/// 非 Cursor 官方账单——官方未暴露 API key 用量端点
+/// 用来看各账号的相对消耗。官方账单在 admin_stats.cursor。
 struct AdminTenantStats: Sendable, Hashable, Identifiable {
     var id: String
     var name: String
@@ -419,8 +481,8 @@ enum ServerMessage {
         clipped: Bool
     )
     case chatTitle(chatId: String, title: String)
-    /// P9：admin_stats 应答（仅管理员收得到）
-    case adminStats(tenants: [AdminTenantStats], serverTime: Double)
+    /// P9：admin_stats 应答（仅管理员收得到）。cursor 是当前 API Key 的官方账单
+    case adminStats(tenants: [AdminTenantStats], serverTime: Double, cursor: CursorBill?)
     case loopState(
         chatId: String,
         status: String,
@@ -644,7 +706,8 @@ enum ServerMessage {
         case "admin_stats":
             return .adminStats(
                 tenants: object["tenants"]?.array?.compactMap(AdminTenantStats.from) ?? [],
-                serverTime: object["serverTime"]?.number ?? 0
+                serverTime: object["serverTime"]?.number ?? 0,
+                cursor: object["cursor"].flatMap(CursorBill.from)
             )
         case "files":
             // 网关附带 git status（M/A/D/U/R），全量清单时写入 gitStatus

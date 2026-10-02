@@ -26,6 +26,7 @@ import type {
   LoopState,
   HistoryTurn,
   AdminTenantStats,
+  CursorBill,
 } from "../lib/protocol";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
@@ -813,6 +814,29 @@ function fmtDuration(ms: number) {
   return `${hours} 小时 ${minutes % 60} 分`;
 }
 
+function fmtUsd(cents: number) {
+  return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function fmtPct(value: number) {
+  const n = Math.max(0, Math.min(100, value));
+  if (n > 0 && n < 1) return "1%";
+  return `${Math.round(n)}%`;
+}
+
+function fmtCycle(ms?: number) {
+  if (!ms || ms <= 0) return "";
+  return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", timeZone: "UTC" }).format(ms);
+}
+
+function onDemandText(row: NonNullable<CursorBill["onDemand"]>) {
+  const used = fmtUsd(row.usedCents);
+  if (row.kind === "fixed" && typeof row.limitCents === "number") return `${used} / ${fmtUsd(row.limitCents)}`;
+  if (row.kind === "unlimited") return `${used} · 无上限`;
+  if (row.kind === "disabled") return "已关闭";
+  return "—";
+}
+
 function fmtRelative(epochMs: number) {
   if (!(epochMs > 0)) return "—";
   const seconds = (Date.now() - epochMs) / 1000;
@@ -825,6 +849,46 @@ function fmtRelative(epochMs: number) {
 function fmtClock(epochMs: number) {
   if (!(epochMs > 0)) return "";
   return new Date(epochMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function CursorBillPanel({ bill, ready }: { bill: CursorBill | null; ready: boolean }) {
+  if (!bill) {
+    return <div className="admin-row"><span>账单</span><span>{ready ? "这台网关还没有账单数据。" : "正在查询…"}</span></div>;
+  }
+  const cycle = [fmtCycle(bill.cycleStart), fmtCycle(bill.cycleEnd)].filter(Boolean).join(" – ");
+  const hasIncluded = typeof bill.includedPercent === "number";
+  return (
+    <>
+      {bill.plan ? <div className="admin-row"><span>方案</span><span>{bill.plan}</span></div> : null}
+      {cycle ? <div className="admin-row"><span>账期</span><span>{cycle}{bill.cycleEnd ? " 重置" : ""}</span></div> : null}
+      {typeof bill.spendCents === "number" ? (
+        <div className="admin-row"><span>本 Key 花费</span><span>{fmtUsd(bill.spendCents)}</span></div>
+      ) : null}
+      {hasIncluded ? (
+        <div className="admin-summary">
+          <div><strong>{fmtPct(bill.includedPercent ?? 0)}</strong><span>套餐内</span></div>
+          <div><strong>{fmtPct(bill.autoPercent ?? 0)}</strong><span>Auto</span></div>
+          <div><strong>{fmtPct(bill.apiPercent ?? 0)}</strong><span>API</span></div>
+        </div>
+      ) : null}
+      {bill.onDemand && bill.onDemand.kind !== "unavailable" ? (
+        <div className="admin-row"><span>按需</span><span>{onDemandText(bill.onDemand)}</span></div>
+      ) : null}
+      {typeof bill.inputTokens === "number" ? (
+        <div className="admin-row">
+          <span>输入 / 输出</span>
+          <span>{fmtCount(bill.inputTokens)} / {fmtCount(bill.outputTokens ?? 0)} token</span>
+        </div>
+      ) : null}
+      {bill.models?.map((row) => (
+        <div key={row.name} className="admin-row">
+          <span>{row.name}</span>
+          <span>{fmtUsd(row.spendCents)}</span>
+        </div>
+      ))}
+      {bill.error ? <p className="admin-note">{bill.error}</p> : null}
+    </>
+  );
 }
 
 function shellRows(turns: Turn[]): { id: string; command: string; output: string; running: boolean }[] {
@@ -1223,6 +1287,7 @@ export default function ChatApp() {
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminStats, setAdminStats] = useState<AdminTenantStats[]>([]);
   const [adminStatsAt, setAdminStatsAt] = useState<number | null>(null);
+  const [cursorBill, setCursorBill] = useState<CursorBill | null>(null);
   const [grepQ, setGrepQ] = useState("");
   const searchShown = useHeldOpen(searchOpen);
   const paletteShown = useHeldOpen(paletteOpen);
@@ -1504,6 +1569,7 @@ export default function ChatApp() {
     setAdminOpen(false);
     setAdminStats([]);
     setAdminStatsAt(null);
+    setCursorBill(null);
   }
 
   const send = useCallback((message: ClientMessage) => {
@@ -1761,6 +1827,7 @@ export default function ChatApp() {
               setAdminOpen(false);
               setAdminStats([]);
               setAdminStatsAt(null);
+              setCursorBill(null);
             }
             const reconnected = unlockedRef.current;
             if (reconnected) setNotice("已重新连上服务器");
@@ -2220,6 +2287,7 @@ export default function ChatApp() {
         case "admin_stats":
           setAdminStats(message.tenants || []);
           setAdminStatsAt(message.serverTime || Date.now());
+          setCursorBill(message.cursor ?? null);
           break;
         case "chat_title": {
           const title = message.title.trim();
@@ -4519,11 +4587,17 @@ export default function ChatApp() {
                 </button>
               </div>
             </div>
-            {adminStats.length ? (
+            {adminStats.length || cursorBill ? (
               <div className="admin-body">
                 <div className="admin-section">
                   <div className="admin-section-label">
-                    API Key 估算消耗{adminStatsAt ? ` · ${fmtClock(adminStatsAt)} 更新` : ""}
+                    Cursor 账单{cursorBill ? ` · ${fmtClock(cursorBill.fetchedAt)}` : ""}
+                  </div>
+                  <CursorBillPanel bill={cursorBill} ready={adminStatsAt != null} />
+                </div>
+                <div className="admin-section">
+                  <div className="admin-section-label">
+                    各账号估算消耗{adminStatsAt ? ` · ${fmtClock(adminStatsAt)} 更新` : ""}
                   </div>
                   <div className="admin-summary">
                     <div>
@@ -4567,7 +4641,7 @@ export default function ChatApp() {
                   </div>
                 ))}
                 <p className="admin-note">
-                  token 为按字符估算（英文 ≈4 字符/token；中文 1 字符 ≈1-2 token，中文场景实际消耗约为估算值的 2-4 倍），反映各账号的相对消耗；Cursor 官方未提供 API key 账单查询。
+                  上面是这台服务器 CURSOR_API_KEY 的官方账单，和 Cursor CLI 的 /usage 同一口径。下面各账号的 token 仍是按字符估算（英文 ≈4 字符/token；中文实际更高），只用来看相对消耗。
                 </p>
               </div>
             ) : (

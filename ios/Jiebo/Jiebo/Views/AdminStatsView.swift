@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// P9：管理员使用统计面板。数据来自网关自计量（usage.ts）——Cursor 官方未暴露
-/// API key 用量端点，estTokens 是按字符的粗估（≈4 字符/token），只看相对消耗。
+/// P9：管理员使用统计。上面是当前 API Key 的 Cursor 官方账单（与 CLI /usage 同一口径），
+/// 下面各账号仍是网关按字符估算的相对消耗。
 struct AdminStatsView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
@@ -9,13 +9,14 @@ struct AdminStatsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if store.adminStats.isEmpty {
+                if store.adminStats.isEmpty && store.cursorBill == nil {
                     ContentUnavailableView(
                         "暂无数据",
                         systemImage: "chart.bar",
                         description: Text("连上服务器后自动拉取。")
                     )
                 } else {
+                    cursorSection
                     summarySection
                     ForEach(store.adminStats) { row in
                         tenantSection(row)
@@ -43,7 +44,58 @@ struct AdminStatsView: View {
         .presentationDetents([.medium, .large])
     }
 
-    // MARK: 汇总（全部租户合计 ≈ 这个 API key 的总消耗）
+    // MARK: 当前 API Key 的官方账单
+
+    private var cursorSection: some View {
+        let bill = store.cursorBill
+        let start = (bill?.cycleStart ?? 0) > 0 ? Self.fmtCycle(bill?.cycleStart ?? 0) : ""
+        let end = (bill?.cycleEnd ?? 0) > 0 ? Self.fmtCycle(bill?.cycleEnd ?? 0) : ""
+        let span = [start, end].filter { !$0.isEmpty }.joined(separator: " – ")
+        let cycleText = (bill?.cycleEnd ?? 0) > 0 ? "\(span) 重置" : span
+        let stamp: String = {
+            guard let bill, bill.fetchedAt > 0 else { return "" }
+            let date = Date(timeIntervalSince1970: bill.fetchedAt / 1000)
+            return " · " + date.formatted(date: .omitted, time: .shortened)
+        }()
+        return Section {
+            if let bill {
+                if let plan = bill.plan, !plan.isEmpty {
+                    statRow("方案", plan)
+                }
+                if bill.cycleStart > 0 || bill.cycleEnd > 0 {
+                    statRow("账期", cycleText)
+                }
+                if let spend = bill.spendCents {
+                    statRow("本 Key 花费", Self.fmtUsd(spend))
+                }
+                if let included = bill.includedPercent {
+                    statRow("套餐内 / Auto / API", "\(Self.fmtPct(included)) / \(Self.fmtPct(bill.autoPercent ?? 0)) / \(Self.fmtPct(bill.apiPercent ?? 0))")
+                }
+                if let demand = bill.onDemand, demand.kind != "unavailable" {
+                    statRow("按需", Self.fmtOnDemand(demand))
+                }
+                if let input = bill.inputTokens {
+                    statRow("输入 / 输出", "\(Self.fmtCount(Int(input))) / \(Self.fmtCount(Int(bill.outputTokens ?? 0))) token")
+                }
+                ForEach(bill.models) { row in
+                    statRow(row.name, Self.fmtUsd(row.spendCents))
+                }
+                if let error = bill.error, !error.isEmpty {
+                    Text(error)
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            } else {
+                Text(store.adminStatsAt == nil ? "正在查询…" : "这台网关还没有账单数据。")
+                    .font(JieboFont.ui(13))
+                    .foregroundStyle(JieboColor.dim)
+            }
+        } header: {
+            Text("Cursor 账单" + stamp)
+        }
+    }
+
+    // MARK: 汇总（各租户合计，字符估算）
 
     private var summarySection: some View {
         let rows = store.adminStats
@@ -60,7 +112,7 @@ struct AdminStatsView: View {
             }
             .padding(.vertical, 6)
         } header: {
-            Text("API Key 估算消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened))} 更新" } ?? ""))
+            Text("各账号估算消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened)) 更新" } ?? ""))
         }
     }
 
@@ -124,13 +176,36 @@ struct AdminStatsView: View {
 
     private var footer: some View {
         Section {
-            Text("token 为按字符估算（英文 ≈4 字符/token；中文 1 字符 ≈1-2 token，中文场景实际消耗约为估算值的 2-4 倍），反映各账号的相对消耗；Cursor 官方未提供 API key 账单查询。")
+            Text("上面是这台服务器 API Key 的官方账单，和 Cursor CLI 的 /usage 同一口径。下面各账号的 token 仍是按字符估算（英文 ≈4 字符/token；中文实际更高），只用来看相对消耗。")
                 .font(JieboFont.ui(11))
                 .foregroundStyle(JieboColor.dim)
         }
     }
 
     // MARK: 格式化
+
+    static func fmtUsd(_ cents: Double) -> String {
+        (cents / 100).formatted(.currency(code: "USD"))
+    }
+
+    static func fmtPct(_ value: Double) -> String {
+        let n = min(100, max(0, value))
+        if n > 0 && n < 1 { return "1%" }
+        return "\(Int(n.rounded()))%"
+    }
+
+    static func fmtCycle(_ epochMs: Double) -> String {
+        let date = Date(timeIntervalSince1970: epochMs / 1000)
+        return date.formatted(.dateTime.month(.numeric).day(.numeric).timeZone(.gmt))
+    }
+
+    static func fmtOnDemand(_ row: CursorOnDemand) -> String {
+        let used = fmtUsd(row.usedCents)
+        if row.kind == "fixed", let limit = row.limitCents { return "\(used) / \(fmtUsd(limit))" }
+        if row.kind == "unlimited" { return "\(used) · 无上限" }
+        if row.kind == "disabled" { return "已关闭" }
+        return "—"
+    }
 
     static func fmtTokens(_ value: Int) -> String {
         if value >= 10_000 { return String(format: "%.1f 万", Double(value) / 10_000) }
