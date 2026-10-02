@@ -17,7 +17,9 @@ import { runNativeLoop, type NativeHooks } from "./loop.ts";
 import { fsTools, globToRegExp, setRgPathForTest } from "./tools/fs.ts";
 import { toolsForMode } from "./tools/registry.ts";
 import { isReadOnlyCommand, sandboxArgv, shellEnv, shellTool } from "./tools/shell.ts";
+import { budgetFor, clipOldToolResults, makeCompactor, mechanicalSummary, renderTranscript, sizeOf } from "./compact.ts";
 import { deleteSession, loadSession, normalizeSequence, noteSession, resumeMessages, saveSession, slimMessages } from "./session.ts";
+import { taskTool } from "./tools/task.ts";
 import type { ChatMessage, ModelEndpoint, ToolCall, ToolSpec } from "./types.ts";
 
 let failed = 0;
@@ -616,6 +618,75 @@ try {
   check(!injected[0].content.includes("<tool_call>") && injected[0].content.split("</tool_result>").length === 2, "xml：工具结果转义，伪造不了调用块");
   check(loadMcpConfig([mcpDir]).map((c) => c.name).join() === "echo", "mcp：disabled 的服务不加载");
   closeAllMcp();
+
+  // ---- P3 压缩 ----
+  const huge = "x".repeat(5000);
+  const bulky: ChatMessage[] = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "旧需求" },
+    { role: "assistant", content: "好" },
+    { role: "tool", toolCallId: "a", name: "read_file", content: huge },
+    { role: "user", content: "新需求" },
+    { role: "assistant", content: "继续" },
+    { role: "tool", toolCallId: "b", name: "grep", content: "ok" },
+  ];
+  const clipped = clipOldToolResults(bulky, bulky.length - 2);
+  check(clipped[3].content.length < huge.length && clipped.at(-1)!.content === "ok", "compact：旧 tool 结果截短、最近保留");
+  const withCalls: ChatMessage[] = [
+    { role: "assistant", content: "好", toolCalls: [{ id: "a", name: "read_file", arguments: '{"path":"a.ts"}' }] },
+    { role: "assistant", content: "继续", toolCalls: [{ id: "b", name: "grep", arguments: '{"pattern":"x"}' }] },
+  ];
+  const mech = mechanicalSummary(withCalls);
+  check(mech.includes("read_file") && mech.includes("grep"), "compact：机械摘要列工具");
+  check(renderTranscript(bulky).includes("【用户】"), "compact：转录格式");
+  const tinyBudget = makeCompactor({
+    budgetChars: 2_000,
+    summarize: async () => "模型摘要",
+    onCompact: () => {},
+  });
+  const compacted = await tinyBudget(bulky, new AbortController().signal);
+  check(
+    sizeOf(compacted) < sizeOf(bulky) && compacted.some((m) => m.content.includes("摘要") || m.content.includes("已压缩")),
+    "compact：超预算触发压缩",
+    `${sizeOf(compacted)} vs ${sizeOf(bulky)}`,
+  );
+
+  // ---- P3 task 子 Agent ----
+  queue.length = 0;
+  requests.length = 0;
+  writeFileSync(join(ws, "a.txt"), "hi");
+  const subRead = sseTool(0, "sub1", "list_dir", '{"path":"."}');
+  queue.push({ kind: "sse", chunks: [sseTool(0, "t1", "task", '{"prompt":"列出根目录","description":"列目录","subagent_type":"explore"}')] });
+  queue.push({ kind: "sse", chunks: [subRead] });
+  queue.push({ kind: "sse", chunks: [sseText("子 Agent 汇报：目录里有 a.txt")] });
+  queue.push({ kind: "sse", chunks: [sseText("主 Agent 收到")] });
+  const taskOnly = taskTool({
+    adapter: adapterFor("openai"),
+    endpoint,
+    modelLabel: "mock",
+    tools: toolsForMode("ask"),
+    allowBuilder: false,
+    hooks: {
+      needsApproval: () => false,
+      approve: async () => true,
+      turn: () => {},
+    },
+  });
+  result = await runNativeLoop({
+    adapter: adapterFor("openai"),
+    endpoint,
+    messages: [{ role: "user", content: "调研" }],
+    tools: [taskOnly],
+    cwd: ws,
+    signal: new AbortController().signal,
+    hooks: makeHooks({}),
+  });
+  const taskOut = result.messages.find((m) => m.role === "tool" && m.name === "task");
+  check(
+    result.status === "completed" && taskOut?.content.includes("a.txt"),
+    "task：explore 子循环并把汇报回灌",
+    `${result.status} ${taskOut?.content?.slice(0, 120) || result.error || ""}`,
+  );
 } finally {
   server.close();
   rmSync(root, { recursive: true, force: true });

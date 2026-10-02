@@ -3,7 +3,7 @@
 // 用法（在网关所在机器上）：
 //   set -a; . /etc/cursor-remote/gateway.env; set +a
 //   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/native-e2e.mjs [场景...]
-// 场景：create undo restore approve ask cancel shell memory mcp usage（缺省全跑）
+// 场景：create undo restore approve ask cancel shell memory mcp task usage（缺省全跑）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -287,6 +287,25 @@ try {
         rmSync(mcpFile, { force: true });
       }
     }
+  }
+
+  if (want("task")) {
+    const { chatId, cwd } = await openChat("task");
+    chats.push(chatId);
+    root = join(cwd, "..");
+    writeFileSync(join(cwd, "marker.txt"), "子Agent应读到这行\n");
+    const from = await prompt(
+      chatId,
+      "不要自己 read_file。必须用 task 工具派 explore 子 Agent：让它 list_dir 当前目录并 read_file marker.txt，把文件第一行原文汇报回来。你收到汇报后只输出那一行原文，不要别的字。",
+    );
+    const done = await waitDone(chatId, from, "task");
+    const events = since(from, chatId);
+    const s = summary(events);
+    const nested = events.filter((m) => m.type === "tool-started" && m.parentCallId);
+    check(done.status === "completed", "task：本轮完成", `${done.status} ${s.errors.join(" | ")}`);
+    check(events.some((m) => m.type === "tool-started" && m.name === "task"), "task：主 Agent 调用了 task", s.tools.join(","));
+    check(nested.some((m) => m.name === "list_dir" || m.name === "read_file"), "task：子 Agent 有只读工具调用", nested.map((m) => m.name).join(","));
+    check(/子Agent应读到这行/.test(s.text), "task：最终回答带出子 Agent 读到的内容", s.text.slice(0, 200));
   }
 
   if (want("usage")) {

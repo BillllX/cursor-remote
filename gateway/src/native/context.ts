@@ -15,6 +15,7 @@ export function buildSystemPrompt(opts: { cwd: string; mode: AgentMode; tools: T
     has("run_shell") ? "- 需要运行测试、构建或查看环境时用 run_shell。命令要能在非交互环境下结束，不要启动常驻服务；读写文件仍用文件工具。" : "",
     "- 工具调用失败时，读一下报错，换一种做法再试；同一件事最多再试 2 次。",
     "- 能并行的只读查询可以在一次回复里同时发起多个工具调用。",
+    has("task") ? "- 大范围调研用 task 派 explore 子 Agent，把结果收回来再继续；子 Agent 看不到当前对话，prompt 里要写全背景。" : "",
     "- 完成后用简短的中文说明做了什么、改了哪些文件；没完成的要说清楚卡在哪。",
   ];
   if (opts.mode === "ask") lines.push("", "当前是 Ask 模式：只能读，不能改文件。用户要改动时，说明你会怎么改然后停下。");
