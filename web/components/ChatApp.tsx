@@ -3448,8 +3448,18 @@ export default function ChatApp() {
     ) {
       // USER 根目录不开新的普通会话：等助理会话同步，或先选子工作区
       const home = chatsRef.current.find((item) => isAssistantChat(item.id));
-      if (home) selectChat(home);
-      else setNotice("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。");
+      if (!home) {
+        setNotice("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。");
+        return;
+      }
+      // 输入的文字和图片跟着搬到助理会话，不留在看不见的占位里
+      const carryText = draftRef.current;
+      const carryImages = images;
+      selectChat(home);
+      imagesRef.current[target.id] = [];
+      patchChat(target.id, (item) => ({ ...item, draft: "", draftImages: [] }));
+      syncComposer(carryText);
+      setImages(carryImages);
       return;
     }
     const attached = images.slice(0, MAX_IMAGES);
@@ -4466,8 +4476,10 @@ export default function ChatApp() {
     delete imagesRef.current[id];
     if (!rest.length) {
       const nextModel = lastModelRef.current || modelRef.current;
+      // 占位落在 USER 根目录时复用 boot 空壳：不同步、不开会话，助理会话到了就替换它
+      const atRoot = !cwdRef.current || Boolean(workspaceRoot && sameCwd(cwdRef.current, workspaceRoot));
       const chat = {
-        id: uid(),
+        id: atRoot ? "boot" : uid(),
         title: "新对话",
         turns: [],
         draft: "",
@@ -4478,7 +4490,6 @@ export default function ChatApp() {
       policy: policyRef.current,
       };
       setChats([chat]);
-      // 助理会话到了就替换这个占位；占位在根目录时不向网关开会话
       autoPickedIdRef.current = chat.id;
       setActiveId(chat.id);
       if (nextModel) {
@@ -4492,8 +4503,8 @@ export default function ChatApp() {
       setPreviewDrafts({});
       setPreviewPath("");
       setPreviewMax(false);
-      const atRoot = !chat.cwd || (workspaceRoot && sameCwd(chat.cwd, workspaceRoot));
-      if (!atRoot) send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
+      if (atRoot) return;
+      send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
       if (nextModel) send({ type: "set_model", model: nextModel, chatId: chat.id });
       flushChats([chat]);
       return;

@@ -483,8 +483,18 @@ final class ChatStore {
         if let target = chats.first(where: { $0.id == chatId }),
            !isAssistantChat(target.id), target.turnsComplete, target.turns.isEmpty,
            isUserRoot(target.cwd?.nilIfEmpty ?? workspaceRoot) {
-            if assistantChat != nil {
-                openAssistantChat()
+            if let home = assistantChat {
+                // 输入的文字和图片跟着搬到助理会话，不留在看不见的占位里
+                let carryText = draft
+                select(home.id)
+                patch(chatId) { chat in
+                    var next = chat
+                    next.draft = ""
+                    return next
+                }
+                imagesByChat[chatId] = nil
+                draft = carryText
+                pendingImages = images
             } else {
                 flash("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。")
             }
@@ -1101,10 +1111,14 @@ final class ChatStore {
         dropChatState(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
-            let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: lastModel.nilIfEmpty ?? model, mode: mode)
+            let place = cwd.nilIfEmpty ?? workspaceRoot
+            // 占位在 USER 根目录时复用 boot 空壳：不同步、不开会话，等助理会话同步后切过去
+            let atRoot = place.isEmpty || isUserRoot(place)
+            let chat = atRoot
+                ? ChatSession.blank(id: "boot", cwd: place.nilIfEmpty, model: lastModel.nilIfEmpty ?? model, mode: mode)
+                : ChatSession.blank(cwd: place, model: lastModel.nilIfEmpty ?? model, mode: mode)
             rest = [chat]
-            // 占位在 USER 根目录时不向网关开会话，等助理会话同步后切过去
-            if isUserRoot(chat.cwd) {
+            if atRoot {
                 pendingAssistantOpen = true
             } else {
                 send(.newSession(chatId: chat.id, cwd: chat.cwd))
@@ -2933,10 +2947,12 @@ final class ChatStore {
 
     private func ensureActiveChat() {
         if chats.isEmpty {
-            let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: model, mode: mode)
+            let place = cwd.nilIfEmpty ?? workspaceRoot
+            let atRoot = place.isEmpty || isUserRoot(place)
+            let chat = ChatSession.blank(id: atRoot ? "boot" : UUID().uuidString.lowercased(), cwd: place.nilIfEmpty, model: model, mode: mode)
             chats = [chat]
             swapActive(to: chat.id) // P9：统一入口——持久化 lastActive、置换草稿/待发图归属
-            if !isUserRoot(chat.cwd) { send(.newSession(chatId: chat.id, cwd: chat.cwd)) }
+            if !atRoot { send(.newSession(chatId: chat.id, cwd: chat.cwd)) }
         }
     }
 
