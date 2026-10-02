@@ -1,13 +1,16 @@
-/** SSE 读取：兼容 \n\n 与 \r\n\r\n 分帧，长时间无数据判定停滞断开。 */
+/** SSE 读取：兼容 \n\n 与 \r\n\r\n 分帧，长时间无数据判定停滞断开。onEvent 返回 true 时立即停止读取。 */
 export async function readSse(
   body: ReadableStream<Uint8Array>,
   label: string,
-  onEvent: (data: string, event: string) => void,
+  onEvent: (data: string, event: string) => void | boolean,
   idleMs = 120_000,
+  maxBytes = Infinity,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   const FRAME_RE = /\r?\n\r?\n/;
+  let stopped = false;
+  let total = 0;
   const handle = (frame: string) => {
     let event = "";
     const data: string[] = [];
@@ -17,7 +20,7 @@ export async function readSse(
     }
     const joined = data.join("\n");
     if (!joined || joined.trim() === "[DONE]") return;
-    onEvent(joined, event);
+    if (onEvent(joined, event) === true) stopped = true;
   };
   const readChunk = async () => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,12 +42,21 @@ export async function readSse(
   for (;;) {
     const { done, value } = await readChunk();
     if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      void reader.cancel().catch(() => {});
+      throw new Error(`${label} 返回内容超过 ${Math.round(maxBytes / 1024 / 1024)}MB，已断开`);
+    }
     buffer += decoder.decode(value, { stream: true });
     let match: RegExpExecArray | null;
     while ((match = FRAME_RE.exec(buffer))) {
       const frame = buffer.slice(0, match.index);
       buffer = buffer.slice(match.index + match[0].length);
       handle(frame);
+      if (stopped) {
+        void reader.cancel().catch(() => {});
+        return;
+      }
     }
   }
   if (buffer.trim()) handle(buffer);

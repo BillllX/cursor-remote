@@ -3,11 +3,12 @@
 // 用法（在网关所在机器上）：
 //   set -a; . /etc/cursor-remote/gateway.env; set +a
 //   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/native-e2e.mjs [场景...]
-// 场景：create undo restore approve ask cancel shell memory usage（缺省全跑）
+// 场景：create undo restore approve ask cancel shell memory mcp usage（缺省全跑）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
 const TOKEN = process.env.CURSOR_REMOTE_TOKEN || "";
@@ -247,6 +248,45 @@ try {
     const s = summary(since(from, chatId));
     check(done.status === "completed" && s.text.includes("7731"), "memory：不带 history 也记得上一轮", s.text.slice(0, 160));
     check(/list_dir/.test(s.text), "memory：记得上一轮的工具调用", s.text.slice(0, 160));
+  }
+
+  if (want("mcp")) {
+    // 临时挂一个测试 MCP 服务：只在状态目录原本没有 mcp.json 时做，跑完删掉
+    const stateDir = process.env.CURSOR_REMOTE_STATE_DIR || "/var/lib/cursor-remote";
+    const mcpFile = join(stateDir, "mcp.json");
+    if (existsSync(mcpFile)) {
+      console.log("SKIP  mcp：状态目录已有 mcp.json，不覆盖");
+    } else {
+      const server = join(dirname(fileURLToPath(import.meta.url)), "mcp-echo-server.mjs");
+      writeFileSync(mcpFile, JSON.stringify({ mcpServers: { echo: { command: process.execPath, args: [server], readOnlyTools: ["add"] } } }));
+      chmodSync(mcpFile, 0o644);
+      try {
+        const { chatId, cwd } = await openChat("mcp");
+        chats.push(chatId);
+        root = join(cwd, "..");
+        let from = await prompt(chatId, "用 MCP 工具 mcp__echo__add 计算 17 加 25，告诉我结果。");
+        let done = await waitDone(chatId, from, "mcp-add");
+        let events = since(from, chatId);
+        const addDone = events.find((m) => m.type === "tool-completed" && m.name === "mcp__echo__add");
+        check(done.status === "completed" && addDone?.status === "completed" && addDone.result === "42", "mcp：调用 MCP 工具拿到结果", `${done.status} ${JSON.stringify(addDone)}`);
+        check(summary(events).text.includes("42"), "mcp：回答里给出 42");
+
+        from = await prompt(chatId, "用 mcp__echo__shout 把 hello 转成大写。", { confirmWrites: true });
+        const { msg: ask } = await waitFor((m) => m.type === "approval" && m.chatId === chatId, "mcp approval", RUN_TIMEOUT, from);
+        check(ask.name === "mcp__echo__shout", "mcp：非只读的 MCP 工具要审批", ask.name);
+        send({ type: "approval_reply", chatId, callId: ask.callId, allow: true });
+        done = await waitDone(chatId, from, "mcp-shout");
+        events = since(from, chatId);
+        check(done.status === "completed" && events.some((m) => m.type === "tool-completed" && m.result === "HELLO!"), "mcp：批准后执行");
+
+        from = await prompt(chatId, "用 mcp__echo__add 算 1+1。", { mode: "ask" });
+        done = await waitDone(chatId, from, "mcp-ask");
+        events = since(from, chatId);
+        check(done.status === "completed" && events.some((m) => m.type === "tool-completed" && m.name === "mcp__echo__add"), "mcp：ask 模式可用只读 MCP 工具");
+      } finally {
+        rmSync(mcpFile, { force: true });
+      }
+    }
   }
 
   if (want("usage")) {

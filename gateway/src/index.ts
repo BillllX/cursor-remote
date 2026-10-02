@@ -93,6 +93,7 @@ import {
 import { adapterFor } from "./native/adapters/index.ts";
 import { buildSystemPrompt } from "./native/context.ts";
 import { runNativeLoop } from "./native/loop.ts";
+import { mcpTools } from "./native/mcp.ts";
 import { deleteSession, loadSession, noteSession, resumeMessages, saveSession, sessionKey } from "./native/session.ts";
 import { toolsForMode } from "./native/tools/registry.ts";
 import { findBwrap, isReadOnlyCommand, shellTool } from "./native/tools/shell.ts";
@@ -2323,7 +2324,8 @@ function toolEscapesWorkspace(cwd: string, name: string, args: unknown): boolean
   if (!/(shell|bash|terminal|command)/i.test(name)) return false;
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
   const working = typeof record.working_directory === "string" ? record.working_directory : "";
-  if (working && !workspacePath(cwd, working)) return true;
+  // workspacePath 对工作区根本身返回 null，"." 或根的绝对路径不算越界
+  if (working && resolve(cwd, working) !== resolve(cwd) && !workspacePath(cwd, working)) return true;
   const cmd = typeof record.command === "string" ? record.command : "";
   if (!cmd) return false;
   for (const match of cmd.matchAll(/(?:^|[\s;|&])(?:\d*>{1,2}|tee(?:\s+-a)?)\s*(\/[^\s;|&]+)/g)) {
@@ -2995,9 +2997,22 @@ async function runNativeChat(
 
   const sandbox = sandboxEnabledForTenant(conn.tenant);
   const extraTools = !sandbox || findBwrap() ? [shellTool({ sandbox, masks: [stateDir()] })] : [];
-  const tools = toolsForMode(mode, extraTools);
-  const endpoint = endpointFor(ext.provider, ext.model);
   const stateDirOf = nativeStateDir(conn, slot);
+  // 从这里起登记 abort：连 MCP 期间点停止也能立即退出
+  const abort = new AbortController();
+  slot.externalAbort = abort;
+  // 沙箱租户不拉起本机进程，只用 HTTP 类 MCP 服务
+  const mcp = await mcpTools([...new Set([stateDir(), stateDirOf].filter((dir): dir is string => Boolean(dir)))], {
+    allowStdio: !sandbox,
+    signal: abort.signal,
+  });
+  if (mcp.errors.length) console.error("mcp", mcp.errors.join(" | "));
+  if (abort.signal.aborted || slot.epoch !== epoch || slot.finished) {
+    if (slot.externalAbort === abort) slot.externalAbort = null;
+    return;
+  }
+  const tools = toolsForMode(mode, [...extraTools, ...mcp.tools]);
+  const endpoint = endpointFor(ext.provider, ext.model);
   const prior = resumeMessages(stateDirOf ? loadSession(stateDirOf, slot.chatId) : null, input.history);
   const notes = prior.notes.length ? `${prior.notes.join("\n")}\n\n` : "";
   const messages: ChatMessage[] = [
@@ -3021,8 +3036,6 @@ async function runNativeChat(
       console.error("native session save", err instanceof Error ? err.message : err);
     }
   };
-  const abort = new AbortController();
-  slot.externalAbort = abort;
   let approvedAll = input.autoApprove;
   const live = () => slot.epoch === epoch && !slot.finished;
 
@@ -3101,7 +3114,7 @@ async function runNativeChat(
           // shell 默认要审批：正则认不全写操作（重定向、脚本、sed -i），只放行白名单里的只读命令
           if (spec.category === "shell") {
             if (isReadOnlyCommand(typeof args.command === "string" ? args.command : "")) return false;
-          } else if (spec.category !== "write") return false;
+          } else if (spec.category !== "write" && spec.category !== "mcp") return false;
           if (isPlane(slot.policy) && slot.approvedKeys.has(toolFingerprint(spec.name, args))) return false;
           return true;
         },

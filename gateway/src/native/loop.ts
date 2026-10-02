@@ -148,6 +148,7 @@ async function execTool(
   try {
     return await spec.run(args, {
       cwd: input.cwd,
+      callId: call.id,
       signal: input.signal,
       onOutput: input.hooks.toolOutput ? (chunk) => input.hooks.toolOutput!(call, chunk) : undefined,
     });
@@ -183,6 +184,7 @@ export async function runNativeLoop(input: NativeRunInput): Promise<NativeRunRes
         content: turn.text,
         reasoning: turn.reasoning || undefined,
         reasoningInline: turn.reasoningInline || undefined,
+        thinkingBlocks: turn.thinkingBlocks?.length ? turn.thinkingBlocks : undefined,
         toolCalls: turn.toolCalls.length ? turn.toolCalls : undefined,
       });
       if (!turn.toolCalls.length) return finish("completed");
@@ -215,7 +217,8 @@ export async function runNativeLoop(input: NativeRunInput): Promise<NativeRunRes
           result = await execTool(input, call, spec, args);
         }
         hooks.toolCompleted(call, result, spec);
-        return pushResult(call, result);
+        pushResult(call, result);
+        return result.denied ? "denied" : "ok";
       };
 
       const pushResult = (call: ToolCall, result: ToolResult): "ok" => {

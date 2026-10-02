@@ -5,6 +5,9 @@
 
 export type ImagePart = { data: string; mimeType: string };
 
+/** Anthropic 思考块：带 tool_use 的轮次必须连同签名原样回传 */
+export type ThinkingBlock = { type: "thinking"; thinking: string; signature: string } | { type: "redacted_thinking"; data: string };
+
 export type ToolCall = {
   id: string;
   name: string;
@@ -21,6 +24,7 @@ export type ChatMessage =
       reasoning?: string;
       /** 思考链来自正文里的 <think> 标签（MiniMax）。回传时要原样包回去 */
       reasoningInline?: boolean;
+      thinkingBlocks?: ThinkingBlock[];
       toolCalls?: ToolCall[];
     }
   | { role: "tool"; toolCallId: string; name: string; content: string; isError?: boolean };
@@ -59,6 +63,7 @@ export type ModelTurn = {
   text: string;
   reasoning: string;
   reasoningInline: boolean;
+  thinkingBlocks?: ThinkingBlock[];
   toolCalls: ToolCall[];
   usage?: Partial<Usage>;
   finishReason?: string;
@@ -97,6 +102,8 @@ export type ToolCategory = "read" | "write" | "shell" | "network" | "mcp" | "tas
 
 export type ToolContext = {
   cwd: string;
+  /** 这次调用的 id（task 用它把子 Agent 的事件挂到自己下面） */
+  callId?: string;
   signal: AbortSignal;
   /** 长任务（shell）的流式输出 */
   onOutput?: (chunk: { stdout?: string; stderr?: string }) => void;
@@ -108,6 +115,8 @@ export type ToolResult = {
   content: string;
   /** 本次改动的工作区相对路径 */
   changed?: string[];
+  /** 子 Agent 的写操作被用户拒绝：父级循环按拒绝收尾（还原检查点） */
+  denied?: boolean;
 };
 
 export type ToolSpec = ToolSchema & {

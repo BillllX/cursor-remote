@@ -159,8 +159,10 @@ export function slimMessages(messages: StoredSession["messages"]): { messages: S
       if (msg.role === "tool" && msg.content.length > OLD_TOOL_CHARS) {
         return { ...msg, content: `${msg.content.slice(0, OLD_TOOL_CHARS)}\n…（旧结果已截短）` };
       }
-      if (msg.role === "assistant" && msg.reasoning && msg.reasoning.length > OLD_TOOL_CHARS) {
-        return { ...msg, reasoning: msg.reasoning.slice(-OLD_TOOL_CHARS) };
+      if (msg.role === "assistant" && (msg.thinkingBlocks || (msg.reasoning && msg.reasoning.length > OLD_TOOL_CHARS))) {
+        // 旧轮次的思考块接口会自动忽略，不必带签名回传
+        const { thinkingBlocks: _drop, ...rest } = msg;
+        return { ...rest, reasoning: msg.reasoning && msg.reasoning.length > OLD_TOOL_CHARS ? msg.reasoning.slice(-OLD_TOOL_CHARS) : msg.reasoning };
       }
       return msg;
     });
