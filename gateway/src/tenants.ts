@@ -128,11 +128,13 @@ function tenantSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** BillXu 的 Agent 不进沙箱。其余租户维持沙箱。 */
+/** 管理员与 BillXu 的 Agent 不进沙箱，能调用的工具按 gateway 进程的系统权限执行。
+ *  工作目录仍是各自的租户目录。其余租户维持沙箱。 */
 export function sandboxEnabledForTenant(
-  tenant: { id: string; name: string } | null | undefined,
+  tenant: { id: string; name: string; admin?: boolean } | null | undefined,
 ): boolean {
   if (!tenant) return true;
+  if (tenant.admin) return false;
   return tenantSlug(tenant.id) !== "billxu" && tenantSlug(tenant.name) !== "billxu";
 }
 
