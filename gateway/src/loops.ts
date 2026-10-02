@@ -25,12 +25,18 @@ export type LoopJob = {
 };
 
 export type LoopHooks = {
-  /** 返回顺延原因；false 表示现在可以发 */
-  busy: (tenantId: string, chatId: string) => false | string;
-  /** error === "offline" 表示没有在线连接，本拍顺延且不占拍数 */
+  /** 返回顺延原因；false 表示现在可以发。retryMs 缺省 RETRY_MS */
+  busy: (tenantId: string, chatId: string) => false | { reason: string; retryMs?: number };
+  /**
+   * error === "offline" 表示没有在线连接，本拍顺延且不占拍数。
+   * error === "approval" 表示这一拍要改文件、没拿到批准已还原：占拍数，按正常间隔排下一拍。
+   */
   dispatch: (job: LoopJob) => Promise<{ text: string; error?: string }>;
   publish: (tenantId: string, message: ({ type: "loop_state" } & LoopState) | ({ type: "loop_tick" } & LoopTick)) => void;
 };
+
+/** 顺延重试间隔。不超过最短拍间隔 30 秒，也不至于在会话长跑时空转 */
+const RETRY_MS = 30_000;
 
 const loops = new Map<string, StoredLoop>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -171,8 +177,8 @@ async function fire(id: string, gen: number) {
   if (!row || row.gen !== gen || !hooks) return;
   const defer = hooks.busy(row.tenantId, row.chatId);
   if (defer) {
-    row.lastSummary = defer;
-    row.nextAt = Date.now() + 5000;
+    row.lastSummary = defer.reason;
+    row.nextAt = Date.now() + (defer.retryMs ?? RETRY_MS);
     row.status = "armed";
     persist();
     publishTick(row, "skipped", row.lastSummary);
@@ -201,7 +207,7 @@ async function fire(id: string, gen: number) {
   if (result.error === "offline" || result.error === "deferred") {
     current.status = "armed";
     current.lastSummary = result.error === "offline" ? "没有在线连接，本拍顺延。" : "没能马上开跑，本拍顺延。";
-    current.nextAt = Date.now() + (result.error === "offline" ? 15_000 : 5_000);
+    current.nextAt = Date.now() + (result.error === "offline" ? 15_000 : RETRY_MS);
     persist();
     publishTick(current, "skipped", current.lastSummary);
     publishState(current);
@@ -209,9 +215,14 @@ async function fire(id: string, gen: number) {
     return;
   }
   current.tick = tick;
-  const failed = Boolean(result.error);
-  current.lastSummary = failed ? result.error!.slice(0, 200) : summaryOf(result.text);
-  const done = !failed && endsDone(result.text);
+  const awaiting = result.error === "approval";
+  const failed = Boolean(result.error) && !awaiting;
+  current.lastSummary = awaiting
+    ? "这一拍要改文件，没等到批准，已还原到这一拍之前。"
+    : failed
+      ? result.error!.slice(0, 200)
+      : summaryOf(result.text);
+  const done = !failed && !awaiting && endsDone(result.text);
   const hitMax = current.maxTicks != null && current.tick >= current.maxTicks;
   if (done || hitMax) {
     current.status = "stopped";

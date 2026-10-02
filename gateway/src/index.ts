@@ -341,7 +341,11 @@ function liveSlotsOf(tenant: Tenant): Map<string, Slot> {
   return map;
 }
 
+/** 连接登出后，它发起的那一轮还会继续往这个 ws 发事件：归属不随 detachConn 清掉。 */
+const wsTenant = new WeakMap<WebSocket, string>();
+
 function bindTenant(conn: Conn, tenant: Tenant) {
+  wsTenant.set(conn.ws, tenant.id);
   conn.tenant = tenant;
   conn.slots = liveSlotsOf(tenant);
   conn.cwd = tenant.workspaceRoot;
@@ -515,9 +519,10 @@ function reply(ws: WebSocket, message: ServerMessage) {
 
 function send(ws: WebSocket, message: ServerMessage) {
   const chatId = "chatId" in message && typeof message.chatId === "string" ? message.chatId : "";
-  const slot = chatId ? slotByChat(chatId) : undefined;
+  const tenantId = wsTenant.get(ws);
+  const slot = chatId && tenantId ? slotByChat(tenantId, chatId) : undefined;
   if (slot?.transcript && isStreamEvent(message.type)) applyStreamEvent(slot.transcript, message);
-  const capturing = chatId ? capturingSlot(chatId) : undefined;
+  const capturing = slot && (slot.captureText || slot.captureError) ? slot : undefined;
   if (message.type === "text-delta") capturing?.captureText?.(message.text);
   if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
   if (message.type === "done") capturing?.captureDone?.(message.status);
@@ -527,15 +532,9 @@ function send(ws: WebSocket, message: ServerMessage) {
   if (sock) sock.send(JSON.stringify(message));
 }
 
-function slotByChat(chatId: string): Slot | undefined {
-  let found: Slot | undefined;
-  for (const map of liveByTenant.values()) {
-    const slot = map.get(chatId);
-    if (!slot) continue;
-    if (slot.transcript) return slot;
-    found = slot;
-  }
-  return found;
+/** 会话编号由客户端生成，不同租户可能撞号：只在发起连接所属租户里找。 */
+function slotByChat(tenantId: string, chatId: string): Slot | undefined {
+  return liveByTenant.get(tenantId)?.get(chatId);
 }
 
 function stopRunFlush(slot: Slot) {
@@ -684,14 +683,6 @@ function protectChatUpload(
     row.runMark = mark;
   }
   return row;
-}
-
-function capturingSlot(chatId: string): Slot | undefined {
-  for (const map of liveByTenant.values()) {
-    const slot = map.get(chatId);
-    if (slot && (slot.captureText || slot.captureError)) return slot;
-  }
-  return undefined;
 }
 
 function parseClient(raw: string): ClientMessage | null {
@@ -5547,25 +5538,30 @@ function openConn(tenantId: string): Conn | undefined {
   return undefined;
 }
 
-function loopBusy(tenantId: string, chatId: string): false | string {
+function loopBusy(tenantId: string, chatId: string): false | { reason: string; retryMs?: number } {
   const tenant = getTenant(tenantId);
   if (!tenant) return false;
   const slot = liveSlotsOf(tenant).get(chatId);
-  if (slot && (slot.pending.length > 0 || !slot.finished)) {
-    return "会话还在跑，本拍顺延。";
+  if (slot?.awaitingApproval) {
+    return { reason: "上一拍的写入还在等你批准，本拍顺延。", retryMs: 60_000 };
   }
-  if (globalRunningCount() >= maxRunning()) return "同时跑的任务已满，本拍顺延。";
+  if (slot && (slot.pending.length > 0 || !slot.finished)) {
+    return { reason: "会话还在跑，本拍顺延。" };
+  }
+  if (globalRunningCount() >= maxRunning()) return { reason: "同时跑的任务已满，本拍顺延。" };
   return false;
 }
 
 async function dispatchLoop(job: LoopJob) {
-  const conn = openConn(job.tenantId);
-  if (!conn) return { text: "", error: "offline" as const };
-  const tenant = conn.tenant;
+  const tenant = getTenant(job.tenantId);
   const previous = tenant ? liveSlotsOf(tenant).get(job.chatId) : undefined;
-  const previousOwner = previous?.owner ?? null;
+  const previousOwner = previous?.owner?.readyState === WebSocket.OPEN ? previous.owner : null;
+  const ownerConn = previousOwner ? conns.get(previousOwner) : undefined;
+  // 优先用会话当前 owner 的连接跑，免得工作区、事件去向和 owner 分属两台设备
+  const conn = ownerConn?.authed && ownerConn.tenant?.id === job.tenantId ? ownerConn : openConn(job.tenantId);
+  if (!conn) return { text: "", error: "offline" as const };
   const slot = slotOf(conn, job.chatId);
-  if (previousOwner && previousOwner.readyState === WebSocket.OPEN) slot.owner = previousOwner;
+  if (previousOwner) slot.owner = previousOwner;
   let text = "";
   let error = "";
   let doneStatus = "";
@@ -5595,7 +5591,8 @@ async function dispatchLoop(job: LoopJob) {
       job.mode ?? slot.mode ?? "agent",
       undefined,
       undefined,
-      false,
+      // Loop 无人盯着时也会到点开跑：写入一律要确认，不继承会话的自动批准
+      true,
       false,
       false,
       slot.policy,
@@ -5608,8 +5605,12 @@ async function dispatchLoop(job: LoopJob) {
     slot.captureError = prevErr;
     slot.captureDone = prevDone;
   }
+  // 审批会原地等到批准、拒绝或超时；没批准时以 cancelled 收尾并已还原。这一拍算数，不然到点会反复弹审批
+  if (doneStatus === "approval" || (doneStatus === "cancelled" && slot.runStats.approvals > 0)) {
+    return { text, error: "approval" as const };
+  }
   // 没开跑、被取消、或 epoch 失配没有 done：不当成一拍，也不留在 pending 里等 drain 再跑
-  if (outcome === "busy" || !doneStatus || doneStatus === "cancelled" || doneStatus === "approval") {
+  if (outcome === "busy" || !doneStatus || doneStatus === "cancelled") {
     return { text: "", error: "deferred" as const };
   }
   // Cursor 收尾是 finished，第三方是 completed。两条都算真正跑完的一拍

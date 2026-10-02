@@ -39,6 +39,8 @@ export type Tenant = {
   /** P9：管理员可查询全租户使用统计（admin_stats）。tenants.json 里 admin: true；
    * env 单租户模式默认 true（自己部署自己看） */
   admin: boolean;
+  /** Agent 是否进沙箱。只由部署配置决定，不看显示名 */
+  sandbox: boolean;
   workspaceRoot: string;
   stateDir: string;
   stateFile: string;
@@ -93,6 +95,8 @@ export function loadTenants(): TenantsRegistry {
             workspaceRoot: resolve(process.env.CURSOR_REMOTE_CWD || `${homedir()}/Projects`),
             stateDir: root,
             admin: true, // env 单租户模式：部署者即管理员
+            // 显示名在这里也是部署者写进环境变量的配置，不是用户能改的字段
+            sandbox: !/^(0|false|off|no)$/i.test(process.env.CURSOR_REMOTE_SANDBOX || "") && tenantSlug(displayName) !== "billxu",
           }),
         ]
       : [];
@@ -128,14 +132,11 @@ function tenantSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** 管理员与 BillXu 的 Agent 不进沙箱，能调用的工具按 gateway 进程的系统权限执行。
- *  工作目录仍是各自的租户目录。其余租户维持沙箱。 */
-export function sandboxEnabledForTenant(
-  tenant: { id: string; name: string; admin?: boolean } | null | undefined,
-): boolean {
-  if (!tenant) return true;
-  if (tenant.admin) return false;
-  return tenantSlug(tenant.id) !== "billxu" && tenantSlug(tenant.name) !== "billxu";
+/** 只有部署配置里标了不进沙箱的租户（tenants.json 里 id 为 billxu 或 sandbox: false；
+ *  env 单租户模式下 CURSOR_REMOTE_SANDBOX=0 或部署名为 BillXu）按 gateway 进程权限执行。
+ *  管理员和其余租户都进沙箱：子工作区会话读不到租户状态目录里的助理数据。 */
+export function sandboxEnabledForTenant(tenant: { sandbox: boolean } | null | undefined): boolean {
+  return tenant ? tenant.sandbox : true;
 }
 
 export function mediaSecret(): string {
@@ -208,7 +209,7 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
   const seenHash = new Set<string>();
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
-    const rec = row as { id?: unknown; name?: unknown; token?: unknown; admin?: unknown };
+    const rec = row as { id?: unknown; name?: unknown; token?: unknown; admin?: unknown; sandbox?: unknown };
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     const token = typeof rec.token === "string" ? rec.token : "";
     const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id;
@@ -229,6 +230,7 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
         workspaceRoot: resolve(dataRoot, "tenants", id, "workspace"),
         stateDir: resolve(dataRoot, "tenants", id),
         admin,
+        sandbox: !(rec.sandbox === false || rec.sandbox === "false" || id === "billxu"),
       }),
     );
   }
@@ -240,13 +242,14 @@ function makeTenant(
   id: string,
   name: string,
   token: string,
-  paths: { workspaceRoot: string; stateDir: string; admin: boolean },
+  paths: { workspaceRoot: string; stateDir: string; admin: boolean; sandbox: boolean },
 ): Tenant {
   return {
     id,
     name,
     tokenHash: hashToken(token),
     admin: paths.admin,
+    sandbox: paths.sandbox,
     workspaceRoot: resolve(paths.workspaceRoot),
     stateDir: resolve(paths.stateDir),
     stateFile: resolve(paths.stateDir, "state.json"),
