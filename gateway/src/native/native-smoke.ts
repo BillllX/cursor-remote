@@ -10,6 +10,8 @@ import { ConfineError, resolveInside } from "./confine.ts";
 import { runNativeLoop, type NativeHooks } from "./loop.ts";
 import { fsTools, globToRegExp, setRgPathForTest } from "./tools/fs.ts";
 import { toolsForMode } from "./tools/registry.ts";
+import { isReadOnlyCommand, sandboxArgv, shellEnv, shellTool } from "./tools/shell.ts";
+import { deleteSession, loadSession, normalizeSequence, noteSession, resumeMessages, saveSession, slimMessages } from "./session.ts";
 import type { ChatMessage, ModelEndpoint, ToolCall, ToolSpec } from "./types.ts";
 
 let failed = 0;
@@ -356,6 +358,116 @@ try {
   for (let i = 0; i < 3; i++) queue.push({ kind: "sse", chunks: [sseTool(0, `l${i}`, "list_dir", "{}")] });
   result = await runNativeLoop({ adapter: openaiAdapter, endpoint, messages: baseMessages, tools: toolsForMode("agent"), cwd: ws, signal: new AbortController().signal, hooks: makeHooks(), maxSteps: 3 });
   check(result.status === "max_steps" && result.steps === 3, "循环：步数上限");
+
+  // vet 拦截：不执行、不审批，原因回给模型
+  queue.push({ kind: "sse", chunks: [sseTool(0, "v1", "write_file", JSON.stringify({ path: "vetted.txt", content: "x" }))] });
+  queue.push({ kind: "sse", chunks: [sseText("好")] });
+  let vetApprovals = 0;
+  result = await runNativeLoop({
+    adapter: openaiAdapter,
+    endpoint,
+    messages: baseMessages,
+    tools: toolsForMode("agent"),
+    cwd: ws,
+    signal: new AbortController().signal,
+    hooks: makeHooks({ vet: () => "被拦了", needsApproval: () => true, approve: async () => (vetApprovals++, true) }),
+  });
+  const vetted = result.messages.find((m) => m.role === "tool");
+  check(result.status === "completed" && vetApprovals === 0 && !existsSync(join(ws, "vetted.txt")) && vetted?.role === "tool" && vetted.content === "被拦了", "循环：vet 拦截不执行也不审批");
+
+  // ---- shell ----
+  const sh = shellTool({ sandbox: false });
+  const outputs: string[] = [];
+  r = await sh.run({ command: "echo hi; echo err >&2; exit 3" }, { ...ctx, onOutput: (c) => outputs.push(c.stdout ?? c.stderr ?? "") });
+  check(!r.ok && r.content.startsWith("退出码 3") && r.content.includes("hi") && r.content.includes("err") && outputs.join("").includes("hi"), "shell：退出码、合并输出、流式回调", r.content);
+  mkdirSync(join(ws, "sub"), { recursive: true });
+  r = await sh.run({ command: "pwd", working_directory: "sub" }, ctx);
+  check(r.ok && r.content.trim().endsWith(`${resolve(ws, "sub")}`), "shell：working_directory 相对工作区", r.content);
+  r = await sh.run({ command: "pwd", working_directory: "../outside" }, ctx).catch((err: Error) => ({ ok: false, content: err.message }));
+  check(!r.ok, "shell：working_directory 不能出工作区", r.content);
+  process.env.NATIVE_SMOKE_SECRET = "sk-should-not-leak";
+  r = await sh.run({ command: "env" }, ctx);
+  check(r.ok && !r.content.includes("sk-should-not-leak") && r.content.includes("PATH="), "shell：环境变量白名单不漏密钥");
+  delete process.env.NATIVE_SMOKE_SECRET;
+  let t1 = Date.now();
+  r = await sh.run({ command: "sleep 30 & sleep 30", timeout_ms: 1000 }, ctx);
+  check(!r.ok && r.content.includes("超时") && Date.now() - t1 < 5000, "shell：超时杀掉整个进程组", `${r.content} ${Date.now() - t1}ms`);
+  r = await sh.run({ command: "head -c 200000 /dev/zero | tr '\\0' a" }, ctx);
+  check(r.ok && r.content.length < 30_000 && r.content.includes("中间省略"), "shell：长输出保留头尾", String(r.content.length));
+  const shAbort = new AbortController();
+  t1 = Date.now();
+  setTimeout(() => shAbort.abort(), 300);
+  const aborted = await sh.run({ command: "sleep 30" }, { cwd: ws, signal: shAbort.signal }).then(
+    () => false,
+    (err: Error) => err.name === "AbortError",
+  );
+  check(aborted && Date.now() - t1 < 4000, "shell：取消即终止并抛 AbortError");
+  check(toolsForMode("ask", [sh]).every((t) => t.name !== "run_shell") && toolsForMode("agent", [sh]).some((t) => t.name === "run_shell"), "shell：只在 agent 模式提供");
+  check(shellEnv({ PATH: "/bin", CURSOR_API_KEY: "x", HOME: "/h" }).CURSOR_API_KEY === undefined, "shell：shellEnv 丢弃非白名单变量");
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const marker = join(ws, "should-not-exist.txt");
+  const preResult = await sh.run({ command: `touch ${marker}` }, { cwd: ws, signal: preAborted.signal }).then(
+    () => "ran",
+    (err: Error) => err.name,
+  );
+  check(preResult === "AbortError" && !existsSync(marker), "shell：已取消的信号不再执行命令");
+  const readOnly = ["ls -la", "git status && git diff HEAD~1", "cat a.txt | grep x | wc -l", "find . -name '*.ts'", "echo hi 2>&1", "rg foo src >/dev/null"];
+  const writes = ["echo x > a.txt", "sed -i s/a/b/ f", "python3 x.py", "git commit -m x", "find . -delete", "cat $(which x)", "ls; rm -rf .", "git branch -D main", "echo `id`", "tee out.txt"];
+  check(readOnly.every(isReadOnlyCommand), "shell：只读白名单放行", readOnly.filter((c) => !isReadOnlyCommand(c)).join(" | "));
+  check(!writes.some(isReadOnlyCommand), "shell：写操作都要审批", writes.filter(isReadOnlyCommand).join(" | "));
+  const [, bwArgs] = sandboxArgv("/usr/bin/bwrap", "/var/lib/cursor-remote/workspace/a", "/var/lib/cursor-remote/workspace/a", "ls", ["/var/lib/cursor-remote", "/etc/cursor-remote"]);
+  const maskAt = bwArgs.indexOf("/var/lib/cursor-remote");
+  const bindAt = bwArgs.indexOf("--bind");
+  check(bwArgs[maskAt - 1] === "--tmpfs" && bindAt > maskAt && bwArgs[bindAt + 1] === "/var/lib/cursor-remote/workspace/a" && bwArgs.includes("--die-with-parent"), "shell：bwrap 先遮敏感目录再挂回工作区");
+
+  // ---- 会话持久化 ----
+  const stateDir = join(root, "state");
+  const turnMsgs: ChatMessage[] = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "第一问", images: [{ data: "AAAA", mimeType: "image/png" }] },
+    { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read_file", arguments: "{}" }, { id: "c2", name: "list_dir", arguments: "{}" }] },
+    { role: "tool", toolCallId: "c1", name: "read_file", content: "x".repeat(5000) },
+    { role: "user", content: "第二问" },
+    { role: "assistant", content: "答" },
+  ];
+  saveSession(stateDir, "chat-1", { model: "m", userKeys: ["第一问", "第二问"], messages: turnMsgs });
+  const stored = loadSession(stateDir, "chat-1");
+  const storedTools = stored?.messages.filter((m) => m.role === "tool") ?? [];
+  check(stored && !stored.messages.some((m) => m.role === ("system" as string)), "会话：不存 system");
+  check(stored?.messages[0].role === "user" && !("images" in stored.messages[0] && stored.messages[0].images) && stored.messages[0].content.includes("图片"), "会话：图片不落盘只留说明");
+  check(storedTools.length === 2 && storedTools.some((m) => m.role === "tool" && m.toolCallId === "c2" && m.isError), "会话：补齐没有结果的 tool_call");
+  check(storedTools.some((m) => m.role === "tool" && m.toolCallId === "c1" && m.content.length < 2100), "会话：旧轮次工具结果截短");
+  let resumed = resumeMessages(stored, []);
+  check(resumed.source === "stored" && resumed.messages.length === stored!.messages.length, "会话：客户端不带 history 时用存档");
+  resumed = resumeMessages(stored, [{ role: "user", text: "第二问" }, { role: "assistant", text: "答" }]);
+  check(resumed.source === "stored", "会话：history 是存档的尾部时用存档");
+  resumed = resumeMessages(stored, [{ role: "user", text: "别的问题" }, { role: "assistant", text: "别的答" }]);
+  check(resumed.source === "client" && resumed.messages.length === 2 && resumed.userKeys[0] === "别的问题", "会话：history 对不上时以客户端为准");
+  noteSession(stateDir, "chat-1", "已还原");
+  check(loadSession(stateDir, "chat-1")?.notes?.[0] === "已还原" && resumeMessages(loadSession(stateDir, "chat-1"), []).notes[0] === "已还原", "会话：旁白随下一轮带出");
+  saveSession(stateDir, "../evil", { model: "m", userKeys: [], messages: [{ role: "user", content: "x" }] });
+  check(!existsSync(join(root, "evil.json")) && loadSession(stateDir, "../evil") !== null, "会话：chatId 不能做路径穿越");
+  deleteSession(stateDir, "chat-1");
+  check(loadSession(stateDir, "chat-1") === null, "会话：删除");
+  const big: ChatMessage[] = [];
+  for (let i = 0; i < 30; i++) big.push({ role: "user", content: `q${i}` }, { role: "assistant", content: "y".repeat(20_000) });
+  const slim = slimMessages(big as never);
+  check(slim.droppedTurns > 0 && slim.messages[0].role === "user" && slim.messages.at(-1)?.content === "y".repeat(20_000), "会话：超量时丢最早的整轮");
+  const messy = normalizeSequence([
+    { role: "assistant", content: "开头的助手" },
+    { role: "tool", toolCallId: "orphan", name: "x", content: "孤儿" },
+    { role: "user", content: "u1" },
+    { role: "user", content: "u2" },
+    { role: "assistant", content: "a1" },
+    { role: "assistant", content: "a2" },
+    { role: "user", content: "u3" },
+  ] as never);
+  const roles = messy.map((m) => m.role).join(",");
+  check(roles === "user,assistant,user,assistant,user,assistant", "会话：整理出合法序列", roles);
+  check(messy[3].content === "a1\n\na2" && messy.at(-1)?.content.includes("中断"), "会话：合并连续助手、结尾补占位");
+  resumed = resumeMessages(null, [{ role: "assistant", text: "前导" }, { role: "user", text: "q" }]);
+  check(resumed.messages[0].role === "user" && resumed.messages.at(-1)?.role === "assistant", "会话：客户端 history 也会整理");
 } finally {
   server.close();
   rmSync(root, { recursive: true, force: true });

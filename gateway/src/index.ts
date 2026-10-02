@@ -62,6 +62,7 @@ import {
 } from "./tenants.ts";
 import { cursorBill } from "./cursorBill.ts";
 import {
+  noteModelTokens,
   noteOutput,
   noteRun,
   noteToolCall,
@@ -92,7 +93,9 @@ import {
 import { adapterFor } from "./native/adapters/index.ts";
 import { buildSystemPrompt } from "./native/context.ts";
 import { runNativeLoop } from "./native/loop.ts";
+import { deleteSession, loadSession, noteSession, resumeMessages, saveSession, sessionKey } from "./native/session.ts";
 import { toolsForMode } from "./native/tools/registry.ts";
+import { findBwrap, isReadOnlyCommand, shellTool } from "./native/tools/shell.ts";
 import type { ChatMessage } from "./native/types.ts";
 import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
 import { createPublishController } from "./publish.ts";
@@ -944,6 +947,7 @@ async function forgetChat(conn: Conn, chatId: string) {
     await disposeSlot(slot);
     conn.slots.delete(chatId);
   }
+  deleteSession(tenant.stateDir, chatId);
   tenant.disk.slots = tenant.disk.slots.filter((item) => item.chatId !== chatId);
   pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
   tenant.disk.rev += 1;
@@ -1949,6 +1953,18 @@ function restoreCheckpoint(
   }
 }
 
+function nativeStateDir(conn: Conn, slot: Slot): string | null {
+  return (conn.tenant || getTenant(slot.tenantId))?.stateDir ?? null;
+}
+
+/** 文件被还原后，自研 Agent 的会话里记一笔，否则模型下一轮会以为改动还在 */
+function noteNativeRestore(conn: Conn, slot: Slot, label?: string, paths?: string[]) {
+  const dir = nativeStateDir(conn, slot);
+  if (!dir) return;
+  const what = paths?.length ? `这些文件已撤销到改动前：${paths.slice(0, 20).join(", ")}` : `工作区已还原到检查点${label ? `「${label}」` : ""}`;
+  noteSession(dir, slot.chatId, `（系统提示：${what}。之前的改动可能已不存在，动手前先重新读取文件。）`);
+}
+
 function rollbackToLatestCheckpoint(
   ws: WebSocket,
   slot: Slot,
@@ -1962,6 +1978,7 @@ function rollbackToLatestCheckpoint(
     const result = restoreCheckpoint(cwd, wanted, slot.edited);
     slot.edited = [];
     if (!result.error) {
+      noteNativeRestore(conn, slot, wanted.label);
       send(ws, {
         type: "restored",
         chatId: slot.chatId,
@@ -2950,6 +2967,8 @@ async function runNativeChat(
   ext: { provider: ExternalProvider; model: string; full: string },
   input: {
     prompt: string;
+    /** 用户原文：存进会话、与客户端 history 对齐。prompt 是加了规则和约束的包装版，只用于本轮 */
+    userText: string;
     images: Array<{ data: string; mimeType: string }>;
     history: ChatHistoryItem[];
     epoch: number;
@@ -2974,16 +2993,34 @@ async function runNativeChat(
   }
   if (!input.autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
 
-  const tools = toolsForMode(mode);
+  const sandbox = sandboxEnabledForTenant(conn.tenant);
+  const extraTools = !sandbox || findBwrap() ? [shellTool({ sandbox, masks: [stateDir()] })] : [];
+  const tools = toolsForMode(mode, extraTools);
   const endpoint = endpointFor(ext.provider, ext.model);
+  const stateDirOf = nativeStateDir(conn, slot);
+  const prior = resumeMessages(stateDirOf ? loadSession(stateDirOf, slot.chatId) : null, input.history);
+  const notes = prior.notes.length ? `${prior.notes.join("\n")}\n\n` : "";
   const messages: ChatMessage[] = [
     { role: "system", content: buildSystemPrompt({ cwd, mode, tools, modelLabel: ext.full }) },
-    ...input.history.slice(-12).map((item) => ({
-      role: item.role,
-      content: item.text.length > 3000 ? `${item.text.slice(0, 3000)}\n…` : item.text,
-    })),
-    { role: "user", content: input.prompt, images: input.images.length ? input.images : undefined },
+    ...prior.messages,
+    { role: "user", content: notes + input.prompt, images: input.images.length ? input.images : undefined },
   ];
+  const userIndex = messages.length - 1;
+  const userKeys = [...prior.userKeys, sessionKey(input.userText)];
+  const persist = (result: { messages: ChatMessage[] }, errored = false) => {
+    if (!stateDirOf) return;
+    const saved = result.messages.slice();
+    const current = saved[userIndex];
+    if (current?.role === "user") {
+      saved[userIndex] = { ...current, content: notes + (input.userText || "（附图）") };
+    }
+    try {
+      // iOS 上行 history 时跳过出错的轮次，key 也不记，否则下一轮对不上存档
+      saveSession(stateDirOf, slot.chatId, { model: ext.full, userKeys: errored ? prior.userKeys : userKeys, messages: saved });
+    } catch (err) {
+      console.error("native session save", err instanceof Error ? err.message : err);
+    }
+  };
   const abort = new AbortController();
   slot.externalAbort = abort;
   let approvedAll = input.autoApprove;
@@ -3015,7 +3052,7 @@ async function runNativeChat(
           slot.runStats.toolStarts += 1;
           if (spec?.category === "write") rememberEdit(slot, call.name, args, cwd);
         },
-        toolCompleted: (call, result) => {
+        toolCompleted: (call, result, spec) => {
           if (!live()) return;
           if (slot.openTools.delete(call.id)) noteToolCall(slot.tenantId);
           const preview =
@@ -3029,10 +3066,42 @@ async function runNativeChat(
             result: preview,
           });
           if (result.changed?.length) pushWorkspace(ws, slot, conn, result.changed);
+          else if (spec?.category === "shell") pushWorkspace(ws, slot, conn);
+        },
+        toolOutput: (call, chunk) => {
+          // 客户端收不过来时丢弃实时输出，最终结果里仍有头尾
+          if (!live() || ws.bufferedAmount > 4 * 1024 * 1024) return;
+          const stream = chunk.stderr != null ? "stderr" : "stdout";
+          send(ws, { type: "tool-output", chatId: slot.chatId, callId: call.id, stream, chunk: chunk.stderr ?? chunk.stdout ?? "" });
+        },
+        turn: (turn) => {
+          const used = turn.usage;
+          if (used) noteModelTokens(slot.tenantId, used.inputTokens ?? 0, used.outputTokens ?? 0, used.cacheReadTokens ?? 0);
+        },
+        retrying: (attempt, waitMs, reason) => {
+          if (!live()) return;
+          send(ws, {
+            type: "status",
+            chatId: slot.chatId,
+            status: "RUNNING",
+            message: `模型接口暂时不可用（${reason.slice(0, 80)}），${Math.ceil(waitMs / 1000)} 秒后第 ${attempt} 次重试`,
+          });
+        },
+        vet: (spec, args) => {
+          if (spec.category !== "shell") return null;
+          if (toolEscapesWorkspace(cwd, spec.name, args)) return "命令的工作目录或输出重定向超出了当前工作区，已拦截。";
+          if (shellPublishes(spec.name, args)) {
+            const root = conn.tenant?.workspaceRoot;
+            if (!root || !isUserWorkspace(cwd, root)) return "对外网站只能在 USER 工作区里创建，这个会话不能执行 jiebo-publish。";
+          }
+          return null;
         },
         needsApproval: (spec, args) => {
           if (mode !== "agent" || approvedAll || !input.confirmWrites) return false;
-          if (spec.category !== "write" && spec.category !== "shell") return false;
+          // shell 默认要审批：正则认不全写操作（重定向、脚本、sed -i），只放行白名单里的只读命令
+          if (spec.category === "shell") {
+            if (isReadOnlyCommand(typeof args.command === "string" ? args.command : "")) return false;
+          } else if (spec.category !== "write") return false;
           if (isPlane(slot.policy) && slot.approvedKeys.has(toolFingerprint(spec.name, args))) return false;
           return true;
         },
@@ -3054,6 +3123,12 @@ async function runNativeChat(
       },
     });
 
+    // 用户点停止时 slot 已 finished，但同一 epoch 的半截对话仍要存；denied 的还原提示由 rollbackToLatestCheckpoint 随后追加
+    // 出错前已经执行过的工具调用也要存，否则下一轮模型不知道文件已被改过
+    if (slot.epoch === epoch) {
+      if (result.status !== "error") persist(result);
+      else if (result.messages.length > userIndex + 1) persist(result, true);
+    }
     if (!live()) return;
     if (result.status === "denied") {
       rollbackToLatestCheckpoint(ws, slot, conn, true);
@@ -3253,6 +3328,8 @@ async function handlePrompt(
     await cancelRun(slot.run);
     slot.epoch += 1;
     await disposeSlot(slot);
+    const nativeDir = nativeStateDir(conn, slot);
+    if (nativeDir) deleteSession(nativeDir, slot.chatId);
     slot.agentId = null;
     slot.run = null;
     slot.finished = true;
@@ -3354,6 +3431,7 @@ async function handlePrompt(
   if (external && external.provider.tools) {
     await runNativeChat(ws, conn, slot, external, {
       prompt,
+      userText: text.trim(),
       images: safeImages,
       history: safeHistory,
       epoch: slot.epoch,
@@ -4655,6 +4733,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             inChars: usage.inChars,
             outChars: usage.outChars,
             estTokens: Math.round((usage.inChars + usage.outChars) / 4),
+            modelInTokens: usage.modelInTokens,
+            modelOutTokens: usage.modelOutTokens,
+            modelCacheTokens: usage.modelCacheTokens,
             firstSeenAt: usage.firstSeenAt,
             lastActiveAt: usage.lastActiveAt,
           };
@@ -5100,6 +5181,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         await cancelRun(slot.run);
         finishRun(ws, slot, "cancelled");
         await disposeSlot(slot);
+        deleteSession(tenant.stateDir, slot.chatId);
         slot.agentId = null;
         slot.edited = [];
         slot.checkpoints = [];
@@ -5180,7 +5262,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
 
       if (message.type === "revert_file") {
         const slot = slotOf(conn, message.chatId);
-        if (slot.run) {
+        if (slot.run || slot.externalAbort) {
           send(ws, {
             type: "error",
             chatId: slot.chatId,
@@ -5202,13 +5284,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             return !path || !gone.has(path);
           });
           pushWorkspace(ws, slot, conn, result.paths);
+          noteNativeRestore(conn, slot, undefined, result.paths);
         }
         return;
       }
 
       if (message.type === "revert_hunk") {
         const slot = slotOf(conn, message.chatId);
-        if (slot.run) {
+        if (slot.run || slot.externalAbort) {
           send(ws, {
             type: "error",
             chatId: slot.chatId,
@@ -5223,13 +5306,16 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           paths: result.error ? [] : [result.path],
           error: result.error,
         });
-        if (!result.error) pushWorkspace(ws, slot, conn, [result.path]);
+        if (!result.error) {
+          pushWorkspace(ws, slot, conn, [result.path]);
+          noteNativeRestore(conn, slot, undefined, [result.path]);
+        }
         return;
       }
 
       if (message.type === "undo" || message.type === "restore") {
         const slot = slotOf(conn, message.chatId);
-        if (slot.run) {
+        if (slot.run || slot.externalAbort) {
           send(ws, {
             type: "error",
             chatId: slot.chatId,
@@ -5254,6 +5340,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             const preview = slot.edited.slice();
             slot.edited = [];
             pushWorkspace(ws, slot, conn, preview);
+            noteNativeRestore(conn, slot, wanted.label);
           }
           persistConn(conn);
           return;
@@ -5277,6 +5364,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         if (result.paths.length) {
           slot.edited = [];
           pushWorkspace(ws, slot, conn, result.paths);
+          noteNativeRestore(conn, slot, undefined, result.paths);
         }
         return;
       }

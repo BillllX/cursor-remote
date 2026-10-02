@@ -4637,6 +4637,15 @@ export default function ChatApp() {
                       <span>{fmtCount(row.inChars)} / {fmtCount(row.outChars)} 字符</span>
                     </div>
                     <div className="admin-row"><span>估算 token</span><span>{fmtTokens(row.estTokens)}</span></div>
+                    {row.modelInTokens || row.modelOutTokens ? (
+                      <div className="admin-row">
+                        <span>第三方模型 token（实计）</span>
+                        <span>
+                          入 {fmtTokens(row.modelInTokens ?? 0)} / 出 {fmtTokens(row.modelOutTokens ?? 0)}
+                          {row.modelCacheTokens ? ` / 缓存 ${fmtTokens(row.modelCacheTokens)}` : ""}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="admin-row"><span>最后活跃</span><span>{fmtRelative(row.lastActiveAt)}</span></div>
                   </div>
                 ))}

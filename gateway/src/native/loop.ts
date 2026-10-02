@@ -24,6 +24,8 @@ export type NativeHooks = {
   /** 返回 false 表示用户拒绝，循环以 denied 结束 */
   approve: (call: ToolCall, args: Record<string, unknown>, spec: ToolSpec) => Promise<boolean>;
   needsApproval: (spec: ToolSpec, args: Record<string, unknown>) => boolean;
+  /** 执行前的硬性拦截（越界、禁用命令）：返回原因则不执行，原因作为错误结果回给模型 */
+  vet?: (spec: ToolSpec, args: Record<string, unknown>) => string | null;
   /** 一次模型调用结束（含 usage），计量用 */
   turn?: (turn: ModelTurn, step: number) => void;
   /** 退避重试前的提示 */
@@ -196,7 +198,9 @@ export async function runNativeLoop(input: NativeRunInput): Promise<NativeRunRes
         const args = parsed.ok ? parsed.args : {};
         hooks.toolStarted(call, args, spec);
         let result: ToolResult;
+        const veto = parsed.ok && spec ? hooks.vet?.(spec, args) : null;
         if (!parsed.ok) result = { ok: false, content: parsed.error };
+        else if (veto) result = { ok: false, content: veto };
         else {
           if (spec && hooks.needsApproval(spec, args)) {
             const allowed = await hooks.approve(call, args, spec);
@@ -228,7 +232,7 @@ export async function runNativeLoop(input: NativeRunInput): Promise<NativeRunRes
       const allReads =
         input.parallelReads !== false &&
         prepared.length > 1 &&
-        prepared.every((item) => item.spec && item.parsed.ok && (item.spec.category === "read" || item.spec.category === "network") && !hooks.needsApproval(item.spec, item.parsed.args));
+        prepared.every((item) => item.spec && item.parsed.ok && (item.spec.category === "read" || item.spec.category === "network") && !hooks.needsApproval(item.spec, item.parsed.args) && !hooks.vet?.(item.spec, item.parsed.args));
       if (allReads) {
         prepared.forEach((item) => hooks.toolStarted(item.call, item.parsed.ok ? item.parsed.args : {}, item.spec));
         const results = await Promise.all(prepared.map((item) => execTool(input, item.call, item.spec, item.parsed.ok ? item.parsed.args : {})));

@@ -27,6 +27,10 @@ export type UsageRec = {
   runMs: number;
   inChars: number;
   outChars: number;
+  /** 第三方模型（自研 Agent）接口返回的真实 token，与上面的字符估算分开记 */
+  modelInTokens: number;
+  modelOutTokens: number;
+  modelCacheTokens: number;
   firstSeenAt: number;
   lastActiveAt: number;
 };
@@ -53,6 +57,9 @@ function blankRec(now: number): UsageRec {
     runMs: 0,
     inChars: 0,
     outChars: 0,
+    modelInTokens: 0,
+    modelOutTokens: 0,
+    modelCacheTokens: 0,
     firstSeenAt: now,
     lastActiveAt: now,
   };
@@ -81,6 +88,9 @@ function load(): void {
         runMs: num(row.runMs),
         inChars: num(row.inChars),
         outChars: num(row.outChars),
+        modelInTokens: num(row.modelInTokens),
+        modelOutTokens: num(row.modelOutTokens),
+        modelCacheTokens: num(row.modelCacheTokens),
         firstSeenAt: num(row.firstSeenAt) || now,
         lastActiveAt: num(row.lastActiveAt) || now,
       });
@@ -138,6 +148,14 @@ export function noteRun(tenantId: string, durationMs?: number): void {
   if (typeof durationMs === "number" && Number.isFinite(durationMs) && durationMs > 0) {
     rec.runMs += durationMs;
   }
+  scheduleSave();
+}
+
+export function noteModelTokens(tenantId: string, input: number, output: number, cacheRead: number): void {
+  const rec = usageRec(tenantId);
+  rec.modelInTokens += num(input);
+  rec.modelOutTokens += num(output);
+  rec.modelCacheTokens += num(cacheRead);
   scheduleSave();
 }
 

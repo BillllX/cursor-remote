@@ -372,6 +372,10 @@ export type AdminTenantStats = {
   outChars: number;
   /** (inChars + outChars) / 4 的估算 token 量 */
   estTokens: number;
+  /** 第三方模型（自研 Agent）接口返回的真实 token：输入 / 输出 / 缓存命中 */
+  modelInTokens?: number;
+  modelOutTokens?: number;
+  modelCacheTokens?: number;
   firstSeenAt: number;
   lastActiveAt: number;
 };

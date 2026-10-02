@@ -3,7 +3,7 @@
 // 用法（在网关所在机器上）：
 //   set -a; . /etc/cursor-remote/gateway.env; set +a
 //   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/native-e2e.mjs [场景...]
-// 场景：create undo restore approve ask cancel（缺省全跑）
+// 场景：create undo restore approve ask cancel shell memory usage（缺省全跑）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
@@ -200,6 +200,61 @@ try {
     check(after.length === 0, "cancel：取消后不再有输出", String(after.length));
     const written = Array.from({ length: 9 }, (_, i) => existsSync(join(cwd, `a${i + 1}.txt`))).filter(Boolean).length;
     check(written < 9, "cancel：没有把九个文件写完", String(written));
+  }
+
+  if (want("shell")) {
+    const { chatId, cwd } = await openChat("shell");
+    chats.push(chatId);
+    root = join(cwd, "..");
+    const from = await prompt(chatId, "用 run_shell 执行命令 `echo $((6*7)) > answer.txt && cat answer.txt`，然后告诉我输出是多少。");
+    const done = await waitDone(chatId, from, "shell");
+    const events = since(from, chatId);
+    const s = summary(events);
+    const shellDone = events.find((m) => m.type === "tool-completed" && m.name === "run_shell");
+    check(done.status === "completed", "shell：本轮完成", `${done.status} ${s.errors.join(" | ")}`);
+    check(s.tools.includes("run_shell"), "shell：调用了 run_shell", s.tools.join(","));
+    check(events.some((m) => m.type === "tool-output" && m.chatId === chatId && /42/.test(m.chunk || "")), "shell：流式推送了命令输出");
+    check(shellDone && /退出码 0/.test(shellDone.result || ""), "shell：结果带退出码", shellDone?.result?.slice(0, 120));
+    check(existsSync(join(cwd, "answer.txt")) && readFileSync(join(cwd, "answer.txt"), "utf8").trim() === "42", "shell：命令在工作区里执行");
+    check(s.text.includes("42"), "shell：回答里给出 42", s.text.slice(0, 160));
+
+    const from2 = await prompt(chatId, "用 run_shell 执行 `cat /etc/hostname > /tmp/jiebo-e2e-escape.txt`。如果被拦截，就直接告诉我被拦截了，不要换别的办法。");
+    const done2 = await waitDone(chatId, from2, "shell-escape");
+    const blocked = since(from2, chatId).find((m) => m.type === "tool-completed" && m.name === "run_shell");
+    check(done2.status === "completed" && (!blocked || /超出了当前工作区/.test(blocked.result || "")), "shell：重定向到工作区外被拦截", blocked?.result);
+    check(!existsSync("/tmp/jiebo-e2e-escape.txt"), "shell：工作区外没有落盘");
+
+    const from3 = await prompt(chatId, "先用 run_shell 执行 `ls`，再用 run_shell 执行 `echo ok > s.txt`。两条命令分两次调用。", { confirmWrites: true });
+    const { msg: ask } = await waitFor((m) => m.type === "approval" && m.chatId === chatId, "shell approval", RUN_TIMEOUT, from3);
+    check(ask.name === "run_shell" && /s\.txt/.test(JSON.stringify(ask.args || "")), "shell：写文件的命令要审批", JSON.stringify(ask.args));
+    const lsRan = since(from3, chatId).some((m) => m.type === "tool-completed" && m.name === "run_shell");
+    check(lsRan, "shell：只读命令不审批直接执行");
+    send({ type: "approval_reply", chatId, callId: ask.callId, allow: true });
+    const done3 = await waitDone(chatId, from3, "shell-approve");
+    check(done3.status === "completed" && existsSync(join(cwd, "s.txt")), "shell：批准后执行", done3.status);
+  }
+
+  if (want("memory")) {
+    const { chatId, cwd } = await openChat("memory");
+    chats.push(chatId);
+    root = join(cwd, "..");
+    let from = await prompt(chatId, "先用 list_dir 看一下当前目录，然后记住：本次测试的暗号是「蓝鲸-7731」。只回复「记住了」。");
+    let done = await waitDone(chatId, from, "memory-1");
+    check(done.status === "completed", "memory：第一轮完成");
+    // 网页端不带 history：网关必须从存档接上
+    from = await prompt(chatId, "暗号是什么？上一轮你调用了哪个工具？");
+    done = await waitDone(chatId, from, "memory-2");
+    const s = summary(since(from, chatId));
+    check(done.status === "completed" && s.text.includes("7731"), "memory：不带 history 也记得上一轮", s.text.slice(0, 160));
+    check(/list_dir/.test(s.text), "memory：记得上一轮的工具调用", s.text.slice(0, 160));
+  }
+
+  if (want("usage")) {
+    const from = inbox.length;
+    send({ type: "admin_stats" });
+    const { msg } = await waitFor((m) => m.type === "admin_stats", "admin_stats", 20_000, from);
+    const total = (msg.tenants || []).reduce((sum, row) => sum + (row.modelInTokens || 0) + (row.modelOutTokens || 0), 0);
+    check(total > 0, "usage：记录了第三方模型的真实 token", JSON.stringify((msg.tenants || []).map((r) => [r.name, r.modelInTokens, r.modelOutTokens])));
   }
 } catch (err) {
   failed += 1;

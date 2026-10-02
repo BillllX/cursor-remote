@@ -342,6 +342,9 @@ export type AdminTenantStats = {
   inChars: number;
   outChars: number;
   estTokens: number;
+  modelInTokens?: number;
+  modelOutTokens?: number;
+  modelCacheTokens?: number;
   firstSeenAt: number;
   lastActiveAt: number;
 };
