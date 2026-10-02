@@ -27,6 +27,7 @@ try {
   const runs = await import("./assistant/runs.ts");
   const memory = await import("./assistant/memory.ts");
   const chatIndex = await import("./assistant/chatIndex.ts");
+  const retrieval = await import("./assistant/retrieval.ts");
   const name = await import("./assistant/name.ts");
   const cron = await import("./assistant/cron.ts");
   const schedules = await import("./assistant/schedules.ts");
@@ -145,6 +146,107 @@ try {
   memory.writeSettings(ref, { paused: false });
   const edited = memory.editMemory(ref, ev.ok ? ev.value.id : "", 0, { text: "x" });
   check(!edited.ok, "记忆：记忆页编辑带 rev，版本不对不覆盖");
+
+  /* ── 检索增强 ── */
+  let seed = 7;
+  const rand = (n: number) => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    return (seed >>> 8) % n;
+  };
+  const pick = <T,>(list: T[]) => list[rand(list.length)];
+  const cities = ["北京", "上海", "深圳", "杭州", "成都", "广州", "南京", "西安"];
+  const people = ["小王", "老李", "张姐", "Alice", "Bob", "陈总"];
+  const templates: Array<[string, () => string]> = [
+    ["工作", () => `用户负责${pick(["支付", "搜索", "推荐", "网关", "报表"])}项目，周${pick(["一", "三", "五"])}开例会`],
+    ["工作", () => `用户的同事${pick(people)}擅长${pick(["Go", "Rust", "前端", "运维", "设计"])}`],
+    ["工作", () => `用户下周去${pick(cities)}开会`],
+    ["出行", () => `2026-${String(1 + rand(9)).padStart(2, "0")}-${String(1 + rand(28)).padStart(2, "0")} 去${pick(cities)}出差`],
+    ["出行", () => `用户喜欢坐${pick(["高铁", "飞机", "夜车"])}去${pick(cities)}`],
+    ["饮食", () => `用户喜欢吃${pick(["火锅", "烧烤", "寿司", "面条", "饺子"])}`],
+    ["饮食", () => `用户早上爱喝${pick(["咖啡", "豆浆", "绿茶"])}`],
+    ["购物", () => `用户买了一条${pick(["牛仔裤", "围巾", "运动鞋"])}`],
+    ["爱好", () => `用户周末${pick(["爬山", "打羽毛球", "看展", "弹吉他"])}`],
+    ["家庭", () => `用户的${pick(["妈妈", "哥哥", "女儿"])}住在${pick(cities)}`],
+    ["阅读", () => `用户在读《${pick(["三体", "百年孤独", "人类简史"])}》`],
+    ["宠物", () => `用户养了一只${pick(["猫", "狗", "兔"])}，叫${pick(["豆豆", "团团", "可乐"])}`],
+  ];
+  const synthEntries = (count: number) =>
+    Array.from({ length: count }, (_, i) => {
+      const [topic, make] = templates[rand(templates.length)];
+      const at = new Date(Date.now() - rand(400) * 86_400_000).toISOString();
+      return {
+        id: `m_s${i}`,
+        rev: 1,
+        topic,
+        kind: "事实",
+        text: `${make()}（${i}）`,
+        basis: rand(2) ? "user_said" : "inferred",
+        confidence: 1,
+        createdAt: at,
+        updatedAt: at,
+        invalidAt: null,
+      };
+    });
+  const realEntries = [
+    { id: "m_diet", topic: "饮食", text: "用户吃素，不吃牛肉" },
+    { id: "m_k8s", topic: "工作", text: "Kubernetes 集群在上海" },
+    { id: "m_trip", topic: "出行", text: "2026-10-15 去杭州出差" },
+  ].map((row) => ({ ...row, rev: 1, kind: "事实", basis: "user_said", confidence: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), invalidAt: null }));
+  const rref = { id: "t5", stateDir: resolve(dir, "t5") };
+  writeJson(assistantPath(rref, "memory", "entries.json"), { rev: 1, entries: [...synthEntries(1000), ...realEntries, ...synthEntries(1000)] });
+  const top = (query: string, n = 3) => memory.searchMemory(rref, query).slice(0, n).map((entry) => entry.id);
+  check(top("我能吃牛排吗").includes("m_diet"), "检索：2000 条里“我能吃牛排吗”命中饮食条目（前 3）");
+  check(top("素食").includes("m_diet"), "检索：2000 条里“素食”命中饮食条目（前 3）");
+  check(top("kubernets 上海").includes("m_k8s"), "检索：拼错的 kubernets 也能找到 Kubernetes 条目（前 3）");
+  check(top("10-15 出差")[0] === "m_trip", "检索：日期实体 10-15 在一堆出差里排第一");
+  check(top("10月15号去哪")[0] === "m_trip", "检索：中文日期写法归一后命中");
+  check(memory.searchMemory(rref, "量子力学").length === 0, "检索：无关查询返回空");
+  check(memory.searchMemory(rref, "火锅", { limit: 5 }).length === 5, "检索：limit 生效");
+
+  const tref = { id: "t6", stateDir: resolve(dir, "t6") };
+  writeJson(assistantPath(tref, "memory", "entries.json"), { rev: 1, entries: [...synthEntries(2500), ...realEntries, ...synthEntries(2497)] });
+  let t = performance.now();
+  const coldHits = memory.searchMemory(tref, "我能吃牛排吗");
+  const memCold = performance.now() - t;
+  const warm: number[] = [];
+  for (const query of ["kubernets 上海", "10-15 出差", "素食", "量子力学"]) {
+    t = performance.now();
+    memory.searchMemory(tref, query);
+    warm.push(performance.now() - t);
+  }
+  const retrievalIndex = retrieval.buildIndex(memory.listMemory(tref).entries.map((entry) => ({ topic: entry.topic, text: entry.text })));
+  const pure: number[] = [];
+  for (const query of ["kubernets 上海", "10-15 出差", "素食", "我能吃牛排吗"]) {
+    t = performance.now();
+    retrieval.retrieve(retrievalIndex, query);
+    pure.push(performance.now() - t);
+  }
+  const ms = (list: number[]) => list.map((value) => value.toFixed(1)).join("/");
+  console.log(`      5000 条记忆：首次（含读写文件、建索引）${memCold.toFixed(1)}ms；之后 searchMemory ${ms(warm)}ms；纯检索 ${ms(pure)}ms`);
+  check(coldHits.slice(0, 3).some((entry) => entry.id === "m_diet") && memCold < 500, "检索：5000 条记忆首次检索（含建索引）< 500ms");
+  check(Math.max(...warm) < 200 && Math.max(...pure) < 200, "检索：5000 条记忆检索 < 200ms");
+  const lastUsed = memory.listMemory(tref).entries.find((entry) => entry.id === "m_k8s")?.lastUsedAt;
+  check(Boolean(lastUsed), "检索：命中条目仍更新 lastUsedAt");
+
+  const cref = { id: "t7", stateDir: resolve(dir, "t7") };
+  for (let i = 0; i < 3; i += 1) chatIndex.indexTurn(cref, { chatId: `c${i}`, turn: 0, title: "聊天", user: `随便聊聊 ${i}`, assistant: "好的" });
+  const turns = readFileSync(assistantPath(cref, "chat-index", "index.json"), "utf8");
+  const base5000 = JSON.parse(turns) as { turns: Array<Record<string, unknown>> };
+  for (let i = 0; i < 5000; i += 1) {
+    const [title, make] = templates[rand(templates.length)];
+    base5000.turns.push({ chatId: `cx${i % 300}`, turn: i, title, user: `${make()}，你帮我记一下。${make()}`, assistant: `好的，记下了：${make()}。还有别的吗？`.repeat(4), at: Date.now() - i * 60_000 });
+  }
+  base5000.turns.push({ chatId: "cz", turn: 0, title: "集群", user: "我们的 Kubernetes 集群在上海机房", assistant: "收到", at: Date.now() });
+  writeJson(assistantPath(cref, "chat-index", "index.json"), base5000);
+  t = performance.now();
+  const chatHits = chatIndex.searchChats(cref, "kubernets 上海");
+  const chatCold = performance.now() - t;
+  t = performance.now();
+  chatIndex.searchChats(cref, "10-15 出差");
+  const chatWarm = performance.now() - t;
+  console.log(`      5000 轮会话：首次（含建索引）${chatCold.toFixed(1)}ms，缓存后 ${chatWarm.toFixed(1)}ms`);
+  check(chatHits[0]?.chatId === "cz" && chatHits[0].snippet.includes("上海"), "检索：会话搜索拼错也能命中，片段带关键词");
+  check(chatIndex.searchChats(cref, "量子力学").length === 0, "检索：会话搜索无关查询返回空");
 
   /* ── 名字 ── */
   check(name.parseAssistantName("---\nname: 阿福\n---\n正文") === "阿福", "名字：front matter 的 name");
@@ -298,6 +400,8 @@ try {
   check(idle.length === 1, "整理者：空闲后处理");
   const prompt = jobs.integratorPrompt(iref, idle);
   check(prompt.includes("我下周三去杭州") && !prompt.includes("const a = 1") && !prompt.includes("好的"), "整理者：只看用户亲手输入，代码块当外部材料，不看助理回答");
+  const hz = chatIndex.searchChats(iref, "杭州");
+  check(hz.length === 1 && hz[0].chatId === "c9" && hz[0].turn === 0 && hz[0].snippet.includes("杭州"), "会话搜索：命中轮次，返回片段");
   let ran = 0;
   await jobs.runIntegrator(iref, async () => {
     ran += 1;
@@ -305,6 +409,24 @@ try {
   }, Date.now() + 31 * 60_000);
   check(ran === 1 && jobs.pendingChats(iref, Date.now() + 31 * 60_000).length === 0, "整理者：处理过的轮次不再处理");
   check(existsSync(assistantPath(iref, "integrator.json")), "整理者：进度落盘");
+
+  /* ── 委派挂起审批 ── */
+  const approvals = await import("./assistant/approvals.ts");
+  const delegations = await import("./assistant/delegations.ts");
+  const aref = { id: "t5", stateDir: resolve(dir, "t5") };
+  const d = delegations.createDelegation(aref, { parentChatId: "p1", childChatId: "c1", workspace: "ws", title: "改 README", task: "改", mode: "foreground" });
+  const a1 = approvals.addApproval(aref, { chatId: "c1", callId: "k1", tool: "edit", summary: approvals.summarizeArgs({ path: "README.md", content: "x".repeat(5000) }), delegationId: d.id, parentChatId: "p1" }, 1000);
+  check(a1.summary === "README.md" && a1.expiresAt === 1000 + 24 * 3_600_000, "委派审批：落盘摘要只有路径，24 小时到期");
+  const a2 = approvals.addApproval(aref, { chatId: "c1", callId: "k2", tool: "shell", summary: "npm test", delegationId: d.id }, 2000);
+  check(approvals.listApprovals(aref).length === 1 && approvals.listApprovals(aref)[0].id === a2.id, "委派审批：同一子会话只留最新一项");
+  check(approvals.findApproval(aref, "c1", "k2")?.tool === "shell" && !approvals.findApproval(aref, "c1", "k1"), "委派审批：按会话和调用查找");
+  check(approvals.settleApproval(aref, "c1", "zz").length === 0 && approvals.listApprovals(aref).length === 1, "委派审批：callId 不符不摘");
+  check(approvals.settleApproval(aref, "c1").length === 1 && approvals.listApprovals(aref).length === 0, "委派审批：作答后摘掉");
+  approvals.addApproval(aref, { chatId: "c2", callId: "k3", tool: "edit", summary: "", delegationId: d.id });
+  check(approvals.recoverApprovals(aref).length === 1 && approvals.listApprovals(aref).length === 0, "委派审批：重启时残留全部作废");
+  delegations.updateDelegation(aref, d.id, { status: "awaiting" });
+  const stale = delegations.recoverDelegations(aref);
+  check(stale.length === 1 && delegations.getDelegation(aref, d.id)?.status === "failed", "委派：重启时待批的委派记为失败");
 } catch (err) {
   failed += 1;
   console.log(`FAIL  冒烟异常：${err instanceof Error ? err.stack : String(err)}`);

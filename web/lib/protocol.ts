@@ -34,6 +34,32 @@ export type AssistantMemoryEntry = {
   supplements?: string[];
 };
 
+export type AssistantDelegation = {
+  id: string;
+  parentChatId?: string;
+  childChatId: string;
+  workspace: string;
+  title: string;
+  mode: "foreground" | "background";
+  status: "running" | "awaiting" | "done" | "failed";
+  createdAt: number;
+  endedAt?: number;
+  result?: string;
+};
+
+export type AssistantApproval = {
+  id: string;
+  chatId: string;
+  callId: string;
+  tool: string;
+  /** 参数摘要，不含文件全文 */
+  summary: string;
+  delegationId?: string;
+  parentChatId?: string;
+  createdAt: number;
+  expiresAt: number;
+};
+
 export type AssistantState = {
   name: string;
   background: { model: string; ok: boolean; reason?: string };
@@ -53,18 +79,9 @@ export type AssistantState = {
     failCount: number;
     pausedReason?: string;
   }>;
-  delegations: Array<{
-    id: string;
-    parentChatId?: string;
-    childChatId: string;
-    workspace: string;
-    title: string;
-    mode: "foreground" | "background";
-    status: "running" | "awaiting" | "done" | "failed";
-    createdAt: number;
-    endedAt?: number;
-    result?: string;
-  }>;
+  delegations: AssistantDelegation[];
+  /** 委派子会话停在审批上的工具调用；任一在线设备、父会话或收件箱都能作答 */
+  approvals: AssistantApproval[];
   runs: Array<{ runId: string; origin: string; label: string; status: string; startedAt: number; endedAt?: number; summary?: string; error?: string }>;
   brief?: { day: string; text: string } | null;
   memory?: {
@@ -99,7 +116,9 @@ export type AssistantOp =
   | "memory_export"
   | "push_subscribe"
   | "push_unsubscribe"
-  | "push_test";
+  | "push_test"
+  /** args: { chatId, callId, allow }；作答委派子会话的挂起审批 */
+  | "approval_answer";
 
 /** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
 export type PolicyId = "baseline" | "plane";
@@ -421,6 +440,8 @@ export type ServerMessage =
   | { type: "assistant_state"; state: AssistantState }
   | { type: "assistant_result"; reqId?: string; op: AssistantOp; ok: boolean; error?: string; data?: unknown }
   | { type: "inbox_item"; item: AssistantInboxItem }
+  /** 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带 */
+  | { type: "delegation_state"; delegation: AssistantDelegation; approval?: AssistantApproval }
   | { type: "memory_written"; chatId?: string; entry: AssistantMemoryEntry }
   | { type: "pong" };
 

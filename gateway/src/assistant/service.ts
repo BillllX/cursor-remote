@@ -5,7 +5,8 @@ import type { AssistantOp, AssistantState, ServerMessage } from "../../../shared
 import { BACKGROUND_MODEL, modelAvailable, runBackground } from "./background.ts";
 import { dropChatFromIndex, indexTurn, scrubChatIndex } from "./chatIndex.ts";
 import { describeLocal } from "./cron.ts";
-import { listDelegations, recoverDelegations } from "./delegations.ts";
+import { listApprovals, recoverApprovals, type PendingApproval } from "./approvals.ts";
+import { listDelegations, recoverDelegations, type Delegation } from "./delegations.ts";
 import { executeSchedule, latestBrief, runEpisodes, runIntegrator, runMaintenance, type JobRunner } from "./jobs.ts";
 import { listInbox, markInboxRead, onInbox, postInbox, PUSH_KINDS } from "./inbox.ts";
 import {
@@ -185,6 +186,7 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
     todos: listTodos(ref, { includeDone: true }),
     schedules: listSchedules(ref),
     delegations: listDelegations(ref, 20),
+    approvals: listApprovals(ref),
     runs: listRuns(ref, 20),
     brief: latestBrief(ref, day),
   };
@@ -210,6 +212,12 @@ export async function publishState(tenant: AssistantTenant) {
   if (!deps) return;
   const state = await buildState(tenant, { memory: memoryWatchers.has(tenant.id) });
   deps.publish(tenant.id, { type: "assistant_state", state });
+}
+
+/** 委派状态变化：先发单条 delegation_state，再推整份状态让列表和角标对齐 */
+export function publishDelegation(tenant: AssistantTenant, delegation: Delegation, approval?: PendingApproval) {
+  deps?.publish(tenant.id, { type: "delegation_state", delegation, approval });
+  void publishState(tenant);
 }
 
 /** 客户端打开过记忆页后，状态推送带上记忆全量 */
@@ -392,6 +400,8 @@ export function startAssistant(next: AssistantDeps) {
     if (!existsSync(assistantDir(ref))) continue;
     recoverRuns(ref);
     recoverSchedules(ref);
+    // 挂起审批跟着运行一起丢了；对应的委派下面会记为中断并进收件箱
+    recoverApprovals(ref);
     for (const item of recoverDelegations(ref)) {
       postInbox(ref, {
         kind: "delegation",

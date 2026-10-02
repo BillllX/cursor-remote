@@ -102,7 +102,8 @@ import { taskTool } from "./native/tools/task.ts";
 import type { ChatMessage, ToolSpec } from "./native/types.ts";
 import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
 import { bindBackground } from "./assistant/background.ts";
-import { activeDelegationFor, createDelegation, updateDelegation } from "./assistant/delegations.ts";
+import { addApproval, APPROVAL_TTL_MS, findApproval, settleApproval, summarizeArgs } from "./assistant/approvals.ts";
+import { activeDelegationFor, createDelegation, getDelegation, updateDelegation } from "./assistant/delegations.ts";
 import { postInbox } from "./assistant/inbox.ts";
 import {
   assistantName,
@@ -112,6 +113,7 @@ import {
   noteChatDeleted,
   noteUserTurn,
   onTenantHello,
+  publishDelegation,
   publishState,
   runDelegateInBackground,
   runLoopInBackground,
@@ -551,7 +553,7 @@ function send(ws: WebSocket, message: ServerMessage) {
   if (message.type === "text-delta") capturing?.captureText?.(message.text);
   if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
   if (message.type === "done") capturing?.captureDone?.(message.status);
-  if (message.type === "approval" && slot?.delegationId) noteDelegationApproval(slot, message.callId, message.name);
+  if (message.type === "approval" && slot?.delegationId) noteDelegationApproval(slot, message.callId, message.name, message.args);
   // 流式事件跟当前 owner。应答仍回发起连接，避免翻页或写文件被另一台设备抢走。
   const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
@@ -1104,6 +1106,7 @@ function chatOwnedByOther(chatId: string, except: Tenant) {
 function resolveApprovalWait(slot: Slot, allow: boolean) {
   const wait = slot.approvalWait;
   slot.approvalWait = null;
+  if (slot.delegationId && (wait || slot.awaitingApproval)) noteDelegationAnswered(slot);
   if (wait) {
     slot.awaitingApproval = false;
     wait(allow);
@@ -1133,6 +1136,7 @@ function waitForApproval(slot: Slot, ms = slot.approvalTimeoutMs ?? 120_000) {
       if (slot.approvalWait === done) {
         slot.approvalWait = null;
         slot.awaitingApproval = false;
+        if (slot.delegationId) noteDelegationExpired(slot);
       }
       resolve(false);
     }, ms);
@@ -4870,7 +4874,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
 
       if (message.type === "assistant_op") {
         const args = message.args && typeof message.args === "object" ? message.args : {};
-        const result = await handleOp(tenant, message.op, args);
+        const result = message.op === "approval_answer" ? answerDelegationApproval(tenant, args) : await handleOp(tenant, message.op, args);
         send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result });
         if (result.ok) void publishState(tenant);
         return;
@@ -5743,20 +5747,75 @@ function publishLoop(tenantId: string, message: ServerMessage) {
 
 bindLoops({ busy: loopBusy, dispatch: dispatchLoop, publish: publishLoop });
 
-const DELEGATION_APPROVAL_MS = 24 * 3_600_000;
-
-function noteDelegationApproval(slot: Slot, callId: string, tool: string) {
+function noteDelegationApproval(slot: Slot, callId: string, tool: string, args: unknown) {
   const tenant = getTenant(slot.tenantId);
   if (!tenant || !slot.delegationId) return;
   const record = updateDelegation(tenant, slot.delegationId, { status: "awaiting" });
+  if (!record) return;
+  const approval = addApproval(
+    tenant,
+    {
+      chatId: slot.chatId,
+      callId,
+      tool,
+      summary: summarizeArgs(args),
+      delegationId: record.id,
+      parentChatId: record.parentChatId,
+    },
+    Date.now(),
+    slot.approvalTimeoutMs ?? APPROVAL_TTL_MS,
+  );
   postInbox(tenant, {
     kind: "approval",
-    title: `委派「${record?.title ?? ""}」要${tool === "shell" ? "跑命令" : "改文件"}，等你批准`,
-    body: "打开子会话，在工具卡上批准或拒绝。24 小时没人答就按拒绝处理。",
+    title: `委派「${record.title}」要${tool === "shell" ? "跑命令" : "改文件"}，等你批准`,
+    body: `${approval.summary ? `${tool}：${approval.summary}\n` : ""}在父会话、收件箱或子会话的工具卡上批准或拒绝。24 小时没人答就按拒绝处理。`,
     key: `approval:${slot.chatId}:${callId}`,
+    chatId: record.parentChatId || slot.chatId,
+    delegationId: record.id,
+  });
+  publishDelegation(tenant, record, approval);
+}
+
+/** 审批有了结果（批准、拒绝、取消）：摘掉挂起项，委派回到运行中，等运行自己收尾 */
+function noteDelegationAnswered(slot: Slot) {
+  const tenant = getTenant(slot.tenantId);
+  if (!tenant || !slot.delegationId) return;
+  settleApproval(tenant, slot.chatId);
+  const current = getDelegation(tenant, slot.delegationId);
+  if (current?.status !== "awaiting") return;
+  const record = updateDelegation(tenant, slot.delegationId, { status: "running" });
+  if (record) publishDelegation(tenant, record);
+}
+
+function noteDelegationExpired(slot: Slot) {
+  const tenant = getTenant(slot.tenantId);
+  if (!tenant || !slot.delegationId) return;
+  const record = getDelegation(tenant, slot.delegationId);
+  noteDelegationAnswered(slot);
+  postInbox(tenant, {
+    kind: "delegation",
+    title: `委派「${record?.title ?? ""}」的审批超时`,
+    body: "24 小时没人答，已按拒绝处理。子会话里可以重新交代。",
+    key: `approval-expired:${slot.chatId}:${slot.approvalCallId ?? ""}`,
     chatId: slot.chatId,
     delegationId: slot.delegationId,
   });
+}
+
+/** 收件箱、父会话或任一设备作答委派子会话的挂起审批；不抢子会话的 owner */
+function answerDelegationApproval(tenant: Tenant, args: Record<string, unknown>) {
+  const chatId = typeof args.chatId === "string" ? args.chatId : "";
+  const callId = typeof args.callId === "string" ? args.callId : "";
+  if (!chatId || !callId || typeof args.allow !== "boolean") return { ok: false, error: "要带 chatId、callId 和 allow。" };
+  const slot = liveSlotsOf(tenant).get(chatId);
+  if (!slot || !slot.awaitingApproval || slot.approvalCallId !== callId) {
+    // 落盘的挂起项还在、运行却没了：多半是网关重启后的残留，顺手清掉
+    if (findApproval(tenant, chatId, callId)) settleApproval(tenant, chatId, callId);
+    return { ok: false, error: "这项审批已经结束或过期了。" };
+  }
+  if (!slot.delegationId) return { ok: false, error: "只能在这里作答委派子会话的审批。" };
+  resolveApprovalWait(slot, args.allow);
+  return { ok: true };
 }
 
 function delegationWorkspaces(tenant: Tenant) {
@@ -5800,10 +5859,12 @@ async function startDelegation(req: DelegateRequest): Promise<string> {
   tenant.disk.chatRevs[childChatId] = tenant.disk.rev;
   persistTenant(tenant);
   broadcastDigest(tenant, null as unknown as WebSocket);
-  void publishState(tenant);
+  publishDelegation(tenant, record);
 
   const finish = (ok: boolean, text: string) => {
-    updateDelegation(tenant, record.id, { status: ok ? "done" : "failed", result: text, endedAt: Date.now() });
+    settleApproval(tenant, childChatId);
+    const done = updateDelegation(tenant, record.id, { status: ok ? "done" : "failed", result: text, endedAt: Date.now() });
+    if (done) publishDelegation(tenant, done);
     postInbox(tenant, {
       kind: "delegation",
       title: `委派${ok ? "完成" : "失败"}：${title}`,
@@ -5824,7 +5885,7 @@ async function startDelegation(req: DelegateRequest): Promise<string> {
   const slot = slotOf(conn, childChatId);
   slot.cwd = cwd;
   slot.delegationId = record.id;
-  slot.approvalTimeoutMs = DELEGATION_APPROVAL_MS;
+  slot.approvalTimeoutMs = APPROVAL_TTL_MS;
   let text = "";
   let error = "";
   const settled = new Promise<string>((resolveDone) => {

@@ -16,6 +16,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentMode,
+  AssistantApproval,
   AssistantState,
   CheckpointInfo,
   ClientMessage,
@@ -30,7 +31,7 @@ import type {
   CursorBill,
 } from "../lib/protocol";
 import { DEFAULT_ASSISTANT_NAME } from "../lib/protocol";
-import AssistantPanel from "./AssistantPanel";
+import AssistantPanel, { DELEGATION_STATUS } from "./AssistantPanel";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
 import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
@@ -2312,6 +2313,16 @@ export default function ChatApp() {
             return { ...prev, inbox };
           });
           break;
+        case "delegation_state":
+          setAssistantState((prev) => {
+            if (!prev) return prev;
+            const { delegation, approval } = message;
+            const delegations = [delegation, ...prev.delegations.filter((row) => row.id !== delegation.id)];
+            const others = prev.approvals.filter((row) => row.delegationId !== delegation.id);
+            const approvals = delegation.status === "awaiting" && approval ? [...others, approval] : others;
+            return { ...prev, delegations, approvals };
+          });
+          break;
         case "assistant_result":
           if (!message.ok && message.error) setNotice(message.error);
           break;
@@ -3602,6 +3613,18 @@ export default function ChatApp() {
     if (pane === "files") setFilesQuery("");
   }
 
+  function openChatById(chatId: string) {
+    const chat = chatsRef.current.find((row) => row.id === chatId);
+    if (chat) {
+      selectChat(chat);
+      setAssistantOpen(false);
+    } else setNotice("这个会话还没同步到本机，稍后再试。");
+  }
+
+  function answerDelegation(approval: AssistantApproval, allow: boolean) {
+    send({ type: "assistant_op", op: "approval_answer", args: { chatId: approval.chatId, callId: approval.callId, allow }, reqId: crypto.randomUUID() });
+  }
+
   function openAssistantInboxItem(item: { chatId?: string; id: string }) {
     if (item.chatId) {
       const chat = chatsRef.current.find((row) => row.id === item.chatId);
@@ -4818,6 +4841,7 @@ export default function ChatApp() {
         initialInboxId={inboxDeepLink}
         basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
+        onOpenChat={openChatById}
       />
       {loopOpen ? (
         <div className="search-overlay open" onClick={() => { if (wideIDE && sidePane === "loop") return; setLoopOpen(false); }}>
@@ -6119,6 +6143,36 @@ export default function ChatApp() {
         ) : null}
             <div className="composer-dock">
               <div className="composer-wrap">
+                {(() => {
+                  const mine = (assistantState?.delegations || []).filter(
+                    (row) => row.parentChatId === activeId && (row.status === "running" || row.status === "awaiting"),
+                  );
+                  if (!mine.length) return null;
+                  return mine.map((row) => {
+                    const approval = assistantState?.approvals.find((item) => item.delegationId === row.id);
+                    return (
+                      <div className="approval-row delegation-row" key={row.id}>
+                        <span>
+                          委派「{row.title}」→ {row.workspace} · {DELEGATION_STATUS[row.status]}
+                          {approval ? `：要${approval.tool === "shell" ? "跑命令" : "改文件"} ${approval.summary}` : ""}
+                        </span>
+                        {approval ? (
+                          <>
+                            <button type="button" className="pill" onClick={() => answerDelegation(approval, true)}>
+                              批准
+                            </button>
+                            <button type="button" className="pill" onClick={() => answerDelegation(approval, false)}>
+                              拒绝
+                            </button>
+                          </>
+                        ) : null}
+                        <button type="button" className="pill" onClick={() => openChatById(row.childChatId)}>
+                          打开子会话
+                        </button>
+                      </div>
+                    );
+                  });
+                })()}
                 {(() => {
                   const pending = empty
                     ? undefined
