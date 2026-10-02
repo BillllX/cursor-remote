@@ -21,6 +21,7 @@ struct ComposerView: View {
     /// 长按输入框说话
     @State private var dictation = VoiceDictation()
     @State private var holdTask: Task<Void, Never>?
+    @State private var finishTask: Task<Void, Never>?
     @State private var pressing = false
     /// 按住时上滑超过阈值：松手就丢掉这段录音
     @State private var voiceCancelArmed = false
@@ -101,14 +102,10 @@ struct ComposerView: View {
             text = store.draft
             store.refreshCheckpoints()
         }
-        .onDisappear {
-            holdTask?.cancel()
-            dictation.cancel()
-        }
+        .onDisappear(perform: stopVoice)
         .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
         .onChange(of: store.activeId) { _, _ in
-            holdTask?.cancel()
-            dictation.cancel()
+            stopVoice()
             persistTask?.cancel()
             text = store.draft
             store.refreshCheckpoints()
@@ -240,7 +237,14 @@ struct ComposerView: View {
                         await beginVoice()
                     }
                 }
-                guard dictation.active else { return }
+                guard dictation.active else {
+                    // 还没开始录就挪开了手指：当作拖动，不录音
+                    if abs(value.translation.width) + abs(value.translation.height) > 10 {
+                        holdTask?.cancel()
+                        holdTask = nil
+                    }
+                    return
+                }
                 let armed = value.translation.height < -60
                 if armed != voiceCancelArmed {
                     voiceCancelArmed = armed
@@ -254,20 +258,36 @@ struct ComposerView: View {
                 switch dictation.phase {
                 case .idle:
                     let moved = abs(value.translation.width) + abs(value.translation.height)
-                    if moved < 12 { focused = true }
+                    if moved <= 10 { focused = true }
                 case .starting:
                     dictation.cancel()
                 case .recording:
                     if voiceCancelArmed {
                         dictation.cancel()
                     } else {
-                        Task { @MainActor in insertTranscript(await dictation.finish()) }
+                        finishTask?.cancel()
+                        finishTask = Task { @MainActor in
+                            let spoken = await dictation.finish()
+                            guard !Task.isCancelled else { return }
+                            insertTranscript(spoken)
+                        }
                     }
                 case .finishing:
                     break
                 }
                 voiceCancelArmed = false
             }
+    }
+
+    /// 切会话、页面消失：丢掉进行中的录音和还没回填的转写
+    private func stopVoice() {
+        holdTask?.cancel()
+        holdTask = nil
+        finishTask?.cancel()
+        finishTask = nil
+        pressing = false
+        voiceCancelArmed = false
+        dictation.cancel()
     }
 
     private func beginVoice() async {
@@ -321,7 +341,8 @@ struct ComposerView: View {
     private func voiceHint(finishing: Bool) -> String {
         if finishing { return "正在转文字…" }
         if dictation.phase == .starting { return "准备录音…" }
-        return voiceCancelArmed ? "松开取消" : "松开填入输入框 · 上滑取消"
+        if voiceCancelArmed { return "松开取消" }
+        return dictation.stoppedEarly ? "已停止录音，松开填入输入框" : "松开填入输入框 · 上滑取消"
     }
 
     private var placeholder: String {
