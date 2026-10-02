@@ -3457,7 +3457,9 @@ export default function ChatApp() {
       const carryImages = images;
       selectChat(home);
       imagesRef.current[target.id] = [];
+      imagesRef.current[home.id] = carryImages;
       patchChat(target.id, (item) => ({ ...item, draft: "", draftImages: [] }));
+      patchChat(home.id, (item) => ({ ...item, draft: carryText, draftImages: carryImages }));
       syncComposer(carryText);
       setImages(carryImages);
       return;
