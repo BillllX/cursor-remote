@@ -5361,6 +5361,10 @@ wss.on("connection", (ws, req: IncomingMessage) => {
       }
 
       if (message.type === "set_workspace") {
+        if (message.chatId && isAssistantChat(tenant, message.chatId)) {
+          send(ws, { type: "error", chatId: message.chatId, message: "助理会话固定在 USER 根目录，不能换工作区。" });
+          return;
+        }
         const next = confinedCwd(message.cwd || conn.cwd, tenant.workspaceRoot);
         if (!next) {
           send(ws, { type: "error", chatId: message.chatId, message: "工作区必须在允许的目录里。" });
@@ -5370,10 +5374,6 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           ensureWorkspaceDir(next);
         } catch {
           send(ws, { type: "error", chatId: message.chatId, message: "建不了这个工作区目录。" });
-          return;
-        }
-        if (message.chatId && isAssistantChat(tenant, message.chatId)) {
-          send(ws, { type: "error", chatId: message.chatId, message: "助理会话固定在 USER 根目录，不能换工作区。" });
           return;
         }
         if (message.chatId) {
