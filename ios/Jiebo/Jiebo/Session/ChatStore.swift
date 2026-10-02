@@ -479,6 +479,17 @@ final class ChatStore {
         }
         ensureActiveChat()
         let chatId = activeId
+        // USER 根目录不开新的普通会话：等助理会话同步，或先选子工作区
+        if let target = chats.first(where: { $0.id == chatId }),
+           !isAssistantChat(target.id), target.turnsComplete, target.turns.isEmpty,
+           isUserRoot(target.cwd?.nilIfEmpty ?? workspaceRoot) {
+            if assistantChat != nil {
+                openAssistantChat()
+            } else {
+                flash("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。")
+            }
+            return
+        }
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
         // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
         let history = ChatStore.externalHistory(model: model, turns: active?.turns ?? [])
@@ -1092,9 +1103,14 @@ final class ChatStore {
         if rest.isEmpty {
             let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: lastModel.nilIfEmpty ?? model, mode: mode)
             rest = [chat]
-            send(.newSession(chatId: chat.id, cwd: chat.cwd))
-            if let nextModel = chat.model {
-                send(.setModel(model: nextModel, chatId: chat.id))
+            // 占位在 USER 根目录时不向网关开会话，等助理会话同步后切过去
+            if isUserRoot(chat.cwd) {
+                pendingAssistantOpen = true
+            } else {
+                send(.newSession(chatId: chat.id, cwd: chat.cwd))
+                if let nextModel = chat.model {
+                    send(.setModel(model: nextModel, chatId: chat.id))
+                }
             }
         }
         chats = rest
@@ -2920,7 +2936,7 @@ final class ChatStore {
             let chat = ChatSession.blank(cwd: cwd.nilIfEmpty ?? workspaceRoot, model: model, mode: mode)
             chats = [chat]
             swapActive(to: chat.id) // P9：统一入口——持久化 lastActive、置换草稿/待发图归属
-            send(.newSession(chatId: chat.id, cwd: chat.cwd))
+            if !isUserRoot(chat.cwd) { send(.newSession(chatId: chat.id, cwd: chat.cwd)) }
         }
     }
 

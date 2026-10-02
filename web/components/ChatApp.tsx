@@ -3438,6 +3438,20 @@ export default function ChatApp() {
     if (raw != null) draftRef.current = raw;
     const text = draftRef.current.trim();
     if (!text && !images.length) return;
+    const target = chatsRef.current.find((item) => item.id === activeIdRef.current);
+    if (
+      target &&
+      !isAssistantChat(target.id) &&
+      !target.turns.length &&
+      workspaceRoot &&
+      sameCwd(target.cwd || workspaceRoot, workspaceRoot)
+    ) {
+      // USER 根目录不开新的普通会话：等助理会话同步，或先选子工作区
+      const home = chatsRef.current.find((item) => isAssistantChat(item.id));
+      if (home) selectChat(home);
+      else setNotice("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。");
+      return;
+    }
     const attached = images.slice(0, MAX_IMAGES);
     syncComposer("");
     setImages([]);
@@ -4464,6 +4478,8 @@ export default function ChatApp() {
       policy: policyRef.current,
       };
       setChats([chat]);
+      // 助理会话到了就替换这个占位；占位在根目录时不向网关开会话
+      autoPickedIdRef.current = chat.id;
       setActiveId(chat.id);
       if (nextModel) {
         modelRef.current = nextModel;
@@ -4476,7 +4492,8 @@ export default function ChatApp() {
       setPreviewDrafts({});
       setPreviewPath("");
       setPreviewMax(false);
-      send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
+      const atRoot = !chat.cwd || (workspaceRoot && sameCwd(chat.cwd, workspaceRoot));
+      if (!atRoot) send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
       if (nextModel) send({ type: "set_model", model: nextModel, chatId: chat.id });
       flushChats([chat]);
       return;
