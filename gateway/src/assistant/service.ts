@@ -106,6 +106,11 @@ export function foregroundTools(tenant: AssistantTenant, chatId: string): Record
   return assistantTools(toolHost(tenant, "chat", chatId));
 }
 
+/** 自研 Agent 路径用的 ToolHost（与 foregroundTools 同一套回调） */
+export function chatToolHost(tenant: AssistantTenant, chatId: string): ToolHost {
+  return toolHost(tenant, "chat", chatId);
+}
+
 /** USER 会话每轮前置：名字 + 记忆数据块。子工作区会话不调用 */
 export function userRootPreamble(tenant: AssistantTenant) {
   const name = assistantName(tenant);

@@ -118,8 +118,10 @@ import {
   startAssistant,
   userRootPreamble,
   watchMemory,
+  chatToolHost,
   type DelegateRequest,
 } from "./assistant/service.ts";
+import { assistantToolSpecs } from "./assistant/tools.ts";
 import { createPublishController } from "./publish.ts";
 
 loadDotEnv([
@@ -2914,6 +2916,7 @@ async function runExternalChat(
     history: ChatHistoryItem[];
     epoch: number;
     cwd: string;
+    assistantBlock?: string;
   },
 ) {
   const { epoch } = input;
@@ -2937,12 +2940,21 @@ async function runExternalChat(
     return;
   }
   const rules = loadWorkspaceRules(input.cwd);
-  const system = [
-    "你是「接驳」客户端里的问答助手。你没有工具，读不了也改不了工作区文件——只能根据对话内容回答。",
-    `用户的工作区路径：${input.cwd}。`,
-    rules ? `工作区规则：\n${rules}` : "",
-    "回答用中文（除非用户用别的语言提问），代码块标语言。",
-  ].filter(Boolean).join("\n");
+  const system = input.assistantBlock
+    ? [
+        input.assistantBlock,
+        "当前模型没有工具，读不了也改不了工作区文件——只能根据对话和上面的记忆数据回答；需要动手时请让用户换 Cursor 目录里的模型。",
+        rules ? `工作区规则：\n${rules}` : "",
+        "回答用中文（除非用户用别的语言提问），代码块标语言。",
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    : [
+        "你是「接驳」客户端里的问答助手。你没有工具，读不了也改不了工作区文件——只能根据对话内容回答。",
+        `用户的工作区路径：${input.cwd}。`,
+        rules ? `工作区规则：\n${rules}` : "",
+        "回答用中文（除非用户用别的语言提问），代码块标语言。",
+      ].filter(Boolean).join("\n");
   const abort = new AbortController();
   slot.externalAbort = abort;
   try {
@@ -3028,9 +3040,13 @@ async function runNativeChat(
     mode: AgentMode;
     confirmWrites: boolean;
     autoApprove: boolean;
+    /** USER 根目录：个人助理人设 + 记忆块，放进 system，不与 wrapPrompt 重复 */
+    assistantBlock?: string;
   },
 ) {
   const { epoch, cwd, mode } = input;
+  const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
+  const rootAssistantName = atUserRoot && conn.tenant ? assistantName(conn.tenant) : undefined;
   const t0 = Date.now();
   send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
   send(ws, { type: "run_meta", chatId: slot.chatId, model: ext.full, mode, policy: slot.policy, dialect: slot.dialect });
@@ -3149,11 +3165,13 @@ async function runNativeChat(
       console.log(`native compact chat=${slot.chatId} stage=${info.stage} ${info.before}→${info.after} summarized=${info.summarized}`);
     },
   });
+  const assistantSpecs =
+    atUserRoot && conn.tenant ? assistantToolSpecs(chatToolHost(conn.tenant, slot.chatId)) : [];
   const taskSpec = taskTool({
     adapter,
     endpoint,
     modelLabel: ext.full,
-    tools: baseTools,
+    tools: [...baseTools, ...assistantSpecs],
     allowBuilder: mode === "agent",
     compact: compactor,
     hooks: {
@@ -3181,11 +3199,13 @@ async function runNativeChat(
       },
     },
   });
-  const tools = toolsForMode(mode, [...extraTools, ...mcp.tools, taskSpec]);
+  const tools = toolsForMode(mode, [...extraTools, ...mcp.tools, ...assistantSpecs, taskSpec]);
   const prior = resumeMessages(stateDirOf ? loadSession(stateDirOf, slot.chatId) : null, input.history);
   const notes = prior.notes.length ? `${prior.notes.join("\n")}\n\n` : "";
+  const systemCore = buildSystemPrompt({ cwd, mode, tools, modelLabel: ext.full, assistantName: rootAssistantName });
+  const systemContent = input.assistantBlock ? `${input.assistantBlock}\n\n${systemCore}` : systemCore;
   const messages: ChatMessage[] = [
-    { role: "system", content: buildSystemPrompt({ cwd, mode, tools, modelLabel: ext.full }) },
+    { role: "system", content: systemContent },
     ...prior.messages,
     { role: "user", content: notes + input.prompt, images: input.images.length ? input.images : undefined },
   ];
@@ -3545,6 +3565,14 @@ async function handlePrompt(
   const externalEarly = externalRoute(usedModel);
   if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
   const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
+  let assistantBlock = "";
+  if (atUserRoot && conn.tenant) {
+    try {
+      assistantBlock = userRootPreamble(conn.tenant);
+    } catch (err) {
+      console.error("assistant preamble", err);
+    }
+  }
   let prompt = wrapPrompt(
     userText,
     mode,
@@ -3556,12 +3584,9 @@ async function handlePrompt(
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
-  if (atUserRoot && conn.tenant && !externalEarly) {
-    try {
-      prompt = `${userRootPreamble(conn.tenant)}\n\n${prompt}`;
-    } catch (err) {
-      console.error("assistant preamble", err);
-    }
+  // Cursor SDK 路径：人设进 user 包装；第三方自研 Agent 路径改由 runNativeChat 写进 system
+  if (assistantBlock && !externalEarly) {
+    prompt = `${assistantBlock}\n\n${prompt}`;
   }
   if (!prompt) return;
 
@@ -3593,6 +3618,7 @@ async function handlePrompt(
       mode,
       confirmWrites,
       autoApprove,
+      assistantBlock: externalEarly ? assistantBlock || undefined : undefined,
     });
     drainPending(ws, conn, slot, epoch);
     return;
@@ -3611,6 +3637,7 @@ async function handlePrompt(
       history: safeHistory,
       epoch: slot.epoch,
       cwd,
+      assistantBlock: assistantBlock || undefined,
     });
     // 与 cursor 路径同一 drain 口径——否则排队消息永久滞留、超上限被静默丢弃（Kimi 评审 C1）；
     // epoch 守卫挡 fresh/new_session 后返回的过期栈（Grok R2）

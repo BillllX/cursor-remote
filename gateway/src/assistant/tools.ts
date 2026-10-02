@@ -1,4 +1,5 @@
 import type { SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
+import type { ToolSpec } from "../native/types.ts";
 import { searchChats } from "./chatIndex.ts";
 import { postInbox } from "./inbox.ts";
 import {
@@ -299,4 +300,28 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
 
 export function assistantToolNames(host: ToolHost) {
   return Object.keys(assistantTools(host));
+}
+
+/** 第三方模型走自研 Agent 循环时，把助理工具挂进 ToolSpec 表 */
+export function assistantToolSpecs(host: ToolHost): ToolSpec[] {
+  const defs = assistantTools(host);
+  return Object.entries(defs).map(([name, def]) => ({
+    name,
+    description: def.description || name,
+    parameters: (def.inputSchema ?? { type: "object", properties: {} }) as ToolSpec["parameters"],
+    category: "network" as const,
+    run: async (args) => {
+      const raw = await def.execute((args ?? {}) as Args, {} as never);
+      if (typeof raw === "string") return { ok: true, content: raw };
+      if (raw && typeof raw === "object" && "isError" in raw && raw.isError) {
+        const text =
+          Array.isArray((raw as { content?: unknown }).content) &&
+          (raw as { content: { type?: string; text?: string }[] }).content[0]?.text
+            ? String((raw as { content: { text?: string }[] }).content[0].text)
+            : JSON.stringify(raw);
+        return { ok: false, content: text };
+      }
+      return { ok: true, content: typeof raw === "object" ? JSON.stringify(raw) : String(raw) };
+    },
+  }));
 }
