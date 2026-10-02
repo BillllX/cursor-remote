@@ -146,7 +146,19 @@ struct CollapsedSidebarRail: View {
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
-            ForEach(ToolLayer.allCases) { layer in
+            railButton(
+                ToolLayer.assistant.symbol,
+                label: store.assistantBadgeCount > 0 ? "\(store.assistantName)，\(store.assistantBadgeCount) 条待处理" : store.assistantName,
+                marked: store.assistantBadgeCount > 0,
+                on: store.assistantChatActive || store.toolLayer == .assistant,
+                tint: JieboColor.pine,
+                action: store.toggleAssistantRail
+            )
+            Rectangle()
+                .fill(JieboColor.line)
+                .frame(width: 24, height: 1)
+                .padding(.vertical, 4)
+            ForEach(ToolLayer.workTools) { layer in
                 railButton(layer.symbol, label: layer.title, marked: marked(layer), on: store.toolSelected(layer)) {
                     store.toggleTool(layer)
                 }
@@ -180,7 +192,7 @@ struct CollapsedSidebarRail: View {
     }
 
     private func marked(_ layer: ToolLayer) -> Bool {
-        (layer == .loop && loopLive) || (layer == .assistant && store.assistantBadgeCount > 0)
+        layer == .loop && loopLive
     }
 
     private func railButton(

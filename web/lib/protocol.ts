@@ -302,6 +302,8 @@ export type ServerMessage =
       loops?: LoopState[];
       /** USER 根目录的助理名字，来自 AGENTS.md；缺省 DEFAULT_ASSISTANT_NAME */
       assistantName?: string;
+      /** 这个租户唯一的助理会话编号；固定在 USER 根目录，不能删除、不能换工作区 */
+      assistantChatId?: string;
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }

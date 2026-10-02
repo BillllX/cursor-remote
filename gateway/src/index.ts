@@ -784,8 +784,44 @@ function chatIdOf(item: unknown): string {
   return typeof id === "string" ? id : "";
 }
 
+/** 每个租户唯一的个人助理会话：编号固定、工作目录固定在 USER 根目录、不能删除 */
+function assistantChatIdOf(tenant: Tenant) {
+  return `assistant-${tenant.id}`;
+}
+
+function isAssistantChat(tenant: Tenant | null | undefined, chatId: string) {
+  return Boolean(tenant && chatId && chatId === assistantChatIdOf(tenant));
+}
+
+function assistantCwd(tenant: Tenant) {
+  return confinedCwd(tenant.workspaceRoot, tenant.workspaceRoot) || resolve(tenant.workspaceRoot);
+}
+
+/** 助理会话不分段新建：每满这么多轮换一个新的模型会话，靠记忆块 + 最近摘录续上 */
+const ASSISTANT_ROLL_TURNS = 40;
+const assistantRolledAt = new WeakMap<Slot, number>();
+
+/** 缺了就建；只认编号，不改客户端写回的标题等字段，避免每次同步都触发重新对账 */
+function ensureAssistantChat(tenant: Tenant) {
+  const id = assistantChatIdOf(tenant);
+  const exists = tenant.disk.chats.some((item) => chatIdOf(item) === id);
+  const deleted = tenant.disk.deletedIds.includes(id);
+  if (exists && !deleted) return false;
+  tenant.disk.deletedIds = tenant.disk.deletedIds.filter((item) => item !== id);
+  if (!exists) {
+    tenant.disk.chats = [
+      { id, title: assistantName(tenant), turns: [], cwd: assistantCwd(tenant), assistant: true },
+      ...tenant.disk.chats,
+    ];
+  }
+  tenant.disk.rev += 1;
+  tenant.disk.chatRevs[id] = tenant.disk.rev;
+  persistTenant(tenant);
+  return true;
+}
+
 function tombstoneChat(tenant: Tenant, chatId: string) {
-  if (!chatId) return;
+  if (!chatId || isAssistantChat(tenant, chatId)) return;
   tenant.disk.deletedIds = [chatId, ...tenant.disk.deletedIds.filter((id) => id !== chatId)].slice(0, 500);
   tenant.disk.chats = tenant.disk.chats.filter((item) => chatIdOf(item) !== chatId);
   delete tenant.disk.chatRevs[chatId];
@@ -962,7 +998,7 @@ function emitStoredState(ws: WebSocket, tenant: Tenant) {
 
 async function forgetChat(conn: Conn, chatId: string) {
   const tenant = conn.tenant;
-  if (!tenant) return;
+  if (!tenant || isAssistantChat(tenant, chatId)) return;
   tombstoneChat(tenant, chatId);
   const stopped = stopLoop(tenant.id, chatId);
   if (stopped) publishLoop(tenant.id, { type: "loop_state", ...stopped });
@@ -1157,10 +1193,12 @@ function waitForApproval(slot: Slot, ms = slot.approvalTimeoutMs ?? 120_000) {
 
 function cwdOf(conn: Conn, slot: Slot) {
   const root = conn.tenant?.workspaceRoot || slot.cwd;
+  if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) return requireCwd(root, root);
   return requireCwd(slot.cwd || conn.cwd, root);
 }
 
 function cwdForChat(tenant: Tenant, chatId: string) {
+  if (isAssistantChat(tenant, chatId)) return assistantCwd(tenant);
   const fromChat = diskChatCwd(tenant, chatId);
   if (fromChat) {
     const next = confinedCwd(fromChat, tenant.workspaceRoot);
@@ -1236,8 +1274,8 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
     cwd,
     sandboxOptions: { enabled: sandbox },
   };
-  // 助理工具只挂在 USER 根目录会话上；子工作区会话没有记忆工具
-  if (conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot)) {
+  // 助理工具只挂在唯一的助理会话上；其他会话没有记忆工具
+  if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
     local.customTools = foregroundTools(conn.tenant, slot.chatId);
   }
   const base = { apiKey, model: { id: modelId }, local };
@@ -2885,11 +2923,11 @@ function finishRun(
   if (!approval) indexUserTurn(slot);
 }
 
-/** USER 根目录会话每轮完成后进会话搜索索引；子工作区会话不进 */
+/** 助理会话每轮完成后进会话搜索索引；其他会话不进 */
 function indexUserTurn(slot: Slot) {
   const tenant = getTenant(slot.tenantId);
   const transcript = slot.transcript;
-  if (!tenant || !transcript || !slot.cwd || !isUserWorkspace(slot.cwd, tenant.workspaceRoot)) return;
+  if (!tenant || !transcript || !isAssistantChat(tenant, slot.chatId)) return;
   const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as
     | { title?: unknown; turns?: unknown[] }
     | undefined;
@@ -3057,8 +3095,8 @@ async function runNativeChat(
   },
 ) {
   const { epoch, cwd, mode } = input;
-  const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
-  const rootAssistantName = atUserRoot && conn.tenant ? assistantName(conn.tenant) : undefined;
+  const atAssistant = isAssistantChat(conn.tenant, slot.chatId);
+  const rootAssistantName = atAssistant && conn.tenant ? assistantName(conn.tenant) : undefined;
   const t0 = Date.now();
   send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
   send(ws, { type: "run_meta", chatId: slot.chatId, model: ext.full, mode, policy: slot.policy, dialect: slot.dialect });
@@ -3180,7 +3218,7 @@ async function runNativeChat(
     },
   });
   const assistantSpecs =
-    atUserRoot && conn.tenant ? assistantToolSpecs(chatToolHost(conn.tenant, slot.chatId)) : [];
+    atAssistant && conn.tenant ? assistantToolSpecs(chatToolHost(conn.tenant, slot.chatId)) : [];
   const taskSpec = taskTool({
     adapter,
     endpoint,
@@ -3580,7 +3618,7 @@ async function handlePrompt(
   if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
   const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
   let assistantBlock = "";
-  if (atUserRoot && conn.tenant) {
+  if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
     try {
       assistantBlock = userRootPreamble(conn.tenant);
     } catch (err) {
@@ -3943,6 +3981,15 @@ async function handlePrompt(
       } else if (apiKey) {
         prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch);
         if (slot.finished || slot.epoch !== epoch) return;
+      }
+    }
+    if (isAssistantChat(conn.tenant, slot.chatId) && (slot.agent || slot.agentId)) {
+      const turns = diskChatTurns(conn.tenant, slot.chatId).length;
+      if (turns > 0 && turns % ASSISTANT_ROLL_TURNS === 0 && assistantRolledAt.get(slot) !== turns) {
+        assistantRolledAt.set(slot, turns);
+        if (slot.agent) await disposeSlot(slot);
+        slot.agentId = null;
+        slot.reseed = true;
       }
     }
     const agent = await ensureAgent(conn, slot);
@@ -4852,9 +4899,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             policy: conn.policy || defaultPolicy(),
             loops: loopsForTenant(tenant.id),
             assistantName: assistantName(tenant),
+            assistantChatId: assistantChatIdOf(tenant),
           });
         };
         try {
+          ensureAssistantChat(tenant);
           onTenantHello(tenant);
         } catch (err) {
           console.error("assistant hello", err);
@@ -4986,6 +5035,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         }
         const incoming = (Array.isArray(message.chats) ? message.chats : []).slice(0, MAX_STORED_CHATS);
         const incomingIds = chatIdsFrom(incoming);
+        const assistantId = assistantChatIdOf(tenant);
+        const assistantRow = tenant.disk.chats.find((item) => chatIdOf(item) === assistantId);
+        if (assistantRow && !incomingIds.has(assistantId)) {
+          incoming.unshift(assistantRow);
+          incomingIds.add(assistantId);
+        }
         for (const id of prevIds) {
           if (!incomingIds.has(id)) tombstoneChat(tenant, id);
         }
@@ -5000,7 +5055,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             const row = item as { id?: unknown; cwd?: unknown };
             const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
             const id = typeof row.id === "string" ? row.id : "";
-            const next = wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
+            const next = isAssistantChat(tenant, id)
+              ? assistantCwd(tenant)
+              : wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
             const withCwd = row.cwd === next ? item : { ...row, cwd: next };
             const provided = Boolean(item && typeof item === "object" && Array.isArray((item as { turns?: unknown }).turns));
             return protectChatUpload(tenant, id, withCwd, provided);
@@ -5044,7 +5101,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           const prevRow = prev && typeof prev === "object" ? (prev as { cwd?: unknown }) : {};
           const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
           const fallback = typeof prevRow.cwd === "string" ? confinedCwd(prevRow.cwd, tenant.workspaceRoot) : null;
-          const cwd = wanted || fallback || tenant.workspaceRoot;
+          const cwd = isAssistantChat(tenant, id) ? assistantCwd(tenant) : wanted || fallback || tenant.workspaceRoot;
           if (row.cwd !== cwd) next = { ...next, cwd };
         }
         // P8 slim 合并：incoming 没有 turns 键 = 元数据更新，保留服务端 turns
@@ -5309,6 +5366,10 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           send(ws, { type: "error", chatId: message.chatId, message: "建不了这个工作区目录。" });
           return;
         }
+        if (message.chatId && isAssistantChat(tenant, message.chatId)) {
+          send(ws, { type: "error", chatId: message.chatId, message: "助理会话固定在 USER 根目录，不能换工作区。" });
+          return;
+        }
         if (message.chatId) {
           const slot = slotOf(conn, message.chatId);
           if (next !== slot.cwd) {
@@ -5388,6 +5449,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
       }
 
       if (message.type === "delete_session") {
+        if (isAssistantChat(tenant, message.chatId)) {
+          send(ws, { type: "error", chatId: message.chatId, message: "助理会话不能删除。" });
+          emitStoredState(ws, tenant);
+          return;
+        }
         await forgetChat(conn, message.chatId);
         emitStoredState(ws, tenant);
         return;
@@ -5408,7 +5474,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         slot.edited = [];
         slot.checkpoints = [];
         slot.openTools.clear();
-        const next = message.cwd ? confinedCwd(message.cwd, tenant.workspaceRoot) : null;
+        const next = isAssistantChat(tenant, slot.chatId)
+          ? assistantCwd(tenant)
+          : message.cwd
+            ? confinedCwd(message.cwd, tenant.workspaceRoot)
+            : null;
         if (next) {
           try {
             ensureWorkspaceDir(next);

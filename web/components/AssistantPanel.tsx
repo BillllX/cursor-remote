@@ -276,7 +276,7 @@ export default function AssistantPanel({
                     ))}
                   </ul>
                 ) : (
-                  <Empty>还没有委派。在对话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
+                  <Empty>还没有委派。在助理会话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
                 )}
               </Section>
             </>

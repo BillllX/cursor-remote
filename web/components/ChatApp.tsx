@@ -1280,6 +1280,12 @@ export default function ChatApp() {
   const [loopOpen, setLoopOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantName, setAssistantName] = useState(DEFAULT_ASSISTANT_NAME);
+  const [assistantChatId, setAssistantChatId] = useState("");
+  // 助理会话：每个租户唯一，固定在 USER 根目录，不能删、不能换工作区
+  const assistantChatIdRef = useRef("");
+  const isAssistantChat = (id?: string) => Boolean(id) && id === assistantChatIdRef.current;
+  // 自动选中（非用户点选）的会话；助理会话就绪后可被它替换
+  const autoPickedIdRef = useRef("");
   const [assistantState, setAssistantState] = useState<AssistantState | null>(null);
   const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
@@ -1401,6 +1407,7 @@ export default function ChatApp() {
     const keep = new Set<string>();
     const seenEmpty = new Set<string>();
     for (const chat of chats) {
+      if (assistantChatId && chat.id === assistantChatId) continue;
       const empty = chat.title === "新对话" && !chat.turns.length;
       if (!empty) {
         keep.add(chat.id);
@@ -1413,7 +1420,20 @@ export default function ChatApp() {
       }
     }
     return chats.filter((chat) => keep.has(chat.id));
-  }, [chats, activeId, workspaceRoot]);
+  }, [chats, activeId, workspaceRoot, assistantChatId]);
+
+  const assistantChat = useMemo(
+    () => (assistantChatId ? chats.find((chat) => chat.id === assistantChatId) : undefined),
+    [chats, assistantChatId],
+  );
+  const assistantPreview = useMemo(() => {
+    const turns = assistantChat?.turns || [];
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const text = (turns[i].assistant.trim() || turns[i].user.trim()).replace(/\s+/g, " ");
+      if (text) return text.slice(0, 80);
+    }
+    return "今日 · 收件箱 · 记忆";
+  }, [assistantChat?.turns]);
 
   const recentWorkspaces = useMemo(() => {
     const seen = new Set<string>();
@@ -1560,6 +1580,9 @@ export default function ChatApp() {
     setChats([boot]);
     activeIdRef.current = "boot";
     setActiveId("boot");
+    assistantChatIdRef.current = "";
+    setAssistantChatId("");
+    autoPickedIdRef.current = "";
     appliedStoreRef.current = false;
     stateRevRef.current = 0;
     deletedIdsRef.current = new Set();
@@ -1599,6 +1622,13 @@ export default function ChatApp() {
   }
 
   const send = useCallback((message: ClientMessage) => {
+    if (
+      (message.type === "delete_session" || message.type === "set_workspace") &&
+      message.chatId &&
+      message.chatId === assistantChatIdRef.current
+    ) {
+      return;
+    }
     if (message.type !== "hello" && !unlockedRef.current) {
       outboxRef.current = [...outboxRef.current, message].slice(-50);
       return;
@@ -1877,6 +1907,8 @@ export default function ChatApp() {
             if (message.workspaceRoot) setWorkspaceRoot(message.workspaceRoot);
             else setWorkspaceRoot((prev) => prev || message.cwd);
             setAssistantName(message.assistantName?.trim() || DEFAULT_ASSISTANT_NAME);
+            assistantChatIdRef.current = message.assistantChatId || "";
+            setAssistantChatId(message.assistantChatId || "");
             send({ type: "assistant_get" });
             if (inboxDeepLinkRef.current) {
               if (wideIDERef.current) chooseSide("assistant");
@@ -2046,8 +2078,10 @@ export default function ChatApp() {
               prevChatsRef.current = merged;
             }
             const current = merged.find((item) => item.id === activeIdRef.current);
-            const keep = current || merged[0];
+            const keep =
+              current || merged.find((item) => isAssistantChat(item.id)) || merged[0];
             if (keep && !current) {
+              autoPickedIdRef.current = keep.id;
               setActiveId(keep.id);
               {
                 const value = usableDraft(keep);
@@ -3484,6 +3518,7 @@ export default function ChatApp() {
     const nextModel = lastModelRef.current || modelRef.current;
     const empties = chatsRef.current.filter(
       (chat) =>
+        !isAssistantChat(chat.id) &&
         chat.title === "新对话" &&
         !chat.turns.length &&
         sameCwd(chat.cwd || workspaceRoot, next),
@@ -3536,6 +3571,7 @@ export default function ChatApp() {
       policy: policyRef.current,
     };
     setChats((prev) => [chat, ...prev]);
+    autoPickedIdRef.current = "";
     setActiveId(chat.id);
     if (nextModel) {
       modelRef.current = nextModel;
@@ -3627,7 +3663,28 @@ export default function ChatApp() {
     if (pane === "files") setFilesQuery("");
   }
 
+  /** 主区切到助理会话；还没同步到本机时返回 false */
+  function openAssistantChat() {
+    const chat = chatsRef.current.find((row) => isAssistantChat(row.id));
+    if (!chat) {
+      if (assistantChatIdRef.current) setNotice("助理会话还没同步到本机，稍后再试。");
+      return false;
+    }
+    if (chat.id === activeIdRef.current) setNavOpen(false);
+    else selectChat(chat);
+    return true;
+  }
+
+  function openAssistantFromRail() {
+    openAssistantChat();
+    chooseSide("assistant");
+  }
+
   function openChatById(chatId: string) {
+    if (!chatId) {
+      if (openAssistantChat() && !wideIDERef.current) setAssistantOpen(false);
+      return;
+    }
     const chat = chatsRef.current.find((row) => row.id === chatId);
     if (!chat) {
       setNotice("这个会话还没同步到本机，稍后再试。");
@@ -3646,7 +3703,12 @@ export default function ChatApp() {
     clearInboxDeepLink();
     const chat = item.chatId ? chatsRef.current.find((row) => row.id === item.chatId) : undefined;
     if (!chat) {
-      // 没有关联会话（提醒、简报）或会话还没同步：留在收件箱里看正文
+      // 没有关联会话（提醒、简报）：回助理会话；助理会话也没同步时留在收件箱里看正文
+      if (!item.chatId && openAssistantChat()) {
+        if (wideIDERef.current) chooseSide("assistant");
+        else setAssistantOpen(false);
+        return;
+      }
       if (wideIDERef.current) chooseSide("assistant");
       else setAssistantOpen(true);
       return;
@@ -3667,6 +3729,7 @@ export default function ChatApp() {
     }
     stashView();
     setNavOpen(false);
+    autoPickedIdRef.current = "";
     setActiveId(chat.id);
     if (chat.unread) patchChat(chat.id, (item) => ({ ...item, unread: false }));
     const draft = usableDraft(chat);
@@ -4337,6 +4400,7 @@ export default function ChatApp() {
   }
 
   function startRename(chat: Chat) {
+    if (isAssistantChat(chat.id)) return;
     setRenameId(chat.id);
     setRenameDraft(chat.title);
   }
@@ -4365,6 +4429,7 @@ export default function ChatApp() {
   }
 
   function deleteChat(id: string) {
+    if (isAssistantChat(id)) return;
     const stored = draftsByChatRef.current[id] || {};
     const activeDirty = id === activeIdRef.current && Object.keys(dirtyDraftMap()).length > 0;
     const storedDirty = id !== activeIdRef.current && Object.keys(stored).length > 0;
@@ -4421,7 +4486,8 @@ export default function ChatApp() {
     setChats(rest);
     flushChats(rest);
     if (id !== activeIdRef.current) return;
-    const chat = rest[0];
+    const chat = rest.find((item) => isAssistantChat(item.id)) || rest[0];
+    autoPickedIdRef.current = "";
     setActiveId(chat.id);
     if (chat.unread) patchChat(chat.id, (item) => ({ ...item, unread: false }));
     const draft = usableDraft(chat);
@@ -4624,6 +4690,18 @@ export default function ChatApp() {
   const loopRow = loops[activeId];
   const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
   const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
+  const assistantActive = Boolean(assistantChatId) && activeId === assistantChatId;
+
+  // 默认落点：没有用户选过的会话（boot 空壳、已删、同步时自动挑的）就进助理会话
+  useEffect(() => {
+    if (!assistantChat || activeId === assistantChat.id) return;
+    const current = chats.find((chat) => chat.id === activeId);
+    const idle =
+      !current ||
+      (current.id === "boot" && !current.turns.length) ||
+      current.id === autoPickedIdRef.current;
+    if (idle && !Object.keys(dirtyDraftMap()).length) selectChat(assistantChat);
+  }, [assistantChat, activeId, chats]);
 
   if (!unlocked && !demoCanvas) {
     return (
@@ -4646,13 +4724,13 @@ export default function ChatApp() {
       <nav className="activity-bar" aria-label="活动栏">
         {(
           [
+            ["assistant", `${assistantName} · 助理`],
             ["chats", "对话"],
             ["files", "文件"],
             ["search", "搜索"],
             ["git", "Git"],
             ["terminal", "终端"],
             ["loop", "Loop"],
-            ["assistant", `${assistantName} · 助理`],
           ] as const
         ).map(([pane, label]) => {
           const marked = (pane === "loop" && loopLive) || (pane === "assistant" && assistantBadge > 0);
@@ -4664,7 +4742,7 @@ export default function ChatApp() {
               aria-pressed={sidePane === pane}
               aria-label={label}
               title={label}
-              onClick={() => chooseSide(pane)}
+              onClick={() => (pane === "assistant" ? openAssistantFromRail() : chooseSide(pane))}
             >
               <IconRail name={pane} />
               {marked ? <span className="loop-live" /> : null}
@@ -4791,7 +4869,7 @@ export default function ChatApp() {
                   className={`search-item${chat.id === activeId ? " active" : ""}`}
                   onClick={() => selectChat(chat)}
                 >
-                  {chat.title}
+                  {isAssistantChat(chat.id) ? assistantName : chat.title}
                 </button>
               ))}
             </div>
@@ -5242,6 +5320,28 @@ export default function ChatApp() {
             </div>
           </div>
         </div>
+        {assistantChatId ? (
+          <button
+            type="button"
+            className={`chat-item assistant-pin${assistantActive ? " active" : ""}${assistantChat?.unread && !assistantActive ? " unread" : ""}`}
+            title={`${assistantName} · 助理`}
+            onClick={openAssistantChat}
+          >
+            <span className="assistant-pin-icon">
+              <IconRail name="assistant" size={14} />
+              {assistantBadge > 0 ? <span className="loop-live" /> : null}
+            </span>
+            <span className="assistant-pin-copy">
+              <span className="assistant-pin-name">{assistantName}</span>
+              <span className="assistant-pin-preview">{assistantPreview}</span>
+            </span>
+            {assistantChat?.turns.some((turn) => turn.running) ? (
+              <span className="chat-mark run">跑</span>
+            ) : assistantChat?.unread && !assistantActive ? (
+              <span className="chat-mark unread">新</span>
+            ) : null}
+          </button>
+        ) : null}
         <div
           className={`workspace-picker${workspaceMenuOpen ? " open" : ""}`}
           onMouseDown={(event) => event.stopPropagation()}
@@ -5265,7 +5365,6 @@ export default function ChatApp() {
                 ["git", "Git"],
                 ["terminal", "终端"],
                 ["loop", "Loop"],
-                ["assistant", "助理"],
               ] as const
             ).map(([pane, label]) => {
               const on = wideIDE
@@ -5276,8 +5375,6 @@ export default function ChatApp() {
                     ? terminalOpen
                     : pane === "loop"
                       ? loopOpen
-                      : pane === "assistant"
-                        ? assistantOpen
                       : pane === "git"
                         ? false
                         : filesOpen;
@@ -5292,7 +5389,7 @@ export default function ChatApp() {
                 >
                   <span className="side-tool-icon">
                     <IconRail name={pane} size={14} />
-                    {(pane === "loop" && loopLive) || (pane === "assistant" && assistantBadge > 0) ? <span className="loop-live" /> : null}
+                    {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
                   </span>
                   {label}
                 </button>
@@ -5573,9 +5670,20 @@ export default function ChatApp() {
               <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
             </svg>
           </button>
-          <div className="pad-bar-title" title={active?.title || "新对话"}>
-            {shortPadTitle(active?.title, active?.turns.find((turn) => turn.user)?.user)}
+          <div className="pad-bar-title" title={assistantActive ? assistantName : active?.title || "新对话"}>
+            {assistantActive ? assistantName : shortPadTitle(active?.title, active?.turns.find((turn) => turn.user)?.user)}
           </div>
+          {assistantActive ? (
+            <button
+              type="button"
+              className={`pill assistant-today${assistantOpen ? " on" : ""}`}
+              aria-label="打开今日、收件箱和记忆"
+              onClick={() => chooseSide("assistant")}
+            >
+              今日
+              {assistantBadge > 0 ? <span className="loop-live" /> : null}
+            </button>
+          ) : null}
           <button
             type="button"
             className="pad-bar-btn"
@@ -5591,6 +5699,21 @@ export default function ChatApp() {
             +
           </button>
         </div>
+        {assistantActive ? (
+          <div className="assistant-chat-head">
+            <span className="assistant-chat-title">{assistantName}</span>
+            <span className="assistant-chat-sub">助理</span>
+            <button
+              type="button"
+              className={`pill assistant-today${wideIDE && sidePane === "assistant" ? " on" : ""}`}
+              aria-label="打开今日、收件箱和记忆"
+              onClick={() => chooseSide("assistant")}
+            >
+              今日
+              {assistantBadge > 0 ? <span className="loop-live" /> : null}
+            </button>
+          </div>
+        ) : null}
         {empty ? (
           <div className="empty">
             <div className="empty-mark">

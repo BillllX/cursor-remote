@@ -236,10 +236,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   gap: 8px;
 }
 
-/* 侧栏底部工具：文件、搜索、Git、终端、Loop、助理，顺序和活动栏一致 */
+/* 侧栏底部工具：文件、搜索、Git、终端、Loop，顺序和活动栏一致；助理是侧栏最上的固定入口 */
 .side-tools {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -838,6 +838,112 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .chat-item-x:hover {
   background: var(--border);
   color: var(--text);
+}
+
+/* 助理固定入口：侧栏最上，沿用会话行的底色、选中态和 chat-mark */
+.assistant-pin {
+  flex: none;
+  min-height: 52px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.chat-item.assistant-pin.active {
+  box-shadow: var(--shadow-card), inset 0 0 0 1px var(--accent-line);
+}
+
+.assistant-pin-icon {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.assistant-pin-icon .loop-live {
+  top: -2px;
+  right: -2px;
+}
+
+.assistant-pin-copy {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.assistant-pin-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+
+.assistant-pin-preview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.assistant-today {
+  position: relative;
+  flex: none;
+}
+
+.assistant-today .loop-live {
+  top: -2px;
+  right: -2px;
+}
+
+.assistant-today.on .loop-live {
+  background: var(--fill-fg);
+}
+
+.pad-bar .assistant-today {
+  height: 32px;
+  padding: 0 12px;
+}
+
+/* 助理会话标题栏：宽屏没有 pad-bar，窄屏由 pad-bar 承担 */
+.assistant-chat-head {
+  display: none;
+}
+
+.app.ide .assistant-chat-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.assistant-chat-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.assistant-chat-sub {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.assistant-chat-head .assistant-today {
+  margin-left: auto;
 }
 
 .side-block {

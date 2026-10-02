@@ -30,6 +30,9 @@ enum FileBrowserPane: String, CaseIterable, Identifiable {
 enum ToolLayer: String, CaseIterable, Identifiable {
     case files, search, git, terminal, loop, assistant
 
+    /// 工具栏里的固定工具。助理不在这里，它有自己置顶的入口
+    static let workTools: [ToolLayer] = [.files, .search, .git, .terminal, .loop]
+
     var id: String { rawValue }
 
     var title: String {
@@ -90,6 +93,10 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState?
+    /// 租户唯一的助理会话（ready 下发，网关建在 stored chats 里）。按租户存一份，冷启动 ready 前也认得出
+    var assistantChatId: String?
+    /// 想打开助理会话时它还没同步到本机：记下意图，会话到了再切
+    private var pendingAssistantOpen = false
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -268,6 +275,10 @@ final class ChatStore {
         tenantId.isEmpty ? nil : "jiebo.lastActiveChatId.\(tenantId)"
     }
 
+    private var assistantChatKey: String? {
+        tenantId.isEmpty ? nil : "jiebo.assistantChatId.\(tenantId)"
+    }
+
     func start() {
         guard !started else { return }
         started = true
@@ -313,6 +324,7 @@ final class ChatStore {
         #endif
         lastModel = UserDefaults.standard.string(forKey: ModelCatalog.lastModelKey) ?? ""
         tenantId = UserDefaults.standard.string(forKey: tenantKey) ?? ""
+        assistantChatId = assistantChatKey.flatMap { UserDefaults.standard.string(forKey: $0) }
         wireClient()
         client.connect(url: GatewayConfig.url)
     }
@@ -609,10 +621,11 @@ final class ChatStore {
     func startChat(in path: String) {
         let next = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
+        pendingAssistantOpen = false
         workspaceSheetOpen = false
         creatingWorkspace = false
         persistDraft()
-        if let existing = chats.first(where: { $0.isUntitled && $0.turnsComplete && $0.turns.isEmpty && sameCwd($0.cwd?.nilIfEmpty ?? groupRoot, next) }) {
+        if let existing = chats.first(where: { !isAssistantChat($0.id) && $0.isUntitled && $0.turnsComplete && $0.turns.isEmpty && sameCwd($0.cwd?.nilIfEmpty ?? groupRoot, next) }) {
             select(existing.id)
             patch(existing.id) { chat in
                 var nextChat = chat
@@ -699,7 +712,64 @@ final class ChatStore {
                 assistantState?.inbox[index].read = true
             }
         }
-        if let chatId = item.chatId { openAssistantChat(chatId) }
+        if let chatId = item.chatId {
+            openAssistantChat(chatId)
+        } else {
+            toolLayer = nil
+            openAssistantChat()
+        }
+    }
+
+    func isAssistantChat(_ id: String?) -> Bool {
+        guard let id, let assistantChatId else { return false }
+        return id == assistantChatId
+    }
+
+    var assistantChat: ChatSession? {
+        guard let assistantChatId else { return nil }
+        return chats.first { $0.id == assistantChatId }
+    }
+
+    var assistantChatActive: Bool { isAssistantChat(activeId) }
+
+    /// 置顶入口的一行摘要：最后一条消息；正文没加载时用网关下发的摘要
+    var assistantPreview: String {
+        guard let chat = assistantChat else { return "" }
+        let turn = chat.turns.last
+        let last: String = turn?.assistant.nilIfEmpty ?? turn?.user.nilIfEmpty ?? chat.serverPreview?.nilIfEmpty ?? ""
+        return last.split(whereSeparator: \.isNewline).joined(separator: " ")
+    }
+
+    /// 置顶入口：切到助理会话。旧网关没有助理会话时退回打开助理层
+    func openAssistantEntry() {
+        guard assistantChatId != nil else {
+            if toolLayer != .assistant { toggleTool(.assistant) }
+            return
+        }
+        openAssistantChat()
+    }
+
+    /// iPad 图标栏：不在助理会话就切过去并打开今日层；已经在了就开关今日层
+    func toggleAssistantRail() {
+        let wasActive = assistantChatActive || assistantChatId == nil
+        if assistantChatId != nil { openAssistantChat() }
+        if wasActive || toolLayer != .assistant { toggleTool(.assistant) }
+    }
+
+    /// 切到助理会话。本机还没同步到就记下意图，会话到了再切（不在本地新建）
+    func openAssistantChat() {
+        guard let id = assistantChatId, chats.contains(where: { $0.id == id }) else {
+            pendingAssistantOpen = true
+            return
+        }
+        pendingAssistantOpen = false
+        select(id)
+    }
+
+    private func fulfillPendingAssistantOpen() {
+        guard pendingAssistantOpen, let id = assistantChatId, chats.contains(where: { $0.id == id }) else { return }
+        pendingAssistantOpen = false
+        select(id)
     }
 
     /// 打开助理关联的会话（委派子会话、收件箱条目）。本机还没同步到的会话不切，避免 activeId 指向空壳
@@ -738,6 +808,7 @@ final class ChatStore {
     }
 
     func select(_ id: String) {
+        pendingAssistantOpen = false
         guard id != activeId else { return }
         let nextCwd = chats.first { $0.id == id }?.cwd
         if contentPath != nil, !sameCwd(nextCwd, active?.cwd), contentDirty, !suppressContentDiscard {
@@ -989,6 +1060,7 @@ final class ChatStore {
     }
 
     func deleteChat(_ id: String) {
+        guard !isAssistantChat(id) else { return }
         if contentChatId == id, contentPath != nil {
             if contentDirty, !suppressContentDiscard {
                 contentDiscardFollowup = .deleteChat(id)
@@ -1798,7 +1870,7 @@ final class ChatStore {
         }
 
         switch message {
-        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops, let readyAssistantName):
+        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops, let readyAssistantName, let readyAssistantChatId):
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
@@ -1828,6 +1900,15 @@ final class ChatStore {
             } else {
                 assistantName = AssistantDefaults.name
             }
+            assistantChatId = readyAssistantChatId
+            if let key = assistantChatKey {
+                if let readyAssistantChatId {
+                    UserDefaults.standard.set(readyAssistantChatId, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+            if let readyAssistantChatId { deletedIds.remove(readyAssistantChatId) }
             let current = chats.first { $0.id == activeId }
             cwd = current?.cwd ?? nextCwd
             models = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels
@@ -1857,6 +1938,7 @@ final class ChatStore {
             send(.listWorkspaces)
             requestFileIndex()
             requestAssistant(memory: assistantState?.memory != nil)
+            fulfillPendingAssistantOpen()
         case .auth(let ok, let messageText):
             if !ok {
                 unlocked = false
@@ -1949,6 +2031,7 @@ final class ChatStore {
                 }
             }
             if pendingChatLoads.isEmpty { scheduleSync() } // 对账完毕，把本地脏的推上去
+            fulfillPendingAssistantOpen()
         case .workspaces(_, let items):
             workspaces = items
             if workspaceRoot.isEmpty, let first = items.first { workspaceRoot = first.path }
@@ -2811,6 +2894,15 @@ final class ChatStore {
             return
         }
         guard unlocked else { return }
+        // 网关对助理会话拒删、拒换工作区，这里直接不发
+        switch message {
+        case .deleteSession(let chatId) where isAssistantChat(chatId):
+            return
+        case .setWorkspace(_, let chatId, _) where isAssistantChat(chatId):
+            return
+        default:
+            break
+        }
         client.send(message)
     }
 
@@ -3006,7 +3098,9 @@ final class ChatStore {
         }
         if let path = chat.cwd, !path.isEmpty {
             cwd = path
-            send(.setWorkspace(cwd: path, chatId: chat.id, create: nil))
+            if !isAssistantChat(chat.id) {
+                send(.setWorkspace(cwd: path, chatId: chat.id, create: nil))
+            }
         }
         if let agentId = chat.agentId, !agentId.isEmpty, !runningChatIds.contains(chat.id) {
             send(.resumeSession(chatId: chat.id, agentId: agentId))
@@ -3228,6 +3322,8 @@ final class ChatStore {
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
         assistantState = nil
+        assistantChatId = nil
+        pendingAssistantOpen = false
         loops = [:]
         loopError = ""
         toolLayer = nil
@@ -3293,16 +3389,26 @@ final class ChatStore {
     private func restoreLastActiveIfNeeded() {
         guard !didRestoreLastActive else { return }
         didRestoreLastActive = true
-        guard activeId == "boot",
-              let key = lastChatKey,
-              let stored = UserDefaults.standard.string(forKey: key),
-              stored != "boot",
-              chats.contains(where: { $0.id == stored }) else { return }
-        swapActive(to: stored)
+        guard activeId == "boot" else { return }
+        if let key = lastChatKey,
+           let stored = UserDefaults.standard.string(forKey: key),
+           stored != "boot",
+           chats.contains(where: { $0.id == stored }) {
+            swapActive(to: stored)
+            return
+        }
+        // 没有可恢复的会话：落到助理会话；还没同步到就等它到了再切
+        guard let assistantId = assistantChatId else { return }
+        if chats.contains(where: { $0.id == assistantId }) {
+            swapActive(to: assistantId)
+        } else {
+            pendingAssistantOpen = true
+        }
     }
 
     /// stored_state 应用逻辑（WS 直推与 HTTP /state 拉取共用）
     private func applyStoredState(rows: [JSONValue], rev: Int?, deleted: [String], chatRevs serverRevs: [String: Int]?) {
+        defer { fulfillPendingAssistantOpen() }
         if serverRevs != nil { serverSupportsP4 = true }
         if appliedStore, let rev, rev <= stateRev {
             // rev 不新（如断线重连后服务端还没收到我们的 sync_chat）：
@@ -3311,7 +3417,7 @@ final class ChatStore {
             ensureTurnsLoaded(activeId) // 断线丢失的在途分页在此重启（onClose 已清 loadingChatIds）
             return
         }
-        deleted.forEach { deletedIds.insert($0) }
+        deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
         appliedStore = true
         if let rev, rev > stateRev { stateRev = rev }
         // 双保险：全量到达时回收在途（正常 ack 会清；断线已由 onClose 回收）
@@ -3410,7 +3516,7 @@ final class ChatStore {
         // 若以后网关主动广播 digest，这里需要按 id 精细化。
         dirtyChatIds.formUnion(inflightChatIds)
         inflightChatIds = []
-        deleted.forEach { deletedIds.insert($0) }
+        deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
         appliedStore = true
         if let rev, rev > stateRev { stateRev = rev }
         let digestIds = Set(serverRevs.keys)
@@ -3422,6 +3528,7 @@ final class ChatStore {
                 || hasLocalPriority(chat.id)
                 || chatRevs[chat.id] == nil
                 || chat.id == "boot"
+                || isAssistantChat(chat.id)
         }
         if kept.count != chats.count {
             let keptIds = Set(kept.map(\.id))

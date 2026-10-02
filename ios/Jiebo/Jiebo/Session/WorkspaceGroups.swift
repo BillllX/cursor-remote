@@ -59,7 +59,8 @@ extension ChatStore {
             .reduce(into: []) { $0.insert($1) }
         var keep = Set<String>()
         var seenEmpty = Set<String>()
-        for chat in chats {
+        // 助理会话单独置顶，不进工作区分组
+        for chat in chats where !isAssistantChat(chat.id) {
             // P8 slim：turnsComplete=false 的是「未加载」不是「真空」，不能参与空会话去重
             let empty = chat.title == "新对话" && chat.turnsComplete && chat.turns.isEmpty
             if !empty {

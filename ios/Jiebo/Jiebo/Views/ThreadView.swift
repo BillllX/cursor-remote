@@ -192,8 +192,49 @@ struct ThreadView: View {
         return (raw as NSString).lastPathComponent
     }
 
+    private var headerTitle: String {
+        store.assistantChatActive ? store.assistantName : (store.active?.title ?? "新对话")
+    }
+
+    /// 助理会话里打开今日/收件箱/记忆层；有未读或待批时挂点
+    private var assistantTodayButton: some View {
+        let on = store.toolLayer == .assistant
+        let marked = store.assistantBadgeCount > 0
+        return Button {
+            store.toggleTool(.assistant)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: ToolLayer.assistant.symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                Text("今日")
+                    .font(JieboFont.ui(13, weight: .medium))
+            }
+            .foregroundStyle(on ? JieboColor.pine : JieboColor.ink)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(on ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(JieboColor.ok)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 2, y: -2)
+                    .opacity(marked ? 1 : 0)
+                    .animation(JieboMotion.fade(reduceMotion), value: marked)
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: on)
+            .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(marked ? "今日，\(store.assistantBadgeCount) 条待处理" : "今日")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
     private var phoneSubtitle: String {
         if !store.connected { return "正在重连…" }
+        if store.assistantChatActive {
+            return store.hasApiKey ? "个人助理 · \(store.mode.label)" : "服务器还没配 API Key"
+        }
         let place = store.currentWorkspaceName
         return store.hasApiKey ? "\(place) · \(store.mode.label)" : "服务器还没配 API Key"
     }
@@ -214,7 +255,7 @@ struct ThreadView: View {
             HStack(spacing: 8) {
                 phoneIcon("line.3.horizontal", label: "菜单", action: openDrawer)
                 VStack(spacing: 1) {
-                    Text(store.active?.title ?? "新对话")
+                    Text(headerTitle)
                         .font(JieboFont.display(17))
                         .tracking(0.34)
                         .foregroundStyle(JieboColor.ink)
@@ -226,6 +267,9 @@ struct ThreadView: View {
                         .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
+                if store.assistantChatActive {
+                    assistantTodayButton
+                }
                 if store.canUndo {
                     phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动", action: store.undoLast)
                 }
@@ -285,7 +329,7 @@ struct ThreadView: View {
     private var padHeader: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.active?.title ?? "新对话")
+                Text(headerTitle)
                     .font(JieboFont.display(22))
                     .tracking(0.44)
                     .foregroundStyle(JieboColor.ink)
@@ -300,6 +344,9 @@ struct ThreadView: View {
                 ProgressView()
                     .controlSize(.small)
                     .tint(JieboColor.dim)
+            }
+            if store.assistantChatActive {
+                assistantTodayButton
             }
             if store.canUndo {
                 Button(action: store.undoLast) {

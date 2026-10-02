@@ -111,6 +111,13 @@ private struct PhoneDrawer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("工作区列表")
 
+            AssistantEntryRow {
+                store.openAssistantEntry()
+                close()
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 10)
+
             drawerRow("plus", "新对话", boxed: true) {
                 store.openNewChat()
                 close()
@@ -128,7 +135,7 @@ private struct PhoneDrawer: View {
                         .padding(.horizontal, 16)
                         .padding(.top, 14)
                         .padding(.bottom, 4)
-                    ForEach(ToolLayer.allCases) { layer in
+                    ForEach(ToolLayer.workTools) { layer in
                         toolRow(layer)
                     }
                 }
@@ -192,7 +199,7 @@ private struct PhoneDrawer: View {
     }
 
     private func toolRow(_ layer: ToolLayer) -> some View {
-        let marked = (layer == .loop && loopLive) || (layer == .assistant && store.assistantBadgeCount > 0)
+        let marked = layer == .loop && loopLive
         return drawerRow(layer.symbol, layer.title, marked: marked, iconBox: true) {
             store.toggleTool(layer)
             close()

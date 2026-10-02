@@ -764,7 +764,9 @@ enum ServerMessage {
         tenantName: String?,
         admin: Bool,
         loops: [LoopSnapshot],
-        assistantName: String?
+        assistantName: String?,
+        /// 每个租户唯一的助理会话。旧网关不带
+        assistantChatId: String?
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
@@ -913,7 +915,8 @@ enum ServerMessage {
                 tenantName: object["tenantName"]?.string,
                 admin: object["admin"]?.bool ?? false,
                 loops: object["loops"]?.array?.compactMap { LoopSnapshot.from($0.object) } ?? [],
-                assistantName: object["assistantName"]?.string
+                assistantName: object["assistantName"]?.string,
+                assistantChatId: object["assistantChatId"]?.string?.nilIfEmpty
             )
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in
