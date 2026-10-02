@@ -54,6 +54,7 @@ import {
   requireCwd,
   resolveTenant,
   sandboxEnabledForTenant,
+  workspaceFenceForTenant,
   saveDisk,
   settlePersistedChats,
   stateDir,
@@ -198,6 +199,12 @@ process.on("unhandledRejection", (err) => {
 });
 process.on("uncaughtException", (err) => {
   if (isAbortError(err)) return;
+  const code = err && typeof err === "object" ? (err as { code?: string }).code : "";
+  // 超长帧会关掉那一条连接。不能因此退出进程，否则 systemd 重启后客户端立刻重发，变成连上就断。
+  if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
+    console.error("websocket payload too large");
+    return;
+  }
   console.error(err);
   process.exit(1);
 });
@@ -1239,7 +1246,7 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
 
   const open = async (next: ReviewBinding[] | null, resumeId: string | null) => {
     const opts = next
-      ? { ...base, agents: buildCrewAgents(modelId, catalog, cwd, overlay, next) }
+      ? { ...base, agents: buildCrewAgents(modelId, catalog, cwd, overlay, next, workspaceFenceForTenant(conn.tenant)) }
       : base;
     if (resumeId) return Agent.resume(resumeId, opts);
     return Agent.create(opts);
@@ -2400,6 +2407,7 @@ function wrapPrompt(
   cwd?: string,
   panel: ReviewBinding[] = [],
   atUserRoot = false,
+  confine = true,
 ): string {
   let body = text;
   if (files?.length) {
@@ -2411,7 +2419,7 @@ function wrapPrompt(
   if (rules?.trim()) {
     body = `Workspace rules (follow these):\n${rules.trim()}\n\n${body}`;
   }
-  const bound = cwd ? `${workspaceConfinePrompt(cwd)}\n\n` : "";
+  const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n\n` : "";
   if (mode === "ask") {
     return `${bound}ASK MODE (read-only). You must not modify the workspace.
 Do not call write, edit, delete, apply patch, or any mutating shell command (rm, mv, git commit, npm install, etc.).
@@ -3089,7 +3097,9 @@ async function runNativeChat(
     args.subagent_type === "builder" && mode === "agent" ? "builder" : "explore";
   const nativeVet = (spec: ToolSpec, args: Record<string, unknown>) => {
     if (spec.category !== "shell") return null;
-    if (toolEscapesWorkspace(cwd, spec.name, args)) return "命令的工作目录或输出重定向超出了当前工作区，已拦截。";
+    if (workspaceFenceForTenant(conn.tenant) && toolEscapesWorkspace(cwd, spec.name, args)) {
+      return "命令的工作目录或输出重定向超出了当前工作区，已拦截。";
+    }
     if (shellPublishes(spec.name, args)) {
       const root = conn.tenant?.workspaceRoot;
       if (!root || !isUserWorkspace(cwd, root)) return "对外网站只能在 USER 工作区里创建，这个会话不能执行 jiebo-publish。";
@@ -3585,6 +3595,7 @@ async function handlePrompt(
     cwd,
     slot.reviewRoster || [],
     atUserRoot,
+    workspaceFenceForTenant(conn.tenant),
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
@@ -3761,6 +3772,7 @@ async function handlePrompt(
   };
 
   const blockOutsideWorkspace = (name: string, args: unknown, callId: string) => {
+    if (!workspaceFenceForTenant(conn.tenant)) return false;
     const shell = /(shell|bash|terminal|command)/i.test(name);
     if (!isMutatingTool(name, args) && !shell) return false;
     if (!toolEscapesWorkspace(cwd, name, args)) return false;
@@ -4732,8 +4744,8 @@ const httpServer = createServer((req, res) => {
 // 注意：ws 的 threshold 只在关闭 context takeover 时生效； takeover 还会让每连接常驻 zlib 窗口，一并关掉。
 const wss = new WebSocketServer({
   noServer: true,
-  // 大文件走 HTTP /upload；WS 帧只需要覆盖 sync_state 全量（约几 MB）加余量
-  maxPayload: 16 * 1024 * 1024,
+  // 单条会话会带上完整工具记录。cursorremote 一条对话已经超过 40MB，16MB 上限会把网关打崩。
+  maxPayload: 96 * 1024 * 1024,
   perMessageDeflate: {
     serverNoContextTakeover: true,
     clientNoContextTakeover: true,
@@ -4772,6 +4784,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
     policy: defaultPolicy(),
   };
   conns.set(ws, conn);
+
+  ws.on("error", (err) => {
+    const code = err && typeof err === "object" ? (err as { code?: string }).code : "";
+    console.error("ws error", code || (err instanceof Error ? err.message : err));
+  });
 
   ws.on("message", async (data) => {
     const message = parseClient(String(data));

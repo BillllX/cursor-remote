@@ -139,6 +139,14 @@ export function sandboxEnabledForTenant(tenant: { sandbox: boolean } | null | un
   return tenant ? tenant.sandbox : true;
 }
 
+/** 会话工作区围栏：写到当前目录以外就拦截。BillXu 除外，可以改这台机器上 gateway 用户能碰到的路径。 */
+export function workspaceFenceForTenant(
+  tenant: { id: string; name: string } | null | undefined,
+): boolean {
+  if (!tenant) return true;
+  return tenantSlug(tenant.id) !== "billxu" && tenantSlug(tenant.name) !== "billxu";
+}
+
 export function mediaSecret(): string {
   return loadTenants().mediaSecret;
 }

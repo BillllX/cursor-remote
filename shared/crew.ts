@@ -236,10 +236,11 @@ export function buildCrewAgents(
   cwd?: string,
   overlayFor?: (modelId: string) => string,
   reviewers?: ReviewBinding[],
+  confine = true,
 ): Record<string, CrewAgentDef> {
   const exploreModel = pickExplore(lead, catalog);
   const panel = reviewers ?? pickReviewPanel(lead, catalog);
-  const bound = cwd ? `${workspaceConfinePrompt(cwd)} ` : "";
+  const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)} ` : "";
   const extra = (model: { id: string } | "inherit") => {
     const id = model === "inherit" ? lead : model.id;
     const text = overlayFor?.(id)?.trim();
