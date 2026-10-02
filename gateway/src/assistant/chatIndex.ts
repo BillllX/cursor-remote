@@ -1,4 +1,5 @@
 import { splitTerms } from "./memory.ts";
+import { cachedIndex, fingerprint, retrieve, tokenize } from "./retrieval.ts";
 import { assistantPath, clip, readJson, writeJson, type TenantRef } from "./store.ts";
 
 /**
@@ -13,8 +14,16 @@ type IndexFile = { turns: IndexedTurn[] };
 
 const MAX_TURNS = 5000;
 
+/** 每次写索引加一，检索缓存靠它判断文档集变了没有（抹片段可能不改长度） */
+let writes = 0;
+
 function file(ref: TenantRef) {
   return assistantPath(ref, "chat-index", "index.json");
+}
+
+function save(ref: TenantRef, data: IndexFile) {
+  writes += 1;
+  writeJson(file(ref), data);
 }
 
 export function indexTurn(ref: TenantRef, row: Omit<IndexedTurn, "at" | "external">) {
@@ -31,13 +40,13 @@ export function indexTurn(ref: TenantRef, row: Omit<IndexedTurn, "at" | "externa
   if (at >= 0) data.turns[at] = next;
   else data.turns.push(next);
   data.turns = data.turns.slice(-MAX_TURNS);
-  writeJson(file(ref), data);
+  save(ref, data);
 }
 
 export function dropChatFromIndex(ref: TenantRef, chatId: string) {
   const data = readJson<IndexFile>(file(ref), { turns: [] });
   const kept = data.turns.filter((item) => item.chatId !== chatId);
-  if (kept.length !== data.turns.length) writeJson(file(ref), { turns: kept });
+  if (kept.length !== data.turns.length) save(ref, { turns: kept });
 }
 
 export function scrubChatIndex(ref: TenantRef, needles: string[]) {
@@ -53,30 +62,31 @@ export function scrubChatIndex(ref: TenantRef, needles: string[]) {
       }
     }
   }
-  if (changed) writeJson(file(ref), data);
+  if (changed) save(ref, data);
   return changed;
 }
 
+/** 混合检索（关键词 + 字符向量 + 实体），同分时新的在前 */
 export function searchChats(ref: TenantRef, query: string, limit = 8) {
   const terms = splitTerms(query);
   if (!terms.length) return [];
   const data = readJson<IndexFile>(file(ref), { turns: [] });
-  return data.turns
-    .map((turn) => {
-      const hay = `${turn.title}\n${turn.user}\n${turn.assistant}`.toLowerCase();
-      const score = terms.reduce((sum, term) => sum + (hay.includes(term) ? 1 : 0), 0);
-      return { turn, score };
-    })
-    .filter((row) => row.score > 0)
-    .sort((a, b) => b.score - a.score || b.turn.at - a.turn.at)
-    .slice(0, limit)
-    .map(({ turn }) => ({
-      chatId: turn.chatId,
-      turn: turn.turn,
-      title: turn.title,
-      snippet: snippetOf(`${turn.user}\n${turn.assistant}`, terms),
-      at: new Date(turn.at).toISOString(),
-    }));
+  const key = `${file(ref)}:${writes}:${fingerprint(data.turns.map((t) => `${t.chatId}:${t.turn}:${t.at}:${t.user.length}:${t.assistant.length}`))}`;
+  const index = cachedIndex(key, () => data.turns.map((turn) => ({ topic: turn.title, text: `${turn.user}\n${turn.assistant}` })));
+  const now = Date.now();
+  const snippetTerms = [...terms, ...tokenize(query).filter((term) => term.length > 1)];
+  return retrieve(index, query, { limit, prior: (i) => Math.exp(-Math.max(0, now - data.turns[i].at) / (30 * 86_400_000)) }).map(
+    ({ index: i }) => {
+      const turn = data.turns[i];
+      return {
+        chatId: turn.chatId,
+        turn: turn.turn,
+        title: turn.title,
+        snippet: snippetOf(`${turn.user}\n${turn.assistant}`, snippetTerms),
+        at: new Date(turn.at).toISOString(),
+      };
+    },
+  );
 }
 
 function snippetOf(text: string, terms: string[]) {

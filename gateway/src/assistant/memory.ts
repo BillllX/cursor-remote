@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import { scrubInbox } from "./inbox.ts";
+import { cachedIndex, fingerprint, retrieve } from "./retrieval.ts";
 import {
   appendJsonl,
   assistantPath,
@@ -458,22 +459,21 @@ export function isValid(entry: MemoryEntry, at = today()) {
   return true;
 }
 
+/** 混合检索（关键词 + 字符向量 + 实体）；空查询按 rank 列出 */
 export function searchMemory(ref: TenantRef, query: string, opts: { at?: string; limit?: number; includeInvalid?: boolean } = {}) {
-  const terms = splitTerms(query);
   const data = readEntries(ref);
   const at = opts.at || today();
-  const scored = data.entries
-    .filter((entry) => opts.includeInvalid || isValid(entry, at))
-    .map((entry) => {
-      const hay = `${entry.topic} ${entry.kind} ${entry.text} ${(entry.supplements ?? []).join(" ")}`.toLowerCase();
-      const score = terms.length ? terms.reduce((sum, term) => sum + (hay.includes(term) ? 1 : 0), 0) : 1;
-      return { entry, score };
-    })
-    .filter((row) => row.score > 0)
-    .sort((a, b) => b.score - a.score || rank(b.entry) - rank(a.entry))
-    .slice(0, opts.limit ?? 12);
-  if (scored.length) {
-    const ids = new Set(scored.map((row) => row.entry.id));
+  const limit = opts.limit ?? 12;
+  const usable = (entry: MemoryEntry) => opts.includeInvalid || isValid(entry, at);
+  const picked = splitTerms(query).length
+    ? retrieve(memoryIndex(ref, data), query, {
+        limit,
+        filter: (i) => usable(data.entries[i]),
+        prior: (i) => rank(data.entries[i]) / 6,
+      }).map((hit) => data.entries[hit.index])
+    : data.entries.filter(usable).sort((a, b) => rank(b) - rank(a)).slice(0, limit);
+  if (picked.length) {
+    const ids = new Set(picked.map((entry) => entry.id));
     for (const entry of data.entries) {
       if (!ids.has(entry.id)) continue;
       entry.lastUsedAt = nowIso();
@@ -482,7 +482,18 @@ export function searchMemory(ref: TenantRef, query: string, opts: { at?: string;
     }
     writeJson(entriesFile(ref), data);
   }
-  return scored.map((row) => row.entry);
+  return picked;
+}
+
+/** 条目的 id+rev 决定索引内容；lastUsedAt 之类不影响索引 */
+function memoryIndex(ref: TenantRef, data: EntriesFile) {
+  const key = `${entriesFile(ref)}:${data.rev}:${fingerprint(data.entries.map((entry) => `${entry.id}:${entry.rev}`))}`;
+  return cachedIndex(key, () =>
+    data.entries.map((entry) => ({
+      topic: entry.topic,
+      text: `${entry.kind} ${entry.text} ${(entry.supplements ?? []).join(" ")}`,
+    })),
+  );
 }
 
 function laterDate(a: string | undefined, b: string) {
