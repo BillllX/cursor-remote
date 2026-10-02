@@ -16,6 +16,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentMode,
+  AssistantState,
   CheckpointInfo,
   ClientMessage,
   HelloClient,
@@ -28,6 +29,8 @@ import type {
   AdminTenantStats,
   CursorBill,
 } from "../lib/protocol";
+import { DEFAULT_ASSISTANT_NAME } from "../lib/protocol";
+import AssistantPanel from "./AssistantPanel";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
 import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
@@ -595,12 +598,12 @@ function FolderMark({ className = "workspace-menu-folder" }: { className?: strin
   );
 }
 
-function workspaceLabel(path: string, root: string) {
+function workspaceLabel(path: string, root: string, rootName = DEFAULT_ASSISTANT_NAME) {
   const abs = normPath(path);
   const base = normPath(root);
-  if (!abs) return base ? "USER" : "工作区";
+  if (!abs) return base ? rootName : "工作区";
   if (!base) return abs.split("/").filter(Boolean).pop() || abs;
-  if (abs === base) return "USER";
+  if (abs === base) return rootName;
   if (abs.startsWith(`${base}/`)) return abs.slice(base.length + 1);
   return abs.split("/").filter(Boolean).pop() || abs;
 }
@@ -1274,8 +1277,15 @@ export default function ChatApp() {
   const [threadFindIndex, setThreadFindIndex] = useState(0);
   const [grepOpen, setGrepOpen] = useState(false);
   const [loopOpen, setLoopOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantName, setAssistantName] = useState(DEFAULT_ASSISTANT_NAME);
+  const [assistantState, setAssistantState] = useState<AssistantState | null>(null);
+  const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    return new URLSearchParams(window.location.search).get("inbox") || undefined;
+  });
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop">("chats");
+  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant">("chats");
   const [wideIDE, setWideIDE] = useState(false);
   const wideIDERef = useRef(false);
   wideIDERef.current = wideIDE;
@@ -1404,10 +1414,14 @@ export default function ChatApp() {
       seen.add(key);
       const known = workspaces.find((item) => sameCwd(item.path, path));
       const user = Boolean(known?.user) || sameCwd(path, workspaceRoot);
-      out.push({ path, name: user ? "USER" : known?.name || workspaceLabel(path, workspaceRoot), user });
+      out.push({
+        path,
+        name: user ? assistantName : known?.name || workspaceLabel(path, workspaceRoot, assistantName),
+        user,
+      });
     }
     return out;
-  }, [chats, workspaceRoot, workspaces]);
+  }, [assistantName, chats, workspaceRoot, workspaces]);
 
   const catalogWorkspaces = useMemo(() => {
     const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
@@ -1419,7 +1433,7 @@ export default function ChatApp() {
     const known = workspaces.length
       ? workspaces
       : root
-        ? [{ path: root, name: workspaceLabel(root, root) }]
+        ? [{ path: root, name: workspaceLabel(root, root, assistantName) }]
         : [];
     const byPath = new Map(known.map((item) => [normPath(item.path), { ...item, chats: [] as Chat[] }]));
     for (const chat of sidebarChats) {
@@ -1431,7 +1445,7 @@ export default function ChatApp() {
         const user = sameCwd(path, root);
         byPath.set(key, {
           path,
-          name: user ? "USER" : workspaceLabel(path, root),
+          name: user ? assistantName : workspaceLabel(path, root, assistantName),
           user,
           chats: [chat],
         });
@@ -1439,11 +1453,11 @@ export default function ChatApp() {
     }
     const groups = [...byPath.values()].map((group) => {
       const user = Boolean(group.user) || sameCwd(group.path, root);
-      return { ...group, user, name: user ? "USER" : group.name };
+      return { ...group, user, name: user ? assistantName : group.name };
     });
     groups.sort((a, b) => Number(Boolean(b.user)) - Number(Boolean(a.user)));
     return groups.filter((group) => group.chats.length || group.user || (root && !sameCwd(group.path, root)));
-  }, [sidebarChats, workspaces, workspaceRoot, cwd]);
+  }, [assistantName, sidebarChats, workspaces, workspaceRoot, cwd]);
 
   const duplicateGroupNames = useMemo(() => {
     const counts = new Map<string, number>();
@@ -1458,8 +1472,8 @@ export default function ChatApp() {
   const userMenuWorkspace = useMemo(
     () =>
       menuWorkspaces.find((item) => item.user) ||
-      (workspaceRoot ? { path: workspaceRoot, name: "USER", user: true as const } : null),
-    [menuWorkspaces, workspaceRoot],
+      (workspaceRoot ? { path: workspaceRoot, name: assistantName, user: true as const } : null),
+    [assistantName, menuWorkspaces, workspaceRoot],
   );
   const otherMenuWorkspaces = useMemo(
     () => menuWorkspaces.filter((item) => !item.user && !sameCwd(item.path, userMenuWorkspace?.path)),
@@ -1850,6 +1864,9 @@ export default function ChatApp() {
             }
             if (message.workspaceRoot) setWorkspaceRoot(message.workspaceRoot);
             else setWorkspaceRoot((prev) => prev || message.cwd);
+            setAssistantName(message.assistantName?.trim() || DEFAULT_ASSISTANT_NAME);
+            send({ type: "assistant_get" });
+            if (inboxDeepLink) setAssistantOpen(true);
             {
               const next: Record<string, LoopState> = {};
               for (const row of message.loops || []) {
@@ -2283,6 +2300,23 @@ export default function ChatApp() {
               },
             };
           });
+          break;
+        case "assistant_state":
+          setAssistantState(message.state);
+          if (message.state.name?.trim()) setAssistantName(message.state.name.trim());
+          break;
+        case "inbox_item":
+          setAssistantState((prev) => {
+            if (!prev) return prev;
+            const inbox = [message.item, ...prev.inbox.filter((row) => row.id !== message.item.id)];
+            return { ...prev, inbox };
+          });
+          break;
+        case "assistant_result":
+          if (!message.ok && message.error) setNotice(message.error);
+          break;
+        case "memory_written":
+          if (message.entry?.topic) setNotice(`已记住：${message.entry.topic}`);
           break;
         case "admin_stats":
           setAdminStats(message.tenants || []);
@@ -3524,24 +3558,33 @@ export default function ChatApp() {
     setFilesOpen(true);
   }
 
-  function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop") {
+  function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") {
     if (!wideIDERef.current) {
       if (pane === "chats") setNavOpen(true);
       if (pane === "files" || pane === "git") openFilesBrowser();
       if (pane === "search") {
         setPaletteOpen(false);
         setLoopOpen(false);
+        setAssistantOpen(false);
         setTerminalOpen(false);
         setGrepOpen(true);
       }
       if (pane === "loop") {
         setGrepOpen(false);
         setTerminalOpen(false);
+        setAssistantOpen(false);
         setLoopOpen(true);
+      }
+      if (pane === "assistant") {
+        setGrepOpen(false);
+        setLoopOpen(false);
+        setTerminalOpen(false);
+        setAssistantOpen(true);
       }
       if (pane === "terminal") {
         setGrepOpen(false);
         setLoopOpen(false);
+        setAssistantOpen(false);
         setTerminalOpen(true);
       }
       return;
@@ -3554,8 +3597,18 @@ export default function ChatApp() {
     setFilesOpen(pane === "files" || pane === "git");
     setGrepOpen(pane === "search");
     setLoopOpen(pane === "loop");
+    setAssistantOpen(pane === "assistant");
     setTerminalOpen(pane === "terminal");
     if (pane === "files") setFilesQuery("");
+  }
+
+  function openAssistantInboxItem(item: { chatId?: string; id: string }) {
+    if (item.chatId) {
+      const chat = chatsRef.current.find((row) => row.id === item.chatId);
+      if (chat) selectChat(chat);
+    }
+    setAssistantOpen(true);
+    setInboxDeepLink(item.id);
   }
 
   function selectChat(chat: Chat) {
@@ -4548,6 +4601,7 @@ export default function ChatApp() {
         {(
           [
             ["chats", "对话"],
+            ["assistant", assistantName],
             ["files", "文件"],
             ["search", "搜索"],
             ["git", "Git"],
@@ -4558,7 +4612,7 @@ export default function ChatApp() {
           <button
             key={pane}
             type="button"
-            className={`${sidePane === pane ? "on" : ""}${pane === "loop" && loopLive ? " live" : ""}`}
+            className={`${sidePane === pane ? "on" : ""}${pane === "loop" && loopLive ? " live" : ""}${pane === "assistant" && assistantOpen ? " on" : ""}`}
             aria-pressed={sidePane === pane}
             aria-label={label}
             onClick={() => chooseSide(pane)}
@@ -4752,6 +4806,19 @@ export default function ChatApp() {
           </div>
         </div>
       ) : null}
+      <AssistantPanel
+        open={assistantOpen}
+        onClose={() => {
+          setAssistantOpen(false);
+          setInboxDeepLink(undefined);
+        }}
+        name={assistantName}
+        state={assistantState}
+        send={send}
+        initialInboxId={inboxDeepLink}
+        basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
+        onOpenInboxItem={(item) => openAssistantInboxItem(item)}
+      />
       {loopOpen ? (
         <div className="search-overlay open" onClick={() => { if (wideIDE && sidePane === "loop") return; setLoopOpen(false); }}>
           <form
@@ -4999,7 +5066,7 @@ export default function ChatApp() {
               <div className="files-browser-title">
                 <span>{sidePane === "git" && wideIDE ? "Git" : "文件"}</span>
                 <span className="files-browser-cwd" title={cwd || workspaceRoot}>
-                  {workspaceLabel(cwd || workspaceRoot, workspaceRoot)}
+                  {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
                 </span>
               </div>
               <button
@@ -5118,7 +5185,7 @@ export default function ChatApp() {
           <div>
             <div className="brand-title">接驳</div>
             <div className="brand-sub" title={cwd || workspaceRoot}>
-              {workspaceLabel(cwd || workspaceRoot, workspaceRoot)}
+              {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
             </div>
           </div>
         </div>
@@ -5140,6 +5207,7 @@ export default function ChatApp() {
           <div className="side-tools" role="toolbar" aria-label="工具">
             {(
               [
+                ["assistant", "助理"],
                 ["files", "文件"],
                 ["search", "搜索"],
                 ["git", "Git"],
@@ -5155,6 +5223,8 @@ export default function ChatApp() {
                     ? terminalOpen
                     : pane === "loop"
                       ? loopOpen
+                      : pane === "assistant"
+                        ? assistantOpen
                       : pane === "git"
                         ? false
                         : filesOpen;
@@ -5187,7 +5257,7 @@ export default function ChatApp() {
                     onClick={() => startChatIn(userMenuWorkspace.path)}
                   >
                     <FolderMark />
-                    <span className="workspace-menu-name">USER</span>
+                    <span className="workspace-menu-name">{assistantName}</span>
                     <span className="workspace-menu-user">全部</span>
                     {sameCwd(userMenuWorkspace.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
                   </button>
@@ -5372,7 +5442,7 @@ export default function ChatApp() {
               {connected
                 ? busy
                   ? "服务器正在干活"
-                  : workspaceLabel(cwd || workspaceRoot, workspaceRoot)
+                  : workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)
                 : "没连上"}
             </span>
           </button>

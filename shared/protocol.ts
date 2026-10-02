@@ -1,5 +1,106 @@
 export type AgentMode = "agent" | "plan" | "ask";
 
+/** USER 根目录 AGENTS.md 没设名字或不合法时，助理叫这个。iOS 有同名常量 */
+export const DEFAULT_ASSISTANT_NAME = "小驳";
+
+export type AssistantInboxItem = {
+  id: string;
+  kind: "approval" | "delegation" | "reminder" | "brief" | "run" | "memory" | "info";
+  title: string;
+  body: string;
+  createdAt: number;
+  read: boolean;
+  chatId?: string;
+  scheduleId?: string;
+  delegationId?: string;
+};
+
+export type AssistantMemoryEntry = {
+  id: string;
+  rev: number;
+  topic: string;
+  kind: string;
+  text: string;
+  basis: "user_said" | "inferred";
+  confidence: number;
+  source?: { chatId?: string; turn?: number; chatDeleted?: boolean };
+  validFrom?: string;
+  validUntil?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  invalidAt?: string | null;
+  invalidReason?: string;
+  supplements?: string[];
+};
+
+export type AssistantState = {
+  name: string;
+  background: { model: string; ok: boolean; reason?: string };
+  pushKey?: string;
+  inbox: AssistantInboxItem[];
+  todos: Array<{ id: string; text: string; due?: string; done: boolean; doneAt?: number; createdAt: number }>;
+  schedules: Array<{
+    id: string;
+    title: string;
+    kind: "prompt" | "brief" | "remind";
+    cron: string;
+    tz: string;
+    prompt: string;
+    enabled: boolean;
+    nextAt: number | null;
+    lastStatus?: string;
+    failCount: number;
+    pausedReason?: string;
+  }>;
+  delegations: Array<{
+    id: string;
+    parentChatId?: string;
+    childChatId: string;
+    workspace: string;
+    title: string;
+    mode: "foreground" | "background";
+    status: "running" | "awaiting" | "done" | "failed";
+    createdAt: number;
+    endedAt?: number;
+    result?: string;
+  }>;
+  runs: Array<{ runId: string; origin: string; label: string; status: string; startedAt: number; endedAt?: number; summary?: string; error?: string }>;
+  brief?: { day: string; text: string } | null;
+  memory?: {
+    rev: number;
+    core: { rev: number; fields: Record<string, string> };
+    entries: AssistantMemoryEntry[];
+    settings: { paused: boolean; allowSensitive: Record<string, boolean | undefined> };
+    sensitive: Record<string, string>;
+    coreTokens: number;
+    coreBudget: number;
+  };
+};
+
+/** assistant_op 的操作名；args 由网关逐项校验 */
+export type AssistantOp =
+  | "inbox_read"
+  | "todo_add"
+  | "todo_done"
+  | "todo_undo"
+  | "todo_remove"
+  | "schedule_set"
+  | "schedule_remove"
+  | "memory_save"
+  | "memory_edit"
+  | "memory_invalidate"
+  | "memory_restore"
+  | "memory_forget"
+  | "memory_purge"
+  | "memory_purge_all"
+  | "memory_core"
+  | "memory_settings"
+  | "memory_export"
+  | "push_subscribe"
+  | "push_unsubscribe"
+  | "push_test";
+
 /** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
 export type PolicyId = "baseline" | "plane";
 
@@ -96,7 +197,10 @@ export type ClientMessage =
       model?: string;
       mode?: AgentMode;
     }
-  | { type: "loop_stop"; chatId: string };
+  | { type: "loop_stop"; chatId: string }
+  // 个人助理（今日页、记忆页、推送）。memory: true 时一并下发记忆全量
+  | { type: "assistant_get"; memory?: boolean }
+  | { type: "assistant_op"; op: AssistantOp; args?: Record<string, unknown>; reqId?: string };
 
 export type PreviewKind =
   | "text"
@@ -177,6 +281,8 @@ export type ServerMessage =
       policy?: PolicyId;
       /** 未停止的产品 Loop。L2 起随 ready 下发；L1 字段先占位 */
       loops?: LoopState[];
+      /** USER 根目录的助理名字，来自 AGENTS.md；缺省 DEFAULT_ASSISTANT_NAME */
+      assistantName?: string;
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
@@ -312,6 +418,10 @@ export type ServerMessage =
   | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[]; cursor?: CursorBill }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
+  | { type: "assistant_state"; state: AssistantState }
+  | { type: "assistant_result"; reqId?: string; op: AssistantOp; ok: boolean; error?: string; data?: unknown }
+  | { type: "inbox_item"; item: AssistantInboxItem }
+  | { type: "memory_written"; chatId?: string; entry: AssistantMemoryEntry }
   | { type: "pong" };
 
 /** 当前 CURSOR_API_KEY 的官方账单，口径与 Cursor CLI `/usage` 相同。

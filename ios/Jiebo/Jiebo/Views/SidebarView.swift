@@ -454,7 +454,7 @@ struct SidebarView: View {
     private var newChatMenu: some View {
         let root = store.workspaceRoot.isEmpty ? store.cwd : store.workspaceRoot
         let items = store.workspaces.isEmpty && !root.isEmpty
-            ? [WorkspaceItem(path: root, name: "USER", user: true)]
+            ? [WorkspaceItem(path: root, name: store.assistantName, user: true)]
             : store.workspaces
         return VStack(alignment: .leading, spacing: 2) {
             if items.isEmpty {
@@ -474,7 +474,7 @@ struct SidebarView: View {
                             Image(systemName: "folder")
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundStyle(JieboColor.brass)
-                            Text(item.user || sameCwd(item.path, root) ? "USER" : item.name)
+                            Text(item.user || sameCwd(item.path, root) ? store.assistantName : item.name)
                                 .font(JieboFont.ui(13, weight: current ? .semibold : .regular))
                                 .foregroundStyle(JieboColor.ink)
                                 .lineLimit(1)
@@ -517,7 +517,7 @@ private struct WorkspaceSheet: View {
                             dismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(root.isEmpty ? "正在读取工作区…" : "USER")
+                                Text(root.isEmpty ? "正在读取工作区…" : store.assistantName)
                                     .font(JieboFont.ui(16, weight: .semibold))
                                     .foregroundStyle(JieboColor.pine)
                                 Text("能看全部子工作区。网站只在这里公开。")
@@ -533,7 +533,7 @@ private struct WorkspaceSheet: View {
                             dismiss()
                         } label: {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("USER")
+                                Text(store.assistantName)
                                     .font(JieboFont.ui(16, weight: .semibold))
                                     .foregroundStyle(JieboColor.pine)
                                 Text("能看全部子工作区。网站只在这里公开。")

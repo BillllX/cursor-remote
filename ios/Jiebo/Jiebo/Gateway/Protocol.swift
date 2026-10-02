@@ -436,6 +436,10 @@ struct SearchHit: Sendable, Hashable, Identifiable {
     }
 }
 
+enum AssistantDefaults {
+    static let name = "小驳"
+}
+
 enum ServerMessage {
     case ready(
         cwd: String,
@@ -449,7 +453,8 @@ enum ServerMessage {
         tenantId: String?,
         tenantName: String?,
         admin: Bool,
-        loops: [LoopSnapshot]
+        loops: [LoopSnapshot],
+        assistantName: String?
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
@@ -590,7 +595,8 @@ enum ServerMessage {
                 tenantId: object["tenantId"]?.string,
                 tenantName: object["tenantName"]?.string,
                 admin: object["admin"]?.bool ?? false,
-                loops: object["loops"]?.array?.compactMap { LoopSnapshot.from($0.object) } ?? []
+                loops: object["loops"]?.array?.compactMap { LoopSnapshot.from($0.object) } ?? [],
+                assistantName: object["assistantName"]?.string
             )
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in

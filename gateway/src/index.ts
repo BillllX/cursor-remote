@@ -101,6 +101,25 @@ import { findBwrap, isReadOnlyCommand, shellTool } from "./native/tools/shell.ts
 import { taskTool } from "./native/tools/task.ts";
 import type { ChatMessage, ToolSpec } from "./native/types.ts";
 import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
+import { bindBackground } from "./assistant/background.ts";
+import { activeDelegationFor, createDelegation, updateDelegation } from "./assistant/delegations.ts";
+import { postInbox } from "./assistant/inbox.ts";
+import {
+  assistantName,
+  buildState,
+  foregroundTools,
+  handleOp,
+  noteChatDeleted,
+  noteUserTurn,
+  onTenantHello,
+  publishState,
+  runDelegateInBackground,
+  runLoopInBackground,
+  startAssistant,
+  userRootPreamble,
+  watchMemory,
+  type DelegateRequest,
+} from "./assistant/service.ts";
 import { createPublishController } from "./publish.ts";
 
 loadDotEnv([
@@ -249,6 +268,9 @@ type Slot = {
   captureText?: (text: string) => void;
   captureError?: (text: string) => void;
   captureDone?: (status: string) => void;
+  /** 委派来的子会话：审批要进收件箱并推送，等待时长按 approvalTimeoutMs */
+  delegationId?: string;
+  approvalTimeoutMs?: number;
   policy: PolicyId;
   approvedKeys: Set<string>;
   approvalCallId: string | null;
@@ -387,7 +409,8 @@ function listWorkspaceItems(tenant: Tenant): { path: string; name: string; user?
   const root = resolve(tenant.workspaceRoot);
   const skip = new Set(["node_modules", "dist", "coverage", "venv", "__pycache__"]);
   const byPath = new Map<string, string>();
-  byPath.set(root, "USER");
+  const rootName = assistantName(tenant);
+  byPath.set(root, rootName);
   try {
     for (const name of readdirSync(root).sort()) {
       if (name.startsWith(".") || skip.has(name)) continue;
@@ -408,7 +431,7 @@ function listWorkspaceItems(tenant: Tenant): { path: string; name: string; user?
     byPath.set(cwd, rel || basename(cwd));
   }
   return [...byPath.entries()].map(([path, name]) =>
-    path === root ? { path, name: "USER", user: true as const } : { path, name },
+    path === root ? { path, name: rootName, user: true as const } : { path, name },
   );
 }
 
@@ -526,6 +549,7 @@ function send(ws: WebSocket, message: ServerMessage) {
   if (message.type === "text-delta") capturing?.captureText?.(message.text);
   if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
   if (message.type === "done") capturing?.captureDone?.(message.status);
+  if (message.type === "approval" && slot?.delegationId) noteDelegationApproval(slot, message.callId, message.name);
   // 流式事件跟当前 owner。应答仍回发起连接，避免翻页或写文件被另一台设备抢走。
   const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
@@ -754,6 +778,7 @@ function tombstoneChat(tenant: Tenant, chatId: string) {
   tenant.disk.deletedIds = [chatId, ...tenant.disk.deletedIds.filter((id) => id !== chatId)].slice(0, 500);
   tenant.disk.chats = tenant.disk.chats.filter((item) => chatIdOf(item) !== chatId);
   delete tenant.disk.chatRevs[chatId];
+  noteChatDeleted(tenant, chatId);
 }
 
 /// 全量 chatRevs 视图：没有记录的老会话补 0（迁移期），保证 digest/stored_state 一致
@@ -1094,7 +1119,7 @@ function rememberApproved(slot: Slot) {
   if (tool) slot.approvedKeys.add(toolFingerprint(tool.name, tool.args));
 }
 
-function waitForApproval(slot: Slot, ms = 120_000) {
+function waitForApproval(slot: Slot, ms = slot.approvalTimeoutMs ?? 120_000) {
   if (slot.approvalSettled != null) {
     const value = slot.approvalSettled;
     slot.approvalSettled = null;
@@ -1194,10 +1219,14 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
   const modelId = (slot.model || conn.model || DEFAULT_MODEL).trim() || DEFAULT_MODEL;
   const catalog = await listModels(apiKey);
   const sandbox = sandboxEnabledForTenant(conn.tenant);
-  const local: { cwd: string; sandboxOptions?: { enabled: boolean } } = {
+  const local: { cwd: string; sandboxOptions?: { enabled: boolean }; customTools?: ReturnType<typeof foregroundTools> } = {
     cwd,
     sandboxOptions: { enabled: sandbox },
   };
+  // 助理工具只挂在 USER 根目录会话上；子工作区会话没有记忆工具
+  if (conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot)) {
+    local.customTools = foregroundTools(conn.tenant, slot.chatId);
+  }
   const base = { apiKey, model: { id: modelId }, local };
   const overlay = slot.dialect === false ? undefined : dialectOverlay;
   const panel = [...(slot.reviewRoster ?? pickReviewPanel(modelId, catalog))];
@@ -2839,6 +2868,29 @@ function finishRun(
   const approval = status === "approval";
   if (!approval) stopRunFlush(slot);
   flushTranscript(slot, !approval);
+  if (!approval) indexUserTurn(slot);
+}
+
+/** USER 根目录会话每轮完成后进会话搜索索引；子工作区会话不进 */
+function indexUserTurn(slot: Slot) {
+  const tenant = getTenant(slot.tenantId);
+  const transcript = slot.transcript;
+  if (!tenant || !transcript || !slot.cwd || !isUserWorkspace(slot.cwd, tenant.workspaceRoot)) return;
+  const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as
+    | { title?: unknown; turns?: unknown[] }
+    | undefined;
+  const turns = Array.isArray(chat?.turns) ? chat.turns.length : 1;
+  try {
+    noteUserTurn(tenant, {
+      chatId: slot.chatId,
+      turn: Math.max(turns - 1, 0),
+      title: typeof chat?.title === "string" ? chat.title : "",
+      user: transcript.userText || "",
+      assistant: transcript.assistant || "",
+    });
+  } catch (err) {
+    console.error("index user turn", err);
+  }
 }
 
 function sanitizeChatTitle(raw: string) {
@@ -3504,6 +3556,13 @@ async function handlePrompt(
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
+  if (atUserRoot && conn.tenant && !externalEarly) {
+    try {
+      prompt = `${userRootPreamble(conn.tenant)}\n\n${prompt}`;
+    } catch (err) {
+      console.error("assistant preamble", err);
+    }
+  }
   if (!prompt) return;
 
   const epoch = ++slot.epoch;
@@ -4744,8 +4803,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             admin: tenant.admin,
             policy: conn.policy || defaultPolicy(),
             loops: loopsForTenant(tenant.id),
+            assistantName: assistantName(tenant),
           });
         };
+        try {
+          onTenantHello(tenant);
+        } catch (err) {
+          console.error("assistant hello", err);
+        }
         emitReady(cached);
         emitStoredState(ws, tenant);
         emitWorkspaces(ws, tenant);
@@ -4769,6 +4834,20 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
       const tenant = conn.tenant;
+
+      if (message.type === "assistant_get") {
+        if (message.memory) watchMemory(tenant.id, true);
+        send(ws, { type: "assistant_state", state: await buildState(tenant, { memory: Boolean(message.memory) }) });
+        return;
+      }
+
+      if (message.type === "assistant_op") {
+        const args = message.args && typeof message.args === "object" ? message.args : {};
+        const result = await handleOp(tenant, message.op, args);
+        send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result });
+        if (result.ok) void publishState(tenant);
+        return;
+      }
 
       if (message.type === "loop_start") {
         const result = startLoop({
@@ -5559,7 +5638,18 @@ async function dispatchLoop(job: LoopJob) {
   const ownerConn = previousOwner ? conns.get(previousOwner) : undefined;
   // 优先用会话当前 owner 的连接跑，免得工作区、事件去向和 owner 分属两台设备
   const conn = ownerConn?.authed && ownerConn.tenant?.id === job.tenantId ? ownerConn : openConn(job.tenantId);
-  if (!conn) return { text: "", error: "offline" as const };
+  if (!conn) {
+    if (!tenant) return { text: "", error: "offline" as const };
+    // 没人在线：走后台策略（只读工具、grok-4.7），不再顺延等人上线
+    const result = await runLoopInBackground(tenant, {
+      chatId: job.chatId,
+      cwd: cwdForChat(tenant, job.chatId),
+      text: job.text,
+      label: `Loop：${job.text.split("\n")[0].slice(0, 30)}`,
+    });
+    if (!result.ok) return { text: "", error: result.busy ? ("deferred" as const) : result.error };
+    return { text: result.text };
+  }
   const slot = slotOf(conn, job.chatId);
   if (previousOwner) slot.owner = previousOwner;
   let text = "";
@@ -5625,6 +5715,137 @@ function publishLoop(tenantId: string, message: ServerMessage) {
 }
 
 bindLoops({ busy: loopBusy, dispatch: dispatchLoop, publish: publishLoop });
+
+const DELEGATION_APPROVAL_MS = 24 * 3_600_000;
+
+function noteDelegationApproval(slot: Slot, callId: string, tool: string) {
+  const tenant = getTenant(slot.tenantId);
+  if (!tenant || !slot.delegationId) return;
+  const record = updateDelegation(tenant, slot.delegationId, { status: "awaiting" });
+  postInbox(tenant, {
+    kind: "approval",
+    title: `委派「${record?.title ?? ""}」要${tool === "shell" ? "跑命令" : "改文件"}，等你批准`,
+    body: "打开子会话，在工具卡上批准或拒绝。24 小时没人答就按拒绝处理。",
+    key: `approval:${slot.chatId}:${callId}`,
+    chatId: slot.chatId,
+    delegationId: slot.delegationId,
+  });
+}
+
+function delegationWorkspaces(tenant: Tenant) {
+  return listWorkspaceItems(tenant)
+    .filter((item) => !item.user)
+    .map((item) => item.name);
+}
+
+async function startDelegation(req: DelegateRequest): Promise<string> {
+  const tenant = getTenant(req.tenant.id);
+  if (!tenant) return JSON.stringify({ ok: false, error: "租户不存在" });
+  const name = sanitizeWorkspaceName(req.workspace.replace(/^\.\//, ""));
+  const root = resolve(tenant.workspaceRoot);
+  const cwd = name ? confinedCwd(resolve(root, name), root) : null;
+  if (!name || !cwd || cwd === root || !existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return JSON.stringify({ ok: false, error: `没有这个子工作区：${req.workspace}。可用：${delegationWorkspaces(tenant).join("、")}` });
+  }
+  const task = req.task.trim();
+  if (!task) return JSON.stringify({ ok: false, error: "任务说明为空" });
+  const busy = activeDelegationFor(tenant, name);
+  if (busy) return JSON.stringify({ ok: false, error: `子工作区 ${name} 已有委派「${busy.title}」在跑，等它完成再交新的。` });
+  const parent = req.parentChatId ? liveSlotsOf(tenant).get(req.parentChatId) : undefined;
+  const ownerConn = parent?.owner?.readyState === WebSocket.OPEN ? conns.get(parent.owner) : undefined;
+  const conn = req.background ? undefined : ownerConn?.authed ? ownerConn : openConn(tenant.id);
+  const background = !conn;
+  const title = (req.title || task.split("\n")[0]).slice(0, 30);
+  const childChatId = crypto.randomUUID();
+  const record = createDelegation(tenant, {
+    parentChatId: req.parentChatId,
+    childChatId,
+    workspace: name,
+    title,
+    task,
+    mode: background ? "background" : "foreground",
+  });
+  tenant.disk.chats = [
+    ...tenant.disk.chats,
+    { id: childChatId, title: `委派：${title}`, turns: [], cwd, parentChatId: req.parentChatId, delegationId: record.id },
+  ];
+  tenant.disk.rev += 1;
+  tenant.disk.chatRevs[childChatId] = tenant.disk.rev;
+  persistTenant(tenant);
+  broadcastDigest(tenant, null as unknown as WebSocket);
+  void publishState(tenant);
+
+  const finish = (ok: boolean, text: string) => {
+    updateDelegation(tenant, record.id, { status: ok ? "done" : "failed", result: text, endedAt: Date.now() });
+    postInbox(tenant, {
+      kind: "delegation",
+      title: `委派${ok ? "完成" : "失败"}：${title}`,
+      body: text.slice(0, 3000) || "（没有输出）",
+      key: `delegation:${record.id}`,
+      chatId: childChatId,
+      delegationId: record.id,
+    });
+  };
+
+  if (background) {
+    void runDelegateInBackground(tenant, { chatId: childChatId, cwd, task, label: `委派：${title}` }).then((result) =>
+      finish(result.ok, result.ok ? result.text : result.error),
+    );
+    return JSON.stringify({ ok: true, id: record.id, childChatId, mode: "background", note: "后台委派只读，结果进收件箱。" });
+  }
+
+  const slot = slotOf(conn, childChatId);
+  slot.cwd = cwd;
+  slot.delegationId = record.id;
+  slot.approvalTimeoutMs = DELEGATION_APPROVAL_MS;
+  let text = "";
+  let error = "";
+  const settled = new Promise<string>((resolveDone) => {
+    slot.captureText = (chunk) => {
+      text += chunk;
+    };
+    slot.captureError = (chunk) => {
+      error = chunk;
+    };
+    slot.captureDone = (status) => {
+      if (status === "approval") return;
+      resolveDone(status);
+    };
+  });
+  const prompt = [
+    "这是从个人工作区委派来的任务。做完用三五句话汇报：做了什么、改了哪些文件、还有什么没做。",
+    "",
+    task,
+  ].join("\n");
+  void handlePrompt(conn.ws, conn, slot, prompt, undefined, "agent", undefined, undefined, true, false, false, slot.policy, slot.dialect);
+  void settled.then((status) => {
+    slot.captureText = undefined;
+    slot.captureError = undefined;
+    slot.captureDone = undefined;
+    const ok = status === "completed" || status === "finished";
+    finish(ok, ok ? text.trim() : error || `结束状态：${status}`);
+  });
+  return JSON.stringify({ ok: true, id: record.id, childChatId, mode: "foreground", note: "子会话已开工，写文件要你批准；完成后汇报到收件箱。" });
+}
+
+bindBackground({
+  apiKey: () => process.env.CURSOR_API_KEY?.trim() || "",
+  listModels,
+  prompt: (message, options) => Agent.prompt(message, options),
+  sandbox: (tenantId) => sandboxEnabledForTenant(getTenant(tenantId)),
+});
+
+startAssistant({
+  tenants: () => allTenants(),
+  publish: publishLoop,
+  globalStateDir: stateDir(),
+  delegate: startDelegation,
+  workspaces: (tenant) => {
+    const full = getTenant(tenant.id);
+    return full ? delegationWorkspaces(full) : [];
+  },
+  appUrl: () => "./",
+});
 
 httpServer.listen(PORT, HOST, () => {
   publish.boot();

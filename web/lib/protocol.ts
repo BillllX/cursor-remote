@@ -1,5 +1,106 @@
 export type AgentMode = "agent" | "plan" | "ask";
 
+/** USER 根目录 AGENTS.md 没设名字或不合法时，助理叫这个。iOS 有同名常量 */
+export const DEFAULT_ASSISTANT_NAME = "小驳";
+
+export type AssistantInboxItem = {
+  id: string;
+  kind: "approval" | "delegation" | "reminder" | "brief" | "run" | "memory" | "info";
+  title: string;
+  body: string;
+  createdAt: number;
+  read: boolean;
+  chatId?: string;
+  scheduleId?: string;
+  delegationId?: string;
+};
+
+export type AssistantMemoryEntry = {
+  id: string;
+  rev: number;
+  topic: string;
+  kind: string;
+  text: string;
+  basis: "user_said" | "inferred";
+  confidence: number;
+  source?: { chatId?: string; turn?: number; chatDeleted?: boolean };
+  validFrom?: string;
+  validUntil?: string;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt?: string;
+  invalidAt?: string | null;
+  invalidReason?: string;
+  supplements?: string[];
+};
+
+export type AssistantState = {
+  name: string;
+  background: { model: string; ok: boolean; reason?: string };
+  pushKey?: string;
+  inbox: AssistantInboxItem[];
+  todos: Array<{ id: string; text: string; due?: string; done: boolean; doneAt?: number; createdAt: number }>;
+  schedules: Array<{
+    id: string;
+    title: string;
+    kind: "prompt" | "brief" | "remind";
+    cron: string;
+    tz: string;
+    prompt: string;
+    enabled: boolean;
+    nextAt: number | null;
+    lastStatus?: string;
+    failCount: number;
+    pausedReason?: string;
+  }>;
+  delegations: Array<{
+    id: string;
+    parentChatId?: string;
+    childChatId: string;
+    workspace: string;
+    title: string;
+    mode: "foreground" | "background";
+    status: "running" | "awaiting" | "done" | "failed";
+    createdAt: number;
+    endedAt?: number;
+    result?: string;
+  }>;
+  runs: Array<{ runId: string; origin: string; label: string; status: string; startedAt: number; endedAt?: number; summary?: string; error?: string }>;
+  brief?: { day: string; text: string } | null;
+  memory?: {
+    rev: number;
+    core: { rev: number; fields: Record<string, string> };
+    entries: AssistantMemoryEntry[];
+    settings: { paused: boolean; allowSensitive: Record<string, boolean | undefined> };
+    sensitive: Record<string, string>;
+    coreTokens: number;
+    coreBudget: number;
+  };
+};
+
+/** assistant_op 的操作名；args 由网关逐项校验 */
+export type AssistantOp =
+  | "inbox_read"
+  | "todo_add"
+  | "todo_done"
+  | "todo_undo"
+  | "todo_remove"
+  | "schedule_set"
+  | "schedule_remove"
+  | "memory_save"
+  | "memory_edit"
+  | "memory_invalidate"
+  | "memory_restore"
+  | "memory_forget"
+  | "memory_purge"
+  | "memory_purge_all"
+  | "memory_core"
+  | "memory_settings"
+  | "memory_export"
+  | "push_subscribe"
+  | "push_unsubscribe"
+  | "push_test";
+
 /** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
 export type PolicyId = "baseline" | "plane";
 
@@ -12,6 +113,9 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 // caps：客户端能力集。已知值：
 //   "sync_chat"     —— 支持单会话增量上传（sync_chat）与 sync_ack 回执
 //   "stored_digest" —— 分叉时收 stored_digest 目录 + load_chats 按需拉取，而不是全量 stored_state
+//   "slim_state"    —— stored_state 只给元数据（剥 turns，补 preview），内容走 load_chat 分页；
+//                      stored_chat（load_chats 应答）仍回全量——digest 对账是跨设备 turns 更新唯一通道
+//                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
 
 export type ClientMessage =
@@ -34,7 +138,10 @@ export type ClientMessage =
       policy?: PolicyId;
       /** 缺省 true。false 时关掉中文系方言 overlay，给 dialect-bench 对照用 */
       dialect?: boolean;
-      /** 客户端本地回合 id。网关用它对齐缓冲、快照和落盘 */
+      /** P11：第三方模型（model 带 provider: 前缀）的会话历史——客户端是内容权威源，
+       *  网关无状态，随 prompt 上行最近若干条 user/assistant 文本；Cursor 路径忽略 */
+      history?: { role: "user" | "assistant"; text: string }[];
+      /** 客户端本地回合 id。网关用它对齐缓冲、快照和落盘，避免靠用户原文配对 */
       turnId?: string;
     }
   | { type: "cancel"; chatId: string }
@@ -72,10 +179,15 @@ export type ClientMessage =
   | { type: "sync_chat"; chat: unknown; rev?: number }
   // stored_digest 后按需拉取单个会话全量（P4c）
   | { type: "load_chats"; ids: string[] }
+  // slim_state 客户端的会话内容分页（P8）：from 省略=最后一页，否则拉 turns[..<from] 的上一页。
+  // nonce：客户端分页代际标记，网关在 chat_turns 原样回显——降级/重启分页后旧链迟到页据此丢弃
+  | { type: "load_chat"; chatId: string; from?: number; nonce?: number }
   | { type: "approval_reply"; chatId: string; callId: string; allow: boolean }
   | { type: "set_policy"; policy: PolicyId; chatId?: string }
+  // 管理员查询全部租户的使用统计（P9）：仅 tenants.json 里 admin: true 的租户可用
   | { type: "admin_stats" }
   | { type: "ping" }
+  // 产品 Loop（见 docs/IDE.md）：挂在某个会话上的重复任务。L1 只定消息形状，调度在 L2
   | {
       type: "loop_start";
       chatId: string;
@@ -85,7 +197,10 @@ export type ClientMessage =
       model?: string;
       mode?: AgentMode;
     }
-  | { type: "loop_stop"; chatId: string };
+  | { type: "loop_stop"; chatId: string }
+  // 个人助理（今日页、记忆页、推送）。memory: true 时一并下发记忆全量
+  | { type: "assistant_get"; memory?: boolean }
+  | { type: "assistant_op"; op: AssistantOp; args?: Record<string, unknown>; reqId?: string };
 
 export type PreviewKind =
   | "text"
@@ -161,10 +276,13 @@ export type ServerMessage =
       workspaceRoot?: string;
       tenantId?: string;
       tenantName?: string;
-      /** 当前租户是否管理员。只有管理员看得到使用统计。 */
+      /** P9：当前租户是否管理员（tenants.json 里 admin: true）——客户端据此显示统计入口 */
       admin?: boolean;
       policy?: PolicyId;
+      /** 未停止的产品 Loop。L2 起随 ready 下发；L1 字段先占位 */
       loops?: LoopState[];
+      /** USER 根目录的助理名字，来自 AGENTS.md；缺省 DEFAULT_ASSISTANT_NAME */
+      assistantName?: string;
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
@@ -251,8 +369,11 @@ export type ServerMessage =
   | { type: "sync_ack"; rev?: number; chatRevs?: Record<string, number> }
   // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
-  // load_chats 的应答：单个会话全量
+  // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）
   | { type: "stored_chat"; chat: unknown; rev?: number }
+  // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记；
+  // nonce 回显请求的 nonce（客户端分页代际校验，见 load_chat）
+  | { type: "chat_turns"; chatId: string; turns: unknown[]; from: number; hasMore: boolean; total: number; nonce?: number }
   | { type: "auth"; ok: boolean; message?: string }
   | {
       type: "tool-output";
@@ -293,9 +414,14 @@ export type ServerMessage =
       silent?: boolean;
     }
   | { type: "chat_title"; chatId: string; title: string }
+  // admin_stats 的应答（P9）：全租户使用统计。cursor 是当前 CURSOR_API_KEY 的官方账单
   | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[]; cursor?: CursorBill }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
+  | { type: "assistant_state"; state: AssistantState }
+  | { type: "assistant_result"; reqId?: string; op: AssistantOp; ok: boolean; error?: string; data?: unknown }
+  | { type: "inbox_item"; item: AssistantInboxItem }
+  | { type: "memory_written"; chatId?: string; entry: AssistantMemoryEntry }
   | { type: "pong" };
 
 /** 当前 CURSOR_API_KEY 的官方账单，口径与 Cursor CLI `/usage` 相同。
@@ -329,19 +455,34 @@ export type CursorBill = {
   fetchedAt: number;
 };
 
+/** P9：单租户使用统计。estTokens 按字符估算（≈4 字符/token，英文偏向；中文 1 字符≈1-2 token，
+ *  中文场景实际消耗约为估算值的 2-4 倍）。这是网关自计量的相对消耗，
+ *  官方账单在 admin_stats.cursor。 */
 export type AdminTenantStats = {
   id: string;
   name: string;
   admin: boolean;
+  /** 当前在线连接数 */
   online: number;
+  /** 现存会话数（实时读 disk） */
   chats: number;
+  /** 累计用户消息数（prompt 条数，含排队） */
   turns: number;
+  /** 累计 agent 运行完成次数（按 finishRun 计；confirm-writes 被拦截的首次运行手动收尾、
+   *  不经 finishRun，故「拦截+重放」实际计 1 次；titleChat 起标题也不经 finishRun、
+   *  单独计 1 次——相对消耗口径，非精确 API 调用数） */
   runs: number;
+  /** 累计工具调用完成数 */
   toolCalls: number;
+  /** 累计运行时长（毫秒） */
   runMs: number;
+  /** 累计用户输入字符数（仅文本；纯图 prompt 计 0，图像 token 不在口径内） */
   inChars: number;
+  /** 累计助手输出字符数（text + thinking + 会话标题；不含工具调用参数） */
   outChars: number;
+  /** (inChars + outChars) / 4 的估算 token 量 */
   estTokens: number;
+  /** 第三方模型（自研 Agent）接口返回的真实 token：输入 / 输出 / 缓存命中 */
   modelInTokens?: number;
   modelOutTokens?: number;
   modelCacheTokens?: number;

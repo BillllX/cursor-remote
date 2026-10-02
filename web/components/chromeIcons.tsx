@@ -111,7 +111,7 @@ export function IconRail({
   name,
   size = 16,
 }: {
-  name: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats";
+  name: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats" | "assistant";
   size?: number;
 }) {
   const d =
@@ -127,7 +127,9 @@ export function IconRail({
               ? "M3.4 4.8 7 8l-3.6 3.2M8.4 12.2h4.2"
               : name === "loop"
                 ? "M11.4 5.2A4.2 4.2 0 0 0 4.6 6.4M4.6 10.8A4.2 4.2 0 0 0 11.4 9.6M11.4 3.4v2.2H9.2M4.6 12.6V10.4H6.8"
-                : "M3.4 12.4V8.6M8 12.4V5.2M12.6 12.4V3.6";
+                : name === "assistant"
+                  ? "M3.2 6.2h9.6v7.2H3.2zM5.6 3.8h4.8M8 9.2v2.4"
+                  : "M3.4 12.4V8.6M8 12.4V5.2M12.6 12.4V3.6";
   return (
     <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path d={d} stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />

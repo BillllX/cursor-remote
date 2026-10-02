@@ -85,6 +85,7 @@ final class ChatStore {
     var activeId = "boot"
     var cwd = ""
     var workspaceRoot = ""
+    var assistantName = AssistantDefaults.name
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -1713,7 +1714,7 @@ final class ChatStore {
         }
 
         switch message {
-        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops):
+        case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops, let readyAssistantName):
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
@@ -1738,6 +1739,11 @@ final class ChatStore {
             if !token.isEmpty, KeychainStore.token() != token { KeychainStore.save(token) }
             hasApiKey = hasKey
             workspaceRoot = root ?? workspaceRoot.nilIfEmpty ?? nextCwd
+            if let name = readyAssistantName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                assistantName = name
+            } else {
+                assistantName = AssistantDefaults.name
+            }
             let current = chats.first { $0.id == activeId }
             cwd = current?.cwd ?? nextCwd
             models = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels

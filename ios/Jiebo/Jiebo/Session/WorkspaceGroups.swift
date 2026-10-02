@@ -15,13 +15,13 @@ func sameCwd(_ a: String?, _ b: String?) -> Bool {
     normPath(a ?? "") == normPath(b ?? "")
 }
 
-/// 工作区显示名：root 下的子工作区显示相对子路径；用户根目录固定叫 USER。
-func workspaceLabel(_ path: String, root: String) -> String {
+/// 工作区显示名：root 下的子工作区显示相对子路径；用户根目录用助理名字。
+func workspaceLabel(_ path: String, root: String, rootName: String = AssistantDefaults.name) -> String {
     let abs = normPath(path)
     let base = normPath(root)
-    if abs.isEmpty { return base.isEmpty ? "工作区" : "USER" }
+    if abs.isEmpty { return base.isEmpty ? "工作区" : rootName }
     if base.isEmpty { return abs.split(separator: "/").last.map(String.init) ?? abs }
-    if abs == base { return "USER" }
+    if abs == base { return rootName }
     if abs.hasPrefix(base + "/") { return String(abs.dropFirst(base.count + 1)) }
     return abs.split(separator: "/").last.map(String.init) ?? abs
 }
@@ -84,7 +84,7 @@ extension ChatStore {
     var workspaceGroups: [WorkspaceGroup] {
         let root = groupRoot
         let known: [WorkspaceItem] = workspaces.isEmpty
-            ? (root.nilIfEmpty.map { [WorkspaceItem(path: $0, name: "USER", user: true)] } ?? [])
+            ? (root.nilIfEmpty.map { [WorkspaceItem(path: $0, name: assistantName, user: true)] } ?? [])
             : workspaces
         var order: [String] = []
         var byKey: [String: (path: String, name: String, user: Bool, chats: [ChatSession])] = [:]
@@ -93,7 +93,7 @@ extension ChatStore {
             // 同 key 重复项：后写覆盖（对齐 web Map 语义），但组序保首次位置不跳动
             if byKey[key] == nil { order.append(key) }
             let user = item.user || sameCwd(item.path, root)
-            byKey[key] = (item.path, user ? "USER" : item.name, user, byKey[key]?.chats ?? [])
+            byKey[key] = (item.path, user ? assistantName : item.name, user, byKey[key]?.chats ?? [])
         }
         for chat in sidebarChats {
             let path = chat.cwd?.nilIfEmpty ?? root
@@ -102,7 +102,7 @@ extension ChatStore {
                 byKey[key]?.chats.append(chat)
             } else {
                 let user = sameCwd(path, root)
-                byKey[key] = (path, user ? "USER" : workspaceLabel(path, root: root), user, [chat])
+                byKey[key] = (path, user ? assistantName : workspaceLabel(path, root: root, rootName: assistantName), user, [chat])
                 order.append(key)
             }
         }

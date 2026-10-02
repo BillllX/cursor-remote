@@ -5778,3 +5778,138 @@ nextjs-portal {
     border-radius: 50%;
   }
 }
+
+/* ── 个人助理面板 ── */
+.assistant-box {
+  max-width: min(520px, 92vw);
+  max-height: min(82vh, 720px);
+  overflow: auto;
+  text-align: left;
+}
+.assistant-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.assistant-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.assistant-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.assistant-tab {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.assistant-tab.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.assistant-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.assistant-section h3 {
+  font-size: 13px;
+  margin: 0 0 6px;
+}
+.assistant-muted {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0;
+}
+.assistant-notice {
+  font-size: 12px;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+.assistant-pre {
+  white-space: pre-wrap;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  margin: 0;
+  line-height: 1.45;
+}
+.assistant-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-list.compact li {
+  font-size: 12px;
+}
+.assistant-list li {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+.assistant-row-form,
+.assistant-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.assistant-col-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.assistant-inbox {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.assistant-inbox-btn {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+.assistant-inbox li.unread .assistant-inbox-btn {
+  border-color: var(--accent);
+}
+.assistant-inbox-title {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+}
+.assistant-inbox-body {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.assistant-core p {
+  margin: 2px 0 8px;
+  font-size: 13px;
+}
