@@ -1640,23 +1640,25 @@ final class ChatStore {
     }
 
     private func markTurnReview(_ turnId: String, review: String, onlyEmpty: Bool) {
-        guard let chat = active else { return }
-        patch(chat.id) { item in
-            var row = item
-            row.turns = row.turns.map { turn in
-                guard turn.id == turnId else { return turn }
-                var next = turn
-                next.tools = turn.tools.map { tool in
-                    var copy = tool
-                    guard copy.kind.isMutating else { return copy }
-                    if onlyEmpty, !(copy.review ?? "").isEmpty { return copy }
-                    copy.review = review
-                    return copy
-                }
-                return next
+        guard let index = chats.firstIndex(where: { $0.id == activeId }) else { return }
+        var chat = chats[index]
+        var reviews: [[String: JSONValue]] = []
+        chat.turns = chat.turns.map { turn in
+            guard turn.id == turnId else { return turn }
+            var next = turn
+            next.tools = turn.tools.map { tool in
+                var copy = tool
+                guard copy.kind.isMutating else { return copy }
+                if onlyEmpty, !(copy.review ?? "").isEmpty { return copy }
+                copy.review = review
+                reviews.append(["callId": .string(copy.callId), "review": .string(review)])
+                return copy
             }
-            return row
+            return next
         }
+        chats[index] = chat
+        guard !reviews.isEmpty else { return }
+        send(.toolReview(chatId: chat.id, turnId: turnId, reviews: reviews))
     }
 
     // MARK: 检查点
@@ -2029,12 +2031,12 @@ final class ChatStore {
             digestTimeoutTask?.cancel()
             scheduleStateFetch()
             ensureTurnsLoaded(activeId) // active 被降级就立即重启分页
-        case .syncAck(let rev, let ackRevs):
-            // P4b 回执：确认服务端收下了这些会话
+        case .syncAck(let rev, let ackRevs, let reviewOnly):
+            // P4b 回执：确认服务端收下了这些会话。保留回执只对齐版本，不把在途正文同步当成已落盘。
             serverSupportsP4 = true
             for (id, chatRev) in ackRevs {
                 chatRevs[id] = chatRev
-                inflightChatIds.remove(id)
+                if !reviewOnly { inflightChatIds.remove(id) }
             }
             if let rev, rev > stateRev { stateRev = rev }
             if !dirtyChatIds.isEmpty { scheduleSync() } // ack 期间又改了的继续推

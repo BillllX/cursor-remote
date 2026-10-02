@@ -224,6 +224,8 @@ enum ClientMessage {
     case ping
     /// P4b：单会话增量上传（只带变化的那个会话）
     case syncChat(chat: JSONValue, rev: Int)
+    /// 只改工具的保留/还原标记，不回传工具正文
+    case toolReview(chatId: String, turnId: String, reviews: [[String: JSONValue]])
     /// P4c：stored_digest 后按需拉取单个会话全量
     case loadChats(ids: [String])
     /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页。
@@ -363,6 +365,13 @@ enum ClientMessage {
             return .object(["type": .string("ping")])
         case .syncChat(let chat, let rev):
             return .object(["type": .string("sync_chat"), "chat": chat, "rev": .number(Double(rev))])
+        case .toolReview(let chatId, let turnId, let reviews):
+            return .object([
+                "type": .string("tool_review"),
+                "chatId": .string(chatId),
+                "turnId": .string(turnId),
+                "reviews": .array(reviews.map { .object($0) }),
+            ])
         case .loadChats(let ids):
             return .object(["type": .string("load_chats"), "ids": .array(ids.map { .string($0) })])
         case .loadChat(let chatId, let from, let nonce):
@@ -787,7 +796,7 @@ enum ServerMessage {
     /// stored_state 超过 maxMessageBytes 时的替代通知：应 HTTP GET /state 拉全量
     case storedStateDeferred(rev: Int?)
     /// P4b：sync_state / sync_chat 被接受后的回执
-    case syncAck(rev: Int?, chatRevs: [String: Int])
+    case syncAck(rev: Int?, chatRevs: [String: Int], reviewOnly: Bool)
     /// P4c：分叉时的目录推送（比对 chatRevs 后用 loadChats 拉差异会话）
     case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
     /// P4c：load_chats 的应答（单个会话全量——slim 客户端也是全量：digest 对账是跨设备 turns 更新唯一通道）
@@ -988,7 +997,11 @@ enum ServerMessage {
         case "stored_state_deferred":
             return .storedStateDeferred(rev: object["rev"]?.int)
         case "sync_ack":
-            return .syncAck(rev: object["rev"]?.int, chatRevs: object["chatRevs"]?.intMap ?? [:])
+            return .syncAck(
+                rev: object["rev"]?.int,
+                chatRevs: object["chatRevs"]?.intMap ?? [:],
+                reviewOnly: object["reviewOnly"]?.bool ?? false
+            )
         case "stored_digest":
             return .storedDigest(
                 rev: object["rev"]?.int,

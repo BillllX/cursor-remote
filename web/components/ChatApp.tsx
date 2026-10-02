@@ -61,6 +61,8 @@ type ToolCall = {
   result?: unknown;
   status: "running" | "completed" | "error";
   review?: "accepted" | "rejected";
+  /** 同步时省略已确认的正文，网关按 callId 从上一份记录拷回。只出现在发出去的副本上。 */
+  keepBody?: boolean;
   parentCallId?: string;
   agent?: string;
   model?: string;
@@ -1113,7 +1115,41 @@ function pushRecent(prev: string[], path: string): string[] {
   return [path, ...prev.filter((item) => item !== path)].slice(0, MAX_RECENT);
 }
 
-function slimChats(chats: Chat[]): Chat[] {
+/** 工具正文上线上限。高于卡片 1.2 万的展示截断，diff 还留得住。 */
+const TOOL_TEXT_CAP = 24_000;
+
+function capWireValue(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    const mark = "\n…（过长已截断）";
+    return value.length <= TOOL_TEXT_CAP ? value : value.slice(0, TOOL_TEXT_CAP - mark.length) + mark;
+  }
+  if (depth >= 8 || value == null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const items = depth === 0 && value.length > 400 ? value.slice(0, 400) : value;
+    return items.map((item) => capWireValue(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = capWireValue(item, depth + 1);
+  }
+  return out;
+}
+
+function slimTool(tool: ToolCall, known: Set<string> | undefined): ToolCall {
+  if (tool.status !== "running" && known?.has(tool.callId)) {
+    const next = { ...tool, keepBody: true as const };
+    delete next.args;
+    delete next.result;
+    return next;
+  }
+  return {
+    ...tool,
+    args: tool.args === undefined ? undefined : capWireValue(tool.args),
+    result: tool.result === undefined ? undefined : capWireValue(tool.result),
+  };
+}
+
+function slimChats(chats: Chat[], acked?: Map<string, Set<string>>): Chat[] {
   return chats.map((chat) => ({
     ...chat,
     previewTabs: chat.previewTabs?.map(({ path, line }) => ({ path, line })),
@@ -1125,7 +1161,8 @@ function slimChats(chats: Chat[]): Chat[] {
         { ...rest, images: keepImages ? turn.images : undefined, running: false },
         running ? turn.status || "cancelled" : turn.status,
       );
-      return settled;
+      const known = acked?.get(chat.id);
+      return { ...settled, tools: settled.tools.map((tool) => slimTool(tool, known)) };
     }),
   }));
 }
@@ -1543,6 +1580,9 @@ export default function ChatApp() {
   const fullSyncRef = useRef(true); // 首次同步全量（对齐现状）
   const pendingLoadsRef = useRef<Set<string>>(new Set());
   const suppressDirtyRef = useRef<Map<string, Chat>>(new Map()); // 服务端驱动的 setChats 不标脏（按对象引用精确抑制）
+  // 已随 sync_ack 落盘的工具正文，之后的同步只带 keepBody
+  const ackedToolBodiesRef = useRef<Map<string, Set<string>>>(new Map());
+  const pendingToolBodiesRef = useRef<Map<string, Set<string>>>(new Map());
   const prevChatsRef = useRef<Chat[]>([]);
   const [syncTick, setSyncTick] = useState(0);
   const digestTimerRef = useRef<number | undefined>(undefined);
@@ -1588,6 +1628,8 @@ export default function ChatApp() {
     fullSyncRef.current = true;
     pendingLoadsRef.current = new Set();
     suppressDirtyRef.current = new Map();
+    ackedToolBodiesRef.current = new Map();
+    pendingToolBodiesRef.current = new Map();
     prevChatsRef.current = [];
     serverP4Ref.current = false;
     if (digestTimerRef.current) window.clearTimeout(digestTimerRef.current);
@@ -2130,8 +2172,19 @@ export default function ChatApp() {
           for (const [id, rev] of Object.entries(revs)) {
             if (typeof rev !== "number") continue;
             chatRevsRef.current[id] = rev;
+            // 保留回执只对齐版本号。清掉 in-flight 会把还没被确认的正文同步当成已经落盘。
+            if (message.reviewOnly) continue;
             inflightIdsRef.current.delete(id);
             // 注意：不清 dirtyIdsRef——发送后又改过的会话保持脏，下一轮重推
+            if (message.keptBodies) {
+              const pending = pendingToolBodiesRef.current.get(id);
+              if (pending) {
+                const known = ackedToolBodiesRef.current.get(id) ?? new Set<string>();
+                for (const callId of pending) known.add(callId);
+                ackedToolBodiesRef.current.set(id, known);
+                pendingToolBodiesRef.current.delete(id);
+              }
+            }
           }
           if (typeof message.rev === "number" && message.rev > stateRevRef.current) {
             stateRevRef.current = message.rev;
@@ -3057,7 +3110,12 @@ export default function ChatApp() {
       stateRevRef.current += 1;
       // 旧网关没有 ack/digest，增量状态机跑不起来：退回全量（老行为），不动 dirty/inflight
       if (!serverP4Ref.current) {
-        send({ type: "sync_state", chats: slimChats(chatsRef.current), rev: stateRevRef.current });
+        for (const chat of chatsRef.current) noteToolBodies(chat);
+        send({
+          type: "sync_state",
+          chats: slimChats(chatsRef.current, ackedToolBodiesRef.current),
+          rev: stateRevRef.current,
+        });
         return;
       }
       if (fullSyncRef.current) {
@@ -3066,7 +3124,12 @@ export default function ChatApp() {
         // 脏集合移入 inflight：ack 清 inflight 收敛；被拒（digest）时倒回 dirty 重推
         for (const id of dirtyIdsRef.current) inflightIdsRef.current.add(id);
         dirtyIdsRef.current = new Set();
-        send({ type: "sync_state", chats: slimChats(chatsRef.current), rev: stateRevRef.current });
+        for (const chat of chatsRef.current) noteToolBodies(chat);
+        send({
+          type: "sync_state",
+          chats: slimChats(chatsRef.current, ackedToolBodiesRef.current),
+          rev: stateRevRef.current,
+        });
         return;
       }
       // P4b：只上传脏会话（流式期间从全量降到单会话）
@@ -3080,7 +3143,12 @@ export default function ChatApp() {
         }
         dirtyIdsRef.current.delete(id);
         inflightIdsRef.current.add(id);
-        send({ type: "sync_chat", chat: slimChats([chat])[0], rev: stateRevRef.current });
+        noteToolBodies(chat);
+        send({
+          type: "sync_chat",
+          chat: slimChats([chat], ackedToolBodiesRef.current)[0],
+          rev: stateRevRef.current,
+        });
       }
     }, 800);
     return () => window.clearTimeout(timer);
@@ -4227,18 +4295,46 @@ export default function ChatApp() {
     send({ type: "revert_hunk", chatId: activeIdRef.current, path, hunk });
   }
 
+  function noteToolBodies(chat: Chat) {
+    const known = ackedToolBodiesRef.current.get(chat.id);
+    const pending = new Set<string>();
+    for (const turn of chat.turns) {
+      for (const tool of turn.tools) {
+        if (tool.status === "running" || known?.has(tool.callId)) continue;
+        pending.add(tool.callId);
+      }
+    }
+    pendingToolBodiesRef.current.set(chat.id, pending);
+  }
+
+  function applyToolReviews(turnId: string, reviews: { callId: string; review: "accepted" | "rejected" }[]) {
+    if (!reviews.length) return;
+    const want = new Map(reviews.map((item) => [item.callId, item.review]));
+    const chatId = activeIdRef.current;
+    patchChat(chatId, (chat) => {
+      const next = {
+        ...chat,
+        turns: chat.turns.map((item) =>
+          item.id !== turnId
+            ? item
+            : {
+                ...item,
+                tools: item.tools.map((tool) => {
+                  const review = want.get(tool.callId);
+                  return review ? { ...tool, review } : tool;
+                }),
+              },
+        ),
+      };
+      // updater 在 effect 之前跑，抑制的是即将提交的那份对象，避免整段会话再走 sync_chat
+      suppressDirtyRef.current.set(chatId, next);
+      return next;
+    });
+    send({ type: "tool_review", chatId, turnId, reviews });
+  }
+
   function setToolReview(turnId: string, callId: string, review: "accepted" | "rejected") {
-    patchActive((chat) => ({
-      ...chat,
-      turns: chat.turns.map((item) =>
-        item.id !== turnId
-          ? item
-          : {
-              ...item,
-              tools: item.tools.map((tool) => (tool.callId === callId ? { ...tool, review } : tool)),
-            },
-      ),
-    }));
+    applyToolReviews(turnId, [{ callId, review }]);
   }
 
   function keepTool(turnId: string, tool: ToolCall) {
@@ -4257,19 +4353,12 @@ export default function ChatApp() {
   }
 
   function keepTurnFiles(turn: Turn) {
-    patchActive((chat) => ({
-      ...chat,
-      turns: chat.turns.map((item) =>
-        item.id !== turn.id
-          ? item
-          : {
-              ...item,
-              tools: item.tools.map((tool) =>
-                mutatingTool(tool.name) ? { ...tool, review: tool.review || "accepted" } : tool,
-              ),
-            },
-      ),
-    }));
+    applyToolReviews(
+      turn.id,
+      turn.tools
+        .filter((tool) => mutatingTool(tool.name) && !tool.review)
+        .map((tool) => ({ callId: tool.callId, review: "accepted" as const })),
+    );
     for (const path of editPathsOf(turn)) keepFile(relToCwd(path, cwdRef.current) || path);
   }
 
@@ -4283,19 +4372,12 @@ export default function ChatApp() {
     else {
       for (const path of paths) revertFile(path, true);
     }
-    patchActive((item) => ({
-      ...item,
-      turns: item.turns.map((row) =>
-        row.id !== turn.id
-          ? row
-          : {
-              ...row,
-              tools: row.tools.map((tool) =>
-                mutatingTool(tool.name) ? { ...tool, review: "rejected" } : tool,
-              ),
-            },
-      ),
-    }));
+    applyToolReviews(
+      turn.id,
+      turn.tools
+        .filter((tool) => mutatingTool(tool.name))
+        .map((tool) => ({ callId: tool.callId, review: "rejected" as const })),
+    );
   }
 
   function saveFile(path: string, content: string) {
@@ -4449,7 +4531,8 @@ export default function ChatApp() {
   function flushChats(next: Chat[]) {
     chatsRef.current = next;
     stateRevRef.current += 1;
-    send({ type: "sync_state", chats: slimChats(next), rev: stateRevRef.current });
+    for (const chat of next) noteToolBodies(chat);
+    send({ type: "sync_state", chats: slimChats(next, ackedToolBodiesRef.current), rev: stateRevRef.current });
   }
 
   function deleteChat(id: string) {

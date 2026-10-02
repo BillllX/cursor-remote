@@ -137,11 +137,17 @@ const HOST = process.env.GATEWAY_HOST || "127.0.0.1";
 const WEB_URL = new URL(process.env.CURSOR_REMOTE_WEB_ORIGIN || "http://127.0.0.1:3000");
 const PROXY_WEB = !/^(0|false|off|no)$/i.test(process.env.GATEWAY_PROXY_WEB || "1");
 const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
+/** 工具正文落盘上限。高于网页卡片的 1.2 万展示截断，diff 字段仍留得住。 */
+const TOOL_TEXT_CAP = 24_000;
 
 loadTenants();
 for (const tenant of allTenants()) {
   if (!sandboxEnabledForTenant(tenant)) {
     console.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);
+  }
+  if (compactTenantChats(tenant)) {
+    saveDisk(tenant);
+    console.log(`已截断过长的工具记录 ${tenant.name}（${tenant.id}）`);
   }
 }
 let modelsCache: { at: number; ids: string[] } | null = null;
@@ -627,8 +633,14 @@ function flushTranscript(slot: Slot, broadcast: boolean) {
   if (!chat || typeof chat !== "object") return;
   const row = chat as Record<string, unknown>;
   const turns = Array.isArray(row.turns) ? row.turns : [];
-  row.turns = upsertTranscriptTurn(turns, transcript);
-  row.runMark = mark;
+  const stamped = {
+    ...row,
+    turns: upsertTranscriptTurn(turns, transcript),
+    runMark: mark,
+  };
+  // transcript 里的工具没有保留标记，也可能带着未截断的正文
+  const next = mergeAndCompactChat(chat, stamped);
+  tenant.disk.chats = tenant.disk.chats.map((item) => (item === chat ? next : item));
   if (broadcast && transcript.phase === "done") {
     tenant.disk.rev += 1;
     tenant.disk.chatRevs[slot.chatId] = tenant.disk.rev;
@@ -915,6 +927,85 @@ function slimChat(item: unknown): unknown {
   delete rest.preview; // 不信持久化里的旧值，响应期重算
   if (!turns.length) return { ...rest, turns: [] };
   return { ...rest, preview: chatPreviewOf(turns) };
+}
+
+const TOOL_TEXT_MARK = "\n…（过长已截断）";
+
+function capStoredString(value: string, hit: { n: number }): string {
+  if (value.length <= TOOL_TEXT_CAP) return value;
+  hit.n += 1;
+  return value.slice(0, TOOL_TEXT_CAP - TOOL_TEXT_MARK.length) + TOOL_TEXT_MARK;
+}
+
+function capStoredValue(value: unknown, hit: { n: number }, depth = 0): unknown {
+  if (typeof value === "string") return capStoredString(value, hit);
+  if (depth >= 8 || value == null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const items = depth === 0 && value.length > 400 ? value.slice(0, 400) : value;
+    if (items.length !== value.length) hit.n += 1;
+    return items.map((item) => capStoredValue(item, hit, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = capStoredValue(item, hit, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * 回填已确认过的工具正文，再截断过长的 result/args。
+ * keepBody 只表示「这轮没带正文」，正文从上一份磁盘记录按 callId 拷回。
+ */
+function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = { n: 0 }): unknown {
+  if (!next || typeof next !== "object") return next;
+  const row = next as { turns?: unknown };
+  if (!Array.isArray(row.turns)) return next;
+  const prevTools = new Map<string, { args?: unknown; result?: unknown; review?: unknown }>();
+  const prevTurns = prev && typeof prev === "object" ? (prev as { turns?: unknown }).turns : undefined;
+  if (Array.isArray(prevTurns)) {
+    for (const turn of prevTurns) {
+      if (!turn || typeof turn !== "object" || !Array.isArray((turn as { tools?: unknown }).tools)) continue;
+      for (const tool of (turn as { tools: unknown[] }).tools) {
+        if (!tool || typeof tool !== "object") continue;
+        const callId = (tool as { callId?: unknown }).callId;
+        if (typeof callId !== "string" || !callId) continue;
+        prevTools.set(callId, tool as { args?: unknown; result?: unknown; review?: unknown });
+      }
+    }
+  }
+  const turns = row.turns.map((turn) => {
+    if (!turn || typeof turn !== "object" || !Array.isArray((turn as { tools?: unknown }).tools)) return turn;
+    const tools = (turn as { tools: unknown[] }).tools.map((tool) => {
+      if (!tool || typeof tool !== "object") return tool;
+      const rowTool = { ...(tool as Record<string, unknown>) };
+      const callId = typeof rowTool.callId === "string" ? rowTool.callId : "";
+      const old = callId ? prevTools.get(callId) : undefined;
+      if (rowTool.keepBody === true && old) {
+        if (!("args" in rowTool) && "args" in old) rowTool.args = old.args;
+        if (!("result" in rowTool) && "result" in old) rowTool.result = old.result;
+      }
+      // 在途的整段同步可能早于「保留」，别把刚落盘的标记盖掉
+      if (
+        (rowTool.review == null || rowTool.review === "") &&
+        (old?.review === "accepted" || old?.review === "rejected")
+      ) {
+        rowTool.review = old.review;
+      }
+      delete rowTool.keepBody;
+      if ("args" in rowTool) rowTool.args = capStoredValue(rowTool.args, hit);
+      if ("result" in rowTool) rowTool.result = capStoredValue(rowTool.result, hit);
+      return rowTool;
+    });
+    return { ...(turn as Record<string, unknown>), tools };
+  });
+  return { ...(next as Record<string, unknown>), turns };
+}
+
+/** 启动时把磁盘上已经超长的工具记录截掉。不改版本号，避免把打开着的客户端整页刷掉。 */
+function compactTenantChats(tenant: { disk: { chats: unknown[] } }): boolean {
+  const hit = { n: 0 };
+  tenant.disk.chats = tenant.disk.chats.map((chat) => mergeAndCompactChat(chat, chat, hit));
+  return hit.n > 0;
 }
 
 /// load_chat 组页时单条 turn 超预算的兜底截断：砍长字符串字段并打 clipped 标记。
@@ -5064,8 +5155,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
               ? assistantCwd(tenant)
               : wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
             const withCwd = row.cwd === next ? item : { ...row, cwd: next };
+            const prevChat = id ? tenant.disk.chats.find((row) => chatIdOf(row) === id) : undefined;
+            const merged = mergeAndCompactChat(prevChat, withCwd);
             const provided = Boolean(item && typeof item === "object" && Array.isArray((item as { turns?: unknown }).turns));
-            return protectChatUpload(tenant, id, withCwd, provided);
+            // protect 可能因助手文本更长而留用磁盘上的旧工具列表，截断必须发生在那之后
+            const uploaded = protectChatUpload(tenant, id, merged, provided);
+            return mergeAndCompactChat(prevChat, uploaded);
           });
         tenant.disk.rev = clientRev;
         // P4c：按会话变更检测（规范化序列化，键序无关），只给真正变了的会话记新版本号
@@ -5079,8 +5174,70 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         pruneChatRevs(tenant);
         pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
         persistConn(conn);
-        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: effectiveChatRevs(tenant) });
+        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: effectiveChatRevs(tenant), keptBodies: true });
         broadcastDigest(tenant, ws); // 多设备实时对账
+        return;
+      }
+
+      // 保留/还原只改标记。同时把磁盘上过长的工具正文截掉，打开着的标签不重载。
+      if (message.type === "tool_review") {
+        const chatId = typeof message.chatId === "string" ? message.chatId : "";
+        const turnId = typeof message.turnId === "string" ? message.turnId : "";
+        const reviews = Array.isArray(message.reviews) ? message.reviews : [];
+        const ackRev = () => {
+          send(ws, {
+            type: "sync_ack",
+            rev: tenant.disk.rev,
+            chatRevs: chatId ? { [chatId]: tenant.disk.chatRevs[chatId] ?? tenant.disk.rev } : {},
+            reviewOnly: true,
+          });
+        };
+        if (!chatId || !turnId || tenant.disk.deletedIds.includes(chatId)) {
+          ackRev();
+          return;
+        }
+        const prev = tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+        if (!prev || typeof prev !== "object") {
+          ackRev();
+          return;
+        }
+        const want = new Map<string, "accepted" | "rejected">();
+        for (const item of reviews) {
+          if (!item || typeof item !== "object") continue;
+          const callId = (item as { callId?: unknown }).callId;
+          const review = (item as { review?: unknown }).review;
+          if (typeof callId !== "string" || !callId) continue;
+          if (review !== "accepted" && review !== "rejected") continue;
+          want.set(callId, review);
+        }
+        let applied = false;
+        const stamped = { ...(prev as Record<string, unknown>) };
+        if (Array.isArray(stamped.turns)) {
+          stamped.turns = stamped.turns.map((turn) => {
+            if (!turn || typeof turn !== "object" || (turn as { id?: unknown }).id !== turnId) return turn;
+            if (!Array.isArray((turn as { tools?: unknown }).tools)) return turn;
+            const tools = (turn as { tools: unknown[] }).tools.map((tool) => {
+              if (!tool || typeof tool !== "object") return tool;
+              const callId = (tool as { callId?: unknown }).callId;
+              if (typeof callId !== "string" || !want.has(callId)) return tool;
+              const review = want.get(callId);
+              if ((tool as { review?: unknown }).review === review) return tool;
+              applied = true;
+              return { ...(tool as Record<string, unknown>), review };
+            });
+            return { ...(turn as Record<string, unknown>), tools };
+          });
+        }
+        const hit = { n: 0 };
+        const compacted = mergeAndCompactChat(prev, stamped, hit);
+        if (applied || hit.n > 0) {
+          tenant.disk.rev += 1;
+          tenant.disk.chatRevs[chatId] = tenant.disk.rev;
+          tenant.disk.chats = tenant.disk.chats.map((item) => (chatIdOf(item) === chatId ? compacted : item));
+          persistConn(conn);
+          broadcastDigest(tenant, ws);
+        }
+        ackRev();
         return;
       }
 
@@ -5140,12 +5297,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             next = { ...row, turns: [] };
           }
         }
+        next = mergeAndCompactChat(prev, next);
         const turnsProvided = Boolean(
           message.chat &&
             typeof message.chat === "object" &&
             Array.isArray((message.chat as { turns?: unknown }).turns),
         );
         next = protectChatUpload(tenant, id, next, turnsProvided);
+        next = mergeAndCompactChat(prev, next);
         const changed = stableStringify(prev ?? null) !== stableStringify(next);
         const stored = tenant.disk.chats.filter((item) => !isAssistantChat(tenant, chatIdOf(item))).length;
         if (changed && !prev && !isAssistantChat(tenant, id) && stored >= MAX_STORED_CHATS) {
@@ -5167,7 +5326,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         }
         persistConn(conn);
         // ack 回报服务端真实 chatRev（无变化时不前进），客户端对账口径与 digest 一致
-        send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: tenant.disk.chatRevs[id] ?? clientRev } });
+        send(ws, {
+          type: "sync_ack",
+          rev: tenant.disk.rev,
+          chatRevs: { [id]: tenant.disk.chatRevs[id] ?? clientRev },
+          keptBodies: true,
+        });
         if (changed) broadcastDigest(tenant, ws); // 多设备实时对账
         return;
       }

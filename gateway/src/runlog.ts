@@ -104,7 +104,7 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
       const next: RunTool = {
         callId: message.callId,
         name: message.name,
-        args: message.args,
+        args: capToolPayload(message.args),
         status: "running",
         parentCallId: message.parentCallId,
         agent: message.agent,
@@ -122,7 +122,7 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
         callId: message.callId,
         name: message.name,
         args: prev?.args,
-        result: message.result,
+        result: capToolPayload(message.result),
         status: message.status,
         parentCallId: message.parentCallId || prev?.parentCallId,
         agent: message.agent || prev?.agent,
@@ -138,7 +138,7 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
         transcript.tools.push({ callId: message.callId, name: "shell", status: "running" });
         index = transcript.tools.length - 1;
       }
-      transcript.tools[index].result = foldToolOutput(transcript.tools[index].result, message);
+      transcript.tools[index].result = capToolPayload(foldToolOutput(transcript.tools[index].result, message));
       break;
     }
     case "task":
@@ -172,6 +172,28 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
     default:
       break;
   }
+}
+
+const TOOL_TEXT_CAP = 24_000;
+const TOOL_TEXT_MARK = "\n…（过长已截断）";
+
+function capToolText(value: string): string {
+  if (value.length <= TOOL_TEXT_CAP) return value;
+  return value.slice(0, TOOL_TEXT_CAP - TOOL_TEXT_MARK.length) + TOOL_TEXT_MARK;
+}
+
+function capToolPayload(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return capToolText(value);
+  if (depth >= 8 || value == null || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    const items = depth === 0 && value.length > 400 ? value.slice(0, 400) : value;
+    return items.map((item) => capToolPayload(item, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = capToolPayload(item, depth + 1);
+  }
+  return out;
 }
 
 function foldToolOutput(

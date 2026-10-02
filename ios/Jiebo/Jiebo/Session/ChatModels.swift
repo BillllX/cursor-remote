@@ -138,6 +138,28 @@ struct Turn: Identifiable, Hashable {
         )
     }
 
+    /// 工具正文上线上限。高于卡片展示截断，diff 还留得住。
+    private func capToolJSON(_ value: JSONValue, depth: Int = 0) -> JSONValue {
+        switch value {
+        case .string(let text):
+            let mark = "\n…（过长已截断）"
+            if text.count <= 24_000 { return value }
+            let keep = text.index(text.startIndex, offsetBy: 24_000 - mark.count)
+            return .string(String(text[..<keep]) + mark)
+        case .array(let items):
+            if depth >= 8 { return value }
+            let capped = depth == 0 && items.count > 400 ? Array(items.prefix(400)) : items
+            return .array(capped.map { capToolJSON($0, depth: depth + 1) })
+        case .object(let object):
+            if depth >= 8 { return value }
+            var next: [String: JSONValue] = [:]
+            for (key, item) in object { next[key] = capToolJSON(item, depth: depth + 1) }
+            return .object(next)
+        default:
+            return value
+        }
+    }
+
     func json() -> JSONValue {
         var object = extra
         object["id"] = .string(id)
@@ -150,8 +172,8 @@ struct Turn: Identifiable, Hashable {
                 "name": .string(tool.name),
                 "status": .string(tool.status == "running" ? "error" : tool.status),
             ]
-            if let args = tool.args { row["args"] = args }
-            if let result = tool.result { row["result"] = result }
+            if let args = tool.args { row["args"] = capToolJSON(args) }
+            if let result = tool.result { row["result"] = capToolJSON(result) }
             if let parentCallId = tool.parentCallId { row["parentCallId"] = .string(parentCallId) }
             if let agent = tool.agent { row["agent"] = .string(agent) }
             if let model = tool.model { row["model"] = .string(model) }

@@ -196,6 +196,13 @@ export type ClientMessage =
   | { type: "sync_state"; chats: unknown[]; rev?: number }
   // 单会话增量上传（P4b）：只带变化的那个会话；删除/新建等结构变化仍走 sync_state
   | { type: "sync_chat"; chat: unknown; rev?: number }
+  // 只改工具的保留/还原标记，不回传工具正文
+  | {
+      type: "tool_review";
+      chatId: string;
+      turnId: string;
+      reviews: { callId: string; review: "accepted" | "rejected" }[];
+    }
   // stored_digest 后按需拉取单个会话全量（P4c）
   | { type: "load_chats"; ids: string[] }
   // slim_state 客户端的会话内容分页（P8）：from 省略=最后一页，否则拉 turns[..<from] 的上一页。
@@ -387,7 +394,13 @@ export type ServerMessage =
   // stored_state 超过客户端 maxMessageBytes 时的替代通知：客户端应 HTTP GET /state 拉全量
   | { type: "stored_state_deferred"; rev?: number }
   // sync_state / sync_chat 被接受后的回执（P4b）：携带服务端最新 rev 与相关会话的 chatRev
-  | { type: "sync_ack"; rev?: number; chatRevs?: Record<string, number> }
+  | {
+      type: "sync_ack";
+      rev?: number;
+      chatRevs?: Record<string, number>;
+      keptBodies?: boolean;
+      reviewOnly?: boolean;
+    }
   // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
   // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）
