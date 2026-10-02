@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { basename, dirname, relative, resolve } from "node:path";
 import {
@@ -82,12 +82,18 @@ import {
   type RunTranscript,
 } from "./runlog.ts";
 import {
+  endpointFor,
   externalModelIds,
   externalRoute,
   streamChatCompletions,
   type ChatHistoryItem,
   type ExternalProvider,
 } from "./providers.ts";
+import { adapterFor } from "./native/adapters/index.ts";
+import { buildSystemPrompt } from "./native/context.ts";
+import { runNativeLoop } from "./native/loop.ts";
+import { toolsForMode } from "./native/tools/registry.ts";
+import type { ChatMessage } from "./native/types.ts";
 import { bindLoops, loopsForTenant, startLoop, stopLoop, type LoopJob } from "./loops.ts";
 import { createPublishController } from "./publish.ts";
 
@@ -174,6 +180,8 @@ type Checkpoint = {
   createdAt: number;
   gitDir?: string;
   workTree?: string;
+  /** 打点时目录里没有文件。还原时没有可 restore 的路径，只删之后新建的文件 */
+  empty?: boolean;
 };
 
 type PendingPrompt = {
@@ -1096,9 +1104,11 @@ function waitForApproval(slot: Slot, ms = 120_000) {
   }
   return new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
-      if (slot.approvalWait !== done) return;
-      slot.approvalWait = null;
-      slot.awaitingApproval = false;
+      // waiter 已被替换时也要 resolve，否则旧调用方永远挂着
+      if (slot.approvalWait === done) {
+        slot.approvalWait = null;
+        slot.awaitingApproval = false;
+      }
       resolve(false);
     }, ms);
     const done = (allow: boolean) => {
@@ -1810,6 +1820,31 @@ function cwdPathFromTree(treePath: string, prefix: string): string | null {
   return norm.slice(lead.length);
 }
 
+/** 目录里有没有任何非目录条目（含 git 忽略的文件和符号链接，不看 .git）。空目录检查点据此判定 */
+function dirHasEntries(dir: string): boolean {
+  const stack = [dir];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    let names: string[];
+    try {
+      names = readdirSync(cur);
+    } catch {
+      return true;
+    }
+    for (const name of names) {
+      if (cur === dir && name === ".git") continue;
+      try {
+        const st = lstatSync(resolve(cur, name));
+        if (st.isDirectory()) stack.push(resolve(cur, name));
+        else return true;
+      } catch {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function createCheckpoint(cwd: string, label: string): Checkpoint {
   const ctx = checkpointGit(cwd);
   try {
@@ -1819,9 +1854,8 @@ function createCheckpoint(cwd: string, label: string): Checkpoint {
   }
   // 子目录只快照自己。add -A 打在仓库根上会把兄弟项目卷进来，还原时再按根路径删文件。
   const prefix = workspacePrefix(ctx.cwd, cwd);
-  const listed = prefix
-    ? [prefix]
-    : listWorkspaceFiles(cwd, "").paths;
+  const empty = !dirHasEntries(cwd);
+  const listed = prefix ? [prefix] : listWorkspaceFiles(cwd, "").paths;
   try {
     if (listed.length) {
       for (let i = 0; i < listed.length; i += 200) {
@@ -1855,6 +1889,7 @@ function createCheckpoint(cwd: string, label: string): Checkpoint {
     createdAt: Date.now(),
     gitDir: ctx.env.GIT_DIR,
     workTree: ctx.cwd,
+    empty: empty || undefined,
   };
 }
 
@@ -1866,32 +1901,36 @@ function restoreCheckpoint(
   try {
     const ctx = checkpointGit(cwd, checkpoint);
     const prefix = workspacePrefix(ctx.cwd, cwd);
-    if (prefix) {
-      git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "--", prefix], ctx.env);
-    } else {
-      git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "."], ctx.env);
+    const keep = new Set<string>();
+    if (!checkpoint.empty) {
+      if (prefix) {
+        git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "--", prefix], ctx.env);
+      } else {
+        git(ctx.cwd, ["restore", "--source", checkpoint.commit, "--worktree", "."], ctx.env);
+      }
     }
     if (ctx.env.GIT_DIR) {
       git(ctx.cwd, ["update-ref", "HEAD", checkpoint.commit], ctx.env);
       git(ctx.cwd, ["read-tree", checkpoint.commit], ctx.env);
     }
-    const treePaths = git(ctx.cwd, ["ls-tree", "-z", "-r", "--name-only", checkpoint.commit], ctx.env)
-      .split("\0")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    const keep = new Set(
-      treePaths
-        .map((name) => cwdPathFromTree(name, prefix))
-        .filter((name): name is string => Boolean(name)),
-    );
-    const treeHasScope = prefix
-      ? treePaths.some((name) => name === prefix || name.startsWith(`${prefix}/`))
-      : treePaths.length > 0;
-    if (prefix && !treeHasScope) {
-      return { error: "检查点里没有这个目录的文件，已停止删除。" };
-    }
-    if (treeHasScope && keep.size === 0) {
-      return { error: "检查点路径对不上当前目录，已停止删除文件。" };
+    if (!checkpoint.empty) {
+      const treePaths = git(ctx.cwd, ["ls-tree", "-z", "-r", "--name-only", checkpoint.commit], ctx.env)
+        .split("\0")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      for (const name of treePaths) {
+        const local = cwdPathFromTree(name, prefix);
+        if (local) keep.add(local);
+      }
+      const treeHasScope = prefix
+        ? treePaths.some((name) => name === prefix || name.startsWith(`${prefix}/`))
+        : treePaths.length > 0;
+      if (prefix && !treeHasScope) {
+        return { error: "检查点里没有这个目录的文件，已停止删除。" };
+      }
+      if (treeHasScope && keep.size === 0) {
+        return { error: "检查点路径对不上当前目录，已停止删除文件。" };
+      }
     }
     const extras = new Set(extra.map((raw) => workspacePath(cwd, raw)).filter(Boolean) as string[]);
     for (const path of listWorkspaceFiles(cwd, "").paths) extras.add(path);
@@ -2877,6 +2916,171 @@ async function runExternalChat(
   }
 }
 
+function recordRunCheckpoint(ws: WebSocket, conn: Conn, slot: Slot, cwd: string, mode: AgentMode) {
+  try {
+    const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    const kind = mode === "plan" ? "Plan" : "Agent";
+    let label = `${kind} · ${stamp}`;
+    if (slot.checkpoints.some((item) => item.label === label)) {
+      label = `${kind} · ${stamp} · ${slot.checkpoints.length + 1}`;
+    }
+    const checkpoint = createCheckpoint(cwd, label);
+    slot.checkpoints.unshift(checkpoint);
+    slot.checkpoints = slot.checkpoints.slice(0, 10);
+    sendCheckpoints(ws, slot);
+    persistConn(conn);
+  } catch (err) {
+    send(ws, {
+      type: "status",
+      chatId: slot.chatId,
+      status: "RUNNING",
+      message: `检查点没记下：${err instanceof Error ? err.message : "未知错误"}`,
+    });
+  }
+}
+
+const NATIVE_RESULT_PREVIEW = 4000;
+
+/** 自研 Agent 的一轮：工具调用循环跑在网关里，事件映射成与 Cursor run 相同的协议，
+ *  审批、检查点、撤销、计量都复用现有机制。 */
+async function runNativeChat(
+  ws: WebSocket,
+  conn: Conn,
+  slot: Slot,
+  ext: { provider: ExternalProvider; model: string; full: string },
+  input: {
+    prompt: string;
+    images: Array<{ data: string; mimeType: string }>;
+    history: ChatHistoryItem[];
+    epoch: number;
+    cwd: string;
+    mode: AgentMode;
+    confirmWrites: boolean;
+    autoApprove: boolean;
+  },
+) {
+  const { epoch, cwd, mode } = input;
+  const t0 = Date.now();
+  send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
+  send(ws, { type: "run_meta", chatId: slot.chatId, model: ext.full, mode, policy: slot.policy, dialect: slot.dialect });
+  if (input.images.length && !ext.provider.vision) {
+    send(ws, {
+      type: "error",
+      chatId: slot.chatId,
+      message: `${ext.provider.name} 这个模型不收图片（providers.json 里 vision: true 才放行）。`,
+    });
+    finishRun(ws, slot, "error", Date.now() - t0, epoch);
+    return;
+  }
+  if (!input.autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
+
+  const tools = toolsForMode(mode);
+  const endpoint = endpointFor(ext.provider, ext.model);
+  const messages: ChatMessage[] = [
+    { role: "system", content: buildSystemPrompt({ cwd, mode, tools, modelLabel: ext.full }) },
+    ...input.history.slice(-12).map((item) => ({
+      role: item.role,
+      content: item.text.length > 3000 ? `${item.text.slice(0, 3000)}\n…` : item.text,
+    })),
+    { role: "user", content: input.prompt, images: input.images.length ? input.images : undefined },
+  ];
+  const abort = new AbortController();
+  slot.externalAbort = abort;
+  let approvedAll = input.autoApprove;
+  const live = () => slot.epoch === epoch && !slot.finished;
+
+  try {
+    const result = await runNativeLoop({
+      adapter: adapterFor(endpoint.adapter),
+      endpoint,
+      messages,
+      tools,
+      cwd,
+      signal: abort.signal,
+      hooks: {
+        text: (delta) => {
+          if (!live()) return;
+          send(ws, { type: "text-delta", chatId: slot.chatId, text: delta });
+          noteOutput(slot.tenantId, delta.length);
+        },
+        thinking: (delta) => {
+          if (!live()) return;
+          send(ws, { type: "thinking-delta", chatId: slot.chatId, text: delta });
+          noteOutput(slot.tenantId, delta.length);
+        },
+        toolStarted: (call, args, spec) => {
+          if (!live()) return;
+          send(ws, { type: "tool-started", chatId: slot.chatId, callId: call.id, name: call.name, args });
+          slot.openTools.set(call.id, { name: call.name, args });
+          slot.runStats.toolStarts += 1;
+          if (spec?.category === "write") rememberEdit(slot, call.name, args, cwd);
+        },
+        toolCompleted: (call, result) => {
+          if (!live()) return;
+          if (slot.openTools.delete(call.id)) noteToolCall(slot.tenantId);
+          const preview =
+            result.content.length > NATIVE_RESULT_PREVIEW ? `${result.content.slice(0, NATIVE_RESULT_PREVIEW)}…` : result.content;
+          send(ws, {
+            type: "tool-completed",
+            chatId: slot.chatId,
+            callId: call.id,
+            name: call.name,
+            status: result.ok ? "completed" : "error",
+            result: preview,
+          });
+          if (result.changed?.length) pushWorkspace(ws, slot, conn, result.changed);
+        },
+        needsApproval: (spec, args) => {
+          if (mode !== "agent" || approvedAll || !input.confirmWrites) return false;
+          if (spec.category !== "write" && spec.category !== "shell") return false;
+          if (isPlane(slot.policy) && slot.approvedKeys.has(toolFingerprint(spec.name, args))) return false;
+          return true;
+        },
+        approve: async (call, args) => {
+          slot.awaitingApproval = true;
+          slot.approvalCallId = call.id;
+          slot.runStats.approvals += 1;
+          send(ws, { type: "approval", chatId: slot.chatId, callId: call.id, name: call.name, args: summarizeToolArgs(args) });
+          const allowed = await waitForApproval(slot);
+          if (allowed) {
+            rememberApproved(slot);
+            // plane 按指纹逐个放行；baseline 与 SDK 路径一致，同意一次整轮放行
+            if (!isPlane(slot.policy)) approvedAll = true;
+          }
+          slot.awaitingApproval = false;
+          slot.approvalCallId = null;
+          return allowed;
+        },
+      },
+    });
+
+    if (!live()) return;
+    if (result.status === "denied") {
+      rollbackToLatestCheckpoint(ws, slot, conn, true);
+      send(ws, { type: "status", chatId: slot.chatId, status: "CANCELLED", message: "已拒绝写入，已还原到发送前。" });
+      send(ws, { type: "text-delta", chatId: slot.chatId, text: "\n\n已拒绝写入，已还原到发送前。" });
+      finishRun(ws, slot, "cancelled", Date.now() - t0, epoch);
+      return;
+    }
+    if (result.status === "max_steps") {
+      send(ws, { type: "text-delta", chatId: slot.chatId, text: `\n\n已达到单轮 ${result.steps} 步上限，先停在这里。回复「继续」接着做。` });
+    }
+    if (result.status === "error") {
+      send(ws, { type: "error", chatId: slot.chatId, message: result.error || `${ext.provider.name} 调用失败` });
+      finishRun(ws, slot, "error", Date.now() - t0, epoch);
+      return;
+    }
+    finishRun(ws, slot, result.status === "cancelled" ? "cancelled" : "completed", Date.now() - t0, epoch);
+  } catch (err) {
+    if (!live()) return;
+    send(ws, { type: "error", chatId: slot.chatId, message: err instanceof Error ? err.message : "自研 Agent 出错" });
+    finishRun(ws, slot, "error", Date.now() - t0, epoch);
+  } finally {
+    if (slot.externalAbort === abort) slot.externalAbort = null;
+    if (slot.approvalCallId && !slot.awaitingApproval) slot.approvalCallId = null;
+  }
+}
+
 async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: string) {
   if (!chatId || namedChats.has(chatId) || namingChats.has(chatId)) return;
   const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
@@ -3045,6 +3249,7 @@ async function handlePrompt(
       !!h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string",
   );
   if (fresh) {
+    resolveApprovalWait(slot, false);
     await cancelRun(slot.run);
     slot.epoch += 1;
     await disposeSlot(slot);
@@ -3143,9 +3348,23 @@ async function handlePrompt(
   if (autoApprove) slot.runStats.replays += 1;
   else slot.runStats = { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 };
 
-  // P11：第三方 OpenAI 兼容模型（"minimax:MiniMax-M2" 等）——纯问答：
-  // 无工具/检查点/confirm-writes；历史由客户端随 prompt 上行（iOS 是会话内容权威源）
+  // P11：第三方模型（"minimax:MiniMax-M2" 等）默认走自研 Agent；providers.json 里 tools: false 的退回纯问答。
+  // 历史由客户端随 prompt 上行（iOS 是会话内容权威源）
   const external = externalEarly;
+  if (external && external.provider.tools) {
+    await runNativeChat(ws, conn, slot, external, {
+      prompt,
+      images: safeImages,
+      history: safeHistory,
+      epoch: slot.epoch,
+      cwd,
+      mode,
+      confirmWrites,
+      autoApprove,
+    });
+    drainPending(ws, conn, slot, epoch);
+    return;
+  }
   if (external) {
     if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
       send(ws, {
@@ -3169,28 +3388,7 @@ async function handlePrompt(
 
   let replayApproved = false;
 
-  if (!autoApprove && (mode === "agent" || mode === "plan")) {
-    try {
-      const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-      const kind = mode === "plan" ? "Plan" : "Agent";
-      let label = `${kind} · ${stamp}`;
-      if (slot.checkpoints.some((item) => item.label === label)) {
-        label = `${kind} · ${stamp} · ${slot.checkpoints.length + 1}`;
-      }
-      const checkpoint = createCheckpoint(cwd, label);
-      slot.checkpoints.unshift(checkpoint);
-      slot.checkpoints = slot.checkpoints.slice(0, 10);
-      sendCheckpoints(ws, slot);
-      persistConn(conn);
-    } catch (err) {
-      send(ws, {
-        type: "status",
-        chatId: slot.chatId,
-        status: "RUNNING",
-        message: `检查点没记下：${err instanceof Error ? err.message : "未知错误"}`,
-      });
-    }
-  }
+  if (!autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
 
   let run: RunHandle | null = null;
   let blockedAsk = false;
@@ -4925,6 +5123,8 @@ wss.on("connection", (ws, req: IncomingMessage) => {
 
       if (message.type === "approval_reply") {
         const slot = slotOf(conn, message.chatId);
+        // 迟到的回复（旧工具、已超时）不能批准当前正在等的另一项
+        if (message.callId && slot.approvalCallId && message.callId !== slot.approvalCallId) return;
         resolveApprovalWait(slot, Boolean(message.allow));
         return;
       }

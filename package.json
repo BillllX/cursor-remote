@@ -22,7 +22,8 @@
     "smoke:publish": "npm run smoke:publish -w gateway",
     "bench:policy": "node scripts/policy-bench.mjs",
     "bench:dialect": "node scripts/dialect-bench.mjs",
-    "check:protocol": "diff shared/protocol.ts web/lib/protocol.ts && echo 'protocol 双份同步 ✅'"
+    "check:protocol": "diff shared/protocol.ts web/lib/protocol.ts && echo 'protocol 双份同步 ✅'",
+    "smoke:native": "npm run smoke:native -w gateway"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

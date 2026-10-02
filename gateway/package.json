@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json --noEmit",
     "start": "tsx src/index.ts",
-    "smoke:publish": "tsx src/publish-smoke.ts"
+    "smoke:publish": "tsx src/publish-smoke.ts",
+    "smoke:native": "tsx src/native/native-smoke.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.9",

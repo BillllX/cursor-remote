@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stateDir } from "./tenants.js";
+import type { AdapterKind, ModelEndpoint } from "./native/types.ts";
 
 /**
  * P11：第三方 OpenAI 兼容模型接入（MiniMax / GLM / Kimi / Grok 等）。
@@ -11,9 +12,16 @@ import { stateDir } from "./tenants.js";
  * `provider:model` 编码混进 ready.models
  * （如 "minimax:MiniMax-M2"），iOS 选中后 prompt.model 原样回传，网关按前缀路由。
  *
- * 能力边界：纯问答——无工具、无检查点、无 confirm-writes；历史由客户端
- * 随 prompt 上行（iOS 是会话内容权威源，服务端 state.json 只是同步副本）。
+ * 能力：默认走自研 Agent（gateway/src/native），带工具、检查点、审批；
+ * `"tools": false` 时退回纯问答，历史由客户端随 prompt 上行。
  * reasoning_content（GLM/MiniMax 的思考链）映射 thinking-delta。
+ *
+ * 可选字段：
+ *   "adapter": "openai" | "anthropic" | "xml"   协议，默认 openai；xml 给不支持 tool calling 的模型
+ *   "tools": false                              关掉自研 Agent，只做问答
+ *   "echoReasoning": true                       工具轮把 reasoning_content 回传（Kimi 思考模型需要）
+ *   "cache": true                               打 prompt caching 标记（anthropic 默认开）
+ *   "maxTokens": 8192                           单次输出上限
  *
  * providers.json 示例：
  * {
@@ -35,7 +43,29 @@ export type ExternalProvider = {
   apiKey: string;
   models: string[];
   vision: boolean;
+  /** 协议：openai（默认）/ anthropic / xml（无原生 tool calling，用文本协议） */
+  adapter: AdapterKind;
+  /** 走自研 Agent（带工具）。false 时退回纯问答 */
+  tools: boolean;
+  echoReasoning: boolean;
+  cache: boolean;
+  maxTokens?: number;
 };
+
+export function endpointFor(provider: ExternalProvider, model: string): ModelEndpoint {
+  return {
+    id: provider.id,
+    name: provider.name,
+    baseURL: provider.baseURL,
+    apiKey: provider.apiKey,
+    model,
+    adapter: provider.adapter,
+    vision: provider.vision,
+    echoReasoning: provider.echoReasoning,
+    cache: provider.cache,
+    maxTokens: provider.maxTokens,
+  };
+}
 
 const ID_RE = /^[a-z][a-z0-9-]*$/;
 
@@ -78,6 +108,8 @@ export function loadExternalProviders(): ExternalProvider[] {
         console.error(`providers.json：${id} 缺 API key（apiKeyEnv 指向的环境变量为空），跳过`);
         continue;
       }
+      const adapter: AdapterKind = rec.adapter === "anthropic" || rec.adapter === "xml" ? rec.adapter : "openai";
+      const maxTokens = typeof rec.maxTokens === "number" && rec.maxTokens > 0 ? Math.floor(rec.maxTokens) : undefined;
       cache.push({
         id,
         name: typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id,
@@ -85,6 +117,11 @@ export function loadExternalProviders(): ExternalProvider[] {
         apiKey,
         models,
         vision: rec.vision === true,
+        adapter,
+        tools: rec.tools !== false,
+        echoReasoning: rec.echoReasoning === true,
+        cache: rec.cache === true || adapter === "anthropic",
+        maxTokens,
       });
     }
   } catch (err) {
@@ -122,7 +159,7 @@ export type ChatHistoryItem = { role: "user" | "assistant"; text: string };
  * 标签可能跨 delta（如 "<thi"+"nk>"），缓冲尾部保留「模式长-1」字符防切半；
  * 不输出 <think> 的模型透明转发（仅拖尾几字符，流式体验不受影响）。
  */
-class ThinkSplitter {
+export class ThinkSplitter {
   private buf = "";
   private inThink = false;
   constructor(
