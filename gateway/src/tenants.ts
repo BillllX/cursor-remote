@@ -132,11 +132,16 @@ function tenantSlug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** 只有部署配置里标了不进沙箱的租户（tenants.json 里 id 为 billxu 或 sandbox: false；
- *  env 单租户模式下 CURSOR_REMOTE_SANDBOX=0 或部署名为 BillXu）按 gateway 进程权限执行。
- *  管理员和其余租户都进沙箱：子工作区会话读不到租户状态目录里的助理数据。 */
-export function sandboxEnabledForTenant(tenant: { sandbox: boolean } | null | undefined): boolean {
-  return tenant ? tenant.sandbox : true;
+/** 平台管理员创建的 Agent 不进沙箱，按 gateway 进程权限执行。
+ *  其余租户看部署配置：tenants.json 里 id 为 billxu 或 sandbox: false，
+ *  以及 env 单租户模式下 CURSOR_REMOTE_SANDBOX=0 或部署名为 BillXu，也不进沙箱。
+ *  没有租户时默认进沙箱。 */
+export function sandboxEnabledForTenant(
+  tenant: { sandbox: boolean; admin?: boolean } | null | undefined,
+): boolean {
+  if (!tenant) return true;
+  if (tenant.admin) return false;
+  return tenant.sandbox;
 }
 
 /** 会话工作区围栏：写到当前目录以外就拦截。BillXu 除外，可以改这台机器上 gateway 用户能碰到的路径。 */

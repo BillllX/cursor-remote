@@ -107,7 +107,7 @@ try {
 
   loadTenants();
   const sandbox = (id: string) => sandboxEnabledForTenant(getTenant(id));
-  check(sandbox("admin") === true, "沙箱：管理员进沙箱");
+  check(sandbox("admin") === false, "沙箱：平台管理员不进沙箱");
   check(sandbox("billxu") === false, "沙箱：id 为 billxu 的租户不进沙箱");
   check(sandbox("alice") === true, "沙箱：显示名叫 BillXu 不能绕过沙箱");
   check(sandbox("carol") === false, "沙箱：tenants.json 里 sandbox: false 不进沙箱");
