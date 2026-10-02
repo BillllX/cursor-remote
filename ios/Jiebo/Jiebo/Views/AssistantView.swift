@@ -186,7 +186,7 @@ struct AssistantView: View {
                             .foregroundStyle(JieboColor.ink)
                         Text(scheduleLine(row))
                             .font(JieboFont.ui(12))
-                            .foregroundStyle(row.enabled ? JieboColor.dim : JieboColor.clay)
+                            .foregroundStyle(row.enabled ? JieboColor.dim : JieboColor.warnFg)
                     }
                     .assistantCard()
                 }
@@ -513,6 +513,7 @@ struct AssistantView: View {
                             ActionButton(title: "恢复") {
                                 store.assistantOp("memory_restore", args: ["id": .string(entry.id)])
                             }
+                            ActionButton(title: "彻底删除", kind: .destructive) { purgeTarget = entry }
                         }
                     }
                 }
@@ -601,7 +602,7 @@ extension AssistantDelegation {
     var statusColors: (fg: Color, bg: Color) {
         switch status {
         case "running": return (JieboColor.run, JieboColor.runBg)
-        case "awaiting": return (JieboColor.clay, JieboColor.clay.opacity(0.12))
+        case "awaiting": return (JieboColor.warnFg, JieboColor.warnBg)
         case "done": return (JieboColor.ok, JieboColor.okBg)
         case "failed": return (JieboColor.danger, JieboColor.dangerBg)
         default: return (JieboColor.dim, JieboColor.mist)

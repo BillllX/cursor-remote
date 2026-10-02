@@ -1285,6 +1285,17 @@ export default function ChatApp() {
     if (typeof window === "undefined") return undefined;
     return new URLSearchParams(window.location.search).get("inbox") || undefined;
   });
+  // onServer 回调常驻，读 state 会拿到首屏的旧值；用 ref 判断深链是否还没处理
+  const inboxDeepLinkRef = useRef(inboxDeepLink);
+  const clearInboxDeepLink = () => {
+    inboxDeepLinkRef.current = undefined;
+    setInboxDeepLink(undefined);
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("inbox")) {
+      url.searchParams.delete("inbox");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+  };
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant">("chats");
   const [wideIDE, setWideIDE] = useState(false);
@@ -1867,7 +1878,7 @@ export default function ChatApp() {
             else setWorkspaceRoot((prev) => prev || message.cwd);
             setAssistantName(message.assistantName?.trim() || DEFAULT_ASSISTANT_NAME);
             send({ type: "assistant_get" });
-            if (inboxDeepLink) {
+            if (inboxDeepLinkRef.current) {
               if (wideIDERef.current) chooseSide("assistant");
               else setAssistantOpen(true);
             }
@@ -3623,8 +3634,8 @@ export default function ChatApp() {
       return;
     }
     selectChat(chat);
-    if (wideIDERef.current && sidePane === "assistant") chooseSide("chats");
-    else setAssistantOpen(false);
+    // 和收件箱一致：宽屏助理留在侧栏列，窄屏关掉浮层才能看见会话
+    if (!wideIDERef.current) setAssistantOpen(false);
   }
 
   function answerDelegation(approval: AssistantApproval, allow: boolean) {
@@ -3632,7 +3643,7 @@ export default function ChatApp() {
   }
 
   function openAssistantInboxItem(item: { chatId?: string; id: string }) {
-    setInboxDeepLink(undefined);
+    clearInboxDeepLink();
     const chat = item.chatId ? chatsRef.current.find((row) => row.id === item.chatId) : undefined;
     if (!chat) {
       // 没有关联会话（提醒、简报）或会话还没同步：留在收件箱里看正文
@@ -4849,7 +4860,7 @@ export default function ChatApp() {
         open={assistantOpen}
         docked={wideIDE && sidePane === "assistant"}
         onClose={() => {
-          setInboxDeepLink(undefined);
+          clearInboxDeepLink();
           if (wideIDE && sidePane === "assistant") chooseSide("chats");
           else setAssistantOpen(false);
         }}

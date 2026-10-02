@@ -210,6 +210,9 @@ enum JieboColor {
     static let run = Color(light: 0x8A6526, dark: 0xD4B47A)
     static let runBg = Color(light: 0xF2E8D2, dark: 0x2C2617)
     static let dangerBg = Color(light: 0xF8E5E0, dark: 0x3A1D1B)
+    /// 待批、暂停这类“要你处理”的提醒色。与网页 --warn-fg / --warn-bg 一致。
+    static let warnFg = Color(light: 0x7A581B, dark: 0xE0B570)
+    static let warnBg = Color(light: 0xF7EEDB, dark: 0x2A2118)
 }
 
 enum JieboFont {
