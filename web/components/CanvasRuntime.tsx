@@ -14,6 +14,7 @@ import { compileCanvas, loadCanvasModule } from "../lib/canvas/compile";
 import { CanvasRuntimeProvider, buildHostTheme, type CanvasAction } from "../lib/canvas/host";
 import { useHostTheme } from "../lib/canvas/host";
 import { SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
+import { DEFAULT_PALETTE } from "../lib/theme";
 
 type LoadMessage = {
   type: "canvas:load";
@@ -84,12 +85,12 @@ export default function CanvasRuntime() {
   const [seq, setSeq] = useState<number | undefined>();
   const [load, setLoad] = useState(0);
   const [kind, setKind] = useState("dark");
-  const [palette, setPalette] = useState("neutral");
+  const [palette, setPalette] = useState<string>(DEFAULT_PALETTE);
   useLayoutEffect(() => {
     const root = document.documentElement;
     const read = () => {
       setKind(root.dataset.theme === "light" ? "light" : "dark");
-      setPalette(root.dataset.palette || "neutral");
+      setPalette(root.dataset.palette || DEFAULT_PALETTE);
     };
     read();
     const observer = new MutationObserver(read);

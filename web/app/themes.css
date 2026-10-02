@@ -1,4 +1,4 @@
-/* 八套配色。色值与 ios/Jiebo/Jiebo/Theme/Tokens.swift 对齐。
+/* 九套配色。除品牌默认的“接驳”外，色值与 ios/Jiebo/Jiebo/Theme/Tokens.swift 对齐。
    外观由 html[data-theme]，配色由 html[data-palette]。启动脚本在绘制前写上这两个属性。 */
 
 html[data-palette] {
@@ -31,8 +31,8 @@ html[data-palette] {
   --ok: #7dce98;
   --ok-bg: #16301f;
   --ok-fg: #7dce98;
-  --run: #7aa5f8;
-  --run-bg: #1b2942;
+  --run: #d4b47a;
+  --run-bg: #2c2617;
   --add-bg: #16301f;
   --del-bg: #3a1d1b;
   --warn-bg: #2a2118;
@@ -40,6 +40,77 @@ html[data-palette] {
   --warn-border: #5a4a2a;
   --mark-bg: #3a3218;
   --shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+}
+
+/* 接驳：品牌默认。牙白主面、雾色侧栏、松绿强调、赭金表示进行中。见 brand/vi。 */
+[data-palette="jiebo"][data-theme="light"] {
+  --bg: #f3eee4;
+  --bg-sidebar: #ebe5d9;
+  --bg-panel: #fffcf8;
+  --bg-composer: #fffdfa;
+  --bg-user: #e2ebe4;
+  --border: #ddd5c7;
+  --border-strong: #cdc4b4;
+  --text: #1c1916;
+  --muted: #5c574f;
+  --dim: #746d62;
+  --accent: #1a4f41;
+  --fill: #1a4f41;
+  --fill-fg: #fffcf8;
+  --hover: color-mix(in srgb, #1c1916 5%, transparent);
+  --hover-strong: color-mix(in srgb, #1c1916 9%, transparent);
+  --danger: #b42318;
+  --danger-bg: #f8e5e0;
+  --danger-fg: #9a1d14;
+  --ok: #2f7d4a;
+  --ok-bg: #e1eee3;
+  --ok-fg: #24633a;
+  --run: #8a6526;
+  --run-bg: #f2e8d2;
+  --add-bg: #e5efe5;
+  --del-bg: #f7e5e0;
+  --warn-bg: #f7eedb;
+  --warn-fg: #7a581b;
+  --warn-border: #e3cf9f;
+  --mark-bg: #f0e0b2;
+  --shadow: 0 1px 2px rgba(28, 25, 22, 0.05), 0 12px 32px rgba(28, 25, 22, 0.08);
+}
+
+[data-palette="jiebo"][data-theme="dark"] {
+  --bg: #141512;
+  --bg-sidebar: #101210;
+  --bg-panel: #1b1d1a;
+  --bg-composer: #1f211e;
+  --bg-user: #22322c;
+  --border: #2c2f2b;
+  --border-strong: #3a3e38;
+  --text: #ede8de;
+  --muted: #b6b0a4;
+  --dim: #8a8478;
+  --accent: #8fbfb0;
+  --fill: #8fbfb0;
+  --fill-fg: #141512;
+  --hover: color-mix(in srgb, #ede8de 6%, transparent);
+  --hover-strong: color-mix(in srgb, #ede8de 10%, transparent);
+  --run: #d4b47a;
+  --run-bg: #2c2617;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.32);
+}
+
+[data-palette="neutral"][data-theme="light"] {
+  --bg: #f7f7f8;
+  --bg-sidebar: #f2f2f3;
+  --bg-panel: #ffffff;
+  --bg-composer: #ffffff;
+  --bg-user: #f4f4f5;
+  --border: #ececec;
+  --border-strong: #e4e4e7;
+  --text: #171717;
+  --muted: #6e6e6e;
+  --dim: #6e6e6e;
+  --accent: #171717;
+  --fill: #171717;
+  --fill-fg: #fafafa;
 }
 
 [data-palette="paper"][data-theme="light"] {
@@ -282,6 +353,7 @@ html[data-palette] {
   border: 1px solid var(--border-strong);
 }
 
+.theme-dot[data-palette="jiebo"] { background: linear-gradient(135deg, #1a4f41 50%, #c4a36a 50%); }
 .theme-dot[data-palette="neutral"] { background: #171717; }
 .theme-dot[data-palette="paper"] { background: #1a4f41; }
 .theme-dot[data-palette="sand"] { background: #8a6a3c; }

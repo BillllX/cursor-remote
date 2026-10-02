@@ -8,40 +8,49 @@
   --jiebo-mist: #e7e1d4;
   --jiebo-white: #fffcfa;
   --jiebo-ink: #1c1916;
-  --bg: #f7f7f8;
-  --bg-sidebar: #f2f2f3;
-  --bg-panel: #ffffff;
-  --bg-composer: #ffffff;
-  --bg-user: #f4f4f5;
-  --border: #ececec;
-  --border-strong: #e4e4e7;
-  --text: #171717;
-  --muted: #6e6e6e;
-  --dim: #6e6e6e;
-  --accent: #171717;
+  --jiebo-clay: #a35c3c;
+  --bg: #f3eee4;
+  --bg-sidebar: #ebe5d9;
+  --bg-panel: #fffcf8;
+  --bg-composer: #fffdfa;
+  --bg-user: #e2ebe4;
+  --border: #ddd5c7;
+  --border-strong: #cdc4b4;
+  --text: #1c1916;
+  --muted: #5c574f;
+  --dim: #746d62;
+  --accent: #1a4f41;
   --accent-2: var(--jiebo-brass);
-  --danger: #dc2626;
-  --ok: #16a34a;
-  --ok-bg: #dcfce7;
-  --run: #2563eb;
-  --run-bg: #dbeafe;
-  --hover: #f4f4f5;
-  --hover-strong: #ececee;
-  --fill: #171717;
-  --fill-fg: #fafafa;
-  --danger-bg: #fee2e2;
-  --danger-fg: #b91c1c;
-  --ok-fg: #15803d;
-  --add-bg: #f0fdf4;
-  --del-bg: #fef2f2;
-  --warn-bg: #fffbeb;
-  --warn-fg: #a16207;
-  --warn-border: #fde68a;
-  --mark-bg: #fef3c7;
-  --shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
-  --font: var(--font-sans), "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Segoe UI", system-ui, sans-serif;
-  --font-display: var(--font-sans), "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", sans-serif;
-  --mono: "Noto Sans Mono", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --danger: #b42318;
+  --ok: #2f7d4a;
+  --ok-bg: #e1eee3;
+  --run: #8a6526;
+  --run-bg: #f2e8d2;
+  --hover: color-mix(in srgb, #1c1916 5%, transparent);
+  --hover-strong: color-mix(in srgb, #1c1916 9%, transparent);
+  --fill: #1a4f41;
+  --fill-fg: #fffcf8;
+  --danger-bg: #f8e5e0;
+  --danger-fg: #9a1d14;
+  --ok-fg: #24633a;
+  --add-bg: #e5efe5;
+  --del-bg: #f7e5e0;
+  --warn-bg: #f7eedb;
+  --warn-fg: #7a581b;
+  --warn-border: #e3cf9f;
+  --mark-bg: #f0e0b2;
+  --shadow: 0 1px 2px rgba(28, 25, 22, 0.05), 0 12px 32px rgba(28, 25, 22, 0.08);
+  --shadow-card: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+  --shadow-float: 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent), 0 10px 28px -8px color-mix(in srgb, var(--text) 14%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, var(--border));
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  --scrim: color-mix(in srgb, #12100d 46%, transparent);
+  --radius-sm: 8px;
+  --radius-lg: 16px;
+  --font: var(--font-sans), "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --font-display: var(--font-serif), "Noto Serif SC", "Songti SC", "STSong", "SimSun", serif;
+  --mono: var(--font-mono), "Noto Sans Mono", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-in: cubic-bezier(0.32, 0, 0.67, 0);
   --dur-sheet: 340ms;
@@ -64,6 +73,9 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -72,6 +84,23 @@ textarea,
 select {
   font: inherit;
   color: inherit;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.composer-input:focus-visible,
+.search-input:focus-visible,
+.thread-find-input:focus-visible,
+.login-card input:focus-visible,
+.file-preview-edit:focus-visible {
+  outline: none;
 }
 
 button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn),
@@ -119,10 +148,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .brand-title {
-  font-family: var(--font);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   line-height: 1.1;
   color: var(--text);
 }
@@ -153,6 +182,26 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .new-chat:active {
   transform: scale(0.98);
+}
+
+.new-chat.primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: var(--fill);
+  color: var(--fill-fg);
+  box-shadow: var(--shadow-card);
+}
+
+.new-chat.primary:hover,
+.new-chat.primary.open {
+  background: color-mix(in srgb, var(--fill) 88%, var(--text));
+}
+
+.new-chat.primary.open {
+  box-shadow: var(--focus);
 }
 
 .grep-chat {
@@ -228,10 +277,9 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .side-tool.on .side-tool-icon {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
-  border-color: var(--border);
-  color: var(--text);
-  box-shadow: inset 2px 0 0 var(--text);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
 }
 
 .side-tool .loop-live {
@@ -569,9 +617,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   align-items: center;
   gap: 6px;
   min-height: 28px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.04em;
   color: var(--muted);
   padding: 2px 12px;
   overflow: hidden;
@@ -702,12 +749,12 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .chat-mark.run {
-  background: rgba(226, 179, 64, 0.2);
-  color: #e2b340;
+  background: var(--run-bg);
+  color: var(--run);
 }
 
 .chat-mark.unread {
-  background: var(--text);
+  background: var(--accent);
   color: var(--fill-fg);
   width: 6px;
   height: 6px;
@@ -730,9 +777,9 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .chat-item.active {
-  box-shadow: inset 2px 0 0 var(--text);
+  box-shadow: var(--shadow-card), inset 0 0 0 1px var(--border);
   color: var(--text);
-  background: color-mix(in srgb, var(--text) 7%, transparent);
+  background: var(--bg-panel);
   font-weight: 500;
 }
 
@@ -834,7 +881,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #555;
+  background: var(--dim);
 }
 
 .dot.on {
@@ -842,7 +889,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .dot.busy {
-  background: #fbbf24;
+  background: var(--run);
 }
 
 .dot.off {
@@ -857,7 +904,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-panel);
+  background: var(--bg);
 }
 
 .app.nav-ready .main {
@@ -1059,10 +1106,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .empty h1 {
   margin: 0;
-  font-family: var(--font);
-  font-size: clamp(32px, 4.4vw, 44px);
-  font-weight: 600;
-  letter-spacing: -0.045em;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4vw, 40px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
   line-height: 1.1;
   animation: jiebo-in 520ms var(--ease-out) 40ms both;
 }
@@ -1078,10 +1125,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .empty-chip {
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   background: var(--bg-panel);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 0 14px;
   height: 36px;
   font-size: 13px;
@@ -1097,9 +1144,9 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .empty-starters .empty-chip:nth-child(4) { animation-delay: 350ms; }
 
 .empty-chip:hover {
-  color: var(--text);
-  background: var(--hover);
-  border-color: var(--border-strong);
+  color: var(--accent);
+  background: var(--bg-panel);
+  border-color: var(--accent-line);
 }
 
 .empty-lead {
@@ -1176,11 +1223,11 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   max-width: min(520px, calc(100% - 80px));
   min-width: 0;
   margin-left: 0;
-  background: color-mix(in srgb, var(--text) 6%, transparent);
+  background: var(--bg-user);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 14px 14px 4px 14px;
+  padding: 11px 15px;
   font-size: 16px;
   font-weight: 400;
   line-height: 1.5;
@@ -1277,8 +1324,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   height: 28px;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
+  background: var(--bg-panel);
+  color: var(--accent);
   display: grid;
   place-items: center;
   font-size: 11px;
@@ -1517,7 +1564,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .tool.running,
 .tool-pack.running {
-  border-color: #bfdbfe;
+  border-color: color-mix(in srgb, var(--run) 45%, var(--border));
 }
 
 .tool-live {
@@ -1611,10 +1658,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   align-items: center;
   gap: 0;
   padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   overflow: visible;
-  background: transparent;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   flex: 0 1 auto;
   min-width: 0;
   isolation: isolate;
@@ -1626,7 +1673,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   bottom: 2px;
   left: 0;
   border-radius: 8px;
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-card), inset 0 0 0 1px var(--border);
   pointer-events: none;
   z-index: 0;
   opacity: 0;
@@ -1862,20 +1910,58 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   margin-bottom: 0;
 }
 
-.markdown h2,
-.markdown h3 {
-  margin: 12px 0 6px;
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.markdown h1,
+.markdown h2 {
+  margin: 18px 0 8px;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
   color: var(--text);
 }
 
-.markdown h3 {
-  font-size: 12px;
-  font-weight: 400;
-  margin: 10px 0 4px;
+.markdown h1 {
+  font-size: 22px;
+}
+
+.markdown h3,
+.markdown h4 {
+  margin: 14px 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
   color: var(--text);
+}
+
+.markdown h4 {
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown strong {
+  font-weight: 600;
+}
+
+.markdown a {
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-underline-offset: 3px;
+}
+
+.markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.markdown blockquote {
+  margin: 8px 0;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid color-mix(in srgb, var(--accent-2) 70%, transparent);
+  color: var(--muted);
 }
 
 .md-table {
@@ -1960,14 +2046,11 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .markdown :not(pre) > code {
-  background: transparent;
-  color: var(--dim);
-  padding: 0;
-  border-radius: 0;
-  font-size: 0.92em;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--dim) 45%, transparent);
-  text-underline-offset: 3px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 0.86em;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -2041,8 +2124,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   grid-column: 1;
   grid-row: 2;
   flex: none;
-  padding: 8px 0 28px;
-  background: var(--bg-panel);
+  padding: 8px 0 24px;
+  background: var(--bg);
 }
 
 .composer-dock::before {
@@ -2050,10 +2133,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   position: absolute;
   left: 0;
   right: 0;
-  top: 0;
-  height: 1px;
+  top: -20px;
+  height: 20px;
   pointer-events: none;
-  background: var(--border);
+  background: linear-gradient(to bottom, transparent, var(--bg));
 }
 
 .composer {
@@ -2061,8 +2144,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   flex-direction: column;
   background: var(--bg-composer);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: none;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
   padding: 10px 12px 8px;
   container-type: inline-size;
   container-name: composer;
@@ -2079,8 +2162,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .composer:focus-within {
-  border-color: color-mix(in srgb, var(--text) 28%, var(--border));
-  box-shadow: none;
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-float), var(--focus);
 }
 
 .composer-input {
@@ -2221,7 +2304,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 6px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow);
   z-index: 40;
   animation: jiebo-pop 150ms var(--ease-out) both;
   transform-origin: top left;
@@ -2268,10 +2351,11 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .send {
+  flex: none;
   width: 32px;
   height: 32px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 10px;
   background: var(--fill);
   color: var(--fill-fg);
   display: grid;
@@ -2290,7 +2374,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .send:hover:not(:disabled) {
-  transform: scale(1.04);
+  background: color-mix(in srgb, var(--fill) 88%, var(--text));
   box-shadow: none;
 }
 
@@ -2300,8 +2384,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .send:disabled {
-  background: color-mix(in srgb, var(--bg-user) 55%, transparent);
-  color: color-mix(in srgb, var(--dim) 45%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: color-mix(in srgb, var(--dim) 70%, transparent);
   box-shadow: none;
   transform: scale(0.94);
   cursor: default;
@@ -2416,7 +2500,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .tree-glyph.dir {
-  color: #c4a36a;
+  color: var(--accent-2);
 }
 
 .tree-chevron {
@@ -2468,24 +2552,24 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .git-mark.M {
-  color: #e2b340;
+  color: var(--run);
 }
 
 .git-mark.A,
 .git-mark.U {
-  color: #6ccb6c;
+  color: var(--ok);
 }
 
 .git-mark.D {
-  color: #e07070;
+  color: var(--danger);
 }
 
 .git-mark.R {
-  color: #6cb0e0;
+  color: var(--accent);
 }
 
 .git-mark.dir {
-  color: #e2b340;
+  color: var(--run);
   font-size: 14px;
 }
 
@@ -2559,7 +2643,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow);
   animation: jiebo-pop 150ms var(--ease-out) both;
   transform-origin: top left;
 }
@@ -2621,7 +2705,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 
 .file-preview {
   border-left: 1px solid var(--border);
-  background: var(--bg-sidebar);
+  background: var(--bg-panel);
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -2707,6 +2791,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .file-preview-tabs {
   display: flex;
   overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--bg-sidebar);
   border-bottom: 1px solid var(--border);
   min-width: 0;
   width: 100%;
@@ -2737,13 +2823,14 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .file-preview-tab.on {
-  background: color-mix(in srgb, var(--text) 8%, transparent);
+  background: var(--bg-panel);
   color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 .file-preview-tab.dirty .file-preview-tab-name::before {
   content: "●";
-  color: #c4553a;
+  color: var(--jiebo-clay);
   margin-right: 4px;
   font-size: 10px;
 }
@@ -3152,7 +3239,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border: 0;
   padding: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--accent);
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
   font: inherit;
   cursor: pointer;
   text-align: left;
@@ -3270,6 +3358,28 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border-color: var(--border-strong);
 }
 
+.composer-bar .pill.icon,
+.composer-bar .model-picker-btn {
+  border-color: transparent;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+.composer-bar .model-picker-btn.open {
+  border-color: transparent;
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+@media (hover: hover) {
+  .composer-bar .pill.icon:hover,
+  .composer-bar .model-picker-btn:hover {
+    border-color: transparent;
+    background-color: var(--hover);
+    color: var(--text);
+  }
+}
+
 .composer-attach svg {
   transition: rotate 280ms var(--ease-out);
 }
@@ -3349,7 +3459,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 .search-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--scrim);
   z-index: 20;
   display: grid;
   place-items: start center;
@@ -3401,7 +3511,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   display: grid;
   place-items: center;
   padding: 32px;
-  background: rgba(0, 0, 0, 0.4);
+  background: var(--scrim);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-scrim) var(--ease-in);
@@ -3423,7 +3533,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   border: 1px solid var(--border-strong);
   border-radius: 16px;
   overflow: hidden;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--shadow);
   opacity: 0;
   transform: translateY(12px) scale(0.98);
   transition:
@@ -3628,7 +3738,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .find-mark {
-  background: rgba(232, 180, 80, 0.35);
+  background: var(--mark-bg);
   color: inherit;
   border-radius: 2px;
   padding: 0 1px;
@@ -3650,27 +3760,43 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .login-card {
-  width: min(360px, 100%);
+  width: min(380px, 100%);
   display: grid;
-  gap: 12px;
+  gap: 14px;
   background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-  padding: 28px 24px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px 28px 24px;
   box-shadow: var(--shadow);
 }
 
 .login-card .logo {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
 }
 
 .login-card h1 {
-  margin: 0;
-  font-family: var(--font);
-  font-size: 28px;
-  font-weight: 600;
-  letter-spacing: -0.04em;
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.login-card input {
+  height: 44px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-composer);
+  padding: 0 14px;
+  outline: none;
+  transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
+}
+
+.login-card input:focus {
+  border-color: var(--accent-line);
+  box-shadow: var(--focus);
 }
 
 .login-card p {
@@ -3681,9 +3807,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .login-btn {
-  margin-top: 4px;
+  margin-top: 2px;
   border: 0;
   border-radius: 12px;
+  min-height: 44px;
   padding: 10px 12px;
   background: var(--fill);
   color: var(--fill-fg);
@@ -3701,7 +3828,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
 }
 
 .login-btn:disabled {
-  background: var(--bg-user);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--muted);
   opacity: 1;
   cursor: default;
@@ -4064,7 +4191,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     inset: 0;
     z-index: 55;
     border: 0;
-    background: rgba(0, 0, 0, 0.72);
+    background: var(--scrim);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -4108,7 +4235,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     transform: translateX(-100%);
     padding-top: max(24px, env(safe-area-inset-top, 0px));
     padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
-    box-shadow: 16px 0 40px rgba(0, 0, 0, 0.4);
+    box-shadow: none;
   }
 
   .app.nav-ready .sidebar {
@@ -4118,6 +4245,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   .app.nav-open .sidebar {
     transform: translateX(0);
     translate: 0;
+    box-shadow: 16px 0 40px color-mix(in srgb, #12100d 22%, transparent);
   }
 
   .app.nav-ready.nav-open .sidebar {
@@ -4178,7 +4306,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   .files-overlay {
     padding: 16px;
     place-items: center;
-    background: rgba(0, 0, 0, 0.48);
+    background: var(--scrim);
   }
 
   .files-browser {
@@ -4614,7 +4742,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     top: calc(70px + max(24px, env(safe-area-inset-top, 0px)));
     z-index: 28;
     border: 0;
-    background: rgba(0, 0, 0, 0.48);
+    background: var(--scrim);
     opacity: 0;
     visibility: hidden;
     pointer-events: none;
@@ -4653,7 +4781,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     min-height: 0;
     padding-top: 12px;
     padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
-    box-shadow: -20px 0 48px rgba(0, 0, 0, 0.45);
+    box-shadow: none;
     transform: translateX(110%);
     pointer-events: none;
   }
@@ -4689,11 +4817,11 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     display: none;
     position: fixed;
     right: max(12px, env(safe-area-inset-right, 0px));
-    bottom: calc(196px + max(var(--kb, 0px), env(keyboard-inset-bottom, 0px)) + max(12px, env(safe-area-inset-bottom, 0px)));
+    top: calc(82px + max(24px, env(safe-area-inset-top, 0px)));
     z-index: 18;
     max-width: min(280px, 72vw);
-    height: 48px;
-    padding: 0 16px;
+    height: 40px;
+    padding: 0 14px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4701,8 +4829,8 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     border-radius: 999px;
     background: var(--bg-panel);
     color: var(--text);
-    font-size: 14px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    font-size: 13px;
+    box-shadow: var(--shadow-float);
   }
 
   .main.with-preview:not(.preview-max) .preview-reopen {
@@ -4867,7 +4995,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     transform: translateX(-100%);
     translate: none;
     transition: transform var(--dur-scrim) var(--ease-in);
-    box-shadow: 16px 0 40px rgba(0, 0, 0, 0.4);
+    box-shadow: none;
     padding-top: max(24px, env(safe-area-inset-top, 0px));
     padding-bottom: max(20px, env(safe-area-inset-bottom, 0px));
   }
@@ -4875,6 +5003,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   .app.nav-open:has(.main.with-preview) .sidebar {
     transform: translateX(0);
     transition: transform var(--dur-sheet) var(--ease-out);
+    box-shadow: 16px 0 40px color-mix(in srgb, #12100d 22%, transparent);
   }
 
   .app:has(.main.with-preview) .pad-bar-nav {
@@ -4887,7 +5016,7 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     inset: 0;
     z-index: 55;
     border: 0;
-    background: rgba(0, 0, 0, 0.72);
+    background: var(--scrim);
     opacity: 1;
     visibility: visible;
     pointer-events: auto;
@@ -4916,7 +5045,11 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
     right: 0;
     width: min(1200px, 86vw);
     border-left: 1px solid var(--border);
-    box-shadow: -20px 0 48px rgba(0, 0, 0, 0.45);
+    box-shadow: none;
+  }
+
+  .main.with-preview.preview-max .file-preview {
+    box-shadow: -20px 0 48px color-mix(in srgb, #12100d 24%, transparent);
   }
 
   .main.with-preview.preview-max.with-canvas .file-preview {
@@ -5186,6 +5319,10 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   opacity: 0;
 }
 
+.composer.density-tight .model-picker {
+  flex: 0 0 auto;
+}
+
 .composer.density-tight .model-picker-btn {
   width: 28px;
   max-width: 28px;
@@ -5408,18 +5545,23 @@ nextjs-portal {
     padding: 0;
     display: grid;
     place-items: center;
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    border: 1px solid transparent;
+    border-radius: 10px;
     background: transparent;
-    color: var(--text);
+    color: var(--muted);
     cursor: pointer;
+    transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+  }
+
+  .app.ide .activity-bar button:hover {
+    background: var(--hover);
+    color: var(--text);
   }
 
   .app.ide .activity-bar button.on {
-    background: color-mix(in srgb, var(--text) 8%, transparent);
-    border-color: var(--border);
-    color: var(--text);
-    box-shadow: inset 2px 0 0 var(--text);
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent);
   }
 
   .app.ide .activity-bar .loop-live {
@@ -5566,20 +5708,39 @@ nextjs-portal {
 
 @media (pointer: coarse) {
   .mode-switch .mode-btn {
-    height: 32px;
-    min-height: 32px;
+    height: 34px;
+    min-height: 34px;
     padding: 0 12px;
   }
 
   .model-picker-btn {
-    height: 32px;
+    height: 40px;
     font-size: 13px;
   }
 
+  .composer.density-tight .model-picker-btn {
+    width: 40px;
+    max-width: 40px;
+    height: 40px;
+  }
+
+  .composer-bar > .confirm-btn {
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .composer-bar .pill.icon {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
   .send,
-  .stop {
-    width: 32px;
-    height: 32px;
+  .stop,
+  .composer.density-tight .send,
+  .composer.density-tight .stop {
+    width: 40px;
+    height: 40px;
   }
 
   .file-preview-bar .pill {

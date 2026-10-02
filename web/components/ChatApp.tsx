@@ -1231,7 +1231,7 @@ function LoginGate({
           {verifying ? "正在验证…" : "进入"}
         </button>
         <div className="login-status">
-          {connected ? "已连上服务器" : "正在连 gateway…"}
+          {connected ? "已连上服务器" : "正在连接服务器…"}
         </div>
       </form>
     </div>
@@ -5128,11 +5128,14 @@ export default function ChatApp() {
         >
           <div className="side-actions">
           <button
-            className={`new-chat${workspaceMenuOpen ? " open" : ""}`}
+            className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`}
             type="button"
             onClick={newChat}
           >
-            + 新对话
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+            </svg>
+            新对话
           </button>
           <div className="side-tools" role="toolbar" aria-label="工具">
             {(

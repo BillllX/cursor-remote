@@ -1,4 +1,5 @@
 export const PALETTES = [
+  { id: "jiebo", name: "接驳" },
   { id: "neutral", name: "中性" },
   { id: "paper", name: "纸墨" },
   { id: "sand", name: "暖砂" },
@@ -21,6 +22,7 @@ export type AppearanceId = (typeof APPEARANCES)[number]["id"];
 
 export const THEME_KEY = "jiebo.theme";
 export const APPEARANCE_KEY = "jiebo.appearance";
+export const DEFAULT_PALETTE: PaletteId = "jiebo";
 
 const PALETTE_IDS = new Set<string>(PALETTES.map((item) => item.id));
 
@@ -38,6 +40,10 @@ export type SurfaceInk = {
 
 /** 与 web/app/themes.css、iOS JieboSurfaces 同一组色值。 */
 const SURFACES: Record<PaletteId, { light: SurfaceInk; dark: SurfaceInk }> = {
+  jiebo: {
+    light: { bg: "#f3eee4", sidebar: "#ebe5d9", panel: "#fffcf8", text: "#1c1916", muted: "#5c574f", border: "#ddd5c7", accent: "#1a4f41", user: "#e2ebe4", fillFg: "#fffcf8" },
+    dark: { bg: "#141512", sidebar: "#101210", panel: "#1b1d1a", text: "#ede8de", muted: "#b6b0a4", border: "#2c2f2b", accent: "#8fbfb0", user: "#22322c", fillFg: "#141512" },
+  },
   neutral: {
     light: { bg: "#fafafa", sidebar: "#fafafa", panel: "#ffffff", text: "#171717", muted: "#6e6e6e", border: "#ececec", accent: "#171717", user: "#f4f4f5", fillFg: "#fafafa" },
     dark: { bg: "#141512", sidebar: "#101210", panel: "#1b1d1a", text: "#ede8de", muted: "#b6b0a4", border: "#2c2f2b", accent: "#8fbfb0", user: "#24332e", fillFg: "#141512" },
@@ -77,7 +83,7 @@ export function paletteSurfaces(id: string | null | undefined, kind: "light" | "
 }
 
 export function normalizePalette(value: string | null): PaletteId {
-  return value && PALETTE_IDS.has(value) ? (value as PaletteId) : "neutral";
+  return value && PALETTE_IDS.has(value) ? (value as PaletteId) : DEFAULT_PALETTE;
 }
 
 export function normalizeAppearance(value: string | null): AppearanceId {
@@ -85,7 +91,7 @@ export function normalizeAppearance(value: string | null): AppearanceId {
 }
 
 export function readThemeChoice(): { palette: PaletteId; appearance: AppearanceId } {
-  if (typeof window === "undefined") return { palette: "neutral", appearance: "system" };
+  if (typeof window === "undefined") return { palette: DEFAULT_PALETTE, appearance: "system" };
   return {
     palette: normalizePalette(localStorage.getItem(THEME_KEY)),
     appearance: normalizeAppearance(localStorage.getItem(APPEARANCE_KEY)),
@@ -117,10 +123,12 @@ export function applyJieboTheme(palette: string, appearance: string) {
   document.documentElement.style.colorScheme = theme;
 }
 
-/** 写在 <head> 里，首屏绘制前套上配色。画布 iframe 同源，用 storage 事件跟上切换。 */
+/** 写在 <head> 里，首屏绘制前套上配色。画布 iframe 同源，用 storage 事件跟上切换。
+ *  旧版启动脚本会把默认的 neutral 写进 storage，分不出是不是用户自己选的；rev 2 起统一迁到品牌配色一次。 */
 export const THEME_BOOT = `(function(){
-  var ids=["neutral","paper","sand","pine","cool","ink","night","clay"];
-  function paletteOf(value){return ids.indexOf(value)>=0?value:"neutral"}
+  var ids=${JSON.stringify(PALETTES.map((item) => item.id))};
+  var fallback=${JSON.stringify(DEFAULT_PALETTE)};
+  function paletteOf(value){return ids.indexOf(value)>=0?value:fallback}
   function appearanceOf(value){return value==="light"||value==="dark"||value==="system"?value:"system"}
   function read(key, fallback){try{return localStorage.getItem(key)||fallback}catch(e){return fallback}}
   function write(key, value){try{if(localStorage.getItem(key)!==value)localStorage.setItem(key,value)}catch(e){}}
@@ -147,13 +155,17 @@ export const THEME_BOOT = `(function(){
     else paint();
   }
   window.__jieboApplyTheme=apply;
-  apply(read("jiebo.theme","neutral"), read("jiebo.appearance","system"));
+  if(read("jiebo.theme.rev","")!=="2"){
+    if(read("jiebo.theme","neutral")==="neutral") write("jiebo.theme", fallback);
+    write("jiebo.theme.rev","2");
+  }
+  apply(read("jiebo.theme",fallback), read("jiebo.appearance","system"));
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(){
     if(read("jiebo.appearance","system")!=="system") return;
-    apply(read("jiebo.theme","neutral"), "system");
+    apply(read("jiebo.theme",fallback), "system");
   });
   window.addEventListener("storage", function(event){
     if(event.key!=="jiebo.theme"&&event.key!=="jiebo.appearance") return;
-    apply(read("jiebo.theme","neutral"), read("jiebo.appearance","system"));
+    apply(read("jiebo.theme",fallback), read("jiebo.appearance","system"));
   });
 })();`;

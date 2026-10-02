@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { paletteSurfaces } from "../theme";
+import { DEFAULT_PALETTE, paletteSurfaces } from "../theme";
 import {
   buildHostTokens,
   type CanvasPalette,
@@ -76,9 +76,9 @@ export function useHostTheme(): CanvasHostTheme {
   if (typeof document !== "undefined") {
     const root = document.documentElement;
     const kind = root.dataset.theme === "light" ? "light" : "dark";
-    return buildHostTheme(kind, { palette: root.dataset.palette || "neutral" });
+    return buildHostTheme(kind, { palette: root.dataset.palette || DEFAULT_PALETTE });
   }
-  return buildHostTheme("dark", { palette: "neutral" });
+  return buildHostTheme("dark", { palette: DEFAULT_PALETTE });
 }
 
 export function useCanvasState<T>(key: string, defaultValue: T): [T, SetCanvasState<T>] {
