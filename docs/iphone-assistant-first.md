@@ -1,17 +1,25 @@
-# 接驳 iPhone 改版：助理优先，IDE 为辅
+# 接驳 iPhone 改版：纯个人助理
 
 > 交给 Mac 上的 Agent 执行的实现规格。本文写于没有 Xcode 的环境，所有代码引用都基于当前仓库源码阅读，**行号仅供定位，以实际文件为准**。
 >
 > 工程：`ios/Jiebo/Jiebo.xcodeproj`，Target `Jiebo`，iOS 17.0，Swift 5，Observation（`@Observable`）。
 > 工程**不是** Xcode 16 的文件夹同步组（pbxproj 里没有 `PBXFileSystemSynchronizedRootGroup`），**每新增一个 .swift 文件都必须加进 `project.pbxproj`**（PBXFileReference + PBXBuildFile + 所属 PBXGroup + Sources 阶段），否则编译不到。最稳的做法是用 Xcode 打开工程，把新文件拖进对应分组。
+>
+> 本版取代此前「四个 Tab、工作 tab、会话页」以及「三个 Tab」的方案。方向已定：**iPhone 是一个纯粹的个人助理 App，不进工作区，没有底栏。**
 
 ---
 
-## 0. 一句话目标
+## 0. 目标与已定的决定
 
-iPad 和网页是「IDE + 对话」；iPhone 改成「**个人助理 App**」：打开就是助理（小驳），一眼看到今天要处理的事；工作区会话、文件、Git、终端、Loop 收进第二层，需要时再进。
+iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 
-**只改 iPhone。** iPad（含 iPad 上的窄窗 / Slide Over）保持现在的行为不变，不允许回归。
+1. **iPhone 上只有一条对话：助理。** 不显示工作区、不显示工作区里的历史会话、不提供文件树 / 搜索 / Git / 终端 / Loop 入口，用户也不能「进入」任何工作区会话。
+2. **要在工作区干活，就跟助理说。** 助理用已有的 `delegate` 工具把任务交给对应工作区的子会话，子会话要写文件或跑命令时，批准请求回到助理这里，用户在手机上批准或拒绝，结果回到助理对话和待处理。
+3. **助理可以自己判断需要新工作区，但必须经用户确认。** 助理调用新增的 `create_workspace` 工具，手机上弹出确认卡，同意才建，拒绝或不回应都不会建。
+4. **不做「插话」。** 子会话跑起来之后，用户不能直接给它发消息；想调整就停掉，再跟助理说，由助理重新委派。
+5. **iPhone 上不看，其它端保留。** 网页和 iPad 照旧可以看到所有工作区会话（包括助理委派出去的子会话）。网关数据不改，只是 iPhone 不展示。
+
+**只改 iPhone。** iPad（含 iPad 窄窗 / Slide Over）保持现有行为，不允许回归。
 
 ---
 
@@ -22,144 +30,115 @@ iPad 和网页是「IDE + 对话」；iPhone 改成「**个人助理 App**」：
 `Views/RootView.swift` → `WorkbenchView`：
 
 - `horizontalSizeClass == .compact` → `PhoneWorkbench()`（iPhone 和 iPad 窄窗共用）
-- 否则 → `padWorkbench`（NavigationSplitView + `CollapsedSidebarRail` + `ToolLayerOverlay` + 右侧 `PreviewPanelView`）
-- `FileBrowserCover` 以 `.fullScreenCover(isPresented: store.fileBrowserOpen)` 挂在 `WorkbenchView` 上，两端共用
+- 否则 → `padWorkbench`
+- `FileBrowserCover` 以 `.fullScreenCover` 挂在 `WorkbenchView` 上，两端共用
 
-### 1.2 iPhone 现在的结构（`Views/PhoneWorkbench.swift`）
+改后：`UIDevice.current.userInterfaceIdiom == .phone` → `PhoneShell()`；iPad 的两个分支不变。
 
-```
-ZStack
-├─ ThreadView(phoneChrome: true)        ← 打开就是「当前对话」（上次活跃的那条）
-│   └─ phoneHeader: ☰ | 标题+副标题 | [今日] [撤销] 📁 ＋
-│      └─ Loop/正在回复 状态条
-├─ ToolLayerOverlay(layer)              ← 终端 / Loop / 助理面板（窄屏=全宽单列）
-├─ PhoneDrawer（左抽屉 300pt）
-│   ├─ 品牌行 + 连接状态
-│   ├─ AssistantEntryRow（助理入口）
-│   ├─ 当前工作区卡片（点开 WorkspacePickerSheet）
-│   ├─ 工具条：文件 搜索 Git 终端 Loop
-│   ├─ 当前工作区会话列表 + 新对话
-│   └─ 设置菜单：主题 / 统计 / 退出
-└─ PreviewPanelView（全屏，从文件引用打开）
-```
+### 1.2 iPhone 现在的问题
 
-问题：
+1. 助理只是抽屉里的一行，和工作区会话同权重。
+2. 打开 App 落在「上次的对话」，多数时候是某个工作区会话。
+3. 抽屉里塞了 5 个 IDE 工具 + 会话列表 + 设置，小屏信息密度过高。
+4. 待批散落在各自会话里。
+5. 输入框为 IDE 设计，对和助理聊天太重。
 
-1. **助理是抽屉里的一行**，和工作区会话同权重；今日 / 收件箱 / 记忆要「切到助理会话 → 点标题栏『今日』→ 弹工具层」三步才能看到。
-2. 打开 App 落在「上次的对话」，大多数时候是某个工作区会话，不是助理。
-3. 抽屉里塞了 5 个 IDE 工具 + 会话列表 + 设置，层级平铺，小屏信息密度过高。
-4. 待批（写文件确认、委派审批）散落在各自会话里，跨会话没有汇总。
-5. 收件箱未读、待批数量只在抽屉入口上有个小点，几乎不可见。
-6. 输入框为 IDE 设计：模式（Agent/Plan/Ask）、模型、策略层、确认写都在第一层，对和助理聊天来说太重。
-
-### 1.3 可以直接复用的能力（不需要改网关）
+### 1.3 可以直接复用的能力
 
 | 能力 | 位置 |
 |---|---|
 | 助理会话 id、名字 | `store.assistantChatId`、`store.assistantName`、`store.isAssistantChat(_:)`、`store.assistantChatActive` |
 | 助理状态（简报/待办/日程/委派/待批/收件箱/记忆/后台模型） | `store.assistantState: AssistantState?`，`store.requestAssistant(memory:)` |
-| 助理操作 | `store.assistantOp(op, args:)`。网关支持：`inbox_read`(ids 或省略=全部)、`todo_add`、`todo_done`、`todo_undo`、`todo_remove`、`schedule_set`(id/title/cron/enabled/...)、`schedule_remove`、`memory_*`、`approval_answer` |
+| 助理操作 | `store.assistantOp(op, args:)`：`inbox_read`、`todo_add/done/undo/remove`、`schedule_set/remove`、`memory_*`、`approval_answer`，以及本版新增的 `delegation_cancel`（§7） |
 | 角标数 | `store.assistantBadgeCount`（未读收件箱 + 待批） |
-| 委派审批 | `store.answerAssistantApproval(_:allow:)`、`store.assistantApprovals(forParent:)` |
-| 打开助理会话 / 关联会话 | `store.openAssistantChat()`（会话没同步到时记 pending）、`store.openAssistantChat(_ chatId:)`、`store.openAssistantInboxItem(_:)` |
-| 会话分组 | `store.workspaceGroups`、`store.sidebarChats`、`store.subWorkspaces`、`store.currentWorkspacePath` |
-| 正在跑 | `store.runningChatIds`、`turn.running`、`store.loops[chatId]`（status `armed`/`running`） |
-| 新建 / 切换 | `store.startChat(in:)`、`store.switchWorkspace(to:)`、`store.select(_:)`、`store.renameChat`、`store.deleteChat` |
-| 工具层 | `store.toggleTool(_:)`、`store.toolSelected(_:)`、`ToolLayerOverlay`、`FileBrowserCover`、`ContentLayerView` |
-| 预览 | `store.previewPanelOpen`、`store.activePreviewTab`、`PreviewPanelView`、`store.collapsePreview()` |
+| 审批 | `store.answerAssistantApproval(_:allow:)`、`store.assistantApprovals(forParent:)` |
+| 打开助理会话 | `store.openAssistantChat()`（会话没同步到时记 pending） |
+| 按需加载会话正文（不切换会话） | `store.ensureTurnsLoaded(_ chatId:)` |
+| 预览 | `store.previewPanelOpen`、`store.activePreviewTab`、`PreviewPanelView` |
+| 语音 | `Session/VoiceDictation.swift`：`start` / `finish` / `cancel` |
 
-### 1.4 必须守住的不变量（改错会出隐蔽 bug）
+### 1.4 必须守住的不变量
 
-1. **同一时刻只能挂载一个 `ComposerView`。** 它用本地 `@State text` 打字、350ms 后 `store.saveDraft(text)` 回写，并在 `onChange(of: store.activeId)` 时从 `store.draft` 重灌。两个同时挂载会互相覆盖草稿。⇒ **不能用系统 `TabView` 同时保活两个含 `ThreadView` 的页**（TabView 会保活所有 tab），必须自己做 tab 容器，只挂载选中的 tab。
-2. **`store.activeId` 是唯一的「当前会话」。** `ThreadView` / `ComposerView` / 文件索引 / 搜索 / Git / 终端全都跟着 `active` 走。iPhone 上「现在显示哪条对话」必须和 `activeId` 一致；切 tab 时要 `select`。
-3. `select(_:)` 可能**被拦下**：内容层有未保存修改且跨工作区时，会弹 `contentDiscardPrompt` 并直接 return。调用方不能假设 select 一定成功，要在调用后比对 `store.activeId`。
-4. 改 `activeId` 的路径必须走 `select` / `startChat` / `switchWorkspace` 等现有方法（内部统一走 `swapActive`），**不要直接赋值 `store.activeId`**。
-5. 助理会话不能删、不能改名、不能新开第二条；USER 根目录只承载助理会话（`isUserRoot`）。
-6. 颜色只用 `JieboColor.*`（随 `JieboTheme` 主题和深浅色切换），字体用 `JieboFont.*`，圆角 `JieboRadius.*`，动画 `JieboMotion.*`（都尊重 `accessibilityReduceMotion`），按钮命中区 `.hitTarget()`，按压 `PressScaleButtonStyle()`。**不写死任何颜色值**。
+1. **同一时刻只能挂载一个 `ComposerView`。** 它用本地 `@State text` 打字、350ms 后 `store.saveDraft` 回写，并在 `onChange(of: store.activeId)` 时重灌。⇒ 助理页是唯一的根页，只有它里面有 `ComposerView`；push 出去的页面（待处理、记忆、待办与日程、委派记录）都不放输入框。不用系统 `TabView`。
+2. **iPhone 上 `store.activeId` 永远是助理会话**（或启动前的 `"boot"`）。这是本版最大的简化，也是最需要守住的一条：`ThreadView`、`ComposerView`、预览、文件索引全都跟着 `activeId` 走，一旦它指向工作区会话，iPhone 就会「掉进」一个没有入口的会话里。守法见 §5.3 的 `assistantOnly` 守卫。
+3. 不要直接赋值 `store.activeId`；改动一律走 `swapActive`（`select` / `startChat` / `deleteChat` / `applyStoredState` 都会汇到它）。
+4. 助理会话不能删、不能改名、不能新开第二条；USER 根目录只承载助理会话。
+5. 颜色只用 `JieboColor.*`，字体 `JieboFont.*`，圆角 `JieboRadius.*`，动画 `JieboMotion.*`（尊重 `accessibilityReduceMotion`），按钮命中区 `.hitTarget()`，按压 `PressScaleButtonStyle()`。**不写死任何颜色值**。
+6. 读取子会话内容**不能用 `select`**。需要看子会话的过程时，从 `store.chats` 里按 id 取出 `ChatSession`，先 `store.ensureTurnsLoaded(id)`，然后只读渲染（§4.4）。
 
 ---
 
 ## 2. 目标信息架构
 
-### 2.1 四个 Tab（自绘底栏）
+### 2.1 一个页面，两个入口
 
-| Tab | 图标（SF Symbol） | 内容 | 角标 |
-|---|---|---|---|
-| **助理**（默认） | `sparkles` | 助理会话 + 今日条 | 助理会话在跑时显示小点 |
-| **待处理** | `tray` | 所有待批 + 收件箱 | 数字：待批 + 未读收件箱 + 待确认写入 |
-| **工作** | `square.stack.3d.up` | 正在进行 + 按工作区分组的会话；进入会话后才有 IDE 工具 | 有会话或 Loop 在跑时显示小点 |
-| **我** | `person.crop.circle` | 记忆、待办与日程管理、主题、用量、账号 | 无 |
+**没有底栏，没有 Tab。** 助理页是唯一的根页，一切都从它出发：
 
-Tab 名用「助理」时可以替换为 `store.assistantName`（默认「小驳」）—— 建议 Tab 文案固定「助理」，页内标题用名字。
+| 入口 | 位置 | 去向 |
+|---|---|---|
+| ☰ 菜单 | 导航栏左侧 | 左侧滑出的菜单抽屉：原来「我」里的所有内容（§4.3） |
+| ✉ 消息 | 导航栏右侧，带数字角标 | push「待处理」页（待批 + 收件箱，§4.2） |
+| 今日 | 导航栏右侧，消息图标左边 | 半屏 Hub：今日 / 记忆（§4.1.5） |
+
+- 消息角标 = `store.assistantBadgeCount`（未读收件箱 + 待批），> 99 显示 `99+`；为 0 不显示。
+- 菜单图标上没有角标。
+- 助理在回复时，导航栏副标题显示「正在回复」，不需要底栏上的小点。
 
 ### 2.2 层级图
 
 ```
 PhoneShell
-├─ [tab 内容，只挂载选中的一个]
-│   ├─ AssistantHome（NavigationStack 根）
-│   │    ├─ 系统导航栏：小驳 / 状态   右：[今日]
+├─ NavigationStack(path: router.path)           ← 根永远是 AssistantHome
+│   ├─ AssistantHome
+│   │    ├─ 导航栏：☰ | 小驳 / 状态 | [今日] [✉³]
 │   │    ├─ TodayStrip（横滑芯片）
 │   │    ├─ ThreadView(chrome: .embedded) —— 助理会话
-│   │    └─ sheet: AssistantHubSheet（今日 / 记忆，detents medium+large）
-│   ├─ InboxHome（NavigationStack）
-│   │    ├─ 待批（委派审批可直接批；写入确认点进会话）
-│   │    └─ 收件箱（点开 → 详情或跳到关联会话）
-│   ├─ WorkHome（NavigationStack(path: router.workPath)）
-│   │    ├─ 搜索框（.searchable，按标题过滤）
-│   │    ├─ 正在进行（跑着的会话 / Loop / 委派）
-│   │    ├─ 工作区分组（可折叠，组头带「新对话」）
-│   │    └─ push → ChatScreen(chatId)
-│   │          ├─ 系统导航栏：‹ 工作 | 标题+工作区·模式 | [工具 ▾] [＋]
-│   │          ├─ ChatStatusStrip（Loop / 正在回复）
-│   │          ├─ ThreadView(chrome: .embedded)
-│   │          └─ ToolLayerOverlay（终端 / Loop），FileBrowserCover（文件 / 搜索 / Git）
-│   └─ MeHome（NavigationStack，insetGrouped List）
-├─ PhoneTabBar（键盘弹起或 workPath 非空时隐藏）
+│   │    ├─ ActionDock（输入框正上方：确认卡 + 进行中的委派）
+│   │    └─ ComposerView(style: .assistant)
+│   └─ push 的页面（都没有输入框）
+│        ├─ InboxHome（待处理）→ InboxDetailView
+│        ├─ AssistantMemoryScreen（记忆）
+│        ├─ AssistantTodayScreen（待办与日程）
+│        └─ DelegationListScreen（委派记录）
+├─ MenuDrawer（从左侧滑出的抽屉，覆盖在 NavigationStack 之上）
 ├─ PreviewPanelView 全屏层（store.previewPanelOpen）
-└─ 全局 sheet：WorkspacePickerSheet、ThemeSettingsSheet、AdminStatsView
+└─ sheet：AssistantHubSheet、DelegationDetailSheet、ThemeSettingsSheet、AdminStatsView
 ```
 
 ### 2.3 关键交互规则
 
-1. **冷启动**落在「助理」tab，并选中助理会话。上次活跃的工作区会话不丢：放进 `router.workPath = [.chat(id)]`，用户点「工作」tab 时直接回到它。
-2. **从后台回来**保持原 tab 和原页面，不重置。
-3. 切到「助理」tab → `store.select(assistantChatId)`；切到「工作」tab 且 `workPath` 里有会话 → `store.select(那个 id)`；切到「待处理」「我」不改 `activeId`。
-4. 在 ChatScreen 里**隐藏底栏**（全屏对话，键盘区域最大化）；返回 WorkHome 底栏回来。
-5. 键盘弹起时**隐藏底栏**，输入框贴着键盘。
-6. 任何地方触发了「打开某个工作区会话」（收件箱条目、委派卡片、待批跳转、助理在线程里的链接）→ 切到「工作」tab 并 push 该会话；触发「打开助理会话」→ 切到「助理」tab。
-7. IDE 工具只能在 ChatScreen 里打开（它们依赖当前会话的工作区）。工具层打开时隐藏 ChatScreen 的系统导航栏，由工具层自己的「‹ 对话」返回。
+1. **冷启动**落在助理页并选中助理会话（§3.2）。
+2. **从后台回来**保持原页面（可能停在待处理或某个 push 页上）。
+3. 所有 push 页和 sheet 都**不改 `activeId`**（它一直是助理）。
+4. 进入任何 push 页之前先收起键盘（`UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)`）；回到助理页时不自动弹键盘。
+5. 打开菜单抽屉之前同样收起键盘。
+6. 任何「打开某条会话」的触发（收件箱条目、委派卡、推送点击、线程里的链接）统一走 `router.open(...)`（§3.1）：
+   - 目标是助理会话 → 回到助理页（pop 到根）；
+   - 目标是委派子会话 → 打开 `DelegationDetailSheet`；
+   - 其它会话 → **不跳转**，只 `store.flash("这个会话在电脑或 iPad 上查看")`。
+7. 助理回复里的文件链接 → 沿用现有机制打开 `PreviewPanelView` 全屏预览（只读）。
+8. 侧滑返回是系统导航栈的；**菜单抽屉的「左缘右滑打开」手势只在 `router.path.isEmpty` 时启用**，避免和 push 页的侧滑返回冲突。
 
 ---
 
 ## 3. 状态与路由（新增 `Session/PhoneRouter.swift`）
 
+没有 tab、没有工作区栈，路由只剩一个 push 栈和几个弹层。
+
 ```swift
 import SwiftUI
 
-enum PhoneTab: String, CaseIterable, Identifiable {
-    case assistant, inbox, work, me
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .assistant: return "助理"
-        case .inbox: return "待处理"
-        case .work: return "工作"
-        case .me: return "我"
-        }
-    }
-    var symbol: String {
-        switch self {
-        case .assistant: return "sparkles"
-        case .inbox: return "tray"
-        case .work: return "square.stack.3d.up"
-        case .me: return "person.crop.circle"
-        }
-    }
+/// 从助理页 push 出去的页面
+enum PhoneRoute: Hashable {
+    case inbox
+    case inboxItem(String)      // AssistantInboxItem.id
+    case memory
+    case todayManage
+    case delegations
 }
 
-enum WorkRoute: Hashable {
-    case chat(String)
+struct DelegationRef: Identifiable, Hashable {
+    let id: String   // AssistantDelegation.id
 }
 
 enum AssistantHubSection: String, CaseIterable, Identifiable {
@@ -170,143 +149,79 @@ enum AssistantHubSection: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class PhoneRouter {
-    var tab: PhoneTab = .assistant
-    var workPath: [WorkRoute] = []
+    var path: [PhoneRoute] = []
+    var menuOpen = false
     var hubOpen = false
     var hubSection: AssistantHubSection = .today
-    var keyboardVisible = false
-    /// 冷启动对齐完成前，不响应 activeId 变化（restoreLastActiveIfNeeded 会先落到上次会话）
+    /// 正在看的委派详情。sheet 挂在 PhoneShell 上，在任何 push 页上都能弹
+    var delegationDetail: DelegationRef?
     var bootstrapped = false
-    /// 删除当前会话时，store 会自己回落到 chats.first（可能是助理会话，也可能是别的工作区会话）。
-    /// 这次回落不是用户的跳转意图，follow 要吞掉一次
-    var swallowNextFollow = false
-
-    var workChatId: String? {
-        if case .chat(let id)? = workPath.last { return id }
-        return nil
-    }
-
-    var tabBarHidden: Bool { keyboardVisible || !workPath.isEmpty && tab == .work }
 }
 ```
 
-`PhoneRouter` 只在 `PhoneShell` 里用 `@State private var router = PhoneRouter()` 创建，通过 `.environment(router)` 下发。**不要放进 `ChatStore`**，iPad 不需要它。
+`PhoneRouter` 只在 `PhoneShell` 里 `@State private var router = PhoneRouter()` 创建，`.environment(router)` 下发。**不要放进 `ChatStore`**。
 
-### 3.1 路由动作（写成 `PhoneRouter` 的方法，参数传 `store`）
+### 3.1 路由动作
 
 ```swift
 extension PhoneRouter {
-    /// 切 tab。返回 false 表示被拦下（例如有未保存的文件修改）
-    @discardableResult
-    func switchTab(_ next: PhoneTab, store: ChatStore) -> Bool {
-        if store.contentDirty {
-            store.flash("先保存或放弃这个文件的修改")
-            return false
-        }
-        if store.toolLayer != nil { store.toolLayer = nil; store.loopError = "" }
-        if next != .assistant { hubOpen = false }   // Hub sheet 挂在 AssistantHome 上，离开时一并收起，否则回来会自己再弹
-        // 先改 tab 再 select：select 会触发 onChange(activeId) → follow()，follow 要看到新 tab
-        tab = next
-        switch next {
-        case .assistant:
-            store.openAssistantChat()          // 未同步时内部记 pending，到了再切
-        case .work:
-            if let id = workChatId {
-                if store.chats.contains(where: { $0.id == id }) {
-                    store.select(id)
-                } else {
-                    workPath = []              // 会话已删
-                }
-            }
-        case .inbox, .me:
-            break
-        }
-        return true
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// 打开工作区会话：切到「工作」并 push
-    func openWorkChat(_ id: String, store: ChatStore) {
-        guard !store.isAssistantChat(id) else { switchTab(.assistant, store: store); return }
-        store.select(id)
-        guard store.activeId == id else { return }   // 被 discard 提示拦下
-        tab = .work
-        workPath = [.chat(id)]
+    /// 菜单里的条目 / 导航栏消息图标：先收菜单和键盘，再 push（替换整个栈，不叠层）
+    func go(_ route: PhoneRoute) {
+        dismissKeyboard()
+        menuOpen = false
+        hubOpen = false
+        path = [route]
     }
 
-    /// 在某个工作区开新对话并 push
-    func startChat(in path: String, store: ChatStore) {
-        store.startChat(in: path)
-        let id = store.activeId
-        guard !store.isAssistantChat(id), id != "boot" else { return }
-        tab = .work
-        workPath = [.chat(id)]
+    func openMenu() {
+        dismissKeyboard()
+        hubOpen = false
+        menuOpen = true
     }
 
-    /// store.activeId 被别处改了（收件箱跳转、委派卡、删除会话回落、startChat……）时对齐 UI
-    func follow(activeId id: String, store: ChatStore) {
-        guard bootstrapped, id != "boot" else { return }
-        if swallowNextFollow { swallowNextFollow = false; return }
-        if !store.isAssistantChat(id) { hubOpen = false }
-        if store.isAssistantChat(id) {
-            if tab == .work { workPath = [] }       // 工作 tab 里不显示助理会话
-            if tab != .assistant { tab = .assistant }
+    func popToRoot() {
+        path = []
+        menuOpen = false
+    }
+
+    /// 收件箱条目 / 推送 / 委派卡等「要打开某个会话」的统一入口
+    func open(chatId: String?, delegationId: String?, store: ChatStore) {
+        if let delegationId, store.assistantState?.delegations.contains(where: { $0.id == delegationId }) == true {
+            delegationDetail = DelegationRef(id: delegationId)
             return
         }
-        if tab == .assistant || tab == .inbox || tab == .me || workChatId != id {
-            tab = .work
-            workPath = [.chat(id)]
+        if let chatId, store.isAssistantChat(chatId) {
+            popToRoot()
+            store.openAssistantChat()
+            return
         }
-    }
-
-    /// 删会话统一走这里（列表左滑、ChatScreen 菜单都用）。删完留在工作列表根，不跟着回落跳走
-    func deleteChat(_ id: String, store: ChatStore) {
-        let wasActive = id == store.activeId
-        store.deleteChat(id)
-        // deleteChat 可能因为未保存的文件修改被拦下（弹 discard 提示后 return），这时会话还在
-        guard !store.chats.contains(where: { $0.id == id }) else { return }
-        // 只有删的是当前会话，activeId 才会变；否则别置标记，免得吞掉下一次真正的跳转
-        if wasActive, store.activeId != id { swallowNextFollow = true }
-        if workChatId == id || wasActive { workPath = [] }
+        if let chatId, let row = store.assistantState?.delegations.first(where: { $0.childChatId == chatId }) {
+            delegationDetail = DelegationRef(id: row.id)
+            return
+        }
+        store.flash("这个会话在电脑或 iPad 上查看")
     }
 }
 ```
 
-> 已核实：`ChatStore.deleteChat` 删的是当前会话时会 `swapActive(to: rest.first)`，`rest.first` 取决于 `chats` 顺序，经常就是助理会话。不走 `router.deleteChat` 的话，在工作列表左滑删掉当前会话会被 `follow` 直接甩到助理 tab，或者 push 一条不相干的会话。
-
-> `follow` 和 `switchTab` 的配合：`switchTab(.assistant)` 先把 `tab` 设成 `.assistant`，再 `openAssistantChat()` → `activeId` 变成助理 → `follow` 看到 tab 已经对了，什么都不做。`switchTab(.work)` 同理，`follow` 看到 `workChatId == id` 不动栈。每种跳转都要手测（见 §9）。
->
-> `openWorkChat` 里 `select` 发生在改 `tab` 之前，`follow` 会先一步把 tab 和栈设好，后面两行再赋同样的值，结果一致。
->
-> `switchTab(.inbox/.me)` 不改 `activeId`，所以 `follow` 在这两个 tab 只会被外部跳转触发，这正是想要的。
+> 在 push 页上弹出 `DelegationDetailSheet` 时，sheet 盖在当前页之上，不改变 `path`，关闭后用户回到原来的页面。
 
 ### 3.2 冷启动对齐（`PhoneShell.task`）
 
 ```
-1. 等 store.unlocked && store.assistantChatId != nil && store.activeId != "boot"
-   （轮询或 onChange 都可以；给 8 秒上限，超时也置 bootstrapped = true）
-2. let restored = store.activeId
-3. 若 restored 不是助理会话：router.workPath = [.chat(restored)]
-4. store.openAssistantChat()；router.tab = .assistant
-5. router.bootstrapped = true
+1. 打开 PhoneShell 时 store.assistantOnly = true（§5.3）；onDisappear 置回 false
+2. 等 store.unlocked && store.assistantChatId != nil
+   （onChange 即可；给 8 秒上限，超时也置 bootstrapped = true）
+3. store.openAssistantChat()
+4. router.bootstrapped = true
 ```
 
-- 旧网关没有 `assistantChatId`：超时后 `bootstrapped = true`，助理 tab 显示降级页（§4.1.6），工作 tab 照常。
-- 删掉 `PhoneWorkbench.preferRunningChat()` 的逻辑在 iPhone 上的等价物：**不再自动切到正在跑的会话**，改成在 WorkHome「正在进行」里置顶展示。
-
-### 3.3 键盘可见性
-
-在 `PhoneShell` 上：
-
-```swift
-.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-    router.keyboardVisible = true
-}
-.onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-    router.keyboardVisible = false
-}
-```
-
-底栏显隐动画用 `JieboMotion.fade(reduceMotion)`，**不要**让输入框跟着做位移动画（ThreadView 里已经对 ComposerView 用了 `.transaction { $0.animation = nil }`，保持）。
+- `restoreLastActiveIfNeeded` 会先恢复「上次活跃会话」（可能是工作区会话，来自旧版本或 iPad 上的操作）。有了 `assistantOnly` 守卫，这次恢复会被重定向到助理会话，不需要额外处理。
+- 旧网关没有 `assistantChatId`：超时后 `bootstrapped = true`，助理页显示降级页（§4.1.6）。
 
 ---
 
@@ -323,44 +238,42 @@ struct PhoneShell: View {
     @State private var router = PhoneRouter()
 
     var body: some View {
-        @Bindable var store = store
+        @Bindable var router = router
         ZStack {
-            VStack(spacing: 0) {
-                content                                  // 只挂载选中 tab
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if !router.tabBarHidden {
-                    PhoneTabBar()
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+            NavigationStack(path: $router.path) {
+                AssistantHome()
+                    .navigationDestination(for: PhoneRoute.self) { route in
+                        switch route {
+                        case .inbox: InboxHome()
+                        case .inboxItem(let id): InboxDetailView(itemId: id)
+                        case .memory: AssistantMemoryScreen()
+                        case .todayManage: AssistantTodayScreen()
+                        case .delegations: DelegationListScreen()
+                        }
+                    }
+            }
+            if router.menuOpen {
+                MenuDrawer()                 // 遮罩 + 左侧 300pt 面板，zIndex 2
             }
             if store.previewPanelOpen, let tab = store.activePreviewTab {
                 // 与 PhoneWorkbench 现有写法一致：遮罩 + 全屏 PreviewPanelView，zIndex 3
             }
         }
         .environment(router)
-        .animation(JieboMotion.fade(reduceMotion), value: router.tabBarHidden)
+        .animation(JieboMotion.panel(reduceMotion), value: router.menuOpen)
         .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
-        .sheet(isPresented: $store.workspaceSheetOpen) { WorkspacePickerSheet(onPick: …) }
-        .onChange(of: store.activeId) { _, id in router.follow(activeId: id, store: store) }
+        .sheet(item: $router.delegationDetail) { ref in DelegationDetailSheet(delegationId: ref.id) }
+        .onAppear { store.assistantOnly = true }
+        .onDisappear { store.assistantOnly = false }
         .task { await bootstrap() }
-        // 键盘监听见 §3.3
-    }
-
-    @ViewBuilder private var content: some View {
-        switch router.tab {
-        case .assistant: AssistantHome()
-        case .inbox: InboxHome()
-        case .work: WorkHome()
-        case .me: MeHome()
-        }
     }
 }
 ```
 
 要求：
 
-- `content` 用 `switch`，**不能**用 `opacity`/`ZStack` 叠放保活（不变量 1）。
-- 切 tab 不做整页滑动动画，只做 0.15s 淡入（`JieboMotion.fade`），reduceMotion 时无动画。
+- 助理页永远是根，**只有一个 `ComposerView`**（不变量 1）；push 页里没有输入框。
+- push / pop 用系统默认动画。
 - `WorkbenchView` 改为：
 
 ```swift
@@ -373,266 +286,190 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 }
 ```
 
-- `FileBrowserCover` 的 `.fullScreenCover` 仍然留在 `WorkbenchView`，iPhone 继续用它做文件 / 搜索 / Git。
+- `FileBrowserCover` 的 `.fullScreenCover` 留在 `WorkbenchView`，iPhone 没有入口会触发它，不用动。
 
-### 4.0.1 `PhoneTabBar`（新文件 `Views/Phone/PhoneTabBar.swift`）
+### 4.0.1 `MenuDrawer`（新文件 `Views/Phone/MenuDrawer.swift`）
 
-- 高度 49pt + 底部安全区；背景 `JieboColor.sidebar`（或 `.paper` + 顶部 1px `JieboColor.line` 分隔线，二选一，和现有侧栏风格对齐即可），`ignoresSafeArea(edges: .bottom)` 只作用在背景上。
-- 四等分按钮：图标 18pt semibold + 文字 `JieboFont.ui(10, weight: .medium)`；选中 `JieboColor.ink`，未选中 `JieboColor.dim`；选中态图标用 `.fill` 变体（`sparkles` 无 fill 变体则保持原样，`tray.fill`、`square.stack.3d.up.fill`、`person.crop.circle.fill`）。
-- 角标：
-  - 待处理：数字胶囊（`JieboColor.danger` 底，`JieboColor.fillFg` 字，`JieboFont.ui(10, weight: .semibold)`），> 99 显示 `99+`。数 = `store.assistantBadgeCount + pendingWriteCount`（§4.2.1）。
-  - 助理：助理会话在跑时 6pt 圆点 `JieboColor.run`。
-  - 工作：任一非助理会话在跑或任一 Loop 为 armed/running 时 6pt 圆点 `JieboColor.ok`。
-- 点击当前 tab 再点一次：
-  - 工作 tab → `workPath = []`（回到列表根）
-  - 助理 tab → 线程滚到底（发一个 `router.scrollToBottomNonce += 1`，ThreadView 可选支持；不做也行）
-- 点击调用 `router.switchTab(_:store:)`；成功时 `UISelectionFeedbackGenerator().selectionChanged()`。
-- 无障碍：每个按钮 `.accessibilityLabel(title)`，角标写进 label（「待处理，3 项」），选中加 `.isSelected` trait。
+左侧抽屉，内容见 §4.3。写法沿用 `PhoneWorkbench` 里现有的 `PhoneDrawer`：
+
+- 宽 300pt（小屏取 `min(300, 屏宽 × 0.82)`）；面板背景 `JieboColor.sidebar`，右缘 1px `JieboColor.line`；内容不穿过安全区（顶部留状态栏、底部留 home indicator）。
+- 遮罩 `Color.black.opacity(0.28)`（与现有抽屉一致，不是新增颜色常量；如果现有写法用了 token 就跟现有）；点遮罩关闭。
+- 手势：面板上向左拖 > 60pt 或速度够快 → 关闭；**左缘 16pt 内向右拖 → 打开，仅当 `router.path.isEmpty` 且没有键盘**。
+- 打开 / 关闭动画 `JieboMotion.panel(reduceMotion)`；打开时 `UISelectionFeedbackGenerator().selectionChanged()`。
+- 无障碍：打开后焦点移到抽屉首项，遮罩 `accessibilityLabel("关闭菜单")`。
 
 ### 4.1 助理页 `AssistantHome`（新文件 `Views/Phone/AssistantHome.swift`）
 
 ```
 ┌──────────────────────────────────┐
-│  ◆ 小驳                   [今日•] │  ← 系统导航栏 inline；副标题：已连接 / 正在回复 / 正在重连…
-│    正在回复                        │
+│ ☰   小驳              [今日•] [✉³] │  ← 导航栏 inline；副标题：就绪 / 正在回复 / 正在重连…
 ├──────────────────────────────────┤
-│ [简报] [待批 2] [待办 3] [09:00 晨报] [委派 1 进行中] → │  ← TodayStrip，横滑
+│ [简报] [待办 3] [09:00 晨报] [进行中 2] → │  ← TodayStrip，横滑，空则整条隐藏
 ├──────────────────────────────────┤
 │                                  │
 │   助理会话线程（ThreadView）         │
 │                                  │
 ├──────────────────────────────────┤
-│ ┌ 跟小驳说点什么 · 长按说话 ───────┐ │
+│ ┌ 助理想新建工作区「讲稿」 ────────┐ │  ← ActionDock：确认卡在最上
+│ │ 原因：…          [拒绝] [同意]  │ │
+│ └────────────────────────────────┘ │
+│ ┌ ● 整理周报 · notes · 进行中 › ──┐ │  ← 进行中的委派（最多 2 条，其余折叠成「还有 N 项」）
+│ └────────────────────────────────┘ │
+│ ┌ 跟小驳说点什么 · 点话筒说话 ────┐ │
 │ │ ＋                    🎤   ⬆    │ │  ← ComposerView(style: .assistant)
 │ └────────────────────────────────┘ │
-├──────────────────────────────────┤
-│  助理   待处理³   工作•    我        │
 └──────────────────────────────────┘
 ```
 
+> 没有底栏，输入框直接贴着屏幕底部（含安全区）。
+
 #### 4.1.1 导航栏
 
-- `NavigationStack { … }` 包住页面，`.navigationBarTitleDisplayMode(.inline)`，`.toolbarBackground(JieboColor.paper, for: .navigationBar)` + `.toolbarBackground(.visible, for: .navigationBar)`。
-- `ToolbarItem(placement: .principal)`：VStack —— `store.assistantName`（`JieboFont.display(17)`）+ 副标题（`JieboFont.ui(11, weight: .medium)`, `JieboColor.dim`）。副标题优先级：未连接「正在重连…」> 未配 key「服务器还没配 API Key」（`JieboColor.danger`）> 助理会话在跑「正在回复」> 后台状态 `assistantState.background.ok ? "就绪" : reason`。
-- 左侧：`JieboMark(size: 22)`（纯装饰，`accessibilityHidden`）。
-- 右侧：「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 的外观（抽出来变成可复用 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubSection = .today; router.hubOpen = true`。
-- 如果 `store.canUndo`：右侧多一个撤销按钮（同现在 phoneHeader）。
+- 导航栈由 `PhoneShell` 提供（`NavigationStack(path:)`），`AssistantHome` 自己不再包一层。`.navigationBarTitleDisplayMode(.inline)`，`.toolbarBackground(JieboColor.paper, for: .navigationBar)` + `.toolbarBackground(.visible, for: .navigationBar)`。
+- `ToolbarItem(placement: .principal)`：VStack —— `store.assistantName`（`JieboFont.display(17)`）+ 副标题（`JieboFont.ui(11, weight: .medium)`, `JieboColor.dim`）。优先级：未连接「正在重连…」> 未配 key「服务器还没配 API Key」（`JieboColor.danger`）> 助理在跑「正在回复」> 后台状态 `assistantState.background.ok ? "就绪" : reason`。
+- **左侧：☰ 菜单按钮**（`line.3.horizontal`，`hitTarget()`，`accessibilityLabel("菜单")`）→ `router.openMenu()`。
+- **右侧从左到右**：
+  1. 「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 外观（抽成可复用的 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubSection = .today; router.hubOpen = true`。
+  2. **✉ 消息按钮**（SF Symbol `tray`，有未读时用 `tray.full`）→ `router.go(.inbox)`。右上角数字角标（`JieboColor.danger` 底，`JieboColor.fillFg` 字，`JieboFont.ui(10, weight: .semibold)`，> 99 显示 `99+`），数 = `store.assistantBadgeCount`，为 0 不显示。`accessibilityLabel` 写成「待处理，3 项」。
+- `store.canUndo` 时在今日按钮左边多一个撤销按钮；导航栏过挤时（小屏、大字号）撤销收进 ☰ 菜单之外的 `ellipsis` `Menu` 里，不要挤掉消息图标。
 
 #### 4.1.2 TodayStrip（新文件 `Views/Phone/TodayStrip.swift`）
 
-横向 `ScrollView(.horizontal, showsIndicators: false)`，`HStack(spacing: 8)`，左右内边距 16，高度 44（芯片本身 32 高，`hitTarget()` 保证 44 命中）。芯片样式：`JieboColor.white` 底、`JieboColor.line` 描边、`JieboRadius.sm` 圆角、`JieboFont.ui(13, weight: .medium)`。
-
-按顺序，**为空的芯片不显示**；全部为空或 `assistantState == nil` 时整条隐藏（不占高度）。
+横向 `ScrollView(.horizontal, showsIndicators: false)`，`HStack(spacing: 8)`，左右内边距 16，高度 44（芯片 32 高，`hitTarget()` 保证 44 命中）。芯片：`JieboColor.white` 底、`JieboColor.line` 描边、`JieboRadius.sm`、`JieboFont.ui(13, weight: .medium)`。**为空的芯片不显示**；全部为空或 `assistantState == nil` 时整条隐藏。
 
 | 芯片 | 条件 | 文案 | 点击 |
 |---|---|---|---|
-| 简报 | `state.brief?.text` 非空 | `doc.text` 图标 +「今日简报」 | 打开 Hub（今日） |
-| 待批 | `state.approvals.count > 0` | 「待批 N」，`JieboColor.warnFg` / `warnBg` | `router.switchTab(.inbox)` |
+| 简报 | `state.brief?.text` 非空 | `doc.text` +「今日简报」 | 打开 Hub（今日） |
 | 待办 | 未完成 todo 数 > 0 | 「待办 N」 | 打开 Hub（今日，滚到待办） |
-| 下一个日程 | `schedules.filter(\.enabled).min(by: nextAt)` 存在且 `nextAt` 非空 | 「HH:mm 标题」（今天以外显示「明天 HH:mm」/「M月d日」） | 打开 Hub（今日，滚到日程） |
-| 委派 | `delegations` 里 status 为 running/awaiting 的数 > 0 | 「委派 N 进行中」，`JieboColor.run`/`runBg` | `router.switchTab(.work)` 且 `workPath = []`（WorkHome 的「正在进行」会列出它们） |
+| 下一个日程 | 启用的日程里 `nextAt` 最近的 | 「HH:mm 标题」（跨天显示「明天 HH:mm」/「M月d日」） | 打开 Hub（今日，滚到日程） |
+| 进行中 | `delegations` 里 running/awaiting 数 > 0 | 「进行中 N」，`JieboColor.run`/`runBg` | 滚动到行动区；仅 1 项时直接打开其详情 |
 
-- `AssistantHome.task { store.requestAssistant() }`；并在 `scenePhase` 回到 `.active` 时再拉一次。
-- 收件箱未读**不放**在这里（底栏已有角标）。
+- 待批**不在**这里：它会出现在行动区（要立刻答复）和待处理页（消息图标有角标）。
+- `AssistantHome.task { store.requestAssistant() }`；`scenePhase` 回到 `.active` 时再拉一次。
 
 #### 4.1.3 线程
 
 - `ThreadView(chrome: .embedded)`（§5.1）。
-- 助理会话专用空状态（`emptyState` 根据 `store.assistantChatActive` 分支）：
+- 助理空状态：
   - 标题：「\(assistantName) 在这儿」
-  - 说明：「记事、提醒、查东西，或者让它去某个工作区干活。」
-  - 快捷句（点了填进输入框并聚焦，沿用 `starterRow` 机制）：「今天有什么安排？」「帮我记一下：」「明早 9 点提醒我」「让某个工作区跑一遍测试」
-  - 底部提示：「长按输入框说话」
-- 现有的委派审批横幅（`delegatedApprovalBanner`）、写入确认条、pendingDiff pill 都保留。
+  - 说明：「记事、提醒、查东西，或者让它去某个项目里干活，不用你自己打开任何东西。」
+  - 快捷句（点了填进输入框并聚焦）：「今天有什么安排？」「帮我记一下：」「明早 9 点提醒我」「让 acrabat 里的讲稿再顺一遍」
+- `ThreadView` 里现有的 `delegatedApprovalBanner`、写入确认条、pendingDiff pill：`.embedded` 下**隐藏**，由 ActionDock 接管，避免两处出现同一张确认卡。
+- 线程里助理调用 `delegate` / `create_workspace` / `delegation_status` 的工具卡：沿用 `ThreadView` 现有通用工具卡即可；可选优化是把 `delegate` 显示成「交给 acrabat：<title>」、`create_workspace` 显示成「申请新建工作区：<name>」，而不是原始工具名与 JSON（放在 P5）。
 
-#### 4.1.4 AssistantHubSheet（新文件 `Views/Phone/AssistantHubSheet.swift`）
+#### 4.1.4 ActionDock（新文件 `Views/Phone/ActionDock.swift`）
+
+放在 `ThreadView` 与 `ComposerView` 之间，随内容自适应高度，无内容时不占位。内容按顺序：
+
+**A. 确认卡**：`store.assistantState.approvals` 里所有项，倒序，最多展开 2 张，其余合并成「还有 N 项待批，去待处理」一行（点击 `router.go(.inbox)`）。
+
+| `approval.tool` | 标题 | 正文 | 按钮 |
+|---|---|---|---|
+| `create_workspace` | 「新建工作区」 | `summary` 的格式是 `名字 · 原因`：名字用 `JieboFont.mono(13)` 强调，原因用 `JieboFont.ui(13)` | 「拒绝」「同意」 |
+| `shell` | 「<委派标题> 想跑命令」 | `summary`（mono 12，最多 3 行） | 「拒绝」「批准」 |
+| 其它（改文件等） | 「<委派标题> 想改文件」 | `summary`（mono 12，最多 3 行） | 「拒绝」「批准」 |
+
+- 委派标题：`state.delegations.first { $0.id == approval.delegationId }?.title`；`create_workspace` 没有 `delegationId`（它属于助理自己的会话，`approval.chatId == assistantChatId`）。
+- 按钮调用 `store.answerAssistantApproval(approval, allow:)`（内部发 `approval_answer {chatId, callId, allow}`）。触觉：同意 `.success`，拒绝 `.warning`。
+- `create_workspace` 同意后助理那一轮会**自动继续**（网关里工具调用就是停在这张确认卡上等答复，答复后接着往下走），**不要**在客户端再发一条「已同意」的消息。
+- 卡片会在答复、超时（30 分钟）或网关重启后消失，由 `assistantState` 的更新驱动，客户端不用自己计时；但卡片上要显示「N 分钟后失效」的静态提示（`expiresAt` 减当前时间，每分钟刷新一次即可），免得用户不知道它会失效。
+- 视觉：`JieboColor.warnBg` 底 + `JieboColor.warnFg` 标题；圆角 `JieboRadius.md`；左右各 12pt 外边距。
+
+**B. 进行中的委派**：`delegations` 里 `status == running || awaiting`，按 `createdAt` 倒序，最多 2 条，其余合并成「还有 N 项」（点击打开最新一项的详情）。
+
+- 一行：状态点（running = `JieboColor.run`，awaiting = `JieboColor.warnFg`）+ 标题 + 「工作区 · 已 N 分钟」+ 右侧 `chevron.right`。
+- `awaiting` 的状态文案改成「等你批准」。
+- 点击 → `router.delegationDetail = DelegationRef(id: id)`。
+- 行高 ≥ 44pt，`hitTarget()`。
+
+**C. 刚结束的委派**（可选，P5）：`done` / `failed` 且 `endedAt` 在 10 分钟内、用户还没看过 → 显示一行「✓ 整理周报 已完成」/「✗ … 失败」，点击打开详情，滑走或 10 分钟后消失。这样用户盯着助理页时不用切到待处理就能看到结果。不做也行，结果在待处理里一定有。
+
+#### 4.1.5 AssistantHubSheet（新文件 `Views/Phone/AssistantHubSheet.swift`）
 
 `.sheet(isPresented: $router.hubOpen)`，`.presentationDetents([.medium, .large])`，`.presentationDragIndicator(.visible)`，`.presentationBackground(JieboColor.paper)`。
 
-- 顶部：分段控件「今日 / 记忆」（沿用 `AssistantView.tabBar` 的描边+滑块样式），右上「完成」。
-- 今日：复用 `AssistantTodayPane`（§5.3 从 `AssistantView` 抽出），并补两项：
-  - 待办行**左滑**：「删除」→ `todo_remove`；已完成的待办折叠在「已完成 (N)」里，可「撤销」→ `todo_undo`。
-  - 日程行右侧加 `Toggle` → `assistantOp("schedule_set", args: ["id": .string(id), "enabled": .bool(on)])`（网关对已有 id 做部分更新，cron/prompt 沿用原值，已核实 `schedules.ts setSchedule`）。
+- 顶部分段控件「今日 / 记忆」（沿用 `AssistantView.tabBar` 样式），右上「完成」。
+- 今日：复用 `AssistantTodayPane`（§5.4）。需要补两项：
+  - 待办行**左滑**「删除」→ `todo_remove`；已完成的折叠在「已完成 (N)」里，可「撤销」→ `todo_undo`。
+  - 日程行右侧 `Toggle` → `assistantOp("schedule_set", args: ["id": .string(id), "enabled": .bool(on)])`（网关对已有 id 做部分更新，cron/prompt 沿用原值，已核实 `schedules.ts setSchedule`）。
 - 记忆：复用 `AssistantMemoryPane`。
-- **收件箱不在 Hub 里**（它在「待处理」tab）。
-- `hubSection` 变化时用 `ScrollViewReader` 滚到对应锚点（`"todos"`、`"schedules"`）。
-
-#### 4.1.5 输入框（助理风格）
-
-见 §5.2：`ComposerView(style: .assistant)`。
+- `hubSection` 变化时用 `ScrollViewReader` 滚到锚点（`"todos"`、`"schedules"`）。
+- 今日 pane 里的「待批」「委派」「收件箱」三块在 iPhone 上**不显示**（它们在行动区和待处理里）；用 `AssistantTodayPane(showsApprovals: false, showsDelegations: false)` 之类的开关控制，iPad 默认全开。
 
 #### 4.1.6 降级
 
-`store.assistantChatId == nil`（旧网关）且 `bootstrapped`：页面主体显示 `AssistantTodayPane`（只读）+ 一句「这个网关还没有助理会话，先去『工作』里聊。」，不放输入框。
+`store.assistantChatId == nil`（旧网关）且 `bootstrapped`：页面主体显示一张说明卡「这个服务器还没有助理功能，请先升级服务器」，不放输入框。iPhone 此时没有任何别的可用功能，这是有意为之。
 
 ### 4.2 待处理页 `InboxHome`（新文件 `Views/Phone/InboxHome.swift`）
 
-`NavigationStack`，`.navigationTitle("待处理")`，large title；`List` + `.listStyle(.insetGrouped)` + `.scrollContentBackground(.hidden)` + `JieboColor.paper` 背景（同 `WorkspacePickerSheet` 写法）。`.refreshable { store.requestAssistant() }`。
+从助理页右上角的 ✉ 消息图标 push 进来（`router.go(.inbox)`），不是独立 Tab。用系统导航栏返回。
 
-右上菜单：「全部标为已读」→ `assistantOp("inbox_read")`（不带 ids = 全部；本地同步把 `assistantState.inbox[i].read = true`）。
+`List` + `.listStyle(.insetGrouped)` + `.scrollContentBackground(.hidden)` + `JieboColor.paper`，`.navigationTitle("待处理")`，inline 标题。`.refreshable { store.requestAssistant() }`。
 
-#### 4.2.1 Section「待批」
+右上菜单：「全部标为已读」→ `assistantOp("inbox_read")`（不带 ids = 全部；本地同步把 `inbox[i].read = true`）。
 
-两类来源，合并后按时间倒序：
+#### Section「待批」
 
-1. **委派审批**：`store.assistantState?.approvals`。行内容：工具名（semibold）、summary（mono 12，最多 3 行）、来源（`delegation` 对应的 `workspace` 名）。行内两个按钮「批准」「拒绝」→ `store.answerAssistantApproval`。按钮样式复用 `AssistantView.ActionButton`（抽成共享组件，§5.3）。
-2. **写入确认**：遍历 `store.chats`（排除助理会话），取 `turns.last(where: { $0.pendingTool != nil })`。新增计算属性：
+数据 `store.assistantState?.approvals`（`create_workspace` 与委派审批同样处理），行内容和按钮与 ActionDock 的确认卡一致（抽成共享的 `ApprovalCard`，Dock 和这里共用）。委派审批行右侧再放「看委派」→ `router.delegationDetail`。为空时 Section 不显示。
 
-```swift
-extension ChatStore {
-    /// 已加载到本机的会话里，停在「确认写」上的那些。未加载 turns 的会话看不到（slim 加载的限制）
-    var pendingWriteChats: [(chat: ChatSession, tool: PendingTool)] { … }
-}
-```
+#### Section「收件箱」
 
-   行内容：会话标题 + 「要改文件：path」。**不在这里直接允许/拒绝**（`replyToApproval` 只作用于 activeId），点行 → `router.openWorkChat(chat.id)`，进入会话后输入框上方已有确认条。
-
-- 为空时 Section 不显示。
-- 底栏「待处理」角标 = `assistantBadgeCount + pendingWriteChats.count`。
-
-#### 4.2.2 Section「收件箱」
-
-- 数据：`store.assistantState?.inbox`（已按时间排序，否则按 `createdAt` 倒序）。
-- 行：未读圆点（`JieboColor.pine`）、标题（未读 semibold）、相对时间（`Date.formatted(.relative(presentation: .named))`）、正文前两行。`kind` 映射小标签：approval「待批」、delegation「委派」、reminder「提醒」、brief「简报」，用 `StatusTag`。
+- 数据：`store.assistantState?.inbox`（按 `createdAt` 倒序）。
+- 行：未读圆点（`JieboColor.pine`）、标题（未读 semibold）、相对时间、正文前两行。`kind` 小标签（`StatusTag`）：approval「待批」、delegation「委派」、reminder「提醒」、brief「简报」。
 - 点击：
-  - 有 `chatId` → 先标已读，再：助理会话 → `router.switchTab(.assistant)`；本机有这个会话 → `router.openWorkChat(chatId)`；本机没有 → `store.flash("这个会话还没同步到本机")`。
-  - **不要**在 iPhone 上调 `store.openAssistantInboxItem(item)` 再指望 `follow` 跟上：目标会话恰好就是当前 `activeId` 时（比如刚从这条会话返回列表再来点收件箱），`select` 直接 return，`activeId` 不变、`onChange` 不触发，页面会停在待处理 tab 不动。另外它在没有 `chatId` 时会切去助理会话，和这里「进详情」的要求冲突。
-  - 标已读抽一个小方法放进 `ChatStore+Phone.swift`：`func markInboxRead(_ item: AssistantInboxItem)`，内容就是 `openAssistantInboxItem` 前半段（发 `inbox_read` + 本地置 `read = true`）。
-  - 无 `chatId` → push `InboxDetailView(item)`（标题、时间、完整正文 `textSelection(.enabled)`），出现时 `inbox_read`。
+  1. 先 `markInboxRead(item)`（只发 `inbox_read` 并本地置已读，不跳转，见 §5.3）。
+  2. 有 `delegationId` 或 `chatId` → `router.open(chatId:delegationId:store:)`（§3.1）。目标是助理会话时会 pop 回助理页。
+  3. 都没有 → push `.inboxItem(item.id)` → `InboxDetailView`（标题、时间、完整正文 `textSelection(.enabled)`）。
+  - **不要**调 `store.openAssistantInboxItem(item)`：它会 `select` 目标会话，而目标可能是工作区子会话，会破坏「`activeId` 永远是助理」的不变量。
 - 左滑：未读时「已读」。
-- 空状态：`ContentUnavailableView("没有待处理的事", systemImage: "tray", description: Text("\(assistantName) 有新消息会放在这里。"))`，颜色用默认（随主题）。
+- 空状态：`ContentUnavailableView("没有待处理的事", systemImage: "tray", description: Text("\(assistantName) 有新消息会放在这里。"))`。
 
-### 4.3 工作页 `WorkHome`（新文件 `Views/Phone/WorkHome.swift`）
+### 4.3 菜单抽屉内容（原「我」）
 
-```
-┌──────────────────────────────────┐
-│ 工作                         ＋   │  ← large title；＋ 是 Menu：各子工作区 / 新建工作区…
-│ 🔍 搜索对话                        │
-├──────────────────────────────────┤
-│ 正在进行                           │
-│  ● 载人航天        acrabat · 跑     │
-│  ↻ 讲稿同步        acrabat · Loop 第2拍│
-│  ⇢ 整理周报        notes · 委派待批  │
-├──────────────────────────────────┤
-│ ▾ acrabat                  ＋ 新对话│
-│   载人航天                    刚刚  │
-│   继续                             │
-│ ▸ notes (4)                       │
-│ ▸ cursor-remote (12)              │
-└──────────────────────────────────┘
-```
+`MenuDrawer` 里是一个自绘的竖向列表（不是 `List`，抽屉不需要 inset 分组），分组之间用 `JieboColor.line` 分隔线，行高 ≥ 48pt，`hitTarget()`：
 
-`NavigationStack(path: $router.workPath)` + `.navigationDestination(for: WorkRoute.self) { route in switch route { case .chat(let id): ChatScreen(chatId: id) } }`。
-
-#### 4.3.1 「正在进行」Section
-
-合并去重（同一会话只出现一次，优先级 委派待批 > Loop > 跑）：
-
-- 非助理会话中 `runningChatIds.contains(id) || turns.contains(\.running)` → 标签「跑」（`run`/`runBg`）。
-- `store.loops` 里 status 为 armed/running 的 → 「Loop 第 N 拍」（`ok`/`okBg`）。
-- `assistantState.delegations` 里 running/awaiting 且 `childChatId` 在本机 → 用 `AssistantDelegation.statusLabel/statusColors`。
-- 行副标题：工作区名（`workspaceLabel(chat.cwd, root: store.groupRoot)`）。
-- 点击 → `router.openWorkChat(id)`。
-- 为空时整个 Section 不显示。
-
-#### 4.3.2 工作区分组
-
-- 数据：`store.workspaceGroups`（已排除 USER 根目录）。
-- 每组一个 `Section`，组头是自绘 `Button`：▸/▾ + 名字 + （折叠时）会话数 + 右侧「＋」（`router.startChat(in: group.path, store:)`）。
-- 展开状态：`@AppStorage("jiebo.phone.expandedGroups")` 存 JSON 数组字符串（路径里可能有逗号，不要用逗号拼接）；**默认展开**：`store.currentWorkspacePath` 所在组 + 有会话在跑的组。
-- 行：`ChatRow`（新组件）—— 标题（未读 semibold）、一行摘要（`chat.preview` 或 `serverPreview`，`JieboColor.dim`）、右侧状态（跑 / 未读点 / Loop 点）。最小高度 56。
-- 行左滑：「删除」（destructive，弹确认，沿用 `SidebarView` 的 alert 文案，确认后调 `router.deleteChat(id, store:)`）；右滑：「重命名」（沿用 `SidebarView` 的 rename alert）。`contextMenu` 同时提供这两项。
-- 空组：显示一行「还没有对话」+「新对话」。
-
-#### 4.3.3 搜索
-
-`.searchable(text: $query, prompt: "搜索对话")`：非空时隐藏分组，改为平铺 `store.sidebarChats` 中标题或摘要包含 query 的会话（大小写不敏感），每行带工作区名。
-
-#### 4.3.4 右上「＋」菜单
-
-`Menu`：
-
-- 每个 `store.subWorkspaces`：「在 X 开新对话」→ `router.startChat(in:)`
-- Divider
-- 「切换 / 管理工作区…」→ `store.openWorkspaceSwitcher()`（全局 sheet）
-- 「新建工作区…」→ 打开 `WorkspacePickerSheet` 并直接置 `store.creatingWorkspace = true`
-
-`WorkspacePickerSheet` 加一个可选参数 `onPick: ((String) -> Void)? = nil`：iPhone 传 `{ path in store.switchWorkspace(to: path); router.openWorkChat(store.activeId, store: store) }`；iPad 不传，行为不变。新建工作区成功后网关会切过去，`router.follow` 会把它 push 出来。
-
-`.onAppear { store.refreshWorkspaces() }`。
-
-### 4.4 会话页 `ChatScreen`（新文件 `Views/Phone/ChatScreen.swift`）
-
-```
-┌──────────────────────────────────┐
-│ ‹ 工作     载人航天        [⌘] [＋] │  ← principal：标题 + 「acrabat · 代理」
-├──────────────────────────────────┤
-│ ● Loop · 第 2 拍 · 三页已渲染       │  ← ChatStatusStrip（可点 → Loop 工具层）
-├──────────────────────────────────┤
-│ ThreadView(chrome: .embedded)     │
-│ ComposerView(style: .full)        │
-└──────────────────────────────────┘
-（底栏隐藏）
-```
-
-```swift
-struct ChatScreen: View {
-    let chatId: String
-    // …
-    var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                ChatStatusStrip()
-                ThreadView(chrome: .embedded)
-            }
-            if let layer = store.toolLayer {
-                ToolLayerOverlay(layer: layer).id(layer)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            }
-        }
-        .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(store.toolLayer == nil ? .visible : .hidden, for: .navigationBar)
-        .toolbar { … }
-        .onAppear { if store.activeId != chatId { store.select(chatId) } }
-        .onDisappear { if store.toolLayer != nil { store.toolLayer = nil } }
-    }
-}
-```
-
-- **principal**：标题（`store.active?.title ?? "新对话"`，`JieboFont.display(17)`）+ 副标题「工作区名 · 模式」（同现在 `phoneSubtitle`）。点标题 → 弹重命名 alert。
-- **工具按钮**（`Menu`，图标 `wrench.and.screwdriver`；有 Loop 在跑或有 Git 改动时右上角 6pt 点）：
-  - 文件 → `store.toggleTool(.files)`（走 `FileBrowserCover`）
-  - 搜索 → `.search`
-  - Git（N 处改动）→ `.git`，N = `store.gitStatus.count`
-  - 终端 → `.terminal`（`ToolLayerOverlay`）
-  - Loop（在跑时文案「Loop · 在跑」）→ `.loop`
-  - Divider
-  - 撤销上一轮（`store.canUndo` 时可用）→ `store.undoLast()`
-  - 重命名…、删除会话（destructive，确认后 `router.deleteChat(id, store:)`，见 §3.1；不要直接调 `store.deleteChat`）
-- **＋**：在当前会话所在工作区开新对话 → `router.startChat(in: chat.cwd ?? store.currentWorkspacePath)`（替换栈顶，不叠两层）。
-- `ToolLayerOverlay` 在窄屏已是全宽单列 + 「‹ 对话」+ 左缘右滑关闭 + discard/revert alert，**直接复用不改**。
-- 删除会话后若 `activeId` 回落到别的会话，`router.follow` 会处理；ChatScreen 要在 `chatId` 不再存在时自动 pop（`onChange(of: store.chats.map(\.id))`）。
-- 有未保存修改时系统返回按钮不会出现（工具层打开时导航栏是隐藏的），无需额外拦截。
-
-#### 4.4.1 `ChatStatusStrip`（从 `ThreadView.phoneHeader` 抽出，放 `Views/Phone/ChatStatusStrip.swift`）
-
-逻辑完全照搬 `ThreadView.phoneStatus` 和下方按钮：Loop 在跑显示「Loop · 第 N 拍 · 摘要」，否则 `store.busy` 显示「正在回复」，否则不显示。点击（有 loop 时）→ `store.toggleTool(.loop)`。
-
-### 4.5 我 `MeHome`（新文件 `Views/Phone/MeHome.swift`）
-
-`NavigationStack` + `List(.insetGrouped)`：
-
-1. **头部**（无标题 Section）：`JieboMark(size: 36)` + `store.tenantName`（空则「接驳」）+ `ConnectionDot` + 「已连接 / 正在重连…」。
+1. **头部**：`JieboMark(size: 36)` + `store.tenantName`（空则「接驳」）+ `ConnectionDot` + 「已连接 / 正在重连…」。
 2. **助理**
-   - 「记忆」→ push `AssistantMemoryScreen`（包 `AssistantMemoryPane`，`onAppear { store.requestAssistant(memory: true) }`），右侧 detail 显示有效条目数。
-   - 「待办与日程」→ push `AssistantTodayScreen`（包 `AssistantTodayPane`，含 §4.1.4 的补充操作）。
-   - 「委派记录」→ push 列表（`assistantState.delegations`，复用 `delegationCard`；点可打开的 → `router.openWorkChat(childChatId)`）。
+   - 「记忆」→ `router.go(.memory)`，push `AssistantMemoryScreen`（包 `AssistantMemoryPane`，`onAppear { store.requestAssistant(memory: true) }`），右侧显示有效条目数。
+   - 「待办与日程」→ `router.go(.todayManage)`，push `AssistantTodayScreen`（包 `AssistantTodayPane`，含 §4.1.5 的补充操作）。
+   - 「委派记录」→ `router.go(.delegations)`，push `DelegationListScreen`（`assistantState.delegations`，倒序，行：标题 + 工作区 + 状态 + 相对时间）；点行 → `router.delegationDetail`。
    - 「后台模型」只读行：`background.model` + 就绪/原因。
-3. **外观**：「主题 · \(JieboTheme.shared.palette.title)」→ `ThemeSettingsSheet`（sheet）。
-4. **用量**（`store.isAdmin`）：「使用统计」→ `AdminStatsView`（sheet）。
+3. **外观**：「主题 · \(JieboTheme.shared.palette.title)」→ 先关抽屉，再弹 `ThemeSettingsSheet`。
+4. **用量**（`store.isAdmin`）：「使用统计」→ 关抽屉后弹 `AdminStatsView`（sheet）。
 5. **账号**：「退出登录」（destructive）→ `confirmationDialog`，文案沿用 `PhoneWorkbench`。
-6. **关于**：版本号 `Bundle.main.infoDictionary?["CFBundleShortVersionString"]` + build。
+6. **关于**（抽屉底部，小字）：版本号 `CFBundleShortVersionString` + build。
+
+> 「待处理」**不放**在抽屉里（它有自己的 ✉ 入口和角标）；「今日」也不放（导航栏有按钮）。抽屉里是低频、偏设置与管理的内容。
+
+### 4.4 委派详情 `DelegationDetailSheet`（新文件 `Views/Phone/DelegationDetailSheet.swift`）
+
+`.presentationDetents([.medium, .large])`，只读。**没有输入框，没有「继续聊」，没有文件入口。**
+
+```
+┌──────────────────────────────────┐
+│ 整理周报                    完成   │  ← 标题 + 完成按钮
+│ notes · 后台 · 已用时 3 分钟        │
+│ ● 进行中                           │  ← 状态胶囊（AssistantDelegation.statusLabel/statusColors）
+├──────────────────────────────────┤
+│ 汇报                               │  ← done/failed 时：delegation.result，textSelection
+│  做了什么…                          │
+├──────────────────────────────────┤
+│ 过程                               │  ← 子会话的工具步骤，只读
+│  ✓ 读 周报/本周.md                  │
+│  ✓ 改 周报/汇总.md                  │
+│  … 正在跑 npm test                  │
+├──────────────────────────────────┤
+│ [停止这项委派]                      │  ← 仅 foreground 且 running/awaiting
+└──────────────────────────────────┘
+```
+
+- 数据：`delegation = store.assistantState?.delegations.first { $0.id == delegationId }`；删除或找不到 → 显示「这项委派已不存在」。
+- **过程**：`store.chats.first { $0.id == delegation.childChatId }` 取子会话。出现时调 `store.ensureTurnsLoaded(childChatId)`（它不切换会话，已核实只依赖传入的 chatId）。过程区取该会话**最后一个 assistant turn** 的 `tools`，每个一行：状态图标 + 动作文字 + 目标路径（`mono 12`），用与 `ThreadView` 工具卡相同的文案函数。最多 30 行，更多折叠成「还有 N 步」。**不渲染对话气泡，不渲染 diff。** 子会话尚未同步到本机（`chats` 里没有）→ 过程区显示「过程在电脑上查看」，不影响其它区块。
+- **汇报**：`delegation.result`（`done`/`failed` 时）。进行中不显示。
+- **等你批准**：`awaiting` 时顶部放该委派的 `ApprovalCard`（`approvals` 里 `delegationId == delegation.id`）。
+- **停止**：`assistantOp("delegation_cancel", args: ["delegationId": .string(id)])`；先弹 `confirmationDialog`「停掉后已经改过的文件不会自动还原」，确认后按钮变「正在停止…」，等 `assistantState` 里状态变化；返回 `ok:false` 时用 `store.flash(error)` 显示网关给的原因。
+  - `mode == "background"`（定时任务发起的只读委派）不显示「停止」按钮，改显示一行说明「后台任务只读，会自己结束」。
+- 不做：文件预览、查看 diff、还原、继续对话。想看细节 → 说明文字「完整过程在电脑或 iPad 上查看」。
 
 ---
 
@@ -640,7 +477,7 @@ struct ChatScreen: View {
 
 ### 5.1 `Views/ThreadView.swift`
 
-把 `phoneChrome: Bool` 换成枚举（保留旧初始化参数的兼容入口，避免一次改太多调用点）：
+把 `phoneChrome: Bool` 换成枚举（保留旧初始化器兼容，避免一次改太多调用点）：
 
 ```swift
 enum ThreadChrome { case pad, phoneLegacy, embedded }
@@ -656,11 +493,11 @@ struct ThreadView: View {
 ```
 
 - `header`：`.pad` → `padHeader`；`.phoneLegacy` → `phoneHeader`；`.embedded` → `EmptyView()`。
-- `.toolbar(.hidden, for: .navigationBar)` **只在 `.pad`/`.phoneLegacy` 时应用**。`.embedded` 由宿主管理导航栏（否则 ChatScreen 的返回按钮和侧滑返回都没了）。用 `ViewModifier` 条件包一下。
-- `.frame(maxWidth: JieboMeasure.thread)` 保留。
-- `emptyState`：`store.assistantChatActive` 时用助理版文案和快捷句（§4.1.3）；工作区会话在 `.embedded` 下把「点左上角打开对话列表」改成「点右上角工具打开文件、Git、终端」，「打开工作区文件」快捷按钮保留。
-- 把 `assistantTodayButton` 抽成 `AssistantTodayButton`（`Views/Phone/` 或 `SidebarView.swift` 旁边都可），ThreadView 内部改为调用它，外观不变。
-- 右上角「xxx · 预览」浮动胶囊：iPhone `.embedded` 下保留（它打开 `PreviewPanelView`，由 `PhoneShell` 绘制）。
+- `.toolbar(.hidden, for: .navigationBar)` 只在 `.pad` / `.phoneLegacy` 时应用。`.embedded` 由宿主管理导航栏。
+- `emptyState` 在 `.embedded` 下用助理文案（§4.1.3）。
+- `.embedded` 下隐藏 `delegatedApprovalBanner`、写入确认条、pendingDiff pill（§4.1.3）。
+- 「xxx · 预览」浮动胶囊：`.embedded` 下保留（打开 `PreviewPanelView`，由 `PhoneShell` 绘制）。
+- 把 `assistantTodayButton` 抽成 `AssistantTodayButton`，ThreadView 内部改为调用它，外观不变。
 
 ### 5.2 `Views/ComposerView.swift`
 
@@ -668,57 +505,75 @@ struct ThreadView: View {
 
 `.assistant`：
 
-- placeholder：未连接「正在连服务器…」；忙「正在回复，发送会排队」；否则「跟\(store.assistantName)说点什么 · 长按说话」。
-- `controls`：`attachMenu`（去掉「工作区文件…」项，助理在 USER 根目录，引用工作区文件意义不大）+ `Spacer` + **麦克风按钮** + `sendCluster`。
-  - 麦克风按钮：32pt 圆，`mic` / 录音中 `mic.fill` + `JieboColor.pine`。**点按**切换开始/结束录音：开始走现有 `beginVoice()`（内部调 `dictation.start()`，含权限申请）；再点一次 `let spoken = await dictation.finish()` 后 `insertTranscript(spoken)`；录音中想放弃用 `dictation.cancel()`。这几个方法已核实存在于 `Session/VoiceDictation.swift`。长按手势和点按共用同一个 `dictation`，录音中两种入口互斥（`dictation.active` 时不响应另一种开始）。长按输入框说话的现有手势保留。
-  - 模式、模型、策略层、确认写、检查点**全部收进 `moreMenu`**（`ellipsis`），菜单里加「模式」「模型」两个子 `Menu`（`Picker` inline 风格）。助理会话默认就是 Agent 模式，用户很少改。
-- `@` 补全条在助理风格下仍可用（不删能力）。
+- placeholder：未连接「正在连服务器…」；忙「正在回复，发送会排队」；否则「跟\(store.assistantName)说点什么」。
+- `controls`：`attachMenu`（去掉「工作区文件…」项）+ `Spacer` + **麦克风按钮** + `sendCluster`。
+  - 麦克风按钮：32pt 圆，`mic` / 录音中 `mic.fill` + `JieboColor.pine`。**点按**切换开始/结束：开始走现有 `beginVoice()`（内部 `dictation.start()`，含权限申请）；再点一次 `let spoken = await dictation.finish()` 后 `insertTranscript(spoken)`；放弃用 `dictation.cancel()`。长按输入框说话的现有手势保留，两种入口共用同一个 `dictation`，`dictation.active` 时互斥。
+  - 模式、模型、策略层、确认写、检查点**全部收进 `moreMenu`**（`ellipsis`），菜单里加「模式」「模型」两个子 `Menu`。
+- `@` 补全条仍可用。
 - 由调用方决定 style：`ThreadView` 里 `ComposerView(focusNonce:, style: store.assistantChatActive && chrome == .embedded ? .assistant : .full)`。iPad 永远 `.full`。
 
-### 5.3 `Views/AssistantView.swift`（拆分，iPad 外观不变）
+### 5.3 `Session/ChatStore.swift`（只加，不改既有方法语义）
 
-把三个 pane 抽成独立的 `struct`，`AssistantView` 只负责状态行 + 分段 + 组合：
-
-- `AssistantTodayPane`（简报、待批、待办、日程、委派）——内部 `@State todoDraft` 随之迁移。
-- `AssistantInboxList`（收件箱）——iPhone 的 InboxHome 可以不用它（用 List 重写），但 iPad 继续用。
-- `AssistantMemoryPane`（核心档案、暂停、新增、有效/失效条目、彻底删除确认）——相关 `@State` 随之迁移。
-- `AssistantSection`、`StatusTag`、`ActionButton`、`View.assistantCard(highlight:)` 从 `private` 改为 internal，挪到新文件 `Views/AssistantComponents.swift`，供 iPhone 页面复用。
-- 新增的「左滑删除待办 / 已完成可撤销 / 日程开关」只加在 `AssistantTodayPane` 上；iPad 一并获得这些能力可以接受（纯增量），若想严格不动 iPad，用参数 `var editable = false` 控制，iPhone 传 true。
-
-### 5.4 `Views/RootView.swift`
-
-- `WorkbenchView.body` 按 §4.0 分流。
-- `CollapsedSidebarRail`、`ToolLayerOverlay`、`ContentLayerView`、`SearchToolView`、`GitToolView`、`TerminalToolView` **不改**。
-
-### 5.5 `Views/SidebarView.swift`
-
-- `WorkspacePickerSheet` 加 `onPick` 可选参数（§4.3.4）。
-- 把 `SidebarView` 里的 rename / delete alert 逻辑抽成 `ChatRowActions` 修饰符（`.chatRowActions(renameTarget:deleteTarget:)`），iPhone WorkHome 和 ChatScreen 复用。可选；不抽就复制一份，保证文案一致。
-
-### 5.6 `Session/ChatStore.swift` / `Session/WorkspaceGroups.swift`
-
-只加计算属性 / 小方法，不改现有方法语义：
+**① `assistantOnly` 守卫**（不变量 2 的落实点）：
 
 ```swift
-extension ChatStore {
-    var pendingWriteChats: [(chat: ChatSession, tool: PendingTool)]   // §4.2.1
-    var phoneInboxBadge: Int { assistantBadgeCount + pendingWriteChats.count }
-    var anyWorkRunning: Bool                                            // 非助理会话在跑 || 有 Loop armed/running
-    var assistantRunning: Bool                                          // 助理会话在跑
-    func chatIsLive(_ chat: ChatSession) -> Bool                        // 抽出 PhoneDrawer.chatRow 里的 live 判断
-    func markInboxRead(_ item: AssistantInboxItem)                      // §4.2.2，只标已读不跳转
+/// iPhone 的 PhoneShell 出现时置 true：activeId 只允许是助理会话。iPad / 网页永远 false
+var assistantOnly = false
+```
+
+在 `swapActive(to:)` 的**最开头**（`guard newId != activeId` 之前）加：
+
+```swift
+var newId = newId
+if assistantOnly, let assistantId = assistantChatId, newId != assistantId {
+    // 任何路径（恢复上次会话、删除回落、收件箱跳转、网关 workspace_created、旧代码里的 startChat……）
+    // 想切到工作区会话，都改成助理会话。助理会话还没同步到时不切，留在当前页
+    guard chats.contains(where: { $0.id == assistantId }) else { return }
+    newId = assistantId
 }
 ```
 
-放进新文件 `Session/ChatStore+Phone.swift`（记得加进 pbxproj）。
+> 因为 `swapActive` 是 `private`，这段直接写在方法里。`select` 在调用 `swapActive` 之后还会 `patch(id)` 标已读、`applySession(chats.first { $0.id == id })`，这里的 `id` 是原始参数，不是重定向后的助理 id —— **要把这两处也换成 `activeId`**，或者在 `select` 开头同样重定向。改完后通读 `select`、`startChat`、`deleteChat`、`applyStoredState`、`restoreLastActiveIfNeeded` 五个方法，确认没有地方在 `swapActive` 之后还用原始 id 操作。
+>
+> 注意 `.workspaceCreated` 分支会 `startChat(in: path)`，守卫会把它重定向回助理会话，不会跳走。iPhone 本身不会发 `create_workspace` 请求；网关在助理建好工作区后给所有端广播的是 `workspaces`（不是 `workspace_created`），也不会触发这条。
 
-### 5.7 `Views/PhoneWorkbench.swift`
+**② 辅助方法**，放进新文件 `Session/ChatStore+Phone.swift`：
 
-**保留**，只给 iPad 窄窗用。文件头注释更新为「iPad 窄窗（compact）」。iPhone 不再进入这里。
+```swift
+extension ChatStore {
+    /// 只标已读，不跳转（InboxHome 用；openAssistantInboxItem 的前半段）
+    func markInboxRead(_ item: AssistantInboxItem)
+    var assistantRunning: Bool        // 助理会话在跑
+    var runningDelegations: [AssistantDelegation]   // status running / awaiting，createdAt 倒序
+    func approvalDelegationTitle(_ approval: AssistantApproval) -> String
+}
+```
 
-### 5.8 `docs/iphone-ux.html`
+**③ 避免多余的正文拉取（可选的省流优化）**：`assistantOnly` 时，除助理会话和 `DelegationDetailSheet` 主动请求的子会话外，不对其它会话调用 `ensureTurnsLoaded` / 预取 `load_chats`（`ChatStore.swift` 约 3600 行的 `send(.loadChats(ids:))` 是预取入口）。会话元数据仍然要同步（网关的摘要和 digest 机制不变）。
 
-旧的八帧设计稿已被本方案替代，在页面顶部 lede 里加一句「已被 iphone-assistant-first.md 取代」即可，不删文件。
+### 5.4 `Views/AssistantView.swift`（拆分，iPad 外观不变）
+
+把三个 pane 抽成独立 `struct`，`AssistantView` 只负责状态行 + 分段 + 组合：
+
+- `AssistantTodayPane`（简报、待批、待办、日程、委派）——`@State todoDraft` 随之迁移。加 `showsApprovals` / `showsDelegations` 开关（默认 true，iPad 不变；iPhone 传 false）。
+- `AssistantInboxList`（iPad 继续用；iPhone 的 `InboxHome` 用 `List` 重写）。
+- `AssistantMemoryPane`（核心档案、暂停、新增、有效/失效条目、彻底删除确认）。
+- `AssistantSection`、`StatusTag`、`ActionButton`、`View.assistantCard(highlight:)` 从 `private` 改为 internal，挪到新文件 `Views/AssistantComponents.swift`。
+- `approvalCard` 同时挪出，作为 `ApprovalCard`（§4.1.4 / §4.2 共用），并**按 `approval.tool` 区分文案**：`create_workspace` 显示「新建工作区」+ 名字与原因，按钮「拒绝 / 同意」；其它沿用「批准 / 拒绝」。iPad 的助理面板同样要获得这个区分，否则 `create_workspace` 会显示成一个叫 `create_workspace` 的「工具调用」。
+- 新增的「左滑删除待办 / 已完成可撤销 / 日程开关」只加在 `AssistantTodayPane` 上；iPad 一并获得可以接受（纯增量）。
+
+### 5.5 `Views/RootView.swift`
+
+`WorkbenchView.body` 按 §4.0 分流。`CollapsedSidebarRail`、`ToolLayerOverlay`、`ContentLayerView`、`SearchToolView`、`GitToolView`、`TerminalToolView` **不改**。
+
+### 5.6 `Views/PhoneWorkbench.swift`、`Views/SidebarView.swift`
+
+- `PhoneWorkbench` **保留**，只给 iPad 窄窗用；文件头注释更新为「iPad 窄窗（compact）」。iPhone 不再进入。
+- `SidebarView` / `WorkspacePickerSheet` **不用改**（上一版为 iPhone 工作 tab 设计的 `onPick` 参数不再需要）。
+
+### 5.7 `docs/iphone-ux.html`
+
+旧的八帧设计稿在页面顶部 lede 里加一句「已被 iphone-assistant-first.md 取代」，不删文件。
 
 ---
 
@@ -728,114 +583,113 @@ extension ChatStore {
 
 | 文件 | 内容 |
 |---|---|
-| `Session/PhoneRouter.swift` | `PhoneTab`、`WorkRoute`、`AssistantHubSection`、`PhoneRouter` 及路由方法 |
-| `Session/ChatStore+Phone.swift` | §5.6 计算属性 |
+| `Session/PhoneRouter.swift` | `PhoneRoute`、`AssistantHubSection`、`PhoneRouter`、`DelegationRef` 及路由方法 |
+| `Session/ChatStore+Phone.swift` | §5.3② 辅助方法 |
 | `Views/Phone/PhoneShell.swift` | 容器、键盘监听、冷启动对齐、全局 sheet、预览层 |
-| `Views/Phone/PhoneTabBar.swift` | 底栏 |
+| `Views/Phone/MenuDrawer.swift` | 左侧菜单抽屉（原「我」的内容） |
 | `Views/Phone/AssistantHome.swift` | 助理页 |
 | `Views/Phone/TodayStrip.swift` | 今日条 |
+| `Views/Phone/ActionDock.swift` | 确认卡 + 进行中的委派 |
 | `Views/Phone/AssistantHubSheet.swift` | 今日 / 记忆面板 |
+| `Views/Phone/DelegationDetailSheet.swift` | 委派详情 |
 | `Views/Phone/InboxHome.swift` | 待处理页 + `InboxDetailView` |
-| `Views/Phone/WorkHome.swift` | 工作页 + `ChatRow` |
-| `Views/Phone/ChatScreen.swift` | 会话页 |
-| `Views/Phone/ChatStatusStrip.swift` | Loop / 正在回复状态条 |
-| `Views/Phone/MeHome.swift` | 我 + 记忆/待办/委派子页 |
-| `Views/AssistantComponents.swift` | 从 AssistantView 抽出的共享组件 |
+| `Views/Phone/MenuScreens.swift` | 抽屉里 push 出去的三个页面：`AssistantMemoryScreen`、`AssistantTodayScreen`、`DelegationListScreen` |
+| `Views/AssistantComponents.swift` | 从 AssistantView 抽出的共享组件（含 `ApprovalCard`） |
 
-在 Xcode 里给 `Views/Phone` 建一个 Group（带文件夹）。
+在 Xcode 里给 `Views/Phone` 建一个带文件夹的 Group。
 
 ---
 
-## 7. 视觉与交互细则
+## 7. 网关侧（已完成，不需要 Mac 上再改）
 
-- **颜色**：只用 `JieboColor`。背景层级：页面 `paper`，卡片 `white`，底栏/分组 `sidebar`，分隔 `line`。强调 `pine`；运行 `run/runBg`；完成 `ok/okBg`；警告 `warnFg/warnBg`；危险 `danger/dangerBg`。不新增颜色常量；如确需新语义色，加进 `Tokens.swift` 并同时给浅/深两套值。
-- **字体**：标题 `JieboFont.display`，正文 `JieboFont.ui`，代码 `JieboFont.mono`。所有文字支持 Dynamic Type（`JieboFont.ui` 若是固定字号，至少保证 `.dynamicTypeSize(...DynamicTypeSize.accessibility2)` 下布局不崩：芯片条可横滑、行高自适应）。
-- **触控**：所有可点元素命中区 ≥ 44pt（`.hitTarget()`）。
-- **动画**：tab 切换淡入；push 用系统默认；Hub sheet 系统默认；工具层沿用 `JieboMotion.panel`。所有自定义动画在 `accessibilityReduceMotion` 时为 nil。
-- **触觉**：切 tab `selectionChanged`；批准/拒绝 `UINotificationFeedbackGenerator().notificationOccurred(.success/.warning)`；删除确认 `.warning`。
-- **深色模式 / 主题切换**：所有新页面在 `ThemeSettingsSheet` 切换配色后即时生效（因为只用 token）。手测至少切两套配色 × 浅/深。
-- **横屏**：iPhone 横屏可用即可，不专门设计；底栏在横屏照常显示。
-- **无障碍**：TodayStrip 芯片 `accessibilityLabel` 写全（「待批 2 项，打开待处理」）；行状态（跑 / 未读 / Loop）进 label；底栏角标进 label。
+本版配套的网关改动已在仓库里，iOS 只需要按下面的协议对接。
+
+| 项 | 说明 |
+|---|---|
+| `create_workspace` 工具 | 仅助理前台对话可用（定时任务、后台、Loop 没有）。参数 `name`、`reason`。名字会校验（不能含 `..`、不能以点开头、不能出根目录）；工作区已存在就直接返回 `ok:true, existed:true`，不打扰用户 |
+| 确认流程 | 工具调用**停住等答复**：网关落一条 `AssistantApproval{tool:"create_workspace", chatId:<助理会话>, callId, summary:"名字 · 原因", delegationId:nil}`，同时往收件箱放一条 `kind:"approval"`（会触发 Web Push），并推 `assistant_state`。答复走原有 `assistant_op approval_answer {chatId, callId, allow}`。同意 → 网关建目录、向所有端广播 `workspaces`、工具返回 `ok:true`，助理那一轮继续（通常紧接着 `delegate`）；拒绝 → 返回「用户拒绝了」，工具说明里要求助理不要再问同一个名字；30 分钟没答复 → 取消，同样返回给助理 |
+| `delegation_cancel` | 新的 `assistant_op`，`args: {delegationId}`。只对前台委派且 `running`/`awaiting` 的有效；后台委派（定时任务发起、只读）返回 `ok:false` 和原因。停止后委派变 `failed`，`result` 为「你停掉了这项委派。」，收件箱会有一条「委派失败」 |
+| 同工作区并发 | 同一个工作区同时只允许一项委派在跑，第二个会被网关拒绝并把原因返回给助理，由助理告诉用户 |
+| 助理的提示 | `userRootPreamble` 增加了三句：干活用 `delegate`、没有工作区先 `create_workspace`、完成后简短汇报 |
+| 老客户端 | 网页的「待批」面板已区分 `create_workspace`。**iOS 的 `AssistantView.approvalCard` 还没有**，按 §5.4 改 |
+
+**协议字段确认**（`shared/protocol.ts`）：`AssistantApproval` 没变，只是 `tool` 多了取值 `"create_workspace"`；`AssistantOp` 多了 `"delegation_cancel"`。iOS 的 `AssistantApproval.from` 对 `delegationId` 本来就是可选，不需要改解析。
 
 ---
 
 ## 8. 实施顺序（每一刀可独立编译、可回退）
 
-每一刀做完都要：`xcodebuild` 通过 → iPhone 模拟器手测该刀的验收项 → iPad 模拟器确认无回归。
+每一刀做完都要：`xcodebuild` 通过 → iPhone 模拟器手测该刀验收项 → iPad 模拟器确认无回归。
 
-### P0 骨架
+### P0 骨架与守卫
 
-- [ ] 新建 `PhoneRouter.swift`、`PhoneShell.swift`、`PhoneTabBar.swift`；四个 tab 先放占位页（助理 tab 直接放 `ThreadView(chrome: .embedded)` 包在 NavigationStack 里）。
+- [ ] `PhoneRouter.swift`、`PhoneShell.swift`（`NavigationStack(path:)` + 根页 `AssistantHome` 占位，先放 `ThreadView(chrome: .embedded)`）、`MenuDrawer.swift` 空壳（能开能关）。导航栏先放 ☰ 和 ✉ 两个按钮。
 - [ ] `ThreadView` 改 `ThreadChrome`（§5.1），旧 `phoneChrome:` 初始化器保留。
-- [ ] `WorkbenchView` 按 idiom 分流。
-- [ ] 冷启动对齐 + 键盘隐藏底栏。
-- **验收**：iPhone 启动落在助理会话；底栏四个 tab 能切；键盘弹起底栏消失；iPad 全尺寸 + 窄窗行为与改前一致。
+- [ ] `ChatStore.assistantOnly` + `swapActive` 守卫 + `select` 里原始 id 的修正（§5.3①）。
+- [ ] `WorkbenchView` 按 idiom 分流；冷启动对齐。
+- **验收**：iPhone 启动一定落在助理会话（先在 iPad 上切到某个工作区会话再退出，再开 iPhone，也必须落在助理）；☰ 能打开 / 关闭抽屉（遮罩点击、向左拖、左缘右滑打开都可用，push 页上左缘右滑是返回而不是开抽屉）；✉ 能 push 占位页并返回；iPad 全尺寸 + 窄窗行为与改前一致。
 
-### P1 工作 tab
+### P1 助理页
 
-- [ ] `WorkHome`（正在进行、分组、搜索、＋菜单）、`ChatRow`、左右滑操作。
-- [ ] `ChatScreen`（导航栏、工具菜单、ChatStatusStrip、ToolLayerOverlay、自动 pop）。
-- [ ] `WorkspacePickerSheet.onPick`。
-- **验收**：能进任意会话聊天；文件/搜索/Git 打开 FileBrowserCover，终端/Loop 打开工具层且「‹ 对话」能回；编辑文件未保存时无法直接返回列表；新建对话、重命名、删除可用；返回列表后底栏出现；切到助理再切回工作，回到刚才那条会话并且草稿还在。
-
-### P2 助理 tab
-
-- [ ] `AssistantHome` 导航栏、`TodayStrip`、助理空状态。
-- [ ] 拆 `AssistantView`（§5.3）+ `AssistantComponents.swift`；`AssistantHubSheet`。
-- **验收**：今日条在有数据时出现、为空时不占位；点芯片跳转正确；Hub 两个分段可用，记忆的编辑/标失效/遗忘/彻底删除与 iPad 行为一致；iPad 上助理面板外观不变。
-
-### P3 待处理 tab
-
-- [ ] `pendingWriteChats`、`phoneInboxBadge`。
-- [ ] `InboxHome`（待批、收件箱、详情、全部已读、下拉刷新）。
-- **验收**：委派审批能在列表里直接批/拒；写入确认点进对应会话；收件箱条目点开跳转到关联会话（助理会话 → 助理 tab，工作会话 → 工作 tab 并 push）；底栏角标数与内容一致，标已读后减少。
-
-### P4 我 tab
-
-- [ ] `MeHome` 及记忆、待办与日程、委派记录子页；主题、统计、退出。
-- [ ] 待办删除/撤销、日程开关（`schedule_set enabled`）。
-- **验收**：所有入口可达；退出登录回到 LoginView；切主题全 App 生效。
-
-### P5 输入框助理风格
-
+- [ ] 导航栏、`TodayStrip`、助理空状态。
+- [ ] 拆 `AssistantView`（§5.4）+ `AssistantComponents.swift`；`AssistantHubSheet`。
 - [ ] `ComposerStyle.assistant`（placeholder、麦克风按钮、模式/模型收进更多菜单）。
-- **验收**：助理会话输入栏只有 ＋ / 🎤 / ⬆（以及 ⋯）；点麦克风录音再点结束后文字进输入框；工作区会话和 iPad 输入框与改前一致。
+- **验收**：今日条有数据时出现、为空时不占位；Hub 两个分段可用，记忆编辑/标失效/遗忘/彻底删除与 iPad 一致；输入栏只有 ＋ / 🎤 / ⬆ / ⋯；点话筒录音再点结束，文字进输入框；iPad 助理面板外观不变。
 
-### P6 收尾
+### P2 行动区与确认卡
 
+- [ ] `ApprovalCard`（`create_workspace` / `shell` / 改文件三种文案）、`ActionDock`。
+- [ ] `ThreadView` `.embedded` 下隐藏旧的确认横幅。
+- **验收**：让助理「在 acrabat 里建一个新项目」→ 手机上出现「新建工作区」确认卡 → 点同意 → 助理继续并发起委派；拒绝 → 助理告知用户不会再问；不理它 → 30 分钟后卡片消失；卡片上有失效倒计时；委派要写文件时出现「批准 / 拒绝」卡；iPad 的助理面板也正确显示 `create_workspace`。
+
+### P3 委派详情
+
+- [ ] `DelegationDetailSheet`（汇报、过程、停止），`ensureTurnsLoaded` 接入。
+- [ ] ActionDock 的进行中行 → 打开详情。
+- **验收**：进行中的委派点开能看到过程在更新；完成后能看到汇报；停止后状态变失败且收件箱有记录；后台委派没有停止按钮；子会话未同步到本机时过程区有占位；整个过程中 `activeId` 一直是助理（用 DEBUG 日志确认）。
+
+### P4 待处理页
+
+- [ ] `InboxHome`（待批、收件箱、详情、全部已读、下拉刷新）、`router.open`。
+- **验收**：待批能直接批 / 拒；收件箱点条目：委派 → 详情 sheet，助理 → pop 回助理页，其它会话 → 提示「在电脑或 iPad 上查看」且不跳转；✉ 角标数与内容一致，标已读后减少。
+
+### P5 菜单内容与收尾
+
+- [ ] `MenuDrawer` 的完整内容与三个 push 页；主题、统计、退出。
 - [ ] 触觉、无障碍 label、Dynamic Type 检查、深浅色 × 两套主题截图。
-- [ ] DEBUG 启动参数：`--phone-tab=assistant|inbox|work|me`、`--phone-open-chat=<id>`，方便截图和回归（仿照现有 `--open-file-browser` 写在 `#if DEBUG` 里）。
-- [ ] `PhoneWorkbench.swift` 注释更新；`docs/iphone-ux.html` 加「已取代」说明；`docs/IDE.md` 的「### iPad」节后补一句「iPhone 见 iphone-assistant-first.md」。
+- [ ] 线程里 `delegate` / `create_workspace` 工具卡的友好文案（§4.1.3）；可选的「刚结束的委派」行（§4.1.4 C）。
+- [ ] DEBUG 启动参数：`--phone-route=root|inbox|memory|today|delegations`、`--phone-menu=open`、`--phone-delegation=<id>`，方便截图和回归。
+- [ ] `PhoneWorkbench.swift` 注释更新；`docs/iphone-ux.html` 加「已取代」说明；`docs/IDE.md` 的「iPad」节后补一句「iPhone 见 iphone-assistant-first.md」。
 
-### P7（可选，需要改网关，不在本轮必做范围）
+### P6（建议尽早做，需要改网关，不在本轮必做范围）
 
-- APNs 推送：网关 `assistant/push.ts` 目前只有 Web Push（VAPID）。要在 iPhone 上收到「待批 / 委派有结果 / 提醒 / 简报」需要：新增 `push_subscribe` 的 `kind: "apns"` + device token 存储、网关用 p8 key 发 APNs、App 端 `UNUserNotificationCenter` 授权 + `registerForRemoteNotifications` + 点击通知按 `chatId` 路由（复用 `router.openWorkChat` / `switchTab(.assistant)`）。
-- 主屏小组件（今日待办 / 待批数）、锁屏 Live Activity（会话在跑）、App Intents（「问小驳」快捷指令）。这些都依赖后台数据通道，放到 APNs 之后。
+- **APNs 推送。** 去掉了工作区入口之后，用户几乎全靠通知得知「委派做完了 / 要你批准 / 提醒到了」，App 在后台时 WebSocket 会断，没有推送就等于看不到。网关 `assistant/push.ts` 目前只有 Web Push：需要新增 `push_subscribe` 的 `kind:"apns"` + device token 存储、网关用 p8 key 发 APNs、App 端 `UNUserNotificationCenter` 授权 + `registerForRemoteNotifications`，点通知按 `chatId` / `delegationId` 调 `router.open`。
+- 主屏小组件（今日待办 / 待批数）、Live Activity（委派进行中）、App Intents（「问小驳」）、分享扩展（把网页 / 文字 / 图片丢给助理）。
 
 ---
 
-## 9. 手测清单（P0–P6 全部完成后整体再走一遍）
+## 9. 手测清单（P0–P5 全部完成后整体再走一遍）
 
 在 iPhone 16 / iPhone SE（第 3 代，小屏）两台模拟器上：
 
-1. 冷启动：落在助理 tab，显示助理会话，副标题正确；上次打开的工作区会话在「工作」tab 里能直接回到。
-2. 断网再连：副标题「正在重连…」→ 恢复；今日条重新拉取。
-3. 助理 tab 发一条消息，回复流式显示；底栏「助理」出现运行点；切到「工作」再切回，回复仍在继续，草稿不串。
-4. 在助理里让它委派一个工作区任务 → 今日条出现「委派 1 进行中」→ 点它到工作 tab「正在进行」→ 点进子会话。
-5. 委派停在审批 → 底栏待处理角标 +1 → 待处理 tab 里直接批准 → 角标 -1。
-6. 工作区会话开「确认写」，让 Agent 改文件 → 待处理里出现写入确认 → 点进会话 → 输入框上方确认条允许。
-7. 会话里打开文件、改一行、不保存直接点「‹ 对话」→ 弹放弃提示；保存后再回。
-8. Git → 点一个改动看 diff → 保留 / 还原。
-9. 开一个 30 秒、最多 2 拍的 Loop → ChatStatusStrip 显示拍数 → 返回工作列表「正在进行」里能看到 → 停止后消失。
-10. 线程里点 `@文件` 链接 → 全屏预览 → 关掉回到原处（助理 tab 和会话页都试）。
-11. 收件箱条目：有 chatId 的跳会话，无 chatId 的进详情；全部已读后角标清零。再测一次「目标会话就是当前 activeId」：先进会话 A、返回列表、去待处理点指向 A 的条目，必须进到 A。
-11a. 工作列表左滑删掉当前会话（刚从它返回）：留在工作列表根，不跳到助理 tab，也不 push 别的会话。删一条非当前会话后，再点收件箱跳转仍正常（标记没被误吞）。
-11b. Hub 里点一张委派卡跳到工作 tab，再切回助理 tab：Hub 不会自己再弹出来。
-12. 我 → 记忆：新增、编辑、标失效、恢复、彻底删除；暂停记忆开关。
-13. 我 → 待办与日程：添加、完成、撤销、删除待办；关掉一个日程再打开。
+1. 冷启动：落在助理页，副标题正确；在 iPad / 网页上把当前会话切到某个工作区会话后，iPhone 重新启动仍然落在助理。
+2. 全 App 找不到任何进入工作区会话的入口：没有会话列表、没有文件 / Git / 终端 / Loop；收件箱、委派记录里点指向工作区会话的条目不会跳走。
+3. 断网再连：副标题「正在重连…」→ 恢复；今日条重新拉取。
+4. 发一条消息，回复流式显示；导航栏副标题显示「正在回复」；点 ✉ 进待处理再返回，回复仍在，草稿不串；点 ☰ 开关抽屉，草稿不丢。
+5. 说「在 notes 里把周报整理一下」→ 助理发起委派 → 行动区出现进行中行 → 点开详情看到过程在更新 → 完成后汇报出现，收件箱多一条。
+6. 说「给我的讲稿建一个单独的工作区」→ 确认卡 → 同意后助理接着委派；再来一次点拒绝 → 助理说不建了，不再追问；再来一次不理它，退到后台再回来，卡片和倒计时仍然正确。
+7. 委派要写文件 → ✉ 角标 +1、行动区出现批准卡 → 在行动区批准 → 角标 -1。
+8. 在进行中的委派详情点「停止」→ 确认 → 状态变失败；对只读的后台委派没有停止按钮。
+9. 两个并发委派指向同一工作区：助理告诉你前一个还在跑，不会假装成功。
+10. 线程里点 `@文件` 链接 → 全屏预览 → 关掉回到原处。
+11. 待处理（✉）：委派条目 → 详情 sheet；助理条目 → 回到助理页；全部已读后角标清零。
+12. ☰ → 记忆：新增、编辑、标失效、恢复、彻底删除；暂停记忆开关。
+13. ☰ → 待办与日程：添加、完成、撤销、删除待办；关掉一个日程再打开。
 14. 主题切换两套 × 浅深色，逐页看有没有写死的颜色。
-15. 系统设置把文字调到最大，助理页、待处理、工作列表不截断关键信息、不重叠。
-16. iPad（全屏、分屏 1/2、Slide Over）：侧栏、图标栏、工具层、助理面板与改前一致。
+15. 系统设置把文字调到最大，助理页、行动区、待处理不截断关键信息、不重叠。
+16. iPad（全屏、分屏 1/2、Slide Over）：侧栏、图标栏、工具层、助理面板与改前一致；iPad 助理面板里 `create_workspace` 确认卡文案正确。
+16a. 菜单抽屉：☰ 打开时键盘收起；点主题 / 统计会先关抽屉再弹 sheet；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
+17. 网页 / iPad 上仍能看到助理委派出去的子会话，并能继续在里面聊（iPhone 不显示，其它端保留）。
 
 ---
 
@@ -859,9 +713,10 @@ xcodebuild -project Jiebo.xcodeproj -scheme Jiebo \
 
 ## 11. 明确不做
 
-- 不改 iPad 和网页的布局。
-- 不改 WebSocket 协议、不改网关（P7 除外，且 P7 本轮不做）。
-- 不在 iPhone 上做常驻编辑器、分栏、底部终端栏。
+- 不改 iPad 和网页的布局与能力。
+- 不做「插话」：子会话运行中，用户不能直接给它发消息。
+- iPhone 不显示工作区、历史会话、子会话对话，不提供文件 / 搜索 / Git / 终端 / Loop 入口，不做 diff 查看与还原。
+- 不用系统 `TabView`，也没有任何形式的底栏（不变量 1）。
 - 不允许在助理会话里新开会话、改名、删除。
-- 不用系统 `TabView`（不变量 1）。
 - 不写死任何颜色值，不另做一套深浅色。
+- APNs、小组件、分享扩展本轮不做（P6）。

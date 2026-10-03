@@ -185,8 +185,14 @@ export default function AssistantPanel({
                     return (
                       <div key={item.id} className="approval-row assistant-approval">
                         <span>
-                          委派「{owner?.title || "未命名"}」要{item.tool === "shell" ? "跑命令" : "改文件"}
-                          {item.summary ? `：${item.summary}` : ""}
+                          {item.tool === "create_workspace" ? (
+                            <>助理想新建工作区：{item.summary}</>
+                          ) : (
+                            <>
+                              委派「{owner?.title || "未命名"}」要{item.tool === "shell" ? "跑命令" : "改文件"}
+                              {item.summary ? `：${item.summary}` : ""}
+                            </>
+                          )}
                         </span>
                         <button type="button" className="pill" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: true })}>
                           批准
@@ -194,9 +200,11 @@ export default function AssistantPanel({
                         <button type="button" className="pill" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: false })}>
                           拒绝
                         </button>
-                        <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
-                          看子会话
-                        </button>
+                        {item.tool === "create_workspace" ? null : (
+                          <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
+                            看子会话
+                          </button>
+                        )}
                       </div>
                     );
                   })}

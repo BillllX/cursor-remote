@@ -30,6 +30,8 @@ export type ToolHost = {
   onChanged?: () => void;
   delegate?: (args: { workspace: string; task: string; title?: string }) => Promise<string>;
   delegationStatus?: (id?: string) => string;
+  /** 请用户确认后新建工作区；用户同意才会真正建 */
+  createWorkspace?: (args: { name: string; reason: string }) => Promise<string>;
   workspaces?: () => string[];
 };
 
@@ -288,6 +290,18 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       ["workspace", "task"],
       async (args) => host.delegate!({ workspace: str(args.workspace), task: str(args.task), title: str(args.title) || undefined }),
     );
+    if (role === "chat" && host.createWorkspace) {
+      out.create_workspace = tool(
+        [
+          "新建一个子工作区（用户根目录下的新文件夹）。会先弹确认卡问用户，同意了才建，没回应或拒绝都不会建。",
+          "只在 delegate 要用的工作区还不存在、而且任务值得单独成一个项目时才用；已有合适的工作区就直接 delegate。",
+          "返回 ok:true 后再用同一个名字 delegate。被拒绝就别再问同一个名字，换个办法或直接告诉用户。",
+        ].join(""),
+        { name: S("工作区名字，短而清楚，如 acrabat；不能以点开头，不能含 .."), reason: S("一句话说明为什么要建，用户会在确认卡上看到") },
+        ["name", "reason"],
+        async (args) => host.createWorkspace!({ name: str(args.name), reason: str(args.reason) }),
+      );
+    }
     if (host.delegationStatus) {
       out.delegation_status = tool("查看委派的进度和结果。不填 id 列出最近的委派。", { id: S("可选") }, [], (args) =>
         host.delegationStatus!(str(args.id) || undefined),

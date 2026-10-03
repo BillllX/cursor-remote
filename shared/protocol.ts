@@ -118,7 +118,9 @@ export type AssistantOp =
   | "push_unsubscribe"
   | "push_test"
   /** args: { chatId, callId, allow }；作答委派子会话的挂起审批 */
-  | "approval_answer";
+  | "approval_answer"
+  /** args: { delegationId }；停掉一项在跑或等批准的前台委派 */
+  | "delegation_cancel";
 
 /** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
 export type PolicyId = "baseline" | "plane";

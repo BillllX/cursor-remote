@@ -437,6 +437,28 @@ try {
   delegations.updateDelegation(aref, d.id, { status: "awaiting" });
   const stale = delegations.recoverDelegations(aref);
   check(stale.length === 1 && delegations.getDelegation(aref, d.id)?.status === "failed", "委派：重启时待批的委派记为失败");
+
+  /* ── 助理新建工作区：先问用户 ── */
+  const wsa = await import("./assistant/workspaceAsk.ts");
+  const wref = { id: "t6", stateDir: resolve(dir, "t6") };
+  let changes = 0;
+  const pending = wsa.askWorkspace(wref, { chatId: "asst", name: "acrabat", reason: "讲稿要单独成项目" }, () => (changes += 1));
+  const ask = approvals.listApprovals(wref)[0];
+  check(ask?.tool === "create_workspace" && ask.chatId === "asst" && ask.summary.includes("acrabat") && changes === 1, "建工作区：挂起一项确认，并通知客户端刷新");
+  check(inbox.listInbox(wref).some((row) => row.kind === "approval" && row.title.includes("acrabat")), "建工作区：收件箱同步一条待批准消息");
+  check(!wsa.answerWorkspaceAsk(wref, "other", ask.callId, true), "建工作区：会话对不上不能作答");
+  check(!wsa.answerWorkspaceAsk({ id: "t7", stateDir: wref.stateDir }, "asst", ask.callId, true), "建工作区：租户对不上不能作答");
+  check(wsa.answerWorkspaceAsk(wref, "asst", ask.callId, true) && (await pending) === "allowed", "建工作区：同意后工具调用继续");
+  check(approvals.listApprovals(wref).length === 0 && changes === 2, "建工作区：作答后摘掉确认并再次通知");
+  check(!wsa.answerWorkspaceAsk(wref, "asst", ask.callId, true), "建工作区：同一项不能答两次");
+  const no = wsa.askWorkspace(wref, { chatId: "asst", name: "x", reason: "" }, () => {});
+  wsa.answerWorkspaceAsk(wref, "asst", approvals.listApprovals(wref)[0].callId, false);
+  check((await no) === "denied", "建工作区：拒绝");
+  const late = await wsa.askWorkspace(wref, { chatId: "asst", name: "y", reason: "", ttlMs: 30 }, () => {});
+  check(late === "expired" && approvals.listApprovals(wref).length === 0, "建工作区：超时按取消处理并摘掉确认");
+  const wnames = (role: "chat" | "schedule" | "loop") =>
+    Object.keys(tools.assistantTools({ ref, role, delegate: async () => "", createWorkspace: async () => "", workspaces: () => [] }));
+  check(wnames("chat").includes("create_workspace") && !wnames("schedule").includes("create_workspace") && !wnames("loop").includes("create_workspace"), "工具：只有前台对话能请求建工作区，定时和后台不能");
 } catch (err) {
   failed += 1;
   console.log(`FAIL  冒烟异常：${err instanceof Error ? err.stack : String(err)}`);

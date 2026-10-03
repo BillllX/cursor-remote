@@ -49,12 +49,20 @@ export type DelegateRequest = {
   background: boolean;
 };
 
+export type CreateWorkspaceRequest = {
+  tenant: AssistantTenant;
+  name: string;
+  reason: string;
+  parentChatId?: string;
+};
+
 export type AssistantDeps = {
   tenants: () => AssistantTenant[];
   publish: (tenantId: string, message: ServerMessage) => void;
   globalStateDir: string;
   delegate: (req: DelegateRequest) => Promise<string>;
   workspaces: (tenant: AssistantTenant) => string[];
+  createWorkspace: (req: CreateWorkspaceRequest) => Promise<string>;
   /** 推送点开后跳转的页面地址前缀，如 https://host/cursor-remote/ */
   appUrl: () => string;
 };
@@ -97,6 +105,10 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
       role === "chat" || role === "schedule"
         ? (args) => deps!.delegate({ tenant, ...args, parentChatId: chatId, background: role === "schedule" })
         : undefined,
+    createWorkspace:
+      role === "chat" && chatId
+        ? (args) => deps!.createWorkspace({ tenant, ...args, parentChatId: chatId })
+        : undefined,
     delegationStatus: (id) => delegationStatusText(ref, id),
     workspaces: () => deps?.workspaces(tenant) ?? [],
   };
@@ -118,7 +130,10 @@ export function userRootPreamble(tenant: AssistantTenant) {
   const block = renderMemoryBlock(refOf(tenant));
   return [
     `你是用户的个人助理，名字是「${name}」。这里是${name}的工作区（用户根目录）。`,
-    "你有一组助理工具：memory_*（个人记忆）、chat_search（历史会话）、todo_*（待办）、schedule_*（定时任务和提醒）、inbox_post（收件箱）、delegate（交给子工作区去做）。",
+    "你有一组助理工具：memory_*（个人记忆）、chat_search（历史会话）、todo_*（待办）、schedule_*（定时任务和提醒）、inbox_post（收件箱）、delegate（交给子工作区去做）、create_workspace（新建子工作区，需用户确认）。",
+    "用户让你在某个项目里干活时，不要自己改文件：用 delegate 交给对应的子工作区，并用 delegation_status 跟进。同一个工作区一次只能有一项委派。",
+    "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
+    "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
     "用户说“记住…”时调用 memory_save（basis=user_said）。用户说“提醒我…”时用 schedule_set 或带时间的 todo_add。",
     block,
   ]
