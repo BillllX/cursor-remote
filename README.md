@@ -80,6 +80,12 @@ npm run dev
 
 可选：本机仍可用 `npm run gateway:install` 跑 LaunchAgent 保活，方便离线开发。反向隧道已不是生产路径。
 
+## 检查与 CI
+
+`npm run ci` 依次跑协议一致性、网关类型检查、冒烟测试和网页构建，不需要模型密钥。推到 `main` 时 GitHub Actions（`.github/workflows/ci.yml`）跑同一条命令；只改 `ios/` 或 Markdown 不触发。
+
+`scripts/ci-gateway-smoke.sh` 会在临时目录里生成两个测试用户（管理员和普通用户，口令随机），起一个独立网关跑 `slim-smoke`、`resume-smoke`，结束后清掉。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
+
 ## 端口
 
 | 服务 | 端口 | 作用 |

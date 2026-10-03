@@ -5,7 +5,11 @@ const require = createRequire(new URL("../gateway/package.json", import.meta.url
 const WebSocket = require("ws");
 
 const url = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
-const token = process.env.CURSOR_REMOTE_TOKEN || "73dk2DLV9j";
+const token = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
+if (!token) {
+  console.error("缺少 CURSOR_REMOTE_TOKEN：请用测试用户的口令，不要用真实用户的。");
+  process.exit(2);
+}
 const chatId = `loop-smoke-${Date.now()}`;
 const ws = new WebSocket(url);
 let pass = 0;

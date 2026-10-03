@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // resume_session 宽容化冒烟（P7 后）：agentId 不匹配应回 session 自愈，不再报「不能恢复别人的会话」。
-// 用法: node scripts/resume-smoke.mjs   （默认连本地 dev gateway 127.0.0.1:8787，token 从模拟器 UserDefaults 读）
+// 用法: CURSOR_REMOTE_TOKEN=<测试用户口令> node scripts/resume-smoke.mjs   （默认连本地 dev gateway 127.0.0.1:8787）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 
 const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
-const TOKEN = process.env.CURSOR_REMOTE_TOKEN || "73dk2DLV9j";
+const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
+if (!TOKEN) {
+  console.error("缺少 CURSOR_REMOTE_TOKEN：请用测试用户的口令，不要用真实用户的。");
+  process.exit(2);
+}
 const chatId = `resume-smoke-${randomUUID().slice(0, 8)}`;
 const inbox = [];
 let cursor = 0;

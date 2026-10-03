@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "ios/**"
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "ios/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 协议双份一致
+        run: npm run check:protocol
+      - name: 网关类型检查
+        run: npm run build -w gateway
+      - name: 冒烟测试（无模型密钥，临时测试用户）
+        run: npm run ci:smoke
+      - name: 网页构建（含类型检查）
+        run: npm run build -w web

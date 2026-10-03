@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // P8 slim_state / load_chat 分页冒烟（本地 dev gateway）。
-// 用法: node scripts/slim-smoke.mjs   （默认连 127.0.0.1:8787，token 同 resume-smoke）
+// 用法: CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/slim-smoke.mjs   （默认连 127.0.0.1:8787）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 
 const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
-const TOKEN = process.env.CURSOR_REMOTE_TOKEN || "73dk2DLV9j";
+const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
+if (!TOKEN) {
+  console.error("缺少 CURSOR_REMOTE_TOKEN：请用测试用户的口令，不要用真实用户的。");
+  process.exit(2);
+}
 const chatId = `slim-smoke-${randomUUID().slice(0, 8)}`;
 const TURNS = 95; // 40/页 → 3 页（55..94, 15..54, 0..14）
 const BIG = "巨".repeat(300_000); // ~900KB 单 turn，超 80% 帧预算 → 应被 clip
