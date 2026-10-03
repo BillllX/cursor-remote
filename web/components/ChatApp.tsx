@@ -1554,7 +1554,15 @@ export default function ChatApp() {
   chatsRef.current = chats;
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
+  // -1 表示离开时贴在底部，回来继续贴底
   const scrollMap = useRef<Record<string, number>>({});
+  const stickRef = useRef(true);
+  const lastTopRef = useRef(0);
+  const restoreRef = useRef<number | null>(null);
+  const restoreTimerRef = useRef(0);
+  const expectTopRef = useRef(-1);
+  const shownChatRef = useRef("");
+  const [jumpState, setJumpState] = useState<"" | "far" | "new">("");
   const draftRef = useRef(draft);
   const imagesRef = useRef<Record<string, PromptImage[]>>({});
   const newChatRef = useRef<() => void>(() => {});
@@ -3466,41 +3474,102 @@ export default function ChatApp() {
     };
   }, [send]);
 
-  const scrollThreadToEnd = useCallback(() => {
-    const run = () => {
-      const el = threadRef.current;
-      if (!el) return;
-      el.scrollTop = el.scrollHeight;
-      scrollMap.current[activeIdRef.current] = el.scrollTop;
-    };
-    run();
-    requestAnimationFrame(() => {
-      run();
-      requestAnimationFrame(run);
-    });
-    window.setTimeout(run, 80);
-    window.setTimeout(run, 320);
+  // 只在“贴底”时跟随新内容；用户往上翻过就不再拽回，直到他自己回到底部或点“回到最新”。
+  // 代码挪动滚动位置时记下目标值，onScroll 据此区分“程序滚”和“用户滚”（滚轮、键盘、拖滚动条、查找跳转）。
+  const moveThread = useCallback((el: HTMLDivElement, top: number) => {
+    el.scrollTop = top;
+    expectTopRef.current = el.scrollTop;
+    lastTopRef.current = el.scrollTop;
   }, []);
 
-  useEffect(() => {
+  // 待还原优先；否则贴底时跟到最底。正文还在分段加载时，等够高了再还原。
+  const reconcileThread = useCallback(() => {
     const el = threadRef.current;
     if (!el) return;
-    if (busy) {
-      el.scrollTop = el.scrollHeight;
+    const want = restoreRef.current;
+    if (want != null) {
+      if (el.scrollHeight - el.clientHeight >= want) {
+        moveThread(el, want);
+        restoreRef.current = null;
+      }
       return;
     }
-    const saved = scrollMap.current[activeId];
-    if (saved != null) el.scrollTop = saved;
-    else el.scrollTop = el.scrollHeight;
-  }, [active?.turns, busy, activeId]);
+    if (stickRef.current) moveThread(el, el.scrollHeight);
+  }, [moveThread]);
 
-  const previewMaxWasRef = useRef(previewMax);
+  const scrollThreadToEnd = useCallback((smooth = false) => {
+    const el = threadRef.current;
+    stickRef.current = true;
+    restoreRef.current = null;
+    setJumpState("");
+    if (!el) return;
+    scrollMap.current[activeIdRef.current] = -1;
+    const far = el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 3;
+    if (smooth && !far) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+      return;
+    }
+    reconcileThread();
+    requestAnimationFrame(reconcileThread);
+  }, [reconcileThread]);
+
+  const onThreadScroll = useCallback(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    const programmatic = Math.abs(top - expectTopRef.current) <= 1;
+    expectTopRef.current = -1;
+    if (!programmatic) restoreRef.current = null;
+    const dist = el.scrollHeight - top - el.clientHeight;
+    const movedUp = top < lastTopRef.current - 1;
+    lastTopRef.current = top;
+    if (dist <= 4) stickRef.current = true;
+    else if (movedUp && !programmatic) stickRef.current = false;
+    if (restoreRef.current == null) scrollMap.current[activeIdRef.current] = stickRef.current ? -1 : top;
+    const show = !stickRef.current && dist > 160;
+    setJumpState((prev) => (show ? prev || "far" : ""));
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    if (shownChatRef.current !== activeId) {
+      shownChatRef.current = activeId;
+      setJumpState("");
+      window.clearTimeout(restoreTimerRef.current);
+      const saved = scrollMap.current[activeId];
+      if (saved == null || saved < 0) {
+        stickRef.current = true;
+        restoreRef.current = null;
+      } else {
+        stickRef.current = false;
+        restoreRef.current = saved;
+        // 正文最终没那么高（被删减、折叠）时，不让还原一直挂着
+        restoreTimerRef.current = window.setTimeout(() => {
+          const node = threadRef.current;
+          const want = restoreRef.current;
+          restoreRef.current = null;
+          if (node && want != null) moveThread(node, Math.min(want, node.scrollHeight - node.clientHeight));
+        }, 1500);
+      }
+    }
+    const pending = restoreRef.current != null;
+    reconcileThread();
+    if (!pending && !stickRef.current && el.scrollHeight - el.scrollTop - el.clientHeight > 160) setJumpState("new");
+  }, [active?.turns, activeId, moveThread, reconcileThread]);
+
+  useEffect(() => () => window.clearTimeout(restoreTimerRef.current), []);
+
+  const hasThread = Boolean(active?.turns.length);
   useEffect(() => {
-    const was = previewMaxWasRef.current;
-    previewMaxWasRef.current = previewMax;
-    if (!was || previewMax) return;
-    scrollThreadToEnd();
-  }, [previewMax, scrollThreadToEnd]);
+    const el = threadRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    // 图片、代码高亮、折叠展开、查找栏开合这类不改 turns 的高度变化
+    const ro = new ResizeObserver(() => reconcileThread());
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [activeId, hasThread, threadFindOpen, reconcileThread]);
 
   function submit(raw?: string) {
     if (raw != null) draftRef.current = raw;
@@ -3533,6 +3602,7 @@ export default function ChatApp() {
       return;
     }
     const attached = images.slice(0, MAX_IMAGES);
+    scrollThreadToEnd();
     syncComposer("");
     setImages([]);
     imagesRef.current[activeIdRef.current] = [];
@@ -3588,7 +3658,9 @@ export default function ChatApp() {
       draftSaveTimerRef.current = 0;
     }
     const id = activeIdRef.current;
-    if (threadRef.current) scrollMap.current[id] = threadRef.current.scrollTop;
+    if (threadRef.current && restoreRef.current == null) {
+      scrollMap.current[id] = stickRef.current ? -1 : threadRef.current.scrollTop;
+    }
     const text = draftRef.current;
     imagesRef.current[id] = images;
     setChats((prev) =>
@@ -5841,7 +5913,11 @@ export default function ChatApp() {
             <p className="empty-foot empty-foot-land">对话列表在左侧 · 可粘贴图片</p>
           </div>
         ) : (
-            <div className="thread" ref={threadRef}>
+            <div
+              className="thread"
+              ref={threadRef}
+              onScroll={onThreadScroll}
+            >
               {threadFindOpen ? (
                 <div className="thread-find">
                   <input
@@ -6389,6 +6465,18 @@ export default function ChatApp() {
           </>
         ) : null}
             <div className="composer-dock">
+              {jumpState && !empty ? (
+                <button
+                  type="button"
+                  className={`thread-jump${jumpState === "new" ? " new" : ""}`}
+                  onClick={() => scrollThreadToEnd(true)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M8 3.5v8.5M4 8.5l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  {jumpState === "new" ? "有新内容" : "回到最新"}
+                </button>
+              ) : null}
               <div className="composer-wrap">
                 {(() => {
                   const mine = (assistantState?.delegations || []).filter(

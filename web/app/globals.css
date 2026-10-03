@@ -2191,6 +2191,46 @@ button[aria-pressed="true"] .rail-icon-tint,
   background: var(--bg);
 }
 
+.thread-jump {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+}
+
+.thread-jump:hover {
+  color: var(--text);
+}
+
+.thread-jump.new {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  color: var(--accent);
+}
+
+@media (pointer: coarse) {
+  .thread-jump {
+    height: 40px;
+    padding: 0 18px 0 14px;
+    font-size: 14px;
+  }
+}
+
 .composer-dock::before {
   content: "";
   position: absolute;
