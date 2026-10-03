@@ -1,21 +1,14 @@
 import SwiftUI
+import UIKit
 
 /// 个人助理：今日 / 收件箱 / 记忆。对齐 web/components/AssistantPanel.tsx（通知页是浏览器推送，iOS 不做）
 /// 挂在工具层里：标题、关闭和提示条由 ToolLayerOverlay 画，这里只画内容。
+/// 三个 pane（AssistantTodayPane / AssistantInboxList / AssistantMemoryPane）在本文件下方，iPhone 的页面直接复用。
 struct AssistantView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabThumb
     @State private var tab: AssistantTab = .today
-    @State private var todoDraft = ""
-    @State private var memTopic = ""
-    @State private var memText = ""
-    /// 非 nil 时核心档案在原地编辑
-    @State private var coreDrafts: [String: String]?
-    @State private var editingEntryId: String?
-    @State private var entryTopic = ""
-    @State private var entryText = ""
-    @State private var purgeTarget: AssistantMemoryEntry?
 
     private var state: AssistantState? { store.assistantState }
 
@@ -27,9 +20,9 @@ struct AssistantView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     switch tab {
-                    case .today: todayPane
-                    case .inbox: inboxPane
-                    case .memory: memoryPane
+                    case .today: AssistantTodayPane()
+                    case .inbox: AssistantInboxList()
+                    case .memory: AssistantMemoryPane()
                     }
                 }
                 .padding(14)
@@ -42,19 +35,6 @@ struct AssistantView: View {
         .onChange(of: tab) { _, next in
             if next == .memory { store.requestAssistant(memory: true) }
         }
-        .alert("彻底删除这条记忆？", isPresented: purgePresented, presenting: purgeTarget) { entry in
-            Button("彻底删除", role: .destructive) {
-                store.assistantOp("memory_purge", args: ["id": .string(entry.id)])
-                purgeTarget = nil
-            }
-            Button("取消", role: .cancel) { purgeTarget = nil }
-        } message: { entry in
-            Text("「\(entry.topic.nilIfEmpty ?? "未分类")」会从记忆文件里抹掉，不能恢复。")
-        }
-    }
-
-    private var purgePresented: Binding<Bool> {
-        Binding(get: { purgeTarget != nil }, set: { if !$0 { purgeTarget = nil } })
     }
 
     private func tabTitle(_ item: AssistantTab) -> String {
@@ -120,11 +100,91 @@ struct AssistantView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
     }
+}
 
-    // MARK: 今日
+enum AssistantTab: String, CaseIterable, Identifiable {
+    case today, inbox, memory
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .today: return "今日"
+        case .inbox: return "收件箱"
+        case .memory: return "记忆"
+        }
+    }
+}
+
+extension AssistantDelegation {
+    var statusLabel: String {
+        switch status {
+        case "running": return "进行中"
+        case "awaiting": return "待批"
+        case "done": return "完成"
+        case "failed": return "失败"
+        default: return status
+        }
+    }
+
+    var statusColors: (fg: Color, bg: Color) {
+        switch status {
+        case "running": return (JieboColor.run, JieboColor.runBg)
+        case "awaiting": return (JieboColor.warnFg, JieboColor.warnBg)
+        case "done": return (JieboColor.ok, JieboColor.okBg)
+        case "failed": return (JieboColor.danger, JieboColor.dangerBg)
+        default: return (JieboColor.dim, JieboColor.mist)
+        }
+    }
+}
+
+// MARK: - 今日 pane
+
+/// 简报、待批、待办、日程、委派。调用方负责 ScrollView 和内边距。
+/// iPad 全开；iPhone 的今日面板传 showsApprovals: false / showsDelegations: false（它们在行动区和待处理里）。
+/// 锚点：待办区 `.id("todos")`，日程区 `.id("schedules")`，供 ScrollViewReader 滚动。
+struct AssistantTodayPane: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var showsApprovals: Bool
+    var showsDelegations: Bool
+    /// 预留：今日页本身不含收件箱，保留参数让调用方写法统一
+    var showsInbox: Bool
+    @State private var todoDraft = ""
+    @State private var doneExpanded = false
+
+    init(showsApprovals: Bool = true, showsDelegations: Bool = true, showsInbox: Bool = true) {
+        self.showsApprovals = showsApprovals
+        self.showsDelegations = showsDelegations
+        self.showsInbox = showsInbox
+    }
+
+    private var state: AssistantState? { store.assistantState }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            briefSection
+            if showsApprovals, let approvals = state?.approvals, !approvals.isEmpty {
+                AssistantSection("待批 (\(approvals.count))") {
+                    ForEach(approvals) { approval in
+                        ApprovalCard(approval: approval, style: .plain)
+                    }
+                }
+            }
+            todoSection
+            scheduleSection
+            if showsDelegations, let delegations = state?.delegations, !delegations.isEmpty {
+                AssistantSection("委派") {
+                    ForEach(delegations.prefix(8)) { row in
+                        delegationCard(row)
+                    }
+                }
+            }
+        }
+    }
 
     @ViewBuilder
-    private var todayPane: some View {
+    private var briefSection: some View {
         if let brief = state?.brief?.text.trimmingCharacters(in: .whitespacesAndNewlines), !brief.isEmpty {
             AssistantSection("简报") {
                 Text(brief)
@@ -134,18 +194,16 @@ struct AssistantView: View {
                     .assistantCard()
             }
         } else {
-            mutedText("今天还没有简报。定时任务会在设定时刻生成。")
+            AssistantMutedText("今天还没有简报。定时任务会在设定时刻生成。")
         }
+    }
 
-        if let approvals = state?.approvals, !approvals.isEmpty {
-            AssistantSection("待批 (\(approvals.count))") {
-                ForEach(approvals) { approval in
-                    approvalCard(approval)
-                }
-            }
-        }
+    // MARK: 待办
 
-        AssistantSection("待办") {
+    private var todoSection: some View {
+        let openTodos = state?.todos.filter { !$0.done } ?? []
+        let doneTodos = (state?.todos.filter(\.done) ?? []).sorted { ($0.doneAt ?? 0) > ($1.doneAt ?? 0) }
+        return AssistantSection("待办") {
             HStack(spacing: 8) {
                 TextField("加一条待办", text: $todoDraft)
                     .textFieldStyle(.roundedBorder)
@@ -155,51 +213,68 @@ struct AssistantView: View {
                 ActionButton(title: "添加", kind: .primary, action: addTodo)
                     .disabled(todoDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            let open = state?.todos.filter { !$0.done } ?? []
-            if open.isEmpty {
-                mutedText("没有未完成的待办。")
+            if openTodos.isEmpty {
+                AssistantMutedText("没有未完成的待办。")
             } else {
-                ForEach(open) { todo in
-                    HStack(spacing: 8) {
-                        Text(todo.text)
-                            .font(JieboFont.ui(14))
-                            .foregroundStyle(JieboColor.ink)
-                        if let due = todo.due {
-                            StatusTag(text: due, fg: JieboColor.ink2, bg: JieboColor.mist)
+                ForEach(openTodos) { todo in
+                    SwipeDeleteRow(onDelete: { removeTodo(todo) }) {
+                        HStack(spacing: 8) {
+                            Text(todo.text)
+                                .font(JieboFont.ui(14))
+                                .foregroundStyle(JieboColor.ink)
+                            if let due = todo.due {
+                                StatusTag(text: due, fg: JieboColor.ink2, bg: JieboColor.mist)
+                            }
+                            Spacer(minLength: 8)
+                            ActionButton(title: "完成") {
+                                store.assistantOp("todo_done", args: ["id": .string(todo.id)])
+                            }
                         }
-                        Spacer(minLength: 8)
-                        ActionButton(title: "完成") {
-                            store.assistantOp("todo_done", args: ["id": .string(todo.id)])
+                        .assistantCard()
+                    }
+                }
+            }
+            if !doneTodos.isEmpty {
+                doneHeader(count: doneTodos.count)
+                if doneExpanded {
+                    ForEach(doneTodos.prefix(30)) { todo in
+                        HStack(spacing: 8) {
+                            Text(todo.text)
+                                .font(JieboFont.ui(14))
+                                .strikethrough()
+                                .foregroundStyle(JieboColor.dim)
+                            Spacer(minLength: 8)
+                            ActionButton(title: "撤销") {
+                                store.assistantOp("todo_undo", args: ["id": .string(todo.id)])
+                            }
                         }
+                        .assistantCard()
                     }
-                    .assistantCard()
                 }
             }
         }
+        .id("todos")
+    }
 
-        if let schedules = state?.schedules, !schedules.isEmpty {
-            AssistantSection("日程") {
-                ForEach(schedules) { row in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(row.title.nilIfEmpty ?? row.cron)
-                            .font(JieboFont.ui(14, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink)
-                        Text(scheduleLine(row))
-                            .font(JieboFont.ui(12))
-                            .foregroundStyle(row.enabled ? JieboColor.dim : JieboColor.warnFg)
-                    }
-                    .assistantCard()
-                }
+    private func doneHeader(count: Int) -> some View {
+        Button {
+            withAnimation(JieboMotion.snappy(reduceMotion)) { doneExpanded.toggle() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: doneExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                Text("已完成 (\(count))")
+                    .font(JieboFont.ui(13, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 36)
+            .contentShape(Rectangle())
         }
-
-        if let delegations = state?.delegations, !delegations.isEmpty {
-            AssistantSection("委派") {
-                ForEach(delegations.prefix(8)) { row in
-                    delegationCard(row)
-                }
-            }
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("已完成 \(count) 项，\(doneExpanded ? "点按收起" : "点按展开")")
     }
 
     private func addTodo() {
@@ -209,34 +284,52 @@ struct AssistantView: View {
         todoDraft = ""
     }
 
+    private func removeTodo(_ todo: AssistantTodo) {
+        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+    }
+
+    // MARK: 日程
+
+    @ViewBuilder
+    private var scheduleSection: some View {
+        if let schedules = state?.schedules, !schedules.isEmpty {
+            AssistantSection("日程") {
+                ForEach(schedules) { row in
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.title.nilIfEmpty ?? row.cron)
+                                .font(JieboFont.ui(14, weight: .semibold))
+                                .foregroundStyle(JieboColor.ink)
+                            Text(scheduleLine(row))
+                                .font(JieboFont.ui(12))
+                                .foregroundStyle(row.enabled ? JieboColor.dim : JieboColor.warnFg)
+                        }
+                        Spacer(minLength: 8)
+                        Toggle(row.title.nilIfEmpty ?? row.cron, isOn: scheduleBinding(row))
+                            .labelsHidden()
+                            .tint(JieboColor.pine)
+                    }
+                    .assistantCard()
+                }
+            }
+            .id("schedules")
+        }
+    }
+
+    private func scheduleBinding(_ row: AssistantSchedule) -> Binding<Bool> {
+        Binding(
+            get: { row.enabled },
+            set: { on in store.assistantSetScheduleEnabled(row.id, enabled: on) }
+        )
+    }
+
     private func scheduleLine(_ row: AssistantSchedule) -> String {
         var line = "\(row.cron) · \(row.enabled ? "启用" : "暂停")"
         if let reason = row.pausedReason { line += " · \(reason)" }
         return line
     }
 
-    private func approvalCard(_ approval: AssistantApproval) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(approval.tool.nilIfEmpty ?? "工具调用")
-                .font(JieboFont.ui(14, weight: .semibold))
-                .foregroundStyle(JieboColor.ink)
-            if !approval.summary.isEmpty {
-                Text(approval.summary)
-                    .font(JieboFont.mono(12))
-                    .foregroundStyle(JieboColor.ink2)
-                    .lineLimit(6)
-            }
-            HStack(spacing: 8) {
-                ActionButton(title: "批准", kind: .primary) {
-                    store.answerAssistantApproval(approval, allow: true)
-                }
-                ActionButton(title: "拒绝", kind: .secondary) {
-                    store.answerAssistantApproval(approval, allow: false)
-                }
-            }
-        }
-        .assistantCard()
-    }
+    // MARK: 委派（iPad）
 
     private func delegationCard(_ row: AssistantDelegation) -> some View {
         let openable = !row.childChatId.isEmpty && store.chats.contains(where: { $0.id == row.childChatId })
@@ -278,60 +371,162 @@ struct AssistantView: View {
         .buttonStyle(.plain)
         .disabled(!openable)
     }
+}
 
-    // MARK: 收件箱
+/// 在 ScrollView 里也能「左滑删除」的行（系统 swipeActions 只在 List 里有效）。
+/// 向左拖露出「删除」，再点一下删除；往回拖或点内容收起。VoiceOver 走自定义动作「删除」。
+private struct SwipeDeleteRow<Content: View>: View {
+    let onDelete: () -> Void
+    let content: Content
 
-    @ViewBuilder
-    private var inboxPane: some View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var offset: CGFloat = 0
+    @State private var revealed = false
+
+    private let actionWidth: CGFloat = 72
+
+    init(onDelete: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.onDelete = onDelete
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Button {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                onDelete()
+            } label: {
+                Text("删除")
+                    .font(JieboFont.ui(14, weight: .semibold))
+                    .foregroundStyle(JieboColor.fillFg)
+                    .frame(width: actionWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(JieboColor.danger)
+            }
+            .buttonStyle(.plain)
+            .opacity(offset < 0 ? 1 : 0)
+            .accessibilityHidden(true)
+
+            content
+                .offset(x: offset)
+                .simultaneousGesture(dragGesture)
+                .accessibilityAction(named: "删除", onDelete)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 16)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                let base: CGFloat = revealed ? -actionWidth : 0
+                offset = min(0, max(-actionWidth - 24, base + value.translation.width))
+            }
+            .onEnded { _ in
+                let open = offset < -actionWidth / 2
+                withAnimation(JieboMotion.snappy(reduceMotion)) {
+                    revealed = open
+                    offset = open ? -actionWidth : 0
+                }
+            }
+    }
+}
+
+// MARK: - 收件箱 pane（iPad；iPhone 用 InboxHome）
+
+struct AssistantInboxList: View {
+    @Environment(ChatStore.self) private var store
+
+    init() {}
+
+    var body: some View {
+        let state = store.assistantState
         let items = state?.inbox ?? []
-        if items.isEmpty {
-            mutedText(state == nil ? "正在加载…" : "收件箱是空的。")
-        } else {
-            ForEach(items) { item in
-                Button {
-                    store.openAssistantInboxItem(item)
-                } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Circle()
-                            .fill(item.read ? Color.clear : JieboColor.pine)
-                            .frame(width: 7, height: 7)
-                            .padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title)
-                                .font(JieboFont.ui(14, weight: item.read ? .regular : .semibold))
-                                .foregroundStyle(item.read ? JieboColor.ink2 : JieboColor.ink)
-                                .multilineTextAlignment(.leading)
-                            Text(formatMillis(item.createdAt))
-                                .font(JieboFont.ui(11))
-                                .foregroundStyle(JieboColor.dim)
-                            if !item.body.isEmpty {
-                                Text(String(item.body.prefix(240)))
-                                    .font(JieboFont.ui(13))
-                                    .foregroundStyle(JieboColor.ink2)
+        VStack(alignment: .leading, spacing: 20) {
+            if items.isEmpty {
+                AssistantMutedText(state == nil ? "正在加载…" : "收件箱是空的。")
+            } else {
+                ForEach(items) { item in
+                    Button {
+                        store.openAssistantInboxItem(item)
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Circle()
+                                .fill(item.read ? Color.clear : JieboColor.pine)
+                                .frame(width: 7, height: 7)
+                                .padding(.top, 6)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.title)
+                                    .font(JieboFont.ui(14, weight: item.read ? .regular : .semibold))
+                                    .foregroundStyle(item.read ? JieboColor.ink2 : JieboColor.ink)
                                     .multilineTextAlignment(.leading)
-                                    .lineLimit(4)
+                                Text(assistantFormatMillis(item.createdAt))
+                                    .font(JieboFont.ui(11))
+                                    .foregroundStyle(JieboColor.dim)
+                                if !item.body.isEmpty {
+                                    Text(String(item.body.prefix(240)))
+                                        .font(JieboFont.ui(13))
+                                        .foregroundStyle(JieboColor.ink2)
+                                        .multilineTextAlignment(.leading)
+                                        .lineLimit(4)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                            if item.chatId != nil {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(JieboColor.dim)
+                                    .padding(.top, 4)
                             }
                         }
-                        Spacer(minLength: 0)
-                        if item.chatId != nil {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(JieboColor.dim)
-                                .padding(.top, 4)
-                        }
+                        .assistantCard(highlight: !item.read)
+                        .contentShape(Rectangle())
                     }
-                    .assistantCard(highlight: !item.read)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
+}
 
-    // MARK: 记忆
+// MARK: - 记忆 pane
+
+struct AssistantMemoryPane: View {
+    @Environment(ChatStore.self) private var store
+    @State private var memTopic = ""
+    @State private var memText = ""
+    /// 非 nil 时核心档案在原地编辑
+    @State private var coreDrafts: [String: String]?
+    @State private var editingEntryId: String?
+    @State private var entryTopic = ""
+    @State private var entryText = ""
+    @State private var purgeTarget: AssistantMemoryEntry?
+
+    init() {}
+
+    private var state: AssistantState? { store.assistantState }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            memoryContent
+        }
+        .alert("彻底删除这条记忆？", isPresented: purgePresented, presenting: purgeTarget) { entry in
+            Button("彻底删除", role: .destructive) {
+                store.assistantOp("memory_purge", args: ["id": .string(entry.id)])
+                purgeTarget = nil
+            }
+            Button("取消", role: .cancel) { purgeTarget = nil }
+        } message: { entry in
+            Text("「\(entry.topic.nilIfEmpty ?? "未分类")」会从记忆文件里抹掉，不能恢复。")
+        }
+    }
+
+    private var purgePresented: Binding<Bool> {
+        Binding(get: { purgeTarget != nil }, set: { if !$0 { purgeTarget = nil } })
+    }
 
     @ViewBuilder
-    private var memoryPane: some View {
+    private var memoryContent: some View {
         if let memory = state?.memory {
             AssistantSection("核心档案") {
                 if coreDrafts != nil {
@@ -375,7 +570,7 @@ struct AssistantView: View {
             let invalid = memory.entries.filter { !$0.isValid }
             AssistantSection("有效 (\(valid.count))") {
                 if valid.isEmpty {
-                    mutedText("还没有记忆条目。")
+                    AssistantMutedText("还没有记忆条目。")
                 } else {
                     ForEach(valid.prefix(120)) { entry in
                         entryCard(entry)
@@ -390,7 +585,7 @@ struct AssistantView: View {
                 }
             }
         } else {
-            mutedText("正在加载记忆…")
+            AssistantMutedText("正在加载记忆…")
         }
     }
 
@@ -556,152 +751,7 @@ struct AssistantView: View {
         editingEntryId = nil
     }
 
-    // MARK: 杂项
-
     private func trimmed(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func mutedText(_ text: String) -> some View {
-        Text(text)
-            .font(JieboFont.ui(13))
-            .foregroundStyle(JieboColor.dim)
-    }
-
-    private func formatMillis(_ millis: Double) -> String {
-        guard millis > 0 else { return "" }
-        return Date(timeIntervalSince1970: millis / 1000).formatted(date: .abbreviated, time: .shortened)
-    }
-}
-
-enum AssistantTab: String, CaseIterable, Identifiable {
-    case today, inbox, memory
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .today: return "今日"
-        case .inbox: return "收件箱"
-        case .memory: return "记忆"
-        }
-    }
-}
-
-extension AssistantDelegation {
-    var statusLabel: String {
-        switch status {
-        case "running": return "进行中"
-        case "awaiting": return "待批"
-        case "done": return "完成"
-        case "failed": return "失败"
-        default: return status
-        }
-    }
-
-    var statusColors: (fg: Color, bg: Color) {
-        switch status {
-        case "running": return (JieboColor.run, JieboColor.runBg)
-        case "awaiting": return (JieboColor.warnFg, JieboColor.warnBg)
-        case "done": return (JieboColor.ok, JieboColor.okBg)
-        case "failed": return (JieboColor.danger, JieboColor.dangerBg)
-        default: return (JieboColor.dim, JieboColor.mist)
-        }
-    }
-}
-
-private struct AssistantSection<Content: View>: View {
-    var title: String
-    var content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(JieboFont.ui(12, weight: .semibold))
-                .tracking(0.4)
-                .foregroundStyle(JieboColor.dim)
-            content
-        }
-    }
-}
-
-/// 与侧栏会话行的「跑」标同一形状：小号字、浅底胶囊
-private struct StatusTag: View {
-    var text: String
-    var fg: Color
-    var bg: Color
-
-    var body: some View {
-        Text(text)
-            .font(JieboFont.ui(10, weight: .medium))
-            .foregroundStyle(fg)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(bg)
-            .clipShape(Capsule())
-    }
-}
-
-/// 按钮沿用现有两套：主/次与输入框待批条的「允许 / 拒绝」一致，描边与工具层顶栏的「保留 / 还原」一致
-private struct ActionButton: View {
-    enum Kind { case primary, secondary, outline, destructive }
-
-    var title: String
-    var kind: Kind = .outline
-    var action: () -> Void
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .font(JieboFont.ui(13, weight: kind == .primary ? .semibold : .medium))
-            .foregroundStyle(foreground)
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-            .overlay {
-                if kind == .outline || kind == .destructive {
-                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
-                }
-            }
-            .opacity(isEnabled ? 1 : 0.45)
-            .hitTarget(36)
-    }
-
-    private var foreground: Color {
-        switch kind {
-        case .primary: return JieboColor.fillFg
-        case .secondary: return JieboColor.ink
-        case .outline: return JieboColor.ink
-        case .destructive: return JieboColor.danger
-        }
-    }
-
-    private var background: Color {
-        switch kind {
-        case .primary: return JieboColor.pine
-        case .secondary: return JieboColor.mist
-        case .outline, .destructive: return Color.clear
-        }
-    }
-}
-
-private extension View {
-    func assistantCard(highlight: Bool = false) -> some View {
-        padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(highlight ? JieboColor.userBubble : JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
-            )
     }
 }

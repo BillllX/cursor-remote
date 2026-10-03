@@ -1,15 +1,31 @@
 import SwiftUI
 import UIKit
 
+/// 对话页的外壳：pad = iPad 大标题；phoneLegacy = iPad 窄窗（PhoneWorkbench）的旧手机标题栏；
+/// embedded = iPhone 助理页（PhoneShell）：头部为空、导航栏由宿主管理。
+enum ThreadChrome { case pad, phoneLegacy, embedded }
+
 struct ThreadView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 窄屏：标题栏是菜单、会话名和新对话，不画 iPad 的大标题。
-    var phoneChrome = false
+    var chrome: ThreadChrome = .pad
     var openDrawer: () -> Void = {}
+    /// 仅 .embedded 使用：渲染在消息列表与输入框之间的插槽（ActionDock）。输入框仍然只有 ThreadView 里这一个。
+    var dock: AnyView? = nil
     @State private var composerFocusNonce = 0
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State private var motionChatId = ""
+
+    init(chrome: ThreadChrome = .pad, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
+        self.chrome = chrome
+        self.openDrawer = openDrawer
+        self.dock = dock
+    }
+
+    /// 旧写法：窄屏手机标题栏。保留给 PhoneWorkbench 等现有调用点。
+    init(phoneChrome: Bool, openDrawer: @escaping () -> Void = {}) {
+        self.init(chrome: phoneChrome ? .phoneLegacy : .pad, openDrawer: openDrawer)
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -30,7 +46,7 @@ struct ThreadView: View {
             thread
             // P5b：agent 改完文件的待看入口（面板关着时不硬弹，点 pill 才进）
             Group {
-            if !store.pendingDiffPaths.isEmpty {
+            if chrome != .embedded, !store.pendingDiffPaths.isEmpty {
                 Button(action: store.openDiffs) {
                     HStack(spacing: 6) {
                         Image(systemName: "plus.forwardslash.minus")
@@ -58,7 +74,8 @@ struct ThreadView: View {
             }
             }
             .animation(JieboMotion.fade(reduceMotion), value: store.pendingDiffPaths.isEmpty)
-            let delegated = store.assistantApprovals(forParent: store.activeId)
+            // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
+            let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: store.activeId)
             Group {
                 if let approval = delegated.first {
                     delegatedApprovalBanner(approval, more: delegated.count - 1)
@@ -66,7 +83,13 @@ struct ThreadView: View {
                 }
             }
             .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
-            ComposerView(focusNonce: composerFocusNonce)
+            if chrome == .embedded, let dock {
+                dock
+            }
+            ComposerView(
+                focusNonce: composerFocusNonce,
+                style: store.assistantChatActive && chrome == .embedded ? .assistant : .full
+            )
                 // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
                 .transaction { $0.animation = nil }
         }
@@ -94,7 +117,7 @@ struct ThreadView: View {
                 .padding(.trailing, 12)
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .toolbar(chrome == .embedded ? .automatic : .hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
         // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
         .environment(\.openURL, OpenURLAction { url in
@@ -179,10 +202,13 @@ struct ThreadView: View {
 
     @ViewBuilder
     private var header: some View {
-        if phoneChrome {
-            phoneHeader
-        } else {
+        switch chrome {
+        case .pad:
             padHeader
+        case .phoneLegacy:
+            phoneHeader
+        case .embedded:
+            EmptyView()
         }
     }
 
@@ -198,36 +224,12 @@ struct ThreadView: View {
 
     /// 助理会话里打开今日/收件箱/记忆层；有未读或待批时挂点
     private var assistantTodayButton: some View {
-        let on = store.toolLayer == .assistant
-        let marked = store.assistantBadgeCount > 0
-        return Button {
+        AssistantTodayButton(
+            on: store.toolLayer == .assistant,
+            marked: store.assistantBadgeCount > 0
+        ) {
             store.toggleTool(.assistant)
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: ToolLayer.assistant.symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                Text("今日")
-                    .font(JieboFont.ui(13, weight: .medium))
-            }
-            .foregroundStyle(on ? JieboColor.pine : JieboColor.ink)
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background(on ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                Circle()
-                    .fill(JieboColor.ok)
-                    .frame(width: 6, height: 6)
-                    .offset(x: 2, y: -2)
-                    .opacity(marked ? 1 : 0)
-                    .animation(JieboMotion.fade(reduceMotion), value: marked)
-            }
-            .animation(JieboMotion.fade(reduceMotion), value: on)
-            .hitTarget()
         }
-        .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(marked ? "今日，\(store.assistantBadgeCount) 条待处理" : "今日")
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     private var phoneSubtitle: String {
@@ -396,7 +398,11 @@ struct ThreadView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     if let chat = store.active, chat.turns.isEmpty, chat.turnsComplete {
                         // 未加载完的壳（!turnsComplete）不算空会话——由下方遮罩覆盖
-                        emptyState
+                        if chrome == .embedded {
+                            assistantEmptyState
+                        } else {
+                            emptyState
+                        }
                     }
                     if let chat = store.active, !chat.turnsComplete, !chat.turns.isEmpty {
                         // 分页加载更早内容的轻提示（不抢滚动，对齐「分段加载」的可感知性）
@@ -413,7 +419,8 @@ struct ThreadView: View {
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                         TurnView(
                             turn: turn,
-                            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued
+                            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
+                            embedded: chrome == .embedded
                         )
                             .id(turn.id)
                             .transition(.opacity.combined(with: .offset(y: 10)))
@@ -611,6 +618,59 @@ struct ThreadView: View {
         .padding(.horizontal, 24)
     }
 
+    /// iPhone 助理页的空状态：不是「工作区」语境，快捷句也是跟助理说的话
+    private var assistantEmptyState: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 40)
+            JieboMark(size: 36)
+            Text("\(store.assistantName) 在这儿")
+                .font(JieboFont.display(30))
+                .tracking(0.6)
+                .foregroundStyle(JieboColor.ink)
+                .multilineTextAlignment(.center)
+            Text("记事、提醒、查东西，或者让它去某个项目里干活，不用你自己打开任何东西。")
+                .font(JieboFont.ui(15))
+                .foregroundStyle(JieboColor.dim)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+            VStack(spacing: 8) {
+                ForEach(assistantStarters, id: \.self) { text in
+                    Button {
+                        store.saveDraft(text)
+                        composerFocusNonce += 1
+                    } label: {
+                        Text(text)
+                            .font(JieboFont.ui(13))
+                            .foregroundStyle(JieboColor.ink)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 36)
+                            .background(JieboColor.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(JieboColor.line, lineWidth: 1)
+                            )
+                            .hitTarget()
+                    }
+                    .buttonStyle(PressScaleButtonStyle())
+                }
+            }
+            .padding(.top, 8)
+            Spacer(minLength: 40)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: viewportHeight > 120 ? viewportHeight - 24 : 0)
+        .padding(.horizontal, 24)
+    }
+
+    private let assistantStarters = [
+        "今天有什么安排？",
+        "帮我记一下：",
+        "明早 9 点提醒我",
+        "让 acrabat 里的讲稿再顺一遍",
+    ]
+
     private func starterRow(axis: Axis) -> some View {
         let row = ForEach(starters, id: \.self) { text in
             Button {
@@ -673,6 +733,8 @@ private struct TurnView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var turn: Turn
     var canAnswer = false
+    /// iPhone 助理页：记忆类工具不出卡片，delegate / create_workspace 写成人话
+    var embedded = false
     @State private var thinkingOpen = false
     @State private var confirmRestore = false
 
@@ -692,6 +754,11 @@ private struct TurnView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         )
+    }
+
+    /// .embedded 下 memory_* / chat_search 整张不渲染；其它端原样
+    private var visibleTools: [ToolCall] {
+        embedded ? turn.tools.filter { !AssistantToolText.isSilent($0) } : turn.tools
     }
 
     private var turnMeta: String? {
@@ -818,9 +885,11 @@ private struct TurnView: View {
                     if running { thinkingOpen = true }
                 }
             }
-            ForEach(turn.tools) { tool in
+            ForEach(visibleTools) { tool in
                 if let asked = AskedForm.parse(tool) {
                     QuestionCardView(asked: asked, canAnswer: canAnswer)
+                } else if embedded, let text = AssistantToolText.friendly(tool) {
+                    AssistantActionRow(tool: tool, text: text)
                 } else {
                     ToolCardView(tool: tool)
                 }
@@ -1352,7 +1421,7 @@ private struct HairlineTable: View {
     }
 }
 
-private struct ApprovalCard: View {
+private struct ReplyApprovalCard: View {
     @Environment(ChatStore.self) private var store
     var tool: PendingTool
 
@@ -1404,5 +1473,132 @@ private struct ApprovalCard: View {
                 .stroke(JieboColor.brass, lineWidth: 1)
         )
         .shadow(color: JieboColor.brass.opacity(0.12), radius: 8, y: 2)
+    }
+}
+
+/// 「今日」按钮：ThreadView 的助理标题栏和 iPhone 助理页导航栏共用，外观一致。
+struct AssistantTodayButton: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var on: Bool
+    var marked: Bool
+    var action: () -> Void
+
+    init(on: Bool, marked: Bool, action: @escaping () -> Void) {
+        self.on = on
+        self.marked = marked
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: ToolLayer.assistant.symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                Text("今日")
+                    .font(JieboFont.ui(13, weight: .medium))
+            }
+            .foregroundStyle(on ? JieboColor.pine : JieboColor.ink)
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(on ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                Circle()
+                    .fill(JieboColor.ok)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 2, y: -2)
+                    .opacity(marked ? 1 : 0)
+                    .animation(JieboMotion.fade(reduceMotion), value: marked)
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: on)
+            .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(marked ? "今日，\(store.assistantBadgeCount) 条待处理" : "今日")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+}
+
+/// 助理工具名的判断与人话文案。工具名可能带 MCP 前缀，所以取最后一段再比。
+private enum AssistantToolText {
+    static func baseName(_ name: String) -> String {
+        var base = name.lowercased()
+        for separator in ["__", ".", "/", ":"] {
+            if let range = base.range(of: separator, options: .backwards) {
+                base = String(base[range.upperBound...])
+            }
+        }
+        return base
+    }
+
+    /// 记忆是沉默的：memory_* 与 chat_search 不出卡片
+    static func isSilent(_ tool: ToolCall) -> Bool {
+        let base = baseName(tool.name)
+        return base.hasPrefix("memory_") || base == "chat_search"
+    }
+
+    static func friendly(_ tool: ToolCall) -> String? {
+        switch baseName(tool.name) {
+        case "delegate":
+            let workspace = tool.args?.string(in: "workspace") ?? ""
+            let detail = tool.args?.string(in: "title", "task") ?? ""
+            let head = workspace.isEmpty ? "交给工作区" : "交给 \(workspace)"
+            return detail.isEmpty ? head : "\(head)：\(String(detail.prefix(40)))"
+        case "create_workspace":
+            let name = tool.args?.string(in: "name") ?? ""
+            return name.isEmpty ? "申请新建工作区" : "申请新建工作区：\(name)"
+        default:
+            return nil
+        }
+    }
+}
+
+/// delegate / create_workspace 的一行说明（不展开原始参数）
+private struct AssistantActionRow: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var tool: ToolCall
+    var text: String
+
+    private var failed: Bool {
+        tool.status == "error" || tool.result?["ok"]?.bool == false
+    }
+
+    private var statusText: String {
+        if tool.status == "running" { return "处理中" }
+        return failed ? "未完成" : "已提交"
+    }
+
+    private var statusColor: Color {
+        if tool.status == "running" { return JieboColor.run }
+        return failed ? JieboColor.danger : JieboColor.ok
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "paperplane")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 16, height: 16)
+            Text(text)
+                .font(JieboFont.ui(13, weight: .medium))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+            Text(statusText)
+                .font(JieboFont.ui(11))
+                .foregroundStyle(statusColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(JieboColor.line, lineWidth: 1)
+        )
+        .animation(JieboMotion.fade(reduceMotion), value: tool.status)
+        .accessibilityElement(children: .combine)
     }
 }

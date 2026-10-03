@@ -2,10 +2,14 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
+/// full = 原来的完整工具栏（iPad / 工作区会话）；assistant = iPhone 助理页：＋ / ⋯ / 麦克风 / 发送。
+enum ComposerStyle { case full, assistant }
+
 struct ComposerView: View {
     @Environment(ChatStore.self) private var store
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
+    var style: ComposerStyle = .full
     @FocusState private var focused: Bool
     /// 打字只改这里。直接绑 store.draft 会让整段对话每次按键都重绘。
     @State private var text = ""
@@ -25,6 +29,8 @@ struct ComposerView: View {
     @State private var pressing = false
     /// 按住时上滑超过阈值：松手就丢掉这段录音
     @State private var voiceCancelArmed = false
+    /// .assistant：点按麦克风开始的录音。期间长按手势不动作，两种入口互斥共用同一个 dictation
+    @State private var tapVoice = false
     @Namespace private var modeThumb
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -228,6 +234,7 @@ struct ComposerView: View {
     private var holdToTalk: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                if tapVoice { return }
                 if !pressing {
                     pressing = true
                     voiceCancelArmed = false
@@ -252,6 +259,7 @@ struct ComposerView: View {
                 }
             }
             .onEnded { value in
+                if tapVoice { return }
                 pressing = false
                 holdTask?.cancel()
                 holdTask = nil
@@ -287,17 +295,53 @@ struct ComposerView: View {
         finishTask = nil
         pressing = false
         voiceCancelArmed = false
+        tapVoice = false
         dictation.cancel()
     }
 
-    private func beginVoice() async {
+    /// .assistant 的麦克风按钮：点一下开始，再点一下结束并把文字填进输入框
+    private func toggleVoice() {
+        switch dictation.phase {
+        case .idle:
+            guard !pressing else { return }
+            tapVoice = true
+            Task { @MainActor in
+                await beginVoice(tap: true)
+                if dictation.phase == .idle { tapVoice = false }
+            }
+        case .starting:
+            guard tapVoice else { return } // 长按手势发起的录音，不被按钮打断
+            dictation.cancel()
+            tapVoice = false
+        case .recording:
+            guard tapVoice else { return }
+            finishTask?.cancel()
+            finishTask = Task { @MainActor in
+                let spoken = await dictation.finish()
+                tapVoice = false
+                guard !Task.isCancelled else { return }
+                insertTranscript(spoken)
+            }
+        case .finishing:
+            break
+        }
+    }
+
+    private func cancelTapVoice() {
+        finishTask?.cancel()
+        finishTask = nil
+        dictation.cancel()
+        tapVoice = false
+    }
+
+    private func beginVoice(tap: Bool = false) async {
         focused = false
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         if let message = await dictation.start() {
             store.flash(message)
         }
         // 权限弹窗、开音频期间已经松手：start 会自己收掉，这里不再留着录音
-        if !pressing, dictation.phase == .recording { dictation.cancel() }
+        if !tap, !pressing, dictation.phase == .recording { dictation.cancel() }
     }
 
     private func insertTranscript(_ spoken: String) {
@@ -321,6 +365,13 @@ struct ComposerView: View {
                     .foregroundStyle(voiceCancelArmed ? JieboColor.danger : JieboColor.ink2)
                 Spacer(minLength: 0)
                 if finishing { ProgressView().controlSize(.small) }
+                if tapVoice, !finishing {
+                    Button("取消", action: cancelTapVoice)
+                        .buttonStyle(.plain)
+                        .font(JieboFont.ui(12, weight: .medium))
+                        .foregroundStyle(JieboColor.ink2)
+                        .hitTarget()
+                }
             }
             Text(dictation.transcript.isEmpty ? "请说话…" : dictation.transcript)
                 .font(JieboFont.ui(15))
@@ -341,11 +392,17 @@ struct ComposerView: View {
     private func voiceHint(finishing: Bool) -> String {
         if finishing { return "正在转文字…" }
         if dictation.phase == .starting { return "准备录音…" }
+        if tapVoice { return dictation.stoppedEarly ? "已停止录音，点话筒填入输入框" : "再点话筒结束" }
         if voiceCancelArmed { return "松开取消" }
         return dictation.stoppedEarly ? "已停止录音，松开填入输入框" : "松开填入输入框 · 上滑取消"
     }
 
     private var placeholder: String {
+        if style == .assistant {
+            if !store.connected { return "正在连服务器…" }
+            if store.busy { return "正在回复，发送会排队" }
+            return "跟\(store.assistantName)说点什么"
+        }
         if !store.connected { return "正在连服务器…" }
         if store.busy { return "正在动手，Enter 会排队" }
         switch store.mode {
@@ -414,7 +471,44 @@ struct ComposerView: View {
         text = store.draft
     }
 
+    @ViewBuilder
     private var controls: some View {
+        switch style {
+        case .full:
+            fullControls
+        case .assistant:
+            assistantControls
+        }
+    }
+
+    /// iPhone 助理：＋ ⋯ ……… 🎤 ⬆。模式、模型、策略层、确认写、检查点都收进 ⋯
+    private var assistantControls: some View {
+        HStack(alignment: .center, spacing: 8) {
+            attachMenu
+            moreMenu
+            Spacer(minLength: 8)
+            micButton
+            sendCluster(enabled: canSendNow)
+        }
+    }
+
+    private var micButton: some View {
+        let recording = dictation.active
+        return Button(action: toggleVoice) {
+            Image(systemName: recording ? "mic.fill" : "mic")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(recording ? JieboColor.pine : JieboColor.ink2)
+                .frame(width: 32, height: 32)
+                .background(recording ? JieboColor.pine.opacity(0.12) : Color.clear)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(recording ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1))
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(recording ? "结束录音" : "语音输入")
+    }
+
+    private var fullControls: some View {
         HStack(alignment: .center, spacing: 8) {
             attachMenu
             if controlsWidth >= 420 {
@@ -482,6 +576,31 @@ struct ComposerView: View {
         let plane = store.active?.policy == "plane"
         let confirm = store.active?.confirmWrites == true
         return Menu {
+            if style == .assistant {
+                Menu {
+                    ForEach(AgentMode.allCases, id: \.self) { item in
+                        Button {
+                            store.chooseMode(item)
+                        } label: {
+                            Label(item.label, systemImage: store.mode == item ? "checkmark" : "circle")
+                        }
+                    }
+                } label: {
+                    Label("模式 · \(store.mode.label)", systemImage: "slider.horizontal.3")
+                }
+                Menu {
+                    ForEach(ModelCatalog.groups(from: store.models)) { group in
+                        Section(group.label) {
+                            ForEach(group.models) { item in
+                                Button(item.name) { store.chooseModel(item.id) }
+                            }
+                        }
+                    }
+                } label: {
+                    Label("模型 · \(ModelCatalog.label(for: store.model))", systemImage: "cpu")
+                }
+                Divider()
+            }
             Button(action: store.togglePolicy) {
                 Label(plane ? "正在用策略层" : "切到策略层", systemImage: plane ? "checkmark" : "circle")
             }
@@ -529,10 +648,12 @@ struct ComposerView: View {
             } label: {
                 Label("文件", systemImage: "doc")
             }
-            Button {
-                fileBrowserOpen = true
-            } label: {
-                Label("工作区文件…", systemImage: "folder")
+            if style == .full {
+                Button {
+                    fileBrowserOpen = true
+                } label: {
+                    Label("工作区文件…", systemImage: "folder")
+                }
             }
         } label: {
             Image(systemName: "plus")

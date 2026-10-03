@@ -25,8 +25,11 @@ struct WorkbenchView: View {
 
     var body: some View {
         Group {
-            if sizeClass == .compact {
-                PhoneWorkbench()
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                // iPhone：纯个人助理（见 docs/iphone-assistant-first.md）
+                PhoneShell()
+            } else if sizeClass == .compact {
+                PhoneWorkbench() // iPad 窄窗保持原样
             } else {
                 padWorkbench
             }

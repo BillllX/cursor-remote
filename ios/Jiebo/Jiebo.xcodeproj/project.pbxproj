@@ -40,6 +40,20 @@
 		A1B2C3D4E5F6071829000331 /* VoiceDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */; };
 		A1B2C3D4E5F6071829000329 /* PhoneWorkbench.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000129 /* PhoneWorkbench.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
+		A1B2C3D4E5F6071829000800 /* PhoneRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */; };
+		A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */; };
+		A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */; };
+		A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */; };
+		A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000704 /* PhoneShell.swift */; };
+		A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */; };
+		A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000706 /* AssistantHome.swift */; };
+		A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000707 /* TodayStrip.swift */; };
+		A1B2C3D4E5F6071829000808 /* ActionDock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000708 /* ActionDock.swift */; };
+		A1B2C3D4E5F6071829000809 /* AssistantHubSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */; };
+		A1B2C3D4E5F6071829000810 /* DelegationDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */; };
+		A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000711 /* InboxHome.swift */; };
+		A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000712 /* MenuScreens.swift */; };
+		A1B2C3D4E5F6071829000813 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000713 /* AppDelegate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +92,21 @@
 		A1B2C3D4E5F6071829000130 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictation.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000129 /* PhoneWorkbench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneWorkbench.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRouter.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore+Phone.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantComponents.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000704 /* PhoneShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneShell.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuDrawer.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000706 /* AssistantHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantHome.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000707 /* TodayStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayStrip.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000708 /* ActionDock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDock.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantHubSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DelegationDetailSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000711 /* InboxHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxHome.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000712 /* MenuScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuScreens.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000713 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000750 /* Jiebo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Jiebo.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -110,6 +139,8 @@
 		A1B2C3D4E5F6071829000005 /* Jiebo */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6071829000901 /* App */,
+				A1B2C3D4E5F6071829000750 /* Jiebo.entitlements */,
 				A1B2C3D4E5F6071829000100 /* JieboApp.swift */,
 				A1B2C3D4E5F6071829000006 /* Theme */,
 				A1B2C3D4E5F6071829000007 /* Gateway */,
@@ -154,6 +185,9 @@
 		A1B2C3D4E5F6071829000009 /* Session */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */,
+				A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */,
+				A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */,
 				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
 				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
 				A1B2C3D4E5F6071829000117 /* Crew.swift */,
@@ -168,6 +202,8 @@
 		A1B2C3D4E5F6071829000010 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6071829000900 /* Phone */,
+				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
@@ -186,6 +222,30 @@
 				A1B2C3D4E5F6071829000130 /* AssistantView.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000900 /* Phone */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000704 /* PhoneShell.swift */,
+				A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */,
+				A1B2C3D4E5F6071829000706 /* AssistantHome.swift */,
+				A1B2C3D4E5F6071829000707 /* TodayStrip.swift */,
+				A1B2C3D4E5F6071829000708 /* ActionDock.swift */,
+				A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */,
+				A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */,
+				A1B2C3D4E5F6071829000711 /* InboxHome.swift */,
+				A1B2C3D4E5F6071829000712 /* MenuScreens.swift */,
+			);
+			path = Phone;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000901 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000713 /* AppDelegate.swift */,
+			);
+			path = App;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -220,6 +280,11 @@
 				TargetAttributes = {
 					A1B2C3D4E5F6071829000002 = {
 						CreatedOnToolsVersion = 15.0;
+						SystemCapabilities = {
+							com.apple.Push = {
+								enabled = 1;
+							};
+						};
 					};
 				};
 			};
@@ -258,6 +323,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1B2C3D4E5F6071829000800 /* PhoneRouter.swift in Sources */,
+				A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */,
+				A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */,
+				A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */,
+				A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */,
+				A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */,
+				A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */,
+				A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */,
+				A1B2C3D4E5F6071829000808 /* ActionDock.swift in Sources */,
+				A1B2C3D4E5F6071829000809 /* AssistantHubSheet.swift in Sources */,
+				A1B2C3D4E5F6071829000810 /* DelegationDetailSheet.swift in Sources */,
+				A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */,
+				A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */,
+				A1B2C3D4E5F6071829000813 /* AppDelegate.swift in Sources */,
 				A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */,
 				A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */,
 				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
@@ -410,6 +489,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Jiebo/Jiebo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8M43BMB6J8;
@@ -446,6 +526,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Jiebo/Jiebo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 8M43BMB6J8;

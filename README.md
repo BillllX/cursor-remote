@@ -107,6 +107,22 @@ jiebo-publish stop
 - `sudo python3 scripts/insert-nginx-publish.py && sudo nginx -t && sudo systemctl reload nginx`，把 `/p/` 反代进这个主机名已有的 443 站点
 - 安装脚本会把 `jiebo-publish` 链到 `/usr/local/bin` 和 `/var/lib/cursor-remote/.local/bin`
 
+## 推送通知（可选）
+
+个人助理的收件箱（待批 / 委派结果 / 提醒 / 简报）会推送到两个通道：网页走 Web Push（VAPID，网关自动生成密钥），iPhone 走 APNs。APNs 在 `gateway.env` 里配置，**不配则安静跳过**，`assistant_state.pushApns` 为 `false`：
+
+| 变量 | 说明 |
+|---|---|
+| `APNS_TEAM_ID` | Apple Developer Team ID |
+| `APNS_KEY_ID` | APNs auth key（.p8）的 Key ID |
+| `APNS_PRIVATE_KEY` | `.p8` 全文，换行可写成 `\n`；与下一项二选一 |
+| `APNS_PRIVATE_KEY_PATH` | `.p8` 文件路径（权限收紧，别进 git） |
+| `APNS_BUNDLE_ID` | 默认 topic；订阅自带 `bundleId` 时以订阅为准 |
+| `APNS_DEFAULT_ENV` | 可选，`sandbox` 或 `production`（默认）；订阅没声明 `environment` 时用 |
+| `APNS_HOST_OVERRIDE` | 仅测试：覆盖 APNs 主机，如 `http://127.0.0.1:PORT`（h2c 明文）。生产不要设 |
+
+改完需要 `systemctl restart cursor-remote-gateway`。订阅存在租户目录 `assistant/push-subs.json`（`{ web, apns }`，每通道最多 20 条），APNs 返回 410 或 400 且原因为 `BadDeviceToken` / `Unregistered` / `DeviceTokenNotForTopic` 时自动删订阅，其它错误只写 `push-log.jsonl`。不用外网的冒烟：`npm run smoke:apns -w gateway`。详见 `docs/iphone-assistant-first.md` §7.1。
+
 ## 它不会做什么
 
 - 不复刻完整 IDE

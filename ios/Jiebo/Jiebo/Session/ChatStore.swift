@@ -97,6 +97,8 @@ final class ChatStore {
     var assistantChatId: String?
     /// 想打开助理会话时它还没同步到本机：记下意图，会话到了再切
     private var pendingAssistantOpen = false
+    /// iPhone 的 PhoneShell 出现时置 true：activeId 只允许是助理会话。iPad / 网页永远 false
+    var assistantOnly = false
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -645,6 +647,11 @@ final class ChatStore {
 
     /// 新对话只能开在子工作区；USER 根目录留给助理会话
     func startChat(in path: String) {
+        // iPhone（assistantOnly）不开工作区会话：改回助理会话，不建占位、不发 new_session，也不动草稿
+        if assistantOnly {
+            openAssistantChat()
+            return
+        }
         let next = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
         guard !isUserRoot(next) else {
@@ -837,7 +844,16 @@ final class ChatStore {
         assistantState = state
     }
 
-    func select(_ id: String) {
+    func select(_ requestedId: String) {
+        var id = requestedId
+        if assistantOnly, let assistantId = assistantChatId, id != assistantId {
+            // iPhone：任何想切到工作区会话的路径都改成助理会话；助理会话还没同步到就记下意图，到了再切
+            guard chats.contains(where: { $0.id == assistantId }) else {
+                pendingAssistantOpen = true
+                return
+            }
+            id = assistantId
+        }
         pendingAssistantOpen = false
         guard id != activeId else { return }
         let nextCwd = chats.first { $0.id == id }?.cwd
@@ -861,6 +877,16 @@ final class ChatStore {
     /// 切换 activeId 的统一入口：保存旧会话草稿+待发图 → 切 → 载入新会话待发图 → 拉新工作区文件索引。
     /// 所有改 activeId 的路径（select/startChat/deleteChat/storedState）都必须走这里。
     private func swapActive(to newId: String) {
+        var newId = newId
+        if assistantOnly, let assistantId = assistantChatId, newId != assistantId {
+            // 任何路径（恢复上次会话、删除回落、网关 workspace_created……）想切到工作区会话，都改成助理会话。
+            // 助理会话还没同步到就不切，留在当前页，等它到了由 fulfillPendingAssistantOpen 接上
+            guard chats.contains(where: { $0.id == assistantId }) else {
+                pendingAssistantOpen = true
+                return
+            }
+            newId = assistantId
+        }
         guard newId != activeId else { return }
         let nextCwd = chats.first { $0.id == newId }?.cwd
         if contentPath != nil, !sameCwd(nextCwd, active?.cwd) {
@@ -1131,7 +1157,7 @@ final class ChatStore {
         if id == activeId, let first = rest.first {
             pendingImages = [] // 被删会话的待发图随会话丢弃（swapActive 会把空数组 flush 到已删 id）
             swapActive(to: first.id)
-            applySession(first)
+            applySession(chats.first { $0.id == activeId }) // swapActive 可能被 assistantOnly 改道，不能再用原始的 first
         }
         scheduleSync()
     }
@@ -3579,7 +3605,7 @@ final class ChatStore {
             chats = kept
             if !chats.contains(where: { $0.id == activeId }), let first = chats.first {
                 swapActive(to: first.id)
-                applySession(first)
+                applySession(chats.first { $0.id == activeId }) // 同上：swapActive 可能改道到助理会话
             }
         }
         // rev 不一致或本地缺失 → 拉取（本地优先的跳过：本地优先）

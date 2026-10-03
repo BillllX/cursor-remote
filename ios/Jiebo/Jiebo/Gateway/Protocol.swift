@@ -720,6 +720,8 @@ struct AssistantState: Sendable, Hashable {
     var name: String
     var background: AssistantBackground
     var pushKey: String?
+    /// 网关配置了 APNs 且能发（iPhone 通知是否可用）；老网关不带，默认 false
+    var pushApns: Bool = false
     var inbox: [AssistantInboxItem]
     var todos: [AssistantTodo]
     var schedules: [AssistantSchedule]
@@ -747,6 +749,7 @@ struct AssistantState: Sendable, Hashable {
                 reason: background?["reason"]?.string?.nilIfEmpty
             ),
             pushKey: row["pushKey"]?.string?.nilIfEmpty,
+            pushApns: row["pushApns"]?.bool ?? false,
             inbox: row["inbox"]?.array?.compactMap(AssistantInboxItem.from) ?? [],
             todos: row["todos"]?.array?.compactMap(AssistantTodo.from) ?? [],
             schedules: row["schedules"]?.array?.compactMap(AssistantSchedule.from) ?? [],

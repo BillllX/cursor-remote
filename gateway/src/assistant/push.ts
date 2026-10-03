@@ -75,25 +75,91 @@ function logFile(ref: TenantRef) {
   return assistantPath(ref, "push-log.jsonl");
 }
 
+/** APNs 订阅：token 为 hex device token，environment 缺省时按 APNS_DEFAULT_ENV 解析 */
+export type ApnsSubscription = {
+  token: string;
+  bundleId: string;
+  environment?: "sandbox" | "production";
+  createdAt?: number;
+  ua?: string;
+};
+
+type SubsFile = { web: PushSubscription[]; apns: ApnsSubscription[] };
+
+const MAX_SUBS_PER_CHANNEL = 20;
+const APNS_TOKEN_RE = /^[0-9a-f]{64,200}$/i;
+const BUNDLE_ID_RE = /^[A-Za-z0-9.-]{1,155}$/;
+
+/** 读订阅文件；旧格式 { subs } 自动迁移成 { web, apns } 并原子写回 */
+function readSubs(ref: TenantRef): SubsFile {
+  const raw = readJson<{ subs?: PushSubscription[]; web?: PushSubscription[]; apns?: ApnsSubscription[] } | null>(subsFile(ref), null);
+  if (!raw) return { web: [], apns: [] };
+  const legacy = Array.isArray(raw.subs) && !Array.isArray(raw.web);
+  const file: SubsFile = {
+    web: (Array.isArray(raw.web) ? raw.web : Array.isArray(raw.subs) ? raw.subs : []).slice(-MAX_SUBS_PER_CHANNEL),
+    apns: (Array.isArray(raw.apns) ? raw.apns : []).slice(-MAX_SUBS_PER_CHANNEL),
+  };
+  if (legacy) writeJson(subsFile(ref), file);
+  return file;
+}
+
+function writeSubs(ref: TenantRef, file: SubsFile) {
+  writeJson(subsFile(ref), { web: file.web.slice(-MAX_SUBS_PER_CHANNEL), apns: file.apns.slice(-MAX_SUBS_PER_CHANNEL) });
+}
+
 export function listSubscriptions(ref: TenantRef): PushSubscription[] {
-  return readJson<{ subs: PushSubscription[] }>(subsFile(ref), { subs: [] }).subs;
+  return readSubs(ref).web;
+}
+
+export function listApnsSubscriptions(ref: TenantRef): ApnsSubscription[] {
+  return readSubs(ref).apns;
 }
 
 export function addSubscription(ref: TenantRef, sub: PushSubscription) {
   if (!sub?.endpoint || !/^https:\/\//.test(sub.endpoint) || !sub.keys?.p256dh || !sub.keys?.auth) {
     return { ok: false as const, error: "订阅信息不完整。" };
   }
-  const subs = listSubscriptions(ref).filter((item) => item.endpoint !== sub.endpoint);
+  const file = readSubs(ref);
+  const subs = file.web.filter((item) => item.endpoint !== sub.endpoint);
   subs.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, createdAt: Date.now(), ua: sub.ua?.slice(0, 120) });
-  writeJson(subsFile(ref), { subs: subs.slice(-20) });
-  return { ok: true as const, count: subs.length };
+  writeSubs(ref, { ...file, web: subs });
+  return { ok: true as const, count: Math.min(subs.length, MAX_SUBS_PER_CHANNEL) };
 }
 
 export function removeSubscription(ref: TenantRef, endpoint: string) {
-  const subs = listSubscriptions(ref);
-  const next = subs.filter((item) => item.endpoint !== endpoint);
-  writeJson(subsFile(ref), { subs: next });
-  return subs.length - next.length;
+  const file = readSubs(ref);
+  const next = file.web.filter((item) => item.endpoint !== endpoint);
+  if (next.length !== file.web.length) writeSubs(ref, { ...file, web: next });
+  return file.web.length - next.length;
+}
+
+/** 校验并登记 APNs 订阅；同 token 重复注册更新 bundleId / environment / ua */
+export function addApnsSubscription(ref: TenantRef, input: { token?: unknown; bundleId?: unknown; environment?: unknown; ua?: unknown }) {
+  const token = typeof input.token === "string" ? input.token.trim() : "";
+  if (!APNS_TOKEN_RE.test(token) || token.length % 2 !== 0) return { ok: false as const, error: "APNs token 格式不对（要 64 位以上的偶数长度 hex）。" };
+  const bundleId = typeof input.bundleId === "string" ? input.bundleId.trim() : "";
+  if (!BUNDLE_ID_RE.test(bundleId)) return { ok: false as const, error: "bundleId 不能为空，且只能含字母、数字、点和连字符。" };
+  const env = input.environment;
+  if (env !== undefined && env !== null && env !== "" && env !== "sandbox" && env !== "production") {
+    return { ok: false as const, error: "environment 只能是 sandbox 或 production。" };
+  }
+  const environment = env === "sandbox" || env === "production" ? env : undefined;
+  const ua = typeof input.ua === "string" && input.ua ? input.ua.slice(0, 120) : undefined;
+  const file = readSubs(ref);
+  const key = token.toLowerCase();
+  const known = file.apns.find((item) => item.token.toLowerCase() === key);
+  const apns = file.apns.filter((item) => item.token.toLowerCase() !== key);
+  apns.push({ token: key, bundleId, environment, createdAt: known?.createdAt ?? Date.now(), ua: ua ?? known?.ua });
+  writeSubs(ref, { ...file, apns });
+  return { ok: true as const, count: Math.min(apns.length, MAX_SUBS_PER_CHANNEL) };
+}
+
+export function removeApnsSubscription(ref: TenantRef, token: string) {
+  const key = token.trim().toLowerCase();
+  const file = readSubs(ref);
+  const next = file.apns.filter((item) => item.token.toLowerCase() !== key);
+  if (next.length !== file.apns.length) writeSubs(ref, { ...file, apns: next });
+  return file.apns.length - next.length;
 }
 
 export type PushMessage = { itemId: string; kind: string; title: string; url: string };

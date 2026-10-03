@@ -30,7 +30,8 @@ import {
   type CoreField,
   type MemoryEntry,
 } from "./memory.ts";
-import { addSubscription, removeSubscription, retryFailedPushes, sendPush, vapidKeys, type PushSubscription } from "./push.ts";
+import { addApnsSubscription, addSubscription, listApnsSubscriptions, listSubscriptions, removeApnsSubscription, removeSubscription, retryFailedPushes, sendPush, vapidKeys, type PushSubscription } from "./push.ts";
+import { apnsReady, sendApns } from "./apns.ts";
 import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
 import { assistantDir, estimateTokens, writeJson, assistantPath, type TenantRef } from "./store.ts";
@@ -197,6 +198,7 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
     name: assistantName(tenant),
     background: { model: BACKGROUND_MODEL, ok: model.ok, reason: model.reason },
     pushKey: vapid().publicKey,
+    pushApns: apnsReady(),
     inbox: listInbox(ref, 60),
     todos: listTodos(ref, { includeDone: true }),
     schedules: listSchedules(ref),
@@ -345,21 +347,28 @@ export async function handleOp(
       return { ok: true, data: { path: `.jiebo/memory-export/memory-${stamp}.json` } };
     }
     case "push_subscribe": {
+      if (args.kind === "apns") {
+        const result = addApnsSubscription(ref, { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua });
+        return result.ok ? { ok: true, data: { count: result.count, ready: apnsReady() } } : fail(result.error);
+      }
+      if (args.kind !== undefined && args.kind !== "web") return fail("kind 只能是 web 或 apns。");
       const result = addSubscription(ref, args.subscription as PushSubscription);
       return result.ok ? { ok: true, data: { count: result.count } } : fail(result.error);
     }
     case "push_unsubscribe":
+      if (args.kind === "apns") return { ok: true, data: { removed: removeApnsSubscription(ref, str(args.token)) } };
       return { ok: true, data: { removed: removeSubscription(ref, str(args.endpoint)) } };
     case "push_test": {
       const { item } = postInbox(ref, { kind: "reminder", title: "测试通知", body: "这是一条测试通知，看到就说明推送通了。" });
-      return { ok: true, data: { itemId: item.id } };
+      // 走 onInbox → pushItem，Web 和 APNs 各发一遍；这里只回报有多少订阅会收到
+      return { ok: true, data: { itemId: item.id, web: listSubscriptions(ref).length, apns: apnsReady() ? listApnsSubscriptions(ref).length : 0 } };
     }
     default:
       return fail(`不认识的操作：${String(op)}`);
   }
 }
 
-async function pushItem(tenant: AssistantTenant, item: { id: string; kind: string; title: string }) {
+async function pushItem(tenant: AssistantTenant, item: { id: string; kind: string; title: string; chatId?: string; delegationId?: string }) {
   const titles: Record<string, string> = {
     approval: "有一项待你批准",
     delegation: "委派有结果了",
@@ -367,13 +376,25 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
     brief: "今日简报",
   };
   const base = deps?.appUrl() || "";
+  const ref = refOf(tenant);
+  const label = titles[item.kind] ?? "助理";
   // 推送正文不带记忆或收件箱正文：只有类型、条目标题和 id
-  await sendPush(refOf(tenant), vapid(), {
-    itemId: item.id,
-    kind: item.kind,
-    title: `${titles[item.kind] ?? "助理"}：${item.title}`.slice(0, 80),
-    url: `${base}?inbox=${encodeURIComponent(item.id)}`,
-  }).catch((err) => console.error("push", err));
+  await Promise.all([
+    sendPush(ref, vapid(), {
+      itemId: item.id,
+      kind: item.kind,
+      title: `${label}：${item.title}`.slice(0, 80),
+      url: `${base}?inbox=${encodeURIComponent(item.id)}`,
+    }).catch((err) => console.error("push", err)),
+    sendApns(ref, {
+      itemId: item.id,
+      kind: item.kind,
+      title: label,
+      body: item.title.slice(0, 80),
+      chatId: item.chatId,
+      delegationId: item.delegationId,
+    }).catch((err) => console.error("apns", err)),
+  ]);
 }
 
 async function slowTick(tenant: AssistantTenant) {

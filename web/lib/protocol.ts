@@ -64,6 +64,8 @@ export type AssistantState = {
   name: string;
   background: { model: string; ok: boolean; reason?: string };
   pushKey?: string;
+  /** 网关配置了 APNs（.p8）且能发；iPhone 设置页据此显示「通知已就绪」。iPhone 不读 pushKey */
+  pushApns?: boolean;
   inbox: AssistantInboxItem[];
   todos: Array<{ id: string; text: string; due?: string; done: boolean; doneAt?: number; createdAt: number }>;
   schedules: Array<{

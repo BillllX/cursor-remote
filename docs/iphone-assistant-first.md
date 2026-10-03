@@ -624,6 +624,109 @@ extension ChatStore {
 
 ---
 
+## 7.1 APNs 推送（**纳入本轮**，开发者账号已就绪）
+
+纯助理 iPhone 在后台时 WebSocket 会断，**待批 / 委派结果 / 提醒 / 简报** 几乎只能靠系统通知触达。网页继续用现有 Web Push（VAPID）；**iPhone 走 APNs**，与 Web 订阅并存、同一套收件箱事件源（`postInbox` → `onInbox` → `pushItem`）。
+
+### 7.1.1 触发与可见内容（与 Web Push 对齐）
+
+| 收件箱 `kind` | 通知标题模板（与 `pushItem` 一致） | 默认 `Urgency` |
+|---|---|---|
+| `approval` | 有一项待你批准：… | 高 |
+| `delegation` | 委派有结果了：… | 普通 |
+| `reminder` | 提醒：… | 普通 |
+| `brief` | 今日简报：… | 普通 |
+
+**不在通知里带**：记忆正文、收件箱 `body` 全文、工作区路径。自定义字段只带路由用 id（见下）。
+
+### 7.1.2 协议扩展（`assistant_op`）
+
+沿用 `push_subscribe` / `push_unsubscribe`，用 `kind` 区分通道（**不新增 op 名**，网页旧客户端只传 `subscription` 时视为 `web`）：
+
+```ts
+// push_subscribe
+{
+  kind: "web" | "apns";           // 缺省 "web"
+  subscription?: PushSubscription; // kind=web 必填，与现网相同
+  token?: string;                 // kind=apns：hex device token（无尖括号；校验 /^[0-9a-f]{64,200}$/i 且偶数长度，Apple 将来可能变长）
+  bundleId?: string;              // kind=apns：必填，App bundle id（字母/数字/点/连字符，≤155），用作 apns-topic
+  environment?: "sandbox" | "production"; // 可省略（用 APNS_DEFAULT_ENV）；传了只能是这两个值。Debug 用 sandbox，TestFlight / App Store 用 production
+}
+
+// push_unsubscribe
+{ kind?: "web" | "apns"; endpoint?: string; token?: string; }  // kind=web 用 endpoint，kind=apns 用 token
+```
+
+`push_test` 不变：写一条测试收件箱并走完整推送链路（Web + APNs 各发一遍）；返回 `data: { itemId, web, apns }`（两通道的订阅数，`apns` 在网关未配置时为 0）。`push_subscribe` 的 apns 订阅成功返回 `data: { count, ready }`，`ready` 即网关当前是否能发 APNs。
+
+`AssistantState` 可选增加 `pushApns: boolean`（网关配置了 p8 且能发时为 true），供设置页显示「通知已就绪 / 服务器未配置推送」。**iPhone 不读 `pushKey`（VAPID）**。
+
+### 7.1.3 网关存储与发送
+
+- 文件：租户 `assistant/push-subs.json` 从 `{ subs: PushSubscription[] }` 扩为：
+  ```json
+  { "web": [ … ], "apns": [ { "token", "bundleId", "environment", "createdAt", "ua" } ] }
+  ```
+  迁移：读旧格式时把 `subs` 挪进 `web`，写回新格式。每通道各保留最近 **20** 条订阅；同一 `token` 重复注册则更新 `environment` / `ua`。
+- 新模块 `gateway/src/assistant/apns.ts`（Node `http2` + ES256 JWT，**不新增 npm 包**）：读全局环境变量，对每个 APNs 订阅 `POST /3/device/<token>` 到 `api.sandbox.push.apple.com`（sandbox）或 `api.push.apple.com`（production）。provider token 缓存 50 分钟后刷新；请求头 `apns-topic`（订阅的 `bundleId`，缺则 `APNS_BUNDLE_ID`）、`apns-push-type: alert`、`apns-priority`（`approval`=10，其余=5）、`apns-expiration`（24 小时）、`apns-collapse-id`（条目 id）。未配置 p8 时安静跳过。
+- `pushItem` 改为并行调用 `sendPush`（web）+ `sendApns`（apns）；web 用 `PushMessage`，APNs 用 `ApnsMessage { itemId, kind, title, body, chatId?, delegationId? }`（`title` 是类型标题，`body` 是 `item.title` 截到 80 字，不是收件箱 body）。返回 410，或 400 且 `reason` 为 `BadDeviceToken` / `Unregistered` / `DeviceTokenNotForTopic` 时删订阅，其它错误（含 5xx、超时）只记日志、保留订阅。APNs 日志写入同一 `push-log.jsonl`，`endpoint` 为 `apns:<token前8位>`，失败时多一个 `reason` 字段。APNs 失败暂不做重启补发（`retryFailedPushes` 只补 web）。
+- **环境变量**（写在 `/etc/cursor-remote/gateway.env`，不进 git）：
+  - `APNS_TEAM_ID`
+  - `APNS_KEY_ID`
+  - `APNS_PRIVATE_KEY`（`.p8` 全文，含 `BEGIN/END`，换行可写成 `\n`）或 `APNS_PRIVATE_KEY_PATH`
+  - `APNS_BUNDLE_ID`（默认 topic，与 Xcode 一致）
+  - 可选 `APNS_DEFAULT_ENV=production`（未声明 `environment` 的订阅用此默认值；不设也是 `production`）
+  - 仅测试 `APNS_HOST_OVERRIDE`（如 `http://127.0.0.1:PORT` 走 h2c 明文；生产不要设），冒烟见 `npm run smoke:apns -w gateway`
+
+东京 / 上海各配一份；**Development 包连 sandbox，Release 连 production**（由 App 上传 `environment` 决定，网关按订阅发）。
+
+### 7.1.4 APNs payload（自定义 data）
+
+与 Web Push JSON 对齐，便于共用 `pushItem`：
+
+```json
+{
+  "aps": {
+    "alert": { "title": "有一项待你批准", "body": "新建工作区 notes · 整理讲稿" },
+    "sound": "default",
+    "thread-id": "assistant-inbox"
+  },
+  "cr": {
+    "itemId": "i_…",
+    "kind": "approval",
+    "chatId": "…",
+    "delegationId": "…"
+  }
+}
+```
+
+`chatId` / `delegationId` 仅当收件箱条目有值时带上。`approval` 可设 `aps.interruption-level: time-sensitive`（需 Xcode Capability）；首版用 `sound` + 高优先级即可。
+
+### 7.1.5 iOS 实现要点
+
+1. **Capability**：Target → Push Notifications；Signing 用已就绪的开发者账号。
+2. **`JieboApp`**：`UIApplicationDelegateAdaptor(AppDelegate.self)`；`AppDelegate` 里 `registerForRemoteNotifications`，在 `didRegisterForRemoteNotificationsWithDeviceToken` 把 token 交给 `ChatStore`（或 `PushRegistrar`）。
+3. **授权时机**：`PhoneShell.task` 里、`store.unlocked` 且助理会话就绪后，请求 `UNUserNotificationCenter` 授权（alert + sound + badge）；**拒绝授权不挡用 App**，设置页留「去系统设置开启通知」说明。
+4. **上报**：连上网关且 `assistant_state` 收到后，`assistantOp("push_subscribe", { kind: "apns", token, bundleId, environment })`；token 变化或登出后 `push_unsubscribe`；**仅 `UIDevice.current.userInterfaceIdiom == .phone`** 走 APNs（iPad 不发 APNs，避免和桌面助理面板重复）。
+5. **点击通知**（`UNUserNotificationCenterDelegate`）：
+   - 冷启动 / 前台 / 后台统一：解析 `cr.itemId`、`cr.delegationId`、`cr.chatId`；
+   - 等 `PhoneShell` `bootstrapped` 后调用 §3.1 的 `router.open(chatId:delegationId:store:)`；
+   - 若有 `itemId`：`markInboxRead`（只标已读）+ 若 `kind == approval` 且仍在 `approvals` 里，可 `router.go(.inbox)` 或仅 pop 根页让 ActionDock 显示（**首版：approval → `go(.inbox)`，delegation → `delegationDetail`，其余 → `go(.inbox)` + 详情 push**）。
+6. **设置页**（P5）：「通知」行 — 已授权且订阅成功显示「已开启」；否则「去开启」跳 `UIApplication.openSettings`；管理员可用现有 `push_test`（需在 iOS 设置里暴露「发送测试通知」，仅 DEBUG 或 `store.isAdmin`）。
+
+### 7.1.6 Apple / VPS 一次性准备（你本地做）
+
+1. Apple Developer：App ID 打开 Push Notifications；创建 **Apple Push Notifications auth key (.p8)**，记下 Key ID、Team ID。
+2. Xcode：Signing & Capabilities 勾 Push；真机跑一遍确认能拿到 device token（模拟器**不能**收远程推送，验收必须真机）。
+3. 东京 VPS：`gateway.env` 写入 §7.1.3 变量 → `systemctl restart cursor-remote-gateway`。
+4. 真机登录 → 允许通知 → 设置里点「测试通知」或网页助理面板 `push_test` → 锁屏应出现通知 → 点开落到待处理或委派详情。
+
+### 7.1.7 仍留到后续（原 P6 其余项）
+
+主屏小组件、Live Activity（委派进行中）、App Intents、分享扩展 — **不在本轮**。
+
+---
+
 ## 8. 实施顺序（每一刀可独立编译、可回退）
 
 每一刀做完都要：`xcodebuild` 通过 → iPhone 模拟器手测该刀验收项 → iPad 模拟器确认无回归。
@@ -635,6 +738,13 @@ extension ChatStore {
 - [ ] `ChatStore.assistantOnly` + `swapActive` 守卫 + `select` 里原始 id 的修正（§5.3①）。
 - [ ] `WorkbenchView` 按 idiom 分流；冷启动对齐。
 - **验收**：iPhone 启动一定落在助理会话（先在 iPad 上切到某个工作区会话再退出，再开 iPhone，也必须落在助理）；☰ 能打开 / 关闭抽屉（遮罩点击、向左拖、左缘右滑打开都可用，push 页上左缘右滑是返回而不是开抽屉）；菜单里「待处理」能 push 占位页并返回；iPad 全尺寸 + 窄窗行为与改前一致。
+
+### P-Push APNs（**P0 完成后即可开工**，与 P1–P2 并行）
+
+- [ ] 网关：`push-subs.json` 新格式、`apns.ts`、`pushItem` 双通道、`push_subscribe`/`push_unsubscribe` 的 `kind`（§7.1）；`assistant-smoke` 或单测 mock HTTP/2。
+- [ ] iOS：`AppDelegate` + Push Capability + 订阅上报 + 通知点击 → `router.open` / `go(.inbox)`（依赖 P0 的 `PhoneRouter`；ActionDock 未做时待处理页也能批）。
+- [ ] VPS：`gateway.env` 配 p8；东京先上，上海跟进。
+- **验收（必须真机）**：`push_test` 锁屏收到 → 点开进待处理；真实 `approval` 通知 → 点开能看到待批行；token 无效时网关自动删订阅；iPad 不注册 APNs；网页 Web Push 不受影响。
 
 ### P1 助理页
 
@@ -668,14 +778,9 @@ extension ChatStore {
 - [ ] DEBUG 启动参数：`--phone-route=root|inbox|today|delegations|settings|memory`（`memory` 要压成 `[.settings, .memory]` 两层）、`--phone-menu=open`、`--phone-delegation=<id>`，方便截图和回归。
 - [ ] `PhoneWorkbench.swift` 注释更新；`docs/iphone-ux.html` 加「已取代」说明；`docs/IDE.md` 的「iPad」节后补一句「iPhone 见 iphone-assistant-first.md」。
 
-### P6（建议尽早做，需要改网关，不在本轮必做范围）
-
-- **APNs 推送。** 去掉了工作区入口之后，用户几乎全靠通知得知「委派做完了 / 要你批准 / 提醒到了」，App 在后台时 WebSocket 会断，没有推送就等于看不到。网关 `assistant/push.ts` 目前只有 Web Push：需要新增 `push_subscribe` 的 `kind:"apns"` + device token 存储、网关用 p8 key 发 APNs、App 端 `UNUserNotificationCenter` 授权 + `registerForRemoteNotifications`，点通知按 `chatId` / `delegationId` 调 `router.open`。
-- 主屏小组件（今日待办 / 待批数）、Live Activity（委派进行中）、App Intents（「问小驳」）、分享扩展（把网页 / 文字 / 图片丢给助理）。
-
 ---
 
-## 9. 手测清单（P0–P5 全部完成后整体再走一遍）
+## 9. 手测清单（P0–P5 + P-Push 全部完成后整体再走一遍）
 
 在 iPhone 16 / iPhone SE（第 3 代，小屏）两台模拟器上：
 
@@ -697,6 +802,7 @@ extension ChatStore {
 16. iPad（全屏、分屏 1/2、Slide Over）：侧栏、图标栏、工具层、助理面板与改前一致；iPad 助理面板里 `create_workspace` 确认卡文案正确。
 16a. 菜单抽屉：☰ 打开时键盘收起；有待处理时 ☰ 与「待处理」行角标一致；点「设置」会先关抽屉再 push 设置页；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
 17. 网页 / iPad 上仍能看到助理委派出去的子会话，并能继续在里面聊（iPhone 不显示，其它端保留）。
+18. **推送（真机）**：首次允许通知 → 网关 `push-subs.json` 出现 apns 条目；App 进后台 → `push_test` 或真实待批 → 锁屏通知 → 点开落到待处理或委派 sheet；拒绝通知后 App 仍可用，设置页可跳系统设置。
 
 ---
 
@@ -726,4 +832,4 @@ xcodebuild -project Jiebo.xcodeproj -scheme Jiebo \
 - 不用系统 `TabView`，也没有任何形式的底栏（不变量 1）。
 - 不允许在助理会话里新开会话、改名、删除。
 - 不写死任何颜色值，不另做一套深浅色。
-- APNs、小组件、分享扩展本轮不做（P6）。
+- 小组件、Live Activity、App Intents、分享扩展本轮不做（§7.1.7）。

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// iPhone（以及 iPad 上窄到 compact 的窗口）：打开就是当前对话。
+/// iPad 窄窗（compact）：打开就是当前对话。iPhone 不再进入这里，改走 PhoneShell（纯个人助理）。
 /// 抽屉分三层：助理（全局，不属于任何工作区）→ 当前工作区（切换、工具、对话）→ 底部设置菜单。
 /// 切换工作区、主题、统计这些表单挂在这里而不是抽屉上——抽屉一关，挂在它身上的 sheet 会跟着消失。
 struct PhoneWorkbench: View {
