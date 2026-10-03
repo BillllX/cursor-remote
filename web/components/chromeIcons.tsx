@@ -114,28 +114,50 @@ export function IconRail({
   name: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats" | "assistant";
   size?: number;
 }) {
-  const d =
-    name === "chats"
-      ? "M3 3.5h10v9H3zM6.2 3.5v9"
-      : name === "files"
-        ? "M2.8 5.2h3.6L7.6 3.6H13.2v8.8H2.8z"
-        : name === "search"
-          ? "M7.2 11.2a4 4 0 1 1 0-8 4 4 0 0 1 0 8ZM10.4 10.4 13.2 13.2"
-          : name === "git"
-            ? "M5 3.6v8.8M5 6.2c2.2 0 3.6-1.2 6-1.2v3.2c-2.4 0-3.8 1.2-6 1.2M5 4.2a1.1 1.1 0 1 0 .01 0M11 8.8a1.1 1.1 0 1 0 .01 0"
-            : name === "terminal"
-              ? "M3.4 4.8 7 8l-3.6 3.2M8.4 12.2h4.2"
-              : name === "loop"
-                ? "M11.4 5.2A4.2 4.2 0 0 0 4.6 6.4M4.6 10.8A4.2 4.2 0 0 0 11.4 9.6M11.4 3.4v2.2H9.2M4.6 12.6V10.4H6.8"
-                : name === "assistant"
-                  ? "M3.2 6.2h9.6v7.2H3.2zM5.6 3.8h4.8M8 9.2v2.4"
-                  : "M3.4 12.4V8.6M8 12.4V5.2M12.6 12.4V3.6";
+  const [tint, line] = RAIL[name];
   return (
-    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d={d} stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className="chrome-icon rail-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      {tint ? <path className="rail-icon-tint" d={tint} fill="currentColor" /> : null}
+      <path d={line} stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
+
+// [填充底色, 线稿]，16 格，线宽 1.4。
+const RAIL: Record<"chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats" | "assistant", [string, string]> = {
+  chats: [
+    "M3.6 3.2h8.8a1.4 1.4 0 0 1 1.4 1.4v5.4a1.4 1.4 0 0 1-1.4 1.4H7.4l-2.8 2.1v-2.1h-1a1.4 1.4 0 0 1-1.4-1.4V4.6a1.4 1.4 0 0 1 1.4-1.4Z",
+    "M3.6 3.2h8.8a1.4 1.4 0 0 1 1.4 1.4v5.4a1.4 1.4 0 0 1-1.4 1.4H7.4l-2.8 2.1v-2.1h-1a1.4 1.4 0 0 1-1.4-1.4V4.6a1.4 1.4 0 0 1 1.4-1.4ZM5.4 6h5.2M5.4 8.4h3.2",
+  ],
+  files: [
+    "M2.4 5.6h11.2v6.2a1.2 1.2 0 0 1-1.2 1.2H3.6a1.2 1.2 0 0 1-1.2-1.2Z",
+    "M2.4 4.2A1.2 1.2 0 0 1 3.6 3h2.6l1.4 1.6h4.8a1.2 1.2 0 0 1 1.2 1.2v6a1.2 1.2 0 0 1-1.2 1.2H3.6a1.2 1.2 0 0 1-1.2-1.2ZM2.4 6.6h11.2",
+  ],
+  search: [
+    "M7 10.6a3.6 3.6 0 1 0 0-7.2 3.6 3.6 0 0 0 0 7.2Z",
+    "M7 10.6a3.6 3.6 0 1 0 0-7.2 3.6 3.6 0 0 0 0 7.2ZM9.7 9.7l3.4 3.4M5.4 6.2A1.8 1.8 0 0 1 7 5.2",
+  ],
+  git: [
+    "",
+    "M4.8 5.4v5.2M4.8 3.3a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2ZM4.8 10.2a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2ZM11.2 3.3a1.6 1.6 0 1 1 0 3.2 1.6 1.6 0 0 1 0-3.2ZM11.2 6.5c0 2.6-6.4 1.6-6.4 4",
+  ],
+  terminal: [
+    "M3.4 2.8h9.2a1.4 1.4 0 0 1 1.4 1.4v7.6a1.4 1.4 0 0 1-1.4 1.4H3.4A1.4 1.4 0 0 1 2 11.8V4.2a1.4 1.4 0 0 1 1.4-1.4Z",
+    "M3.4 2.8h9.2a1.4 1.4 0 0 1 1.4 1.4v7.6a1.4 1.4 0 0 1-1.4 1.4H3.4A1.4 1.4 0 0 1 2 11.8V4.2a1.4 1.4 0 0 1 1.4-1.4ZM4.8 6.2 6.8 8l-2 1.8M8.4 10h2.8",
+  ],
+  loop: [
+    "",
+    "M12.6 6.6A4.8 4.8 0 0 0 3.8 5.4M3.4 9.4a4.8 4.8 0 0 0 8.8 1.2M12.8 3.6v3h-3M3.2 12.4v-3h3",
+  ],
+  assistant: [
+    "M8 2.6c.4 2.4 1.4 3.4 3.8 3.8-2.4.4-3.4 1.4-3.8 3.8-.4-2.4-1.4-3.4-3.8-3.8 2.4-.4 3.4-1.4 3.8-3.8Z",
+    "M8 2.6c.4 2.4 1.4 3.4 3.8 3.8-2.4.4-3.4 1.4-3.8 3.8-.4-2.4-1.4-3.4-3.8-3.8 2.4-.4 3.4-1.4 3.8-3.8ZM12.2 10.4v2.8M10.8 11.8h2.8M3.8 11.6h.01",
+  ],
+  stats: [
+    "M7 6.4h2v6.2H7zM11.2 3.6h2v9h-2zM2.8 9h2v3.6h-2z",
+    "M7 6.4h2v6.2H7zM11.2 3.6h2v9h-2zM2.8 9h2v3.6h-2zM2 13.4h12",
+  ],
+};
 
 export function IconCollapse({ size = 14 }: { size?: number }) {
   return (

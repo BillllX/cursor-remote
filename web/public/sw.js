@@ -10,6 +10,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(payload.title || "助理", {
       body: payload.body || "",
+      icon: "icon-192.png",
+      badge: "favicon-48.png",
       tag,
       data: { url: payload.url, itemId: payload.itemId },
       renotify: true,

@@ -51,7 +51,7 @@ import {
   writeLastModel,
 } from "../lib/models";
 import ModelPicker from "./ModelPicker";
-import { JieboMark as Mark } from "./JieboMark";
+import { JieboGlyph, JieboMark as Mark } from "./JieboMark";
 import { IconAgent, IconAsk, IconPlan, IconRail, IconShield, IconWrite } from "./chromeIcons";
 
 type ToolCall = {
@@ -5971,7 +5971,7 @@ export default function ChatApp() {
                     </div>
                     )}
                     <div className="assistant-row">
-                    <span className="bot-avatar" aria-hidden="true">接</span>
+                    <span className="bot-avatar" aria-hidden="true"><JieboGlyph size={16} /></span>
                     <div className="assistant">
                       {turn.thinking && (turn.running || formatDuration(turn.durationMs)) ? (
                         <details

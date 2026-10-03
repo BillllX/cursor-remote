@@ -1765,6 +1765,22 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   flex: none;
 }
 
+.rail-icon-tint {
+  opacity: 0;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+
+button:hover > .rail-icon .rail-icon-tint,
+button:hover .side-tool-icon .rail-icon-tint {
+  opacity: 0.1;
+}
+
+button.on .rail-icon-tint,
+button[aria-pressed="true"] .rail-icon-tint,
+.assistant-pin.active .rail-icon-tint {
+  opacity: 0.2;
+}
+
 .mode-label,
 .confirm-label,
 .pill-label {
@@ -5343,6 +5359,15 @@ button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn
   padding: 0 8px;
 }
 
+.composer.density-full .mode-label,
+.composer.density-mid .mode-label,
+.composer.density-full .mode-switch,
+.composer.density-mid .mode-switch,
+.composer.density-full .mode-switch .mode-btn,
+.composer.density-mid .mode-switch .mode-btn {
+  flex: none;
+}
+
 .composer.density-compact .mode-label,
 .composer.density-tight .mode-label {
   max-width: 0;
@@ -5640,25 +5665,23 @@ nextjs-portal {
     min-height: 0;
   }
 
-  .app.ide .main.with-preview,
-  .app.ide .main.with-preview.with-canvas {
-    grid-template-columns: minmax(280px, 1.25fr) minmax(300px, 0.85fr);
+  .app.ide .main.with-preview {
     grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .app.ide .main.with-preview .file-preview {
-    grid-column: 1;
-    grid-row: 1 / -1;
-  }
-
   .app.ide .main.with-preview .main-col {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
   }
 
   .app.ide .main.with-preview .composer-dock {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
+  }
+
+  .app.ide .main.with-preview .file-preview {
+    grid-column: 2;
+    grid-row: 1 / -1;
   }
 
   .app.ide.pane-files .sidebar,
@@ -5749,10 +5772,40 @@ nextjs-portal {
   }
 
   .app.ide:has(.main.with-preview) .main.with-preview,
-  .app.ide:has(.main.with-preview) .main.with-preview.preview-max,
+  .app.ide:has(.main.with-preview) .main.with-preview.preview-max {
+    grid-template-columns: minmax(320px, 1.1fr) minmax(300px, 0.9fr);
+  }
+
   .app.ide:has(.main.with-preview) .main.with-preview.with-canvas,
   .app.ide:has(.main.with-preview) .main.with-preview.with-canvas.preview-max {
-    grid-template-columns: minmax(280px, 1.25fr) minmax(300px, 0.85fr);
+    grid-template-columns: minmax(310px, 1fr) minmax(310px, 1fr);
+  }
+
+  /* 触屏 ≤1366 的预览是右侧抽屉（position: fixed）；ide 下必须落回第二列，否则留一列空白。 */
+  .app.ide:has(.main.with-preview) .main.with-preview .file-preview,
+  .app.ide:has(.main.with-preview) .main.with-preview.preview-max .file-preview {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    width: auto;
+    height: 100%;
+    padding-top: 0;
+    padding-bottom: 0;
+    transform: none;
+    transition: none;
+    pointer-events: auto;
+    box-shadow: none;
+    border-left: 1px solid var(--border);
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+
+  .app.ide .preview-scrim,
+  .app.ide .main.with-preview.preview-max .preview-scrim,
+  .app.ide .preview-reopen,
+  .app.ide .main.with-preview:not(.preview-max) .preview-reopen,
+  .app.ide .preview-expand {
+    display: none;
   }
 }
 
