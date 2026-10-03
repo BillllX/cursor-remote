@@ -1984,7 +1984,7 @@ function sendCheckpoints(ws: WebSocket, slot: Slot) {
 
 function pushWorkspace(ws: WebSocket, slot: Slot, conn: Conn, paths: string[] = []) {
   const cwd = cwdOf(conn, slot);
-  const listed = listWorkspaceFiles(cwd, "");
+  const listed = listWorkspaceFilesForClient(cwd, "");
   send(ws, {
     type: "files",
     chatId: slot.chatId,
@@ -2781,10 +2781,47 @@ function gitStatusMap(cwd: string): Record<string, string> {
   }
 }
 
-function listWorkspaceFiles(
-  cwd: string,
-  query: string,
-): { paths: string[]; status: Record<string, string>; truncated: boolean } {
+type WorkspaceFiles = { paths: string[]; status: Record<string, string>; truncated: boolean };
+
+function listWorkspaceFiles(cwd: string, query: string): WorkspaceFiles {
+  const { paths, status } = collectWorkspaceFiles(cwd);
+  return rankWorkspaceFiles(paths, status, query);
+}
+
+/**
+ * 给文件树和 @ 补全用：嵌套仓库在外层 git 里只占一项 `dir/`，要进去再列一次。
+ * 检查点不能用这个——还原时会删掉清单里有、快照里没有的文件，而快照只记了嵌套仓库的 gitlink。
+ */
+function listWorkspaceFilesForClient(cwd: string, query: string): WorkspaceFiles {
+  const { paths, status } = collectWithNested(cwd, 0);
+  return rankWorkspaceFiles(paths, status, query);
+}
+
+function collectWithNested(cwd: string, depth: number): { paths: string[]; status: Record<string, string> } {
+  const own = collectWorkspaceFiles(cwd);
+  if (depth >= 3) return own;
+  const nested = own.paths.filter((path) => {
+    try {
+      const abs = resolve(cwd, path);
+      return statSync(abs).isDirectory() && existsSync(resolve(abs, ".git"));
+    } catch {
+      return false;
+    }
+  });
+  if (!nested.length) return own;
+  const skip = new Set(nested);
+  const paths = own.paths.filter((path) => !skip.has(path));
+  const status: Record<string, string> = {};
+  for (const [path, letter] of Object.entries(own.status)) if (!skip.has(path)) status[path] = letter;
+  for (const dir of nested) {
+    const inner = collectWithNested(resolve(cwd, dir), depth + 1);
+    for (const path of inner.paths) paths.push(`${dir}/${path}`);
+    for (const [path, letter] of Object.entries(inner.status)) status[`${dir}/${path}`] = letter;
+  }
+  return { paths, status };
+}
+
+function collectWorkspaceFiles(cwd: string): { paths: string[]; status: Record<string, string> } {
   let paths: string[] = [];
   const root = gitRoot(cwd);
   const shadow = root ? null : shadowGitEnv(cwd);
@@ -2818,6 +2855,10 @@ function listWorkspaceFiles(
     if (status[path] === "D") continue;
     if (!paths.includes(path) && existsSync(resolve(cwd, path))) paths.push(path);
   }
+  return { paths, status };
+}
+
+function rankWorkspaceFiles(paths: string[], status: Record<string, string>, query: string): WorkspaceFiles {
   const q = query.trim().toLowerCase();
   const filtered = q
     ? paths.filter((path) => {
@@ -5610,7 +5651,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const cwd = message.chatId
           ? cwdOf(conn, slotOf(conn, message.chatId))
           : conn.cwd;
-        const listed = listWorkspaceFiles(cwd, message.query || "");
+        const listed = listWorkspaceFilesForClient(cwd, message.query || "");
         send(ws, {
           type: "files",
           chatId: message.chatId,
