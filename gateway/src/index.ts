@@ -12,6 +12,7 @@ import type { Duplex } from "node:stream";
 import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
 import { WebSocketServer, WebSocket } from "ws";
 import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage } from "../../shared/protocol.ts";
+import { bodySummary, chatMeta, isBodyLoaded } from "./chatBodies.ts";
 import {
   askDisallowedTools,
   defaultPolicy,
@@ -917,21 +918,7 @@ function visibleChats(tenant: Tenant) {
 /// P8：slim_state 客户端的会话元数据视图——剥掉 turns（内容走 load_chat 分页），
 /// 补响应期计算的 preview（不落盘，避免 digest 抖动）。真空会话保留 turns:[]：
 /// 客户端按「有无 turns 键」区分「真空（已完整）」与「有内容未加载」（评审 GLM M3）
-function chatPreviewOf(turns: unknown[]): string {
-  // 与 iOS preview 语义逐字对齐：先倒序找最后一条非空 user，没有再倒序找 assistant
-  //（不是「最后一条非空消息」——assistant 收尾的会话也应显示最后的提问）
-  for (const key of ["user", "assistant"] as const) {
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const turn = turns[i];
-      if (!turn || typeof turn !== "object") continue;
-      const text = (turn as Record<string, unknown>)[key];
-      if (typeof text === "string" && text.trim()) return text.slice(0, 100);
-    }
-  }
-  return "";
-}
-
-/** 草稿只存在客户端。下发时去掉，避免磁盘上残留的大图堵住会话列表。 */
+/** 草稿只存在客户端：上传时丢掉，不落盘也不下发。 */
 function omitClientDraft(item: unknown): unknown {
   if (!item || typeof item !== "object") return item;
   const rest = { ...(item as Record<string, unknown>) };
@@ -940,15 +927,16 @@ function omitClientDraft(item: unknown): unknown {
   return rest;
 }
 
+/** 不读 turns：没装回内存的会话用落盘时记下的条数和预览 */
 function slimChat(item: unknown): unknown {
   if (!item || typeof item !== "object") return item;
-  const row = item as Record<string, unknown>;
-  const turns = Array.isArray(row.turns) ? row.turns : [];
-  const rest = omitClientDraft(row) as Record<string, unknown>;
-  delete rest.turns;
-  delete rest.preview; // 不信持久化里的旧值，响应期重算
-  if (!turns.length) return { ...rest, turns: [] };
-  return { ...rest, preview: chatPreviewOf(turns) };
+  const summary = bodySummary(item);
+  const rest = chatMeta(item as Record<string, unknown>);
+  delete rest.draft;
+  delete rest.draftImages;
+  delete rest.preview; // 不信客户端写回的旧值
+  if (!summary?.count) return { ...rest, turns: [] };
+  return { ...rest, preview: summary.preview };
 }
 
 function capStoredString(value: string, hit: { n: number }): string {
@@ -1032,7 +1020,8 @@ function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = 
 /** 启动时把磁盘上已经超长的工具记录截掉。不改版本号，避免把打开着的客户端整页刷掉。 */
 function compactTenantChats(tenant: { disk: { chats: unknown[] } }): boolean {
   const hit = { n: 0 };
-  tenant.disk.chats = tenant.disk.chats.map((chat) => mergeAndCompactChat(chat, chat, hit));
+  // 已拆分落盘的正文写入前都压缩过，不必装回来再压
+  tenant.disk.chats = tenant.disk.chats.map((chat) => (isBodyLoaded(chat) ? mergeAndCompactChat(chat, chat, hit) : chat));
   return hit.n > 0;
 }
 
@@ -1076,12 +1065,14 @@ function clipTurnForPage(turn: unknown, budget: number): unknown {
 
 function storedStatePayload(tenant: Tenant, slim = false) {
   const live = new Set(runningChatIds(tenant));
-  const chats = visibleChats(tenant).map((item) =>
-    live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0],
-  );
+  const visible = visibleChats(tenant);
+  // 精简视图不带 turns，收尾「运行中」标记没意义，也省得把每条会话的正文装回内存
+  const chats = slim
+    ? visible.map(slimChat)
+    : visible.map((item) => (live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0]));
   return {
     type: "stored_state" as const,
-    chats: slim ? chats.map(slimChat) : chats,
+    chats,
     rev: tenant.disk.rev,
     deletedIds: tenant.disk.deletedIds,
     chatRevs: effectiveChatRevs(tenant),
@@ -5222,8 +5213,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             const id = chatIdOf(item);
             return !id || !gone.has(id);
           })
-          .map((item) => {
-            if (!item || typeof item !== "object") return item;
+          .map((raw) => {
+            if (!raw || typeof raw !== "object") return raw;
+            const item = omitClientDraft(raw);
             const row = item as { id?: unknown; cwd?: unknown };
             const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
             const id = typeof row.id === "string" ? row.id : "";
@@ -5438,15 +5430,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             next = { ...row, turns: [] };
           }
         }
-        // 网页不再上传草稿：上传里没有这两个键时保留磁盘上已有的（iOS 的草稿不被网页的元数据上传抹掉）
-        if (next && typeof next === "object" && prev && typeof prev === "object") {
-          const row = next as Record<string, unknown>;
-          const before = prev as Record<string, unknown>;
-          for (const key of ["draft", "draftImages"] as const) {
-            if (!(key in row) && key in before) next = { ...(next as object), [key]: before[key] };
-          }
-        }
-        next = mergeAndCompactChat(prev, next);
+        next = mergeAndCompactChat(prev, omitClientDraft(next));
         const turnsProvided = Boolean(
           message.chat &&
             typeof message.chat === "object" &&

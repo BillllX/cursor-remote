@@ -18,6 +18,7 @@ iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 3. **助理可以自己判断需要新工作区，但必须经用户确认。** 助理调用新增的 `create_workspace` 工具，手机上弹出确认卡，同意才建，拒绝或不回应都不会建。
 4. **不做「插话」。** 子会话跑起来之后，用户不能直接给它发消息；想调整就停掉，再跟助理说，由助理重新委派。
 5. **iPhone 上不看，其它端保留。** 网页和 iPad 照旧可以看到所有工作区会话（包括助理委派出去的子会话）。网关数据不改，只是 iPhone 不展示。
+6. **记忆是沉默的。** 记忆由后台持续总结、更新，前端不强提示：首页、今日面板、菜单第一层都不出现记忆，也不显示条目数；对话里不显示记忆工具的工具卡。要查看或修改，走 ☰ → 设置 → 记忆（§4.3.1）。用户明确说「记住…」时，助理用一句自然的话回应即可，不额外弹提示。
 
 **只改 iPhone。** iPad（含 iPad 窄窗 / Slide Over）保持现有行为，不允许回归。
 
@@ -59,7 +60,7 @@ iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 
 ### 1.4 必须守住的不变量
 
-1. **同一时刻只能挂载一个 `ComposerView`。** 它用本地 `@State text` 打字、350ms 后 `store.saveDraft` 回写，并在 `onChange(of: store.activeId)` 时重灌。⇒ 助理页是唯一的根页，只有它里面有 `ComposerView`；push 出去的页面（待处理、记忆、待办与日程、委派记录）都不放输入框。不用系统 `TabView`。
+1. **同一时刻只能挂载一个 `ComposerView`。** 它用本地 `@State text` 打字、350ms 后 `store.saveDraft` 回写，并在 `onChange(of: store.activeId)` 时重灌。⇒ 助理页是唯一的根页，只有它里面有 `ComposerView`；push 出去的页面（待处理、待办与日程、委派记录、设置、记忆）都不放输入框。不用系统 `TabView`。
 2. **iPhone 上 `store.activeId` 永远是助理会话**（或启动前的 `"boot"`）。这是本版最大的简化，也是最需要守住的一条：`ThreadView`、`ComposerView`、预览、文件索引全都跟着 `activeId` 走，一旦它指向工作区会话，iPhone 就会「掉进」一个没有入口的会话里。守法见 §5.3 的 `assistantOnly` 守卫。
 3. 不要直接赋值 `store.activeId`；改动一律走 `swapActive`（`select` / `startChat` / `deleteChat` / `applyStoredState` 都会汇到它）。
 4. 助理会话不能删、不能改名、不能新开第二条；USER 根目录只承载助理会话。
@@ -77,7 +78,7 @@ iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 | 入口 | 位置 | 去向 |
 |---|---|---|
 | ☰ 菜单 | 导航栏左侧，有待处理时带提示 | 左侧滑出的菜单抽屉：待处理 + 原来「我」里的内容（§4.3） |
-| 今日 | 导航栏右侧 | 半屏 Hub：今日 / 记忆（§4.1.5） |
+| 今日 | 导航栏右侧 | 半屏今日面板：简报、待办、日程（§4.1.5） |
 
 - **待处理**（待批 + 收件箱）只在 ☰ 菜单里进入（§4.2），导航栏不再单独放消息图标。
 - **☰ 上的提示**：`store.assistantBadgeCount`（未读收件箱 + 待批）> 0 时，在菜单按钮右上角显示数字角标（> 99 显示 `99+`）；为 0 时不显示。`accessibilityLabel` 写成「菜单，3 项待处理」或「菜单」。
@@ -97,9 +98,9 @@ PhoneShell
 │   │    └─ ComposerView(style: .assistant)
 │   └─ push 的页面（都没有输入框）
 │        ├─ InboxHome（待处理）→ InboxDetailView
-│        ├─ AssistantMemoryScreen（记忆）
 │        ├─ AssistantTodayScreen（待办与日程）
-│        └─ DelegationListScreen（委派记录）
+│        ├─ DelegationListScreen（委派记录）
+│        └─ PhoneSettingsScreen（设置）→ AssistantMemoryScreen（记忆）
 ├─ MenuDrawer（从左侧滑出的抽屉，覆盖在 NavigationStack 之上）
 ├─ PreviewPanelView 全屏层（store.previewPanelOpen）
 └─ sheet：AssistantHubSheet、DelegationDetailSheet、ThemeSettingsSheet、AdminStatsView
@@ -132,18 +133,14 @@ import SwiftUI
 enum PhoneRoute: Hashable {
     case inbox
     case inboxItem(String)      // AssistantInboxItem.id
-    case memory
     case todayManage
     case delegations
+    case settings
+    case memory                 // 只从设置页 push 进来，不直接挂在菜单上
 }
 
 struct DelegationRef: Identifiable, Hashable {
     let id: String   // AssistantDelegation.id
-}
-
-enum AssistantHubSection: String, CaseIterable, Identifiable {
-    case today, memory
-    var id: String { rawValue }
 }
 
 @Observable
@@ -152,7 +149,8 @@ final class PhoneRouter {
     var path: [PhoneRoute] = []
     var menuOpen = false
     var hubOpen = false
-    var hubSection: AssistantHubSection = .today
+    /// 打开今日面板后滚到的锚点："todos" / "schedules"，nil 不滚
+    var hubAnchor: String?
     /// 正在看的委派详情。sheet 挂在 PhoneShell 上，在任何 push 页上都能弹
     var delegationDetail: DelegationRef?
     var bootstrapped = false
@@ -246,9 +244,10 @@ struct PhoneShell: View {
                         switch route {
                         case .inbox: InboxHome()
                         case .inboxItem(let id): InboxDetailView(itemId: id)
-                        case .memory: AssistantMemoryScreen()
                         case .todayManage: AssistantTodayScreen()
                         case .delegations: DelegationListScreen()
+                        case .settings: PhoneSettingsScreen()
+                        case .memory: AssistantMemoryScreen()
                         }
                     }
             }
@@ -328,7 +327,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 - 导航栈由 `PhoneShell` 提供（`NavigationStack(path:)`），`AssistantHome` 自己不再包一层。`.navigationBarTitleDisplayMode(.inline)`，`.toolbarBackground(JieboColor.paper, for: .navigationBar)` + `.toolbarBackground(.visible, for: .navigationBar)`。
 - `ToolbarItem(placement: .principal)`：VStack —— `store.assistantName`（`JieboFont.display(17)`）+ 副标题（`JieboFont.ui(11, weight: .medium)`, `JieboColor.dim`）。优先级：未连接「正在重连…」> 未配 key「服务器还没配 API Key」（`JieboColor.danger`）> 助理在跑「正在回复」> 后台状态 `assistantState.background.ok ? "就绪" : reason`。
 - **左侧：☰ 菜单按钮**（`line.3.horizontal`，`hitTarget()`）→ `router.openMenu()`。当 `store.assistantBadgeCount > 0` 时，在图标容器右上角叠数字角标（与下文菜单行同款：`JieboColor.danger` 底、`JieboColor.fillFg` 字、`JieboFont.ui(10, weight: .semibold)`，> 99 为 `99+`）；为 0 不叠角标。无障碍：`accessibilityLabel` 有待处理时写「菜单，N 项待处理」，否则「菜单」。
-- **右侧**：「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 外观（抽成可复用的 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubSection = .today; router.hubOpen = true`。
+- **右侧**：「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 外观（抽成可复用的 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubAnchor = nil; router.hubOpen = true`。
 - `store.canUndo` 时在今日按钮左边多一个撤销按钮；导航栏过挤时（小屏、大字号）撤销收进 `ellipsis` `Menu` 里，不要挤掉「今日」。
 
 #### 4.1.2 TodayStrip（新文件 `Views/Phone/TodayStrip.swift`）
@@ -337,9 +336,9 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 | 芯片 | 条件 | 文案 | 点击 |
 |---|---|---|---|
-| 简报 | `state.brief?.text` 非空 | `doc.text` +「今日简报」 | 打开 Hub（今日） |
-| 待办 | 未完成 todo 数 > 0 | 「待办 N」 | 打开 Hub（今日，滚到待办） |
-| 下一个日程 | 启用的日程里 `nextAt` 最近的 | 「HH:mm 标题」（跨天显示「明天 HH:mm」/「M月d日」） | 打开 Hub（今日，滚到日程） |
+| 简报 | `state.brief?.text` 非空 | `doc.text` +「今日简报」 | 打开今日面板 |
+| 待办 | 未完成 todo 数 > 0 | 「待办 N」 | 打开今日面板，`hubAnchor = "todos"` |
+| 下一个日程 | 启用的日程里 `nextAt` 最近的 | 「HH:mm 标题」（跨天显示「明天 HH:mm」/「M月d日」） | 打开今日面板，`hubAnchor = "schedules"` |
 | 进行中 | `delegations` 里 running/awaiting 数 > 0 | 「进行中 N」，`JieboColor.run`/`runBg` | 滚动到行动区；仅 1 项时直接打开其详情 |
 
 - 待批**不在**这里：它会出现在行动区（要立刻答复）和待处理页（☰ 角标与菜单里「待处理」行上的数字）。
@@ -354,6 +353,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
   - 快捷句（点了填进输入框并聚焦）：「今天有什么安排？」「帮我记一下：」「明早 9 点提醒我」「让 acrabat 里的讲稿再顺一遍」
 - `ThreadView` 里现有的 `delegatedApprovalBanner`、写入确认条、pendingDiff pill：`.embedded` 下**隐藏**，由 ActionDock 接管，避免两处出现同一张确认卡。
 - 线程里助理调用 `delegate` / `create_workspace` / `delegation_status` 的工具卡：沿用 `ThreadView` 现有通用工具卡即可；可选优化是把 `delegate` 显示成「交给 acrabat：<title>」、`create_workspace` 显示成「申请新建工作区：<name>」，而不是原始工具名与 JSON（放在 P5）。
+- **记忆工具不出卡片**（决定 6）：`.embedded` 下，工具名以 `memory_` 开头的（`memory_search`、`memory_save`、`memory_supplement`、`memory_forget`、`memory_invalidate`）和 `chat_search`，在线程里**整张不渲染**，也不计入「N 个步骤」之类的折叠计数。助理回复正文照常显示。iPad 和网页不变。
 
 #### 4.1.4 ActionDock（新文件 `Views/Phone/ActionDock.swift`）
 
@@ -382,16 +382,15 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 **C. 刚结束的委派**（可选，P5）：`done` / `failed` 且 `endedAt` 在 10 分钟内、用户还没看过 → 显示一行「✓ 整理周报 已完成」/「✗ … 失败」，点击打开详情，滑走或 10 分钟后消失。这样用户盯着助理页时不用切到待处理就能看到结果。不做也行，结果在待处理里一定有。
 
-#### 4.1.5 AssistantHubSheet（新文件 `Views/Phone/AssistantHubSheet.swift`）
+#### 4.1.5 今日面板 AssistantHubSheet（新文件 `Views/Phone/AssistantHubSheet.swift`）
 
 `.sheet(isPresented: $router.hubOpen)`，`.presentationDetents([.medium, .large])`，`.presentationDragIndicator(.visible)`，`.presentationBackground(JieboColor.paper)`。
 
-- 顶部分段控件「今日 / 记忆」（沿用 `AssistantView.tabBar` 样式），右上「完成」。
-- 今日：复用 `AssistantTodayPane`（§5.4）。需要补两项：
+- 只有「今日」一页，**没有分段控件，没有记忆**（决定 6）。顶部标题「今日」，右上「完成」。
+- 内容复用 `AssistantTodayPane`（§5.4）。需要补两项：
   - 待办行**左滑**「删除」→ `todo_remove`；已完成的折叠在「已完成 (N)」里，可「撤销」→ `todo_undo`。
   - 日程行右侧 `Toggle` → `assistantOp("schedule_set", args: ["id": .string(id), "enabled": .bool(on)])`（网关对已有 id 做部分更新，cron/prompt 沿用原值，已核实 `schedules.ts setSchedule`）。
-- 记忆：复用 `AssistantMemoryPane`。
-- `hubSection` 变化时用 `ScrollViewReader` 滚到锚点（`"todos"`、`"schedules"`）。
+- 打开时 `router.hubAnchor` 非空就用 `ScrollViewReader` 滚到锚点（`"todos"`、`"schedules"`）。
 - 今日 pane 里的「待批」「委派」「收件箱」三块在 iPhone 上**不显示**（它们在行动区和待处理里）；用 `AssistantTodayPane(showsApprovals: false, showsDelegations: false)` 之类的开关控制，iPad 默认全开。
 
 #### 4.1.6 降级
@@ -429,16 +428,25 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 1. **头部**：`JieboMark(size: 36)` + `store.tenantName`（空则「接驳」）+ `ConnectionDot` + 「已连接 / 正在重连…」。
 2. **助理**
    - **「待处理」** → `router.go(.inbox)`，push `InboxHome`（§4.2）。右侧数字角标 = `store.assistantBadgeCount`（与 ☰ 上角标同一数据源），为 0 不显示数字。行首图标 `tray` / 有未读时 `tray.full`。
-   - 「记忆」→ `router.go(.memory)`，push `AssistantMemoryScreen`（包 `AssistantMemoryPane`，`onAppear { store.requestAssistant(memory: true) }`），右侧显示有效条目数。
    - 「待办与日程」→ `router.go(.todayManage)`，push `AssistantTodayScreen`（包 `AssistantTodayPane`，含 §4.1.5 的补充操作）。
    - 「委派记录」→ `router.go(.delegations)`，push `DelegationListScreen`（`assistantState.delegations`，倒序，行：标题 + 工作区 + 状态 + 相对时间）；点行 → `router.delegationDetail`。
-   - 「后台模型」只读行：`background.model` + 就绪/原因。
-3. **外观**：「主题 · \(JieboTheme.shared.palette.title)」→ 先关抽屉，再弹 `ThemeSettingsSheet`。
-4. **用量**（`store.isAdmin`）：「使用统计」→ 关抽屉后弹 `AdminStatsView`（sheet）。
-5. **账号**：「退出登录」（destructive）→ `confirmationDialog`，文案沿用 `PhoneWorkbench`。
-6. **关于**（抽屉底部，小字）：版本号 `CFBundleShortVersionString` + build。
+3. **设置**：一行「设置」（`gearshape`）→ `router.go(.settings)`，push `PhoneSettingsScreen`（§4.3.1）。主题、后台模型、记忆、使用统计都收在里面。
+4. **账号**：「退出登录」（destructive）→ `confirmationDialog`，文案沿用 `PhoneWorkbench`。
+5. **关于**（抽屉底部，小字）：版本号 `CFBundleShortVersionString` + build。
 
-> 「今日」不放抽屉（导航栏有按钮）。「待处理」放在抽屉「助理」组**第一行**，与 ☰ 角标联动；行动区里紧急的确认卡仍可直接批，不必先进菜单。
+> 「今日」不放抽屉（导航栏有按钮）。「待处理」放在抽屉「助理」组**第一行**，与 ☰ 角标联动；行动区里紧急的确认卡仍可直接批，不必先进菜单。记忆不在抽屉第一层出现（决定 6）。
+
+#### 4.3.1 设置页 `PhoneSettingsScreen`（放在 `Views/Phone/MenuScreens.swift`）
+
+`List` + `.listStyle(.insetGrouped)` + `.scrollContentBackground(.hidden)` + `JieboColor.paper`，`.navigationTitle("设置")`。
+
+1. **外观**：「主题 · \(JieboTheme.shared.palette.title)」→ 弹 `ThemeSettingsSheet`。
+2. **助理**
+   - 「后台模型」只读行：`background.model` + 就绪/原因。
+   - 「记忆」→ `NavigationLink(value: PhoneRoute.memory)`（在当前栈上追加，返回回到设置页；**不要**用 `router.go`，它会替换整个栈）。push `AssistantMemoryScreen`（包 `AssistantMemoryPane`，`onAppear { store.requestAssistant(memory: true) }`）。行上**不显示条目数、不显示红点**，副标题固定一行小字「\(assistantName) 会在后台自己整理」。
+3. **用量**（`store.isAdmin`）：「使用统计」→ 弹 `AdminStatsView`（sheet）。
+
+记忆页本身的功能（核心档案、暂停记忆、新增、编辑、标失效、遗忘、彻底删除）沿用 `AssistantMemoryPane`，不删减，只是入口变深。
 
 ### 4.4 委派详情 `DelegationDetailSheet`（新文件 `Views/Phone/DelegationDetailSheet.swift`）
 
@@ -582,17 +590,17 @@ extension ChatStore {
 
 | 文件 | 内容 |
 |---|---|
-| `Session/PhoneRouter.swift` | `PhoneRoute`、`AssistantHubSection`、`PhoneRouter`、`DelegationRef` 及路由方法 |
+| `Session/PhoneRouter.swift` | `PhoneRoute`、`PhoneRouter`、`DelegationRef` 及路由方法 |
 | `Session/ChatStore+Phone.swift` | §5.3② 辅助方法 |
 | `Views/Phone/PhoneShell.swift` | 容器、键盘监听、冷启动对齐、全局 sheet、预览层 |
 | `Views/Phone/MenuDrawer.swift` | 左侧菜单抽屉（原「我」的内容） |
 | `Views/Phone/AssistantHome.swift` | 助理页 |
 | `Views/Phone/TodayStrip.swift` | 今日条 |
 | `Views/Phone/ActionDock.swift` | 确认卡 + 进行中的委派 |
-| `Views/Phone/AssistantHubSheet.swift` | 今日 / 记忆面板 |
+| `Views/Phone/AssistantHubSheet.swift` | 今日面板（只有今日，没有记忆） |
 | `Views/Phone/DelegationDetailSheet.swift` | 委派详情 |
 | `Views/Phone/InboxHome.swift` | 待处理页 + `InboxDetailView` |
-| `Views/Phone/MenuScreens.swift` | 抽屉里 push 出去的三个页面：`AssistantMemoryScreen`、`AssistantTodayScreen`、`DelegationListScreen` |
+| `Views/Phone/MenuScreens.swift` | 抽屉里 push 出去的页面：`AssistantTodayScreen`、`DelegationListScreen`、`PhoneSettingsScreen`，以及从设置页再进一层的 `AssistantMemoryScreen` |
 | `Views/AssistantComponents.swift` | 从 AssistantView 抽出的共享组件（含 `ApprovalCard`） |
 
 在 Xcode 里给 `Views/Phone` 建一个带文件夹的 Group。
@@ -633,7 +641,7 @@ extension ChatStore {
 - [ ] 导航栏、`TodayStrip`、助理空状态。
 - [ ] 拆 `AssistantView`（§5.4）+ `AssistantComponents.swift`；`AssistantHubSheet`。
 - [ ] `ComposerStyle.assistant`（placeholder、麦克风按钮、模式/模型收进更多菜单）。
-- **验收**：今日条有数据时出现、为空时不占位；Hub 两个分段可用，记忆编辑/标失效/遗忘/彻底删除与 iPad 一致；输入栏只有 ＋ / 🎤 / ⬆ / ⋯；点话筒录音再点结束，文字进输入框；iPad 助理面板外观不变。
+- **验收**：今日条有数据时出现、为空时不占位；今日面板只有今日、没有记忆分段；线程里看不到任何 `memory_*` / `chat_search` 工具卡；输入栏只有 ＋ / 🎤 / ⬆ / ⋯；点话筒录音再点结束，文字进输入框；iPad 助理面板外观不变。
 
 ### P2 行动区与确认卡
 
@@ -654,10 +662,10 @@ extension ChatStore {
 
 ### P5 菜单内容与收尾
 
-- [ ] `MenuDrawer` 的完整内容与三个 push 页；主题、统计、退出。
+- [ ] `MenuDrawer` 的完整内容与 push 页（待办与日程、委派记录、设置 → 记忆）；设置页里的主题、后台模型、统计；退出。
 - [ ] 触觉、无障碍 label、Dynamic Type 检查、深浅色 × 两套主题截图。
 - [ ] 线程里 `delegate` / `create_workspace` 工具卡的友好文案（§4.1.3）；可选的「刚结束的委派」行（§4.1.4 C）。
-- [ ] DEBUG 启动参数：`--phone-route=root|inbox|memory|today|delegations`、`--phone-menu=open`、`--phone-delegation=<id>`，方便截图和回归。
+- [ ] DEBUG 启动参数：`--phone-route=root|inbox|today|delegations|settings|memory`（`memory` 要压成 `[.settings, .memory]` 两层）、`--phone-menu=open`、`--phone-delegation=<id>`，方便截图和回归。
 - [ ] `PhoneWorkbench.swift` 注释更新；`docs/iphone-ux.html` 加「已取代」说明；`docs/IDE.md` 的「iPad」节后补一句「iPhone 见 iphone-assistant-first.md」。
 
 ### P6（建议尽早做，需要改网关，不在本轮必做范围）
@@ -682,12 +690,12 @@ extension ChatStore {
 9. 两个并发委派指向同一工作区：助理告诉你前一个还在跑，不会假装成功。
 10. 线程里点 `@文件` 链接 → 全屏预览 → 关掉回到原处。
 11. 待处理（☰ → 菜单）：委派条目 → 详情 sheet；助理条目 → 回到助理页；全部已读后 ☰ 角标与菜单行数字清零。
-12. ☰ → 记忆：新增、编辑、标失效、恢复、彻底删除；暂停记忆开关。
+12. ☰ → 设置 → 记忆：新增、编辑、标失效、恢复、彻底删除；暂停记忆开关；返回回到设置页而不是助理页。首页、今日面板、抽屉第一层都找不到记忆，也没有记忆条目数。说「记住我周三不开会」，线程里只有助理一句回应，没有工具卡。
 13. ☰ → 待办与日程：添加、完成、撤销、删除待办；关掉一个日程再打开。
 14. 主题切换两套 × 浅深色，逐页看有没有写死的颜色。
 15. 系统设置把文字调到最大，助理页、行动区、待处理不截断关键信息、不重叠。
 16. iPad（全屏、分屏 1/2、Slide Over）：侧栏、图标栏、工具层、助理面板与改前一致；iPad 助理面板里 `create_workspace` 确认卡文案正确。
-16a. 菜单抽屉：☰ 打开时键盘收起；有待处理时 ☰ 与「待处理」行角标一致；点主题 / 统计会先关抽屉再弹 sheet；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
+16a. 菜单抽屉：☰ 打开时键盘收起；有待处理时 ☰ 与「待处理」行角标一致；点「设置」会先关抽屉再 push 设置页；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
 17. 网页 / iPad 上仍能看到助理委派出去的子会话，并能继续在里面聊（iPhone 不显示，其它端保留）。
 
 ---

@@ -1,4 +1,5 @@
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -10,6 +11,15 @@ import {
 import { createHash, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, isAbsolute, relative, resolve } from "node:path";
+import {
+  createBodyStore,
+  dropRemovedBodies,
+  evictBodies,
+  hydrateChat,
+  isBodyLoaded,
+  persistBodies,
+  type BodyStore,
+} from "./chatBodies.ts";
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -46,6 +56,8 @@ export type Tenant = {
   stateDir: string;
   stateFile: string;
   disk: DiskState;
+  /** 会话正文的分段存储（stateDir/chats/） */
+  bodies: BodyStore;
 };
 
 export type TenantsRegistry = {
@@ -113,7 +125,7 @@ export function loadTenants(): TenantsRegistry {
   for (const tenant of registry.tenants) {
     mkdirSync(tenant.workspaceRoot, { recursive: true });
     mkdirSync(tenant.stateDir, { recursive: true });
-    tenant.disk = readDisk(tenant.stateFile);
+    tenant.disk = readDisk(tenant.stateFile, tenant.bodies);
   }
   if (registry.derivedMediaSecret) {
     console.warn("未设 CURSOR_REMOTE_MEDIA_SECRET：已从本机配置派生预览签名密钥。");
@@ -219,12 +231,18 @@ export function saveDiskNow(tenant: Tenant) {
     pendingSaves.delete(tenant);
   }
   const tmp = `${tenant.stateFile}.tmp`;
+  const chats = tenant.disk.chats;
   try {
     mkdirSync(tenant.stateDir, { recursive: true });
-    writeFileSync(tmp, JSON.stringify(tenant.disk));
+    // 先写正文分段，成功了再写指向它们的 state.json
+    const rows = persistBodies(tenant.bodies, chats);
+    writeFileSync(tmp, JSON.stringify({ version: DISK_VERSION, ...tenant.disk, chats: rows }));
     renameSync(tmp, tenant.stateFile);
-  } catch {
+    dropRemovedBodies(tenant.bodies, chats);
+    evictBodies(tenant.bodies, chats, rows);
+  } catch (err) {
     // disk full or permission — keep running
+    console.warn("state 落盘失败", tenant.id, err instanceof Error ? err.message : err);
   }
 }
 
@@ -310,6 +328,7 @@ function makeTenant(
     stateDir: resolve(paths.stateDir),
     stateFile: resolve(paths.stateDir, "state.json"),
     disk: emptyDisk(),
+    bodies: createBodyStore(paths.stateDir, settleTurns),
   };
 }
 
@@ -371,11 +390,39 @@ function settlePersistedChats(chats: unknown[]): unknown[] {
   });
 }
 
-function readDisk(file: string): DiskState {
+function settleTurns(turns: unknown[]): unknown[] {
+  return (settlePersistedChats([{ turns }])[0] as { turns: unknown[] }).turns;
+}
+
+/** 草稿只存在客户端，早期版本落过盘的清掉 */
+function dropDraft(row: unknown): unknown {
+  if (!row || typeof row !== "object") return row;
+  const rec = row as Record<string, unknown>;
+  delete rec.draft;
+  delete rec.draftImages;
+  return rec;
+}
+
+/** 2：正文拆到 stateDir/chats/<会话>/NNNNN.json，state.json 只留元数据 */
+const DISK_VERSION = 2;
+
+function readDisk(file: string, bodies: BodyStore): DiskState {
   try {
     if (!existsSync(file)) return emptyDisk();
-    const raw = JSON.parse(readFileSync(file, "utf8")) as DiskState;
-    const chats = settlePersistedChats(Array.isArray(raw.chats) ? raw.chats : []);
+    const raw = JSON.parse(readFileSync(file, "utf8")) as DiskState & { version?: unknown };
+    const rows = Array.isArray(raw.chats) ? raw.chats : [];
+    if (raw.version !== DISK_VERSION && rows.length) {
+      // 旧格式第一次被拆分前留一份原样备份：退回旧版网关时把它改回 state.json
+      const backup = `${file}.pre-split`;
+      try {
+        if (!existsSync(backup)) copyFileSync(file, backup);
+      } catch (err) {
+        console.warn("state.json 拆分前备份失败", backup, err instanceof Error ? err.message : err);
+      }
+    }
+    const chats = rows
+      .map((row) => hydrateChat(bodies, dropDraft(row)))
+      .map((item) => (isBodyLoaded(item) ? settlePersistedChats([item])[0] : item));
     // chatRevs 裁剪到存活会话（P4 审核）：旧状态里 chats∩deletedIds 等残留 key 不带回内存
     const liveIds = new Set(
       chats
@@ -398,7 +445,16 @@ function readDisk(file: string): DiskState {
             )
           : {},
     };
-  } catch {
+  } catch (err) {
+    // 坏文件挪开再按空状态启动，免得下一次写盘把它盖掉
+    const aside = `${file}.unreadable-${Date.now()}`;
+    try {
+      if (existsSync(file)) renameSync(file, aside);
+    } catch (moveErr) {
+      // 挪不开就不能按空状态启动：之后写盘会盖掉唯一的原件
+      throw new Error(`state.json 读不出也挪不开，停止启动：${file}`, { cause: moveErr });
+    }
+    console.warn("state.json 读取失败，按空状态启动，原文件挪到", aside, err instanceof Error ? err.message : err);
     return emptyDisk();
   }
 }
