@@ -929,11 +929,20 @@ function chatPreviewOf(turns: unknown[]): string {
   return "";
 }
 
+/** 草稿只存在客户端。下发时去掉，避免磁盘上残留的大图堵住会话列表。 */
+function omitClientDraft(item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const rest = { ...(item as Record<string, unknown>) };
+  delete rest.draft;
+  delete rest.draftImages;
+  return rest;
+}
+
 function slimChat(item: unknown): unknown {
   if (!item || typeof item !== "object") return item;
   const row = item as Record<string, unknown>;
   const turns = Array.isArray(row.turns) ? row.turns : [];
-  const rest = { ...row };
+  const rest = omitClientDraft(row) as Record<string, unknown>;
   delete rest.turns;
   delete rest.preview; // 不信持久化里的旧值，响应期重算
   if (!turns.length) return { ...rest, turns: [] };
@@ -5442,7 +5451,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           if (gone.has(id)) continue;
           const chat = tenant.disk.chats.find((item) => chatIdOf(item) === id);
           if (!chat) continue;
-          const payload = { type: "stored_chat" as const, chat, rev: tenant.disk.chatRevs[id] ?? 0 };
+          const payload = {
+            type: "stored_chat" as const,
+            chat: omitClientDraft(chat),
+            rev: tenant.disk.chatRevs[id] ?? 0,
+          };
           // 单条同样过接收上限护栏：超限回落 deferred，客户端走 HTTP /state 全量
           if (limit > 0 && Buffer.byteLength(JSON.stringify(payload)) > limit) {
             send(ws, { type: "stored_state_deferred", rev: tenant.disk.rev });
