@@ -104,14 +104,13 @@ function armHooks(): void {
   if (hooksArmed) return;
   hooksArmed = true;
   // systemctl restart 走 SIGTERM：flush 后再退，别丢最后 2s 的计量
-  process.once("SIGTERM", () => {
-    flushUsage();
-    process.exit(0);
-  });
-  process.once("SIGINT", () => {
-    flushUsage();
-    process.exit(0);
-  });
+  // 和 tenants.ts 的落盘监听共用信号：最后一个跑的监听者负责 exit
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      flushUsage();
+      if (process.listenerCount(signal) === 0) process.exit(0);
+    });
+  }
   process.on("exit", () => flushUsage());
 }
 

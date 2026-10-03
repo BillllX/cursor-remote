@@ -135,6 +135,7 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //   "slim_state"    —— stored_state 只给元数据（剥 turns，补 preview），内容走 load_chat 分页；
 //                      stored_chat（load_chats 应答）仍回全量——digest 对账是跨设备 turns 更新唯一通道
 //                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
+//                     网页 v2 起不再上传正文：图片随网关转录落盘，截断走 truncate_turns
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
 
 export type ClientMessage =
@@ -203,6 +204,10 @@ export type ClientMessage =
       turnId: string;
       reviews: { callId: string; review: "accepted" | "rejected" }[];
     }
+  // 删掉 turnId 这一轮及之后的回合（编辑、重试）。会话在跑时不改，只回当前 chatRev；不做 rev 拒绝，回执带 truncated
+  | { type: "truncate_turns"; chatId: string; turnId: string; rev: number }
+  // 按本连接能力重发一份 stored_state（slim 客户端只有元数据和 preview）
+  | { type: "load_state" }
   // stored_digest 后按需拉取单个会话全量（P4c）
   | { type: "load_chats"; ids: string[] }
   // slim_state 客户端的会话内容分页（P8）：from 省略=最后一页，否则拉 turns[..<from] 的上一页。
@@ -400,6 +405,8 @@ export type ServerMessage =
       chatRevs?: Record<string, number>;
       keptBodies?: boolean;
       reviewOnly?: boolean;
+      /** truncate_turns 的回执（不对应任何 sync_chat）；false = 没截成 */
+      truncated?: boolean;
     }
   // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }

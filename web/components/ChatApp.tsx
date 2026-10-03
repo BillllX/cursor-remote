@@ -41,6 +41,7 @@ import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
 import { isWideKind, kindFromPath, preferHttpText, tabKind } from "../lib/preview";
 import { fetchPreviewText, peekPreviewText, putPreviewText } from "../lib/previewCache";
+import { clearBodies, dropBody, readBody, writeBody } from "../lib/chatCache";
 import { APPEARANCES, PALETTES, applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
 import {
   DEFAULT_MODEL,
@@ -61,8 +62,6 @@ type ToolCall = {
   result?: unknown;
   status: "running" | "completed" | "error";
   review?: "accepted" | "rejected";
-  /** 同步时省略已确认的正文，网关按 callId 从上一份记录拷回。只出现在发出去的副本上。 */
-  keepBody?: boolean;
   parentCallId?: string;
   agent?: string;
   model?: string;
@@ -103,7 +102,26 @@ type Chat = {
   policy?: PolicyId;
   draftImages?: PromptImage[];
   checkpoints?: CheckpointInfo[];
+  /** 网关给的最后一条摘要；正文没加载时侧栏和搜索用它 */
+  preview?: string;
 };
+
+/**
+ * 会话正文的加载状态。rev 是这份正文对应的服务端 chatRev（本地新建还没上传的为 undefined）。
+ * loading 时：target 是发请求时的 chatRev；base 是用来只补最后一页的旧正文；buf 是从后往前攒的页。
+ */
+type BodyState =
+  | { state: "complete"; rev: number | undefined }
+  | {
+      state: "loading";
+      rev: number | undefined;
+      prev: "none" | "complete";
+      nonce: number;
+      target: number;
+      base: Turn[] | null;
+      buf: Turn[];
+      progressive: boolean;
+    };
 
 const ONLINE_ORIGIN = "https://jiebo.aiagentswitcher.com";
 const ONLINE_GATEWAY_WS = "wss://jiebo.aiagentswitcher.com/bridge";
@@ -708,52 +726,125 @@ function gitLetterOf(path: string, gitStatus: Record<string, string>, cwd = "") 
   return hit?.[1];
 }
 
-function mergeRemoteChats(
+/** 上传给网关的元数据：除正文（turns）、网关算的 preview 和服务端的 runMark 以外的全部字段。 */
+function chatMeta(chat: Chat): Omit<Chat, "turns"> {
+  const rest: Record<string, unknown> = { ...chat };
+  delete rest.turns;
+  delete rest.preview;
+  delete rest.runMark;
+  delete rest.clipped;
+  const meta = rest as Omit<Chat, "turns">;
+  return {
+    ...meta,
+    previewTabs: meta.previewTabs?.map(({ path, line }) => ({ path, line })),
+    draftImages: meta.draftImages?.slice(0, 3),
+  };
+}
+
+function metaKey(chat: Chat): string {
+  return JSON.stringify(chatMeta(chat));
+}
+
+/** 会话有没有内容：正文没加载时看网关给的 preview（有回合才会带这个键）。 */
+function chatHasContent(chat: Chat): boolean {
+  return chat.turns.length > 0 || chat.preview !== undefined;
+}
+
+function liveTurn(turn: Turn): boolean {
+  return Boolean(turn.running || turn.queued || turn.pendingTool);
+}
+
+function serverTurn(raw: unknown): Turn | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<Turn>;
+  if (typeof row.id !== "string" || !row.id) return null;
+  const tools = Array.isArray(row.tools) ? row.tools : [];
+  const turn: Turn = {
+    ...(row as Turn),
+    user: typeof row.user === "string" ? row.user : "",
+    assistant: typeof row.assistant === "string" ? row.assistant : "",
+    thinking: typeof row.thinking === "string" ? row.thinking : "",
+    tools,
+    running: Boolean(row.running),
+  };
+  if (!turn.todos) {
+    let todos: TodoItem[] | null = null;
+    for (const tool of tools) {
+      todos = extractTodos(tool.name, tool.args) || extractTodos(tool.name, tool.result) || todos;
+    }
+    if (todos) turn.todos = todos;
+  }
+  return turn;
+}
+
+/** 服务端正文为准；本地还在跑、排队或待批的回合保留本地版本，服务端没有的接在末尾。 */
+function withLiveTurns(local: Turn[], server: Turn[]): Turn[] {
+  const live = local.filter(liveTurn);
+  if (!live.length) return server;
+  const byId = new Map(live.map((turn) => [turn.id, turn]));
+  const out = server.map((turn) => byId.get(turn.id) ?? turn);
+  const seen = new Set(out.map((turn) => turn.id));
+  for (const turn of live) if (!seen.has(turn.id)) out.push(turn);
+  return out;
+}
+
+/**
+ * 合并网关的会话列表（slim：只有元数据和 preview）。
+ * 本地元数据和最后一次对齐的快照不同 = 本地改过还没确认，保留本地；否则用服务端的。
+ * 正文一律保留本地已有的，由正文加载按 chatRev 判断是否过期。
+ */
+function mergeSlimChats(
   local: Chat[],
   remote: Chat[],
-  deleted: Set<string> = new Set(),
+  deleted: Set<string>,
+  synced: Map<string, string>,
 ): Chat[] {
-  const drop = (chats: Chat[]) => chats.filter((chat) => !deleted.has(chat.id));
-  local = drop(local);
-  remote = drop(remote);
-  if (!remote.length) return local;
-  const localEmpty =
-    !local.length ||
-    (local.length === 1 &&
-      !local[0].turns.length &&
-      !local[0].agentId &&
-      (local[0].id === "boot" || local[0].title === "新对话"));
-  if (localEmpty) return stopOrphanRuns(remote);
-  const weight = (chat: Chat) =>
-    chat.turns.reduce(
-      (n, turn) => n + (turn.user ? 1 : 0) + (turn.assistant ? 1 : 0) + turn.tools.length,
-      0,
-    );
   const localById = new Map(local.map((chat) => [chat.id, chat]));
-  return stopOrphanRuns(
-    remote.map((chat) => {
-      const cur = localById.get(chat.id);
-      if (!cur) return chat;
-      if (cur.turns.some((turn) => turn.running) || weight(cur) > weight(chat)) {
-        return {
-          ...cur,
-          agentId: cur.agentId || chat.agentId,
-          cwd: preferChatCwd(cur.cwd, chat.cwd),
-          draft: cur.draft || chat.draft,
-          previewTabs: cur.previewTabs?.length ? cur.previewTabs : chat.previewTabs,
-          previewPath: cur.previewPath || chat.previewPath,
-        };
+  const remoteIds = new Set<string>();
+  const out: Chat[] = [];
+  for (const row of remote) {
+    if (!row || typeof row !== "object" || typeof row.id !== "string" || !row.id) continue;
+    if (deleted.has(row.id) || remoteIds.has(row.id)) continue;
+    remoteIds.add(row.id);
+    const cur = localById.get(row.id);
+    const base: Chat = { ...row, title: typeof row.title === "string" ? row.title : "新对话", turns: [] };
+    delete (base as { runMark?: unknown }).runMark;
+    if (!cur) {
+      synced.set(row.id, metaKey(base));
+      out.push(base);
+      continue;
+    }
+    const last = synced.get(row.id);
+    if (last !== undefined && last !== metaKey(cur)) {
+      // 三方合并：只保留本地改过的字段，其余跟服务端（别的设备可能改了别的字段）
+      const before = JSON.parse(last) as Record<string, unknown>;
+      const mine = chatMeta(cur) as Record<string, unknown>;
+      const theirs = chatMeta(base) as Record<string, unknown>;
+      const merged: Record<string, unknown> = { ...theirs };
+      for (const key of new Set([...Object.keys(before), ...Object.keys(mine)])) {
+        if (JSON.stringify(mine[key]) === JSON.stringify(before[key])) continue;
+        if (mine[key] === undefined) delete merged[key];
+        else merged[key] = mine[key];
       }
-      return {
-        ...chat,
-        cwd: preferChatCwd(cur.cwd, chat.cwd),
-        draft: cur.draft || chat.draft,
-        previewTabs: cur.previewTabs?.length ? cur.previewTabs : chat.previewTabs,
-        previewPath: cur.previewPath || chat.previewPath,
-        agentId: cur.agentId || chat.agentId,
-      };
-    }),
-  );
+      synced.set(row.id, metaKey(base));
+      out.push({ ...(merged as Omit<Chat, "turns">), preview: base.preview, turns: cur.turns } as Chat);
+      continue;
+    }
+    if (last === undefined) {
+      // 本地有、但从没和网关对齐过（本地新建后被别处同步上去）：本地元数据优先，下一轮上传
+      out.push({ ...cur, preview: base.preview, agentId: cur.agentId || base.agentId });
+      continue;
+    }
+    const next: Chat = { ...base, turns: cur.turns };
+    synced.set(row.id, metaKey(next));
+    out.push(next);
+  }
+  for (const chat of local) {
+    if (remoteIds.has(chat.id) || deleted.has(chat.id) || chat.id === "boot") continue;
+    // 只留从没和网关对齐过的（本地新建还没上传的）；对齐过又不在列表里 = 别处删了
+    if (!synced.has(chat.id)) out.push(chat);
+  }
+  return out;
 }
 
 function mergeToolOutput(
@@ -1089,7 +1180,8 @@ const RECENT_KEY = "cursor-remote-recent";
 const HELLO_CLIENT: HelloClient = {
   name: "cursor-remote-web",
   version: process.env.NEXT_PUBLIC_APP_VERSION ?? "dev",
-  caps: ["sync_chat", "stored_digest"],
+  caps: ["sync_chat", "stored_digest", "slim_state"],
+  maxMessageBytes: 8 * 1024 * 1024,
 };
 const MAX_DELETED = 200;
 const IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/jpg"]);
@@ -1113,58 +1205,6 @@ function clearBrowserChatStore() {
 function pushRecent(prev: string[], path: string): string[] {
   if (!path.trim()) return prev;
   return [path, ...prev.filter((item) => item !== path)].slice(0, MAX_RECENT);
-}
-
-/** 工具正文上线上限。高于卡片 1.2 万的展示截断，diff 还留得住。 */
-const TOOL_TEXT_CAP = 24_000;
-
-function capWireValue(value: unknown, depth = 0): unknown {
-  if (typeof value === "string") {
-    const mark = "\n…（过长已截断）";
-    return value.length <= TOOL_TEXT_CAP ? value : value.slice(0, TOOL_TEXT_CAP - mark.length) + mark;
-  }
-  if (depth >= 8 || value == null || typeof value !== "object") return value;
-  if (Array.isArray(value)) {
-    const items = depth === 0 && value.length > 400 ? value.slice(0, 400) : value;
-    return items.map((item) => capWireValue(item, depth + 1));
-  }
-  const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = capWireValue(item, depth + 1);
-  }
-  return out;
-}
-
-function slimTool(tool: ToolCall, known: Set<string> | undefined): ToolCall {
-  if (tool.status !== "running" && known?.has(tool.callId)) {
-    const next = { ...tool, keepBody: true as const };
-    delete next.args;
-    delete next.result;
-    return next;
-  }
-  return {
-    ...tool,
-    args: tool.args === undefined ? undefined : capWireValue(tool.args),
-    result: tool.result === undefined ? undefined : capWireValue(tool.result),
-  };
-}
-
-function slimChats(chats: Chat[], acked?: Map<string, Set<string>>): Chat[] {
-  return chats.map((chat) => ({
-    ...chat,
-    previewTabs: chat.previewTabs?.map(({ path, line }) => ({ path, line })),
-    draftImages: chat.draftImages?.slice(0, 3),
-    turns: chat.turns.map((turn, index, all) => {
-      const { running, ...rest } = turn;
-      const keepImages = index >= all.length - 20;
-      const settled = settleTurn(
-        { ...rest, images: keepImages ? turn.images : undefined, running: false },
-        running ? turn.status || "cancelled" : turn.status,
-      );
-      const known = acked?.get(chat.id);
-      return { ...settled, tools: settled.tools.map((tool) => slimTool(tool, known)) };
-    }),
-  }));
 }
 
 function stopOrphanRuns(chats: Chat[], keepIds?: Iterable<string>): Chat[] {
@@ -1445,7 +1485,7 @@ export default function ChatApp() {
     const seenEmpty = new Set<string>();
     for (const chat of chats) {
       if (assistantChatId && chat.id === assistantChatId) continue;
-      const empty = chat.title === "新对话" && !chat.turns.length;
+      const empty = chat.title === "新对话" && !chatHasContent(chat);
       if (!empty) {
         keep.add(chat.id);
         continue;
@@ -1469,8 +1509,8 @@ export default function ChatApp() {
       const text = (turns[i].assistant.trim() || turns[i].user.trim()).replace(/\s+/g, " ");
       if (text) return text.slice(0, 80);
     }
-    return "今日 · 收件箱 · 记忆";
-  }, [assistantChat?.turns]);
+    return assistantChat?.preview?.trim().slice(0, 80) || "今日 · 收件箱 · 记忆";
+  }, [assistantChat?.turns, assistantChat?.preview]);
 
   const recentWorkspaces = useMemo(() => {
     const seen = new Set<string>();
@@ -1580,22 +1620,20 @@ export default function ChatApp() {
   const appliedStoreRef = useRef(false);
   const stateRevRef = useRef(0);
   const deletedIdsRef = useRef<Set<string>>(new Set());
-  // P4 增量同步：每会话版本号 + 脏标记 + 在途确认
+  // 同步 v2（docs/chat-sync.md）：正文以网关为准，网页只传元数据
   const chatRevsRef = useRef<Record<string, number>>({});
-  const dirtyIdsRef = useRef<Set<string>>(new Set());
-  const inflightIdsRef = useRef<Set<string>>(new Set());
-  const inflightFullRef = useRef(false);
-  const fullSyncRef = useRef(true); // 首次同步全量（对齐现状）
-  const pendingLoadsRef = useRef<Set<string>>(new Set());
-  const suppressDirtyRef = useRef<Map<string, Chat>>(new Map()); // 服务端驱动的 setChats 不标脏（按对象引用精确抑制）
-  // 已随 sync_ack 落盘的工具正文，之后的同步只带 keepBody
-  const ackedToolBodiesRef = useRef<Map<string, Set<string>>>(new Map());
-  const pendingToolBodiesRef = useRef<Map<string, Set<string>>>(new Map());
-  const prevChatsRef = useRef<Chat[]>([]);
+  /// 每个会话最后一次和网关对齐的元数据快照（metaKey）
+  const syncedMetaRef = useRef<Map<string, string>>(new Map());
+  /// 已发出、等 sync_ack 的元数据上传，按发送顺序；base 是发送时的服务端 chatRev
+  const inflightMetaRef = useRef<Map<string, { key: string; base: number | undefined }[]>>(new Map());
+  const bodyRef = useRef<Map<string, BodyState>>(new Map());
+  const loadNonceRef = useRef(0);
+  const cacheTimersRef = useRef<Map<string, number>>(new Map());
+  const stateTimerRef = useRef<number | undefined>(undefined);
+  /// load_state 已发、stored_state 还没回：先别上传元数据，否则旧字段会盖掉别处的改动
+  const stateWaitRef = useRef(0);
+  const [bodyTick, setBodyTick] = useState(0);
   const [syncTick, setSyncTick] = useState(0);
-  const digestTimerRef = useRef<number | undefined>(undefined);
-  /// 网关是否支持 P4（stored_state 带 chatRevs / 收到 ack/digest/stored_chat）；默认 false 先走全量
-  const serverP4Ref = useRef(false);
   const renameSkipRef = useRef(false);
   const previewTabsRef = useRef(previewTabs);
   previewTabsRef.current = previewTabs;
@@ -1630,17 +1668,13 @@ export default function ChatApp() {
     stateRevRef.current = 0;
     deletedIdsRef.current = new Set();
     chatRevsRef.current = {};
-    dirtyIdsRef.current = new Set();
-    inflightIdsRef.current = new Set();
-    inflightFullRef.current = false;
-    fullSyncRef.current = true;
-    pendingLoadsRef.current = new Set();
-    suppressDirtyRef.current = new Map();
-    ackedToolBodiesRef.current = new Map();
-    pendingToolBodiesRef.current = new Map();
-    prevChatsRef.current = [];
-    serverP4Ref.current = false;
-    if (digestTimerRef.current) window.clearTimeout(digestTimerRef.current);
+    syncedMetaRef.current = new Map();
+    inflightMetaRef.current = new Map();
+    bodyRef.current = new Map();
+    stateWaitRef.current = 0;
+    for (const timer of cacheTimersRef.current.values()) window.clearTimeout(timer);
+    cacheTimersRef.current = new Map();
+    void clearBodies();
     lastProgressRef.current = {};
     stallNoticedRef.current.clear();
     outboxRef.current = [];
@@ -2057,71 +2091,35 @@ export default function ChatApp() {
           break;
         case "stored_state":
           {
-            if (message.chatRevs !== undefined) serverP4Ref.current = true;
-            const remoteRev = typeof message.rev === "number" ? message.rev : 0;
-            if (appliedStoreRef.current && remoteRev <= stateRevRef.current) break;
             if (!Array.isArray(message.chats)) break;
+            const remoteRev = typeof message.rev === "number" ? message.rev : 0;
             appliedStoreRef.current = true;
+            stateWaitRef.current = 0;
             if (remoteRev > stateRevRef.current) stateRevRef.current = remoteRev;
             if (Array.isArray(message.deletedIds)) {
               deletedIdsRef.current = new Set(
                 [...deletedIdsRef.current, ...message.deletedIds].slice(0, MAX_DELETED),
               );
             }
-            if (!message.chats.length) {
-              // 服务端全空（新租户/被清空）：清掉已被删的本地会话（保留脏的/boot），脏会话触发重推
-              const kept = chatsRef.current.filter(
-                (chat) =>
-                  !deletedIdsRef.current.has(chat.id) ||
-                  dirtyIdsRef.current.has(chat.id) ||
-                  chat.id === "boot",
-              );
-              if (kept.length !== chatsRef.current.length) {
-                prevChatsRef.current = kept; // 服务端驱动，抑制 effect 的删除检测
-                setChats(kept);
-              }
-              if (dirtyIdsRef.current.size) setSyncTick((n) => n + 1);
-              break;
-            }
-            const mergedRaw = mergeRemoteChats(
+            chatRevsRef.current = { ...(message.chatRevs ?? {}) };
+            let merged = mergeSlimChats(
               chatsRef.current,
               message.chats as Chat[],
               deletedIdsRef.current,
+              syncedMetaRef.current,
             );
-            // mergeRemoteChats 只保留远端 id：本地独有的脏会话（离线新建未上传）必须追加保留
-            const remoteIds = new Set(
-              (message.chats as Chat[]).map((row) => row?.id).filter((id): id is string => Boolean(id)),
-            );
-            const localOnlyDirty = chatsRef.current.filter(
-              (chat) =>
-                dirtyIdsRef.current.has(chat.id) &&
-                !remoteIds.has(chat.id) &&
-                !deletedIdsRef.current.has(chat.id),
-            );
-            const merged = localOnlyDirty.length ? [...mergedRaw, ...localOnlyDirty] : mergedRaw;
-            setChats(merged);
-            // P4：记录服务端每会话版本号；合并结果与服务端不一致的标脏（本地优先胜出的/独有的），稍后增量重推
-            chatRevsRef.current = message.chatRevs ?? {};
-            {
-              const remoteById = new Map<string, Chat>(
-                (message.chats as Chat[])
-                  .filter((row) => row && typeof row === "object" && typeof row.id === "string")
-                  .map((row) => [row.id, row]),
-              );
-              for (const chat of merged) {
-                if (chat.id === "boot") continue;
-                const row = remoteById.get(chat.id);
-                if (!row || deletedIdsRef.current.has(chat.id)) {
-                  dirtyIdsRef.current.add(chat.id);
-                  continue;
-                }
-                if (JSON.stringify(slimChats([row])[0]) !== JSON.stringify(slimChats([chat])[0])) {
-                  dirtyIdsRef.current.add(chat.id);
-                }
-              }
-              // 这次 setChats 是服务端驱动：抑制同步 effect 的引用 diff（脏标记已在上面精确算好）
-              prevChatsRef.current = merged;
+            if (!merged.length) {
+              const boot = chatsRef.current.find((chat) => chat.id === "boot");
+              merged = [boot || { id: "boot", title: "新对话", turns: [] }];
             }
+            const keepIds = new Set(merged.map((chat) => chat.id));
+            for (const id of [...bodyRef.current.keys()]) {
+              if (!keepIds.has(id)) bodyRef.current.delete(id);
+            }
+            chatsRef.current = merged;
+            setChats(merged);
+            setSyncTick((n) => n + 1);
+            setBodyTick((n) => n + 1);
             const current = merged.find((item) => item.id === activeIdRef.current);
             const keep =
               current || merged.find((item) => isAssistantChat(item.id)) || merged[0];
@@ -2173,124 +2171,90 @@ export default function ChatApp() {
             }
           }
           break;
-        // P4b：sync_state / sync_chat 被网关接受后的回执
+        // sync_chat（元数据）、tool_review、truncate_turns 被网关接受后的回执
         case "sync_ack": {
-          serverP4Ref.current = true;
           const revs = message.chatRevs ?? {};
           for (const [id, rev] of Object.entries(revs)) {
             if (typeof rev !== "number") continue;
+            const before = chatRevsRef.current[id];
             chatRevsRef.current[id] = rev;
-            // 保留回执只对齐版本号。清掉 in-flight 会把还没被确认的正文同步当成已经落盘。
-            if (message.reviewOnly) continue;
-            inflightIdsRef.current.delete(id);
-            // 注意：不清 dirtyIdsRef——发送后又改过的会话保持脏，下一轮重推
-            if (message.keptBodies) {
-              const pending = pendingToolBodiesRef.current.get(id);
-              if (pending) {
-                const known = ackedToolBodiesRef.current.get(id) ?? new Set<string>();
-                for (const callId of pending) known.add(callId);
-                ackedToolBodiesRef.current.set(id, known);
-                pendingToolBodiesRef.current.delete(id);
-              }
+            const body = bodyRef.current.get(id);
+            if (message.truncated === false) {
+              // 网关没截成，本地截过的正文作废，按服务端重拉
+              if (body?.state === "complete") body.rev = undefined;
+              continue;
+            }
+            if (message.reviewOnly || message.truncated) {
+              // 本地已经做了同样的改动：正文跟着前进，不用重拉
+              if (body?.state === "complete" && body.rev === before) body.rev = rev;
+              scheduleBodyCache(id);
+              continue;
+            }
+            const queue = inflightMetaRef.current.get(id);
+            const sent = queue?.shift();
+            if (queue && !queue.length) inflightMetaRef.current.delete(id);
+            if (!sent) continue;
+            syncedMetaRef.current.set(id, sent.key);
+            // 只改了元数据：发出时正文是最新的，并且中途没有别的版本插进来，正文才算跟着前进
+            const chat = chatsRef.current.find((item) => item.id === id);
+            if (
+              body?.state === "complete" &&
+              body.rev === sent.base &&
+              before === sent.base &&
+              !chat?.turns.some(liveTurn)
+            ) {
+              body.rev = rev;
+              scheduleBodyCache(id);
             }
           }
           if (typeof message.rev === "number" && message.rev > stateRevRef.current) {
             stateRevRef.current = message.rev;
           }
-          inflightFullRef.current = false;
+          setBodyTick((n) => n + 1);
           break;
         }
-        // P4c：分叉时的目录对账——只拉差异会话，本地脏的保留优先
+        // 网关版本前进（别的设备、跑完一轮、或本端上传因 rev 落后被拒）
         case "stored_digest": {
-          serverP4Ref.current = true;
-          // 被拒的在途增量回到脏集合（服务端没收下，本地优先稍后重推）
-          for (const id of inflightIdsRef.current) dirtyIdsRef.current.add(id);
-          inflightIdsRef.current = new Set();
-          if (inflightFullRef.current) {
-            inflightFullRef.current = false;
-            fullSyncRef.current = true; // 全量被拒：对账合并后重新全量
-          }
+          // 被拒的上传不会再有 ack：清掉在途，元数据仍和快照不同，下一轮重推
+          inflightMetaRef.current = new Map();
           const remoteRev = typeof message.rev === "number" ? message.rev : 0;
           if (remoteRev > stateRevRef.current) stateRevRef.current = remoteRev;
-          appliedStoreRef.current = true;
           if (Array.isArray(message.deletedIds)) {
             deletedIdsRef.current = new Set(
               [...deletedIdsRef.current, ...message.deletedIds].slice(0, MAX_DELETED),
             );
           }
           const serverRevs = message.chatRevs ?? {};
-          const digestIds = new Set(Object.keys(serverRevs));
-          // 本地有、digest 没有 → 已被别处删除；本地脏的/从未同步过的（无 rev）保留
-          const kept = chatsRef.current.filter(
+          // 和网关对齐过、现在不在目录里 = 别处删了；本地新建还没上传的保留
+          const gone = chatsRef.current.filter(
             (chat) =>
-              digestIds.has(chat.id) ||
-              dirtyIdsRef.current.has(chat.id) ||
-              chatRevsRef.current[chat.id] == null ||
-              chat.id === "boot",
+              chat.id !== "boot" &&
+              !(chat.id in serverRevs) &&
+              (syncedMetaRef.current.has(chat.id) || deletedIdsRef.current.has(chat.id)),
           );
-          if (kept.length !== chatsRef.current.length) {
-            suppressDirtyRef.current.clear(); // 删除是服务端驱动，不标脏
-            prevChatsRef.current = kept; // 整体抑制 effect 的删除检测（否则冗余触发全量回传）
-            setChats(kept);
+          if (gone.length) {
+            const goneIds = new Set(gone.map((chat) => chat.id));
+            for (const id of goneIds) forgetLocalChat(id);
+            const kept = chatsRef.current.filter((chat) => !goneIds.has(chat.id));
+            chatsRef.current = kept.length ? kept : [{ id: "boot", title: "新对话", turns: [] }];
+            setChats(chatsRef.current);
           }
-          // 清掉已删除会话的版本号残留（保留脏会话的）
-          for (const id of Object.keys(chatRevsRef.current)) {
-            if (!digestIds.has(id) && !dirtyIdsRef.current.has(id)) delete chatRevsRef.current[id];
+          let listStale = false;
+          for (const [id, rev] of Object.entries(serverRevs)) {
+            if (deletedIdsRef.current.has(id)) continue;
+            if (chatRevsRef.current[id] !== rev || !chatsRef.current.some((chat) => chat.id === id)) {
+              listStale = true;
+            }
           }
-          // rev 不一致或本地缺失 → 拉取（本地脏的跳过：本地优先）
-          const toFetch = Object.entries(serverRevs)
-            .filter(
-              ([id, rev]) =>
-                !deletedIdsRef.current.has(id) &&
-                !dirtyIdsRef.current.has(id) &&
-                (chatRevsRef.current[id] !== rev || !chatsRef.current.some((chat) => chat.id === id)),
-            )
-            .map(([id]) => id);
-          if (toFetch.length) {
-            pendingLoadsRef.current = new Set(toFetch);
-            send({ type: "load_chats", ids: toFetch });
-            // 安全网：网关对缺失 id 静默跳过，5s 后强制清空避免卡死同步（存 id 防叠加）
-            if (digestTimerRef.current) window.clearTimeout(digestTimerRef.current);
-            digestTimerRef.current = window.setTimeout(() => {
-              digestTimerRef.current = undefined;
-              if (!pendingLoadsRef.current.size) return;
-              pendingLoadsRef.current = new Set();
-              setSyncTick((n) => n + 1);
-            }, 5000);
-          } else if (dirtyIdsRef.current.size) {
-            setSyncTick((n) => n + 1); // 无需拉取，直接触发重推
-          }
+          chatRevsRef.current = { ...serverRevs };
+          if (listStale) requestState();
+          setSyncTick((n) => n + 1);
+          setBodyTick((n) => n + 1);
           break;
         }
-        // P4c：load_chats 的应答（单个会话全量）
-        case "stored_chat": {
-          serverP4Ref.current = true;
-          const remote = message.chat as Chat | undefined;
-          if (!remote || typeof remote !== "object" || typeof remote.id !== "string" || !remote.id) break;
-          if (deletedIdsRef.current.has(remote.id)) break;
-          pendingLoadsRef.current.delete(remote.id);
-          if (typeof message.rev === "number") chatRevsRef.current[remote.id] = message.rev;
-          // 本地脏的会话本地优先（稍后重推），不脏才应用服务器版
-          if (!dirtyIdsRef.current.has(remote.id)) {
-            // 函数式 setChats（与 patchChat 一致），updater 内登记按引用抑制
-            setChats((prev) => {
-              const exists = prev.some((chat) => chat.id === remote.id);
-              const applied = exists
-                ? { ...remote, draft: prev.find((chat) => chat.id === remote.id)?.draft || remote.draft }
-                : remote;
-              suppressDirtyRef.current.set(remote.id, applied);
-              return exists
-                ? prev.map((chat) => (chat.id === remote.id ? applied : chat))
-                : [...prev, applied];
-            });
-          }
-          if (!pendingLoadsRef.current.size) {
-            if (digestTimerRef.current) {
-              window.clearTimeout(digestTimerRef.current);
-              digestTimerRef.current = undefined;
-            }
-            setSyncTick((n) => n + 1); // 对账完毕，触发重推
-          }
+        // load_chat 的分页应答：from 是这一页在全量里的起点，从后往前翻
+        case "chat_turns": {
+          onChatTurns(message);
           break;
         }
         case "session":
@@ -2445,6 +2409,8 @@ export default function ChatApp() {
           break;
         }
         case "history":
+          // 正文还没对齐服务端时不掺 Cursor 端历史，免得和随后到的分页打架
+          if (bodyRef.current.get(chatId)?.state !== "complete") break;
           patchChat(chatId, (chat) => {
             const incoming = historyToTurns(Array.isArray(message.turns) ? message.turns : []);
             if (!incoming.length) return chat;
@@ -3091,76 +3057,32 @@ export default function ChatApp() {
     setPreviewMax(true);
   }, []);
 
+  // 元数据和最后一次对齐的快照不同就上传；不带 turns 键，网关保留磁盘正文
   useEffect(() => {
     if (!unlockedRef.current) return;
-    if (chats.length === 1 && chats[0].id === "boot") return;
-    // P4b：引用 diff 出脏会话（不可变更新——变了的 chat 是新对象）
-    const prev = prevChatsRef.current;
-    prevChatsRef.current = chats;
-    const prevById = new Map(prev.map((item) => [item.id, item]));
-    const nowIds = new Set(chats.map((item) => item.id));
-    // 有会话被移除 → 全量对账（tombstone 只有 sync_state 做）；新增/内容变化走增量
-    if (prev.some((item) => !nowIds.has(item.id))) fullSyncRef.current = true;
-    for (const chat of chats) {
-      if (chat.id === "boot") continue;
-      const old = prevById.get(chat.id);
-      if (!old) {
-        dirtyIdsRef.current.add(chat.id); // 新会话：sync_chat 让网关追加
-      } else if (old !== chat) {
-        // 仅当当前对象就是服务端应用的那一份时才抑制；用户随后编辑过（新对象）必须标脏
-        const suppressed = suppressDirtyRef.current.get(chat.id);
-        if (suppressed) suppressDirtyRef.current.delete(chat.id);
-        if (suppressed !== chat) dirtyIdsRef.current.add(chat.id);
-      }
-    }
     const timer = window.setTimeout(() => {
-      if (pendingLoadsRef.current.size) return; // digest 对账在途，收齐后再推
-      stateRevRef.current += 1;
-      // 旧网关没有 ack/digest，增量状态机跑不起来：退回全量（老行为），不动 dirty/inflight
-      if (!serverP4Ref.current) {
-        for (const chat of chatsRef.current) noteToolBodies(chat);
-        send({
-          type: "sync_state",
-          chats: slimChats(chatsRef.current, ackedToolBodiesRef.current),
-          rev: stateRevRef.current,
-        });
-        return;
-      }
-      if (fullSyncRef.current) {
-        fullSyncRef.current = false;
-        inflightFullRef.current = true;
-        // 脏集合移入 inflight：ack 清 inflight 收敛；被拒（digest）时倒回 dirty 重推
-        for (const id of dirtyIdsRef.current) inflightIdsRef.current.add(id);
-        dirtyIdsRef.current = new Set();
-        for (const chat of chatsRef.current) noteToolBodies(chat);
-        send({
-          type: "sync_state",
-          chats: slimChats(chatsRef.current, ackedToolBodiesRef.current),
-          rev: stateRevRef.current,
-        });
-        return;
-      }
-      // P4b：只上传脏会话（流式期间从全量降到单会话）
-      const dirty = [...dirtyIdsRef.current].filter((id) => !inflightIdsRef.current.has(id));
-      if (!dirty.length) return;
-      for (const id of dirty) {
-        const chat = chatsRef.current.find((item) => item.id === id);
-        if (!chat) {
-          dirtyIdsRef.current.delete(id); // 本地已删（结构变化会走全量）
-          continue;
-        }
-        dirtyIdsRef.current.delete(id);
-        inflightIdsRef.current.add(id);
-        noteToolBodies(chat);
-        send({
-          type: "sync_chat",
-          chat: slimChats([chat], ackedToolBodiesRef.current)[0],
-          rev: stateRevRef.current,
-        });
+      if (!appliedStoreRef.current) return;
+      if (stateWaitRef.current && Date.now() - stateWaitRef.current < 5000) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      for (const chat of chatsRef.current) {
+        if (chat.id === "boot" || deletedIdsRef.current.has(chat.id)) continue;
+        const key = metaKey(chat);
+        const queue = inflightMetaRef.current.get(chat.id) ?? [];
+        const latest = queue.length ? queue[queue.length - 1].key : syncedMetaRef.current.get(chat.id);
+        if (latest === key) continue;
+        stateRevRef.current += 1;
+        queue.push({ key, base: chatRevsRef.current[chat.id] });
+        inflightMetaRef.current.set(chat.id, queue);
+        send({ type: "sync_chat", chat: chatMeta(chat), rev: stateRevRef.current });
       }
     }, 800);
     return () => window.clearTimeout(timer);
   }, [chats, send, syncTick]);
+
+  useEffect(() => {
+    if (connected && unlocked) ensureBody(activeId);
+  }, [activeId, bodyTick, connected, unlocked]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -3438,14 +3360,13 @@ export default function ChatApp() {
         holdSnapshotRef.current.clear();
         sawSnapshotRef.current.clear();
         resumedRef.current.clear();
-        // P4：断线时在途的 sync_chat 永远等不到 ack——倒回脏集合，重连后随 diff/重推恢复
-        if (inflightIdsRef.current.size) {
-          for (const id of inflightIdsRef.current) dirtyIdsRef.current.add(id);
-          inflightIdsRef.current = new Set();
-        }
-        if (inflightFullRef.current) {
-          inflightFullRef.current = false;
-          fullSyncRef.current = true; // 全量没送达（可能含删除 tombstone），重连后重发全量
+        // 在途的上传和分页都等不到应答了：元数据重连后按快照重推，正文退回加载前的状态
+        inflightMetaRef.current = new Map();
+        stateWaitRef.current = 0;
+        for (const [id, body] of [...bodyRef.current]) {
+          if (body.state !== "loading") continue;
+          if (body.prev === "complete") bodyRef.current.set(id, { state: "complete", rev: body.rev });
+          else bodyRef.current.delete(id);
         }
         if (!unlockedRef.current) {
           setVerifying(false);
@@ -3579,7 +3500,7 @@ export default function ChatApp() {
     if (
       target &&
       !isAssistantChat(target.id) &&
-      !target.turns.length &&
+      !chatHasContent(target) &&
       workspaceRoot &&
       sameCwd(target.cwd || workspaceRoot, workspaceRoot)
     ) {
@@ -3684,7 +3605,7 @@ export default function ChatApp() {
       (chat) =>
         !isAssistantChat(chat.id) &&
         chat.title === "新对话" &&
-        !chat.turns.length &&
+        !chatHasContent(chat) &&
         sameCwd(chat.cwd || workspaceRoot, next),
     );
     setWorkspaceMenuOpen(false);
@@ -4367,16 +4288,156 @@ export default function ChatApp() {
     send({ type: "revert_hunk", chatId: activeIdRef.current, path, hunk });
   }
 
-  function noteToolBodies(chat: Chat) {
-    const known = ackedToolBodiesRef.current.get(chat.id);
-    const pending = new Set<string>();
-    for (const turn of chat.turns) {
-      for (const tool of turn.tools) {
-        if (tool.status === "running" || known?.has(tool.callId)) continue;
-        pending.add(tool.callId);
-      }
+  function requestState() {
+    stateWaitRef.current = Date.now();
+    if (stateTimerRef.current) return;
+    stateTimerRef.current = window.setTimeout(() => {
+      stateTimerRef.current = undefined;
+      send({ type: "load_state" });
+    }, 300);
+  }
+
+  function forgetLocalChat(id: string) {
+    bodyRef.current.delete(id);
+    syncedMetaRef.current.delete(id);
+    inflightMetaRef.current.delete(id);
+    delete chatRevsRef.current[id];
+    const timer = cacheTimersRef.current.get(id);
+    if (timer) window.clearTimeout(timer);
+    cacheTimersRef.current.delete(id);
+    void dropBody(tenantIdRef.current, id);
+  }
+
+  /** 正文完整、和服务端同版本、没有在跑的回合时，写进浏览器缓存 */
+  function scheduleBodyCache(id: string) {
+    const tenant = tenantIdRef.current;
+    if (!tenant) return;
+    const old = cacheTimersRef.current.get(id);
+    if (old) window.clearTimeout(old);
+    cacheTimersRef.current.set(
+      id,
+      window.setTimeout(() => {
+        cacheTimersRef.current.delete(id);
+        if (tenantIdRef.current !== tenant) return;
+        const body = bodyRef.current.get(id);
+        const chat = chatsRef.current.find((item) => item.id === id);
+        if (!chat || body?.state !== "complete" || body.rev == null) return;
+        if (body.rev !== chatRevsRef.current[id] || chat.turns.some(liveTurn)) return;
+        // 超大回合分页时是截断副本，不能当完整正文缓存
+        if (chat.turns.some((turn) => (turn as { clipped?: boolean }).clipped)) return;
+        void writeBody(tenant, id, body.rev, chat.turns);
+      }, 1500),
+    );
+  }
+
+  function commitBody(id: string, turns: Turn[], rev: number) {
+    bodyRef.current.set(id, { state: "complete", rev });
+    setChats((prev) =>
+      prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, turns) } : chat)),
+    );
+    setBodyTick((n) => n + 1);
+    scheduleBodyCache(id);
+  }
+
+  /**
+   * 让会话正文对齐服务端 chatRev。有旧正文（内存或缓存）时先只拉最后一页拼接，
+   * 对不上再从后往前整段拉；整段加载和 iOS 一致，查找、终端、编辑定位都依赖全量。
+   */
+  function ensureBody(id: string) {
+    if (!id || id === "boot" || !appliedStoreRef.current || !unlockedRef.current) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const target = chatRevsRef.current[id];
+    const body = bodyRef.current.get(id);
+    if (body?.state === "loading") return;
+    if (target == null) {
+      // 网关还不知道这个会话（本地新建）：本地就是全部
+      if (!body) bodyRef.current.set(id, { state: "complete", rev: undefined });
+      return;
     }
-    pendingToolBodiesRef.current.set(chat.id, pending);
+    if (body?.state === "complete" && body.rev === target) return;
+    const chat = chatsRef.current.find((item) => item.id === id);
+    if (!chat) return;
+    const nonce = ++loadNonceRef.current;
+    bodyRef.current.set(id, {
+      state: "loading",
+      rev: body?.rev,
+      prev: body ? "complete" : "none",
+      nonce,
+      target,
+      base: body ? chat.turns : null,
+      buf: [],
+      progressive: false,
+    });
+    setBodyTick((n) => n + 1);
+    if (body) {
+      send({ type: "load_chat", chatId: id, nonce });
+      return;
+    }
+    void readBody<Turn>(tenantIdRef.current, id).then((cached) => {
+      const cur = bodyRef.current.get(id);
+      if (cur?.state !== "loading" || cur.nonce !== nonce) return;
+      if (cached && cached.rev === target) {
+        commitBody(id, cached.turns, target);
+        return;
+      }
+      if (cached) {
+        cur.base = cached.turns;
+        setChats((prev) =>
+          prev.map((item) =>
+            item.id === id ? { ...item, turns: withLiveTurns(item.turns, cached.turns) } : item,
+          ),
+        );
+      }
+      send({ type: "load_chat", chatId: id, nonce });
+    });
+  }
+
+  function onChatTurns(message: Extract<ServerMessage, { type: "chat_turns" }>) {
+    const id = message.chatId;
+    const cur = bodyRef.current.get(id);
+    if (cur?.state !== "loading" || cur.nonce !== message.nonce) return;
+    const page = (Array.isArray(message.turns) ? message.turns : [])
+      .map(serverTurn)
+      .filter((turn): turn is Turn => Boolean(turn));
+    const from = typeof message.from === "number" ? message.from : 0;
+    if (cur.base) {
+      const base = cur.base;
+      cur.base = null;
+      if (!message.hasMore) {
+        commitBody(id, page, cur.target);
+        return;
+      }
+      if (page.length && base[from]?.id === page[0].id) {
+        commitBody(id, [...base.slice(0, from), ...page], cur.target);
+        return;
+      }
+      // 前面的回合对不上（别处编辑过）：整段重拉，旧内容先留着显示
+    } else if (!cur.buf.length) {
+      const chat = chatsRef.current.find((item) => item.id === id);
+      cur.progressive = !chat?.turns.some((turn) => !liveTurn(turn));
+    }
+    cur.buf = [...page, ...cur.buf];
+    if (!message.hasMore) {
+      commitBody(id, cur.buf, cur.target);
+      return;
+    }
+    if (cur.progressive) {
+      const shown = cur.buf;
+      setChats((prev) =>
+        prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, shown) } : chat)),
+      );
+    }
+    setBodyTick((n) => n + 1);
+    send({ type: "load_chat", chatId: id, from, nonce: cur.nonce });
+  }
+
+  /** 编辑、重试要按全量定位回合，正文没加载完时先挡住 */
+  function bodyReady(id: string): boolean {
+    const body = bodyRef.current.get(id);
+    if (!body || body.state === "complete") return true;
+    setNotice("正在加载完整记录，稍后再试");
+    return false;
   }
 
   function applyToolReviews(turnId: string, reviews: { callId: string; review: "accepted" | "rejected" }[]) {
@@ -4398,8 +4459,6 @@ export default function ChatApp() {
               },
         ),
       };
-      // updater 在 effect 之前跑，抑制的是即将提交的那份对象，避免整段会话再走 sync_chat
-      suppressDirtyRef.current.set(chatId, next);
       return next;
     });
     send({ type: "tool_review", chatId, turnId, reviews });
@@ -4516,9 +4575,11 @@ export default function ChatApp() {
       return;
     }
     const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
-    if (!chat) return;
+    if (!chat || !bodyReady(chat.id)) return;
     const index = chat.turns.findIndex((item) => item.id === turn.id);
     if (index < 0) return;
+    stateRevRef.current += 1;
+    send({ type: "truncate_turns", chatId: chat.id, turnId: turn.id, rev: stateRevRef.current });
     const next: Turn = {
       ...turn,
       assistant: "",
@@ -4561,12 +4622,15 @@ export default function ChatApp() {
       return;
     }
     const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
-    if (!chat) return;
+    if (!chat || !bodyReady(chat.id)) return;
     const index = chat.turns.findIndex((item) => item.id === turn.id);
     if (index < 0) return;
+    stateRevRef.current += 1;
+    send({ type: "truncate_turns", chatId: chat.id, turnId: turn.id, rev: stateRevRef.current });
     patchActive((item) => ({
       ...item,
       turns: item.turns.slice(0, index),
+      preview: index === 0 ? undefined : item.preview,
       agentId: undefined,
     }));
     send({ type: "new_session", chatId: activeIdRef.current });
@@ -4600,13 +4664,6 @@ export default function ChatApp() {
     });
   }
 
-  function flushChats(next: Chat[]) {
-    chatsRef.current = next;
-    stateRevRef.current += 1;
-    for (const chat of next) noteToolBodies(chat);
-    send({ type: "sync_state", chats: slimChats(next, ackedToolBodiesRef.current), rev: stateRevRef.current });
-  }
-
   function deleteChat(id: string) {
     if (isAssistantChat(id)) return;
     const stored = draftsByChatRef.current[id] || {};
@@ -4629,6 +4686,7 @@ export default function ChatApp() {
       send({ type: "cancel", chatId: id });
     }
     send({ type: "delete_session", chatId: id });
+    forgetLocalChat(id);
     const rest = chatsRef.current.filter((chat) => chat.id !== id);
     delete imagesRef.current[id];
     if (!rest.length) {
@@ -4663,11 +4721,10 @@ export default function ChatApp() {
       if (atRoot) return;
       send({ type: "new_session", chatId: chat.id, cwd: chat.cwd });
       if (nextModel) send({ type: "set_model", model: nextModel, chatId: chat.id });
-      flushChats([chat]);
       return;
     }
+    chatsRef.current = rest;
     setChats(rest);
-    flushChats(rest);
     if (id !== activeIdRef.current) return;
     const chat = rest.find((item) => isAssistantChat(item.id)) || rest[0];
     autoPickedIdRef.current = "";
@@ -4808,7 +4865,14 @@ export default function ChatApp() {
     });
   }
 
-  const empty = !active?.turns.length;
+  const activeBody = active ? bodyRef.current.get(active.id) : undefined;
+  // 正文还没对齐：有 preview 说明服务端有内容，先显示加载中而不是欢迎页
+  const bodyPending =
+    Boolean(active) &&
+    (activeBody?.state === "loading" || (!activeBody && active?.preview !== undefined));
+  const loadingOlder =
+    activeBody?.state === "loading" && activeBody.progressive && Boolean(active?.turns.length);
+  const empty = !active?.turns.length && !bodyPending;
   searchOpenRef.current = searchOpen;
   paletteOpenRef.current = paletteOpen;
   threadFindOpenRef.current = threadFindOpen;
@@ -4823,6 +4887,7 @@ export default function ChatApp() {
         const q = searchQ.trim().toLowerCase();
         return (
           chat.title.toLowerCase().includes(q) ||
+          Boolean(chat.preview?.toLowerCase().includes(q)) ||
           chat.turns.some((turn) => turn.user.toLowerCase().includes(q))
         );
       })
@@ -5985,6 +6050,11 @@ export default function ChatApp() {
                   <div className="warn">{friendlyError(error)}</div>
                 ) : null}
                 {notice ? <div className="warn">{notice}</div> : null}
+                {bodyPending && !active.turns.length ? (
+                  <div className="thread-loading">正在加载对话…</div>
+                ) : loadingOlder ? (
+                  <div className="thread-loading">正在加载更早的内容…</div>
+                ) : null}
                 {active.turns.map((turn, turnIndex) => {
                   if (turnSuperseded(active.turns, turnIndex)) return null;
                   let prevIndex = turnIndex - 1;

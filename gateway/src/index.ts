@@ -56,6 +56,7 @@ import {
   sandboxEnabledForTenant,
   workspaceFenceForTenant,
   saveDisk,
+  saveDiskNow,
   settlePersistedChats,
   stateDir,
   type DiskSlot,
@@ -140,6 +141,8 @@ const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
 /** 工具正文落盘上限。高于网页卡片的 1.2 万展示截断，diff 字段仍留得住。 */
 const TOOL_TEXT_CAP = 24_000;
 const TOOL_TEXT_MARK = "\n…（过长已截断）";
+/** 落盘只留每个会话最近这么多轮的用户图片 */
+const KEEP_TURN_IMAGES = 20;
 
 loadTenants();
 for (const tenant of allTenants()) {
@@ -147,7 +150,7 @@ for (const tenant of allTenants()) {
     console.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);
   }
   if (compactTenantChats(tenant)) {
-    saveDisk(tenant);
+    saveDiskNow(tenant);
     console.log(`已截断过长的工具记录 ${tenant.name}（${tenant.id}）`);
   }
 }
@@ -596,10 +599,17 @@ function armRunFlush(slot: Slot) {
   }, 3_000);
 }
 
-function openTranscript(slot: Slot, turnId: string | undefined, userText: string, epoch: number) {
+function openTranscript(
+  slot: Slot,
+  turnId: string | undefined,
+  userText: string,
+  epoch: number,
+  images?: Array<{ data: string; mimeType: string }>,
+) {
   slot.transcript = {
     turnId: turnId?.trim() || crypto.randomUUID(),
     userText,
+    images: images?.length ? images : undefined,
     assistant: "",
     thinking: "",
     tools: [],
@@ -648,7 +658,7 @@ function flushTranscript(slot: Slot, broadcast: boolean) {
   }
   persistTenant(tenant);
   if (broadcast && transcript.phase === "done") {
-    broadcastDigest(tenant, null as unknown as WebSocket);
+    broadcastDigest(tenant);
   }
 }
 
@@ -880,7 +890,7 @@ function pruneChatRevs(tenant: Tenant) {
 
 /// sync 被接受后向同租户其他支持 digest 的连接广播目录（P4 审核：多设备实时对账，
 /// 否则对端要等自己 rev 分叉才发现变化，互相覆盖）。旧客户端无 caps 不收。
-function broadcastDigest(tenant: Tenant, except: WebSocket) {
+function broadcastDigest(tenant: Tenant, except?: WebSocket) {
   for (const other of conns.values()) {
     if (other.ws === except || !other.authed || other.tenant?.id !== tenant.id) continue;
     if (!other.caps.has("stored_digest")) continue;
@@ -972,7 +982,15 @@ function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = 
       }
     }
   }
-  const turns = row.turns.map((turn) => {
+  const keepImagesFrom = row.turns.length - KEEP_TURN_IMAGES;
+  const turns = row.turns.map((item, index) => {
+    let turn = item;
+    if (index < keepImagesFrom && turn && typeof turn === "object" && "images" in turn) {
+      const rest = { ...(turn as Record<string, unknown>) };
+      delete rest.images;
+      turn = rest;
+      hit.n += 1;
+    }
     if (!turn || typeof turn !== "object" || !Array.isArray((turn as { tools?: unknown }).tools)) return turn;
     const tools = (turn as { tools: unknown[] }).tools.map((tool) => {
       if (!tool || typeof tool !== "object") return tool;
@@ -1112,6 +1130,8 @@ async function forgetChat(conn: Conn, chatId: string) {
   pruneDroppedSlots(tenant, chatIdsFrom(tenant.disk.chats));
   tenant.disk.rev += 1;
   persistConn(conn);
+  // 删除方自己也要收到：rev 前进了，不对齐的话它下一次 sync_chat 会被拒一轮
+  broadcastDigest(tenant);
 }
 
 function hydrateConn(conn: Conn) {
@@ -3739,7 +3759,7 @@ async function handlePrompt(
 
   const epoch = ++slot.epoch;
   if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
-  else openTranscript(slot, turnId, userText, epoch);
+  else openTranscript(slot, turnId, userText, epoch, safeImages);
   slot.finished = false;
   slot.edited = [];
   slot.awaitingApproval = false;
@@ -5240,6 +5260,71 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         return;
       }
 
+      if (message.type === "load_state") {
+        emitStoredState(ws, tenant);
+        return;
+      }
+
+      // 编辑、重试：截掉 turnId 及之后的回合
+      if (message.type === "truncate_turns") {
+        const id = typeof message.chatId === "string" ? message.chatId : "";
+        const turnId = typeof message.turnId === "string" ? message.turnId : "";
+        if (!id || !turnId) return;
+        // 截断只动这一条会话、可重放，不做 rev 拒绝；rev 落后时接着服务端往前走
+        const clientRev = typeof message.rev === "number" ? message.rev : 0;
+        const nextRev = Math.max(clientRev, tenant.disk.rev + 1);
+        const prev = tenant.disk.deletedIds.includes(id)
+          ? undefined
+          : tenant.disk.chats.find((item) => chatIdOf(item) === id);
+        // 没截成（找不到回合或正在跑）：truncated: false，客户端重拉正文
+        const ackCurrent = () =>
+          send(ws, {
+            type: "sync_ack",
+            rev: tenant.disk.rev,
+            chatRevs: prev ? { [id]: tenant.disk.chatRevs[id] ?? 0 } : {},
+            truncated: false,
+          });
+        if (!prev || typeof prev !== "object") {
+          ackCurrent();
+          return;
+        }
+        const slot = liveSlotsOf(tenant).get(id);
+        if (runningChatIds(tenant).includes(id) || slot?.transcript?.phase === "running") {
+          ackCurrent();
+          return;
+        }
+        const row = prev as Record<string, unknown>;
+        const turns = Array.isArray(row.turns) ? row.turns : [];
+        const index = turns.findIndex(
+          (turn) => Boolean(turn) && typeof turn === "object" && (turn as { id?: unknown }).id === turnId,
+        );
+        if (index < 0) {
+          ackCurrent();
+          return;
+        }
+        const removed = new Set(
+          turns
+            .slice(index)
+            .map((turn) => (turn && typeof turn === "object" ? (turn as { id?: unknown }).id : null))
+            .filter((item): item is string => typeof item === "string" && Boolean(item)),
+        );
+        const next: Record<string, unknown> = { ...row, turns: turns.slice(0, index) };
+        const mark = readRunMark(prev);
+        if (mark && removed.has(mark.turnId)) delete next.runMark;
+        // 否则 protectChatUpload / flushTranscript 会把删掉的回合按转录补回来
+        if (slot?.transcript && removed.has(slot.transcript.turnId)) {
+          stopRunFlush(slot);
+          slot.transcript = undefined;
+        }
+        tenant.disk.rev = nextRev;
+        tenant.disk.chatRevs[id] = nextRev;
+        tenant.disk.chats = tenant.disk.chats.map((item) => (item === prev ? next : item));
+        persistConn(conn);
+        send(ws, { type: "sync_ack", rev: nextRev, chatRevs: { [id]: nextRev }, truncated: true });
+        broadcastDigest(tenant, ws);
+        return;
+      }
+
       // P4b：单会话增量上传——只替换/追加这一条，不做 tombstone（结构变化仍走 sync_state）
       if (message.type === "sync_chat") {
         const clientRev = typeof message.rev === "number" ? message.rev : 0;
@@ -6114,7 +6199,7 @@ async function startDelegation(req: DelegateRequest): Promise<string> {
   tenant.disk.rev += 1;
   tenant.disk.chatRevs[childChatId] = tenant.disk.rev;
   persistTenant(tenant);
-  broadcastDigest(tenant, null as unknown as WebSocket);
+  broadcastDigest(tenant);
   publishDelegation(tenant, record);
 
   const finish = (ok: boolean, text: string) => {

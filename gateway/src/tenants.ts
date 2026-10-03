@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -194,13 +195,55 @@ export function requireCwd(raw: string | undefined, root: string): string {
   return confinedCwd(raw, root) || confinedCwd(root, root) || resolve(root);
 }
 
+const SAVE_IDLE_MS = 1_000;
+const SAVE_MAX_WAIT_MS = 3_000;
+const pendingSaves = new Map<Tenant, { first: number; timer: ReturnType<typeof setTimeout> }>();
+let flushHooked = false;
+
+/** 合并写：最后一次调用后 1s 落盘，最长等 3s。读方都读内存里的 tenant.disk。 */
 export function saveDisk(tenant: Tenant) {
+  hookFlushOnExit();
+  const now = Date.now();
+  const pending = pendingSaves.get(tenant);
+  const first = pending ? pending.first : now;
+  if (pending) clearTimeout(pending.timer);
+  const wait = Math.max(0, Math.min(SAVE_IDLE_MS, first + SAVE_MAX_WAIT_MS - now));
+  const timer = setTimeout(() => saveDiskNow(tenant), wait);
+  pendingSaves.set(tenant, { first, timer });
+}
+
+export function saveDiskNow(tenant: Tenant) {
+  const pending = pendingSaves.get(tenant);
+  if (pending) {
+    clearTimeout(pending.timer);
+    pendingSaves.delete(tenant);
+  }
+  const tmp = `${tenant.stateFile}.tmp`;
   try {
     mkdirSync(tenant.stateDir, { recursive: true });
-    writeFileSync(tenant.stateFile, JSON.stringify(tenant.disk));
+    writeFileSync(tmp, JSON.stringify(tenant.disk));
+    renameSync(tmp, tenant.stateFile);
   } catch {
     // disk full or permission — keep running
   }
+}
+
+export function flushDisks() {
+  for (const tenant of [...pendingSaves.keys()]) saveDiskNow(tenant);
+}
+
+function hookFlushOnExit() {
+  if (flushHooked) return;
+  flushHooked = true;
+  // usage.ts 也挂了同样的信号。挂了监听后 Node 不再默认退出，所以要有人 exit；
+  // 留给最后一个监听者做，前面的监听者（以后可能加的清理）都能先跑完
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.once(signal, () => {
+      flushDisks();
+      if (process.listenerCount(signal) === 0) process.exit(0);
+    });
+  }
+  process.on("exit", () => flushDisks());
 }
 
 function findTenantsFile(): string | null {

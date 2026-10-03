@@ -5,6 +5,7 @@ export type RunTool = NonNullable<HistoryTurn["tools"]>[number];
 export type RunTranscript = {
   turnId: string;
   userText: string;
+  images?: Array<{ data: string; mimeType: string }>;
   assistant: string;
   thinking: string;
   tools: RunTool[];
@@ -229,6 +230,8 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
     tools: transcript.tools,
     running: transcript.phase === "running",
   };
+  // 没图时不写键，合并时别把旧客户端传上来的图盖掉
+  if (transcript.images?.length) row.images = transcript.images;
   if (transcript.task) row.task = transcript.task;
   if (transcript.model) row.model = transcript.model;
   if (transcript.mode) row.mode = transcript.mode;
