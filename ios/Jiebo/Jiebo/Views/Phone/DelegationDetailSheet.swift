@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 委派详情（规格 §4.4）：只读。没有输入框，没有「继续聊」，没有文件入口。
+/// 委派详情（规格 §4.4）：只读。没有输入框，没有「继续聊」；文件只能从卡片打开预览。
 /// 子会话只从 store.chats 里按 id 取来只读渲染，绝不 select（iPhone 的 activeId 永远是助理）。
 struct DelegationDetailSheet: View {
     let delegationId: String
@@ -91,6 +91,7 @@ struct DelegationDetailSheet: View {
             }
         }
         processSection
+        filesSection
         stopSection(row)
         Text("完整过程在电脑或 iPad 上查看")
             .font(JieboFont.ui(12))
@@ -157,6 +158,16 @@ struct DelegationDetailSheet: View {
                 }
             } else {
                 AssistantMutedText("过程在电脑上查看")
+            }
+        }
+    }
+
+    /// 子会话最后一轮的文件。按子会话 id 读（它的工作区），先收起 sheet：预览层和 Quick Look 都在 sheet 下面
+    @ViewBuilder
+    private var filesSection: some View {
+        if let chat = childChat, let turn = chat.turns.last, !turn.cardFiles.isEmpty {
+            AssistantSection("文件") {
+                TurnFileCards(turn: turn, chatId: chat.id, beforeOpen: { dismiss() })
             }
         }
     }

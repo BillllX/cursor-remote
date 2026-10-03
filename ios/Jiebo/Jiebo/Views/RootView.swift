@@ -69,28 +69,37 @@ struct WorkbenchView: View {
                 })
                     .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
             } detail: {
-                HStack(spacing: 0) {
-                    ZStack(alignment: .leading) {
-                        ThreadView()
-                        if let layer = store.toolLayer {
-                            ToolLayerOverlay(layer: layer)
-                                .id(layer)
-                                .transition(.move(edge: .leading).combined(with: .opacity))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if store.previewPanelOpen, let tab = store.activePreviewTab {
-                        PreviewPanelView(tab: tab)
-                            .frame(width: 440)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                ZStack(alignment: .leading) {
+                    ThreadView()
+                    if let layer = store.toolLayer {
+                        ToolLayerOverlay(layer: layer)
+                            .id(layer)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
-                .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
             }
             .navigationSplitViewStyle(.balanced)
             // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
             .toolbar(removing: .sidebarToggle)
+        }
+        // 预览盖住侧栏和对话（与 PhoneWorkbench 同一写法），不再占右侧一栏
+        .overlay {
+            ZStack {
+                if store.previewPanelOpen, let tab = store.activePreviewTab {
+                    Color.black.opacity(0.28)
+                        .ignoresSafeArea()
+                        .onTapGesture { store.collapsePreview() }
+                        .transition(.opacity)
+                    PreviewPanelView(tab: tab)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(JieboColor.white)
+                        .transition(.move(edge: .trailing))
+                        .zIndex(3)
+                }
+            }
+            .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
         }
         .task {
             #if DEBUG

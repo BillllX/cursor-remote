@@ -11,7 +11,7 @@ import {
 import type { Duplex } from "node:stream";
 import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
 import { WebSocketServer, WebSocket } from "ws";
-import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage } from "../../shared/protocol.ts";
+import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage, TurnFile } from "../../shared/protocol.ts";
 import { bodySummary, chatMeta, isBodyLoaded } from "./chatBodies.ts";
 import {
   askDisallowedTools,
@@ -78,6 +78,7 @@ import {
   clipSnapshot,
   diskSnapshot,
   isStreamEvent,
+  keepTurnFiles,
   markFromTranscript,
   mergeUploadedTurns,
   readRunMark,
@@ -85,6 +86,17 @@ import {
   upsertTranscriptTurn,
   type RunTranscript,
 } from "./runlog.ts";
+import {
+  computeTurnFiles,
+  isSha,
+  readArtifact,
+  readSnapshotDiff,
+  readSnapshotFile,
+  SNAPSHOT_GONE,
+  snapshotTree,
+  TREE_BASELINE_MAX_FILES,
+  type TurnBaseline,
+} from "./turnFiles.ts";
 import {
   endpointFor,
   externalModelIds,
@@ -305,6 +317,11 @@ type Slot = {
   /** 这一轮还没被客户端确认的正文。断线后靠它补快照 */
   transcript?: RunTranscript;
   runFlush?: ReturnType<typeof setTimeout>;
+  /**
+   * 本轮文件清单的基线，跟 transcript.turnId 走：审批后重放/继续同一轮沿用，不重建。
+   * checkpoint 是本轮检查点；没建检查点时 tree 是只用于清单的树；两者都没有表示这一轮建过但没建成
+   */
+  turnBase?: { turnId: string; cwd: string; checkpoint?: Checkpoint; tree?: string };
 };
 
 type Conn = {
@@ -409,8 +426,15 @@ function detachConn(conn: Conn) {
   conn.authed = false;
 }
 
-function payload(tenant: Tenant, chatId: string | undefined, path: string, file: Parameters<typeof filePayload>[4], diff: boolean) {
-  return filePayload(mediaSecret(), tenant.id, chatId, path, file, diff);
+function payload(
+  tenant: Tenant,
+  chatId: string | undefined,
+  path: string,
+  file: Parameters<typeof filePayload>[4],
+  diff: boolean,
+  echo?: Parameters<typeof filePayload>[6],
+) {
+  return filePayload(mediaSecret(), tenant.id, chatId, path, file, diff, echo);
 }
 
 function sanitizeWorkspaceName(raw: string): string | null {
@@ -619,6 +643,7 @@ function openTranscript(
     phase: "running",
     epoch,
   };
+  slot.turnBase = undefined;
   armRunFlush(slot);
 }
 
@@ -982,7 +1007,8 @@ function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = 
     }
   }
   const keepImagesFrom = row.turns.length - KEEP_TURN_IMAGES;
-  const turns = row.turns.map((item, index) => {
+  const withFiles = keepTurnFiles(Array.isArray(prevTurns) ? prevTurns : undefined, row.turns);
+  const turns = withFiles.map((item, index) => {
     let turn = item;
     if (index < keepImagesFrom && turn && typeof turn === "object" && "images" in turn) {
       const rest = { ...(turn as Record<string, unknown>) };
@@ -3076,8 +3102,55 @@ function finishRun(
   });
   const approval = status === "approval";
   if (!approval) stopRunFlush(slot);
+  const files = approval ? [] : attachTurnFiles(slot);
+  const turnId = slot.transcript?.turnId || "";
   flushTranscript(slot, !approval);
   if (!approval) indexUserTurn(slot);
+  if (files.length && turnId) {
+    const target = slot.owner?.readyState === WebSocket.OPEN ? slot.owner : ws;
+    reply(target, { type: "turn_files", chatId: slot.chatId, turnId, files });
+  }
+}
+
+/** 算这一轮的文件清单并存快照，写进 transcript 随落盘走。出错只记日志，不影响收尾 */
+function attachTurnFiles(slot: Slot): TurnFile[] {
+  const transcript = slot.transcript;
+  const tenant = getTenant(slot.tenantId);
+  if (!tenant || !transcript || transcript.epoch !== slot.epoch) return [];
+  // 基线不在这里清：同一轮在 done 之后被继续时还要用开头那份
+  const base = slot.turnBase?.turnId === transcript.turnId ? slot.turnBase : undefined;
+  try {
+    const cwd =
+      base?.cwd ||
+      (isAssistantChat(tenant, slot.chatId)
+        ? assistantCwd(tenant)
+        : requireCwd(slot.cwd || tenant.workspaceRoot, tenant.workspaceRoot));
+    let baseline: TurnBaseline | null = null;
+    const commit = base?.checkpoint?.commit || base?.tree;
+    if (base && commit) {
+      try {
+        const ctx = checkpointGit(cwd, base.checkpoint);
+        const prefix = workspacePrefix(ctx.cwd, cwd);
+        const scope = prefix ? [prefix] : listWorkspaceFiles(cwd, "").paths;
+        baseline = { commit, ctx, prefix, scope };
+      } catch {
+        baseline = null;
+      }
+    }
+    const files = computeTurnFiles({
+      cwd,
+      stateDir: tenant.stateDir,
+      tools: transcript.tools,
+      baseline,
+      fallbackDiff: (rel) => readWorkspaceDiff(cwd, rel).content ?? null,
+    });
+    if (files.length) transcript.files = files;
+    else delete transcript.files;
+    return files;
+  } catch (err) {
+    console.error("turn files", err instanceof Error ? err.message : err);
+    return [];
+  }
 }
 
 /** 助理会话每轮完成后进会话搜索索引；其他会话不进 */
@@ -3208,6 +3281,8 @@ function recordRunCheckpoint(ws: WebSocket, conn: Conn, slot: Slot, cwd: string,
       label = `${kind} · ${stamp} · ${slot.checkpoints.length + 1}`;
     }
     const checkpoint = createCheckpoint(cwd, label);
+    const turnId = slot.transcript?.turnId;
+    if (turnId && slot.turnBase?.turnId !== turnId) slot.turnBase = { turnId, cwd, checkpoint };
     slot.checkpoints.unshift(checkpoint);
     slot.checkpoints = slot.checkpoints.slice(0, 10);
     sendCheckpoints(ws, slot);
@@ -3219,6 +3294,29 @@ function recordRunCheckpoint(ws: WebSocket, conn: Conn, slot: Slot, cwd: string,
       status: "RUNNING",
       message: `检查点没记下：${err instanceof Error ? err.message : "未知错误"}`,
     });
+  }
+}
+
+/** 新回合没建检查点（autoApprove、检查点失败）时补一个只用于文件清单的 tree 基线，不进还原点列表 */
+function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
+  if (mode !== "agent" && mode !== "plan") return;
+  const turnId = slot.transcript?.turnId;
+  if (!turnId || slot.turnBase?.turnId === turnId) return;
+  // 先占位：建不成也不在同一轮的重放里补建，否则基线会落在半轮的位置
+  const base: NonNullable<Slot["turnBase"]> = { turnId, cwd };
+  slot.turnBase = base;
+  try {
+    const ctx = checkpointGit(cwd);
+    const prefix = workspacePrefix(ctx.cwd, cwd);
+    let scope: string[] = [];
+    if (!prefix) {
+      const listed = listWorkspaceFiles(cwd, "");
+      if (listed.truncated || listed.paths.length > TREE_BASELINE_MAX_FILES) return;
+      scope = listed.paths;
+    }
+    base.tree = snapshotTree({ ctx, prefix, scope }) || undefined;
+  } catch {
+    // 没基线就只用工具路径
   }
 }
 
@@ -3267,6 +3365,7 @@ async function runNativeChat(
     return;
   }
   if (!input.autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
+  ensureTurnBaseline(slot, cwd, mode);
 
   const sandbox = sandboxEnabledForTenant(conn.tenant);
   const extraTools = !sandbox || findBwrap() ? [shellTool({ sandbox, masks: [stateDir()] })] : [];
@@ -3858,6 +3957,7 @@ async function handlePrompt(
   let replayApproved = false;
 
   if (!autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
+  ensureTurnBaseline(slot, cwd, mode);
 
   let run: RunHandle | null = null;
   let blockedAsk = false;
@@ -4837,6 +4937,21 @@ function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
     res.writeHead(400).end("missing path");
     return;
   }
+  if (rev.startsWith("sha:")) {
+    // 回合快照只从本租户 artifacts 目录取，path 只决定 mime 和文件名
+    const sha = rev.slice(4);
+    if (!isSha(sha)) {
+      res.writeHead(400).end("bad sha");
+      return;
+    }
+    const buf = readArtifact(tenant.stateDir, sha);
+    if (!buf) {
+      res.writeHead(404, { "cache-control": "private, no-store" }).end(SNAPSHOT_GONE);
+      return;
+    }
+    sendMediaBuffer(req, res, buf, raw, mimeOf(raw, kindFromPath(raw)));
+    return;
+  }
   const cwd = cwdForChat(tenant, chatId);
   const path = workspacePath(cwd, raw);
   if (!path) {
@@ -5057,6 +5172,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             loops: loopsForTenant(tenant.id),
             assistantName: assistantName(tenant),
             assistantChatId: assistantChatIdOf(tenant),
+            features: ["turn_files", "read_sha", "read_req_id"],
           });
         };
         try {
@@ -5852,10 +5968,21 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const cwd = message.chatId
           ? cwdOf(conn, slotOf(conn, message.chatId))
           : conn.cwd;
-        const file = message.diff
-          ? readWorkspaceDiff(cwd, message.path)
-          : readWorkspaceFile(cwd, message.path);
-        reply(ws, payload(tenant, message.chatId, message.path, file, Boolean(message.diff)));
+        const echo = {
+          reqId: typeof message.reqId === "string" ? message.reqId : undefined,
+          sha: typeof message.sha === "string" ? message.sha : undefined,
+        };
+        let file: WorkspaceFile;
+        if (echo.sha != null) {
+          // 快照只按 sha 寻址，path 只用来定 kind 和显示名
+          const rel = workspacePath(cwd, message.path) || message.path;
+          file = message.diff
+            ? readSnapshotDiff(tenant.stateDir, rel, echo.sha)
+            : readSnapshotFile(tenant.stateDir, rel, echo.sha);
+        } else {
+          file = message.diff ? readWorkspaceDiff(cwd, message.path) : readWorkspaceFile(cwd, message.path);
+        }
+        reply(ws, payload(tenant, message.chatId, message.path, file, Boolean(message.diff), echo));
         return;
       }
 

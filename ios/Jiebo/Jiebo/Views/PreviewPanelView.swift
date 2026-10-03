@@ -104,6 +104,7 @@ struct PreviewPanelView: View {
                     .foregroundStyle(JieboColor.dim)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                versionLine
             }
             Spacer()
             // diff/原文 切换（对齐网页的类型集：text/image/svg/markdown/html）。
@@ -216,6 +217,26 @@ struct PreviewPanelView: View {
     }
 
     /// 头部副标题：绝对路径（cwd 快照拼接，尾斜杠/已是绝对路径都兜底）
+    /// 卡片打开的页签标出看的是哪个版本；diff 态按 diffSha 算（没有 diffSha 时对照是实时的）
+    @ViewBuilder
+    private var versionLine: some View {
+        if tab.readSha != nil {
+            HStack(spacing: 8) {
+                Text("这一轮的版本")
+                    .font(JieboFont.ui(11, weight: .medium))
+                    .foregroundStyle(JieboColor.run)
+                Button("看当前版本") { store.showCurrentVersion(tab.path) }
+                    .buttonStyle(.plain)
+                    .font(JieboFont.ui(11, weight: .semibold))
+                    .foregroundStyle(JieboColor.pine)
+            }
+        } else if tab.fromCard {
+            Text("当前版本")
+                .font(JieboFont.ui(11, weight: .medium))
+                .foregroundStyle(JieboColor.dim)
+        }
+    }
+
     private var headerSubtitle: String {
         if tab.path.hasPrefix("/") { return tab.path }
         let base = tab.cwd ?? store.cwd

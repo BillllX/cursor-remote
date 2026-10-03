@@ -15,6 +15,19 @@ struct DelegationRef: Identifiable, Hashable {
     let id: String   // AssistantDelegation.id
 }
 
+/// 打开委派详情（参数是 AssistantDelegation.id）。只有 PhoneShell 注入；
+/// 没注入 PhoneRouter 的界面（iPad）拿到 nil，不出入口，也不会因为找不到 PhoneRouter 崩溃
+private struct OpenDelegationKey: EnvironmentKey {
+    static let defaultValue: ((String) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var openDelegation: ((String) -> Void)? {
+        get { self[OpenDelegationKey.self] }
+        set { self[OpenDelegationKey.self] = newValue }
+    }
+}
+
 /// iPhone 纯助理壳的路由状态。只在 PhoneShell 里创建并 `.environment(router)` 下发，不放进 ChatStore。
 @Observable
 @MainActor

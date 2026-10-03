@@ -181,7 +181,9 @@ export type ClientMessage =
   | { type: "resume_session"; chatId: string; agentId: string }
   | { type: "list_files"; query?: string; chatId?: string; mention?: boolean }
   | { type: "search_text"; query: string; chatId?: string }
-  | { type: "read_file"; path: string; chatId?: string; diff?: boolean }
+  // sha：读这一轮结束时的快照（TurnFile.sha），不读工作区；diff: true 时 sha 指 TurnFile.diffSha。
+  // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
+  | { type: "read_file"; path: string; chatId?: string; diff?: boolean; sha?: string; reqId?: string }
   | { type: "write_file"; path: string; content: string; chatId?: string }
   | {
       type: "upload_file";
@@ -249,6 +251,24 @@ export type PreviewKind =
   | "video"
   | "binary";
 
+/** 一轮结束时 Agent 新增或改过的文件。快照存在网关 artifacts 目录，按 sha 取 */
+export type TurnFile = {
+  /** 工作区相对路径 */
+  path: string;
+  kind: PreviewKind;
+  op: "added" | "modified";
+  /** 这一轮结束时的字节数 */
+  size?: number;
+  /** 结束时内容的 sha256（64 位小写 hex）。超过 8MB 或读不到时缺省 → 客户端打开当前版本 */
+  sha?: string;
+  /** 这一轮改动对照文本（unified diff）的 sha256；只对文本类 kind（text/canvas/markdown/html/svg）有 */
+  diffSha?: string;
+  /** 增加行数 */
+  added?: number;
+  /** 删除行数 */
+  removed?: number;
+};
+
 export type MediaTicket = { exp: number; sig: string };
 
 export type SearchHit = { path: string; line: number; text: string };
@@ -274,6 +294,8 @@ export type HistoryTurn = {
     agent?: string;
     model?: string;
   }>;
+  /** 这一轮结束且写过文件时才有这个键 */
+  files?: TurnFile[];
 };
 
 export type LoopStatus = "idle" | "armed" | "running" | "stopped";
@@ -320,6 +342,8 @@ export type ServerMessage =
       assistantName?: string;
       /** 这个租户唯一的助理会话编号；固定在 USER 根目录，不能删除、不能换工作区 */
       assistantChatId?: string;
+      /** 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId） */
+      features?: string[];
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
@@ -380,7 +404,12 @@ export type ServerMessage =
       url?: string;
       headUrl?: string;
       media?: MediaTicket;
+      /** 原样回显 read_file 的 reqId / sha；请求没带就没有这个键 */
+      reqId?: string;
+      sha?: string;
     }
+  // 一轮结束时的文件清单，只发给发起这一轮的连接；同一份也写进 turn.files 落盘
+  | { type: "turn_files"; chatId: string; turnId: string; files: TurnFile[] }
   | { type: "file_written"; path: string; chatId?: string; error?: string }
   | {
       type: "file_uploaded";

@@ -107,6 +107,24 @@ tenants/<id>/
 - 收到 `SIGTERM` / `SIGINT` 和进程退出前同步写一次
 - 启动时的压缩写和需要立即可见的路径不受影响（读的都是内存里的 `tenant.disk`）
 
+## 5.1 每轮文件清单（`turn.files`）与快照
+
+聊天里的文件卡片要打开「这一轮结束时的版本」，不是工作区当前文件。网关在每轮结束（`done` 且不是 `approval`）时算清单：
+
+- 来源：本轮写文件类工具的路径（含 `paths`/`files` 数组、apply_patch 的 `*** Add/Update File:`，删除类工具和出错的调用不算），加上和本轮开始时基线的 git 对比（临时 `GIT_INDEX_FILE`，不动用户仓库的 index 和 HEAD）。基线优先用本轮检查点；`autoApprove` 等没建检查点的新回合，另建一棵只用于清单的 tree（read-tree + add + write-tree，不 commit、不加 ref、不进还原点列表；超 5 秒或根目录文件超 5000 个就不建）。基线跟回合 id 走，审批后重放同一轮不重建
+- 耗时上限：整份清单总预算 8 秒、单条 git 5 秒，超了后面的文件只列不存快照；对照文本一次 `git diff` 批量取再按文件拆；没基线时最多 10 个文件生成对照
+- 只收工作区内、结束时还在的普通文件，跳过 `.git`，最多 40 个
+- 写进 transcript，随落盘出现在 `turn.files`（`TurnFile[]`，见 `shared/protocol.ts`），同时给发起这一轮的连接发一条 `turn_files`。没文件时不写键、不发消息
+- 合并保护：`sync_chat` / `sync_state` 上传的回合缺 `files` 键时，按回合 id 留用磁盘那份；带键（哪怕是空数组）时以上传为准
+
+快照存在 `<租户 stateDir>/artifacts/<sha256>`，按内容寻址、同内容只存一份：
+
+- 单文件超过 **8MB** 不存快照，`TurnFile` 不带 `sha`，客户端退回打开当前版本
+- 文本类（text/canvas/markdown/html/svg）另存一份这一轮的 unified diff（截到 200KB），填 `diffSha`
+- 每个账号 artifacts 总量上限 **1GB**，超了按 mtime 从旧到新删到 0.9GB 以下；读快照会刷新 mtime。每轮结束都检查：内存里按目录缓存总量，写入时累加，超额或距上次扫描满 10 分钟才真正扫目录
+- 读取：`read_file` 带 `sha`（`diff: true` 时是 `diffSha`），不读工作区；快照没了回 `error: "历史版本已清理"`。媒体类走 `/media?rev=sha:<sha>`，只从本租户 artifacts 目录取
+- `ready.features` 里有 `turn_files`、`read_sha`、`read_req_id` 时客户端才用这些能力
+
 ## 6. 降级与已知取舍
 
 - 侧栏搜索只覆盖标题、`preview` 和已加载的正文（以前全部正文都在内存）

@@ -82,8 +82,16 @@ struct PreviewTab: Identifiable, Hashable {
     var cwd: String?
     /// canvas 页签的「源码/画布」切换（P5d；true=看源码）
     var showSource: Bool = false
+    /// 某一轮结束时的内容快照；nil = 当前版本
+    var sha: String? = nil
+    /// 这一轮改动对照文本的快照（只有文本类才有），diff 态读它
+    var diffSha: String? = nil
+    /// 从文件卡片打开：chatId 钉在卡片所属会话（可能是委派子会话），切会话、重拉都不换成 activeId
+    var fromCard: Bool = false
 
     var id: String { path }
+    /// 当前这次读取该带的 sha：diff 态用 diffSha，看文件本身用 sha
+    var readSha: String? { diff ? diffSha : sha }
     var filename: String { (path as NSString).lastPathComponent }
 
     /// file_content 的 url 字段已带完整查询（path/chatId/exp/sig），只需补上 scheme+host

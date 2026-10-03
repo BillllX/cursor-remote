@@ -1,4 +1,4 @@
-import type { AgentMode, HistoryTurn, ServerMessage } from "../../shared/protocol.ts";
+import type { AgentMode, HistoryTurn, ServerMessage, TurnFile } from "../../shared/protocol.ts";
 
 export type RunTool = NonNullable<HistoryTurn["tools"]>[number];
 
@@ -18,6 +18,8 @@ export type RunTranscript = {
   epoch: number;
   durationMs?: number;
   error?: string;
+  /** 这一轮结束时算出的文件清单 */
+  files?: TurnFile[];
 };
 
 /** 落在会话上的水位。短于它的上传不能盖掉这一回合。 */
@@ -237,6 +239,7 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
   if (transcript.mode) row.mode = transcript.mode;
   if (transcript.error) row.error = transcript.error;
   if (transcript.durationMs != null) row.durationMs = transcript.durationMs;
+  if (transcript.files?.length) row.files = transcript.files;
   if (transcript.phase === "done" && transcript.status) row.status = transcript.status;
   else if (transcript.status === "approval") row.status = "approval";
   return row;
@@ -285,6 +288,31 @@ function longerTurn(disk: unknown, incoming: unknown): unknown {
   };
 }
 
+/** 客户端本地拼的回合没有 files 键（旧客户端也不认识它）：缺键时留用磁盘那份，带键时以上传为准 */
+function withDiskFiles(disk: unknown, incoming: unknown): unknown {
+  if (!isRecord(incoming) || "files" in incoming) return incoming;
+  if (!isRecord(disk) || !Array.isArray(disk.files) || !disk.files.length) return incoming;
+  // 只认同 id；按用户原文配上的可能是重问的另一轮
+  const id = turnIdOf(incoming);
+  if (!id || id !== turnIdOf(disk)) return incoming;
+  return { ...incoming, files: disk.files };
+}
+
+/** 按回合 id 把磁盘上的 files 补回缺这个键的上传回合。给 index.ts 的各条合并路径共用 */
+export function keepTurnFiles(prevTurns: unknown[] | undefined, turns: unknown[]): unknown[] {
+  if (!Array.isArray(prevTurns) || !prevTurns.length) return turns;
+  const byId = new Map<string, unknown>();
+  for (const turn of prevTurns) {
+    const id = turnIdOf(turn);
+    if (id && isRecord(turn) && Array.isArray(turn.files)) byId.set(id, turn);
+  }
+  if (!byId.size) return turns;
+  return turns.map((turn) => {
+    const disk = byId.get(turnIdOf(turn));
+    return disk ? withDiskFiles(disk, turn) : turn;
+  });
+}
+
 function findDiskTurn(turns: unknown[], turn: unknown, used: Set<number>): number {
   const id = turnIdOf(turn);
   if (id) {
@@ -316,7 +344,7 @@ export function mergeUploadedTurns(
     const index = findDiskTurn(prevTurns, item, used);
     if (index < 0) return [item];
     used.add(index);
-    return [longerTurn(prevTurns[index], item)];
+    return [withDiskFiles(prevTurns[index], longerTurn(prevTurns[index], item))];
   });
   const covered = Boolean(
     mark &&

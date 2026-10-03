@@ -44,36 +44,6 @@ struct ThreadView: View {
             .animation(JieboMotion.fade(reduceMotion), value: store.notice.isEmpty)
             .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
             thread
-            // P5b：agent 改完文件的待看入口（面板关着时不硬弹，点 pill 才进）
-            Group {
-            if chrome != .embedded, !store.pendingDiffPaths.isEmpty {
-                Button(action: store.openDiffs) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "plus.forwardslash.minus")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(JieboColor.brass)
-                        Text("\(store.pendingDiffPaths.count) 个文件有改动")
-                            .font(JieboFont.ui(12, weight: .medium))
-                        Text("查看")
-                            .font(JieboFont.ui(12, weight: .semibold))
-                            .foregroundStyle(JieboColor.brass)
-                    }
-                    .foregroundStyle(JieboColor.ink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(JieboColor.mist)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(JieboColor.brass.opacity(0.35), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, 6)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            }
-            .animation(JieboMotion.fade(reduceMotion), value: store.pendingDiffPaths.isEmpty)
             // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
             let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: store.activeId)
             Group {
@@ -96,27 +66,6 @@ struct ThreadView: View {
         .frame(maxWidth: JieboMeasure.thread)
         .frame(maxWidth: .infinity)
         .background(JieboColor.paper.ignoresSafeArea())
-        .overlay(alignment: .topTrailing) {
-            if !store.previewExpanded, !store.previewTabs.isEmpty, !store.fileBrowserOpen {
-                Button {
-                    store.expandPreview()
-                } label: {
-                    Text("\(previewChipName) · 预览")
-                        .font(JieboFont.ui(13, weight: .medium))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                        .padding(.horizontal, 14)
-                        .frame(height: 40)
-                        .background(JieboColor.white)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
-                        .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 8)
-                .padding(.trailing, 12)
-            }
-        }
         .toolbar(chrome == .embedded ? .automatic : .hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
         // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
@@ -210,12 +159,6 @@ struct ThreadView: View {
         case .embedded:
             EmptyView()
         }
-    }
-
-    private var previewChipName: String {
-        let raw = store.previewActivePath ?? store.previewTabs.last?.path ?? ""
-        if raw.isEmpty { return "文件" }
-        return (raw as NSString).lastPathComponent
     }
 
     private var headerTitle: String {
@@ -477,7 +420,7 @@ struct ThreadView: View {
                             .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
                         }
                         .buttonStyle(.plain)
-                        .padding(.bottom, store.pendingDiffPaths.isEmpty ? 10 : 52)
+                        .padding(.bottom, 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .accessibilityLabel("滚动到最新消息")
                     }
@@ -926,20 +869,21 @@ private struct TurnView: View {
                     .font(JieboFont.ui(14))
                     .foregroundStyle(JieboColor.danger)
             }
-            if turn.needsFileReview {
+            if turn.needsFileReview, store.localTurnReviews[turn.id] == nil {
                 HStack(spacing: 8) {
-                    Text("\(turn.editPaths.count) 个文件改动")
+                    Text("\(turn.reviewPaths.count) 个文件改动")
                         .font(JieboFont.ui(12))
                         .foregroundStyle(JieboColor.ink2)
                     Button("全部保留") { store.keepTurnFiles(turn.id) }
                         .buttonStyle(.plain)
-                    Button("全部还原") { confirmRestore = true }
+                    Button(store.restoringTurnIds.contains(turn.id) ? "还原中" : "全部还原") { confirmRestore = true }
                         .buttonStyle(.plain)
+                        .disabled(store.restoringTurnIds.contains(turn.id))
                 }
                 .font(JieboFont.ui(12, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
                 .confirmationDialog(
-                    "还原这一轮的 \(turn.editPaths.count) 个文件？",
+                    "还原这一轮的 \(turn.reviewPaths.count) 个文件？",
                     isPresented: $confirmRestore,
                     titleVisibility: .visible
                 ) {
@@ -947,42 +891,9 @@ private struct TurnView: View {
                     Button("取消", role: .cancel) {}
                 }
             }
-            let files = relatedFiles(turn)
-            if !files.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("相关文件")
-                        .font(JieboFont.ui(11, weight: .medium))
-                        .foregroundStyle(JieboColor.dim)
-                        .tracking(0.4)
-                    ForEach(files, id: \.self) { path in
-                        Button {
-                            store.openPreview(path)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: fileGlyph(path, isDir: false, open: false))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(JieboColor.dim)
-                                    .frame(width: 16)
-                                Text((path as NSString).lastPathComponent)
-                                    .font(JieboFont.mono(12))
-                                    .foregroundStyle(JieboColor.ink2)
-                                    .lineLimit(1)
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 2)
-                            .frame(height: 28)
-                            .overlay(alignment: .bottom) {
-                                Rectangle()
-                                    .fill(JieboColor.line.opacity(0.8))
-                                    .frame(height: 0.5)
-                            }
-                            .hitTarget()
-                        }
-                        .buttonStyle(PressScaleButtonStyle())
-                        .accessibilityLabel("预览 \(path)")
-                    }
-                }
-                .padding(.leading, 40)
+            if !turn.cardFiles.isEmpty {
+                TurnFileCards(turn: turn, chatId: store.activeId)
+                    .padding(.leading, 40)
             }
             // 无助手正文时耗时仍贴在轮次底部，用 ink2 保证可读
             if turn.assistant.isEmpty,
@@ -995,40 +906,6 @@ private struct TurnView: View {
                     .padding(.leading, 40)
             }
         }
-    }
-
-    /// 这一轮写过、生成过，或回复里 @ 到的文件。
-    private func relatedFiles(_ turn: Turn) -> [String] {
-        var seen = Set<String>()
-        var out: [String] = []
-        func add(_ raw: String?) {
-            guard var path = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else { return }
-            if path.hasPrefix("./") { path.removeFirst(2) }
-            guard !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
-            guard seen.insert(path).inserted else { return }
-            out.append(path)
-        }
-        for tool in turn.tools {
-            let name = tool.name.lowercased()
-            let generated = name.contains("generateimage") || name.contains("generate_image") || name.contains("image_gen")
-            let path = ChatStore.toolPath(args: tool.args, result: tool.result)
-            if generated || tool.kind.isMutating {
-                add(path)
-            } else if let path {
-                let kind = previewKind(of: path)
-                if kind == .image || kind == .svg { add(path) }
-            }
-        }
-        let mention = try? NSRegularExpression(pattern: #"(^|\s)@([^\s@:，。；、！？,;!?)]+)"#)
-        if let mention {
-            let text = turn.assistant
-            for match in mention.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                guard let range = Range(match.range(at: 2), in: text) else { continue }
-                let token = String(text[range])
-                if Self.isFileMention(token) { add(token) }
-            }
-        }
-        return out
     }
 
     /// 把正文里的 @路径 转成可点链接（jiebo-file://open?path=…），由 openURL 拦截打开预览面板。
@@ -1552,13 +1429,69 @@ private enum AssistantToolText {
             return nil
         }
     }
+
+    /// delegate 的结果对象。网关回的是 JSON 字符串，也可能被包成 MCP 的 content:[{type:"text",text:"{…}"}]
+    static func resultObject(_ value: JSONValue?, depth: Int = 0) -> [String: JSONValue]? {
+        guard let value, depth < 4 else { return nil }
+        switch value {
+        case .object(let row):
+            if row["childChatId"] != nil || row["ok"] != nil { return row }
+            for key in ["content", "result", "output"] {
+                if let found = resultObject(row[key], depth: depth + 1) { return found }
+            }
+            if let text = row["text"]?.string { return resultObject(.string(text), depth: depth + 1) }
+            return nil
+        case .array(let items):
+            for item in items {
+                if let found = resultObject(item, depth: depth + 1) { return found }
+            }
+            return nil
+        case .string(let text):
+            guard let data = text.data(using: .utf8), let parsed = try? JSONValue.parse(data) else { return nil }
+            guard parsed.object != nil || parsed.array != nil else { return nil }
+            return resultObject(parsed, depth: depth + 1)
+        default:
+            return nil
+        }
+    }
 }
 
-/// delegate / create_workspace 的一行说明（不展开原始参数）
+/// delegate / create_workspace 的一行说明（不展开原始参数）。
+/// 委派能对上本机已同步的子会话时，下面挂它最后一轮的前 3 个文件，按子会话 id 读
 private struct AssistantActionRow: View {
+    @Environment(ChatStore.self) private var store
+    /// 只有 PhoneShell 注入；为 nil 时不出「全部」
+    @Environment(\.openDelegation) private var openDelegation
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tool: ToolCall
     var text: String
+
+    private static let fileLimit = 3
+
+    /// 委派 id 与子会话 id：先看工具结果，缺的一个从 assistantState.delegations 互查
+    private var delegateRefs: (delegationId: String?, childChatId: String?) {
+        guard AssistantToolText.baseName(tool.name) == "delegate" else { return (nil, nil) }
+        let row = AssistantToolText.resultObject(tool.result)
+        var delegationId = row?["id"]?.string?.nilIfEmpty
+        var childId = row?["childChatId"]?.string?.nilIfEmpty
+        let delegations = store.assistantState?.delegations ?? []
+        if childId == nil, let delegationId {
+            childId = delegations.first(where: { $0.id == delegationId })?.childChatId.nilIfEmpty
+        }
+        if delegationId == nil, let childId {
+            delegationId = delegations.first(where: { $0.childChatId == childId })?.id
+        }
+        return (delegationId, childId)
+    }
+
+    private var childTurn: (chatId: String, turn: Turn)? {
+        guard let childId = delegateRefs.childChatId,
+              let chat = store.chats.first(where: { $0.id == childId }),
+              let turn = chat.turns.last,
+              !turn.cardFiles.isEmpty
+        else { return nil }
+        return (chat.id, turn)
+    }
 
     private var failed: Bool {
         tool.status == "error" || tool.result?["ok"]?.bool == false
@@ -1575,6 +1508,15 @@ private struct AssistantActionRow: View {
     }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            summaryRow
+            if let child = childTurn {
+                childFiles(child.turn, chatId: child.chatId)
+            }
+        }
+    }
+
+    private var summaryRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "paperplane")
                 .font(.system(size: 11, weight: .semibold))
@@ -1600,5 +1542,46 @@ private struct AssistantActionRow: View {
         )
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
         .accessibilityElement(children: .combine)
+    }
+
+    private func childFiles(_ turn: Turn, chatId: String) -> some View {
+        let files = Array(turn.cardFiles.prefix(Self.fileLimit))
+        let delegationId = delegateRefs.delegationId
+        return VStack(spacing: 0) {
+            ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
+                if index > 0 {
+                    Rectangle().fill(JieboColor.line).frame(height: 0.5)
+                }
+                TurnFileRow(file: file, turn: turn, chatId: chatId)
+            }
+            if let openDelegation, let delegationId {
+                Rectangle().fill(JieboColor.line).frame(height: 0.5)
+                Button {
+                    openDelegation(delegationId)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("全部")
+                            .font(JieboFont.ui(12, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(minHeight: 34)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("查看委派的全部文件和过程")
+            }
+        }
+        .background(JieboColor.white)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                .stroke(JieboColor.line, lineWidth: 1)
+        )
+        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
     }
 }

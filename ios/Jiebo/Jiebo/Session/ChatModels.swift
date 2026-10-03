@@ -91,13 +91,67 @@ struct Turn: Identifiable, Hashable {
     var pendingTool: PendingTool?
     /// 随这条消息发出的图片（base64），气泡里回显。
     var images: [PromptImage] = []
+    /// 网关在每轮结束后给的文件清单（turn_files / 落盘的 turn.files）。旧网关没有，为空
+    var files: [TurnFile] = []
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
 
     static let knownKeys: Set<String> = [
         "id", "user", "assistant", "thinking", "tools", "task", "error",
         "running", "queued", "mode", "model", "status", "durationMs", "images",
+        "files",
     ]
+
+    /// 文件卡片的数据源：网关给了 files 就用它；否则从工具推导（没有 sha，只能打开当前版本）。
+    /// 只读过的文件不出卡
+    var cardFiles: [TurnFile] {
+        if !files.isEmpty { return files }
+        var seen = Set<String>()
+        var out: [TurnFile] = []
+        for tool in tools {
+            guard let path = Turn.cardPath(of: tool), seen.insert(path).inserted else { continue }
+            out.append(TurnFile(path: path, kind: previewKind(of: path), op: "modified"))
+        }
+        return out
+    }
+
+    /// 工具写到的文件路径（去掉 ./ 前缀）；删除类、失败的、不改文件的返回 nil
+    static func cardPath(of tool: ToolCall) -> String? {
+        guard tool.status != "error" else { return nil }
+        let name = tool.name.lowercased()
+        let generated = name.contains("generateimage") || name.contains("generate_image") || name.contains("image_gen")
+        guard generated || tool.kind.isMutating else { return nil }
+        if !generated, name.range(of: "delete|unlink|remove", options: .regularExpression) != nil { return nil }
+        guard var path = toolFilePath(args: tool.args, result: tool.result)?.replacingOccurrences(of: "\\", with: "/") else { return nil }
+        while path.hasPrefix("./") { path.removeFirst(2) }
+        guard !path.isEmpty, !path.hasSuffix("/") else { return nil }
+        return path
+    }
+
+    /// 工具里的路径可能是绝对路径，files 里是工作区相对路径：后缀对上就算同一个文件
+    static func samePath(_ lhs: String, _ rhs: String) -> Bool {
+        lhs == rhs || lhs.hasSuffix("/" + rhs) || rhs.hasSuffix("/" + lhs)
+    }
+
+    private func writers(of file: TurnFile) -> [ToolCall] {
+        tools.filter { tool in
+            guard let path = Turn.cardPath(of: tool) else { return false }
+            return Turn.samePath(path, file.path)
+        }
+    }
+
+    /// 对应的工具还在跑：卡片显示「正在写」且不可点
+    func isWriting(_ file: TurnFile) -> Bool {
+        writers(of: file).contains { $0.status == "running" }
+    }
+
+    /// 这一轮已还原（相关工具都标了 rejected）。对不上工具时（shell 写的文件）按整轮带标记的工具算
+    func isRestored(_ file: TurnFile) -> Bool {
+        let related = writers(of: file)
+        let ids = reviewCallIds
+        let pool = related.isEmpty ? tools.filter { ids.contains($0.callId) } : related
+        return !pool.isEmpty && pool.allSatisfy { $0.review == "rejected" }
+    }
 
     /// 这一轮改过的文件，去重后按出现顺序。
     var editPaths: [String] {
@@ -109,14 +163,45 @@ struct Turn: Identifiable, Hashable {
         return paths
     }
 
+    /// 「全部保留 / 全部还原」作用的路径：editPaths 加上 files 里工具对不上的（shell 写的），去重保序
+    var reviewPaths: [String] {
+        var paths = editPaths
+        for file in files where !paths.contains(where: { Turn.samePath($0, file.path) }) {
+            paths.append(file.path)
+        }
+        return paths
+    }
+
+    /// 承载保留/还原标记的工具（网关 tool_review 按 callId 落盘，不挑工具类型）。
+    /// 平时是改文件的工具；files 里有它们对不上的文件时，shell 和其它工具也带标记，
+    /// 这样 shell 写的文件还原后卡片也能显示「已还原」。本轮一个工具都没有时为空
+    var reviewCallIds: Set<String> {
+        var ids = Set(tools.filter { $0.kind.isMutating }.map(\.callId))
+        let edits = editPaths
+        let uncovered = files.contains { file in !edits.contains { Turn.samePath($0, file.path) } }
+        if uncovered {
+            ids.formUnion(tools.filter { $0.kind == .shell || $0.kind == .other }.map(\.callId))
+        }
+        if ids.isEmpty, !files.isEmpty {
+            ids = Set(tools.map(\.callId))
+        }
+        return ids
+    }
+
     var writesRejected: Bool {
         (assistant + "\n" + (status ?? "")).contains("已拒绝写入")
     }
 
     /// 改动还没逐项点过保留或还原，整轮条才出现。
+    /// 带标记的工具都没有时（files 有、工具为空），只要本轮没有任何 review 也显示；
+    /// 这种轮次点过之后由 ChatStore.localTurnReviews 收起
     var needsFileReview: Bool {
-        !running && !queued && !writesRejected && !editPaths.isEmpty
-            && tools.contains { $0.kind.isMutating && ($0.review ?? "").isEmpty }
+        guard !running, !queued, !writesRejected, !reviewPaths.isEmpty else { return false }
+        let ids = reviewCallIds
+        if ids.isEmpty {
+            return !files.isEmpty && !tools.contains { !($0.review ?? "").isEmpty }
+        }
+        return tools.contains { ids.contains($0.callId) && ($0.review ?? "").isEmpty }
     }
 
     static func blank(user: String, model: String?, mode: AgentMode?, running: Bool) -> Turn {
@@ -194,6 +279,7 @@ struct Turn: Identifiable, Hashable {
                 .object(["data": .string($0.data), "mimeType": .string($0.mimeType)])
             })
         }
+        if !files.isEmpty { object["files"] = .array(files.map { $0.json() }) }
         return .object(object)
     }
 
@@ -239,6 +325,7 @@ struct Turn: Identifiable, Hashable {
                 else { return nil }
                 return PromptImage(data: data, mimeType: mime)
             } ?? [],
+            files: object["files"]?.array?.compactMap(TurnFile.from) ?? [],
             extra: object.filter { !Turn.knownKeys.contains($0.key) }
         )
     }

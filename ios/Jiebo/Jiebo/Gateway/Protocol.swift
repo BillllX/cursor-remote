@@ -46,6 +46,49 @@ struct MediaTicket: Sendable, Hashable {
     var sig: String
 }
 
+/// 一轮里新增或改过的文件（turn.files / turn_files）。sha 缺省时只能打开当前版本；
+/// diffSha 只有文本类才有，读它要配 diff=true
+struct TurnFile: Sendable, Hashable, Identifiable {
+    var path: String
+    var kind: PreviewKind
+    /// "added" | "modified"
+    var op: String
+    var size: Double?
+    var sha: String?
+    var diffSha: String?
+    var added: Int?
+    var removed: Int?
+    var id: String { path }
+
+    static func from(_ json: JSONValue) -> TurnFile? {
+        guard let row = json.object, let path = row["path"]?.string?.nilIfEmpty else { return nil }
+        return TurnFile(
+            path: path,
+            kind: row["kind"]?.string.flatMap(PreviewKind.init(rawValue:)) ?? previewKind(of: path),
+            op: row["op"]?.string == "added" ? "added" : "modified",
+            size: row["size"]?.number,
+            sha: row["sha"]?.string?.nilIfEmpty,
+            diffSha: row["diffSha"]?.string?.nilIfEmpty,
+            added: row["added"]?.int,
+            removed: row["removed"]?.int
+        )
+    }
+
+    func json() -> JSONValue {
+        var object: [String: JSONValue] = [
+            "path": .string(path),
+            "kind": .string(kind.rawValue),
+            "op": .string(op),
+        ]
+        if let size { object["size"] = .number(size) }
+        if let sha { object["sha"] = .string(sha) }
+        if let diffSha { object["diffSha"] = .string(diffSha) }
+        if let added { object["added"] = .number(Double(added)) }
+        if let removed { object["removed"] = .number(Double(removed)) }
+        return .object(object)
+    }
+}
+
 /// 当前 API Key 的官方账单，口径与 Cursor CLI `/usage` 相同。金额单位是美分。
 struct CursorOnDemand: Sendable, Hashable {
     var kind: String
@@ -217,8 +260,9 @@ enum ClientMessage {
     case revertFile(chatId: String, path: String)
     case listCheckpoints(chatId: String)
     case restore(chatId: String, checkpointId: String)
-    /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content
-    case readFile(path: String, chatId: String?, diff: Bool)
+    /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content。
+    /// sha 读某一轮的快照（diff=true 时它指 diffSha）；reqId 原样回显。两者只发给声明了 read_sha / read_req_id 的网关
+    case readFile(path: String, chatId: String?, diff: Bool, sha: String? = nil, reqId: String? = nil)
     case writeFile(path: String, content: String, chatId: String?)
     case undo(chatId: String)
     case ping
@@ -231,6 +275,8 @@ enum ClientMessage {
     /// P8 slim：会话内容分页。from 省略=最后一页，否则拉 turns[..<from] 的上一页。
     /// nonce 为分页代际标记（网关原样回显）：降级/重启分页后旧链迟到页据此丢弃（Kimi R2 M1）
     case loadChat(chatId: String, from: Int?, nonce: Int?)
+    /// 重拉一份 stored_state（slim 客户端只有元数据和 preview）。digest 对账用它代替 load_chats，不下载整条正文
+    case loadState
     /// P9：管理员查询全租户使用统计（非管理员会被网关拒绝）
     case adminStats
     /// 产品 Loop（docs/IDE.md L1）：开始 / 停止。调度在 L2，这里只发消息
@@ -346,10 +392,12 @@ enum ClientMessage {
                 "chatId": .string(chatId),
                 "checkpointId": .string(checkpointId),
             ])
-        case .readFile(let path, let chatId, let diff):
+        case .readFile(let path, let chatId, let diff, let sha, let reqId):
             var object: [String: JSONValue] = ["type": .string("read_file"), "path": .string(path)]
             if let chatId { object["chatId"] = .string(chatId) }
             if diff { object["diff"] = .bool(true) }
+            if let sha, !sha.isEmpty { object["sha"] = .string(sha) }
+            if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
             return .object(object)
         case .writeFile(let path, let content, let chatId):
             var object: [String: JSONValue] = [
@@ -379,6 +427,8 @@ enum ClientMessage {
             if let from { obj["from"] = .number(Double(from)) }
             if let nonce { obj["nonce"] = .number(Double(nonce)) }
             return .object(obj)
+        case .loadState:
+            return .object(["type": .string("load_state")])
         case .adminStats:
             return .object(["type": .string("admin_stats")])
         case .loopStart(let chatId, let goal, let intervalSec, let maxTicks, let model, let mode):
@@ -778,7 +828,9 @@ enum ServerMessage {
         loops: [LoopSnapshot],
         assistantName: String?,
         /// 每个租户唯一的助理会话。旧网关不带
-        assistantChatId: String?
+        assistantChatId: String?,
+        /// 网关能力（turn_files / read_sha / read_req_id）。旧网关不带，为空数组
+        features: [String]
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
@@ -856,8 +908,13 @@ enum ServerMessage {
         size: Double?,
         url: String?,
         headUrl: String?,
-        media: MediaTicket?
+        media: MediaTicket?,
+        /// read_file 带的 reqId / sha 原样回显
+        reqId: String?,
+        sha: String?
     )
+    /// 每轮结束后下发这一轮的文件清单
+    case turnFiles(chatId: String, turnId: String, files: [TurnFile])
     case undone(chatId: String, paths: [String], error: String?)
     case checkpoints(chatId: String, items: [CheckpointInfo])
     case restored(chatId: String, checkpointId: String?, label: String?, error: String?, silent: Bool)
@@ -893,7 +950,9 @@ enum ServerMessage {
             return chatId
         case .files(_, _, _, _, let chatId, _):
             return chatId
-        case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _):
+        case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _, _, _):
+            return chatId
+        case .turnFiles(let chatId, _, _):
             return chatId
         case .undone(let chatId, _, _),
              .checkpoints(let chatId, _),
@@ -928,7 +987,8 @@ enum ServerMessage {
                 admin: object["admin"]?.bool ?? false,
                 loops: object["loops"]?.array?.compactMap { LoopSnapshot.from($0.object) } ?? [],
                 assistantName: object["assistantName"]?.string,
-                assistantChatId: object["assistantChatId"]?.string?.nilIfEmpty
+                assistantChatId: object["assistantChatId"]?.string?.nilIfEmpty,
+                features: object["features"]?.array?.compactMap(\.string) ?? []
             )
         case "workspaces":
             let items = object["items"]?.array?.compactMap { item -> WorkspaceItem? in
@@ -1103,7 +1163,16 @@ enum ServerMessage {
                 media: ticketRow.flatMap { row in
                     guard let exp = row["exp"]?.number, let sig = row["sig"]?.string else { return nil }
                     return MediaTicket(exp: exp, sig: sig)
-                }
+                },
+                reqId: object["reqId"]?.string?.nilIfEmpty,
+                sha: object["sha"]?.string?.nilIfEmpty
+            )
+        case "turn_files":
+            guard let turnId = object["turnId"]?.string, !turnId.isEmpty, !chatId.isEmpty else { return .ignored(type) }
+            return .turnFiles(
+                chatId: chatId,
+                turnId: turnId,
+                files: object["files"]?.array?.compactMap(TurnFile.from) ?? []
             )
         case "undone":
             return .undone(
@@ -1205,13 +1274,15 @@ enum GatewayConfig {
         return url
     }
 
-    /// 带查询参数的 /media 下载地址（Bearer 鉴权在请求头里加）
-    static func mediaURL(path: String, chatId: String) -> URL {
+    /// 带查询参数的 /media 下载地址（Bearer 鉴权在请求头里加）。rev 形如 "sha:<sha>" 时下载那一轮的快照
+    static func mediaURL(path: String, chatId: String, rev: String? = nil) -> URL {
         var components = URLComponents(url: mediaBaseURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
+        var items = [
             URLQueryItem(name: "path", value: path),
             URLQueryItem(name: "chatId", value: chatId),
         ]
+        if let rev, !rev.isEmpty { items.append(URLQueryItem(name: "rev", value: rev)) }
+        components?.queryItems = items
         return components?.url ?? mediaBaseURL
     }
 

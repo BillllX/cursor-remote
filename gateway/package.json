@@ -10,7 +10,8 @@
     "smoke:native": "tsx src/native/native-smoke.ts",
     "smoke:loops": "tsx src/loops-smoke.ts",
     "smoke:assistant": "tsx src/assistant-smoke.ts",
-    "smoke:apns": "tsx src/apns-smoke.ts"
+    "smoke:apns": "tsx src/apns-smoke.ts",
+    "smoke:turnfiles": "tsx src/turnfiles-smoke.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.9",

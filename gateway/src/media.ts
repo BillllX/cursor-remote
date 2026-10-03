@@ -73,12 +73,16 @@ export function filePayload(
     hasHead?: boolean;
   },
   diff: boolean,
+  echo: { reqId?: string; sha?: string } = {},
 ) {
   const kind = file.kind;
   const ticket = chatId ? mediaTicket(secret, tenantId, chatId) : undefined;
   const rel = file.path || path;
   const httpText = Boolean(kind && preferHttpText(kind) && !diff);
   const bust = file.size != null ? String(file.size) : undefined;
+  // 快照按内容寻址，rev 本身就能防缓存；对照文本只走 content，不给 url
+  const snapshot = echo.sha && !diff && !file.error ? `sha:${echo.sha}` : undefined;
+  const live = !echo.sha;
   return {
     type: "file_content" as const,
     chatId,
@@ -91,13 +95,15 @@ export function filePayload(
     size: file.size,
     media: ticket,
     url:
-      kind && (needsMediaUrl(kind) || httpText)
-        ? mediaPath(chatId || "", rel, ticket, httpText ? bust : undefined)
+      kind && (needsMediaUrl(kind) || httpText) && (live || snapshot)
+        ? mediaPath(chatId || "", rel, ticket, snapshot || (httpText ? bust : undefined))
         : undefined,
     headUrl:
-      kind && needsMediaUrl(kind) && file.hasHead
+      live && kind && needsMediaUrl(kind) && file.hasHead
         ? mediaPath(chatId || "", rel, ticket, "HEAD")
         : undefined,
+    ...(echo.reqId != null ? { reqId: echo.reqId } : {}),
+    ...(echo.sha != null ? { sha: echo.sha } : {}),
   };
 }
 

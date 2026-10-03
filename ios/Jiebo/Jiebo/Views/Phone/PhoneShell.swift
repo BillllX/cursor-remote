@@ -40,6 +40,9 @@ struct PhoneShell: View {
             }
         }
         .environment(router)
+        .environment(\.openDelegation, { [router = self.router] id in
+            router.delegationDetail = DelegationRef(id: id)
+        })
         .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
         .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
         .sheet(item: $router.delegationDetail) { ref in
