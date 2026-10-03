@@ -53,7 +53,6 @@ struct DelegationDetailSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(JieboColor.paper)
         .confirmationDialog("停止这项委派？", isPresented: $stopConfirm, titleVisibility: .visible) {
             Button("停止", role: .destructive) { stop() }
             Button("取消", role: .cancel) {}

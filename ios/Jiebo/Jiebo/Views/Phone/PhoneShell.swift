@@ -34,12 +34,14 @@ struct PhoneShell: View {
                     .transition(.move(edge: .trailing))
                     .zIndex(3)
             }
+            if router.hubOpen {
+                todayPanel
+                    .zIndex(4)
+            }
         }
         .environment(router)
         .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
-        .sheet(isPresented: $router.hubOpen) {
-            AssistantHubSheet()
-        }
+        .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
         .sheet(item: $router.delegationDetail) { ref in
             DelegationDetailSheet(delegationId: ref.id)
         }
@@ -59,6 +61,30 @@ struct PhoneShell: View {
             Task { @MainActor in await consumePendingPush() }
         }
         .task { await bootstrap() }
+    }
+
+    /// 自绘底栏，避开系统 sheet。点遮罩或「完成」关掉。
+    private var todayPanel: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                Color.black.opacity(0.28)
+                    .ignoresSafeArea()
+                    .onTapGesture { router.hubOpen = false }
+                AssistantHubSheet()
+                    .frame(height: max(320, geo.size.height * 0.72))
+                    .clipShape(
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 16,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: 0,
+                            topTrailingRadius: 16,
+                            style: .continuous
+                        )
+                    )
+            }
+        }
+        .ignoresSafeArea()
+        .transition(.opacity)
     }
 
     @ViewBuilder

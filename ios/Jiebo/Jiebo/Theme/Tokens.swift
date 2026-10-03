@@ -216,9 +216,10 @@ enum JieboColor {
 }
 
 enum JieboFont {
-    /// 标题用宋体，对应网页 --font-display（Noto Serif SC，系统回落 Songti SC）。
+    /// 标题用宋体粗体，对应网页 --font-display（Noto Serif SC，系统回落 Songti SC）。
+    /// 直接点名粗体字面。再套 .weight(.bold) 时，系统改不了宋体的字重，控制台会一直报错。
     static func display(_ size: CGFloat) -> Font {
-        .custom("Songti SC", size: size).weight(.bold)
+        .custom("Songti SC Bold", size: size)
     }
 
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
