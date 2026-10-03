@@ -324,7 +324,7 @@ struct ChatSession: Identifiable, Hashable {
         if turnsComplete {
             object["turns"] = .array(turns.map { $0.json() })
         }
-        object["draft"] = .string(draft)
+        // 草稿只留在本机：不上传，免得每次草稿变化都推进网关的会话版本号、让其他设备重拉
         object["mode"] = .string(mode.rawValue)
         object["confirmWrites"] = .bool(confirmWrites)
         object["policy"] = .string(policy)
@@ -341,7 +341,7 @@ struct ChatSession: Identifiable, Hashable {
             title: object["title"]?.string?.nilIfEmpty ?? "新对话",
             turns: object["turns"]?.array?.compactMap(Turn.from) ?? [],
             agentId: object["agentId"]?.string,
-            draft: object["draft"]?.string ?? "",
+            draft: "", // 网关里可能留着以前的草稿，不读回来
             model: object["model"]?.string,
             mode: object["mode"]?.string.flatMap(AgentMode.init(rawValue:)) ?? .agent,
             cwd: object["cwd"]?.string,

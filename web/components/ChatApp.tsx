@@ -733,11 +733,13 @@ function chatMeta(chat: Chat): Omit<Chat, "turns"> {
   delete rest.preview;
   delete rest.runMark;
   delete rest.clipped;
+  // 草稿只留在本机：打字很频繁，传上去会让网关把会话版本号往前推，其他设备跟着重拉
+  delete rest.draft;
+  delete rest.draftImages;
   const meta = rest as Omit<Chat, "turns">;
   return {
     ...meta,
     previewTabs: meta.previewTabs?.map(({ path, line }) => ({ path, line })),
-    draftImages: meta.draftImages?.slice(0, 3),
   };
 }
 
@@ -809,6 +811,9 @@ function mergeSlimChats(
     const cur = localById.get(row.id);
     const base: Chat = { ...row, title: typeof row.title === "string" ? row.title : "新对话", turns: [] };
     delete (base as { runMark?: unknown }).runMark;
+    // 草稿不跟网关走：服务端旧数据里可能还留着以前的草稿，不能带回来
+    delete base.draft;
+    delete base.draftImages;
     if (!cur) {
       synced.set(row.id, metaKey(base));
       out.push(base);
@@ -827,7 +832,13 @@ function mergeSlimChats(
         else merged[key] = mine[key];
       }
       synced.set(row.id, metaKey(base));
-      out.push({ ...(merged as Omit<Chat, "turns">), preview: base.preview, turns: cur.turns } as Chat);
+      out.push({
+        ...(merged as Omit<Chat, "turns">),
+        preview: base.preview,
+        turns: cur.turns,
+        draft: cur.draft,
+        draftImages: cur.draftImages,
+      } as Chat);
       continue;
     }
     if (last === undefined) {
@@ -835,7 +846,7 @@ function mergeSlimChats(
       out.push({ ...cur, preview: base.preview, agentId: cur.agentId || base.agentId });
       continue;
     }
-    const next: Chat = { ...base, turns: cur.turns };
+    const next: Chat = { ...base, turns: cur.turns, draft: cur.draft, draftImages: cur.draftImages };
     synced.set(row.id, metaKey(next));
     out.push(next);
   }

@@ -5381,6 +5381,14 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             next = { ...row, turns: [] };
           }
         }
+        // 网页不再上传草稿：上传里没有这两个键时保留磁盘上已有的（iOS 的草稿不被网页的元数据上传抹掉）
+        if (next && typeof next === "object" && prev && typeof prev === "object") {
+          const row = next as Record<string, unknown>;
+          const before = prev as Record<string, unknown>;
+          for (const key of ["draft", "draftImages"] as const) {
+            if (!(key in row) && key in before) next = { ...(next as object), [key]: before[key] };
+          }
+        }
         next = mergeAndCompactChat(prev, next);
         const turnsProvided = Boolean(
           message.chat &&
