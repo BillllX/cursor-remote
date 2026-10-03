@@ -70,18 +70,18 @@ iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 
 ## 2. 目标信息架构
 
-### 2.1 一个页面，两个入口
+### 2.1 一个页面，两个顶栏入口
 
 **没有底栏，没有 Tab。** 助理页是唯一的根页，一切都从它出发：
 
 | 入口 | 位置 | 去向 |
 |---|---|---|
-| ☰ 菜单 | 导航栏左侧 | 左侧滑出的菜单抽屉：原来「我」里的所有内容（§4.3） |
-| ✉ 消息 | 导航栏右侧，带数字角标 | push「待处理」页（待批 + 收件箱，§4.2） |
-| 今日 | 导航栏右侧，消息图标左边 | 半屏 Hub：今日 / 记忆（§4.1.5） |
+| ☰ 菜单 | 导航栏左侧，有待处理时带提示 | 左侧滑出的菜单抽屉：待处理 + 原来「我」里的内容（§4.3） |
+| 今日 | 导航栏右侧 | 半屏 Hub：今日 / 记忆（§4.1.5） |
 
-- 消息角标 = `store.assistantBadgeCount`（未读收件箱 + 待批），> 99 显示 `99+`；为 0 不显示。
-- 菜单图标上没有角标。
+- **待处理**（待批 + 收件箱）只在 ☰ 菜单里进入（§4.2），导航栏不再单独放消息图标。
+- **☰ 上的提示**：`store.assistantBadgeCount`（未读收件箱 + 待批）> 0 时，在菜单按钮右上角显示数字角标（> 99 显示 `99+`）；为 0 时不显示。`accessibilityLabel` 写成「菜单，3 项待处理」或「菜单」。
+- 抽屉内第一组「助理」里「待处理」行右侧同样显示该数字（与 ☰ 角标一致），方便打开菜单后一眼看到。
 - 助理在回复时，导航栏副标题显示「正在回复」，不需要底栏上的小点。
 
 ### 2.2 层级图
@@ -90,7 +90,7 @@ iPad 和网页是「IDE + 对话」；iPhone 是「**个人助理**」：
 PhoneShell
 ├─ NavigationStack(path: router.path)           ← 根永远是 AssistantHome
 │   ├─ AssistantHome
-│   │    ├─ 导航栏：☰ | 小驳 / 状态 | [今日] [✉³]
+│   │    ├─ 导航栏：☰³ | 小驳 / 状态 | [今日]
 │   │    ├─ TodayStrip（横滑芯片）
 │   │    ├─ ThreadView(chrome: .embedded) —— 助理会话
 │   │    ├─ ActionDock（输入框正上方：确认卡 + 进行中的委派）
@@ -169,7 +169,7 @@ extension PhoneRouter {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// 菜单里的条目 / 导航栏消息图标：先收菜单和键盘，再 push（替换整个栈，不叠层）
+    /// 菜单里的条目（含「待处理」）：先收菜单和键盘，再 push（替换整个栈，不叠层）
     func go(_ route: PhoneRoute) {
         dismissKeyboard()
         menuOpen = false
@@ -302,7 +302,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 ```
 ┌──────────────────────────────────┐
-│ ☰   小驳              [今日•] [✉³] │  ← 导航栏 inline；副标题：就绪 / 正在回复 / 正在重连…
+│ ☰³  小驳                    [今日•] │  ← 导航栏 inline；☰ 角标 = 待处理数；副标题：就绪 / 正在回复 / 正在重连…
 ├──────────────────────────────────┤
 │ [简报] [待办 3] [09:00 晨报] [进行中 2] → │  ← TodayStrip，横滑，空则整条隐藏
 ├──────────────────────────────────┤
@@ -327,11 +327,9 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 - 导航栈由 `PhoneShell` 提供（`NavigationStack(path:)`），`AssistantHome` 自己不再包一层。`.navigationBarTitleDisplayMode(.inline)`，`.toolbarBackground(JieboColor.paper, for: .navigationBar)` + `.toolbarBackground(.visible, for: .navigationBar)`。
 - `ToolbarItem(placement: .principal)`：VStack —— `store.assistantName`（`JieboFont.display(17)`）+ 副标题（`JieboFont.ui(11, weight: .medium)`, `JieboColor.dim`）。优先级：未连接「正在重连…」> 未配 key「服务器还没配 API Key」（`JieboColor.danger`）> 助理在跑「正在回复」> 后台状态 `assistantState.background.ok ? "就绪" : reason`。
-- **左侧：☰ 菜单按钮**（`line.3.horizontal`，`hitTarget()`，`accessibilityLabel("菜单")`）→ `router.openMenu()`。
-- **右侧从左到右**：
-  1. 「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 外观（抽成可复用的 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubSection = .today; router.hubOpen = true`。
-  2. **✉ 消息按钮**（SF Symbol `tray`，有未读时用 `tray.full`）→ `router.go(.inbox)`。右上角数字角标（`JieboColor.danger` 底，`JieboColor.fillFg` 字，`JieboFont.ui(10, weight: .semibold)`，> 99 显示 `99+`），数 = `store.assistantBadgeCount`，为 0 不显示。`accessibilityLabel` 写成「待处理，3 项」。
-- `store.canUndo` 时在今日按钮左边多一个撤销按钮；导航栏过挤时（小屏、大字号）撤销收进 ☰ 菜单之外的 `ellipsis` `Menu` 里，不要挤掉消息图标。
+- **左侧：☰ 菜单按钮**（`line.3.horizontal`，`hitTarget()`）→ `router.openMenu()`。当 `store.assistantBadgeCount > 0` 时，在图标容器右上角叠数字角标（与下文菜单行同款：`JieboColor.danger` 底、`JieboColor.fillFg` 字、`JieboFont.ui(10, weight: .semibold)`，> 99 为 `99+`）；为 0 不叠角标。无障碍：`accessibilityLabel` 有待处理时写「菜单，N 项待处理」，否则「菜单」。
+- **右侧**：「今日」按钮 —— 沿用 `ThreadView.assistantTodayButton` 外观（抽成可复用的 `AssistantTodayButton(on:marked:action:)`），点击 `router.hubSection = .today; router.hubOpen = true`。
+- `store.canUndo` 时在今日按钮左边多一个撤销按钮；导航栏过挤时（小屏、大字号）撤销收进 `ellipsis` `Menu` 里，不要挤掉「今日」。
 
 #### 4.1.2 TodayStrip（新文件 `Views/Phone/TodayStrip.swift`）
 
@@ -344,7 +342,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 | 下一个日程 | 启用的日程里 `nextAt` 最近的 | 「HH:mm 标题」（跨天显示「明天 HH:mm」/「M月d日」） | 打开 Hub（今日，滚到日程） |
 | 进行中 | `delegations` 里 running/awaiting 数 > 0 | 「进行中 N」，`JieboColor.run`/`runBg` | 滚动到行动区；仅 1 项时直接打开其详情 |
 
-- 待批**不在**这里：它会出现在行动区（要立刻答复）和待处理页（消息图标有角标）。
+- 待批**不在**这里：它会出现在行动区（要立刻答复）和待处理页（☰ 角标与菜单里「待处理」行上的数字）。
 - `AssistantHome.task { store.requestAssistant() }`；`scenePhase` 回到 `.active` 时再拉一次。
 
 #### 4.1.3 线程
@@ -402,7 +400,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 ### 4.2 待处理页 `InboxHome`（新文件 `Views/Phone/InboxHome.swift`）
 
-从助理页右上角的 ✉ 消息图标 push 进来（`router.go(.inbox)`），不是独立 Tab。用系统导航栏返回。
+从 ☰ 菜单里点「待处理」push 进来（`router.go(.inbox)`），不是独立 Tab。用系统导航栏返回。
 
 `List` + `.listStyle(.insetGrouped)` + `.scrollContentBackground(.hidden)` + `JieboColor.paper`，`.navigationTitle("待处理")`，inline 标题。`.refreshable { store.requestAssistant() }`。
 
@@ -430,6 +428,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 
 1. **头部**：`JieboMark(size: 36)` + `store.tenantName`（空则「接驳」）+ `ConnectionDot` + 「已连接 / 正在重连…」。
 2. **助理**
+   - **「待处理」** → `router.go(.inbox)`，push `InboxHome`（§4.2）。右侧数字角标 = `store.assistantBadgeCount`（与 ☰ 上角标同一数据源），为 0 不显示数字。行首图标 `tray` / 有未读时 `tray.full`。
    - 「记忆」→ `router.go(.memory)`，push `AssistantMemoryScreen`（包 `AssistantMemoryPane`，`onAppear { store.requestAssistant(memory: true) }`），右侧显示有效条目数。
    - 「待办与日程」→ `router.go(.todayManage)`，push `AssistantTodayScreen`（包 `AssistantTodayPane`，含 §4.1.5 的补充操作）。
    - 「委派记录」→ `router.go(.delegations)`，push `DelegationListScreen`（`assistantState.delegations`，倒序，行：标题 + 工作区 + 状态 + 相对时间）；点行 → `router.delegationDetail`。
@@ -439,7 +438,7 @@ if UIDevice.current.userInterfaceIdiom == .phone {
 5. **账号**：「退出登录」（destructive）→ `confirmationDialog`，文案沿用 `PhoneWorkbench`。
 6. **关于**（抽屉底部，小字）：版本号 `CFBundleShortVersionString` + build。
 
-> 「待处理」**不放**在抽屉里（它有自己的 ✉ 入口和角标）；「今日」也不放（导航栏有按钮）。抽屉里是低频、偏设置与管理的内容。
+> 「今日」不放抽屉（导航栏有按钮）。「待处理」放在抽屉「助理」组**第一行**，与 ☰ 角标联动；行动区里紧急的确认卡仍可直接批，不必先进菜单。
 
 ### 4.4 委派详情 `DelegationDetailSheet`（新文件 `Views/Phone/DelegationDetailSheet.swift`）
 
@@ -623,11 +622,11 @@ extension ChatStore {
 
 ### P0 骨架与守卫
 
-- [ ] `PhoneRouter.swift`、`PhoneShell.swift`（`NavigationStack(path:)` + 根页 `AssistantHome` 占位，先放 `ThreadView(chrome: .embedded)`）、`MenuDrawer.swift` 空壳（能开能关）。导航栏先放 ☰ 和 ✉ 两个按钮。
+- [ ] `PhoneRouter.swift`、`PhoneShell.swift`（`NavigationStack(path:)` + 根页 `AssistantHome` 占位，先放 `ThreadView(chrome: .embedded)`）、`MenuDrawer.swift` 空壳（能开能关）。导航栏放 ☰（带待处理角标占位）和「今日」。
 - [ ] `ThreadView` 改 `ThreadChrome`（§5.1），旧 `phoneChrome:` 初始化器保留。
 - [ ] `ChatStore.assistantOnly` + `swapActive` 守卫 + `select` 里原始 id 的修正（§5.3①）。
 - [ ] `WorkbenchView` 按 idiom 分流；冷启动对齐。
-- **验收**：iPhone 启动一定落在助理会话（先在 iPad 上切到某个工作区会话再退出，再开 iPhone，也必须落在助理）；☰ 能打开 / 关闭抽屉（遮罩点击、向左拖、左缘右滑打开都可用，push 页上左缘右滑是返回而不是开抽屉）；✉ 能 push 占位页并返回；iPad 全尺寸 + 窄窗行为与改前一致。
+- **验收**：iPhone 启动一定落在助理会话（先在 iPad 上切到某个工作区会话再退出，再开 iPhone，也必须落在助理）；☰ 能打开 / 关闭抽屉（遮罩点击、向左拖、左缘右滑打开都可用，push 页上左缘右滑是返回而不是开抽屉）；菜单里「待处理」能 push 占位页并返回；iPad 全尺寸 + 窄窗行为与改前一致。
 
 ### P1 助理页
 
@@ -651,7 +650,7 @@ extension ChatStore {
 ### P4 待处理页
 
 - [ ] `InboxHome`（待批、收件箱、详情、全部已读、下拉刷新）、`router.open`。
-- **验收**：待批能直接批 / 拒；收件箱点条目：委派 → 详情 sheet，助理 → pop 回助理页，其它会话 → 提示「在电脑或 iPad 上查看」且不跳转；✉ 角标数与内容一致，标已读后减少。
+- **验收**：待批能直接批 / 拒；收件箱点条目：委派 → 详情 sheet，助理 → pop 回助理页，其它会话 → 提示「在电脑或 iPad 上查看」且不跳转；☰ 角标与菜单里「待处理」行数字与内容一致，标已读后减少。
 
 ### P5 菜单内容与收尾
 
@@ -675,20 +674,20 @@ extension ChatStore {
 1. 冷启动：落在助理页，副标题正确；在 iPad / 网页上把当前会话切到某个工作区会话后，iPhone 重新启动仍然落在助理。
 2. 全 App 找不到任何进入工作区会话的入口：没有会话列表、没有文件 / Git / 终端 / Loop；收件箱、委派记录里点指向工作区会话的条目不会跳走。
 3. 断网再连：副标题「正在重连…」→ 恢复；今日条重新拉取。
-4. 发一条消息，回复流式显示；导航栏副标题显示「正在回复」；点 ✉ 进待处理再返回，回复仍在，草稿不串；点 ☰ 开关抽屉，草稿不丢。
+4. 发一条消息，回复流式显示；导航栏副标题显示「正在回复」；☰ → 待处理再返回，回复仍在，草稿不串；点 ☰ 开关抽屉，草稿不丢。
 5. 说「在 notes 里把周报整理一下」→ 助理发起委派 → 行动区出现进行中行 → 点开详情看到过程在更新 → 完成后汇报出现，收件箱多一条。
 6. 说「给我的讲稿建一个单独的工作区」→ 确认卡 → 同意后助理接着委派；再来一次点拒绝 → 助理说不建了，不再追问；再来一次不理它，退到后台再回来，卡片和倒计时仍然正确。
-7. 委派要写文件 → ✉ 角标 +1、行动区出现批准卡 → 在行动区批准 → 角标 -1。
+7. 委派要写文件 → ☰ 角标 +1、行动区出现批准卡 → 在行动区批准 → 角标 -1。
 8. 在进行中的委派详情点「停止」→ 确认 → 状态变失败；对只读的后台委派没有停止按钮。
 9. 两个并发委派指向同一工作区：助理告诉你前一个还在跑，不会假装成功。
 10. 线程里点 `@文件` 链接 → 全屏预览 → 关掉回到原处。
-11. 待处理（✉）：委派条目 → 详情 sheet；助理条目 → 回到助理页；全部已读后角标清零。
+11. 待处理（☰ → 菜单）：委派条目 → 详情 sheet；助理条目 → 回到助理页；全部已读后 ☰ 角标与菜单行数字清零。
 12. ☰ → 记忆：新增、编辑、标失效、恢复、彻底删除；暂停记忆开关。
 13. ☰ → 待办与日程：添加、完成、撤销、删除待办；关掉一个日程再打开。
 14. 主题切换两套 × 浅深色，逐页看有没有写死的颜色。
 15. 系统设置把文字调到最大，助理页、行动区、待处理不截断关键信息、不重叠。
 16. iPad（全屏、分屏 1/2、Slide Over）：侧栏、图标栏、工具层、助理面板与改前一致；iPad 助理面板里 `create_workspace` 确认卡文案正确。
-16a. 菜单抽屉：☰ 打开时键盘收起；点主题 / 统计会先关抽屉再弹 sheet；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
+16a. 菜单抽屉：☰ 打开时键盘收起；有待处理时 ☰ 与「待处理」行角标一致；点主题 / 统计会先关抽屉再弹 sheet；在待处理页（push 页）上左缘右滑是返回，不会拉出抽屉。
 17. 网页 / iPad 上仍能看到助理委派出去的子会话，并能继续在里面聊（iPhone 不显示，其它端保留）。
 
 ---
