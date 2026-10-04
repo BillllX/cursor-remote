@@ -241,9 +241,12 @@ export function supplementMemory(
   text: string,
   actor: MemoryActor,
 ): MemoryResult<MemoryEntry> {
+  if (actor !== "page" && readSettings(ref).paused) return { ok: false, error: "记忆已暂停，没有写入。" };
   const extra = clip(cleanText(text), 300);
   if (!extra) return { ok: false, error: "补充内容为空。" };
   if (detectSecret(extra)) return { ok: false, error: "内容像密钥或密码，按规则不记。" };
+  const sensitive = actor === "page" ? null : detectSensitive(ref, extra);
+  if (sensitive) return { ok: false, error: `内容涉及「${sensitive}」，这一类默认不记；要记的话在记忆页设置里打开。` };
   const data = readEntries(ref);
   const entry = data.entries.find((item) => item.id === id);
   if (!entry) return { ok: false, error: `没有这条记忆：${id}` };
@@ -434,6 +437,7 @@ export function setCore(
   actor: MemoryActor,
   rev?: number,
 ): MemoryResult<CoreProfile> {
+  if (actor !== "page" && readSettings(ref).paused) return { ok: false, error: "记忆已暂停，没有写入。" };
   const core = readCore(ref);
   if (rev !== undefined && rev !== core.rev) return { ok: false, error: "核心档案已被更新，刷新后再改。" };
   // 工作偏好会注入所有会话，只收用户亲口说的：整理者推断出来的不能写
@@ -445,6 +449,13 @@ export function setCore(
     if (value === undefined) continue;
     const text = clip(value.replace(/[\u0000-\u0008\u000b-\u001f]/g, ""), 3000);
     if (detectSecret(text)) return { ok: false, error: `「${key}」里像有密钥或密码，按规则不记。` };
+    if (actor !== "page") {
+      // 只查新增的行：用户在记忆页亲手写进去的旧内容不拦
+      const old = new Set(core.fields[key].split("\n").map((line) => line.trim()));
+      const added = text.split("\n").filter((line) => !old.has(line.trim())).join("\n");
+      const sensitive = detectSensitive(ref, added);
+      if (sensitive) return { ok: false, error: `「${key}」新增内容涉及「${sensitive}」，这一类默认不记；要记的话在记忆页设置里打开。` };
+    }
     core.fields[key] = text;
   }
   if (estimateTokens(core.fields[WORK_PREF_FIELD]) > WORK_PREF_TOKEN_BUDGET) {

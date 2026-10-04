@@ -468,9 +468,14 @@ export function answerCard(tenant: WorkspaceRoot, chatId: string, callId: string
   const data = readStore(ref);
   const card = data.cards.find((item) => item.callId === callId && item.chatId === chatId);
   if (!card) return null;
+  if (card.expiresAt <= Date.now()) {
+    expireCards(ref);
+    return allow ? { ok: false, error: "这张卡已过期作废，原数据没动。" } : { ok: true, written: 0 };
+  }
   const items = data.proposals.filter((item) => item.cardId === callId);
   let written = 0;
   const errors: string[] = [];
+  const retry: Proposal[] = [];
   if (allow) {
     const base = realOr(tenant.workspaceRoot);
     const byDir = new Map<string, Proposal[]>();
@@ -500,6 +505,7 @@ export function answerCard(tenant: WorkspaceRoot, chatId: string, callId: string
         for (const row of rows) landed.add(row.id);
       } catch (err) {
         errors.push(`写 ${dir}/${MEMORY_FILE} 失败：${err instanceof Error ? err.message : String(err)}`);
+        retry.push(...rows);
       }
     }
     for (const item of items) {
@@ -512,6 +518,17 @@ export function answerCard(tenant: WorkspaceRoot, chatId: string, callId: string
   data.proposals = data.proposals.filter((item) => item.cardId !== callId);
   writeStore(ref, data);
   settleApproval(ref, chatId, callId);
+  if (retry.length) {
+    openCard(ref, {
+      chatId,
+      tool: card.tool,
+      items: retry.map(({ cardId: _, ...item }) => item),
+      title: `有 ${retry.length} 条工作区记忆上次没写成，再确认一次`,
+      note: `上次写 ${[...new Set(retry.map((row) => row.dir).filter(Boolean))].join("、") || "工作区记忆"} 失败，请再确认一次。`,
+      origin: card.origin,
+    });
+    errors.push("没写成的已重新出卡，可以再批准一次。");
+  }
   return errors.length ? { ok: written > 0, error: errors.join(" "), written } : { ok: true, written };
 }
 

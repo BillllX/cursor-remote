@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { postInbox } from "./inbox.ts";
-import { audit, isValid, listMemory, memoryFiles, migrateMemoryShapeV2, readCore, workPreferenceLines, type MemoryEntry } from "./memory.ts";
+import { audit, detectSensitive, isValid, listMemory, memoryFiles, migrateMemoryShapeV2, readCore, workPreferenceLines, type MemoryEntry } from "./memory.ts";
 import { assistantDir, assistantPath, clip, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 import { listProposals, openCard, WORK_PREF_TOOL, WORKSPACE_MEMORY_TOOL, type Proposal, type Section, type WorkspaceRoot } from "./workspaceMemory.ts";
 
@@ -30,6 +30,7 @@ export type MigrationReport = {
 const WORK_HABIT_RE =
   /(中文|英文|语言|回复|回答|emoji|表情|注释|测试|提交信息|commit|代码风格|缩进|格式化|命名|一次配好|直接照做|先跑|评审|review|简洁|结论先行)/i;
 const PERSONA_RE = /(语气|可爱|活泼|人设|名字|叫你|称呼)/;
+const LIFE_RE = /(住在|家住|家庭住址|家里|老婆|老公|妻子|丈夫|孩子|女儿|儿子|父母|生日|手机号|电话|身体|过敏|吃素|宠物)/;
 
 function schemaFile(ref: TenantRef) {
   return assistantPath(ref, "memory", "schema.json");
@@ -152,6 +153,7 @@ export function migrateMemory(tenant: WorkspaceRoot): MigrationReport | null {
   const addPref = (text: string, memoryId?: string) => {
     const line = clip(text.replace(/^用户(希望|要求|习惯)?/, "").trim(), 120);
     if (!line || have.has(line) || prefs.some((item) => item.text === line)) return;
+    if (detectSensitive(ref, line) || LIFE_RE.test(line)) return;
     prefs.push({ id: newId("wm"), kind: "work_pref", chatId: assistantChat, dir: "", section: "工作偏好", text: line, refs: [], createdAt: now, memoryId });
   };
   for (const line of rootHabits(tenant.workspaceRoot)) addPref(line);
@@ -167,6 +169,8 @@ export function migrateMemory(tenant: WorkspaceRoot): MigrationReport | null {
     const hit = matchDir(`${entry.text} ${(entry.supplements ?? []).join(" ")}`, dirs);
     if (hit) {
       const text = [entry.text, ...(entry.supplements ?? [])].join("；");
+      // 同一条里混着生活信息的整条留在个人记忆，不往工作区搬
+      if (detectSensitive(ref, text) || LIFE_RE.test(text)) continue;
       const rows = byDir.get(hit.dir) ?? [];
       rows.push({
         id: newId("wm"),

@@ -66,12 +66,26 @@ try {
   const block = memory.renderMemoryBlock(ref);
   check(block.includes("望京") && !block.includes("回复用中文"), "W0：助理记忆块不重复带工作偏好");
   check(!memory.setCore(ref, { 工作偏好: "- 偷偷加" }, "integrator").ok, "W0：整理者不能改工作偏好");
+  check(!memory.setCore(ref, { 近况: "最近在吃抗抑郁的药" }, "integrator").ok, "敏感：整理者写核心档案也拦");
+  check(memory.setCore(ref, { 近况: "最近在吃抗抑郁的药" }, "page").ok, "敏感：记忆页亲手写不拦");
+  check(memory.setCore(ref, { 近况: "最近在吃抗抑郁的药\n周末去爬山" }, "integrator").ok, "敏感：整理者追加别的行时旧内容不拦");
+  memory.setCore(ref, { 近况: "" }, "page");
+  const base = memory.saveMemory(ref, { topic: "工作", text: "用户在做一个 iOS 应用", basis: "user_said" }, "chat");
+  check(base.ok && !memory.supplementMemory(ref, base.value.id, "确诊了焦虑症", "integrator").ok, "敏感：补充也拦");
+  if (base.ok) memory.forgetMemory(ref, base.value.id, "page");
   check(!memory.addWorkPreference(ref, "token: abcdefgh1234", "chat").ok, "W0：像密钥的不收");
   const long = Array.from({ length: 40 }, (_, i) => `第${i}条很长很长的工作习惯描述`).join("\n");
   check(!memory.setCore(ref, { 工作偏好: long }, "page").ok, "W0：超 200 token 拒绝");
+  const pauseEntry = memory.saveMemory(ref, { topic: "工作", text: "暂停开关测试用", basis: "user_said" }, "chat");
   memory.writeSettings(ref, { paused: true });
   check(memory.renderWorkPreferences(ref) === "", "W0：暂停记忆时不注入");
+  check(
+    pauseEntry.ok && !memory.supplementMemory(ref, pauseEntry.value.id, "补充一条", "integrator").ok,
+    "W0：暂停时整理者不能补充",
+  );
+  check(!memory.setCore(ref, { 近况: "暂停期间追加" }, "integrator").ok, "W0：暂停时整理者不能改核心档案");
   memory.writeSettings(ref, { paused: false });
+  if (pauseEntry.ok) memory.forgetMemory(ref, pauseEntry.value.id, "page");
   check(memory.removeWorkPreference(ref, "回复用中文", "chat").ok && memory.workPreferenceLines(ref).length === 0, "W0：能删");
   memory.addWorkPreference(ref, "回复用中文", "page");
   const toForget = memory.saveMemory(ref, { topic: "工作", text: "提交信息用英文", basis: "user_said" }, "chat");
@@ -144,6 +158,35 @@ try {
   propose({ text: "会过期的一条" });
   const card4 = wm.flushChat(ref, chatId)!;
   check(wm.expireCards(ref, card4.expiresAt + 1) === 1 && wm.listProposals(ref).proposals.length === 0, "过期：卡和提议一起作废");
+  write(resolve(root, "proj", "lib", ".jiebo"), "挡路的文件");
+  propose({ text: "写失败要重试的一条", path: "lib" });
+  const card6 = wm.flushChat(ref, chatId)!;
+  const failed = wm.answerCard(tenant, chatId, card6.callId, true);
+  const retryProposal = wm.listProposals(ref).proposals.find((item) => item.text === "写失败要重试的一条" && item.cardId);
+  const retryCard = retryProposal
+    ? approvals.listApprovals(ref).find((item) => item.callId === retryProposal.cardId)
+    : undefined;
+  check(failed?.ok === false && Boolean(retryCard) && wm.listProposals(ref).proposals.some((item) => item.text === "写失败要重试的一条"), "写失败：提议留着、重新出卡");
+  rmSync(resolve(root, "proj", "lib", ".jiebo"));
+  const retried = wm.answerCard(tenant, chatId, retryCard!.callId, true);
+  check(retried?.ok === true && readFileSync(resolve(root, "proj", "lib", ".jiebo/memory.md"), "utf8").includes("写失败要重试的一条"), "写失败：修好后再批准能写下");
+  propose({ text: "作答时已过期的一条" });
+  const queued = wm.listProposals(ref).proposals.filter((item) => !item.cardId);
+  const stale = wm.openCard(ref, { chatId, tool: wm.WORKSPACE_MEMORY_TOOL, items: queued, ttlMs: -1, title: "过期" })!;
+  const late = wm.answerCard(tenant, chatId, stale.callId, true);
+  check(
+    late?.ok === false && !readFileSync(resolve(root, "proj", ".jiebo/memory.md"), "utf8").includes("作答时已过期") && wm.listProposals(ref).proposals.length === 0,
+    "过期：定时清理前作答也不写",
+  );
+  propose({ text: "过期后拒绝的一条" });
+  const staleDeny = wm.openCard(ref, {
+    chatId,
+    tool: wm.WORKSPACE_MEMORY_TOOL,
+    items: wm.listProposals(ref).proposals.filter((item) => !item.cardId),
+    ttlMs: -1,
+    title: "过期拒绝",
+  })!;
+  check(wm.answerCard(tenant, chatId, staleDeny.callId, false)?.ok === true, "过期：点拒绝也不报错");
   propose({ text: "重启前攒的一条" });
   const card5 = wm.flushChat(ref, chatId)!;
   propose({ text: "重启前还没出卡的一条" });
@@ -221,6 +264,8 @@ try {
       entry("m3", "user_said", "工作", "用户希望推送、部署这类重复流程一次配好、记下来，下次直接照做"),
       entry("m4", "user_said", "新房", "用户的新房约 144 平方米"),
       entry("m5", "inferred", "饮食", "用户可能喜欢咖啡"),
+      entry("m6", "user_said", "工作", "用户希望回复用中文，因为老婆看不懂英文"),
+      entry("m7", "user_said", "工作", "cursor-remote 周末在家给老婆演示"),
     ],
   });
   writeJson(assistantPath(oldRef, "memory", "core.json"), { rev: 6, fields: { 关于我: "你叫可乐", 偏好: "可爱活泼，但是非常细致", 近况: "新房在北京", 人物: "有一个孩子" } });
@@ -230,7 +275,7 @@ try {
   check(Boolean(report) && migrate.memorySchemaVersion(oldRef) === 2, "迁移：升到 v2");
   check(existsSync(assistantPath(oldRef, "memory", "backup-v1", "entries.json")) && existsSync(assistantPath(oldRef, "memory", "backup-v1", "core.json")), "迁移：先备份");
   const migrated = memory.listMemory(oldRef).entries;
-  check(migrated.length === 5 && migrated.filter((item) => item.basis === "inferred").every((item) => item.seen === 1), "迁移：条目一条不少，老推断记作出现一次");
+  check(migrated.length === 7 && migrated.filter((item) => item.basis === "inferred").every((item) => item.seen === 1), "迁移：条目一条不少，老推断记作出现一次");
   check(typeof memory.readCore(oldRef).fields.工作偏好 === "string" && memory.readCore(oldRef).fields.近况 === "新房在北京", "迁移：核心档案补栏，原字段不动");
   const cards = wm.listProposals(oldRef);
   const prefCard = cards.cards.find((item) => item.tool === "work_preferences");
@@ -238,10 +283,12 @@ try {
   const prefTexts = cards.proposals.filter((item) => item.kind === "work_pref").map((item) => item.text);
   check(Boolean(prefCard) && prefTexts.some((text) => text.includes("回答默认用中文")), "迁移：根目录 AGENTS.md 的通用习惯成了工作偏好候选");
   check(!prefTexts.some((text) => text.includes("可爱")), "迁移：人设不当工作偏好");
+  check(!prefTexts.some((text) => text.includes("老婆")), "迁移：混生活信息的工作习惯不进工作偏好");
   check(prefTexts.some((text) => text.includes("一次配好")), "迁移：你说过的跨项目工作习惯成了候选");
   const wsItems = cards.proposals.filter((item) => item.kind === "workspace");
   check(Boolean(wsCard) && wsItems.length === 2 && wsItems.every((item) => item.dir === "cursorremote/cursor-remote"), "迁移：提到仓库的项目知识归到那个仓库");
   check(!cards.proposals.some((item) => item.text.includes("144") || item.text.includes("咖啡")), "迁移：个人生活的不动");
+  check(!wsItems.some((item) => item.text.includes("老婆")), "迁移：仓库名+生活信息不进工作区");
   check(approvals.listApprovals(oldRef).length === 2, "迁移：两张确认卡都挂上了");
   check(inbox.listInbox(oldRef).some((item) => item.title === "记忆升级到分层版"), "迁移：收件箱说明一次");
   check(readFileSync(resolve(old.workspaceRoot, "AGENTS.md"), "utf8").includes("回答默认用中文"), "迁移：不改用户的 AGENTS.md");
