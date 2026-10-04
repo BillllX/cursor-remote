@@ -222,12 +222,19 @@ final class ChatStore {
 
     private let client = GatewayClient()
     private var started = false
+    /// 推送用的乐观版本号：每次推送先自增，推送丢了也不回退
     private var stateRev = 0
+    /// 服务端确认过的全局版本（stored_state / digest / ack 带来的）。判断 stored_state 是否陈旧只能看它，
+    /// 看 stateRev 的话，断线前丢掉的推送会让别的设备的写入被整份跳过
+    private var confirmedRev = 0
     private var appliedStore = false
     // P4 增量同步：每会话版本号 + 脏标记 + 在途确认
     private var chatRevs: [String: Int] = [:]
     private var dirtyChatIds = Set<String>()
     private var inflightChatIds = Set<String>()
+    /// 在途 sync_chat / truncate_turns 发出时的 chatRevs[id]：回执时据此判断本机正文是否仍是服务端那一版
+    private var inflightBases: [String: Int] = [:]
+    private var truncateBases: [String: Int] = [:]
     private var pendingChatLoads = Set<String>()
     private var digestTimeoutTask: Task<Void, Never>?
     /// 网关是否支持 P4（stored_state 带 chatRevs / 收到 ack/digest/stored_chat）。
@@ -425,6 +432,7 @@ final class ChatStore {
         }
         let turn = chat.turns[index]
         let text = turn.user
+        sendTruncate(chatId: chat.id, turnId: turnId)
         patch(chat.id) { item in
             var next = item
             next.turns = Array(item.turns.prefix(index))
@@ -459,6 +467,7 @@ final class ChatStore {
         let prior = Array(chat.turns.prefix(index))
         let history = ChatStore.externalHistory(model: next.model, turns: prior)
         let mentions = ChatStore.extractMentions(turn.user)
+        sendTruncate(chatId: chat.id, turnId: turnId)
         patch(chat.id) { item in
             var row = item
             row.turns = prior + [next]
@@ -482,6 +491,13 @@ final class ChatStore {
             turnId: next.id
         ))
         markProgress(chat.id)
+    }
+
+    /// 截断由网关执行：sync_chat 不带正文，本地截掉的回合只能这样告诉服务端
+    private func sendTruncate(chatId: String, turnId: String) {
+        stateRev += 1
+        truncateBases[chatId] = chatRevs[chatId]
+        send(.truncateTurns(chatId: chatId, turnId: turnId, rev: stateRev))
     }
 
     func applyPlan(_ turnId: String) {
@@ -602,8 +618,7 @@ final class ChatStore {
             next.turns.append(turn)
             return next
         }
-        // P8 slim：turns 未加载完时的本地新 turn——加载完成前若 sync 被触发（无 turns 键），
-        // dirty 会被清掉导致此 turn 永不落盘；登记后由分页完成分支补全量回推（Grok 评审 M2）
+        // P8 slim：turns 未加载完时的本地新 turn——登记后补齐时保留它，直到分页完成（Grok 评审 M2）
         if chats.first(where: { $0.id == chatId })?.turnsComplete == false {
             localTurnsPendingSync.insert(chatId)
         }
@@ -1149,6 +1164,23 @@ final class ChatStore {
         chats[index].turnsComplete = false
     }
 
+    /// truncate_turns 回执。截成且发出时正文就是服务端那一版：本地截断结果与服务端一致，版本跟着前进。
+    /// 没截成（回合不在或正在跑）：本地截掉的回合服务端还在，本地正文作废、按服务端补齐（活的回合保留）
+    private func settleTruncate(_ id: String, prior: Int?, chatRev: Int, truncated: Bool) {
+        let base = truncateBases.removeValue(forKey: id)
+        guard chats.contains(where: { $0.id == id }) else { return }
+        if truncated, chats.first(where: { $0.id == id })?.turnsComplete == true, bodyRevs[id] == base, prior == base {
+            bodyRevs[id] = chatRev
+            bodySegs[id] = nil
+            return
+        }
+        // 版本未知也要留基线：markNeedsRefresh 没基线会清空正文，连重试中的那一轮一起丢掉
+        if !truncated || bodyRevs[id] == nil { bodyRevs[id] = Int.min }
+        bodySegs[id] = nil
+        markNeedsRefresh(id, rev: bodyRevs[id])
+        if id == activeId { ensureTurnsLoaded(id) }
+    }
+
     /// 增量补齐的一页。acc 覆盖服务端 [from, total)；from 落进基线后比对 base[from] 与这页第一条：
     /// 一致 → base[..<from] + acc 完成；不一致 → 退回全量，继续翻到第一页后用 acc 整体替换。
     /// 有 minFrom（段哈希判出的第一个变动位置）时 acc 必须覆盖到它才接缝：from > minFrom 继续往前翻；
@@ -1213,12 +1245,8 @@ final class ChatStore {
             bodyRevs[chatId] = rev
             bodySegs[chatId] = [startSegs, serverSegs[chatId], bodySegs[chatId]].compactMap { $0 }.first { $0.rev == rev }
         }
-        // 加载期间发过消息：当时的 sync 无 turns 键、dirty 已被清——现在 turns 齐了，
-        // 必须补一次全量回推，否则本地新 turn 永不落盘（Grok 评审 M2）
-        if localTurnsPendingSync.remove(chatId) != nil {
-            dirtyChatIds.insert(chatId)
-            scheduleSync()
-        }
+        // 加载期间发过消息：补齐时已按 keepLocal 留下本地新回合（正文由网关转录落盘，不靠回推），解除本地优先
+        localTurnsPendingSync.remove(chatId)
         if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
             applyHistory(chatId: chatId, incoming: pending)
         }
@@ -2632,7 +2660,7 @@ final class ChatStore {
             // stored_state 太大（超 maxMessageBytes）走 HTTP /state；rev 不新就跳过。
             // 但 digest 在途时（load_chats 单条超限的回落）digest 已抬过 rev，不能被短路挡住
             // digest 发的 load_state 回包超限也走这里：同样不能被短路挡住
-            if pendingChatLoads.isEmpty, !stateReloadPending, let rev, appliedStore, rev <= stateRev { break }
+            if pendingChatLoads.isEmpty, !stateReloadPending, let rev, appliedStore, rev <= confirmedRev { break }
             // Kimi 评审 M2：digest 判出的变更会话单条超接收上限——HTTP 回落拿的是 slim 壳
             // （且 rev 已被 digest 收敛，applyStoredState 会早退整帧丢弃），壳合并保留本地
             // 旧 turns 会造成永久 stale。把待拉会话标成待补齐：旧正文留作基线，内容改走 load_chat
@@ -2651,26 +2679,37 @@ final class ChatStore {
             }
             scheduleStateFetch()
             ensureTurnsLoaded(activeId) // active 被降级就立即重启分页
-        case .syncAck(let rev, let ackRevs, let reviewOnly):
+        case .syncAck(let rev, let ackRevs, let reviewOnly, let truncated):
             // P4b 回执：确认服务端收下了这些会话。保留回执只对齐版本，不把在途正文同步当成已落盘。
             serverSupportsP4 = true
             for (id, chatRev) in ackRevs {
+                let prior = chatRevs[id]
                 chatRevs[id] = chatRev
-                if !reviewOnly {
-                    inflightChatIds.remove(id)
-                    // 完整正文随 sync_chat 上去且被收下：服务端正文就是本地这份，正文版本跟着前进
-                    if chats.first(where: { $0.id == id })?.turnsComplete == true {
-                        bodyRevs[id] = chatRev
-                        bodySegs[id] = nil // 这个版本的服务端段哈希还不知道
-                        scheduleBodyCache(id)
-                    }
+                if let truncated {
+                    settleTruncate(id, prior: prior, chatRev: chatRev, truncated: truncated)
+                    continue
+                }
+                guard !reviewOnly else { continue }
+                inflightChatIds.remove(id)
+                let base = inflightBases.removeValue(forKey: id)
+                guard chats.first(where: { $0.id == id })?.turnsComplete == true else { continue }
+                if bodyRevs[id] == base, prior == base {
+                    // 上传的只是元数据：发出时正文就是服务端那一版，期间也没有别处写入，正文版本跟着前进
+                    bodyRevs[id] = chatRev
+                    if let segs = bodySegs[id] { bodySegs[id] = SegHashes(rev: chatRev, hashes: segs.hashes) }
+                    scheduleBodyCache(id)
+                } else if bodyRevs[id] != chatRev {
+                    // 本地优先期间别处改过正文：现在不脏了，按新版本补齐
+                    markNeedsRefresh(id, rev: bodyRevs[id] ?? Int.min)
+                    if id == activeId { ensureTurnsLoaded(id) }
                 }
             }
             if let rev, rev > stateRev { stateRev = rev }
+            if let rev, rev > confirmedRev { confirmedRev = rev }
             if !dirtyChatIds.isEmpty { scheduleSync() } // ack 期间又改了的继续推
-        case .storedDigest(let rev, let deleted, let serverRevs):
+        case .storedDigest(let rev, let deleted, let serverRevs, let rejected):
             serverSupportsP4 = true
-            applyStoredDigest(rev: rev, deleted: deleted, serverRevs: serverRevs)
+            applyStoredDigest(rev: rev, deleted: deleted, serverRevs: serverRevs, rejected: rejected)
         case .storedChat(let value, let rev):
             serverSupportsP4 = true
             if let id = value.object?["id"]?.string { pendingChatLoads.remove(id) } // 解析失败也别白等安全网
@@ -3594,7 +3633,6 @@ final class ChatStore {
             next.draft = self.draft
             next.model = self.model
             next.mode = self.mode
-            next.cwd = chat.cwd ?? self.cwd
             return next
         }
     }
@@ -3974,7 +4012,8 @@ final class ChatStore {
                 }
                 dirtyChatIds.remove(id)
                 inflightChatIds.insert(id)
-                send(.syncChat(chat: chat.json(), rev: stateRev))
+                inflightBases[id] = chatRevs[id]
+                send(.syncChat(chat: chat.metaJSON(), rev: stateRev))
             }
         }
     }
@@ -3990,6 +4029,9 @@ final class ChatStore {
         workspaceRoot = ""
         workspaces = []
         stateRev = 0
+        confirmedRev = 0
+        inflightBases = [:]
+        truncateBases = [:]
         appliedStore = false
         didRestoreLastActive = false // P9：换租户后重新允许恢复（新租户有自己的 lastChatKey）
         chatRevs = [:]
@@ -4123,7 +4165,7 @@ final class ChatStore {
         defer { fulfillPendingAssistantOpen() }
         if serverRevs != nil { serverSupportsP4 = true }
         // digest 已把 stateRev 抬到服务端版本，它要的 load_state 回包 rev 不会更新，不能早退
-        if appliedStore, !stateReloadPending, let rev, rev <= stateRev {
+        if appliedStore, !stateReloadPending, let rev, rev <= confirmedRev {
             // rev 不新（如断线重连后服务端还没收到我们的 sync_chat）：
             // 内容不应用，但断线时倒回 dirty 的在途会话必须有人重推，否则会永久搁置
             if !dirtyChatIds.isEmpty { scheduleSync() }
@@ -4133,9 +4175,9 @@ final class ChatStore {
         deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
         appliedStore = true
         if let rev, rev > stateRev { stateRev = rev }
-        // 双保险：全量到达时回收在途（正常 ack 会清；断线已由 onClose 回收）
-        dirtyChatIds.formUnion(inflightChatIds)
-        inflightChatIds = []
+        if let rev, rev > confirmedRev { confirmedRev = rev }
+        // 在途推送不在这里倒回：断线由 onClose 回收，被拒由 rejected digest 回收；
+        // load_state 回包期间在途的推送回执照常会到，倒回只会重复推送
         let oldRevs = chatRevs
         chatRevs = serverRevs ?? [:] // 服务端视图全量替换
         // 段哈希跟着全量替换（只有 slim 行带，版本取刚换上的 chatRevs）
@@ -4267,15 +4309,17 @@ final class ChatStore {
     }
 
     /// P4c：stored_digest 目录对账——有差异就重拉一份 slim stored_state（load_state），正文走增量补齐；本地脏的保留优先
-    private func applyStoredDigest(rev: Int?, deleted: [String], serverRevs: [String: Int]) {
+    private func applyStoredDigest(rev: Int?, deleted: [String], serverRevs: [String: Int], rejected: Bool) {
         // 被拒的 inflight 回到脏集合（服务端没收下，本地优先稍后重推）。
-        // 注：digest 目前只会作为「本连接推送被拒」的响应到达（WS 有序），所以倒回是安全的；
-        // 若以后网关主动广播 digest，这里需要按 id 精细化。
-        dirtyChatIds.formUnion(inflightChatIds)
-        inflightChatIds = []
+        // 别处写入后的广播不影响本端在途推送，回执照常会到，不能倒回：倒回会重复推送，期间还把会话当本地优先
+        if rejected {
+            dirtyChatIds.formUnion(inflightChatIds)
+            inflightChatIds = []
+        }
         deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
         appliedStore = true
         if let rev, rev > stateRev { stateRev = rev }
+        if let rev, rev > confirmedRev { confirmedRev = rev }
         let digestIds = Set(serverRevs.keys)
         // 清掉已删除会话的版本号残留（保留脏会话的）
         chatRevs = chatRevs.filter { digestIds.contains($0.key) || dirtyChatIds.contains($0.key) }
@@ -4299,18 +4343,32 @@ final class ChatStore {
                 applySession(chats.first { $0.id == activeId }) // 同上：swapActive 可能改道到助理会话
             }
         }
-        // rev 不一致或本地缺失（本地优先的跳过：本地优先）→ 不再 load_chats 拉整条正文（网关对 slim 客户端
-        // 也回全量），改发 load_state 拿 slim 元数据和最新 chatRevs。回包走 applyStoredState：脏/被拒在途的
-        // 照旧本地优先稍后重推；正文已加载的标记待补齐，当前会话随即增量补齐；壳和本机缺失的会话补上元数据即可。
-        // 冷启动缓存行还挂着也要拉一次：它们只能由 stored_state 整份替换
-        var stale = !cachedOnlyIds.isEmpty
-        for (id, serverRev) in serverRevs where !stale {
-            guard !deletedIds.contains(id), !hasLocalPriority(id) else { continue }
+        // 对齐网页 stored_digest：先拿旧 rev 判目录是否 stale，再写入服务端 chatRevs。
+        // 别端写入后网关会 broadcast digest——已加载正文须按 rev 增量补齐（不能只改元数据）。
+        // 本地优先会话仍保留本地 rev / 正文，不参与远端覆盖。
+        var listStale = !cachedOnlyIds.isEmpty
+        for (id, serverRev) in serverRevs where !listStale {
+            guard !deletedIds.contains(id) else { continue }
             let missing = !chats.contains(where: { $0.id == id })
-            if missing || chatRevs[id] != serverRev { stale = true }
+            if missing || chatRevs[id] != serverRev { listStale = true }
+        }
+        for (id, serverRev) in serverRevs {
+            guard !deletedIds.contains(id) else { continue }
+            let prior = chatRevs[id]
+            guard prior != serverRev else { continue }
+            // 本地优先的也要记下服务端版本：回执据此发现期间别处改过正文，等不脏了再补齐
+            chatRevs[id] = serverRev
+            guard !hasLocalPriority(id) else { continue }
+            if let index = chats.firstIndex(where: { $0.id == id }), chats[index].turnsComplete {
+                let baseRev = bodyRevs[id] ?? prior
+                if baseRev != serverRev {
+                    markNeedsRefresh(id, rev: baseRev)
+                    if id == activeId { ensureTurnsLoaded(id) }
+                }
+            }
         }
         scheduleListCache()
-        guard stale else {
+        if !listStale {
             if !dirtyChatIds.isEmpty { scheduleSync() }
             return
         }

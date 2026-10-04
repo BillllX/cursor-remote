@@ -29,6 +29,16 @@ cat > "$TMP/tenants.json" <<EOF
 }
 EOF
 
+FAKE_LLM_PORT="${CI_FAKE_LLM_PORT:-18798}"
+mkdir -p "$TMP/state"
+cat > "$TMP/state/providers.json" <<EOF
+{
+  "providers": [
+    { "id": "fake", "name": "假模型", "baseURL": "http://127.0.0.1:$FAKE_LLM_PORT/v1", "apiKey": "ci-fake", "models": ["m1"], "tools": false }
+  ]
+}
+EOF
+
 cd "$ROOT/gateway"
 env -u CURSOR_API_KEY -u CURSOR_REMOTE_TOKEN \
   CURSOR_REMOTE_STATE_DIR="$TMP/state" \
@@ -55,6 +65,7 @@ status=0
 export JIEBO_WS_URL="ws://127.0.0.1:$PORT/bridge"
 CURSOR_REMOTE_TOKEN="$ADMIN_TOKEN" SMOKE_USER_TOKEN="$USER_TOKEN" node scripts/slim-smoke.mjs || status=1
 CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/resume-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$USER_TOKEN" FAKE_LLM_PORT="$FAKE_LLM_PORT" node scripts/multidevice-smoke.mjs || status=1
 
 if [ "$status" -ne 0 ]; then
   echo "---- 网关日志 ----"; cat "$TMP/gateway.log"

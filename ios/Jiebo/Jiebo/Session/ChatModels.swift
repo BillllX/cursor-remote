@@ -411,6 +411,14 @@ struct ChatSession: Identifiable, Hashable {
         return turns.reversed().compactMap(\.model).first
     }
 
+    /// sync_chat 只传元数据：正文由网关转录落盘，截断走 truncate_turns。
+    /// 本机正文可能落后于别的设备，带着它上传会把对方新写的回合覆盖掉
+    func metaJSON() -> JSONValue {
+        guard var object = json().object else { return json() }
+        object.removeValue(forKey: "turns")
+        return .object(object)
+    }
+
     func json() -> JSONValue {
         var object = extra
         object["id"] = .string(id)

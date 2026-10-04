@@ -2239,8 +2239,9 @@ export default function ChatApp() {
         }
         // 网关版本前进（别的设备、跑完一轮、或本端上传因 rev 落后被拒）
         case "stored_digest": {
-          // 被拒的上传不会再有 ack：清掉在途，元数据仍和快照不同，下一轮重推
-          inflightMetaRef.current = new Map();
+          // 被拒的上传不会再有 ack：清掉在途，元数据仍和快照不同，下一轮重推。
+          // 别处写入后的广播（changed）不影响本端在途，ack 照常会到
+          if (message.reason !== "changed") inflightMetaRef.current = new Map();
           const remoteRev = typeof message.rev === "number" ? message.rev : 0;
           if (remoteRev > stateRevRef.current) stateRevRef.current = remoteRev;
           if (Array.isArray(message.deletedIds)) {
@@ -2943,14 +2944,6 @@ export default function ChatApp() {
           setWorkspaceRoot(message.root);
           setWorkspaces(message.items);
           setCwd((prev) => (prev && inWorkspaceRoot(prev, message.root) ? prev : message.root));
-          setChats((prev) =>
-            prev.map((chat) => {
-              if (!chat.cwd || !inWorkspaceRoot(chat.cwd, message.root)) {
-                return { ...chat, cwd: message.root };
-              }
-              return chat;
-            }),
-          );
           break;
         case "workspace_created":
           setWorkspaces((prev) =>
@@ -3617,7 +3610,7 @@ export default function ChatApp() {
     setChats((prev) =>
       prev.map((chat) =>
         chat.id === id
-          ? { ...chat, draft: text, draftImages: images, model: modelRef.current, mode: modeRef.current, cwd: chat.cwd || cwdRef.current, previewTabs: previewTabsRef.current.map(({ path, line }) => ({ path, line })), previewPath: previewPathRef.current }
+          ? { ...chat, draft: text, draftImages: images, model: modelRef.current, mode: modeRef.current, cwd: chat.cwd, previewTabs: previewTabsRef.current.map(({ path, line }) => ({ path, line })), previewPath: previewPathRef.current }
           : chat,
       ),
     );
@@ -3867,6 +3860,8 @@ export default function ChatApp() {
       if (chat.cwd !== cwdRef.current) {
         send({ type: "set_workspace", cwd: chat.cwd, chatId: chat.id });
       }
+    } else if (workspaceRoot) {
+      setCwd(workspaceRoot);
     }
     const savedTabs = chat.previewTabs || [];
     if (savedTabs.length) {
@@ -4778,6 +4773,8 @@ export default function ChatApp() {
       if (chat.cwd !== cwdRef.current) {
         send({ type: "set_workspace", cwd: chat.cwd, chatId: chat.id });
       }
+    } else if (workspaceRoot) {
+      setCwd(workspaceRoot);
     }
     setPreviewTabs([]);
     setPreviewDrafts({ ...(draftsByChatRef.current[chat.id] || {}) });

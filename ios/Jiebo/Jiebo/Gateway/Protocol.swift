@@ -269,6 +269,8 @@ enum ClientMessage {
     case ping
     /// P4b：单会话增量上传（只带变化的那个会话）
     case syncChat(chat: JSONValue, rev: Int)
+    /// 删掉 turnId 这一轮及之后的回合（编辑、重试）；回执是 sync_ack(truncated:)
+    case truncateTurns(chatId: String, turnId: String, rev: Int)
     /// 只改工具的保留/还原标记，不回传工具正文
     case toolReview(chatId: String, turnId: String, reviews: [[String: JSONValue]])
     /// P4c：stored_digest 后按需拉取单个会话全量
@@ -414,6 +416,13 @@ enum ClientMessage {
             return .object(["type": .string("ping")])
         case .syncChat(let chat, let rev):
             return .object(["type": .string("sync_chat"), "chat": chat, "rev": .number(Double(rev))])
+        case .truncateTurns(let chatId, let turnId, let rev):
+            return .object([
+                "type": .string("truncate_turns"),
+                "chatId": .string(chatId),
+                "turnId": .string(turnId),
+                "rev": .number(Double(rev)),
+            ])
         case .toolReview(let chatId, let turnId, let reviews):
             return .object([
                 "type": .string("tool_review"),
@@ -853,9 +862,11 @@ enum ServerMessage {
     /// stored_state 超过 maxMessageBytes 时的替代通知：应 HTTP GET /state 拉全量
     case storedStateDeferred(rev: Int?)
     /// P4b：sync_state / sync_chat 被接受后的回执
-    case syncAck(rev: Int?, chatRevs: [String: Int], reviewOnly: Bool)
+    /// truncated：truncate_turns 的回执（nil = 普通 sync_chat 回执）
+    case syncAck(rev: Int?, chatRevs: [String: Int], reviewOnly: Bool, truncated: Bool?)
     /// P4c：分叉时的目录推送（比对 chatRevs 后用 loadChats 拉差异会话）
-    case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int])
+    /// rejected：本连接的推送被拒（旧网关不带 reason，按被拒处理）；false 是别处写入后的广播
+    case storedDigest(rev: Int?, deletedIds: [String], chatRevs: [String: Int], rejected: Bool)
     /// P4c：load_chats 的应答（单个会话全量——slim 客户端也是全量：digest 对账是跨设备 turns 更新唯一通道）
     case storedChat(chat: JSONValue, rev: Int?)
     /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有；nonce 回显请求代际）
@@ -1066,13 +1077,15 @@ enum ServerMessage {
             return .syncAck(
                 rev: object["rev"]?.int,
                 chatRevs: object["chatRevs"]?.intMap ?? [:],
-                reviewOnly: object["reviewOnly"]?.bool ?? false
+                reviewOnly: object["reviewOnly"]?.bool ?? false,
+                truncated: object["truncated"]?.bool
             )
         case "stored_digest":
             return .storedDigest(
                 rev: object["rev"]?.int,
                 deletedIds: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
-                chatRevs: object["chatRevs"]?.intMap ?? [:]
+                chatRevs: object["chatRevs"]?.intMap ?? [:],
+                rejected: object["reason"]?.string != "changed"
             )
         case "stored_chat":
             guard let chat = object["chat"] else { return .ignored("") }

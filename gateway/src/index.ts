@@ -12,7 +12,7 @@ import type { Duplex } from "node:stream";
 import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
 import { WebSocketServer, WebSocket } from "ws";
 import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage, TurnFile } from "../../shared/protocol.ts";
-import { isBodyLoaded, slimChat } from "./chatBodies.ts";
+import { bodySummary, isBodyLoaded, slimChat } from "./chatBodies.ts";
 import {
   askDisallowedTools,
   defaultPolicy,
@@ -318,6 +318,8 @@ type Slot = {
   /** 这一轮还没被客户端确认的正文。断线后靠它补快照 */
   transcript?: RunTranscript;
   runFlush?: ReturnType<typeof setTimeout>;
+  /** 给 owner 以外的同租户连接节流推送累计快照 */
+  mirrorTimer?: ReturnType<typeof setTimeout>;
   /**
    * 本轮文件清单的基线，跟 transcript.turnId 走：审批后重放/继续同一轮沿用，不重建。
    * checkpoint 是本轮检查点；没建检查点时 tree 是只用于清单的树；两者都没有表示这一轮建过但没建成
@@ -608,6 +610,43 @@ function send(ws: WebSocket, message: ServerMessage) {
   const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
   if (sock) sock.send(JSON.stringify(out));
+  if (slot && isStreamEvent(message.type)) mirrorRun(slot, message.type === "done");
+}
+
+const MIRROR_MS = 800;
+
+/** 其他设备收不到逐字增量，改发累计快照（按 turnId 替换），done 立即补最后一份。 */
+function mirrorRun(slot: Slot, now = false) {
+  if (now) {
+    flushMirror(slot);
+    return;
+  }
+  if (slot.mirrorTimer) return;
+  slot.mirrorTimer = setTimeout(() => flushMirror(slot), MIRROR_MS);
+}
+
+function flushMirror(slot: Slot) {
+  if (slot.mirrorTimer) {
+    clearTimeout(slot.mirrorTimer);
+    slot.mirrorTimer = undefined;
+  }
+  const transcript = slot.transcript;
+  if (!transcript || transcript.epoch !== slot.epoch) return;
+  const live = slot.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
+  let full: ServerMessage | null = null;
+  for (const conn of conns.values()) {
+    if (conn.ws === live || !conn.authed || conn.tenant?.id !== slot.tenantId) continue;
+    if (conn.ws.readyState !== WebSocket.OPEN) continue;
+    full ??= snapshotMessage(slot.chatId, transcript, queuedRows(slot));
+    reply(conn.ws, clipSnapshot(full, conn.maxMessageBytes));
+  }
+}
+
+/** 运行中 owner 不换手：另一台设备连上或查文件不能把流式输出抢走。空闲或原 owner 已断开才接管。 */
+function claimSlot(slot: Slot, ws: WebSocket) {
+  const busy = !slot.finished || slot.pending.length > 0 || slot.awaitingApproval;
+  if (busy && slot.owner && slot.owner !== ws && slot.owner.readyState === WebSocket.OPEN) return;
+  slot.owner = ws;
 }
 
 /** 会话编号由客户端生成，不同租户可能撞号：只在发起连接所属租户里找。 */
@@ -652,6 +691,7 @@ function openTranscript(
   };
   slot.turnBase = undefined;
   armRunFlush(slot);
+  mirrorRun(slot, true);
 }
 
 function continueTranscript(slot: Slot, epoch: number) {
@@ -934,6 +974,7 @@ function broadcastDigest(tenant: Tenant, except?: WebSocket) {
       rev: tenant.disk.rev,
       deletedIds: tenant.disk.deletedIds,
       chatRevs: effectiveChatRevs(tenant),
+      reason: "changed",
     });
   }
 }
@@ -1110,6 +1151,7 @@ function emitStateSync(ws: WebSocket, tenant: Tenant) {
       rev: tenant.disk.rev,
       deletedIds: tenant.disk.deletedIds,
       chatRevs: effectiveChatRevs(tenant),
+      reason: "rejected",
     });
     return;
   }
@@ -1232,7 +1274,7 @@ function slotOf(conn: Conn, chatId: string): Slot {
     slot = makeSlot(tenant, chatId, diskSlot(tenant, chatId), conn.ws);
     conn.slots.set(chatId, slot);
   }
-  slot.owner = conn.ws;
+  claimSlot(slot, conn.ws);
   slot.tenantId = tenant.id;
   return slot;
 }
@@ -1264,7 +1306,7 @@ function maxRunning() {
 
 function attachLiveSlots(conn: Conn) {
   for (const slot of conn.slots.values()) {
-    slot.owner = conn.ws;
+    claimSlot(slot, conn.ws);
   }
 }
 
@@ -1333,6 +1375,20 @@ function cwdOf(conn: Conn, slot: Slot) {
   const root = conn.tenant?.workspaceRoot || slot.cwd;
   if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) return requireCwd(root, root);
   return requireCwd(slot.cwd || conn.cwd, root);
+}
+
+/**
+ * 有过回合的会话目录固定在服务端那份：客户端上传、切会话时的 set_workspace、new_session 都改不了它，
+ * 否则某台设备上旧的或误填的 cwd 会把会话挪组，还会重置 Agent。空会话仍可换目录（iOS 复用空白新对话）。
+ */
+function lockedChatCwd(tenant: Tenant, chatId: string): string | null {
+  if (isAssistantChat(tenant, chatId)) return assistantCwd(tenant);
+  const row = tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+  if (!row || typeof row !== "object") return null;
+  const raw = (row as { cwd?: unknown }).cwd;
+  const cwd = typeof raw === "string" && raw.trim() ? confinedCwd(raw, tenant.workspaceRoot) : null;
+  if (!cwd) return null;
+  return (bodySummary(row)?.count ?? 0) > 0 ? cwd : null;
 }
 
 function cwdForChat(tenant: Tenant, chatId: string) {
@@ -5331,9 +5387,11 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             const row = item as { id?: unknown; cwd?: unknown };
             const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
             const id = typeof row.id === "string" ? row.id : "";
-            const next = isAssistantChat(tenant, id)
-              ? assistantCwd(tenant)
-              : wanted || (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) || tenant.workspaceRoot;
+            const next =
+              (id ? lockedChatCwd(tenant, id) : null) ||
+              wanted ||
+              (id ? confinedCwd(prevCwd.get(id), tenant.workspaceRoot) : null) ||
+              tenant.workspaceRoot;
             const withCwd = row.cwd === next ? item : { ...row, cwd: next };
             const prevChat = id ? tenant.disk.chats.find((row) => chatIdOf(row) === id) : undefined;
             const merged = mergeAndCompactChat(prevChat, withCwd);
@@ -5508,7 +5566,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           const prevRow = prev && typeof prev === "object" ? (prev as { cwd?: unknown }) : {};
           const wanted = typeof row.cwd === "string" ? confinedCwd(row.cwd, tenant.workspaceRoot) : null;
           const fallback = typeof prevRow.cwd === "string" ? confinedCwd(prevRow.cwd, tenant.workspaceRoot) : null;
-          const cwd = isAssistantChat(tenant, id) ? assistantCwd(tenant) : wanted || fallback || tenant.workspaceRoot;
+          const cwd = lockedChatCwd(tenant, id) || wanted || fallback || tenant.workspaceRoot;
           if (row.cwd !== cwd) next = { ...next, cwd };
         }
         // P8 slim 合并：incoming 没有 turns 键 = 元数据更新，保留服务端 turns
@@ -5558,12 +5616,12 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
           return;
         }
-        // 先写 rev 再落盘（P4 审核：崩溃窗口不能出现「新内容旧 rev」）；幂等重推也落盘，
-        // 否则 rev 只在内存里，重启后对账分叉。
-        // chatRevs[id] 只在内容真变时前进（P8 审核：无变化 sync 也 bump 的话，其他端重连时
+        // 先写 rev 再落盘（P4 审核：崩溃窗口不能出现「新内容旧 rev」）。
+        // 无变化的重推不动全局 rev：否则其他设备的下一次推送会因 rev 落后被拒，白白多一轮对账。
+        // chatRevs[id] 同样只在内容真变时前进（P8 审核：无变化 sync 也 bump 的话，其他端重连时
         // 会把纯元数据/未读类本地脏误判成正文变更，整会话作废重载）
-        tenant.disk.rev = clientRev;
         if (changed) {
+          tenant.disk.rev = clientRev;
           tenant.disk.chatRevs[id] = clientRev;
           tenant.disk.chats = prev
             ? tenant.disk.chats.map((item) => (chatIdOf(item) === id ? next : item))
@@ -5779,7 +5837,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           send(ws, { type: "error", chatId: message.chatId, message: "助理会话固定在 USER 根目录，不能换工作区。" });
           return;
         }
-        const next = confinedCwd(message.cwd || conn.cwd, tenant.workspaceRoot);
+        const next =
+          (message.chatId ? lockedChatCwd(tenant, message.chatId) : null) ||
+          confinedCwd(message.cwd || conn.cwd, tenant.workspaceRoot);
         if (!next) {
           send(ws, { type: "error", chatId: message.chatId, message: "工作区必须在允许的目录里。" });
           return;
@@ -5894,11 +5954,9 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         slot.edited = [];
         slot.checkpoints = [];
         slot.openTools.clear();
-        const next = isAssistantChat(tenant, slot.chatId)
-          ? assistantCwd(tenant)
-          : message.cwd
-            ? confinedCwd(message.cwd, tenant.workspaceRoot)
-            : null;
+        const next =
+          lockedChatCwd(tenant, slot.chatId) ||
+          (message.cwd ? confinedCwd(message.cwd, tenant.workspaceRoot) : null);
         if (next) {
           try {
             ensureWorkspaceDir(next);

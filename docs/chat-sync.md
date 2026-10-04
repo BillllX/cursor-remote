@@ -1,6 +1,6 @@
 # 会话同步 v2（网页）
 
-网关是会话正文（turns）的唯一来源。网页只上传元数据和少数显式操作，正文按需分页拉取，并在浏览器 IndexedDB 里按版本号缓存。iOS 已经是 slim 客户端，本文不改它的行为，网关改动对它向后兼容。
+网关是会话正文（turns）的唯一来源。网页和 iOS 都只上传元数据和少数显式操作（截断走 `truncate_turns`，保留/还原走 `tool_review`），正文按需分页拉取并按版本号缓存。多设备与工作区的规则见第 7 节。
 
 ## 1. 为什么改
 
@@ -135,3 +135,35 @@ tenants/<id>/
 - 分页里被截断的超大回合（`clipped`）不写缓存
 - 元数据按字段三方合并：以最后一次对齐的快照为基准，只有本地改过的字段保留本地。等 `load_state` 回来期间（最多 5s）暂停上传，避免旧字段先盖上去
 - `truncate_turns` 没截成（回合不在、正在跑）时回执带 `truncated: false`，网页作废本地正文重拉
+
+## 7. 多设备与工作区
+
+### 7.1 运行中的输出
+
+- 逐字增量（`text-delta` 等流式事件）只发给这条会话的 owner。运行中 owner 不换手：另一台设备连上、查文件、切会话都不会抢走；只有空闲（没在跑、没排队、没等审批）或原 owner 已断开时才由新连接接管
+- 同租户的其他连接改收 `run_snapshot`：开跑时一份，运行中最多每 800ms 一份，`done` 时立即补最后一份。快照是累计全文，按 `turnId` 替换，旁观设备据此插入或更新这一轮
+- 运行中 3 秒一次的落盘仍不推 rev、不发 digest；回合结束才 rev+1 并广播
+
+### 7.2 digest 的 reason
+
+- `rejected`：本连接的 `sync_state` / `sync_chat` 因 rev 落后被拒，只发给这个连接。客户端把在途推送倒回脏集合重推
+- `changed`：别处写入后的广播。客户端的在途推送仍有效，回执照常会到，不能倒回
+- 旧网关不带 reason，客户端按 `rejected` 处理
+- 元数据没变化的 `sync_chat` 只回 ack，不推高全局 rev（否则其他设备的下一次推送会因 rev 落后被拒）
+
+### 7.3 iOS 只传元数据
+
+- `sync_chat` 不带 `turns` 键（`ChatSession.metaJSON()`）。以前 iOS 正文完整时会带全部回合，而网关以上传的回合为准；本机正文落后时，重连后的推送会删掉别的设备刚写的回合
+- 编辑、重试先发 `truncate_turns`。回执 `truncated: true` 且发出时正文就是服务端那一版：正文版本跟着前进；`truncated: false`：本地正文作废，按服务端补齐（活的回合保留）
+- `sync_ack`：发出时记下 `chatRevs[id]`。回执时正文版本等于它、且期间没收到这条会话的新版本，才把正文版本前进到回执版本；否则标记待补齐
+- 本地优先（脏）的会话收到 digest 时也记下服务端版本，只是不立即补齐，等回执后再补
+- 判断 `stored_state` 是否陈旧用服务端确认过的版本（`confirmedRev`），不用推送时自增的 `stateRev`：推送丢了 `stateRev` 不回退，会让别的设备的写入被整份跳过
+
+### 7.4 工作区以服务端为准
+
+- 有过回合的会话，目录固定为服务端记录的 `cwd`：`sync_chat` / `sync_state` 上传的 `cwd`、切会话时的 `set_workspace`、`new_session` 的 `cwd` 都改不了它。`set_workspace` 回 `session` 时带真实目录，客户端据此纠正
+- 空会话仍可换目录（iOS 复用空白新对话）
+- 以前任何一台设备上旧的或误填的 `cwd` 都能把会话挪组；`set_workspace` 的目录与运行时不同还会销毁 Agent、清掉 `agentId`
+- 客户端不再用全局 `cwd` 给没目录的会话补值；网页收到工作区列表时不再改写会话的 `cwd`；切到没目录的会话时界面回落到 `workspaceRoot`
+- 冒烟：`scripts/multidevice-smoke.mjs`（`ci-gateway-smoke.sh` 里用本地假模型跑）
+

@@ -453,8 +453,16 @@ export type ServerMessage =
       /** truncate_turns 的回执（不对应任何 sync_chat）；false = 没截成 */
       truncated?: boolean;
     }
-  // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
-  | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
+  // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话。
+  // reason: "rejected" = 本连接的 sync_state / sync_chat 被拒（在途推送要重推）；
+  // "changed" = 别处写入后的广播（在途推送仍有效）。旧网关不带，按 rejected 处理
+  | {
+      type: "stored_digest";
+      rev?: number;
+      deletedIds?: string[];
+      chatRevs?: Record<string, number>;
+      reason?: "rejected" | "changed";
+    }
   // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）；
   // 带 slim_chats cap 时只给元数据 + segHashes
   | { type: "stored_chat"; chat: unknown; rev?: number }
