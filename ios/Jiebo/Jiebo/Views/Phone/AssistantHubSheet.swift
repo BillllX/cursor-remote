@@ -8,27 +8,40 @@ struct AssistantHubSheet: View {
     @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init() {}
+    @Binding private var drag: CGFloat
+    private let panelHeight: CGFloat
+
+    init(drag: Binding<CGFloat> = .constant(0), panelHeight: CGFloat = 0) {
+        _drag = drag
+        self.panelHeight = panelHeight
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            Capsule()
-                .fill(JieboColor.line)
-                .frame(width: 36, height: 5)
-                .padding(.top, 8)
-                .accessibilityHidden(true)
-            HStack {
-                Text("今日")
-                    .font(JieboFont.display(17))
-                    .foregroundStyle(JieboColor.ink)
-                Spacer()
-                Button("完成") { router.hubOpen = false }
-                    .font(JieboFont.ui(16, weight: .semibold))
-                    .foregroundStyle(JieboColor.pine)
+            // 抓手和标题行：和系统半屏一样可以往下拉关
+            VStack(spacing: 0) {
+                Capsule()
+                    .fill(JieboColor.line)
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 8)
+                    .accessibilityHidden(true)
+                HStack {
+                    Text("今日")
+                        .font(JieboFont.display(17))
+                        .foregroundStyle(JieboColor.ink)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    Button("完成") { router.hubOpen = false }
+                        .font(JieboFont.text(.callout, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 10)
-            .padding(.bottom, 4)
+            .contentShape(Rectangle())
+            .gesture(pullDown)
             ScrollViewReader { proxy in
                 ScrollView {
                     // 待批、委派在 iPhone 上不显示：它们在行动区和待处理里
@@ -45,6 +58,31 @@ struct AssistantHubSheet: View {
         .background(JieboColor.paper)
         .phoneNotice()
         .onDisappear { router.hubAnchor = nil }
+    }
+
+    /// 往下拉过面板高度的 1/4 或甩下去就关，否则弹回
+    private var pullDown: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .global)
+            .onChanged { value in
+                drag = max(0, value.translation.height)
+            }
+            .onEnded { value in
+                let threshold = max(100, panelHeight * 0.25)
+                if value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 2 {
+                    // 从手指位置接着滑出屏幕再收起，不在半空淡出
+                    // 多滑出一截：面板底色还铺在 Home 指示条下面
+                    withAnimation(JieboMotion.panel(reduceMotion)) {
+                        drag = panelHeight + 120
+                    } completion: {
+                        // 已经滑出屏幕，不再走淡出（透明层会在淡出期间挡住点按）
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { router.hubOpen = false }
+                    }
+                } else {
+                    withAnimation(JieboMotion.snappy(reduceMotion)) { drag = 0 }
+                }
+            }
     }
 
     /// 等分区布局出来再滚，否则 id 还没挂上

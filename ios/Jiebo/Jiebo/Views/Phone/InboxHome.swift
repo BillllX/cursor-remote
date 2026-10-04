@@ -109,18 +109,18 @@ struct InboxHome: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Text(item.title)
-                            .font(JieboFont.ui(15, weight: item.read ? .regular : .semibold))
+                            .font(JieboFont.text(.subheadline, weight: item.read ? .regular : .semibold))
                             .foregroundStyle(item.read ? JieboColor.ink2 : JieboColor.ink)
                             .multilineTextAlignment(.leading)
                             .lineLimit(2)
                         kindTag(item.kind)
                     }
                     Text(assistantRelativeTime(item.createdAt))
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                     if !item.body.isEmpty {
                         Text(item.body)
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                             .multilineTextAlignment(.leading)
                             .lineLimit(2)
@@ -128,7 +128,7 @@ struct InboxHome: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                     .padding(.top, 5)
             }
@@ -188,11 +188,11 @@ struct InboxDetailView: View {
                         .foregroundStyle(JieboColor.ink)
                         .textSelection(.enabled)
                     Text(assistantFormatMillis(row.createdAt))
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                     if !row.body.isEmpty {
                         Text(row.body)
-                            .font(JieboFont.ui(15))
+                            .font(JieboFont.text(.subheadline))
                             .foregroundStyle(JieboColor.ink)
                             .textSelection(.enabled)
                             .padding(.top, 6)

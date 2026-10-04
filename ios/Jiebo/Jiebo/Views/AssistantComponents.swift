@@ -15,7 +15,7 @@ struct AssistantSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(JieboFont.ui(12, weight: .semibold))
+                .font(JieboFont.text(.caption, weight: .semibold))
                 .tracking(0.4)
                 .foregroundStyle(JieboColor.dim)
             content
@@ -31,7 +31,7 @@ struct StatusTag: View {
 
     var body: some View {
         Text(text)
-            .font(JieboFont.ui(10, weight: .medium))
+            .font(JieboFont.text(.caption2, weight: .medium))
             .foregroundStyle(fg)
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
@@ -46,32 +46,45 @@ struct ActionButton: View {
 
     var title: String
     var kind: Kind
+    /// 竖排时撑满整行
+    var fullWidth = false
     var action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
 
-    init(title: String, kind: Kind = .outline, action: @escaping () -> Void) {
+    init(title: String, kind: Kind = .outline, fullWidth: Bool = false, action: @escaping () -> Void) {
         self.title = title
         self.kind = kind
+        self.fullWidth = fullWidth
         self.action = action
     }
 
     var body: some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .font(JieboFont.ui(13, weight: kind == .primary ? .semibold : .medium))
-            .foregroundStyle(foreground)
-            .padding(.horizontal, 12)
-            .frame(height: 32)
-            .background(background)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-            .overlay {
-                if kind == .outline || kind == .destructive {
+        Button(action: action) {
+            // 视觉至少 32 高（随字号长高），命中区 44：底色画在内缩 6pt 的圆角矩形上
+            Text(title)
+                .font(JieboFont.text(.footnote, weight: kind == .primary ? .semibold : .medium))
+                .foregroundStyle(foreground)
+                .lineLimit(1)
+                // 不折行：横排放不下时让 ViewThatFits 换成竖排
+                .fixedSize(horizontal: !fullWidth, vertical: false)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .frame(minWidth: 44, maxWidth: fullWidth ? .infinity : nil, minHeight: 32)
+                .background {
                     RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
+                        .fill(background)
                 }
-            }
-            .opacity(isEnabled ? 1 : 0.45)
-            .hitTarget(36)
+                .overlay {
+                    if kind == .outline || kind == .destructive {
+                        RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    }
+                }
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isEnabled ? 1 : 0.45)
     }
 
     private var foreground: Color {
@@ -115,7 +128,7 @@ struct AssistantMutedText: View {
 
     var body: some View {
         Text(text)
-            .font(JieboFont.ui(13))
+            .font(JieboFont.text(.footnote))
             .foregroundStyle(JieboColor.dim)
     }
 }
@@ -215,7 +228,7 @@ struct ApprovalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(titleText)
-                .font(JieboFont.ui(14, weight: .semibold))
+                .font(JieboFont.text(.subheadline, weight: .semibold))
                 .foregroundStyle(style == .warning ? JieboColor.warnFg : JieboColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
             detail
@@ -240,21 +253,21 @@ struct ApprovalCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 if !parts.name.isEmpty {
                     Text(parts.name)
-                        .font(JieboFont.mono(13))
+                        .font(JieboFont.monoText(.footnote))
                         .fontWeight(.semibold)
                         .foregroundStyle(JieboColor.ink)
                         .textSelection(.enabled)
                 }
                 if !parts.reason.isEmpty {
                     Text(parts.reason)
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                         .lineLimit(isMemoryCard && style == .warning ? 6 : nil)
                 }
             }
         } else if !approval.summary.isEmpty {
             Text(approval.summary)
-                .font(JieboFont.mono(12))
+                .font(JieboFont.monoText(.caption))
                 .foregroundStyle(JieboColor.ink2)
                 .lineLimit(style == .warning ? 3 : 6)
         }
@@ -267,7 +280,7 @@ struct ApprovalCard: View {
             let expiresAt = approval.expiresAt
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 Text(Self.expiryText(expiresAt: expiresAt, now: context.date))
-                    .font(JieboFont.ui(11))
+                    .font(JieboFont.text(.caption2))
                     .foregroundStyle(JieboColor.dim)
             }
         }
@@ -283,14 +296,24 @@ struct ApprovalCard: View {
         return "\(minutes) 分钟后失效"
     }
 
+    /// 一行放不下（大字号、窄屏）就竖排，主操作在最上面
     private var buttons: some View {
-        HStack(spacing: 8) {
-            if let onOpenDelegation, approval.delegationId != nil {
-                ActionButton(title: "看委派", kind: .outline, action: onOpenDelegation)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                if let onOpenDelegation, approval.delegationId != nil {
+                    ActionButton(title: "看委派", kind: .outline, action: onOpenDelegation)
+                }
+                Spacer(minLength: 0)
+                ActionButton(title: "拒绝", kind: .secondary) { answer(false) }
+                ActionButton(title: allowTitle, kind: .primary) { answer(true) }
             }
-            Spacer(minLength: 0)
-            ActionButton(title: "拒绝", kind: .secondary) { answer(false) }
-            ActionButton(title: allowTitle, kind: .primary) { answer(true) }
+            VStack(spacing: 0) {
+                ActionButton(title: allowTitle, kind: .primary, fullWidth: true) { answer(true) }
+                ActionButton(title: "拒绝", kind: .secondary, fullWidth: true) { answer(false) }
+                if let onOpenDelegation, approval.delegationId != nil {
+                    ActionButton(title: "看委派", kind: .outline, fullWidth: true, action: onOpenDelegation)
+                }
+            }
         }
     }
 
@@ -319,7 +342,7 @@ struct PhoneNoticeOverlay: ViewModifier {
             .overlay(alignment: .top) {
                 if !text.isEmpty {
                     Text(text)
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(store.bannerError.isEmpty ? JieboColor.ink : JieboColor.danger)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)

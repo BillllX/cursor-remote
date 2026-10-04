@@ -84,7 +84,7 @@ struct DelegationDetailSheet: View {
         if row.status == "done" || row.status == "failed", let result = row.result {
             AssistantSection("汇报") {
                 Text(result)
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.ink)
                     .textSelection(.enabled)
                     .assistantCard()
@@ -94,7 +94,7 @@ struct DelegationDetailSheet: View {
         filesSection
         stopSection(row)
         Text("完整过程在电脑或 iPad 上查看")
-            .font(JieboFont.ui(12))
+            .font(JieboFont.text(.caption))
             .foregroundStyle(JieboColor.dim)
     }
 
@@ -107,7 +107,7 @@ struct DelegationDetailSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 Text(metaLine(row, now: context.date))
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             }
             HStack(spacing: 5) {
@@ -115,7 +115,7 @@ struct DelegationDetailSheet: View {
                     .fill(colors.fg)
                     .frame(width: 6, height: 6)
                 Text(row.statusLabel)
-                    .font(JieboFont.ui(12, weight: .medium))
+                    .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(colors.fg)
             }
             .padding(.horizontal, 10)
@@ -193,14 +193,14 @@ struct DelegationDetailSheet: View {
         let symbol = running ? "ellipsis" : (failed ? "xmark" : "checkmark")
         return HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: symbol)
-                .font(.system(size: 11, weight: .semibold))
+                .font(JieboFont.text(.caption2, weight: .semibold))
                 .foregroundStyle(color)
                 .frame(width: 14)
             Text(running ? "正在\(Self.verb(for: tool))" : Self.verb(for: tool))
-                .font(JieboFont.ui(13, weight: .medium))
+                .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
             Text(tool.summary)
-                .font(JieboFont.mono(12))
+                .font(JieboFont.monoText(.caption))
                 .foregroundStyle(JieboColor.dim)
                 .lineLimit(1)
                 .truncationMode(.middle)

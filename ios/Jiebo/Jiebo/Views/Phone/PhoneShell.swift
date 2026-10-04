@@ -9,6 +9,8 @@ struct PhoneShell: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var router = PhoneRouter()
     @State private var logoutConfirm = false
+    /// 今日面板顶部下拉的位移（抓手和标题行跟手）
+    @State private var hubDrag: CGFloat = 0
 
     var body: some View {
         @Bindable var router = router
@@ -19,15 +21,19 @@ struct PhoneShell: View {
                         destination(route)
                     }
             }
+            // 预览、今日面板、菜单盖在上面时，底下的对话不再让 VoiceOver 摸到
+            .accessibilityHidden(store.previewPanelOpen || router.hubOpen || router.menuOpen)
             MenuDrawer(requestLogout: requestLogout)
                 .zIndex(2)
+                .accessibilityHidden(store.previewPanelOpen || router.hubOpen)
             if store.previewPanelOpen, let tab = store.activePreviewTab {
-                // 与 PhoneWorkbench 现有写法一致：遮罩 + 全屏 PreviewPanelView
+                // 遮罩只在左缘右滑关闭时露出来（预览本身是全屏的）
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
                     .onTapGesture { store.collapsePreview() }
                     .transition(.opacity)
                     .zIndex(3)
+                    .accessibilityHidden(true)
                 PreviewPanelView(tab: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(JieboColor.white)
@@ -68,27 +74,39 @@ struct PhoneShell: View {
 
     /// 自绘底栏，避开系统 sheet。点遮罩或「完成」关掉。
     private var todayPanel: some View {
+        // 外层不忽略安全区：键盘弹起时面板跟着让开；只有遮罩和面板底色铺到 Home 指示条下面
         GeometryReader { geo in
+            let height = max(320, (geo.size.height + geo.safeAreaInsets.top) * 0.72)
             ZStack(alignment: .bottom) {
-                Color.black.opacity(0.28)
+                Color.black.opacity(0.28 * (1 - min(hubDrag / height, 1)))
                     .ignoresSafeArea()
                     .onTapGesture { router.hubOpen = false }
-                AssistantHubSheet()
-                    .frame(height: max(320, geo.size.height * 0.72))
-                    .clipShape(
-                        UnevenRoundedRectangle(
-                            topLeadingRadius: 16,
-                            bottomLeadingRadius: 0,
-                            bottomTrailingRadius: 0,
-                            topTrailingRadius: 16,
-                            style: .continuous
-                        )
-                    )
+                    .accessibilityHidden(true)
+                AssistantHubSheet(drag: $hubDrag, panelHeight: height)
+                    .frame(height: height)
+                    .clipShape(Self.panelShape)
+                    .background {
+                        Self.panelShape
+                            .fill(JieboColor.paper)
+                            .ignoresSafeArea(.container, edges: .bottom)
+                    }
+                    .offset(y: hubDrag)
+                    .accessibilityAddTraits(.isModal)
+                    .accessibilityAction(.escape) { router.hubOpen = false }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
-        .ignoresSafeArea()
         .transition(.opacity)
+        .onDisappear { hubDrag = 0 }
     }
+
+    private static let panelShape = UnevenRoundedRectangle(
+        topLeadingRadius: 16,
+        bottomLeadingRadius: 0,
+        bottomTrailingRadius: 0,
+        topTrailingRadius: 16,
+        style: .continuous
+    )
 
     @ViewBuilder
     private func destination(_ route: PhoneRoute) -> some View {

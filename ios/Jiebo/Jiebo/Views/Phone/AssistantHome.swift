@@ -68,7 +68,7 @@ struct AssistantHome: View {
             router.openMenu()
         } label: {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 17, weight: .semibold))
+                .font(JieboFont.text(.body, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .frame(width: 32, height: 32)
                 .hitTarget()
@@ -90,7 +90,7 @@ struct AssistantHome: View {
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1)
             Text(subtitleText)
-                .font(JieboFont.ui(11, weight: .medium))
+                .font(JieboFont.text(.caption2, weight: .medium))
                 .tracking(0.3)
                 .foregroundStyle(subtitleColor)
                 .lineLimit(1)
@@ -137,7 +137,7 @@ struct AssistantHome: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
                             .foregroundStyle(JieboColor.ink)
                             .frame(width: 32, height: 32)
                             .background(JieboColor.mist)
@@ -150,7 +150,7 @@ struct AssistantHome: View {
                         store.undoLast()
                     } label: {
                         Image(systemName: "arrow.uturn.backward")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
                             .foregroundStyle(JieboColor.ink)
                             .frame(width: 32, height: 32)
                             .background(JieboColor.mist)
@@ -172,7 +172,7 @@ struct AssistantHome: View {
             Spacer(minLength: 40)
             JieboMark(size: 36)
             Text("这个服务器还没有助理功能，请先升级服务器")
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
             Spacer(minLength: 40)

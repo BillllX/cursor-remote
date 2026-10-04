@@ -55,7 +55,7 @@ struct AssistantView: View {
                 .fill(ok ? JieboColor.ok : JieboColor.clay)
                 .frame(width: 6, height: 6)
             Text("\(name) · 后台 \(model) · \(status)")
-                .font(JieboFont.ui(12))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -72,7 +72,7 @@ struct AssistantView: View {
                     tab = item
                 } label: {
                     Text(tabTitle(item))
-                        .font(JieboFont.ui(13, weight: .medium))
+                        .font(JieboFont.text(.footnote, weight: .medium))
                         .foregroundStyle(tab == item ? JieboColor.ink : JieboColor.ink2)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity)
@@ -188,7 +188,7 @@ struct AssistantTodayPane: View {
         if let brief = state?.brief?.text.trimmingCharacters(in: .whitespacesAndNewlines), !brief.isEmpty {
             AssistantSection("简报") {
                 Text(brief)
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.ink)
                     .textSelection(.enabled)
                     .assistantCard()
@@ -207,7 +207,7 @@ struct AssistantTodayPane: View {
             HStack(spacing: 8) {
                 TextField("加一条待办", text: $todoDraft)
                     .textFieldStyle(.roundedBorder)
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .submitLabel(.done)
                     .onSubmit(addTodo)
                 ActionButton(title: "添加", kind: .primary, action: addTodo)
@@ -220,7 +220,7 @@ struct AssistantTodayPane: View {
                     SwipeDeleteRow(onDelete: { removeTodo(todo) }) {
                         HStack(spacing: 8) {
                             Text(todo.text)
-                                .font(JieboFont.ui(14))
+                                .font(JieboFont.text(.subheadline))
                                 .foregroundStyle(JieboColor.ink)
                             if let due = todo.due {
                                 StatusTag(text: due, fg: JieboColor.ink2, bg: JieboColor.mist)
@@ -240,7 +240,7 @@ struct AssistantTodayPane: View {
                     ForEach(doneTodos.prefix(30)) { todo in
                         HStack(spacing: 8) {
                             Text(todo.text)
-                                .font(JieboFont.ui(14))
+                                .font(JieboFont.text(.subheadline))
                                 .strikethrough()
                                 .foregroundStyle(JieboColor.dim)
                             Spacer(minLength: 8)
@@ -262,10 +262,10 @@ struct AssistantTodayPane: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: doneExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                 Text("已完成 (\(count))")
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
                 Spacer(minLength: 0)
             }
@@ -298,10 +298,10 @@ struct AssistantTodayPane: View {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.title.nilIfEmpty ?? row.cron)
-                                .font(JieboFont.ui(14, weight: .semibold))
+                                .font(JieboFont.text(.subheadline, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink)
                             Text(scheduleLine(row))
-                                .font(JieboFont.ui(12))
+                                .font(JieboFont.text(.caption))
                                 .foregroundStyle(row.enabled ? JieboColor.dim : JieboColor.warnFg)
                         }
                         Spacer(minLength: 8)
@@ -340,27 +340,27 @@ struct AssistantTodayPane: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(row.title.nilIfEmpty ?? "委派")
-                        .font(JieboFont.ui(14, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     StatusTag(text: row.statusLabel, fg: colors.fg, bg: colors.bg)
                     Spacer(minLength: 0)
                     if openable {
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(JieboFont.text(.caption2, weight: .semibold))
                             .foregroundStyle(JieboColor.dim)
                     }
                 }
                 if !row.workspace.isEmpty {
                     Text(row.workspace)
-                        .font(JieboFont.mono(11))
+                        .font(JieboFont.monoText(.caption2))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 if let result = row.result {
                     Text(String(result.prefix(300)))
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                         .multilineTextAlignment(.leading)
                 }
@@ -397,7 +397,7 @@ private struct SwipeDeleteRow<Content: View>: View {
                 onDelete()
             } label: {
                 Text("删除")
-                    .font(JieboFont.ui(14, weight: .semibold))
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
                     .foregroundStyle(JieboColor.fillFg)
                     .frame(width: actionWidth)
                     .frame(maxHeight: .infinity)
@@ -457,15 +457,15 @@ struct AssistantInboxList: View {
                                 .padding(.top, 6)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(item.title)
-                                    .font(JieboFont.ui(14, weight: item.read ? .regular : .semibold))
+                                    .font(JieboFont.text(.subheadline, weight: item.read ? .regular : .semibold))
                                     .foregroundStyle(item.read ? JieboColor.ink2 : JieboColor.ink)
                                     .multilineTextAlignment(.leading)
                                 Text(assistantFormatMillis(item.createdAt))
-                                    .font(JieboFont.ui(11))
+                                    .font(JieboFont.text(.caption2))
                                     .foregroundStyle(JieboColor.dim)
                                 if !item.body.isEmpty {
                                     Text(String(item.body.prefix(240)))
-                                        .font(JieboFont.ui(13))
+                                        .font(JieboFont.text(.footnote))
                                         .foregroundStyle(JieboColor.ink2)
                                         .multilineTextAlignment(.leading)
                                         .lineLimit(4)
@@ -474,7 +474,7 @@ struct AssistantInboxList: View {
                             Spacer(minLength: 0)
                             if item.chatId != nil {
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(JieboFont.text(.caption2, weight: .semibold))
                                     .foregroundStyle(JieboColor.dim)
                                     .padding(.top, 4)
                             }
@@ -542,10 +542,10 @@ struct AssistantMemoryPane: View {
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("暂停记忆")
-                        .font(JieboFont.ui(14, weight: .medium))
+                        .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink)
                     Text("暂停后对话里不再自动记新东西")
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                 }
             }
@@ -556,11 +556,11 @@ struct AssistantMemoryPane: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("主题", text: $memTopic)
                         .textFieldStyle(.roundedBorder)
-                        .font(JieboFont.ui(14))
+                        .font(JieboFont.text(.subheadline))
                     TextField("要记住的内容", text: $memText, axis: .vertical)
                         .lineLimit(3...6)
                         .textFieldStyle(.roundedBorder)
-                        .font(JieboFont.ui(14))
+                        .font(JieboFont.text(.subheadline))
                     ActionButton(title: "保存", kind: .primary, action: saveMemory)
                         .disabled(trimmed(memTopic).isEmpty || trimmed(memText).isEmpty)
                 }
@@ -594,17 +594,17 @@ struct AssistantMemoryPane: View {
             ForEach(memory.orderedCoreKeys, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(key)
-                        .font(JieboFont.ui(12, weight: .semibold))
+                        .font(JieboFont.text(.caption, weight: .semibold))
                         .foregroundStyle(JieboColor.ink2)
                     let value = memory.coreFields[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     Text(value.isEmpty ? "（空）" : value)
-                        .font(JieboFont.ui(14))
+                        .font(JieboFont.text(.subheadline))
                         .foregroundStyle(value.isEmpty ? JieboColor.dim : JieboColor.ink)
                 }
             }
             HStack {
                 Text("约 \(memory.coreTokens)/\(memory.coreBudget) token")
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
                 Spacer(minLength: 8)
                 ActionButton(title: "编辑") { coreDrafts = memory.coreFields }
@@ -618,16 +618,16 @@ struct AssistantMemoryPane: View {
             ForEach(memory.orderedCoreKeys, id: \.self) { key in
                 VStack(alignment: .leading, spacing: 4) {
                     Text(key)
-                        .font(JieboFont.ui(12, weight: .semibold))
+                        .font(JieboFont.text(.caption, weight: .semibold))
                         .foregroundStyle(JieboColor.ink2)
                     TextField(key, text: coreBinding(key), axis: .vertical)
                         .lineLimit(2...8)
                         .textFieldStyle(.roundedBorder)
-                        .font(JieboFont.ui(14))
+                        .font(JieboFont.text(.subheadline))
                 }
             }
             Text("约 \(memory.coreTokens)/\(memory.coreBudget) token。核心档案每轮对话都会带上，写短一点。")
-                .font(JieboFont.ui(12))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
             HStack(spacing: 8) {
                 ActionButton(title: "保存", kind: .primary) { saveCore(memory) }
@@ -673,7 +673,7 @@ struct AssistantMemoryPane: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(entry.topic.nilIfEmpty ?? "未分类")
-                        .font(JieboFont.ui(14, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(entry.isValid ? JieboColor.ink : JieboColor.dim)
                         .lineLimit(1)
                     if entry.inferred {
@@ -684,13 +684,13 @@ struct AssistantMemoryPane: View {
                     Spacer(minLength: 0)
                 }
                 Text(String(entry.text.prefix(400)))
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(entry.isValid ? JieboColor.ink2 : JieboColor.dim)
                     .strikethrough(!entry.isValid)
                     .textSelection(.enabled)
                 if !entry.isValid, let reason = entry.invalidReason {
                     Text(reason)
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                 }
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -721,11 +721,11 @@ struct AssistantMemoryPane: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("主题", text: $entryTopic)
                 .textFieldStyle(.roundedBorder)
-                .font(JieboFont.ui(14))
+                .font(JieboFont.text(.subheadline))
             TextField("内容", text: $entryText, axis: .vertical)
                 .lineLimit(3...12)
                 .textFieldStyle(.roundedBorder)
-                .font(JieboFont.ui(14))
+                .font(JieboFont.text(.subheadline))
             HStack(spacing: 8) {
                 ActionButton(title: "保存", kind: .primary) { saveEntry(entry) }
                     .disabled(trimmed(entryTopic).isEmpty || trimmed(entryText).isEmpty)

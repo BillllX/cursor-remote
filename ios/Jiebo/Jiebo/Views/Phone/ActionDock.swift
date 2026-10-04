@@ -18,9 +18,17 @@ struct ActionDock: View {
     private static let finishedWindow: TimeInterval = 10 * 60
 
     /// 小屏（iPhone SE 一类，高度 < 700pt）上行动区会把消息列表挤没：确认卡只展开 1 张，进行中只列 1 条，其余折叠
-    private static let compactHeight = UIScreen.main.bounds.height < 700
-    private static var approvalLimit: Int { compactHeight ? 1 : 2 }
-    private static var runningLimit: Int { compactHeight ? 1 : 2 }
+    /// 大字号（xxLarge 起）时同理：每张卡都更高，也只展开 1 张
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    @MainActor private static var shortScreen: Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        return (scene?.screen.bounds.height ?? 800) < 700
+    }
+    private var compact: Bool { Self.shortScreen || typeSize >= .xxLarge }
+    private var approvalLimit: Int { compact ? 1 : 2 }
+    private var runningLimit: Int { compact ? 1 : 2 }
 
     var body: some View {
         // 每 30 秒重算一次：「已 N 分钟」往前走，超过 10 分钟的结束行自己消失
@@ -58,11 +66,11 @@ struct ActionDock: View {
 
     @ViewBuilder
     private func approvalsBlock(_ approvals: [AssistantApproval]) -> some View {
-        ForEach(approvals.prefix(Self.approvalLimit)) { approval in
+        ForEach(approvals.prefix(approvalLimit)) { approval in
             ApprovalCard(approval: approval)
         }
-        if approvals.count > Self.approvalLimit {
-            moreRow("还有 \(approvals.count - Self.approvalLimit) 项待批，去待处理") {
+        if approvals.count > approvalLimit {
+            moreRow("还有 \(approvals.count - approvalLimit) 项待批，去待处理") {
                 router.go(.inbox)
             }
         }
@@ -72,12 +80,13 @@ struct ActionDock: View {
 
     @ViewBuilder
     private func runningBlock(_ running: [AssistantDelegation], now: Date) -> some View {
-        ForEach(running.prefix(Self.runningLimit)) { row in
+        ForEach(running.prefix(runningLimit)) { row in
             runningRow(row, now: now)
         }
-        if running.count > Self.runningLimit, let latest = running.first {
-            moreRow("还有 \(running.count - Self.runningLimit) 项") {
-                router.delegationDetail = DelegationRef(id: latest.id)
+        if running.count > runningLimit {
+            // 折叠掉的那几项只在委派列表里看得到
+            moreRow("还有 \(running.count - runningLimit) 项进行中，看全部") {
+                router.go(.delegations)
             }
         }
     }
@@ -98,17 +107,17 @@ struct ActionDock: View {
                     .frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
-                        .font(JieboFont.ui(14, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     Text(subtitle)
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .dockRow()
@@ -141,10 +150,10 @@ struct ActionDock: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: failed ? "xmark.circle.fill" : "checkmark.circle.fill")
-                        .font(.system(size: 14))
+                        .font(JieboFont.text(.subheadline))
                         .foregroundStyle(failed ? JieboColor.danger : JieboColor.ok)
                     Text(text)
-                        .font(JieboFont.ui(14, weight: .medium))
+                        .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -160,7 +169,7 @@ struct ActionDock: View {
                 dismissFinished(row.id)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
@@ -192,12 +201,13 @@ struct ActionDock: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Text(text)
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .dockRow()

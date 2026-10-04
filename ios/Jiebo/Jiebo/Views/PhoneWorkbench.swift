@@ -18,10 +18,12 @@ struct PhoneWorkbench: View {
             ThreadView(phoneChrome: true, openDrawer: {
                 withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
             })
+            .accessibilityHidden(store.previewPanelOpen || drawerOpen)
             if let layer = store.toolLayer {
                 ToolLayerOverlay(layer: layer)
                     .id(layer)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .accessibilityHidden(store.previewPanelOpen || drawerOpen)
             }
             if drawerOpen {
                 Color.black.opacity(0.28)
@@ -39,12 +41,16 @@ struct PhoneWorkbench: View {
                     logout: { closeDrawer { logoutConfirm = true } }
                 )
                 .transition(.move(edge: .leading))
+                .accessibilityHidden(store.previewPanelOpen)
+                .accessibilityAddTraits(.isModal)
+                .accessibilityAction(.escape) { closeDrawer() }
             }
             if store.previewPanelOpen, let tab = store.activePreviewTab {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
                     .onTapGesture { store.collapsePreview() }
                     .transition(.opacity)
+                    .accessibilityHidden(true)
                 PreviewPanelView(tab: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(JieboColor.white)
@@ -144,7 +150,7 @@ private struct PhoneDrawer: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if store.currentWorkspaceChats.isEmpty {
                         Text("这个工作区还没有对话")
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
@@ -186,7 +192,7 @@ private struct PhoneDrawer: View {
             ConnectionDot(connected: store.connected)
                 .accessibilityHidden(true)
             Text(store.connected ? "已连接" : "正在重连…")
-                .font(JieboFont.ui(12))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
         }
         .padding(.horizontal, 16)
@@ -201,24 +207,24 @@ private struct PhoneDrawer: View {
         Button(action: openWorkspaces) {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 30, height: 30)
                     .background(JieboColor.brass.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("当前工作区")
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                     Text(store.currentWorkspaceName)
-                        .font(JieboFont.ui(15, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .padding(.horizontal, 10)
@@ -256,7 +262,7 @@ private struct PhoneDrawer: View {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: layer.symbol)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(on ? JieboColor.pine : JieboColor.ink2)
                         .frame(width: 32, height: 32)
                         .background(on ? JieboColor.pine.opacity(0.12) : Color.clear)
@@ -272,7 +278,7 @@ private struct PhoneDrawer: View {
                         .opacity(marked ? 1 : 0)
                 }
                 Text(layer.title)
-                    .font(JieboFont.ui(11, weight: on ? .semibold : .regular))
+                    .font(JieboFont.text(.caption2, weight: on ? .semibold : .regular))
                     .foregroundStyle(on ? JieboColor.ink : JieboColor.dim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -291,13 +297,13 @@ private struct PhoneDrawer: View {
     private var chatsHeader: some View {
         HStack(spacing: 8) {
             Text("对话")
-                .font(JieboFont.ui(12, weight: .medium))
+                .font(JieboFont.text(.caption, weight: .medium))
                 .tracking(0.6)
                 .foregroundStyle(JieboColor.dim)
             Spacer(minLength: 8)
             Button(action: newChat) {
                 Label("新对话", systemImage: "square.and.pencil")
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.pine)
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
@@ -318,12 +324,12 @@ private struct PhoneDrawer: View {
         } label: {
             HStack(spacing: 8) {
                 Text(chat.title)
-                    .font(JieboFont.ui(15, weight: chat.unread ? .semibold : .regular))
+                    .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if live {
                     Text("跑")
-                        .font(JieboFont.ui(10, weight: .medium))
+                        .font(JieboFont.text(.caption2, weight: .medium))
                         .foregroundStyle(JieboColor.run)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
@@ -369,7 +375,7 @@ private struct PhoneDrawer: View {
                 }
             } label: {
                 Label("设置", systemImage: "gearshape")
-                    .font(JieboFont.ui(14, weight: .medium))
+                    .font(JieboFont.text(.subheadline, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())

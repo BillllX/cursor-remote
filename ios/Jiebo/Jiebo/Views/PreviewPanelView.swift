@@ -5,13 +5,27 @@ import UIKit
 /// P6 起遮罩与滑入动画由 WorkbenchView（RootView）的 overlay 持有——transition 必须挂在被插入/删除的那一层上。
 struct PreviewPanelView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let tab: PreviewTab
+    /// 窄屏左缘右滑关闭时的位移
+    @State private var dragX: CGFloat = 0
+
+    private var compact: Bool { sizeClass == .compact }
 
     var body: some View {
         VStack(spacing: 0) {
-            tabStrip
-            Divider().overlay(JieboColor.line)
-            header
+            if compact {
+                compactHeader
+                if store.previewTabs.count > 1 {
+                    Divider().overlay(JieboColor.line)
+                    tabStrip
+                }
+            } else {
+                tabStrip
+                Divider().overlay(JieboColor.line)
+                header
+            }
             Divider().overlay(JieboColor.line)
             PreviewContentView(tab: tab)
         }
@@ -20,6 +34,168 @@ struct PreviewPanelView: View {
         .overlay(alignment: .leading) {
             Rectangle().fill(JieboColor.line).frame(width: 1)
         }
+        .offset(x: dragX)
+        .overlay(alignment: .leading) {
+            // 窄屏：左缘一条 20pt 的手势带，和系统导航返回同一手势。只在这条带上识别，不和内容里的横向滚动抢
+            if compact {
+                Color.clear
+                    .frame(width: 20)
+                    .contentShape(Rectangle())
+                    .gesture(edgeSwipe)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityAddTraits(.isModal)
+        .accessibilityAction(.escape) { store.collapsePreview() }
+    }
+
+    /// 横向为主才跟手；拖过 120 或甩出去就关——不先归位，直接从当前位置滑出
+    private var edgeSwipe: some Gesture {
+        DragGesture(minimumDistance: 8, coordinateSpace: .global)
+            .onChanged { value in
+                let dx = value.translation.width
+                // 已经跟手后不再看方向，往回拉到 0 为止
+                guard dragX > 0 || (dx > 0 && abs(dx) > abs(value.translation.height)) else { return }
+                dragX = max(0, dx)
+            }
+            .onEnded { value in
+                let dx = value.translation.width
+                let horizontal = abs(dx) > abs(value.translation.height)
+                if horizontal, dx > 120 || value.predictedEndTranslation.width > 260 {
+                    store.collapsePreview()
+                } else {
+                    withAnimation(JieboMotion.snappy(reduceMotion)) { dragX = 0 }
+                }
+            }
+    }
+
+    // MARK: 窄屏头部：返回 · 文件名 · 分享 · 更多
+
+    private var compactHeader: some View {
+        HStack(spacing: 4) {
+            Button {
+                store.collapsePreview()
+            } label: {
+                Image(systemName: "chevron.backward")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(JieboColor.pine)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("返回对话")
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(tab.filename)
+                        .font(JieboFont.text(.headline))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if tab.diff {
+                        Text("改动")
+                            .font(JieboFont.text(.caption2, weight: .bold))
+                            .foregroundStyle(JieboColor.brass)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(JieboColor.brass.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
+                }
+                compactSubtitle
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .combine)
+            Button {
+                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+            } label: {
+                Group {
+                    if store.exportLoading {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 17, weight: .regular))
+                            .foregroundStyle(JieboColor.pine)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+            .accessibilityLabel("分享 \(tab.filename)")
+            moreMenu
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var compactSubtitle: some View {
+        if tab.readSha != nil {
+            Text("这一轮的版本")
+                .font(JieboFont.text(.caption, weight: .medium))
+                .foregroundStyle(JieboColor.run)
+        } else {
+            Text(headerSubtitle)
+                .font(JieboFont.monoText(.caption2))
+                .foregroundStyle(JieboColor.dim)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var canToggleDiff: Bool {
+        tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            if canToggleDiff {
+                Toggle(isOn: Binding(get: { tab.diff }, set: { on in
+                    if on != tab.diff { store.togglePreviewDiff(tab.path) }
+                })) {
+                    Label("查看改动", systemImage: "plus.forwardslash.minus")
+                }
+            }
+            if tab.kind == .canvas, GatewayConfig.canvasRuntimeURL != nil {
+                Toggle(isOn: Binding(get: { tab.showSource }, set: { on in
+                    if on != tab.showSource { store.toggleCanvasSource(tab.path) }
+                })) {
+                    Label("查看源码", systemImage: "chevron.left.forwardslash.chevron.right")
+                }
+            }
+            if tab.readSha != nil {
+                Button { store.showCurrentVersion(tab.path) } label: {
+                    Label("看当前版本", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            Section {
+                if tab.kind == .image, !tab.diff {
+                    Button { store.saveImageToPhotos(path: tab.path, chatId: tab.chatId) } label: {
+                        Label("存到相册", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(store.exportLoading)
+                }
+                if let content = tab.content {
+                    Button {
+                        UIPasteboard.general.string = content
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                    } label: {
+                        Label(tab.diff ? "复制改动" : "复制全部内容", systemImage: "doc.on.doc")
+                    }
+                }
+                Button { UIPasteboard.general.string = headerSubtitle } label: {
+                    Label("复制路径", systemImage: "link")
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 17, weight: .regular))
+                .foregroundStyle(JieboColor.pine)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("更多操作")
     }
 
     // MARK: 页签条
@@ -32,9 +208,9 @@ struct PreviewPanelView: View {
                 }
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.vertical, 2)
         }
-        .background(JieboColor.mist)
+        .background(JieboColor.well)
     }
 
     /// 页签：文件名与 × 拆成两个独立 Button（容器挂 onTapGesture 会和 × 抢手势）
@@ -51,31 +227,34 @@ struct PreviewPanelView: View {
                             .foregroundStyle(JieboColor.brass)
                     }
                     Text(item.filename)
-                        .font(JieboFont.ui(12, weight: .medium))
+                        .font(JieboFont.text(.caption, weight: .medium))
                         .foregroundStyle(isActive ? JieboColor.ink : JieboColor.ink2)
                         .lineLimit(1)
                 }
                 .padding(.leading, 10)
-                .padding(.vertical, 6)
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("切换到 \(item.filename)")
+            .accessibilityLabel(item.filename)
+            .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : .isButton)
             Button {
                 store.closePreviewTab(item.path)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(JieboColor.dim)
-                    .frame(width: 22, height: 22)
-                    .hitTarget(34) // P6：页签条高度受限，命中框扩到 34（视觉不变）
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("关闭 \(item.filename)")
         }
-        .padding(.trailing, 4)
-        .background(isActive ? JieboColor.ink.opacity(0.06) : Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                .fill(isActive ? JieboColor.white : Color.clear)
+                .padding(.vertical, 6)
+        )
     }
 
     // MARK: 头部
@@ -85,11 +264,11 @@ struct PreviewPanelView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(tab.filename)
-                        .font(JieboFont.ui(14, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                     if tab.diff {
                         Text("DIFF")
-                            .font(JieboFont.ui(10, weight: .bold))
+                            .font(JieboFont.text(.caption2, weight: .bold))
                             .foregroundStyle(JieboColor.brass)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
@@ -100,7 +279,7 @@ struct PreviewPanelView: View {
                 // P6：副标题给工作区绝对路径（中段截断）——path==filename 时不再三遍重复同一文件名；
                 // cwd 用页签打开时的快照（页签全局存活，store.cwd 随活跃会话变）
                 Text(headerSubtitle)
-                    .font(JieboFont.mono(11))
+                    .font(JieboFont.monoText(.caption2))
                     .foregroundStyle(JieboColor.dim)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -223,16 +402,16 @@ struct PreviewPanelView: View {
         if tab.readSha != nil {
             HStack(spacing: 8) {
                 Text("这一轮的版本")
-                    .font(JieboFont.ui(11, weight: .medium))
+                    .font(JieboFont.text(.caption2, weight: .medium))
                     .foregroundStyle(JieboColor.run)
                 Button("看当前版本") { store.showCurrentVersion(tab.path) }
                     .buttonStyle(.plain)
-                    .font(JieboFont.ui(11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.pine)
             }
         } else if tab.fromCard {
             Text("当前版本")
-                .font(JieboFont.ui(11, weight: .medium))
+                .font(JieboFont.text(.caption2, weight: .medium))
                 .foregroundStyle(JieboColor.dim)
         }
     }
@@ -259,7 +438,7 @@ struct PreviewContentView: View {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
                 Text("正在读取 \(tab.filename)…")
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -269,11 +448,11 @@ struct PreviewContentView: View {
                     .font(.system(size: 22))
                     .foregroundStyle(JieboColor.danger)
                 Text(error)
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink2)
                     .multilineTextAlignment(.center)
                 Button("重试") { store.retryPreviewTab(tab.path) }
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.pine)
                     .hitTarget()
             }
@@ -350,7 +529,7 @@ struct PreviewContentView: View {
             loadingView // 大文本正在 hydratePreviewText 拉取，别误显「文件是空的」
         } else {
             Text("文件是空的")
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -366,7 +545,7 @@ struct PreviewContentView: View {
         VStack(spacing: 10) {
             ProgressView().controlSize(.regular).tint(JieboColor.dim)
             Text("正在读取 \(tab.filename)…")
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -391,12 +570,12 @@ struct CodeFileView: View {
                 ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
                     HStack(alignment: .firstTextBaseline, spacing: 0) {
                         Text("\(index + 1)")
-                            .font(JieboFont.mono(11))
+                            .font(JieboFont.monoText(.caption2))
                             .foregroundStyle(JieboColor.dim)
                             .frame(width: 44, alignment: .trailing)
                             .padding(.trailing, 10)
                         Text(line.isEmpty ? " " : line)
-                            .font(JieboFont.mono(12))
+                            .font(JieboFont.monoText(.caption))
                             .foregroundStyle(JieboColor.ink)
                             .textSelection(.enabled) // P6：代码行可选中复制（行号列不选）
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -460,7 +639,7 @@ struct DiffFileView: View {
                             .fill(barColor(row.kind))
                             .frame(width: 3)
                         Text(row.text)
-                            .font(JieboFont.mono(12))
+                            .font(JieboFont.monoText(.caption))
                             .foregroundStyle(foreground(row.kind))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, 9)

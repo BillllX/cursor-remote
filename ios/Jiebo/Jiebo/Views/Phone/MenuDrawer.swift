@@ -7,7 +7,7 @@ struct PendingBadge: View {
 
     var body: some View {
         Text(count > 99 ? "99+" : "\(count)")
-            .font(JieboFont.ui(10, weight: .semibold))
+            .font(JieboFont.text(.caption2, weight: .semibold))
             .foregroundStyle(JieboColor.fillFg)
             .padding(.horizontal, 5)
             .frame(minWidth: 16, minHeight: 16)
@@ -85,6 +85,8 @@ struct MenuDrawer: View {
                                 }
                         )
                         .transition(.move(edge: .leading))
+                        .accessibilityAddTraits(.isModal)
+                        .accessibilityAction(.escape) { router.closeMenu() }
                         .task {
                             // 打开后把 VoiceOver 焦点放到首项；等滑入动画走完再设，否则会被动画吞掉
                             try? await Task.sleep(for: .milliseconds(450))
@@ -170,7 +172,7 @@ struct MenuDrawer: View {
                     ConnectionDot(connected: store.connected)
                         .accessibilityHidden(true)
                     Text(store.connected ? "已连接" : "正在重连…")
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                 }
             }
@@ -190,7 +192,7 @@ struct MenuDrawer: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(JieboFont.ui(12, weight: .medium))
+            .font(JieboFont.text(.caption, weight: .medium))
             .tracking(0.6)
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 20)
@@ -210,11 +212,11 @@ struct MenuDrawer: View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(JieboFont.text(.callout, weight: .medium))
                     .foregroundStyle(destructive ? JieboColor.danger : JieboColor.ink2)
                     .frame(width: 24)
                 Text(title)
-                    .font(JieboFont.ui(16, weight: .medium))
+                    .font(JieboFont.text(.callout, weight: .medium))
                     .foregroundStyle(destructive ? JieboColor.danger : JieboColor.ink)
                 Spacer(minLength: 8)
                 if badge > 0 {
@@ -222,7 +224,7 @@ struct MenuDrawer: View {
                 }
                 if !destructive {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(JieboFont.text(.caption, weight: .semibold))
                         .foregroundStyle(JieboColor.dim)
                         .accessibilityHidden(true)
                 }
@@ -243,7 +245,7 @@ struct MenuDrawer: View {
         let build = info?["CFBundleVersion"] as? String ?? ""
         let text = build.isEmpty ? "接驳 \(version)" : "接驳 \(version) (\(build))"
         return Text(text)
-            .font(JieboFont.ui(11))
+            .font(JieboFont.text(.caption2))
             .foregroundStyle(JieboColor.dim)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)

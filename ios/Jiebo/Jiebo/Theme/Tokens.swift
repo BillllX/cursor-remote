@@ -193,6 +193,29 @@ enum JieboColor {
             return UIColor(hex: palette.extras(dark: dark)[keyPath: key])
         })
     }
+    /// 缩略图占位、浅胶囊的底：卡片色往细边色靠 45%。浅色比卡片略深，深色比卡片略亮——两种主题下都不会比卡片更黑
+    static var well: Color {
+        let palette = JieboTheme.shared.palette
+        return Color(uiColor: UIColor { traits in
+            let ink = traits.userInterfaceStyle == .dark ? palette.dark : palette.light
+            return UIColor(hex: blend(ink.panel, ink.border, 0.45))
+        })
+    }
+
+    /// 骨架扫光：任何主题下都比底色亮一点（深色里只是一层很淡的白）
+    static let shimmer = Color(uiColor: UIColor { traits in
+        UIColor.white.withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.12 : 0.55)
+    })
+
+    private static func blend(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let x = Double((a >> shift) & 0xFF)
+            let y = Double((b >> shift) & 0xFF)
+            return UInt32((x + (y - x) * t).rounded()) << shift
+        }
+        return channel(16) | channel(8) | channel(0)
+    }
+
     static var hoverStrong: Color { surface(\.border) }
     static var pine: Color { surface(\.accent) }
     static var pineDeep: Color { surface(\.accent) }
@@ -218,8 +241,9 @@ enum JieboColor {
 enum JieboFont {
     /// 标题用宋体粗体，对应网页 --font-display（Noto Serif SC，系统回落 Songti SC）。
     /// 直接点名粗体字面。再套 .weight(.bold) 时，系统改不了宋体的字重，控制台会一直报错。
+    /// relativeTo：跟 Dynamic Type 一起缩放
     static func display(_ size: CGFloat) -> Font {
-        .custom("Songti SC Bold", size: size)
+        .custom("Songti SC Bold", size: size, relativeTo: .title2)
     }
 
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -228,6 +252,15 @@ enum JieboFont {
 
     static func mono(_ size: CGFloat) -> Font {
         .system(size: size, design: .monospaced)
+    }
+
+    /// 语义字号：跟 Dynamic Type 走。对话区的标签、按钮、卡片用它，别再写死点数。
+    static func text(_ style: Font.TextStyle, weight: Font.Weight = .regular) -> Font {
+        .system(style, design: .default, weight: weight)
+    }
+
+    static func monoText(_ style: Font.TextStyle) -> Font {
+        .system(style, design: .monospaced)
     }
 
     /// 跟系统字号档位缩放（Dynamic Type）。
@@ -322,6 +355,14 @@ enum JieboMotion {
     }
 }
 
+enum JieboGlass {
+    /// 系统有 Liquid Glass（iOS 26+）
+    static let available: Bool = {
+        if #available(iOS 26.0, *) { return true }
+        return false
+    }()
+}
+
 struct PressScaleButtonStyle: ButtonStyle {
     var enabled: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -339,6 +380,17 @@ extension View {
     /// 页签条等高度受限处传更小的值。假设调用方用 .buttonStyle(.plain)（其他样式会覆盖 contentShape）。
     func hitTarget(_ size: CGFloat = 44) -> some View {
         frame(minWidth: size, minHeight: size).contentShape(Rectangle())
+    }
+
+    /// 浮在内容上的控件层（输入胶囊、回到底部、浮动提示）：iOS 26+ 用 Liquid Glass，更早的系统退回材质。
+    /// 内容层（消息、卡片）不要套它。
+    @ViewBuilder
+    func jieboGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+        }
     }
 }
 

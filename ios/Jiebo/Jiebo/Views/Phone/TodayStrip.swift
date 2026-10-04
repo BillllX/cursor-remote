@@ -61,7 +61,7 @@ struct TodayStrip: View {
                 }
                 .padding(.horizontal, 16)
             }
-            .frame(height: 44)
+            .frame(minHeight: 44)
         }
     }
 
@@ -77,15 +77,16 @@ struct TodayStrip: View {
             HStack(spacing: 5) {
                 if let symbol {
                     Image(systemName: symbol)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(JieboFont.text(.caption, weight: .semibold))
                 }
                 Text(text)
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .lineLimit(1)
             }
             .foregroundStyle(fg)
             .padding(.horizontal, 12)
-            .frame(height: 32)
+            .padding(.vertical, 6)
+            .frame(minHeight: 32)
             .background(bg)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
             .overlay(

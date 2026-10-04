@@ -28,7 +28,7 @@ struct ToolCardView: View {
             HStack(spacing: 8) {
                 // 展开/收起做成独立 Button：容器挂 onTapGesture 会和内部按钮抢手势（P5a 页签同款坑）
                 Button {
-                    withAnimation(.easeOut(duration: 0.28)) {
+                    withAnimation(JieboMotion.snappy(reduceMotion)) {
                         let next = !expanded
                         expanded = next
                         userPinned = next
@@ -36,23 +36,27 @@ struct ToolCardView: View {
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: kindSymbol)
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(JieboFont.text(.caption, weight: .semibold))
                             .foregroundStyle(statusColor)
-                            .frame(width: 16, height: 16)
-                        Text(compactPresentation ? Self.chineseVerb(tool) : verb)
-                            .font(compactPresentation ? JieboFont.ui(13, weight: .medium) : JieboFont.mono(13))
-                            .fontWeight(compactPresentation ? .medium : .medium)
+                            .frame(width: 16)
+                        Text(Self.chineseVerb(tool))
+                            .font(JieboFont.text(.footnote, weight: .medium))
                             .foregroundStyle(JieboColor.ink)
+                            .layoutPriority(1)
                         Text(titleLine)
-                            .font(JieboFont.mono(11))
+                            .font(JieboFont.monoText(.caption))
                             .foregroundStyle(JieboColor.dim)
                             .lineLimit(1)
+                            .truncationMode(.middle)
                         Spacer(minLength: 0)
                     }
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel(expanded ? "收起工具结果" : "展开工具结果")
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(statusSpoken)
+                .accessibilityHint(expanded ? "轻点两下收起结果" : "轻点两下展开结果")
                 // P5b：edit/write 工具给文件入口——按类型路由（diff 页签/原文页签/Quick Look）
                 if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
                     let imagePath = Self.imagePath(tool)
@@ -60,12 +64,13 @@ struct ToolCardView: View {
                         if let imagePath { store.openPreview(imagePath) }
                     } label: {
                         Label(imagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
-                            .font(JieboFont.ui(12, weight: .medium))
+                            .font(JieboFont.text(.caption, weight: .medium))
                             .foregroundStyle(JieboColor.ink)
-                            .padding(.horizontal, 8)
-                            .frame(height: 26)
-                            .background(JieboColor.mist)
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 32)
+                            .background(JieboColor.well)
                             .clipShape(Capsule())
+                            .hitTarget()
                     }
                     .buttonStyle(.plain)
                     .disabled(imagePath == nil)
@@ -98,7 +103,7 @@ struct ToolCardView: View {
             }
         }
         .padding(.horizontal, compactPresentation ? 8 : 12)
-        .padding(.vertical, compactPresentation ? 5 : 7)
+        .padding(.bottom, expanded ? 10 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous))
@@ -119,14 +124,22 @@ struct ToolCardView: View {
         switch tool.status {
         case "running":
             Text("进行中")
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.run)
         case "error":
             Text("失败")
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.danger)
         default:
             EmptyView()
+        }
+    }
+
+    private var statusSpoken: String {
+        switch tool.status {
+        case "running": return "进行中"
+        case "error": return "失败"
+        default: return "已完成"
         }
     }
 
@@ -141,26 +154,11 @@ struct ToolCardView: View {
     }
 
     private var titleLine: String {
-        let summary = tool.summary
+        // 不认识的工具动词统一写「调用工具」，原始工具名挪到这里当说明
+        let summary = tool.summary.nilIfEmpty ?? (Self.isGeneric(tool) ? tool.name : "")
         guard let model = tool.model?.nilIfEmpty else { return summary }
         let name = ModelCatalog.label(for: model)
         return summary.isEmpty ? name : "\(summary) · \(name)"
-    }
-
-    /// 和网页工具卡同一套动词、状态字。子代理角色占动词位。
-    private var verb: String {
-        let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
-        if !crew.isEmpty { return crew }
-        switch tool.kind {
-        case .shell: return "Ran"
-        case .search: return "Searched"
-        case .edit: return "Edited"
-        case .write: return "Wrote"
-        case .read: return "Read"
-        case .other:
-            if tool.name.range(of: "task", options: .caseInsensitive) != nil { return "Task" }
-            return tool.name.isEmpty ? "Tool" : tool.name
-        }
     }
 
     private var kindSymbol: String {
@@ -182,23 +180,24 @@ struct ToolCardView: View {
         }
     }
 
-    /// 状态只留字，不再用绿色胶囊。
+    /// 状态只留字，不再用绿色胶囊。完成用次级绿，不和正文抢
     @ViewBuilder
     private var badge: some View {
         switch tool.status {
         case "running":
-            badgeView("Processing", fg: JieboColor.run)
+            badgeView("进行中", fg: JieboColor.run)
         case "error":
-            badgeView("Error", fg: JieboColor.danger)
+            badgeView("失败", fg: JieboColor.danger)
         default:
-            badgeView("Completed", fg: JieboColor.ok)
+            badgeView("完成", fg: JieboColor.okSoft)
         }
     }
 
     private func badgeView(_ text: String, fg: Color) -> some View {
         Text(text)
-            .font(JieboFont.mono(11))
+            .font(JieboFont.text(.caption))
             .foregroundStyle(fg)
+            .accessibilityHidden(true)
     }
 
     static func isImageTool(_ tool: ToolCall) -> Bool {
@@ -232,7 +231,7 @@ private struct ToolDetail: View {
         VStack(alignment: .leading, spacing: 6) {
             if tool.result == nil, tool.status == "running", diff.unified.isEmpty, diff.before.isEmpty, diff.after.isEmpty {
                 Text("正在跑…")
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             } else if !diff.unified.isEmpty {
                 DiffLines(lines: Self.unifiedLines(diff.unified))
@@ -241,30 +240,30 @@ private struct ToolDetail: View {
             } else if let shell, shell.hasOutput || !shell.command.isEmpty {
                 if !shell.command.isEmpty {
                     Text("$ \(shell.command)")
-                        .font(JieboFont.mono(12))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(JieboColor.ink2)
                         .textSelection(.enabled)
                 }
                 if let exit = shell.exit {
                     Text("exit \(exit)")
-                        .font(JieboFont.mono(11))
+                        .font(JieboFont.monoText(.caption2))
                         .foregroundStyle(JieboColor.dim)
                 }
                 if !shell.stdout.isEmpty {
                     Text(clip(shell.stdout))
-                        .font(JieboFont.mono(12))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(JieboColor.ink)
                         .textSelection(.enabled)
                 }
                 if !shell.stderr.isEmpty {
                     Text(clip(shell.stderr))
-                        .font(JieboFont.mono(12))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(JieboColor.danger)
                         .textSelection(.enabled)
                 }
             } else if let result = tool.result {
                 Text(clip(result.pretty(8_000)))
-                    .font(JieboFont.mono(12))
+                    .font(JieboFont.monoText(.caption))
                     .foregroundStyle(JieboColor.ink)
                     .textSelection(.enabled)
             }
@@ -360,7 +359,7 @@ private struct DiffLines: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.prefix(200).enumerated()), id: \.offset) { _, line in
                     Text(line.text.isEmpty ? " " : line.text)
-                        .font(JieboFont.mono(12))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(line.kind == "add" ? JieboColor.ok : line.kind == "del" ? JieboColor.danger : JieboColor.ink2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(line.kind == "add" ? JieboColor.okBg : line.kind == "del" ? JieboColor.dangerBg : Color.clear)
@@ -449,15 +448,15 @@ struct QuestionCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(asked.title.isEmpty ? "需要你选一下" : asked.title)
-                .font(JieboFont.ui(15, weight: .semibold))
+                .font(JieboFont.text(.subheadline, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
             Text(canAnswer ? "这一轮停在提问上。选好后会接着做。" : "模型问了这些问题。")
-                .font(JieboFont.ui(12))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
             ForEach(Array(asked.questions.enumerated()), id: \.element.id) { index, question in
                 VStack(alignment: .leading, spacing: 6) {
                     Text(asked.questions.count > 1 ? "\(index + 1). \(question.prompt)" : question.prompt)
-                        .font(JieboFont.ui(15))
+                        .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if canAnswer {
@@ -466,20 +465,32 @@ struct QuestionCardView: View {
                             Button {
                                 toggle(question, option.id)
                             } label: {
-                                Text(option.label)
-                                    .font(JieboFont.ui(14, weight: on ? .semibold : .regular))
-                                    .foregroundStyle(JieboColor.ink)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 8)
-                                    .background(on ? JieboColor.brass.opacity(0.14) : JieboColor.mist)
-                                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                            .stroke(on ? JieboColor.brass : JieboColor.line, lineWidth: 1)
-                                    )
+                                HStack(spacing: 10) {
+                                    // 单选圆点 / 多选方框，与系统选择控件同一套符号
+                                    Image(systemName: question.allowMultiple
+                                        ? (on ? "checkmark.square.fill" : "square")
+                                        : (on ? "checkmark.circle.fill" : "circle"))
+                                        .font(JieboFont.text(.body))
+                                        .foregroundStyle(on ? JieboColor.pine : JieboColor.dim)
+                                        .accessibilityHidden(true)
+                                    Text(option.label)
+                                        .font(JieboFont.text(.subheadline, weight: on ? .semibold : .regular))
+                                        .foregroundStyle(JieboColor.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .frame(minHeight: 44)
+                                .background(on ? JieboColor.pine.opacity(0.08) : JieboColor.well)
+                                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                                        .stroke(on ? JieboColor.pine.opacity(0.5) : Color.clear, lineWidth: 1)
+                                )
+                                .contentShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                             }
                             .buttonStyle(.plain)
+                            .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
                         }
                         TextField(
                             question.options.isEmpty ? "写下回答" : "也可以补充一句",
@@ -487,7 +498,7 @@ struct QuestionCardView: View {
                             axis: .vertical
                         )
                         .lineLimit(2...4)
-                        .font(JieboFont.ui(14))
+                        .font(JieboFont.text(.subheadline))
                         .padding(10)
                         .background(JieboColor.paper)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
@@ -497,7 +508,7 @@ struct QuestionCardView: View {
                         )
                     } else if !question.options.isEmpty {
                         Text(question.options.map(\.label).joined(separator: "  ·  "))
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                     }
                 }
@@ -506,13 +517,11 @@ struct QuestionCardView: View {
                 Button("按这个回答继续") {
                     store.answerQuestion(asked.answer(picks: picks, notes: notes))
                 }
-                .buttonStyle(.plain)
-                .font(JieboFont.ui(14, weight: .semibold))
-                .foregroundStyle(ready ? JieboColor.paper : JieboColor.dim)
-                .padding(.horizontal, 16)
-                .frame(height: 36)
-                .background(ready ? JieboColor.pine : JieboColor.mist)
-                .clipShape(Capsule())
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(JieboColor.pine)
+                .controlSize(.large)
+                .font(JieboFont.text(.subheadline, weight: .semibold))
                 .disabled(!ready)
             }
         }

@@ -76,19 +76,19 @@ struct DelegationListScreen: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(title)
-                            .font(JieboFont.ui(15, weight: .semibold))
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
                         StatusTag(text: row.statusLabel, fg: colors.fg, bg: colors.bg)
                     }
                     Text(workspace.isEmpty ? time : "\(workspace) · \(time)")
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -146,15 +146,15 @@ struct PhoneSettingsScreen: View {
                 NavigationLink(value: PhoneRoute.memory) {
                     HStack(spacing: 12) {
                         Image(systemName: "brain.head.profile")
-                            .font(.system(size: 15, weight: .medium))
+                            .font(JieboFont.text(.subheadline, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
                             .frame(width: 24)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("记忆")
-                                .font(JieboFont.ui(15))
+                                .font(JieboFont.text(.subheadline))
                                 .foregroundStyle(JieboColor.ink)
                             Text("\(store.assistantName) 会在后台自己整理")
-                                .font(JieboFont.ui(12))
+                                .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
@@ -204,23 +204,23 @@ struct PhoneSettingsScreen: View {
     private func settingsRow(symbol: String, title: String, trailing: String?, chevron: Bool) -> some View {
         HStack(spacing: 12) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .medium))
+                .font(JieboFont.text(.subheadline, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
                 .frame(width: 24)
             Text(title)
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
             Spacer(minLength: 8)
             if let trailing {
                 Text(trailing)
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             if chevron {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
         }

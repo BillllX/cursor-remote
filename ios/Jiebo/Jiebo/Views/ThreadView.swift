@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import ImageIO
 
 /// 对话页的外壳：pad = iPad 大标题；phoneLegacy = iPad 窄窗（PhoneWorkbench）的旧手机标题栏；
 /// embedded = iPhone 助理页（PhoneShell）：头部为空、导航栏由宿主管理。
@@ -20,7 +21,6 @@ struct ThreadView: View {
     private static let renderedTurnStep = 12
     @State private var renderedTurnLimitByChat: [String: Int] = [:]
     @State private var loadingEarlierBatch = false
-    @State private var shareText: ShareText?
 
     init(chrome: ThreadChrome = .pad, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
         self.chrome = chrome
@@ -33,30 +33,19 @@ struct ThreadView: View {
         self.init(chrome: phoneChrome ? .phoneLegacy : .pad, openDrawer: openDrawer)
     }
 
+    /// iPhone 助理页在 iOS 26+ 上把输入区做成浮在消息上的玻璃底栏（safeAreaBar），消息从它下面滚过去
+    private var floatsComposer: Bool { chrome == .embedded && JieboGlass.available }
+
     var body: some View {
         @Bindable var store = store
         VStack(spacing: 0) {
             header
             thread
                 .overlay(alignment: .top) { floatingBanners }
-            // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
-            let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: store.activeId)
-            Group {
-                if let approval = delegated.first {
-                    delegatedApprovalBanner(approval, more: delegated.count - 1)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                .modifier(FloatingBottomBar(enabled: floatsComposer) { bottomStack })
+            if !floatsComposer {
+                bottomStack
             }
-            .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
-            if chrome == .embedded, let dock {
-                dock
-            }
-            ComposerView(
-                focusNonce: composerFocusNonce,
-                style: store.assistantChatActive && chrome == .embedded ? .assistant : .full
-            )
-                // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
-                .transaction { $0.animation = nil }
         }
         .frame(maxWidth: JieboMeasure.thread)
         .frame(maxWidth: .infinity)
@@ -91,8 +80,30 @@ struct ThreadView: View {
         .sheet(item: exportFileBinding, onDismiss: store.closeExport) { file in
             ActivityView(items: [file.url])
         }
-        .sheet(item: $shareText) { item in
-            ActivityView(items: [item.text])
+    }
+
+    /// 输入框上方的委派待批、ActionDock 和输入框本身。输入框只有这一个
+    @ViewBuilder
+    private var bottomStack: some View {
+        VStack(spacing: 0) {
+            // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
+            let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: store.activeId)
+            Group {
+                if let approval = delegated.first {
+                    delegatedApprovalBanner(approval, more: delegated.count - 1)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
+            if chrome == .embedded, let dock {
+                dock
+            }
+            ComposerView(
+                focusNonce: composerFocusNonce,
+                style: store.assistantChatActive && chrome == .embedded ? .assistant : .full
+            )
+                // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
+                .transaction { $0.animation = nil }
         }
     }
 
@@ -115,14 +126,14 @@ struct ThreadView: View {
 
     private func floatingBanner(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(JieboFont.ui(13))
+            .font(JieboFont.text(.footnote, weight: .medium))
             .foregroundStyle(color)
+            .multilineTextAlignment(.center)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.ultraThinMaterial)
-            .clipShape(Capsule())
-            .shadow(color: .black.opacity(0.08), radius: 6, y: 2)
+            .jieboGlass(in: Capsule())
             .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.isStaticText)
     }
 
     /// 本会话派出去的委派子会话停在审批上：在输入框上方直接作答
@@ -131,39 +142,30 @@ struct ThreadView: View {
         let tool = approval.tool.nilIfEmpty ?? "工具调用"
         return VStack(alignment: .leading, spacing: 8) {
             Text(more > 0 ? "委派要用 \(tool)（另有 \(more) 条待批）" : "委派要用 \(tool)")
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.subheadline, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
-                .lineLimit(1)
+                .lineLimit(2)
             if !approval.summary.isEmpty {
                 Text(approval.summary)
-                    .font(JieboFont.mono(12))
+                    .font(JieboFont.monoText(.caption))
                     .foregroundStyle(JieboColor.ink2)
                     .lineLimit(2)
                     .truncationMode(.middle)
             }
             HStack(spacing: 8) {
+                Button("拒绝", role: .destructive) { store.answerAssistantApproval(approval, allow: false) }
+                    .buttonStyle(.bordered)
                 Button("批准") { store.answerAssistantApproval(approval, allow: true) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(13, weight: .semibold))
-                    .foregroundStyle(JieboColor.fillFg)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(JieboColor.pine)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                Button("拒绝") { store.answerAssistantApproval(approval, allow: false) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(13, weight: .medium))
-                    .foregroundStyle(JieboColor.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(JieboColor.mist)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .buttonStyle(.borderedProminent)
+                    .tint(JieboColor.pine)
             }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .controlSize(.large)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(JieboColor.runBg.opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(JieboColor.warnBg)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .padding(.horizontal, 16)
         .padding(.bottom, 6)
     }
@@ -242,7 +244,7 @@ struct ThreadView: View {
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     Text(phoneSubtitle)
-                        .font(JieboFont.ui(11, weight: .medium))
+                        .font(JieboFont.text(.caption2, weight: .medium))
                         .tracking(0.3)
                         .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
                         .lineLimit(1)
@@ -271,7 +273,7 @@ struct ThreadView: View {
                     HStack(spacing: 6) {
                         Circle().fill(JieboColor.ok).frame(width: 6, height: 6)
                         Text(phoneStatus)
-                            .font(JieboFont.ui(12))
+                            .font(JieboFont.text(.caption))
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
                         Spacer(minLength: 0)
@@ -316,7 +318,7 @@ struct ThreadView: View {
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)
                 Text(store.hasApiKey ? store.mode.label : "服务器还没配 API Key")
-                    .font(JieboFont.ui(12, weight: .medium))
+                    .font(JieboFont.text(.caption, weight: .medium))
                     .tracking(0.4)
                     .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
             }
@@ -367,6 +369,8 @@ struct ThreadView: View {
     /// 程序在滚到底时，几何探针的中间帧不能把跟随关掉
     @State private var scrollingProgrammatically = false
     @State private var followTask: Task<Void, Never>?
+    /// 节流用的时钟；引用类型，改它不触发重绘
+    @State private var followClock = FollowClock()
     /// showThreadLoading 持续超过 350ms 才亮的加载遮罩
     @State private var loadingVisible = false
 
@@ -392,7 +396,7 @@ struct ThreadView: View {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
                             Text("正在加载更早的内容…")
-                                .font(JieboFont.ui(12))
+                                .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.ink2)
                         }
                         .frame(maxWidth: .infinity)
@@ -408,10 +412,10 @@ struct ThreadView: View {
                             loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
                         } label: {
                             Text(batch < hiddenCount ? "显示更早 \(batch) 轮（还有 \(hiddenCount) 轮）" : "显示更早 \(hiddenCount) 轮")
-                                .font(JieboFont.ui(12, weight: .medium))
+                                .font(JieboFont.text(.footnote, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .background {
@@ -429,18 +433,22 @@ struct ThreadView: View {
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                         if let gap = timeSeparator(before: turn, previous: index > 0 ? turns[index - 1] : nil) {
                             Text(gap)
-                                .font(JieboFont.ui(11, weight: .medium))
+                                .font(JieboFont.text(.caption, weight: .medium))
                                 .foregroundStyle(JieboColor.dim)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 4)
+                                .accessibilityAddTraits(.isHeader)
                         }
                         TurnView(
                             turn: turn,
                             canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
                             embedded: chrome == .embedded,
                             isLastAssistant: turn.id == allTurns.last?.id,
-                            onShare: { shareText = ShareText(text: $0) }
+                            reviewMark: store.localTurnReviews[turn.id],
+                            restoring: store.restoringTurnIds.contains(turn.id)
                         )
+                            // 流式只改最后一轮：其余轮次入参不变就不重算 body
+                            .equatable()
                             .id(turn.id)
                             .transition(.opacity.combined(with: .offset(y: 10)))
                     }
@@ -465,8 +473,9 @@ struct ThreadView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .coordinateSpace(name: "threadScroll")
-            .onAppear { viewportHeight = geo.size.height }
-            .onChange(of: geo.size.height) { _, h in viewportHeight = h }
+            // 浮动底栏盖住的那截不算可见区，否则「在底部」的判断会松一个底栏高
+            .onAppear { viewportHeight = geo.size.height - geo.safeAreaInsets.bottom }
+            .onChange(of: geo.size.height - geo.safeAreaInsets.bottom) { _, h in viewportHeight = h }
             .onChange(of: geo.size.width) { _, _ in
                 // 侧栏或转屏改变折行，高度会变，停在底部时再对齐一次
                 followBottom(proxy)
@@ -480,21 +489,21 @@ struct ThreadView: View {
                         } label: {
                             ZStack(alignment: .topTrailing) {
                                 Image(systemName: "arrow.down")
-                                    .font(.system(size: 14, weight: .bold))
+                                    .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(JieboColor.ink)
-                                    .frame(width: 36, height: 36)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Circle())
-                                    .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                                    .frame(width: 44, height: 44)
+                                    .jieboGlass(in: Circle(), interactive: true)
                                 if store.active?.turns.last?.running == true {
                                     Circle()
                                         .fill(JieboColor.run)
-                                        .frame(width: 8, height: 8)
-                                        .offset(x: 2, y: -2)
+                                        .frame(width: 9, height: 9)
+                                        .offset(x: 1, y: 1)
                                 }
                             }
+                            .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityValue(store.active?.turns.last?.running == true ? "有新内容正在生成" : "")
                         .padding(.bottom, 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .accessibilityLabel("滚动到最新消息")
@@ -509,7 +518,7 @@ struct ThreadView: View {
                         VStack(spacing: 12) {
                             ProgressView().controlSize(.large)
                             Text("正在加载会话…")
-                                .font(JieboFont.ui(13, weight: .medium))
+                                .font(JieboFont.text(.footnote, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -539,7 +548,11 @@ struct ThreadView: View {
                 }
             )
             .onChange(of: store.active?.turns.count) { _, _ in followBottom(proxy) }
-            .onChange(of: liveTail) { _, _ in followBottom(proxy) }
+            .onChange(of: liveTail) { _, _ in followStream(proxy) }
+            .onChange(of: store.active?.turns.last?.running) { _, running in
+                // 流式时只补滚一次；停更后最后一块（代码、表格）还会长高，按完整节奏再对齐
+                if running == false { followBottom(proxy) }
+            }
             .onChange(of: viewportHeight) { _, _ in
                 followBottom(proxy)
             }
@@ -591,8 +604,29 @@ struct ThreadView: View {
         }
     }
 
-    /// 跟随流式输出。布局往往晚一帧才完成，所以紧接着再滚一次，避免停在旧高度。
-    private func followBottom(_ proxy: ScrollViewProxy, animated: Bool = false) {
+    /// 流式每个 token 都会改 liveTail：最多每 50ms 跟一次，其间来的合并成一次尾随滚动
+    private func followStream(_ proxy: ScrollViewProxy) {
+        guard stickToBottom else { return }
+        let clock = followClock
+        let elapsed = Date().timeIntervalSince(clock.last)
+        if elapsed >= FollowClock.interval {
+            clock.last = Date()
+            followBottom(proxy, settle: [40])
+            return
+        }
+        guard clock.pending == nil else { return }
+        clock.pending = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(FollowClock.interval - elapsed))
+            clock.pending = nil
+            guard !Task.isCancelled else { return }
+            clock.last = Date()
+            followBottom(proxy, settle: [40])
+        }
+    }
+
+    /// 跟随流式输出。布局往往晚一帧才完成，所以紧接着再滚几次，避免停在旧高度。
+    /// settle：补滚的间隔；流式节流时只补一次，下一次 token 会接着跟
+    private func followBottom(_ proxy: ScrollViewProxy, animated: Bool = false, settle: [Int] = [40, 100, 180, 380]) {
         guard stickToBottom else { return }
         scrollingProgrammatically = true
         let scroll = {
@@ -609,7 +643,7 @@ struct ThreadView: View {
         followTask = Task { @MainActor in
             // 计划正文是逐行排的，高度常常晚于前两帧才定下来。停早了会落在旧高度上。
             // 间隔累加后大约落在 40 / 140 / 320 / 700 毫秒。
-            for delay in [40, 100, 180, 380] {
+            for delay in settle {
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard !Task.isCancelled, stickToBottom else { return }
                 var transaction = Transaction()
@@ -659,7 +693,7 @@ struct ThreadView: View {
                 .tracking(0.68)
                 .foregroundStyle(JieboColor.ink)
             Text("网页说话，远端动手。从左侧接着聊，或先打开一个工作区文件。")
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
@@ -669,7 +703,7 @@ struct ThreadView: View {
             }
             .padding(.top, 8)
             Text("点左上角打开对话列表 · 可粘贴图片")
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
             Spacer(minLength: 40)
@@ -690,7 +724,7 @@ struct ThreadView: View {
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
             Text("记事、提醒、查东西，或者让它去某个项目里干活，不用你自己打开任何东西。")
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
@@ -701,11 +735,11 @@ struct ThreadView: View {
                         composerFocusNonce += 1
                     } label: {
                         Text(text)
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 14)
-                            .frame(minHeight: 36)
+                            .frame(minHeight: 44)
                             .background(JieboColor.white)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(
@@ -745,10 +779,10 @@ struct ThreadView: View {
                 }
             } label: {
                 Text(text)
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)
                     .padding(.horizontal, 14)
-                    .frame(height: 36)
+                    .frame(minHeight: 44)
                     .background(JieboColor.white)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     .overlay(
@@ -782,12 +816,7 @@ struct ThreadView: View {
     }
 }
 
-private struct ShareText: Identifiable {
-    let id = UUID()
-    let text: String
-}
-
-private struct TurnView: View {
+private struct TurnView: View, Equatable {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var turn: Turn
@@ -795,25 +824,38 @@ private struct TurnView: View {
     /// iPhone 助理页：记忆类工具不出卡片，delegate / create_workspace 写成人话
     var embedded = false
     var isLastAssistant = false
-    var onShare: (String) -> Void = { _ in }
+    /// 本机审阅记录与还原中：都存在 store 里而不在 Turn 上，作为入参让 == 能看到它们的变化
+    var reviewMark: String? = nil
+    var restoring = false
     @State private var thinkingOpen = false
     @State private var thinkingPinned = false
-    private func turnThumb(_ image: PromptImage) -> some View {
-        Group {
-            if let data = Data(base64Encoded: image.data), let uiImage = UIImage(data: data) {
-                Image(uiImage: uiImage)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                JieboColor.mist
+    @State private var shareItem: ShareItem?
+    @State private var viewerItem: AttachmentViewerItem?
+
+    static func == (lhs: TurnView, rhs: TurnView) -> Bool {
+        lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
+            && lhs.embedded == rhs.embedded && lhs.isLastAssistant == rhs.isLastAssistant
+            && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
+    }
+    private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
+        let base64 = image.data
+        let title = total > 1 ? "附图 \(index + 1)/\(total)" : "附图"
+        return Button {
+            viewerItem = AttachmentViewerItem(title: title, load: { Data(base64Encoded: base64) })
+        } label: {
+            AttachmentThumb(key: JieboThumbDecoder.key(base64: base64, size: 72), side: 72) {
+                Data(base64Encoded: base64)
             }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .frame(width: 72, height: 72)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
-        )
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(title)
+        .accessibilityHint("轻点两下查看大图")
     }
 
     /// .embedded 下 memory_* / chat_search 整张不渲染；其它端原样
@@ -849,15 +891,20 @@ private struct TurnView: View {
                     VStack(alignment: .trailing, spacing: 4) {
                         VStack(alignment: .trailing, spacing: 8) {
                             if !turn.images.isEmpty {
-                                HStack(spacing: 8) {
-                                    ForEach(Array(turn.images.enumerated()), id: \.offset) { _, image in
-                                        turnThumb(image)
+                                let thumbs = HStack(spacing: 8) {
+                                    ForEach(Array(turn.images.enumerated()), id: \.offset) { index, image in
+                                        turnThumb(image, index: index, total: turn.images.count)
                                     }
+                                }
+                                // 放得下就排一行，放不下改横向滑动（最多 5 张，窄屏放不下）
+                                ViewThatFits(in: .horizontal) {
+                                    thumbs
+                                    ScrollView(.horizontal, showsIndicators: false) { thumbs }
                                 }
                             }
                             if turn.user != "（附图）" || turn.images.isEmpty {
                                 Text(turn.user)
-                                    .font(JieboFont.ui(16))
+                                    .font(JieboFont.text(.callout))
                                     .foregroundStyle(JieboColor.ink)
                                     .textSelection(.enabled)
                                     .lineSpacing(4)
@@ -875,30 +922,33 @@ private struct TurnView: View {
                         .frame(maxWidth: JieboMeasure.bubble, alignment: .trailing)
                         .contextMenu {
                             if let meta = turnMeta {
-                                Button(meta) {}
-                                    .disabled(true)
+                                Section(meta) {}
                             }
-                            Button("编辑") { store.editTurn(turn.id) }
-                            Button("重试") { store.retryTurn(turn.id) }
-                            Button("复制") {
-                                UIPasteboard.general.string = turn.user
-                            }
+                            Button { store.editTurn(turn.id) } label: { Label("编辑", systemImage: "pencil") }
+                            Button { store.retryTurn(turn.id) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                            Button { copy(turn.user) } label: { Label("复制", systemImage: "doc.on.doc") }
+                        }
+                        .fullScreenCover(item: $viewerItem) { item in
+                            AttachmentViewer(item: item)
                         }
                         if turn.queued {
-                            HStack(spacing: 8) {
+                            HStack(spacing: 4) {
                                 Text("排队中")
-                                    .font(JieboFont.ui(12))
+                                    .font(JieboFont.text(.caption, weight: .medium))
                                     .foregroundStyle(JieboColor.run)
                                 Button("去掉") { store.dropQueuedTurn(turn.id) }
-                                    .font(JieboFont.ui(12))
-                                    .foregroundStyle(JieboColor.dim)
+                                    .font(JieboFont.text(.caption))
+                                    .foregroundStyle(JieboColor.ink2)
                                     .buttonStyle(.plain)
+                                    .hitTarget()
+                                    .accessibilityLabel("去掉这条排队消息")
                             }
                         } else if userFailed {
                             Button("重试") { store.retryTurn(turn.id) }
-                                .font(JieboFont.ui(12, weight: .medium))
+                                .font(JieboFont.text(.caption, weight: .semibold))
                                 .foregroundStyle(JieboColor.danger)
                                 .buttonStyle(.plain)
+                                .hitTarget()
                         }
                     }
                 }
@@ -913,28 +963,29 @@ private struct TurnView: View {
                     } label: {
                         HStack(spacing: 8) {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(JieboFont.text(.caption2, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink2)
                                 .rotationEffect(.degrees(thinkingOpen ? 90 : 0))
                             if turn.running {
-                                ShimmerText(text: "正在思考", font: JieboFont.ui(13))
+                                ShimmerText(text: "正在思考", font: JieboFont.text(.footnote))
                             } else {
                                 Text("思考过程")
-                                    .font(JieboFont.ui(13, weight: .medium))
+                                    .font(JieboFont.text(.footnote, weight: .medium))
                                     .foregroundStyle(JieboColor.ink2)
                             }
                             Spacer(minLength: 0)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .frame(minHeight: 32, alignment: .leading)
+                        .padding(.horizontal, thinkingOpen ? 12 : 0)
+                        .frame(minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(thinkingOpen ? "收起思考" : "展开思考")
+                    .accessibilityLabel(turn.running ? "正在思考" : "思考过程")
+                    .accessibilityValue(thinkingOpen ? "已展开" : "已收起")
+                    .accessibilityHint(thinkingOpen ? "轻点两下收起" : "轻点两下展开")
                     if thinkingOpen {
                         Text(turn.thinking)
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 12)
@@ -978,70 +1029,73 @@ private struct TurnView: View {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(Array(inline.parts.enumerated()), id: \.offset) { _, part in
                                     if part.text.contains(where: { !$0.isWhitespace }) {
-                                        AssistantMessage(text: linkMentions(part.text))
+                                        ChunkedAssistantMessage(text: linkMentions(part.text))
+                                            .equatable()
                                     }
                                     if !part.files.isEmpty {
                                         TurnFileCards(
                                             turn: turn,
                                             chatId: store.activeId,
-                                            files: part.files,
-                                            cardLayout: .compact
+                                            files: part.files
                                         )
                                     }
                                 }
                             }
                         } else {
-                            AssistantMessage(text: linkMentions(turn.assistant))
+                            ChunkedAssistantMessage(text: linkMentions(turn.assistant))
+                                .equatable()
                         }
                         if turn.mode == .plan, !turn.running, !turn.queued {
                             Button("执行这个计划") { store.applyPlan(turn.id) }
-                                .buttonStyle(.plain)
-                                .font(JieboFont.ui(13, weight: .medium))
-                                .foregroundStyle(JieboColor.fillFg)
-                                .padding(.horizontal, 12)
-                                .frame(height: 32)
-                                .background(JieboColor.pine)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        }
-                        if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
-                            assistantActionRow
+                                .buttonStyle(.borderedProminent)
+                                .tint(JieboColor.pine)
+                                .font(JieboFont.text(.subheadline, weight: .semibold))
+                                .padding(.top, 2)
                         }
                     }
                     .contextMenu {
-                        if !isLastAssistant, !turn.assistant.isEmpty {
-                            Button("复制") {
-                                UIPasteboard.general.string = turn.assistant
+                        if !turn.assistant.isEmpty {
+                            Button { copy(turn.assistant) } label: { Label("复制", systemImage: "doc.on.doc") }
+                            Button { store.retryTurn(turn.id) } label: { Label("重新生成", systemImage: "arrow.clockwise") }
+                            // 菜单收起后 ShareLink 的宿主会被销毁：改成先记下、再由本视图弹分享面板
+                            Button { shareItem = ShareItem(text: turn.assistant) } label: {
+                                Label("分享", systemImage: "square.and.arrow.up")
                             }
-                            Button("重试") { store.retryTurn(turn.id) }
-                            Button("分享") { onShare(turn.assistant) }
                         }
+                    }
+                    .sheet(item: $shareItem) { item in
+                        ActivityView(items: [item.text])
+                            .presentationDetents([.medium, .large])
                     }
                 }
             }
             if turn.running, turn.assistant.isEmpty {
-                ShimmerText(text: turn.task?.nilIfEmpty ?? "开始动手")
-                    .padding(.leading, 0)
+                ShimmerText(text: turn.task?.nilIfEmpty ?? "开始动手", font: JieboFont.text(.subheadline))
             }
             if let error = turn.error, !error.isEmpty, !turn.running {
                 HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.danger)
+                        .accessibilityHidden(true)
                     Text(friendlyError(error))
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.danger)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button("重试") { store.retryTurn(turn.id) }
-                        .buttonStyle(.plain)
-                        .font(JieboFont.ui(13, weight: .semibold))
-                        .foregroundStyle(JieboColor.danger)
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                        .tint(JieboColor.danger)
+                        .font(JieboFont.text(.footnote, weight: .semibold))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.leading, 12)
+                .padding(.trailing, 8)
+                .frame(minHeight: 48)
                 .background(JieboColor.dangerBg)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+                .accessibilityElement(children: .contain)
             }
-            if turn.needsFileReview, store.localTurnReviews[turn.id] == nil {
-                TurnReviewBar(turn: turn)
-                    .padding(.leading, embedded ? 0 : 40)
-            }
+            // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
             if let inline {
                 if !inline.tail.isEmpty {
                     TurnFileCards(turn: turn, chatId: store.activeId, files: inline.tail)
@@ -1051,33 +1105,62 @@ private struct TurnView: View {
                 TurnFileCards(turn: turn, chatId: store.activeId)
                     .padding(.leading, embedded ? 0 : 40)
             }
+            if turn.needsFileReview, store.localTurnReviews[turn.id] == nil {
+                TurnReviewBar(turn: turn)
+                    .padding(.leading, embedded ? 0 : 40)
+            }
+            if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
+                assistantActionRow
+                    .padding(.leading, embedded ? 0 : 40)
+            }
             // 无助手正文时耗时仍贴在轮次底部，用 ink2 保证可读
             if turn.assistant.isEmpty,
                let duration = formatDuration(turn.durationMs).nilIfEmpty,
                !turn.running
             {
                 Text(duration)
-                    .font(JieboFont.ui(12, weight: .medium))
+                    .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
                     .padding(.leading, embedded ? 0 : 40)
             }
         }
     }
 
+    /// 最后一轮的复制 / 重试 / 分享：只放图标（系统同款），每个 44pt 热区；更早的轮次走长按菜单
     private var assistantActionRow: some View {
-        HStack(spacing: 16) {
-            Button("复制") {
-                UIPasteboard.general.string = turn.assistant
+        HStack(spacing: 0) {
+            actionIcon("doc.on.doc", label: "复制回复") { copy(turn.assistant) }
+            actionIcon("arrow.clockwise", label: "重新生成") { store.retryTurn(turn.id) }
+            ShareLink(item: turn.assistant) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            Button("重试") { store.retryTurn(turn.id) }
-                .buttonStyle(.plain)
-            Button("分享") { onShare(turn.assistant) }
-                .buttonStyle(.plain)
+            .accessibilityLabel("分享回复")
+            Spacer(minLength: 0)
         }
-        .font(JieboFont.ui(12))
-        .foregroundStyle(JieboColor.dim)
-        .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func actionIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(JieboFont.text(.subheadline))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func copy(_ text: String) {
+        UIPasteboard.general.string = text
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        store.flash("已复制")
     }
 
     private func syncThinkingOpen() {
@@ -1091,11 +1174,18 @@ private struct TurnView: View {
     /// 把正文里的 @路径 转成可点链接（jiebo-file://open?path=…），由 openURL 拦截打开预览面板。
     /// 对齐网页 splitCiteParts：字符集排除 @: 与 CJK 标点，:行号/-区间 只显示不进路径；
     /// 跳过 ``` 围栏与行内 `代码` 段；只链接「像文件」的 token（isFileMention）。
-    private func linkMentions(_ text: String) -> String {
-        // group1=前导空白 group2=路径 group3=:行号后缀（可选，仅显示用）
-        let regex = try? NSRegularExpression(pattern: #"(^|\s)@([^\s@:，。；、！？,;!?)]+)((?::\d+(?:-\d+)?)?)"#)
+    /// group1=前导空白 group2=路径 group3=:行号后缀（可选，仅显示用）
+    private static let mentionRegex = try? NSRegularExpression(pattern: #"(^|\s)@([^\s@:，。；、！？,;!?)]+)((?::\d+(?:-\d+)?)?)"#)
+    private static let mentionAllowed: CharacterSet = {
         var allowed = CharacterSet.urlQueryAllowed
         allowed.remove(charactersIn: "&#+=") // query 里这些字符必须编码，否则 openURL 侧解析会断
+        return allowed
+    }()
+
+    private func linkMentions(_ text: String) -> String {
+        guard text.contains("@") else { return text }
+        let regex = Self.mentionRegex
+        let allowed = Self.mentionAllowed
         var inFence = false
         return text.components(separatedBy: "\n").map { line in
             if line.hasPrefix("```") { inFence.toggle(); return line }
@@ -1299,51 +1389,410 @@ private struct CodeHeader: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(lang.isEmpty ? "代码" : lang)
-                .font(JieboFont.mono(11))
+                .font(JieboFont.monoText(.caption2))
                 .foregroundStyle(JieboColor.dim)
                 .tracking(0.4)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Button(copied ? "已复制" : "复制") {
+            Button {
                 UIPasteboard.general.string = code
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
                 copied = true
+            } label: {
+                Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    .font(JieboFont.text(.caption, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .padding(.horizontal, 4)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .font(JieboFont.ui(12))
-            .foregroundStyle(JieboColor.ink2)
+            .accessibilityLabel(copied ? "已复制代码" : "复制代码")
+            .task(id: copied) {
+                guard copied else { return }
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
         .overlay(alignment: .bottom) {
             Rectangle().fill(JieboColor.line).frame(height: 0.5)
         }
     }
 }
 
-private struct AssistantMessage: View {
-    @Environment(\.sizeCategory) private var sizeCategory
+private struct ShareItem: Identifiable {
+    let id = UUID()
     let text: String
+}
+
+/// 附图解码：ImageIO 直接按目标像素解码，不先解出整张原图（相机图解开是几十 MB）。
+/// 缓存按字节计；NSCache 本身线程安全，后台解码可以直接写。
+enum JieboThumbDecoder {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
+
+    static func cached(_ key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    static func store(_ image: UIImage, key: String) {
+        let cost = image.cgImage.map { $0.bytesPerRow * $0.height } ?? 1
+        cache.setObject(image, forKey: key as NSString, cost: cost)
+    }
+
+    static func decode(_ data: Data, maxPixel: CGFloat) -> UIImage? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(maxPixel, 1),
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    /// base64 太长不能整段哈希（每次重算都要扫几 MB）：长度 + 头、中、尾各 48 字节，连续存储时 O(1) 取样
+    static func key(base64 text: String, size: CGFloat) -> String {
+        var text = text
+        return text.withUTF8 { bytes in
+            let n = bytes.count
+            func slice(_ start: Int) -> String {
+                let lo = max(0, min(start, n))
+                let hi = min(n, lo + 48)
+                return String(decoding: UnsafeBufferPointer(rebasing: bytes[lo..<hi]), as: UTF8.self)
+            }
+            return "b64|\(Int(size))|\(n)|\(slice(0))|\(slice(n / 2))|\(slice(n - 48))"
+        }
+    }
+}
+
+/// 附图缩略：先查缓存；没有就在后台解码，解好淡入。重算 body（流式每个 token、输入每个按键）不再碰原图。
+struct AttachmentThumb: View {
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let key: String
+    /// 视图边长（pt）；scaledToFill，长边按 2 倍解，短边也铺得满
+    let side: CGFloat
+    let load: @Sendable () -> Data?
+    @State private var image: UIImage?
+
+    init(key: String, side: CGFloat, load: @escaping @Sendable () -> Data?) {
+        self.key = key
+        self.side = side
+        self.load = load
+        _image = State(initialValue: JieboThumbDecoder.cached(key))
+    }
+
+    var body: some View {
+        ZStack {
+            JieboColor.well
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: side, height: side)
+        .clipped()
+        .task(id: key) {
+            if let hit = JieboThumbDecoder.cached(key) {
+                image = hit
+                return
+            }
+            let maxPixel = side * 2 * displayScale
+            let load = self.load
+            let key = self.key
+            let decoded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let data = load(), let image = JieboThumbDecoder.decode(data, maxPixel: maxPixel) else { return nil }
+                JieboThumbDecoder.store(image, key: key)
+                return image
+            }.value
+            guard !Task.isCancelled else { return }
+            withAnimation(JieboMotion.fade(reduceMotion)) { image = decoded }
+        }
+    }
+}
+
+/// 点开附图：全屏看原图（按屏幕像素解码），双指缩放、双击放大、拖动平移，可分享
+struct AttachmentViewerItem: Identifiable {
+    let id = UUID()
+    let title: String
+    let load: @Sendable () -> Data?
+}
+
+struct AttachmentViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    let item: AttachmentViewerItem
+    @State private var image: UIImage?
+    @State private var failed = false
+    @State private var scale: CGFloat = 1
+    @State private var pinch: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var pan: CGSize = .zero
+    @State private var chromeHidden = false
+
+    /// 解码按屏幕像素 × maxScale，放到最大也不糊
+    private static let maxScale: CGFloat = 3
+    private static let doubleTapScale: CGFloat = 2.5
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black
+                // 视口取整屏（含安全区）：导航栏、状态栏浮在图上，显隐时图不跟着变大变小
+                GeometryReader { geo in
+                    content(in: geo.size)
+                }
+                if chromeHidden {
+                    // 导航栏藏起来后「完成」不在层级里，Esc 靠这个隐形按钮
+                    Button("完成") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .ignoresSafeArea()
+            .navigationTitle(item.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbar(chromeHidden ? .hidden : .visible, for: .navigationBar)
+            .statusBarHidden(chromeHidden)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("完成") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
+                if let image {
+                    ToolbarItem(placement: .primaryAction) {
+                        ShareLink(
+                            item: Image(uiImage: image),
+                            preview: SharePreview(item.title, image: Image(uiImage: image))
+                        )
+                    }
+                }
+            }
+        }
+        .accessibilityAction(.escape) { dismiss() }
+    }
+
+    @ViewBuilder
+    private func content(in viewport: CGSize) -> some View {
+        ZStack {
+            if let image {
+                let fit = Self.fitted(image.size, in: viewport)
+                let live = min(max(scale * pinch, 1), Self.maxScale)
+                let shown = Self.clamp(
+                    CGSize(width: offset.width + pan.width, height: offset.height + pan.height),
+                    fit: fit, scale: live, in: viewport
+                )
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: fit.width, height: fit.height)
+                    .scaleEffect(live)
+                    .offset(shown)
+                    .accessibilityLabel(item.title)
+                    .accessibilityAddTraits(.isImage)
+            } else if failed {
+                Label("图片打不开", systemImage: "photo.badge.exclamationmark")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(.white.opacity(0.8))
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .frame(width: viewport.width, height: viewport.height)
+        .contentShape(Rectangle())
+        .gesture(zoom(in: viewport))
+        .simultaneousGesture(drag(in: viewport), including: scale > 1 ? .all : .subviews)
+        .gesture(taps(in: viewport))
+        .task {
+            let maxPixel = min(4096, max(viewport.width, viewport.height) * displayScale * Self.maxScale)
+            let load = item.load
+            let decoded = await Task.detached(priority: .userInitiated) {
+                load().flatMap { JieboThumbDecoder.decode($0, maxPixel: maxPixel) }
+            }.value
+            guard !Task.isCancelled else { return }
+            image = decoded
+            failed = decoded == nil
+        }
+    }
+
+    /// 双击优先于单击：双击在点击处放大 / 复原，单击显隐导航栏
+    private func taps(in viewport: CGSize) -> some Gesture {
+        SpatialTapGesture(count: 2)
+            .onEnded { value in
+                withAnimation(JieboMotion.snappy(reduceMotion)) {
+                    if scale > 1 {
+                        scale = 1
+                        offset = .zero
+                    } else {
+                        let s = Self.doubleTapScale
+                        let dx = value.location.x - viewport.width / 2
+                        let dy = value.location.y - viewport.height / 2
+                        scale = s
+                        offset = clamped(CGSize(width: -dx * (s - 1), height: -dy * (s - 1)), scale: s, in: viewport)
+                    }
+                }
+            }
+            .exclusively(before: TapGesture().onEnded {
+                guard !voiceOver else { return }
+                withAnimation(JieboMotion.fade(reduceMotion)) { chromeHidden.toggle() }
+            })
+    }
+
+    private func zoom(in viewport: CGSize) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in pinch = value.magnification }
+            .onEnded { value in
+                let next = min(max(scale * value.magnification, 1), Self.maxScale)
+                withAnimation(JieboMotion.snappy(reduceMotion)) {
+                    scale = next
+                    pinch = 1
+                    offset = next == 1 ? .zero : clamped(offset, scale: next, in: viewport)
+                }
+            }
+    }
+
+    private func drag(in viewport: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { value in pan = value.translation }
+            .onEnded { value in
+                let moved = CGSize(
+                    width: offset.width + value.translation.width,
+                    height: offset.height + value.translation.height
+                )
+                offset = clamped(moved, scale: scale, in: viewport)
+                pan = .zero
+            }
+    }
+
+    private func clamped(_ value: CGSize, scale: CGFloat, in viewport: CGSize) -> CGSize {
+        guard let image else { return .zero }
+        return Self.clamp(value, fit: Self.fitted(image.size, in: viewport), scale: scale, in: viewport)
+    }
+
+    static func fitted(_ size: CGSize, in viewport: CGSize) -> CGSize {
+        guard size.width > 0, size.height > 0 else { return viewport }
+        let ratio = min(viewport.width / size.width, viewport.height / size.height)
+        return CGSize(width: size.width * ratio, height: size.height * ratio)
+    }
+
+    /// 放大后图边不离开屏幕边：可平移量 = (放大后尺寸 − 视口) / 2，图比视口小的方向不让移
+    static func clamp(_ value: CGSize, fit: CGSize, scale: CGFloat, in viewport: CGSize) -> CGSize {
+        let maxX = max(0, (fit.width * scale - viewport.width) / 2)
+        let maxY = max(0, (fit.height * scale - viewport.height) / 2)
+        return CGSize(
+            width: min(max(value.width, -maxX), maxX),
+            height: min(max(value.height, -maxY), maxY)
+        )
+    }
+}
+
+/// 正文按围栏外的空行切成段，每段是一个 equatable 的 AssistantMessage：
+/// 流式时只有最后一段在变，前面的段不再重新拆块、解析表格和排版
+private struct ChunkedAssistantMessage: View, Equatable {
+    let text: String
+
+    /// 段间距 = 原来一行空行的高度（5 + 12 + 5）
+    private static let gap: CGFloat = 22
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Self.gap) {
+            ForEach(Array(ChunkMemo.shared.chunks(text).enumerated()), id: \.offset) { _, chunk in
+                AssistantMessage(text: chunk)
+                    .equatable()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 围栏判定与 AssistantMessage.blocks 一致（行首 ```）。
+    /// 返回值里 stableEnd 是最后一个「围栏外空行」之后的 UTF-8 偏移，stableCount 是它之前已经封口的段数。
+    static func scan(_ text: Substring) -> (chunks: [String], stableEnd: Int, stableCount: Int) {
+        var result: [String] = []
+        var current: [Substring] = []
+        var inFence = false
+        var offset = 0
+        var stableEnd = 0
+        var stableCount = 0
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let next = offset + line.utf8.count + 1
+            defer { offset = next }
+            if line.hasPrefix("```") { inFence.toggle() }
+            if !inFence, line.allSatisfy({ $0 == " " || $0 == "\t" }) {
+                if !current.isEmpty {
+                    result.append(current.joined(separator: "\n"))
+                    current = []
+                }
+                // 末行的空串只是还没写完的换行，后面的字会接在这一行上，不算封口
+                if next <= text.utf8.count {
+                    stableEnd = next
+                    stableCount = result.count
+                }
+                continue
+            }
+            current.append(line)
+        }
+        if !current.isEmpty { result.append(current.joined(separator: "\n")) }
+        return (result, stableEnd, stableCount)
+    }
+}
+
+/// 流式时正文只在末尾追加：上次已经封口的段直接复用，只扫新增的尾巴
+@MainActor
+private final class ChunkMemo {
+    static let shared = ChunkMemo()
+    private var stablePrefix = ""
+    private var stableChunks: [String] = []
+
+    func chunks(_ text: String) -> [String] {
+        var head: [String] = []
+        var tail = Substring(text)
+        if !stablePrefix.isEmpty, text.hasPrefix(stablePrefix) {
+            head = stableChunks
+            tail = text[text.utf8.index(text.startIndex, offsetBy: stablePrefix.utf8.count)...]
+        }
+        let scanned = ChunkedAssistantMessage.scan(tail)
+        let all = head + scanned.chunks
+        if scanned.stableEnd > 0 {
+            let consumed = (text.utf8.count - tail.utf8.count) + scanned.stableEnd
+            stablePrefix = String(text[..<text.utf8.index(text.startIndex, offsetBy: consumed)])
+            stableChunks = head + scanned.chunks.prefix(scanned.stableCount)
+        } else if head.isEmpty {
+            stablePrefix = ""
+            stableChunks = []
+        }
+        return all.isEmpty ? [text] : all
+    }
+}
+
+private struct AssistantMessage: View, Equatable {
+    let text: String
+
+    static func == (lhs: AssistantMessage, rhs: AssistantMessage) -> Bool {
+        lhs.text == rhs.text
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .code(let code, let lang):
-                    VStack(alignment: .leading, spacing: 0) {
-                        CodeHeader(lang: lang, code: code)
-                        ScrollView(.horizontal, showsIndicators: true) {
-                            Text(Self.expandTabs(code.isEmpty ? " " : code))
-                                .font(JieboFont.monoScaled(12, sizeCategory: sizeCategory))
-                                .foregroundStyle(JieboColor.ink)
-                                .textSelection(.enabled)
-                                .multilineTextAlignment(.leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                        }
-                    }
-                    .background(JieboColor.mist.opacity(0.35))
-                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                    CodeBlockView(code: code, lang: lang)
                 case .prose(let prose):
                     ProseLines(text: prose)
                 }
@@ -1391,9 +1840,29 @@ private struct AssistantMessage: View {
         if result.isEmpty { result.append(.prose(text)) }
         return result
     }
+}
 
-    private static func expandTabs(_ text: String) -> String {
-        text.replacingOccurrences(of: "\t", with: "    ")
+/// 代码块：字号跟 Dynamic Type。单独成视图，字号档变化只重画它，不受外层 equatable 拦截
+private struct CodeBlockView: View {
+    @Environment(\.sizeCategory) private var sizeCategory
+    let code: String
+    let lang: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            CodeHeader(lang: lang, code: code)
+            ScrollView(.horizontal, showsIndicators: true) {
+                Text((code.isEmpty ? " " : code).replacingOccurrences(of: "\t", with: "    "))
+                    .font(JieboFont.monoScaled(12, sizeCategory: sizeCategory))
+                    .foregroundStyle(JieboColor.ink)
+                    .textSelection(.enabled)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+            }
+        }
+        .background(JieboColor.well.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
     }
 }
 
@@ -1503,7 +1972,7 @@ private struct ProseLines: View {
             }
             if let item {
                 Text(item.marker)
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.dim)
                     .frame(width: 22, alignment: .leading)
             }
@@ -1644,12 +2113,12 @@ private struct ReplyApprovalCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("要改文件：\(approvalTarget)。允许会先还原再写；拒绝还原到发送前。")
-                .font(JieboFont.ui(14))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
             if let args = tool.args {
                 ScrollView {
                     Text(args.pretty(2_000))
-                        .font(JieboFont.mono(12))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(JieboColor.ink2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -1657,23 +2126,14 @@ private struct ReplyApprovalCard: View {
                 .frame(maxHeight: 160)
             }
             HStack(spacing: 10) {
+                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false) }
+                    .buttonStyle(.bordered)
                 Button("允许") { store.replyToApproval(allow: true) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(14, weight: .semibold))
-                    .foregroundStyle(JieboColor.paper)
-                    .padding(.horizontal, 16)
-                    .frame(height: 36)
-                    .background(JieboColor.pine)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                Button("拒绝") { store.replyToApproval(allow: false) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(14, weight: .medium))
-                    .foregroundStyle(JieboColor.ink)
-                    .padding(.horizontal, 16)
-                    .frame(height: 36)
-                    .background(JieboColor.mist)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .buttonStyle(.borderedProminent)
+                    .tint(JieboColor.pine)
             }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .controlSize(.large)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1707,11 +2167,11 @@ struct AssistantTodayButton: View {
                 Image(systemName: ToolLayer.assistant.symbol)
                     .font(.system(size: 12, weight: .semibold))
                 Text("今日")
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
             }
             .foregroundStyle(on ? JieboColor.pine : JieboColor.ink)
             .padding(.horizontal, 10)
-            .frame(height: 30)
+            .frame(minHeight: 30)
             .background(on ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
             .overlay(alignment: .topTrailing) {
@@ -1853,70 +2313,93 @@ private struct AssistantActionRow: View {
     private var summaryRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "paperplane")
-                .font(.system(size: 11, weight: .semibold))
+                .font(JieboFont.text(.caption, weight: .semibold))
                 .foregroundStyle(statusColor)
-                .frame(width: 16, height: 16)
+                .frame(width: 18)
             Text(text)
-                .font(JieboFont.ui(13, weight: .medium))
+                .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(2)
             Spacer(minLength: 0)
             Text(statusText)
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(statusColor)
+            if openDelegation != nil, delegateRefs.delegationId != nil {
+                Image(systemName: "chevron.right")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .frame(minHeight: 44)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.clear)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .onTapGesture {
+            if let openDelegation, let id = delegateRefs.delegationId { openDelegation(id) }
+        }
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(openDelegation != nil && delegateRefs.delegationId != nil ? .isButton : [])
+        .accessibilityHint(openDelegation != nil && delegateRefs.delegationId != nil ? "轻点两下查看委派详情" : "")
     }
 
+    /// 委派产出的文件：与本轮文件同一套卡片（能预览的出缩略图），最多 3 个，更多进详情
     private func childFiles(_ turn: Turn, chatId: String) -> some View {
-        let files = Array(turn.cardFiles.prefix(Self.fileLimit))
+        let all = turn.cardFiles
+        let files = Array(all.prefix(Self.fileLimit))
         let delegationId = delegateRefs.delegationId
-        return VStack(spacing: 0) {
-            ForEach(Array(files.enumerated()), id: \.element.id) { index, file in
-                if index > 0 {
-                    Rectangle().fill(JieboColor.line).frame(height: 0.5)
-                }
-                TurnFileRow(file: file, turn: turn, chatId: chatId)
-            }
-            if let openDelegation, let delegationId {
-                Rectangle().fill(JieboColor.line).frame(height: 0.5)
+        return VStack(alignment: .leading, spacing: 4) {
+            TurnFileCards(turn: turn, chatId: chatId, files: files)
+            if let openDelegation, let delegationId, all.count > files.count {
                 Button {
                     openDelegation(delegationId)
                 } label: {
-                    HStack(spacing: 6) {
-                        Text("全部")
-                            .font(JieboFont.ui(12, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                        Spacer(minLength: 0)
+                    HStack(spacing: 4) {
+                        Text("查看全部 \(all.count) 个文件")
+                            .font(JieboFont.text(.footnote, weight: .medium))
                         Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(JieboColor.dim)
+                            .font(JieboFont.text(.caption2, weight: .semibold))
                     }
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 34)
+                    .foregroundStyle(JieboColor.pine)
+                    .frame(minHeight: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("查看委派的全部文件和过程")
+                .accessibilityLabel("查看委派的全部 \(all.count) 个文件和过程")
             }
         }
-        .background(JieboColor.white)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
-        )
         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
+    }
+}
+
+@MainActor
+private final class FollowClock {
+    static let interval: Double = 0.05
+    var last = Date.distantPast
+    var pending: Task<Void, Never>?
+}
+
+/// iOS 26+：内容挂一条底部 safeAreaBar（系统给滚动边缘做柔化）；其它情况原样返回，由调用方把底栏排在 VStack 里
+private struct FloatingBottomBar<Bar: View>: ViewModifier {
+    var enabled: Bool
+    @ViewBuilder var bar: () -> Bar
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            if enabled {
+                content.safeAreaBar(edge: .bottom) { bar() }
+            } else {
+                content
+            }
+        } else {
+            content
+        }
     }
 }
 

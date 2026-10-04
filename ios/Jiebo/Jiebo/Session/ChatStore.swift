@@ -1667,6 +1667,16 @@ final class ChatStore {
         }
     }
 
+    /// 输入框防抖还没落库就切了会话：草稿写回它原来的会话，不写进新会话
+    func saveDraft(_ value: String, forChat id: String) {
+        if id == activeId {
+            saveDraft(value)
+            return
+        }
+        guard let index = chats.firstIndex(where: { $0.id == id }), chats[index].draft != value else { return }
+        chats[index].draft = value
+    }
+
     /// 打字时只更新 @ 候选，不把草稿写进会话列表。
     func updateMentions(for text: String) {
         guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
@@ -2321,6 +2331,18 @@ final class ChatStore {
         }
         if images.count > room { flash("一次最多带 \(ImagePrep.maxCount) 张图") }
         pendingImages.append(contentsOf: images.prefix(room))
+    }
+
+    /// 图片还在压缩时切了会话：结果放回发起时的会话
+    func addPendingImages(_ images: [PendingImage], toChat id: String) {
+        guard id != activeId else {
+            addPendingImages(images)
+            return
+        }
+        guard chats.contains(where: { $0.id == id }) else { return }
+        var list = imagesByChat[id] ?? []
+        list.append(contentsOf: images.prefix(max(0, ImagePrep.maxCount - list.count)))
+        imagesByChat[id] = list
     }
 
     func removePendingImage(_ id: UUID) {

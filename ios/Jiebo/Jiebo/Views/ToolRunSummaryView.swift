@@ -15,8 +15,15 @@ struct ToolRunSummaryView: View {
 
     private var summaryLine: String {
         let count = tools.count
-        let head = "执行了 \(count) 个步骤"
-        if turnRunning { return head }
+        if turnRunning {
+            // 跑的时候说清楚正在做哪一步
+            if let index = tools.lastIndex(where: { $0.status == "running" }) {
+                return "第 \(index + 1) 步 · \(ToolCardView.chineseVerb(tools[index]))"
+            }
+            return "已执行 \(count) 个步骤"
+        }
+        let failed = tools.filter { $0.status == "error" }.count
+        let head = failed > 0 ? "执行了 \(count) 个步骤，\(failed) 个失败" : "执行了 \(count) 个步骤"
         if let duration = formatDuration(durationMs).nilIfEmpty {
             return "\(head) · \(duration)"
         }
@@ -31,23 +38,28 @@ struct ToolRunSummaryView: View {
                     userPinned = true
                 }
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(JieboColor.ink2)
                         .rotationEffect(.degrees(detailOpen ? 90 : 0))
-                    Text(summaryLine)
-                        .font(JieboFont.ui(13, weight: .medium))
-                        .foregroundStyle(JieboColor.ink2)
-                        .lineLimit(2)
+                    if turnRunning {
+                        ShimmerText(text: summaryLine, font: JieboFont.text(.footnote, weight: .medium))
+                    } else {
+                        Text(summaryLine)
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .lineLimit(2)
+                    }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 4)
-                .padding(.vertical, 4)
+                .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(detailOpen ? "收起工具步骤" : "展开工具步骤")
+            .accessibilityLabel(summaryLine)
+            .accessibilityValue(detailOpen ? "已展开" : "已收起")
+            .accessibilityHint(detailOpen ? "轻点两下收起步骤" : "轻点两下展开步骤")
 
             if detailOpen {
                 VStack(alignment: .leading, spacing: 4) {
@@ -91,8 +103,17 @@ extension ToolCardView {
         case .write: return "写入"
         case .read: return "读取"
         case .other:
-            if tool.name.range(of: "task", options: .caseInsensitive) != nil { return "任务" }
-            return tool.name.isEmpty ? "工具" : tool.name
+            if tool.name.range(of: "task", options: .caseInsensitive) != nil { return "子任务" }
+            if isImageTool(tool) { return "生成图片" }
+            return "调用工具"
         }
+    }
+
+    /// 动词是兜底的「调用工具」：卡片标题行补上原始工具名
+    static func isGeneric(_ tool: ToolCall) -> Bool {
+        Crew.label(name: tool.name, args: tool.args, agent: tool.agent).isEmpty
+            && tool.kind == .other
+            && tool.name.range(of: "task", options: .caseInsensitive) == nil
+            && !isImageTool(tool)
     }
 }

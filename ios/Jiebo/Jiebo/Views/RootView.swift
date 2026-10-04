@@ -84,6 +84,8 @@ struct WorkbenchView: View {
             // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
             .toolbar(removing: .sidebarToggle)
         }
+        // 预览层盖满时，底下的侧栏和对话不再让 VoiceOver 摸到
+        .accessibilityHidden(store.previewPanelOpen)
         // 预览盖住侧栏和对话（与 PhoneWorkbench 同一写法），不再占右侧一栏
         .overlay {
             ZStack {
@@ -92,6 +94,7 @@ struct WorkbenchView: View {
                         .ignoresSafeArea()
                         .onTapGesture { store.collapsePreview() }
                         .transition(.opacity)
+                        .accessibilityHidden(true)
                     PreviewPanelView(tab: tab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.white)

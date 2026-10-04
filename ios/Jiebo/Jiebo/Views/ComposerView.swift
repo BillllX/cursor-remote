@@ -14,11 +14,14 @@ struct ComposerView: View {
     /// 打字只改这里。直接绑 store.draft 会让整段对话每次按键都重绘。
     @State private var text = ""
     @State private var persistTask: Task<Void, Never>?
+    /// 防抖中还没落库的草稿和它所属的会话
+    @State private var pendingDraft: (chatId: String, text: String)?
     /// 自己写回 store.draft 时不要再灌进输入框，否则会把后打的字盖掉。
     @State private var ignoreDraftEcho: String?
     /// 工具栏宽度。只在宽度变化时重选布局，避免每个字都把两套控件量一遍。
     @State private var controlsWidth: CGFloat = 0
     @State private var photoItems: [PhotosPickerItem] = []
+    @State private var viewerItem: AttachmentViewerItem?
     @State private var photoPickerOpen = false
     @State private var filePickerOpen = false
     @State private var fileBrowserOpen = false
@@ -53,7 +56,7 @@ struct ComposerView: View {
                 assistantCapsuleRow
             } else {
                 TextField(placeholder, text: $text, axis: .vertical)
-                    .font(JieboFont.ui(17))
+                    .font(JieboFont.text(.body))
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1...8)
                     .focused($focused)
@@ -82,7 +85,7 @@ struct ComposerView: View {
                 controls
                 if controlsWidth >= 420, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Return 发送，Shift+Return 换行")
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                         .padding(.horizontal, 6)
                         .transition(.opacity)
@@ -106,8 +109,9 @@ struct ComposerView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 16)
-        .background(JieboColor.paper)
+        .padding(.bottom, floating ? 8 : 16)
+        // 浮动玻璃底栏：不铺实底，让消息从胶囊下面透过去
+        .background(floating ? Color.clear : JieboColor.paper)
         .onAppear {
             text = store.draft
             store.refreshCheckpoints()
@@ -116,7 +120,7 @@ struct ComposerView: View {
         .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
         .onChange(of: store.activeId) { _, _ in
             stopVoice()
-            persistTask?.cancel()
+            flushDraft()
             text = store.draft
             store.refreshCheckpoints()
         }
@@ -130,6 +134,7 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
+            let chatId = store.activeId
             Task {
                 var prepared: [PendingImage] = []
                 var failed = 0
@@ -146,7 +151,7 @@ struct ComposerView: View {
                         failed += 1
                     }
                 }
-                store.addPendingImages(prepared)
+                store.addPendingImages(prepared, toChat: chatId)
                 if failed > 0 { store.flash("\(failed) 张图片读取失败，换一张试试") }
             }
         }
@@ -163,6 +168,9 @@ struct ComposerView: View {
         }
     }
 
+    /// 助理胶囊在 iOS 26+ 由 ThreadView 放进 safeAreaBar，浮在消息上
+    private var floating: Bool { style == .assistant && JieboGlass.available }
+
     private var pendingApproval: PendingTool? {
         store.active?.turns.reversed().first { $0.pendingTool != nil }?.pendingTool
     }
@@ -176,57 +184,59 @@ struct ComposerView: View {
         let target = path.isEmpty ? tool.name : path
         return VStack(alignment: .leading, spacing: 8) {
             Text("要改文件：\(target)。允许会先还原再写；拒绝还原到发送前。")
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.ink)
             HStack(spacing: 8) {
+                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false) }
+                    .buttonStyle(.bordered)
                 Button("允许") { store.replyToApproval(allow: true) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(13, weight: .semibold))
-                    .foregroundStyle(JieboColor.fillFg)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(JieboColor.pine)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                Button("拒绝") { store.replyToApproval(allow: false) }
-                    .buttonStyle(.plain)
-                    .font(JieboFont.ui(13, weight: .medium))
-                    .foregroundStyle(JieboColor.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(JieboColor.mist)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .buttonStyle(.borderedProminent)
+                    .tint(JieboColor.pine)
             }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .controlSize(.large)
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(JieboColor.runBg.opacity(0.65))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(JieboColor.warnBg)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
     }
 
     private var queueBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(queuedTurns) { turn in
-                    HStack(spacing: 6) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "clock")
+                            .font(JieboFont.text(.caption2, weight: .semibold))
+                            .foregroundStyle(JieboColor.run)
+                            .accessibilityHidden(true)
                         Text("排队 · \(String(turn.user.prefix(24)))")
-                            .font(JieboFont.ui(12))
+                            .font(JieboFont.text(.caption))
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
+                            .padding(.leading, 4)
                         Button {
                             store.dropQueuedTurn(turn.id)
                         } label: {
                             Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(JieboColor.dim)
+                                .font(JieboFont.text(.caption2, weight: .bold))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("去掉这条排队")
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 28)
-                    .background(JieboColor.white)
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                    .padding(.leading, 10)
+                    .frame(minHeight: 44)
+                    // 胶囊视觉 32 高，布局与热区 44
+                    .background(
+                        Capsule()
+                            .fill(JieboColor.white)
+                            .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+                            .padding(.vertical, 6)
+                    )
                 }
             }
         }
@@ -365,20 +375,20 @@ struct ComposerView: View {
             HStack(spacing: 10) {
                 VoiceLevelBars(level: dictation.level, tint: tint, live: dictation.phase == .recording)
                 Text(voiceHint(finishing: finishing))
-                    .font(JieboFont.ui(12, weight: .medium))
+                    .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(voiceCancelArmed ? JieboColor.danger : JieboColor.ink2)
                 Spacer(minLength: 0)
                 if finishing { ProgressView().controlSize(.small) }
                 if tapVoice, !finishing {
                     Button("取消", action: cancelTapVoice)
                         .buttonStyle(.plain)
-                        .font(JieboFont.ui(12, weight: .medium))
+                        .font(JieboFont.text(.caption, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                         .hitTarget()
                 }
             }
             Text(dictation.transcript.isEmpty ? "请说话…" : dictation.transcript)
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(dictation.transcript.isEmpty ? JieboColor.dim : JieboColor.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(6)
@@ -434,13 +444,14 @@ struct ComposerView: View {
                             store.insertMention(path)
                         } label: {
                             Text("@\(label)")
-                                .font(JieboFont.mono(12))
+                                .font(JieboFont.monoText(.caption))
                                 .foregroundStyle(JieboColor.ink)
                                 .lineLimit(1)
                                 .padding(.horizontal, 10)
-                                .frame(height: 30)
+                                .frame(minHeight: 30)
                                 .background(JieboColor.mist)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .hitTarget()
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("引用 \(path)")
@@ -458,17 +469,27 @@ struct ComposerView: View {
     }
 
     private func schedulePersist() {
+        if let pendingDraft, pendingDraft.chatId != store.activeId { flushDraft() }
         persistTask?.cancel()
+        pendingDraft = (store.activeId, text)
         persistTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
-            ignoreDraftEcho = text
-            store.saveDraft(text)
+            flushDraft()
         }
+    }
+
+    private func flushDraft() {
+        persistTask?.cancel()
+        guard let pending = pendingDraft else { return }
+        pendingDraft = nil
+        if pending.chatId == store.activeId { ignoreDraftEcho = pending.text }
+        store.saveDraft(pending.text, forChat: pending.chatId)
     }
 
     private func commitAndSend() {
         persistTask?.cancel()
+        pendingDraft = nil
         ignoreDraftEcho = ""
         store.saveDraft(text)
         store.submit()
@@ -487,11 +508,11 @@ struct ComposerView: View {
         HStack(alignment: .bottom, spacing: 6) {
             assistantAttachMenu
             TextField(placeholder, text: $text, axis: .vertical)
-                .font(JieboFont.ui(16))
+                .font(JieboFont.text(.body))
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1...6)
                 .focused($focused)
-                .padding(.vertical, 8)
+                .padding(.vertical, 11)
                 .overlay {
                     if !focused || dictation.active {
                         Color.clear
@@ -506,46 +527,55 @@ struct ComposerView: View {
                     }
                     schedulePersist()
                 }
+            // 忙碌时停止和发送并存：发送会排在当前这轮之后（与 iPad 的完整输入框一致）
             if store.busy {
-                Button(action: store.stop) {
-                    Image(systemName: "stop.fill")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(JieboColor.paper)
-                        .frame(width: 32, height: 32)
-                        .background(JieboColor.danger)
-                        .clipShape(Circle())
-                        .hitTarget()
-                }
-                .buttonStyle(PressScaleButtonStyle())
-                .accessibilityLabel("停止")
+                if !canSendNow { micButton }
+                stopButton
+                if canSendNow { sendButton(queued: true) }
             } else if canSendNow {
-                Button(action: commitAndSend) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(JieboColor.paper)
-                        .frame(width: 32, height: 32)
-                        .background(JieboColor.pine)
-                        .clipShape(Circle())
-                        .hitTarget()
-                }
-                .buttonStyle(PressScaleButtonStyle())
-                .accessibilityLabel("发送")
+                sendButton(queued: false)
             } else {
                 micButton
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(JieboColor.composer)
-                .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
-                .shadow(color: JieboColor.ink.opacity(focused ? 0.14 : 0.08), radius: focused ? 12 : 8, y: 4)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(focused ? JieboColor.pine.opacity(0.4) : JieboColor.line, lineWidth: 1)
-                )
+        .padding(.leading, 4)
+        .padding(.trailing, 4)
+        .padding(.vertical, 2)
+        .animation(JieboMotion.snappy(reduceMotion), value: store.busy)
+        .animation(JieboMotion.snappy(reduceMotion), value: canSendNow)
+        .modifier(CapsuleSurface(focused: focused))
+    }
+
+    private var stopButton: some View {
+        Button(action: store.stop) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(JieboColor.danger)
+                .frame(width: 36, height: 36)
+                .background(JieboColor.dangerBg)
+                .clipShape(Circle())
+                .hitTarget()
         }
+        .buttonStyle(PressScaleButtonStyle())
+        .transition(.scale.combined(with: .opacity))
+        .accessibilityLabel("停止回复")
+    }
+
+    private func sendButton(queued: Bool) -> some View {
+        Button(action: commitAndSend) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(JieboColor.fillFg)
+                .frame(width: 36, height: 36)
+                .background(JieboColor.pine)
+                .clipShape(Circle())
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .transition(.scale.combined(with: .opacity))
+        .keyboardShortcut(.return, modifiers: .command)
+        .accessibilityLabel(queued ? "排队发送" : "发送")
+        .accessibilityHint(queued ? "当前回复结束后再发" : "")
     }
 
     private var assistantAttachMenu: some View {
@@ -553,47 +583,62 @@ struct ComposerView: View {
             Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
             Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
             Divider()
-            Menu {
+            Picker(selection: Binding(get: { store.mode }, set: { store.chooseMode($0) })) {
                 ForEach(AgentMode.allCases, id: \.self) { item in
-                    Button { store.chooseMode(item) } label: {
-                        Label(item.label, systemImage: store.mode == item ? "checkmark" : "circle")
-                    }
+                    Text(item.label).tag(item)
                 }
-            } label: { Label("模式 · \(store.mode.label)", systemImage: "slider.horizontal.3") }
-            Menu {
+            } label: {
+                Label("模式", systemImage: "slider.horizontal.3")
+            }
+            .pickerStyle(.menu)
+            Picker(selection: Binding(get: { store.model }, set: { store.chooseModel($0) })) {
                 ForEach(ModelCatalog.groups(from: store.models)) { group in
                     Section(group.label) {
                         ForEach(group.models) { item in
-                            Button(item.name) { store.chooseModel(item.id) }
+                            Text(item.name).tag(item.id)
                         }
                     }
                 }
-            } label: { Label("模型 · \(ModelCatalog.label(for: store.model))", systemImage: "cpu") }
-            Divider()
-            Button(action: store.togglePolicy) {
-                Label(store.active?.policy == "plane" ? "正在用策略层" : "切到策略层", systemImage: "circle")
+            } label: {
+                Label("模型", systemImage: "cpu")
             }
-            Button(action: store.toggleConfirmWrites) {
-                Label(store.active?.confirmWrites == true ? "确认写" : "直写", systemImage: "checkmark.shield")
+            .pickerStyle(.menu)
+            Section {
+                Toggle(isOn: Binding(get: { store.active?.policy == "plane" }, set: { on in
+                    if on != (store.active?.policy == "plane") { store.togglePolicy() }
+                })) {
+                    Label("策略层", systemImage: "square.stack.3d.up")
+                }
+                Toggle(isOn: Binding(get: { store.active?.confirmWrites == true }, set: { on in
+                    if on != (store.active?.confirmWrites == true) { store.toggleConfirmWrites() }
+                })) {
+                    Label("写入前确认", systemImage: "checkmark.shield")
+                }
             }
-            Button(action: store.undoLast) {
-                Label("撤销上一次", systemImage: "arrow.uturn.backward")
-            }
-            .disabled(!store.canUndo)
-            if !store.checkpoints.isEmpty {
-                ForEach(store.checkpoints) { item in
-                    Button("还原 · \(item.label)") { store.restoreCheckpoint(item.id) }
-                        .disabled(store.busy)
+            Section {
+                Button(action: store.undoLast) {
+                    Label("撤销上一次", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!store.canUndo)
+                if !store.checkpoints.isEmpty {
+                    Menu {
+                        ForEach(store.checkpoints) { item in
+                            Button(item.label) { store.restoreCheckpoint(item.id) }
+                                .disabled(store.busy)
+                        }
+                    } label: {
+                        Label("还原到检查点", systemImage: "clock.arrow.circlepath")
+                    }
                 }
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
-                .frame(width: 32, height: 32)
+                .frame(width: 36, height: 36)
                 .hitTarget()
         }
-        .buttonStyle(PressScaleButtonStyle())
+        .menuOrder(.fixed)
         .accessibilityLabel("添加与更多")
     }
 
@@ -601,15 +646,16 @@ struct ComposerView: View {
         let recording = dictation.active
         return Button(action: toggleVoice) {
             Image(systemName: recording ? "mic.fill" : "mic")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(recording ? JieboColor.pine : JieboColor.ink2)
-                .frame(width: 32, height: 32)
-                .background(recording ? JieboColor.pine.opacity(0.12) : Color.clear)
+                .frame(width: 36, height: 36)
+                .background(recording ? JieboColor.pine.opacity(0.14) : Color.clear)
                 .clipShape(Circle())
-                .overlay(Circle().stroke(recording ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1))
+                .symbolEffect(.pulse, isActive: recording && !reduceMotion)
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
+        .transition(.scale.combined(with: .opacity))
         .accessibilityLabel(recording ? "结束录音" : "语音输入")
     }
 
@@ -781,12 +827,12 @@ struct ComposerView: View {
                 Image(systemName: on ? "checkmark.shield.fill" : "checkmark.shield")
                     .font(.system(size: 11, weight: .regular))
                 Text(on ? "确认写" : "直写")
-                    .font(JieboFont.ui(11, weight: .regular))
+                    .font(JieboFont.text(.caption2, weight: .regular))
             }
             // 次级：关态 ink2 可读、无填充；开态浅 brass；字号 11 让出主焦点给模式/模型
             .foregroundStyle(on ? JieboColor.brass : JieboColor.ink2)
             .padding(.horizontal, 10)
-            .frame(height: 32)
+            .frame(minHeight: 32)
             .background(on ? JieboColor.brass.opacity(0.10) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
             .hitTarget() // P6：视觉 32 高，命中 44
@@ -799,10 +845,10 @@ struct ComposerView: View {
         let plane = store.active?.policy == "plane"
         return Button(action: store.togglePolicy) {
             Text(plane ? "策略层" : "现状")
-                .font(JieboFont.ui(11, weight: .regular))
+                .font(JieboFont.text(.caption2, weight: .regular))
                 .foregroundStyle(plane ? JieboColor.brass : JieboColor.ink2)
                 .padding(.horizontal, 10)
-                .frame(height: 32)
+                .frame(minHeight: 32)
                 .background(plane ? JieboColor.brass.opacity(0.10) : Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                 .hitTarget()
@@ -815,30 +861,40 @@ struct ComposerView: View {
     private var attachmentStrip: some View {
         if !store.pendingImages.isEmpty || !store.uploads.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: 26) {
                     ForEach(store.pendingImages) { image in
                         ZStack(alignment: .topTrailing) {
-                            Group {
-                                if let uiImage = UIImage(data: image.data) {
-                                    Image(uiImage: uiImage)
-                                        .resizable()
-                                        .scaledToFill()
-                                } else {
-                                    JieboColor.mist
-                                }
+                            let data = image.data
+                            Button {
+                                viewerItem = AttachmentViewerItem(title: "待发送的图片", load: { data })
+                            } label: {
+                                AttachmentThumb(key: "pending|\(image.id.uuidString)", side: 56) { data }
+                                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                             }
-                            .frame(width: 44, height: 44)
-                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                            .buttonStyle(PressScaleButtonStyle())
+                            .accessibilityLabel("待发送的图片")
+                            .accessibilityHint("轻点两下查看大图")
                             Button {
                                 store.removePendingImage(image.id)
                             } label: {
+                                // 图标 20pt 压在右上角，命中框 44×44 以图片角为中心，不盖住图片中部（中部是看大图）
                                 Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 16))
-                                    .foregroundStyle(JieboColor.dim)
-                                    .background(Circle().fill(JieboColor.paper).padding(2))
+                                    .font(.system(size: 20))
+                                    .symbolRenderingMode(.palette)
+                                    .foregroundStyle(JieboColor.paper, JieboColor.ink2)
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(Rectangle())
                             }
-                            .offset(x: 4, y: -4)
+                            .buttonStyle(.plain)
+                            .offset(x: 22, y: -22)
                             .accessibilityLabel("移除图片")
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                store.removePendingImage(image.id)
+                            } label: {
+                                Label("移除图片", systemImage: "trash")
+                            }
                         }
                     }
                     ForEach(store.uploads) { item in
@@ -846,19 +902,25 @@ struct ComposerView: View {
                             ProgressView()
                                 .controlSize(.small)
                             Text(item.name)
-                                .font(JieboFont.ui(12))
+                                .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.ink2)
                                 .lineLimit(1)
                         }
                         .padding(.horizontal, 10)
-                        .frame(height: 32)
+                        .frame(minHeight: 32)
                         .background(JieboColor.mist)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                     }
                 }
-                .padding(.vertical, 2)
+                // 给右上角的移除按钮留出位置，不被滚动区裁掉
+                .padding(.top, 22)
+                .padding(.trailing, 22)
+                .padding(.bottom, 2)
             }
             .transition(.move(edge: .top).combined(with: .opacity))
+            .fullScreenCover(item: $viewerItem) { item in
+                AttachmentViewer(item: item)
+            }
         }
     }
 
@@ -869,10 +931,10 @@ struct ComposerView: View {
                     store.chooseMode(item)
                 } label: {
                     Text(item.label)
-                        .font(JieboFont.ui(13, weight: .medium))
+                        .font(JieboFont.text(.footnote, weight: .medium))
                         .foregroundStyle(store.mode == item ? JieboColor.ink : JieboColor.ink2)
                         .padding(.horizontal, 12)
-                        .frame(height: 32)
+                        .frame(minHeight: 32)
                         .background {
                             if store.mode == item {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -901,10 +963,10 @@ struct ComposerView: View {
             }
         } label: {
             Text(store.mode.label)
-                .font(JieboFont.ui(13, weight: .medium))
+                .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
                 .padding(.horizontal, 10)
-                .frame(height: 32)
+                .frame(minHeight: 32)
                 .background(Color.clear)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(
@@ -929,7 +991,7 @@ struct ComposerView: View {
         } label: {
             HStack(spacing: 6) {
                 Text(ModelCatalog.label(for: store.model))
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)
                 Image(systemName: "chevron.down")
@@ -937,7 +999,7 @@ struct ComposerView: View {
                     .foregroundStyle(JieboColor.dim)
             }
             .padding(.horizontal, 10)
-            .frame(height: 32)
+            .frame(minHeight: 32)
             .frame(maxWidth: maxWidth)
             .background(Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -948,6 +1010,28 @@ struct ComposerView: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
+    }
+}
+
+/// iPhone 助理输入胶囊的底：iOS 26+ 是浮在内容上的 Liquid Glass（聚焦时描一圈强调色），更早的系统保留原来的实底 + 阴影
+private struct CapsuleSurface: ViewModifier {
+    var focused: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+        if #available(iOS 26.0, *) {
+            content
+                .glassEffect(.regular.interactive(), in: shape)
+                .overlay(shape.stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
+        } else {
+            content.background {
+                shape
+                    .fill(JieboColor.composer)
+                    .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
+                    .shadow(color: JieboColor.ink.opacity(focused ? 0.14 : 0.08), radius: focused ? 12 : 8, y: 4)
+                    .overlay(shape.stroke(focused ? JieboColor.pine.opacity(0.4) : JieboColor.line, lineWidth: 1))
+            }
+        }
     }
 }
 

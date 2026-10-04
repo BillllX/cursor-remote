@@ -20,9 +20,10 @@ enum ThumbState: Equatable {
 
 /// 文件卡片缩略图：read_file 带 reqId 走旁路（不进页签/内容层），按类型渲染成图或几行文字。
 /// 键 tenant|chatId|path|sha；没有 sha 的是当前版本，会变，只放内存。
-/// 每个键每次启动只试一次，失败显示图标，不重试。
-/// 限流：在途 read_file 最多 3 个、下载/解码最多 3 个、离屏 WebView 最多 2 个；
-/// 排队最多 40 个，超出丢最旧的（退回未请求，卡片再出现时重排）；卡片消失时撤掉还没发出的。
+/// 失败按 3 秒、10 秒退避各重试一次，之后显示图标。
+/// 限流：在途 read_file 最多 3 个、下载/解码最多 3 个、离屏 WebView 最多 2 个。
+/// 排队按后进先出发：对话列表一次建好所有卡片，最后入队的是最新一轮，先出图。
+/// 断线时队列原样留着，重连后卡片的触发键变化会再推一次；卡片消失时撤掉还没发出的。
 @Observable
 @MainActor
 final class ThumbnailStore {
@@ -49,8 +50,10 @@ final class ThumbnailStore {
 
     /// reqId → 已发出、等回包的请求
     @ObservationIgnored private var pending: [String: Pending] = [:]
-    /// 还没发出的请求（FIFO）
+    /// 还没发出的请求（从尾部取）
     @ObservationIgnored private var waiting: [Pending] = []
+    /// 每个键已经失败的次数
+    @ObservationIgnored private var failures: [String: Int] = [:]
     /// 回包已到、在等下载/解码名额的个数（也占在途名额，免得回包堆积）
     @ObservationIgnored private var awaitingRender = 0
     /// 正在查盘缓存的键 → 本次请求的 token
@@ -66,7 +69,9 @@ final class ThumbnailStore {
 
     private static let memoryLimit = 200
     private static let maxInFlight = 3
-    private static let maxWaiting = 40
+    /// 只是兜底：可见卡片数本来就受 12 轮窗口限制
+    private static let maxWaiting = 240
+    private static let retryDelays: [Double] = [3, 10]
 
     static func renderable(_ kind: PreviewKind) -> Bool {
         switch kind {
@@ -88,11 +93,16 @@ final class ThumbnailStore {
               !chatId.isEmpty, chatId != "boot"
         else { return }
         let (key, sha) = cacheKey(for: file, chatId: chatId, store: store)
-        guard !attempted.contains(key) else { return }
-        attempted.insert(key)
-        states[key] = .loading
         chatStore = store
+        guard !attempted.contains(key) else {
+            // 重连、能力到齐时卡片会再来一次：顺手把断线期间留着的队列推出去
+            pump()
+            return
+        }
+        attempted.insert(key)
         let job = Pending(key: key, kind: file.kind, path: file.path, chatId: chatId, tenant: store.tenantId, sha: sha)
+        // 读盘期间也算 loading：骨架要 0.3 秒后才淡入，命中缓存时看不到它
+        states[key] = .loading
         guard job.persist else {
             enqueue(job)
             return
@@ -113,6 +123,14 @@ final class ThumbnailStore {
         }
     }
 
+    /// 用户手动重试（长按菜单「重新生成预览」）：清掉失败记录重新来
+    func retry(file: TurnFile, chatId: String, store: ChatStore) {
+        let key = cacheKey(for: file, chatId: chatId, store: store).key
+        guard states[key] == .failed else { return }
+        forget(key)
+        request(file: file, chatId: chatId, store: store)
+    }
+
     /// 卡片消失：还没发出的请求撤掉，退回未请求
     func cancel(file: TurnFile, chatId: String, store: ChatStore) {
         let key = cacheKey(for: file, chatId: chatId, store: store).key
@@ -128,7 +146,7 @@ final class ThumbnailStore {
     func handleReply(reqId: String, path: String, kind: String?, content: String?, url: String?, media: MediaTicket?, error: String?) {
         guard let job = pending.removeValue(forKey: reqId) else { return }
         if error != nil {
-            fail(job.key)
+            fail(job)
             pump()
             return
         }
@@ -160,9 +178,10 @@ final class ThumbnailStore {
             }
             guard self.epoch == epochAtStart else { return }
             guard let result else {
-                self.fail(job.key)
+                self.fail(job)
                 return
             }
+            self.failures[job.key] = nil
             self.commit(result, for: job.key)
             if job.persist { ThumbDisk.save(result, tenant: job.tenant, key: job.key, epoch: epochAtStart) }
         }
@@ -176,6 +195,7 @@ final class ThumbnailStore {
         waiting = []
         diskLoading = [:]
         attempted = []
+        failures = [:]
         order = []
         ThumbDisk.clear(tenant: tenant, epoch: epoch)
     }
@@ -185,23 +205,27 @@ final class ThumbnailStore {
     func cacheKey(for file: TurnFile, chatId: String, store: ChatStore) -> (key: String, sha: String?) {
         let sha = store.gatewayFeatures.contains("read_sha") ? file.sha : nil
         if let sha { return ("\(store.tenantId)|\(chatId)|\(file.path)|\(sha)", sha) }
+        // 没有 sha 时，同样大小的改写也得换键：把差异指纹和增删行数一起算进去
         let size = file.size.map { String(Int($0)) } ?? "-"
-        return ("\(store.tenantId)|\(chatId)|\(file.path)|size:\(size)", nil)
+        let edit = "\(file.diffSha ?? "-"):\(file.added ?? -1):\(file.removed ?? -1)"
+        return ("\(store.tenantId)|\(chatId)|\(file.path)|size:\(size)|\(edit)", nil)
     }
 
     private func enqueue(_ job: Pending) {
+        waiting.removeAll { $0.key == job.key }
         waiting.append(job)
         while waiting.count > Self.maxWaiting {
-            forget(waiting.removeFirst().key)
+            // 丢掉的是最早入队、最靠上的卡片；标失败，不让它重新入队把别人挤掉
+            states[waiting.removeFirst().key] = .failed
         }
         pump()
     }
 
     private func pump() {
-        while pending.count + awaitingRender < Self.maxInFlight, !waiting.isEmpty {
-            let job = waiting.removeFirst()
-            // 发之前断线/换了租户：退回未请求，等卡片下次出现
-            guard let store = chatStore, store.connected, store.tenantId == job.tenant else {
+        // 断线时不发，也不丢：等重连
+        guard let store = chatStore, store.connected else { return }
+        while pending.count + awaitingRender < Self.maxInFlight, let job = waiting.popLast() {
+            guard store.tenantId == job.tenant else {
                 forget(job.key)
                 continue
             }
@@ -217,7 +241,7 @@ final class ThumbnailStore {
         Task {
             try? await Task.sleep(for: .seconds(20))
             guard self.epoch == epochAtStart, self.pending.removeValue(forKey: reqId) != nil else { return }
-            self.fail(job.key)
+            self.fail(job)
             self.pump()
         }
     }
@@ -225,18 +249,38 @@ final class ThumbnailStore {
     private func forget(_ key: String) {
         states[key] = nil
         attempted.remove(key)
+        failures[key] = nil
+        order.removeAll { $0 == key }
     }
 
+    /// 超过上限从最早的丢（只丢内存）；被丢的卡片若还在屏上，状态回到 .none，ThumbRequest 会再请求一次（盘上有就直接读回）
     private func commit(_ state: ThumbState, for key: String) {
         states[key] = state
+        order.removeAll { $0 == key }
         order.append(key)
         while order.count > Self.memoryLimit {
             forget(order.removeFirst())
         }
     }
 
-    private func fail(_ key: String) {
-        states[key] = .failed
+    /// 失败先保持骨架，退避后自己重排；次数用完才落到 .failed（图标占位）
+    private func fail(_ job: Pending) {
+        let count = failures[job.key, default: 0]
+        guard count < Self.retryDelays.count else {
+            states[job.key] = .failed
+            return
+        }
+        failures[job.key] = count + 1
+        let epochAtStart = epoch
+        let delay = Self.retryDelays[count]
+        Task {
+            try? await Task.sleep(for: .seconds(delay))
+            // 期间被撤（卡片消失）或换了租户：不再重排
+            guard self.epoch == epochAtStart, self.attempted.contains(job.key),
+                  self.states[job.key] == .loading
+            else { return }
+            self.enqueue(job)
+        }
     }
 
     /// 下载与解码（占 renderGate）；网页类只拉文本，截图在 webGate 里做
@@ -697,8 +741,14 @@ private enum ThumbDisk {
             let ext: String
             switch state {
             case .image(let image):
-                data = image.jpegData(compressionQuality: 0.8)
-                ext = "jpg"
+                // JPEG 没有 alpha，透明区会变黑：带透明的存 PNG
+                if hasAlpha(image) {
+                    data = image.pngData()
+                    ext = "png"
+                } else {
+                    data = image.jpegData(compressionQuality: 0.8)
+                    ext = "jpg"
+                }
             case .text(let text):
                 data = Data(text.utf8)
                 ext = "txt"
@@ -720,10 +770,12 @@ private enum ThumbDisk {
     private static func read(tenant: String, key: String) -> ThumbState? {
         guard let dir = thumbsDir(tenant) else { return nil }
         let base = dir.appendingPathComponent(fileName(key))
-        let jpg = base.appendingPathExtension("jpg")
-        if let data = try? Data(contentsOf: jpg), let image = UIImage(data: data) {
-            touch(jpg)
-            return .image(image)
+        for ext in ["png", "jpg"] {
+            let url = base.appendingPathExtension(ext)
+            if let data = try? Data(contentsOf: url), let image = UIImage(data: data) {
+                touch(url)
+                return .image(image)
+            }
         }
         let txt = base.appendingPathExtension("txt")
         if let text = try? String(contentsOf: txt, encoding: .utf8), !text.isEmpty {
@@ -731,6 +783,14 @@ private enum ThumbDisk {
             return .text(text)
         }
         return nil
+    }
+
+    private static func hasAlpha(_ image: UIImage) -> Bool {
+        guard let info = image.cgImage?.alphaInfo else { return false }
+        switch info {
+        case .none, .noneSkipFirst, .noneSkipLast: return false
+        default: return true
+        }
     }
 
     private static func touch(_ url: URL) {
@@ -754,8 +814,9 @@ private enum ThumbDisk {
         }
     }
 
+    /// v2：透明图改存 PNG 之前写下的 JPEG（透明区已变黑）不再命中，留给 prune 按时间清掉
     private static func fileName(_ key: String) -> String {
-        SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data("v2|\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// 目录名必须和 ChatCache.tenantDir 一致（同一套 safeName），清缓存才删得到
