@@ -35,10 +35,15 @@ export type MemoryEntry = {
   invalidAt?: string | null;
   invalidReason?: string;
   supplements?: string[];
+  /** 推断条目被独立写入的次数；到 2 次才进常驻索引 */
+  seen?: number;
 };
 
-export const CORE_FIELDS = ["关于我", "偏好", "近况", "人物"] as const;
+export const WORK_PREF_FIELD = "工作偏好";
+export const CORE_FIELDS = ["关于我", "偏好", "近况", "人物", WORK_PREF_FIELD] as const;
 export type CoreField = (typeof CORE_FIELDS)[number];
+/** 关于“这个人”的四栏；工作偏好单独渲染成 W0，注入所有会话 */
+export const PERSONAL_CORE_FIELDS = CORE_FIELDS.filter((key) => key !== WORK_PREF_FIELD) as Exclude<CoreField, typeof WORK_PREF_FIELD>[];
 
 export type CoreProfile = { rev: number; fields: Record<CoreField, string>; updatedAt?: string };
 
@@ -56,6 +61,8 @@ export const CORE_TOKEN_BUDGET = 1500;
 export const INDEX_TOKEN_BUDGET = 500;
 export const INFERRED_TTL_DAYS = 90;
 export const INFERRED_CONFIDENCE = 0.6;
+export const WORK_PREF_TOKEN_BUDGET = 200;
+export const INFERRED_RESIDENT_SEEN = 2;
 
 const SENSITIVE: Record<SensitiveTopic, { label: string; re: RegExp }> = {
   health: { label: "健康", re: /(病|诊断|药|抑郁|焦虑症|癌|怀孕|体检报告|病历|手术|艾滋|HIV)/i },
@@ -103,7 +110,7 @@ function writeEntries(ref: TenantRef, data: EntriesFile) {
 }
 
 export function emptyCore(): CoreProfile {
-  return { rev: 0, fields: { 关于我: "", 偏好: "", 近况: "", 人物: "" } };
+  return { rev: 0, fields: { 关于我: "", 偏好: "", 近况: "", 人物: "", 工作偏好: "" } };
 }
 
 export function readCore(ref: TenantRef): CoreProfile {
@@ -122,7 +129,7 @@ export function writeSettings(ref: TenantRef, next: Partial<MemorySettings>) {
   return merged;
 }
 
-function audit(ref: TenantRef, row: { id: string; op: string; actor: MemoryActor; chatId?: string; text?: string }) {
+export function audit(ref: TenantRef, row: { id: string; op: string; actor: MemoryActor; chatId?: string; text?: string }) {
   appendJsonl(auditFile(ref), {
     at: nowIso(),
     id: row.id,
@@ -200,6 +207,7 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
       duplicate.rev += 1;
     } else if (duplicate.basis === "inferred") {
       duplicate.validUntil = addDays(INFERRED_TTL_DAYS);
+      duplicate.seen = (duplicate.seen ?? 1) + 1;
     }
     writeEntries(ref, data);
     return { ok: true, value: duplicate };
@@ -219,6 +227,7 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
     createdAt: nowIso(),
     updatedAt: nowIso(),
     invalidAt: null,
+    seen: userSaid ? undefined : 1,
   };
   data.entries.push(entry);
   writeEntries(ref, data);
@@ -427,12 +436,19 @@ export function setCore(
 ): MemoryResult<CoreProfile> {
   const core = readCore(ref);
   if (rev !== undefined && rev !== core.rev) return { ok: false, error: "核心档案已被更新，刷新后再改。" };
+  // 工作偏好会注入所有会话，只收用户亲口说的：整理者推断出来的不能写
+  if (actor === "integrator" && fields[WORK_PREF_FIELD] !== undefined) {
+    return { ok: false, error: "「工作偏好」只收用户亲口说的，整理者不能改；可以用 inbox_post 建议用户自己加。" };
+  }
   for (const key of CORE_FIELDS) {
     const value = fields[key];
     if (value === undefined) continue;
     const text = clip(value.replace(/[\u0000-\u0008\u000b-\u001f]/g, ""), 3000);
     if (detectSecret(text)) return { ok: false, error: `「${key}」里像有密钥或密码，按规则不记。` };
     core.fields[key] = text;
+  }
+  if (estimateTokens(core.fields[WORK_PREF_FIELD]) > WORK_PREF_TOKEN_BUDGET) {
+    return { ok: false, error: `「工作偏好」超过上限（约 ${WORK_PREF_TOKEN_BUDGET} token）。它会进所有会话，请只留最要紧的几条。` };
   }
   if (estimateTokens(CORE_FIELDS.map((key) => core.fields[key]).join("\n")) > CORE_TOKEN_BUDGET * 1.5) {
     return { ok: false, error: `核心档案超过上限（约 ${CORE_TOKEN_BUDGET} token），请精简。` };
@@ -565,7 +581,7 @@ export function renderMemoryBlock(ref: TenantRef): string {
   const core = readCore(ref);
   const coreRows: Record<string, string> = {};
   let used = 0;
-  for (const key of CORE_FIELDS) {
+  for (const key of PERSONAL_CORE_FIELDS) {
     const value = cleanText(core.fields[key] || "");
     if (!value) continue;
     const cost = estimateTokens(value);
@@ -577,6 +593,7 @@ export function renderMemoryBlock(ref: TenantRef): string {
   const index: Array<{ id: string; topic: string; text: string; basis: string; until?: string }> = [];
   let indexUsed = 0;
   for (const entry of entries) {
+    if (!isResident(entry)) continue;
     const row = {
       id: entry.id,
       topic: entry.topic,
@@ -605,4 +622,80 @@ export function renderMemoryBlock(ref: TenantRef): string {
     JSON.stringify({ today: today(), core: coreRows, topics, entries: index, more: Math.max(entries.length - index.length, 0) }),
     "</user_memory>",
   ].join("\n");
+}
+
+/** 常驻索引只放你说的，和被独立推断出至少两次的；其余只在 memory_search 里 */
+export function isResident(entry: MemoryEntry) {
+  return entry.basis === "user_said" || (entry.seen ?? 1) >= INFERRED_RESIDENT_SEEN;
+}
+
+export function workPreferenceLines(ref: TenantRef) {
+  return readCore(ref)
+    .fields[WORK_PREF_FIELD].split("\n")
+    .map((line) => line.replace(/^\s*[-*•]\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * W0：从个人记忆的「工作偏好」一栏导出，注入所有会话（含子工作区、委派、后台）。
+ * 只带这一栏，其余个人记忆不出 USER 会话。暂停记忆时一并不注入。
+ */
+export function renderWorkPreferences(ref: TenantRef): string {
+  if (readSettings(ref).paused) return "";
+  const lines = workPreferenceLines(ref).map((line) => cleanText(line)).filter(Boolean);
+  if (!lines.length) return "";
+  return [
+    "<work_preferences>",
+    "用户亲口定下的通用工作习惯，所有工作区都适用。下面的工作区规则和它冲突时，只在那个工作区里以工作区规则为准。",
+    ...lines.map((line) => `- ${line}`),
+    "</work_preferences>",
+  ].join("\n");
+}
+
+/** 只在用户亲口说了跨项目的工作习惯时调用（前台会话或记忆页） */
+export function addWorkPreference(ref: TenantRef, text: string, actor: "chat" | "page"): MemoryResult<string[]> {
+  if (actor !== "page" && readSettings(ref).paused) return { ok: false, error: "记忆已暂停，没有写入。" };
+  const line = clip(cleanText(text), 120).replace(/^[-*•]\s*/, "");
+  if (!line) return { ok: false, error: "内容为空。" };
+  if (detectSecret(line)) return { ok: false, error: "内容像密钥或密码，按规则不记。" };
+  const sensitive = actor === "page" ? null : detectSensitive(ref, line);
+  if (sensitive) return { ok: false, error: `内容涉及「${sensitive}」，不能放进会给所有工作区看的工作偏好。` };
+  const lines = workPreferenceLines(ref);
+  if (lines.includes(line)) return { ok: true, value: lines };
+  const next = [...lines, line];
+  const result = setCore(ref, { [WORK_PREF_FIELD]: next.map((item) => `- ${item}`).join("\n") }, actor);
+  return result.ok ? { ok: true, value: next } : { ok: false, error: result.error };
+}
+
+export function removeWorkPreference(ref: TenantRef, text: string, actor: "chat" | "page"): MemoryResult<string[]> {
+  const needle = cleanText(text);
+  const lines = workPreferenceLines(ref);
+  const next = lines.filter((line) => line !== needle && !(needle.length >= 4 && line.includes(needle)));
+  if (next.length === lines.length) return { ok: false, error: "工作偏好里没有这一条。" };
+  const result = setCore(ref, { [WORK_PREF_FIELD]: next.map((item) => `- ${item}`).join("\n") }, actor);
+  return result.ok ? { ok: true, value: next } : { ok: false, error: result.error };
+}
+
+/** v2 迁移：老推断条目记作出现过一次（之后要再出现或被确认才常驻）；核心档案补上工作偏好一栏 */
+export function migrateMemoryShapeV2(ref: TenantRef) {
+  const data = readEntries(ref);
+  let inferred = 0;
+  for (const entry of data.entries) {
+    if (entry.basis === "inferred" && entry.seen === undefined) {
+      entry.seen = 1;
+      inferred += 1;
+    }
+  }
+  if (inferred) writeJson(entriesFile(ref), data);
+  const raw = readJson<CoreProfile | null>(coreFile(ref), null);
+  let coreChanged = false;
+  if (raw && typeof raw.fields?.[WORK_PREF_FIELD] !== "string") {
+    writeJson(coreFile(ref), { ...raw, fields: { ...raw.fields, [WORK_PREF_FIELD]: "" } });
+    coreChanged = true;
+  }
+  return { inferred, coreChanged };
+}
+
+export function memoryFiles(ref: TenantRef) {
+  return { entries: entriesFile(ref), core: coreFile(ref) };
 }

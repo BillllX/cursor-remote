@@ -187,6 +187,10 @@ export default function AssistantPanel({
                         <span>
                           {item.tool === "create_workspace" ? (
                             <>助理想新建工作区：{item.summary}</>
+                          ) : item.tool === "workspace_memory" ? (
+                            <>记进工作区记忆：{item.summary}</>
+                          ) : item.tool === "work_preferences" ? (
+                            <>记进工作偏好：{item.summary}</>
                           ) : (
                             <>
                               委派「{owner?.title || "未命名"}」要{item.tool === "shell" ? "跑命令" : "改文件"}
@@ -200,7 +204,7 @@ export default function AssistantPanel({
                         <button type="button" className="pill" onClick={() => op("approval_answer", { chatId: item.chatId, callId: item.callId, allow: false })}>
                           拒绝
                         </button>
-                        {item.tool === "create_workspace" ? null : (
+                        {item.tool === "create_workspace" || item.tool === "work_preferences" ? null : (
                           <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
                             看子会话
                           </button>

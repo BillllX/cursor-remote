@@ -3,10 +3,12 @@ import type { ToolSpec } from "../native/types.ts";
 import { searchChats } from "./chatIndex.ts";
 import { postInbox } from "./inbox.ts";
 import {
-  CORE_FIELDS,
+  addWorkPreference,
   forgetMemory,
   invalidateMemory,
+  PERSONAL_CORE_FIELDS,
   readCore,
+  removeWorkPreference,
   saveMemory,
   searchMemory,
   setCore,
@@ -33,6 +35,13 @@ export type ToolHost = {
   /** 请用户确认后新建工作区；用户同意才会真正建 */
   createWorkspace?: (args: { name: string; reason: string }) => Promise<string>;
   workspaces?: () => string[];
+  /** 只读查看某个子工作区的规则、工作区记忆和线程摘要 */
+  workspaceMemory?: (workspace: string, query: string) => unknown;
+};
+
+/** 子工作区会话（含委派子会话）挂的工具：只有提议写工作区记忆，没有任何个人记忆工具 */
+export type WorkspaceToolHost = {
+  propose: (args: { section: string; text: string; refs?: string; path?: string }) => unknown;
 };
 
 type Args = Record<string, SDKJsonValue>;
@@ -150,6 +159,38 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         return result.ok ? { ok: true } : { ok: false, error: result.error };
       },
     );
+    out.work_preference_add = tool(
+      [
+        "往「工作偏好」加一条：用户亲口说的、对所有项目都适用的工作习惯，如“回复用中文”“改完先跑测试”“提交信息用英文”。",
+        "这一栏会带进所有工作区的会话（含委派），所以只在用户这次明确说了才调用，不要从对话里推断；只对某个项目成立的约定不要放这里。",
+        "个人信息（生活、家人、健康等）绝不能放进来。",
+      ].join(""),
+      { text: S("一句话，如 回复用中文") },
+      ["text"],
+      (args) => {
+        const result = addWorkPreference(ref, str(args.text), "chat");
+        if (result.ok) changed();
+        return result.ok ? { ok: true, lines: result.value } : { ok: false, error: result.error };
+      },
+    );
+    out.work_preference_remove = tool(
+      "从「工作偏好」删一条。用户说不再需要某个工作习惯时调用。",
+      { text: S("要删的那一条（原文或其中一段）") },
+      ["text"],
+      (args) => {
+        const result = removeWorkPreference(ref, str(args.text), "chat");
+        if (result.ok) changed();
+        return result.ok ? { ok: true, lines: result.value } : { ok: false, error: result.error };
+      },
+    );
+    if (host.workspaceMemory) {
+      out.workspace_memory_read = tool(
+        "只读查看某个子工作区：各层规则（AGENTS.md、.cursor/rules）、工作区记忆（.jiebo/memory.md）和最近的会话摘要。回答“那个项目进展到哪了、有什么约定”时用；这里不能写。",
+        { workspace: S("子工作区名字"), query: S("可选，关键词，只看相关的会话摘要") },
+        ["workspace"],
+        (args) => host.workspaceMemory!(str(args.workspace), str(args.query)),
+      );
+    }
   }
 
   if (role === "integrator") {
@@ -163,9 +204,9 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         return result.ok ? { ok: true } : { ok: false, error: result.error };
       },
     );
-    out.core_read = tool("读取核心档案（关于我、偏好、近况、人物）。", {}, [], () => readCore(ref));
+    out.core_read = tool("读取核心档案（关于我、偏好、近况、人物，以及只读的工作偏好）。", {}, [], () => readCore(ref));
     out.core_update = tool(
-      `重写核心档案的某些字段。字段：${CORE_FIELDS.join("、")}。只写稳定、用户说过或在多个会话里反复出现的内容。带上 core_read 返回的 rev。`,
+      `重写核心档案的某些字段。字段：${PERSONAL_CORE_FIELDS.join("、")}。只写稳定、用户说过或在多个会话里反复出现的内容。「工作偏好」只收用户亲口说的，这里不能改。带上 core_read 返回的 rev。`,
       {
         rev: { type: "number" },
         关于我: S("可选"),
@@ -176,7 +217,7 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       ["rev"],
       (args) => {
         const fields: Partial<Record<CoreField, string>> = {};
-        for (const key of CORE_FIELDS) if (typeof args[key] === "string") fields[key] = args[key] as string;
+        for (const key of PERSONAL_CORE_FIELDS) if (typeof args[key] === "string") fields[key] = args[key] as string;
         const result = setCore(ref, fields, "integrator", typeof args.rev === "number" ? args.rev : undefined);
         if (result.ok) changed();
         return result.ok ? { ok: true, rev: result.value.rev } : { ok: false, error: result.error };
@@ -316,9 +357,39 @@ export function assistantToolNames(host: ToolHost) {
   return Object.keys(assistantTools(host));
 }
 
+export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, SDKCustomTool> {
+  return {
+    workspace_memory_propose: tool(
+      [
+        "提议把这个工作区里学到的、以后的会话还用得上的项目知识记进工作区记忆（.jiebo/memory.md）：约定、常用命令、踩过的坑、架构决定、进行中的事。",
+        "不会马上写：这个线程空闲后，攒下的提议合成一张确认卡请用户批准，批准了才写。",
+        "一条一句话，写具体（文件、命令、原因）。不要写用户的个人信息、密钥，也不要写这次任务的流水账。",
+        "refs 填这条依赖的相对路径（如 gateway/src/index.ts），文件没了会自动标“待核实”。",
+      ].join(""),
+      {
+        section: { type: "string", enum: ["约定", "命令", "坑", "决定", "进行中"] },
+        text: S("一句话"),
+        refs: S("可选，相对当前目录的路径，逗号分隔"),
+        path: S("可选，记到当前目录下的哪个子目录（如某个仓库），默认当前目录"),
+      },
+      ["section", "text"],
+      (args) =>
+        host.propose({
+          section: str(args.section),
+          text: str(args.text),
+          refs: str(args.refs) || undefined,
+          path: str(args.path) || undefined,
+        }),
+    ),
+  };
+}
+
 /** 第三方模型走自研 Agent 循环时，把助理工具挂进 ToolSpec 表 */
 export function assistantToolSpecs(host: ToolHost): ToolSpec[] {
-  const defs = assistantTools(host);
+  return toolSpecs(assistantTools(host));
+}
+
+export function toolSpecs(defs: Record<string, SDKCustomTool>): ToolSpec[] {
   return Object.entries(defs).map(([name, def]) => ({
     name,
     description: def.description || name,

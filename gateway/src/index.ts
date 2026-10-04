@@ -138,10 +138,16 @@ import {
   userRootPreamble,
   watchMemory,
   chatToolHost,
+  answerMemoryCard,
+  flushWorkspaceProposals,
+  noteWorkspaceTurnEnd,
+  noteWorkspaceTurnStart,
+  workspaceContextFor,
+  workspaceToolsFor,
   type CreateWorkspaceRequest,
   type DelegateRequest,
 } from "./assistant/service.ts";
-import { assistantToolSpecs } from "./assistant/tools.ts";
+import { assistantToolSpecs, toolSpecs } from "./assistant/tools.ts";
 import { createPublishController } from "./publish.ts";
 
 loadDotEnv([
@@ -1468,9 +1474,11 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
     cwd,
     sandboxOptions: { enabled: sandbox },
   };
-  // 助理工具只挂在唯一的助理会话上；其他会话没有记忆工具
+  // 助理工具只挂在唯一的助理会话上；其他会话没有个人记忆工具，只能提议写工作区记忆
   if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
     local.customTools = foregroundTools(conn.tenant, slot.chatId);
+  } else if (conn.tenant) {
+    local.customTools = workspaceToolsFor(conn.tenant, slot.chatId, cwd);
   }
   const base = { apiKey, model: { id: modelId }, local };
   const overlay = slot.dialect === false ? undefined : dialectOverlay;
@@ -2603,7 +2611,15 @@ function toolEscapesWorkspace(cwd: string, name: string, args: unknown): boolean
   return false;
 }
 
-function loadWorkspaceRules(cwd: string): string {
+/** 有租户时：W0 工作偏好 + 从 cwd 往上到 USER 根目录的分层规则；没有租户只读 cwd 这一层 */
+function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string {
+  if (tenant) {
+    try {
+      return workspaceContextFor(tenant, cwd);
+    } catch (err) {
+      console.error("workspace context", err);
+    }
+  }
   const chunks: string[] = [];
   const take = (rel: string) => {
     const abs = resolve(cwd, rel);
@@ -3158,6 +3174,7 @@ function finishRun(
   const turnId = slot.transcript?.turnId || "";
   flushTranscript(slot, !approval);
   if (!approval) indexUserTurn(slot);
+  if (!approval) noteWorkspaceTurn(slot);
   if (files.length && turnId) {
     const target = slot.owner?.readyState === WebSocket.OPEN ? slot.owner : ws;
     reply(target, { type: "turn_files", chatId: slot.chatId, turnId, files });
@@ -3228,6 +3245,25 @@ function indexUserTurn(slot: Slot) {
   }
 }
 
+/** 子工作区会话每轮完成后：更新线程摘要，攒了工作区记忆提议的话等空闲出确认卡 */
+function noteWorkspaceTurn(slot: Slot) {
+  const tenant = getTenant(slot.tenantId);
+  const transcript = slot.transcript;
+  if (!tenant || !transcript || isAssistantChat(tenant, slot.chatId)) return;
+  const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as { title?: unknown } | undefined;
+  try {
+    noteWorkspaceTurnEnd(tenant, {
+      chatId: slot.chatId,
+      cwd: requireCwd(slot.cwd || tenant.workspaceRoot, tenant.workspaceRoot),
+      title: typeof chat?.title === "string" ? chat.title : "",
+      user: transcript.userText || "",
+      assistant: transcript.assistant || "",
+    });
+  } catch (err) {
+    console.error("workspace turn", err);
+  }
+}
+
 function sanitizeChatTitle(raw: string) {
   let title = raw.trim().split(/\r?\n/)[0] || "";
   title = title.replace(/^[#>*\-\s]+/, "");
@@ -3272,7 +3308,7 @@ async function runExternalChat(
     finishRun(ws, slot, "error", Date.now() - t0, epoch);
     return;
   }
-  const rules = loadWorkspaceRules(input.cwd);
+  const rules = loadWorkspaceRules(input.cwd, getTenant(slot.tenantId));
   const system = input.assistantBlock
     ? [
         input.assistantBlock,
@@ -3526,8 +3562,11 @@ async function runNativeChat(
       console.log(`native compact chat=${slot.chatId} stage=${info.stage} ${info.before}→${info.after} summarized=${info.summarized}`);
     },
   });
-  const assistantSpecs =
-    atAssistant && conn.tenant ? assistantToolSpecs(chatToolHost(conn.tenant, slot.chatId)) : [];
+  const assistantSpecs = !conn.tenant
+    ? []
+    : atAssistant
+      ? assistantToolSpecs(chatToolHost(conn.tenant, slot.chatId))
+      : toolSpecs(workspaceToolsFor(conn.tenant, slot.chatId, cwd));
   const taskSpec = taskTool({
     adapter,
     endpoint,
@@ -3938,7 +3977,7 @@ async function handlePrompt(
     userText,
     mode,
     files,
-    loadWorkspaceRules(cwd),
+    loadWorkspaceRules(cwd, conn.tenant),
     cwd,
     slot.reviewRoster || [],
     atUserRoot,
@@ -3955,6 +3994,7 @@ async function handlePrompt(
   const epoch = ++slot.epoch;
   if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
   else openTranscript(slot, turnId, userText, epoch, safeImages);
+  if (conn.tenant && !isAssistantChat(conn.tenant, slot.chatId)) noteWorkspaceTurnStart(conn.tenant, slot.chatId);
   slot.finished = false;
   slot.edited = [];
   slot.awaitingApproval = false;
@@ -6384,6 +6424,8 @@ function answerDelegationApproval(tenant: Tenant, args: Record<string, unknown>)
   const chatId = typeof args.chatId === "string" ? args.chatId : "";
   const callId = typeof args.callId === "string" ? args.callId : "";
   if (!chatId || !callId || typeof args.allow !== "boolean") return { ok: false, error: "要带 chatId、callId 和 allow。" };
+  const card = answerMemoryCard(tenant, chatId, callId, args.allow);
+  if (card) return card;
   if (answerWorkspaceAsk(tenant, chatId, callId, args.allow)) return { ok: true };
   const slot = liveSlotsOf(tenant).get(chatId);
   if (!slot || !slot.awaitingApproval || slot.approvalCallId !== callId) {
@@ -6486,6 +6528,7 @@ async function startDelegation(req: DelegateRequest): Promise<string> {
 
   const finish = (ok: boolean, text: string) => {
     settleApproval(tenant, childChatId);
+    flushWorkspaceProposals(tenant, childChatId);
     const done = updateDelegation(tenant, record.id, { status: ok ? "done" : "failed", result: text, endedAt: Date.now() });
     if (done) publishDelegation(tenant, done);
     postInbox(tenant, {

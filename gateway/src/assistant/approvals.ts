@@ -14,6 +14,13 @@ type ApprovalsFile = { items: PendingApproval[] };
 
 export const APPROVAL_TTL_MS = 24 * 3_600_000;
 
+/** 不挂在运行上的确认卡（工作区记忆提议、记忆迁移）：可以和运行审批并存，运行收尾也不摘 */
+export const STANDING_TOOLS = ["workspace_memory", "work_preferences"] as const;
+
+export function isStandingTool(tool: string) {
+  return (STANDING_TOOLS as readonly string[]).includes(tool);
+}
+
 function file(ref: TenantRef) {
   return assistantPath(ref, "approvals.json");
 }
@@ -37,8 +44,9 @@ export function addApproval(
   ttlMs = APPROVAL_TTL_MS,
 ) {
   const data = read(ref);
-  // 同一子会话同时只会停在一项审批上：新的进来，旧的一定已经结束
-  data.items = data.items.filter((item) => item.chatId !== input.chatId);
+  // 同一子会话同时只会停在一项运行审批上：新的进来，旧的一定已经结束
+  if (isStandingTool(input.tool)) data.items = data.items.filter((item) => item.callId !== input.callId);
+  else data.items = data.items.filter((item) => item.chatId !== input.chatId || isStandingTool(item.tool));
   const item: PendingApproval = {
     ...input,
     summary: clip(input.summary, 400),
@@ -51,10 +59,12 @@ export function addApproval(
   return item;
 }
 
-/** 作答、超时或运行结束时摘掉；callId 省略时摘掉这个会话的全部 */
+/** 作答、超时或运行结束时摘掉；callId 省略时摘掉这个会话的全部运行审批（确认卡不动） */
 export function settleApproval(ref: TenantRef, chatId: string, callId?: string) {
   const data = read(ref);
-  const gone = data.items.filter((item) => item.chatId === chatId && (!callId || item.callId === callId));
+  const gone = data.items.filter(
+    (item) => item.chatId === chatId && (callId ? item.callId === callId : !isStandingTool(item.tool)),
+  );
   if (!gone.length) return [];
   data.items = data.items.filter((item) => !gone.includes(item));
   writeJson(file(ref), data);

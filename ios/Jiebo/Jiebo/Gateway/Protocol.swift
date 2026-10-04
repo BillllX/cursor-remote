@@ -743,7 +743,7 @@ struct AssistantBrief: Sendable, Hashable {
 
 struct AssistantMemory: Sendable, Hashable {
     /// 网关 CORE_FIELDS 的顺序；fields 里多出来的键排在后面
-    static let coreFieldKeys = ["关于我", "偏好", "近况", "人物"]
+    static let coreFieldKeys = ["关于我", "偏好", "近况", "人物", "工作偏好"]
 
     var rev: Int
     var coreRev: Int

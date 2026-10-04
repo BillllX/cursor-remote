@@ -36,8 +36,23 @@ import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
 import { assistantDir, estimateTokens, writeJson, assistantPath, type TenantRef } from "./store.ts";
 import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders } from "./todos.ts";
-import { assistantTools, type ToolHost, type ToolRole } from "./tools.ts";
+import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
+import { migrateMemory } from "./migrate.ts";
+import {
+  answerCard,
+  cancelFlush,
+  dropWorkspaceThread,
+  expireCards,
+  flushChat,
+  noteWorkspaceThread,
+  proposeWorkspaceMemory,
+  readWorkspaceMemory,
+  restoreCards,
+  scheduleFlush,
+  scrubWorkspaceIndex,
+  workspaceContext,
+} from "./workspaceMemory.ts";
 
 export type AssistantTenant = TenantRef & { name: string; workspaceRoot: string };
 
@@ -112,7 +127,50 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
         : undefined,
     delegationStatus: (id) => delegationStatusText(ref, id),
     workspaces: () => deps?.workspaces(tenant) ?? [],
+    workspaceMemory: role === "chat" ? (workspace, query) => readWorkspaceMemory(tenant, workspace, query) : undefined,
   };
+}
+
+/** 子工作区会话（含委派子会话）挂的工具：只能提议写工作区记忆 */
+export function workspaceToolsFor(tenant: AssistantTenant, chatId: string, cwd: string): Record<string, SDKCustomTool> {
+  return workspaceSessionTools({ propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }) });
+}
+
+/** W0 工作偏好 + 从 cwd 往上的各层规则；所有会话都用这一份 */
+export function workspaceContextFor(tenant: AssistantTenant, cwd: string) {
+  return workspaceContext(tenant, cwd);
+}
+
+/** 子工作区会话一轮开始：线程又活跃了，先不出确认卡 */
+export function noteWorkspaceTurnStart(tenant: AssistantTenant, chatId: string) {
+  cancelFlush(refOf(tenant), chatId);
+}
+
+/** 子工作区会话一轮结束：更新线程摘要；攒了提议的话等线程空闲再出确认卡 */
+export function noteWorkspaceTurnEnd(
+  tenant: AssistantTenant,
+  row: { chatId: string; cwd: string; title: string; user: string; assistant: string },
+) {
+  try {
+    noteWorkspaceThread(tenant, row);
+  } catch (err) {
+    console.error("workspace thread index", err);
+  }
+  scheduleFlush(refOf(tenant), row.chatId, () => void publishState(tenant));
+}
+
+/** 委派结束：子会话不会再有新回合，攒的提议马上出卡 */
+export function flushWorkspaceProposals(tenant: AssistantTenant, chatId: string) {
+  const ref = refOf(tenant);
+  cancelFlush(ref, chatId);
+  if (flushChat(ref, chatId)) void publishState(tenant);
+}
+
+/** 作答工作区记忆 / 工作偏好确认卡；不是这类卡返回 null */
+export function answerMemoryCard(tenant: AssistantTenant, chatId: string, callId: string, allow: boolean) {
+  const result = answerCard(tenant, chatId, callId, allow);
+  if (result) void publishState(tenant);
+  return result;
 }
 
 /** USER 前台会话挂的助理工具（SDK customTools） */
@@ -131,7 +189,8 @@ export function userRootPreamble(tenant: AssistantTenant) {
   const block = renderMemoryBlock(refOf(tenant));
   return [
     `你是用户的个人助理，名字是「${name}」。这里是${name}的工作区（用户根目录）。`,
-    "你有一组助理工具：memory_*（个人记忆）、chat_search（历史会话）、todo_*（待办）、schedule_*（定时任务和提醒）、inbox_post（收件箱）、delegate（交给子工作区去做）、create_workspace（新建子工作区，需用户确认）。",
+    "你有一组助理工具：memory_*（个人记忆）、work_preference_*（工作偏好）、chat_search（历史会话）、workspace_memory_read（只读查看子工作区的约定和进展）、todo_*（待办）、schedule_*（定时任务和提醒）、inbox_post（收件箱）、delegate（交给子工作区去做）、create_workspace（新建子工作区，需用户确认）。",
+    "用户亲口定下对所有项目都适用的工作习惯（如“以后都用中文回复”）时用 work_preference_add；只关于某个项目的约定不要记进个人记忆，委派时让子会话自己提议写进工作区记忆。",
     "用户让你在某个项目里干活时，不要自己改文件：用 delegate 交给对应的子工作区，并用 delegation_status 跟进。同一个工作区一次只能有一项委派。",
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
     "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
@@ -156,24 +215,26 @@ function runnerFor(tenant: AssistantTenant): JobRunner {
 
 /** Loop 没人在线时走后台策略：只读工具 + inbox_post，模型固定 grok-4.7 */
 export async function runLoopInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; text: string; label: string }) {
+  const context = workspaceContext(tenant, input.cwd);
   return runBackground(refOf(tenant), {
     origin: "loop",
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: input.text,
+    prompt: context ? `工作区规则（照着做）：\n${context}\n\n${input.text}` : input.text,
     customTools: assistantTools(toolHost(tenant, "loop", input.chatId)),
   });
 }
 
 /** 后台委派：子工作区里只读分析，产出改动方案；没有记忆工具 */
 export async function runDelegateInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; task: string; label: string }) {
+  const context = workspaceContext(tenant, input.cwd);
   return runBackground(refOf(tenant), {
     origin: "delegate",
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: `${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。`,
+    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。`,
     customTools: assistantTools(toolHost(tenant, "loop", input.chatId)),
   });
 }
@@ -187,6 +248,8 @@ export function noteChatDeleted(tenant: AssistantTenant, chatId: string) {
   const ref = refOf(tenant);
   if (!existsSync(assistantDir(ref))) return;
   dropChatFromIndex(ref, chatId);
+  dropWorkspaceThread(ref, chatId);
+  cancelFlush(ref, chatId);
   markChatDeleted(ref, chatId);
 }
 
@@ -244,6 +307,16 @@ export function watchMemory(tenantId: string, on: boolean) {
 
 export function onTenantHello(tenant: AssistantTenant) {
   seedDefaults(refOf(tenant));
+  runMigration(tenant);
+}
+
+function runMigration(tenant: AssistantTenant) {
+  try {
+    const report = migrateMemory(tenant);
+    if (report) console.log(`memory migrate v2 tenant=${tenant.id} ${JSON.stringify(report)}`);
+  } catch (err) {
+    console.error("memory migrate", tenant.id, err);
+  }
 }
 
 const str = (value: unknown) => (typeof value === "string" ? value : "");
@@ -313,12 +386,12 @@ export async function handleOp(
       return result.ok ? { ok: true } : fail(result.error);
     }
     case "memory_purge": {
-      const result = purgeMemory(ref, str(args.id), { scrubChatIndex: (needles) => scrubChatIndex(ref, needles) });
+      const result = purgeMemory(ref, str(args.id), { scrubChatIndex: (needles) => scrubChatIndex(ref, needles) + scrubWorkspaceIndex(ref, needles) });
       return result.ok ? { ok: true, data: { scrubbed: result.value.scrubbed, sourceChatId: result.value.sourceChatId } } : fail(result.error);
     }
     case "memory_purge_all": {
       if (args.confirm !== true) return fail("要带 confirm: true。");
-      const count = purgeAll(ref, { scrubChatIndex: (needles) => scrubChatIndex(ref, needles) });
+      const count = purgeAll(ref, { scrubChatIndex: (needles) => scrubChatIndex(ref, needles) + scrubWorkspaceIndex(ref, needles) });
       return { ok: true, data: { count } };
     }
     case "memory_core": {
@@ -400,6 +473,11 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
 async function slowTick(tenant: AssistantTenant) {
   const runner = runnerFor(tenant);
   const ref = refOf(tenant);
+  try {
+    if (expireCards(ref)) void publishState(tenant);
+  } catch (err) {
+    console.error("expire memory cards", err);
+  }
   await runMaintenance(ref, runner).catch((err) => console.error("maintenance", err));
   await runEpisodes(ref, runner).catch((err) => console.error("episodes", err));
   await runIntegrator(ref, runner).catch((err) => console.error("integrator", err));
@@ -438,6 +516,13 @@ export function startAssistant(next: AssistantDeps) {
     recoverSchedules(ref);
     // 挂起审批跟着运行一起丢了；对应的委派下面会记为中断并进收件箱
     recoverApprovals(ref);
+    runMigration(tenant);
+    // 记忆确认卡不挂在运行上，重启后挂回去
+    try {
+      restoreCards(ref);
+    } catch (err) {
+      console.error("restore memory cards", err);
+    }
     for (const item of recoverDelegations(ref)) {
       postInbox(ref, {
         kind: "delegation",

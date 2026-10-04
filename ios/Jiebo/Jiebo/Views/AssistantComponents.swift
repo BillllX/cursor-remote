@@ -157,7 +157,8 @@ extension ChatStore {
 // MARK: 待批确认卡
 
 /// 待批卡。行动区、待处理页、iPad 助理面板共用。按 approval.tool 区分文案：
-/// create_workspace →「新建工作区」+ 名字与原因（拒绝 / 同意）；shell →「想跑命令」；其它 →「想改文件」（拒绝 / 批准）。
+/// create_workspace →「新建工作区」+ 名字与原因（拒绝 / 同意）；workspace_memory / work_preferences →「记进…」+ 目标与条目（拒绝 / 记下）；
+/// shell →「想跑命令」；其它 →「想改文件」（拒绝 / 批准）。
 struct ApprovalCard: View {
     enum Style {
         /// iPhone 行动区 / 待处理：warnBg 底 + warnFg 标题
@@ -180,17 +181,25 @@ struct ApprovalCard: View {
 
     private var isCreateWorkspace: Bool { approval.tool == "create_workspace" }
 
+    /// 工作区记忆提议 / 记忆升级整理出的工作偏好：summary 也是「目标 · 内容」
+    private var isMemoryCard: Bool { approval.tool == "workspace_memory" || approval.tool == "work_preferences" }
+
     private var isShell: Bool {
-        !isCreateWorkspace && ToolKind.from(name: approval.tool, args: nil) == .shell
+        !isCreateWorkspace && !isMemoryCard && ToolKind.from(name: approval.tool, args: nil) == .shell
     }
 
     private var titleText: String {
         if isCreateWorkspace { return "新建工作区" }
+        if approval.tool == "workspace_memory" { return "记进工作区记忆" }
+        if approval.tool == "work_preferences" { return "记进工作偏好" }
         let owner = store.approvalDelegationTitle(approval)
         return isShell ? "\(owner) 想跑命令" : "\(owner) 想改文件"
     }
 
-    private var allowTitle: String { isCreateWorkspace ? "同意" : "批准" }
+    private var allowTitle: String {
+        if isCreateWorkspace { return "同意" }
+        return isMemoryCard ? "记下" : "批准"
+    }
 
     /// summary 的格式是「名字 · 原因」
     private var workspaceParts: (name: String, reason: String) {
@@ -226,7 +235,7 @@ struct ApprovalCard: View {
 
     @ViewBuilder
     private var detail: some View {
-        if isCreateWorkspace {
+        if isCreateWorkspace || isMemoryCard {
             let parts = workspaceParts
             VStack(alignment: .leading, spacing: 2) {
                 if !parts.name.isEmpty {
@@ -240,6 +249,7 @@ struct ApprovalCard: View {
                     Text(parts.reason)
                         .font(JieboFont.ui(13))
                         .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(isMemoryCard && style == .warning ? 6 : nil)
                 }
             }
         } else if !approval.summary.isEmpty {
@@ -268,6 +278,7 @@ struct ApprovalCard: View {
         if remaining <= 0 { return "即将失效" }
         let minutes = Int((remaining / 60).rounded(.up))
         if minutes <= 1 { return "不到 1 分钟后失效" }
+        if minutes >= 48 * 60 { return "\(minutes / (24 * 60)) 天后失效" }
         if minutes >= 120 { return "\(minutes / 60) 小时后失效" }
         return "\(minutes) 分钟后失效"
     }
