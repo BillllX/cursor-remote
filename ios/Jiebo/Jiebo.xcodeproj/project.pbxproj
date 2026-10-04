@@ -23,6 +23,7 @@
 		A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000113 /* ThreadView.swift */; };
 		A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000114 /* ComposerView.swift */; };
 		A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000115 /* ToolCardView.swift */; };
+		A1B2C3D4E5F6071829000393 /* ToolRunSummaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */; };
 		A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000116 /* Uploader.swift */; };
 		A1B2C3D4E5F6071829000317 /* Crew.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000117 /* Crew.swift */; };
 		A1B2C3D4E5F6071829000318 /* QuickLookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000118 /* QuickLookView.swift */; };
@@ -79,6 +80,7 @@
 		A1B2C3D4E5F6071829000113 /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000114 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000115 /* ToolCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCardView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolRunSummaryView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000116 /* Uploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Uploader.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000117 /* Crew.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Crew.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000118 /* QuickLookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickLookView.swift; sourceTree = "<group>"; };
@@ -218,6 +220,7 @@
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
 				A1B2C3D4E5F6071829000114 /* ComposerView.swift */,
 				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
+				A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */,
 				A1B2C3D4E5F6071829000190 /* FileCardView.swift */,
 				A1B2C3D4E5F6071829000118 /* QuickLookView.swift */,
 				A1B2C3D4E5F6071829000119 /* FileBrowserSheet.swift */,
@@ -362,6 +365,7 @@
 				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
 				A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */,
 				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
+				A1B2C3D4E5F6071829000393 /* ToolRunSummaryView.swift in Sources */,
 				A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */,
 				A1B2C3D4E5F6071829000317 /* Crew.swift in Sources */,
 				A1B2C3D4E5F6071829000318 /* QuickLookView.swift in Sources */,

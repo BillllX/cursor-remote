@@ -34,8 +34,6 @@ struct AssistantHome: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(JieboColor.paper, for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 menuButton

@@ -4,7 +4,24 @@ struct ToolCardView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tool: ToolCall
+    var compactPresentation = false
+    var showBorder = true
+    /// 摘要展开时：跑的过程中强制展开当前步（不由 userPinned 挡）
+    var forceExpanded = false
     @State private var expanded = false
+    @State private var userPinned = false
+
+    init(
+        tool: ToolCall,
+        compactPresentation: Bool = false,
+        showBorder: Bool = true,
+        forceExpanded: Bool = false
+    ) {
+        self.tool = tool
+        self.compactPresentation = compactPresentation
+        self.showBorder = showBorder
+        self.forceExpanded = forceExpanded
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -12,7 +29,9 @@ struct ToolCardView: View {
                 // 展开/收起做成独立 Button：容器挂 onTapGesture 会和内部按钮抢手势（P5a 页签同款坑）
                 Button {
                     withAnimation(.easeOut(duration: 0.28)) {
-                        expanded.toggle()
+                        let next = !expanded
+                        expanded = next
+                        userPinned = next
                     }
                 } label: {
                     HStack(spacing: 8) {
@@ -20,9 +39,9 @@ struct ToolCardView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(statusColor)
                             .frame(width: 16, height: 16)
-                        Text(verb)
-                            .font(JieboFont.mono(13))
-                            .fontWeight(.medium)
+                        Text(compactPresentation ? Self.chineseVerb(tool) : verb)
+                            .font(compactPresentation ? JieboFont.ui(13, weight: .medium) : JieboFont.mono(13))
+                            .fontWeight(compactPresentation ? .medium : .medium)
                             .foregroundStyle(JieboColor.ink)
                         Text(titleLine)
                             .font(JieboFont.mono(11))
@@ -69,27 +88,55 @@ struct ToolCardView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("打开 \(path)")
                 }
-                badge
+                if !compactPresentation { badge }
+                else if tool.status == "running" || tool.status == "error" {
+                    compactStatus
+                }
             }
             if expanded {
                 ToolDetail(tool: tool)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.horizontal, compactPresentation ? 8 : 12)
+        .padding(.vertical, compactPresentation ? 5 : 7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
-        )
-        .animation(JieboMotion.fade(reduceMotion), value: tool.status)
-        .onAppear {
-            if tool.status == "running" { expanded = true }
+        .overlay {
+            if showBorder {
+                RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            }
         }
-        .onChange(of: tool.status) { _, status in
-            if status == "running" { expanded = true }
+        .animation(JieboMotion.fade(reduceMotion), value: tool.status)
+        .onAppear { syncExpanded() }
+        .onChange(of: tool.status) { _, _ in syncExpanded() }
+        .onChange(of: forceExpanded) { _, _ in syncExpanded() }
+    }
+
+    @ViewBuilder
+    private var compactStatus: some View {
+        switch tool.status {
+        case "running":
+            Text("进行中")
+                .font(JieboFont.ui(11))
+                .foregroundStyle(JieboColor.run)
+        case "error":
+            Text("失败")
+                .font(JieboFont.ui(11))
+                .foregroundStyle(JieboColor.danger)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func syncExpanded() {
+        if forceExpanded || tool.status == "running" {
+            expanded = true
+            return
+        }
+        if !userPinned {
+            expanded = false
         }
     }
 

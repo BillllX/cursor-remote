@@ -90,6 +90,8 @@ struct Turn: Identifiable, Hashable {
     var model: String?
     var status: String?
     var durationMs: Double?
+    /// 回合开始时间（毫秒 epoch）。网关补齐；旧数据可能没有
+    var startedAt: Double?
     var pendingTool: PendingTool?
     /// 随这条消息发出的图片（base64），气泡里回显。
     var images: [PromptImage] = []
@@ -100,7 +102,7 @@ struct Turn: Identifiable, Hashable {
 
     static let knownKeys: Set<String> = [
         "id", "user", "assistant", "thinking", "tools", "task", "error",
-        "running", "queued", "mode", "model", "status", "durationMs", "images",
+        "running", "queued", "mode", "model", "status", "durationMs", "startedAt", "images",
         "files",
     ]
 
@@ -277,6 +279,7 @@ struct Turn: Identifiable, Hashable {
         if let model { object["model"] = .string(model) }
         if let status { object["status"] = .string(status) }
         if let durationMs { object["durationMs"] = .number(durationMs) }
+        if let startedAt { object["startedAt"] = .number(startedAt) }
         if !images.isEmpty {
             object["images"] = .array(images.map {
                 .object(["data": .string($0.data), "mimeType": .string($0.mimeType)])
@@ -321,6 +324,7 @@ struct Turn: Identifiable, Hashable {
             model: object["model"]?.string,
             status: object["status"]?.string,
             durationMs: object["durationMs"]?.number,
+            startedAt: object["startedAt"]?.number,
             pendingTool: nil,
             images: object["images"]?.array?.compactMap { item -> PromptImage? in
                 guard let row = item.object,
@@ -460,6 +464,15 @@ func friendlyError(_ text: String) -> String {
         return "这条会话在服务器上已经不在了，重试会开新的。"
     }
     return text.replacingOccurrences(of: #"agent-[a-z0-9-]+"#, with: "Agent", options: [.regularExpression, .caseInsensitive])
+}
+
+func formatTurnTimeSeparator(_ ms: Double) -> String {
+    let date = Date(timeIntervalSince1970: ms / 1000)
+    let cal = Calendar.current
+    let time = date.formatted(date: .omitted, time: .shortened)
+    if cal.isDateInToday(date) { return "今天 \(time)" }
+    if cal.isDateInYesterday(date) { return "昨天 \(time)" }
+    return date.formatted(.dateTime.month().day().hour().minute())
 }
 
 func formatDuration(_ ms: Double?) -> String {

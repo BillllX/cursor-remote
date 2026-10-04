@@ -229,6 +229,41 @@ enum JieboFont {
     static func mono(_ size: CGFloat) -> Font {
         .system(size: size, design: .monospaced)
     }
+
+    /// 跟系统字号档位缩放（Dynamic Type）。
+    static func uiScaled(_ base: CGFloat, sizeCategory: ContentSizeCategory, weight: Font.Weight = .regular) -> Font {
+        ui(scaledPoint(base, sizeCategory: sizeCategory), weight: weight)
+    }
+
+    static func monoScaled(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> Font {
+        mono(scaledPoint(base, sizeCategory: sizeCategory))
+    }
+
+    private static func scaledPoint(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> CGFloat {
+        let metrics = UIFontMetrics(forTextStyle: .body)
+        let trait = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(sizeCategory))
+        return metrics.scaledValue(for: base, compatibleWith: trait)
+    }
+}
+
+private extension UIContentSizeCategory {
+    init(_ category: ContentSizeCategory) {
+        switch category {
+        case .extraSmall: self = .extraSmall
+        case .small: self = .small
+        case .medium: self = .medium
+        case .large: self = .large
+        case .extraLarge: self = .extraLarge
+        case .extraExtraLarge: self = .extraExtraLarge
+        case .extraExtraExtraLarge: self = .extraExtraExtraLarge
+        case .accessibilityMedium: self = .accessibilityMedium
+        case .accessibilityLarge: self = .accessibilityLarge
+        case .accessibilityExtraLarge: self = .accessibilityExtraLarge
+        case .accessibilityExtraExtraLarge: self = .accessibilityExtraExtraLarge
+        case .accessibilityExtraExtraExtraLarge: self = .accessibilityExtraExtraExtraLarge
+        @unknown default: self = .large
+        }
+    }
 }
 
 extension Color {

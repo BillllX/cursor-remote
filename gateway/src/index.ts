@@ -648,6 +648,7 @@ function openTranscript(
     tools: [],
     phase: "running",
     epoch,
+    startedAt: Date.now(),
   };
   slot.turnBase = undefined;
   armRunFlush(slot);

@@ -286,6 +286,8 @@ export type HistoryTurn = {
   id: string;
   user: string;
   assistant: string;
+  /** 回合开始时间（毫秒 epoch） */
+  startedAt?: number;
   thinking?: string;
   tools?: Array<{
     callId: string;

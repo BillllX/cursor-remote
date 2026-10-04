@@ -244,6 +244,11 @@ final class ChatStore {
     var cursorBill: CursorBill?
     /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）
     var loadingChatIds: Set<String> = []
+    /// 增量补齐正文时导航栏小 spinner（不阻塞输入）
+    var threadSyncBusy: Bool {
+        refreshingChatIds.contains(activeId)
+            || (loadingChatIds.contains(activeId) && bodyRevs[activeId] != nil && !(active?.turnsComplete ?? true))
+    }
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
     private var pendingHistory: [String: [Turn]] = [:]
     /// 快照到达时分页还没完成：先暂存，正文齐了再按 turnId 盖上

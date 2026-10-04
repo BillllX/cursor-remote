@@ -49,56 +49,60 @@ struct ComposerView: View {
                 voicePanel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            TextField(placeholder, text: $text, axis: .vertical)
-                .font(JieboFont.ui(17))
-                .foregroundStyle(JieboColor.ink)
-                .lineLimit(1...8)
-                .focused($focused)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 8)
-                .overlay {
-                    // 没在打字时盖一层：点一下进入输入，长按说话。键盘起来后长按仍是系统的选字
-                    if !focused || dictation.active {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .gesture(holdToTalk)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .accessibilityHint("长按说话，松开后转成文字")
-                .onChange(of: text) { _, value in
-                    if value.contains("@") || !store.mentionSuggestions.isEmpty {
-                        store.updateMentions(for: value)
-                    }
-                    schedulePersist()
-                }
-                .onKeyPress(keys: [.return]) { press in
-                    if press.modifiers.contains(.shift) { return .ignored }
-                    commitAndSend()
-                    return .handled
-                }
-            controls
-            if controlsWidth >= 420, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Return 发送，Shift+Return 换行")
-                    .font(JieboFont.ui(11))
-                    .foregroundStyle(JieboColor.dim)
+            if style == .assistant {
+                assistantCapsuleRow
+            } else {
+                TextField(placeholder, text: $text, axis: .vertical)
+                    .font(JieboFont.ui(17))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(1...8)
+                    .focused($focused)
                     .padding(.horizontal, 6)
-                    .transition(.opacity)
+                    .padding(.vertical, 8)
+                    .overlay {
+                        if !focused || dictation.active {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .gesture(holdToTalk)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityHint("长按说话，松开后转成文字")
+                    .onChange(of: text) { _, value in
+                        if value.contains("@") || !store.mentionSuggestions.isEmpty {
+                            store.updateMentions(for: value)
+                        }
+                        schedulePersist()
+                    }
+                    .onKeyPress(keys: [.return]) { press in
+                        if press.modifiers.contains(.shift) { return .ignored }
+                        commitAndSend()
+                        return .handled
+                    }
+                controls
+                if controlsWidth >= 420, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Return 发送，Shift+Return 换行")
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(.horizontal, 6)
+                        .transition(.opacity)
+                }
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
+        .padding(.top, style == .assistant ? 8 : 10)
+        .padding(.bottom, style == .assistant ? 8 : 10)
         .background {
-            // 阴影画在底上，不要挂在输入框这一层。挂在上面的话每个字都会连阴影一起重绘。
-            RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                .fill(JieboColor.composer)
-                .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
-                .shadow(color: JieboColor.ink.opacity(focused ? 0.16 : 0.1), radius: focused ? 16 : 14, y: 8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                        .stroke(focused ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1)
-                )
+            if style != .assistant {
+                RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
+                    .fill(JieboColor.composer)
+                    .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
+                    .shadow(color: JieboColor.ink.opacity(focused ? 0.16 : 0.1), radius: focused ? 16 : 14, y: 8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
+                            .stroke(focused ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1)
+                    )
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)
@@ -473,23 +477,124 @@ struct ComposerView: View {
 
     @ViewBuilder
     private var controls: some View {
-        switch style {
-        case .full:
+        if style == .full {
             fullControls
-        case .assistant:
-            assistantControls
         }
     }
 
-    /// iPhone 助理：＋ ⋯ ……… 🎤 ⬆。模式、模型、策略层、确认写、检查点都收进 ⋯
-    private var assistantControls: some View {
-        HStack(alignment: .center, spacing: 8) {
-            attachMenu
-            moreMenu
-            Spacer(minLength: 8)
-            micButton
-            sendCluster(enabled: canSendNow)
+    /// iPhone 助理：单行胶囊 — ＋（含 ⋯ 项）、输入、话筒/发送
+    private var assistantCapsuleRow: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            assistantAttachMenu
+            TextField(placeholder, text: $text, axis: .vertical)
+                .font(JieboFont.ui(16))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(1...6)
+                .focused($focused)
+                .padding(.vertical, 8)
+                .overlay {
+                    if !focused || dictation.active {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .gesture(holdToTalk)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .onChange(of: text) { _, value in
+                    if value.contains("@") || !store.mentionSuggestions.isEmpty {
+                        store.updateMentions(for: value)
+                    }
+                    schedulePersist()
+                }
+            if store.busy {
+                Button(action: store.stop) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(JieboColor.paper)
+                        .frame(width: 32, height: 32)
+                        .background(JieboColor.danger)
+                        .clipShape(Circle())
+                        .hitTarget()
+                }
+                .buttonStyle(PressScaleButtonStyle())
+                .accessibilityLabel("停止")
+            } else if canSendNow {
+                Button(action: commitAndSend) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(JieboColor.paper)
+                        .frame(width: 32, height: 32)
+                        .background(JieboColor.pine)
+                        .clipShape(Circle())
+                        .hitTarget()
+                }
+                .buttonStyle(PressScaleButtonStyle())
+                .accessibilityLabel("发送")
+            } else {
+                micButton
+            }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(JieboColor.composer)
+                .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
+                .shadow(color: JieboColor.ink.opacity(focused ? 0.14 : 0.08), radius: focused ? 12 : 8, y: 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(focused ? JieboColor.pine.opacity(0.4) : JieboColor.line, lineWidth: 1)
+                )
+        }
+    }
+
+    private var assistantAttachMenu: some View {
+        Menu {
+            Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
+            Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
+            Divider()
+            Menu {
+                ForEach(AgentMode.allCases, id: \.self) { item in
+                    Button { store.chooseMode(item) } label: {
+                        Label(item.label, systemImage: store.mode == item ? "checkmark" : "circle")
+                    }
+                }
+            } label: { Label("模式 · \(store.mode.label)", systemImage: "slider.horizontal.3") }
+            Menu {
+                ForEach(ModelCatalog.groups(from: store.models)) { group in
+                    Section(group.label) {
+                        ForEach(group.models) { item in
+                            Button(item.name) { store.chooseModel(item.id) }
+                        }
+                    }
+                }
+            } label: { Label("模型 · \(ModelCatalog.label(for: store.model))", systemImage: "cpu") }
+            Divider()
+            Button(action: store.togglePolicy) {
+                Label(store.active?.policy == "plane" ? "正在用策略层" : "切到策略层", systemImage: "circle")
+            }
+            Button(action: store.toggleConfirmWrites) {
+                Label(store.active?.confirmWrites == true ? "确认写" : "直写", systemImage: "checkmark.shield")
+            }
+            Button(action: store.undoLast) {
+                Label("撤销上一次", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!store.canUndo)
+            if !store.checkpoints.isEmpty {
+                ForEach(store.checkpoints) { item in
+                    Button("还原 · \(item.label)") { store.restoreCheckpoint(item.id) }
+                        .disabled(store.busy)
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(width: 32, height: 32)
+                .hitTarget()
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel("添加与更多")
     }
 
     private var micButton: some View {

@@ -76,8 +76,47 @@ enum TurnFileStyle {
     }
 }
 
+/// 内联默认横条；轮末/有缩略图时用 featured 大卡。
+/// 一轮文件审阅：与卡片是否渲染无关（内联卡片、无 card 的 delete 改动也要能保留/还原）
+struct TurnReviewBar: View {
+    @Environment(ChatStore.self) private var store
+    let turn: Turn
+    @State private var confirmRestore = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("\(turn.reviewPaths.count) 个文件改动")
+                .font(JieboFont.ui(12))
+                .foregroundStyle(JieboColor.ink2)
+            Button("全部保留") { store.keepTurnFiles(turn.id) }
+                .buttonStyle(.plain)
+                .font(JieboFont.ui(12, weight: .semibold))
+                .foregroundStyle(JieboColor.pine)
+            Button(store.restoringTurnIds.contains(turn.id) ? "还原中" : "全部还原") { confirmRestore = true }
+                .buttonStyle(.plain)
+                .font(JieboFont.ui(12, weight: .medium))
+                .foregroundStyle(JieboColor.ink2)
+                .disabled(store.restoringTurnIds.contains(turn.id))
+        }
+        .confirmationDialog(
+            "还原这一轮的 \(turn.reviewPaths.count) 个文件？",
+            isPresented: $confirmRestore,
+            titleVisibility: .visible
+        ) {
+            Button("全部还原", role: .destructive) { store.restoreTurnFiles(turn.id) }
+            Button("取消", role: .cancel) {}
+        }
+    }
+}
+
+enum TurnFileCardLayout {
+    case compact
+    case featured
+}
+
 /// 一轮的文件卡片：大卡最多 2 张，其余紧凑行；紧凑行超过 3 行折叠
 struct TurnFileCards: View {
+    @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let turn: Turn
     let chatId: String
@@ -85,20 +124,28 @@ struct TurnFileCards: View {
     var beforeOpen: (() -> Void)?
     /// 只画这一组（卡片插在正文中间时按段分组）；nil 画整轮
     var files: [TurnFile]?
+    var cardLayout: TurnFileCardLayout = .featured
     @State private var expanded = false
 
     private static let featuredLimit = 2
     private static let compactLimit = 3
 
-    init(turn: Turn, chatId: String, files: [TurnFile]? = nil, beforeOpen: (() -> Void)? = nil) {
+    init(
+        turn: Turn,
+        chatId: String,
+        files: [TurnFile]? = nil,
+        cardLayout: TurnFileCardLayout = .featured,
+        beforeOpen: (() -> Void)? = nil
+    ) {
         self.turn = turn
         self.chatId = chatId
         self.files = files
+        self.cardLayout = cardLayout
         self.beforeOpen = beforeOpen
     }
 
     /// 同类型取最后出现的那个。大卡按整轮挑，分组时只留落在本组的
-    private var layout: (featured: [TurnFile], compact: [TurnFile]) {
+    private var filePartition: (featured: [TurnFile], compact: [TurnFile]) {
         let all = turn.cardFiles
         var featured: [TurnFile] = []
         for rank in 0 ... 6 where featured.count < Self.featuredLimit {
@@ -115,12 +162,16 @@ struct TurnFileCards: View {
     }
 
     var body: some View {
-        let parts = layout
+        let parts = filePartition
         let folded = parts.compact.count > Self.compactLimit && !expanded
         let rows = folded ? Array(parts.compact.prefix(Self.compactLimit)) : parts.compact
         VStack(alignment: .leading, spacing: 8) {
             ForEach(parts.featured) { file in
-                TurnFileLargeCard(file: file, turn: turn, chatId: chatId, beforeOpen: beforeOpen)
+                if cardLayout == .compact {
+                    TurnFileStripCard(file: file, turn: turn, chatId: chatId, beforeOpen: beforeOpen)
+                } else {
+                    TurnFileLargeCard(file: file, turn: turn, chatId: chatId, beforeOpen: beforeOpen)
+                }
             }
             if !rows.isEmpty {
                 VStack(spacing: 0) {
@@ -143,7 +194,7 @@ struct TurnFileCards: View {
                 )
             }
         }
-        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
+        .frame(maxWidth: cardLayout == .compact ? .infinity : JieboMeasure.bubble, alignment: .leading)
     }
 
     private func moreButton(hidden: Int) -> some View {
@@ -168,6 +219,82 @@ struct TurnFileCards: View {
         .accessibilityLabel(expanded ? "收起文件列表" : "还有 \(hidden) 个文件")
         .accessibilityValue(expanded ? "已展开" : "已收起")
         .accessibilityHint(expanded ? "轻点两下收起" : "轻点两下展开")
+    }
+}
+
+/// 内联用 64pt 横条：左侧小缩略图或图标，右侧文件名
+struct TurnFileStripCard: View {
+    @Environment(ChatStore.self) private var store
+    let file: TurnFile
+    let turn: Turn
+    let chatId: String
+    var beforeOpen: (() -> Void)?
+
+    private func thumbTrigger(writing: Bool) -> String {
+        let key = ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key
+        return "\(key)|\(store.connected)|\(writing)"
+    }
+
+    private func requestThumb(writing: Bool) {
+        guard !writing else { return }
+        ThumbnailStore.shared.request(file: file, chatId: chatId, store: store)
+    }
+
+    var body: some View {
+        let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
+        let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
+        let writing = state == .writing
+        Button {
+            beforeOpen?()
+            store.openTurnFile(file, chatId: chatId)
+        } label: {
+            HStack(spacing: 10) {
+                stripThumb(thumb: thumb, kind: file.kind)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(TurnFileStyle.filename(file))
+                        .font(JieboFont.ui(13, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(TurnFileStyle.label(file.kind))
+                        .font(JieboFont.ui(11))
+                        .foregroundStyle(JieboColor.dim)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                TurnFileTrailing(state: state)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 64)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(JieboColor.white)
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle(enabled: state != .writing))
+        .disabled(state == .writing)
+        .onAppear { requestThumb(writing: writing) }
+        .onChange(of: thumbTrigger(writing: writing)) { _, _ in requestThumb(writing: writing) }
+        .onDisappear { ThumbnailStore.shared.cancel(file: file, chatId: chatId, store: store) }
+    }
+
+    @ViewBuilder
+    private func stripThumb(thumb: ThumbState, kind: PreviewKind) -> some View {
+        switch thumb {
+        case .image(let image):
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+        default:
+            ZStack {
+                JieboColor.mist.opacity(0.6)
+                Image(systemName: TurnFileStyle.symbol(kind))
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(JieboColor.dim)
+            }
+        }
     }
 }
 

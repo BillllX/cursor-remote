@@ -18,6 +18,8 @@ export type RunTranscript = {
   epoch: number;
   durationMs?: number;
   error?: string;
+  /** 这一轮开始时的时间戳（毫秒） */
+  startedAt?: number;
   /** 这一轮结束时算出的文件清单 */
   files?: TurnFile[];
 };
@@ -243,6 +245,10 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
   if (transcript.mode) row.mode = transcript.mode;
   if (transcript.error) row.error = transcript.error;
   if (transcript.durationMs != null) row.durationMs = transcript.durationMs;
+  row.startedAt =
+    typeof transcript.startedAt === "number" && Number.isFinite(transcript.startedAt)
+      ? transcript.startedAt
+      : Date.now();
   if (transcript.files?.length) row.files = transcript.files;
   if (transcript.phase === "done" && transcript.status) row.status = transcript.status;
   else if (transcript.status === "approval") row.status = "approval";
@@ -258,7 +264,11 @@ export function upsertTranscriptTurn(turns: unknown[], transcript: RunTranscript
     : -1;
   if (byId >= 0) {
     const prev = isRecord(next[byId]) ? next[byId] : {};
-    next[byId] = { ...prev, ...written };
+    const merged = { ...prev, ...written };
+    if (typeof (prev as Record<string, unknown>).startedAt === "number") {
+      merged.startedAt = (prev as Record<string, unknown>).startedAt;
+    }
+    next[byId] = merged;
     return next;
   }
   const fp = userFingerprint(transcript.userText);
