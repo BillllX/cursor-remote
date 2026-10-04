@@ -152,10 +152,18 @@ const FILE_HEAD = [
   "<!-- 接驳维护：每条一行，可以手改或删。行尾注释是来源和引用的路径，引用的文件没了会标“待核实”。这里不放个人信息。 -->",
 ].join("\n");
 
+/** 默认不进版本库：.jiebo/ 下放一份只忽略 memory.md 的 .gitignore；已有的不动，删掉它就会被提交 */
+function ensureIgnored(dir: string) {
+  const ignore = resolve(dir, ".jiebo", ".gitignore");
+  if (existsSync(ignore)) return;
+  writeTextAtomic(ignore, "# 接驳的工作区记忆默认不进版本库；想跟代码一起提交就删掉这个文件\nmemory.md\n");
+}
+
 /** 写回时保留人手加的行和顺序，只在对应小节末尾追加新行 */
 export function appendMemoryLines(dir: string, lines: MemoryLine[]) {
   const path = resolve(dir, MEMORY_FILE);
   const current = readText(path);
+  if (!current) ensureIgnored(dir);
   const known = new Set(parseMemoryFile(current).map((line) => line.text));
   const fresh = lines.filter((line) => line.text && !known.has(line.text));
   if (!fresh.length) return 0;

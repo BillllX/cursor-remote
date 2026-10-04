@@ -57,8 +57,8 @@ export type MemorySettings = {
 
 type EntriesFile = { rev: number; entries: MemoryEntry[] };
 
-export const CORE_TOKEN_BUDGET = 1500;
-export const INDEX_TOKEN_BUDGET = 500;
+export const CORE_TOKEN_BUDGET = 1200;
+export const INDEX_TOKEN_BUDGET = 300;
 export const INFERRED_TTL_DAYS = 90;
 export const INFERRED_CONFIDENCE = 0.6;
 export const WORK_PREF_TOKEN_BUDGET = 200;

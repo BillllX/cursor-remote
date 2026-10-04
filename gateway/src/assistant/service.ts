@@ -234,8 +234,8 @@ export async function runDelegateInBackground(tenant: AssistantTenant, input: { 
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。`,
-    customTools: assistantTools(toolHost(tenant, "loop", input.chatId)),
+    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。读代码时发现以后还用得上的约定、命令、坑，可以用 workspace_memory_propose 提议（用户确认后才写）。`,
+    customTools: { ...assistantTools(toolHost(tenant, "loop", input.chatId)), ...workspaceToolsFor(tenant, input.chatId, input.cwd) },
   });
 }
 

@@ -117,6 +117,10 @@ try {
   check(answered?.ok === true && answered.written === 2, "批准：两条都写下");
   check(projFile.includes("## 约定") && projFile.includes("依赖统一用 pnpm 装"), "批准：子工作区 .jiebo/memory.md 有这条");
   check(appFile.includes("refs=src/main.ts"), "批准：仓库那条带引用");
+  check(readFileSync(resolve(root, "proj", "app", ".jiebo/.gitignore"), "utf8").includes("memory.md"), "批准：新建的 memory.md 默认不进版本库");
+  write(resolve(root, "other", ".jiebo", ".gitignore"), "# 我自己的\n");
+  wm.appendMemoryLines(resolve(root, "other"), [{ section: "约定", text: "手动写入", refs: [] }]);
+  check(readFileSync(resolve(root, "other", ".jiebo/.gitignore"), "utf8") === "# 我自己的\n", "批准：已有的 .jiebo/.gitignore 不动");
   check(!approvals.listApprovals(ref).some((item) => item.callId === card!.callId), "批准：卡摘掉了");
   check(wm.answerCard(tenant, chatId, "nope", true) === null, "批准：不认识的卡交回给别的审批");
   const ctxAfter = wm.workspaceContext(tenant, resolve(root, "proj", "app"));
@@ -181,6 +185,25 @@ try {
   check(!integratorTools.includes("work_preference_add") && !integratorTools.includes("workspace_memory_read"), "工具：整理者既不能写工作偏好，也不读工作区");
   const sessionTools = Object.keys(tools.workspaceSessionTools({ propose: () => ({ ok: true }) }));
   check(sessionTools.length === 1 && sessionTools[0] === "workspace_memory_propose", "工具：工作区会话只有提议这一个");
+  check(memory.CORE_TOKEN_BUDGET === 1200 && memory.INDEX_TOKEN_BUDGET === 300 && memory.WORK_PREF_TOKEN_BUDGET === 200, "预算：核心 1200 / 索引 300 / 工作偏好 200");
+
+  // 后台委派：只读工具 + 提议，没有个人记忆工具；提示词带工作区上下文
+  const bg = await import("./assistant/background.ts");
+  const service = await import("./assistant/service.ts");
+  let seen: { prompt: string; tools: string[] } | null = null;
+  bg.bindBackground({
+    apiKey: () => "key",
+    listModels: async () => [bg.BACKGROUND_MODEL],
+    sandbox: () => true,
+    prompt: async (message, options) => {
+      seen = { prompt: message, tools: Object.keys(options.local?.customTools ?? {}) };
+      return { id: "r", status: "finished", result: "方案" } as never;
+    },
+  });
+  await service.runDelegateInBackground({ ...tenant, name: "t" }, { chatId: "c-bg", cwd: resolve(root, "proj"), task: "看看", label: "后台" });
+  const bgSeen = seen as { prompt: string; tools: string[] } | null;
+  check(Boolean(bgSeen?.tools.includes("workspace_memory_propose")) && !bgSeen?.tools.some((name) => name.startsWith("memory_") || name.startsWith("work_preference")), "后台委派：能提议，没有个人记忆工具");
+  check(Boolean(bgSeen?.prompt.includes("proj 用 pnpm")) && Boolean(bgSeen?.prompt.includes("回复用中文")), "后台委派：提示词带工作偏好和分层规则");
 
   /* ── v1 → v2 迁移 ── */
   const old = { id: "t2", stateDir: resolve(dir, "t2"), workspaceRoot: resolve(dir, "ws2") };
