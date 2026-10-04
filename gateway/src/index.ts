@@ -12,7 +12,7 @@ import type { Duplex } from "node:stream";
 import { Agent, Cursor, CursorAgentError } from "@cursor/sdk";
 import { WebSocketServer, WebSocket } from "ws";
 import type { AgentMode, ClientMessage, HistoryTurn, PolicyId, PreviewKind, ServerMessage, TurnFile } from "../../shared/protocol.ts";
-import { bodySummary, chatMeta, isBodyLoaded } from "./chatBodies.ts";
+import { isBodyLoaded, slimChat } from "./chatBodies.ts";
 import {
   askDisallowedTools,
   defaultPolicy,
@@ -78,6 +78,7 @@ import {
   clipSnapshot,
   diskSnapshot,
   isStreamEvent,
+  keepToolsAt,
   keepTurnFiles,
   markFromTranscript,
   mergeUploadedTurns,
@@ -593,6 +594,11 @@ function send(ws: WebSocket, message: ServerMessage) {
   const tenantId = wsTenant.get(ws);
   const slot = chatId && tenantId ? slotByChat(tenantId, chatId) : undefined;
   if (slot?.transcript && isStreamEvent(message.type)) applyStreamEvent(slot.transcript, message);
+  let out = message;
+  if (message.type === "tool-started" && slot?.transcript) {
+    const at = slot.transcript.tools.find((item) => item.callId === message.callId)?.at;
+    if (typeof at === "number") out = { ...message, at };
+  }
   const capturing = slot && (slot.captureText || slot.captureError) ? slot : undefined;
   if (message.type === "text-delta") capturing?.captureText?.(message.text);
   if (message.type === "error" && "message" in message) capturing?.captureError?.(message.message);
@@ -601,7 +607,7 @@ function send(ws: WebSocket, message: ServerMessage) {
   // 流式事件跟当前 owner。应答仍回发起连接，避免翻页或写文件被另一台设备抢走。
   const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
-  if (sock) sock.send(JSON.stringify(message));
+  if (sock) sock.send(JSON.stringify(out));
 }
 
 /** 会话编号由客户端生成，不同租户可能撞号：只在发起连接所属租户里找。 */
@@ -952,18 +958,6 @@ function omitClientDraft(item: unknown): unknown {
   return rest;
 }
 
-/** 不读 turns：没装回内存的会话用落盘时记下的条数和预览 */
-function slimChat(item: unknown): unknown {
-  if (!item || typeof item !== "object") return item;
-  const summary = bodySummary(item);
-  const rest = chatMeta(item as Record<string, unknown>);
-  delete rest.draft;
-  delete rest.draftImages;
-  delete rest.preview; // 不信客户端写回的旧值
-  if (!summary?.count) return { ...rest, turns: [] };
-  return { ...rest, preview: summary.preview };
-}
-
 function capStoredString(value: string, hit: { n: number }): string {
   if (value.length <= TOOL_TEXT_CAP) return value;
   hit.n += 1;
@@ -1007,7 +1001,8 @@ function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = 
     }
   }
   const keepImagesFrom = row.turns.length - KEEP_TURN_IMAGES;
-  const withFiles = keepTurnFiles(Array.isArray(prevTurns) ? prevTurns : undefined, row.turns);
+  const diskTurns = Array.isArray(prevTurns) ? prevTurns : undefined;
+  const withFiles = keepToolsAt(diskTurns, keepTurnFiles(diskTurns, row.turns));
   const turns = withFiles.map((item, index) => {
     let turn = item;
     if (index < keepImagesFrom && turn && typeof turn === "object" && "images" in turn) {
@@ -1094,7 +1089,7 @@ function storedStatePayload(tenant: Tenant, slim = false) {
   const visible = visibleChats(tenant);
   // 精简视图不带 turns，收尾「运行中」标记没意义，也省得把每条会话的正文装回内存
   const chats = slim
-    ? visible.map(slimChat)
+    ? visible.map((item) => slimChat(tenant.bodies, item))
     : visible.map((item) => (live.has(chatIdOf(item)) ? item : settlePersistedChats([item])[0]));
   return {
     type: "stored_state" as const,
@@ -5172,7 +5167,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             loops: loopsForTenant(tenant.id),
             assistantName: assistantName(tenant),
             assistantChatId: assistantChatIdOf(tenant),
-            features: ["turn_files", "read_sha", "read_req_id"],
+            features: ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats"],
           });
         };
         try {
@@ -5593,15 +5588,16 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const gone = new Set(tenant.disk.deletedIds);
         const connNow = conns.get(ws);
         const limit = connNow?.maxMessageBytes ?? 0;
-        // 注意：load_chats 对 slim 客户端也回全量——它只服务 digest 差异对账（通常单会话），
-        // 是跨设备 turns 更新的唯一通道；slim 只作用于 stored_state 启动全量
+        // 注意：load_chats 对 slim_state 客户端也回全量——它只服务 digest 差异对账（通常单会话），
+        // 是跨设备 turns 更新的唯一通道。带 slim_chats 的客户端按 segHashes 自己走 load_chat 补正文
+        const slimRows = connNow?.caps.has("slim_chats") ?? false;
         for (const id of ids) {
           if (gone.has(id)) continue;
           const chat = tenant.disk.chats.find((item) => chatIdOf(item) === id);
           if (!chat) continue;
           const payload = {
             type: "stored_chat" as const,
-            chat: omitClientDraft(chat),
+            chat: slimRows ? slimChat(tenant.bodies, chat) : omitClientDraft(chat),
             rev: tenant.disk.chatRevs[id] ?? 0,
           };
           // 单条同样过接收上限护栏：超限回落 deferred，客户端走 HTTP /state 全量

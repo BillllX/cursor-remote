@@ -18,6 +18,8 @@ enum ChatCache {
     struct Body {
         var rev: Int
         var turns: [Turn]
+        /// 写入时服务端这个版本的段哈希（segHashes），没有就是 nil
+        var serverSegs: [String]?
     }
 
     static let maxChats = 60
@@ -36,6 +38,8 @@ enum ChatCache {
         var at: Double
         var bytes: Int
         var segments: [Segment]
+        /// 服务端段哈希（可选，旧清单没有）
+        var serverSegs: [String]?
 
         struct Segment: Codable {
             var file: String
@@ -56,9 +60,9 @@ enum ChatCache {
     }
 
     /// turns 传 Turn.json() 的结果：编码和写盘都在后台做
-    static func saveBody(tenant: String, chatId: String, rev: Int, turns: [JSONValue]) {
+    static func saveBody(tenant: String, chatId: String, rev: Int, turns: [JSONValue], serverSegs: [String]? = nil) {
         queue.async {
-            writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: turns)
+            writeBody(tenant: tenant, chatId: chatId, rev: rev, rows: turns, serverSegs: serverSegs)
             prune(tenant: tenant, keep: chatId)
         }
     }
@@ -208,10 +212,10 @@ enum ChatCache {
         }
         manifest.at = Date().timeIntervalSince1970
         writeManifest(manifest, to: dir)
-        return Body(rev: manifest.rev, turns: turns)
+        return Body(rev: manifest.rev, turns: turns, serverSegs: manifest.serverSegs)
     }
 
-    private static func writeBody(tenant: String, chatId: String, rev: Int, rows: [JSONValue]) {
+    private static func writeBody(tenant: String, chatId: String, rev: Int, rows: [JSONValue], serverSegs: [String]?) {
         guard let dir = bodyDir(tenant, chatId) else { return }
         let fm = FileManager.default
         do {
@@ -245,7 +249,8 @@ enum ChatCache {
                 lastTurnId: rows.last?["id"]?.string,
                 at: Date().timeIntervalSince1970,
                 bytes: total,
-                segments: segments
+                segments: segments,
+                serverSegs: serverSegs
             )
             // 清单最后写：中途失败时旧清单的段哈希对不上新段，读的时候整条作废
             try JSONEncoder().encode(manifest).write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)

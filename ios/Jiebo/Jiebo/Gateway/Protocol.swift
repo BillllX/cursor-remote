@@ -199,6 +199,7 @@ struct ClientInfo: Sendable, Equatable {
     var maxMessageBytes: Int?
     /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）+ slim_state（P8 懒加载：
     /// stored_state/stored_chat 只给元数据，内容走 load_chat 分页；sync_chat 可不写 turns 键）
+    /// + slim_chats（load_chats 也只回元数据壳）
     var caps: [String]
 
     static var current: ClientInfo {
@@ -213,7 +214,7 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest", "slim_state"]
+            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats"]
         )
     }
 
@@ -838,7 +839,8 @@ enum ServerMessage {
     case runMeta(chatId: String, model: String, mode: AgentMode?)
     case textDelta(chatId: String, text: String)
     case thinkingDelta(chatId: String, text: String)
-    case toolStarted(chatId: String, callId: String, name: String, args: JSONValue?, parentCallId: String?, agent: String?, model: String?)
+    /// at：工具开始时 assistant 正文的 UTF-16 长度（tool_at 能力）
+    case toolStarted(chatId: String, callId: String, name: String, args: JSONValue?, parentCallId: String?, agent: String?, model: String?, at: Int?)
     case toolCompleted(chatId: String, callId: String, name: String, status: String, result: JSONValue?, parentCallId: String?, agent: String?, model: String?)
     case toolOutput(chatId: String, callId: String, stream: String?, chunk: String?, stdout: String?, stderr: String?)
     case task(chatId: String, text: String)
@@ -934,7 +936,7 @@ enum ServerMessage {
              .runMeta(let chatId, _, _),
              .textDelta(let chatId, _),
              .thinkingDelta(let chatId, _),
-             .toolStarted(let chatId, _, _, _, _, _, _),
+             .toolStarted(let chatId, _, _, _, _, _, _, _),
              .toolCompleted(let chatId, _, _, _, _, _, _, _),
              .toolOutput(let chatId, _, _, _, _, _),
              .task(let chatId, _),
@@ -1018,7 +1020,8 @@ enum ServerMessage {
                 args: object["args"],
                 parentCallId: object["parentCallId"]?.string,
                 agent: object["agent"]?.string,
-                model: object["model"]?.string
+                model: object["model"]?.string,
+                at: object["at"]?.int
             )
         case "tool-completed":
             return .toolCompleted(

@@ -200,6 +200,58 @@ function sameRefs(a: unknown[] | undefined, b: unknown[]) {
   return true;
 }
 
+/** 以分段最后一个 turn 为键缓存分段哈希；命中后仍要比对整段引用 */
+const segHashCache = new WeakMap<object, { refs: unknown[]; hash: string }>();
+
+/**
+ * 每段内容的哈希，算法与分段文件名一致：sha1(JSON.stringify(分段))。
+ * 没装回的用落盘描述；装回的按引用复用上次写盘的哈希或缓存，其余现算。不会触发装回，0 条返回 null
+ */
+export function segmentHashes(store: BodyStore, chat: unknown): string[] | null {
+  if (!chat || typeof chat !== "object") return null;
+  if (!isBodyLoaded(chat)) {
+    const info = (chat as { [BODY]?: BodyInfo })[BODY];
+    return info?.count ? info.segs.slice() : null;
+  }
+  const turns = (chat as { turns?: unknown }).turns;
+  if (!Array.isArray(turns) || !turns.length) return null;
+  const id = (chat as { id?: unknown }).id;
+  const record = typeof id === "string" ? store.records.get(id) : undefined;
+  const hashes: string[] = [];
+  for (let i = 0; i * SEGMENT_TURNS < turns.length; i += 1) {
+    const refs = turns.slice(i * SEGMENT_TURNS, (i + 1) * SEGMENT_TURNS);
+    const known = record?.segHashes[i];
+    if (known && sameRefs(record?.segRefs[i], refs)) {
+      hashes.push(known);
+      continue;
+    }
+    const last = refs[refs.length - 1];
+    const key = last && typeof last === "object" ? last : null;
+    const cached = key ? segHashCache.get(key) : undefined;
+    if (cached && sameRefs(cached.refs, refs)) {
+      hashes.push(cached.hash);
+      continue;
+    }
+    const hash = createHash("sha1").update(JSON.stringify(refs)).digest("hex");
+    if (key) segHashCache.set(key, { refs, hash });
+    hashes.push(hash);
+  }
+  return hashes;
+}
+
+/** 不读 turns：没装回内存的会话用落盘时记下的条数和预览 */
+export function slimChat(store: BodyStore, item: unknown): unknown {
+  if (!item || typeof item !== "object") return item;
+  const summary = bodySummary(item);
+  const rest = chatMeta(item as Record<string, unknown>);
+  delete rest.draft;
+  delete rest.draftImages;
+  delete rest.preview; // 不信客户端写回的旧值
+  if (!summary?.count) return { ...rest, turns: [] };
+  const segHashes = segmentHashes(store, item);
+  return segHashes ? { ...rest, preview: summary.preview, segHashes } : { ...rest, preview: summary.preview };
+}
+
 /** 写一条会话的正文，返回 state.json 里的 body 描述。只重写变了的分段 */
 function writeBody(store: BodyStore, id: string, turns: unknown[], preview: string): BodyInfo {
   const prev = store.records.get(id);

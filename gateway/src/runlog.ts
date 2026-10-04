@@ -104,6 +104,8 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
       transcript.thinking += message.text || "";
       break;
     case "tool-started": {
+      const index = transcript.tools.findIndex((item) => item.callId === message.callId);
+      const prevAt = index >= 0 ? transcript.tools[index].at : undefined;
       const next: RunTool = {
         callId: message.callId,
         name: message.name,
@@ -112,8 +114,9 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
         parentCallId: message.parentCallId,
         agent: message.agent,
         model: message.model,
+        // 只认第一次开始时的位置；按 UTF-16 码元计，客户端自己换算
+        at: typeof prevAt === "number" ? prevAt : transcript.assistant.length,
       };
-      const index = transcript.tools.findIndex((item) => item.callId === next.callId);
       if (index >= 0) transcript.tools[index] = { ...transcript.tools[index], ...next };
       else transcript.tools.push(next);
       break;
@@ -130,6 +133,7 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
         parentCallId: message.parentCallId || prev?.parentCallId,
         agent: message.agent || prev?.agent,
         model: message.model || prev?.model,
+        at: prev?.at,
       };
       if (index >= 0) transcript.tools[index] = next;
       else transcript.tools.push(next);
@@ -313,6 +317,40 @@ export function keepTurnFiles(prevTurns: unknown[] | undefined, turns: unknown[]
   });
 }
 
+/**
+ * 旧客户端上传的工具没有 at：从磁盘上同 id 回合里同 callId 的工具补回。
+ * callId 可能跨回合复用，没有 id 的回合不补。没补的回合原样返回，不换对象
+ */
+export function keepToolsAt(prevTurns: unknown[] | undefined, turns: unknown[]): unknown[] {
+  if (!Array.isArray(prevTurns) || !prevTurns.length) return turns;
+  const byTurn = new Map<string, Map<string, number>>();
+  for (const turn of prevTurns) {
+    const id = turnIdOf(turn);
+    if (!id || byTurn.has(id) || !isRecord(turn) || !Array.isArray(turn.tools)) continue;
+    const atById = new Map<string, number>();
+    for (const tool of turn.tools) {
+      if (isRecord(tool) && typeof tool.callId === "string" && tool.callId && typeof tool.at === "number") {
+        atById.set(tool.callId, tool.at);
+      }
+    }
+    if (atById.size) byTurn.set(id, atById);
+  }
+  if (!byTurn.size) return turns;
+  return turns.map((turn) => {
+    const atById = byTurn.get(turnIdOf(turn));
+    if (!atById || !isRecord(turn) || !Array.isArray(turn.tools)) return turn;
+    let hit = false;
+    const tools = turn.tools.map((tool) => {
+      if (!isRecord(tool) || typeof tool.at === "number" || typeof tool.callId !== "string") return tool;
+      const at = atById.get(tool.callId);
+      if (at == null) return tool;
+      hit = true;
+      return { ...tool, at };
+    });
+    return hit ? { ...turn, tools } : turn;
+  });
+}
+
 function findDiskTurn(turns: unknown[], turn: unknown, used: Set<number>): number {
   const id = turnIdOf(turn);
   if (id) {
@@ -336,7 +374,7 @@ export function mergeUploadedTurns(
   if (!incoming) return { turns: prevTurns, clearMark: false };
   const fullById = new Map(prevTurns.map((item) => [turnIdOf(item), item]));
   const used = new Set<number>();
-  const turns = incoming.flatMap((item) => {
+  const merged = incoming.flatMap((item) => {
     if (isRecord(item) && item.clipped === true) {
       const full = fullById.get(turnIdOf(item));
       return full ? [full] : [];
@@ -346,6 +384,7 @@ export function mergeUploadedTurns(
     used.add(index);
     return [withDiskFiles(prevTurns[index], longerTurn(prevTurns[index], item))];
   });
+  const turns = keepToolsAt(prevTurns, merged);
   const covered = Boolean(
     mark &&
       turns.some(
@@ -442,6 +481,7 @@ export function clipSnapshot(message: ServerMessage, maxBytes: number): ServerMe
       callId: tool.callId,
       name: tool.name,
       status: tool.status,
+      at: tool.at,
     })),
   };
   if (Buffer.byteLength(JSON.stringify(trimmed)) <= maxBytes) return trimmed;

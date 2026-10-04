@@ -11,7 +11,8 @@
     "smoke:loops": "tsx src/loops-smoke.ts",
     "smoke:assistant": "tsx src/assistant-smoke.ts",
     "smoke:apns": "tsx src/apns-smoke.ts",
-    "smoke:turnfiles": "tsx src/turnfiles-smoke.ts"
+    "smoke:turnfiles": "tsx src/turnfiles-smoke.ts",
+    "smoke:seghash": "tsx src/seghash-smoke.ts"
   },
   "dependencies": {
     "@cursor/sdk": "^1.0.9",

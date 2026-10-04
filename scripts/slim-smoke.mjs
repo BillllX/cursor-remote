@@ -2,7 +2,7 @@
 // P8 slim_state / load_chat 分页冒烟（本地 dev gateway）。
 // 用法: CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/slim-smoke.mjs   （默认连 127.0.0.1:8787）
 import WebSocket from "ws";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
@@ -15,6 +15,7 @@ const TURNS = 95; // 40/页 → 3 页（55..94, 15..54, 0..14）
 const BIG = "巨".repeat(300_000); // ~900KB 单 turn，超 80% 帧预算 → 应被 clip
 
 let failed = 0;
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 function step(ok, label, extra = "") {
   if (!ok) failed += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${extra ? `  — ${extra}` : ""}`);
@@ -108,6 +109,12 @@ async function main() {
   step(!!row && typeof row.preview === "string" && row.preview.length > 0 && row.preview.length <= 100,
     "slim stored_state：补 preview 摘要（≤100 字）", `len=${row?.preview?.length}`);
   step(!!emptyRow && Array.isArray(emptyRow.turns) && emptyRow.turns.length === 0, "slim stored_state：真空会话保留 turns:[]");
+  const ready3 = slim3.inbox.find((m) => m.type === "ready");
+  step(["seg_hashes", "tool_at", "slim_chats"].every((f) => ready3?.features?.includes(f)),
+    "ready.features 带 seg_hashes / tool_at / slim_chats", JSON.stringify(ready3?.features));
+  step(Array.isArray(row?.segHashes) && row.segHashes.length === 1 && /^[0-9a-f]{40}$/.test(row.segHashes[0]),
+    "slim stored_state：有内容的会话带 segHashes（96 条 1 段）", JSON.stringify(row?.segHashes));
+  step(!!emptyRow && !("segHashes" in emptyRow), "slim stored_state：真空会话不带 segHashes");
 
   // 1b. slim 客户端 load_chats 仍回全量（digest 对账是跨设备 turns 更新唯一通道；Grok 评审 MINOR1 注释固化）
   //（用 slim3：slim2 的 1MB 上限装不下含巨 turn 的全量，会回落 deferred）
@@ -115,6 +122,19 @@ async function main() {
   const sc = await slim3.waitFor((m) => m.type === "stored_chat" && m.chat?.id === chatId, "slim load_chats");
   step(Array.isArray(sc.chat?.turns) && sc.chat.turns.length === TURNS + 1,
     "slim 客户端 load_chats 回全量 turns", `n=${sc.chat?.turns?.length}`);
+  const seg0 = createHash("sha1").update(JSON.stringify(sc.chat?.turns?.slice(0, 100) ?? [])).digest("hex");
+  step(row?.segHashes?.[0] === seg0, "segHashes[0] = sha1(JSON.stringify(turns[0..<100]))");
+
+  // 1c. slim_chats 客户端：load_chats 只回元数据 + segHashes，1MB 以下的上限也不会因巨 turn 回落 deferred
+  const slimc = client("slimc", ["sync_chat", "stored_digest", "slim_state", "slim_chats"], 200_000);
+  await slimc.hello();
+  slimc.send({ type: "load_chats", ids: [chatId, emptyId] });
+  const scs = await slimc.waitFor((m) => m.type === "stored_chat" && m.chat?.id === chatId, "slim_chats load_chats");
+  step(!("turns" in scs.chat) && same(scs.chat.segHashes, row?.segHashes) && typeof scs.chat.preview === "string",
+    "slim_chats：stored_chat 不带 turns，segHashes 与 stored_state 一致");
+  const sce = await slimc.waitFor((m) => m.type === "stored_chat" && m.chat?.id === emptyId, "slim_chats 空会话");
+  step(Array.isArray(sce.chat.turns) && sce.chat.turns.length === 0, "slim_chats：真空会话保留 turns:[]");
+  slimc.ws.close();
 
   // 2. load_chat 分页：末页 → 向前翻到底（共 96 条：40 + 40 + 16；巨 turn 在末页）
   slim2.send({ type: "load_chat", chatId, nonce: 7 }); // nonce：分页代际标记，应原样回显（Kimi R2 M1）
@@ -207,6 +227,7 @@ async function main() {
   const http = await res.json();
   const hrow = (http.chats || []).find((c) => c && c.id === chatId);
   step(res.ok && !!hrow && !("turns" in hrow) && typeof hrow.preview === "string", "HTTP /state?slim=1 同样剥 turns 补 preview");
+  step(Array.isArray(hrow?.segHashes) && hrow.segHashes.length === 1, "HTTP /state?slim=1 同样带 segHashes");
 
   // 7. Kimi 设计评审修补回归：
   //    a) load_chat 页过 settle——磁盘 running 残留（非 live 会话）不能下发成永远转圈

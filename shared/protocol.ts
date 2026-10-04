@@ -140,6 +140,9 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //                      stored_chat（load_chats 应答）仍回全量——digest 对账是跨设备 turns 更新唯一通道
 //                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
 //                     网页 v2 起不再上传正文：图片随网关转录落盘，截断走 truncate_turns
+//   "slim_chats"    —— stored_chat 也只给元数据（同 slim_state 的行），内容走 load_chat 分页
+// slim 行对有内容的会话带 segHashes：第 i 个是 turns[i*100, (i+1)*100) 的 sha1(JSON.stringify(分段))，
+// 客户端据此只重拉变了的分段
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
 
 export type ClientMessage =
@@ -293,6 +296,8 @@ export type HistoryTurn = {
     parentCallId?: string;
     agent?: string;
     model?: string;
+    /** 首次开始时 assistant 已有的长度（UTF-16 码元），工具卡片插在正文这个位置 */
+    at?: number;
   }>;
   /** 这一轮结束且写过文件时才有这个键 */
   files?: TurnFile[];
@@ -342,7 +347,10 @@ export type ServerMessage =
       assistantName?: string;
       /** 这个租户唯一的助理会话编号；固定在 USER 根目录，不能删除、不能换工作区 */
       assistantChatId?: string;
-      /** 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId） */
+      /**
+       * 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId）、
+       * "seg_hashes"（slim 行带 segHashes）、"tool_at"（工具带 at）、"slim_chats"（认 slim_chats cap）
+       */
       features?: string[];
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
@@ -357,6 +365,8 @@ export type ServerMessage =
       callId: string;
       name: string;
       args?: unknown;
+      /** 网关按本轮转录补上，含义同 HistoryTurn tools[].at */
+      at?: number;
     } & ToolMeta)
   | ({
       type: "tool-completed";
@@ -443,7 +453,8 @@ export type ServerMessage =
     }
   // 分叉时的目录推送（P4c，需 caps: ["stored_digest"]）：客户端比对 chatRevs 后用 load_chats 拉差异会话
   | { type: "stored_digest"; rev?: number; deletedIds?: string[]; chatRevs?: Record<string, number> }
-  // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）
+  // load_chats 的应答：单个会话全量（slim_state 客户端也是全量——digest 对账是跨设备 turns 更新唯一通道）；
+  // 带 slim_chats cap 时只给元数据 + segHashes
   | { type: "stored_chat"; chat: unknown; rev?: number }
   // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记；
   // nonce 回显请求的 nonce（客户端分页代际校验，见 load_chat）

@@ -271,12 +271,25 @@ final class ChatStore {
     private var bodyRevs: [String: Int] = [:]
     /// 分页/补齐发起时的 chatRevs[id]：完成时正文就是这个版本（途中版本又前进了就再补一次）
     private var loadStartRevs: [String: Int] = [:]
+    /// 服务端段哈希（segHashes[i] 覆盖 turns[i*100, (i+1)*100)）和它对应的会话版本：版本对不上就不能用
+    private struct SegHashes: Equatable {
+        var rev: Int
+        var hashes: [String]
+    }
+    /// slim 行带来的服务端最新段哈希
+    private var serverSegs: [String: SegHashes] = [:]
+    /// 内存正文对应的服务端段哈希：跟 bodyRevs 同设同清（rev 与 bodyRevs 一致才有效）
+    private var bodySegs: [String: SegHashes] = [:]
+    /// 分页/补齐发起时的服务端段哈希，完成时随 loadStartRevs 记进 bodySegs
+    private var loadStartSegs: [String: SegHashes] = [:]
     /// 增量补齐的进度：base 是基线里已结束的回合，acc 是从末尾往前累积的服务端回合（覆盖 [from, total)）
     private struct BodyRefresh {
         var base: [Turn]
         var acc: [Turn] = []
         /// 基线和服务端对不上：继续翻到第一页，最后用 acc 整体替换
         var fallback = false
+        /// 段哈希判出的第一个变动位置：acc 至少要覆盖到这里（from <= minFrom）才能接缝
+        var minFrom: Int?
     }
     private var bodyRefreshes: [String: BodyRefresh] = [:]
     /// 正在读本机正文缓存的会话（读完前不重复读、不发分页）
@@ -1005,6 +1018,19 @@ final class ChatStore {
             chats[index].turnsComplete = true
             chats[index].serverPreview = nil
             loadStartRevs[chatId] = nil
+            loadStartSegs[chatId] = nil
+            completeTurnsLoad(chatId)
+            return
+        }
+        let segCompare = compareSegs(chatId)
+        // 段哈希全部一致：服务端正文没变，基线版本对齐到当前版本，同样不发请求
+        if case .same = segCompare, let serverRev = chatRevs[chatId] {
+            bodyRevs[chatId] = serverRev
+            bodySegs[chatId] = serverSegs[chatId]
+            chats[index].turnsComplete = true
+            chats[index].serverPreview = nil
+            loadStartRevs[chatId] = nil
+            loadStartSegs[chatId] = nil
             completeTurnsLoad(chatId)
             return
         }
@@ -1013,10 +1039,15 @@ final class ChatStore {
         loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1 // 新分页链起新代际
         loadingChatIds.insert(chatId)
         loadStartRevs[chatId] = chatRevs[chatId]
+        loadStartSegs[chatId] = currentServerSegs(chatId)
         if bodyRevs[chatId] != nil {
             // 有旧正文基线：增量补齐。基线留着显示、不并页，turnsComplete 保持 false——
             // json() 不带 turns，补齐完成前旧正文不会随 sync_chat 盖掉服务端的新回合
-            bodyRefreshes[chatId] = BodyRefresh(base: chats[index].turns.filter { !ChatStore.isLiveTurn($0) })
+            var refresh = BodyRefresh(base: chats[index].turns.filter { !ChatStore.isLiveTurn($0) })
+            if case .changed(let segment) = segCompare {
+                refresh.minFrom = min(segment * ChatStore.serverSegmentSize, refresh.base.count)
+            }
+            bodyRefreshes[chatId] = refresh
             refreshingChatIds.insert(chatId)
         }
         send(.loadChat(chatId: chatId, from: nil, nonce: loadEpochs[chatId]))
@@ -1025,6 +1056,47 @@ final class ChatStore {
     /// 本地「活的」回合：补齐时以本地为准，不让服务端的旧副本盖掉
     private static func isLiveTurn(_ turn: Turn) -> Bool {
         turn.running || turn.queued || turn.pendingTool != nil
+    }
+
+    /// 网关段哈希每段的回合数
+    private static let serverSegmentSize = 100
+
+    private enum SegCompare {
+        /// 比不了（网关不支持、哈希缺失或版本对不上）：退回末页接缝
+        case unknown
+        case same
+        /// 第一个不一致的段（或一方先结束的位置）
+        case changed(Int)
+    }
+
+    /// 服务端段哈希，只在它就是 chatRevs 当前版本的哈希时返回
+    private func currentServerSegs(_ chatId: String) -> SegHashes? {
+        guard let segs = serverSegs[chatId], segs.rev == chatRevs[chatId] else { return nil }
+        return segs
+    }
+
+    /// 基线正文的段哈希和服务端当前段哈希比对
+    private func compareSegs(_ chatId: String) -> SegCompare {
+        guard gatewayFeatures.contains("seg_hashes"),
+              let bodyRev = bodyRevs[chatId],
+              let body = bodySegs[chatId], body.rev == bodyRev,
+              let server = currentServerSegs(chatId)
+        else { return .unknown }
+        let shared = min(body.hashes.count, server.hashes.count)
+        if let index = (0 ..< shared).first(where: { body.hashes[$0] != server.hashes[$0] }) {
+            return .changed(index)
+        }
+        return body.hashes.count == server.hashes.count ? .same : .changed(shared)
+    }
+
+    /// slim 行带的 segHashes 记成服务端段哈希（版本取 chatRevs，调用前先更新 chatRevs）
+    private func noteServerSegs(_ row: JSONValue) {
+        guard let object = row.object, let id = object["id"]?.string else { return }
+        if let hashes = object["segHashes"]?.array?.compactMap(\.string), let rev = chatRevs[id] {
+            serverSegs[id] = SegHashes(rev: rev, hashes: hashes)
+        } else {
+            serverSegs[id] = nil
+        }
     }
 
     /// 后台读本机正文缓存，命中就装成基线（bodyRevs 记缓存版本），然后回到 ensureTurnsLoaded
@@ -1047,6 +1119,7 @@ final class ChatStore {
                 let local = self.chats[index].turns.filter { !cachedIds.contains($0.id) }
                 self.chats[index].turns = body.turns + local
                 self.bodyRevs[chatId] = body.rev
+                self.bodySegs[chatId] = body.serverSegs.map { SegHashes(rev: body.rev, hashes: $0) }
             }
             self.ensureTurnsLoaded(chatId)
         }
@@ -1062,13 +1135,20 @@ final class ChatStore {
     }
 
     /// 增量补齐的一页。acc 覆盖服务端 [from, total)；from 落进基线后比对 base[from] 与这页第一条：
-    /// 一致 → base[..<from] + acc 完成；不一致 → 退回全量，继续翻到第一页后用 acc 整体替换
+    /// 一致 → base[..<from] + acc 完成；不一致 → 退回全量，继续翻到第一页后用 acc 整体替换。
+    /// 有 minFrom（段哈希判出的第一个变动位置）时 acc 必须覆盖到它才接缝：from > minFrom 继续往前翻；
+    /// from == minFrom == base.count 是纯追加，直接 base + acc
     private func applyRefreshPage(chatId: String, rows: [JSONValue], from: Int, hasMore: Bool) {
         guard var refresh = bodyRefreshes[chatId] else { return }
         let page = rows.compactMap(Turn.from)
         let known = Set(refresh.acc.map(\.id))
         refresh.acc = page.filter { !known.contains($0.id) } + refresh.acc
-        if !refresh.fallback, from >= 0, from < refresh.base.count {
+        let reached = refresh.minFrom.map { from <= $0 } ?? true
+        if !refresh.fallback, reached, from >= 0, from == refresh.base.count, refresh.minFrom == from {
+            finishRefresh(chatId, server: refresh.base + refresh.acc)
+            return
+        }
+        if !refresh.fallback, reached, from >= 0, from < refresh.base.count {
             if let first = page.first, refresh.base[from].id == first.id {
                 finishRefresh(chatId, server: Array(refresh.base.prefix(from)) + refresh.acc)
                 return
@@ -1113,8 +1193,10 @@ final class ChatStore {
 
     /// 正文齐了（全量分页、增量补齐、基线版本一致）之后的公共收尾。调用前已置 turnsComplete = true
     private func completeTurnsLoad(_ chatId: String) {
+        let startSegs = loadStartSegs.removeValue(forKey: chatId)
         if let rev = loadStartRevs.removeValue(forKey: chatId) ?? chatRevs[chatId] {
             bodyRevs[chatId] = rev
+            bodySegs[chatId] = [startSegs, serverSegs[chatId], bodySegs[chatId]].compactMap { $0 }.first { $0.rev == rev }
         }
         // 加载期间发过消息：当时的 sync 无 turns 键、dirty 已被清——现在 turns 齐了，
         // 必须补一次全量回推，否则本地新 turn 永不落盘（Grok 评审 M2）
@@ -1191,7 +1273,8 @@ final class ChatStore {
                           || turn.tools.contains(where: { $0.status == "running" })
                   })
             else { return }
-            ChatCache.saveBody(tenant: tenant, chatId: chatId, rev: rev, turns: chat.turns.map { $0.json() })
+            let segs = self.bodySegs[chatId].flatMap { $0.rev == rev ? $0.hashes : nil }
+            ChatCache.saveBody(tenant: tenant, chatId: chatId, rev: rev, turns: chat.turns.map { $0.json() }, serverSegs: segs)
         }
     }
 
@@ -1199,6 +1282,7 @@ final class ChatStore {
     private func forgetBodyCache(_ chatId: String) {
         bodyCacheTasks.removeValue(forKey: chatId)?.cancel()
         bodyRevs[chatId] = nil
+        bodySegs[chatId] = nil
         guard chatId != "boot", !tenantId.isEmpty else { return }
         ChatCache.remove(tenant: tenantId, chatId: chatId)
     }
@@ -2138,6 +2222,7 @@ final class ChatStore {
             return next
         }
         chats[index] = chat
+        bodySegs[chat.id] = nil // 本地写了保留/还原标记，正文与段哈希不再对应
         if untaggable { localTurnReviews[turnId] = review }
         guard !reviews.isEmpty else { return }
         send(.toolReview(chatId: chat.id, turnId: turnId, reviews: reviews))
@@ -2354,6 +2439,7 @@ final class ChatStore {
             self.bodyRefreshes = [:]
             self.refreshingChatIds = []
             self.loadStartRevs = [:]
+            self.loadStartSegs = [:]
             self.awaitSnapshot = []
             self.sawSnapshot = []
             self.snapshotHold = []
@@ -2532,6 +2618,7 @@ final class ChatStore {
                     // 完整正文随 sync_chat 上去且被收下：服务端正文就是本地这份，正文版本跟着前进
                     if chats.first(where: { $0.id == id })?.turnsComplete == true {
                         bodyRevs[id] = chatRev
+                        bodySegs[id] = nil // 这个版本的服务端段哈希还不知道
                         scheduleBodyCache(id)
                     }
                 }
@@ -2546,7 +2633,9 @@ final class ChatStore {
             if let id = value.object?["id"]?.string { pendingChatLoads.remove(id) } // 解析失败也别白等安全网
             guard let remote = ChatSession.from(value), !deletedIds.contains(remote.id) else { break }
             pendingChatLoads.remove(remote.id)
+            let priorRev = chatRevs[remote.id]
             if let rev { chatRevs[remote.id] = rev }
+            if !remote.turnsComplete { noteServerSegs(value) }
             // 本地优先（脏/有未回推新 turn）的会话不应用服务器版，稍后重推
             if !hasLocalPriority(remote.id) {
                 cachedOnlyIds.remove(remote.id) // 服务端版本到了，不再是只读缓存行
@@ -2555,15 +2644,22 @@ final class ChatStore {
                     mergedChat.draft = chats[index].draft.isEmpty ? remote.draft : chats[index].draft
                     // P8 slim：元数据壳（无 turns 键）不得清空已加载正文——只更新元数据；
                     // 全量到达则取消在途分页（迟到页由 loadingChatIds 校验丢弃）
+                    var staleRev: Int?
                     if !remote.turnsComplete {
                         mergedChat.turns = chats[index].turns
                         mergedChat.turnsComplete = chats[index].turnsComplete
+                        // slim_chats：壳的版本比已加载正文新 → 正文留作基线、标成待补齐（同 applyStoredState 的 slim 行）
+                        if mergedChat.turnsComplete, let rev, let oldRev = bodyRevs[remote.id] ?? priorRev, oldRev != rev {
+                            staleRev = oldRev
+                        }
                     } else {
                         dropChatState(remote.id) // 全量到达取消在途分页 + 清暂存（迟到页由校验丢弃）
                         bodyRevs[remote.id] = rev
+                        bodySegs[remote.id] = nil
                         scheduleBodyCache(remote.id)
                     }
                     chats[index] = mergedChat
+                    if let staleRev { markNeedsRefresh(remote.id, rev: staleRev) }
                 } else {
                     chats.append(remote)
                 }
@@ -2621,12 +2717,13 @@ final class ChatStore {
                 return next
             }
             showThinkingIds.insert(id)
-        case .toolStarted(let id, let callId, let name, let args, let parent, let agent, let toolModel):
+        case .toolStarted(let id, let callId, let name, let args, let parent, let agent, let toolModel, let toolAt):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
                 var next = turn
+                let priorAt = next.tools.first { $0.callId == callId }?.at
                 next.tools.removeAll { $0.callId == callId }
-                next.tools.append(ToolCall(callId: callId, name: name, args: args, result: nil, status: "running", parentCallId: parent, agent: agent, model: toolModel))
+                next.tools.append(ToolCall(callId: callId, name: name, args: args, result: nil, status: "running", parentCallId: parent, agent: agent, model: toolModel, at: priorAt ?? toolAt))
                 return next
             }
         case .toolCompleted(let id, let callId, let name, let status, let result, let parent, let agent, let toolModel):
@@ -2646,7 +2743,8 @@ final class ChatStore {
                     status: status,
                     parentCallId: existing?.parentCallId ?? parent,
                     agent: existing?.agent ?? agent,
-                    model: existing?.model ?? toolModel
+                    model: existing?.model ?? toolModel,
+                    at: existing?.at
                 ))
                 return next
             }
@@ -2674,7 +2772,8 @@ final class ChatStore {
                         status: "running",
                         parentCallId: nil,
                         agent: nil,
-                        model: nil
+                        model: nil,
+                        at: nil
                     ))
                 }
                 return next
@@ -2758,6 +2857,7 @@ final class ChatStore {
                 }
                 // 正文少了这一轮，不能按「版本一致」直接补齐：有基线的作废版本号（只走增量补齐），也不再读本机缓存
                 if bodyRevs[id] != nil { bodyRevs[id] = Int.min }
+                bodySegs[id] = nil
                 cacheCheckedIds.insert(id)
                 pendingSnapshots[id] = message
                 ensureTurnsLoaded(id)
@@ -2880,8 +2980,13 @@ final class ChatStore {
                 }
             }
         case .fileContent(let path, let msgChatId, let content, let error, let diff, let kind, let mime, let size, let url, let headUrl, let media, let reqId, let replySha):
-            // 带 reqId 的是旁路读取（以后的缩略图），不进内容层也不进页签
-            if reqId != nil { break }
+            // 带 reqId 的是旁路读取（缩略图等），不进内容层也不进页签
+            if let reqId {
+                if reqId.hasPrefix("thumb:") {
+                    ThumbnailStore.shared.handleReply(reqId: reqId, path: path, kind: kind, content: content, url: url, media: media, error: error)
+                }
+                break
+            }
             let forActive = msgChatId?.isEmpty != false || msgChatId == activeId
             let forContent = msgChatId == contentChatId && contentChatId != nil
             let forPinned = previewTabs.contains { $0.path == path && $0.fromCard && $0.chatId != nil && $0.chatId == msgChatId }
@@ -3019,6 +3124,7 @@ final class ChatStore {
                   let turnIndex = chats[index].turns.firstIndex(where: { $0.id == turnId })
             else { break }
             chats[index].turns[turnIndex].files = files
+            bodySegs[filesChatId] = nil
             scheduleBodyCache(filesChatId)
         case .undone(_, let paths, let error):
             settleRestore(chatId: chatId, paths: paths, error: error?.nilIfEmpty)
@@ -3405,6 +3511,11 @@ final class ChatStore {
         send(.loopStop(chatId: activeId))
     }
 
+    /// 缩略图旁路读取：带 reqId，回包不进页签/内容层
+    func sendThumbnailRead(path: String, chatId: String, sha: String?, reqId: String) {
+        send(.readFile(path: path, chatId: chatId, diff: false, sha: sha, reqId: reqId))
+    }
+
     private func send(_ message: ClientMessage) {
         if case .hello = message {
             client.send(message)
@@ -3476,7 +3587,15 @@ final class ChatStore {
                     var row = next.turns[index]
                     if assistant.count >= row.assistant.count { row.assistant = assistant }
                     if thinking.count >= row.thinking.count { row.thinking = thinking }
-                    if parsedTools.count >= row.tools.count { row.tools = parsedTools }
+                    if parsedTools.count >= row.tools.count {
+                        var priorAt: [String: Int] = [:]
+                        for tool in row.tools where priorAt[tool.callId] == nil { priorAt[tool.callId] = tool.at }
+                        row.tools = parsedTools.map { tool in
+                            var item = tool
+                            if item.at == nil { item.at = priorAt[item.callId] }
+                            return item
+                        }
+                    }
                     if let task { row.task = task }
                     if let model { row.model = model }
                     if let mode { row.mode = mode }
@@ -3544,7 +3663,8 @@ final class ChatStore {
             status: row["status"]?.string ?? "completed",
             parentCallId: row["parentCallId"]?.string,
             agent: row["agent"]?.string,
-            model: row["model"]?.string
+            model: row["model"]?.string,
+            at: row["at"]?.int
         )
     }
 
@@ -3657,6 +3777,7 @@ final class ChatStore {
         bodyRefreshes[id] = nil
         refreshingChatIds.remove(id)
         loadStartRevs[id] = nil
+        loadStartSegs[id] = nil
     }
 
     /// 本地优先门闩：显式脏 + 加载期间发过消息（Grok R2 M1——后者 turns 未齐时 sync 不带正文，
@@ -3714,7 +3835,10 @@ final class ChatStore {
 
     private func patch(_ id: String, _ update: (ChatSession) -> ChatSession) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
-        chats[index] = update(chats[index])
+        let before = chats[index]
+        chats[index] = update(before)
+        // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
+        if bodySegs[id] != nil, chats[index].turns != before.turns { bodySegs[id] = nil }
         // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
         if id != "boot", !cachedOnlyIds.contains(id) { dirtyChatIds.insert(id) }
         scheduleSync()
@@ -3837,13 +3961,17 @@ final class ChatStore {
         localTurnsPendingSync = []
         // 本机缓存：换账号清掉旧租户的（登出时 tenantId 已清空，由 logout 整体清），在途读写作废
         if !tenantId.isEmpty { ChatCache.clear(tenant: tenantId) }
+        ThumbnailStore.shared.reset(tenant: tenantId)
         cacheEpoch += 1
         for task in bodyCacheTasks.values { task.cancel() }
         bodyCacheTasks = [:]
         listCacheTask?.cancel()
         refreshingChatIds = []
         bodyRevs = [:]
+        bodySegs = [:]
+        serverSegs = [:]
         loadStartRevs = [:]
+        loadStartSegs = [:]
         bodyRefreshes = [:]
         cacheReadingIds = []
         cacheCheckedIds = []
@@ -3966,6 +4094,9 @@ final class ChatStore {
         inflightChatIds = []
         let oldRevs = chatRevs
         chatRevs = serverRevs ?? [:] // 服务端视图全量替换
+        // 段哈希跟着全量替换（只有 slim 行带，版本取刚换上的 chatRevs）
+        serverSegs = [:]
+        for row in rows { noteServerSegs(row) }
         if stateReloadPending {
             stateReloadPending = false
             digestTimeoutTask?.cancel()

@@ -11,6 +11,8 @@ struct ToolCall: Identifiable, Hashable {
     var model: String?
     /// 网页 tool.review：accepted 保留，rejected 还原。空着表示这轮还能整体处理。
     var review: String?
+    /// 工具开始时 assistant 正文的长度（UTF-16 偏移），文件卡片按它插回正文里。旧数据没有
+    var at: Int? = nil
     var id: String { callId }
 
     var kind: ToolKind { ToolKind.from(name: name, args: args) }
@@ -263,6 +265,7 @@ struct Turn: Identifiable, Hashable {
             if let agent = tool.agent { row["agent"] = .string(agent) }
             if let model = tool.model { row["model"] = .string(model) }
             if let review = tool.review, !review.isEmpty { row["review"] = .string(review) }
+            if let at = tool.at { row["at"] = .number(Double(at)) }
             return .object(row)
         })
         object["running"] = .bool(false)
@@ -300,7 +303,8 @@ struct Turn: Identifiable, Hashable {
                 parentCallId: row["parentCallId"]?.string,
                 agent: row["agent"]?.string,
                 model: row["model"]?.string,
-                review: row["review"]?.string
+                review: row["review"]?.string,
+                at: row["at"]?.int
             )
         } ?? []
         return Turn(
@@ -370,7 +374,8 @@ struct ChatSession: Identifiable, Hashable {
 
     static let knownKeys: Set<String> = [
         "id", "title", "turns", "agentId", "draft", "model", "mode", "cwd", "unread", "confirmWrites", "policy",
-        "preview",
+        // segHashes 是服务端段哈希，ChatStore 单独记，不进 extra，免得随 sync 回传
+        "preview", "segHashes",
     ]
 
     var isUntitled: Bool { title.isEmpty || title == "新对话" }

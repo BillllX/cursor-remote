@@ -24,7 +24,7 @@
     "bench:dialect": "node scripts/dialect-bench.mjs",
     "check:protocol": "diff shared/protocol.ts web/lib/protocol.ts && echo 'protocol 双份同步 ✅'",
     "ci": "npm run check:protocol && npm run build -w gateway && npm run ci:smoke && npm run build -w web",
-    "ci:smoke": "npm run smoke:assistant -w gateway && npm run smoke:turnfiles -w gateway && npm run smoke:loops -w gateway && npm run smoke:apns -w gateway && npm run smoke:native -w gateway && npm run smoke:publish -w gateway && bash scripts/ci-gateway-smoke.sh",
+    "ci:smoke": "npm run smoke:assistant -w gateway && npm run smoke:turnfiles -w gateway && npm run smoke:seghash -w gateway && npm run smoke:loops -w gateway && npm run smoke:apns -w gateway && npm run smoke:native -w gateway && npm run smoke:publish -w gateway && bash scripts/ci-gateway-smoke.sh",
     "smoke:native": "npm run smoke:native -w gateway",
     "smoke:assistant": "npm run smoke:assistant -w gateway"
   },

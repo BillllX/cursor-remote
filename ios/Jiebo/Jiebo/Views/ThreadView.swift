@@ -712,6 +712,7 @@ private struct TurnView: View {
     }
 
     var body: some View {
+        let inline = InlineFileCards.split(turn)
         VStack(alignment: .leading, spacing: 10) {
             if !turn.user.isEmpty {
                 HStack {
@@ -846,7 +847,21 @@ private struct TurnView: View {
                                 .font(JieboFont.ui(12, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                         }
-                        AssistantMessage(text: linkMentions(turn.assistant))
+                        if let inline {
+                            // 卡片插在正文中间：逐段渲染，段后跟这段写出的文件
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(Array(inline.parts.enumerated()), id: \.offset) { _, part in
+                                    if part.text.contains(where: { !$0.isWhitespace }) {
+                                        AssistantMessage(text: linkMentions(part.text))
+                                    }
+                                    if !part.files.isEmpty {
+                                        TurnFileCards(turn: turn, chatId: store.activeId, files: part.files)
+                                    }
+                                }
+                            }
+                        } else {
+                            AssistantMessage(text: linkMentions(turn.assistant))
+                        }
                         if turn.mode == .plan, !turn.running, !turn.queued {
                             Button("执行这个计划") { store.applyPlan(turn.id) }
                                 .buttonStyle(.plain)
@@ -891,7 +906,12 @@ private struct TurnView: View {
                     Button("取消", role: .cancel) {}
                 }
             }
-            if !turn.cardFiles.isEmpty {
+            if let inline {
+                if !inline.tail.isEmpty {
+                    TurnFileCards(turn: turn, chatId: store.activeId, files: inline.tail)
+                        .padding(.leading, 40)
+                }
+            } else if !turn.cardFiles.isEmpty {
                 TurnFileCards(turn: turn, chatId: store.activeId)
                     .padding(.leading, 40)
             }
@@ -965,6 +985,149 @@ private struct TurnView: View {
             of: #"^(readme|license|makefile|dockerfile|changelog|gemfile|procfile|jenkinsfile)(\.[a-z0-9]+)?$"#,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
+    }
+}
+
+/// 文件卡片插回正文：工具开始时记下的正文偏移（ToolCall.at，UTF-16）往后吸到块边界，正文在那里切开、卡片跟在后面。
+/// 边界只取行首（换行之后），不切进 ``` 围栏，也不切开表格（连续以 | 开头的行）
+private enum InlineFileCards {
+    struct Part {
+        var text: String
+        var files: [TurnFile]
+    }
+
+    /// nil：没有落在正文中间的卡片，照旧整段正文 + 末尾卡片。tail 是挂在末尾的（没有偏移或偏移在正文之后）
+    static func split(_ turn: Turn) -> (parts: [Part], tail: [TurnFile])? {
+        let text = turn.assistant
+        guard !text.isEmpty, turn.tools.contains(where: { $0.at != nil }) else { return nil }
+        let files = turn.cardFiles
+        guard !files.isEmpty else { return nil }
+        let lines = text.components(separatedBy: "\n")
+        // starts[i]：第 i 行起点的 UTF-16 偏移
+        var starts: [Int] = []
+        starts.reserveCapacity(lines.count)
+        var offset = 0
+        for line in lines {
+            starts.append(offset)
+            offset += line.utf16.count + 1
+        }
+        // allowed[k]：能否在第 k 行之前切开（k == lines.count 即末尾）
+        var allowed = [Bool](repeating: true, count: lines.count + 1)
+        // 围栏：最多缩进 3 格的 ``` 或 ~~~，只由同一种符号关上。fenced[i]：第 i 行在围栏里（含起止行）
+        var fenced = [Bool](repeating: false, count: lines.count)
+        var fenceOpenAfter = [Bool](repeating: false, count: lines.count)
+        var openMark: Character?
+        for index in lines.indices {
+            if let mark = fenceMark(lines[index]) {
+                if openMark == nil {
+                    openMark = mark
+                } else if openMark == mark {
+                    openMark = nil
+                }
+                fenced[index] = true
+            } else {
+                fenced[index] = openMark != nil
+            }
+            fenceOpenAfter[index] = openMark != nil
+        }
+        // 表格块：含 | 的表头 + 分隔行 + 之后连续的非空且含 | 的行。table[i] 是所在块的首行号，不在块里为 -1
+        var table = [Int](repeating: -1, count: lines.count)
+        var row = 0
+        while row < lines.count {
+            if row + 1 < lines.count, !fenced[row], !fenced[row + 1],
+               lines[row].contains("|"), isDelimiterRow(lines[row + 1])
+            {
+                var end = row + 2
+                while end < lines.count, !fenced[end], lines[end].contains("|"),
+                      lines[end].contains(where: { !$0.isWhitespace })
+                {
+                    end += 1
+                }
+                for member in row ..< end { table[member] = row }
+                row = end
+            } else {
+                row += 1
+            }
+        }
+        for index in lines.indices {
+            let next = index + 1
+            guard next < lines.count else { break }
+            let sameTable = table[index] >= 0 && table[index] == table[next]
+            allowed[next] = !fenceOpenAfter[index] && !sameTable
+                && !(isTableRow(lines[index]) && isTableRow(lines[next]))
+        }
+        // 最后一行有字的行之后只剩空行：落在那里的算末尾
+        let lastContent = lines.lastIndex(where: { line in line.contains(where: { !$0.isWhitespace }) }) ?? -1
+        let total = max(offset - 1, 0)
+        var groups: [Int: [TurnFile]] = [:]
+        var tail: [TurnFile] = []
+        for file in files {
+            guard let at = anchor(of: file, in: turn) else {
+                tail.append(file)
+                continue
+            }
+            let cut = boundary(at: at, total: total, starts: starts, allowed: allowed)
+            if cut > lastContent {
+                tail.append(file)
+            } else {
+                groups[cut, default: []].append(file)
+            }
+        }
+        guard !groups.isEmpty else { return nil }
+        var parts: [Part] = []
+        var previous = 0
+        for cut in groups.keys.sorted() {
+            parts.append(Part(text: lines[previous ..< cut].joined(separator: "\n"), files: groups[cut] ?? []))
+            previous = cut
+        }
+        parts.append(Part(text: lines[previous...].joined(separator: "\n"), files: []))
+        return (parts, tail)
+    }
+
+    /// 写这个文件的第一个带偏移的工具（路径归一同 Turn.cardPath / samePath）
+    private static func anchor(of file: TurnFile, in turn: Turn) -> Int? {
+        turn.tools.first { tool in
+            guard tool.at != nil, let path = Turn.cardPath(of: tool) else { return false }
+            return Turn.samePath(path, file.path)
+        }?.at
+    }
+
+    /// 偏移所在行的下一个行首（偏移正好在行首就是这一行），再跳过围栏/表格内部。返回「在第几行之前切」
+    private static func boundary(at raw: Int, total: Int, starts: [Int], allowed: [Bool]) -> Int {
+        let count = starts.count
+        let at = min(max(raw, 0), total)
+        if at == 0 { return 0 }
+        if at >= total { return count }
+        var low = 0
+        var high = count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if starts[mid] <= at { low = mid } else { high = mid - 1 }
+        }
+        var cut = starts[low] == at ? low : low + 1
+        while cut < count, !allowed[cut] { cut += 1 }
+        return cut
+    }
+
+    private static func isTableRow(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix("|")
+    }
+
+    /// 围栏起止行的符号（` 或 ~）；前面最多 3 个空格
+    private static func fenceMark(_ line: String) -> Character? {
+        let indent = line.prefix(while: { $0 == " " }).count
+        guard indent <= 3 else { return nil }
+        let rest = line.dropFirst(indent)
+        if rest.hasPrefix("```") { return "`" }
+        if rest.hasPrefix("~~~") { return "~" }
+        return nil
+    }
+
+    /// 表格分隔行：只由 - : | 和空白组成，至少一个 - 和一个 |
+    private static func isDelimiterRow(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains("-"), trimmed.contains("|") else { return false }
+        return trimmed.allSatisfy { $0 == "-" || $0 == ":" || $0 == "|" || $0 == " " || $0 == "\t" }
     }
 }
 

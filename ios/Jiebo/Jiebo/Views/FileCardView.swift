@@ -83,28 +83,35 @@ struct TurnFileCards: View {
     let chatId: String
     /// 打开前先做的事（委派详情是 sheet，预览层在它下面，要先收起）
     var beforeOpen: (() -> Void)?
+    /// 只画这一组（卡片插在正文中间时按段分组）；nil 画整轮
+    var files: [TurnFile]?
     @State private var expanded = false
 
     private static let featuredLimit = 2
     private static let compactLimit = 3
 
-    init(turn: Turn, chatId: String, beforeOpen: (() -> Void)? = nil) {
+    init(turn: Turn, chatId: String, files: [TurnFile]? = nil, beforeOpen: (() -> Void)? = nil) {
         self.turn = turn
         self.chatId = chatId
+        self.files = files
         self.beforeOpen = beforeOpen
     }
 
-    /// 同类型取最后出现的那个
+    /// 同类型取最后出现的那个。大卡按整轮挑，分组时只留落在本组的
     private var layout: (featured: [TurnFile], compact: [TurnFile]) {
-        let files = turn.cardFiles
+        let all = turn.cardFiles
         var featured: [TurnFile] = []
         for rank in 0 ... 6 where featured.count < Self.featuredLimit {
-            if let pick = files.last(where: { TurnFileStyle.featuredRank($0.kind) == rank }) {
+            if let pick = all.last(where: { TurnFileStyle.featuredRank($0.kind) == rank }) {
                 featured.append(pick)
             }
         }
         let picked = Set(featured.map(\.path))
-        return (featured, files.filter { !picked.contains($0.path) })
+        guard let files else {
+            return (featured, all.filter { !picked.contains($0.path) })
+        }
+        let group = Set(files.map(\.path))
+        return (featured.filter { group.contains($0.path) }, files.filter { !picked.contains($0.path) })
     }
 
     var body: some View {
@@ -164,7 +171,7 @@ struct TurnFileCards: View {
     }
 }
 
-/// 大卡：顶部一行文件名和状态，下面 16:10 的占位区（缩略图以后做）
+/// 大卡：顶部一行文件名和状态，下面 16:10 的缩略图区（没有缩略图时是图标占位）
 struct TurnFileLargeCard: View {
     @Environment(ChatStore.self) private var store
     let file: TurnFile
@@ -185,8 +192,27 @@ struct TurnFileLargeCard: View {
         return "\(kind) · \(formatBytes(size))"
     }
 
+    /// 键、连接、能力、写入状态任一变化都重新请求（同一键 ThumbnailStore 只会真正发一次）
+    private func thumbTrigger(writing: Bool) -> String {
+        let key = ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key
+        return "\(key)|\(store.connected)|\(store.gatewayFeatures.contains("read_req_id"))|\(writing)"
+    }
+
+    private func requestThumb(writing: Bool) {
+        // 正在写的文件内容不完整，等写完再截
+        guard !writing else { return }
+        ThumbnailStore.shared.request(file: file, chatId: chatId, store: store)
+    }
+
+    private func spokenValue(_ state: TurnFileState, thumb: ThumbState) -> String {
+        let base = state.label ?? TurnFileStyle.label(file.kind)
+        return thumb == .loading ? "\(base)，生成缩略图中" : base
+    }
+
     var body: some View {
         let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
+        let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
+        let writing = state == .writing
         Button {
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
@@ -213,16 +239,9 @@ struct TurnFileLargeCard: View {
                     .fill(JieboColor.mist.opacity(0.5))
                     .aspectRatio(16.0 / 10.0, contentMode: .fit)
                     .overlay {
-                        VStack(spacing: 6) {
-                            Image(systemName: TurnFileStyle.symbol(file.kind))
-                                .font(.system(size: 28, weight: .light))
-                                .foregroundStyle(JieboColor.dim)
-                            Text(caption)
-                                .font(JieboFont.ui(11))
-                                .foregroundStyle(JieboColor.dim)
-                                .lineLimit(1)
-                        }
+                        TurnFileThumbnail(state: thumb, kind: file.kind, caption: caption)
                     }
+                    .clipped()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(JieboColor.white)
@@ -236,8 +255,99 @@ struct TurnFileLargeCard: View {
         .buttonStyle(PressScaleButtonStyle(enabled: state != .writing))
         .disabled(state == .writing)
         .accessibilityLabel(TurnFileStyle.filename(file))
-        .accessibilityValue(state.label ?? TurnFileStyle.label(file.kind))
+        .accessibilityValue(spokenValue(state, thumb: thumb))
         .accessibilityHint("轻点两下打开预览")
+        .onAppear { requestThumb(writing: writing) }
+        .onChange(of: thumbTrigger(writing: writing)) { _, _ in requestThumb(writing: writing) }
+        // 滑出屏幕：还没发出的请求撤掉，下次出现再排
+        .onDisappear { ThumbnailStore.shared.cancel(file: file, chatId: chatId, store: store) }
+    }
+}
+
+/// 大卡的 16:10 区：缩略图 / markdown 前几行 / 加载骨架 / 图标占位
+private struct TurnFileThumbnail: View {
+    let state: ThumbState
+    let kind: PreviewKind
+    let caption: String
+
+    /// 网页、画布、PDF 从顶部裁，其余居中
+    private var alignment: Alignment {
+        switch kind {
+        case .html, .canvas, .pdf: return .top
+        default: return .center
+        }
+    }
+
+    var body: some View {
+        switch state {
+        case .image(let image):
+            Color.clear
+                .overlay(alignment: alignment) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
+                .clipped()
+        case .text(let text):
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(text.split(separator: "\n").enumerated()), id: \.offset) { index, line in
+                    Text(String(line))
+                        .font(JieboFont.ui(index == 0 ? 12 : 11, weight: index == 0 ? .semibold : .regular))
+                        .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(1)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(JieboColor.white)
+            .clipped()
+        case .loading:
+            placeholder
+                .overlay { ThumbSkeleton() }
+        case .none, .failed:
+            placeholder
+        }
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 6) {
+            Image(systemName: TurnFileStyle.symbol(kind))
+                .font(.system(size: 28, weight: .light))
+                .foregroundStyle(JieboColor.dim)
+            Text(caption)
+                .font(JieboFont.ui(11))
+                .foregroundStyle(JieboColor.dim)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 缩略图加载中的骨架：一道淡光从左扫到右；减少动态效果时静态
+private struct ThumbSkeleton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        Group {
+            if reduceMotion {
+                JieboColor.white.opacity(0.25)
+            } else {
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    let t = CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6)
+                    GeometryReader { proxy in
+                        LinearGradient(
+                            colors: [Color.clear, JieboColor.white.opacity(0.5), Color.clear],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: proxy.size.width * 0.5)
+                        .offset(x: (t * 1.5 - 0.5) * proxy.size.width)
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
