@@ -49,6 +49,7 @@ import {
   readLastModel,
   resolveModel,
   sessionModel,
+  withCurrentModel,
   writeLastModel,
 } from "../lib/models";
 import ModelPicker from "./ModelPicker";
@@ -2030,15 +2031,17 @@ export default function ChatApp() {
             });
             {
               const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
-              const nextModel = resolveModel(
-                sessionModel(chat) || lastModelRef.current || modelRef.current,
-                message.models,
-                message.model,
+              const preferred =
+                sessionModel(chat) || lastModelRef.current || modelRef.current || "";
+              const catalog = withCurrentModel(
+                withCurrentModel(message.models, preferred),
+                modelRef.current,
               );
+              const nextModel = resolveModel(preferred, catalog, message.model);
               if (nextModel) {
                 modelRef.current = nextModel;
                 setModel(nextModel);
-                rememberLastModel(nextModel);
+                if (preferred) rememberLastModel(nextModel);
                 if (chat && chat.model !== nextModel) {
                   patchChat(chat.id, (item) =>
                     item.model === nextModel ? item : { ...item, model: nextModel },
@@ -2064,7 +2067,13 @@ export default function ChatApp() {
                 send({ type: "resume_session", chatId: chat.id, agentId: chat.agentId });
               }
             }
-            if (message.models.length) setModels(message.models);
+            if (message.models.length) {
+              const preferred =
+                sessionModel(chatsRef.current.find((item) => item.id === activeIdRef.current)) ||
+                lastModelRef.current ||
+                modelRef.current;
+              setModels(withCurrentModel(withCurrentModel(message.models, preferred), modelRef.current));
+            }
             if (!message.hasApiKey) {
               setError("服务器还没配模型密钥，先写进网关配置。");
             } else {
@@ -4028,11 +4037,9 @@ export default function ChatApp() {
   }
 
   function applySessionModel(chat: Chat) {
-    const next = resolveModel(
-      sessionModel(chat) || lastModelRef.current || modelRef.current,
-      models,
-      DEFAULT_MODEL,
-    );
+    const preferred = sessionModel(chat) || lastModelRef.current || modelRef.current;
+    const catalog = withCurrentModel(withCurrentModel(models, preferred), modelRef.current);
+    const next = resolveModel(preferred, catalog, DEFAULT_MODEL);
     if (!next) return;
     modelRef.current = next;
     setModel(next);

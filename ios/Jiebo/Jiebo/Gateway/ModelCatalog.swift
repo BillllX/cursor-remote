@@ -123,13 +123,22 @@ enum ModelCatalog {
         return result
     }
 
+    /// 保证用户已选/会话里的 model id 出现在下拉里，避免 catalog 刷新后 resolve 把它降级成 composer-2.5
+    static func withCurrentModel(_ ids: [String], current: String?) -> [String] {
+        let key = current?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !key.isEmpty else { return ids }
+        if ids.contains(key) { return ids }
+        return [key] + ids
+    }
+
     static func resolve(preferred: String?, ids: [String], fallback: String) -> String {
-        let list = ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let want = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // 会话或 UserDefaults 里明确的偏好不要被「第二次 ready + 完整 catalog」盖掉
+        if !want.isEmpty { return want }
+        let list = ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         let catalogReady = list.count > 1 || (list.count == 1 && list[0] != defaultModel)
-        if !want.isEmpty, !catalogReady || list.contains(want) { return want }
         let next = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
         if !next.isEmpty, !catalogReady || list.contains(next) || list.isEmpty { return next }
-        return list.first ?? next.nilIfEmpty ?? want.nilIfEmpty ?? defaultModel
+        return list.first ?? next.nilIfEmpty ?? defaultModel
     }
 }

@@ -2530,17 +2530,23 @@ final class ChatStore {
             if let readyAssistantChatId { deletedIds.remove(readyAssistantChatId) }
             let current = chats.first { $0.id == activeId }
             cwd = current?.cwd ?? nextCwd
-            models = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels
+            let preferred = current?.sessionModel ?? lastModel.nilIfEmpty ?? model
+            var catalog = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels
+            catalog = ModelCatalog.withCurrentModel(catalog, current: preferred)
+            catalog = ModelCatalog.withCurrentModel(catalog, current: model)
+            models = catalog
             runningChatIds = running
             queuedChatIds = queued
             loops = Dictionary(readyLoops.filter { $0.status != "stopped" && $0.status != "idle" }.map { ($0.chatId, $0) }, uniquingKeysWith: { _, new in new })
             let nextModel = ModelCatalog.resolve(
-                preferred: current?.sessionModel ?? lastModel.nilIfEmpty ?? model,
-                ids: models,
-                fallback: serverModel
+                preferred: preferred,
+                ids: catalog,
+                fallback: serverModel.nilIfEmpty ?? ModelCatalog.defaultModel
             )
             model = nextModel
-            rememberModel(nextModel)
+            if !preferred.isEmpty || nextModel != ModelCatalog.defaultModel {
+                rememberModel(nextModel)
+            }
             markLive(running: running, queued: queued)
             for id in running where !sawSnapshot.contains(id) {
                 awaitSnapshot.insert(id)
@@ -3738,7 +3744,8 @@ final class ChatStore {
         draft = chat.draft
         mode = chat.mode
         if let sessionModel = chat.sessionModel {
-            model = ModelCatalog.resolve(preferred: sessionModel, ids: models, fallback: model)
+            let catalog = ModelCatalog.withCurrentModel(models, current: sessionModel)
+            model = ModelCatalog.resolve(preferred: sessionModel, ids: catalog, fallback: model)
         }
         if let path = chat.cwd, !path.isEmpty {
             cwd = path

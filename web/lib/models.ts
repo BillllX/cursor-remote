@@ -165,13 +165,14 @@ export function withCurrentModel(ids: string[], current: string): string[] {
 }
 
 export function resolveModel(preferred: string | undefined, ids: string[], fallback: string): string {
-  const list = ids.map((id) => id.trim()).filter(Boolean);
   const want = preferred?.trim();
+  // 与 iOS 一致：localStorage / 会话里明确的偏好不被第二次 ready 的 catalog 降级
+  if (want) return want;
+  const list = ids.map((id) => id.trim()).filter(Boolean);
   const catalogReady = list.length > 1 || (list.length === 1 && list[0] !== DEFAULT_MODEL);
-  if (want && (!catalogReady || list.includes(want))) return want;
   const next = fallback.trim();
   if (next && (!catalogReady || list.includes(next) || !list.length)) return next;
-  return list[0] || next || want || DEFAULT_MODEL;
+  return list[0] || next || DEFAULT_MODEL;
 }
 
 export function sessionModel(chat?: {
