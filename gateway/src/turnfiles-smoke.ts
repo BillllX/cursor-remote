@@ -9,6 +9,7 @@ import {
   artifactPath,
   artifactsDir,
   checkArtifactQuota,
+  canvasPathsFromAssistant,
   computeTurnFiles,
   enforceArtifactQuota,
   FALLBACK_DIFF_LIMIT,
@@ -85,6 +86,21 @@ try {
     JSON.stringify(paths) ===
       JSON.stringify(["a.txt", "b.txt", "c.txt", "src/new.ts", "src/old.ts", "img/cat.png", "/abs/x.md"]),
     `工具路径：数组、apply_patch、生成图片、uri，排除删除/出错/todo/读 → ${JSON.stringify(paths)}`,
+  );
+
+  const canvasRel = ".cursor-remote/canvases/smoke-demo.canvas.tsx";
+  const canvasBody = `见 [概览](${canvasRel}) 和 @${canvasRel}:12 以及 [外链](https://x/y.canvas.tsx)。`;
+  check(
+    JSON.stringify(canvasPathsFromAssistant(canvasBody)) === JSON.stringify([canvasRel]),
+    `助理正文 canvas 链接与 @ 提及 → ${JSON.stringify(canvasPathsFromAssistant(canvasBody))}`,
+  );
+  check(
+    canvasPathsFromAssistant(`见 @${canvasRel}。`)?.[0] === canvasRel,
+    "助理 @ 提及后接中文句号",
+  );
+  check(
+    canvasPathsFromAssistant(`[x](${canvasRel}#L3)`)?.[0] === canvasRel,
+    "markdown 链接带 # 锚点",
   );
 
   // ---------- 带基线：git 仓库里聊天目录是子目录 ----------
@@ -174,6 +190,8 @@ try {
   writeFileSync(resolve(plain, "pic.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
   mkdirSync(resolve(plain, ".git"), { recursive: true });
   writeFileSync(resolve(plain, ".git", "config"), "x");
+  mkdirSync(resolve(plain, ".cursor-remote", "canvases"), { recursive: true });
+  writeFileSync(resolve(plain, canvasRel), "export default function Canvas() { return null; }\n");
   const plainFiles = computeTurnFiles({
     cwd: plain,
     stateDir,
@@ -185,13 +203,20 @@ try {
       tool("Write", { path: "docs" }),
     ],
     baseline: null,
+    assistantBody: canvasBody,
     fallbackDiff: (rel) =>
-      rel === "docs/x.md" ? "diff --git a/docs/x.md b/docs/x.md\nnew file\n--- /dev/null\n+++ b/docs/x.md\n@@ -0,0 +1,2 @@\n+# 标题\n+正文" : null,
+      rel === "docs/x.md"
+        ? "diff --git a/docs/x.md b/docs/x.md\nnew file\n--- /dev/null\n+++ b/docs/x.md\n@@ -0,0 +1,2 @@\n+# 标题\n+正文"
+        : rel === canvasRel
+          ? "diff --git a/.cursor-remote/canvases/smoke-demo.canvas.tsx b/.cursor-remote/canvases/smoke-demo.canvas.tsx\nnew file\n+++ b/.cursor-remote/canvases/smoke-demo.canvas.tsx\n+export"
+          : null,
   });
   check(
-    JSON.stringify(plainFiles.map((item) => item.path)) === JSON.stringify(["docs/x.md", "pic.png"]),
-    `无基线：只用工具路径，跳过 .git、不存在和目录 → ${JSON.stringify(plainFiles.map((item) => item.path))}`,
+    JSON.stringify(plainFiles.map((item) => item.path)) === JSON.stringify(["docs/x.md", "pic.png", canvasRel]),
+    `无基线：工具路径 + 助理 canvas 链接，跳过 .git、不存在和目录 → ${JSON.stringify(plainFiles.map((item) => item.path))}`,
   );
+  const canvasRow = plainFiles.find((item) => item.path === canvasRel);
+  check(canvasRow?.kind === "canvas" && Boolean(canvasRow.sha), `assistantBody canvas 快照 → ${JSON.stringify(canvasRow)}`);
   const md = plainFiles[0];
   check(md?.kind === "markdown" && md.op === "added" && md.added === 2 && md.removed === 0 && Boolean(md.diffSha), "markdown 新文件 +2，带 diffSha");
   const png = plainFiles[1];

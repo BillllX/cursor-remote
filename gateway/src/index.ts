@@ -3194,6 +3194,7 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
       stateDir: tenant.stateDir,
       tools: transcript.tools,
       baseline,
+      assistantBody: transcript.assistant,
       fallbackDiff: (rel) => readWorkspaceDiff(cwd, rel).content ?? null,
     });
     if (files.length) transcript.files = files;

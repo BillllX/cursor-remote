@@ -143,6 +143,44 @@ export function workspaceRel(cwd: string, raw: string): string | null {
   return rel;
 }
 
+const CANVAS_PATH = /\.canvas\.tsx$/i;
+
+function normalizeCanvasTarget(raw: string): string | null {
+  let path = cleanPath(raw.trim());
+  if (path.startsWith("<") && path.endsWith(">")) path = path.slice(1, -1).trim();
+  const space = path.search(/\s/);
+  if (space >= 0) path = path.slice(0, space);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !path.toLowerCase().startsWith("file://")) return null;
+  path = cleanPath(path);
+  path = path.split(/[#?]/, 1)[0] ?? path;
+  path = path.replace(/:\d+(?:-\d+)?$/, "");
+  path = path.replace(/[.,;:!?。，；：！？、）」』]+$/u, "");
+  path = path.replace(/\/+$/, "").replace(/^\.\//, "");
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    // 保留原样
+  }
+  if (!CANVAS_PATH.test(path)) return null;
+  return path;
+}
+
+/** 从助理回复里的 markdown 链接和 @ 提及提取 .canvas.tsx 路径，按出现顺序去重 */
+export function canvasPathsFromAssistant(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const path = normalizeCanvasTarget(raw);
+    if (!path || seen.has(path)) return;
+    seen.add(path);
+    out.push(path);
+  };
+  if (!text) return out;
+  for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) push(match[1]);
+  for (const match of text.matchAll(/@([^\s`[\]()<>,;]+)/g)) push(match[1]);
+  return out;
+}
+
 // ---------- 来源 B：对比本轮开始时的检查点 ----------
 
 export type GitCtx = { cwd: string; env: Record<string, string> };
@@ -600,6 +638,8 @@ export type TurnFilesInput = {
   stateDir: string;
   tools: RunTool[];
   baseline?: TurnBaseline | null;
+  /** 助理正文：其中的 canvas 链接/提及会追加到清单（在工具与 git 变更之后，避免挤掉真实改动） */
+  assistantBody?: string;
   /** 没基线或文件不在基线可比范围里时的对照文本（index.ts 里是 readWorkspaceDiff） */
   fallbackDiff: (rel: string) => string | null;
   quota?: { max: number; target: number };
@@ -622,6 +662,9 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
   const base = input.baseline && !overBudget() ? openBaseline(input.baseline, deadline) : null;
   try {
     if (base) for (const rel of base.changes.keys()) add(workspaceRel(cwd, rel));
+    if (input.assistantBody) {
+      for (const raw of canvasPathsFromAssistant(input.assistantBody)) add(workspaceRel(cwd, raw));
+    }
     const picked: Array<{ rel: string; abs: string; size: number; kind: PreviewKind }> = [];
     for (const rel of ordered) {
       if (picked.length >= MAX_TURN_FILES) break;
