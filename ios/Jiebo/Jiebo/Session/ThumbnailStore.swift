@@ -358,7 +358,8 @@ private final class ThumbGate {
 
 // MARK: - 离屏 WebView 截图
 
-/// 挂在 key window 最底层（alpha 0.01、不接触摸）才会真正渲染；截完即移除。
+/// 挂在 key window 最底层（不透明、被根视图整屏盖住、不接触摸）才会真正渲染；截完即移除。
+/// 不能用 alpha 压低来藏：截图会带上这层透明度，深色卡片上只剩一点影子。
 /// html/svg 沙箱对齐 SandboxWebView：loadHTMLString(baseURL: nil)、无 JS bridge、只放行首屏 about:blank。
 /// canvas 对齐 CanvasWebView：加载 /canvas-runtime，canvas:ready 后推 canvas:load，canvas:loaded 后截图。
 @MainActor
@@ -377,7 +378,8 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
     private var seq = 0
     private var timers: [Task<Void, Never>] = []
 
-    private static let size = CGSize(width: 640, height: 400)
+    /// 16:10，和卡片预览区同比例；视口窄一些，缩到卡片里正文还认得出
+    private static let size = CGSize(width: 480, height: 300)
 
     init(source: Source) {
         self.source = source
@@ -421,13 +423,15 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         }
         let webView = WKWebView(frame: CGRect(origin: .zero, size: Self.size), configuration: config)
         webView.navigationDelegate = self
-        webView.alpha = 0.01
         webView.isUserInteractionEnabled = false
         webView.accessibilityElementsHidden = true
+        // 没写背景的页面按浏览器默认白底黑字渲染；垫 App 底色会在深色模式下变成黑底黑字
         webView.isOpaque = true
-        webView.backgroundColor = UIColor(JieboColor.paper)
-        webView.scrollView.backgroundColor = UIColor(JieboColor.paper)
+        webView.backgroundColor = .white
+        webView.scrollView.backgroundColor = .white
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        // 放在窗口正中：弹 sheet 时根视图会缩小、露出窗口四周，正中始终被盖住
+        webView.center = CGPoint(x: window.bounds.midX, y: window.bounds.midY)
         window.insertSubview(webView, at: 0)
         self.webView = webView
 
@@ -456,10 +460,23 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         schedule(after: delay) { [weak self] in
             guard let self, let webView = self.webView else { return }
             let config = WKSnapshotConfiguration()
-            config.snapshotWidth = NSNumber(value: 400)
+            config.snapshotWidth = NSNumber(value: Self.size.width)
+            config.afterScreenUpdates = true
             webView.takeSnapshot(with: config) { [weak self] image, _ in
-                self?.finish(image)
+                self?.finish(image.map(Self.flattened))
             }
+        }
+    }
+
+    /// 截图压到白底上存成不透明图：卡片里不透出底色，落盘走 JPEG
+    private static func flattened(_ image: UIImage) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        format.scale = image.scale
+        return UIGraphicsImageRenderer(size: image.size, format: format).image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(origin: .zero, size: image.size))
+            image.draw(at: .zero)
         }
     }
 
@@ -816,7 +833,7 @@ private enum ThumbDisk {
 
     /// v2：透明图改存 PNG 之前写下的 JPEG（透明区已变黑）不再命中，留给 prune 按时间清掉
     private static func fileName(_ key: String) -> String {
-        SHA256.hash(data: Data("v2|\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data("v3|\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// 目录名必须和 ChatCache.tenantDir 一致（同一套 safeName），清缓存才删得到
