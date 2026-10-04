@@ -15,8 +15,11 @@ struct ThreadView: View {
     @State private var composerFocusNonce = 0
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State private var motionChatId = ""
-    /// 长会话默认只渲染最后 30 轮；按 chat id 记住是否展开全部
-    @State private var showAllTurnsByChat: [String: Bool] = [:]
+    /// 长会话首屏只排版最近若干轮，往上翻再按批加载；按 chat id 记住已展开到多少轮
+    private static let initialRenderedTurns = 12
+    private static let renderedTurnStep = 12
+    @State private var renderedTurnLimitByChat: [String: Int] = [:]
+    @State private var loadingEarlierBatch = false
     @State private var shareText: ShareText?
 
     init(chrome: ThreadChrome = .pad, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
@@ -364,6 +367,8 @@ struct ThreadView: View {
     /// 程序在滚到底时，几何探针的中间帧不能把跟随关掉
     @State private var scrollingProgrammatically = false
     @State private var followTask: Task<Void, Never>?
+    /// showThreadLoading 持续超过 350ms 才亮的加载遮罩
+    @State private var loadingVisible = false
 
     private var thread: some View {
         // 外层先量出视口宽。不锁宽的话，计划里的长行会按「不折行」的理想高度去撑滚动区，看起来到底了，下面还有一大段。
@@ -372,7 +377,7 @@ struct ThreadView: View {
             ScrollView {
                 // 不用 LazyVStack：流式增高时未实现的底部锚点会让 scrollTo 落空，跟随就断。
                 VStack(alignment: .leading, spacing: 18) {
-                    if let chat = store.active, chat.turns.isEmpty, chat.turnsComplete {
+                    if let chat = store.active, chat.turns.isEmpty, chat.turnsComplete, !store.coldStartPlaceholder {
                         // 未加载完的壳（!turnsComplete）不算空会话——由下方遮罩覆盖
                         if chrome == .embedded {
                             assistantEmptyState
@@ -380,7 +385,9 @@ struct ThreadView: View {
                             emptyState
                         }
                     }
-                    if let chat = store.active, !chat.turnsComplete, !chat.turns.isEmpty {
+                    if let chat = store.active, !chat.turnsComplete, !chat.turns.isEmpty,
+                       store.loadingChatIds.contains(chat.id), !store.refreshingChatIds.contains(chat.id) {
+                        // 只在真的往前翻页时出现；显示本机缓存、增量补齐期间由导航栏的同步转圈提示
                         // 分页加载更早内容的轻提示（不抢滚动，对齐「分段加载」的可感知性）
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
@@ -392,20 +399,32 @@ struct ThreadView: View {
                         .padding(.vertical, 4)
                     }
                     let allTurns = store.active?.turns ?? []
-                    let showAll = showAllTurnsByChat[store.activeId] == true
-                    let hiddenCount = showAll ? 0 : max(0, allTurns.count - 30)
-                    let turns = showAll ? allTurns : Array(allTurns.suffix(30))
+                    let renderLimit = renderedTurnLimit(for: store.activeId, total: allTurns.count)
+                    let hiddenCount = max(0, allTurns.count - renderLimit)
+                    let turns = Array(allTurns.suffix(renderLimit))
                     if hiddenCount > 0 {
+                        let batch = min(hiddenCount, Self.renderedTurnStep)
                         Button {
-                            showAllTurnsByChat[store.activeId] = true
+                            loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
                         } label: {
-                            Text("显示更早 \(hiddenCount) 轮")
+                            Text(batch < hiddenCount ? "显示更早 \(batch) 轮（还有 \(hiddenCount) 轮）" : "显示更早 \(hiddenCount) 轮")
                                 .font(JieboFont.ui(12, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 6)
                         }
                         .buttonStyle(.plain)
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear
+                                    .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, minY in
+                                        // VStack 会一次性建好子视图，不能用 onAppear；看哨兵是否进视口
+                                        guard minY >= -12, minY < viewportHeight - 48 else { return }
+                                        guard !stickToBottom else { return }
+                                        loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
+                                    }
+                            }
+                        }
                     }
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                         if let gap = timeSeparator(before: turn, previous: index > 0 ? turns[index - 1] : nil) {
@@ -486,7 +505,7 @@ struct ThreadView: View {
             .overlay {
                 // P8 slim：会话内容分页加载遮罩（只盖住对话区，侧栏/输入框可操作）
                 Group {
-                    if showThreadLoading {
+                    if loadingVisible {
                         VStack(spacing: 12) {
                             ProgressView().controlSize(.large)
                             Text("正在加载会话…")
@@ -498,8 +517,18 @@ struct ThreadView: View {
                         .transition(.opacity)
                     }
                 }
-                .animation(JieboMotion.fade(reduceMotion), value: showThreadLoading)
+                .animation(JieboMotion.fade(reduceMotion), value: loadingVisible)
             }
+            .task(id: showThreadLoading) {
+                // 本机缓存通常几十毫秒就读完：等一小会儿再盖遮罩，免得冷启动先闪一下
+                guard showThreadLoading else {
+                    loadingVisible = false
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(350))
+                if !Task.isCancelled, showThreadLoading { loadingVisible = true }
+            }
+            .modifier(StartAtBottom())
             .simultaneousGesture(
                 DragGesture(minimumDistance: 12).onChanged { value in
                     // 手指向下拖是在离开底部、看更早的内容
@@ -527,6 +556,38 @@ struct ThreadView: View {
                 followBottom(proxy)
             }
         }
+        }
+    }
+
+    private func renderedTurnLimit(for chatId: String, total: Int) -> Int {
+        let stored = renderedTurnLimitByChat[chatId] ?? Self.initialRenderedTurns
+        return min(total, max(Self.initialRenderedTurns, stored))
+    }
+
+    /// 在列表顶部 prepend 更早轮次后，锚定原先最上面那一轮，避免整页跳动
+    private func loadEarlierTurns(proxy: ScrollViewProxy, allTurns: [Turn], limit: Int) {
+        guard !loadingEarlierBatch else { return }
+        let hidden = allTurns.count - limit
+        guard hidden > 0 else { return }
+        loadingEarlierBatch = true
+        let anchorId = Array(allTurns.suffix(limit)).first?.id
+        let next = min(allTurns.count, limit + Self.renderedTurnStep)
+        renderedTurnLimitByChat[store.activeId] = next
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            defer { loadingEarlierBatch = false }
+            guard let anchorId else { return }
+            scrollingProgrammatically = true
+            for delay in [0, 48, 120, 260] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo(anchorId, anchor: .top)
+                }
+            }
+            scrollingProgrammatically = false
         }
     }
 
@@ -584,6 +645,7 @@ struct ThreadView: View {
     }
 
     private var showThreadLoading: Bool {
+        if store.coldStartPlaceholder { return true }
         guard let chat = store.active else { return false }
         return !chat.turnsComplete && chat.turns.isEmpty
     }
@@ -1855,5 +1917,18 @@ private struct AssistantActionRow: View {
                 .stroke(JieboColor.line, lineWidth: 1)
         )
         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
+    }
+}
+
+/// 打开会话时直接停在底部，不先从顶上画一帧再跳下去。
+/// 只管初始位置：iOS 17 的 defaultScrollAnchor 还会在内容变高时贴底，会和 stickToBottom 的跟随打架
+private struct StartAtBottom: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.defaultScrollAnchor(.bottom, for: .initialOffset)
+        } else {
+            content
+        }
     }
 }

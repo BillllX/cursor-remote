@@ -1345,6 +1345,8 @@ export default function ChatApp() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [token, setToken] = useState("");
   const [unlocked, setUnlocked] = useState(false);
+  /** null = 还没读本地令牌；true = 有上次登录的令牌，先进主界面、后台自动登录，网关拒绝或退出登录才回登录页 */
+  const [resuming, setResuming] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL);
@@ -2102,9 +2104,11 @@ export default function ChatApp() {
         case "auth":
           unlockedRef.current = false;
           setUnlocked(false);
+          setResuming(false);
           setVerifying(false);
           if (verifyTimerRef.current) window.clearTimeout(verifyTimerRef.current);
           if (!message.ok) {
+            outboxRef.current = [];
             setAuthError(message.message || "密码不对。");
             localStorage.removeItem(TOKEN_KEY);
           }
@@ -3056,8 +3060,9 @@ export default function ChatApp() {
   ]);
 
   useEffect(() => {
-    const saved = localStorage.getItem(TOKEN_KEY);
+    const saved = localStorage.getItem(TOKEN_KEY)?.trim() || "";
     if (saved) setToken(saved);
+    setResuming(Boolean(saved));
     const last = readLastModel();
     if (last) {
       lastModelRef.current = last;
@@ -3516,6 +3521,11 @@ export default function ChatApp() {
     if (raw != null) draftRef.current = raw;
     const text = draftRef.current.trim();
     if (!text && !images.length) return;
+    // 自动登录还没完成：会话列表还没同步，先不发，草稿留着
+    if (!unlockedRef.current) {
+      setNotice("正在登录，稍后再发");
+      return;
+    }
     const target = chatsRef.current.find((item) => item.id === activeIdRef.current);
     if (
       target &&
@@ -4016,6 +4026,7 @@ export default function ChatApp() {
     setToken("");
     unlockedRef.current = false;
     setUnlocked(false);
+    setResuming(false);
     setVerifying(false);
     setAuthError("");
     resetTenantSession();
@@ -4969,7 +4980,8 @@ export default function ChatApp() {
     if (idle && !Object.keys(dirtyDraftMap()).length) selectChat(assistantChat);
   }, [assistantChat, activeId, chats]);
 
-  if (!unlocked && !demoCanvas) {
+  if (!unlocked && resuming === null && !demoCanvas) return <div className="login-gate" />;
+  if (!unlocked && !resuming && !demoCanvas) {
     return (
       <LoginGate
         connected={connected}
@@ -5837,12 +5849,14 @@ export default function ChatApp() {
             onClick={() => setSettingsOpen((open) => !open)}
             title={cwd || "工作目录"}
           >
-            <span className={`dot ${connected ? (busy ? "busy" : "on") : "off"}`} />
+            <span className={`dot ${connected && unlocked ? (busy ? "busy" : "on") : "off"}`} />
             <span className="side-foot-cwd">
               {connected
-                ? busy
-                  ? "服务器正在干活"
-                  : workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)
+                ? !unlocked
+                  ? "正在登录…"
+                  : busy
+                    ? "服务器正在干活"
+                    : workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)
                 : "没连上"}
             </span>
           </button>

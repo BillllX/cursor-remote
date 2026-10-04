@@ -124,10 +124,13 @@ struct PhoneShell: View {
 
     // MARK: 冷启动对齐（§3.2）
 
-    /// 等 unlocked 且助理会话 id 到手（最多 8 秒）→ 选中助理会话 → bootstrapped
+    /// 等 unlocked（自动登录时可能要等网络）→ 再等助理会话 id 到手（最多 8 秒）→ 选中助理会话 → bootstrapped
     @MainActor
     private func bootstrap() async {
         store.assistantOnly = true
+        while !store.unlocked, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         var waited = 0
         while !(store.unlocked && store.assistantChatId != nil), waited < 80, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(100))

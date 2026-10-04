@@ -81,6 +81,8 @@ private enum ContentDiscard {
 final class ChatStore {
     var connected = false
     var unlocked = false
+    /// 钥匙串里有上次登录的令牌：先进主界面、后台用它自动登录；网关拒绝或退出登录才回登录页
+    var resumingLogin = false
     var verifying = false
     var authError = ""
     var notice = ""
@@ -246,7 +248,8 @@ final class ChatStore {
     var loadingChatIds: Set<String> = []
     /// 增量补齐正文时导航栏小 spinner（不阻塞输入）
     var threadSyncBusy: Bool {
-        refreshingChatIds.contains(activeId)
+        (resumingLogin && !unlocked)
+            || refreshingChatIds.contains(activeId)
             || (loadingChatIds.contains(activeId) && bodyRevs[activeId] != nil && !(active?.turnsComplete ?? true))
     }
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
@@ -332,8 +335,9 @@ final class ChatStore {
     func start() {
         guard !started else { return }
         started = true
-        if let saved = KeychainStore.token() {
+        if let saved = KeychainStore.token()?.trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             tokenDraft = saved
+            resumingLogin = true
         }
         #if DEBUG
         // 开发便利：模拟器里 defaults write ai.jiebo.ipad jiebo.token 可预填令牌
@@ -395,6 +399,7 @@ final class ChatStore {
         KeychainStore.delete()
         UserDefaults.standard.removeObject(forKey: tenantKey)
         unlocked = false
+        resumingLogin = false
         connected = false
         verifying = false
         verifyTask?.cancel()
@@ -544,6 +549,11 @@ final class ChatStore {
         // 带图 prompt 不进 outbox（base64 太大），掉线时直接拒发
         if !images.isEmpty, !client.isOpen {
             bannerError = "图片需要在线发送，等连接恢复再发。"
+            return
+        }
+        // 自动登录还没完成：send 会丢掉消息，草稿留着
+        guard unlocked else {
+            flash("正在连接服务器，稍后再发")
             return
         }
         ensureActiveChat()
@@ -1343,17 +1353,38 @@ final class ChatStore {
             if self.assistantOnly, let assistantId = self.assistantChatId, target != assistantId {
                 target = ids.contains(assistantId) ? assistantId : nil
             }
-            self.cachedOnlyIds = ids
-            if let target, let chat = rows.first(where: { $0.id == target }) {
-                self.chats = rows
-                self.activeId = target
-                self.cwd = chat.cwd ?? self.cwd
-                self.mode = chat.mode
-                self.ensureTurnsLoaded(target) // 只读本机正文缓存，不发请求
-            } else {
+            guard let targetId = target, var chat = rows.first(where: { $0.id == targetId }) else {
+                self.cachedOnlyIds = ids
                 self.chats += rows
+                return
             }
+            // 正文和列表一起亮出来：分两步的话中间会先闪一下「正在加载会话」
+            let body = await ChatCache.loadBody(tenant: tenant, chatId: targetId)
+            guard self.cacheEpoch == epoch, self.tenantId == tenant, !self.appliedStore,
+                  self.activeId == "boot", self.chats.count == 1, self.chats[0].id == "boot",
+                  self.chats[0].turns.isEmpty, !self.cacheReadingIds.contains(targetId)
+            else { return }
+            self.cacheCheckedIds.insert(targetId)
+            if let body, !self.deletedIds.contains(targetId) {
+                chat.turns = body.turns
+                self.bodyRevs[targetId] = body.rev
+                self.bodySegs[targetId] = body.serverSegs.map { SegHashes(rev: body.rev, hashes: $0) }
+            }
+            var merged = rows
+            if let index = merged.firstIndex(where: { $0.id == targetId }) { merged[index] = chat }
+            self.cachedOnlyIds = ids
+            self.chats = merged
+            self.activeId = targetId
+            self.cwd = chat.cwd ?? self.cwd
+            self.mode = chat.mode
+            self.ensureTurnsLoaded(targetId) // 缓存行：只用本机正文，不发请求
         }
+    }
+
+    /// iPhone 冷启动：助理会话还没从本机缓存或服务端装进来，当前停在 boot 占位上。
+    /// 这时既不是空会话，也不该亮「正在加载」，对话区留白，超过一小会儿才转圈
+    var coldStartPlaceholder: Bool {
+        assistantOnly && activeId == "boot" && !appliedStore && assistantChatId != nil
     }
 
     /// stored_digest 对账：发 load_state 拿 slim 元数据和最新 chatRevs（约 20KB），不下载整条正文。
@@ -2567,6 +2598,7 @@ final class ChatStore {
         case .auth(let ok, let messageText):
             if !ok {
                 unlocked = false
+                resumingLogin = false
                 verifying = false
                 verifyTask?.cancel()
                 authError = messageText ?? "密码不对。"

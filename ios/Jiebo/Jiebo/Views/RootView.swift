@@ -6,7 +6,7 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if store.unlocked {
+            if store.unlocked || store.resumingLogin {
                 WorkbenchView()
             } else {
                 LoginView()
