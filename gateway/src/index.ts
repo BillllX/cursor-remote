@@ -188,8 +188,8 @@ const publish = createPublishController({
       id: tenant.id,
       workspaceRoot: tenant.workspaceRoot,
       stateDir: tenant.stateDir,
+      name: tenant.name,
     })),
-  ticketSecret: mediaSecret,
 });
 
 type AgentHandle = Awaited<ReturnType<typeof Agent.create>>;

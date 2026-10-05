@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -7,6 +7,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   statSync,
   unlinkSync,
@@ -16,6 +17,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import { connect as netConnect, createServer as netCreateServer } from "node:net";
 import { dirname, resolve } from "node:path";
 import type { Duplex } from "node:stream";
+import { defaultWorkbenchPage, workbenchDownPage } from "./publish-home.ts";
 import { confinedCwd } from "./tenants.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -33,18 +35,20 @@ const HOP = new Set([
   "te",
   "trailer",
 ]);
-const TICKET_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const DEFAULT_IDLE_MS = 30 * 60 * 1000;
 const DEFAULT_LISTEN_MS = 45_000;
+const SWEEP_MS = 30_000;
+/** 自动拉起失败后的退避：30 秒起翻倍，最长 30 分钟 */
+const REVIVE_BASE_MS = 30_000;
+const REVIVE_MAX_MS = 30 * 60 * 1000;
 
 export type PublishTenant = {
   id: string;
   workspaceRoot: string;
   stateDir: string;
+  name?: string;
 };
 
-type TicketBody = { t: string; g: number; e: number; n: string };
-
+/** publish.json：用户要的工作台（命令 + 目录）和当前进程。只有 stop 才删，进程没了靠它重新拉起 */
 type Persisted = {
   v: 1;
   pid: number;
@@ -59,9 +63,12 @@ type Persisted = {
 type Slot = Persisted & {
   tenantId: string;
   workspaceRoot: string;
-  lastHitAt: number;
   child?: ChildProcess;
 };
+
+type Backoff = { failures: number; nextAt: number };
+
+type Outcome = { status: number; body: Record<string, unknown> };
 
 export type PublishController = {
   boot: () => void;
@@ -70,9 +77,9 @@ export type PublishController = {
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
 };
 
-export function publishIdleDue(lastHit: number, now: number, idleMs: number) {
-  if (!Number.isFinite(idleMs) || idleMs <= 0) return false;
-  return now - lastHit >= idleMs;
+export function reviveDelay(failures: number) {
+  if (failures <= 0) return 0;
+  return Math.min(REVIVE_MAX_MS, REVIVE_BASE_MS * 2 ** Math.min(failures - 1, 16));
 }
 
 export function cleanPublishHost(raw: string) {
@@ -100,6 +107,7 @@ function pathnameOf(rawUrl: string) {
   return path;
 }
 
+/** 以前发出去的链接带 ?ticket=，现在不校验了，转给用户进程前去掉 */
 export function locationWithoutTicket(rawUrl: string) {
   const url = new URL(rawUrl || "/", "http://127.0.0.1");
   url.searchParams.delete("ticket");
@@ -130,60 +138,7 @@ function bearer(req: IncomingMessage) {
   return match?.[1] || "";
 }
 
-function issueTicket(secret: string, tenantId: string, gen: number, ttlMs: number) {
-  const body: TicketBody = {
-    t: tenantId,
-    g: gen,
-    e: Date.now() + ttlMs,
-    n: randomBytes(16).toString("base64url"),
-  };
-  const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
-  const sig = createHmac("sha256", secret).update(payload).digest("base64url");
-  return `${payload}.${sig}`;
-}
-
-function readTicket(secret: string, ticket: string): TicketBody | null {
-  const dot = ticket.indexOf(".");
-  if (dot <= 0 || dot !== ticket.lastIndexOf(".")) return null;
-  const payload = ticket.slice(0, dot);
-  const sig = ticket.slice(dot + 1);
-  if (!secret || !payload || !sig) return null;
-  const expected = createHmac("sha256", secret).update(payload).digest("base64url");
-  const a = Buffer.from(expected);
-  const b = Buffer.from(sig);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Partial<TicketBody>;
-    const tenantId = parsed?.t;
-    const gen = parsed?.g;
-    const exp = parsed?.e;
-    const nonce = parsed?.n;
-    if (typeof tenantId !== "string" || typeof gen !== "number" || typeof exp !== "number" || typeof nonce !== "string" || !nonce) {
-      return null;
-    }
-    if (!Number.isInteger(gen) || !Number.isInteger(exp)) return null;
-    if (Date.now() > exp + 30_000) return null;
-    return { t: tenantId, g: gen, e: exp, n: nonce };
-  } catch {
-    return null;
-  }
-}
-
-function readCookie(header: string | string[] | undefined, name: string) {
-  const raw = Array.isArray(header) ? header.join("; ") : header || "";
-  for (const part of raw.split(";")) {
-    const eq = part.indexOf("=");
-    if (eq < 0) continue;
-    if (part.slice(0, eq).trim() !== name) continue;
-    try {
-      return decodeURIComponent(part.slice(eq + 1).trim());
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
+/** 以前的访问 cookie 不再有用，别转给用户进程 */
 function stripOurCookie(header: string | string[] | undefined) {
   const raw = Array.isArray(header) ? header.join("; ") : header || "";
   const kept = raw
@@ -191,19 +146,6 @@ function stripOurCookie(header: string | string[] | undefined) {
     .map((part) => part.trim())
     .filter((part) => part && !part.startsWith("jiebo_pub="));
   return kept.length ? kept.join("; ") : "";
-}
-
-function cookieHeader(ticket: string, exp: number, secure: boolean, cookiePath: string) {
-  const age = Math.max(1, Math.floor((exp - Date.now()) / 1000));
-  const parts = [
-    `jiebo_pub=${encodeURIComponent(ticket)}`,
-    "HttpOnly",
-    `Path=${cookiePath}`,
-    "SameSite=Lax",
-    `Max-Age=${age}`,
-  ];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
 }
 
 function text(res: ServerResponse, status: number, message: string) {
@@ -215,6 +157,17 @@ function text(res: ServerResponse, status: number, message: string) {
     "cache-control": "no-store",
   });
   res.end(body);
+}
+
+function html(res: ServerResponse, status: number, page: string, head: boolean) {
+  if (res.headersSent || res.writableEnded) return;
+  const body = Buffer.from(page);
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": body.length,
+    "cache-control": "no-store",
+  });
+  res.end(head ? undefined : body);
 }
 
 function json(res: ServerResponse, status: number, body: Record<string, unknown>) {
@@ -254,6 +207,45 @@ function alive(pid: number) {
   } catch {
     return false;
   }
+}
+
+/** 进程是 detached 起的，pgid 就是首进程 pid。sh -c 'a && b' 这类命令首进程会先退，服务还在组里 */
+function groupAlive(pgid: number) {
+  if (!Number.isInteger(pgid) || pgid <= 0) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return alive(pgid);
+  }
+}
+
+function groupMembers(pgid: number) {
+  if (process.platform !== "linux") return [];
+  const out: number[] = [];
+  let names: string[] = [];
+  try {
+    names = readdirSync("/proc");
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      const stat = readFileSync(`/proc/${name}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      if (Number(fields[2]) === pgid) out.push(Number(name));
+    } catch {
+      // 进程刚退出
+    }
+  }
+  return out;
+}
+
+/** 组里还有带着本次标记的进程，才算是我们起的那一份（防 pid 复用） */
+function groupOwned(pgid: number, marker: string) {
+  if (alive(pgid) && markerVisible(pgid, marker)) return true;
+  return groupMembers(pgid).some((pid) => markerVisible(pid, marker));
 }
 
 export function markerTokenMatches(text: string, marker: string) {
@@ -500,6 +492,7 @@ function writeTokenFile(file: string, token: string) {
   }
 }
 
+/** 这个口令只管 Agent 能不能 start/stop 自己的工作台，访问工作台不需要它 */
 function ensureTenantToken(tenant: PublishTenant) {
   const file = resolve(tenant.stateDir, "publish-token");
   let token = readTokenFile(file);
@@ -513,8 +506,8 @@ function ensureTenantToken(tenant: PublishTenant) {
 }
 
 async function killOwned(pid: number, marker: string) {
-  if (!alive(pid)) return;
-  if (!markerVisible(pid, marker)) {
+  if (!groupAlive(pid)) return;
+  if (!groupOwned(pid, marker)) {
     throw new Error("进程对不上，没有停掉。");
   }
   try {
@@ -527,8 +520,8 @@ async function killOwned(pid: number, marker: string) {
     }
   }
   const deadline = Date.now() + 3000;
-  while (Date.now() < deadline && alive(pid)) await sleep(100);
-  if (!alive(pid)) return;
+  while (Date.now() < deadline && groupAlive(pid)) await sleep(100);
+  if (!groupAlive(pid)) return;
   try {
     process.kill(-pid, "SIGKILL");
   } catch {
@@ -540,11 +533,11 @@ async function killOwned(pid: number, marker: string) {
   }
 }
 
-function publicUrl(scheme: string, host: string, tenantId: string, ticket: string) {
+function publicUrl(scheme: string, host: string, tenantId: string) {
   const name = cleanPublishHost(host);
   if (!name) return "";
   const proto = scheme === "http" ? "http" : "https";
-  return `${proto}://${name}${publishBasePath(tenantId)}/?ticket=${encodeURIComponent(ticket)}`;
+  return `${proto}://${name}${publishBasePath(tenantId)}/`;
 }
 
 function numberEnv(name: string, fallback: number) {
@@ -554,16 +547,16 @@ function numberEnv(name: string, fallback: number) {
 
 export function createPublishController(options: {
   tenants: () => PublishTenant[];
-  ticketSecret: () => string;
   host?: () => string;
   scheme?: () => string;
   portMin?: number;
   portMax?: number;
-  idleMs?: number;
   listenTimeoutMs?: number;
-  ticketTtlMs?: number;
+  sweepMs?: number;
 }): PublishController {
   const slots = new Map<string, Slot>();
+  const backoff = new Map<string, Backoff>();
+  const reviving = new Set<string>();
   let chain: Promise<unknown> = Promise.resolve();
   let timer: NodeJS.Timeout | null = null;
 
@@ -571,9 +564,8 @@ export function createPublishController(options: {
   const scheme = () => (options.scheme?.() ?? process.env.JIEBO_PUBLISH_SCHEME ?? "https").trim().toLowerCase();
   const portMin = options.portMin ?? numberEnv("JIEBO_PUBLISH_PORT_MIN", 20000);
   const portMax = options.portMax ?? numberEnv("JIEBO_PUBLISH_PORT_MAX", 20999);
-  const idleMs = options.idleMs ?? numberEnv("JIEBO_PUBLISH_IDLE_MS", DEFAULT_IDLE_MS);
   const listenTimeoutMs = options.listenTimeoutMs ?? numberEnv("JIEBO_PUBLISH_LISTEN_MS", DEFAULT_LISTEN_MS);
-  const ticketTtlMs = options.ticketTtlMs ?? TICKET_TTL_MS;
+  const sweepMs = options.sweepMs ?? SWEEP_MS;
 
   function lock<T>(fn: () => Promise<T>): Promise<T> {
     const run = chain.then(fn, fn);
@@ -623,11 +615,11 @@ export function createPublishController(options: {
   };
 
   function messageFor(slot: Slot, listening: boolean) {
-    const ticket = issueTicket(options.ticketSecret(), slot.tenantId, slot.gen, ticketTtlMs);
-    const url = publicUrl(scheme(), host(), slot.tenantId, ticket);
+    const url = publicUrl(scheme(), host(), slot.tenantId);
     const lines = [
       listening ? "正在监听" : "进程还在，端口尚未监听",
       url || "外网地址还没配置（JIEBO_PUBLISH_HOST）。",
+      "任何人拿到这个地址都能打开；会一直开着，进程退出或平台重启后自动拉起。",
       `本机 127.0.0.1:${slot.port}`,
       `命令 ${slot.command}`,
     ];
@@ -647,70 +639,205 @@ export function createPublishController(options: {
     throw new Error("没有空闲端口。");
   }
 
-  function forget(tenant: PublishTenant, pid?: number) {
-    const current = slots.get(tenant.id);
+  /** 只丢掉内存里的进程记录；publish.json 留着，监督循环据此重新拉起 */
+  function dropSlot(tenantId: string, pid?: number) {
+    const current = slots.get(tenantId);
     if (pid != null && current && current.pid !== pid) return;
-    slots.delete(tenant.id);
-    clearPersisted(tenant);
+    slots.delete(tenantId);
   }
 
-  async function ensureAlive(tenant: PublishTenant, slot: Slot) {
-    if (alive(slot.pid) && markerVisible(slot.pid, slot.marker)) return slot;
-    forget(tenant, slot.pid);
+  /** 自己起的进程靠 exit 事件；开机接上的没有事件，每次都核对标记，防 pid 被别的进程复用 */
+  function slotAlive(slot: Slot) {
+    if (!groupAlive(slot.pid)) return false;
+    if (slot.child && slot.child.exitCode === null && slot.child.signalCode === null) return true;
+    return groupOwned(slot.pid, slot.marker);
+  }
+
+  function liveSlot(tenantId: string) {
+    const slot = slots.get(tenantId);
+    if (!slot) return null;
+    if (slotAlive(slot)) return slot;
+    dropSlot(tenantId, slot.pid);
     return null;
   }
 
-  async function stopSlot(tenant: PublishTenant, slot: Slot) {
-    await killOwned(slot.pid, slot.marker);
-    if (slot.child && !slot.child.killed) slot.child.unref();
-    forget(tenant, slot.pid);
+  async function launch(
+    tenant: PublishTenant,
+    command: string,
+    cwd: string,
+  ): Promise<{ ok: true; slot: Slot } | { ok: false; status: number; message: string }> {
+    let port: number;
+    try {
+      port = await allocatePort();
+    } catch (err) {
+      return { ok: false, status: 503, message: err instanceof Error ? err.message : "没有空闲端口。" };
+    }
+    const prev = readPersisted(tenant);
+    const gen = Math.max(readGen(tenant), prev?.gen || 0, slots.get(tenant.id)?.gen || 0) + 1;
+    writeGen(tenant, gen);
+    const marker = `${tenant.id}:${gen}`;
+    const logFile = resolve(tenant.stateDir, "publish.log");
+    mkdirSync(tenant.stateDir, { recursive: true });
+    const logFd = openSync(logFile, "w", 0o600);
+    let child: ChildProcess;
+    try {
+      child = spawn("/bin/sh", ["-c", command, marker], {
+        cwd,
+        env: childEnv(port, marker, publishBasePath(tenant.id)),
+        detached: true,
+        stdio: ["ignore", logFd, logFd],
+      });
+    } catch (err) {
+      closeSync(logFd);
+      return { ok: false, status: 500, message: err instanceof Error ? err.message : "启动失败。" };
+    }
+    closeSync(logFd);
+    child.unref();
+    const slot: Slot = {
+      v: 1,
+      tenantId: tenant.id,
+      pid: child.pid || 0,
+      port,
+      command,
+      cwd,
+      gen,
+      marker,
+      startedAt: Date.now(),
+      workspaceRoot: tenant.workspaceRoot,
+      child,
+    };
+    if (!slot.pid) return { ok: false, status: 500, message: "没有拿到进程号。" };
+    slots.set(tenant.id, slot);
+    let exited = false;
+    child.on("error", () => {
+      exited = true;
+    });
+    child.on("exit", () => {
+      // 首进程退了但组里服务还在（sh -c 'a && b'），交给 slotAlive 按组判断
+      if (groupAlive(slot.pid) && groupOwned(slot.pid, slot.marker)) return;
+      exited = true;
+      dropSlot(tenant.id, slot.pid);
+    });
+    const deadline = Date.now() + Math.max(1000, listenTimeoutMs);
+    let listening = false;
+    while (Date.now() < deadline) {
+      if (exited || !groupAlive(slot.pid)) break;
+      if (await portOpen(port)) {
+        listening = true;
+        break;
+      }
+      await sleep(200);
+    }
+    const fail = async (message: string) => {
+      try {
+        await killOwned(slot.pid, slot.marker);
+      } catch {
+        // 对不上就留着，避免误杀
+      }
+      if (!groupAlive(slot.pid)) dropSlot(tenant.id, slot.pid);
+      return { ok: false as const, status: 502, message };
+    };
+    if (!listening) {
+      const tail = logTail(logFile);
+      const why = tail ? `\n${tail}` : "";
+      return fail(`进程没在 127.0.0.1:${port} 监听。确认启动命令使用 HOST 和 PORT。${why}`);
+    }
+    if (boundToLoopback(port) !== true) {
+      return fail(`必须只监听 127.0.0.1:${port}，不要绑定 0.0.0.0 或 ::。`);
+    }
+    return { ok: true, slot };
   }
 
-  function allowed(tenant: PublishTenant, presented: string) {
-    return secretEqual(presented, ensureTenantToken(tenant));
+  /** 用户要过工作台、进程却不在：按 publish.json 重新拉起，失败按退避重试，不清用户的设置 */
+  async function revive(tenant: PublishTenant) {
+    const row = readPersisted(tenant);
+    if (!row) {
+      backoff.delete(tenant.id);
+      return;
+    }
+    if (liveSlot(tenant.id)) return;
+    const wait = backoff.get(tenant.id);
+    if (wait && Date.now() < wait.nextAt) return;
+    const cwd = confine(row.cwd, tenant);
+    if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory() || !DNS_LABEL.test(tenant.id)) {
+      console.warn(`publish revive ${tenant.id}: 工作目录没了，放弃自动拉起`);
+      clearPersisted(tenant);
+      backoff.delete(tenant.id);
+      return;
+    }
+    const result = await launch(tenant, row.command, cwd);
+    if (result.ok) {
+      writePersisted(tenant, result.slot);
+      backoff.delete(tenant.id);
+      console.log(`publish revive ${tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
+      return;
+    }
+    const failures = (wait?.failures || 0) + 1;
+    backoff.set(tenant.id, { failures, nextAt: Date.now() + reviveDelay(failures) });
+    console.warn(`publish revive ${tenant.id} 第 ${failures} 次失败：${result.message.split("\n")[0]}`);
   }
 
-  async function statusOf(cwd: string, presented: string) {
+  async function statusOf(cwd: string, presented: string): Promise<Outcome> {
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
-    if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
+      return { status: 401, body: { ok: false, message: "口令不对。" } };
+    }
     if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
-    const existing = slots.get(found.tenant.id);
-    const slot = existing ? await ensureAlive(found.tenant, existing) : null;
-    if (!slot) return { status: 200, body: { ok: true, listening: false, message: "还没有公开的服务。" } };
+    const slot = liveSlot(found.tenant.id);
+    if (!slot) {
+      const row = readPersisted(found.tenant);
+      if (!row) return { status: 200, body: { ok: true, listening: false, message: "还没有公开的服务。外网地址现在显示默认介绍页。" } };
+      const wait = backoff.get(found.tenant.id);
+      const tail = logTail(resolve(found.tenant.stateDir, "publish.log"));
+      const lines = [
+        "工作台进程没在运行，平台会自动重新拉起。",
+        wait ? `已连续失败 ${wait.failures} 次，下次重试在 ${Math.max(0, Math.round((wait.nextAt - Date.now()) / 1000))} 秒后。` : "",
+        `命令 ${row.command}`,
+        tail ? `最近日志：\n${tail}` : "",
+      ].filter(Boolean);
+      return { status: 200, body: { ok: true, listening: false, message: lines.join("\n") } };
+    }
     const listening = await portOpen(slot.port);
     const view = messageFor(slot, listening);
     return { status: 200, body: { ok: true, ...view, port: slot.port } };
   }
 
-  async function stopAt(cwd: string, presented: string) {
+  async function stopAt(cwd: string, presented: string): Promise<Outcome> {
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
-    if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
+      return { status: 401, body: { ok: false, message: "口令不对。" } };
+    }
     if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
     const slot = slots.get(found.tenant.id);
-    if (!slot) return { status: 200, body: { ok: true, message: "当前没有公开的服务。" } };
-    if (!alive(slot.pid)) {
-      forget(found.tenant, slot.pid);
-      return { status: 200, body: { ok: true, message: "已停止。" } };
+    const hadRow = Boolean(readPersisted(found.tenant));
+    if (slot && groupAlive(slot.pid)) {
+      try {
+        await killOwned(slot.pid, slot.marker);
+      } catch (err) {
+        return { status: 409, body: { ok: false, message: err instanceof Error ? err.message : "没有停掉。" } };
+      }
+      if (slot.child && !slot.child.killed) slot.child.unref();
     }
-    try {
-      await stopSlot(found.tenant, slot);
-    } catch (err) {
-      return { status: 409, body: { ok: false, message: err instanceof Error ? err.message : "没有停掉。" } };
-    }
+    dropSlot(found.tenant.id);
+    clearPersisted(found.tenant);
+    backoff.delete(found.tenant.id);
+    if (!slot && !hadRow) return { status: 200, body: { ok: true, message: "当前没有公开的服务。" } };
     console.log(`publish stop ${found.tenant.id}`);
-    return { status: 200, body: { ok: true, message: "已停止。" } };
+    return { status: 200, body: { ok: true, message: "已停止。外网地址现在显示默认介绍页。" } };
   }
 
-  async function startAt(cwd: string, command: string, presented: string) {
+  async function startAt(cwd: string, command: string, presented: string): Promise<Outcome> {
     const trimmed = command.trim();
     if (!trimmed || trimmed.length > 4000) {
       return { status: 400, body: { ok: false, message: "启动命令是空的，或超过 4000 字。" } };
     }
     const found = locate(cwd);
     if (!found) return { status: 400, body: { ok: false, message: "工作目录不在任何一个租户工作区里。" } };
-    if (!allowed(found.tenant, presented)) return { status: 401, body: { ok: false, message: "口令不对。" } };
+    if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
+      return { status: 401, body: { ok: false, message: "口令不对。" } };
+    }
     if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
     if (!existsSync(found.cwd) || !statSync(found.cwd).isDirectory()) {
       return { status: 400, body: { ok: false, message: "工作目录不存在。" } };
@@ -721,104 +848,21 @@ export function createPublishController(options: {
         body: { ok: false, message: `租户 id「${found.tenant.id}」不能出现在路径里。用小写字母、数字和中间的短横线。` },
       };
     }
-    const existing = slots.get(found.tenant.id);
-    if (existing && (await ensureAlive(found.tenant, existing))) {
+    if (liveSlot(found.tenant.id)) {
       return { status: 409, body: { ok: false, message: "已经有公开的服务。先执行 jiebo-publish stop。" } };
     }
-    const port = await allocatePort();
-    const prev = readPersisted(found.tenant);
-    const gen = Math.max(readGen(found.tenant), prev?.gen || 0, existing?.gen || 0) + 1;
-    writeGen(found.tenant, gen);
-    const marker = `${found.tenant.id}:${gen}`;
-    const logFile = resolve(found.tenant.stateDir, "publish.log");
-    mkdirSync(found.tenant.stateDir, { recursive: true });
-    const logFd = openSync(logFile, "w", 0o600);
-    let child: ChildProcess;
-    try {
-      child = spawn("/bin/sh", ["-c", trimmed, marker], {
-        cwd: found.cwd,
-        env: childEnv(port, marker, publishBasePath(found.tenant.id)),
-        detached: true,
-        stdio: ["ignore", logFd, logFd],
-      });
-    } catch (err) {
-      closeSync(logFd);
-      return { status: 500, body: { ok: false, message: err instanceof Error ? err.message : "启动失败。" } };
+    const result = await launch(found.tenant, trimmed, found.cwd);
+    if (!result.ok) {
+      // 新命令起不来就不再记着旧的，外网回到默认页
+      clearPersisted(found.tenant);
+      backoff.delete(found.tenant.id);
+      return { status: result.status, body: { ok: false, listening: false, message: result.message } };
     }
-    closeSync(logFd);
-    child.unref();
-    const slot: Slot = {
-      v: 1,
-      tenantId: found.tenant.id,
-      pid: child.pid || 0,
-      port,
-      command: trimmed,
-      cwd: found.cwd,
-      gen,
-      marker,
-      startedAt: Date.now(),
-      lastHitAt: Date.now(),
-      workspaceRoot: found.tenant.workspaceRoot,
-      child,
-    };
-    if (!slot.pid) {
-      return { status: 500, body: { ok: false, message: "没有拿到进程号。" } };
-    }
-    slots.set(found.tenant.id, slot);
-    writePersisted(found.tenant, slot);
-    let exited = false;
-    child.on("exit", () => {
-      exited = true;
-      const current = slots.get(found.tenant.id);
-      if (current?.pid === slot.pid) forget(found.tenant);
-    });
-    const deadline = Date.now() + Math.max(1000, listenTimeoutMs);
-    let listening = false;
-    while (Date.now() < deadline) {
-      if (exited || !alive(slot.pid)) break;
-      if (await portOpen(port)) {
-        listening = true;
-        break;
-      }
-      await sleep(200);
-    }
-    if (!listening) {
-      const tail = logTail(logFile);
-      try {
-        await killOwned(slot.pid, slot.marker);
-      } catch {
-        // leave the slot if we cannot prove ownership; status will show it
-      }
-      if (!alive(slot.pid)) forget(found.tenant, slot.pid);
-      const why = tail ? `\n${tail}` : "";
-      return {
-        status: 502,
-        body: {
-          ok: false,
-          listening: false,
-          message: `进程没在 127.0.0.1:${port} 监听。确认启动命令使用 HOST 和 PORT。${why}`,
-        },
-      };
-    }
-    if (boundToLoopback(port) !== true) {
-      try {
-        await killOwned(slot.pid, slot.marker);
-      } catch {
-        // 对不上就留着，避免误杀
-      }
-      if (!alive(slot.pid)) forget(found.tenant, slot.pid);
-      return {
-        status: 502,
-        body: {
-          ok: false,
-          listening: false,
-          message: `必须只监听 127.0.0.1:${port}，不要绑定 0.0.0.0 或 ::。`,
-        },
-      };
-    }
-    const view = messageFor(slot, true);
-    console.log(`publish start ${found.tenant.id} 127.0.0.1:${port} pid ${slot.pid}`);
-    return { status: 200, body: { ok: true, port, ...view } };
+    writePersisted(found.tenant, result.slot);
+    backoff.delete(found.tenant.id);
+    const view = messageFor(result.slot, true);
+    console.log(`publish start ${found.tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
+    return { status: 200, body: { ok: true, port: result.slot.port, ...view } };
   }
 
   async function control(req: IncomingMessage, res: ServerResponse, op: "start" | "stop" | "status") {
@@ -848,22 +892,7 @@ export function createPublishController(options: {
     json(res, result.status, result.body);
   }
 
-  function secureCookie(req: IncomingMessage) {
-    const proto = String(req.headers["x-forwarded-proto"] || "")
-      .split(",")[0]
-      .trim()
-      .toLowerCase();
-    return proto === "https" || scheme() === "https";
-  }
-
-  function proxyHttp(
-    req: IncomingMessage,
-    res: ServerResponse,
-    port: number,
-    tenantId: string,
-    ticket: string | null,
-    exp: number | null,
-  ) {
+  function proxyHttp(req: IncomingMessage, res: ServerResponse, port: number, tenantId: string) {
     const headers = { ...req.headers };
     const cookie = stripOurCookie(headers.cookie);
     if (cookie) headers.cookie = cookie;
@@ -891,7 +920,6 @@ export function createPublishController(options: {
           }
           out[key] = value;
         }
-        if (ticket && exp) cookies.push(cookieHeader(ticket, exp, secureCookie(req), `${publishBasePath(tenantId)}/`));
         if (cookies.length) out["set-cookie"] = cookies;
         res.writeHead(up.statusCode || 502, out);
         up.pipe(res);
@@ -914,40 +942,26 @@ export function createPublishController(options: {
       text(res, 404, "没有这个用户。");
       return;
     }
-    const slot = slots.get(label);
-    if (!slot || !alive(slot.pid)) {
-      if (slot && !alive(slot.pid)) forget(tenant, slot.pid);
-      text(res, 404, "还没公开。在工作区里执行 jiebo-publish start。");
+    const slot = liveSlot(label);
+    if (slot) {
+      proxyHttp(req, res, slot.port, label);
       return;
     }
-    const current = new URL(req.url || "/", "http://127.0.0.1");
-    const fromQuery = current.searchParams.get("ticket");
-    const fromCookie = readCookie(req.headers.cookie, "jiebo_pub");
-    const presented = fromQuery || fromCookie;
-    const body = presented ? readTicket(options.ticketSecret(), presented) : null;
-    if (!body || body.t !== label || body.g !== slot.gen) {
-      text(res, 401, "这个服务还没对你开放。向接驳要一次新的链接。");
+    const head = req.method === "HEAD";
+    if (readPersisted(tenant)) {
+      scheduleRevive(tenant);
+      html(res, 503, workbenchDownPage(tenant.id, tenant.name), head);
       return;
     }
-    slot.lastHitAt = Date.now();
-    if (fromQuery && (req.method === "GET" || req.method === "HEAD")) {
-      res.writeHead(302, {
-        location: locationWithoutTicket(req.url || "/"),
-        "set-cookie": cookieHeader(fromQuery, body.e, secureCookie(req), `${publishBasePath(label)}/`),
-        "referrer-policy": "no-referrer",
-        "cache-control": "no-store",
-        "content-length": 0,
-      });
-      res.end();
-      return;
-    }
-    proxyHttp(req, res, slot.port, label, fromQuery, fromQuery ? body.e : null);
+    const path = pathnameOf(req.url || "/");
+    const atRoot = path === publishBasePath(label) || path === `${publishBasePath(label)}/`;
+    html(res, atRoot ? 200 : 404, defaultWorkbenchPage(tenant.id, tenant.name), head);
   }
 
   function rejectUpgrade(socket: Duplex, status: number, message: string) {
     if (socket.destroyed) return;
     const body = Buffer.from(message);
-    const reason = status === 401 ? "Unauthorized" : status === 404 ? "Not Found" : "Bad Gateway";
+    const reason = status === 404 ? "Not Found" : status === 503 ? "Service Unavailable" : "Bad Gateway";
     socket.write(
       `HTTP/1.1 ${status} ${reason}\r\n` +
         "Content-Type: text/plain; charset=utf-8\r\n" +
@@ -958,17 +972,7 @@ export function createPublishController(options: {
     socket.end(body);
   }
 
-  function proxyUpgrade(
-    req: IncomingMessage,
-    socket: Duplex,
-    head: Buffer,
-    port: number,
-    tenantId: string,
-    onActivity: () => void,
-  ) {
-    const beat = setInterval(onActivity, 30_000);
-    beat.unref();
-    const stopBeat = () => clearInterval(beat);
+  function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, port: number, tenantId: string) {
     const upstream = netConnect(port, "127.0.0.1", () => {
       let raw = `${req.method || "GET"} ${locationWithoutTicket(req.url || "/")} HTTP/1.1\r\n`;
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
@@ -989,39 +993,31 @@ export function createPublishController(options: {
       upstream.pipe(socket);
       socket.pipe(upstream);
     });
-    const fail = () => {
+    upstream.on("error", () => {
       upstream.destroy();
       if (socket.writable) rejectUpgrade(socket, 502, "服务暂时连不上。");
       else socket.destroy();
-    };
-    upstream.on("error", fail);
-    upstream.on("close", stopBeat);
-    socket.on("close", stopBeat);
+    });
     socket.on("error", () => upstream.destroy());
   }
 
-  function sweepIdle() {
-    for (const [id, slot] of [...slots]) {
-      const tenant = tenantById(id);
-      if (!tenant) {
-        slots.delete(id);
-        continue;
-      }
-      void lock(async () => {
-        const current = slots.get(id);
-        if (!current || current.pid !== slot.pid) return;
-        if (!alive(current.pid)) {
-          forget(tenant, current.pid);
-          return;
-        }
-        if (!publishIdleDue(current.lastHitAt, Date.now(), idleMs)) return;
-        try {
-          await stopSlot(tenant, current);
-          console.log(`publish idle ${id}`);
-        } catch (err) {
-          console.error("publish idle", err instanceof Error ? err.message : err);
-        }
-      });
+  function scheduleRevive(tenant: PublishTenant) {
+    if (reviving.has(tenant.id)) return;
+    reviving.add(tenant.id);
+    void lock(() => revive(tenant))
+      .catch((err) => {
+        // 异常也计入退避，否则外部请求能反复触发
+        const failures = (backoff.get(tenant.id)?.failures || 0) + 1;
+        backoff.set(tenant.id, { failures, nextAt: Date.now() + reviveDelay(failures) });
+        console.error("publish revive", err instanceof Error ? err.message : err);
+      })
+      .finally(() => reviving.delete(tenant.id));
+  }
+
+  function sweep() {
+    for (const tenant of options.tenants()) scheduleRevive(tenant);
+    for (const id of [...slots.keys()]) {
+      if (!tenantById(id)) slots.delete(id);
     }
   }
 
@@ -1031,29 +1027,21 @@ export function createPublishController(options: {
         ensureTenantToken(tenant);
         const row = readPersisted(tenant);
         if (!row) continue;
-        if (!alive(row.pid) || !markerVisible(row.pid, row.marker)) {
-          clearPersisted(tenant);
-          continue;
-        }
         const cwd = confine(row.cwd, tenant);
-        if (!cwd) {
-          clearPersisted(tenant);
-          continue;
+        if (cwd && groupAlive(row.pid) && groupOwned(row.pid, row.marker)) {
+          slots.set(tenant.id, { ...row, cwd, tenantId: tenant.id, workspaceRoot: tenant.workspaceRoot });
+          console.log(`publish attach ${tenant.id} 127.0.0.1:${row.port} pid ${row.pid}`);
         }
-        slots.set(tenant.id, {
-          ...row,
-          cwd,
-          tenantId: tenant.id,
-          workspaceRoot: tenant.workspaceRoot,
-          lastHitAt: Date.now(),
-        });
-        console.log(`publish attach ${tenant.id} 127.0.0.1:${row.port} pid ${row.pid}`);
       }
-      if (idleMs > 0 && !timer) timer = setInterval(sweepIdle, 30_000);
-      timer?.unref();
+      // 平台重启会带走这些进程（同一个 systemd cgroup），开机就按 publish.json 拉回来
+      sweep();
+      if (sweepMs > 0 && !timer) {
+        timer = setInterval(sweep, sweepMs);
+        timer.unref();
+      }
       const name = host();
       const proto = scheme() === "http" ? "http" : "https";
-      console.log(name ? `对外预览               ${proto}://${name}/p/<id>/` : "对外预览               未配置 JIEBO_PUBLISH_HOST");
+      console.log(name ? `对外预览               ${proto}://${name}/p/<id>/（公开访问，常驻）` : "对外预览               未配置 JIEBO_PUBLISH_HOST");
     },
     close() {
       if (timer) clearInterval(timer);
@@ -1082,25 +1070,18 @@ export function createPublishController(options: {
     handleUpgrade(req, socket, head) {
       const label = tenantFromPublishPath(req.url || "/");
       if (!label) return false;
-      const slot = slots.get(label);
-      const presented = readCookie(req.headers.cookie, "jiebo_pub");
-      const body = presented ? readTicket(options.ticketSecret(), presented) : null;
-      if (!slot || !alive(slot.pid)) {
-        if (slot && !alive(slot.pid)) {
-          const tenant = tenantById(label);
-          if (tenant) forget(tenant, slot.pid);
+      const slot = liveSlot(label);
+      if (!slot) {
+        const tenant = tenantById(label);
+        if (tenant && readPersisted(tenant)) {
+          scheduleRevive(tenant);
+          rejectUpgrade(socket, 503, "工作台正在重新启动。");
+        } else {
+          rejectUpgrade(socket, 404, "工作台还没在运行。");
         }
-        rejectUpgrade(socket, 404, "还没公开。");
         return true;
       }
-      if (!body || body.t !== label || body.g !== slot.gen) {
-        rejectUpgrade(socket, 401, "这个服务还没对你开放。向接驳要一次新的链接。");
-        return true;
-      }
-      slot.lastHitAt = Date.now();
-      proxyUpgrade(req, socket, head, slot.port, label, () => {
-        slot.lastHitAt = Date.now();
-      });
+      proxyUpgrade(req, socket, head, slot.port, label);
       return true;
     },
   };

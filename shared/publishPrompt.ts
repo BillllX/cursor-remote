@@ -4,7 +4,7 @@ export const PUBLISH_AGENT_PROMPT = [
   "对外预览：用户要从外网打开网站或接口时，用 shell 执行 jiebo-publish start -- <启动命令>。每人只有一个对外网站，只能在这个 USER 工作区里创建。",
   "启动命令必须监听环境变量 HOST 和 PORT（HOST 是 127.0.0.1），并把网站挂在 BASE_PATH 下。要写进命令时用单引号 '$HOST'、'$PORT'、'$BASE_PATH'，避免当前 shell 先展开成空。",
   "Vite 用 --base '$BASE_PATH/'，Next 的 basePath 用 BASE_PATH。浏览器里的资源地址必须落在这个前缀下。",
-  "把命令打印出的地址原样回复给用户。",
+  "把命令打印出的地址原样回复给用户。这个网站就是用户的工作台：任何人拿到地址都能打开，不要把口令、持仓、个人隐私放进页面；它会一直开着，进程退出或平台重启后自动按同一条命令拉起，所以启动命令要能反复执行。",
   "不要自己选端口，不要绑定 0.0.0.0，不要改 nginx、hosts 或证书。",
   "已经公开过就先 jiebo-publish stop。查看用 jiebo-publish status。",
 ].join("");
