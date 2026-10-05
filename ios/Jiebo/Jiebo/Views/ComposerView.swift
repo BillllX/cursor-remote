@@ -949,7 +949,7 @@ struct ComposerView: View {
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)
-                            Text(item.name)
+                            Text(item.compressing ? "压缩中 · \(item.name)" : item.name)
                                 .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.ink2)
                                 .lineLimit(1)

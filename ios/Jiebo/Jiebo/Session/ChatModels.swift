@@ -74,6 +74,7 @@ struct PendingTool: Hashable {
 struct UploadItem: Identifiable, Hashable {
     var id: String
     var name: String
+    var compressing = false
 }
 
 struct Turn: Identifiable, Hashable {

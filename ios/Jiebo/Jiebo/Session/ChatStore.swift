@@ -2492,12 +2492,13 @@ final class ChatStore {
         let tenantAtStart = tenantId
         do {
             // 重 I/O（安全作用域 + 复制 iCloud 文件）放后台线程，避免卡主 actor
-            let (temp, size) = try await Task.detached(priority: .userInitiated) { () throws -> (URL, Int) in
+            let (temp, originalSize) = try await Task.detached(priority: .userInitiated) { () throws -> (URL, Int) in
                 let scoped = source.startAccessingSecurityScopedResource()
                 defer { if scoped { source.stopAccessingSecurityScopedResource() } }
                 let size = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
                 guard size > 0 else { throw UploadError.empty }
-                guard size <= maxUploadBytes else { throw UploadError.tooLarge }
+                let limit = MediaShrink.canShrink(name: source.lastPathComponent) ? MediaShrink.maxSourceBytes : maxUploadBytes
+                guard size <= limit else { throw UploadError.tooLarge }
                 // 复制到临时文件，避免上传期间源文件（iCloud/安全作用域）失效
                 let temp = FileManager.default.temporaryDirectory
                     .appendingPathComponent("jiebo-upload-\(item.id)-\(source.lastPathComponent)")
@@ -2507,12 +2508,30 @@ final class ChatStore {
             }.value
             defer { try? FileManager.default.removeItem(at: temp) }
 
+            var file = temp
+            var name = item.name
+            var size = originalSize
+            if MediaShrink.canShrink(name: name) {
+                setUploadCompressing(item.id, true)
+                let shrunk = await Task.detached(priority: .userInitiated) { [name] in
+                    await MediaShrink.shrinkUpload(temp, name: name, size: originalSize)
+                }.value
+                setUploadCompressing(item.id, false)
+                if let shrunk {
+                    file = shrunk.url
+                    name = shrunk.name
+                    size = shrunk.size
+                }
+            }
+            defer { if file != temp { try? FileManager.default.removeItem(at: file) } }
+            guard size <= maxUploadBytes else { throw UploadError.tooLarge }
+
             let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             var path: String?
             var httpError: Error?
             if !token.isEmpty {
                 do {
-                    path = try await Uploader.upload(chatId: chatId, name: item.name, file: temp, token: token).path
+                    path = try await Uploader.upload(chatId: chatId, name: name, file: file, token: token).path
                 } catch {
                     httpError = error
                 }
@@ -2522,11 +2541,11 @@ final class ChatStore {
                 guard client.isOpen else { throw httpError ?? UploadError.notConnected }
                 guard size <= 8 * 1024 * 1024 else { throw httpError ?? UploadError.tooLarge }
                 // base64 编码也放后台（8MB → ~11MB 字符串）
-                let data = try await Task.detached(priority: .userInitiated) {
-                    try Data(contentsOf: temp, options: .mappedIfSafe)
+                let data = try await Task.detached(priority: .userInitiated) { [file] in
+                    try Data(contentsOf: file, options: .mappedIfSafe)
                 }.value
                 do {
-                    path = try await uploadViaGateway(chatId: chatId, name: item.name, data: data)
+                    path = try await uploadViaGateway(chatId: chatId, name: name, data: data)
                 } catch {
                     // 两条路都失败时优先展示更具体的 HTTP 错误（如 401），而非 WS 超时
                     throw httpError ?? error
@@ -2537,12 +2556,26 @@ final class ChatStore {
             // 上传期间切了租户：静默丢弃，不写草稿不弹提示
             guard tenantId == tenantAtStart else { return }
             appendMention(path, to: chatId)
-            flash("已上传 \(item.name)")
+            if size < originalSize {
+                flash("已上传 \(name)（\(Self.megabytes(originalSize)) → \(Self.megabytes(size))）")
+            } else {
+                flash("已上传 \(name)")
+            }
         } catch {
             uploads.removeAll { $0.id == item.id }
             guard tenantId == tenantAtStart else { return }
             bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
+    }
+
+    private func setUploadCompressing(_ id: String, _ value: Bool) {
+        guard let index = uploads.firstIndex(where: { $0.id == id }) else { return }
+        uploads[index].compressing = value
+    }
+
+    private static func megabytes(_ bytes: Int) -> String {
+        let mb = Double(bytes) / 1024 / 1024
+        return mb >= 10 ? String(format: "%.0fMB", mb) : String(format: "%.1fMB", max(0.1, mb))
     }
 
     /// WS 兜底通道：upload_file + 按 id 配对 file_uploaded，90s 超时
