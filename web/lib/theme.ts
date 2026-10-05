@@ -1,13 +1,7 @@
+/** 只留两套。浅色、深色各有两种观感：接驳偏暖，素墨偏冷。id 与 iOS JieboPalette 的 rawValue 一致。 */
 export const PALETTES = [
-  { id: "jiebo", name: "接驳" },
-  { id: "neutral", name: "中性" },
-  { id: "paper", name: "纸墨" },
-  { id: "sand", name: "暖砂" },
-  { id: "pine", name: "松石" },
-  { id: "cool", name: "冷墨" },
-  { id: "ink", name: "墨砚" },
-  { id: "night", name: "夜读" },
-  { id: "clay", name: "陶土" },
+  { id: "jiebo", name: "接驳", note: "暖白纸色 · 松绿强调" },
+  { id: "night", name: "素墨", note: "冷白近黑 · 墨黑与赭金强调" },
 ] as const;
 
 export type PaletteId = (typeof PALETTES)[number]["id"];
@@ -24,7 +18,18 @@ export const THEME_KEY = "jiebo.theme";
 export const APPEARANCE_KEY = "jiebo.appearance";
 export const DEFAULT_PALETTE: PaletteId = "jiebo";
 
-const PALETTE_IDS = new Set<string>(PALETTES.map((item) => item.id));
+/** 旧版九套配色按观感归到两套里：暖色系归接驳，中性、冷色系归素墨。 */
+const LEGACY_PALETTES: Record<string, PaletteId> = {
+  jiebo: "jiebo",
+  paper: "jiebo",
+  pine: "jiebo",
+  sand: "jiebo",
+  ink: "jiebo",
+  clay: "jiebo",
+  night: "night",
+  neutral: "night",
+  cool: "night",
+};
 
 export type SurfaceInk = {
   bg: string;
@@ -44,37 +49,9 @@ const SURFACES: Record<PaletteId, { light: SurfaceInk; dark: SurfaceInk }> = {
     light: { bg: "#f3eee4", sidebar: "#ebe5d9", panel: "#fffcf8", text: "#1c1916", muted: "#5c574f", border: "#ddd5c7", accent: "#1a4f41", user: "#e2ebe4", fillFg: "#fffcf8" },
     dark: { bg: "#141512", sidebar: "#101210", panel: "#1b1d1a", text: "#ede8de", muted: "#b6b0a4", border: "#2c2f2b", accent: "#8fbfb0", user: "#22322c", fillFg: "#141512" },
   },
-  neutral: {
-    light: { bg: "#fafafa", sidebar: "#fafafa", panel: "#ffffff", text: "#171717", muted: "#6e6e6e", border: "#ececec", accent: "#171717", user: "#f4f4f5", fillFg: "#fafafa" },
-    dark: { bg: "#141512", sidebar: "#101210", panel: "#1b1d1a", text: "#ede8de", muted: "#b6b0a4", border: "#2c2f2b", accent: "#8fbfb0", user: "#24332e", fillFg: "#141512" },
-  },
-  paper: {
-    light: { bg: "#f3eee4", sidebar: "#efe9dd", panel: "#fffcfa", text: "#1c1916", muted: "#5c574f", border: "#d4cdbf", accent: "#1a4f41", user: "#e7e1d4", fillFg: "#fffcfa" },
-    dark: { bg: "#1c1916", sidebar: "#161310", panel: "#221f1a", text: "#ede8de", muted: "#b6b0a4", border: "#3a352d", accent: "#8fbfb0", user: "#2a3a32", fillFg: "#1c1916" },
-  },
-  sand: {
-    light: { bg: "#f7f4ee", sidebar: "#f3eee4", panel: "#fffdf8", text: "#2a2620", muted: "#6e655a", border: "#e2d9c8", accent: "#8a6a3c", user: "#ece4d2", fillFg: "#fffdf8" },
-    dark: { bg: "#1a1814", sidebar: "#15120e", panel: "#221f1a", text: "#ede6d6", muted: "#b3a890", border: "#322d22", accent: "#c4a36a", user: "#2c2620", fillFg: "#1a1814" },
-  },
-  pine: {
-    light: { bg: "#f5f2ec", sidebar: "#efece4", panel: "#ffffff", text: "#1c1916", muted: "#5c574f", border: "#d4cdbf", accent: "#1a4f41", user: "#e3ece6", fillFg: "#ffffff" },
-    dark: { bg: "#0f1a16", sidebar: "#0c1612", panel: "#142019", text: "#e6efe9", muted: "#9db5a8", border: "#243029", accent: "#8fbfb0", user: "#1f3a2e", fillFg: "#0f1a16" },
-  },
-  cool: {
-    light: { bg: "#f6f7f8", sidebar: "#f1f3f5", panel: "#ffffff", text: "#0f1720", muted: "#5a6373", border: "#e3e7ec", accent: "#1f4f66", user: "#eef1f5", fillFg: "#ffffff" },
-    dark: { bg: "#0f1418", sidebar: "#0b0f13", panel: "#161b21", text: "#e6ebf0", muted: "#9aa3b0", border: "#232a32", accent: "#7aa5f8", user: "#1d2630", fillFg: "#0f1418" },
-  },
-  ink: {
-    light: { bg: "#f4efe6", sidebar: "#ebe4d8", panel: "#fffcf7", text: "#1c1612", muted: "#6a6156", border: "#ddd2c4", accent: "#6b4e32", user: "#e6dccb", fillFg: "#fffcf7" },
-    dark: { bg: "#121110", sidebar: "#0e0d0c", panel: "#1a1917", text: "#f3eee4", muted: "#b3a890", border: "#322c26", accent: "#c4a36a", user: "#2a2520", fillFg: "#121110" },
-  },
   night: {
     light: { bg: "#f7f7f8", sidebar: "#f1f1f3", panel: "#ffffff", text: "#161618", muted: "#5e5e66", border: "#e4e4e8", accent: "#161618", user: "#ececef", fillFg: "#f7f7f8" },
     dark: { bg: "#0c0d10", sidebar: "#090a0c", panel: "#131418", text: "#e8e8ea", muted: "#9a9aa0", border: "#23242a", accent: "#c4a36a", user: "#1a1c22", fillFg: "#0c0d10" },
-  },
-  clay: {
-    light: { bg: "#f6f1ea", sidebar: "#efe6dc", panel: "#fffdf9", text: "#241812", muted: "#6e5b4e", border: "#e0d2c4", accent: "#8a4632", user: "#eadfd2", fillFg: "#fffdf9" },
-    dark: { bg: "#1a1411", sidebar: "#140f0d", panel: "#241c18", text: "#f3ebe4", muted: "#c4b0a2", border: "#3a2e28", accent: "#e09478", user: "#2e241e", fillFg: "#1a1411" },
   },
 };
 
@@ -83,7 +60,7 @@ export function paletteSurfaces(id: string | null | undefined, kind: "light" | "
 }
 
 export function normalizePalette(value: string | null): PaletteId {
-  return value && PALETTE_IDS.has(value) ? (value as PaletteId) : DEFAULT_PALETTE;
+  return value && Object.prototype.hasOwnProperty.call(LEGACY_PALETTES, value) ? LEGACY_PALETTES[value] : DEFAULT_PALETTE;
 }
 
 export function normalizeAppearance(value: string | null): AppearanceId {
@@ -126,9 +103,9 @@ export function applyJieboTheme(palette: string, appearance: string) {
 /** 写在 <head> 里，首屏绘制前套上配色。画布 iframe 同源，用 storage 事件跟上切换。
  *  旧版启动脚本会把默认的 neutral 写进 storage，分不出是不是用户自己选的；rev 2 起统一迁到品牌配色一次。 */
 export const THEME_BOOT = `(function(){
-  var ids=${JSON.stringify(PALETTES.map((item) => item.id))};
+  var legacy=${JSON.stringify(LEGACY_PALETTES)};
   var fallback=${JSON.stringify(DEFAULT_PALETTE)};
-  function paletteOf(value){return ids.indexOf(value)>=0?value:fallback}
+  function paletteOf(value){return Object.prototype.hasOwnProperty.call(legacy,value)?legacy[value]:fallback}
   function appearanceOf(value){return value==="light"||value==="dark"||value==="system"?value:"system"}
   function read(key, fallback){try{return localStorage.getItem(key)||fallback}catch(e){return fallback}}
   function write(key, value){try{if(localStorage.getItem(key)!==value)localStorage.setItem(key,value)}catch(e){}}

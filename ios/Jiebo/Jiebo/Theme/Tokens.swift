@@ -14,22 +14,33 @@ struct JieboSurfaces {
     var user: UInt32
 }
 
+/// 只留两套：接驳（暖白 + 松绿，深色是暖炭 + 雾绿）和素墨（冷白 + 墨黑，深色是近黑 + 赭金）。
+/// rawValue 与网页 web/lib/theme.ts 的配色 id 一致，画布按 id 去网页端取表面色，不能另起新 id。
 enum JieboPalette: String, CaseIterable, Identifiable {
-    case jiebo, neutral, paper, sand, pine, cool, ink, night, clay
+    case jiebo, night
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .jiebo: "接驳"
-        case .neutral: "中性"
-        case .paper: "纸墨"
-        case .sand: "暖砂"
-        case .pine: "松石"
-        case .cool: "冷墨"
-        case .ink: "墨砚"
-        case .night: "夜读"
-        case .clay: "陶土"
+        case .night: "素墨"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .jiebo: "暖白纸色 · 松绿强调"
+        case .night: "冷白近黑 · 墨黑与赭金强调"
+        }
+    }
+
+    /// 旧版的九套配色按观感归到两套里：暖色系归接驳，中性、冷色系归素墨。
+    static func migrated(_ raw: String) -> JieboPalette? {
+        switch raw {
+        case "jiebo", "paper", "pine", "sand", "ink", "clay": .jiebo
+        case "night", "neutral", "cool": .night
+        default: nil
         }
     }
 
@@ -41,9 +52,7 @@ enum JieboPalette: String, CaseIterable, Identifiable {
             return dark
                 ? (0x1F211E, 0x8A8478, 0x3A3E38)
                 : (0xFFFDFA, 0x746D62, 0xCDC4B4)
-        case .neutral where !dark:
-            return (ink.panel, ink.muted, 0xE4E4E7)
-        default:
+        case .night:
             return (ink.panel, ink.muted, ink.border)
         }
     }
@@ -52,22 +61,8 @@ enum JieboPalette: String, CaseIterable, Identifiable {
         switch self {
         case .jiebo:
             JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEBE5D9, panel: 0xFFFCF8, text: 0x1C1916, muted: 0x5C574F, border: 0xDDD5C7, accent: 0x1A4F41, user: 0xE2EBE4)
-        case .neutral:
-            JieboSurfaces(bg: 0xF7F7F8, sidebar: 0xF2F2F3, panel: 0xFFFFFF, text: 0x171717, muted: 0x6E6E6E, border: 0xECECEC, accent: 0x171717, user: 0xF4F4F5)
-        case .paper:
-            JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEFE9DD, panel: 0xFFFCFA, text: 0x1C1916, muted: 0x5C574F, border: 0xD4CDBF, accent: 0x1A4F41, user: 0xE7E1D4)
-        case .sand:
-            JieboSurfaces(bg: 0xF7F4EE, sidebar: 0xF3EEE4, panel: 0xFFFDF8, text: 0x2A2620, muted: 0x6E655A, border: 0xE2D9C8, accent: 0x8A6A3C, user: 0xECE4D2)
-        case .pine:
-            JieboSurfaces(bg: 0xF5F2EC, sidebar: 0xEFECE4, panel: 0xFFFFFF, text: 0x1C1916, muted: 0x5C574F, border: 0xD4CDBF, accent: 0x1A4F41, user: 0xE3ECE6)
-        case .cool:
-            JieboSurfaces(bg: 0xF6F7F8, sidebar: 0xF1F3F5, panel: 0xFFFFFF, text: 0x0F1720, muted: 0x5A6373, border: 0xE3E7EC, accent: 0x1F4F66, user: 0xEEF1F5)
-        case .ink:
-            JieboSurfaces(bg: 0xF4EFE6, sidebar: 0xEBE4D8, panel: 0xFFFCF7, text: 0x1C1612, muted: 0x6A6156, border: 0xDDD2C4, accent: 0x6B4E32, user: 0xE6DCCB)
         case .night:
             JieboSurfaces(bg: 0xF7F7F8, sidebar: 0xF1F1F3, panel: 0xFFFFFF, text: 0x161618, muted: 0x5E5E66, border: 0xE4E4E8, accent: 0x161618, user: 0xECECEF)
-        case .clay:
-            JieboSurfaces(bg: 0xF6F1EA, sidebar: 0xEFE6DC, panel: 0xFFFDF9, text: 0x241812, muted: 0x6E5B4E, border: 0xE0D2C4, accent: 0x8A4632, user: 0xEADFD2)
         }
     }
 
@@ -75,26 +70,10 @@ enum JieboPalette: String, CaseIterable, Identifiable {
         switch self {
         case .jiebo:
             JieboSurfaces(bg: 0x141512, sidebar: 0x101210, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x22322C)
-        case .neutral:
-            JieboSurfaces(bg: 0x161714, sidebar: 0x0E0F0C, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x24332E)
-        case .paper:
-            JieboSurfaces(bg: 0x1C1916, sidebar: 0x161310, panel: 0x221F1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x3A352D, accent: 0x8FBFB0, user: 0x2A3A32)
-        case .sand:
-            JieboSurfaces(bg: 0x1A1814, sidebar: 0x15120E, panel: 0x221F1A, text: 0xEDE6D6, muted: 0xB3A890, border: 0x322D22, accent: 0xC4A36A, user: 0x2C2620)
-        case .pine:
-            JieboSurfaces(bg: 0x0F1A16, sidebar: 0x0C1612, panel: 0x142019, text: 0xE6EFE9, muted: 0x9DB5A8, border: 0x243029, accent: 0x8FBFB0, user: 0x1F3A2E)
-        case .cool:
-            JieboSurfaces(bg: 0x0F1418, sidebar: 0x0B0F13, panel: 0x161B21, text: 0xE6EBF0, muted: 0x9AA3B0, border: 0x232A32, accent: 0x7AA5F8, user: 0x1D2630)
-        case .ink:
-            JieboSurfaces(bg: 0x121110, sidebar: 0x0E0D0C, panel: 0x1A1917, text: 0xF3EEE4, muted: 0xB3A890, border: 0x322C26, accent: 0xC4A36A, user: 0x2A2520)
         case .night:
             JieboSurfaces(bg: 0x0C0D10, sidebar: 0x090A0C, panel: 0x131418, text: 0xE8E8EA, muted: 0x9A9AA0, border: 0x23242A, accent: 0xC4A36A, user: 0x1A1C22)
-        case .clay:
-            JieboSurfaces(bg: 0x1A1411, sidebar: 0x140F0D, panel: 0x241C18, text: 0xF3EBE4, muted: 0xC4B0A2, border: 0x3A2E28, accent: 0xE09478, user: 0x2E241E)
         }
     }
-
-    var swatch: Color { Color(hex: light.accent) }
 }
 
 enum JieboAppearance: String, CaseIterable, Identifiable {
@@ -141,15 +120,17 @@ final class JieboTheme {
         let storedAppearance = UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
         let branded = UserDefaults.standard.bool(forKey: Self.brandDefaultKey)
         let resolved: JieboPalette
-        if !branded && (storedPalette.isEmpty || storedPalette == JieboPalette.neutral.rawValue) {
+        if !branded && (storedPalette.isEmpty || storedPalette == "neutral") {
             resolved = .jiebo
         } else {
-            resolved = JieboPalette(rawValue: storedPalette) ?? .jiebo
+            resolved = JieboPalette.migrated(storedPalette) ?? .jiebo
         }
         palette = resolved
         appearance = JieboAppearance(rawValue: storedAppearance) ?? .system
         if !branded {
             UserDefaults.standard.set(true, forKey: Self.brandDefaultKey)
+        }
+        if storedPalette != resolved.rawValue {
             UserDefaults.standard.set(resolved.rawValue, forKey: Self.paletteKey)
         }
     }

@@ -1,4 +1,4 @@
-/* 九套配色。除品牌默认的“接驳”外，色值与 ios/Jiebo/Jiebo/Theme/Tokens.swift 对齐。
+/* 两套配色：接驳、素墨（id 为 night）。色值与 ios/Jiebo/Jiebo/Theme/Tokens.swift、web/lib/theme.ts 对齐。
    外观由 html[data-theme]，配色由 html[data-palette]。启动脚本在绘制前写上这两个属性。 */
 
 html[data-palette] {
@@ -97,152 +97,6 @@ html[data-palette] {
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.32);
 }
 
-[data-palette="neutral"][data-theme="light"] {
-  --bg: #f7f7f8;
-  --bg-sidebar: #f2f2f3;
-  --bg-panel: #ffffff;
-  --bg-composer: #ffffff;
-  --bg-user: #f4f4f5;
-  --border: #ececec;
-  --border-strong: #e4e4e7;
-  --text: #171717;
-  --muted: #6e6e6e;
-  --dim: #6e6e6e;
-  --accent: #171717;
-  --fill: #171717;
-  --fill-fg: #fafafa;
-}
-
-[data-palette="paper"][data-theme="light"] {
-  --bg: #f3eee4;
-  --bg-sidebar: #efe9dd;
-  --bg-panel: #fffcfa;
-  --bg-user: #e7e1d4;
-  --border: #d4cdbf;
-  --text: #1c1916;
-  --muted: #5c574f;
-  --accent: #1a4f41;
-  --fill: #1a4f41;
-  --fill-fg: #fffcfa;
-}
-
-[data-palette="paper"][data-theme="dark"] {
-  --bg: #1c1916;
-  --bg-sidebar: #161310;
-  --bg-panel: #221f1a;
-  --bg-user: #2a3a32;
-  --border: #3a352d;
-  --text: #ede8de;
-  --muted: #b6b0a4;
-  --accent: #8fbfb0;
-  --fill: #8fbfb0;
-  --fill-fg: #1c1916;
-}
-
-[data-palette="sand"][data-theme="light"] {
-  --bg: #f7f4ee;
-  --bg-sidebar: #f3eee4;
-  --bg-panel: #fffdf8;
-  --bg-user: #ece4d2;
-  --border: #e2d9c8;
-  --text: #2a2620;
-  --muted: #6e655a;
-  --accent: #8a6a3c;
-  --fill: #8a6a3c;
-  --fill-fg: #fffdf8;
-}
-
-[data-palette="sand"][data-theme="dark"] {
-  --bg: #1a1814;
-  --bg-sidebar: #15120e;
-  --bg-panel: #221f1a;
-  --bg-user: #2c2620;
-  --border: #322d22;
-  --text: #ede6d6;
-  --muted: #b3a890;
-  --accent: #c4a36a;
-  --fill: #c4a36a;
-  --fill-fg: #1a1814;
-}
-
-[data-palette="pine"][data-theme="light"] {
-  --bg: #f5f2ec;
-  --bg-sidebar: #efece4;
-  --bg-panel: #ffffff;
-  --bg-user: #e3ece6;
-  --border: #d4cdbf;
-  --text: #1c1916;
-  --muted: #5c574f;
-  --accent: #1a4f41;
-  --fill: #1a4f41;
-  --fill-fg: #ffffff;
-}
-
-[data-palette="pine"][data-theme="dark"] {
-  --bg: #0f1a16;
-  --bg-sidebar: #0c1612;
-  --bg-panel: #142019;
-  --bg-user: #1f3a2e;
-  --border: #243029;
-  --text: #e6efe9;
-  --muted: #9db5a8;
-  --accent: #8fbfb0;
-  --fill: #8fbfb0;
-  --fill-fg: #0f1a16;
-}
-
-[data-palette="cool"][data-theme="light"] {
-  --bg: #f6f7f8;
-  --bg-sidebar: #f1f3f5;
-  --bg-panel: #ffffff;
-  --bg-user: #eef1f5;
-  --border: #e3e7ec;
-  --text: #0f1720;
-  --muted: #5a6373;
-  --accent: #1f4f66;
-  --fill: #1f4f66;
-  --fill-fg: #ffffff;
-}
-
-[data-palette="cool"][data-theme="dark"] {
-  --bg: #0f1418;
-  --bg-sidebar: #0b0f13;
-  --bg-panel: #161b21;
-  --bg-user: #1d2630;
-  --border: #232a32;
-  --text: #e6ebf0;
-  --muted: #9aa3b0;
-  --accent: #7aa5f8;
-  --fill: #7aa5f8;
-  --fill-fg: #0f1418;
-}
-
-[data-palette="ink"][data-theme="light"] {
-  --bg: #f4efe6;
-  --bg-sidebar: #ebe4d8;
-  --bg-panel: #fffcf7;
-  --bg-user: #e6dccb;
-  --border: #ddd2c4;
-  --text: #1c1612;
-  --muted: #6a6156;
-  --accent: #6b4e32;
-  --fill: #6b4e32;
-  --fill-fg: #fffcf7;
-}
-
-[data-palette="ink"][data-theme="dark"] {
-  --bg: #121110;
-  --bg-sidebar: #0e0d0c;
-  --bg-panel: #1a1917;
-  --bg-user: #2a2520;
-  --border: #322c26;
-  --text: #f3eee4;
-  --muted: #b3a890;
-  --accent: #c4a36a;
-  --fill: #c4a36a;
-  --fill-fg: #121110;
-}
-
 [data-palette="night"][data-theme="light"] {
   --bg: #f7f7f8;
   --bg-sidebar: #f1f1f3;
@@ -269,32 +123,6 @@ html[data-palette] {
   --fill-fg: #0c0d10;
 }
 
-[data-palette="clay"][data-theme="light"] {
-  --bg: #f6f1ea;
-  --bg-sidebar: #efe6dc;
-  --bg-panel: #fffdf9;
-  --bg-user: #eadfd2;
-  --border: #e0d2c4;
-  --text: #241812;
-  --muted: #6e5b4e;
-  --accent: #8a4632;
-  --fill: #8a4632;
-  --fill-fg: #fffdf9;
-}
-
-[data-palette="clay"][data-theme="dark"] {
-  --bg: #1a1411;
-  --bg-sidebar: #140f0d;
-  --bg-panel: #241c18;
-  --bg-user: #2e241e;
-  --border: #3a2e28;
-  --text: #f3ebe4;
-  --muted: #c4b0a2;
-  --accent: #e09478;
-  --fill: #e09478;
-  --fill-fg: #1a1411;
-}
-
 .theme-settings {
   display: grid;
   gap: 8px;
@@ -309,19 +137,14 @@ html[data-palette] {
 .theme-seg,
 .theme-list {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .theme-seg {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.theme-list {
-  grid-template-columns: 1fr 1fr;
-}
-
-.theme-seg button,
-.theme-list button {
+.theme-seg button {
   border: 1px solid var(--border);
   background: transparent;
   color: var(--muted);
@@ -329,36 +152,133 @@ html[data-palette] {
   padding: 6px 8px;
   font-size: 12px;
   cursor: pointer;
-  text-align: left;
 }
 
-.theme-list button {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.theme-seg button.on,
-.theme-list button.on {
+.theme-seg button.on {
   background: var(--bg-user);
   color: var(--text);
   border-color: var(--border-strong);
 }
 
-.theme-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 99px;
-  flex: none;
-  border: 1px solid var(--border-strong);
+/* 配色卡：左右两块迷你界面分别套上这套配色的浅色、深色变量。 */
+.theme-card {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
 }
 
-.theme-dot[data-palette="jiebo"] { background: linear-gradient(135deg, #1a4f41 50%, #c4a36a 50%); }
-.theme-dot[data-palette="neutral"] { background: #171717; }
-.theme-dot[data-palette="paper"] { background: #1a4f41; }
-.theme-dot[data-palette="sand"] { background: #8a6a3c; }
-.theme-dot[data-palette="pine"] { background: #1a4f41; }
-.theme-dot[data-palette="cool"] { background: #1f4f66; }
-.theme-dot[data-palette="ink"] { background: #6b4e32; }
-.theme-dot[data-palette="night"] { background: #c4a36a; }
-.theme-dot[data-palette="clay"] { background: #8a4632; }
+.theme-card.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+
+.theme-card-preview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.theme-mini {
+  display: grid;
+  grid-template-columns: 22% 1fr;
+  height: 64px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  transition: opacity 0.16s ease;
+}
+
+.theme-mini.idle {
+  opacity: 0.4;
+}
+
+.theme-mini-side {
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  padding: 6px 3px;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+}
+
+.theme-mini-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  min-width: 0;
+}
+
+.theme-mini-line {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--muted);
+  opacity: 0.55;
+}
+
+.theme-mini-line.text {
+  background: var(--text);
+  opacity: 0.8;
+}
+
+.theme-mini-bubble {
+  align-self: flex-end;
+  width: 55%;
+  height: 9px;
+  border-radius: 4px;
+  background: var(--bg-user);
+}
+
+.theme-mini-composer {
+  margin-top: auto;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  height: 11px;
+  padding: 0 2px;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}
+
+.theme-mini-send {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--accent);
+}
+
+.theme-card-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 2px;
+  font-size: 12px;
+}
+
+.theme-card-meta b {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-card-meta span {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-mini {
+    transition: none;
+  }
+}

@@ -5887,7 +5887,8 @@ export default function ChatApp() {
                       type="button"
                       role="option"
                       aria-selected={themeChoice?.palette === item.id}
-                      className={themeChoice?.palette === item.id ? "on" : ""}
+                      aria-label={`${item.name}，${item.note}`}
+                      className={`theme-card${themeChoice?.palette === item.id ? " on" : ""}`}
                       onClick={() =>
                         setThemeChoice((current) => ({
                           palette: item.id,
@@ -5895,8 +5896,34 @@ export default function ChatApp() {
                         }))
                       }
                     >
-                      <span className="theme-dot" data-palette={item.id} />
-                      {item.name}
+                      <span className="theme-card-preview" aria-hidden>
+                        {(["light", "dark"] as const).map((kind) => (
+                          <span
+                            key={kind}
+                            className={`theme-mini${themeChoice && themeChoice.appearance !== "system" && themeChoice.appearance !== kind ? " idle" : ""}`}
+                            data-palette={item.id}
+                            data-theme={kind}
+                          >
+                            <span className="theme-mini-side">
+                              <span className="theme-mini-line" />
+                              <span className="theme-mini-line" />
+                              <span className="theme-mini-line" />
+                            </span>
+                            <span className="theme-mini-main">
+                              <span className="theme-mini-line text" style={{ width: "80%" }} />
+                              <span className="theme-mini-line" style={{ width: "60%" }} />
+                              <span className="theme-mini-bubble" />
+                              <span className="theme-mini-composer">
+                                <span className="theme-mini-send" />
+                              </span>
+                            </span>
+                          </span>
+                        ))}
+                      </span>
+                      <span className="theme-card-meta">
+                        <b>{item.name}</b>
+                        <span>{item.note}</span>
+                      </span>
                     </button>
                   ))}
                 </div>
