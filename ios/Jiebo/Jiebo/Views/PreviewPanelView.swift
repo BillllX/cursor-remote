@@ -259,8 +259,10 @@ struct PreviewPanelView: View {
                 .padding(.leading, 10)
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
+                .hoverEffect(.highlight)
             }
             .buttonStyle(.plain)
+            .draggableMention(item.path)
             .accessibilityLabel(item.filename)
             .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : .isButton)
             Button {

@@ -6,6 +6,18 @@ import SwiftUI
 // - flatten：手动展开行——不用 OutlineGroup（控不了「depth<1 默认开 / 搜索时全展开」，大列表还整树刷新）
 // （P7 曾移植 git 徽章/改动清单，后按产品决定撤掉——只展示文件本身）
 
+extension View {
+    /// 文件行、预览页签可拖：带出「@相对路径」，拖进输入框变引用，拖进别的 App 就是这段文字
+    @ViewBuilder
+    func draggableMention(_ path: String?) -> some View {
+        if let path, !path.isEmpty {
+            draggable("@\(path)")
+        } else {
+            self
+        }
+    }
+}
+
 struct FileNode: Identifiable, Hashable {
     let name: String
     let path: String
@@ -197,8 +209,10 @@ struct FileTreeView: View {
             .background(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
             .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
             .contentShape(Rectangle())
+            .hoverEffect(.highlight)
         }
         .buttonStyle(.plain)
+        .draggableMention(node.isDir ? nil : node.path)
         .accessibilityLabel(node.isDir ? "文件夹 \(node.name)" : node.name)
         .accessibilityValue(node.isDir ? (isOpen ? "已展开" : "已收起") : "")
         .accessibilityHint(node.isDir ? "轻点展开或收起" : "轻点预览")

@@ -156,6 +156,18 @@ struct ComposerView: View {
                 if failed > 0 { store.flash("\(failed) 张图片读取失败，换一张试试") }
             }
         }
+        // 落在输入文字上时系统文本框自己插字；落在输入框其余位置时这里接，只认文件行、页签拖出来的 @路径
+        .dropDestination(for: String.self) { items, _ in
+            let paths = items.compactMap { item -> String? in
+                let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("@"), trimmed.count > 1,
+                      !trimmed.contains(where: \.isWhitespace) else { return nil }
+                return String(trimmed.dropFirst())
+            }
+            guard !paths.isEmpty else { return false }
+            for path in paths { store.appendMentionToDraft(path) }
+            return true
+        }
         .photosPicker(isPresented: $photoPickerOpen, selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images)
         .fileImporter(isPresented: $filePickerOpen, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {

@@ -291,6 +291,8 @@ struct SidebarView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(selected ? JieboColor.line : Color.clear, lineWidth: 1)
             )
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .hoverEffect(.highlight)
             .padding(.horizontal, 8)
             .contentShape(Rectangle())
         }
