@@ -184,7 +184,7 @@ struct CollapsedSidebarRail: View {
             if store.isAdmin {
                 railButton("chart.bar", label: "查看使用统计") { adminOpen = true }
             }
-            ConnectionDot(connected: store.connected)
+            LinkStatusDot(state: store.linkState, size: 8)
                 .padding(.top, 4)
             railButton("rectangle.portrait.and.arrow.right", label: "退出登录", action: store.logout)
                 .padding(.bottom, 12)

@@ -51,15 +51,6 @@ struct ThreadView: View {
         .frame(maxWidth: .infinity)
         .background(JieboColor.paper.ignoresSafeArea())
         .toolbar(chrome == .embedded ? .automatic : .hidden, for: .navigationBar)
-        .toolbar {
-            if chrome == .embedded, store.threadSyncBusy {
-                ToolbarItem(placement: .topBarTrailing) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(JieboColor.dim)
-                }
-            }
-        }
         .toolbar(removing: .sidebarToggle)
         // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
         .environment(\.openURL, OpenURLAction { url in
@@ -213,8 +204,16 @@ struct ThreadView: View {
         }
     }
 
+    /// 优先级和 iPhone 首页一致：没连上 > 没配 API Key > 正在回复 > 模式
+    private var padSubtitle: String {
+        if !store.connected { return store.linkState.title }
+        if !store.hasApiKey { return "服务器还没配 API Key" }
+        if store.busy { return "正在回复" }
+        return store.mode.label
+    }
+
     private var phoneSubtitle: String {
-        if !store.connected { return "正在重连…" }
+        if !store.connected { return store.linkState.title }
         if store.assistantChatActive {
             return store.hasApiKey ? "个人助理 · \(store.mode.label)" : "服务器还没配 API Key"
         }
@@ -243,11 +242,15 @@ struct ThreadView: View {
                         .tracking(0.34)
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
-                    Text(phoneSubtitle)
-                        .font(JieboFont.text(.caption2, weight: .medium))
-                        .tracking(0.3)
-                        .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
+                        Text(phoneSubtitle)
+                            .font(JieboFont.text(.caption2, weight: .medium))
+                            .tracking(0.3)
+                            .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
+                            .lineLimit(1)
+                    }
+                    .accessibilityElement(children: .combine)
                 }
                 .frame(maxWidth: .infinity)
                 if store.assistantChatActive {
@@ -317,10 +320,15 @@ struct ThreadView: View {
                     .tracking(0.44)
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)
-                Text(store.hasApiKey ? store.mode.label : "服务器还没配 API Key")
-                    .font(JieboFont.text(.caption, weight: .medium))
-                    .tracking(0.4)
-                    .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
+                HStack(spacing: 6) {
+                    LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy, size: 7)
+                    Text(padSubtitle)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .tracking(0.4)
+                        .foregroundStyle(store.connected && !store.hasApiKey ? JieboColor.danger : JieboColor.dim)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
             }
             Spacer()
             if store.previewLoading {
@@ -344,10 +352,6 @@ struct ThreadView: View {
                 }
                 .buttonStyle(PressScaleButtonStyle())
                 .accessibilityLabel("还原上一轮的改动")
-            }
-            if store.busy {
-                ProgressView()
-                    .tint(JieboColor.pine)
             }
         }
         .padding(.horizontal, 24)

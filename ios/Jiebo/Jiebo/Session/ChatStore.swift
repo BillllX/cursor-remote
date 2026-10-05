@@ -80,6 +80,10 @@ private enum ContentDiscard {
 @MainActor
 final class ChatStore {
     var connected = false
+    /// 连不上已超过 offlineGrace：客户端仍在后台重连，界面从「连接中」改报「已断开」
+    private(set) var linkOffline = false
+    private var offlineTask: Task<Void, Never>?
+    private static let offlineGrace: Duration = .seconds(10)
     var unlocked = false
     /// 钥匙串里有上次登录的令牌：先进主界面、后台用它自动登录；网关拒绝或退出登录才回登录页
     var resumingLogin = false
@@ -261,6 +265,40 @@ final class ChatStore {
             || refreshingChatIds.contains(activeId)
             || (loadingChatIds.contains(activeId) && bodyRevs[activeId] != nil && !(active?.turnsComplete ?? true))
     }
+
+    enum LinkState {
+        case connected, connecting, offline
+
+        var title: String {
+            switch self {
+            case .connected: "已连接"
+            case .connecting: "连接中…"
+            case .offline: "已断开"
+            }
+        }
+    }
+
+    var linkState: LinkState {
+        if connected { return .connected }
+        return linkOffline ? .offline : .connecting
+    }
+
+    /// 开始等连接：offlineGrace 内连上就一直算「连接中」，过了还没连上才算断开
+    private func armOfflineTimer() {
+        guard offlineTask == nil, !connected else { return }
+        offlineTask = Task { [weak self] in
+            try? await Task.sleep(for: ChatStore.offlineGrace)
+            guard let self, !Task.isCancelled else { return }
+            self.offlineTask = nil
+            if !self.connected { self.linkOffline = true }
+        }
+    }
+
+    private func clearOfflineTimer() {
+        offlineTask?.cancel()
+        offlineTask = nil
+        linkOffline = false
+    }
     /// P8 slim：turns 未加载完时暂存的 agent 历史（fresh UUID 与持久 turn id 不同空间，直接合并会重复）
     private var pendingHistory: [String: [Turn]] = [:]
     /// 快照到达时分页还没完成：先暂存，正文齐了再按 turnId 盖上
@@ -396,6 +434,7 @@ final class ChatStore {
         loadCachedList()
         wireClient()
         client.connect(url: GatewayConfig.url)
+        armOfflineTimer()
     }
 
     func login() {
@@ -407,6 +446,7 @@ final class ChatStore {
         armVerifyTimeout()
         // hello 由 client.onOpen 在握手完成后统一发出
         client.connect(url: GatewayConfig.url)
+        armOfflineTimer()
     }
 
     func logout() {
@@ -415,6 +455,7 @@ final class ChatStore {
         unlocked = false
         resumingLogin = false
         connected = false
+        clearOfflineTimer()
         verifying = false
         verifyTask?.cancel()
         tokenDraft = ""
@@ -2549,6 +2590,7 @@ final class ChatStore {
         client.onOpen = { [weak self] in
             guard let self else { return }
             self.connected = true
+            self.clearOfflineTimer()
             if self.authError.hasPrefix("还没连上") { self.authError = "" }
             // tokenDraft 是当前凭据（login 写入）；Keychain 只是持久化兜底
             var token = self.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2565,6 +2607,7 @@ final class ChatStore {
         client.onClose = { [weak self] in
             guard let self else { return }
             self.connected = false
+            self.armOfflineTimer()
             // P4：断线时在途的 sync_chat 永远等不到 ack——倒回脏集合，重连后随 diff/重推恢复
             if !self.inflightChatIds.isEmpty {
                 self.dirtyChatIds.formUnion(self.inflightChatIds)

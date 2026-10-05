@@ -89,29 +89,30 @@ struct AssistantHome: View {
                 .tracking(0.34)
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1)
-            Text(subtitleText)
-                .font(JieboFont.text(.caption2, weight: .medium))
-                .tracking(0.3)
-                .foregroundStyle(subtitleColor)
-                .lineLimit(1)
+            HStack(spacing: 5) {
+                LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
+                if let subtitleText {
+                    Text(subtitleText)
+                        .font(JieboFont.text(.caption2, weight: .medium))
+                        .tracking(0.3)
+                        .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
+                        .lineLimit(1)
+                }
+            }
+            .frame(minHeight: 12)
         }
         .accessibilityElement(children: .combine)
     }
 
-    /// 优先级：未连接 > 没配 API Key > 助理在跑 > 后台状态
-    private var subtitleText: String {
-        if !store.connected { return "正在重连…" }
+    /// 连接状态由圆点表达；只有连上之后还有话要说才出字。优先级：没配 API Key > 助理在跑 > 后台状态
+    private var subtitleText: String? {
+        guard store.connected else { return nil }
         if !store.hasApiKey { return "服务器还没配 API Key" }
         if store.assistantRunning { return "正在回复" }
         if let background = store.assistantState?.background, !background.ok {
             return background.reason?.nilIfEmpty ?? "后台模型未就绪"
         }
-        return "就绪"
-    }
-
-    private var subtitleColor: Color {
-        if store.connected, !store.hasApiKey { return JieboColor.danger }
-        return JieboColor.dim
+        return nil
     }
 
     private var todayButton: some View {

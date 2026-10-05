@@ -189,9 +189,9 @@ private struct PhoneDrawer: View {
                 .tracking(0.34)
                 .foregroundStyle(JieboColor.ink)
             Spacer(minLength: 8)
-            ConnectionDot(connected: store.connected)
+            LinkStatusDot(state: store.linkState, size: 8)
                 .accessibilityHidden(true)
-            Text(store.connected ? "已连接" : "正在重连…")
+            Text(store.linkState.title)
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
         }
