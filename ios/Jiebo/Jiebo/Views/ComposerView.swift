@@ -53,6 +53,7 @@ struct ComposerView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if style == .assistant {
+                assistantStatusLine
                 assistantCapsuleRow
             } else {
                 TextField(placeholder, text: $text, axis: .vertical)
@@ -578,11 +579,9 @@ struct ComposerView: View {
         .accessibilityHint(queued ? "当前回复结束后再发" : "")
     }
 
-    private var assistantAttachMenu: some View {
+    /// 胶囊上方一行小字：当前模式和模型。原来只藏在「＋」里，看不出这次会不会动手改文件
+    private var assistantStatusLine: some View {
         Menu {
-            Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
-            Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
-            Divider()
             Picker(selection: Binding(get: { store.mode }, set: { store.chooseMode($0) })) {
                 ForEach(AgentMode.allCases, id: \.self) { item in
                     Text(item.label).tag(item)
@@ -603,6 +602,36 @@ struct ComposerView: View {
                 Label("模型", systemImage: "cpu")
             }
             .pickerStyle(.menu)
+        } label: {
+            HStack(spacing: 4) {
+                Text(store.mode.label)
+                    .foregroundStyle(store.mode == .agent ? JieboColor.ink2 : JieboColor.pine)
+                Text("·")
+                Text(ModelCatalog.label(for: store.model))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .accessibilityHidden(true)
+            }
+            .font(JieboFont.text(.caption, weight: .medium))
+            .foregroundStyle(JieboColor.dim)
+            .padding(.horizontal, 10)
+            .frame(minHeight: 24)
+            // 浮在消息上时没有底，字会和正文叠在一起
+            .jieboGlass(in: Capsule())
+            .contentShape(Capsule())
+        }
+        .menuOrder(.fixed)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, -4)
+        .accessibilityLabel("模式 \(store.mode.label)，模型 \(ModelCatalog.label(for: store.model))")
+        .accessibilityHint("轻点切换")
+    }
+
+    private var assistantAttachMenu: some View {
+        Menu {
+            Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
+            Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
             Section {
                 Toggle(isOn: Binding(get: { store.active?.policy == "plane" }, set: { on in
                     if on != (store.active?.policy == "plane") { store.togglePolicy() }

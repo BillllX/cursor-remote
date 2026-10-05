@@ -190,7 +190,10 @@ struct PhoneSettingsScreen: View {
         .sheet(isPresented: $adminStatsOpen) {
             AdminStatsView()
         }
-        .task { await refreshNotifyStatus() }
+        .task {
+            store.requestAssistant()
+            await refreshNotifyStatus()
+        }
         .onChange(of: scenePhase) { _, phase in
             // 从系统设置回来时刷新
             if phase == .active {
@@ -229,7 +232,9 @@ struct PhoneSettingsScreen: View {
     }
 
     private var backgroundModelText: String {
-        guard let background = state?.background else { return "正在连接…" }
+        // 断线后 assistantState 不清空，先看连接，免得把旧的「就绪」当成现在
+        guard store.connected else { return "未连接" }
+        guard let background = state?.background else { return "正在获取…" }
         let model = background.model.nilIfEmpty ?? "未知"
         let status = background.ok ? "就绪" : (background.reason ?? "未就绪")
         return "\(model) · \(status)"
@@ -256,7 +261,7 @@ struct PhoneSettingsScreen: View {
     private var notificationSection: some View {
         Section {
             if notifyStatus == nil {
-                settingsRow(symbol: "bell", title: "通知", trailing: nil, chevron: false)
+                settingsRow(symbol: "bell", title: "通知", trailing: "查询中…", chevron: false)
                     .listRowBackground(JieboColor.white)
             } else if notifyEnabled {
                 settingsRow(symbol: "bell.badge", title: "通知", trailing: "已开启", chevron: false)

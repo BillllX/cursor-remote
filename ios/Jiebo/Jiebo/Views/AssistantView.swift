@@ -162,6 +162,19 @@ struct AssistantTodayPane: View {
     private var state: AssistantState? { store.assistantState }
 
     var body: some View {
+        if state == nil {
+            // 状态还没到时各区的空文案（「今天还没有简报」「没有未完成的待办」）会被当成真的没有
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                AssistantMutedText("正在加载…")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            loadedBody
+        }
+    }
+
+    private var loadedBody: some View {
         VStack(alignment: .leading, spacing: 20) {
             briefSection
             if showsApprovals, let approvals = state?.approvals, !approvals.isEmpty {

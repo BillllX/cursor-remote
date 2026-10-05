@@ -387,7 +387,8 @@ struct ShimmerText: View {
                 .font(font)
                 .foregroundStyle(JieboColor.ink2)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            // 4 秒扫一遍，20 帧看不出差别；流式时同屏常有好几处在扫
+            TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
                 let t = CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4)
                 let center = t * 1.6 - 0.3 // 高亮窗从 -0.3 扫到 1.3
                 ZStack {

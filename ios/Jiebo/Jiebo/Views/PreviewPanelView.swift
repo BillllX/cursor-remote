@@ -47,6 +47,31 @@ struct PreviewPanelView: View {
         }
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape) { store.collapsePreview() }
+        .background { keyboardShortcuts }
+    }
+
+    /// 外接键盘：Esc / ⌘W 收起预览，⌘⇧[ / ⌘⇧] 切页签。按钮不可见，只为挂快捷键
+    private var keyboardShortcuts: some View {
+        Group {
+            Button("收起预览") { store.collapsePreview() }
+                .keyboardShortcut(.escape, modifiers: [])
+            Button("关闭预览") { store.collapsePreview() }
+                .keyboardShortcut("w", modifiers: .command)
+            Button("上一个页签") { stepTab(-1) }
+                .keyboardShortcut("[", modifiers: [.command, .shift])
+            Button("下一个页签") { stepTab(1) }
+                .keyboardShortcut("]", modifiers: [.command, .shift])
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    private func stepTab(_ delta: Int) {
+        let tabs = store.previewTabs
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.path == tab.path }) else { return }
+        let next = (index + delta + tabs.count) % tabs.count
+        store.selectPreviewTab(tabs[next].path)
     }
 
     /// 横向为主才跟手；拖过 120 或甩出去就关——不先归位，直接从当前位置滑出

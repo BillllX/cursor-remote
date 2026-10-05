@@ -18,6 +18,7 @@ struct PhoneWorkbench: View {
             ThreadView(phoneChrome: true, openDrawer: {
                 withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
             })
+            .background { WorkbenchShortcuts() }
             .accessibilityHidden(store.previewPanelOpen || drawerOpen)
             if let layer = store.toolLayer {
                 ToolLayerOverlay(layer: layer)

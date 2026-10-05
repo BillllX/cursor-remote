@@ -52,12 +52,6 @@ struct AssistantHome: View {
         .onChange(of: store.connected) { _, connected in
             if connected { store.requestAssistant() }
         }
-        .onChange(of: router.focusActionDock) { _, on in
-            // 行动区贴在输入框上方，一直在屏幕上；这里只消费标记并给一个触觉反馈
-            guard on else { return }
-            router.focusActionDock = false
-            UISelectionFeedbackGenerator().selectionChanged()
-        }
     }
 
     // MARK: 导航栏
@@ -176,6 +170,11 @@ struct AssistantHome: View {
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
+            HStack(spacing: 10) {
+                ActionButton(title: "重试", kind: .primary) { store.requestAssistant() }
+                ActionButton(title: "设置") { router.go(.settings) }
+            }
+            .padding(.top, 4)
             Spacer(minLength: 40)
         }
         .padding(.horizontal, 32)

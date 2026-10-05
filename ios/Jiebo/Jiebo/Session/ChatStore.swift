@@ -90,7 +90,10 @@ final class ChatStore {
     var verifying = false
     var authError = ""
     var notice = ""
-    var bannerError = ""
+    /// 红色错误条。8 秒后自动清掉，点一下也能关（dismissBannerError）
+    var bannerError = "" {
+        didSet { scheduleBannerErrorClear() }
+    }
     var tokenDraft = ""
     var chats: [ChatSession] = [ChatSession.blank(id: "boot")]
     var activeId = "boot"
@@ -368,6 +371,7 @@ final class ChatStore {
     private var syncTask: Task<Void, Never>?
     private var verifyTask: Task<Void, Never>?
     private var noticeTask: Task<Void, Never>?
+    private var bannerErrorTask: Task<Void, Never>?
     private var stallTask: Task<Void, Never>?
     private var lastProgress = Date()
     private let tenantKey = "jiebo.tenantId"
@@ -2755,7 +2759,7 @@ final class ChatStore {
                 resumingLogin = false
                 verifying = false
                 verifyTask?.cancel()
-                authError = messageText ?? "密码不对。"
+                authError = messageText ?? "访问码不对。"
                 KeychainStore.delete()
             }
         case .adminStats(let rows, _, let bill):
@@ -4565,6 +4569,21 @@ final class ChatStore {
             return .success(object)
         } catch {
             return .retryable
+        }
+    }
+
+    func dismissBannerError() {
+        bannerError = ""
+    }
+
+    private func scheduleBannerErrorClear() {
+        bannerErrorTask?.cancel()
+        guard !bannerError.isEmpty else { return }
+        let text = bannerError
+        bannerErrorTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+            guard let self, !Task.isCancelled, self.bannerError == text else { return }
+            self.bannerError = ""
         }
     }
 

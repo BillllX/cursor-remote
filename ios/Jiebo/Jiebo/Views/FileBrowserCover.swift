@@ -17,8 +17,6 @@ struct FileBrowserCover: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var searchFocused: Bool
     @State private var filter = ""
-    /// 窄窗先关掉浮层，等浮层消失再打开预览，避免两层 sheet 抢同一个文件。
-    @State private var pendingPreview: (path: String, chatId: String, diff: Bool)?
 
     private var edgeDismiss: some Gesture {
         DragGesture(minimumDistance: 24, coordinateSpace: .local)
@@ -113,21 +111,6 @@ struct FileBrowserCover: View {
             }
         }
         .onAppear { store.requestFileIndex() } // 打开时刷新（web 只在空时才拉；这里每次拉，更新鲜，成本一次 list_files）
-        .onDisappear {
-            guard let pending = pendingPreview else { return }
-            pendingPreview = nil
-            let path = pending.path
-            let chatId = pending.chatId
-            let diff = pending.diff
-            Task { @MainActor in
-                guard store.activeId == chatId else { return }
-                if diff {
-                    store.openPreviewTab(path: path, diff: true)
-                } else {
-                    store.openPreview(path)
-                }
-            }
-        }
         // Quick Look 挂在 cover 自己身上——ThreadView 的 sheet 在 cover 背后，弹不出来
         // （ThreadView 侧已用绑定守卫在 cover 期间不抢 present，故这里无需 onDisappear 兜底清理——
         //   无条件清理反而会误杀进 cover 前已开的 QL，Grok R2 MINOR）

@@ -103,28 +103,43 @@ struct ThreadView: View {
         VStack(spacing: 6) {
             if !store.notice.isEmpty {
                 floatingBanner(store.notice, color: JieboColor.dim)
+                    .allowsHitTesting(false)
             }
             if !store.bannerError.isEmpty {
-                floatingBanner(friendlyError(store.bannerError), color: JieboColor.danger)
+                Button {
+                    store.dismissBannerError()
+                } label: {
+                    floatingBanner(friendlyError(store.bannerError), color: JieboColor.danger, closable: true)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("轻点关闭")
             }
         }
         .padding(.top, 8)
         .padding(.horizontal, 16)
         .animation(JieboMotion.fade(reduceMotion), value: store.notice.isEmpty)
         .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
-        .allowsHitTesting(false)
     }
 
-    private func floatingBanner(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(JieboFont.text(.footnote, weight: .medium))
-            .foregroundStyle(color)
-            .multilineTextAlignment(.center)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .jieboGlass(in: Capsule())
-            .frame(maxWidth: .infinity)
-            .accessibilityAddTraits(.isStaticText)
+    private func floatingBanner(_ text: String, color: Color, closable: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            Text(text)
+                .multilineTextAlignment(.center)
+            if closable {
+                Image(systemName: "xmark")
+                    .font(JieboFont.text(.caption2, weight: .bold))
+                    .opacity(0.7)
+                    .accessibilityHidden(true)
+            }
+        }
+        .font(JieboFont.text(.footnote, weight: .medium))
+        .foregroundStyle(color)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .jieboGlass(in: Capsule())
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(closable ? [] : .isStaticText)
     }
 
     /// 本会话派出去的委派子会话停在审批上：在输入框上方直接作答

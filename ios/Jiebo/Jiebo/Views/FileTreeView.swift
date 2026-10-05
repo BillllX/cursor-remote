@@ -193,12 +193,16 @@ struct FileTreeView: View {
             .padding(.leading, 14 + CGFloat(row.depth) * 16)
             .padding(.trailing, 12)
             .padding(.vertical, 5)
-            .frame(minHeight: 32)
+            .frame(minHeight: 44)
             .background(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
             .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(node.isDir ? "文件夹 \(node.name)" : node.name)
+        .accessibilityValue(node.isDir ? (isOpen ? "已展开" : "已收起") : "")
+        .accessibilityHint(node.isDir ? "轻点展开或收起" : "轻点预览")
+        .accessibilityAddTraits(selectedPath == node.path ? .isSelected : [])
         .contextMenu {
             if node.isDir {
                 Button { onCopyPath(node.path) } label: { Label("复制路径", systemImage: "doc.on.doc") }

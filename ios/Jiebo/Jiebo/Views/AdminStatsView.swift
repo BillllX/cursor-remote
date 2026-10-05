@@ -5,16 +5,29 @@ import SwiftUI
 struct AdminStatsView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @State private var waitedOut = false
+    @State private var reloadToken = 0
 
     var body: some View {
         NavigationStack {
             List {
                 if store.adminStats.isEmpty && store.cursorBill == nil {
-                    ContentUnavailableView(
-                        "暂无数据",
-                        systemImage: "chart.bar",
-                        description: Text("连上服务器后自动拉取。")
-                    )
+                    if store.connected && !waitedOut {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text("正在加载…")
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .listRowBackground(Color.clear)
+                    } else {
+                        ContentUnavailableView(
+                            store.connected ? "暂无数据" : "没连上服务器",
+                            systemImage: "chart.bar",
+                            description: Text(store.connected ? "点右上角刷新再试一次。" : "连上以后会自动拉取。")
+                        )
+                    }
                 } else {
                     cursorSection
                     summarySection
@@ -32,14 +45,22 @@ struct AdminStatsView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
-                        store.requestAdminStats()
+                        reloadToken += 1
                     } label: {
                         Image(systemName: "arrow.clockwise")
                     }
                     .accessibilityLabel("刷新")
                 }
             }
-            .onAppear { store.requestAdminStats() }
+            // 连上、或点右上角刷新时重新拉一次，并重新计时
+            .task(id: "\(store.connected)-\(reloadToken)") {
+                guard store.connected else { return }
+                waitedOut = false
+                store.requestAdminStats()
+                // 10 秒还没回包就当没有数据，不一直转圈
+                try? await Task.sleep(for: .seconds(10))
+                if !Task.isCancelled { waitedOut = true }
+            }
         }
         .presentationDetents([.medium, .large])
     }

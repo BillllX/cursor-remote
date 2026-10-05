@@ -41,7 +41,7 @@ struct FileBrowserSheet: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(JieboColor.dim)
                                 .frame(width: 32, height: 32)
-                                .contentShape(Rectangle())
+                                .hitTarget()
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel("预览 \(path)")

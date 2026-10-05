@@ -71,6 +71,7 @@ struct WorkbenchView: View {
             } detail: {
                 ZStack(alignment: .leading) {
                     ThreadView()
+                        .background { WorkbenchShortcuts() }
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
                             .id(layer)
@@ -157,6 +158,7 @@ struct CollapsedSidebarRail: View {
     var expand: () -> Void
     @State private var adminOpen = false
     @State private var themeOpen = false
+    @State private var logoutConfirm = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -186,7 +188,7 @@ struct CollapsedSidebarRail: View {
             }
             LinkStatusDot(state: store.linkState, size: 8)
                 .padding(.top, 4)
-            railButton("rectangle.portrait.and.arrow.right", label: "退出登录", action: store.logout)
+            railButton("rectangle.portrait.and.arrow.right", label: "退出登录") { logoutConfirm = true }
                 .padding(.bottom, 12)
         }
         .padding(.top, 16)
@@ -195,6 +197,12 @@ struct CollapsedSidebarRail: View {
         .background(JieboColor.sidebar)
         .sheet(isPresented: $adminOpen) {
             AdminStatsView()
+        }
+        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
+            Button("退出登录", role: .destructive, action: store.logout)
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("退出后需要重新输入访问码才能连回来。")
         }
         .sheet(isPresented: $themeOpen) {
             ThemeSettingsSheet()
@@ -393,21 +401,9 @@ struct ToolLayerOverlay: View {
     @ViewBuilder
     private var layerBody: some View {
         switch layer {
-        case .files:
-            FileTreeView(
-                paths: store.fileIndex,
-                truncated: store.treeTruncated,
-                filter: "",
-                selectedPath: store.contentPath ?? store.previewActivePath,
-                onOpen: { store.openContentFile($0) },
-                onPick: { store.appendMentionToDraft($0) },
-                onCopyPath: { UIPasteboard.general.string = $0 },
-                onQuickLook: { store.openMention($0) }
-            )
-        case .search:
-            SearchToolView()
-        case .git:
-            GitToolView()
+        case .files, .search, .git:
+            // 这三项由 ChatStore.toggleTool 转去全屏文件浏览器，不会落到工具滑层
+            EmptyView()
         case .terminal:
             TerminalToolView()
         case .loop:
@@ -738,5 +734,18 @@ struct TerminalToolView: View {
                 }
             }
         }
+    }
+}
+
+/// iPad 外接键盘：⌘O 打开文件浏览器。挂在对话区上，侧栏收起时也在
+struct WorkbenchShortcuts: View {
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        Button("打开文件") { store.toggleFileBrowser() }
+            .keyboardShortcut("o", modifiers: .command)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 }

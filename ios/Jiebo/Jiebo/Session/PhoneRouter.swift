@@ -40,8 +40,6 @@ final class PhoneRouter {
     /// 正在看的委派详情。sheet 挂在 PhoneShell 上，在任何 push 页上都能弹
     var delegationDetail: DelegationRef?
     var bootstrapped = false
-    /// 行动区被要求滚到可见（TodayStrip「进行中」芯片）。AssistantHome 消费后置回 false
-    var focusActionDock = false
 }
 
 extension PhoneRouter {

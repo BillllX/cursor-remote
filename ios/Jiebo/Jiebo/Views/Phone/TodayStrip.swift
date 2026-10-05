@@ -54,7 +54,7 @@ struct TodayStrip: View {
                             if running.count == 1, let only = running.first {
                                 router.delegationDetail = DelegationRef(id: only.id)
                             } else {
-                                router.focusActionDock = true
+                                router.go(.delegations)
                             }
                         }
                     }

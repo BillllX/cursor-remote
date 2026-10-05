@@ -180,7 +180,7 @@ struct ToolCardView: View {
         }
     }
 
-    /// 状态只留字，不再用绿色胶囊。完成用次级绿，不和正文抢
+    /// 只在进行中和失败时出字。成功是常态，每张卡都挂「完成」会把失败淹掉
     @ViewBuilder
     private var badge: some View {
         switch tool.status {
@@ -189,7 +189,7 @@ struct ToolCardView: View {
         case "error":
             badgeView("失败", fg: JieboColor.danger)
         default:
-            badgeView("完成", fg: JieboColor.okSoft)
+            EmptyView()
         }
     }
 

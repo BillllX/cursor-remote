@@ -669,7 +669,8 @@ struct LinkStatusDot: View {
                         }
                     }
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
+                // 6pt 的点 15 帧就够顺，标题栏常驻，不值得按 30 帧重绘
+                TimelineView(.animation(minimumInterval: 1.0 / 15)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                         .truncatingRemainder(dividingBy: period) / period
                     dot(opacity: breathes ? 0.65 + 0.35 * cos(t * 2 * .pi) : 1)
