@@ -8,6 +8,8 @@ struct PreviewPanelView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let tab: PreviewTab
+    /// 盖满时是模态；iPad 横屏分栏时和对话并排，读屏两边都要能摸到
+    var modal = true
     /// 窄屏左缘右滑关闭时的位移
     @State private var dragX: CGFloat = 0
 
@@ -45,7 +47,7 @@ struct PreviewPanelView: View {
                     .accessibilityHidden(true)
             }
         }
-        .accessibilityAddTraits(.isModal)
+        .accessibilityAddTraits(modal ? .isModal : [])
         .accessibilityAction(.escape) { store.collapsePreview() }
         .background { keyboardShortcuts }
     }

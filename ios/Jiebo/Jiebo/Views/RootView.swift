@@ -23,6 +23,8 @@ struct WorkbenchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var workbenchWidth: CGFloat = 0
+    /// 侧栏实际宽（用户可拖 240–380）
+    @State private var sidebarWidth: CGFloat = 300
 
     /// 预览分栏宽：窗口的四成，夹在 420–600
     private var previewColumnWidth: CGFloat {
@@ -31,8 +33,8 @@ struct WorkbenchView: View {
 
     /// 侧栏（或收起后的图标栏）和预览栏都放下后，对话区还剩 400 以上才分栏；否则预览照旧盖满
     private var previewSplit: Bool {
-        let side: CGFloat = columnVisibility == .detailOnly ? 56 : 300
-        return workbenchWidth - side - previewColumnWidth >= 400
+        let side: CGFloat = columnVisibility == .detailOnly ? 56 : sidebarWidth
+        return workbenchWidth - side - previewColumnWidth - 1 >= 400
     }
 
     private var previewOverlaid: Bool { store.previewPanelOpen && !previewSplit }
@@ -82,6 +84,15 @@ struct WorkbenchView: View {
                     }
                 })
                     .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 380)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear
+                                .onAppear { sidebarWidth = geo.size.width }
+                                .onChange(of: geo.size.width) { _, width in
+                                    if width > 0, abs(width - sidebarWidth) > 1 { sidebarWidth = width }
+                                }
+                        }
+                    }
             } detail: {
                 ZStack(alignment: .leading) {
                     ThreadView()
@@ -102,7 +113,7 @@ struct WorkbenchView: View {
             .accessibilityHidden(previewOverlaid)
             if previewSplit, store.previewPanelOpen, let tab = store.activePreviewTab {
                 Divider().overlay(JieboColor.line)
-                PreviewPanelView(tab: tab)
+                PreviewPanelView(tab: tab, modal: false)
                     .frame(width: previewColumnWidth)
                     .frame(maxHeight: .infinity)
                     .background(JieboColor.white)

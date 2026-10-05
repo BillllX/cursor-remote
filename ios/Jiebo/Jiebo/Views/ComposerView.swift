@@ -165,6 +165,8 @@ struct ComposerView: View {
                 return String(trimmed.dropFirst())
             }
             guard !paths.isEmpty else { return false }
+            // 本地刚打的字 350ms 后才落到 store.draft；先落盘，否则追加会基于旧草稿把新字盖掉
+            flushDraft()
             for path in paths { store.appendMentionToDraft(path) }
             return true
         }

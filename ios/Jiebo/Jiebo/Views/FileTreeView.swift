@@ -7,10 +7,11 @@ import SwiftUI
 // （P7 曾移植 git 徽章/改动清单，后按产品决定撤掉——只展示文件本身）
 
 extension View {
-    /// 文件行、预览页签可拖：带出「@相对路径」，拖进输入框变引用，拖进别的 App 就是这段文字
+    /// 文件行、预览页签可拖：带出「@相对路径」，拖进输入框变引用，拖进别的 App 就是这段文字。
+    /// 引用按 @\S+ 解析，路径带空白的拖进去会被截断，干脆不让拖
     @ViewBuilder
     func draggableMention(_ path: String?) -> some View {
-        if let path, !path.isEmpty {
+        if let path, !path.isEmpty, !path.contains(where: \.isWhitespace) {
             draggable("@\(path)")
         } else {
             self
