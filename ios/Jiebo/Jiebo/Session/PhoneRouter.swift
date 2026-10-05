@@ -5,7 +5,6 @@ import UIKit
 enum PhoneRoute: Hashable {
     case inbox
     case inboxItem(String)      // AssistantInboxItem.id
-    case todayManage
     case delegations
     case settings
     case memory                 // 只从设置页 push 进来，不直接挂在菜单上

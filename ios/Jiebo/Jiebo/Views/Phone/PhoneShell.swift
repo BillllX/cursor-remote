@@ -120,8 +120,6 @@ struct PhoneShell: View {
             InboxHome()
         case .inboxItem(let id):
             InboxDetailView(itemId: id)
-        case .todayManage:
-            AssistantTodayScreen()
         case .delegations:
             DelegationListScreen()
         case .settings:
@@ -215,7 +213,7 @@ struct PhoneShell: View {
         if let route = value(of: "--phone-route=") {
             switch route {
             case "inbox": router.path = [.inbox]
-            case "today": router.path = [.todayManage]
+            case "today": router.openHub()
             case "delegations": router.path = [.delegations]
             case "settings": router.path = [.settings]
             case "memory": router.path = [.settings, .memory]

@@ -5,6 +5,7 @@ import SwiftUI
 /// iOS 26 弹出半屏时会在容器背景上断言崩溃。
 /// 打开时 `router.hubAnchor`（"todos" / "schedules"）非空就滚到对应分区。
 struct AssistantHubSheet: View {
+    @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -50,7 +51,11 @@ struct AssistantHubSheet: View {
                         .padding(.bottom, 24)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .onAppear { scrollToAnchor(proxy) }
+                .refreshable { store.requestAssistant() }
+                .onAppear {
+                    store.requestAssistant()
+                    scrollToAnchor(proxy)
+                }
                 .onChange(of: router.hubAnchor) { _, _ in scrollToAnchor(proxy) }
             }
         }

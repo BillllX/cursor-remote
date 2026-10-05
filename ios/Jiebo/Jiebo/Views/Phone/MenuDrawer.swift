@@ -136,8 +136,9 @@ struct MenuDrawer: View {
                     ) {
                         router.go(.inbox)
                     }
-                    menuRow("checklist", "待办与日程", tag: 1) {
-                        router.go(.todayManage)
+                    // 和导航栏「今日」是同一个面板，不再另开一个全屏页
+                    menuRow("sun.max", "今日", tag: 1) {
+                        router.openHub()
                     }
                     menuRow("paperplane", "委派记录", tag: 2) {
                         router.go(.delegations)
