@@ -1756,9 +1756,17 @@ private struct StreamingAssistantText: View {
                 latest = text
                 if live { rendered = transform(text) }
             }
-            .onChange(of: text) { _, value in
+            .onChange(of: text) { old, value in
                 latest = value
-                guard live, flush == nil else { return }
+                guard live else { return }
+                // 不是在末尾追加（文件卡片插进来、分段重切，ForEach 按下标复用了这份状态）：立刻排，不等节流
+                if !value.hasPrefix(old) {
+                    flush?.cancel()
+                    flush = nil
+                    rendered = transform(value)
+                    return
+                }
+                guard flush == nil else { return }
                 flush = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(100))
                     guard !Task.isCancelled else { return }
