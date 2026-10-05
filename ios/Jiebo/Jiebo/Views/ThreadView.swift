@@ -1131,6 +1131,18 @@ private struct TurnView: View, Equatable {
             if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
                 assistantActionRow
                     .padding(.leading, embedded ? 0 : 40)
+            } else if !turn.running, !turn.assistant.isEmpty {
+                // 更早的轮次只留复制：发了新消息以后，上一轮的按钮不该整个消失
+                Button { copy(turn.assistant) } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.dim)
+                        .frame(width: 44, height: 32, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("复制回复")
+                .padding(.leading, embedded ? 0 : 40)
             }
             // 无助手正文时耗时仍贴在轮次底部，用 ink2 保证可读
             if turn.assistant.isEmpty,
