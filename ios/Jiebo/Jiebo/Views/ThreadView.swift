@@ -21,6 +21,7 @@ struct ThreadView: View {
     private static let renderedTurnStep = 12
     @State private var renderedTurnLimitByChat: [String: Int] = [:]
     @State private var loadingEarlierBatch = false
+    @AppStorage(CalendarInvite.dismissedKey) private var calendarInviteDismissed = false
 
     init(chrome: ThreadChrome = .pad, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
         self.chrome = chrome
@@ -425,6 +426,7 @@ struct ThreadView: View {
                     let renderLimit = renderedTurnLimit(for: store.activeId, total: allTurns.count)
                     let hiddenCount = max(0, allTurns.count - renderLimit)
                     let turns = Array(allTurns.suffix(renderLimit))
+                    let inviteTurnId = calendarInviteTurnId(turns)
                     if hiddenCount > 0 {
                         let batch = min(hiddenCount, Self.renderedTurnStep)
                         Button {
@@ -464,7 +466,9 @@ struct ThreadView: View {
                             embedded: chrome == .embedded,
                             isLastAssistant: turn.id == allTurns.last?.id,
                             reviewMark: store.localTurnReviews[turn.id],
-                            restoring: store.restoringTurnIds.contains(turn.id)
+                            restoring: store.restoringTurnIds.contains(turn.id),
+                            captured: TodoReceipt.captured(in: turn, todos: store.assistantState?.todos),
+                            calendarInvite: turn.id == inviteTurnId ? store.assistantState?.calendar : nil
                         )
                             // 流式只改最后一轮：其余轮次入参不变就不重算 body
                             .equatable()
@@ -827,6 +831,14 @@ struct ThreadView: View {
         "用 Canvas 概括这个仓库",
     ]
 
+    /// 订阅引导只挂在最近一轮记下带日期待办的回执下面，不在每条回执后面重复
+    private func calendarInviteTurnId(_ turns: [Turn]) -> String? {
+        guard CalendarInvite.pending(store.assistantState?.calendar, dismissed: calendarInviteDismissed) else { return nil }
+        return turns.last(where: { turn in
+            TodoReceipt.captured(in: turn, todos: store.assistantState?.todos).contains { !$0.duplicate && $0.due != nil }
+        })?.id
+    }
+
     private func timeSeparator(before turn: Turn, previous: Turn?) -> String? {
         guard let at = turn.startedAt, at > 0 else { return nil }
         guard let prev = previous?.startedAt, prev > 0 else { return nil }
@@ -846,6 +858,10 @@ private struct TurnView: View, Equatable {
     /// 本机审阅记录与还原中：都存在 store 里而不在 Turn 上，作为入参让 == 能看到它们的变化
     var reviewMark: String? = nil
     var restoring = false
+    /// 这一轮 todo_add 记下的待办（按工具结果里的 id 对上今日里的那条），回执里能撤销和改
+    var captured: [TodoReceipt] = []
+    var calendarInvite: AssistantCalendar? = nil
+    @State private var editingTodo: AssistantTodo?
     @State private var thinkingOpen = false
     @State private var thinkingPinned = false
     @State private var shareItem: ShareItem?
@@ -855,6 +871,7 @@ private struct TurnView: View, Equatable {
         lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
             && lhs.embedded == rhs.embedded && lhs.isLastAssistant == rhs.isLastAssistant
             && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
+            && lhs.captured == rhs.captured && lhs.calendarInvite == rhs.calendarInvite
     }
     private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
         let base64 = image.data
@@ -885,6 +902,7 @@ private struct TurnView: View, Equatable {
     private var processTools: [ToolCall] {
         visibleTools.filter { tool in
             if AskedForm.parse(tool) != nil { return false }
+            if captured.contains(where: { $0.callId == tool.callId }) { return false }
             if embedded, AssistantToolText.friendly(tool) != nil { return false }
             return true
         }
@@ -1096,6 +1114,20 @@ private struct TurnView: View, Equatable {
             }
             if turn.running, turn.assistant.isEmpty {
                 ShimmerText(text: turn.task?.nilIfEmpty ?? "开始动手", font: JieboFont.text(.subheadline))
+            }
+            if !captured.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(captured) { receipt in
+                        TodoReceiptRow(receipt: receipt) { editingTodo = $0 }
+                    }
+                    if let calendarInvite, !turn.running {
+                        CalendarInviteCard(calendar: calendarInvite, compact: true)
+                    }
+                }
+                .padding(.leading, embedded ? 0 : 40)
+                .sheet(item: $editingTodo) { todo in
+                    TodoEditSheet(todo: todo)
+                }
             }
             if let error = turn.error, !error.isEmpty, !turn.running {
                 HStack(spacing: 10) {
@@ -2276,6 +2308,92 @@ struct AssistantTodayButton: View {
 }
 
 /// 助理工具名的判断与人话文案。工具名可能带 MCP 前缀，所以取最后一段再比。
+/// 助理在这一轮里 todo_add 的一条。todo 是今日里现在的样子；nil 且 known 表示已经撤销或删掉了
+struct TodoReceipt: Identifiable, Hashable {
+    var callId: String
+    var text: String
+    var due: String?
+    /// 网关说同一天已有同样的待办，没新加——这时不能给「撤销」，否则删的是用户原来那条
+    var duplicate: Bool
+    var todo: AssistantTodo?
+    /// 今日状态已经到了，才能区分「撤销了」和「还没加载」
+    var known: Bool
+    var id: String { callId }
+
+    static func captured(in turn: Turn, todos: [AssistantTodo]?) -> [TodoReceipt] {
+        turn.tools.compactMap { tool in
+            guard AssistantToolText.baseName(tool.name) == "todo_add",
+                  let result = AssistantToolText.resultObject(tool.result),
+                  result["ok"]?.bool == true,
+                  let id = result["id"]?.string
+            else { return nil }
+            let todo = todos?.first(where: { $0.id == id })
+            return TodoReceipt(
+                callId: tool.callId,
+                text: todo?.text ?? tool.args?.string(in: "text") ?? "",
+                due: todo?.due ?? (result["due"]?.string?.nilIfEmpty ?? tool.args?.string(in: "due").nilIfEmpty),
+                duplicate: result["duplicate"]?.bool == true,
+                todo: todo,
+                known: todos != nil
+            )
+        }
+    }
+}
+
+/// 「已记：周三 15:00 交报告  撤销 · 改」。撤销即删掉这条待办
+private struct TodoReceiptRow: View {
+    @Environment(ChatStore.self) private var store
+    var receipt: TodoReceipt
+    var edit: (AssistantTodo) -> Void
+
+    private var removed: Bool { receipt.known && receipt.todo == nil }
+    private var done: Bool { receipt.todo?.done == true }
+
+    private var head: String {
+        if removed { return "已撤销" }
+        if done { return "已完成" }
+        return receipt.duplicate ? "待办里已有" : "已记"
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: removed ? "arrow.uturn.backward.circle" : "checkmark.circle")
+                .font(JieboFont.text(.footnote, weight: .medium))
+                .foregroundStyle(removed ? JieboColor.dim : JieboColor.ok)
+                .accessibilityHidden(true)
+            (Text("\(head)：").foregroundStyle(JieboColor.ink2)
+                + Text([TodoDue.label(receipt.due), receipt.text].compactMap { $0 }.joined(separator: " "))
+                .foregroundStyle(removed ? JieboColor.dim : JieboColor.ink)
+                .strikethrough(removed || done))
+                .font(JieboFont.text(.footnote))
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let todo = receipt.todo, !todo.done {
+                if !receipt.duplicate {
+                    receiptButton("撤销") {
+                        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+                    }
+                }
+                receiptButton("改") { edit(todo) }
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(minHeight: 40)
+        .background(JieboColor.mist)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+        .accessibilityElement(children: .contain)
+    }
+
+    private func receiptButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(JieboFont.text(.footnote, weight: .semibold))
+            .foregroundStyle(JieboColor.pine)
+            .buttonStyle(.plain)
+            .frame(minWidth: 36, minHeight: 40)
+            .contentShape(Rectangle())
+    }
+}
+
 private enum AssistantToolText {
     static func baseName(_ name: String) -> String {
         var base = name.lowercased()

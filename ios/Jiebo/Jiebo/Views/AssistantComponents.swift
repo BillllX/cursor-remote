@@ -167,6 +167,243 @@ extension ChatStore {
     }
 }
 
+// MARK: 待办日期
+
+/// due 两种写法：YYYY-MM-DD（全天）或带时区的 ISO 时间（到点提醒）
+enum TodoDue {
+    struct Parsed {
+        var date: Date
+        var timed: Bool
+    }
+
+    static func parse(_ due: String?) -> Parsed? {
+        guard let due = due?.trimmingCharacters(in: .whitespaces), !due.isEmpty else { return nil }
+        if due.contains("T") {
+            let iso = ISO8601DateFormatter()
+            if let date = iso.date(from: due) { return Parsed(date: date, timed: true) }
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return iso.date(from: due).map { Parsed(date: $0, timed: true) }
+        }
+        return dayFormatter.date(from: String(due.prefix(10))).map { Parsed(date: $0, timed: false) }
+    }
+
+    /// 「今天 15:00」「明天」「周三」「10月12日」；认不出就原样显示
+    static func label(_ due: String?) -> String? {
+        guard let due = due?.nilIfEmpty else { return nil }
+        guard let parsed = parse(due) else { return due }
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: parsed.date)
+        let today = calendar.startOfDay(for: Date())
+        let offset = calendar.dateComponents([.day], from: today, to: day).day ?? 0
+        var text: String
+        switch offset {
+        case 0: text = "今天"
+        case 1: text = "明天"
+        case 2: text = "后天"
+        case 3 ... 6: text = zhFormat("EEE", parsed.date)
+        default:
+            let sameYear = calendar.component(.year, from: day) == calendar.component(.year, from: today)
+            text = zhFormat(sameYear ? "M月d日" : "yyyy年M月d日", parsed.date)
+        }
+        if parsed.timed { text += " " + zhFormat("HH:mm", parsed.date) }
+        return text
+    }
+
+    private static func zhFormat(_ pattern: String, _ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = .current
+        formatter.dateFormat = pattern
+        return formatter.string(from: date)
+    }
+
+    static func overdue(_ due: String?) -> Bool {
+        guard let parsed = parse(due) else { return false }
+        if parsed.timed { return parsed.date < Date() }
+        return Calendar.current.startOfDay(for: parsed.date) < Calendar.current.startOfDay(for: Date())
+    }
+
+    /// 网关要求带时间的必须带时区，按本机时区写
+    static func encode(_ date: Date, timed: Bool) -> String {
+        guard timed else { return dayFormatter.string(from: date) }
+        let iso = ISO8601DateFormatter()
+        iso.timeZone = .current
+        return iso.string(from: date)
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+}
+
+// MARK: 改待办
+
+/// 今日列表点一条、对话回执点「改」都弹这个。助理记下时的原话放在下面，方便判断记得对不对
+struct TodoEditSheet: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    var todo: AssistantTodo
+    @State private var text: String
+    @State private var hasDate: Bool
+    @State private var timed: Bool
+    @State private var date: Date
+
+    init(todo: AssistantTodo) {
+        self.todo = todo
+        let parsed = TodoDue.parse(todo.due)
+        _text = State(initialValue: todo.text)
+        _hasDate = State(initialValue: parsed != nil)
+        _timed = State(initialValue: parsed?.timed ?? false)
+        _date = State(initialValue: parsed?.date ?? Self.nextHour())
+    }
+
+    private static func nextHour() -> Date {
+        let calendar = Calendar.current
+        let now = Date()
+        let hour = calendar.dateInterval(of: .hour, for: now)?.start ?? now
+        return calendar.date(byAdding: .hour, value: 1, to: hour) ?? now
+    }
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var newDue: String { hasDate ? TodoDue.encode(date, timed: timed) : "" }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("待办内容", text: $text, axis: .vertical)
+                        .font(JieboFont.text(.body))
+                        .listRowBackground(JieboColor.white)
+                }
+                Section {
+                    Toggle("日期", isOn: $hasDate.animation())
+                        .tint(JieboColor.pine)
+                        .listRowBackground(JieboColor.white)
+                    if hasDate {
+                        DatePicker("哪天", selection: $date, displayedComponents: .date)
+                            .listRowBackground(JieboColor.white)
+                        Toggle("具体时间", isOn: $timed.animation())
+                            .tint(JieboColor.pine)
+                            .listRowBackground(JieboColor.white)
+                        if timed {
+                            DatePicker("几点", selection: $date, displayedComponents: .hourAndMinute)
+                                .listRowBackground(JieboColor.white)
+                        }
+                    }
+                } footer: {
+                    if hasDate {
+                        Text(timed ? "到点会提醒；订阅了苹果日历的话，日历里也会出现。" : "订阅了苹果日历的话，会作为全天事件出现。")
+                    }
+                }
+                if let quote = todo.quote {
+                    Section("记下时的原话") {
+                        Text(quote)
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink2)
+                            .textSelection(.enabled)
+                            .listRowBackground(JieboColor.white)
+                    }
+                }
+                Section {
+                    Button("删除这条", role: .destructive) {
+                        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+                        dismiss()
+                    }
+                    .listRowBackground(JieboColor.white)
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
+            .navigationTitle("改待办")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存", action: save)
+                        .disabled(trimmed.isEmpty)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func save() {
+        var args: [String: JSONValue] = ["id": .string(todo.id)]
+        if trimmed != todo.text { args["text"] = .string(trimmed) }
+        if newDue != (todo.due ?? "") { args["due"] = .string(newDue) }
+        if args.count > 1 { store.assistantOp("todo_update", args: args) }
+        dismiss()
+    }
+}
+
+// MARK: 苹果日历订阅
+
+/// 订阅引导只出一次：点过「以后再说」或订阅过，回执和今日页都不再提
+enum CalendarInvite {
+    static let dismissedKey = "jiebo.calendarInviteDismissed"
+    /// 记下用户对哪一次「好久没同步」说了不用；日历再来拉过、又断了才再提
+    static let staleDismissedKey = "jiebo.calendarStaleDismissed"
+
+    /// 开着、还没被日历拉过、用户也没说不要
+    static func pending(_ calendar: AssistantCalendar?, dismissed: Bool) -> Bool {
+        guard let calendar, calendar.enabled else { return false }
+        return !calendar.subscribed && !dismissed
+    }
+
+    static func staleNotice(_ calendar: AssistantCalendar?, dismissedAt: Double) -> Bool {
+        guard let calendar, calendar.enabled, calendar.stale else { return false }
+        return calendar.lastFetchAt != dismissedAt
+    }
+}
+
+/// 今日页顶部和对话回执下面的「同步到苹果日历？」。stale=true 时改成「好几天没同步了」
+struct CalendarInviteCard: View {
+    @Environment(\.openURL) private var openURL
+    @AppStorage(CalendarInvite.dismissedKey) private var dismissed = false
+    @AppStorage(CalendarInvite.staleDismissedKey) private var staleDismissedAt: Double = 0
+    var calendar: AssistantCalendar
+    var stale = false
+    var compact = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "calendar.badge.plus")
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.pine)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(stale ? "苹果日历好几天没来同步了" : "同步到苹果日历？")
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                    if !compact {
+                        Text(stale ? "可能在日历里取消了订阅，重新添加一下就好。" : "带日期的待办会自动出现在日历里。日历里只读，要改还是在这儿改。")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                ActionButton(title: stale ? "重新添加" : "添加到日历", kind: .primary) {
+                    if let url = calendar.webcalURL { openURL(url) }
+                }
+                ActionButton(title: stale ? "不用了" : "以后再说", kind: .secondary) {
+                    if stale { staleDismissedAt = calendar.lastFetchAt ?? 0 } else { dismissed = true }
+                }
+            }
+        }
+        .assistantCard(highlight: true)
+    }
+}
+
 // MARK: 待批确认卡
 
 /// 待批卡。行动区、待处理页、iPad 助理面板共用。按 approval.tool 区分文案：

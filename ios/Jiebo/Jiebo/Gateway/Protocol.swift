@@ -658,6 +658,15 @@ struct AssistantTodo: Sendable, Hashable, Identifiable {
     var done: Bool
     var doneAt: Double?
     var createdAt: Double
+    /// 在哪个会话里记下的（助理在对话里记的才有）
+    var chatId: String?
+    /// "user" 手动加 / "chat" 对话里助理记下 / "nightly" 夜里补记；老数据没有
+    var source: String?
+    /// 助理记下时用户的原话
+    var quote: String?
+
+    /// 助理自己记的（不是用户手动加的），列表里要标出来，记错了用户才看得出
+    var capturedByAssistant: Bool { source == "chat" || source == "nightly" }
 
     static func from(_ json: JSONValue) -> AssistantTodo? {
         guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
@@ -667,8 +676,33 @@ struct AssistantTodo: Sendable, Hashable, Identifiable {
             due: row["due"]?.string?.nilIfEmpty,
             done: row["done"]?.bool ?? false,
             doneAt: row["doneAt"]?.number,
-            createdAt: row["createdAt"]?.number ?? 0
+            createdAt: row["createdAt"]?.number ?? 0,
+            chatId: row["chatId"]?.string?.nilIfEmpty,
+            source: row["source"]?.string?.nilIfEmpty,
+            quote: row["quote"]?.string?.nilIfEmpty
         )
+    }
+}
+
+/// 苹果日历订阅：token 拼进 /media/cal/<token>.ics；lastFetchAt 是日历最近一次来拉的时间（毫秒）
+struct AssistantCalendar: Sendable, Hashable {
+    var token: String
+    var enabled: Bool
+    var lastFetchAt: Double?
+
+    /// 拉过就算订阅了；超过 3 天没来拉，多半是在日历里删掉了
+    var subscribed: Bool { lastFetchAt != nil }
+    var stale: Bool {
+        guard let lastFetchAt else { return false }
+        return Date().timeIntervalSince1970 * 1000 - lastFetchAt > 3 * 86_400_000
+    }
+
+    var webcalURL: URL? { GatewayConfig.calendarURL(token: token, scheme: "webcal") }
+    var httpsURL: URL? { GatewayConfig.calendarURL(token: token, scheme: nil) }
+
+    static func from(_ json: JSONValue) -> AssistantCalendar? {
+        guard let row = json.object, let token = row["token"]?.string, !token.isEmpty else { return nil }
+        return AssistantCalendar(token: token, enabled: row["enabled"]?.bool ?? true, lastFetchAt: row["lastFetchAt"]?.number)
     }
 }
 
@@ -791,6 +825,8 @@ struct AssistantState: Sendable, Hashable {
     var brief: AssistantBrief?
     /// 只有发过 assistant_get(memory: true) 的连接才带
     var memory: AssistantMemory?
+    /// 老网关不带
+    var calendar: AssistantCalendar?
 
     var unreadInbox: Int { inbox.filter { !$0.read }.count }
 
@@ -817,7 +853,8 @@ struct AssistantState: Sendable, Hashable {
             approvals: row["approvals"]?.array?.compactMap(AssistantApproval.from) ?? [],
             runs: row["runs"]?.array?.compactMap(AssistantRun.from) ?? [],
             brief: brief,
-            memory: row["memory"].flatMap(AssistantMemory.from)
+            memory: row["memory"].flatMap(AssistantMemory.from),
+            calendar: row["calendar"].flatMap(AssistantCalendar.from)
         )
     }
 }
@@ -1281,6 +1318,13 @@ enum GatewayConfig {
     /// /media 预览票据通道（P3 用）
     static var mediaBaseURL: URL {
         derive(path: "/media")
+    }
+
+    /// 日历订阅地址：scheme 传 "webcal" 让系统直接弹「订阅日历」，nil 保留 http(s) 供复制
+    static func calendarURL(token: String, scheme: String?) -> URL? {
+        var components = URLComponents(url: derive(path: "/media/cal/\(token).ics"), resolvingAgainstBaseURL: false)
+        if let scheme { components?.scheme = scheme }
+        return components?.url
     }
 
     /// stored_state 的 HTTP 拉取通道（WS 单条消息超 maxMessageBytes 时的兜底）。

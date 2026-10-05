@@ -152,6 +152,9 @@ struct AssistantTodayPane: View {
     var showsInbox: Bool
     @State private var todoDraft = ""
     @State private var doneExpanded = false
+    @State private var editingTodo: AssistantTodo?
+    @AppStorage(CalendarInvite.dismissedKey) private var calendarInviteDismissed = false
+    @AppStorage(CalendarInvite.staleDismissedKey) private var calendarStaleDismissedAt: Double = 0
 
     init(showsApprovals: Bool = true, showsDelegations: Bool = true, showsInbox: Bool = true) {
         self.showsApprovals = showsApprovals
@@ -216,7 +219,21 @@ struct AssistantTodayPane: View {
     private var todoSection: some View {
         let openTodos = state?.todos.filter { !$0.done } ?? []
         let doneTodos = (state?.todos.filter(\.done) ?? []).sorted { ($0.doneAt ?? 0) > ($1.doneAt ?? 0) }
+        let capturedToday = (state?.todos ?? []).filter {
+            $0.capturedByAssistant && Calendar.current.isDateInToday(Date(timeIntervalSince1970: $0.createdAt / 1000))
+        }.count
+        let calendar = state?.calendar
         return AssistantSection("待办") {
+            if let calendar, CalendarInvite.staleNotice(calendar, dismissedAt: calendarStaleDismissedAt) {
+                CalendarInviteCard(calendar: calendar, stale: true)
+            } else if let calendar, CalendarInvite.pending(calendar, dismissed: calendarInviteDismissed),
+                      openTodos.contains(where: { $0.due != nil })
+            {
+                CalendarInviteCard(calendar: calendar)
+            }
+            if capturedToday > 0 {
+                AssistantMutedText("今天从聊天里记了 \(capturedToday) 件，点一条可以改。")
+            }
             HStack(spacing: 8) {
                 TextField("加一条待办", text: $todoDraft)
                     .textFieldStyle(.roundedBorder)
@@ -229,15 +246,16 @@ struct AssistantTodayPane: View {
             if openTodos.isEmpty {
                 AssistantMutedText("没有未完成的待办。")
             } else {
-                ForEach(openTodos) { todo in
+                ForEach(sortedOpen(openTodos)) { todo in
                     SwipeDeleteRow(onDelete: { removeTodo(todo) }) {
                         HStack(spacing: 8) {
-                            Text(todo.text)
-                                .font(JieboFont.text(.subheadline))
-                                .foregroundStyle(JieboColor.ink)
-                            if let due = todo.due {
-                                StatusTag(text: due, fg: JieboColor.ink2, bg: JieboColor.mist)
+                            Button {
+                                editingTodo = todo
+                            } label: {
+                                todoLabel(todo)
                             }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("轻点两下修改")
                             Spacer(minLength: 8)
                             ActionButton(title: "完成") {
                                 store.assistantOp("todo_done", args: ["id": .string(todo.id)])
@@ -267,6 +285,43 @@ struct AssistantTodayPane: View {
             }
         }
         .id("todos")
+        .sheet(item: $editingTodo) { todo in
+            TodoEditSheet(todo: todo)
+        }
+    }
+
+    /// 文字在上，日期和「聊天里记的」在下；助理记的要标出来，记错了一眼能看出
+    private func todoLabel(_ todo: AssistantTodo) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(todo.text)
+                .font(JieboFont.text(.subheadline))
+                .foregroundStyle(JieboColor.ink)
+                .multilineTextAlignment(.leading)
+            let due = TodoDue.label(todo.due)
+            if due != nil || todo.capturedByAssistant {
+                HStack(spacing: 6) {
+                    if let due {
+                        let late = TodoDue.overdue(todo.due)
+                        StatusTag(text: due, fg: late ? JieboColor.warnFg : JieboColor.ink2, bg: late ? JieboColor.warnBg : JieboColor.mist)
+                    }
+                    if todo.capturedByAssistant {
+                        Text(todo.source == "nightly" ? "夜里补记" : "聊天里记的")
+                            .font(JieboFont.text(.caption2))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    /// 有日期的按时间先后排在前面，没日期的保持添加顺序
+    private func sortedOpen(_ todos: [AssistantTodo]) -> [AssistantTodo] {
+        let dated = todos.compactMap { todo in TodoDue.parse(todo.due).map { (todo, $0.date) } }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+        return dated + todos.filter { TodoDue.parse($0.due) == nil }
     }
 
     private func doneHeader(count: Int) -> some View {

@@ -86,6 +86,7 @@ struct PhoneSettingsScreen: View {
     @State private var themeOpen = false
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
+    @State private var rotateConfirm = false
 
     init() {}
 
@@ -111,6 +112,8 @@ struct PhoneSettingsScreen: View {
             }
 
             notificationSection
+
+            calendarSection
 
             Section {
                 settingsRow(
@@ -273,6 +276,79 @@ struct PhoneSettingsScreen: View {
                 Text("待你批准的事项、委派结果和提醒会通过系统通知送达。")
             }
         }
+    }
+
+    // MARK: 日历
+
+    @ViewBuilder
+    private var calendarSection: some View {
+        if let calendar = state?.calendar {
+            Section {
+                Toggle(isOn: Binding(
+                    get: { calendar.enabled },
+                    set: { on in store.assistantOp("calendar_set", args: ["enabled": .bool(on)]) }
+                )) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "calendar")
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .frame(width: 24)
+                        Text("待办同步到日历")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.ink)
+                    }
+                }
+                .tint(JieboColor.pine)
+                .frame(minHeight: 44)
+                .listRowBackground(JieboColor.white)
+
+                if calendar.enabled {
+                    Button {
+                        if let url = calendar.webcalURL { openURL(url) }
+                    } label: {
+                        settingsRow(symbol: "calendar.badge.plus", title: "添加到苹果日历", trailing: calendarStatus(calendar), chevron: true)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(JieboColor.white)
+
+                    Button {
+                        if let url = calendar.httpsURL {
+                            UIPasteboard.general.string = url.absoluteString
+                            store.flash("已复制订阅链接")
+                        }
+                    } label: {
+                        settingsRow(symbol: "link", title: "复制订阅链接", trailing: nil, chevron: false)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(JieboColor.white)
+
+                    Button {
+                        rotateConfirm = true
+                    } label: {
+                        settingsRow(symbol: "arrow.triangle.2.circlepath", title: "重新生成链接", trailing: nil, chevron: false)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(JieboColor.white)
+                    .confirmationDialog("旧链接会立刻失效，已订阅的日历需要重新添加。", isPresented: $rotateConfirm, titleVisibility: .visible) {
+                        Button("重新生成", role: .destructive) {
+                            store.assistantOp("calendar_set", args: ["rotate": .bool(true)])
+                        }
+                    }
+                }
+            } header: {
+                Text("日历")
+            } footer: {
+                Text(calendar.enabled
+                    ? "带日期的待办会出现在苹果日历里，大约每 15 分钟同步一次，只读。知道链接的人能看到待办标题，链接外泄了就重新生成。"
+                    : "关掉后日历里的待办会在下次同步时清空。不想让旧链接再能打开，就打开后重新生成。")
+            }
+        }
+    }
+
+    private func calendarStatus(_ calendar: AssistantCalendar) -> String {
+        guard let last = calendar.lastFetchAt else { return "未订阅" }
+        if calendar.stale { return "好几天没同步了" }
+        return "已订阅 · \(assistantRelativeTime(last))同步"
     }
 
     private func refreshNotifyStatus() async {
