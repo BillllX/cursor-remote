@@ -6,12 +6,9 @@ struct SidebarView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var collapse: () -> Void = {}
-    /// P8：重命名目标（alert presenting 驱动）
-    @State private var renameTarget: ChatSession?
-    @State private var renameDraft = ""
+    @State private var chatActions = ChatActionTargets()
     /// P9：管理员统计面板
     @State private var adminStatsOpen = false
-    @State private var deleteTarget: ChatSession?
     @State private var themeOpen = false
     @State private var logoutConfirm = false
 
@@ -78,26 +75,7 @@ struct SidebarView: View {
         .sheet(isPresented: $adminStatsOpen) {
             AdminStatsView()
         }
-        .alert("重命名会话", isPresented: renamePresented, presenting: renameTarget) { chat in
-            TextField("会话标题", text: $renameDraft)
-                .textInputAutocapitalization(.sentences)
-            Button("取消", role: .cancel) { renameTarget = nil }
-            Button("确定") {
-                store.renameChat(chat.id, to: renameDraft)
-                renameTarget = nil
-            }
-        } message: { chat in
-            Text(chat.title)
-        }
-        .alert("删除这个会话？", isPresented: deletePresented, presenting: deleteTarget) { chat in
-            Button("删除", role: .destructive) {
-                store.deleteChat(chat.id)
-                deleteTarget = nil
-            }
-            Button("取消", role: .cancel) { deleteTarget = nil }
-        } message: { chat in
-            Text("「\(chat.title)」会从这台设备上的列表里去掉。")
-        }
+        .chatActionAlerts($chatActions)
         .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
             Button("退出登录", role: .destructive, action: store.logout)
             Button("取消", role: .cancel) {}
@@ -319,28 +297,11 @@ struct SidebarView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(live ? "\(chat.title)，正在运行" : chat.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .contextMenu {
-            Button {
-                renameDraft = chat.isUntitled ? "" : chat.title
-                renameTarget = chat
-            } label: {
-                Label("重命名", systemImage: "pencil")
-            }
-            Button(role: .destructive) {
-                deleteTarget = chat
-            } label: {
-                Label("删除", systemImage: "trash")
-            }
-        }
-    }
-
-    /// alert isPresented 绑定（presenting: 需要 Bool 驱动）
-    private var deletePresented: Binding<Bool> {
-        Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })
-    }
-
-    private var renamePresented: Binding<Bool> {
-        Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })
+        .chatRowMenu(
+            chat,
+            rename: { chatActions.beginRename($0) },
+            delete: { chatActions.delete = $0 }
+        )
     }
 
 }
@@ -870,5 +831,76 @@ private struct ThemeMiniThread: View {
             .fill(Color(hex: hex))
             .frame(width: width, height: height)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+    }
+}
+
+/// 会话的重命名 / 删除目标。iPad 侧栏和窄窗抽屉共用：提示要挂在不会消失的宿主上，抽屉一关挂在它身上的 alert 会跟着没
+struct ChatActionTargets {
+    var rename: ChatSession?
+    var draft = ""
+    var delete: ChatSession?
+
+    mutating func beginRename(_ chat: ChatSession) {
+        draft = chat.isUntitled ? "" : chat.title
+        rename = chat
+    }
+}
+
+extension View {
+    /// 会话行的长按菜单
+    func chatRowMenu(
+        _ chat: ChatSession,
+        rename: @escaping (ChatSession) -> Void,
+        delete: @escaping (ChatSession) -> Void
+    ) -> some View {
+        contextMenu {
+            Button { rename(chat) } label: {
+                Label("重命名", systemImage: "pencil")
+            }
+            Button(role: .destructive) { delete(chat) } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    func chatActionAlerts(_ targets: Binding<ChatActionTargets>) -> some View {
+        modifier(ChatActionAlerts(targets: targets))
+    }
+}
+
+private struct ChatActionAlerts: ViewModifier {
+    @Environment(ChatStore.self) private var store
+    @Binding var targets: ChatActionTargets
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "重命名会话",
+                isPresented: Binding(get: { targets.rename != nil }, set: { if !$0 { targets.rename = nil } }),
+                presenting: targets.rename
+            ) { chat in
+                TextField("会话标题", text: $targets.draft)
+                    .textInputAutocapitalization(.sentences)
+                Button("取消", role: .cancel) { targets.rename = nil }
+                Button("确定") {
+                    store.renameChat(chat.id, to: targets.draft)
+                    targets.rename = nil
+                }
+            } message: { chat in
+                Text(chat.title)
+            }
+            .alert(
+                "删除这个会话？",
+                isPresented: Binding(get: { targets.delete != nil }, set: { if !$0 { targets.delete = nil } }),
+                presenting: targets.delete
+            ) { chat in
+                Button("删除", role: .destructive) {
+                    store.deleteChat(chat.id)
+                    targets.delete = nil
+                }
+                Button("取消", role: .cancel) { targets.delete = nil }
+            } message: { chat in
+                Text("「\(chat.title)」会从这台设备上的列表里去掉。")
+            }
     }
 }

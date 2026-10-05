@@ -11,6 +11,7 @@ struct PhoneWorkbench: View {
     @State private var themeOpen = false
     @State private var adminStatsOpen = false
     @State private var logoutConfirm = false
+    @State private var chatActions = ChatActionTargets()
 
     var body: some View {
         @Bindable var store = store
@@ -39,7 +40,9 @@ struct PhoneWorkbench: View {
                     newChat: { closeDrawer(then: store.openNewChat) },
                     openTheme: { closeDrawer { themeOpen = true } },
                     openAdminStats: { closeDrawer { adminStatsOpen = true } },
-                    logout: { closeDrawer { logoutConfirm = true } }
+                    logout: { closeDrawer { logoutConfirm = true } },
+                    renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
+                    deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
                 .transition(.move(edge: .leading))
                 .accessibilityHidden(store.previewPanelOpen)
@@ -77,6 +80,7 @@ struct PhoneWorkbench: View {
         } message: {
             Text("退出后需要重新输入访问码才能连回来。")
         }
+        .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
     }
 
@@ -115,6 +119,8 @@ private struct PhoneDrawer: View {
     var openTheme: () -> Void
     var openAdminStats: () -> Void
     var logout: () -> Void
+    var renameChat: (ChatSession) -> Void
+    var deleteChat: (ChatSession) -> Void
 
     private var loopLive: Bool {
         guard let row = store.loops[store.activeId] else { return false }
@@ -355,6 +361,7 @@ private struct PhoneDrawer: View {
         .buttonStyle(.plain)
         .accessibilityLabel(live ? "\(chat.title)，正在运行" : chat.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .chatRowMenu(chat, rename: renameChat, delete: deleteChat)
     }
 
     // MARK: 底部设置（低频账号操作收进系统菜单）
