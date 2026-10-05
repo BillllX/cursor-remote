@@ -18,7 +18,7 @@ import {
   type MemoryEntry,
 } from "./memory.ts";
 import { listSchedules, removeSchedule, setSchedule, type ScheduleKind } from "./schedules.ts";
-import { addTodo, listTodos, setTodoDone } from "./todos.ts";
+import { addTodo, listTodos, setTodoDone, updateTodo } from "./todos.ts";
 import type { TenantRef } from "./store.ts";
 
 /** 谁在用这组工具：决定能拿到哪些 */
@@ -235,13 +235,24 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       })),
     );
     out.todo_add = tool(
-      "加一条待办。due 可以是日期 YYYY-MM-DD；要到点提醒就写带时区的 ISO 时间，如 2026-10-03T09:00:00+08:00。",
-      { text: S("待办内容"), due: S("可选") },
+      [
+        "加一条待办。due 可以是日期 YYYY-MM-DD；要到点提醒就写带时区的 ISO 时间，如 2026-10-03T09:00:00+08:00（不带时区会被拒绝）。",
+        "从对话里记下的，quote 填用户的原话。同一天已有同样的未完成待办时不会重复加，返回 duplicate=true。",
+      ].join(""),
+      { text: S("待办内容，一句话"), due: S("可选"), quote: S("可选，用户原话") },
       ["text"],
       (args) => {
-        const result = addTodo(ref, { text: str(args.text), due: str(args.due) || undefined, chatId: host.chatId });
-        if (result.ok) changed();
-        return result.ok ? { ok: true, id: result.value.id } : { ok: false, error: result.error };
+        const result = addTodo(ref, {
+          text: str(args.text),
+          due: str(args.due) || undefined,
+          chatId: host.chatId,
+          source: role === "chat" ? "chat" : undefined,
+          quote: str(args.quote) || undefined,
+        });
+        if (result.ok && !result.duplicate) changed();
+        return result.ok
+          ? { ok: true, id: result.value.id, due: result.value.due, duplicate: result.duplicate }
+          : { ok: false, error: result.error };
       },
     );
     out.schedule_list = tool("列出定时任务。", {}, [], () =>
@@ -263,6 +274,19 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       if (result.ok) changed();
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     });
+    out.todo_update = tool(
+      "改一条待办的内容或日期。due 规则同 todo_add，传空串表示去掉日期。",
+      { id: S("待办 id"), text: S("可选，新内容"), due: S("可选，新日期或时间") },
+      ["id"],
+      (args) => {
+        const result = updateTodo(ref, str(args.id), {
+          text: typeof args.text === "string" ? args.text : undefined,
+          due: typeof args.due === "string" ? args.due : undefined,
+        });
+        if (result.ok) changed();
+        return result.ok ? { ok: true, due: result.value.due } : { ok: false, error: result.error };
+      },
+    );
     out.schedule_set = tool(
       [
         "新建或修改定时任务。cron 是五段（分 时 日 月 周），tz 是 IANA 时区，默认 Asia/Shanghai。",

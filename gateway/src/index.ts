@@ -139,6 +139,7 @@ import {
   watchMemory,
   chatToolHost,
   answerMemoryCard,
+  calendarFeed,
   flushWorkspaceProposals,
   noteWorkspaceTurnEnd,
   noteWorkspaceTurnStart,
@@ -5295,6 +5296,27 @@ const httpServer = createServer((req, res) => {
     const body = healthPayload();
     res.writeHead(body.ok ? 200 : 503, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
+    return;
+  }
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith("/media/cal/")) {
+    // 口令就是凭证，出错也不往日志里写路径
+    const token = url.pathname.slice("/media/cal/".length).replace(/\.ics$/, "");
+    let body: string | null = null;
+    try {
+      body = calendarFeed(allTenants(), token);
+    } catch (err) {
+      console.error("calendar feed", err instanceof Error ? err.message : err);
+    }
+    if (body === null) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }).end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": "text/calendar; charset=utf-8",
+      "cache-control": "no-store",
+      "content-disposition": 'inline; filename="todos.ics"',
+    });
+    res.end(req.method === "HEAD" ? undefined : body);
     return;
   }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media") {

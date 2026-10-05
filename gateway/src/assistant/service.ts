@@ -35,7 +35,8 @@ import { apnsReady, sendApns } from "./apns.ts";
 import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
 import { assistantDir, estimateTokens, writeJson, assistantPath, type TenantRef } from "./store.ts";
-import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders } from "./todos.ts";
+import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
+import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
 import { migrateMemory } from "./migrate.ts";
@@ -183,6 +184,19 @@ export function chatToolHost(tenant: AssistantTenant, chatId: string): ToolHost 
   return toolHost(tenant, "chat", chatId);
 }
 
+/** 模型不知道今天几号，换算“下周三”要靠这一行。只到日期：第三方模型路径里这段进 system，精确到分钟会让每轮的提示缓存都失效 */
+function nowLine(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: DEFAULT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    weekday: "short",
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `今天是 ${get("year")}-${get("month")}-${get("day")} ${get("weekday")}（${DEFAULT_TZ}，UTC+08:00）。`;
+}
+
 /** USER 会话每轮前置：名字 + 记忆数据块。子工作区会话不调用 */
 export function userRootPreamble(tenant: AssistantTenant) {
   const name = assistantName(tenant);
@@ -195,6 +209,12 @@ export function userRootPreamble(tenant: AssistantTenant) {
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
     "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
     "用户说“记住…”时调用 memory_save（basis=user_said）。用户说“提醒我…”时用 schedule_set 或带时间的 todo_add。",
+    nowLine(),
+    [
+      "对话里出现能落到确切日期的、用户自己要做的事（“下周三交报告”“明天下午三点和老王开会”），不用问，直接 todo_add：text 写成一句话的事，due 换算成具体日期（有钟点就写带 +08:00 的时间），quote 填用户原话。",
+      "记下后在回复里一句话带过，如“记下了：周三 交报告”，不要另起话题。返回 duplicate=true 就别再说一遍。",
+      "别人的事、已经过去的事、只是闲聊提到的日期、说不准哪天的（“改天”“过阵子”）都不记。用户说记错了，用 todo_update 改或 todo_done 划掉。",
+    ].join(""),
     block,
   ]
     .filter(Boolean)
@@ -269,6 +289,7 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
     approvals: listApprovals(ref),
     runs: listRuns(ref, 20),
     brief: latestBrief(ref, day),
+    calendar: calendarInfo(ref),
   };
   if (opts.memory) {
     const memory = listMemory(ref);
@@ -287,6 +308,16 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
 }
 
 const memoryWatchers = new Set<string>();
+
+/** 日历来拉订阅：口令对上就返回 .ics。第一次被拉时推一次状态，App 立刻显示「已订阅」 */
+export function calendarFeed(tenants: AssistantTenant[], token: string): string | null {
+  if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) return null;
+  const tenant = findByToken(tenants, token);
+  if (!tenant) return null;
+  const ref = refOf(tenant);
+  if (noteFetch(ref)) void publishState(tenant);
+  return buildIcs(ref, assistantName(tenant));
+}
 
 export async function publishState(tenant: AssistantTenant) {
   if (!deps) return;
@@ -334,9 +365,24 @@ export async function handleOp(
       return { ok: true, data: { changed: markInboxRead(ref, ids) } };
     }
     case "todo_add": {
-      const result = addTodo(ref, { text: str(args.text), due: str(args.due) || undefined });
+      const result = addTodo(ref, { text: str(args.text), due: str(args.due) || undefined, source: "user" });
       return result.ok ? { ok: true, data: result.value } : fail(result.error);
     }
+    case "todo_update": {
+      const result = updateTodo(ref, str(args.id), {
+        text: typeof args.text === "string" ? args.text : undefined,
+        due: typeof args.due === "string" ? args.due : undefined,
+      });
+      return result.ok ? { ok: true, data: result.value } : fail(result.error);
+    }
+    case "calendar_set":
+      return {
+        ok: true,
+        data: setCalendar(ref, {
+          enabled: typeof args.enabled === "boolean" ? args.enabled : undefined,
+          rotate: args.rotate === true,
+        }),
+      };
     case "todo_done":
     case "todo_undo": {
       const result = setTodoDone(ref, str(args.id), op === "todo_done");

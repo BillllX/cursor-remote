@@ -67,7 +67,20 @@ export type AssistantState = {
   /** 网关配置了 APNs（.p8）且能发；iPhone 设置页据此显示「通知已就绪」。iPhone 不读 pushKey */
   pushApns?: boolean;
   inbox: AssistantInboxItem[];
-  todos: Array<{ id: string; text: string; due?: string; done: boolean; doneAt?: number; createdAt: number }>;
+  /** source：user 手动加 / chat 对话里助理记下 / nightly 夜里从聊天补记；quote 是记下时的原话 */
+  todos: Array<{
+    id: string;
+    text: string;
+    due?: string;
+    done: boolean;
+    doneAt?: number;
+    createdAt: number;
+    chatId?: string;
+    source?: "user" | "chat" | "nightly";
+    quote?: string;
+  }>;
+  /** 苹果日历订阅：地址 = 网关 HTTP 基址 + /media/cal/<token>.ics；lastFetchAt 是日历最近一次来拉的时间 */
+  calendar?: { token: string; enabled: boolean; lastFetchAt?: number };
   schedules: Array<{
     id: string;
     title: string;
@@ -104,6 +117,10 @@ export type AssistantOp =
   | "todo_done"
   | "todo_undo"
   | "todo_remove"
+  /** args: { id, text?, due? }；due 传空串表示去掉日期 */
+  | "todo_update"
+  /** args: { enabled?, rotate? }；rotate=true 重新生成订阅口令，旧地址立即失效 */
+  | "calendar_set"
   | "schedule_set"
   | "schedule_remove"
   | "memory_save"

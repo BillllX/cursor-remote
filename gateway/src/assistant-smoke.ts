@@ -327,6 +327,40 @@ try {
   check(todo.ok && todo.value.remindAt === Date.parse("2026-10-02T01:00:00Z"), "待办：带时间的 due 会到点提醒");
   check(todos.takeDueReminders(sref, Date.parse("2026-10-02T01:00:01Z")).length === 1 && todos.takeDueReminders(sref, Date.parse("2026-10-02T02:00:00Z")).length === 0, "待办：每条只提醒一次");
   check(!todos.addTodo(sref, { text: "x", due: "明天" }).ok, "待办：due 格式不对就拒绝");
+  check(!todos.addTodo(sref, { text: "x", due: "2026-10-03T09:00:00" }).ok, "待办：带时间却不带时区就拒绝");
+  check(!todos.addTodo(sref, { text: "x", due: "2026-02-31" }).ok && todos.addTodo(sref, { text: "闰日", due: "2028-02-29" }).ok, "待办：不存在的日子拒绝，闰日照收");
+
+  /* ── 聊天里当场记 + 苹果日历订阅 ── */
+  const kref = { id: "cal", stateDir: resolve(dir, "cal") };
+  const meet = todos.addTodo(kref, { text: "和老王开会", due: "2026-10-07T15:00:00+08:00", source: "chat", quote: "周三下午三点和老王开会".repeat(20) });
+  const again = todos.addTodo(kref, { text: "和老王 开会。", due: "2026-10-07" });
+  check(meet.ok && !meet.duplicate && again.ok && again.duplicate && again.value.id === meet.value.id, "待办：同一天同一件事不重复记");
+  check(meet.ok && meet.value.source === "chat" && meet.value.quote?.length === 121 && meet.value.quote.endsWith("…"), "待办：记下来源，原话截到 120 字");
+  check(todos.addTodo(kref, { text: "和老王开会", due: "2026-10-08" }).ok && todos.listTodos(kref).length === 2, "待办：换一天算新的一件");
+  const moved = meet.ok ? todos.updateTodo(kref, meet.value.id, { due: "2026-10-09T10:00:00+08:00" }) : null;
+  check(Boolean(moved?.ok && moved.value.remindAt === Date.parse("2026-10-09T02:00:00Z") && !moved.value.reminded), "待办：改时间后重新等提醒");
+  check(Boolean(meet.ok && !todos.updateTodo(kref, meet.value.id, { due: "下周" }).ok && todos.updateTodo(kref, meet.value.id, { text: "  " }).ok === false), "待办：改成非法日期或空内容都拒绝");
+  check(todos.addTodo(kref, { text: "付 ¥100", due: "2026-10-12" }).ok && !todos.addTodo(kref, { text: "付 $100", due: "2026-10-12" }).duplicate, "待办：去重不吞货币符号");
+  todos.addTodo(kref, { text: "交报告, 带 PPT; 别忘\r抄送", due: "2026-10-10" });
+  todos.addTodo(kref, { text: "没日期的事" });
+
+  const calendar = await import("./assistant/calendar.ts");
+  const info = calendar.calendarInfo(kref);
+  check(info.enabled && info.token.length >= 40 && calendar.calendarInfo(kref).token === info.token, "日历：默认开，口令生成一次后复用");
+  check(calendar.matchesToken(kref, info.token) && !calendar.matchesToken(kref, `${info.token.slice(0, -1)}x`), "日历：口令要完全对上");
+  const ics = calendar.buildIcs(kref, "小助", Date.parse("2026-10-05T00:00:00Z"));
+  check(ics.includes("DTSTART:20261009T020000Z") && ics.includes("DTEND:20261009T023000Z") && ics.includes("TRIGGER:PT0M"), "日历：带时间的写成 30 分钟事件并到点提醒");
+  check(ics.includes("DTSTART;VALUE=DATE:20261008") && ics.includes("DTEND;VALUE=DATE:20261009"), "日历：只有日期的写成全天事件");
+  check(ics.includes("SUMMARY:交报告\\, 带 PPT\\; 别忘\\n抄送") && !ics.includes("没日期的事") && !ics.includes("周三下午三点"), "日历：标题转义，没日期的不放，原话不放");
+  check(ics.split("\r\n").every((line) => Buffer.byteLength(line) <= 75), "日历：每行不超过 75 字节");
+  check(calendar.noteFetch(kref, 1_000_000) === true && calendar.noteFetch(kref, 1_030_000) === false && calendar.calendarInfo(kref).lastFetchAt === 1_000_000, "日历：记下首次拉取，一分钟内不重复写");
+  check(calendar.noteFetch(kref, 1_000_000 + 3_600_000) === false && calendar.noteFetch(kref, 1_000_000 + 13 * 3_600_000) === true, "日历：之后每隔半天推一次拉取时间，App 不会误报取消订阅");
+  check(calendar.buildIcs(kref, "小助", 1).match(/DTSTAMP:\S+/g)?.join() === calendar.buildIcs(kref, "小助", 2).match(/DTSTAMP:\S+/g)?.join(), "日历：DTSTAMP 不随拉取时间变化");
+  check(calendar.findByToken([ref, kref], info.token) === kref && calendar.findByToken([ref, kref], "y".repeat(43)) === undefined, "日历：按口令找到租户，错口令查不到");
+  const rotated = calendar.setCalendar(kref, { rotate: true });
+  check(rotated.token !== info.token && rotated.lastFetchAt === undefined && !calendar.matchesToken(kref, info.token), "日历：换口令后旧链接失效、订阅状态清零");
+  calendar.setCalendar(kref, { enabled: false });
+  check(calendar.matchesToken(kref, rotated.token) && !calendar.buildIcs(kref, "小助").includes("BEGIN:VEVENT"), "日历：关掉后给空日历，让订阅里的旧事件清掉");
 
   /* ── 推送 ── */
   const vapid = push.vapidKeys(dir);
