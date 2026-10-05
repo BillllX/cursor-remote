@@ -187,6 +187,8 @@ export type ClientMessage =
       history?: { role: "user" | "assistant"; text: string }[];
       /** 客户端本地回合 id。网关用它对齐缓冲、快照和落盘，避免靠用户原文配对 */
       turnId?: string;
+      /** 发送时客户端的时间（毫秒）和系统时区（IANA），助理换算“明天”“下周三”用 */
+      clientTime?: { now: number; tz: string };
     }
   | { type: "cancel"; chatId: string }
   | { type: "drop_queued"; chatId: string; text?: string }

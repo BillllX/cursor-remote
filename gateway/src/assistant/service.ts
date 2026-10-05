@@ -184,17 +184,45 @@ export function chatToolHost(tenant: AssistantTenant, chatId: string): ToolHost 
   return toolHost(tenant, "chat", chatId);
 }
 
-/** 模型不知道今天几号，换算“下周三”要靠这一行。只到日期：第三方模型路径里这段进 system，精确到分钟会让每轮的提示缓存都失效 */
-function nowLine(now = new Date()) {
+/** 用户那边的时钟：时区取客户端系统时区，skew 是客户端时间减网关时间（排队后才跑的轮次也按跑的那一刻算） */
+export type ClientClock = { tz: string; skew: number };
+
+export function parseClientClock(raw: unknown, now = Date.now()): ClientClock | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const { tz, now: at } = raw as { tz?: unknown; now?: unknown };
+  if (typeof tz !== "string" || !tz || tz.length > 64) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+  } catch {
+    return undefined;
+  }
+  // 客户端时钟差太多（比如手动改过时间）就不信它的钟，只用它的时区
+  const skew = typeof at === "number" && Number.isFinite(at) && Math.abs(at - now) < 86_400_000 ? at - now : 0;
+  return { tz, skew };
+}
+
+/**
+ * 每轮放进用户消息（不放 system，免得每轮都让提示缓存失效）。
+ * 模型不知道现在几点，换算“明天下午三点”“下周三”全靠这一行；没收到客户端时钟就按网关默认时区
+ */
+export function clockLine(clock?: ClientClock, now = Date.now()) {
+  const tz = clock?.tz || DEFAULT_TZ;
+  const at = new Date(now + (clock?.skew ?? 0));
   const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: DEFAULT_TZ,
+    timeZone: tz,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     weekday: "short",
-  }).formatToParts(now);
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset",
+  }).formatToParts(at);
   const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
-  return `今天是 ${get("year")}-${get("month")}-${get("day")} ${get("weekday")}（${DEFAULT_TZ}，UTC+08:00）。`;
+  const offset = get("timeZoneName").replace(/^GMT/, "") || "+00:00";
+  const utc = offset === "+00:00" || offset === "" ? "UTC" : `UTC${offset}`;
+  return `[用户这边现在是 ${get("year")}-${get("month")}-${get("day")} ${get("weekday")} ${get("hour")}:${get("minute")}，时区 ${tz}（${utc}）。记待办、设提醒按这个时区换算；带钟点的 due 写成 ${offset === "+00:00" ? "Z" : offset} 结尾，定时任务的 tz 填 ${tz}。]`;
 }
 
 /** USER 会话每轮前置：名字 + 记忆数据块。子工作区会话不调用 */
@@ -209,9 +237,8 @@ export function userRootPreamble(tenant: AssistantTenant) {
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
     "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
     "用户说“记住…”时调用 memory_save（basis=user_said）。用户说“提醒我…”时用 schedule_set 或带时间的 todo_add。",
-    nowLine(),
     [
-      "对话里出现能落到确切日期的、用户自己要做的事（“下周三交报告”“明天下午三点和老王开会”），不用问，直接 todo_add：text 写成一句话的事，due 换算成具体日期（有钟点就写带 +08:00 的时间），quote 填用户原话。",
+      "对话里出现能落到确切日期的、用户自己要做的事（“下周三交报告”“明天下午三点和老王开会”），不用问，直接 todo_add：text 写成一句话的事，due 按用户消息开头那行的时间和时区换算成具体日期（有钟点就写带时区偏移的时间），quote 填用户原话。",
       "记下后在回复里一句话带过，如“记下了：周三 交报告”，不要另起话题。返回 duplicate=true 就别再说一遍。",
       "别人的事、已经过去的事、只是闲聊提到的日期、说不准哪天的（“改天”“过阵子”）都不记。用户说记错了，用 todo_update 改或 todo_done 划掉。",
     ].join(""),

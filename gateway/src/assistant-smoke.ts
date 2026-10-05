@@ -344,6 +344,17 @@ try {
   todos.addTodo(kref, { text: "交报告, 带 PPT; 别忘\r抄送", due: "2026-10-10" });
   todos.addTodo(kref, { text: "没日期的事" });
 
+  /* ── 客户端时钟 ── */
+  const svc = await import("./assistant/service.ts");
+  const at = Date.parse("2026-10-05T19:22:00Z");
+  const ny = svc.parseClientClock({ now: at + 90_000, tz: "America/New_York" }, at);
+  check(ny?.tz === "America/New_York" && ny.skew === 90_000, "时钟：收下客户端时区和时差");
+  check(svc.parseClientClock({ now: at, tz: "Mars/Base" }, at) === undefined && svc.parseClientClock({ now: at + 3 * 86_400_000, tz: "Asia/Tokyo" }, at)?.skew === 0, "时钟：认不出的时区不要，钟差太大只用时区");
+  const nyLine = svc.clockLine(ny, at);
+  check(nyLine.includes("2026-10-05") && nyLine.includes("15:23") && nyLine.includes("UTC-04:00") && nyLine.includes("-04:00 结尾"), "时钟：按客户端时区和时间写，偏移跟着时区走");
+  check(svc.clockLine(undefined, at).includes("2026-10-06") && svc.clockLine(undefined, at).includes("UTC+08:00"), "时钟：没收到客户端时钟按默认时区");
+  check(svc.clockLine({ tz: "UTC", skew: 0 }, at).includes("Z 结尾"), "时钟：UTC 用 Z");
+
   const calendar = await import("./assistant/calendar.ts");
   const info = calendar.calendarInfo(kref);
   check(info.enabled && info.token.length >= 40 && calendar.calendarInfo(kref).token === info.token, "日历：默认开，口令生成一次后复用");

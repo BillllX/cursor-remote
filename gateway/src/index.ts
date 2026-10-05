@@ -140,6 +140,9 @@ import {
   chatToolHost,
   answerMemoryCard,
   calendarFeed,
+  clockLine,
+  parseClientClock,
+  type ClientClock,
   flushWorkspaceProposals,
   noteWorkspaceTurnEnd,
   noteWorkspaceTurnStart,
@@ -347,6 +350,8 @@ type Conn = {
   /** hello.client.caps：客户端能力集（"sync_chat" / "stored_digest"） */
   caps: Set<string>;
   policy: PolicyId;
+  /** 最近一条 prompt 带来的客户端时钟（时区 + 与网关的时差），助理会话每轮据此写“现在几点” */
+  clock?: ClientClock;
 };
 
 const liveByTenant = new Map<string, Map<string, Slot>>();
@@ -4162,7 +4167,10 @@ async function handlePrompt(
   );
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
-  // Cursor SDK 路径：人设进 user 包装；第三方自研 Agent 路径改由 runNativeChat 写进 system
+  // Cursor SDK 路径：人设进 user 包装；第三方自研 Agent 路径改由 runNativeChat 写进 system。
+  // 时间行两条路径都放在用户消息里：它每轮都变，进 system 会让提示缓存失效
+  const clock = assistantBlock ? clockLine(conn.clock) : "";
+  if (clock) prompt = `${clock}\n\n${prompt}`;
   if (assistantBlock && !externalEarly) {
     prompt = `${assistantBlock}\n\n${prompt}`;
   }
@@ -4211,7 +4219,7 @@ async function handlePrompt(
       });
     }
     await runExternalChat(ws, slot, external, {
-      text: userText,
+      text: clock ? `${clock}\n\n${userText}` : userText,
       images: safeImages,
       history: safeHistory,
       epoch: slot.epoch,
@@ -6406,6 +6414,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         // P9 计量：一条用户消息记一个 turn（排队也算——用户确实发了）；
         // 埋点在分发处而非 handlePrompt，pending 重放不会重复计数
         noteTurn(tenant.id, (message.text || "").length);
+        conn.clock = parseClientClock(message.clientTime) ?? conn.clock;
         await handlePrompt(
           ws,
           conn,

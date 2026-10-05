@@ -1331,6 +1331,15 @@ function LoginGate({
   );
 }
 
+/** prompt 在真正发出时才盖上本机时间和系统时区：离线攒在发件箱里的，按发出那一刻算 */
+function wire(message: ClientMessage) {
+  return JSON.stringify(
+    message.type === "prompt"
+      ? { ...message, clientTime: { now: Date.now(), tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" } }
+      : message,
+  );
+}
+
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
@@ -1728,7 +1737,7 @@ export default function ChatApp() {
     }
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+      ws.send(wire(message));
       return;
     }
     if (message.type === "hello") {
@@ -1745,7 +1754,7 @@ export default function ChatApp() {
     outboxRef.current = [];
     for (const message of pending) {
       if (message.type === "hello") continue;
-      ws.send(JSON.stringify(message));
+      ws.send(wire(message));
     }
   }, []);
 

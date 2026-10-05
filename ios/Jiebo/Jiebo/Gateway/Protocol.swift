@@ -327,6 +327,11 @@ enum ClientMessage {
                 object["history"] = .array(history.map { .object(["role": .string($0.role), "text": .string($0.text)]) })
             }
             if let turnId, !turnId.isEmpty { object["turnId"] = .string(turnId) }
+            // 编码即发送：取发出那一刻的本机时间和系统时区，助理换算“明天”“下周三”用
+            object["clientTime"] = .object([
+                "now": .number((Date().timeIntervalSince1970 * 1000).rounded()),
+                "tz": .string(TimeZone.current.identifier),
+            ])
             return .object(object)
         case .cancel(let chatId):
             return .object(["type": .string("cancel"), "chatId": .string(chatId)])
