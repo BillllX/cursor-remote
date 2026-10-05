@@ -603,6 +603,12 @@ struct SearchToolView: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    if store.searchTruncated, !store.searchLoading {
+                        Text("结果太多，只显示前 \(store.searchHits.count) 条。换个更具体的关键词试试。")
+                            .font(JieboFont.ui(13))
+                            .foregroundStyle(JieboColor.dim)
+                            .padding(16)
+                    }
                     if store.searchLoading {
                         ProgressView("正在搜索内容…")
                             .padding(16)

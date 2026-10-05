@@ -907,7 +907,7 @@ enum ServerMessage {
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
     case fileWritten(path: String, chatId: String?, error: String?)
     case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?, status: [String: String])
-    case searchHits(query: String, hits: [SearchHit], chatId: String?)
+    case searchHits(query: String, hits: [SearchHit], chatId: String?, truncated: Bool)
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
     /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
     case fileContent(
@@ -1161,7 +1161,8 @@ enum ServerMessage {
             return .searchHits(
                 query: object["query"]?.string ?? "",
                 hits: object["hits"]?.array?.compactMap(SearchHit.from) ?? [],
-                chatId: object["chatId"]?.string
+                chatId: object["chatId"]?.string,
+                truncated: object["truncated"]?.bool ?? false
             )
         case "file_content":
             let ticketRow = object["media"]?.object

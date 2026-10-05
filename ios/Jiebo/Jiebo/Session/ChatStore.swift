@@ -115,6 +115,8 @@ final class ChatStore {
     var loops: [String: LoopSnapshot] = [:]
     var searchQuery = ""
     var searchHits: [SearchHit] = []
+    /// 网关为了不超单条上限裁掉了一部分命中
+    var searchTruncated = false
     var searchLoading = false
     private var searchTask: Task<Void, Never>?
     private var searchEpoch = 0
@@ -274,6 +276,11 @@ final class ChatStore {
     /// P8 slim：每会话分页代际（单调递增，会话内不复用）。load_chat 携带、chat_turns 回显，
     /// 降级/重启分页后旧链迟到页凭 nonce 不匹配丢弃——成员资格守卫挡不住同步重注册（Kimi R2 M1）
     private var loadEpochs: [String: Int] = [:]
+    /// 分页请求的超时：每发一页重新计时，回包丢了不会让会话永远停在「加载中」
+    private var loadTimeouts: [String: Task<Void, Never>] = [:]
+    /// 连续超时次数，超过上限就停下等重连，不无限重发
+    private var loadTimeoutStreak: [String: Int] = [:]
+    private static let loadPageTimeout: Duration = .seconds(25)
     /// P8 slim：turns 未加载完就发了消息的会话——加载完成后必须补一次全量 sync，
     /// 否则加载期间的 sync（无 turns 键）会把 dirty 清掉，新 turn 永不落盘（Grok 评审 M2）
     private var localTurnsPendingSync = Set<String>()
@@ -1013,6 +1020,7 @@ final class ChatStore {
         notedCheckpointId = nil
         refreshCheckpoints()
         searchHits = []
+        searchTruncated = false
         if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             scheduleSearch()
         }
@@ -1080,7 +1088,62 @@ final class ChatStore {
             bodyRefreshes[chatId] = refresh
             refreshingChatIds.insert(chatId)
         }
-        send(.loadChat(chatId: chatId, from: nil, nonce: loadEpochs[chatId]))
+        sendLoadChat(chatId, from: nil)
+    }
+
+    /// 发一页 load_chat 并重新计时。超时按断线同一套规则作废这条分页链，换新 nonce 从末页重拉，
+    /// 迟到的旧页凭 nonce 丢弃，不会和新页拼在一起
+    private func sendLoadChat(_ chatId: String, from: Int?) {
+        let epoch = loadEpochs[chatId] ?? 0
+        send(.loadChat(chatId: chatId, from: from, nonce: epoch))
+        loadTimeouts[chatId]?.cancel()
+        loadTimeouts[chatId] = Task { [weak self] in
+            try? await Task.sleep(for: ChatStore.loadPageTimeout)
+            guard let self, !Task.isCancelled,
+                  self.loadingChatIds.contains(chatId),
+                  (self.loadEpochs[chatId] ?? 0) == epoch else { return }
+            self.loadTimeouts[chatId] = nil
+            self.abortTurnsLoad(chatId)
+            let streak = (self.loadTimeoutStreak[chatId] ?? 0) + 1
+            self.loadTimeoutStreak[chatId] = streak
+            // 回包迟迟不到多半是连接半死：先探活，断了会重连，重连后的 stored_state 会重启分页
+            self.client.probe()
+            if streak <= 2, self.client.isOpen {
+                self.ensureTurnsLoaded(chatId)
+            } else if chatId == self.activeId {
+                self.flash(self.client.isOpen ? "聊天记录加载超时，稍后切回这个会话再试" : "聊天记录加载超时，正在重连…")
+            }
+        }
+    }
+
+    private func clearLoadTimeout(_ chatId: String) {
+        loadTimeouts.removeValue(forKey: chatId)?.cancel()
+    }
+
+    /// 作废一条在途分页链：剥掉已 prepend 的页前缀（保留本地新发后缀），清掉加载与增量补齐状态。
+    /// 断线和分页超时共用；增量补齐没有并页，基线原样留着显示
+    private func abortTurnsLoad(_ id: String) {
+        clearLoadTimeout(id)
+        if loadingChatIds.contains(id), let index = chats.firstIndex(where: { $0.id == id }) {
+            let pageCount = loadedPageTurnCounts[id] ?? 0
+            if pageCount > 0, pageCount <= chats[index].turns.count {
+                chats[index].turns = Array(chats[index].turns.dropFirst(pageCount))
+            } else if pageCount > chats[index].turns.count {
+                chats[index].turns = []
+            }
+        }
+        loadingChatIds.remove(id)
+        loadedPageTurnCounts[id] = nil
+        bodyRefreshes[id] = nil
+        refreshingChatIds.remove(id)
+        loadStartRevs[id] = nil
+        loadStartSegs[id] = nil
+    }
+
+    /// App 回到前台：系统可能在后台掐掉了 socket 却没通知，先探活
+    func appBecameActive() {
+        guard started else { return }
+        client.probe()
     }
 
     /// 本地「活的」回合：补齐时以本地为准，不让服务端的旧副本盖掉
@@ -1204,7 +1267,7 @@ final class ChatStore {
         }
         if hasMore {
             bodyRefreshes[chatId] = refresh
-            send(.loadChat(chatId: chatId, from: from, nonce: loadEpochs[chatId])) // 继续向前翻 turns[..<from]
+            sendLoadChat(chatId, from: from) // 继续向前翻 turns[..<from]
         } else {
             finishRefresh(chatId, server: refresh.acc)
         }
@@ -1214,6 +1277,8 @@ final class ChatStore {
     /// 补齐期间本地新加的回合（不在基线里）也接在末尾
     private func finishRefresh(_ chatId: String, server: [Turn]) {
         let refresh = bodyRefreshes.removeValue(forKey: chatId)
+        clearLoadTimeout(chatId)
+        loadTimeoutStreak[chatId] = nil
         refreshingChatIds.remove(chatId)
         loadingChatIds.remove(chatId)
         loadedPageTurnCounts[chatId] = nil
@@ -2508,19 +2573,15 @@ final class ChatStore {
             // P8 slim：在途分页随断线丢失，loadingChatIds 不清会永久卡死加载（Grok 评审 M1）。
             // 重启分页必须剥掉已 prepend 的页前缀（保留本地新发后缀）：留着半截从末页重拉，
             // 服务端新增尾部会被去重逻辑当 fresh 插到数组头，顺序错乱
-            if !self.loadingChatIds.isEmpty {
-                for id in self.loadingChatIds {
-                    guard let index = self.chats.firstIndex(where: { $0.id == id }) else { continue }
-                    let pageCount = self.loadedPageTurnCounts[id] ?? 0
-                    if pageCount > 0, pageCount <= self.chats[index].turns.count {
-                        self.chats[index].turns = Array(self.chats[index].turns.dropFirst(pageCount))
-                    } else if pageCount > self.chats[index].turns.count {
-                        self.chats[index].turns = []
-                    }
-                }
-                self.loadingChatIds = []
-                self.loadedPageTurnCounts = [:]
+            for id in self.loadingChatIds {
+                self.abortTurnsLoad(id)
             }
+            self.loadingChatIds = []
+            self.loadedPageTurnCounts = [:]
+            for task in self.loadTimeouts.values { task.cancel() }
+            self.loadTimeouts = [:]
+            // 断线已经换了恢复路径（重连后 stored_state 重启分页），超时计数从头算
+            self.loadTimeoutStreak = [:]
             // 增量补齐没有并页，基线原样留着显示；重连后的 stored_state 会从末页重新补齐
             self.bodyRefreshes = [:]
             self.refreshingChatIds = []
@@ -3027,8 +3088,10 @@ final class ChatStore {
             chats[index].turns = fresh + chats[index].turns
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
             if hasMore {
-                send(.loadChat(chatId: chatId, from: from, nonce: loadEpochs[chatId])) // 继续向前翻 turns[..<from]
+                sendLoadChat(chatId, from: from) // 继续向前翻 turns[..<from]
             } else {
+                clearLoadTimeout(chatId)
+                loadTimeoutStreak[chatId] = nil
                 chats[index].turnsComplete = true
                 loadingChatIds.remove(chatId)
                 loadedPageTurnCounts[chatId] = nil
@@ -3191,11 +3254,12 @@ final class ChatStore {
                 treeTruncated = truncated
                 if query.isEmpty { gitStatus = status }
             }
-        case .searchHits(let query, let hits, let hitsChatId):
+        case .searchHits(let query, let hits, let hitsChatId, let truncated):
             if let hitsChatId, !hitsChatId.isEmpty, hitsChatId != activeId { break }
             let current = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
             guard query.trimmingCharacters(in: .whitespacesAndNewlines) == current else { break }
             searchHits = hits
+            searchTruncated = truncated
             searchLoading = false
         case .checkpoints(let id, let items):
             guard id.isEmpty || id == activeId else { break }
@@ -3343,11 +3407,13 @@ final class ChatStore {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if query.isEmpty {
             searchHits = []
+            searchTruncated = false
             searchLoading = false
             return
         }
         searchLoading = true
         searchHits = []
+        searchTruncated = false
         let chatId = activeId
         searchTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
@@ -3873,6 +3939,7 @@ final class ChatStore {
 
     /// 会话从列表消失（远端删除/全量替换取消分页）时清理其分页/暂存状态（Kimi 评审 MINOR5）
     private func dropChatState(_ id: String) {
+        clearLoadTimeout(id)
         loadingChatIds.remove(id)
         loadedPageTurnCounts[id] = nil
         pendingHistory[id] = nil
@@ -4065,6 +4132,9 @@ final class ChatStore {
         deletedIds.removeAll()
         loadingChatIds = []
         loadedPageTurnCounts = [:]
+        for task in loadTimeouts.values { task.cancel() }
+        loadTimeouts = [:]
+        loadTimeoutStreak = [:]
         loadEpochs = [:]
         localTurnsPendingSync = []
         // 本机缓存：换账号清掉旧租户的（登出时 tenantId 已清空，由 logout 整体清），在途读写作废
@@ -4106,6 +4176,7 @@ final class ChatStore {
         searchTask?.cancel()
         searchQuery = ""
         searchHits = []
+        searchTruncated = false
         searchLoading = false
         suppressContentDiscard = true
         closeContentLayer()
@@ -4407,27 +4478,50 @@ final class ChatStore {
         guard !token.isEmpty else { return }
         let tenantAtStart = tenantId
         stateFetchTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(300))
-            guard let self, !Task.isCancelled else { return }
-            do {
-                var request = URLRequest(url: GatewayConfig.stateURL)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                request.timeoutInterval = 60
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard (200 ..< 300).contains((response as? HTTPURLResponse)?.statusCode ?? 0) else { return }
-                let json = try JSONValue.parse(data)
-                guard let object = json.object else { return }
-                // 跨租户/登出后的迟到结果直接丢
+            // 首次 300ms 去抖；失败后按 2s、5s、15s 退避重试。网络错误和 5xx 才重试，4xx 重试也没用
+            let delays: [Duration] = [.milliseconds(300), .seconds(2), .seconds(5), .seconds(15)]
+            for (attempt, delay) in delays.enumerated() {
+                try? await Task.sleep(for: delay)
+                guard let self, !Task.isCancelled else { return }
+                let outcome = await Self.fetchState(token: token)
                 guard !Task.isCancelled, self.tenantId == tenantAtStart else { return }
-                self.applyStoredState(
-                    rows: object["chats"]?.array ?? [],
-                    rev: object["rev"]?.int,
-                    deleted: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
-                    chatRevs: object["chatRevs"]?.intMap
-                )
-            } catch {
-                // 静默：下次状态变更网关还会再推 deferred
+                switch outcome {
+                case .success(let object):
+                    self.applyStoredState(
+                        rows: object["chats"]?.array ?? [],
+                        rev: object["rev"]?.int,
+                        deleted: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
+                        chatRevs: object["chatRevs"]?.intMap
+                    )
+                    return
+                case .retryable where attempt < delays.count - 1:
+                    continue
+                case .retryable, .fatal:
+                    if self.unlocked { self.flash("会话列表没同步下来，请检查网络后重新打开 App") }
+                    return
+                }
             }
+        }
+    }
+
+    private enum StateFetchOutcome {
+        case success([String: JSONValue])
+        case retryable
+        case fatal
+    }
+
+    private nonisolated static func fetchState(token: String) async -> StateFetchOutcome {
+        var request = URLRequest(url: GatewayConfig.stateURL)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200 ..< 300).contains(status) else { return status >= 500 || status == 0 ? .retryable : .fatal }
+            guard let object = try JSONValue.parse(data).object else { return .fatal }
+            return .success(object)
+        } catch {
+            return .retryable
         }
     }
 

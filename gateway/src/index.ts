@@ -594,7 +594,130 @@ function loadDotEnv(files: string[]) {
 }
 
 function reply(ws: WebSocket, message: ServerMessage) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+  if (ws.readyState !== WebSocket.OPEN) return;
+  const frame = frameFor(ws, message);
+  if (frame !== null) ws.send(frame);
+}
+
+/**
+ * 出站最后一道护栏：单条消息超过该连接声明的接收上限时按类型裁剪，裁不动就丢弃并记日志。
+ * 超限的消息发出去，iOS 会以「消息太长」断线，重连后又请求同一份数据，陷入断线循环。
+ */
+function frameFor(sock: WebSocket, message: ServerMessage): string | null {
+  const text = JSON.stringify(message);
+  const limit = conns.get(sock)?.maxMessageBytes ?? 0;
+  // UTF-16 码元数 ×3 一定不小于 UTF-8 字节数，小消息不必逐字节计算
+  if (limit <= 0 || text.length * 3 <= limit) return text;
+  const bytes = Buffer.byteLength(text);
+  if (bytes <= limit) return text;
+  const fitted = shrinkMessage(message, Math.floor(limit * 0.85));
+  if (fitted) {
+    const next = JSON.stringify(fitted);
+    if (Buffer.byteLength(next) <= limit) {
+      console.log("frame clipped", message.type, bytes, "->", Buffer.byteLength(next));
+      return next;
+    }
+  }
+  console.warn("frame dropped", message.type, bytes, ">", limit);
+  return null;
+}
+
+function shrinkMessage(message: ServerMessage, budget: number): ServerMessage | null {
+  if (message.type === "file_content") return fitFileContent(message, budget);
+  if (message.type === "search_hits") return fitSearchHits(message, budget);
+  if (message.type === "history") return { ...message, turns: fitTurnsFromEnd(message.turns, budget, 40) as HistoryTurn[] };
+  if (message.type === "files") {
+    const { paths, status, truncated, ...base } = message;
+    const overhead = Buffer.byteLength(JSON.stringify({ ...base, truncated: true }));
+    const fitted = fitWorkspaceFiles({ paths, status: status || {}, truncated: Boolean(truncated) }, budget / 0.8, overhead);
+    return { ...message, ...fitted };
+  }
+  // 这几类客户端会落盘、回推，截过的正文可能被当成真内容；上游各自有 deferred / 分页护栏
+  if (message.type === "stored_state" || message.type === "stored_chat" || message.type === "chat_turns") return null;
+  // 其余（工具结果、快照等）只用于展示：逐级截短长字符串，保住消息本身，客户端状态不会卡住
+  for (const cap of [64 * 1024, 16 * 1024, 4 * 1024, 1024]) {
+    const clipped = clipLongStrings(message, cap) as ServerMessage;
+    if (Buffer.byteLength(JSON.stringify(clipped)) <= budget) return clipped;
+  }
+  return null;
+}
+
+function clipLongStrings(value: unknown, cap: number): unknown {
+  if (typeof value === "string") return value.length > cap ? `${value.slice(0, cap)}…（过长已截断）` : value;
+  if (Array.isArray(value)) return value.map((item) => clipLongStrings(item, cap));
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value)) out[key] = clipLongStrings(item, cap);
+    return out;
+  }
+  return value;
+}
+
+/** 截到 JSON 编码后不超过 maxBytes（转义后的字节，不是原文长度），不拆代理对 */
+function clipJsonString(text: string, maxBytes: number): string {
+  if (maxBytes <= 2) return "";
+  const full = Buffer.byteLength(JSON.stringify(text));
+  if (full <= maxBytes) return text;
+  let n = Math.floor((text.length * maxBytes) / full);
+  while (n > 0) {
+    const code = text.charCodeAt(n - 1);
+    if (code >= 0xd800 && code <= 0xdbff) n -= 1;
+    if (Buffer.byteLength(JSON.stringify(text.slice(0, n))) <= maxBytes) break;
+    n = Math.floor(n * 0.9);
+  }
+  return text.slice(0, Math.max(0, n));
+}
+
+const CLIPPED_NOTE = "\n\n…（内容过长，这台设备只显示前一部分，完整版见网页端）";
+
+type FileContentMessage = Extract<ServerMessage, { type: "file_content" }>;
+
+/**
+ * 有 url 的（svg、markdown、html、canvas）去掉正文，客户端改走 HTTP 拉；
+ * 纯文本和 diff 截短正文；其余没有 url 的半截就是坏文档，直接报太大
+ */
+function fitFileContent(message: FileContentMessage, budget: number): FileContentMessage {
+  if (message.url) return { ...message, content: undefined, truncated: true };
+  if (typeof message.content !== "string") return message;
+  if (!message.diff && message.kind && message.kind !== "text") {
+    const size = message.size ?? Buffer.byteLength(message.content);
+    return { ...message, content: undefined, error: `文件太大（${formatBytes(size)}），这台设备打不开`, truncated: true };
+  }
+  const overhead = Buffer.byteLength(JSON.stringify({ ...message, content: CLIPPED_NOTE, truncated: true }));
+  return { ...message, content: clipJsonString(message.content, budget - overhead) + CLIPPED_NOTE, truncated: true };
+}
+
+type SearchHitsMessage = Extract<ServerMessage, { type: "search_hits" }>;
+
+function fitSearchHits(message: SearchHitsMessage, budget: number): SearchHitsMessage {
+  let used = Buffer.byteLength(JSON.stringify({ ...message, hits: [], truncated: true }));
+  const hits: SearchHitsMessage["hits"] = [];
+  for (const hit of message.hits) {
+    const row = hit.text.length > 400 ? { ...hit, text: `${hit.text.slice(0, 400)}…` } : hit;
+    const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
+    if (used + cost > budget) break;
+    hits.push(row);
+    used += cost;
+  }
+  return { ...message, hits, truncated: true };
+}
+
+/** 从最后一条往前装，条数和字节双上限；单条超预算先按 load_chat 的规则截短 */
+function fitTurnsFromEnd(all: unknown[], budget: number, maxCount: number): unknown[] {
+  const page: unknown[] = [];
+  let bytes = 0;
+  for (let i = all.length - 1; i >= 0 && page.length < maxCount; i -= 1) {
+    let turn = all[i];
+    let size = Buffer.byteLength(JSON.stringify(turn));
+    if (size > budget) {
+      turn = clipTurnForPage(turn, budget);
+      size = Buffer.byteLength(JSON.stringify(turn));
+    }
+    if (bytes + size > budget) break;
+    page.unshift(turn);
+    bytes += size;
+  }
+  return page;
 }
 
 function send(ws: WebSocket, message: ServerMessage) {
@@ -615,7 +738,8 @@ function send(ws: WebSocket, message: ServerMessage) {
   // 流式事件跟当前 owner。应答仍回发起连接，避免翻页或写文件被另一台设备抢走。
   const owner = isStreamEvent(message.type) && slot?.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   const sock = owner || (ws.readyState === WebSocket.OPEN ? ws : null);
-  if (sock) sock.send(JSON.stringify(out));
+  const frame = sock ? frameFor(sock, out) : null;
+  if (sock && frame !== null) sock.send(frame);
   if (slot && isStreamEvent(message.type)) mirrorRun(slot, message.type === "done");
 }
 
@@ -1608,13 +1732,23 @@ ${pieces.join("\n\n")}
 ${prompt}`;
 }
 
+/** 续接时 prompt 前面拼了此前对话摘录（attachReseedContext），回放时只留「当前请求」之后的部分 */
+function unwrapReseedPrompt(text: string): string {
+  const mark = "\n\n当前请求：\n";
+  if (!text.startsWith("以下是同一工作区里此前的对话摘录")) return text;
+  const at = text.lastIndexOf(mark);
+  return at >= 0 ? text.slice(at + mark.length) : text;
+}
+
 function conversationToTurns(conv: unknown[], roster?: ReviewBinding[]): HistoryTurn[] {
   const out: HistoryTurn[] = [];
-  for (const item of conv) {
-    if (!isRecord(item) || item.type === "shellConversationTurn") continue;
+  for (const raw of conv) {
+    if (!isRecord(raw) || raw.type === "shellConversationTurn") continue;
+    // SDK 1.x：{ type: "agentConversationTurn", turn: { userMessage, steps } }；旧格式字段直接在顶层
+    const item = isRecord(raw.turn) ? raw.turn : raw;
     const user =
       isRecord(item.userMessage) && typeof item.userMessage.text === "string"
-        ? item.userMessage.text
+        ? unwrapReseedPrompt(item.userMessage.text)
         : "";
     const steps = Array.isArray(item.steps) ? item.steps : [];
     let assistant = "";
@@ -1659,9 +1793,14 @@ function conversationToTurns(conv: unknown[], roster?: ReviewBinding[]): History
   return out;
 }
 
+/**
+ * 只给落盘里没有任何回合的会话补回 SDK 历史。客户端按用户原文配对合并，而 SDK 记下的
+ * 用户消息带着网关拼的规则和说明，配不上的回合会整批插到前面，落盘有正文时只会造成重复。
+ */
 async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
   const agentId = slot.agentId;
   if (!agentId) return;
+  if (diskChatTurns(conn.tenant, slot.chatId).length > 0) return;
   try {
     const listed = await Agent.listRuns(agentId, {
       runtime: "local",
@@ -1680,7 +1819,11 @@ async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
       if (turns.length >= 40) break;
     }
     if (turns.length) {
-      send(ws, { type: "history", chatId: slot.chatId, turns: turns.slice(-40) });
+      // 与 load_chat 同口径：条数 40、字节为接收上限的 80%（不限的连接按 800KB）
+      const declared = conn.maxMessageBytes;
+      const budget = declared > 0 ? Math.floor(declared * 0.8) : 800 * 1024;
+      const page = fitTurnsFromEnd(turns, budget, 40) as HistoryTurn[];
+      if (page.length) send(ws, { type: "history", chatId: slot.chatId, turns: page });
     }
   } catch {
     // History is best-effort; local store may not have runs yet.
@@ -2062,14 +2205,7 @@ function sendCheckpoints(ws: WebSocket, slot: Slot) {
 function pushWorkspace(ws: WebSocket, slot: Slot, conn: Conn, paths: string[] = []) {
   const cwd = cwdOf(conn, slot);
   const listed = listWorkspaceFilesForClient(cwd, "");
-  send(ws, {
-    type: "files",
-    chatId: slot.chatId,
-    query: "",
-    paths: listed.paths,
-    status: listed.status,
-    truncated: listed.truncated,
-  });
+  send(ws, filesMessage(conn, { chatId: slot.chatId, query: "" }, listed));
   const unique = [...new Set(paths.filter(Boolean))];
   for (const path of unique) {
     const file = readWorkspaceFile(cwd, path);
@@ -2958,6 +3094,46 @@ function rankWorkspaceFiles(paths: string[], status: Record<string, string>, que
     : [...dirty.filter((path) => filtered.includes(path)), ...rest];
   const sliced = ranked.slice(0, 8000);
   return { paths: sliced, status, truncated: ranked.length > sliced.length };
+}
+
+/**
+ * files 回包按连接声明的单条上限裁剪（limit = 0 不限，网页端原样）。
+ * 路径按排名从前往后装，装不下就停；status 只保留实际发出的路径和已删除项，
+ * 否则 8000 条路径之外的 git 状态会单独把一条消息撑过 iOS 的 1MiB 帧上限。
+ */
+function fitWorkspaceFiles(listed: WorkspaceFiles, limit: number, overhead: number): WorkspaceFiles {
+  if (limit <= 0) return listed;
+  const budget = Math.floor(limit * 0.8) - overhead;
+  const status: Record<string, string> = {};
+  let used = 64;
+  for (const [path, letter] of Object.entries(listed.status)) {
+    if (letter !== "D") continue;
+    const cost = Buffer.byteLength(JSON.stringify(path)) + letter.length + 4;
+    if (used + cost > budget) break;
+    status[path] = letter;
+    used += cost;
+  }
+  const paths: string[] = [];
+  for (const path of listed.paths) {
+    const key = Buffer.byteLength(JSON.stringify(path));
+    const letter = listed.status[path];
+    const cost = key + 1 + (letter ? key + letter.length + 4 : 0);
+    if (used + cost > budget) break;
+    paths.push(path);
+    if (letter) status[path] = letter;
+    used += cost;
+  }
+  return { paths, status, truncated: listed.truncated || paths.length < listed.paths.length };
+}
+
+function filesMessage(
+  conn: Conn | undefined,
+  base: { chatId?: string; query: string; mention?: boolean },
+  listed: WorkspaceFiles,
+): ServerMessage {
+  const overhead = Buffer.byteLength(JSON.stringify({ type: "files", ...base, truncated: true }));
+  const fitted = fitWorkspaceFiles(listed, conn?.maxMessageBytes ?? 0, overhead);
+  return { type: "files", ...base, paths: fitted.paths, status: fitted.status, truncated: fitted.truncated };
 }
 
 function parseSearchHits(raw: string): { path: string; line: number; text: string }[] {
@@ -5848,15 +6024,10 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           ? cwdOf(conn, slotOf(conn, message.chatId))
           : conn.cwd;
         const listed = listWorkspaceFilesForClient(cwd, message.query || "");
-        send(ws, {
-          type: "files",
-          chatId: message.chatId,
-          query: message.query || "",
-          paths: listed.paths,
-          status: listed.status,
-          mention: Boolean(message.mention),
-          truncated: listed.truncated,
-        });
+        send(
+          ws,
+          filesMessage(conn, { chatId: message.chatId, query: message.query || "", mention: Boolean(message.mention) }, listed),
+        );
         return;
       }
 

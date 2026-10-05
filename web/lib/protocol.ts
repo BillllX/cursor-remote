@@ -402,7 +402,7 @@ export type ServerMessage =
     }
   | { type: "policy"; policy: PolicyId; chatId?: string }
   | { type: "files"; query: string; paths: string[]; status?: Record<string, string>; mention?: boolean; truncated?: boolean; chatId?: string }
-  | { type: "search_hits"; query: string; hits: SearchHit[]; chatId?: string }
+  | { type: "search_hits"; query: string; hits: SearchHit[]; chatId?: string; truncated?: boolean }
   | {
       type: "file_content";
       path: string;
@@ -419,6 +419,8 @@ export type ServerMessage =
       /** 原样回显 read_file 的 reqId / sha；请求没带就没有这个键 */
       reqId?: string;
       sha?: string;
+      /** 超过连接声明的单条上限：有 url 时去掉了 content（客户端走 HTTP），否则 content 被截短 */
+      truncated?: boolean;
     }
   // 一轮结束时的文件清单，只发给发起这一轮的连接；同一份也写进 turn.files 落盘
   | { type: "turn_files"; chatId: string; turnId: string; files: TurnFile[] }
