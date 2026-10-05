@@ -705,8 +705,13 @@ struct ComposerView: View {
                 moreMenu
             }
             Spacer(minLength: 8)
+            // 聚焦后输入框上的长按说话会被键盘盖住，没字可发时给一个点按的话筒
+            if !canSendNow || dictation.active {
+                micButton
+            }
             sendCluster(enabled: canSendNow)
         }
+        .animation(JieboMotion.snappy(reduceMotion), value: canSendNow)
         .background {
             GeometryReader { geo in
                 Color.clear
