@@ -1048,8 +1048,11 @@ private struct TurnView: View, Equatable {
                             VStack(alignment: .leading, spacing: 10) {
                                 ForEach(Array(inline.parts.enumerated()), id: \.offset) { _, part in
                                     if part.text.contains(where: { !$0.isWhitespace }) {
-                                        ChunkedAssistantMessage(text: linkMentions(part.text))
-                                            .equatable()
+                                        StreamingAssistantText(
+                                            text: part.text,
+                                            live: turn.running,
+                                            transform: linkMentions
+                                        )
                                     }
                                     if !part.files.isEmpty {
                                         TurnFileCards(
@@ -1061,8 +1064,11 @@ private struct TurnView: View, Equatable {
                                 }
                             }
                         } else {
-                            ChunkedAssistantMessage(text: linkMentions(turn.assistant))
-                                .equatable()
+                            StreamingAssistantText(
+                                text: turn.assistant,
+                                live: turn.running,
+                                transform: linkMentions
+                            )
                         }
                         if turn.mode == .plan, !turn.running, !turn.queued {
                             Button("执行这个计划") { store.applyPlan(turn.id) }
@@ -1730,6 +1736,45 @@ struct AttachmentViewer: View {
             width: min(max(value.width, -maxX), maxX),
             height: min(max(value.height, -maxY), maxY)
         )
+    }
+}
+
+/// 流式时每个 token 都会改 text；排版（含 @路径改链接）最多每 100ms 一次，停下立刻排完整版
+private struct StreamingAssistantText: View {
+    let text: String
+    let live: Bool
+    let transform: @MainActor (String) -> String
+
+    @State private var rendered: String?
+    @State private var latest = ""
+    @State private var flush: Task<Void, Never>?
+
+    var body: some View {
+        ChunkedAssistantMessage(text: live ? (rendered ?? transform(text)) : transform(text))
+            .equatable()
+            .onAppear {
+                latest = text
+                if live { rendered = transform(text) }
+            }
+            .onChange(of: text) { _, value in
+                latest = value
+                guard live, flush == nil else { return }
+                flush = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    guard !Task.isCancelled else { return }
+                    rendered = transform(latest)
+                    flush = nil
+                }
+            }
+            .onChange(of: live) { _, isLive in
+                flush?.cancel()
+                flush = nil
+                rendered = isLive ? transform(latest) : nil
+            }
+            .onDisappear {
+                flush?.cancel()
+                flush = nil
+            }
     }
 }
 
