@@ -9,7 +9,7 @@ import UIKit
 ///  （Workbench 已是 NSV，modal 里再套会列宽塌缩/toolbar 跑错栏）
 /// - 右栏复用 P5 预览管线：单击文件走 store.openPreview（写 previewTabs），
 ///   关掉 cover 后工作台 overlay 停在最后浏览的文件——有意的连续性，与 FileBrowserSheet 眼睛按钮一致
-/// - compact 宽度（Stage Manager 窄窗/Slide Over）退化单栏：点文件 dismiss + 预览面板接管
+/// - compact 宽度（Stage Manager 窄窗/Slide Over）退化单栏：点文件整页换成预览，左上「文件」回到目录
 struct FileBrowserCover: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -30,7 +30,14 @@ struct FileBrowserCover: View {
         @Bindable var store = store
         NavigationStack {
             Group {
-                if store.activePreviewTab != nil {
+                if sizeClass != .compact {
+                    HStack(spacing: 0) {
+                        treeColumn
+                            .frame(width: 340)
+                        Divider().overlay(JieboColor.line)
+                        rightPane
+                    }
+                } else if store.activePreviewTab != nil {
                     VStack(spacing: 0) {
                         HStack {
                             Button {
