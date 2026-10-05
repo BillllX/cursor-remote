@@ -22,6 +22,20 @@ struct WorkbenchView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var workbenchWidth: CGFloat = 0
+
+    /// 预览分栏宽：窗口的四成，夹在 420–600
+    private var previewColumnWidth: CGFloat {
+        min(max(workbenchWidth * 0.4, 420), 600)
+    }
+
+    /// 侧栏（或收起后的图标栏）和预览栏都放下后，对话区还剩 400 以上才分栏；否则预览照旧盖满
+    private var previewSplit: Bool {
+        let side: CGFloat = columnVisibility == .detailOnly ? 56 : 300
+        return workbenchWidth - side - previewColumnWidth >= 400
+    }
+
+    private var previewOverlaid: Bool { store.previewPanelOpen && !previewSplit }
 
     var body: some View {
         Group {
@@ -84,13 +98,31 @@ struct WorkbenchView: View {
             .navigationSplitViewStyle(.balanced)
             // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
             .toolbar(removing: .sidebarToggle)
+            // 预览盖满时，底下的侧栏和对话不再让 VoiceOver 摸到；分栏时两边都能摸
+            .accessibilityHidden(previewOverlaid)
+            if previewSplit, store.previewPanelOpen, let tab = store.activePreviewTab {
+                Divider().overlay(JieboColor.line)
+                PreviewPanelView(tab: tab)
+                    .frame(width: previewColumnWidth)
+                    .frame(maxHeight: .infinity)
+                    .background(JieboColor.white)
+                    .transition(.move(edge: .trailing))
+            }
         }
-        // 预览层盖满时，底下的侧栏和对话不再让 VoiceOver 摸到
-        .accessibilityHidden(store.previewPanelOpen)
-        // 预览盖住侧栏和对话（与 PhoneWorkbench 同一写法），不再占右侧一栏
+        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen && previewSplit)
+        .background {
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { workbenchWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, width in
+                        if abs(width - workbenchWidth) > 1 { workbenchWidth = width }
+                    }
+            }
+        }
+        // 竖屏、窄窗放不下分栏：预览盖住侧栏和对话（与 PhoneWorkbench 同一写法）
         .overlay {
             ZStack {
-                if store.previewPanelOpen, let tab = store.activePreviewTab {
+                if previewOverlaid, let tab = store.activePreviewTab {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
                         .onTapGesture { store.collapsePreview() }
