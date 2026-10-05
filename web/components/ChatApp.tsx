@@ -5880,13 +5880,13 @@ export default function ChatApp() {
                   ))}
                 </div>
                 <div className="theme-label">配色</div>
-                <div className="theme-list" role="listbox" aria-label="配色">
+                <div className="theme-list" role="radiogroup" aria-label="配色">
                   {PALETTES.map((item) => (
                     <button
                       key={item.id}
                       type="button"
-                      role="option"
-                      aria-selected={themeChoice?.palette === item.id}
+                      role="radio"
+                      aria-checked={themeChoice?.palette === item.id}
                       aria-label={`${item.name}，${item.note}`}
                       className={`theme-card${themeChoice?.palette === item.id ? " on" : ""}`}
                       onClick={() =>
