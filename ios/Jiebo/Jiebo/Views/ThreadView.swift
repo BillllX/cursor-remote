@@ -2097,7 +2097,7 @@ private struct ProseLines: View {
                 .font(proseFont(heading?.level))
                 .foregroundStyle(JieboColor.ink)
                 .tint(JieboColor.pine)
-                .textSelection(.enabled)
+                // 不逐行开 textSelection：整条消息已有长按菜单（复制/重新生成/分享），一行一个会抢掉它
                 .multilineTextAlignment(.leading)
                 // 竖向只按自己的折行高度占位：被压矮时行尾出省略号、下一行叠上来
                 .fixedSize(horizontal: false, vertical: true)
@@ -2195,7 +2195,6 @@ private struct HairlineTable: View {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
             }
         }
         .padding(.vertical, 7)
