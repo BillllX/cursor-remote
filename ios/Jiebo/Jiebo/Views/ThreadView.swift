@@ -1983,6 +1983,126 @@ private struct CodeBlockView: View {
     }
 }
 
+/// 行内 **加粗** 用 AttributedString。若再套 SwiftUI `.font()`，混排字重时行高会算矮，下一行叠上来。
+private enum ProseInline {
+    enum Kind {
+        case body
+        case heading(level: Int)
+        case tableHeader
+        case tableMono
+        case tableBody
+    }
+
+    static func attributed(_ text: String, sizeCategory: ContentSizeCategory, kind: Kind) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        guard var result = try? AttributedString(markdown: text, options: options) else {
+            var plain = AttributedString(text)
+            applyFonts(to: &plain, sizeCategory: sizeCategory, kind: kind)
+            return plain
+        }
+        applyFonts(to: &result, sizeCategory: sizeCategory, kind: kind)
+        return result
+    }
+
+    private static func applyFonts(
+        to attr: inout AttributedString,
+        sizeCategory: ContentSizeCategory,
+        kind: Kind
+    ) {
+        let point = scaledPoint(baseSize(for: kind), sizeCategory: sizeCategory)
+        for run in attr.runs {
+            var container = AttributeContainer()
+            container.font = font(for: run, pointSize: point, kind: kind)
+            attr[run.range].mergeAttributes(container)
+        }
+        if attr.runs.isEmpty, !String(attr.characters).isEmpty {
+            var container = AttributeContainer()
+            container.font = baseFont(pointSize: point, kind: kind)
+            attr.mergeAttributes(container)
+        }
+    }
+
+    private static func baseSize(for kind: Kind) -> CGFloat {
+        switch kind {
+        case .body: return 16
+        case .heading(let level): return headingSize(level)
+        case .tableHeader, .tableMono: return 12
+        case .tableBody: return 16
+        }
+    }
+
+    private static func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: return 22
+        case 2: return 19
+        case 3: return 16
+        case 4: return 15
+        default: return 15
+        }
+    }
+
+    private static func scaledPoint(_ base: CGFloat, sizeCategory: ContentSizeCategory) -> CGFloat {
+        let metrics = UIFontMetrics(forTextStyle: .body)
+        let trait = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(sizeCategory))
+        return metrics.scaledValue(for: base, compatibleWith: trait)
+    }
+
+    private static func font(for run: AttributedString.Runs.Element, pointSize: CGFloat, kind: Kind) -> UIFont {
+        let intent = run.inlinePresentationIntent
+        if intent?.contains(.code) == true {
+            return .monospacedSystemFont(ofSize: pointSize * 0.94, weight: .regular)
+        }
+        if intent?.contains(.stronglyEmphasized) == true {
+            return emphasisFont(pointSize: pointSize, kind: kind)
+        }
+        if intent?.contains(.emphasized) == true {
+            let base = baseFont(pointSize: pointSize, kind: kind)
+            var traits = base.fontDescriptor.symbolicTraits
+            traits.insert(.traitItalic)
+            if let desc = base.fontDescriptor.withSymbolicTraits(traits) {
+                return UIFont(descriptor: desc, size: pointSize)
+            }
+            return base
+        }
+        return baseFont(pointSize: pointSize, kind: kind)
+    }
+
+    private static func baseFont(pointSize: CGFloat, kind: Kind) -> UIFont {
+        switch kind {
+        case .body, .tableBody:
+            return .systemFont(ofSize: pointSize, weight: .regular)
+        case .heading(let level):
+            if level <= 2 {
+                return UIFont(name: "Songti SC Bold", size: pointSize)
+                    ?? .systemFont(ofSize: pointSize, weight: .bold)
+            }
+            return .systemFont(ofSize: pointSize, weight: .semibold)
+        case .tableHeader:
+            return .systemFont(ofSize: pointSize, weight: .medium)
+        case .tableMono:
+            return .monospacedSystemFont(ofSize: pointSize, weight: .regular)
+        }
+    }
+
+    private static func emphasisFont(pointSize: CGFloat, kind: Kind) -> UIFont {
+        switch kind {
+        case .body, .tableBody:
+            return .systemFont(ofSize: pointSize, weight: .semibold)
+        case .heading(let level) where level <= 2:
+            return UIFont(name: "Songti SC Bold", size: pointSize)
+                ?? .systemFont(ofSize: pointSize, weight: .bold)
+        case .heading:
+            return .systemFont(ofSize: pointSize, weight: .bold)
+        case .tableHeader:
+            return .systemFont(ofSize: pointSize, weight: .semibold)
+        case .tableMono:
+            return .monospacedSystemFont(ofSize: pointSize, weight: .semibold)
+        }
+    }
+}
+
 /// 按原文逐行排。整段 Markdown 会把单个换行和行首空格吃掉。
 private struct ProseLines: View {
     @Environment(\.sizeCategory) private var sizeCategory
@@ -2083,7 +2203,13 @@ private struct ProseLines: View {
         let body = String(expanded.dropFirst(indent))
         let heading = headingLevel(of: body)
         let item = listItem(of: body)
-        return HStack(alignment: .firstTextBaseline, spacing: 0) {
+        let headingInfo = heading
+        let display = item?.rest ?? headingInfo?.rest ?? body
+        let inlineKind: ProseInline.Kind = {
+            if let level = headingInfo?.level { return .heading(level: level) }
+            return .body
+        }()
+        return HStack(alignment: .top, spacing: 0) {
             if indent > 0 {
                 Color.clear.frame(width: CGFloat(indent) * 8)
             }
@@ -2092,17 +2218,17 @@ private struct ProseLines: View {
                     .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.dim)
                     .frame(width: 22, alignment: .leading)
+                    .padding(.top, 2)
             }
-            Text(Self.inline(item?.rest ?? heading?.rest ?? body))
-                .font(proseFont(heading?.level))
+            Text(ProseInline.attributed(display, sizeCategory: sizeCategory, kind: inlineKind))
                 .foregroundStyle(JieboColor.ink)
                 .tint(JieboColor.pine)
                 // 不逐行开 textSelection：整条消息已有长按菜单（复制/重新生成/分享），一行一个会抢掉它
                 .multilineTextAlignment(.leading)
-                // 竖向只按自己的折行高度占位：被压矮时行尾出省略号、下一行叠上来
+                // 竖向只按自己的折行高度占位；字重已写进 AttributedString，勿再套 .font()
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func listItem(of line: String) -> (marker: String, rest: String)? {
@@ -2125,28 +2251,6 @@ private struct ProseLines: View {
         return (marks, String(rest.dropFirst()))
     }
 
-    private func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: return 22
-        case 2: return 19
-        case 3: return 16
-        case 4: return 15
-        default: return 15
-        }
-    }
-
-    private func proseFont(_ level: Int?) -> Font {
-        guard let level else { return JieboFont.uiScaled(16, sizeCategory: sizeCategory) }
-        if level <= 2 { return JieboFont.display(headingSize(level)) }
-        return JieboFont.uiScaled(headingSize(level), sizeCategory: sizeCategory, weight: .semibold)
-    }
-
-    fileprivate static func inline(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
-    }
 }
 
 /// 对话里的 Markdown 表。表头比单元格更淡，文件名用等宽，行与行之间只留发丝线。
@@ -2186,10 +2290,12 @@ private struct HairlineTable: View {
     }
 
     private func row(_ cells: [String], header: Bool, last: Bool) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 18) {
+        HStack(alignment: .top, spacing: 18) {
             ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
-                Text(ProseLines.inline(cell))
-                    .font(font(index: index, header: header))
+                let kind: ProseInline.Kind = header
+                    ? .tableHeader
+                    : (index == 0 ? .tableMono : .tableBody)
+                Text(ProseInline.attributed(cell, sizeCategory: sizeCategory, kind: kind))
                     .foregroundStyle(color(index: index, header: header))
                     .tracking(header ? 0.4 : 0)
                     .multilineTextAlignment(.leading)
@@ -2205,12 +2311,6 @@ private struct HairlineTable: View {
                     .frame(height: header ? 1 : 0.5)
             }
         }
-    }
-
-    private func font(index: Int, header: Bool) -> Font {
-        if header { return JieboFont.uiScaled(12, sizeCategory: sizeCategory, weight: .medium) }
-        if index == 0 { return JieboFont.monoScaled(12, sizeCategory: sizeCategory) }
-        return JieboFont.uiScaled(16, sizeCategory: sizeCategory)
     }
 
     private func color(index: Int, header: Bool) -> Color {
