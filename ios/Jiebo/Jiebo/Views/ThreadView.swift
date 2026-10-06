@@ -422,7 +422,7 @@ struct ThreadView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                     }
-                    let allTurns = store.active?.turns ?? []
+                    let allTurns = Turn.uniqued(store.active?.turns ?? [])
                     let renderLimit = renderedTurnLimit(for: store.activeId, total: allTurns.count)
                     let hiddenCount = max(0, allTurns.count - renderLimit)
                     let turns = Array(allTurns.suffix(renderLimit))
@@ -896,7 +896,8 @@ private struct TurnView: View, Equatable {
 
     /// .embedded 下 memory_* / chat_search 整张不渲染；其它端原样
     private var visibleTools: [ToolCall] {
-        embedded ? turn.tools.filter { !AssistantToolText.isSilent($0) } : turn.tools
+        let tools = ToolCall.uniqued(turn.tools)
+        return embedded ? tools.filter { !AssistantToolText.isSilent($0) } : tools
     }
 
     private var processTools: [ToolCall] {
@@ -2098,6 +2099,8 @@ private struct ProseLines: View {
                 .tint(JieboColor.pine)
                 .textSelection(.enabled)
                 .multilineTextAlignment(.leading)
+                // 竖向只按自己的折行高度占位：被压矮时行尾出省略号、下一行叠上来
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -2190,6 +2193,7 @@ private struct HairlineTable: View {
                     .foregroundStyle(color(index: index, header: header))
                     .tracking(header ? 0.4 : 0)
                     .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }

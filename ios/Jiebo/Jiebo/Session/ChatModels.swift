@@ -356,6 +356,48 @@ struct Turn: Identifiable, Hashable {
         }
         return next
     }
+
+    /// 同一个 id 只留一条：位置取第一次出现，内容取最后一次（较新）。
+    /// 对话列表按 id 做 ForEach，id 重复时 SwiftUI 的复用是未定义的，轮次会叠在一起、错位
+    static func uniqued(_ turns: [Turn]) -> [Turn] {
+        var position: [String: Int] = [:]
+        position.reserveCapacity(turns.count)
+        var out: [Turn] = []
+        out.reserveCapacity(turns.count)
+        for turn in turns {
+            if let at = position[turn.id] {
+                out[at] = turn
+            } else {
+                position[turn.id] = out.count
+                out.append(turn)
+            }
+        }
+        return out
+    }
+
+    static func hasDuplicateIds(_ turns: [Turn]) -> Bool {
+        var seen = Set<String>()
+        seen.reserveCapacity(turns.count)
+        return turns.contains { !seen.insert($0.id).inserted }
+    }
+}
+
+extension ToolCall {
+    /// 同一轮里 callId 只留一张卡：位置取第一次出现，内容取最后一次
+    static func uniqued(_ tools: [ToolCall]) -> [ToolCall] {
+        var position: [String: Int] = [:]
+        var out: [ToolCall] = []
+        out.reserveCapacity(tools.count)
+        for tool in tools {
+            if let at = position[tool.callId] {
+                out[at] = tool
+            } else {
+                position[tool.callId] = out.count
+                out.append(tool)
+            }
+        }
+        return out
+    }
 }
 
 struct ChatSession: Identifiable, Hashable {

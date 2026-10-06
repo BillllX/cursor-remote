@@ -206,7 +206,8 @@ enum ChatCache {
             }
             turns.append(contentsOf: rows.compactMap(Turn.from))
         }
-        guard turns.count == manifest.count, turns.last?.id == manifest.lastTurnId else {
+        // 服务端正文里 id 不会重复；缓存里有重复说明存进来时本地已经合乱了，作废重拉
+        guard turns.count == manifest.count, turns.last?.id == manifest.lastTurnId, !Turn.hasDuplicateIds(turns) else {
             try? FileManager.default.removeItem(at: dir)
             return nil
         }

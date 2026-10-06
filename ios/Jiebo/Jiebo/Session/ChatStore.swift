@@ -1331,7 +1331,8 @@ final class ChatStore {
         let baseIds = Set((refresh?.base ?? []).map(\.id))
         // 有待回推的本地回合时，基线里服务端没有的回合也留着（可能就是本地发的、还没落盘）
         let keepLocal = localTurnsPendingSync.contains(chatId)
-        var result = server
+        // 基线前缀和补来的页是直接拼的：接缝判断错一次就会同一轮出现两遍
+        var result = Turn.uniqued(server)
         var position: [String: Int] = [:]
         for (offset, turn) in result.enumerated() { position[turn.id] = offset }
         for turn in chats[index].turns {
@@ -1420,6 +1421,7 @@ final class ChatStore {
                   !self.hasLocalPriority(chatId),
                   !self.inflightChatIds.contains(chatId),
                   let rev = self.chatRevs[chatId], self.bodyRevs[chatId] == rev,
+                  !Turn.hasDuplicateIds(chat.turns),
                   !chat.turns.contains(where: { turn in
                       ChatStore.isLiveTurn(turn)
                           || turn.extra["clipped"]?.bool == true
