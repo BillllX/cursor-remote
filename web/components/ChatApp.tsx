@@ -110,6 +110,8 @@ type Chat = {
   checkpoints?: CheckpointInfo[];
   /** 网关给的最后一条摘要；正文没加载时侧栏和搜索用它 */
   preview?: string;
+  /** 最近一次开始或结束回复的时间（毫秒）；侧栏按它给工作区排序、显示“几分钟前” */
+  touchedAt?: number;
 };
 
 /**
@@ -1108,6 +1110,18 @@ function fmtRelative(epochMs: number) {
   return `${Math.floor(seconds / 86_400)} 天前`;
 }
 
+/** 侧栏里用的短相对时间：刚刚 / 5 分 / 3 时 / 2 天 / 10月3日 */
+function fmtAgo(epochMs?: number, long = false) {
+  if (!epochMs || !(epochMs > 0)) return "";
+  const seconds = Math.max(0, (Date.now() - epochMs) / 1000);
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} ${long ? "分钟前" : "分"}`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} ${long ? "小时前" : "时"}`;
+  if (seconds < 86_400 * 7) return `${Math.floor(seconds / 86_400)} ${long ? "天前" : "天"}`;
+  const d = new Date(epochMs);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
 function fmtClock(epochMs: number) {
   if (!(epochMs > 0)) return "";
   return new Date(epochMs).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
@@ -1341,6 +1355,9 @@ const CHATS_KEY = "cursor-remote-chats";
 const DELETED_KEY = "cursor-remote-deleted";
 const TOKEN_KEY = "cursor-remote-token";
 const RECENT_KEY = "cursor-remote-recent";
+const GROUPS_KEY = "cursor-remote-groups";
+/** 侧栏“更多工作区”最多直接列几个，其余去“新对话”浮层里搜 */
+const MORE_GROUPS_SHOWN = 8;
 /** hello 携带的客户端标识（P2 协议护栏，网关可据此区分客户端与版本） */
 const HELLO_CLIENT: HelloClient = {
   name: "cursor-remote-web",
@@ -1564,6 +1581,13 @@ export default function ChatApp() {
   const [workspaceIndex, setWorkspaceIndex] = useState(0);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  /** 侧栏里“更多工作区”（还没有对话的）是否展开 */
+  const [moreOpen, setMoreOpen] = useState(false);
+  /** 工作区分组头上打开的“···”菜单；记目录路径 */
+  const [groupMenu, setGroupMenu] = useState<{ path: string; name: string } | null>(null);
+  const groupMenuRef = useRef<{ path: string; name: string } | null>(null);
+  groupMenuRef.current = groupMenu;
+  const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
   const [unlocked, setUnlocked] = useState(false);
   /** null = 还没读本地令牌；true = 有上次登录的令牌，先进主界面、后台自动登录，网关拒绝或退出登录才回登录页 */
@@ -1798,10 +1822,14 @@ export default function ChatApp() {
     }
     const groups = [...byPath.values()].map((group) => {
       const user = Boolean(group.user) || sameCwd(group.path, root);
-      return { ...group, user, name: user ? assistantName : group.name };
+      const touched = group.chats.reduce((max, chat) => Math.max(max, chat.touchedAt || 0), 0);
+      return { ...group, user, touched, name: user ? assistantName : group.name };
     });
     // USER 根目录只承载助理会话，由侧栏置顶入口代替，不进工作区分组
-    return groups.filter((group) => !group.user && (!root || !sameCwd(group.path, root)));
+    return groups
+      .filter((group) => !group.user && (!root || !sameCwd(group.path, root)))
+      // 最近动过的工作区排前面；没有时间的保持原来的顺序（sort 是稳定的）
+      .sort((a, b) => b.touched - a.touched);
   }, [assistantName, sidebarChats, workspaces, workspaceRoot, cwd]);
 
   const duplicateGroupNames = useMemo(() => {
@@ -1820,9 +1848,16 @@ export default function ChatApp() {
     [menuWorkspaces, workspaceRoot],
   );
 
-  // 侧栏只列有对话的工作区（外加当前所在的）；空工作区从“新对话”浮层里选，工作区再多也不会把侧栏撑满
+  // 侧栏主区只列有对话的工作区（外加当前所在的）；没对话的收进底部“更多工作区”，工作区再多也不会把侧栏撑满
   const sidebarGroups = useMemo(
     () => workspaceGroups.filter((group) => group.chats.length || sameCwd(group.path, cwd)),
+    [workspaceGroups, cwd],
+  );
+  const moreGroups = useMemo(
+    () =>
+      workspaceGroups
+        .filter((group) => !group.chats.length && !sameCwd(group.path, cwd))
+        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
     [workspaceGroups, cwd],
   );
 
@@ -1831,13 +1866,20 @@ export default function ChatApp() {
     const q = workspaceQuery.trim().toLowerCase();
     const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
     const counts = new Map(workspaceGroups.map((group) => [normPath(group.path), group.chats.length]));
+    const touchedBy = new Map(workspaceGroups.map((group) => [normPath(group.path), group.touched]));
+    const names = new Map<string, number>();
+    for (const item of otherMenuWorkspaces) names.set(item.name, (names.get(item.name) || 0) + 1);
     return otherMenuWorkspaces
       .filter((item) => !q || item.name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q))
       .map((item) => ({
         ...item,
         recent: recent.has(normPath(item.path)),
         chats: counts.get(normPath(item.path)) || 0,
-      }));
+        touched: touchedBy.get(normPath(item.path)) || 0,
+        // 重名的工作区必须带路径才分得清
+        dup: (names.get(item.name) || 0) > 1,
+      }))
+      .sort((a, b) => Number(b.recent) - Number(a.recent) || b.touched - a.touched);
   }, [workspaceQuery, recentWorkspaces, workspaceGroups, otherMenuWorkspaces]);
   const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
   const workspaceExact = workspaceChoices.some(
@@ -3382,8 +3424,75 @@ export default function ChatApp() {
     });
   }, [previewTabs, previewPath, patchActive]);
 
+  // 会话开始或结束回复时记一下时间：侧栏按它给工作区排序、显示“几分钟前”
+  const runSeenRef = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    const seen = runSeenRef.current;
+    const stamp = new Set<string>();
+    for (const chat of chats) {
+      const run = chat.turns.some((turn) => turn.running);
+      const before = seen.get(chat.id);
+      seen.set(chat.id, run);
+      if (before !== undefined && before !== run && chat.id !== "boot") stamp.add(chat.id);
+    }
+    if (!stamp.size) return;
+    const now = Date.now();
+    setChats((prev) => {
+      const next = prev.map((chat) => (stamp.has(chat.id) ? { ...chat, touchedAt: now } : chat));
+      chatsRef.current = next;
+      return next;
+    });
+  }, [chats]);
+
+  // 侧栏的“几分钟前”每分钟重算一次；页面在后台时不走
+  const [, setClockTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") setClockTick((n) => n + 1);
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 侧栏分组的展开状态记在本机，刷新后保持
+  useEffect(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(GROUPS_KEY) || "{}") as { open?: unknown; more?: unknown };
+      if (Array.isArray(raw.open)) {
+        setExpandedGroups(new Set(raw.open.filter((item): item is string => typeof item === "string")));
+      }
+      if (raw.more === true) setMoreOpen(true);
+    } catch {
+      // 坏数据忽略
+    }
+    setGroupPrefsReady(true);
+  }, []);
+  useEffect(() => {
+    if (!groupPrefsReady) return;
+    try {
+      localStorage.setItem(
+        GROUPS_KEY,
+        JSON.stringify({ open: [...expandedGroups].slice(0, 200), more: moreOpen }),
+      );
+    } catch {
+      // 存不下就算了
+    }
+  }, [groupPrefsReady, expandedGroups, moreOpen]);
+
+  // 分组“···”菜单：点菜单外面就关
+  useEffect(() => {
+    if (!groupMenu) return;
+    const onDown = (event: MouseEvent) => {
+      const node = event.target;
+      if (node instanceof Element && node.closest(".chat-group-menu, .chat-group-act")) return;
+      setGroupMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [groupMenu]);
+
   const layerSeqRef = useRef<Record<string, number>>({});
   const layerOpen: Record<string, boolean> = {
+    groupMenu: groupMenu != null,
     admin: adminOpen,
     workspace: workspaceMenuOpen,
     palette: paletteOpen,
@@ -3413,6 +3522,15 @@ export default function ChatApp() {
       if (event.key === "Escape") {
         // 同时开着几层时先关最后打开的那层；打开时间一样时按这里的先后
         const layers: [string, boolean, () => void][] = [
+          [
+            "groupMenu",
+            groupMenuRef.current != null,
+            () => {
+              const path = groupMenuRef.current?.path;
+              setGroupMenu(null);
+              if (path) focusGroupTrigger(path);
+            },
+          ],
           ["admin", adminOpenRef.current, () => setAdminOpen(false)],
           [
             "workspace",
@@ -4002,6 +4120,7 @@ export default function ChatApp() {
       cwd: next,
       confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
+      touchedAt: Date.now(),
     };
     setChats((prev) => [chat, ...prev]);
     autoPickedIdRef.current = "";
@@ -5043,6 +5162,60 @@ export default function ChatApp() {
     });
   }
 
+  /** 关掉分组菜单后把焦点还给它的“···”按钮，键盘用户不会掉到页面开头 */
+  function focusGroupTrigger(path: string) {
+    window.setTimeout(() => {
+      const all = document.querySelectorAll<HTMLElement>("[data-group-trigger]");
+      for (const node of all) {
+        if (sameCwd(node.dataset.groupTrigger, path)) {
+          node.focus();
+          return;
+        }
+      }
+    }, 0);
+  }
+
+  function copyPath(path: string) {
+    const clip = navigator.clipboard;
+    if (!clip?.writeText) {
+      setNotice("复制失败");
+      return;
+    }
+    void clip.writeText(path).then(
+      () => setNotice("已复制路径"),
+      () => setNotice("复制失败"),
+    );
+  }
+
+  /** 清空某个工作区下的全部对话（目录和文件不动）。有对话在跑时不处理，免得误伤。 */
+  function clearWorkspaceChats(path: string, name: string) {
+    const ids = chatsRef.current
+      .filter((chat) => !isAssistantChat(chat.id) && chat.id !== "boot" && sameCwd(chat.cwd || workspaceRoot, path))
+      .map((chat) => chat.id);
+    if (!ids.length) {
+      setNotice("这个工作区里没有对话");
+      return;
+    }
+    if (chatsRef.current.some((chat) => ids.includes(chat.id) && chat.turns.some((turn) => turn.running))) {
+      setNotice("有对话正在运行，先停掉再清空");
+      return;
+    }
+    if (!window.confirm(`清空「${name}」下的 ${ids.length} 个对话？\n只删对话，目录里的文件不动，删除后不能恢复。`)) {
+      return;
+    }
+    // 当前打开的最后删：它被删时才会切到别的会话，前面删的都不会影响选中项
+    const current = activeIdRef.current;
+    const order = [...ids.filter((id) => id !== current), ...ids.filter((id) => id === current)];
+    let removed = 0;
+    for (const id of order) {
+      deleteChat(id);
+      // 有未保存的修改时 deleteChat 会让用户取消，没删成就别往下删了，也别报“已清空”
+      if (!deletedIdsRef.current.has(id)) break;
+      removed += 1;
+    }
+    setNotice(removed === ids.length ? `已清空 ${ids.length} 个对话` : `已删除 ${removed} 个，其余因有未保存的修改保留`);
+  }
+
   function deleteChat(id: string) {
     if (isAssistantChat(id)) return;
     const stored = draftsByChatRef.current[id] || {};
@@ -5083,6 +5256,7 @@ export default function ChatApp() {
         confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
       };
+      chatsRef.current = [chat];
       setChats([chat]);
       autoPickedIdRef.current = chat.id;
       setActiveId(chat.id);
@@ -5632,12 +5806,16 @@ export default function ChatApp() {
                       <span className="workspace-choice-name">
                         <Highlight text={item.name} query={workspaceQuery} />
                       </span>
-                      {(relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
+                      {item.dup || (relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
                         <span className="workspace-choice-path">{relToCwd(item.path, workspaceRoot) || item.path}</span>
                       ) : null}
                     </span>
                     {sameCwd(item.path, cwd) ? <span className="workspace-choice-tag">当前</span> : null}
-                    {item.chats ? <span className="workspace-choice-count">{item.chats} 个对话</span> : null}
+                    {item.chats ? (
+                      <span className="workspace-choice-count">
+                        {item.chats} 个对话{item.touched ? ` · ${fmtAgo(item.touched, true)}` : ""}
+                      </span>
+                    ) : null}
                   </button>
                 </Fragment>
               ))}
@@ -6210,7 +6388,9 @@ export default function ChatApp() {
         </div>
         <div className="chats">
           {sidebarGroups.length ? null : (
-            <div className="chats-empty">还没有对话。点“新对话”选一个工作区开始。</div>
+            <div className="chats-empty">
+              {moreGroups.length ? "还没有对话。点“新对话”，或展开下面的“更多工作区”开始。" : "还没有对话。点“新对话”选一个工作区开始。"}
+            </div>
           )}
           {sidebarGroups.map((group) => {
             const key = normPath(group.path);
@@ -6218,10 +6398,12 @@ export default function ChatApp() {
             const open = holdsActive || expandedGroups.has(key);
             return (
             <div key={group.path} className="chat-group">
+              <div className={`chat-group-head${groupMenu && sameCwd(groupMenu.path, group.path) ? " menu-open" : ""}`}>
               <button
                 type="button"
                 className={`chat-group-label${open ? " open" : ""}${holdsActive ? " locked" : ""}`}
                 title={group.path}
+                aria-expanded={group.chats.length ? open : undefined}
                 onClick={() => {
                   if (!group.chats.length) {
                     startChatIn(group.path);
@@ -6240,17 +6422,98 @@ export default function ChatApp() {
                 <FolderMark className="chat-group-folder" />
                 <span className="chat-group-name">{group.name}</span>
                 {duplicateGroupNames.has(group.name) ? (
-                  <span className="chat-group-path">{group.path}</span>
+                  <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
                 ) : null}
                 {group.chats.some((chat) => chat.turns.some((turn) => turn.running)) ? (
-                  <span className="chat-group-live" />
+                  <span className="chat-group-live" title="有对话在运行" />
                 ) : null}
-                {group.chats.length ? (
-                  <span className="chat-group-count">{group.chats.length}</span>
-                ) : (
-                  <span className="chat-group-count">+</span>
-                )}
+                <span className="chat-group-meta">
+                  {group.touched ? <span className="chat-group-time">{fmtAgo(group.touched)}</span> : null}
+                  {group.chats.length ? <span className="chat-group-count">{group.chats.length}</span> : null}
+                </span>
               </button>
+              <div className="chat-group-actions">
+                <button
+                  type="button"
+                  className="chat-group-act"
+                  title={`在「${group.name}」新建对话`}
+                  aria-label={`在「${group.name}」新建对话`}
+                  onClick={() => startChatIn(group.path)}
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  className="chat-group-act"
+                  title="更多"
+                  aria-label={`「${group.name}」的更多操作`}
+                  aria-haspopup="menu"
+                  data-group-trigger={group.path}
+                  aria-expanded={Boolean(groupMenu && sameCwd(groupMenu.path, group.path))}
+                  onClick={() =>
+                    setGroupMenu((cur) => (cur && sameCwd(cur.path, group.path) ? null : { path: group.path, name: group.name }))
+                  }
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                    <circle cx="3" cy="8" r="1.4" fill="currentColor" />
+                    <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                    <circle cx="13" cy="8" r="1.4" fill="currentColor" />
+                  </svg>
+                </button>
+              </div>
+              {groupMenu && sameCwd(groupMenu.path, group.path) ? (
+                <div
+                  className="chat-group-menu"
+                  role="menu"
+                  aria-label={`「${group.name}」的操作`}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+                    event.preventDefault();
+                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+                    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+                    const step = event.key === "ArrowDown" ? 1 : -1;
+                    items[(at + step + items.length) % items.length]?.focus();
+                  }}
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    autoFocus
+                    onClick={() => {
+                      setGroupMenu(null);
+                      startChatIn(group.path);
+                    }}
+                  >
+                    新对话
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setGroupMenu(null);
+                      copyPath(group.path);
+                      focusGroupTrigger(group.path);
+                    }}
+                  >
+                    复制路径
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="danger"
+                    disabled={!group.chats.length}
+                    onClick={() => {
+                      setGroupMenu(null);
+                      clearWorkspaceChats(group.path, group.name);
+                    }}
+                  >
+                    清空对话{group.chats.length ? `（${group.chats.length}）` : ""}
+                  </button>
+                </div>
+              ) : null}
+              </div>
               {open ? group.chats.map((chat) => (
             <div
               key={chat.id}
@@ -6292,6 +6555,7 @@ export default function ChatApp() {
                   ) : chat.unread ? (
                     <span className="chat-mark unread">新</span>
                   ) : null}
+                  {chat.touchedAt ? <span className="chat-item-time">{fmtAgo(chat.touchedAt)}</span> : null}
                 </button>
               )}
               <button
@@ -6311,6 +6575,45 @@ export default function ChatApp() {
             </div>
             );
           })}
+          {moreGroups.length ? (
+            <div className="chat-more">
+              <button
+                type="button"
+                className={`chat-more-toggle${moreOpen ? " open" : ""}`}
+                aria-expanded={moreOpen}
+                onClick={() => setMoreOpen((open) => !open)}
+              >
+                <span className="chat-group-chevron" aria-hidden="true" />
+                <span className="chat-more-title">更多工作区</span>
+                <span className="chat-group-count">{moreGroups.length}</span>
+              </button>
+              {moreOpen ? (
+                <div className="chat-more-list">
+                  {moreGroups.slice(0, MORE_GROUPS_SHOWN).map((group) => (
+                    <button
+                      key={group.path}
+                      type="button"
+                      className="chat-more-item"
+                      title={`${group.path}\n点一下在这里开始新对话`}
+                      onClick={() => startChatIn(group.path)}
+                    >
+                      <FolderMark className="chat-group-folder" />
+                      <span className="chat-group-name">{group.name}</span>
+                      {duplicateGroupNames.has(group.name) ? (
+                        <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
+                      ) : null}
+                      <span className="chat-more-hint" aria-hidden="true">新对话</span>
+                    </button>
+                  ))}
+                  {moreGroups.length > MORE_GROUPS_SHOWN ? (
+                    <button type="button" className="chat-more-all" onClick={openNewChatMenu}>
+                      查看全部 {moreGroups.length} 个…
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <button
           type="button"

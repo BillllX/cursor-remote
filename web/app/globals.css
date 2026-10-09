@@ -6423,3 +6423,314 @@ nextjs-portal {
     animation: none;
   }
 }
+
+/* ===== 侧栏工作区管理：分组头、会话行、更多工作区 ===== */
+.chat-group {
+  gap: 2px;
+}
+
+.chat-group-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.chat-group-head .chat-group-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  min-height: 32px;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+
+.chat-group-head .chat-group-label:hover {
+  background: var(--hover);
+}
+
+.chat-group-meta {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-group-meta .chat-group-count {
+  margin-left: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  text-align: center;
+  line-height: 18px;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.chat-group-time {
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--dim);
+}
+
+.chat-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.chat-group-act {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.chat-group-act:hover,
+.chat-group-act[aria-expanded="true"] {
+  background: var(--hover-strong);
+  color: var(--text);
+}
+
+.chat-group-menu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% - 2px);
+  right: 4px;
+  min-width: 156px;
+  display: grid;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-float);
+}
+
+.chat-group-menu button {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-group-menu button:hover:not(:disabled),
+.chat-group-menu button:focus-visible {
+  background: var(--hover-strong);
+}
+
+.chat-group-menu button.danger {
+  color: var(--danger);
+}
+
+.chat-group-menu button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 会话行：标题 + 右侧相对时间；时间在悬停时让位给删除按钮 */
+.chats .chat-item {
+  position: relative;
+}
+
+.chat-item-title {
+  flex: 0 1 auto;
+}
+
+.chat-item-time {
+  flex: none;
+  margin-left: auto;
+  min-width: 28px;
+  text-align: right;
+  font-size: var(--fs-2xs);
+  font-weight: 400;
+  color: var(--dim);
+}
+
+/* 更多工作区：没有对话的工作区收在这里，点一下就在里面开新对话 */
+.chat-more {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-more-toggle,
+.chat-more-item,
+.chat-more-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 2px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-more-toggle:hover,
+.chat-more-item:hover,
+.chat-more-all:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.chat-more-toggle.open .chat-group-chevron {
+  transform: rotate(90deg);
+}
+
+.chat-more-title {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-more-toggle .chat-group-count {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+}
+
+.chat-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.chat-more-item {
+  padding-left: 28px;
+}
+
+.chat-more-hint {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--fs-2xs);
+  color: var(--accent);
+  opacity: 0;
+}
+
+.chat-more-item:hover .chat-more-hint,
+.chat-more-item:focus-visible .chat-more-hint {
+  opacity: 1;
+}
+
+.chat-more-all {
+  padding-left: 28px;
+  color: var(--accent);
+}
+
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  /* 纯鼠标设备：会话行压矮（≤1366px 宽时原来是 72px），× 叠在时间上，悬停才出现 */
+  .chats {
+    gap: 2px;
+  }
+
+  .chat-group {
+    padding-bottom: 6px;
+  }
+
+  .chats .chat-item {
+    min-height: 36px;
+    padding: 2px 8px;
+    gap: 6px;
+    font-size: var(--fs-base);
+  }
+
+  .chats .chat-item .chat-item-main {
+    min-height: 32px;
+  }
+}
+
+/* 纯鼠标设备（没有任何触摸输入）才用“悬停出现”的叠加布局，混合设备按触屏处理 */
+@media (hover: hover) and (pointer: fine) and (not (any-pointer: coarse)) {
+  .chats .chat-item .chat-item-x {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .chats .chat-item:hover .chat-item-time,
+  .chats .chat-item:focus-within .chat-item-time {
+    opacity: 0;
+  }
+
+  /* 分组头的操作按钮叠在右侧，悬停、键盘聚焦或菜单打开时才出现，同时让开时间和个数 */
+  .chat-group-actions {
+    position: absolute;
+    right: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .chat-group-act {
+    width: 26px;
+    height: 26px;
+  }
+
+  .chat-group-head:hover .chat-group-actions,
+  .chat-group-head:has(:focus-visible) .chat-group-actions,
+  .chat-group-head.menu-open .chat-group-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chat-group-head:hover .chat-group-meta,
+  .chat-group-head:has(:focus-visible) .chat-group-meta,
+  .chat-group-head.menu-open .chat-group-meta {
+    opacity: 0;
+  }
+}
+
+@media (pointer: coarse) {
+  /* 触屏：分组头的按钮一直在，会话行比原来的 72px 矮一些，分组之间也收紧 */
+  .chats {
+    gap: 4px;
+  }
+
+  .chat-group {
+    padding-bottom: 8px;
+  }
+
+  .chats .chat-item {
+    min-height: 56px;
+    padding: 6px 12px;
+  }
+
+  .chat-group-head .chat-group-label {
+    min-height: 44px;
+  }
+
+  .chat-group-act {
+    width: 44px;
+    height: 44px;
+  }
+
+  .chat-group-meta .chat-group-time {
+    display: none;
+  }
+}
