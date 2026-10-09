@@ -5,6 +5,28 @@ import UserNotifications
 // 抽屉里 push 出去的页面（规格 §4.3）。都没有输入框（同一时刻只能挂载一个 ComposerView）。
 // 这些页面不改 store.activeId，也不调用 select。
 
+// MARK: 待办与日程
+
+struct AssistantTodayScreen: View {
+    @Environment(ChatStore.self) private var store
+
+    init() {}
+
+    var body: some View {
+        ScrollView {
+            // 待批在行动区和待处理里，委派在委派记录里
+            AssistantTodayPane(showsApprovals: false, showsDelegations: false)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(JieboColor.paper)
+        .navigationTitle("待办与日程")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { store.requestAssistant() }
+        .task { store.requestAssistant() }
+    }
+}
+
 // MARK: 委派记录
 
 struct DelegationListScreen: View {
