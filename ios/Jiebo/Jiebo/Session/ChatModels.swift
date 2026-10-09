@@ -419,6 +419,13 @@ struct ChatSession: Identifiable, Hashable {
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
 
+    /// 最近一次开始或结束回复的时间（毫秒 epoch）。网页端同名字段，存在 extra 里随元数据回传；
+    /// 侧栏据它给工作区排序、显示「几分钟前」
+    var touchedAt: Double? {
+        get { extra["touchedAt"]?.number }
+        set { extra["touchedAt"] = newValue.map { JSONValue.number($0) } }
+    }
+
     static let knownKeys: Set<String> = [
         "id", "title", "turns", "agentId", "draft", "model", "mode", "cwd", "unread", "confirmWrites", "policy",
         // segHashes 是服务端段哈希，ChatStore 单独记，不进 extra，免得随 sync 回传

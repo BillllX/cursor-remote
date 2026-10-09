@@ -6734,3 +6734,9 @@ nextjs-portal {
     display: none;
   }
 }
+
+/* 更多工作区里的行：和分组头共用“悬停出现 ···”的布局 */
+.chat-more-row .chat-more-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}

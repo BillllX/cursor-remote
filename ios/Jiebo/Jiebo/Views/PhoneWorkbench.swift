@@ -334,6 +334,9 @@ private struct PhoneDrawer: View {
                     .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if !live, let touched = chat.touchedAt {
+                    AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
+                }
                 if live {
                     Text("跑")
                         .font(JieboFont.text(.caption2, weight: .medium))

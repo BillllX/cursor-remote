@@ -1116,6 +1116,9 @@ private struct TurnView: View, Equatable {
             if turn.running, turn.assistant.isEmpty {
                 ShimmerText(text: turn.task?.nilIfEmpty ?? "开始动手", font: JieboFont.text(.subheadline))
             }
+            if turn.running, isLastAssistant {
+                StallHintRow()
+            }
             if !captured.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(captured) { receipt in
@@ -2717,6 +2720,33 @@ private struct StartAtBottom: ViewModifier {
             content.defaultScrollAnchor(.bottom, for: .initialOffset)
         } else {
             content
+        }
+    }
+}
+
+
+/// 一段时间没有新输出时的提示：4 秒起「仍在处理…」，15 秒起带秒数并给一个停止按钮（对齐网页）。
+/// 单独成 View，只有它读 store.stallSeconds，每秒刷新不影响整条对话。
+struct StallHintRow: View {
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        let seconds = store.stallSeconds
+        if seconds >= 4 {
+            HStack(spacing: 8) {
+                Text(seconds >= 15 ? "仍在处理… 已 \(seconds) 秒没有新输出" : "仍在处理…")
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+                    .monospacedDigit()
+                if seconds >= 15 {
+                    Button("停止") { store.stop() }
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        .tint(JieboColor.clay)
+                }
+            }
+            .accessibilityElement(children: .combine)
         }
     }
 }

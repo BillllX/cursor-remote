@@ -3250,6 +3250,37 @@ export default function ChatApp() {
           setWorkspaceNameDraft("");
           startChatInRef.current(message.path);
           break;
+        case "workspace_renamed": {
+          // 网关已把会话的目录改到新路径；本地先照改，再拉一次存档对齐版本号
+          const move = (path?: string) =>
+            path && inWorkspaceRoot(path, message.from) ? message.path + path.slice(message.from.length) : path;
+          setChats((prev) => {
+            const next = prev.map((chat) => (chat.cwd && move(chat.cwd) !== chat.cwd ? { ...chat, cwd: move(chat.cwd) } : chat));
+            chatsRef.current = next;
+            return next;
+          });
+          setCwd((prev) => move(prev) || prev);
+          setExpandedGroups((prev) => {
+            const from = normPath(message.from);
+            const next = new Set([...prev].map((key) => (key === from ? normPath(message.path) : key)));
+            return next;
+          });
+          setNotice(`已改名为「${message.name}」`);
+          send({ type: "load_state" });
+          break;
+        }
+        case "workspace_removed":
+          setExpandedGroups((prev) => {
+            const next = new Set(prev);
+            next.delete(normPath(message.path));
+            return next;
+          });
+          setNotice(
+            message.mode === "deleted"
+              ? `已删除工作区「${message.name}」`
+              : `「${message.name}」里有文件，已从列表隐藏（文件没动）`,
+          );
+          break;
         default:
           break;
       }
@@ -5175,6 +5206,107 @@ export default function ChatApp() {
     }, 0);
   }
 
+  /** 是不是根目录下的一级工作区：只有这些能改名、删除 */
+  function isTopLevelWorkspace(path: string) {
+    const rel = relToCwd(path, workspaceRoot);
+    return Boolean(rel) && !rel.includes("/") && !rel.startsWith(".") && rel !== path;
+  }
+
+  function renameWorkspacePrompt(path: string, name: string) {
+    const next = window.prompt(`把工作区「${name}」改名为：`, name)?.trim();
+    if (!next || next === name) return;
+    send({ type: "rename_workspace", path, name: next });
+  }
+
+  function deleteWorkspaceConfirm(path: string, name: string) {
+    const ok = window.confirm(
+      `删除工作区「${name}」？\n目录是空的会直接删掉；里面有文件的只从列表里隐藏，文件不动（以后同名新建就能找回）。`,
+    );
+    if (ok) send({ type: "delete_workspace", path });
+  }
+
+  /** 工作区的“···”菜单：侧栏分组头和“更多工作区”共用 */
+  function groupMenuNode(path: string, name: string, chatCount: number) {
+    const manage = isTopLevelWorkspace(path);
+    return (
+      <div
+        className="chat-group-menu"
+        role="menu"
+        aria-label={`「${name}」的操作`}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+          const at = items.indexOf(document.activeElement as HTMLButtonElement);
+          const step = event.key === "ArrowDown" ? 1 : -1;
+          items[(at + step + items.length) % items.length]?.focus();
+        }}
+      >
+        <button
+          type="button"
+          role="menuitem"
+          autoFocus
+          onClick={() => {
+            setGroupMenu(null);
+            startChatIn(path);
+          }}
+        >
+          新对话
+        </button>
+        {manage ? (
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setGroupMenu(null);
+              renameWorkspacePrompt(path, name);
+            }}
+          >
+            重命名…
+          </button>
+        ) : null}
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => {
+            setGroupMenu(null);
+            copyPath(path);
+            focusGroupTrigger(path);
+          }}
+        >
+          复制路径
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          className="danger"
+          disabled={!chatCount}
+          onClick={() => {
+            setGroupMenu(null);
+            clearWorkspaceChats(path, name);
+          }}
+        >
+          清空对话{chatCount ? `（${chatCount}）` : ""}
+        </button>
+        {manage ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            disabled={chatCount > 0}
+            title={chatCount > 0 ? "里面还有对话，先清空对话" : "空目录直接删除，有文件的只隐藏"}
+            onClick={() => {
+              setGroupMenu(null);
+              deleteWorkspaceConfirm(path, name);
+            }}
+          >
+            删除工作区…
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
   function copyPath(path: string) {
     const clip = navigator.clipboard;
     if (!clip?.writeText) {
@@ -6463,56 +6595,7 @@ export default function ChatApp() {
                   </svg>
                 </button>
               </div>
-              {groupMenu && sameCwd(groupMenu.path, group.path) ? (
-                <div
-                  className="chat-group-menu"
-                  role="menu"
-                  aria-label={`「${group.name}」的操作`}
-                  onKeyDown={(event) => {
-                    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-                    event.preventDefault();
-                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
-                    const at = items.indexOf(document.activeElement as HTMLButtonElement);
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    items[(at + step + items.length) % items.length]?.focus();
-                  }}
-                >
-                  <button
-                    type="button"
-                    role="menuitem"
-                    autoFocus
-                    onClick={() => {
-                      setGroupMenu(null);
-                      startChatIn(group.path);
-                    }}
-                  >
-                    新对话
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setGroupMenu(null);
-                      copyPath(group.path);
-                      focusGroupTrigger(group.path);
-                    }}
-                  >
-                    复制路径
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="danger"
-                    disabled={!group.chats.length}
-                    onClick={() => {
-                      setGroupMenu(null);
-                      clearWorkspaceChats(group.path, group.name);
-                    }}
-                  >
-                    清空对话{group.chats.length ? `（${group.chats.length}）` : ""}
-                  </button>
-                </div>
-              ) : null}
+              {groupMenu && sameCwd(groupMenu.path, group.path) ? groupMenuNode(group.path, group.name, group.chats.length) : null}
               </div>
               {open ? group.chats.map((chat) => (
             <div
@@ -6590,20 +6673,44 @@ export default function ChatApp() {
               {moreOpen ? (
                 <div className="chat-more-list">
                   {moreGroups.slice(0, MORE_GROUPS_SHOWN).map((group) => (
-                    <button
+                    <div
                       key={group.path}
-                      type="button"
-                      className="chat-more-item"
-                      title={`${group.path}\n点一下在这里开始新对话`}
-                      onClick={() => startChatIn(group.path)}
+                      className={`chat-group-head chat-more-row${groupMenu && sameCwd(groupMenu.path, group.path) ? " menu-open" : ""}`}
                     >
-                      <FolderMark className="chat-group-folder" />
-                      <span className="chat-group-name">{group.name}</span>
-                      {duplicateGroupNames.has(group.name) ? (
-                        <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
-                      ) : null}
-                      <span className="chat-more-hint" aria-hidden="true">新对话</span>
-                    </button>
+                      <button
+                        type="button"
+                        className="chat-more-item"
+                        title={`${group.path}\n点一下在这里开始新对话`}
+                        onClick={() => startChatIn(group.path)}
+                      >
+                        <FolderMark className="chat-group-folder" />
+                        <span className="chat-group-name">{group.name}</span>
+                        {duplicateGroupNames.has(group.name) ? (
+                          <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
+                        ) : null}
+                      </button>
+                      <div className="chat-group-actions">
+                        <button
+                          type="button"
+                          className="chat-group-act"
+                          title="更多"
+                          aria-label={`「${group.name}」的更多操作`}
+                          aria-haspopup="menu"
+                          data-group-trigger={group.path}
+                          aria-expanded={Boolean(groupMenu && sameCwd(groupMenu.path, group.path))}
+                          onClick={() =>
+                            setGroupMenu((cur) => (cur && sameCwd(cur.path, group.path) ? null : { path: group.path, name: group.name }))
+                          }
+                        >
+                          <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                            <circle cx="3" cy="8" r="1.4" fill="currentColor" />
+                            <circle cx="8" cy="8" r="1.4" fill="currentColor" />
+                            <circle cx="13" cy="8" r="1.4" fill="currentColor" />
+                          </svg>
+                        </button>
+                      </div>
+                      {groupMenu && sameCwd(groupMenu.path, group.path) ? groupMenuNode(group.path, group.name, 0) : null}
+                    </div>
                   ))}
                   {moreGroups.length > MORE_GROUPS_SHOWN ? (
                     <button type="button" className="chat-more-all" onClick={openNewChatMenu}>

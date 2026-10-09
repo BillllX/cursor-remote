@@ -167,6 +167,10 @@ export type ClientMessage =
   | { type: "set_workspace"; cwd: string; chatId?: string; create?: boolean }
   | { type: "list_workspaces" }
   | { type: "create_workspace"; name: string }
+  /** 只改根目录下的一级工作区；会话、断点里的路径一并改过去 */
+  | { type: "rename_workspace"; path: string; name: string }
+  /** 空目录真删，有文件只隐藏，还有对话就拒绝 */
+  | { type: "delete_workspace"; path: string }
   | {
       type: "prompt";
       text: string;
@@ -376,6 +380,8 @@ export type ServerMessage =
     }
   | { type: "workspaces"; root: string; items: { path: string; name: string; user?: boolean }[] }
   | { type: "workspace_created"; path: string; name: string }
+  | { type: "workspace_renamed"; from: string; path: string; name: string }
+  | { type: "workspace_removed"; path: string; name: string; mode: "deleted" | "hidden" }
   | { type: "session"; chatId: string; agentId: string; cwd: string }
   | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }
   | { type: "text-delta"; chatId: string; text: string }

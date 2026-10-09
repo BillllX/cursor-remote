@@ -65,6 +65,7 @@ status=0
 export JIEBO_WS_URL="ws://127.0.0.1:$PORT/bridge"
 CURSOR_REMOTE_TOKEN="$ADMIN_TOKEN" SMOKE_USER_TOKEN="$USER_TOKEN" node scripts/slim-smoke.mjs || status=1
 CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/resume-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/workspace-smoke.mjs || status=1
 CURSOR_REMOTE_TOKEN="$USER_TOKEN" FAKE_LLM_PORT="$FAKE_LLM_PORT" node scripts/multidevice-smoke.mjs || status=1
 
 if [ "$status" -ne 0 ]; then

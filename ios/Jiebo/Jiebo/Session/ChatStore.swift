@@ -373,7 +373,13 @@ final class ChatStore {
     private var noticeTask: Task<Void, Never>?
     private var bannerErrorTask: Task<Void, Never>?
     private var stallTask: Task<Void, Never>?
+    /// stallTask 正在盯的对话；别的对话收尾/有进展不能抢掉它
+    private var stallChatId: String?
     private var lastProgress = Date()
+    /// 当前这一轮已经多少秒没有新进展（0 = 不显示提示）。
+    /// 对齐网页：4 秒起显示「仍在处理…」，15 秒起带秒数并出现停止按钮。
+    /// 只有 StallHintRow 读它，每秒刷新不会带动整条对话重绘。
+    var stallSeconds = 0
     private let tenantKey = "jiebo.tenantId"
     /// P9：最后活跃会话是否已在本次启动恢复过（只恢复一次，重连/后续 stored_state 不再抢）
     private var didRestoreLastActive = false
@@ -733,6 +739,7 @@ final class ChatStore {
             return next
         }
         stallTask?.cancel()
+        clearStallHint()
     }
 
     func chooseModel(_ id: String) {
@@ -825,7 +832,8 @@ final class ChatStore {
             send(.setWorkspace(cwd: next, chatId: existing.id, create: nil))
             return
         }
-        let chat = ChatSession.blank(cwd: next, model: lastModel.nilIfEmpty ?? model, mode: .agent)
+        var chat = ChatSession.blank(cwd: next, model: lastModel.nilIfEmpty ?? model, mode: .agent)
+        chat.touchedAt = Date().timeIntervalSince1970 * 1000
         chats.insert(chat, at: 0)
         swapActive(to: chat.id)
         cwd = next
@@ -848,6 +856,54 @@ final class ChatStore {
         send(.createWorkspace(name: name))
         newWorkspaceName = ""
         creatingWorkspace = false
+    }
+
+    func renameWorkspace(_ path: String, to rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        send(.renameWorkspace(path: path, name: name))
+    }
+
+    /// 空目录网关直接删；里面有文件只隐藏；还有对话会被拒（错误走顶部提示）
+    func deleteWorkspace(_ path: String) {
+        send(.deleteWorkspace(path: path))
+    }
+
+    /// 清空某个工作区下的全部对话（目录和文件不动）。有对话在跑时不处理，免得误伤
+    func clearWorkspaceChats(_ path: String) {
+        let ids = chats
+            .filter { !isAssistantChat($0.id) && $0.id != "boot" && isChatUnder($0, path) }
+            .map(\.id)
+        guard !ids.isEmpty else {
+            flash("这个工作区里没有对话")
+            return
+        }
+        let busy = Set(runningChatIds)
+        if chats.contains(where: { ids.contains($0.id) && ($0.turns.contains(where: \.running) || busy.contains($0.id)) }) {
+            flash("有对话正在运行，先停掉再清空")
+            return
+        }
+        // 当前打开的最后删：它被删时才会切到别的会话，前面删的都不会影响选中项
+        let order = ids.filter { $0 != activeId } + ids.filter { $0 == activeId }
+        var removed = 0
+        for id in order {
+            deleteChat(id)
+            // 有未保存的修改时 deleteChat 会先问用户，没删成就别往下删了
+            if !deletedIds.contains(id) { break }
+            removed += 1
+        }
+        flash(removed == ids.count ? "已清空 \(ids.count) 个对话" : "已删除 \(removed) 个，其余因有未保存的修改保留")
+    }
+
+    /// 开始或结束回复时记一下时间：侧栏按它给工作区排序、显示「几分钟前」
+    private func touchChat(_ id: String) {
+        guard id != "boot", !isAssistantChat(id) else { return }
+        let now = Date().timeIntervalSince1970 * 1000
+        patch(id) { chat in
+            var next = chat
+            next.touchedAt = now
+            return next
+        }
     }
 
     /// P9：管理员拉全租户统计（非管理员发了也会被网关拒，入口按 isAdmin 隐藏）
@@ -2693,7 +2749,10 @@ final class ChatStore {
         case .status(_, let status, _) where status == "RUNNING" || status == "CREATING":
             markProgress(chatId)
         case .done, .error:
-            stallTask?.cancel()
+            if chatId == stallChatId {
+                stallTask?.cancel()
+                clearStallHint()
+            }
         default:
             break
         }
@@ -2926,6 +2985,25 @@ final class ChatStore {
                 workspaces.insert(WorkspaceItem(path: path, name: name), at: index)
             }
             startChat(in: path)
+        case .workspaceRenamed(let from, let newPath, let name):
+            // 网关已把会话的目录改到新路径；本地照改（不标脏，不用再传回去），再对账拿新的版本号
+            let fromKey = normPath(from)
+            let moveCwd: (String?) -> String? = { value in
+                guard let value, !value.isEmpty else { return value }
+                let key = normPath(value)
+                if key == fromKey { return newPath }
+                if key.hasPrefix(fromKey + "/") { return newPath + String(key.dropFirst(fromKey.count)) }
+                return value
+            }
+            for index in chats.indices {
+                let moved = moveCwd(chats[index].cwd)
+                if moved != chats[index].cwd { chats[index].cwd = moved }
+            }
+            cwd = moveCwd(cwd) ?? cwd
+            flash("已改名为「\(name)」")
+            requestStateReload()
+        case .workspaceRemoved(_, let name, let mode):
+            flash(mode == "deleted" ? "已删除工作区「\(name)」" : "「\(name)」里有文件，已从列表隐藏（文件没动）")
         case .session(let id, let agentId, let sessionCwd):
             let target = id.nilIfEmpty ?? activeId
             patch(target) { chat in
@@ -3044,7 +3122,10 @@ final class ChatStore {
             if status == "RUNNING" || status == "CREATING" {
                 let target = id ?? activeId
                 // slim 会话没有 turns 可标 running——运行点靠 runningChatIds 驱动，必须回填
-                if !runningChatIds.contains(target) { runningChatIds.append(target) }
+                if !runningChatIds.contains(target) {
+                    runningChatIds.append(target)
+                    touchChat(target)
+                }
                 patch(target) { chat in
                     guard let index = chat.turns.lastIndex(where: { !$0.user.isEmpty || $0.running }) else { return chat }
                     var next = chat
@@ -3079,12 +3160,14 @@ final class ChatStore {
                 next.error = text
                 return next
             }
+            touchChat(target)
         case .done(let id, let status, let duration):
             runningChatIds.removeAll { $0 == id }
             queuedChatIds.removeAll { $0 == id }
             patchOpen(id) { turn in
                 turn.settled(status: status, durationMs: duration)
             }
+            touchChat(id)
             scheduleSync()
             scheduleBodyCache(id) // 通常还脏着，要等 sync_ack 后那次触发才真写
             if id == activeId { refreshCheckpoints() }
@@ -4130,21 +4213,37 @@ final class ChatStore {
     }
 
     private func markProgress(_ chatId: String) {
+        // 只给正在看的对话挂表：后台对话的进展不该重置前台的计时
+        guard chatId == activeId else { return }
         lastProgress = Date()
+        clearStallHint()
         armStallWatch(chatId)
+    }
+
+    private func clearStallHint() {
+        if stallSeconds != 0 { stallSeconds = 0 }
     }
 
     private func armStallWatch(_ chatId: String) {
         stallTask?.cancel()
+        stallChatId = chatId
         stallTask = Task { @MainActor in
+            var noticed = false
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
+                try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
                 let live = chats.first { $0.id == chatId }?.turns.contains(where: { $0.running || $0.tools.contains(where: { $0.status == "running" }) }) == true
-                guard live else { return }
-                if Date().timeIntervalSince(lastProgress) >= 90 {
+                guard live else { clearStallHint(); return }
+                // 只盯正在看的这个对话：后台对话的提示没地方显示
+                let idle = Int(Date().timeIntervalSince(lastProgress))
+                if chatId == activeId, idle >= 4 {
+                    stallSeconds = idle
+                } else {
+                    clearStallHint()
+                }
+                if idle >= 90, !noticed {
+                    noticed = true
                     notice = "这一轮没有新进展。如果一直转圈，点停止再发一次。"
-                    return
                 }
             }
         }

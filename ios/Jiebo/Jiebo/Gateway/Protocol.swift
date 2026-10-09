@@ -231,6 +231,10 @@ enum ClientMessage {
     case setWorkspace(cwd: String, chatId: String?, create: Bool?)
     case listWorkspaces
     case createWorkspace(name: String)
+    /// 只改根目录下的一级工作区；网关把会话、断点里的路径一并改过去
+    case renameWorkspace(path: String, name: String)
+    /// 空目录真删，有文件只隐藏，还有对话就拒绝
+    case deleteWorkspace(path: String)
     case prompt(
         text: String,
         model: String?,
@@ -306,6 +310,10 @@ enum ClientMessage {
             return .object(["type": .string("list_workspaces")])
         case .createWorkspace(let name):
             return .object(["type": .string("create_workspace"), "name": .string(name)])
+        case .renameWorkspace(let path, let name):
+            return .object(["type": .string("rename_workspace"), "path": .string(path), "name": .string(name)])
+        case .deleteWorkspace(let path):
+            return .object(["type": .string("delete_workspace"), "path": .string(path)])
         case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy, let history, let turnId):
             var object: [String: JSONValue] = [
                 "type": .string("prompt"),
@@ -886,6 +894,9 @@ enum ServerMessage {
     )
     case workspaces(root: String, items: [WorkspaceItem])
     case workspaceCreated(path: String, name: String)
+    case workspaceRenamed(from: String, path: String, name: String)
+    /// mode：deleted（空目录已删）/ hidden（有文件，只从列表隐藏）
+    case workspaceRemoved(path: String, name: String, mode: String)
     case session(chatId: String, agentId: String, cwd: String)
     case runMeta(chatId: String, model: String, mode: AgentMode?)
     case textDelta(chatId: String, text: String)
@@ -1057,6 +1068,18 @@ enum ServerMessage {
             return .workspaces(root: object["root"]?.string ?? "", items: items)
         case "workspace_created":
             return .workspaceCreated(path: object["path"]?.string ?? "", name: object["name"]?.string ?? "")
+        case "workspace_renamed":
+            return .workspaceRenamed(
+                from: object["from"]?.string ?? "",
+                path: object["path"]?.string ?? "",
+                name: object["name"]?.string ?? ""
+            )
+        case "workspace_removed":
+            return .workspaceRemoved(
+                path: object["path"]?.string ?? "",
+                name: object["name"]?.string ?? "",
+                mode: object["mode"]?.string ?? "hidden"
+            )
         case "session":
             return .session(chatId: chatId, agentId: object["agentId"]?.string ?? "", cwd: object["cwd"]?.string ?? "")
         case "run_meta":

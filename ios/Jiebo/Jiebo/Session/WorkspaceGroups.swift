@@ -26,6 +26,24 @@ func workspaceLabel(_ path: String, root: String, rootName: String = AssistantDe
     return abs.split(separator: "/").last.map(String.init) ?? abs
 }
 
+/// 侧栏里的短相对时间：刚刚 / 5 分 / 3 时 / 2 天 / 10月3日；long 版写成「5 分钟前」
+func agoText(_ epochMs: Double?, long: Bool = false) -> String {
+    guard let epochMs, epochMs > 0 else { return "" }
+    let seconds = max(0, Date().timeIntervalSince1970 - epochMs / 1000)
+    if seconds < 60 { return "刚刚" }
+    if seconds < 3600 { return "\(Int(seconds / 60)) \(long ? "分钟前" : "分")" }
+    if seconds < 86_400 { return "\(Int(seconds / 3600)) \(long ? "小时前" : "时")" }
+    if seconds < 86_400 * 7 { return "\(Int(seconds / 86_400)) \(long ? "天前" : "天")" }
+    let parts = Calendar.current.dateComponents([.month, .day], from: Date(timeIntervalSince1970: epochMs / 1000))
+    return "\(parts.month ?? 1)月\(parts.day ?? 1)日"
+}
+
+/// 一个工作区里的对话数和最近活动时间（毫秒）
+struct WorkspaceStat {
+    var chats = 0
+    var touched = 0.0
+}
+
 // MARK: - 侧栏分组模型
 
 struct WorkspaceGroup: Identifiable {
@@ -122,6 +140,53 @@ extension ChatStore {
     /// 可以开新对话的子工作区（不含 USER 根目录）
     var subWorkspaces: [WorkspaceItem] {
         workspaces.filter { !$0.user && !isUserRoot($0.path) }
+    }
+
+    /// 每个工作区的对话数、最近活动时间，key 是 normPath 后的目录（和网页端分组口径一致）
+    var workspaceStatsByKey: [String: WorkspaceStat] {
+        var out: [String: WorkspaceStat] = [:]
+        for chat in sidebarChats {
+            let key = normPath(chat.cwd?.nilIfEmpty ?? groupRoot)
+            var stat = out[key] ?? WorkspaceStat()
+            stat.chats += 1
+            stat.touched = max(stat.touched, chat.touchedAt ?? 0)
+            out[key] = stat
+        }
+        return out
+    }
+
+    /// 子工作区按最近活动排序；没有时间的保持网关给的顺序
+    var recentSubWorkspaces: [WorkspaceItem] {
+        let stats = workspaceStatsByKey
+        return subWorkspaces.enumerated()
+            .sorted { lhs, rhs in
+                let a = stats[normPath(lhs.element.path)]?.touched ?? 0
+                let b = stats[normPath(rhs.element.path)]?.touched ?? 0
+                if a != b { return a > b }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+
+    /// 对话的目录是不是在 path 里面（含自身和子目录）。和网关删除工作区时数对话的口径一致
+    func isChatUnder(_ chat: ChatSession, _ path: String) -> Bool {
+        let dir = normPath(path)
+        let cwd = normPath(chat.cwd?.nilIfEmpty ?? groupRoot)
+        return cwd == dir || cwd.hasPrefix(dir + "/")
+    }
+
+    /// path 里（含子目录）有多少个对话
+    func chatCountUnder(_ path: String) -> Int {
+        sidebarChats.filter { isChatUnder($0, path) }.count
+    }
+
+    /// 是不是根目录下的一级工作区：只有这些能改名、删除
+    func isTopLevelWorkspace(_ path: String) -> Bool {
+        let root = normPath(workspaceRoot)
+        let abs = normPath(path)
+        guard !root.isEmpty, abs.hasPrefix(root + "/") else { return false }
+        let rel = String(abs.dropFirst(root.count + 1))
+        return !rel.isEmpty && !rel.contains("/") && !rel.hasPrefix(".")
     }
 
     /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd。
