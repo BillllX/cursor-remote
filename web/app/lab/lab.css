@@ -18,7 +18,7 @@
   --danger: #dc2626;
   --add: #15803d;
   --del: #b91c1c;
-  --font: var(--font-sans), "Noto Sans SC", "PingFang SC", system-ui, sans-serif;
+  --font: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
   --mono: "Noto Sans Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --radius: 24px;

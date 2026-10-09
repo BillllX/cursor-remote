@@ -1,25 +1,13 @@
 import type { ReactNode } from "react";
 import type { Metadata, Viewport } from "next";
-import { Noto_Sans_Mono, Noto_Sans_SC, Noto_Serif_SC } from "next/font/google";
+import { Noto_Sans_Mono } from "next/font/google";
 import "./globals.css";
 import "./themes.css";
 import ThemeSync from "../components/ThemeSync";
 import { THEME_BOOT } from "../lib/theme";
 
-const sans = Noto_Sans_SC({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-  variable: "--font-sans",
-});
-
-const serif = Noto_Serif_SC({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-  variable: "--font-serif",
-});
-
+// 正文和标题走系统字体：这两个网页字体只带拉丁子集，中文本来就在用系统字，
+// 同一行里两种字形来源还白白多两次字体请求。只保留等宽字体，保证代码块各端一致。
 const mono = Noto_Sans_Mono({
   subsets: ["latin"],
   weight: ["400", "500"],
@@ -62,7 +50,7 @@ export default function RootLayout({
   children: ReactNode;
 }) {
   return (
-    <html lang="zh-CN" className={`${sans.variable} ${serif.variable} ${mono.variable}`} suppressHydrationWarning>
+    <html lang="zh-CN" className={mono.variable} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOT }} />
       </head>

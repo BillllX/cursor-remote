@@ -2,17 +2,20 @@
 
 import {
   Children,
+  Fragment,
   cloneElement,
   isValidElement,
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
+  useId,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type {
   AgentMode,
@@ -53,6 +56,7 @@ import {
   writeLastModel,
 } from "../lib/models";
 import ModelPicker from "./ModelPicker";
+import { useFocusTrap } from "../lib/useFocusTrap";
 import { JieboGlyph, JieboMark as Mark } from "./JieboMark";
 import { IconAgent, IconAsk, IconPlan, IconRail, IconShield, IconWrite } from "./chromeIcons";
 
@@ -517,6 +521,35 @@ function toolPreview(name: string, args: unknown) {
   return bits.join(" · ");
 }
 
+/// 一轮跑着却没有新进展时分级提示：4 秒后说“仍在处理”，15 秒后给出停止按钮。
+/// 进展时间存在 ref 里不会触发渲染，所以每秒自己读一次。
+function StallHint({ lastProgress, onStop }: { lastProgress: () => number | undefined; onStop: () => void }) {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(mountedAt);
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const idle = Math.max(0, now - (lastProgress() ?? mountedAt));
+  if (idle < 4_000) return null;
+  const long = idle >= 15_000;
+  return (
+    <div className={`stall-hint${long ? " long" : ""}`}>
+      <span role="status">{long ? "还在处理，暂时没有新进展" : "仍在处理…"}</span>
+      {long ? (
+        <>
+          <span className="stall-hint-time" aria-hidden="true">
+            {Math.round(idle / 1000)} 秒
+          </span>
+          <button type="button" className="stall-hint-stop" onClick={onStop}>
+            停止
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 function Highlight({ text, query }: { text: string; query?: string }) {
   const q = query?.trim();
   if (!q) return <>{text}</>;
@@ -717,6 +750,91 @@ function wrapCites(
     }
     return child;
   });
+}
+
+// react-markdown 以 children 和插件数组为依赖重新解析；插件和 components 引用稳定后，
+// 已经写完的回答在父组件重渲染时直接跳过，只有正在流式输出的那一条重新解析。
+const REMARK_PLUGINS = [remarkGfm];
+const MemoMarkdown = memo(Markdown);
+
+function markdownComponents(
+  openFile: (path: string, line?: number) => void,
+  findQuery?: string,
+): Components {
+  const wrap = (children: ReactNode) => wrapCites(children, openFile, findQuery);
+  return {
+    table({ children }) {
+      return (
+        <div className="md-table">
+          <table>{children}</table>
+        </div>
+      );
+    },
+    pre({ children }) {
+      return <>{children}</>;
+    },
+    p({ children }) {
+      return <p>{wrap(children)}</p>;
+    },
+    li({ children }) {
+      return <li>{wrap(children)}</li>;
+    },
+    td({ children }) {
+      return <td>{wrap(children)}</td>;
+    },
+    a({ href, children }) {
+      const raw = (href || "").trim();
+      const local =
+        raw &&
+        !/^[a-z]+:/i.test(raw) &&
+        !raw.startsWith("#") &&
+        (isCanvasPath(raw) || isFileMention(raw));
+      if (local) {
+        return (
+          <button
+            type="button"
+            className="cite-ref"
+            onClick={() => openFile(raw.replace(/^\.\//, ""))}
+          >
+            {children}
+          </button>
+        );
+      }
+      return (
+        <a href={href} target="_blank" rel="noreferrer">
+          {children}
+        </a>
+      );
+    },
+    code({ className, children }) {
+      const text = String(children).replace(/\n$/, "");
+      const language = (className || "").replace(/^language-/, "");
+      const cite = parseCite(language);
+      if (cite) {
+        return (
+          <div>
+            <button
+              type="button"
+              className="cite-jump"
+              onClick={() => openFile(cite.path, cite.line)}
+            >
+              {cite.path}:{cite.line}
+            </button>
+            <CodeBlock
+              code={text}
+              language={cite.path.split(".").pop()}
+              highlight={cite.line}
+              lineNumbers
+            />
+          </div>
+        );
+      }
+      if (!language && !text.includes("\n")) {
+        return <code>{text}</code>;
+      }
+      return <CodeBlock code={text} language={language} />;
+    },
+  };
 }
 
 function gitLetterOf(path: string, gitStatus: Record<string, string>, cwd = "") {
@@ -1407,6 +1525,8 @@ export default function ChatApp() {
   const [workspaces, setWorkspaces] = useState<{ path: string; name: string; user?: boolean }[]>([]);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceCreating, setWorkspaceCreating] = useState(false);
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const [workspaceIndex, setWorkspaceIndex] = useState(0);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [token, setToken] = useState("");
@@ -1476,6 +1596,7 @@ export default function ChatApp() {
   const [grepQ, setGrepQ] = useState("");
   const searchShown = useHeldOpen(searchOpen);
   const paletteShown = useHeldOpen(paletteOpen);
+  const workspaceShown = useHeldOpen(workspaceMenuOpen);
   const grepShown = useHeldOpen(grepOpen);
   const terminalShown = useHeldOpen(terminalOpen);
   const [filesOpen, setFilesOpen] = useState(false);
@@ -1664,12 +1785,29 @@ export default function ChatApp() {
     [menuWorkspaces, workspaceRoot],
   );
 
-  const duplicateMenuNames = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const item of menuWorkspaces) counts.set(item.name, (counts.get(item.name) || 0) + 1);
-    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [menuWorkspaces]);
+  // 侧栏只列有对话的工作区（外加当前所在的）；空工作区从“新对话”浮层里选，工作区再多也不会把侧栏撑满
+  const sidebarGroups = useMemo(
+    () => workspaceGroups.filter((group) => group.chats.length || sameCwd(group.path, cwd)),
+    [workspaceGroups, cwd],
+  );
 
+  // 新对话浮层的候选：最近用过的排前面，按名字或路径过滤，附带每个工作区已有几个对话
+  const workspaceChoices = useMemo(() => {
+    const q = workspaceQuery.trim().toLowerCase();
+    const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
+    const counts = new Map(workspaceGroups.map((group) => [normPath(group.path), group.chats.length]));
+    return otherMenuWorkspaces
+      .filter((item) => !q || item.name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q))
+      .map((item) => ({
+        ...item,
+        recent: recent.has(normPath(item.path)),
+        chats: counts.get(normPath(item.path)) || 0,
+      }));
+  }, [workspaceQuery, recentWorkspaces, workspaceGroups, otherMenuWorkspaces]);
+  const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
+  const workspaceExact = workspaceChoices.some(
+    (item) => item.name.toLowerCase() === workspaceQuery.trim().toLowerCase(),
+  );
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
   const activeIdRef = useRef(activeId);
@@ -3195,66 +3333,99 @@ export default function ChatApp() {
     });
   }, [previewTabs, previewPath, patchActive]);
 
+  const layerSeqRef = useRef<Record<string, number>>({});
+  const layerOpen: Record<string, boolean> = {
+    admin: adminOpen,
+    workspace: workspaceMenuOpen,
+    palette: paletteOpen,
+    grep: grepOpen,
+    loop: loopOpen,
+    terminal: terminalOpen,
+    files: filesOpen,
+    search: searchOpen,
+    find: threadFindOpen,
+    previewMax,
+  };
+  const layerOpenKey = Object.keys(layerOpen)
+    .filter((id) => layerOpen[id])
+    .join("|");
   useEffect(() => {
-    if (!workspaceMenuOpen) return;
-    const close = () => {
-      setWorkspaceMenuOpen(false);
-      setWorkspaceCreating(false);
-    };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
-  }, [workspaceMenuOpen]);
+    const seqs = layerSeqRef.current;
+    const open = new Set(layerOpenKey ? layerOpenKey.split("|") : []);
+    let next = Math.max(0, ...Object.values(seqs));
+    // 同一次渲染里一起打开的几层，排在前面的拿更大的序号，和原来的优先级一致
+    for (const id of [...open].reverse()) if (!seqs[id]) seqs[id] = ++next;
+    for (const id of Object.keys(seqs)) if (!open.has(id)) delete seqs[id];
+  }, [layerOpenKey]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const meta = event.metaKey || event.ctrlKey;
       if (event.key === "Escape") {
-        if (adminOpenRef.current) {
-          setAdminOpen(false);
+        // 同时开着几层时先关最后打开的那层；打开时间一样时按这里的先后
+        const layers: [string, boolean, () => void][] = [
+          ["admin", adminOpenRef.current, () => setAdminOpen(false)],
+          [
+            "workspace",
+            workspaceMenuOpenRef.current,
+            () => {
+              setWorkspaceMenuOpen(false);
+              setWorkspaceCreating(false);
+            },
+          ],
+          ["palette", paletteOpenRef.current, () => setPaletteOpen(false)],
+          [
+            "grep",
+            grepOpenRef.current,
+            () => {
+              setGrepOpen(false);
+              if (wideIDERef.current) setSidePane("chats");
+            },
+          ],
+          [
+            "loop",
+            loopOpenRef.current,
+            () => {
+              setLoopOpen(false);
+              if (wideIDERef.current) setSidePane("chats");
+            },
+          ],
+          [
+            "terminal",
+            terminalOpenRef.current,
+            () => {
+              setTerminalOpen(false);
+              if (wideIDERef.current) setSidePane("chats");
+            },
+          ],
+          [
+            "files",
+            filesOpenRef.current,
+            () => {
+              setFilesOpen(false);
+              setFilesQuery("");
+              if (wideIDERef.current) setSidePane("chats");
+            },
+          ],
+          ["search", searchOpenRef.current, () => setSearchOpen(false)],
+          ["find", threadFindOpenRef.current, () => setThreadFindOpen(false)],
+          ["previewMax", previewMaxRef.current && previewTabsRef.current.length > 0, () => setPreviewMax(false)],
+        ];
+        let top: (() => void) | null = null;
+        let topSeq = -1;
+        for (const [id, open, close] of layers) {
+          const seq = layerSeqRef.current[id] ?? 0;
+          if (open && seq > topSeq) {
+            top = close;
+            topSeq = seq;
+          }
+        }
+        if (top) {
+          top();
           return;
         }
-        if (workspaceMenuOpenRef.current) {
-          setWorkspaceMenuOpen(false);
-          setWorkspaceCreating(false);
-          return;
-        }
-        if (paletteOpenRef.current) {
-          setPaletteOpen(false);
-          return;
-        }
-        if (grepOpenRef.current) {
-          setGrepOpen(false);
-          if (wideIDERef.current) setSidePane("chats");
-          return;
-        }
-        if (loopOpenRef.current) {
-          setLoopOpen(false);
-          if (wideIDERef.current) setSidePane("chats");
-          return;
-        }
-        if (terminalOpenRef.current) {
-          setTerminalOpen(false);
-          if (wideIDERef.current) setSidePane("chats");
-          return;
-        }
-        if (filesOpenRef.current) {
-          setFilesOpen(false);
-          setFilesQuery("");
-          if (wideIDERef.current) setSidePane("chats");
-          return;
-        }
-        if (searchOpenRef.current) {
-          setSearchOpen(false);
-          return;
-        }
-        if (threadFindOpenRef.current) {
-          setThreadFindOpen(false);
-          return;
-        }
-        if (previewMaxRef.current && previewTabsRef.current.length) {
-          setPreviewMax(false);
-          return;
-        }
+        // 这里是捕获阶段，比输入框先拿到 Esc；提及列表开着时交给输入框收起列表，不停任务
+        if (mentionQueryRef.current != null) return;
         if (busyRef.current) stopChat(activeIdRef.current);
       }
       if (meta && event.key.toLowerCase() === "n") {
@@ -3393,6 +3564,30 @@ export default function ChatApp() {
     let closed = false;
     let retry: number | undefined;
     let heartbeat: number | undefined;
+    // 文字增量按帧合并后再进 onServer：长回复每个 token 都 setChats 会让整条线程反复重渲染。
+    // 其他消息到达前先把攒下的增量冲出去，保证事件先后不变；后台标签页 rAF 不跑，用定时器兜底。
+    let deltas: Extract<ServerMessage, { type: "text-delta" | "thinking-delta" }>[] = [];
+    let deltaFrame = 0;
+    let deltaTimer = 0;
+    const flushDeltas = () => {
+      if (deltaFrame) window.cancelAnimationFrame(deltaFrame);
+      if (deltaTimer) window.clearTimeout(deltaTimer);
+      deltaFrame = 0;
+      deltaTimer = 0;
+      const batch = deltas;
+      deltas = [];
+      for (const delta of batch) onServerRef.current(delta);
+    };
+    const queueDelta = (delta: Extract<ServerMessage, { type: "text-delta" | "thinking-delta" }>) => {
+      const last = deltas[deltas.length - 1];
+      if (last && last.type === delta.type && last.chatId === delta.chatId) {
+        deltas[deltas.length - 1] = { ...last, text: last.text + delta.text };
+      } else {
+        deltas.push(delta);
+      }
+      if (!deltaFrame) deltaFrame = window.requestAnimationFrame(flushDeltas);
+      if (!deltaTimer) deltaTimer = window.setTimeout(flushDeltas, 120);
+    };
 
     const connect = () => {
       if (retry) {
@@ -3432,14 +3627,26 @@ export default function ChatApp() {
         }
       };
       ws.onmessage = (event) => {
+        let message: ServerMessage;
         try {
-          onServerRef.current(JSON.parse(String(event.data)) as ServerMessage);
+          message = JSON.parse(String(event.data)) as ServerMessage;
+        } catch {
+          return;
+        }
+        if ((message.type === "text-delta" || message.type === "thinking-delta") && message.chatId) {
+          queueDelta(message);
+          return;
+        }
+        flushDeltas();
+        try {
+          onServerRef.current(message);
         } catch {
           // Ignore malformed frames.
         }
       };
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
+        flushDeltas();
         setConnected(false);
         holdSnapshotRef.current.clear();
         sawSnapshotRef.current.clear();
@@ -3471,6 +3678,9 @@ export default function ChatApp() {
       closed = true;
       if (retry) window.clearTimeout(retry);
       if (heartbeat) window.clearInterval(heartbeat);
+      if (deltaFrame) window.cancelAnimationFrame(deltaFrame);
+      if (deltaTimer) window.clearTimeout(deltaTimer);
+      deltas = [];
       const ws = wsRef.current;
       if (ws) {
         ws.onclose = null;
@@ -3768,8 +3978,13 @@ export default function ChatApp() {
   function openNewChatMenu() {
     send({ type: "list_workspaces" });
     setWorkspaceCreating(false);
+    setWorkspaceQuery("");
+    setWorkspaceIndex(0);
+    setSearchOpen(false);
+    setPaletteOpen(false);
+    // 窄屏抽屉的层级比浮层高，先收起抽屉
+    setNavOpen(false);
     setWorkspaceMenuOpen(true);
-    setNavOpen(true);
   }
   newChatRef.current = openNewChatMenu;
 
@@ -5028,6 +5243,39 @@ export default function ChatApp() {
     threadRef.current.querySelector(`[data-turn="${id}"]`)?.scrollIntoView({ block: "center" });
   }, [threadFindOpen, threadFindHi, threadFindQ, activeId]);
 
+  // 读屏播报：提示信息直接读；当前会话一轮跑完时补一句“回复完成”
+  // 每次播报换一个 key，同一句话第二次出现时读屏也会再读
+  const [liveAnnounce, setLiveAnnounce] = useState({ text: "", seq: 0 });
+  const announce = useCallback((text: string) => setLiveAnnounce((prev) => ({ text, seq: prev.seq + 1 })), []);
+  const wasBusyRef = useRef({ chatId: activeId, busy });
+  useEffect(() => {
+    const prev = wasBusyRef.current;
+    wasBusyRef.current = { chatId: activeId, busy };
+    if (prev.chatId === activeId && prev.busy && !busy) announce("回复完成");
+  }, [activeId, busy, announce]);
+  useEffect(() => {
+    if (notice) announce(notice);
+  }, [notice, announce]);
+
+  // 宽屏 IDE 模式下循环、终端、搜索是侧栏面板，不算模态，不圈焦点
+  const adminTrap = useFocusTrap<HTMLDivElement>(adminOpen);
+  const searchTrap = useFocusTrap<HTMLDivElement>(searchOpen);
+  const paletteTrap = useFocusTrap<HTMLDivElement>(paletteOpen);
+  const workspaceTrap = useFocusTrap<HTMLDivElement>(workspaceMenuOpen);
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    document.getElementById(`workspace-choice-${workspacePick}`)?.scrollIntoView({ block: "nearest" });
+  }, [workspaceMenuOpen, workspacePick]);
+  const loopTrap = useFocusTrap<HTMLFormElement>(loopOpen && !(wideIDE && sidePane === "loop"));
+  const terminalTrap = useFocusTrap<HTMLDivElement>(terminalOpen && !(wideIDE && sidePane === "terminal"));
+  const grepTrap = useFocusTrap<HTMLDivElement>(grepOpen && !(wideIDE && sidePane === "search"));
+
+  const openFileRef = useRef(openFile);
+  openFileRef.current = openFile;
+  const openFileStable = useCallback((path: string, line?: number) => openFileRef.current(path, line), []);
+  const mdFindQuery = threadFindOpen ? threadFindQ : undefined;
+  const mdComponents = useMemo(() => markdownComponents(openFileStable, mdFindQuery), [openFileStable, mdFindQuery]);
+
   const loopRow = loops[activeId];
   const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
   const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
@@ -5063,6 +5311,12 @@ export default function ChatApp() {
 
   return (
     <div className={`app${navOpen ? " nav-open" : ""}${navReady ? " nav-ready" : ""}${wideIDE ? ` ide pane-${sidePane}` : ""}${previewTabs.length ? " has-editor" : ""}`}>
+      <div className="sr-only" role="status" aria-live="polite">
+        {liveAnnounce.text ? <span key={liveAnnounce.seq}>{liveAnnounce.text}</span> : null}
+      </div>
+      <div className="sr-only" role="alert">
+        {error ? friendlyError(error) : ""}
+      </div>
       <nav className="activity-bar" aria-label="活动栏">
         {(
           [
@@ -5099,7 +5353,14 @@ export default function ChatApp() {
       </nav>
       {adminOpen ? (
         <div className="search-overlay open" onClick={() => setAdminOpen(false)}>
-          <div className="search-box admin-box" onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={adminTrap}
+            className="search-box admin-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label="使用统计"
+            onClick={(event) => event.stopPropagation()}
+          >
             <div className="admin-head">
               <div className="loop-title">使用统计</div>
               <div className="admin-head-actions">
@@ -5189,7 +5450,11 @@ export default function ChatApp() {
       {searchShown ? (
         <div className={`search-overlay${searchOpen ? " open" : ""}`} onClick={() => setSearchOpen(false)}>
           <div
+            ref={searchTrap}
             className="search-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label="搜索对话"
             onClick={(event) => event.stopPropagation()}
           >
             <input
@@ -5218,9 +5483,151 @@ export default function ChatApp() {
           </div>
         </div>
       ) : null}
+      {workspaceShown ? (
+        <div
+          className={`search-overlay${workspaceMenuOpen ? " open" : ""}`}
+          onClick={() => {
+            setWorkspaceMenuOpen(false);
+            setWorkspaceCreating(false);
+          }}
+        >
+          <div
+            ref={workspaceTrap}
+            className="search-box workspace-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="新对话：选择工作区"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="workspace-dialog-head">
+              <div className="loop-title">新对话</div>
+              <div className="workspace-dialog-sub">选一个工作区，对话里的读写都在这个目录下进行</div>
+            </div>
+            <input
+              autoFocus={workspaceMenuOpen}
+              className="search-input"
+              placeholder={otherMenuWorkspaces.length > 6 ? `搜索 ${otherMenuWorkspaces.length} 个工作区` : "搜索工作区"}
+              value={workspaceQuery}
+              role="combobox"
+              aria-expanded="true"
+              aria-controls="workspace-choices"
+              aria-activedescendant={workspaceChoices.length ? `workspace-choice-${workspacePick}` : undefined}
+              onChange={(event) => {
+                setWorkspaceQuery(event.target.value);
+                setWorkspaceIndex(0);
+              }}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if ((event.key === "ArrowDown" || event.key === "ArrowUp") && workspaceChoices.length) {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setWorkspaceIndex((workspacePick + step + workspaceChoices.length) % workspaceChoices.length);
+                  return;
+                }
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                const pick = workspaceChoices[workspacePick];
+                if (pick) startChatIn(pick.path);
+                else if (workspaceQuery.trim()) send({ type: "create_workspace", name: workspaceQuery.trim() });
+              }}
+            />
+            <div className="search-list workspace-choices" id="workspace-choices" role="listbox" aria-label="工作区">
+              {workspaceChoices.map((item, index) => (
+                <Fragment key={item.path}>
+                  {index === 0 || item.recent !== workspaceChoices[index - 1].recent ? (
+                    <div className="workspace-choice-section" role="presentation">
+                      {item.recent ? "最近用过" : "全部工作区"}
+                    </div>
+                  ) : null}
+                  <button
+                    id={`workspace-choice-${index}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === workspacePick}
+                    tabIndex={-1}
+                    className={`workspace-choice${index === workspacePick ? " active" : ""}`}
+                    onMouseMove={() => {
+                      if (index !== workspacePick) setWorkspaceIndex(index);
+                    }}
+                    onClick={() => startChatIn(item.path)}
+                  >
+                    <FolderMark />
+                    <span className="workspace-choice-text">
+                      <span className="workspace-choice-name">
+                        <Highlight text={item.name} query={workspaceQuery} />
+                      </span>
+                      {(relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
+                        <span className="workspace-choice-path">{relToCwd(item.path, workspaceRoot) || item.path}</span>
+                      ) : null}
+                    </span>
+                    {sameCwd(item.path, cwd) ? <span className="workspace-choice-tag">当前</span> : null}
+                    {item.chats ? <span className="workspace-choice-count">{item.chats} 个对话</span> : null}
+                  </button>
+                </Fragment>
+              ))}
+              {!workspaceChoices.length ? (
+                <div className="workspace-choice-empty">
+                  {otherMenuWorkspaces.length ? "没有匹配的工作区" : "还没有工作区，先新建一个"}
+                </div>
+              ) : null}
+            </div>
+            <div className="workspace-dialog-foot">
+              {workspaceCreating ? (
+                <form
+                  className="workspace-create"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitNewWorkspace();
+                  }}
+                >
+                  <input
+                    className="side-input"
+                    autoFocus
+                    value={workspaceNameDraft}
+                    placeholder="新目录名"
+                    onChange={(event) => setWorkspaceNameDraft(event.target.value)}
+                  />
+                  <button type="submit" className="workspace-create-ok" disabled={!workspaceNameDraft.trim()}>
+                    创建
+                  </button>
+                </form>
+              ) : workspaceQuery.trim() && !workspaceExact ? (
+                <button
+                  type="button"
+                  className="workspace-new"
+                  onClick={() => send({ type: "create_workspace", name: workspaceQuery.trim() })}
+                >
+                  + 新建工作区「{workspaceQuery.trim()}」
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="workspace-new"
+                  onClick={() => {
+                    setWorkspaceNameDraft("");
+                    setWorkspaceCreating(true);
+                  }}
+                >
+                  + 新建工作区
+                </button>
+              )}
+              <span className="workspace-dialog-keys" aria-hidden="true">
+                ↑↓ 选择 · Enter 打开 · Esc 关闭
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {paletteShown ? (
         <div className={`search-overlay${paletteOpen ? " open" : ""}`} onClick={() => setPaletteOpen(false)}>
-          <div className="search-box" onClick={(event) => event.stopPropagation()}>
+          <div
+            ref={paletteTrap}
+            className="search-box"
+            role="dialog"
+            aria-modal="true"
+            aria-label="打开文件"
+            onClick={(event) => event.stopPropagation()}
+          >
             <input
               autoFocus={paletteOpen}
               className="search-input"
@@ -5295,7 +5702,9 @@ export default function ChatApp() {
       {loopOpen ? (
         <div className="search-overlay open" onClick={() => { if (wideIDE && sidePane === "loop") return; setLoopOpen(false); }}>
           <form
+            ref={loopTrap}
             className="search-box loop-box"
+            aria-label="循环任务"
             onClick={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
@@ -5408,7 +5817,7 @@ export default function ChatApp() {
             setTerminalOpen(false);
           }}
         >
-          <div className="search-box terminal-box" onClick={(event) => event.stopPropagation()}>
+          <div ref={terminalTrap} className="search-box terminal-box" aria-label="终端" onClick={(event) => event.stopPropagation()}>
             <div className="loop-title">终端 · 当前对话</div>
             {shellEntries.length ? (
               <div className="terminal-log" ref={terminalLogRef}>
@@ -5432,7 +5841,7 @@ export default function ChatApp() {
       ) : null}
       {grepShown ? (
         <div className={`search-overlay${grepOpen ? " open" : ""}`} onClick={() => { if (wideIDE && sidePane === "search") return; setGrepOpen(false); }}>
-          <div className="search-box grep-box" onClick={(event) => event.stopPropagation()}>
+          <div ref={grepTrap} className="search-box grep-box" aria-label="全文搜索" onClick={(event) => event.stopPropagation()}>
             <input
               autoFocus={grepOpen}
               className="search-input"
@@ -5684,10 +6093,7 @@ export default function ChatApp() {
             ) : null}
           </button>
         ) : null}
-        <div
-          className={`workspace-picker${workspaceMenuOpen ? " open" : ""}`}
-          onMouseDown={(event) => event.stopPropagation()}
-        >
+        <div className={`workspace-picker${workspaceMenuOpen ? " open" : ""}`}>
           <div className="side-actions">
           <button
             className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`}
@@ -5739,56 +6145,12 @@ export default function ChatApp() {
             })}
           </div>
           </div>
-          {workspaceMenuOpen ? (
-            <div className="workspace-menu">
-              {otherMenuWorkspaces.map((item) => (
-                <button
-                  key={item.path}
-                  type="button"
-                  className={`workspace-menu-item${sameCwd(item.path, cwd) ? " on" : ""}`}
-                  onClick={() => startChatIn(item.path)}
-                >
-                  <FolderMark />
-                  <span className="workspace-menu-name">{item.name}</span>
-                  {duplicateMenuNames.has(item.name) ? (
-                    <span className="workspace-menu-path">{item.path}</span>
-                  ) : null}
-                  {sameCwd(item.path, cwd) ? <span className="workspace-menu-check">正在用</span> : null}
-                </button>
-              ))}
-              {workspaceCreating ? (
-                <form
-                  className="workspace-create"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitNewWorkspace();
-                  }}
-                >
-                  <input
-                    className="side-input"
-                    autoFocus
-                    value={workspaceNameDraft}
-                    placeholder="新目录名"
-                    onChange={(event) => setWorkspaceNameDraft(event.target.value)}
-                  />
-                  <button type="submit" className="workspace-create-ok" disabled={!workspaceNameDraft.trim()}>
-                    创建
-                  </button>
-                </form>
-              ) : (
-                <button
-                  type="button"
-                  className="workspace-menu-item new"
-                  onClick={() => setWorkspaceCreating(true)}
-                >
-                  + 新建工作区
-                </button>
-              )}
-            </div>
-          ) : null}
         </div>
         <div className="chats">
-          {workspaceGroups.map((group) => {
+          {sidebarGroups.length ? null : (
+            <div className="chats-empty">还没有对话。点“新对话”选一个工作区开始。</div>
+          )}
+          {sidebarGroups.map((group) => {
             const key = normPath(group.path);
             const holdsActive = group.chats.some((chat) => chat.id === activeId);
             const open = holdsActive || expandedGroups.has(key);
@@ -5874,6 +6236,7 @@ export default function ChatApp() {
                 type="button"
                 className="chat-item-x"
                 title="删除会话"
+                aria-label="删除会话"
                 onClick={(event) => {
                   event.stopPropagation();
                   deleteChat(chat.id);
@@ -6174,7 +6537,21 @@ export default function ChatApp() {
                 ) : null}
                 {notice ? <div className="warn">{notice}</div> : null}
                 {bodyPending && !active.turns.length ? (
-                  <div className="thread-loading">正在加载对话…</div>
+                  <div className="skeleton" role="status" aria-live="polite">
+                    <span className="sr-only">正在加载对话…</span>
+                    <div className="skel-line skel-user" style={{ width: "42%" }} />
+                    <div className="skel-block">
+                      {["94%", "86%", "58%"].map((width) => (
+                        <div key={width} className="skel-line" style={{ width }} />
+                      ))}
+                    </div>
+                    <div className="skel-line skel-user" style={{ width: "30%" }} />
+                    <div className="skel-block">
+                      {["90%", "72%"].map((width) => (
+                        <div key={width} className="skel-line" style={{ width }} />
+                      ))}
+                    </div>
+                  </div>
                 ) : loadingOlder ? (
                   <div className="thread-loading">正在加载更早的内容…</div>
                 ) : null}
@@ -6452,88 +6829,19 @@ export default function ChatApp() {
                         });
                       })()}
                       {turn.assistant && !(isProgressBlurb(turn.assistant) && !turn.running) ? (
-                        <div className="markdown">
-                          <Markdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              table({ children }) {
-                                return (
-                                  <div className="md-table">
-                                    <table>{children}</table>
-                                  </div>
-                                );
-                              },
-                              pre({ children }) {
-                                return <>{children}</>;
-                              },
-                              p({ children }) {
-                                return <p>{wrapCites(children, openFile, threadFindOpen ? threadFindQ : undefined)}</p>;
-                              },
-                              li({ children }) {
-                                return <li>{wrapCites(children, openFile, threadFindOpen ? threadFindQ : undefined)}</li>;
-                              },
-                              td({ children }) {
-                                return <td>{wrapCites(children, openFile, threadFindOpen ? threadFindQ : undefined)}</td>;
-                              },
-                              a({ href, children }) {
-                                const raw = (href || "").trim();
-                                const local =
-                                  raw &&
-                                  !/^[a-z]+:/i.test(raw) &&
-                                  !raw.startsWith("#") &&
-                                  (isCanvasPath(raw) || isFileMention(raw));
-                                if (local) {
-                                  return (
-                                    <button
-                                      type="button"
-                                      className="cite-ref"
-                                      onClick={() => openFile(raw.replace(/^\.\//, ""))}
-                                    >
-                                      {children}
-                                    </button>
-                                  );
-                                }
-                                return (
-                                  <a href={href} target="_blank" rel="noreferrer">
-                                    {children}
-                                  </a>
-                                );
-                              },
-                              code({ className, children }) {
-                                const text = String(children).replace(/\n$/, "");
-                                const language = (className || "").replace(/^language-/, "");
-                                const cite = parseCite(language);
-                                if (cite) {
-                                  return (
-                                    <div>
-                                      <button
-                                        type="button"
-                                        className="cite-jump"
-                                        onClick={() => openFile(cite.path, cite.line)}
-                                      >
-                                        {cite.path}:{cite.line}
-                                      </button>
-                                      <CodeBlock
-                                        code={text}
-                                        language={cite.path.split(".").pop()}
-                                        highlight={cite.line}
-                                        lineNumbers
-                                      />
-                                    </div>
-                                  );
-                                }
-                                if (!language && !text.includes("\n")) {
-                                  return <code>{text}</code>;
-                                }
-                                return <CodeBlock code={text} language={language} />;
-                              },
-                            }}
-                          >
+                        <div className={`markdown${turn.running ? " streaming" : ""}`}>
+                          <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
                             {turn.assistant}
-                          </Markdown>
+                          </MemoMarkdown>
                         </div>
                       ) : turn.running ? (
                         <div className="task-line">{turn.task || "开始动手"}</div>
+                      ) : null}
+                      {turn.running && !turn.pendingTool ? (
+                        <StallHint
+                          lastProgress={() => lastProgressRef.current[activeId]}
+                          onStop={() => stopChat(activeId)}
+                        />
                       ) : null}
                       {turn.error ? <div className="error-line">{friendlyError(turn.error)}</div> : null}
                       {!turn.running &&
@@ -6866,6 +7174,15 @@ function Composer({
   centered?: boolean;
 }) {
   const mentioning = mentionQuery != null;
+  const mentionListId = useId();
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const mentionHitsKey = fileHits.join("\n");
+  useEffect(() => setMentionIndex(0), [mentionHitsKey, mentionQuery]);
+  const mentionPick = Math.min(mentionIndex, Math.max(0, fileHits.length - 1));
+  useEffect(() => {
+    if (!mentioning) return;
+    document.getElementById(`${mentionListId}-${mentionPick}`)?.scrollIntoView({ block: "nearest" });
+  }, [mentioning, mentionPick, mentionListId]);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const composerRef = useRef<HTMLFormElement | null>(null);
   const composingRef = useRef(false);
@@ -6974,13 +7291,19 @@ function Composer({
     >
       <div className="composer-body">
       {mentioning ? (
-        <div className="mention-list">
+        <div className="mention-list" id={mentionListId} role="listbox" aria-label="引用文件">
           {fileHits.length ? (
-            fileHits.map((path) => (
+            fileHits.map((path, index) => (
               <button
                 key={path}
+                id={`${mentionListId}-${index}`}
                 type="button"
-                className="mention-item"
+                role="option"
+                aria-selected={index === mentionPick}
+                tabIndex={-1}
+                className={`mention-item${index === mentionPick ? " active" : ""}`}
+                onMouseEnter={() => setMentionIndex(index)}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onPickFile(path)}
               >
                 {path}
@@ -7043,6 +7366,9 @@ function Composer({
       <textarea
         ref={inputRef}
         className="composer-input"
+        aria-label="输入消息"
+        aria-controls={mentioning ? mentionListId : undefined}
+        aria-activedescendant={mentioning && fileHits.length ? `${mentionListId}-${mentionPick}` : undefined}
         defaultValue={draft}
         placeholder={
           !connected
@@ -7086,10 +7412,16 @@ function Composer({
         }}
         onKeyDown={(event) => {
           const composing = composingRef.current || event.nativeEvent.isComposing;
-          if (mentioning && event.key === "Enter" && !composing) {
-            if (fileHits[0]) {
+          if (mentioning && !composing && fileHits.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            const step = event.key === "ArrowDown" ? 1 : -1;
+            setMentionIndex((mentionPick + step + fileHits.length) % fileHits.length);
+            return;
+          }
+          if (mentioning && (event.key === "Enter" || event.key === "Tab") && !composing) {
+            if (fileHits[mentionPick]) {
               event.preventDefault();
-              onPickFile(fileHits[0]);
+              onPickFile(fileHits[mentionPick]);
             }
             return;
           }
@@ -7159,7 +7491,7 @@ function Composer({
         />
         <button
           type="button"
-          className={`mode-btn confirm-btn${policy === "plane" ? " on" : ""}`}
+          className={`mode-btn confirm-btn policy-btn${policy === "plane" ? " on" : ""}`}
           title={policy === "plane" ? "策略层：Ask 硬只读、按条放行、方言 overlay" : "现状路径，用于对照"}
           aria-label={policy === "plane" ? "策略层" : "现状"}
           onClick={() => setPolicy(policy === "plane" ? "baseline" : "plane")}
@@ -7203,6 +7535,16 @@ function Composer({
                 }}
               >
                 {confirmWrites ? "确认写入 · 开" : "确认写入"}
+              </button>
+              <button
+                type="button"
+                className={`narrow-only${policy === "plane" ? " on" : ""}`}
+                onClick={() => {
+                  setPolicy(policy === "plane" ? "baseline" : "plane");
+                  setMoreOpen(false);
+                }}
+              >
+                {policy === "plane" ? "策略层 · 开（点一下切回现状）" : "现状路径（点一下切到策略层）"}
               </button>
               {!busy ? (
                 <button

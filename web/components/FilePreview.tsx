@@ -73,16 +73,24 @@ function sameTab(a: string, b: string) {
 }
 
 function LoadingPreview({ onRetry }: { onRetry?: () => void }) {
+  // 刚开始读不用急着给重试；读了几秒还没出来再显示
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 4000);
+    return () => window.clearTimeout(timer);
+  }, []);
   return (
-    <div className="tree-empty">
-      正在读取文件…
-      {onRetry ? (
-        <>
-          {" "}
-          <button type="button" className="pill" onClick={onRetry}>
-            重试
-          </button>
-        </>
+    <div className="skeleton file-skeleton" role="status" aria-live="polite">
+      <span className="sr-only">正在读取文件…</span>
+      <div className="skel-block">
+        {["38%", "82%", "66%", "74%", "48%", "78%", "56%"].map((width, index) => (
+          <div key={index} className="skel-line" style={{ width }} />
+        ))}
+      </div>
+      {onRetry && slow ? (
+        <button type="button" className="pill" onClick={onRetry}>
+          读取较慢，重试
+        </button>
       ) : null}
     </div>
   );
@@ -473,7 +481,7 @@ export default function FilePreview({
               </div>
             ) : null}
             {canvasVisible ? null : live && kind === "canvas" ? (
-          <LoadingPreview onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
+          <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
         ) : live && kind === "markdown" ? (
           active.content != null ? (
             <MarkdownPreview
@@ -484,13 +492,13 @@ export default function FilePreview({
               onOpen={onOpenFile}
             />
           ) : (
-            <LoadingPreview onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
+            <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
         ) : live && kind === "html" ? (
           active.content != null ? (
             <HtmlPreview path={active.path} content={active.content} chatId={chatId} media={active.media} />
           ) : (
-            <LoadingPreview onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
+            <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
         ) : (kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio") &&
           (kind !== "svg" || live || active.diff) &&
@@ -506,7 +514,7 @@ export default function FilePreview({
               mime={active.mime}
             />
           ) : (
-            <LoadingPreview onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
+            <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
         ) : editing ? (
           <textarea
@@ -599,7 +607,7 @@ export default function FilePreview({
             mime={active.mime}
           />
         ) : (
-          <LoadingPreview onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
+          <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
         )}
           </>
         )}
