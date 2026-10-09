@@ -1905,7 +1905,7 @@ button[aria-pressed="true"] .rail-icon-tint,
   background: transparent;
   color: var(--muted);
   min-width: 28px;
-  flex: 0 2 auto;
+  flex: 0 0 auto;
   transition: background 180ms var(--ease-out), color 180ms var(--ease-out);
 }
 
@@ -5589,6 +5589,7 @@ button[aria-pressed="true"] .rail-icon-tint,
   flex: none;
 }
 
+.composer.density-mid .mode-label,
 .composer.density-compact .mode-label,
 .composer.density-tight .mode-label {
   max-width: 0;
@@ -5596,6 +5597,7 @@ button[aria-pressed="true"] .rail-icon-tint,
   margin: 0;
 }
 
+.composer.density-mid .mode-switch .mode-btn,
 .composer.density-compact .mode-switch .mode-btn,
 .composer.density-tight .mode-switch .mode-btn {
   gap: 0;
@@ -5607,11 +5609,13 @@ button[aria-pressed="true"] .rail-icon-tint,
   display: none;
 }
 
+.composer.density-mid .policy-btn,
 .composer.density-compact .policy-btn,
 .composer.density-tight .policy-btn {
   display: none;
 }
 
+.composer.density-mid .composer-menu .narrow-only,
 .composer.density-compact .composer-menu .narrow-only,
 .composer.density-tight .composer-menu .narrow-only {
   display: block;
@@ -5626,11 +5630,13 @@ button[aria-pressed="true"] .rail-icon-tint,
 }
 
 /* 窄屏下只有图标时看不出当前是哪种模式，选中的那个保留文字 */
+.composer.density-mid .mode-switch .mode-btn.on,
 .composer.density-compact .mode-switch .mode-btn.on,
 .composer.density-tight .mode-switch .mode-btn.on {
   gap: 4px;
 }
 
+.composer.density-mid .mode-switch .mode-btn.on .mode-label,
 .composer.density-compact .mode-switch .mode-btn.on .mode-label,
 .composer.density-tight .mode-switch .mode-btn.on .mode-label {
   max-width: 3em;

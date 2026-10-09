@@ -7211,7 +7211,7 @@ function Composer({
     if (!el) return;
     const apply = () => {
       const width = el.getBoundingClientRect().width;
-      const next = width <= 400 ? "tight" : width <= 480 ? "compact" : width <= 560 ? "mid" : "full";
+      const next = width <= 400 ? "tight" : width <= 480 ? "compact" : width <= 780 ? "mid" : "full";
       setDensity((prev) => (prev === next ? prev : next));
     };
     apply();
