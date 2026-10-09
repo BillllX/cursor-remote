@@ -3808,8 +3808,8 @@ button[aria-pressed="true"] .rail-icon-tint,
 }
 
 .files-browser {
-  width: min(720px, 100%);
-  height: min(780px, calc(100dvh - 64px));
+  width: min(880px, 100%);
+  height: min(860px, calc(100dvh - 64px));
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -4594,8 +4594,8 @@ button[aria-pressed="true"] .rail-icon-tint,
   }
 
   .files-browser {
-    width: min(680px, calc(100% - 24px));
-    height: min(820px, calc(100dvh - 32px));
+    width: min(880px, calc(100% - 32px));
+    height: min(860px, calc(100dvh - 32px));
     border-radius: var(--radius-lg);
   }
 
@@ -5946,7 +5946,6 @@ nextjs-portal {
     grid-row: 1 / -1;
   }
 
-  .app.ide.pane-files .sidebar,
   .app.ide.pane-git .sidebar,
   .app.ide.pane-search .sidebar,
   .app.ide.pane-terminal .sidebar,
@@ -5955,7 +5954,6 @@ nextjs-portal {
     display: none;
   }
 
-  .app.ide.pane-files > .files-overlay.open,
   .app.ide.pane-git > .files-overlay.open,
   .app.ide.pane-search > .search-overlay.open,
   .app.ide.pane-terminal > .search-overlay.open,
@@ -5977,7 +5975,6 @@ nextjs-portal {
     place-items: stretch;
   }
 
-  .app.ide.pane-files .files-browser,
   .app.ide.pane-git .files-browser,
   .app.ide.pane-search .search-box,
   .app.ide.pane-terminal .terminal-box,
@@ -6001,7 +5998,6 @@ nextjs-portal {
     flex: 1;
   }
 
-  .app.ide.pane-files .files-browser-changes,
   .app.ide.pane-git .file-tree,
   .app.ide.pane-git .tree-empty,
   .app.ide.pane-git .files-browser-search {

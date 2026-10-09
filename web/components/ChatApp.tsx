@@ -30,6 +30,7 @@ import type {
   ServerMessage,
   LoopState,
   HistoryTurn,
+  MediaTicket,
   AdminTenantStats,
   CursorBill,
 } from "../lib/protocol";
@@ -42,7 +43,7 @@ import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview"
 import { isCanvasPath } from "../lib/canvas/path";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
-import { isWideKind, kindFromPath, preferHttpText, tabKind } from "../lib/preview";
+import { isWideKind, kindFromPath, mediaSrc, preferHttpText, tabKind } from "../lib/preview";
 import { fetchPreviewText, peekPreviewText, putPreviewText } from "../lib/previewCache";
 import { clearBodies, dropBody, readBody, writeBody } from "../lib/chatCache";
 import { APPEARANCES, PALETTES, applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
@@ -754,6 +755,40 @@ function wrapCites(
 
 // react-markdown 以 children 和插件数组为依赖重新解析；插件和 components 引用稳定后，
 // 已经写完的回答在父组件重渲染时直接跳过，只有正在流式输出的那一条重新解析。
+/** 拉取工作区文件并交给浏览器保存；超限或失败时用 notify 说明原因 */
+async function saveWorkspaceFile(path: string, href: string, notify: (text: string) => void) {
+  const name = path.split("/").pop() || "file";
+  const saveAs = (url: string) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = name;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  };
+  try {
+    const res = await fetch(href, { cache: "no-store" });
+    if (!res.ok) {
+      notify(
+        res.status === 413
+          ? `${name} 太大，网页端下载上限：普通文件 2MB、图片 20MB、PDF/音频 40MB、视频 80MB`
+          : res.status === 404
+            ? `${name} 已不在工作区`
+            : `下载失败（${res.status}）`,
+      );
+      return;
+    }
+    const url = URL.createObjectURL(await res.blob());
+    saveAs(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    notify(`已下载 ${name}`);
+  } catch {
+    // 跨域等原因读不到内容时退回直接打开链接
+    saveAs(href);
+  }
+}
+
 const REMARK_PLUGINS = [remarkGfm];
 const MemoMarkdown = memo(Markdown);
 
@@ -1834,6 +1869,10 @@ export default function ChatApp() {
   const adminOpenRef = useRef(false);
   const terminalLogRef = useRef<HTMLDivElement>(null);
   const filesOpenRef = useRef(false);
+  /** 最近一次收到的媒体票据（按对话），右键下载直接拿来签地址 */
+  const mediaTicketRef = useRef<{ chatId: string; media: MediaTicket } | null>(null);
+  /** 还没拿到票据时先发 read_file 换一张，reqId → 路径 */
+  const pendingDownloadRef = useRef<Map<string, string>>(new Map());
   const grepQRef = useRef("");
   const appliedStoreRef = useRef(false);
   const stateRevRef = useRef(0);
@@ -2949,6 +2988,16 @@ export default function ChatApp() {
           break;
         case "file_content":
           {
+            const ticketChat = message.chatId || activeIdRef.current;
+            if (message.media && ticketChat) mediaTicketRef.current = { chatId: ticketChat, media: message.media };
+            const downloadPath = message.reqId ? pendingDownloadRef.current.get(message.reqId) : undefined;
+            if (message.reqId && downloadPath != null) {
+              pendingDownloadRef.current.delete(message.reqId);
+              const href = message.media && ticketChat ? mediaSrc(downloadPath, ticketChat, message.media) : "";
+              if (href) void saveWorkspaceFile(downloadPath, href, setNotice);
+              else setNotice("下载失败：没拿到下载凭证");
+              break;
+            }
             const cwd = cwdRef.current;
             const match = (path: string) => sameFile(path, message.path, cwd);
             if (message.chatId && message.chatId !== activeIdRef.current) break;
@@ -4006,6 +4055,30 @@ export default function ChatApp() {
     setSearchOpen(false);
     if (wideIDERef.current) setSidePane("files");
     setFilesOpen(true);
+  }
+
+  function closeFiles() {
+    setFilesOpen(false);
+    setFilesQuery("");
+    if (wideIDERef.current) setSidePane("chats");
+  }
+
+  /** 右键“下载”：有未过期的票据直接取，没有就先读一次文件换票据 */
+  function downloadWorkspaceFile(path: string) {
+    const chatId = activeIdRef.current;
+    if (!chatId) {
+      setNotice("没有打开的对话，没法下载");
+      return;
+    }
+    const ticket = mediaTicketRef.current;
+    if (ticket && ticket.chatId === chatId && ticket.media.exp - Date.now() > 5 * 60_000) {
+      void saveWorkspaceFile(path, mediaSrc(path, chatId, ticket.media), setNotice);
+      return;
+    }
+    const reqId = `dl:${crypto.randomUUID()}`;
+    pendingDownloadRef.current.set(reqId, path);
+    send({ type: "read_file", path, chatId, reqId });
+    setNotice("正在准备下载…");
   }
 
   function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") {
@@ -5269,6 +5342,9 @@ export default function ChatApp() {
   const loopTrap = useFocusTrap<HTMLFormElement>(loopOpen && !(wideIDE && sidePane === "loop"));
   const terminalTrap = useFocusTrap<HTMLDivElement>(terminalOpen && !(wideIDE && sidePane === "terminal"));
   const grepTrap = useFocusTrap<HTMLDivElement>(grepOpen && !(wideIDE && sidePane === "search"));
+  // 只有 Git 面板还嵌在侧栏里；文件浏览器是浮层
+  const filesDocked = wideIDE && sidePane === "git";
+  const filesTrap = useFocusTrap<HTMLDivElement>(filesOpen && !filesDocked);
 
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
@@ -5933,14 +6009,15 @@ export default function ChatApp() {
         <div
           className={`files-overlay${filesOpen ? " open" : ""}`}
           onClick={() => {
-            if (wideIDE && (sidePane === "files" || sidePane === "git")) return;
-            setFilesOpen(false);
-            setFilesQuery("");
+            if (filesDocked) return;
+            closeFiles();
           }}
         >
           <div
+            ref={filesTrap}
             className="files-browser"
             role="dialog"
+            aria-modal={filesDocked ? undefined : true}
             aria-label="文件浏览器"
             onClick={(event) => event.stopPropagation()}
           >
@@ -5955,11 +6032,7 @@ export default function ChatApp() {
                 type="button"
                 className="files-browser-close"
                 aria-label="关闭文件浏览器"
-                onClick={() => {
-                  if (wideIDE) setSidePane("chats");
-                  setFilesOpen(false);
-                  setFilesQuery("");
-                }}
+                onClick={closeFiles}
               >
                 ×
               </button>
@@ -5971,10 +6044,7 @@ export default function ChatApp() {
               value={filesQuery}
               onChange={(event) => setFilesQuery(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  setFilesOpen(false);
-                  setFilesQuery("");
-                }
+                if (event.key === "Escape") closeFiles();
               }}
             />
             <div className={`files-browser-body${wideIDE && sidePane === "git" ? " git-only" : ""}`}>
@@ -5991,10 +6061,7 @@ export default function ChatApp() {
                         title={path}
                         onClick={() => {
                           openFile(path, undefined, true);
-                          if (!wideIDERef.current) {
-                            setFilesOpen(false);
-                            setFilesQuery("");
-                          }
+                          if (!filesDocked) closeFiles();
                         }}
                       >
                         <FileGlyph path={path} />
@@ -6019,17 +6086,11 @@ export default function ChatApp() {
                 variant="browser"
                 onPick={(path) => {
                   handlePickFile(path);
-                  if (!wideIDERef.current) {
-                    setFilesOpen(false);
-                    setFilesQuery("");
-                  }
+                  if (!filesDocked) closeFiles();
                 }}
                 onOpen={(path) => {
                   openFile(path);
-                  if (!wideIDERef.current) {
-                    setFilesOpen(false);
-                    setFilesQuery("");
-                  }
+                  if (!filesDocked) closeFiles();
                 }}
                 onCopyPath={(path) => {
                   const clip = navigator.clipboard;
@@ -6042,6 +6103,7 @@ export default function ChatApp() {
                     () => setNotice("复制失败"),
                   );
                 }}
+                onDownload={downloadWorkspaceFile}
                 onCreate={handleTreeCreate}
                 onRename={handleTreeRename}
                 onDelete={handleTreeDelete}

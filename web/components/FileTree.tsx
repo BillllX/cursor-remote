@@ -287,6 +287,7 @@ export default function FileTree({
   onPick,
   onOpen,
   onCopyPath,
+  onDownload,
   onCreate,
   onRename,
   onDelete,
@@ -299,6 +300,7 @@ export default function FileTree({
   onPick: (path: string) => void;
   onOpen?: (path: string) => void;
   onCopyPath?: (path: string) => void;
+  onDownload?: (path: string) => void;
   onCreate?: (path: string, kind: "file" | "dir") => void;
   onRename?: (from: string, to: string) => void;
   onDelete?: (path: string, dir: boolean) => void;
@@ -540,7 +542,10 @@ export default function FileTree({
       {menu ? (
         <div
           className="tree-menu"
-          style={{ left: menu.x, top: menu.y }}
+          style={{
+            left: Math.max(4, Math.min(menu.x, window.innerWidth - 168)),
+            top: Math.max(4, Math.min(menu.y, window.innerHeight - 270)),
+          }}
           onClick={(event) => event.stopPropagation()}
         >
           {menu.dir ? null : (
@@ -565,6 +570,18 @@ export default function FileTree({
           >
             复制路径
           </button>
+          {onDownload && !menu.dir ? (
+            <button
+              type="button"
+              onClick={() => {
+                const path = menu.path;
+                setMenu(null);
+                onDownload(path);
+              }}
+            >
+              下载
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => startCreate(menu.dir ? menu.path : parentPath(menu.path), "file")}
