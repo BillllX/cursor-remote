@@ -34,8 +34,10 @@ struct ThreadView: View {
         self.init(chrome: phoneChrome ? .phoneLegacy : .pad, openDrawer: openDrawer)
     }
 
-    /// iPhone 助理页在 iOS 26+ 上把输入区做成浮在消息上的玻璃底栏（safeAreaBar），消息从它下面滚过去
-    private var floatsComposer: Bool { chrome == .embedded && JieboGlass.available }
+    /// iOS 26+ 把输入区做成浮在消息上的玻璃底栏（safeAreaBar）。iPhone、iPad 宽窗和窄窗同一套。
+    private var floatsComposer: Bool { JieboGlass.available }
+    /// iOS 17–25 用 safeAreaInset，不和列表抢高度。不与 safeAreaBar 同时开。
+    private var insetsComposer: Bool { !JieboGlass.available }
 
     var body: some View {
         @Bindable var store = store
@@ -44,7 +46,8 @@ struct ThreadView: View {
             thread
                 .overlay(alignment: .top) { floatingBanners }
                 .modifier(FloatingBottomBar(enabled: floatsComposer) { bottomStack })
-            if !floatsComposer {
+                .modifier(EmbeddedComposerInset(enabled: insetsComposer) { bottomStack })
+            if !floatsComposer && !insetsComposer {
                 bottomStack
             }
         }
@@ -382,15 +385,26 @@ struct ThreadView: View {
 
     // MARK: 对话流（P8：滚动跟随改造）
 
-    /// 停在底部时才跟随流式输出。用户往上拖超过一段距离后松开跟随。
+    /// 停在底部时才跟随流式输出。松开只认手势，恢复只认「回到最新」和重新钉顶。
     @State private var stickToBottom = true
-    /// 滚动视口高度，与底部锚点的 maxY 比较得出是否还在底部
+    /// 钉顶时的可视高度，用来撑当前轮的最小高度。
     @State private var viewportHeight: CGFloat = 0
-    /// 程序在滚到底时，几何探针的中间帧不能把跟随关掉
+    /// 程序滚动期间，相位和 minY 变化不算用户上滑。
     @State private var scrollingProgrammatically = false
+    /// 当前这一轮撑满一屏。新一轮钉上时清掉上一轮。iPhone 和 iPad 同一套。
+    @State private var pinnedTurnId: String?
+    /// 钉住时的可视高度。键盘变矮不减小，变高可以增大。
+    @State private var pinnedMinHeight: CGFloat = 0
+    /// 内容列高度一旦超过 pinnedMinHeight 就闩住，不再用底锚点的视口坐标判断。
+    @State private var pinExceeded = false
+    @State private var pinBaselineMinY: CGFloat?
+    @State private var pinBaselineReady = false
+    @State private var pinnedTurnMinY: CGFloat = 0
+    /// 程序滚动结束后的短窗口内，相位和 minY 变化不算用户上滑。
+    @State private var pinScrollGuardUntil = Date.distantPast
+    /// 贴底滚动之后，下一次 minY 只用来重记基线，不拿去和旧的钉顶位置比。
+    @State private var pinRecaptureBaseline = false
     @State private var followTask: Task<Void, Never>?
-    /// 节流用的时钟；引用类型，改它不触发重绘
-    @State private var followClock = FollowClock()
     /// showThreadLoading 持续超过 350ms 才亮的加载遮罩
     @State private var loadingVisible = false
 
@@ -460,34 +474,16 @@ struct ThreadView: View {
                                 .padding(.vertical, 4)
                                 .accessibilityAddTraits(.isHeader)
                         }
-                        TurnView(
-                            turn: turn,
-                            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
-                            embedded: chrome == .embedded,
-                            isLastAssistant: turn.id == allTurns.last?.id,
-                            reviewMark: store.localTurnReviews[turn.id],
-                            restoring: store.restoringTurnIds.contains(turn.id),
-                            captured: TodoReceipt.captured(in: turn, todos: store.assistantState?.todos),
-                            calendarInvite: turn.id == inviteTurnId ? store.assistantState?.calendar : nil
+                        pinnedTurn(
+                            turn,
+                            index: index,
+                            turns: turns,
+                            inviteTurnId: inviteTurnId
                         )
-                            // 流式只改最后一轮：其余轮次入参不变就不重算 body
-                            .equatable()
-                            .id(turn.id)
-                            .transition(.opacity.combined(with: .offset(y: 10)))
                     }
-                    // 底部锚点兼任位置探针
                     Color.clear
                         .frame(height: 1)
                         .id("thread-end")
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear
-                                    .onAppear { noteEndPosition(geo.frame(in: .named("threadScroll")).maxY) }
-                                    .onChange(of: geo.frame(in: .named("threadScroll")).maxY) { _, y in
-                                        noteEndPosition(y)
-                                    }
-                            }
-                        )
                 }
                 .padding(.horizontal, chrome == .embedded ? 16 : 24)
                 .padding(.top, 12)
@@ -496,19 +492,21 @@ struct ThreadView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .coordinateSpace(name: "threadScroll")
-            // 浮动底栏盖住的那截不算可见区，否则「在底部」的判断会松一个底栏高
-            .onAppear { viewportHeight = geo.size.height - geo.safeAreaInsets.bottom }
-            .onChange(of: geo.size.height - geo.safeAreaInsets.bottom) { _, h in viewportHeight = h }
-            .onChange(of: geo.size.width) { _, _ in
-                // 侧栏或转屏改变折行，高度会变，停在底部时再对齐一次
-                followBottom(proxy)
+            // 可视高度 = 这一层 GeometryReader 的高度减去 bottom safe area。
+            // iOS 17–25 的 safeAreaInset 和 iOS 26 的 safeAreaBar 都挂在这一层外面，输入框算进 inset，这里不要再减一次。
+            .onAppear {
+                let height = geo.size.height - geo.safeAreaInsets.bottom
+                viewportHeight = height
+                guard height > 1, pinnedMinHeight <= 1, let id = store.active?.turns.last?.id else { return }
+                pinToTurn(id, proxy: proxy, height: height)
             }
+            .onChange(of: geo.size.height - geo.safeAreaInsets.bottom) { _, h in viewportHeight = h }
             .overlay(alignment: .bottom) {
                 Group {
                     if !stickToBottom {
                         Button {
                             stickToBottom = true
-                            followBottom(proxy, animated: true)
+                            revealLatest(proxy, animated: true)
                         } label: {
                             ZStack(alignment: .topTrailing) {
                                 Image(systemName: "arrow.down")
@@ -561,35 +559,65 @@ struct ThreadView: View {
                 if !Task.isCancelled, showThreadLoading { loadingVisible = true }
             }
             .modifier(StartAtBottom())
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 12).onChanged { value in
-                    // 手指向下拖是在离开底部、看更早的内容
-                    guard value.translation.height > 16 else { return }
-                    followTask?.cancel()
-                    scrollingProgrammatically = false
-                    stickToBottom = false
-                }
-            )
-            .onChange(of: store.active?.turns.count) { _, _ in followBottom(proxy) }
-            .onChange(of: liveTail) { _, _ in followStream(proxy) }
-            .onChange(of: store.active?.turns.last?.running) { _, running in
-                // 流式时只补滚一次；停更后最后一块（代码、表格）还会长高，按完整节奏再对齐
-                if running == false { followBottom(proxy) }
+            .modifier(EmbeddedScrollPhase(enabled: true) {
+                releaseFollow()
+            })
+            .modifier(UnstickDrag(embedded: true) {
+                releaseFollow()
+            })
+            .onChange(of: store.active?.turns.count) { _, _ in
+                guard let id = store.active?.turns.last?.id else { return }
+                pinToTurn(id, proxy: proxy, height: viewportHeight)
             }
-            .onChange(of: viewportHeight) { _, _ in
-                followBottom(proxy)
+            .onChange(of: liveTail) { _, _ in
+                guard pinExceeded, stickToBottom else { return }
+                scrollToEndNow(proxy)
+            }
+            .onChange(of: store.active?.turns.last?.running) { _, running in
+                // 流式时不追；停更后代码和表格还会长高，超出钉顶才再贴一次底
+                guard running == false, pinExceeded, stickToBottom else { return }
+                scrollToEndNow(proxy)
+                followTask?.cancel()
+                followTask = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(80))
+                    guard !Task.isCancelled, stickToBottom, pinExceeded else { return }
+                    scrollToEndNow(proxy)
+                }
+            }
+            .onChange(of: viewportHeight) { _, newHeight in
+                guard newHeight > 1 else { return }
+                if pinnedTurnId != nil, pinnedMinHeight <= 1 {
+                    pinnedMinHeight = newHeight
+                    if let id = pinnedTurnId {
+                        pinToTurn(id, proxy: proxy, height: newHeight)
+                    }
+                } else if pinnedTurnId != nil, newHeight > pinnedMinHeight {
+                    pinnedMinHeight = newHeight
+                }
             }
             .onChange(of: store.activeId) { _, id in
-                // 切会话：直接落底。motionChatId 晚一帧对齐，插入动画不会在切换时重播。
+                // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
                 followTask?.cancel()
                 stickToBottom = true
                 motionChatId = id
-                followBottom(proxy)
+                if let last = store.active?.turns.last?.id, viewportHeight > 1 {
+                    pinToTurn(last, proxy: proxy, height: viewportHeight)
+                } else {
+                    pinnedTurnId = store.active?.turns.last?.id
+                    pinExceeded = false
+                    pinBaselineReady = false
+                    pinBaselineMinY = nil
+                }
             }
             .onAppear {
                 motionChatId = store.activeId
                 stickToBottom = true
-                followBottom(proxy)
+                if let last = store.active?.turns.last?.id, viewportHeight > 1 {
+                    pinToTurn(last, proxy: proxy, height: viewportHeight)
+                } else {
+                    pinnedTurnId = store.active?.turns.last?.id
+                    pinExceeded = false
+                }
             }
         }
         }
@@ -598,6 +626,149 @@ struct ThreadView: View {
     private func renderedTurnLimit(for chatId: String, total: Int) -> Int {
         let stored = renderedTurnLimitByChat[chatId] ?? Self.initialRenderedTurns
         return min(total, max(Self.initialRenderedTurns, stored))
+    }
+
+    /// 最小高度加在内容列外面，背景里的 GeometryReader 量到的是内容高度，不是撑开后的外框。
+    @ViewBuilder
+    private func pinnedTurn(_ turn: Turn, index: Int, turns: [Turn], inviteTurnId: String?) -> some View {
+        let pinned = pinnedTurnId == turn.id
+        TurnView(
+            turn: turn,
+            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
+            embedded: chrome == .embedded,
+            isLastAssistant: turn.id == turns.last?.id,
+            reviewMark: store.localTurnReviews[turn.id],
+            restoring: store.restoringTurnIds.contains(turn.id),
+            captured: TodoReceipt.captured(in: turn, todos: store.assistantState?.todos),
+            calendarInvite: turn.id == inviteTurnId ? store.assistantState?.calendar : nil
+        )
+        .equatable()
+        .background {
+            if pinned {
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear {
+                            notePinContentHeight(geo.size.height)
+                            notePinnedMinY(geo.frame(in: .named("threadScroll")).minY)
+                        }
+                        .onChange(of: geo.size.height) { _, height in
+                            notePinContentHeight(height)
+                        }
+                        .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, y in
+                            notePinnedMinY(y)
+                        }
+                }
+            }
+        }
+        .frame(minHeight: pinned ? pinnedMinHeight : 0, alignment: .top)
+        .id(turn.id)
+        .transition(.opacity.combined(with: .offset(y: 10)))
+    }
+
+    /// 把这一轮顶对齐到可视区上方。height 还没量到时只记下 id，等 viewportHeight 再滚。
+    private func pinToTurn(_ id: String, proxy: ScrollViewProxy, height: CGFloat) {
+        pinnedTurnId = id
+        pinExceeded = false
+        pinRecaptureBaseline = false
+        pinBaselineMinY = nil
+        pinBaselineReady = false
+        stickToBottom = true
+        guard height > 1 else { return }
+        pinnedMinHeight = height
+        armScrollGuard()
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled, pinnedTurnId == id else { return }
+            scrollWithoutAnimation(proxy, id: id, anchor: .top)
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled, pinnedTurnId == id else { return }
+            scrollingProgrammatically = false
+            pinBaselineMinY = pinnedTurnMinY
+            pinBaselineReady = true
+        }
+    }
+
+    private func revealLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        armScrollGuard()
+        let scroll = {
+            if pinExceeded {
+                proxy.scrollTo("thread-end", anchor: .bottom)
+            } else if let id = pinnedTurnId {
+                proxy.scrollTo(id, anchor: .top)
+            }
+        }
+        if animated {
+            withAnimation(.easeOut(duration: 0.25)) { scroll() }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { scroll() }
+        }
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(280))
+            guard !Task.isCancelled else { return }
+            scrollingProgrammatically = false
+            pinBaselineMinY = pinnedTurnMinY
+            pinBaselineReady = true
+        }
+    }
+
+    /// 超出钉顶之后才贴底。贴底后的下一次 minY 当作新基线，上滑 24pt 就能松开。
+    private func scrollToEndNow(_ proxy: ScrollViewProxy) {
+        guard stickToBottom else { return }
+        pinRecaptureBaseline = true
+        scrollingProgrammatically = true
+        scrollWithoutAnimation(proxy, id: "thread-end", anchor: .bottom)
+        scrollingProgrammatically = false
+    }
+
+    private func scrollWithoutAnimation(_ proxy: ScrollViewProxy, id: String, anchor: UnitPoint) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(id, anchor: anchor)
+        }
+    }
+
+    private func armScrollGuard() {
+        scrollingProgrammatically = true
+        pinScrollGuardUntil = Date().addingTimeInterval(0.32)
+    }
+
+    private func releaseFollow() {
+        guard Date() >= pinScrollGuardUntil else { return }
+        followTask?.cancel()
+        scrollingProgrammatically = false
+        stickToBottom = false
+    }
+
+    private func notePinContentHeight(_ height: CGFloat) {
+        guard pinnedMinHeight > 1 else { return }
+        if height > pinnedMinHeight + 0.5 {
+            pinExceeded = true
+        }
+    }
+
+    /// iOS 17 没有滚动相位。基线是最近一次定位后的位置：钉顶时在轮顶，贴底后改到贴底位置。
+    private func notePinnedMinY(_ y: CGFloat) {
+        pinnedTurnMinY = y
+        guard Date() >= pinScrollGuardUntil else { return }
+        if pinRecaptureBaseline {
+            pinBaselineMinY = y
+            pinRecaptureBaseline = false
+            pinBaselineReady = true
+            return
+        }
+        guard pinBaselineReady else { return }
+        if pinBaselineMinY == nil {
+            pinBaselineMinY = y
+            return
+        }
+        if let baseline = pinBaselineMinY, y > baseline + 24 {
+            releaseFollow()
+        }
     }
 
     /// 在列表顶部 prepend 更早轮次后，锚定原先最上面那一轮，避免整页跳动
@@ -627,57 +798,6 @@ struct ThreadView: View {
         }
     }
 
-    /// 流式每个 token 都会改 liveTail：最多每 50ms 跟一次，其间来的合并成一次尾随滚动
-    private func followStream(_ proxy: ScrollViewProxy) {
-        guard stickToBottom else { return }
-        let clock = followClock
-        let elapsed = Date().timeIntervalSince(clock.last)
-        if elapsed >= FollowClock.interval {
-            clock.last = Date()
-            followBottom(proxy, settle: [40])
-            return
-        }
-        guard clock.pending == nil else { return }
-        clock.pending = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(FollowClock.interval - elapsed))
-            clock.pending = nil
-            guard !Task.isCancelled else { return }
-            clock.last = Date()
-            followBottom(proxy, settle: [40])
-        }
-    }
-
-    /// 跟随流式输出。布局往往晚一帧才完成，所以紧接着再滚几次，避免停在旧高度。
-    /// settle：补滚的间隔；流式节流时只补一次，下一次 token 会接着跟
-    private func followBottom(_ proxy: ScrollViewProxy, animated: Bool = false, settle: [Int] = [40, 100, 180, 380]) {
-        guard stickToBottom else { return }
-        scrollingProgrammatically = true
-        let scroll = {
-            proxy.scrollTo("thread-end", anchor: .bottom)
-        }
-        if animated {
-            withAnimation(.easeOut(duration: 0.25)) { scroll() }
-        } else {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { scroll() }
-        }
-        followTask?.cancel()
-        followTask = Task { @MainActor in
-            // 计划正文是逐行排的，高度常常晚于前两帧才定下来。停早了会落在旧高度上。
-            // 间隔累加后大约落在 40 / 140 / 320 / 700 毫秒。
-            for delay in settle {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled, stickToBottom else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { proxy.scrollTo("thread-end", anchor: .bottom) }
-            }
-            guard !Task.isCancelled else { return }
-            scrollingProgrammatically = false
-        }
-    }
-
     /// 最后一轮的正文、思考、工具和确认都会变高。只盯 assistant 的话，调工具时不会滚。
     private var liveTail: String {
         guard let turn = store.active?.turns.last else { return "" }
@@ -686,19 +806,6 @@ struct ThreadView: View {
             return "\(tool.callId):\(tool.status):\(size):\(tool.summary.count)"
         }.joined(separator: ",")
         return "\(turn.id)|\(turn.running)|\(turn.assistant.count)|\(turn.thinking.count)|\(turn.task ?? "")|\(turn.pendingTool?.callId ?? "")|\(tools)"
-    }
-
-    private func noteEndPosition(_ endMaxY: CGFloat) {
-        guard viewportHeight > 1 else { return }
-        let gap = endMaxY - viewportHeight
-        if scrollingProgrammatically {
-            if gap <= 72 { stickToBottom = true }
-            return
-        }
-        // 长方案折行后底锚点会先被顶出视口。这不是用户离开底部，离开只认手势。
-        if gap <= 64 {
-            stickToBottom = true
-        }
     }
 
     private var showThreadLoading: Bool {
@@ -1775,7 +1882,7 @@ struct AttachmentViewer: View {
     }
 }
 
-/// 流式时每个 token 都会改 text；排版（含 @路径改链接）最多每 100ms 一次，停下立刻排完整版
+/// 流式时每个 token 都会改 text。界面只读 rendered：换行或 80ms 才排一次，停下立刻排完整版。
 private struct StreamingAssistantText: View {
     let text: String
     let live: Bool
@@ -1786,7 +1893,8 @@ private struct StreamingAssistantText: View {
     @State private var flush: Task<Void, Never>?
 
     var body: some View {
-        ChunkedAssistantMessage(text: live ? (rendered ?? transform(text)) : transform(text))
+        // live 时禁止在 body 里 transform：父视图每个 token 都会重算，那会把节流绕开。
+        ChunkedAssistantMessage(text: live ? (rendered ?? "") : transform(text))
             .equatable()
             .onAppear {
                 latest = text
@@ -1795,16 +1903,15 @@ private struct StreamingAssistantText: View {
             .onChange(of: text) { old, value in
                 latest = value
                 guard live else { return }
-                // 不是在末尾追加（文件卡片插进来、分段重切，ForEach 按下标复用了这份状态）：立刻排，不等节流
-                if !value.hasPrefix(old) {
-                    flush?.cancel()
-                    flush = nil
-                    rendered = transform(value)
+                let appended = value.hasPrefix(old)
+                let delta = appended ? String(value.dropFirst(old.count)) : ""
+                if !appended || delta.contains("\n") {
+                    flushNow(value)
                     return
                 }
                 guard flush == nil else { return }
                 flush = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(100))
+                    try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled else { return }
                     rendered = transform(latest)
                     flush = nil
@@ -1813,12 +1920,21 @@ private struct StreamingAssistantText: View {
             .onChange(of: live) { _, isLive in
                 flush?.cancel()
                 flush = nil
-                rendered = isLive ? transform(latest) : nil
+                rendered = isLive ? transform(latest.isEmpty ? text : latest) : nil
             }
             .onDisappear {
+                if live {
+                    rendered = transform(latest.isEmpty ? text : latest)
+                }
                 flush?.cancel()
                 flush = nil
             }
+    }
+
+    private func flushNow(_ value: String) {
+        flush?.cancel()
+        flush = nil
+        rendered = transform(value)
     }
 }
 
@@ -2686,11 +2802,19 @@ private struct AssistantActionRow: View {
     }
 }
 
-@MainActor
-private final class FollowClock {
-    static let interval: Double = 0.05
-    var last = Date.distantPast
-    var pending: Task<Void, Never>?
+/// iOS 17–25：输入区放进底部 safe area，键盘只改这块留白。
+/// 挂在包住 ScrollView 的 GeometryReader 外面，和 safeAreaBar 二选一。iPhone 与 iPad 都用。
+private struct EmbeddedComposerInset<Bar: View>: ViewModifier {
+    var enabled: Bool
+    @ViewBuilder var bar: () -> Bar
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content.safeAreaInset(edge: .bottom, spacing: 0) { bar() }
+        } else {
+            content
+        }
+    }
 }
 
 /// iOS 26+：内容挂一条底部 safeAreaBar（系统给滚动边缘做柔化）；其它情况原样返回，由调用方把底栏排在 VStack 里
@@ -2712,7 +2836,8 @@ private struct FloatingBottomBar<Bar: View>: ViewModifier {
 }
 
 /// 打开会话时直接停在底部，不先从顶上画一帧再跳下去。
-/// 只管初始位置：iOS 17 的 defaultScrollAnchor 还会在内容变高时贴底，会和 stickToBottom 的跟随打架
+/// 只管初始位置：不带 for: 的 defaultScrollAnchor 还会在内容变高时贴底。
+/// 不要加 .sizeChanges，否则钉顶会被系统重新贴到底部。
 private struct StartAtBottom: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -2725,6 +2850,53 @@ private struct StartAtBottom: ViewModifier {
 }
 
 
+/// iOS 17 没有滚动相位，手指下拖超过 16pt 就松开跟随。
+/// iOS 18 起改看相位，不再叠这层手势。iPhone 和 iPad 同一套。
+private struct UnstickDrag: ViewModifier {
+    var embedded: Bool
+    var onRelease: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if embedded {
+            if #available(iOS 18.0, *) {
+                content
+            } else {
+                content.simultaneousGesture(drag)
+            }
+        } else {
+            content.simultaneousGesture(drag)
+        }
+    }
+
+    private var drag: some Gesture {
+        DragGesture(minimumDistance: 12).onChanged { value in
+            guard value.translation.height > 16 else { return }
+            onRelease()
+        }
+    }
+}
+
+/// iOS 18+：用户拖动、跟踪、减速时松开跟随。程序滚动后的短窗口由调用方挡住。
+private struct EmbeddedScrollPhase: ViewModifier {
+    var enabled: Bool
+    var onUserScroll: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), enabled {
+            content.onScrollPhaseChange { _, phase in
+                switch phase {
+                case .interacting, .tracking, .decelerating:
+                    onUserScroll()
+                default:
+                    break
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
 /// 一段时间没有新输出时的提示：4 秒起「仍在处理…」，15 秒起带秒数并给一个停止按钮（对齐网页）。
 /// 单独成 View，只有它读 store.stallSeconds，每秒刷新不影响整条对话。
 struct StallHintRow: View {
