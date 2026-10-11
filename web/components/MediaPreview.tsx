@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { formatBytes, previewSrc } from "../lib/preview";
-import type { PreviewKind } from "../lib/protocol";
+import type { PreviewKind } from "@shared/protocol";
 
 export default function MediaPreview({
   kind,

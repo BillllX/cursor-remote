@@ -1,0 +1,48 @@
+name: ios-contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/Jiebo/Jiebo/Gateway/**"
+      - "ios/Jiebo/Jiebo/Session/**"
+      - "ios/ContractTests/**"
+      - "shared/**"
+      - "scripts/check-ios-protocol.sh"
+      - "scripts/check-ios-client.mts"
+      - "gateway/test/protocolTypes.ts"
+      - ".github/workflows/ios-contract.yml"
+  pull_request:
+    paths:
+      - "ios/Jiebo/Jiebo/Gateway/**"
+      - "ios/Jiebo/Jiebo/Session/**"
+      - "ios/ContractTests/**"
+      - "shared/**"
+      - "scripts/check-ios-protocol.sh"
+      - "scripts/check-ios-client.mts"
+      - "gateway/test/protocolTypes.ts"
+      - ".github/workflows/ios-contract.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios-protocol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: iOS 协议契约（server 解码快照 + client 字段检查）
+        run: npm run check:ios-protocol
+        env:
+          REQUIRE_SWIFT: "1"

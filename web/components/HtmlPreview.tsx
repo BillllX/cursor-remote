@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { mediaSrc, rewriteHtml } from "../lib/preview";
-import type { MediaTicket } from "../lib/protocol";
+import type { MediaTicket } from "@shared/protocol";
 
 export default function HtmlPreview({
   path,

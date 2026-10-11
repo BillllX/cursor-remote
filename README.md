@@ -82,9 +82,13 @@ npm run dev
 
 ## 检查与 CI
 
-`npm run ci` 依次跑协议一致性、lint、格式检查、单元测试、网关类型检查、冒烟测试和网页构建，不需要模型密钥。推到 `main` 时 GitHub Actions（`.github/workflows/ci.yml`）跑同一条命令；只改 `ios/` 或 Markdown 不触发。
+网页与网关共用 `shared/`（协议类型、预览判定、子代理角色等）：网页通过 `@shared/*` 引用，`next build` 时打进 `.next`，部署网页仍只需要 `web/`；网关由 tsx 直接跑 `shared/` 源码。
 
-单项命令：`npm run lint`（ESLint，存量问题只报 warning）、`npm test`（`gateway/test/*.test.ts`，node:test）、`npm run format:check` / `npm run format`（Prettier）。`.prettierignore` 里「遗留文件」区块是还没格式化的老文件，新文件必须合规；格式化完老文件后跑 `npm run format:baseline` 刷新名单。`SWIFT_BIN=<工具链 bin 目录> npm run lint:swift` 解析全部 Swift 并对改动文件给 swift-format 提示，CI 不跑。
+`npm run ci` 依次跑 lint、格式检查、单元测试、网关类型检查、脚本类型检查、冒烟测试和网页构建，不需要模型密钥。推到 `main` 时 GitHub Actions（`.github/workflows/ci.yml`）跑同一条命令；只改 `ios/` 或 Markdown 不触发。
+
+单项命令：`npm run lint`（ESLint，存量问题只报 warning）、`npm test`（`gateway/test/*.test.ts`，node:test）、`npm run format:check` / `npm run format`（Prettier）、`npm run typecheck:scripts`（`scripts/*.mts`，用 `scripts/tsconfig.json`；需要 TS 的脚本用 `.mts` 后缀，按 ESM 跑）。`.prettierignore` 里「遗留文件」区块是还没格式化的老文件，新文件必须合规；格式化完老文件后跑 `npm run format:baseline` 刷新名单。`SWIFT_BIN=<工具链 bin 目录> npm run lint:swift` 解析全部 Swift 并对改动文件给 swift-format 提示，CI 不跑。
+
+协议金样本在 `shared/protocol-fixtures.ts`。改了 `shared/protocol.ts` 就同步改样本（`npm test` 会检查每个 type 都有样本），再跑 `npm run gen:protocol-fixtures` 重生成 `shared/fixtures/protocol.json`，然后用 `SWIFT_BIN=<工具链 bin 目录> npm run check:ios-protocol` 在本地跑 iOS 契约。iOS 解码结果有预期变化时加 `-- --update` 重写 `ios/ContractTests/server-decode.snapshot.txt`；iOS 故意不处理的 type 写进 `ios/ContractTests/ios-ignored-server-types.txt`。改到 `ios/Jiebo/Jiebo/Gateway`、`Session`、`ios/ContractTests` 或 `shared/` 时，`.github/workflows/ios-contract.yml` 会在 GitHub Actions 上跑同一个检查。
 
 `scripts/ci-gateway-smoke.sh` 会在临时目录里生成两个测试用户（管理员和普通用户，口令随机），起一个独立网关跑 `slim-smoke`、`resume-smoke`，结束后清掉。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
 

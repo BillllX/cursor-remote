@@ -1,0 +1,1107 @@
+{
+  "comment": "由 shared/protocol-fixtures.ts 生成，不要手改；改完样本跑 npm run gen:protocol-fixtures",
+  "server": [
+    {
+      "type": "ready",
+      "admin": true,
+      "agentId": "agent-4d2c8b6a-0e1f",
+      "assistantChatId": "c-assistant-01",
+      "assistantName": "阿驳",
+      "cwd": "/workspace/demo/notes",
+      "features": ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats"],
+      "hasApiKey": true,
+      "loops": [
+        {
+          "chatId": "c-7f3a9e21",
+          "goal": "每小时检查一次构建",
+          "intervalSec": 3600,
+          "lastSummary": "构建通过",
+          "maxTicks": 24,
+          "nextAt": 1739003600000,
+          "status": "armed",
+          "tick": 2
+        }
+      ],
+      "model": "claude-4.6-sonnet",
+      "models": ["composer-2.5", "claude-4.6-sonnet", "minimax:MiniMax-M2"],
+      "policy": "plane",
+      "queuedChatIds": ["c-child-5b10"],
+      "runningChatIds": ["c-7f3a9e21"],
+      "tenantId": "demo",
+      "tenantName": "演示租户",
+      "workspaceRoot": "/workspace/demo"
+    },
+    {
+      "type": "workspaces",
+      "items": [
+        {
+          "name": "notes",
+          "path": "/workspace/demo/notes",
+          "user": true
+        },
+        {
+          "name": "app",
+          "path": "/workspace/demo/app"
+        }
+      ],
+      "root": "/workspace/demo"
+    },
+    {
+      "type": "workspace_created",
+      "name": "slides",
+      "path": "/workspace/demo/slides"
+    },
+    {
+      "type": "workspace_renamed",
+      "from": "/workspace/demo/slides",
+      "name": "talks",
+      "path": "/workspace/demo/talks"
+    },
+    {
+      "type": "workspace_removed",
+      "mode": "deleted",
+      "name": "old",
+      "path": "/workspace/demo/old"
+    },
+    {
+      "type": "session",
+      "agentId": "agent-4d2c8b6a-0e1f",
+      "chatId": "c-7f3a9e21",
+      "cwd": "/workspace/demo/notes"
+    },
+    {
+      "type": "run_meta",
+      "chatId": "c-7f3a9e21",
+      "dialect": false,
+      "mode": "plan",
+      "model": "claude-4.6-sonnet",
+      "policy": "plane"
+    },
+    {
+      "type": "text-delta",
+      "chatId": "c-7f3a9e21",
+      "text": "已修好：路由守卫漏了 await。"
+    },
+    {
+      "type": "thinking-delta",
+      "chatId": "c-7f3a9e21",
+      "text": "先看路由守卫"
+    },
+    {
+      "type": "tool-started",
+      "agent": "explore",
+      "args": {
+        "limit": 200,
+        "path": "src/login.ts"
+      },
+      "at": 6,
+      "callId": "call-r1",
+      "chatId": "c-7f3a9e21",
+      "model": "composer-2.5",
+      "name": "read",
+      "parentCallId": "call-task-0"
+    },
+    {
+      "type": "tool-completed",
+      "agent": "explore",
+      "callId": "call-r1",
+      "chatId": "c-7f3a9e21",
+      "model": "composer-2.5",
+      "name": "read",
+      "parentCallId": "call-task-0",
+      "result": {
+        "error": "文件不存在"
+      },
+      "status": "error"
+    },
+    {
+      "type": "task",
+      "chatId": "c-7f3a9e21",
+      "text": "检查路由守卫"
+    },
+    {
+      "type": "status",
+      "chatId": "c-7f3a9e21",
+      "message": "同时跑的任务已满，排队中",
+      "status": "QUEUED"
+    },
+    {
+      "type": "status",
+      "status": "IDLE"
+    },
+    {
+      "type": "error",
+      "chatId": "c-7f3a9e21",
+      "message": "模型暂时不可用，请稍后重试"
+    },
+    {
+      "type": "error",
+      "message": "未登录"
+    },
+    {
+      "type": "approval",
+      "agent": "writer",
+      "args": {
+        "contents": "# 讲稿",
+        "path": "slides.md"
+      },
+      "callId": "call-w1",
+      "chatId": "c-7f3a9e21",
+      "model": "composer-2.5",
+      "name": "write",
+      "parentCallId": "call-task-0"
+    },
+    {
+      "type": "done",
+      "approvals": 2,
+      "chatId": "c-7f3a9e21",
+      "dialect": false,
+      "durationMs": 12345,
+      "intercepts": 1,
+      "policy": "plane",
+      "replays": 1,
+      "status": "error",
+      "toolStarts": 5
+    },
+    {
+      "type": "policy",
+      "chatId": "c-7f3a9e21",
+      "policy": "plane"
+    },
+    {
+      "type": "files",
+      "chatId": "c-7f3a9e21",
+      "mention": true,
+      "paths": ["src/login.ts", "src/login.test.ts"],
+      "query": "login",
+      "status": {
+        "src/login.test.ts": "A",
+        "src/login.ts": "M"
+      },
+      "truncated": true
+    },
+    {
+      "type": "search_hits",
+      "chatId": "c-7f3a9e21",
+      "hits": [
+        {
+          "line": 42,
+          "path": "src/router.ts",
+          "text": "  await guard(to);"
+        }
+      ],
+      "query": "await guard",
+      "truncated": true
+    },
+    {
+      "type": "file_content",
+      "chatId": "c-7f3a9e21",
+      "content": "@@ -1,3 +1,4 @@\n-import a\n+import b\n",
+      "diff": true,
+      "error": "历史版本已清理",
+      "headUrl": "/media?path=src%2Flogin.ts&chatId=c-7f3a9e21&rev=HEAD&exp=1739003600&sig=example",
+      "kind": "markdown",
+      "media": {
+        "exp": 1739003600,
+        "sig": "example-signature"
+      },
+      "mime": "text/markdown",
+      "path": "src/login.ts",
+      "reqId": "rq-17",
+      "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "size": 2048,
+      "truncated": true,
+      "url": "/media?path=src%2Flogin.ts&chatId=c-7f3a9e21&exp=1739003600&sig=example"
+    },
+    {
+      "type": "turn_files",
+      "chatId": "c-7f3a9e21",
+      "files": [
+        {
+          "added": 12,
+          "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+          "kind": "text",
+          "op": "modified",
+          "path": "src/login.ts",
+          "removed": 3,
+          "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+          "size": 2048
+        },
+        {
+          "kind": "image",
+          "op": "added",
+          "path": "docs/截图.png",
+          "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+          "size": 48213
+        }
+      ],
+      "turnId": "t-1739000000000-k2"
+    },
+    {
+      "type": "file_written",
+      "chatId": "c-7f3a9e21",
+      "error": "磁盘已满",
+      "path": "notes/todo.md"
+    },
+    {
+      "type": "file_uploaded",
+      "chatId": "c-7f3a9e21",
+      "error": "超过 36MB",
+      "id": "up-3",
+      "name": "截图.png",
+      "path": ".cursor-remote/uploads/截图.png",
+      "size": 48213
+    },
+    {
+      "type": "fs_done",
+      "chatId": "c-7f3a9e21",
+      "error": "目标已存在",
+      "op": "rename",
+      "path": "notes/a.md",
+      "to": "notes/b.md"
+    },
+    {
+      "type": "stored_state",
+      "chatRevs": {
+        "c-7f3a9e21": 41,
+        "c-child-5b10": 38
+      },
+      "chats": [
+        {
+          "cwd": "/workspace/demo/notes",
+          "id": "c-7f3a9e21",
+          "mode": "agent",
+          "model": "composer-2.5",
+          "preview": "已修好：路由守卫漏了 await。",
+          "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"],
+          "title": "修登录",
+          "updatedAt": 1739000009000
+        }
+      ],
+      "deletedIds": ["c-deleted-1"],
+      "rev": 41
+    },
+    {
+      "type": "stored_state_deferred",
+      "rev": 41
+    },
+    {
+      "type": "sync_ack",
+      "chatRevs": {
+        "c-7f3a9e21": 42
+      },
+      "keptBodies": true,
+      "rev": 42,
+      "reviewOnly": true,
+      "truncated": true
+    },
+    {
+      "type": "sync_ack",
+      "chatRevs": {
+        "c-7f3a9e21": 43
+      },
+      "rev": 43,
+      "truncated": false
+    },
+    {
+      "type": "stored_digest",
+      "chatRevs": {
+        "c-7f3a9e21": 44
+      },
+      "deletedIds": ["c-deleted-2"],
+      "reason": "changed",
+      "rev": 44
+    },
+    {
+      "type": "stored_digest",
+      "chatRevs": {
+        "c-7f3a9e21": 45
+      },
+      "reason": "rejected",
+      "rev": 45
+    },
+    {
+      "type": "stored_chat",
+      "chat": {
+        "cwd": "/workspace/demo/notes",
+        "id": "c-7f3a9e21",
+        "mode": "agent",
+        "model": "composer-2.5",
+        "preview": "已修好：路由守卫漏了 await。",
+        "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"],
+        "title": "修登录",
+        "updatedAt": 1739000009000
+      },
+      "rev": 44
+    },
+    {
+      "type": "chat_turns",
+      "chatId": "c-7f3a9e21",
+      "from": 100,
+      "hasMore": true,
+      "nonce": 3,
+      "total": 230,
+      "turns": [
+        {
+          "assistant": "已修好：路由守卫漏了 await。",
+          "files": [
+            {
+              "added": 12,
+              "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+              "kind": "text",
+              "op": "modified",
+              "path": "src/login.ts",
+              "removed": 3,
+              "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+              "size": 2048
+            },
+            {
+              "kind": "image",
+              "op": "added",
+              "path": "docs/截图.png",
+              "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+              "size": 48213
+            }
+          ],
+          "id": "t-1739000000000-k2",
+          "startedAt": 1739000000000,
+          "thinking": "先看路由守卫",
+          "tools": [
+            {
+              "agent": "explore",
+              "args": {
+                "path": "src/login.ts"
+              },
+              "at": 6,
+              "callId": "call-r1",
+              "model": "composer-2.5",
+              "name": "read",
+              "parentCallId": "call-task-0",
+              "result": {
+                "ok": true
+              },
+              "status": "completed"
+            }
+          ],
+          "user": "登录页白屏，帮我看看"
+        }
+      ]
+    },
+    {
+      "type": "auth",
+      "message": "已登录",
+      "ok": true
+    },
+    {
+      "type": "auth",
+      "message": "口令无效",
+      "ok": false
+    },
+    {
+      "type": "tool-output",
+      "callId": "call-sh1",
+      "chatId": "c-7f3a9e21",
+      "chunk": "npm WARN deprecated\n",
+      "stream": "stderr"
+    },
+    {
+      "type": "tool-output",
+      "callId": "call-sh1",
+      "chatId": "c-7f3a9e21",
+      "stderr": "1 warning\n",
+      "stdout": "3 passing\n"
+    },
+    {
+      "type": "history",
+      "chatId": "c-7f3a9e21",
+      "turns": [
+        {
+          "assistant": "已修好：路由守卫漏了 await。",
+          "files": [
+            {
+              "added": 12,
+              "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+              "kind": "text",
+              "op": "modified",
+              "path": "src/login.ts",
+              "removed": 3,
+              "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+              "size": 2048
+            },
+            {
+              "kind": "image",
+              "op": "added",
+              "path": "docs/截图.png",
+              "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+              "size": 48213
+            }
+          ],
+          "id": "t-1739000000000-k2",
+          "startedAt": 1739000000000,
+          "thinking": "先看路由守卫",
+          "tools": [
+            {
+              "agent": "explore",
+              "args": {
+                "path": "src/login.ts"
+              },
+              "at": 6,
+              "callId": "call-r1",
+              "model": "composer-2.5",
+              "name": "read",
+              "parentCallId": "call-task-0",
+              "result": {
+                "ok": true
+              },
+              "status": "completed"
+            }
+          ],
+          "user": "登录页白屏，帮我看看"
+        }
+      ]
+    },
+    {
+      "type": "run_snapshot",
+      "assistant": "已修好：路由守卫漏了 await。",
+      "awaitingApproval": {
+        "args": {
+          "path": "slides.md"
+        },
+        "callId": "call-w1",
+        "name": "write"
+      },
+      "chatId": "c-7f3a9e21",
+      "clipped": true,
+      "durationMs": 9876,
+      "mode": "ask",
+      "model": "claude-4.6-sonnet",
+      "phase": "done",
+      "queued": [
+        {
+          "turnId": "t-queued-1",
+          "userText": "再加个测试"
+        }
+      ],
+      "status": "error",
+      "task": "检查路由守卫",
+      "thinking": "先看路由守卫",
+      "tools": [
+        {
+          "agent": "explore",
+          "args": {
+            "path": "src/login.ts"
+          },
+          "at": 6,
+          "callId": "call-r1",
+          "model": "composer-2.5",
+          "name": "read",
+          "parentCallId": "call-task-0",
+          "result": {
+            "ok": true
+          },
+          "status": "completed"
+        }
+      ],
+      "turnId": "t-1739000000000-k2",
+      "userText": "登录页白屏，帮我看看"
+    },
+    {
+      "type": "undone",
+      "chatId": "c-7f3a9e21",
+      "error": "部分文件已被改动",
+      "paths": ["src/login.ts"]
+    },
+    {
+      "type": "checkpoints",
+      "chatId": "c-7f3a9e21",
+      "items": [
+        {
+          "createdAt": 1738999940000,
+          "id": "cp-2",
+          "label": "修登录之前"
+        }
+      ]
+    },
+    {
+      "type": "restored",
+      "chatId": "c-7f3a9e21",
+      "checkpointId": "cp-2",
+      "error": "还原了一部分",
+      "label": "修登录之前",
+      "silent": true
+    },
+    {
+      "type": "chat_title",
+      "chatId": "c-7f3a9e21",
+      "title": "修登录白屏"
+    },
+    {
+      "type": "admin_stats",
+      "cursor": {
+        "apiPercent": 3.5,
+        "autoPercent": 10.25,
+        "cacheReadTokens": 450000,
+        "cycleEnd": 1740728000000,
+        "cycleStart": 1738136000000,
+        "error": "部分模型明细拉取失败",
+        "fetchedAt": 1739007100000,
+        "includedPercent": 42.5,
+        "inputTokens": 900000,
+        "models": [
+          {
+            "name": "claude-4.6-sonnet",
+            "spendCents": 980
+          }
+        ],
+        "ok": true,
+        "onDemand": {
+          "kind": "fixed",
+          "limitCents": 2000,
+          "usedCents": 250
+        },
+        "outputTokens": 120000,
+        "plan": "Pro",
+        "spendCents": 1234
+      },
+      "serverTime": 1739007200000,
+      "tenants": [
+        {
+          "admin": true,
+          "chats": 17,
+          "estTokens": 150000,
+          "firstSeenAt": 1738913600000,
+          "id": "demo",
+          "inChars": 120000,
+          "lastActiveAt": 1739007000000,
+          "modelCacheTokens": 9000,
+          "modelInTokens": 33000,
+          "modelOutTokens": 12000,
+          "name": "演示租户",
+          "online": 2,
+          "outChars": 480000,
+          "runMs": 8765432,
+          "runs": 199,
+          "toolCalls": 1543,
+          "turns": 230
+        }
+      ]
+    },
+    {
+      "type": "loop_state",
+      "chatId": "c-7f3a9e21",
+      "goal": "每小时检查一次构建",
+      "intervalSec": 3600,
+      "lastSummary": "构建通过",
+      "maxTicks": 24,
+      "nextAt": 1739007200000,
+      "status": "running",
+      "tick": 3
+    },
+    {
+      "type": "loop_tick",
+      "chatId": "c-7f3a9e21",
+      "status": "skipped",
+      "summary": "上一轮还没跑完，跳过",
+      "tick": 3
+    },
+    {
+      "type": "assistant_state",
+      "state": {
+        "approvals": [
+          {
+            "callId": "call-w1",
+            "chatId": "c-child-5b10",
+            "createdAt": 1739000002000,
+            "delegationId": "d_q7w3",
+            "expiresAt": 1739003600000,
+            "id": "c-child-5b10:call-w1",
+            "parentChatId": "c-assistant-01",
+            "summary": "写入 slides.md（3.2 KB）",
+            "tool": "write"
+          }
+        ],
+        "background": {
+          "model": "composer-2.5",
+          "ok": true,
+          "reason": "夜间整理已排队"
+        },
+        "brief": {
+          "day": "2026-02-08",
+          "text": "今天有两个会，一项待办到期。"
+        },
+        "calendar": {
+          "enabled": false,
+          "lastFetchAt": 1739000005000,
+          "token": "cal-example-token"
+        },
+        "delegations": [
+          {
+            "childChatId": "c-child-5b10",
+            "createdAt": 1739000000000,
+            "endedAt": 1739000060000,
+            "id": "d_q7w3",
+            "mode": "foreground",
+            "parentChatId": "c-assistant-01",
+            "result": "讲稿已整理成 slides.md",
+            "status": "awaiting",
+            "title": "整理讲稿",
+            "workspace": "/workspace/demo/notes"
+          }
+        ],
+        "inbox": [
+          {
+            "body": "新建工作区 notes · 整理讲稿",
+            "chatId": "c-child-5b10",
+            "createdAt": 1739000001000,
+            "delegationId": "d_q7w3",
+            "id": "i_k8f2m1",
+            "kind": "approval",
+            "read": true,
+            "scheduleId": "s_morning",
+            "title": "有一项待你批准"
+          }
+        ],
+        "memory": {
+          "core": {
+            "fields": {
+              "偏好": "简洁直接",
+              "关于我": "做 iOS 和网关"
+            },
+            "rev": 3
+          },
+          "coreBudget": 800,
+          "coreTokens": 180,
+          "entries": [
+            {
+              "basis": "inferred",
+              "confidence": 0.85,
+              "createdAt": "2026-02-08T09:30:00.000Z",
+              "id": "m_x1y2z3",
+              "invalidAt": "2026-02-11T12:00:00.000Z",
+              "invalidReason": "用户说已经不这么做了",
+              "kind": "preference",
+              "lastUsedAt": "2026-02-10T08:15:00.000Z",
+              "rev": 7,
+              "source": {
+                "chatDeleted": true,
+                "chatId": "c-7f3a9e21",
+                "turn": 4
+              },
+              "supplements": ["评审时附上可运行的命令"],
+              "text": "代码评审意见用中文写，先给结论",
+              "topic": "工作偏好",
+              "updatedAt": "2026-02-09T10:00:00.000Z",
+              "validFrom": "2026-01-01",
+              "validUntil": "2026-12-31"
+            }
+          ],
+          "rev": 12,
+          "sensitive": {
+            "health": "健康类信息"
+          },
+          "settings": {
+            "allowSensitive": {
+              "health": true
+            },
+            "paused": true
+          }
+        },
+        "name": "阿驳",
+        "pushApns": true,
+        "pushKey": "BPk3-example-vapid-public-key",
+        "runs": [
+          {
+            "endedAt": 1739000030000,
+            "error": "部分日历拉取超时",
+            "label": "早报",
+            "origin": "schedule",
+            "runId": "r_9k1",
+            "startedAt": 1739000000000,
+            "status": "done",
+            "summary": "已生成今日早报"
+          }
+        ],
+        "schedules": [
+          {
+            "cron": "0 8 * * *",
+            "enabled": true,
+            "failCount": 2,
+            "id": "s_morning",
+            "kind": "brief",
+            "lastStatus": "ok",
+            "nextAt": 1739043200000,
+            "pausedReason": "连续失败两次，已暂停",
+            "prompt": "汇总今天的日程和待办",
+            "title": "早报",
+            "tz": "Asia/Shanghai"
+          }
+        ],
+        "todos": [
+          {
+            "chatId": "c-assistant-01",
+            "createdAt": 1739000000000,
+            "done": true,
+            "doneAt": 1739086400000,
+            "due": "2026-02-11",
+            "id": "td_1",
+            "quote": "提醒我周三前回报价",
+            "source": "chat",
+            "text": "周三前回复报价"
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "id": "td_2"
+      },
+      "error": "待办内容不能为空",
+      "ok": false,
+      "op": "todo_add",
+      "reqId": "rq-todo-1"
+    },
+    {
+      "type": "inbox_item",
+      "item": {
+        "body": "新建工作区 notes · 整理讲稿",
+        "chatId": "c-child-5b10",
+        "createdAt": 1739000001000,
+        "delegationId": "d_q7w3",
+        "id": "i_k8f2m1",
+        "kind": "approval",
+        "read": true,
+        "scheduleId": "s_morning",
+        "title": "有一项待你批准"
+      }
+    },
+    {
+      "type": "delegation_state",
+      "approval": {
+        "callId": "call-w1",
+        "chatId": "c-child-5b10",
+        "createdAt": 1739000002000,
+        "delegationId": "d_q7w3",
+        "expiresAt": 1739003600000,
+        "id": "c-child-5b10:call-w1",
+        "parentChatId": "c-assistant-01",
+        "summary": "写入 slides.md（3.2 KB）",
+        "tool": "write"
+      },
+      "delegation": {
+        "childChatId": "c-child-5b10",
+        "createdAt": 1739000000000,
+        "endedAt": 1739000060000,
+        "id": "d_q7w3",
+        "mode": "foreground",
+        "parentChatId": "c-assistant-01",
+        "result": "讲稿已整理成 slides.md",
+        "status": "awaiting",
+        "title": "整理讲稿",
+        "workspace": "/workspace/demo/notes"
+      }
+    },
+    {
+      "type": "memory_written",
+      "chatId": "c-assistant-01",
+      "entry": {
+        "basis": "inferred",
+        "confidence": 0.85,
+        "createdAt": "2026-02-08T09:30:00.000Z",
+        "id": "m_x1y2z3",
+        "invalidAt": "2026-02-11T12:00:00.000Z",
+        "invalidReason": "用户说已经不这么做了",
+        "kind": "preference",
+        "lastUsedAt": "2026-02-10T08:15:00.000Z",
+        "rev": 7,
+        "source": {
+          "chatDeleted": true,
+          "chatId": "c-7f3a9e21",
+          "turn": 4
+        },
+        "supplements": ["评审时附上可运行的命令"],
+        "text": "代码评审意见用中文写，先给结论",
+        "topic": "工作偏好",
+        "updatedAt": "2026-02-09T10:00:00.000Z",
+        "validFrom": "2026-01-01",
+        "validUntil": "2026-12-31"
+      }
+    },
+    {
+      "type": "pong"
+    }
+  ],
+  "client": [
+    {
+      "type": "hello",
+      "client": {
+        "caps": ["sync_chat", "stored_digest", "slim_state", "slim_chats"],
+        "maxMessageBytes": 900000,
+        "name": "jiebo-web",
+        "version": "2.3.0"
+      },
+      "token": "example-token"
+    },
+    {
+      "type": "set_workspace",
+      "chatId": "c-7f3a9e21",
+      "create": true,
+      "cwd": "/workspace/demo/notes"
+    },
+    {
+      "type": "list_workspaces"
+    },
+    {
+      "type": "create_workspace",
+      "name": "slides"
+    },
+    {
+      "type": "rename_workspace",
+      "name": "talks",
+      "path": "/workspace/demo/slides"
+    },
+    {
+      "type": "delete_workspace",
+      "path": "/workspace/demo/old"
+    },
+    {
+      "type": "prompt",
+      "autoApprove": true,
+      "chatId": "c-7f3a9e21",
+      "clientTime": {
+        "now": 1739000000000,
+        "tz": "Asia/Shanghai"
+      },
+      "confirmWrites": true,
+      "dialect": false,
+      "files": ["src/login.ts"],
+      "fresh": true,
+      "history": [
+        {
+          "role": "user",
+          "text": "上次的问题"
+        },
+        {
+          "role": "assistant",
+          "text": "上次的回答"
+        }
+      ],
+      "images": [
+        {
+          "data": "iVBORw0KGgo=",
+          "mimeType": "image/png"
+        }
+      ],
+      "mode": "plan",
+      "model": "minimax:MiniMax-M2",
+      "nameChat": true,
+      "policy": "plane",
+      "text": "登录页白屏，帮我看看",
+      "turnId": "t-1739000000000-k2"
+    },
+    {
+      "type": "cancel",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "drop_queued",
+      "chatId": "c-7f3a9e21",
+      "text": "再加个测试"
+    },
+    {
+      "type": "set_model",
+      "chatId": "c-7f3a9e21",
+      "model": "claude-4.6-sonnet"
+    },
+    {
+      "type": "list_checkpoints",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "undo",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "revert_file",
+      "chatId": "c-7f3a9e21",
+      "path": "src/login.ts"
+    },
+    {
+      "type": "revert_hunk",
+      "chatId": "c-7f3a9e21",
+      "hunk": "@@ -1,3 +1,4 @@\n-import a\n+import b\n",
+      "path": "src/login.ts"
+    },
+    {
+      "type": "restore",
+      "chatId": "c-7f3a9e21",
+      "checkpointId": "cp-2"
+    },
+    {
+      "type": "new_session",
+      "chatId": "c-7f3a9e21",
+      "cwd": "/workspace/demo/notes"
+    },
+    {
+      "type": "delete_session",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "resume_session",
+      "agentId": "agent-4d2c8b6a-0e1f",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "list_files",
+      "chatId": "c-7f3a9e21",
+      "mention": true,
+      "query": "login"
+    },
+    {
+      "type": "search_text",
+      "chatId": "c-7f3a9e21",
+      "query": "await guard"
+    },
+    {
+      "type": "read_file",
+      "chatId": "c-7f3a9e21",
+      "diff": true,
+      "path": "src/login.ts",
+      "reqId": "rq-17",
+      "sha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+    },
+    {
+      "type": "write_file",
+      "chatId": "c-7f3a9e21",
+      "content": "- [ ] 回报价\n",
+      "path": "notes/todo.md"
+    },
+    {
+      "type": "upload_file",
+      "chatId": "c-7f3a9e21",
+      "data": "iVBORw0KGgo=",
+      "id": "up-3",
+      "mimeType": "image/png",
+      "name": "截图.png"
+    },
+    {
+      "type": "fs_op",
+      "chatId": "c-7f3a9e21",
+      "op": "rename",
+      "path": "notes/a.md",
+      "to": "notes/b.md"
+    },
+    {
+      "type": "sync_state",
+      "chats": [
+        {
+          "cwd": "/workspace/demo/notes",
+          "id": "c-7f3a9e21",
+          "mode": "agent",
+          "model": "composer-2.5",
+          "preview": "已修好：路由守卫漏了 await。",
+          "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"],
+          "title": "修登录",
+          "updatedAt": 1739000009000
+        }
+      ],
+      "rev": 41
+    },
+    {
+      "type": "sync_chat",
+      "chat": {
+        "cwd": "/workspace/demo/notes",
+        "id": "c-7f3a9e21",
+        "mode": "agent",
+        "model": "composer-2.5",
+        "preview": "已修好：路由守卫漏了 await。",
+        "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"],
+        "title": "修登录",
+        "updatedAt": 1739000009000
+      },
+      "rev": 41
+    },
+    {
+      "type": "tool_review",
+      "chatId": "c-7f3a9e21",
+      "reviews": [
+        {
+          "callId": "call-w1",
+          "review": "rejected"
+        }
+      ],
+      "turnId": "t-1739000000000-k2"
+    },
+    {
+      "type": "truncate_turns",
+      "chatId": "c-7f3a9e21",
+      "rev": 42,
+      "turnId": "t-1739000000000-k2"
+    },
+    {
+      "type": "load_state"
+    },
+    {
+      "type": "load_chats",
+      "ids": ["c-7f3a9e21", "c-child-5b10"]
+    },
+    {
+      "type": "load_chat",
+      "chatId": "c-7f3a9e21",
+      "from": 100,
+      "nonce": 3
+    },
+    {
+      "type": "approval_reply",
+      "allow": true,
+      "callId": "call-w1",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "set_policy",
+      "chatId": "c-7f3a9e21",
+      "policy": "plane"
+    },
+    {
+      "type": "admin_stats"
+    },
+    {
+      "type": "ping"
+    },
+    {
+      "type": "loop_start",
+      "chatId": "c-7f3a9e21",
+      "goal": "每小时检查一次构建",
+      "intervalSec": 3600,
+      "maxTicks": 24,
+      "mode": "ask",
+      "model": "composer-2.5"
+    },
+    {
+      "type": "loop_stop",
+      "chatId": "c-7f3a9e21"
+    },
+    {
+      "type": "assistant_get",
+      "memory": true
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "due": "2026-02-11",
+        "text": "周三前回复报价"
+      },
+      "op": "todo_add",
+      "reqId": "rq-todo-1"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "allow": true,
+        "callId": "call-w1",
+        "chatId": "c-child-5b10"
+      },
+      "op": "approval_answer"
+    }
+  ]
+}

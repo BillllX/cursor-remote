@@ -5,7 +5,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import CodeBlock from "./CodeBlock";
 import { mediaSrc, resolveAssetPath } from "../lib/preview";
-import type { MediaTicket } from "../lib/protocol";
+import type { MediaTicket } from "@shared/protocol";
 
 export default function MarkdownPreview({
   path,

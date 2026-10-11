@@ -12,6 +12,8 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
   },
   allowedDevOrigins: ["127.0.0.1", "localhost"],
+  // 允许编译 web/ 外的 ../shared（与网关共用的协议等）；构建时整体打进 .next，运行时不再读 ../shared
+  experimental: { externalDir: true },
   ...(basePath ? { basePath } : {}),
   async headers() {
     return [

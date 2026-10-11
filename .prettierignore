@@ -90,9 +90,6 @@ web/lib/canvas/charts.tsx
 web/lib/canvas/host.tsx
 web/lib/canvas/sdk.tsx
 web/lib/canvas/tokens.ts
-web/lib/crew.ts
 web/lib/models.ts
-web/lib/preview.ts
-web/lib/protocol.ts
 web/lib/theme.ts
 # <<< 遗留文件

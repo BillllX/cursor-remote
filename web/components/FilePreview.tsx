@@ -6,7 +6,7 @@ import MarkdownPreview from "./MarkdownPreview";
 import MediaPreview from "./MediaPreview";
 import { isCanvasPath } from "../lib/canvas/path";
 import type { CanvasAction } from "../lib/canvas/host";
-import type { MediaTicket, PreviewKind } from "../lib/protocol";
+import type { MediaTicket, PreviewKind } from "@shared/protocol";
 import { isLiveKind, previewSrc, tabKind } from "../lib/preview";
 import {
   IconClose,

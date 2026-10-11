@@ -20,7 +20,7 @@ export default tseslint.config(
     files: [
       "gateway/**/*.{ts,mjs}",
       "shared/**/*.ts",
-      "scripts/*.{js,mjs,cjs}",
+      "scripts/*.{js,mjs,cjs,mts}",
       "web/**/*.{js,mjs,cjs}",
       "eslint.config.mjs",
     ],

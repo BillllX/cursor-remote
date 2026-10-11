@@ -1231,6 +1231,10 @@ enum ServerMessage {
             )
         case "file_content":
             let ticketRow = object["media"]?.object
+            let media = ticketRow.flatMap { row -> MediaTicket? in
+                guard let exp = row["exp"]?.number, let sig = row["sig"]?.string else { return nil }
+                return MediaTicket(exp: exp, sig: sig)
+            }
             return .fileContent(
                 path: object["path"]?.string ?? "",
                 chatId: object["chatId"]?.string,
@@ -1242,10 +1246,7 @@ enum ServerMessage {
                 size: object["size"]?.number,
                 url: object["url"]?.string,
                 headUrl: object["headUrl"]?.string,
-                media: ticketRow.flatMap { row in
-                    guard let exp = row["exp"]?.number, let sig = row["sig"]?.string else { return nil }
-                    return MediaTicket(exp: exp, sig: sig)
-                },
+                media: media,
                 reqId: object["reqId"]?.string?.nilIfEmpty,
                 sha: object["sha"]?.string?.nilIfEmpty
             )

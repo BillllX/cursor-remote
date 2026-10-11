@@ -1,0 +1,727 @@
+# ServerMessage.decode(from:) 对 shared/fixtures/protocol.json 每条 server 样本的解码结果。
+# 由 npm run check:ios-protocol -- --update 生成，不要手改。
+
+## server[0] ready #1
+.ready(
+  cwd: "/workspace/demo/notes"
+  hasApiKey: true
+  model: "claude-4.6-sonnet"
+  models: [
+    "composer-2.5"
+    "claude-4.6-sonnet"
+    "minimax:MiniMax-M2"
+  ]
+  agentId: "agent-4d2c8b6a-0e1f"
+  runningChatIds: [
+    "c-7f3a9e21"
+  ]
+  queuedChatIds: [
+    "c-child-5b10"
+  ]
+  workspaceRoot: "/workspace/demo"
+  tenantId: "demo"
+  tenantName: "演示租户"
+  admin: true
+  loops: [
+    LoopSnapshot(
+      chatId: "c-7f3a9e21"
+      status: "armed"
+      goal: "每小时检查一次构建"
+      intervalSec: 3600
+      tick: 2
+      maxTicks: 24
+      lastSummary: "构建通过"
+      nextAt: 1739003600000
+    )
+  ]
+  assistantName: "阿驳"
+  assistantChatId: "c-assistant-01"
+  features: [
+    "turn_files"
+    "read_sha"
+    "read_req_id"
+    "seg_hashes"
+    "tool_at"
+    "slim_chats"
+  ]
+)
+
+## server[1] workspaces #1
+.workspaces(
+  root: "/workspace/demo"
+  items: [
+    WorkspaceItem(
+      path: "/workspace/demo/notes"
+      name: "notes"
+      user: true
+    )
+    WorkspaceItem(
+      path: "/workspace/demo/app"
+      name: "app"
+      user: false
+    )
+  ]
+)
+
+## server[2] workspace_created #1
+.workspaceCreated(
+  path: "/workspace/demo/slides"
+  name: "slides"
+)
+
+## server[3] workspace_renamed #1
+.workspaceRenamed(
+  from: "/workspace/demo/slides"
+  path: "/workspace/demo/talks"
+  name: "talks"
+)
+
+## server[4] workspace_removed #1
+.workspaceRemoved(
+  path: "/workspace/demo/old"
+  name: "old"
+  mode: "deleted"
+)
+
+## server[5] session #1
+.session(
+  chatId: "c-7f3a9e21"
+  agentId: "agent-4d2c8b6a-0e1f"
+  cwd: "/workspace/demo/notes"
+)
+
+## server[6] run_meta #1
+.runMeta(
+  chatId: "c-7f3a9e21"
+  model: "claude-4.6-sonnet"
+  mode: .plan
+)
+
+## server[7] text-delta #1
+.textDelta(
+  chatId: "c-7f3a9e21"
+  text: "已修好：路由守卫漏了 await。"
+)
+
+## server[8] thinking-delta #1
+.thinkingDelta(
+  chatId: "c-7f3a9e21"
+  text: "先看路由守卫"
+)
+
+## server[9] tool-started #1
+.toolStarted(
+  chatId: "c-7f3a9e21"
+  callId: "call-r1"
+  name: "read"
+  args: JSON {"limit": 200, "path": "src/login.ts"}
+  parentCallId: "call-task-0"
+  agent: "explore"
+  model: "composer-2.5"
+  at: 6
+)
+
+## server[10] tool-completed #1
+.toolCompleted(
+  chatId: "c-7f3a9e21"
+  callId: "call-r1"
+  name: "read"
+  status: "error"
+  result: JSON {"error": "文件不存在"}
+  parentCallId: "call-task-0"
+  agent: "explore"
+  model: "composer-2.5"
+)
+
+## server[11] task #1
+.task(
+  chatId: "c-7f3a9e21"
+  text: "检查路由守卫"
+)
+
+## server[12] status #1
+.status(
+  chatId: "c-7f3a9e21"
+  status: "QUEUED"
+  message: "同时跑的任务已满，排队中"
+)
+
+## server[13] status #2
+.status(
+  chatId: nil
+  status: "IDLE"
+  message: nil
+)
+
+## server[14] error #1
+.error(
+  chatId: "c-7f3a9e21"
+  message: "模型暂时不可用，请稍后重试"
+)
+
+## server[15] error #2
+.error(
+  chatId: nil
+  message: "未登录"
+)
+
+## server[16] approval #1
+.approval(
+  chatId: "c-7f3a9e21"
+  callId: "call-w1"
+  name: "write"
+  args: JSON {"contents": "# 讲稿", "path": "slides.md"}
+)
+
+## server[17] done #1
+.done(
+  chatId: "c-7f3a9e21"
+  status: "error"
+  durationMs: 12345
+)
+
+## server[18] policy #1
+.ignored("policy")
+
+## server[19] files #1
+.files(
+  query: "login"
+  paths: [
+    "src/login.ts"
+    "src/login.test.ts"
+  ]
+  mention: true
+  truncated: true
+  chatId: "c-7f3a9e21"
+  status: [
+    "src/login.test.ts": "A"
+    "src/login.ts": "M"
+  ]
+)
+
+## server[20] search_hits #1
+.searchHits(
+  query: "await guard"
+  hits: [
+    SearchHit(
+      path: "src/router.ts"
+      line: 42
+      text: "  await guard(to);"
+    )
+  ]
+  chatId: "c-7f3a9e21"
+  truncated: true
+)
+
+## server[21] file_content #1
+.fileContent(
+  path: "src/login.ts"
+  chatId: "c-7f3a9e21"
+  content: "@@ -1,3 +1,4 @@\n-import a\n+import b\n"
+  error: "历史版本已清理"
+  diff: true
+  kind: "markdown"
+  mime: "text/markdown"
+  size: 2048
+  url: "/media?path=src%2Flogin.ts&chatId=c-7f3a9e21&exp=1739003600&sig=example"
+  headUrl: "/media?path=src%2Flogin.ts&chatId=c-7f3a9e21&rev=HEAD&exp=1739003600&sig=example"
+  media: MediaTicket(
+    exp: 1739003600
+    sig: "example-signature"
+  )
+  reqId: "rq-17"
+  sha: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+)
+
+## server[22] turn_files #1
+.turnFiles(
+  chatId: "c-7f3a9e21"
+  turnId: "t-1739000000000-k2"
+  files: [
+    TurnFile(
+      path: "src/login.ts"
+      kind: .text
+      op: "modified"
+      size: 2048
+      sha: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+      diffSha: "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+      added: 12
+      removed: 3
+    )
+    TurnFile(
+      path: "docs/截图.png"
+      kind: .image
+      op: "added"
+      size: 48213
+      sha: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+      diffSha: nil
+      added: nil
+      removed: nil
+    )
+  ]
+)
+
+## server[23] file_written #1
+.fileWritten(
+  path: "notes/todo.md"
+  chatId: "c-7f3a9e21"
+  error: "磁盘已满"
+)
+
+## server[24] file_uploaded #1
+.fileUploaded(
+  path: ".cursor-remote/uploads/截图.png"
+  chatId: "c-7f3a9e21"
+  name: "截图.png"
+  error: "超过 36MB"
+  size: 48213
+  id: "up-3"
+)
+
+## server[25] fs_done #1
+.ignored("fs_done")
+
+## server[26] stored_state #1
+.storedState(
+  chats: [
+    JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
+  ]
+  rev: 41
+  deletedIds: [
+    "c-deleted-1"
+  ]
+  chatRevs: [
+    "c-7f3a9e21": 41
+    "c-child-5b10": 38
+  ]
+)
+
+## server[27] stored_state_deferred #1
+.storedStateDeferred(
+  rev: 41
+)
+
+## server[28] sync_ack #1
+.syncAck(
+  rev: 42
+  chatRevs: [
+    "c-7f3a9e21": 42
+  ]
+  reviewOnly: true
+  truncated: true
+)
+
+## server[29] sync_ack #2
+.syncAck(
+  rev: 43
+  chatRevs: [
+    "c-7f3a9e21": 43
+  ]
+  reviewOnly: false
+  truncated: false
+)
+
+## server[30] stored_digest #1
+.storedDigest(
+  rev: 44
+  deletedIds: [
+    "c-deleted-2"
+  ]
+  chatRevs: [
+    "c-7f3a9e21": 44
+  ]
+  rejected: false
+)
+
+## server[31] stored_digest #2
+.storedDigest(
+  rev: 45
+  deletedIds: []
+  chatRevs: [
+    "c-7f3a9e21": 45
+  ]
+  rejected: true
+)
+
+## server[32] stored_chat #1
+.storedChat(
+  chat: JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
+  rev: 44
+)
+
+## server[33] chat_turns #1
+.chatTurns(
+  chatId: "c-7f3a9e21"
+  turns: [
+    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
+  ]
+  from: 100
+  hasMore: true
+  nonce: 3
+)
+
+## server[34] auth #1
+.auth(
+  ok: true
+  message: "已登录"
+)
+
+## server[35] auth #2
+.auth(
+  ok: false
+  message: "口令无效"
+)
+
+## server[36] tool-output #1
+.toolOutput(
+  chatId: "c-7f3a9e21"
+  callId: "call-sh1"
+  stream: "stderr"
+  chunk: "npm WARN deprecated\n"
+  stdout: nil
+  stderr: nil
+)
+
+## server[37] tool-output #2
+.toolOutput(
+  chatId: "c-7f3a9e21"
+  callId: "call-sh1"
+  stream: nil
+  chunk: nil
+  stdout: "3 passing\n"
+  stderr: "1 warning\n"
+)
+
+## server[38] history #1
+.history(
+  chatId: "c-7f3a9e21"
+  turns: [
+    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
+  ]
+)
+
+## server[39] run_snapshot #1
+.runSnapshot(
+  chatId: "c-7f3a9e21"
+  turnId: "t-1739000000000-k2"
+  phase: "done"
+  status: "error"
+  userText: "登录页白屏，帮我看看"
+  assistant: "已修好：路由守卫漏了 await。"
+  thinking: "先看路由守卫"
+  tools: [
+    JSON {"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}
+  ]
+  task: "检查路由守卫"
+  model: "claude-4.6-sonnet"
+  mode: .ask
+  awaitingApproval: JSON {"args": {"path": "slides.md"}, "callId": "call-w1", "name": "write"}
+  queued: [
+    JSON {"turnId": "t-queued-1", "userText": "再加个测试"}
+  ]
+  durationMs: 9876
+  clipped: true
+)
+
+## server[40] undone #1
+.undone(
+  chatId: "c-7f3a9e21"
+  paths: [
+    "src/login.ts"
+  ]
+  error: "部分文件已被改动"
+)
+
+## server[41] checkpoints #1
+.checkpoints(
+  chatId: "c-7f3a9e21"
+  items: [
+    CheckpointInfo(
+      id: "cp-2"
+      label: "修登录之前"
+      createdAt: 1738999940000
+    )
+  ]
+)
+
+## server[42] restored #1
+.restored(
+  chatId: "c-7f3a9e21"
+  checkpointId: "cp-2"
+  label: "修登录之前"
+  error: "还原了一部分"
+  silent: true
+)
+
+## server[43] chat_title #1
+.chatTitle(
+  chatId: "c-7f3a9e21"
+  title: "修登录白屏"
+)
+
+## server[44] admin_stats #1
+.adminStats(
+  tenants: [
+    AdminTenantStats(
+      id: "demo"
+      name: "演示租户"
+      admin: true
+      online: 2
+      chats: 17
+      turns: 230
+      runs: 199
+      toolCalls: 1543
+      runMs: 8765432
+      inChars: 120000
+      outChars: 480000
+      estTokens: 150000
+      firstSeenAt: 1738913600000
+      lastActiveAt: 1739007000000
+    )
+  ]
+  serverTime: 1739007200000
+  cursor: CursorBill(
+    ok: true
+    error: "部分模型明细拉取失败"
+    plan: "Pro"
+    cycleStart: 1738136000000
+    cycleEnd: 1740728000000
+    includedPercent: 42.5
+    autoPercent: 10.25
+    apiPercent: 3.5
+    spendCents: 1234
+    inputTokens: 900000
+    outputTokens: 120000
+    onDemand: CursorOnDemand(
+      kind: "fixed"
+      usedCents: 250
+      limitCents: 2000
+    )
+    models: [
+      CursorModelSpend(
+        name: "claude-4.6-sonnet"
+        spendCents: 980
+      )
+    ]
+    fetchedAt: 1739007100000
+  )
+)
+
+## server[45] loop_state #1
+.loopState(
+  chatId: "c-7f3a9e21"
+  status: "running"
+  goal: "每小时检查一次构建"
+  intervalSec: 3600
+  tick: 3
+  maxTicks: 24
+  lastSummary: "构建通过"
+  nextAt: 1739007200000
+)
+
+## server[46] loop_tick #1
+.loopTick(
+  chatId: "c-7f3a9e21"
+  tick: 3
+  status: "skipped"
+  summary: "上一轮还没跑完，跳过"
+)
+
+## server[47] assistant_state #1
+.assistantState(AssistantState(
+  name: "阿驳"
+  background: AssistantBackground(
+    model: "composer-2.5"
+    ok: true
+    reason: "夜间整理已排队"
+  )
+  pushKey: "BPk3-example-vapid-public-key"
+  pushApns: true
+  inbox: [
+    AssistantInboxItem(
+      id: "i_k8f2m1"
+      kind: "approval"
+      title: "有一项待你批准"
+      body: "新建工作区 notes · 整理讲稿"
+      createdAt: 1739000001000
+      read: true
+      chatId: "c-child-5b10"
+      scheduleId: "s_morning"
+      delegationId: "d_q7w3"
+    )
+  ]
+  todos: [
+    AssistantTodo(
+      id: "td_1"
+      text: "周三前回复报价"
+      due: "2026-02-11"
+      done: true
+      doneAt: 1739086400000
+      createdAt: 1739000000000
+      chatId: "c-assistant-01"
+      source: "chat"
+      quote: "提醒我周三前回报价"
+    )
+  ]
+  schedules: [
+    AssistantSchedule(
+      id: "s_morning"
+      title: "早报"
+      kind: "brief"
+      cron: "0 8 * * *"
+      tz: "Asia/Shanghai"
+      prompt: "汇总今天的日程和待办"
+      enabled: true
+      nextAt: 1739043200000
+      lastStatus: "ok"
+      failCount: 2
+      pausedReason: "连续失败两次，已暂停"
+    )
+  ]
+  delegations: [
+    AssistantDelegation(
+      id: "d_q7w3"
+      parentChatId: "c-assistant-01"
+      childChatId: "c-child-5b10"
+      workspace: "/workspace/demo/notes"
+      title: "整理讲稿"
+      mode: "foreground"
+      status: "awaiting"
+      createdAt: 1739000000000
+      endedAt: 1739000060000
+      result: "讲稿已整理成 slides.md"
+    )
+  ]
+  approvals: [
+    AssistantApproval(
+      id: "c-child-5b10:call-w1"
+      chatId: "c-child-5b10"
+      callId: "call-w1"
+      tool: "write"
+      summary: "写入 slides.md（3.2 KB）"
+      delegationId: "d_q7w3"
+      parentChatId: "c-assistant-01"
+      createdAt: 1739000002000
+      expiresAt: 1739003600000
+    )
+  ]
+  runs: [
+    AssistantRun(
+      runId: "r_9k1"
+      origin: "schedule"
+      label: "早报"
+      status: "done"
+      startedAt: 1739000000000
+      endedAt: 1739000030000
+      summary: "已生成今日早报"
+      error: "部分日历拉取超时"
+    )
+  ]
+  brief: AssistantBrief(
+    day: "2026-02-08"
+    text: "今天有两个会，一项待办到期。"
+  )
+  memory: AssistantMemory(
+    rev: 12
+    coreRev: 3
+    coreFields: [
+      "偏好": "简洁直接"
+      "关于我": "做 iOS 和网关"
+    ]
+    entries: [
+      AssistantMemoryEntry(
+        id: "m_x1y2z3"
+        rev: 7
+        topic: "工作偏好"
+        kind: "preference"
+        text: "代码评审意见用中文写，先给结论"
+        basis: "inferred"
+        confidence: 0.85
+        sourceChatId: "c-7f3a9e21"
+        createdAt: "2026-02-08T09:30:00.000Z"
+        updatedAt: "2026-02-09T10:00:00.000Z"
+        invalidAt: "2026-02-11T12:00:00.000Z"
+        invalidReason: "用户说已经不这么做了"
+      )
+    ]
+    paused: true
+    coreTokens: 180
+    coreBudget: 800
+  )
+  calendar: AssistantCalendar(
+    token: "cal-example-token"
+    enabled: false
+    lastFetchAt: 1739000005000
+  )
+))
+
+## server[48] assistant_result #1
+.assistantResult(
+  reqId: "rq-todo-1"
+  op: "todo_add"
+  ok: false
+  error: "待办内容不能为空"
+  data: JSON {"id": "td_2"}
+)
+
+## server[49] inbox_item #1
+.inboxItem(AssistantInboxItem(
+  id: "i_k8f2m1"
+  kind: "approval"
+  title: "有一项待你批准"
+  body: "新建工作区 notes · 整理讲稿"
+  createdAt: 1739000001000
+  read: true
+  chatId: "c-child-5b10"
+  scheduleId: "s_morning"
+  delegationId: "d_q7w3"
+))
+
+## server[50] delegation_state #1
+.delegationState(
+  delegation: AssistantDelegation(
+    id: "d_q7w3"
+    parentChatId: "c-assistant-01"
+    childChatId: "c-child-5b10"
+    workspace: "/workspace/demo/notes"
+    title: "整理讲稿"
+    mode: "foreground"
+    status: "awaiting"
+    createdAt: 1739000000000
+    endedAt: 1739000060000
+    result: "讲稿已整理成 slides.md"
+  )
+  approval: AssistantApproval(
+    id: "c-child-5b10:call-w1"
+    chatId: "c-child-5b10"
+    callId: "call-w1"
+    tool: "write"
+    summary: "写入 slides.md（3.2 KB）"
+    delegationId: "d_q7w3"
+    parentChatId: "c-assistant-01"
+    createdAt: 1739000002000
+    expiresAt: 1739003600000
+  )
+)
+
+## server[51] memory_written #1
+.memoryWritten(
+  chatId: "c-assistant-01"
+  entry: AssistantMemoryEntry(
+    id: "m_x1y2z3"
+    rev: 7
+    topic: "工作偏好"
+    kind: "preference"
+    text: "代码评审意见用中文写，先给结论"
+    basis: "inferred"
+    confidence: 0.85
+    sourceChatId: "c-7f3a9e21"
+    createdAt: "2026-02-08T09:30:00.000Z"
+    updatedAt: "2026-02-09T10:00:00.000Z"
+    invalidAt: "2026-02-11T12:00:00.000Z"
+    invalidReason: "用户说已经不这么做了"
+  )
+)
+
+## server[52] pong #1
+.pong

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AssistantDelegation, AssistantMemoryEntry, AssistantOp, AssistantState, ClientMessage } from "../lib/protocol";
+import type { AssistantDelegation, AssistantMemoryEntry, AssistantOp, AssistantState, ClientMessage } from "@shared/protocol";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
 type Tab = "today" | "inbox" | "memory" | "notify";

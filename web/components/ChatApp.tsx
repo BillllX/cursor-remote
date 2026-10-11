@@ -33,8 +33,8 @@ import type {
   MediaTicket,
   AdminTenantStats,
   CursorBill,
-} from "../lib/protocol";
-import { DEFAULT_ASSISTANT_NAME } from "../lib/protocol";
+} from "@shared/protocol";
+import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import AssistantPanel, { DELEGATION_STATUS } from "./AssistantPanel";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
 import CodeBlock from "./CodeBlock";
