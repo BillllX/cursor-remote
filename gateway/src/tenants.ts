@@ -9,7 +9,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { homedir } from "node:os";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import {
   createBodyStore,
@@ -20,6 +19,7 @@ import {
   persistBodies,
   type BodyStore,
 } from "./chatBodies.ts";
+import { gatewayEnv } from "./config.ts";
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -72,7 +72,7 @@ export type TenantsRegistry = {
 let registry: TenantsRegistry | null = null;
 
 export function stateDir(): string {
-  return resolve(process.env.CURSOR_REMOTE_STATE_DIR || resolve(homedir(), ".cursor-remote"));
+  return resolve(gatewayEnv.stateDir());
 }
 
 export function emptyDisk(): DiskState {
@@ -95,21 +95,17 @@ export function loadTenants(): TenantsRegistry {
       stateDir: root,
     };
   } else {
-    const token = (
-      process.env.CURSOR_REMOTE_TOKEN ||
-      process.env.CURSOR_REMOTE_PASSWORD ||
-      ""
-    ).trim();
+    const token = gatewayEnv.singleTenantToken();
     // 单租户 env 模式的显示名：CURSOR_REMOTE_NAME（侧栏「名字 · 工作区」用），缺省回退 id
-    const displayName = (process.env.CURSOR_REMOTE_NAME || "").trim() || "default";
+    const displayName = gatewayEnv.singleTenantName();
     const tenants = token
       ? [
           makeTenant("default", displayName, token, {
-            workspaceRoot: resolve(process.env.CURSOR_REMOTE_CWD || `${homedir()}/Projects`),
+            workspaceRoot: resolve(gatewayEnv.singleTenantCwd()),
             stateDir: root,
             admin: true, // env 单租户模式：部署者即管理员
             // 显示名在这里也是部署者写进环境变量的配置，不是用户能改的字段
-            sandbox: !/^(0|false|off|no)$/i.test(process.env.CURSOR_REMOTE_SANDBOX || "") && tenantSlug(displayName) !== "billxu",
+            sandbox: gatewayEnv.singleTenantSandbox() && tenantSlug(displayName) !== "billxu",
           }),
         ]
       : [];
@@ -272,7 +268,7 @@ function hookFlushOnExit() {
 }
 
 function findTenantsFile(): string | null {
-  const explicit = (process.env.CURSOR_REMOTE_TENANTS_FILE || "").trim();
+  const explicit = gatewayEnv.tenantsFile();
   if (explicit) return existsSync(explicit) ? resolve(explicit) : null;
   const candidates = [
     "/etc/cursor-remote/tenants.json",
@@ -344,9 +340,9 @@ function hashToken(token: string) {
 }
 
 function resolveMediaSecret(file: string | null): { secret: string; derived: boolean } {
-  const explicit = (process.env.CURSOR_REMOTE_MEDIA_SECRET || "").trim();
+  const explicit = gatewayEnv.mediaSecret();
   if (explicit) return { secret: explicit, derived: false };
-  const api = process.env.CURSOR_API_KEY?.trim() || "";
+  const api = gatewayEnv.cursorApiKey();
   let stamp = "none";
   if (file && existsSync(file)) {
     try {

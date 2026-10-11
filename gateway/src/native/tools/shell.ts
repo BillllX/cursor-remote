@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
+import { gatewayEnv } from "../../config.ts";
 import { resolveInside } from "../confine.ts";
 import type { ToolResult, ToolSpec } from "../types.ts";
 
@@ -46,7 +47,7 @@ export function sandboxMasks(extra: string[] = []): string[] {
     "/var/lib/cursor-remote",
     "/opt/cursor-remote-gateway",
     env.HOME || "",
-    env.CURSOR_REMOTE_STATE_DIR || "",
+    gatewayEnv.stateDirOverride(),
     ...extra,
   ];
   return [...new Set(list.filter((dir) => dir && dir !== "/" && existsSync(dir)))];

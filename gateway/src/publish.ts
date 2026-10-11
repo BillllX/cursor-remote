@@ -19,6 +19,7 @@ import { dirname, resolve } from "node:path";
 import type { Duplex } from "node:stream";
 import { defaultWorkbenchPage, workbenchDownPage } from "./publish-home.ts";
 import { confinedCwd, isBillXuTenant } from "./tenants.ts";
+import { gatewayEnv } from "./config.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const CONTROL_PATHS = new Set([
@@ -35,7 +36,6 @@ const HOP = new Set([
   "te",
   "trailer",
 ]);
-const DEFAULT_LISTEN_MS = 45_000;
 const SWEEP_MS = 30_000;
 /** 自动拉起失败后的退避：30 秒起翻倍，最长 30 分钟 */
 const REVIVE_BASE_MS = 30_000;
@@ -540,11 +540,6 @@ function publicUrl(scheme: string, host: string, tenantId: string) {
   return `${proto}://${name}${publishBasePath(tenantId)}/`;
 }
 
-function numberEnv(name: string, fallback: number) {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) ? value : fallback;
-}
-
 export function createPublishController(options: {
   tenants: () => PublishTenant[];
   host?: () => string;
@@ -560,11 +555,11 @@ export function createPublishController(options: {
   let chain: Promise<unknown> = Promise.resolve();
   let timer: NodeJS.Timeout | null = null;
 
-  const host = () => cleanPublishHost(options.host?.() ?? process.env.JIEBO_PUBLISH_HOST ?? "");
-  const scheme = () => (options.scheme?.() ?? process.env.JIEBO_PUBLISH_SCHEME ?? "https").trim().toLowerCase();
-  const portMin = options.portMin ?? numberEnv("JIEBO_PUBLISH_PORT_MIN", 20000);
-  const portMax = options.portMax ?? numberEnv("JIEBO_PUBLISH_PORT_MAX", 20999);
-  const listenTimeoutMs = options.listenTimeoutMs ?? numberEnv("JIEBO_PUBLISH_LISTEN_MS", DEFAULT_LISTEN_MS);
+  const host = () => cleanPublishHost(options.host?.() ?? gatewayEnv.publishHost() ?? "");
+  const scheme = () => (options.scheme?.() ?? gatewayEnv.publishScheme() ?? "https").trim().toLowerCase();
+  const portMin = options.portMin ?? gatewayEnv.publishPortMin();
+  const portMax = options.portMax ?? gatewayEnv.publishPortMax();
+  const listenTimeoutMs = options.listenTimeoutMs ?? gatewayEnv.publishListenMs();
   const sweepMs = options.sweepMs ?? SWEEP_MS;
 
   function lock<T>(fn: () => Promise<T>): Promise<T> {

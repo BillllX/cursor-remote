@@ -154,17 +154,19 @@ import {
 } from "./assistant/service.ts";
 import { assistantToolSpecs, toolSpecs } from "./assistant/tools.ts";
 import { createPublishController } from "./publish.ts";
+import { gatewayEnv, loadDotEnv } from "./config.ts";
+import { log } from "./log.ts";
 
 loadDotEnv([
   resolve(process.cwd(), ".env"),
   resolve(process.cwd(), "../.env"),
 ]);
 
-const PORT = Number(process.env.GATEWAY_PORT || 8787);
-const HOST = process.env.GATEWAY_HOST || "127.0.0.1";
-const WEB_URL = new URL(process.env.CURSOR_REMOTE_WEB_ORIGIN || "http://127.0.0.1:3000");
-const PROXY_WEB = !/^(0|false|off|no)$/i.test(process.env.GATEWAY_PROXY_WEB || "1");
-const DEFAULT_MODEL = process.env.CURSOR_REMOTE_MODEL || "composer-2.5";
+const PORT = gatewayEnv.gatewayPort();
+const HOST = gatewayEnv.gatewayHost();
+const WEB_URL = new URL(gatewayEnv.webOrigin());
+const PROXY_WEB = gatewayEnv.proxyWeb();
+const DEFAULT_MODEL = gatewayEnv.defaultModel();
 /** 工具正文落盘上限。高于网页卡片的 1.2 万展示截断，diff 字段仍留得住。 */
 const TOOL_TEXT_CAP = 24_000;
 const TOOL_TEXT_MARK = "\n…（过长已截断）";
@@ -174,11 +176,11 @@ const KEEP_TURN_IMAGES = 20;
 loadTenants();
 for (const tenant of allTenants()) {
   if (!sandboxEnabledForTenant(tenant)) {
-    console.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);
+    log.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);
   }
   if (compactTenantChats(tenant)) {
     saveDiskNow(tenant);
-    console.log(`已截断过长的工具记录 ${tenant.name}（${tenant.id}）`);
+    log.info(`已截断过长的工具记录 ${tenant.name}（${tenant.id}）`);
   }
 }
 let modelsCache: { at: number; ids: string[] } | null = null;
@@ -226,23 +228,24 @@ async function cancelRun(run: RunHandle | null | undefined) {
   } catch (err) {
     if (!isAbortError(err)) {
       // Cancel failures / hangs should not take down the gateway.
+      log.warn("取消运行失败", err instanceof Error ? err.message : err);
     }
   }
 }
 
 process.on("unhandledRejection", (err) => {
   if (isAbortError(err)) return;
-  console.error(err);
+  log.error(err);
 });
 process.on("uncaughtException", (err) => {
   if (isAbortError(err)) return;
   const code = err && typeof err === "object" ? (err as { code?: string }).code : "";
   // 超长帧会关掉那一条连接。不能因此退出进程，否则 systemd 重启后客户端立刻重发，变成连上就断。
   if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
-    console.error("websocket payload too large");
+    log.error("websocket payload too large");
     return;
   }
-  console.error(err);
+  log.error(err);
   process.exit(1);
 });
 
@@ -489,12 +492,14 @@ function listWorkspaceItems(tenant: Tenant): { path: string; name: string; user?
       const abs = resolve(root, name);
       try {
         if (statSync(abs).isDirectory()) byPath.set(abs, name);
-      } catch {
+      } catch (err) {
         // skip unreadable
+        log.debug("列工作区：子目录读不了", abs, err instanceof Error ? err.message : err);
       }
     }
-  } catch {
+  } catch (err) {
     // root missing
+    log.debug("列工作区：根目录读不了", root, err instanceof Error ? err.message : err);
   }
   for (const slot of tenant.disk.slots) {
     const cwd = confinedCwd(slot.cwd, root);
@@ -526,7 +531,7 @@ function writeHiddenWorkspaces(tenant: Tenant, names: string[]) {
     mkdirSync(tenant.stateDir, { recursive: true });
     writeFileSync(hiddenWorkspacesFile(tenant), JSON.stringify([...new Set(names)].sort()), "utf8");
   } catch (error) {
-    console.warn("写 hidden-workspaces.json 失败", tenant.id, error);
+    log.warn("写 hidden-workspaces.json 失败", tenant.id, error);
   }
 }
 
@@ -731,27 +736,6 @@ function proxyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
   upstream.end();
 }
 
-function loadDotEnv(files: string[]) {
-  for (const file of files) {
-    if (!existsSync(file)) continue;
-    for (const line of readFileSync(file, "utf8").split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq < 0) continue;
-      const key = trimmed.slice(0, eq).trim();
-      let value = trimmed.slice(eq + 1).trim();
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
-      }
-      if (!(key in process.env)) process.env[key] = value;
-    }
-  }
-}
-
 function reply(ws: WebSocket, message: ServerMessage) {
   if (ws.readyState !== WebSocket.OPEN) return;
   const frame = frameFor(ws, message);
@@ -773,11 +757,11 @@ function frameFor(sock: WebSocket, message: ServerMessage): string | null {
   if (fitted) {
     const next = JSON.stringify(fitted);
     if (Buffer.byteLength(next) <= limit) {
-      console.log("frame clipped", message.type, bytes, "->", Buffer.byteLength(next));
+      log.info("frame clipped", message.type, bytes, "->", Buffer.byteLength(next));
       return next;
     }
   }
-  console.warn("frame dropped", message.type, bytes, ">", limit);
+  log.warn("frame dropped", message.type, bytes, ">", limit);
   return null;
 }
 
@@ -1455,7 +1439,7 @@ function emitStoredState(ws: WebSocket, tenant: Tenant) {
     const bytes = Buffer.byteLength(JSON.stringify(payload));
     if (bytes > limit) {
       // 客户端收不了这么大的单条 WS 消息（iOS URLSessionWebSocketTask 约 1MiB），改走 HTTP /state
-      console.log("stored_state deferred", tenant.id, bytes, ">", limit);
+      log.info("stored_state deferred", tenant.id, bytes, ">", limit);
       send(ws, { type: "stored_state_deferred", rev: tenant.disk.rev });
       return;
     }
@@ -1729,8 +1713,9 @@ async function disposeSlot(slot: Slot) {
   if (!agent) return;
   try {
     await agent[Symbol.asyncDispose]();
-  } catch {
+  } catch (err) {
     // Agent may already be closed.
+    log.debug("释放 Agent 失败", slot.chatId, err instanceof Error ? err.message : err);
   }
 }
 
@@ -1743,7 +1728,7 @@ function isAgentMissing(err: unknown) {
 }
 
 async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
-  const apiKey = process.env.CURSOR_API_KEY?.trim();
+  const apiKey = gatewayEnv.cursorApiKey();
   if (!apiKey) {
     throw new Error("服务器未配置 CURSOR_API_KEY。写入环境或 .env 后重启 gateway。");
   }
@@ -1788,11 +1773,11 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
         if (bare) throw err;
         if (next.length) {
           const dropped = next[next.length - 1];
-          console.error("drop reviewer after crew reject", dropped.modelId, err);
+          log.error("drop reviewer after crew reject", dropped.modelId, err);
           next = next.slice(0, -1);
           continue;
         }
-        console.error("crew agents rejected, retrying without them", err);
+        log.error("crew agents rejected, retrying without them", err);
         bare = true;
       }
     }
@@ -1803,7 +1788,7 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
     slot.agent = await openWithCrewFallback(resumeId);
   } catch (err) {
     if (!resumeId || !isAgentMissing(err)) throw err;
-    console.warn("agent missing, opening a new one", { chatId: slot.chatId, agentId: resumeId });
+    log.warn("agent missing, opening a new one", { chatId: slot.chatId, agentId: resumeId });
     await disposeSlot(slot);
     slot.agentId = null;
     slot.reseed = true;
@@ -1816,7 +1801,7 @@ async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> {
 }
 
 async function syncReviewRoster(conn: Conn, slot: Slot, lead: string) {
-  const apiKey = process.env.CURSOR_API_KEY?.trim();
+  const apiKey = gatewayEnv.cursorApiKey();
   const catalog = apiKey ? await listModels(apiKey) : [];
   const next = pickReviewPanel(lead, catalog);
   const known = slot.reviewRoster;
@@ -1984,8 +1969,9 @@ async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
       const page = fitTurnsFromEnd(turns, budget, 40) as HistoryTurn[];
       if (page.length) send(ws, { type: "history", chatId: slot.chatId, turns: page });
     }
-  } catch {
+  } catch (err) {
     // History is best-effort; local store may not have runs yet.
+    log.debug("读 Agent 历史失败", slot.chatId, err instanceof Error ? err.message : err);
   }
 }
 
@@ -2251,14 +2237,13 @@ function undoEdits(cwd: string, paths: string[]): { paths: string[]; error?: str
 }
 
 function gitIdentity(): Record<string, string> {
-  const name = process.env.GIT_AUTHOR_NAME || process.env.CURSOR_REMOTE_GIT_NAME || "cursor-remote";
-  const email =
-    process.env.GIT_AUTHOR_EMAIL || process.env.CURSOR_REMOTE_GIT_EMAIL || "cursor-remote@localhost";
+  const name = gatewayEnv.gitAuthorName();
+  const email = gatewayEnv.gitAuthorEmail();
   return {
     GIT_AUTHOR_NAME: name,
     GIT_AUTHOR_EMAIL: email,
-    GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || name,
-    GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || email,
+    GIT_COMMITTER_NAME: gatewayEnv.gitCommitterName() || name,
+    GIT_COMMITTER_EMAIL: gatewayEnv.gitCommitterEmail() || email,
   };
 }
 
@@ -2448,8 +2433,9 @@ function createCheckpoint(cwd: string, label: string): Checkpoint {
   const args = ["commit-tree", tree, "-m", `cursor-remote: ${label}`];
   try {
     args.splice(2, 0, "-p", git(ctx.cwd, ["rev-parse", "HEAD"], ctx.env));
-  } catch {
+  } catch (err) {
     // empty repo, no parent
+    log.debug("检查点：仓库还没有 HEAD", ctx.cwd, err instanceof Error ? err.message : err);
   }
   const commit = git(ctx.cwd, args, ctx.env);
   const id = commit.slice(0, 8);
@@ -2514,8 +2500,9 @@ function restoreCheckpoint(
       const abs = resolve(cwd, path);
       try {
         if (existsSync(abs) && statSync(abs).isFile()) unlinkSync(abs);
-      } catch {
+      } catch (err) {
         // skip files we cannot remove
+        log.warn("还原检查点：删不掉文件", abs, err instanceof Error ? err.message : err);
       }
     }
     return {};
@@ -2738,8 +2725,9 @@ function expandAttachments(cwd: string, files: string[]): string {
           `Attached workspace file ${path} (${file.kind || "binary"}${file.size != null ? `, ${formatBytes(file.size)}` : ""}). It is already in the working directory; read it with tools.`,
         );
       }
-    } catch {
+    } catch (err) {
       // skip unreadable attachment
+      log.debug("附件读不了", raw, err instanceof Error ? err.message : err);
     }
   }
   return parts.join("\n\n");
@@ -2912,7 +2900,7 @@ function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string {
     try {
       return workspaceContextFor(tenant, cwd);
     } catch (err) {
-      console.error("workspace context", err);
+      log.error("workspace context", err);
     }
   }
   const chunks: string[] = [];
@@ -2922,8 +2910,9 @@ function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string {
       if (!existsSync(abs) || !statSync(abs).isFile()) return;
       const text = readFileSync(abs, "utf8").trim();
       if (text) chunks.push(`# ${rel}\n${text}`);
-    } catch {
+    } catch (err) {
       // skip unreadable rule files
+      log.debug("规则文件读不了", abs, err instanceof Error ? err.message : err);
     }
   };
   take(".cursorrules");
@@ -2936,8 +2925,9 @@ function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string {
         take(`.cursor/rules/${name}`);
       }
     }
-  } catch {
+  } catch (err) {
     // no rules directory
+    log.debug("规则目录读不了", dir, err instanceof Error ? err.message : err);
   }
   return chunks.join("\n\n").slice(0, 16_000);
 }
@@ -3034,8 +3024,9 @@ function walkFiles(root: string, dir: string, acc: string[], depth: number) {
         if (full !== root && existsSync(resolve(full, ".git"))) continue;
         walkFiles(root, full, acc, depth + 1);
       } else acc.push(relative(root, full));
-    } catch {
+    } catch (err) {
       // skip unreadable
+      log.debug("遍历文件：读不了", full, err instanceof Error ? err.message : err);
     }
   }
 }
@@ -3409,8 +3400,9 @@ function searchWorkspace(cwd: string, query: string): { path: string; line: numb
         n += 1;
         if (n >= 8 || hits.length >= 100) break;
       }
-    } catch {
+    } catch (err) {
       // skip unreadable
+      log.debug("搜索：文件读不了", abs, err instanceof Error ? err.message : err);
     }
     if (hits.length >= 100) break;
   }
@@ -3562,7 +3554,7 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
     else delete transcript.files;
     return files;
   } catch (err) {
-    console.error("turn files", err instanceof Error ? err.message : err);
+    log.error("turn files", err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -3585,7 +3577,7 @@ function indexUserTurn(slot: Slot) {
       assistant: transcript.assistant || "",
     });
   } catch (err) {
-    console.error("index user turn", err);
+    log.error("index user turn", err);
   }
 }
 
@@ -3604,7 +3596,7 @@ function noteWorkspaceTurn(slot: Slot) {
       assistant: transcript.assistant || "",
     });
   } catch (err) {
-    console.error("workspace turn", err);
+    log.error("workspace turn", err);
   }
 }
 
@@ -3748,10 +3740,18 @@ function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
       scope = listed.paths;
     }
     base.tree = snapshotTree({ ctx, prefix, scope }) || undefined;
-  } catch {
+  } catch (err) {
     // 没基线就只用工具路径
+    const now = Date.now();
+    const quiet = now - (baselineWarnedAt.get(cwd) ?? -Infinity) < BASELINE_WARN_MS;
+    if (!quiet) baselineWarnedAt.set(cwd, now);
+    (quiet ? log.debug : log.warn)("本轮文件基线没建成", slot.chatId, cwd, err instanceof Error ? err.message : err);
   }
 }
+
+/** 基线持续失败时每轮都会走到上面：同一目录 10 分钟内只 warn 一次，其余记 debug */
+const BASELINE_WARN_MS = 10 * 60_000;
+const baselineWarnedAt = new Map<string, number>();
 
 const NATIVE_RESULT_PREVIEW = 4000;
 
@@ -3811,7 +3811,7 @@ async function runNativeChat(
     allowStdio: !sandbox,
     signal: abort.signal,
   });
-  if (mcp.errors.length) console.error("mcp", mcp.errors.join(" | "));
+  if (mcp.errors.length) log.error("mcp", mcp.errors.join(" | "));
   if (abort.signal.aborted || slot.epoch !== epoch || slot.finished) {
     if (slot.externalAbort === abort) slot.externalAbort = null;
     return;
@@ -3902,7 +3902,7 @@ async function runNativeChat(
     summarize: modelSummarizer(adapter, endpoint, nativeTurn),
     onCompact: (info) => {
       if (!live()) return;
-      console.log(`native compact chat=${slot.chatId} stage=${info.stage} ${info.before}→${info.after} summarized=${info.summarized}`);
+      log.info(`native compact chat=${slot.chatId} stage=${info.stage} ${info.before}→${info.after} summarized=${info.summarized}`);
     },
   });
   const assistantSpecs = !conn.tenant
@@ -3965,7 +3965,7 @@ async function runNativeChat(
       // iOS 上行 history 时跳过出错的轮次，key 也不记，否则下一轮对不上存档
       saveSession(stateDirOf, slot.chatId, { model: ext.full, userKeys: errored ? prior.userKeys : userKeys, messages: saved });
     } catch (err) {
-      console.error("native session save", err instanceof Error ? err.message : err);
+      log.error("native session save", err instanceof Error ? err.message : err);
     }
   };
 
@@ -4068,7 +4068,7 @@ async function runNativeChat(
 
 async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: string) {
   if (!chatId || namedChats.has(chatId) || namingChats.has(chatId)) return;
-  const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
+  const apiKey = gatewayEnv.cursorApiKey();
   if (!apiKey) return;
   namingChats.add(chatId);
   const titleT0 = Date.now();
@@ -4092,7 +4092,7 @@ async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: st
     noteOutput(tenant.id, title.length); // 标题输出也走同一 API key
     send(ws, { type: "chat_title", chatId, title });
   } catch (err) {
-    console.error("titleChat", err instanceof Error ? err.message : err);
+    log.error("titleChat", err instanceof Error ? err.message : err);
   } finally {
     namingChats.delete(chatId);
     noteRun(tenant.id, Date.now() - titleT0); // 起标题是一次真实 agent 调用（Kimi R1 M3），成败都计
@@ -4313,7 +4313,7 @@ async function handlePrompt(
     try {
       assistantBlock = userRootPreamble(conn.tenant);
     } catch (err) {
-      console.error("assistant preamble", err);
+      log.error("assistant preamble", err);
     }
   }
   let prompt = wrapPrompt(
@@ -4664,7 +4664,7 @@ async function handlePrompt(
   try {
     if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
       const panel = slot.reviewRoster || [];
-      const apiKey = process.env.CURSOR_API_KEY?.trim();
+      const apiKey = gatewayEnv.cursorApiKey();
       if (panel.length < 2) {
         send(ws, {
           type: "text-delta",
@@ -4856,7 +4856,7 @@ async function handlePrompt(
       run = await startSend(sendOpts);
     } catch (err) {
       if (!sendOpts.disallowedTools) throw err;
-      console.error("disallowedTools rejected, retrying without them", err);
+      log.error("disallowedTools rejected, retrying without them", err);
       const { disallowedTools: _drop, ...rest } = sendOpts;
       run = await startSend(rest);
     }
@@ -4864,8 +4864,9 @@ async function handlePrompt(
     if (slot.epoch !== epoch || slot.finished) {
       try {
         await cancelRun(run);
-      } catch {
+      } catch (err) {
         // Stale run after cancel or a newer prompt.
+        log.warn("取消过期运行失败", slot.chatId, err instanceof Error ? err.message : err);
       }
       return;
     }
@@ -4971,8 +4972,9 @@ async function handlePrompt(
       runWatch.stop = undefined;
       try {
         await iterator.return?.();
-      } catch {
+      } catch (err) {
         // stream already closed
+        log.debug("关闭运行流失败", slot.chatId, err instanceof Error ? err.message : err);
       }
     }
 
@@ -5300,7 +5302,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, url: URL)
         }
       }
       if (!buf.length) {
-        console.warn("upload multipart empty", name, raw.length);
+        log.warn("upload multipart empty", name, raw.length);
       }
     } else {
       buf = raw;
@@ -5317,7 +5319,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, url: URL)
   const token = bearer || formToken.trim();
   const tenant = resolveTenant(token);
   if (!tenant) {
-    console.warn("upload unauthorized", req.method, name);
+    log.warn("upload unauthorized", req.method, name);
     res.writeHead(401, { "content-type": "application/json" }).end(JSON.stringify({ error: "unauthorized" }));
     return;
   }
@@ -5340,7 +5342,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, url: URL)
     res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: written.error, path: written.path }));
     return;
   }
-  console.log("upload", written.path, written.size);
+  log.info("upload", written.path, written.size);
   res.writeHead(200, { "content-type": "application/json" }).end(
     JSON.stringify({ path: written.path, size: written.size, name }),
   );
@@ -5445,13 +5447,13 @@ function healthPayload() {
   const tenants = allTenants();
   const cwdOk = tenants.length ? tenants.every((item) => cwdWritable(item.workspaceRoot)) : false;
   const stateOk = tenants.length ? tenants.every((item) => cwdWritable(item.stateDir)) : false;
-  const ready = Boolean(hasAuth() && process.env.CURSOR_API_KEY?.trim() && cwdOk && stateOk);
+  const ready = Boolean(hasAuth() && gatewayEnv.cursorApiKey() && cwdOk && stateOk);
   return {
     ok: ready,
     tenants: tenants.map((item) => item.id),
     cwdWritable: cwdOk,
     stateWritable: stateOk,
-    hasApiKey: Boolean(process.env.CURSOR_API_KEY?.trim()),
+    hasApiKey: Boolean(gatewayEnv.cursorApiKey()),
     hasAuth: hasAuth(),
     host: HOST,
   };
@@ -5473,7 +5475,7 @@ const httpServer = createServer((req, res) => {
     try {
       body = calendarFeed(allTenants(), token);
     } catch (err) {
-      console.error("calendar feed", err instanceof Error ? err.message : err);
+      log.error("calendar feed", err instanceof Error ? err.message : err);
     }
     if (body === null) {
       res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" }).end("not found");
@@ -5491,7 +5493,7 @@ const httpServer = createServer((req, res) => {
     try {
       handleMedia(req, res, url);
     } catch (err) {
-      console.error("media", err instanceof Error ? err.message : err);
+      log.error("media", err instanceof Error ? err.message : err);
       if (!res.headersSent) res.writeHead(500).end("media failed");
       else res.destroy();
     }
@@ -5503,7 +5505,7 @@ const httpServer = createServer((req, res) => {
   }
   if (url.pathname === "/upload") {
     void handleUpload(req, res, url).catch((err) => {
-      console.error("upload", err instanceof Error ? err.message : err);
+      log.error("upload", err instanceof Error ? err.message : err);
       if (!res.headersSent) {
         res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "上传失败" }));
       }
@@ -5565,7 +5567,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
 
   ws.on("error", (err) => {
     const code = err && typeof err === "object" ? (err as { code?: string }).code : "";
-    console.error("ws error", code || (err instanceof Error ? err.message : err));
+    log.error("ws error", code || (err instanceof Error ? err.message : err));
   });
 
   ws.on("message", async (data) => {
@@ -5609,7 +5611,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         );
         bindTenant(conn, tenant);
         usageRec(tenant.id); // P9：建行 + touch lastActiveAt（登录即活动）
-        const apiKey = process.env.CURSOR_API_KEY?.trim() || "";
+        const apiKey = gatewayEnv.cursorApiKey();
         hydrateConn(conn);
         attachLiveSlots(conn);
         const cached = modelsCache?.ids?.length ? modelsCache.ids : [DEFAULT_MODEL];
@@ -5638,7 +5640,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
           ensureAssistantChat(tenant);
           onTenantHello(tenant);
         } catch (err) {
-          console.error("assistant hello", err);
+          log.error("assistant hello", err);
         }
         emitReady(cached);
         emitStoredState(ws, tenant);
@@ -5748,7 +5750,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
             lastActiveAt: usage.lastActiveAt,
           };
         });
-        const cursor = await cursorBill(process.env.CURSOR_API_KEY?.trim() || "");
+        const cursor = await cursorBill(gatewayEnv.cursorApiKey());
         send(ws, { type: "admin_stats", serverTime: Date.now(), tenants: rows, cursor });
         return;
       }
@@ -6019,7 +6021,7 @@ wss.on("connection", (ws, req: IncomingMessage) => {
         const stored = tenant.disk.chats.filter((item) => !isAssistantChat(tenant, chatIdOf(item))).length;
         if (changed && !prev && !isAssistantChat(tenant, id) && stored >= MAX_STORED_CHATS) {
           // 条数硬顶：追加新会话被拒（替换既有会话不受限），回 ack 让客户端收敛 inflight
-          console.warn("sync_chat 拒绝：会话数超上限", tenant.id, MAX_STORED_CHATS);
+          log.warn("sync_chat 拒绝：会话数超上限", tenant.id, MAX_STORED_CHATS);
           send(ws, { type: "sync_ack", rev: tenant.disk.rev, chatRevs: { [id]: clientRev } });
           return;
         }
@@ -6958,7 +6960,7 @@ async function startDelegation(req: DelegateRequest): Promise<string> {
 }
 
 bindBackground({
-  apiKey: () => process.env.CURSOR_API_KEY?.trim() || "",
+  apiKey: () => gatewayEnv.cursorApiKey(),
   listModels,
   prompt: (message, options) => Agent.prompt(message, options),
   sandbox: (tenantId) => sandboxEnabledForTenant(getTenant(tenantId)),
@@ -6984,18 +6986,18 @@ httpServer.listen(PORT, HOST, () => {
     mkdirSync(tenant.workspaceRoot, { recursive: true });
     mkdirSync(tenant.stateDir, { recursive: true });
   }
-  console.log(`cursor-remote gateway  http://${HOST}:${PORT}`);
+  log.banner(`cursor-remote gateway  http://${HOST}:${PORT}`);
   if (tenants.length === 1) {
-    console.log(`工作区                 ${tenants[0].workspaceRoot}`);
+    log.banner(`工作区                 ${tenants[0].workspaceRoot}`);
   } else {
-    console.log(`租户                   ${tenants.map((item) => item.id).join(", ") || "(无)"}`);
+    log.banner(`租户                   ${tenants.map((item) => item.id).join(", ") || "(无)"}`);
   }
-  console.log(`状态目录               ${stateDir()}`);
-  if (PROXY_WEB) console.log(`本机网页               ${WEB_URL.origin}`);
-  if (!process.env.CURSOR_API_KEY?.trim()) {
-    console.warn("缺少 CURSOR_API_KEY：写入环境或 .env 后重启 gateway。");
+  log.banner(`状态目录               ${stateDir()}`);
+  if (PROXY_WEB) log.banner(`本机网页               ${WEB_URL.origin}`);
+  if (!gatewayEnv.cursorApiKey()) {
+    log.warn("缺少 CURSOR_API_KEY：写入环境或 .env 后重启 gateway。");
   }
   if (!hasAuth()) {
-    console.warn("缺少登录配置：写入 tenants.json 或 CURSOR_REMOTE_TOKEN 后重启 gateway。");
+    log.warn("缺少登录配置：写入 tenants.json 或 CURSOR_REMOTE_TOKEN 后重启 gateway。");
   }
 });

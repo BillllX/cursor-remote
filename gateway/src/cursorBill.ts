@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { CursorBill, CursorOnDemand } from "../../shared/protocol.ts";
+import { gatewayEnv } from "./config.ts";
 
 /**
  * 当前 CURSOR_API_KEY 的官方用量和计费。
@@ -12,7 +13,7 @@ import type { CursorBill, CursorOnDemand } from "../../shared/protocol.ts";
  * 这里不启动 agent 进程，避免 CLI 把 Key 的登录态写进磁盘。
  */
 
-const ENDPOINT = (process.env.CURSOR_API_ENDPOINT || "https://api2.cursor.sh").replace(/\/$/, "");
+const ENDPOINT = gatewayEnv.cursorApiEndpoint();
 const TIMEOUT_MS = 12_000;
 
 type Session = { hash: string; token: string; until: number };

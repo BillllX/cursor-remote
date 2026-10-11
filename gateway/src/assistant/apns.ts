@@ -1,5 +1,6 @@
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { apnsEnv, gatewayEnv } from "../config.ts";
 import { connect, constants as h2, type ClientHttp2Session } from "node:http2";
 import { appendJsonl, assistantPath, type TenantRef } from "./store.ts";
 import { listApnsSubscriptions, removeApnsSubscription, type ApnsSubscription } from "./push.ts";
@@ -38,30 +39,31 @@ const b64u = (buf: Buffer) => buf.toString("base64url");
 let cachedConfig: { sig: string; config: ApnsConfig } | null = null;
 let warnedSig = "";
 
-function readPem(env: NodeJS.ProcessEnv): string {
-  const inline = env.APNS_PRIVATE_KEY?.trim();
+function readPem(vars: ReturnType<typeof apnsEnv>): string {
+  const inline = vars.privateKey?.trim();
   if (inline) return inline.replace(/\\n/g, "\n");
-  const path = env.APNS_PRIVATE_KEY_PATH?.trim();
+  const path = vars.privateKeyPath?.trim();
   return path ? readFileSync(path, "utf8") : "";
 }
 
 /** 读环境变量；没配全或密钥解析失败时返回 null（安静跳过，同一份配置只在日志里提示一次） */
-export function apnsConfig(env: NodeJS.ProcessEnv = process.env): ApnsConfig | null {
-  const teamId = env.APNS_TEAM_ID?.trim() ?? "";
-  const keyId = env.APNS_KEY_ID?.trim() ?? "";
-  const hasKey = Boolean(env.APNS_PRIVATE_KEY?.trim() || env.APNS_PRIVATE_KEY_PATH?.trim());
+export function apnsConfig(env?: NodeJS.ProcessEnv): ApnsConfig | null {
+  const vars = apnsEnv(env);
+  const teamId = vars.teamId?.trim() ?? "";
+  const keyId = vars.keyId?.trim() ?? "";
+  const hasKey = Boolean(vars.privateKey?.trim() || vars.privateKeyPath?.trim());
   if (!teamId || !keyId || !hasKey) return null;
-  const sig = [teamId, keyId, env.APNS_PRIVATE_KEY ?? "", env.APNS_PRIVATE_KEY_PATH ?? "", env.APNS_BUNDLE_ID ?? "", env.APNS_DEFAULT_ENV ?? ""].join("\u0000");
+  const sig = [teamId, keyId, vars.privateKey ?? "", vars.privateKeyPath ?? "", vars.bundleId ?? "", vars.defaultEnv ?? ""].join("\u0000");
   if (cachedConfig?.sig === sig) return cachedConfig.config;
   try {
-    const key = createPrivateKey(readPem(env));
+    const key = createPrivateKey(readPem(vars));
     if (key.asymmetricKeyType !== "ec") throw new Error("不是 EC 私钥");
     const config: ApnsConfig = {
       teamId,
       keyId,
       key,
-      bundleId: env.APNS_BUNDLE_ID?.trim() || undefined,
-      defaultEnv: env.APNS_DEFAULT_ENV?.trim() === "sandbox" ? "sandbox" : "production",
+      bundleId: vars.bundleId?.trim() || undefined,
+      defaultEnv: vars.defaultEnv?.trim() === "sandbox" ? "sandbox" : "production",
     };
     cachedConfig = { sig, config };
     return config;
@@ -99,7 +101,7 @@ export function resetApnsCache() {
   warnedSig = "";
 }
 
-export function apnsHost(environment: "sandbox" | "production", override = process.env.APNS_HOST_OVERRIDE) {
+export function apnsHost(environment: "sandbox" | "production", override = gatewayEnv.apnsHostOverride()) {
   const forced = override?.trim();
   if (forced) return /^https?:\/\//.test(forced) ? forced : `https://${forced}`;
   return environment === "sandbox" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
@@ -197,7 +199,7 @@ export async function sendApns(
           "content-type": "application/json",
         };
         if (!headers["apns-collapse-id"]) delete headers["apns-collapse-id"];
-        const origin = apnsHost(sub.environment ?? config.defaultEnv, opts.host ?? process.env.APNS_HOST_OVERRIDE);
+        const origin = apnsHost(sub.environment ?? config.defaultEnv, opts.host ?? gatewayEnv.apnsHostOverride());
         result = await post(sessionFor(origin), sub.token, headers, body);
       }
       const ok = result.status >= 200 && result.status < 300;
