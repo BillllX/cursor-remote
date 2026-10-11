@@ -17,7 +17,7 @@ import { runNativeLoop, type NativeHooks } from "./loop.ts";
 import { fsTools, globToRegExp, setRgPathForTest } from "./tools/fs.ts";
 import { toolsForMode } from "./tools/registry.ts";
 import { isReadOnlyCommand, sandboxArgv, shellEnv, shellTool } from "./tools/shell.ts";
-import { budgetFor, clipOldToolResults, makeCompactor, mechanicalSummary, renderTranscript, sizeOf } from "./compact.ts";
+import { clipOldToolResults, makeCompactor, mechanicalSummary, renderTranscript, sizeOf } from "./compact.ts";
 import { deleteSession, loadSession, normalizeSequence, noteSession, resumeMessages, saveSession, slimMessages } from "./session.ts";
 import { taskTool } from "./tools/task.ts";
 import type { ChatMessage, ModelEndpoint, ToolCall, ToolSpec } from "./types.ts";

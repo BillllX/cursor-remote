@@ -34,7 +34,7 @@ import { addApnsSubscription, addSubscription, listApnsSubscriptions, listSubscr
 import { apnsReady, sendApns } from "./apns.ts";
 import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
-import { assistantDir, estimateTokens, writeJson, assistantPath, type TenantRef } from "./store.ts";
+import { assistantDir, estimateTokens, writeJson, type TenantRef } from "./store.ts";
 import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
 import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";

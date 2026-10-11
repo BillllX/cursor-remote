@@ -82,7 +82,9 @@ npm run dev
 
 ## 检查与 CI
 
-`npm run ci` 依次跑协议一致性、网关类型检查、冒烟测试和网页构建，不需要模型密钥。推到 `main` 时 GitHub Actions（`.github/workflows/ci.yml`）跑同一条命令；只改 `ios/` 或 Markdown 不触发。
+`npm run ci` 依次跑协议一致性、lint、格式检查、单元测试、网关类型检查、冒烟测试和网页构建，不需要模型密钥。推到 `main` 时 GitHub Actions（`.github/workflows/ci.yml`）跑同一条命令；只改 `ios/` 或 Markdown 不触发。
+
+单项命令：`npm run lint`（ESLint，存量问题只报 warning）、`npm test`（`gateway/test/*.test.ts`，node:test）、`npm run format:check` / `npm run format`（Prettier）。`.prettierignore` 里「遗留文件」区块是还没格式化的老文件，新文件必须合规；格式化完老文件后跑 `npm run format:baseline` 刷新名单。`SWIFT_BIN=<工具链 bin 目录> npm run lint:swift` 解析全部 Swift 并对改动文件给 swift-format 提示，CI 不跑。
 
 `scripts/ci-gateway-smoke.sh` 会在临时目录里生成两个测试用户（管理员和普通用户，口令随机），起一个独立网关跑 `slim-smoke`、`resume-smoke`，结束后清掉。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
 

@@ -5,6 +5,8 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // lint 由根目录 npm run lint 单独跑；不让 next build 去找 eslint-config-next
+  eslint: { ignoreDuringBuilds: true },
   env: {
     // hello.client 版本上报用
     NEXT_PUBLIC_APP_VERSION: pkg.version,

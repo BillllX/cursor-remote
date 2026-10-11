@@ -29,6 +29,12 @@ jobs:
       - run: npm ci
       - name: 协议双份一致
         run: npm run check:protocol
+      - name: Lint
+        run: npm run lint
+      - name: 格式检查
+        run: npm run format:check
+      - name: 单元测试
+        run: npm test
       - name: 网关类型检查
         run: npm run build -w gateway
       - name: 冒烟测试（无模型密钥，临时测试用户）

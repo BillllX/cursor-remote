@@ -11,7 +11,6 @@ import {
   readJson,
   readJsonl,
   writeJson,
-  writeJsonl,
   type TenantRef,
 } from "./store.ts";
 

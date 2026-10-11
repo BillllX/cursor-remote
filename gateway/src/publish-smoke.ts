@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingHttpHeaders, type Server } from "node:http";
 import { tmpdir } from "node:os";

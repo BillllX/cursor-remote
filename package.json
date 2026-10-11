@@ -23,13 +23,25 @@
     "bench:policy": "node scripts/policy-bench.mjs",
     "bench:dialect": "node scripts/dialect-bench.mjs",
     "check:protocol": "diff shared/protocol.ts web/lib/protocol.ts && echo 'protocol 双份同步 ✅'",
-    "ci": "npm run check:protocol && npm run build -w gateway && npm run ci:smoke && npm run build -w web",
+    "lint": "eslint gateway/src gateway/test shared web scripts eslint.config.mjs",
+    "format": "prettier --write --no-error-on-unmatched-pattern \"gateway/src/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"gateway/test/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"shared/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"web/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"scripts/*.{js,mjs,cjs}\" \"eslint.config.mjs\"",
+    "format:check": "prettier --check --no-error-on-unmatched-pattern \"gateway/src/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"gateway/test/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"shared/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"web/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"scripts/*.{js,mjs,cjs}\" \"eslint.config.mjs\"",
+    "format:baseline": "node scripts/format-baseline.mjs",
+    "test": "node --import tsx --test \"gateway/test/**/*.test.ts\"",
+    "lint:swift": "bash scripts/lint-swift.sh",
+    "ci": "npm run check:protocol && npm run lint && npm run format:check && npm test && npm run build -w gateway && npm run ci:smoke && npm run build -w web",
     "ci:smoke": "npm run smoke:assistant -w gateway && npm run smoke:memory -w gateway && npm run smoke:turnfiles -w gateway && npm run smoke:seghash -w gateway && npm run smoke:loops -w gateway && npm run smoke:apns -w gateway && npm run smoke:native -w gateway && npm run smoke:publish -w gateway && bash scripts/ci-gateway-smoke.sh",
     "smoke:native": "npm run smoke:native -w gateway",
     "smoke:assistant": "npm run smoke:assistant -w gateway"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.5",
     "concurrently": "^9.2.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "typescript-eslint": "^8.71.1",
     "ws": "^8.21.3"
   }
 }
