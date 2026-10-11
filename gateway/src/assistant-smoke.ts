@@ -337,7 +337,7 @@ try {
   check(meet.ok && !meet.duplicate && again.ok && again.duplicate && again.value.id === meet.value.id, "待办：同一天同一件事不重复记");
   check(meet.ok && meet.value.source === "chat" && meet.value.quote?.length === 121 && meet.value.quote.endsWith("…"), "待办：记下来源，原话截到 120 字");
   check(todos.addTodo(kref, { text: "和老王开会", due: "2026-10-08" }).ok && todos.listTodos(kref).length === 2, "待办：换一天算新的一件");
-  const moved = meet.ok ? todos.updateTodo(kref, meet.value.id, { due: "2026-10-09T10:00:00+08:00" }) : null;
+  const moved = meet.ok ? todos.updateTodo(kref, meet.value.id, { due: "2026-10-09T10:00:00+08:00" }, Date.parse("2026-10-05T00:00:00Z")) : null;
   check(Boolean(moved?.ok && moved.value.remindAt === Date.parse("2026-10-09T02:00:00Z") && !moved.value.reminded), "待办：改时间后重新等提醒");
   check(Boolean(meet.ok && !todos.updateTodo(kref, meet.value.id, { due: "下周" }).ok && todos.updateTodo(kref, meet.value.id, { text: "  " }).ok === false), "待办：改成非法日期或空内容都拒绝");
   check(todos.addTodo(kref, { text: "付 ¥100", due: "2026-10-12" }).ok && !todos.addTodo(kref, { text: "付 $100", due: "2026-10-12" }).duplicate, "待办：去重不吞货币符号");

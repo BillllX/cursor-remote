@@ -95,7 +95,7 @@ export function addTodo(
 }
 
 /** 改文字或日期；due 传空串表示去掉日期。改了时间就重新等提醒 */
-export function updateTodo(ref: TenantRef, id: string, patch: { text?: string; due?: string }) {
+export function updateTodo(ref: TenantRef, id: string, patch: { text?: string; due?: string }, now = Date.now()) {
   const data = readJson<TodosFile>(file(ref), { todos: [] });
   const todo = data.todos.find((item) => item.id === id);
   if (!todo) return { ok: false as const, error: `没有这条待办：${id}` };
@@ -109,9 +109,9 @@ export function updateTodo(ref: TenantRef, id: string, patch: { text?: string; d
     if (!parsed.ok) return { ok: false as const, error: DUE_ERROR };
     todo.due = parsed.due;
     todo.remindAt = parsed.remindAt;
-    todo.reminded = parsed.remindAt !== undefined && parsed.remindAt <= Date.now();
+    todo.reminded = parsed.remindAt !== undefined && parsed.remindAt <= now;
   }
-  todo.updatedAt = Date.now();
+  todo.updatedAt = now;
   writeJson(file(ref), data);
   return { ok: true as const, value: todo };
 }
