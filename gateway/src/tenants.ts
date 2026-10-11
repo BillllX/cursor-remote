@@ -157,12 +157,19 @@ export function sandboxEnabledForTenant(
   return tenant.sandbox;
 }
 
+/** 平台所有者。id 或显示名是 BillXu 都算。显示名不放开沙箱，只放开工作区围栏和对外网站。 */
+export function isBillXuTenant(
+  tenant: { id: string; name?: string } | null | undefined,
+): boolean {
+  if (!tenant) return false;
+  return tenantSlug(tenant.id) === "billxu" || tenantSlug(tenant.name || "") === "billxu";
+}
+
 /** 会话工作区围栏：写到当前目录以外就拦截。BillXu 除外，可以改这台机器上 gateway 用户能碰到的路径。 */
 export function workspaceFenceForTenant(
   tenant: { id: string; name: string } | null | undefined,
 ): boolean {
-  if (!tenant) return true;
-  return tenantSlug(tenant.id) !== "billxu" && tenantSlug(tenant.name) !== "billxu";
+  return !isBillXuTenant(tenant);
 }
 
 export function mediaSecret(): string {

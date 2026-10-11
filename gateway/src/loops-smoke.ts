@@ -56,7 +56,7 @@ try {
   );
 
   const { bindLoops } = await import("./loops.ts");
-  const { sandboxEnabledForTenant, loadTenants, getTenant } = await import("./tenants.ts");
+  const { sandboxEnabledForTenant, isBillXuTenant, loadTenants, getTenant } = await import("./tenants.ts");
 
   const ticks: Array<{ chatId: string; status: string; summary: string; tick: number }> = [];
   const dispatched: string[] = [];
@@ -113,6 +113,10 @@ try {
   check(sandbox("carol") === false, "沙箱：tenants.json 里 sandbox: false 不进沙箱");
   check(sandbox("dave") === true, "沙箱：普通租户进沙箱");
   check(sandboxEnabledForTenant(null) === true, "沙箱：没有租户时默认进沙箱");
+  check(isBillXuTenant(getTenant("billxu")) === true, "权限：id 为 billxu 的任意会话与 USER 工作区相同");
+  check(isBillXuTenant(getTenant("alice")) === true, "权限：显示名 BillXu 的任意会话与 USER 工作区相同");
+  check(isBillXuTenant(getTenant("dave")) === false, "权限：普通租户仍只能在 USER 工作区创建对外网站");
+  check(isBillXuTenant(null) === false, "权限：没有租户时不能放开对外网站");
 } catch (err) {
   failed += 1;
   console.log(`FAIL  冒烟异常：${err instanceof Error ? err.message : String(err)}`);

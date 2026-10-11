@@ -18,7 +18,7 @@ import { connect as netConnect, createServer as netCreateServer } from "node:net
 import { dirname, resolve } from "node:path";
 import type { Duplex } from "node:stream";
 import { defaultWorkbenchPage, workbenchDownPage } from "./publish-home.ts";
-import { confinedCwd } from "./tenants.ts";
+import { confinedCwd, isBillXuTenant } from "./tenants.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const CONTROL_PATHS = new Set([
@@ -609,6 +609,11 @@ export function createPublishController(options: {
     return real(cwd) === real(tenant.workspaceRoot);
   }
 
+  /** 普通租户只能在 USER 根目录操作。BillXu 的任意子工作区会话都可以。 */
+  function mayControlPublish(cwd: string, tenant: PublishTenant) {
+    return atUserRoot(cwd, tenant) || isBillXuTenant(tenant);
+  }
+
   const offRoot = {
     status: 403,
     body: { ok: false, message: "对外网站只能在 USER 工作区里创建。换到用户根目录下的会话再执行 jiebo-publish。" },
@@ -783,7 +788,7 @@ export function createPublishController(options: {
     if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
       return { status: 401, body: { ok: false, message: "口令不对。" } };
     }
-    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
+    if (!mayControlPublish(found.cwd, found.tenant)) return offRoot;
     const slot = liveSlot(found.tenant.id);
     if (!slot) {
       const row = readPersisted(found.tenant);
@@ -809,7 +814,7 @@ export function createPublishController(options: {
     if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
       return { status: 401, body: { ok: false, message: "口令不对。" } };
     }
-    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
+    if (!mayControlPublish(found.cwd, found.tenant)) return offRoot;
     const slot = slots.get(found.tenant.id);
     const hadRow = Boolean(readPersisted(found.tenant));
     if (slot && groupAlive(slot.pid)) {
@@ -838,7 +843,7 @@ export function createPublishController(options: {
     if (!secretEqual(presented, ensureTenantToken(found.tenant))) {
       return { status: 401, body: { ok: false, message: "口令不对。" } };
     }
-    if (!atUserRoot(found.cwd, found.tenant)) return offRoot;
+    if (!mayControlPublish(found.cwd, found.tenant)) return offRoot;
     if (!existsSync(found.cwd) || !statSync(found.cwd).isDirectory()) {
       return { status: 400, body: { ok: false, message: "工作目录不存在。" } };
     }

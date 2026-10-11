@@ -23,7 +23,7 @@ import {
   toolFingerprint,
 } from "../../shared/policy.ts";
 import { dialectOverlay } from "../../shared/dialect.ts";
-import { PUBLISH_AGENT_PROMPT, PUBLISH_DENIED_PROMPT } from "../../shared/publishPrompt.ts";
+import { PUBLISH_AGENT_PROMPT, PUBLISH_DENIED_PROMPT, PUBLISH_OWNER_PROMPT } from "../../shared/publishPrompt.ts";
 import {
   buildCrewAgents,
   crewAgentToken,
@@ -54,6 +54,7 @@ import {
   mediaSecret,
   requireCwd,
   resolveTenant,
+  isBillXuTenant,
   sandboxEnabledForTenant,
   workspaceFenceForTenant,
   saveDisk,
@@ -466,6 +467,13 @@ function isUserWorkspace(cwd: string, root: string) {
   const next = confinedCwd(cwd, root);
   const base = confinedCwd(root, root);
   return Boolean(next && base && next === base);
+}
+
+/** USER 根目录，或 BillXu 的任意会话。工作目录仍须落在该用户的工作区里。 */
+function mayPublishHere(tenant: Tenant | null | undefined, cwd: string) {
+  if (!tenant) return false;
+  if (isBillXuTenant(tenant)) return true;
+  return isUserWorkspace(cwd, tenant.workspaceRoot);
 }
 
 function listWorkspaceItems(tenant: Tenant): { path: string; name: string; user?: boolean }[] {
@@ -2955,6 +2963,15 @@ function wrapPrompt(
     body = `Workspace rules (follow these):\n${rules.trim()}\n\n${body}`;
   }
   const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n\n` : "";
+  const publishPrompt = confine ? (atUserRoot ? PUBLISH_AGENT_PROMPT : PUBLISH_DENIED_PROMPT) : PUBLISH_OWNER_PROMPT;
+  const planPublish = confine
+    ? atUserRoot
+      ? "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。网站只能在这个 USER 工作区里做。"
+      : "不要执行 jiebo-publish，也不要把它写进方案。对外网站只能在 USER 工作区里创建。"
+    : "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。这个用户的任意会话都能创建对外网站。";
+  const crewStay = confine
+    ? "Subagents must stay inside the current workspace."
+    : "Subagents have the same reach as the USER workspace and may edit any directory under this user's root.";
   if (mode === "ask") {
     return `${bound}ASK MODE (read-only). You must not modify the workspace.
 Do not call write, edit, delete, apply patch, or any mutating shell command (rm, mv, git commit, npm install, etc.).
@@ -2966,8 +2983,8 @@ ${body}`;
   }
   if (mode === "plan") {
     return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
-方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。
-${atUserRoot ? "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。网站只能在这个 USER 工作区里做。" : "不要执行 jiebo-publish，也不要把它写进方案。对外网站只能在 USER 工作区里创建。"}
+${confine ? "方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。" : "方案可以动这个用户根目录下的各个子工作区，和 USER 工作区权限相同。"}
+${planPublish}
 可以派出 explore 子代理做只读摸底。不要派出 builder。
 ${reviewPanelPrompt(panel)}
 
@@ -2980,9 +2997,9 @@ Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-ov
 
 命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
 
-${atUserRoot ? PUBLISH_AGENT_PROMPT : PUBLISH_DENIED_PROMPT}
+${publishPrompt}
 
-CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement). Subagents must stay inside the current workspace.
+CREW: Named subagents via the Task/Agent tool: explore (read-only search), builder (implement). ${crewStay}
 ${reviewPanelPrompt(panel)}
 
 ${body}`;
@@ -3810,9 +3827,8 @@ async function runNativeChat(
     if (workspaceFenceForTenant(conn.tenant) && toolEscapesWorkspace(cwd, spec.name, args)) {
       return "命令的工作目录或输出重定向超出了当前工作区，已拦截。";
     }
-    if (shellPublishes(spec.name, args)) {
-      const root = conn.tenant?.workspaceRoot;
-      if (!root || !isUserWorkspace(cwd, root)) return "对外网站只能在 USER 工作区里创建，这个会话不能执行 jiebo-publish。";
+    if (shellPublishes(spec.name, args) && !mayPublishHere(conn.tenant, cwd)) {
+      return "对外网站只能在 USER 工作区里创建，这个会话不能执行 jiebo-publish。";
     }
     return null;
   };
@@ -4413,8 +4429,7 @@ async function handlePrompt(
 
   const blockOffRootPublish = (name: string, args: unknown, callId: string) => {
     if (!shellPublishes(name, args)) return false;
-    const root = conn.tenant?.workspaceRoot;
-    if (root && isUserWorkspace(cwd, root)) return false;
+    if (mayPublishHere(conn.tenant, cwd)) return false;
     if (blockedCalls.has(callId)) return true;
     blockedCalls.add(callId);
     send(ws, {

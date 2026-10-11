@@ -1,4 +1,4 @@
-import { PUBLISH_BUILDER_ZH } from "./publishPrompt.ts";
+import { PUBLISH_BUILDER_OWNER_ZH, PUBLISH_BUILDER_ZH } from "./publishPrompt.ts";
 
 const CHINESE_VENDORS = /glm|zhipu|kimi|moonshot|deepseek|qwen/;
 
@@ -37,13 +37,18 @@ export function crewChinesePrompt(
   role: "explore" | "builder" | "reviewer",
   bound: string,
   overlay: string,
+  owner = false,
 ): string {
   const head = `${bound}${overlay ? `${overlay} ` : ""}`;
   if (role === "explore") {
     return `${head}你是只读探路。只用 read、grep、glob、ls 摸当前工作目录。不要 edit、delete，不要跑会改系统的 shell。用中文短报相关文件和发现。`;
   }
   if (role === "builder") {
-    return `${head}你在当前工作目录落地改动。改文件用 edit，命令用 shell。不要写到工作区外。命令失败时同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败且后面的步骤不依赖它，就继续做。做完用中文说明改了什么，以及哪一步没成。${PUBLISH_BUILDER_ZH}`;
+    const scope = owner
+      ? "这个用户的会话和 USER 工作区权限相同，可以改用户根目录下的各个子工作区。"
+      : "不要写到工作区外。";
+    const publish = owner ? PUBLISH_BUILDER_OWNER_ZH : PUBLISH_BUILDER_ZH;
+    return `${head}你在当前工作目录落地改动。改文件用 edit，命令用 shell。${scope}命令失败时同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败且后面的步骤不依赖它，就继续做。做完用中文说明改了什么，以及哪一步没成。${publish}`;
   }
   return `${head}你交叉审查交给你的方案，或当前工作目录里的改动。读 diff 和周围代码，列出具体问题。不要重写功能，除非几行能修的致命 bug。用中文回复。`;
 }

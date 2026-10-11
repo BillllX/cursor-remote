@@ -223,11 +223,13 @@ async function main() {
   const alpha = { ...tenant(root, "alpha"), name: "阿尔法" };
   const beta = tenant(root, "beta");
   const bad = tenant(root, "ab-");
+  const bill = { ...tenant(root, "billxu"), name: "Bill" };
+  const named = { ...tenant(root, "guest"), name: "BillXu" };
   const outside = join(root, "outside");
   mkdirSync(outside);
   process.env.CURSOR_API_KEY = "cursor-test-key";
   const options = {
-    tenants: () => [alpha, beta, bad],
+    tenants: () => [alpha, beta, bad, bill, named],
     host: () => "preview.test",
     scheme: () => "http",
     portMin: 46100,
@@ -280,6 +282,21 @@ async function main() {
     mkdirSync(nested);
     const nestedStart = await post(port, "/jiebo-publish/v1/start", alphaToken, { cwd: nested, command });
     check(nestedStart.status === 403 && (nestedStart.json?.message || "").includes("USER"), "子工作区被允许公开网站");
+    const billNested = join(bill.workspaceRoot, "site");
+    mkdirSync(billNested);
+    writeFileSync(join(billNested, "server.mjs"), SERVER);
+    const billToken = readFileSync(join(bill.stateDir, "publish-token"), "utf8").trim();
+    const billStatus = await post(port, "/jiebo-publish/v1/status", billToken, { cwd: billNested });
+    check(billStatus.status === 200, `BillXu 子工作区不能查看对外网站：${billStatus.status} ${billStatus.raw}`);
+    const billStarted = await post(port, "/jiebo-publish/v1/start", billToken, { cwd: billNested, command });
+    check(billStarted.json?.ok === true && billStarted.json.url === "http://preview.test/p/billxu/", billStarted.json?.message || "BillXu 子工作区不能公开网站");
+    const billStopped = await post(port, "/jiebo-publish/v1/stop", billToken, { cwd: billNested });
+    check(billStopped.json?.ok === true, billStopped.json?.message || "BillXu 子工作区不能停止对外网站");
+    const namedNested = join(named.workspaceRoot, "app");
+    mkdirSync(namedNested);
+    const namedToken = readFileSync(join(named.stateDir, "publish-token"), "utf8").trim();
+    const namedStatus = await post(port, "/jiebo-publish/v1/status", namedToken, { cwd: namedNested });
+    check(namedStatus.status === 200, `显示名 BillXu 的子工作区不能查看对外网站：${namedStatus.status}`);
     const badName = await post(port, "/jiebo-publish/v1/start", badToken, { cwd: bad.workspaceRoot, command });
     check(badName.status === 400 && (badName.json?.message || "").includes("路径"), "非法路径被接受了");
 
@@ -393,6 +410,8 @@ async function main() {
       };
       await post(port, "/jiebo-publish/v1/stop", readToken(alpha.stateDir), { cwd: alpha.workspaceRoot }).catch(() => undefined);
       await post(port, "/jiebo-publish/v1/stop", readToken(beta.stateDir), { cwd: beta.workspaceRoot }).catch(() => undefined);
+      await post(port, "/jiebo-publish/v1/stop", readToken(bill.stateDir), { cwd: bill.workspaceRoot }).catch(() => undefined);
+      await post(port, "/jiebo-publish/v1/stop", readToken(named.stateDir), { cwd: named.workspaceRoot }).catch(() => undefined);
     }
     gateway.close();
     publish.close();

@@ -1,5 +1,5 @@
 import { crewChinesePrompt, usesChineseDialect } from "./dialect.ts";
-import { PUBLISH_BUILDER_EN } from "./publishPrompt.ts";
+import { PUBLISH_BUILDER_EN, PUBLISH_BUILDER_OWNER_EN } from "./publishPrompt.ts";
 
 export const CREW_ROLES = ["explore", "builder", "reviewer"] as const;
 export type CrewRole = (typeof CREW_ROLES)[number];
@@ -253,7 +253,7 @@ export function buildCrewAgents(
   ) => {
     const id = model === "inherit" ? lead : model.id;
     if (usesChineseDialect(id)) {
-      return crewChinesePrompt(role, bound, extra(model).trim());
+      return crewChinesePrompt(role, bound, extra(model).trim(), !confine);
     }
     return `${bound}${extra(model)}${english}`;
   };
@@ -288,12 +288,15 @@ export function buildCrewAgents(
       model: exploreModel,
     },
     builder: {
-      description:
-        "Implementer. Use to make the actual code changes and run commands after the plan is clear. All edits must stay inside the working directory.",
+      description: confine
+        ? "Implementer. Use to make the actual code changes and run commands after the plan is clear. All edits must stay inside the working directory."
+        : "Implementer. Use to make the actual code changes and run commands after the plan is clear. This user may edit any workspace under their root, same as the USER workspace.",
       prompt: promptOf(
         "builder",
         "inherit",
-        `You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace. ${PUBLISH_BUILDER_EN}`,
+        confine
+          ? `You implement the assigned change in this workspace. Stay inside the working directory. Make focused edits, run necessary commands, and report what you changed. Never write outside this workspace. ${PUBLISH_BUILDER_EN}`
+          : `You implement the assigned change. This user's sessions have the same permissions as the USER workspace and may edit any workspace under the user root. Make focused edits, run necessary commands, and report what you changed. ${PUBLISH_BUILDER_OWNER_EN}`,
       ),
       model: "inherit",
     },
