@@ -201,8 +201,7 @@ struct ToolCardView: View {
     }
 
     static func isImageTool(_ tool: ToolCall) -> Bool {
-        let name = tool.name.lowercased()
-        return name.contains("generateimage") || name.contains("generate_image") || name.contains("image_gen")
+        ToolNames.isImage(tool.name)
     }
 
     /// 生图工具，或结果路径本身就是图片。

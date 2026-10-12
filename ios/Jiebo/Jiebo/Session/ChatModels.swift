@@ -32,17 +32,68 @@ func toolFilePath(args: JSONValue?, result: JSONValue?) -> String? {
         ?? result?.string(in: "path", "file", "file_path", "filename", "image_path", "imagePath", "output_path", "outputPath").nilIfEmpty
 }
 
+/// 按工具名判断改/写/删/生图，规则和用例与 shared/toolNames.ts 一致（网关文件清单、网页工具卡片共用）
+enum ToolNames {
+    private static let editWord =
+        "(?:^|[^a-z])(?:edit|replace|patch|multiedit|strreplace|editnotebook|applypatch|searchreplace|editfile)(?:[^a-z]|$)"
+    private static let writeWord = "(?:^|[^a-z])(?:write|writefile|createfile)(?:[^a-z]|$)"
+    private static let createFile = "(?:^|[^a-z])create[^a-z]+files?(?:[^a-z]|$)"
+    private static let imageWord = "(?:^|[^a-z])(?:generateimage|imagegen|generate[^a-z]+image|image[^a-z]+gen)(?:[^a-z]|$)"
+    private static let planOrTodo = "todo|create_?plan"
+    private static let deleteWord = "delete|unlink|remove"
+
+    /// 驼峰拆成下划线再小写：MultiEdit → multi_edit；按单词匹配，credit 里的 edit 不算
+    static func words(_ name: String) -> String {
+        name.replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1_$2", options: .regularExpression).lowercased()
+    }
+
+    private static func has(_ pattern: String, _ words: String) -> Bool {
+        words.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// 改已有文件的工具：edit、StrReplace、MultiEdit、apply_patch、EditNotebook……
+    static func isEdit(_ name: String) -> Bool {
+        let n = words(name)
+        return !has(planOrTodo, n) && has(editWord, n)
+    }
+
+    /// 新建或整体写入文件的工具：write、createFile、write_file……
+    static func isWrite(_ name: String) -> Bool {
+        let n = words(name)
+        return !has(planOrTodo, n) && (has(writeWord, n) || has(createFile, n))
+    }
+
+    /// 删文件的工具：delete_file、unlink（按子串）
+    static func isDelete(_ name: String) -> Bool {
+        has("delete|unlink", words(name))
+    }
+
+    /// 生成图片的工具：GenerateImage、generate_image、image_gen
+    static func isImage(_ name: String) -> Bool {
+        has(imageWord, words(name))
+    }
+
+    /// 调用后会在工作区留下文件内容的工具：改、写、生成图片；删除、todo、计划不算
+    static func writesFiles(_ name: String) -> Bool {
+        let n = words(name)
+        if has(planOrTodo, n) || has(deleteWord, n) { return false }
+        return has(editWord, n) || has(writeWord, n) || has(createFile, n) || has(imageWord, n)
+    }
+}
+
 enum ToolKind: String {
     case read, edit, write, shell, search, other
 
+    /// 对齐网页 web/lib/chat/toolKinds.ts 的 toolKind
     static func from(name: String, args: JSONValue?) -> ToolKind {
         let n = name.lowercased()
         if n.range(of: "todo|createplan", options: .regularExpression) != nil { return .other }
         if n.range(of: "shell|bash|terminal|command", options: .regularExpression) != nil { return .shell }
         if n.range(of: "grep|glob|search|find|ripgrep", options: .regularExpression) != nil { return .search }
-        if n.range(of: "strreplace|replace|apply.?patch|editnotebook|edit", options: .regularExpression) != nil { return .edit }
-        if n.range(of: "write|create|delete|unlink", options: .regularExpression) != nil { return .write }
+        if ToolNames.isEdit(name) { return .edit }
+        if ToolNames.isWrite(name) || ToolNames.isDelete(name) { return .write }
         if n.range(of: "read|cat|open|getfile", options: .regularExpression) != nil { return .read }
+        if n.range(of: "todo|task", options: .regularExpression) != nil { return .other }
         if let args, !args.string(in: "globPattern", "glob", "glob_pattern", "pattern", "query").isEmpty {
             return .search
         }
@@ -120,13 +171,9 @@ struct Turn: Identifiable, Hashable {
         return out
     }
 
-    /// 工具写到的文件路径（去掉 ./ 前缀）；删除类、失败的、不改文件的返回 nil
+    /// 工具写到的文件路径（去掉 ./ 前缀）；删除类、失败的、不改文件的返回 nil。口径同网关 toolWritesFiles
     static func cardPath(of tool: ToolCall) -> String? {
-        guard tool.status != "error" else { return nil }
-        let name = tool.name.lowercased()
-        let generated = name.contains("generateimage") || name.contains("generate_image") || name.contains("image_gen")
-        guard generated || tool.kind.isMutating else { return nil }
-        if !generated, name.range(of: "delete|unlink|remove", options: .regularExpression) != nil { return nil }
+        guard tool.status != "error", ToolNames.writesFiles(tool.name) else { return nil }
         guard var path = toolFilePath(args: tool.args, result: tool.result)?.replacingOccurrences(of: "\\", with: "/") else { return nil }
         while path.hasPrefix("./") { path.removeFirst(2) }
         guard !path.isEmpty, !path.hasSuffix("/") else { return nil }

@@ -47,11 +47,6 @@ extension ChatStore {
 
     // MARK: @补全
 
-    /// 检测草稿尾部的 @查询（对齐网页 mentionAt，iOS 简化只看文本末尾）
-    func refreshMentionSuggestions() {
-        updateMentions(for: draft)
-    }
-
     /// 点选候选：把草稿尾部的 @查询 替换成 @路径（保留查询前的空白分隔）
     func insertMention(_ path: String) {
         guard let range = draft.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }

@@ -391,9 +391,6 @@ final class ChatStore {
 
     // MARK: P5b - diff 联动
 
-    /// 旧的「N 个文件有改动」待看清单。改动入口已换成文件卡片，不再写入，恒为空
-    var pendingDiffPaths: [String] = []
-
     /// 网关 ready 声明的能力（turn_files / read_sha / read_req_id）。旧网关为空
     var gatewayFeatures: Set<String> = []
     /// 「全部还原」已发出、还没等到回执的轮次（只在本机，不上传）

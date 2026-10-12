@@ -2,52 +2,6 @@ import SwiftUI
 import UIKit
 import ImageIO
 
-private struct ReplyApprovalCard: View {
-    @Environment(ChatStore.self) private var store
-    var tool: PendingTool
-
-    private var approvalTarget: String {
-        let path = tool.args?.string(in: "path", "file", "target_file", "file_path", "target") ?? ""
-        return path.isEmpty ? tool.name : path
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("要改文件：\(approvalTarget)。允许会先还原再写；拒绝还原到发送前。")
-                .font(JieboFont.text(.subheadline))
-                .foregroundStyle(JieboColor.ink)
-            if let args = tool.args {
-                ScrollView {
-                    Text(args.pretty(2_000))
-                        .font(JieboFont.monoText(.caption))
-                        .foregroundStyle(JieboColor.ink2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(maxHeight: 160)
-            }
-            HStack(spacing: 10) {
-                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false) }
-                    .buttonStyle(.bordered)
-                Button("允许") { store.replyToApproval(allow: true) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(JieboColor.pine)
-            }
-            .font(JieboFont.text(.subheadline, weight: .semibold))
-            .controlSize(.large)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(JieboColor.white)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                .stroke(JieboColor.brass, lineWidth: 1)
-        )
-        .shadow(color: JieboColor.brass.opacity(0.12), radius: 8, y: 2)
-    }
-}
-
 /// 「今日」按钮：ThreadView 的助理标题栏和 iPhone 助理页导航栏共用，外观一致。
 struct AssistantTodayButton: View {
     @Environment(ChatStore.self) private var store

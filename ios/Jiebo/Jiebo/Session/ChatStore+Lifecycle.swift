@@ -244,7 +244,6 @@ extension ChatStore {
         heldDeltas = [:]
         previewTabs = []
         previewActivePath = nil
-        pendingDiffPaths = []
         runningChatIds = []
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废

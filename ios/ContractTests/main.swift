@@ -335,6 +335,71 @@ func writeClientSamples(_ options: Options) -> [String] {
     return problems
 }
 
+// MARK: 工具名判定（用例同 gateway/test/toolNames.test.ts、turnFiles.test.ts、web/test/toolKinds.test.ts）
+
+func checkToolNames() -> [String] {
+    var problems: [String] = []
+    var count = 0
+    func expect<T: Equatable>(_ label: String, _ name: String, _ actual: T, _ expected: T) {
+        count += 1
+        if actual != expected { problems.append("\(label)(\(quote(name))) = \(actual)，应为 \(expected)") }
+    }
+    for (name, words) in [("MultiEdit", "multi_edit"), ("StrReplace", "str_replace"), ("apply_patch", "apply_patch")] {
+        expect("words", name, ToolNames.words(name), words)
+    }
+    for name in ["edit", "MultiEdit", "multiedit", "StrReplace", "search_replace", "apply_patch", "EditNotebook"] {
+        expect("isEdit", name, ToolNames.isEdit(name), true)
+    }
+    for name in ["credit_check", "open_editor", "patchwork", "TodoWrite", "write"] {
+        expect("isEdit", name, ToolNames.isEdit(name), false)
+    }
+    for name in ["Write", "write_file", "createFile", "create_files"] {
+        expect("isWrite", name, ToolNames.isWrite(name), true)
+    }
+    for name in ["rewriter", "CreatePlan", "create_issue", "todo_write"] {
+        expect("isWrite", name, ToolNames.isWrite(name), false)
+    }
+    for (name, value) in [("delete_file", true), ("Unlink", true), ("remove_label", false)] {
+        expect("isDelete", name, ToolNames.isDelete(name), value)
+    }
+    for name in [
+        "edit", "Write", "StrReplace", "apply_patch", "EditNotebook", "createFile", "generate_image", "GenerateImage",
+        "image_gen", "MultiEdit", "multiedit", "search_replace", "str_replace_editor", "write_file", "mcp_fs_edit_file",
+    ] {
+        expect("writesFiles", name, ToolNames.writesFiles(name), true)
+    }
+    for name in [
+        "todo_write", "TodoWrite", "CreatePlan", "delete", "delete_file", "remove", "read", "grep", "shell",
+        "credit_check", "CreditCheck", "open_editor", "rewriter", "creator", "patchwork",
+    ] {
+        expect("writesFiles", name, ToolNames.writesFiles(name), false)
+    }
+    for (name, value) in [("GenerateImage", true), ("generate_image", true), ("image_gen", true), ("imagegen", true), ("read_image", false)] {
+        expect("isImage", name, ToolNames.isImage(name), value)
+    }
+    for name in ["edit", "MultiEdit", "multiedit", "StrReplace", "apply_patch", "EditNotebook"] {
+        expect("toolKind", name, ToolKind.from(name: name, args: nil).rawValue, "edit")
+    }
+    for name in ["Write", "write_file", "createFile", "delete_file", "unlink"] {
+        expect("toolKind", name, ToolKind.from(name: name, args: nil).rawValue, "write")
+    }
+    for name in ["credit_check", "CreditCheck", "open_editor", "rewriter"] {
+        expect("isMutating", name, ToolKind.from(name: name, args: nil).isMutating, false)
+    }
+    let kinds: [(String, JSONValue?, String)] = [
+        ("TodoWrite", nil, "other"), ("CreatePlan", nil, "other"), ("Shell", nil, "shell"), ("grep", nil, "search"),
+        ("read_file", nil, "read"), ("x", .object(["glob_pattern": .string("*.ts")]), "search"),
+    ]
+    for (name, args, kind) in kinds {
+        expect("toolKind", name, ToolKind.from(name: name, args: args).rawValue, kind)
+    }
+    for (name, value) in [("MultiEdit", true), ("Write", true), ("read", false)] {
+        expect("isMutating", name, ToolKind.from(name: name, args: nil).isMutating, value)
+    }
+    print("工具名判定：\(count) 条用例，\(problems.count) 条不符")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -343,7 +408,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options)
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)
