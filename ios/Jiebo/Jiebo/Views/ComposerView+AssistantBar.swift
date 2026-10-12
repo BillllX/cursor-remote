@@ -12,6 +12,7 @@ extension ComposerView {
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1...6)
                 .focused($focused)
+                .background(TextViewKeyboardInsetLock())
                 .padding(.vertical, 11)
                 .overlay {
                     if !focused || dictation.active {

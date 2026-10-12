@@ -34,10 +34,10 @@ struct ThreadView: View {
         self.init(chrome: phoneChrome ? .phoneLegacy : .pad, openDrawer: openDrawer)
     }
 
-    /// iOS 26+ 把输入区做成浮在消息上的玻璃底栏（safeAreaBar）。iPhone、iPad 宽窗和窄窗同一套。
-    var floatsComposer: Bool { JieboGlass.available }
-    /// iOS 17–25 用 safeAreaInset，不和列表抢高度。不与 safeAreaBar 同时开。
-    var insetsComposer: Bool { !JieboGlass.available }
+    /// 不用 safeAreaBar：键盘弹起或文字换行时，那条玻璃底会把输入框和发送按钮错开，点不中也选不了字。
+    /// 各系统都用 safeAreaInset，整块输入区一起停在键盘上方。
+    var floatsComposer: Bool { false }
+    var insetsComposer: Bool { true }
 
     var body: some View {
         @Bindable var store = store
@@ -237,8 +237,8 @@ struct ThreadView: View {
     ]
 }
 
-/// iOS 17–25：输入区放进底部 safe area，键盘只改这块留白。
-/// 挂在包住 ScrollView 的 GeometryReader 外面，和 safeAreaBar 二选一。iPhone 与 iPad 都用。
+/// 输入区放进底部 safe area，整块一起停在键盘上方。
+/// 挂在包住 ScrollView 的 GeometryReader 外面。不用 safeAreaBar，避免键盘弹起时点不到发送。
 private struct EmbeddedComposerInset<Bar: View>: ViewModifier {
     var enabled: Bool
     @ViewBuilder var bar: () -> Bar

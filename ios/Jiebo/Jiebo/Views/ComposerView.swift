@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 
@@ -61,6 +62,7 @@ struct ComposerView: View {
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1...8)
                     .focused($focused)
+                    .background(TextViewKeyboardInsetLock())
                     .padding(.horizontal, 6)
                     .padding(.vertical, 8)
                     .overlay {
@@ -183,7 +185,7 @@ struct ComposerView: View {
         }
     }
 
-    /// 助理胶囊在 iOS 26+ 由 ThreadView 放进 safeAreaBar，浮在消息上
+    /// 助理胶囊在 iOS 26+ 仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
     private var floating: Bool { style == .assistant && JieboGlass.available }
 
     var placeholder: String {
@@ -226,11 +228,73 @@ struct ComposerView: View {
     }
 
     func commitAndSend() {
+        focused = false
         persistTask?.cancel()
         pendingDraft = nil
         ignoreDraftEcho = ""
         store.saveDraft(text)
         store.submit()
         text = store.draft
+    }
+}
+
+/// 多行输入框是 UITextView。键盘弹起时它会按键盘高度再垫一层内边距，字和光标就离开可见区域，发送也点不中。
+struct TextViewKeyboardInsetLock: UIViewRepresentable {
+    func makeUIView(context: Context) -> Anchor { Anchor() }
+    func updateUIView(_ uiView: Anchor, context: Context) { uiView.lock() }
+
+    final class Anchor: UIView {
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            isUserInteractionEnabled = false
+            backgroundColor = .clear
+        }
+
+        required init?(coder: NSCoder) { return nil }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            lock()
+        }
+
+        func lock() {
+            DispatchQueue.main.async { [weak self] in
+                self?.lockNow()
+            }
+        }
+
+        private func lockNow() {
+            if let textView = ancestorTextView() ?? siblingTextView() {
+                guard textView.contentInsetAdjustmentBehavior != .never else { return }
+                textView.contentInsetAdjustmentBehavior = .never
+                textView.contentInset.bottom = 0
+                textView.verticalScrollIndicatorInsets.bottom = 0
+            }
+        }
+
+        private func ancestorTextView() -> UITextView? {
+            var view: UIView? = superview
+            for _ in 0..<8 {
+                if let textView = view as? UITextView { return textView }
+                view = view?.superview
+            }
+            return nil
+        }
+
+        /// 背景层往往和文本视图并列，不在它里面。只看附近两层，避免锁到消息列表里的文本。
+        private func siblingTextView() -> UITextView? {
+            let parents = [superview, superview?.superview]
+            for parent in parents {
+                guard let parent else { continue }
+                if let textView = parent as? UITextView { return textView }
+                for child in parent.subviews {
+                    if let textView = child as? UITextView { return textView }
+                    if let textView = child.subviews.first(where: { $0 is UITextView }) as? UITextView {
+                        return textView
+                    }
+                }
+            }
+            return nil
+        }
     }
 }

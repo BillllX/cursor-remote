@@ -88,7 +88,7 @@ extension ThreadView {
             .scrollDismissesKeyboard(.interactively)
             .coordinateSpace(name: "threadScroll")
             // 可视高度 = 这一层 GeometryReader 的高度减去 bottom safe area。
-            // iOS 17–25 的 safeAreaInset 和 iOS 26 的 safeAreaBar 都挂在这一层外面，输入框算进 inset，这里不要再减一次。
+            // safeAreaInset 挂在这一层外面，输入框算进 inset，这里不要再减一次。
             .onAppear {
                 let height = geo.size.height - geo.safeAreaInsets.bottom
                 viewportHeight = height
