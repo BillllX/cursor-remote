@@ -116,7 +116,23 @@ select {
   outline: none;
 }
 
-button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn),
+/* 通用按下态的权重 (0,6,1) 要压过各按钮自己的底色与 :hover，不能降也不能升；自己画按下态的按钮要排除。
+   新增排除写在 :not(:where(…)) 里（权重为 0）；CSS Modules 的类名带哈希写不进来，模块里的按钮用 data-own-press。 */
+@media not all and (pointer: coarse) {
+  button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn):not(:where([data-own-press])) {
+    background: var(--hover-strong);
+  }
+}
+
+/* 触屏上助理置顶项（button.chat-item）和会话行一样，按下用 touch.css 的 .chat-item:active */
+@media (pointer: coarse) {
+  button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn):not(
+      :where([data-own-press], .chat-item)
+    ) {
+    background: var(--hover-strong);
+  }
+}
+
 .pill:active,
 .pad-bar-btn:active,
 .chat-item-x:active,

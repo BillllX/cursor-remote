@@ -22,7 +22,7 @@ export function StallHint({ lastProgress, onStop }: { lastProgress: () => number
           <span className={styles.time} aria-hidden="true">
             {Math.round(idle / 1000)} 秒
           </span>
-          <button type="button" className={styles.stop} onClick={onStop}>
+          <button type="button" className={styles.stop} data-own-press onClick={onStop}>
             停止
           </button>
         </>

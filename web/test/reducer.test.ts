@@ -9,6 +9,8 @@ import {
   applyReadyRuns,
   applyServerMessage,
   applySession,
+  chatsToFlush,
+  commitSync,
   loopsFromReady,
   markUnread,
   patchOpenTurnIn,
@@ -370,7 +372,96 @@ describe("applyReadyRuns", () => {
   });
 });
 
+describe("chatsToFlush", () => {
+  test("本地有排队、没在跑、网关没在排队的会话才续发", () => {
+    const chats = [
+      chat({ id: "a", turns: [turn({ queued: true })] }),
+      chat({ id: "b", turns: [turn({ running: true }), turn({ id: "t2", queued: true })] }),
+      chat({ id: "c", turns: [turn({ queued: true })] }),
+      chat({ id: "d", turns: [turn()] }),
+    ];
+    assert.deepEqual(chatsToFlush(chats, ["c"]), ["a"]);
+    assert.deepEqual(chatsToFlush(chats), ["a", "c"]);
+  });
+
+  test("要用 applyReadyRuns 之后的列表算：网关不认识的排队回合已被收尾，不能再续发；网关在跑的会话照常续发", () => {
+    const msg: Msg<"ready"> = { ...sample("ready"), runningChatIds: ["live"], queuedChatIds: [] };
+    const chats = [
+      chat({ id: "orphan", turns: [turn(), turn({ id: "t2", queued: true })] }),
+      chat({ id: "live", turns: [turn(), turn({ id: "t2", queued: true })] }),
+    ];
+    // 读到 applyReadyRuns 之前的旧列表会续发 orphan，而界面上这条已显示为停止
+    assert.deepEqual(chatsToFlush(chats, msg.queuedChatIds), ["orphan", "live"]);
+    const next = applyReadyRuns(chats, msg);
+    assert.equal(next[0].turns[1].queued, false);
+    assert.deepEqual(chatsToFlush(next, msg.queuedChatIds), ["live"]);
+  });
+});
+
+describe("commitSync", () => {
+  /** 模拟 React 已有待渲染更新时的行为：updater 先排队，渲染（flush）时才执行 */
+  function deferredState<T>(initial: T) {
+    let state = initial;
+    const queue: Array<T | ((prev: T) => T)> = [];
+    return {
+      set: (value: T | ((prev: T) => T)) => queue.push(value),
+      flush() {
+        for (const item of queue.splice(0)) state = typeof item === "function" ? (item as (prev: T) => T)(state) : item;
+        return state;
+      },
+    };
+  }
+
+  test("updater 被推迟时，旧写法紧接着读 ref 是旧值；commitSync 立刻可见，渲染后结果一致", () => {
+    const old = { current: [1] };
+    const oldState = deferredState(old.current);
+    oldState.set((prev) => {
+      const next = [...prev, 2];
+      old.current = next;
+      return next;
+    });
+    assert.deepEqual(old.current, [1]);
+
+    const ref = { current: [1] };
+    const state = deferredState(ref.current);
+    commitSync(ref, state.set, (prev) => [...prev, 2]);
+    assert.deepEqual(ref.current, [1, 2]);
+    commitSync(ref, state.set, (prev) => [...prev, 3]);
+    assert.deepEqual(ref.current, [1, 2, 3]);
+    assert.deepEqual(state.flush(), [1, 2, 3]);
+  });
+
+  test("没有变化（返回同一引用）时不调用 set", () => {
+    const ref = { current: [1] };
+    let calls = 0;
+    const out = commitSync(
+      ref,
+      () => calls++,
+      (prev) => prev,
+    );
+    assert.equal(out, ref.current);
+    assert.equal(calls, 0);
+  });
+
+  test("tool-started 后紧接着 tool-completed：同步提交后能从 ref 找到 running 回合里开始时的 args", () => {
+    const ref = { current: [chat({ id: CHAT, turns: [turn({ running: true })] })] };
+    const state = deferredState(ref.current);
+    const started = { ...sample("tool-started"), chatId: CHAT };
+    commitSync(ref, state.set, (prev) => applyServerMessage(prev, started, ctx));
+    commitSync(ref, state.set, (prev) =>
+      applyServerMessage(prev, { ...sample("tool-completed"), chatId: CHAT, callId: started.callId }, ctx),
+    );
+    const running = ref.current.find((item) => item.id === CHAT)?.turns.find((item) => item.running);
+    assert.deepEqual(running?.tools.find((item) => item.callId === started.callId)?.args, started.args);
+  });
+});
+
 describe("applySession", () => {
+  test("金样本：三个字段都是字符串（网关从不省略，“没有”用空串）", () => {
+    const msg = sample("session");
+    for (const key of ["chatId", "agentId", "cwd"] as const) assert.equal(typeof msg[key], "string", key);
+  });
+
   test("带 chatId：写调用方算好的 cwd 和 agentId", () => {
     const msg = sample("session");
     const next = applySession([chat({ cwd: "/old" })], msg, "other", "/picked");

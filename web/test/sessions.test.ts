@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { chatMeta, mergeSlimChats, metaKey, shortPadTitle, stopOrphanRuns, usableDraft } from "../lib/chat/sessions";
+import {
+  chatMeta,
+  landingChat,
+  mergeSlimChats,
+  metaKey,
+  shortPadTitle,
+  showsUnread,
+  stopOrphanRuns,
+  usableDraft,
+} from "../lib/chat/sessions";
 import type { Chat, Turn } from "../lib/chat/types";
 
 const turn = (over: Partial<Turn> = {}): Turn => ({
@@ -150,5 +159,35 @@ describe("usableDraft / shortPadTitle", () => {
     assert.equal(shortPadTitle("x", "看看 @src/a.ts 这个文件"), "看看 这个文件");
     assert.equal(shortPadTitle("web/components/chat-"), "chat");
     assert.equal(shortPadTitle("a".repeat(40)), `${"a".repeat(32)}…`);
+  });
+});
+
+describe("showsUnread", () => {
+  test("未读且不是当前会话才显示；当前会话即使还带着 unread 也不显示", () => {
+    assert.equal(showsUnread({ id: "a", unread: true }, "b"), true);
+    assert.equal(showsUnread({ id: "a", unread: true }, "a"), false);
+    assert.equal(showsUnread({ id: "a", unread: false }, "b"), false);
+    assert.equal(showsUnread({ id: "a" }, "b"), false);
+    assert.equal(showsUnread(undefined, "a"), false);
+  });
+});
+
+describe("landingChat", () => {
+  const chats = [chat({ id: "a" }), chat({ id: "assistant" }), chat({ id: "b" })];
+  const isAssistant = (id: string) => id === "assistant";
+
+  test("上次选中的会话还在：落回它，算用户选的", () => {
+    assert.deepEqual(landingChat(chats, "b", isAssistant), { chat: chats[2], auto: false });
+  });
+
+  test("没记过、记的已删或是 boot：落助理会话，记为自动挑的", () => {
+    for (const remembered of ["", "gone", "boot"]) {
+      assert.deepEqual(landingChat(chats, remembered, isAssistant), { chat: chats[1], auto: true }, remembered);
+    }
+  });
+
+  test("没有助理会话时落第一个；列表为空返回 undefined", () => {
+    assert.deepEqual(landingChat([chats[0], chats[2]], "", isAssistant), { chat: chats[0], auto: true });
+    assert.deepEqual(landingChat([], "a", isAssistant), { chat: undefined, auto: true });
   });
 });

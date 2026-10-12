@@ -382,6 +382,10 @@ export type ServerMessage =
   | { type: "workspace_created"; path: string; name: string }
   | { type: "workspace_renamed"; from: string; path: string; name: string }
   | { type: "workspace_removed"; path: string; name: string; mode: "deleted" | "hidden" }
+  /**
+   * 三个字段网关总会带上，“没有”用空串表示而不是省略：chatId 为空串 = 还没有会话时切了工作区（只看 cwd）；
+   * agentId 为空串 = 这个会话当前没有 agent（客户端清掉本地旧值）
+   */
   | { type: "session"; chatId: string; agentId: string; cwd: string }
   | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }
   | { type: "text-delta"; chatId: string; text: string }

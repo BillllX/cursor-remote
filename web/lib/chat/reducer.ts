@@ -82,6 +82,31 @@ export function markUnread(chats: Chat[], chatId: string): Chat[] {
   return patchChatIn(chats, chatId, (chat) => (chat.unread ? chat : { ...chat, unread: true }));
 }
 
+/**
+ * 同步提交：基于 ref 算出新值并立即写回 ref，再把值（不是 updater）交给 set；没变化时不调用 set。
+ * React 在已有待渲染更新时会把 updater 推迟到渲染才执行，紧接着读 ref 的代码就会读到旧值；
+ * 所有写入都要走这里，混用 updater 和直接赋值会让后者覆盖还没执行的前者。
+ */
+export function commitSync<T>(ref: { current: T }, set: (value: T) => void, reduce: (prev: T) => T): T {
+  const prev = ref.current;
+  const next = reduce(prev);
+  if (next === prev) return prev;
+  ref.current = next;
+  set(next);
+  return next;
+}
+
+/** 重连后要自动续发本地排队回合的会话：有排队、没在跑，且不在网关的排队名单里（那些由网关发）；要用 applyReadyRuns 之后的列表算 */
+export function chatsToFlush(chats: Chat[], serverQueued: readonly string[] = []): string[] {
+  const queued = new Set(serverQueued);
+  return chats
+    .filter(
+      (chat) =>
+        !queued.has(chat.id) && chat.turns.some((turn) => turn.queued) && !chat.turns.some((turn) => turn.running),
+    )
+    .map((chat) => chat.id);
+}
+
 /** ready：网关上没在跑/排队的回合收尾；网关说在排队、本地却没有排队回合的，把最后一条用户消息标回排队 */
 export function applyReadyRuns(chats: Chat[], message: Msg<"ready">): Chat[] {
   const keep = [...(message.runningChatIds || []), ...(message.queuedChatIds || [])];

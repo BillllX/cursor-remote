@@ -1,6 +1,7 @@
 // 侧栏对话列表：按工作区分组，底部“更多工作区”
 import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
 import { fmtAgo } from "../../../lib/chat/format";
+import { showsUnread } from "../../../lib/chat/sessions";
 import type { Chat } from "../../../lib/chat/types";
 import { normPath, relToCwd, sameCwd } from "../../../lib/chat/workspace";
 import { FolderMark } from "../FolderMark";
@@ -172,7 +173,7 @@ export function ChatList({
               ? group.chats.map((chat) => (
                   <div
                     key={chat.id}
-                    className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${chat.unread && chat.id !== activeId ? " unread" : ""}`}
+                    className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${showsUnread(chat, activeId) ? " unread" : ""}`}
                   >
                     {renameId === chat.id ? (
                       <input
@@ -207,7 +208,7 @@ export function ChatList({
                         <span className="chat-item-title">{chat.title}</span>
                         {chat.turns.some((turn) => turn.running) ? (
                           <span className="chat-mark run">跑</span>
-                        ) : chat.unread ? (
+                        ) : showsUnread(chat, activeId) ? (
                           <span className="chat-mark unread">新</span>
                         ) : null}
                         {chat.touchedAt ? <span className="chat-item-time">{fmtAgo(chat.touchedAt)}</span> : null}

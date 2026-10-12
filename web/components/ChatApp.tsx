@@ -34,7 +34,9 @@ import { clearBodies, dropBody, readBody, writeBody } from "../lib/chatCache";
 import { applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
 import {
   DEFAULT_MODEL,
+  hasUsableModel,
   modelLabel,
+  NO_MODEL_HINT,
   readLastModel,
   resolveModel,
   sessionModel,
@@ -50,9 +52,9 @@ import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
 import { useWorkspaceGroups } from "../lib/chat/hooks/useWorkspaceGroups";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
-import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, loopsFromReady, markUnread, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
-import { chatHasContent, chatMeta, isUntitled, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
-import { clearBrowserChatStore, GROUPS_KEY, MAX_DELETED, pushRecent, rememberDeleted, TOKEN_KEY } from "../lib/chat/storage";
+import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
+import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
+import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows } from "../lib/chat/tools";
 import { editPathsOf, liveTurn, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
@@ -77,7 +79,7 @@ import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
-  const [hasApiKey, setHasApiKey] = useState(true);
+  const [modelUsable, setModelUsable] = useState(true);
   const [cwd, setCwd] = useState("");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [workspaces, setWorkspaces] = useState<{ path: string; name: string; user?: boolean }[]>([]);
@@ -360,6 +362,7 @@ export default function ChatApp() {
     assistantChatIdRef.current = "";
     setAssistantChatId("");
     autoPickedIdRef.current = "";
+    forgetActiveChat();
     appliedStoreRef.current = false;
     stateRevRef.current = 0;
     deletedIdsRef.current = new Set();
@@ -436,21 +439,17 @@ export default function ChatApp() {
     setRecentFiles((prev) => pushRecent(prev, path));
   }, []);
 
-  const patchChat = useCallback((chatId: string, updater: (chat: Chat) => Chat) => {
-    setChats((prev) => {
-      const next = prev.map((chat) => (chat.id === chatId ? updater(chat) : chat));
-      chatsRef.current = next;
-      return next;
-    });
+  // 会话列表的写入都走这里（或同样先写 chatsRef 再 setChats(值)），不要再用 setChats(updater)，见 commitSync
+  const applyChats = useCallback((reduce: (chats: Chat[]) => Chat[]) => {
+    commitSync(chatsRef, setChats, reduce);
   }, []);
 
-  const applyChats = useCallback((reduce: (chats: Chat[]) => Chat[]) => {
-    setChats((prev) => {
-      const next = reduce(prev);
-      chatsRef.current = next;
-      return next;
-    });
-  }, []);
+  const patchChat = useCallback(
+    (chatId: string, updater: (chat: Chat) => Chat) => {
+      applyChats((prev) => prev.map((chat) => (chat.id === chatId ? updater(chat) : chat)));
+    },
+    [applyChats],
+  );
 
   const patchActive = useCallback(
     (updater: (chat: Chat) => Chat) => {
@@ -639,7 +638,7 @@ export default function ChatApp() {
             if (verifyTimerRef.current) window.clearTimeout(verifyTimerRef.current);
             setAuthError("");
             if (tokenRef.current) localStorage.setItem(TOKEN_KEY, tokenRef.current);
-            setHasApiKey(message.hasApiKey);
+            setModelUsable(hasUsableModel(message.hasApiKey, message.models));
             if (message.policy === "plane" || message.policy === "baseline") {
               policyRef.current = message.policy;
               patchActive((chat) =>
@@ -661,7 +660,7 @@ export default function ChatApp() {
               else setAssistantOpen(true);
             }
             setLoops(loopsFromReady(message.loops));
-            setChats((prev) => applyReadyRuns(prev, message));
+            applyChats((prev) => applyReadyRuns(prev, message));
             {
               const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
               const preferred =
@@ -707,11 +706,7 @@ export default function ChatApp() {
                 modelRef.current;
               setModels(withCurrentModel(withCurrentModel(message.models, preferred), modelRef.current));
             }
-            if (!message.hasApiKey) {
-              setError("服务器还没配模型密钥，先写进网关配置。");
-            } else {
-              setError("");
-            }
+            setError("");
             send({ type: "list_files", query: "", chatId: activeIdRef.current });
             for (const tab of previewTabsRef.current) {
               previewWantedRef.current.add(tab.path);
@@ -719,16 +714,7 @@ export default function ChatApp() {
             }
             flushOutbox();
             if (!reconnected) {
-              const serverQueued = new Set(message.queuedChatIds || []);
-              for (const chat of chatsRef.current) {
-                if (serverQueued.has(chat.id)) continue;
-                if (
-                  chat.turns.some((turn) => turn.queued) &&
-                  !chat.turns.some((turn) => turn.running)
-                ) {
-                  flushQueue(chat.id);
-                }
-              }
+              for (const id of chatsToFlush(chatsRef.current, message.queuedChatIds)) flushQueue(id);
             }
           }
           break;
@@ -776,10 +762,10 @@ export default function ChatApp() {
             setSyncTick((n) => n + 1);
             setBodyTick((n) => n + 1);
             const current = merged.find((item) => item.id === activeIdRef.current);
-            const keep =
-              current || merged.find((item) => isAssistantChat(item.id)) || merged[0];
+            const landing = current ? null : landingChat(merged, readActiveChat(), isAssistantChat);
+            const keep = current || landing?.chat;
             if (keep && !current) {
-              autoPickedIdRef.current = keep.id;
+              autoPickedIdRef.current = landing?.auto ? keep.id : "";
               setActiveId(keep.id);
               {
                 const value = usableDraft(keep);
@@ -1611,12 +1597,8 @@ export default function ChatApp() {
     }
     if (!stamp.size) return;
     const now = Date.now();
-    setChats((prev) => {
-      const next = prev.map((chat) => (stamp.has(chat.id) ? { ...chat, touchedAt: now } : chat));
-      chatsRef.current = next;
-      return next;
-    });
-  }, [chats]);
+    applyChats((prev) => prev.map((chat) => (stamp.has(chat.id) ? { ...chat, touchedAt: now } : chat)));
+  }, [applyChats, chats]);
 
   // 侧栏的“几分钟前”每分钟重算一次；页面在后台时不走
   const [, setClockTick] = useState(0);
@@ -2134,7 +2116,7 @@ export default function ChatApp() {
     }
     const text = draftRef.current;
     imagesRef.current[id] = images;
-    setChats((prev) =>
+    applyChats((prev) =>
       prev.map((chat) =>
         chat.id === id
           ? { ...chat, draft: text, draftImages: images, model: modelRef.current, mode: modeRef.current, cwd: chat.cwd, previewTabs: previewTabsRef.current.map(({ path, line }) => ({ path, line })), previewPath: previewPathRef.current }
@@ -2171,7 +2153,7 @@ export default function ChatApp() {
       };
       if (empties.length > 1) {
         const drop = new Set(empties.slice(1).map((chat) => chat.id));
-        setChats((prev) => prev.filter((chat) => !drop.has(chat.id)));
+        applyChats((prev) => prev.filter((chat) => !drop.has(chat.id)));
       }
       patchChat(keep.id, (chat) => ({
         ...chat,
@@ -2206,7 +2188,7 @@ export default function ChatApp() {
       policy: policyRef.current,
       touchedAt: Date.now(),
     };
-    setChats((prev) => [chat, ...prev]);
+    applyChats((prev) => [chat, ...prev]);
     autoPickedIdRef.current = "";
     setActiveId(chat.id);
     if (nextModel) {
@@ -2914,7 +2896,7 @@ export default function ChatApp() {
 
   function commitBody(id: string, turns: Turn[], rev: number) {
     bodyRef.current.set(id, { state: "complete", rev });
-    setChats((prev) =>
+    applyChats((prev) =>
       prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, turns) } : chat)),
     );
     setBodyTick((n) => n + 1);
@@ -2965,7 +2947,7 @@ export default function ChatApp() {
       }
       if (cached) {
         cur.base = cached.turns;
-        setChats((prev) =>
+        applyChats((prev) =>
           prev.map((item) =>
             item.id === id ? { ...item, turns: withLiveTurns(item.turns, cached.turns) } : item,
           ),
@@ -3006,7 +2988,7 @@ export default function ChatApp() {
     }
     if (cur.progressive) {
       const shown = cur.buf;
-      setChats((prev) =>
+      applyChats((prev) =>
         prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, shown) } : chat)),
       );
     }
@@ -3716,6 +3698,11 @@ export default function ChatApp() {
   const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
   const assistantActive = Boolean(assistantChatId) && activeId === assistantChatId;
 
+  // 用户选中的会话记在本机，刷新后 stored_state 据此落回原会话；自动挑的不记，免得下次被当成用户选的
+  useEffect(() => {
+    if (activeId !== "boot" && activeId !== autoPickedIdRef.current) writeActiveChat(activeId);
+  }, [activeId]);
+
   // 默认落点：没有用户选过的会话（boot 空壳、已删、同步时自动挑的）就进助理会话
   useEffect(() => {
     if (!assistantChat || activeId === assistantChat.id) return;
@@ -4026,7 +4013,6 @@ export default function ChatApp() {
               threadRef={threadRef}
               onThreadScroll={onThreadScroll}
               threadFindOpen={threadFindOpen}
-              hasApiKey={hasApiKey}
               error={error}
               notice={notice}
               bodyPending={bodyPending}
@@ -4144,7 +4130,7 @@ export default function ChatApp() {
               images={images}
               uploading={uploading}
               notice={notice}
-              error={error}
+              error={error || (modelUsable ? "" : NO_MODEL_HINT)}
               model={model}
               models={models}
               persistModel={persistModel}

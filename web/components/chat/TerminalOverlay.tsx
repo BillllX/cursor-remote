@@ -26,17 +26,20 @@ export function TerminalOverlay({
   shellEntries,
   terminalLogRef,
 }: TerminalOverlayProps) {
+  const docked = wideIDE && sidePane === "terminal";
   return (
     <div
       className={`search-overlay${terminalOpen ? " open" : ""}`}
       onClick={() => {
-        if (wideIDE && sidePane === "terminal") return;
+        if (docked) return;
         setTerminalOpen(false);
       }}
     >
       <div
         ref={terminalTrap}
         className="search-box terminal-box"
+        role="dialog"
+        aria-modal={docked ? undefined : true}
         aria-label="终端"
         onClick={(event) => event.stopPropagation()}
       >

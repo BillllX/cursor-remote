@@ -87,9 +87,13 @@ describe("settleTurn", () => {
     assert.equal(settleTurn(turn({ durationMs: 5 }), "finished").durationMs, 5);
   });
 
-  test("“failed” 不算失败：跑着的工具标成 completed（现状；runMeta 把 failed 显示为“出错”）", () => {
-    const out = settleTurn(turn({ running: true, tools: [tool()] }), "failed");
-    assert.equal(out.tools[0].status, "completed");
+  test("failed / Failed 与 error 同样算失败：跑着的工具标成 error（与 runMeta 显示“出错”一致）", () => {
+    for (const status of ["failed", "Failed"]) {
+      const out = settleTurn(turn({ running: true, tools: [tool()] }), status);
+      assert.equal(out.tools[0].status, "error", status);
+      assert.equal(out.running, false);
+      assert.equal(out.status, status);
+    }
   });
 
   test("空闲回合：返回新对象，只更新 status", () => {

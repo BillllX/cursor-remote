@@ -6,6 +6,22 @@ export function isUntitled(title: string | undefined) {
   return !title || title === "新对话";
 }
 
+/** 侧栏的未读样式和“新”角标共用：正打开着的会话不算未读（unread 要等 selectChat 才清，刷新恢复时可能还带着） */
+export function showsUnread(chat: Pick<Chat, "id" | "unread"> | undefined, activeId: string) {
+  return Boolean(chat?.unread) && chat?.id !== activeId;
+}
+
+/** 同步到的列表里没有当前会话时的落点：上次选中且还在的会话算用户选的；否则助理会话或第一个，记为自动挑的 */
+export function landingChat(
+  chats: Chat[],
+  remembered: string,
+  isAssistant: (id: string) => boolean,
+): { chat: Chat | undefined; auto: boolean } {
+  const last = remembered && remembered !== "boot" ? chats.find((chat) => chat.id === remembered) : undefined;
+  if (last) return { chat: last, auto: false };
+  return { chat: chats.find((chat) => isAssistant(chat.id)) || chats[0], auto: true };
+}
+
 export function shortPadTitle(title: string | undefined, firstUser?: string) {
   if (!title || title === "新对话") return "新对话";
   const clip = (text: string) => (text.length > 32 ? `${text.slice(0, 32)}…` : text);

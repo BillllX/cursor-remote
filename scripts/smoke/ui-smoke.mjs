@@ -12,6 +12,8 @@ import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 
 const ECHO_PREFIX = "回声：";
+// 网关没有 Cursor 密钥、只配了第三方假模型：有可用模型，不该出现这条提示
+const NO_KEY_HINT = "还没配模型密钥";
 
 if (process.argv[2] === "--fake-llm") {
   startFakeLlm(Number(process.argv[3]));
@@ -184,6 +186,10 @@ async function main() {
   }
   const esc = () => page.keyboard.press("Escape");
   const openBox = (selector) => page.locator(`.search-overlay.open ${selector}`);
+  async function expectNoKeyHint() {
+    const n = await page.getByText(NO_KEY_HINT).count();
+    if (n) throw new Error(`有可用的第三方模型却出现 ${n} 处“${NO_KEY_HINT}”提示`);
+  }
 
   const started = performance.now();
   // a. 登录
@@ -211,6 +217,10 @@ async function main() {
     },
     { shot: true, critical: true },
   );
+  await step("a4", "假模型环境下不提示没配模型密钥", async () => {
+    await page.waitForTimeout(1000);
+    await expectNoKeyHint();
+  });
 
   // b. 各浮层：打开可见，Esc / 关闭后消失
   await step("b1", "命令面板（⌘P 打开文件）", () =>
@@ -226,11 +236,35 @@ async function main() {
       () => page.locator(".files-overlay.open .files-browser-close").click(),
     ),
   );
-  await step("b4", "全文搜索", () => overlay(() => railButton("搜索").click(), openBox(".grep-box"), esc));
-  await step("b5", "终端", () => overlay(() => railButton("终端").click(), openBox(".terminal-box"), esc));
+  // 1440 宽是停靠模式：弹层收进侧栏列，是对话框但不是模态
+  await step("b4", "全文搜索", () =>
+    overlay(() => railButton("搜索").click(), openBox('.grep-box[role="dialog"]:not([aria-modal])'), esc),
+  );
+  await step("b5", "终端", () =>
+    overlay(() => railButton("终端").click(), openBox('.terminal-box[role="dialog"]:not([aria-modal])'), esc),
+  );
   await step("b6", "循环", () => overlay(() => railButton("Loop").click(), openBox(".loop-box"), esc));
-  await step("b7", "工作区选择（新对话）", () =>
-    overlay(() => sidebar.locator(".side-actions .new-chat.primary").click(), openBox(".workspace-dialog"), esc),
+  await step("b7", "工作区选择（新对话）：列表撑满对话框、对话框不出屏", () =>
+    overlay(
+      () => sidebar.locator(".side-actions .new-chat.primary").click(),
+      openBox(".workspace-dialog"),
+      async () => {
+        const box = await openBox(".workspace-dialog").evaluate((dialog) => {
+          const { getComputedStyle, innerHeight } = globalThis;
+          const list = dialog.querySelector(".workspace-choices");
+          return {
+            maxHeight: list ? getComputedStyle(list).maxHeight : "",
+            bottom: dialog.getBoundingClientRect().bottom,
+            listBottom: list ? list.getBoundingClientRect().bottom : 0,
+            vh: innerHeight,
+          };
+        });
+        if (box.maxHeight !== "none") throw new Error(`工作区列表 max-height 是 ${box.maxHeight}，应撑满对话框`);
+        if (box.bottom > box.vh || box.listBottom > box.bottom + 1)
+          throw new Error(`对话框超出屏幕：${JSON.stringify(box)}`);
+        await esc();
+      },
+    ),
   );
   await step("b8", "设置面板", () =>
     overlay(
@@ -239,6 +273,63 @@ async function main() {
       () => settingsToggle.click(),
     ),
   );
+
+  // 构建产物里的通用按下态：CDP 强制 :active，普通按钮取 --hover-strong，自己画按下色的（StallHint 停止）不被它盖掉
+  await step("b9", "按下态不盖掉自带按下色的按钮", async () => {
+    const stopClass = await page.evaluate(() => {
+      for (const sheet of globalThis.document.styleSheets) {
+        let rules;
+        try {
+          rules = sheet.cssRules;
+        } catch {
+          continue;
+        }
+        for (const rule of rules) {
+          const m = rule.selectorText?.match(/^\.([\w-]*StallHint[\w-]*stop[\w-]*):active$/);
+          if (m) return m[1];
+        }
+      }
+      return "";
+    });
+    if (!stopClass) throw new Error("产物里找不到 StallHint 停止按钮的 :active 规则");
+    await page.evaluate((cls) => {
+      const { document } = globalThis;
+      const host = document.createElement("div");
+      host.id = "press-probe";
+      host.style.cssText = "position:fixed;left:0;top:0;opacity:0;pointer-events:none";
+      host.innerHTML =
+        `<button id="pp-plain" type="button">a</button>` +
+        `<button id="pp-stop" type="button" class="${cls}" data-own-press>b</button>` +
+        `<span id="pp-gray" style="background: var(--hover-strong)"></span>` +
+        `<span id="pp-red" style="background: color-mix(in srgb, var(--danger-fg) 14%, var(--danger-bg))"></span>`;
+      document.body.appendChild(host);
+    }, stopClass);
+    const cdp = await context.newCDPSession(page);
+    try {
+      await cdp.send("DOM.enable");
+      await cdp.send("CSS.enable");
+      const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+      for (const id of ["pp-plain", "pp-stop"]) {
+        const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: `#${id}` });
+        await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: ["active"] });
+      }
+      const bg = await page.evaluate(() => {
+        const { document, getComputedStyle } = globalThis;
+        return Object.fromEntries(
+          ["pp-plain", "pp-stop", "pp-gray", "pp-red"].map((id) => [
+            id,
+            getComputedStyle(document.getElementById(id)).backgroundColor,
+          ]),
+        );
+      });
+      if (bg["pp-plain"] !== bg["pp-gray"]) throw new Error(`普通按钮按下是 ${bg["pp-plain"]}，应为 ${bg["pp-gray"]}`);
+      if (bg["pp-stop"] !== bg["pp-red"]) throw new Error(`停止按钮按下是 ${bg["pp-stop"]}，应为 ${bg["pp-red"]}`);
+      return `普通 ${bg["pp-plain"]}；停止 ${bg["pp-stop"]}`;
+    } finally {
+      await page.evaluate(() => globalThis.document.getElementById("press-probe")?.remove());
+      await cdp.detach().catch(() => {});
+    }
+  });
 
   // c. 新对话 → 假模型 → 发消息 → 回复、回合结束、侧栏出现
   await step(
@@ -287,11 +378,27 @@ async function main() {
     await projGroup.locator(".chat-item.active").waitFor({ state: "visible" });
     return `标题「${(await projGroup.locator(".chat-item.active .chat-item-title").innerText()).trim()}」`;
   });
+  await step("c5", "停靠搜索上面还有一层时，Esc 只关上层", async () => {
+    await railButton("搜索").click();
+    const grep = openBox(".grep-box");
+    await grep.waitFor({ state: "visible" });
+    await page.keyboard.press("Control+f");
+    const find = page.locator(".thread-find-input");
+    await find.waitFor({ state: "visible" });
+    await grep.locator(".search-input").click();
+    await esc();
+    await find.waitFor({ state: "detached" });
+    await page.waitForTimeout(400);
+    if (!(await grep.isVisible())) throw new Error("Esc 连停靠的搜索也关了");
+    await esc();
+    await grep.waitFor({ state: "hidden" });
+    await sidebar.waitFor({ state: "visible" });
+  });
 
-  // d. 刷新：免登录恢复，会话和回复都在
+  // d. 刷新：免登录恢复，直接回到刚才的会话（分组展开），回复都在
   await step(
     "d1",
-    "刷新后免登录、会话与回复仍在",
+    "刷新后免登录、回到刚才的会话与回复",
     async () => {
       await page.waitForTimeout(1500);
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -299,17 +406,17 @@ async function main() {
       if (await passwordInput.count()) throw new Error("刷新后又要求登录");
       await page.waitForTimeout(1000);
       const landing = (await page.locator(".error-line:visible").allInnerTexts()).map((t) => `落点红字「${t.trim()}」`);
-      // 刷新后落到助理会话时，工作区分组是收起的
-      const label = projGroup.locator(".chat-group-label");
-      await label.waitFor({ state: "visible", timeout: 15_000 });
-      if ((await label.getAttribute("aria-expanded")) === "false") await label.click();
-      const item = projGroup.locator(".chat-item").first();
-      await item.waitFor({ state: "visible", timeout: 15_000 });
-      await item.locator(".chat-item-main").click();
-      await page
-        .locator("article.turn .assistant", { hasText: ECHO_PREFIX })
-        .filter({ hasText: nonce })
-        .waitFor({ timeout: 15_000 });
+      await expectNoKeyHint();
+      const reply = page.locator("article.turn .assistant", { hasText: ECHO_PREFIX }).filter({ hasText: nonce });
+      await reply.waitFor({ timeout: 15_000 });
+      // 等一会儿再查一次，防止落点被随后到的同步改回助理会话
+      await page.waitForTimeout(1500);
+      await projGroup.locator(".chat-item.active").waitFor({ state: "visible", timeout: 5_000 });
+      if ((await projGroup.locator(".chat-group-label").getAttribute("aria-expanded")) !== "true") {
+        throw new Error("刷新后该会话所在的分组没展开");
+      }
+      if (await sidebar.locator(".assistant-pin.active").count()) throw new Error("刷新后落到了助理会话");
+      if (!(await reply.isVisible())) throw new Error("刷新后的回复又不见了");
       return landing.join("；");
     },
     { shot: true, critical: true },
@@ -345,11 +452,13 @@ async function main() {
   // f. 退出登录 → 管理员登录 → 使用统计
   await step(
     "f1",
-    "退出登录",
+    "退出登录（不留上次选中的会话）",
     async () => {
       await settingsToggle.click();
       await sidebar.locator(".side-settings .logout-btn").click();
       await passwordInput.waitFor({ state: "visible", timeout: 15_000 });
+      const left = await page.evaluate(() => globalThis.localStorage.getItem("cursor-remote-active"));
+      if (left) throw new Error(`退出后还记着上次选中的会话 ${left}`);
     },
     { critical: true },
   );

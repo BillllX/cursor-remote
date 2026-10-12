@@ -16,7 +16,6 @@ type ThreadProps = {
   threadRef: RefObject<HTMLDivElement | null>;
   onThreadScroll: () => void;
   threadFindOpen: boolean;
-  hasApiKey: boolean;
   error: string;
   notice: string;
   bodyPending: boolean;
@@ -49,7 +48,6 @@ export function Thread({
   threadRef,
   onThreadScroll,
   threadFindOpen,
-  hasApiKey,
   error,
   notice,
   bodyPending,
@@ -90,7 +88,7 @@ export function Thread({
         />
       ) : null}
       <div className="thread-inner">
-        {!hasApiKey || error ? <div className="warn">{friendlyError(error)}</div> : null}
+        {error ? <div className="warn">{friendlyError(error)}</div> : null}
         {notice ? <div className="warn">{notice}</div> : null}
         {bodyPending && !active.turns.length ? (
           <div className="skeleton" role="status" aria-live="polite">

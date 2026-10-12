@@ -83,7 +83,7 @@ export function settleTurn(turn: Turn, status?: string, durationMs?: number): Tu
       durationMs: durationMs ?? turn.durationMs,
     };
   }
-  const failed = key === "cancelled" || key === "canceled" || key === "error";
+  const failed = key === "cancelled" || key === "canceled" || key === "error" || key === "failed";
   return {
     ...settleOpenTools(turn, failed ? "error" : "completed"),
     status: status || turn.status,

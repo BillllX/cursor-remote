@@ -36,17 +36,20 @@ export function GrepOverlay({
   wideIDERef,
   grepWait,
 }: GrepOverlayProps) {
+  const docked = wideIDE && sidePane === "search";
   return (
     <div
       className={`search-overlay${grepOpen ? " open" : ""}`}
       onClick={() => {
-        if (wideIDE && sidePane === "search") return;
+        if (docked) return;
         setGrepOpen(false);
       }}
     >
       <div
         ref={grepTrap}
         className="search-box grep-box"
+        role="dialog"
+        aria-modal={docked ? undefined : true}
         aria-label="全文搜索"
         onClick={(event) => event.stopPropagation()}
       >
@@ -60,8 +63,8 @@ export function GrepOverlay({
             setGrepIndex(0);
           }}
           onKeyDown={(event) => {
+            // Escape 由 ChatApp 的全局捕获按层处理（停靠时还要切回对话列表），这里再关会在上面还有一层时把搜索也关掉
             const total = grepNameHits.length + grepHits.length;
-            if (event.key === "Escape") setGrepOpen(false);
             if (event.key === "ArrowDown") {
               event.preventDefault();
               setGrepIndex((index) => Math.min(index + 1, Math.max(0, total - 1)));

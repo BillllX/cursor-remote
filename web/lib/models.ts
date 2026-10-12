@@ -158,6 +158,13 @@ export function groupModels(ids: string[]): ModelGroup[] {
   });
 }
 
+export const NO_MODEL_HINT = "服务器还没配模型密钥，先写进网关配置。";
+
+/** 第三方模型的 id 形如 provider:model，不需要 Cursor 密钥；没有密钥时只要列表里有它们就能用 */
+export function hasUsableModel(hasApiKey: boolean, models: string[]) {
+  return hasApiKey || models.some((id) => id.includes(":"));
+}
+
 export function withCurrentModel(ids: string[], current: string): string[] {
   const key = current.trim();
   if (!key || ids.includes(key)) return ids;

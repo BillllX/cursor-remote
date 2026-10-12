@@ -1,5 +1,6 @@
 // 左侧对话列表侧栏
 import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
+import { showsUnread } from "../../lib/chat/sessions";
 import type { Chat } from "../../lib/chat/types";
 import { workspaceLabel } from "../../lib/chat/workspace";
 import type { AppearanceId, PaletteId } from "../../lib/theme";
@@ -170,7 +171,7 @@ export function Sidebar({
       {assistantChatId ? (
         <button
           type="button"
-          className={`chat-item assistant-pin${assistantActive ? " active" : ""}${assistantChat?.unread && !assistantActive ? " unread" : ""}`}
+          className={`chat-item assistant-pin${assistantActive ? " active" : ""}${showsUnread(assistantChat, activeId) ? " unread" : ""}`}
           title={`${assistantName} · 助理`}
           onClick={openAssistantChat}
         >
@@ -184,7 +185,7 @@ export function Sidebar({
           </span>
           {assistantChat?.turns.some((turn) => turn.running) ? (
             <span className="chat-mark run">跑</span>
-          ) : assistantChat?.unread && !assistantActive ? (
+          ) : showsUnread(assistantChat, activeId) ? (
             <span className="chat-mark unread">新</span>
           ) : null}
         </button>

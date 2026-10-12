@@ -17,7 +17,7 @@ export function sameFile(a: string, b: string, cwd = "") {
 }
 
 export function relToCwd(path: string, cwd = "") {
-  let p = path.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+  const p = path.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
   const root = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
   if (root && (p === root || p.startsWith(`${root}/`))) {
     return p === root ? "" : p.slice(root.length + 1);
