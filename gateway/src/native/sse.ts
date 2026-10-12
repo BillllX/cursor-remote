@@ -29,7 +29,9 @@ export async function readSse(
         reader.read(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            void reader.cancel().catch(() => {});
+            void reader.cancel().catch(() => {
+              // 流已出错或已关时 cancel 也会拒绝，停滞错误已在下面抛出
+            });
             reject(new Error(`${label} 流 ${idleMs / 1000}s 无数据，判定停滞断开`));
           }, idleMs);
         }),
@@ -44,7 +46,9 @@ export async function readSse(
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      void reader.cancel().catch(() => {});
+      void reader.cancel().catch(() => {
+        // 只为尽快断开连接，超限错误已在下面抛出
+      });
       throw new Error(`${label} 返回内容超过 ${Math.round(maxBytes / 1024 / 1024)}MB，已断开`);
     }
     buffer += decoder.decode(value, { stream: true });
@@ -54,7 +58,9 @@ export async function readSse(
       buffer = buffer.slice(match.index + match[0].length);
       handle(frame);
       if (stopped) {
-        void reader.cancel().catch(() => {});
+        void reader.cancel().catch(() => {
+          // 调用方已拿到想要的帧，断开失败不影响结果
+        });
         return;
       }
     }

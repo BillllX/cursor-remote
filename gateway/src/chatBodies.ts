@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
 
 /**
  * 会话正文单独存放：state.json 只留元数据，正文按会话分目录、每 SEGMENT_TURNS 轮一个文件。
@@ -282,8 +283,7 @@ function writeBody(store: BodyStore, id: string, turns: unknown[], preview: stri
     for (const [hash, text] of pending) {
       const file = resolve(dir, segName(hash));
       if (existsSync(file) && createHash("sha1").update(readFileSync(file, "utf8")).digest("hex") === hash) continue;
-      writeFileSync(`${file}.tmp`, text);
-      renameSync(`${file}.tmp`, file);
+      atomicWriteFileSync(file, text);
     }
   }
   const changed = pending.size > 0 || segHashes.length !== (prev?.segHashes.length ?? 0);

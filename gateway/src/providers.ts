@@ -281,7 +281,9 @@ export async function streamChatCompletions(opts: {
         reader.read(),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            void reader.cancel().catch(() => {});
+            void reader.cancel().catch(() => {
+              // 流已出错或已关时 cancel 也会拒绝，停滞错误已在下面抛出
+            });
             reject(new Error(`${provider.name} 流 ${IDLE_MS / 1000}s 无数据，判定停滞断开`));
           }, IDLE_MS);
         }),

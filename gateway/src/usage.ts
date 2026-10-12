@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
+import { errText, log, warnThrottled } from "./log.ts";
 import { stateDir } from "./tenants.js";
 
 /**
@@ -95,8 +97,9 @@ function load(): void {
         lastActiveAt: num(row.lastActiveAt) || now,
       });
     }
-  } catch {
-    // 损坏的统计文件不值得 crash——从零开始
+  } catch (err) {
+    // 损坏的统计文件不值得 crash——从零开始；下次落盘会覆盖旧文件，所以要留痕
+    log.warn("usage.json 读取失败，计量从零开始", errText(err));
   }
 }
 
@@ -170,6 +173,8 @@ export function usageSnapshot(tenantId: string): UsageRec {
   return recs.get(tenantId) ?? blankRec(0);
 }
 
+const RENAME_FALLBACK_CODES = new Set(["EXDEV", "EPERM", "EBUSY", "EACCES", "ENOTSUP"]);
+
 export function flushUsage(): void {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -184,15 +189,18 @@ export function flushUsage(): void {
       tenants: Object.fromEntries(recs.entries()),
     };
     // tmp + rename 原子替换：避免 SIGKILL/断电写一半损坏整份计量（load 虽容错但会丢全部历史）
-    const tmp = `${file}.tmp`;
     try {
-      writeFileSync(tmp, JSON.stringify(payload));
-      renameSync(tmp, file);
-    } catch {
-      writeFileSync(file, JSON.stringify(payload)); // 某些挂载盘 rename 不可靠：回退直写，别让计量永久停更
+      atomicWriteFileSync(file, JSON.stringify(payload));
+    } catch (err) {
+      // 某些挂载盘 rename 不可靠：只对这类错误回退直写，别让计量永久停更；
+      // 磁盘满/IO 错误时直写会先截断旧文件再失败，丢掉全部历史，所以照常抛给外层
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (!RENAME_FALLBACK_CODES.has(code)) throw err;
+      writeFileSync(file, JSON.stringify(payload));
     }
-  } catch {
+  } catch (err) {
     // 磁盘满/权限——统计丢了不影响主流程
+    warnThrottled("usage.flush", 10 * 60_000, "usage.json 落盘失败", errText(err));
   }
 }
 

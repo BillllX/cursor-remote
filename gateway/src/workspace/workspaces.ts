@@ -1,17 +1,9 @@
 // 工作区 CRUD：列出、隐藏、重命名、删除与推送工作区清单
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import type { WebSocket } from "ws";
 import { assistantName } from "../assistant/service.ts";
+import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { log } from "../log.ts";
 import { chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { disposeSlot, persistTenant, runningChatIds } from "../runtime/slots.ts";
@@ -97,7 +89,7 @@ export function readHiddenWorkspaces(tenant: Tenant): string[] {
 export function writeHiddenWorkspaces(tenant: Tenant, names: string[]) {
   try {
     mkdirSync(tenant.stateDir, { recursive: true });
-    writeFileSync(hiddenWorkspacesFile(tenant), JSON.stringify([...new Set(names)].sort()), "utf8");
+    atomicWriteFileSync(hiddenWorkspacesFile(tenant), JSON.stringify([...new Set(names)].sort()), { encoding: "utf8" });
   } catch (error) {
     log.warn("写 hidden-workspaces.json 失败", tenant.id, error);
   }

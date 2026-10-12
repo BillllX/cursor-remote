@@ -221,7 +221,9 @@ class StdioTransport extends Transport {
       const onAbort = () => {
         if (!this.pending.delete(id)) return;
         clearTimeout(timer);
-        void this.notify("notifications/cancelled", { requestId: id, reason: "aborted" }).catch(() => {});
+        void this.notify("notifications/cancelled", { requestId: id, reason: "aborted" }).catch(() => {
+          // 取消通知只是礼貌告知，本地已按中止处理；服务端收不到最多白跑完这次调用
+        });
         reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -343,7 +345,9 @@ class HttpTransport extends Transport {
   close() {
     this.closed = true;
     if (this.session) {
-      void fetch(this.cfg.url!, { method: "DELETE", headers: { "mcp-session-id": this.session, ...(this.cfg.headers || {}) } }).catch(() => {});
+      void fetch(this.cfg.url!, { method: "DELETE", headers: { "mcp-session-id": this.session, ...(this.cfg.headers || {}) } }).catch(() => {
+        // 关闭时顺手释放服务端会话；失败了服务端会自己超时回收
+      });
     }
   }
 }

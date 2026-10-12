@@ -1,6 +1,7 @@
-import { mkdirSync, renameSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { AgentMode, LoopState, LoopTick, LoopTickStatus } from "../../shared/protocol.ts";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { stateDir } from "./tenants.ts";
 
 /**
@@ -65,7 +66,6 @@ function file() {
 
 function persist() {
   const path = file();
-  const tmp = `${path}.${process.pid}.tmp`;
   const body = JSON.stringify({
     loops: [...loops.values()].map((row) => ({
       tenantId: row.tenantId,
@@ -83,8 +83,7 @@ function persist() {
   });
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(tmp, body);
-    renameSync(tmp, path);
+    atomicWriteFileSync(path, body);
   } catch (err) {
     console.error("loops.json 写入失败：", err instanceof Error ? err.message : err);
   }

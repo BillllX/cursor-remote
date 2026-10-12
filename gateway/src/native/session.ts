@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { atomicWriteFileSync } from "../fsAtomic.ts";
+import { errText, warnThrottled } from "../log.ts";
 import type { ChatMessage } from "./types.ts";
 
 /**
@@ -56,9 +58,7 @@ export function deleteSession(stateDir: string, chatId: string) {
 function write(stateDir: string, chatId: string, session: StoredSession) {
   const file = fileFor(stateDir, chatId);
   mkdirSync(resolve(stateDir, "native-sessions"), { recursive: true });
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(session));
-  renameSync(tmp, file);
+  atomicWriteFileSync(file, JSON.stringify(session));
 }
 
 /** 记一条旁白，下一轮开头告诉模型（会话不存在时忽略） */
@@ -68,8 +68,9 @@ export function noteSession(stateDir: string, chatId: string, note: string) {
   session.notes = [...(session.notes ?? []), note].slice(-5);
   try {
     write(stateDir, chatId, session);
-  } catch {
-    // ignore
+  } catch (err) {
+    // 旁白丢了只少一句提示，不影响会话本身
+    warnThrottled(`native-session.note:${stateDir}`, 10 * 60_000, "native 会话旁白落盘失败", chatId, errText(err));
   }
 }
 

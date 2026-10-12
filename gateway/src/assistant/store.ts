@@ -1,6 +1,7 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
+import { atomicWriteFileSync } from "../fsAtomic.ts";
 
 /**
  * 个人助理数据：全部在租户状态目录 assistant/ 下，网关是唯一写者。
@@ -27,10 +28,7 @@ export function readJson<T>(file: string, fallback: T): T {
 }
 
 export function writeJson(file: string, data: unknown) {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 1));
-  renameSync(tmp, file);
+  atomicWriteFileSync(file, JSON.stringify(data, null, 1), { mkdir: true });
 }
 
 export function appendJsonl(file: string, row: unknown) {
@@ -58,10 +56,9 @@ export function readJsonl<T>(file: string): T[] {
 }
 
 export function writeJsonl(file: string, rows: unknown[]) {
-  mkdirSync(dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""));
-  renameSync(tmp, file);
+  atomicWriteFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""), {
+    mkdir: true,
+  });
 }
 
 export function removePath(file: string) {

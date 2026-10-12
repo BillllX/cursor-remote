@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
-import { log, logEnabled } from "../src/log.ts";
+import { errText, log, logEnabled, warnThrottled } from "../src/log.ts";
 
 type Captured = { stream: "stdout" | "stderr"; line: string };
 
@@ -80,6 +80,32 @@ describe("log 级别过滤与输出流", () => {
     process.env.GATEWAY_LOG_LEVEL = "error";
     log.banner("cursor-remote gateway  http://127.0.0.1:8787");
     assert.deepEqual(out, [{ stream: "stdout", line: "cursor-remote gateway  http://127.0.0.1:8787" }]);
+  });
+
+  test("warnThrottled：同 key 窗口内只 warn 一次，其余降为 debug；不同 key 互不影响", (t) => {
+    process.env.GATEWAY_LOG_LEVEL = "debug";
+    t.mock.timers.enable({ apis: ["Date"], now: 1_000_000 });
+    warnThrottled("t.a", 1000, "写盘失败", "x");
+    warnThrottled("t.a", 1000, "写盘失败", "y");
+    warnThrottled("t.b", 1000, "别的失败");
+    t.mock.timers.tick(1000);
+    warnThrottled("t.a", 1000, "写盘失败", "z");
+    assert.deepEqual(
+      out.map((item) => item.line),
+      ["[warn] 写盘失败 x", "[debug] 写盘失败 y", "[warn] 别的失败", "[warn] 写盘失败 z"],
+    );
+    out = [];
+    process.env.GATEWAY_LOG_LEVEL = "info";
+    warnThrottled("t.a", 1000, "静默");
+    assert.deepEqual(out, []);
+  });
+
+  test("errText：Error 只留 code 与 message，不带堆栈", () => {
+    const fsErr = Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    assert.equal(errText(fsErr), "ENOSPC disk full");
+    assert.equal(errText(Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" })), "ENOENT: no such file");
+    assert.equal(errText(new Error("bad")), "bad");
+    assert.equal(errText("plain"), "plain");
   });
 
   test("对象和 Error 按 util.format 展开成单行前缀", () => {

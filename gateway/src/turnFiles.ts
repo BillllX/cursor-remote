@@ -6,16 +6,16 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   utimesSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import type { HistoryTurn, PreviewKind, TurnFile } from "../../shared/protocol.ts";
 import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../shared/preview.ts";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
+import { errText, warnThrottled } from "./log.ts";
 
 type RunTool = NonNullable<HistoryTurn["tools"]>[number];
 
@@ -415,8 +415,9 @@ export function openBaseline(base: TurnBaseline, deadline = Date.now() + TURN_BU
               if (rel) out.set(rel, chunk);
             }
           }
-        } catch {
+        } catch (err) {
           // 拿到多少算多少，缺的文件只给 sha
+          warnThrottled("turnFiles.diff", 10 * 60_000, "本轮文件对照 git diff 失败", errText(err));
         }
         return out;
       },
@@ -466,20 +467,9 @@ export function storeArtifact(stateDir: string, buf: Buffer): { sha: string; wro
   const file = resolve(dir, sha);
   if (touchArtifact(stateDir, sha)) return { sha, wrote: false };
   mkdirSync(dir, { recursive: true });
-  const tmp = resolve(dir, `.${sha}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);
-  try {
-    writeFileSync(tmp, buf);
-    renameSync(tmp, file);
-    const cached = quotaCache.get(dir);
-    if (cached) cached.total += buf.length;
-  } catch (err) {
-    try {
-      if (existsSync(tmp)) unlinkSync(tmp);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
+  atomicWriteFileSync(file, buf);
+  const cached = quotaCache.get(dir);
+  if (cached) cached.total += buf.length;
   return { sha, wrote: true };
 }
 
@@ -565,7 +555,7 @@ export function enforceArtifactQuota(
         total -= row.size;
         removed += 1;
       } catch {
-        // ignore
+        // 被并发删掉或删不掉都只是这次少收一点，下次扫描再算
       }
     }
   }
@@ -705,8 +695,11 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
           const stored = storeArtifact(stateDir, buf);
           row.sha = stored.sha;
           row.size = buf.length;
-        } catch {
-          // 读不到就不给 sha，客户端打开当前版本
+        } catch (err) {
+          // 读不到就不给 sha，客户端打开当前版本；文件已被删是常态，不记
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            warnThrottled(`turnFiles.snapshot:${stateDir}`, 10 * 60_000, "本轮文件快照没存下", errText(err));
+          }
         }
       }
       let diff: string | null = null;
@@ -723,8 +716,9 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
         try {
           const stored = storeArtifact(stateDir, Buffer.from(capDiff(diff), "utf8"));
           row.diffSha = stored.sha;
-        } catch {
+        } catch (err) {
           // 对照文本存不下就只给文件快照
+          warnThrottled(`turnFiles.diffSnapshot:${stateDir}`, 10 * 60_000, "本轮对照文本没存下", errText(err));
         }
       }
       if (row.added == null && diff) {
@@ -739,8 +733,9 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
     base?.close();
     try {
       checkArtifactQuota(stateDir, input.quota?.max, input.quota?.target);
-    } catch {
+    } catch (err) {
       // 配额下次再收
+      warnThrottled(`turnFiles.quota:${stateDir}`, 10 * 60_000, "artifacts 配额清理失败", errText(err));
     }
   }
 }

@@ -6,7 +6,6 @@ import {
   realpathSync,
   renameSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { basename, isAbsolute, relative, resolve } from "node:path";
@@ -20,6 +19,7 @@ import {
   type BodyStore,
 } from "./chatBodies.ts";
 import { gatewayEnv } from "./config.ts";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -233,14 +233,12 @@ export function saveDiskNow(tenant: Tenant) {
     clearTimeout(pending.timer);
     pendingSaves.delete(tenant);
   }
-  const tmp = `${tenant.stateFile}.tmp`;
   const chats = tenant.disk.chats;
   try {
     mkdirSync(tenant.stateDir, { recursive: true });
     // 先写正文分段，成功了再写指向它们的 state.json
     const rows = persistBodies(tenant.bodies, chats);
-    writeFileSync(tmp, JSON.stringify({ version: DISK_VERSION, ...tenant.disk, chats: rows }));
-    renameSync(tmp, tenant.stateFile);
+    atomicWriteFileSync(tenant.stateFile, JSON.stringify({ version: DISK_VERSION, ...tenant.disk, chats: rows }));
     dropRemovedBodies(tenant.bodies, chats);
     evictBodies(tenant.bodies, chats, rows);
   } catch (err) {

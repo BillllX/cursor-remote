@@ -39,6 +39,7 @@ import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTo
 import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
+import { errText, log } from "../log.ts";
 import { migrateMemory } from "./migrate.ts";
 import {
   answerCard,
@@ -606,7 +607,7 @@ export function startAssistant(next: AssistantDeps) {
         chatId: item.childChatId,
       });
     }
-    void retryFailedPushes(ref, vapid()).catch(() => undefined);
+    void retryFailedPushes(ref, vapid()).catch((err) => log.warn("启动时重试失败推送出错", tenant.id, errText(err)));
   }
   // 首轮慢任务等启动稳定后再跑
   lastSlowTick = Date.now() - 9 * 60_000;

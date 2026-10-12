@@ -20,6 +20,8 @@ import type { Duplex } from "node:stream";
 import { defaultWorkbenchPage, workbenchDownPage } from "./publish-home.ts";
 import { confinedCwd, isBillXuTenant } from "./tenants.ts";
 import { gatewayEnv } from "./config.ts";
+import { atomicWriteFileSync } from "./fsAtomic.ts";
+import { errText, log } from "./log.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const CONTROL_PATHS = new Set([
@@ -279,7 +281,7 @@ function markerVisible(pid: number, marker: string) {
     });
     if (markerTokenMatches(args, marker)) return true;
   } catch {
-    // ignore
+    // 进程不存在时 ps 以非零退出，按“看不到标记”处理
   }
   try {
     const env = execFileSync("ps", ["eww", "-p", String(pid)], {
@@ -444,7 +446,7 @@ function writePersisted(tenant: PublishTenant, row: Persisted) {
     startedAt: row.startedAt,
   };
   mkdirSync(tenant.stateDir, { recursive: true });
-  writeFileSync(persistedPath(tenant), JSON.stringify(plain));
+  atomicWriteFileSync(persistedPath(tenant), JSON.stringify(plain));
 }
 
 function clearPersisted(tenant: PublishTenant) {
@@ -487,8 +489,9 @@ function writeTokenFile(file: string, token: string) {
   writeFileSync(file, `${token}\n`, { mode: 0o600 });
   try {
     chmodSync(file, 0o600);
-  } catch {
+  } catch (err) {
     // best effort
+    log.warn("口令文件改权限失败", file, errText(err));
   }
 }
 
@@ -731,8 +734,9 @@ export function createPublishController(options: {
     const fail = async (message: string) => {
       try {
         await killOwned(slot.pid, slot.marker);
-      } catch {
+      } catch (err) {
         // 对不上就留着，避免误杀
+        log.warn("工作台启动失败后没停掉进程", tenant.id, slot.pid, errText(err));
       }
       if (!groupAlive(slot.pid)) dropSlot(tenant.id, slot.pid);
       return { ok: false as const, status: 502, message };

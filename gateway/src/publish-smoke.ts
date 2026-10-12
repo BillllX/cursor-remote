@@ -408,6 +408,7 @@ async function main() {
           return "";
         }
       };
+      // 收尾尽力停掉各租户的工作台；没在跑或请求失败都不影响冒烟结论
       await post(port, "/jiebo-publish/v1/stop", readToken(alpha.stateDir), { cwd: alpha.workspaceRoot }).catch(() => undefined);
       await post(port, "/jiebo-publish/v1/stop", readToken(beta.stateDir), { cwd: beta.workspaceRoot }).catch(() => undefined);
       await post(port, "/jiebo-publish/v1/stop", readToken(bill.stateDir), { cwd: bill.workspaceRoot }).catch(() => undefined);

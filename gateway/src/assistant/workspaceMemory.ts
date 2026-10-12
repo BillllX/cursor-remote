@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { addApproval, settleApproval } from "./approvals.ts";
 import { postInbox } from "./inbox.ts";
 import {
@@ -74,10 +74,7 @@ function readText(path: string) {
 }
 
 function writeTextAtomic(path: string, text: string) {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  writeFileSync(tmp, text);
-  renameSync(tmp, path);
+  atomicWriteFileSync(path, text, { mkdir: true });
 }
 
 /** 从根目录下第一层一直到 cwd 的各层目录；cwd 就是根目录时只有根目录这一层 */
