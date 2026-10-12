@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // 把拆分后的会话存储（state.json v2 + chats/<会话>/NNNNN.json）合并回旧版网关能读的单文件 state.json。
 // 只在退回旧版网关前用；先停网关。
-// 用法: node scripts/state-unsplit.mjs <租户状态目录>   例如 /var/lib/cursor-remote/tenants/default
+// 用法: node scripts/migrate/state-unsplit.mjs <租户状态目录>   例如 /var/lib/cursor-remote/tenants/default
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const dir = process.argv[2];
 if (!dir) {
-  console.error("用法: node scripts/state-unsplit.mjs <租户状态目录>");
+  console.error("用法: node scripts/migrate/state-unsplit.mjs <租户状态目录>");
   process.exit(1);
 }
 const file = resolve(dir, "state.json");

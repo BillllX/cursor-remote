@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 工作区重命名 / 删除 / 隐藏冒烟（临时网关 + 测试用户）。
-// 用法: CURSOR_REMOTE_TOKEN=<测试用户口令> node scripts/workspace-smoke.mjs   （默认连 127.0.0.1:8787）
+// 用法: CURSOR_REMOTE_TOKEN=<测试用户口令> node scripts/smoke/workspace-smoke.mjs   （默认连 127.0.0.1:8787）
 import WebSocket from "ws";
 import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";

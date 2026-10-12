@@ -12,7 +12,7 @@ tenants.json
 *.tsbuildinfo
 xcuserdata/
 *.xcuserstate
-scripts/policy-bench/results/
-scripts/dialect-bench/results/
+scripts/bench/policy-bench/results/
+scripts/bench/dialect-bench/results/
 .native-smoke/
 .loops-smoke-*/

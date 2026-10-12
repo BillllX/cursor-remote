@@ -40,7 +40,7 @@ tenants/<id>/
 - 装回时校验哈希。对不上的会话：没改动就不碰盘；有改动先把原目录复制到 `chats-broken/` 再写。
 - `state.json` 读不出时挪成 `state.json.unreadable-<时间>` 再按空状态启动；挪不开就拒绝启动。
 - 内存里最多留 16 条会话的正文（且合计不超过 64MB），按最近使用换出；换出的会话下次读 `chat.turns` 时从分段装回。
-- 退回旧版网关前，先停网关，再运行 `node scripts/state-unsplit.mjs <租户状态目录>`，把拆分格式合并回单文件。
+- 退回旧版网关前，先停网关，再运行 `node scripts/migrate/state-unsplit.mjs <租户状态目录>`，把拆分格式合并回单文件。
 
 网页不再发送 `sync_state`，也不再发送带 `turns` 的 `sync_chat`。
 
@@ -165,5 +165,5 @@ tenants/<id>/
 - 空会话仍可换目录（iOS 复用空白新对话）
 - 以前任何一台设备上旧的或误填的 `cwd` 都能把会话挪组；`set_workspace` 的目录与运行时不同还会销毁 Agent、清掉 `agentId`
 - 客户端不再用全局 `cwd` 给没目录的会话补值；网页收到工作区列表时不再改写会话的 `cwd`；切到没目录的会话时界面回落到 `workspaceRoot`
-- 冒烟：`scripts/multidevice-smoke.mjs`（`ci-gateway-smoke.sh` 里用本地假模型跑）
+- 冒烟：`scripts/smoke/multidevice-smoke.mjs`（`scripts/smoke/ci-gateway-smoke.sh` 里用本地假模型跑）
 

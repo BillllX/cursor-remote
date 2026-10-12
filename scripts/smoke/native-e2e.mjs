@@ -2,7 +2,7 @@
 // 自研 Agent 端到端：连真实网关 + 真实第三方模型，在临时子工作区里跑，跑完删掉。
 // 用法（在网关所在机器上）：
 //   set -a; . /etc/cursor-remote/gateway.env; set +a
-//   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/native-e2e.mjs [场景...]
+//   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/smoke/native-e2e.mjs [场景...]
 // 场景：create undo restore approve ask cancel shell memory mcp task usage（缺省全跑）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
@@ -257,7 +257,7 @@ try {
     if (existsSync(mcpFile)) {
       console.log("SKIP  mcp：状态目录已有 mcp.json，不覆盖");
     } else {
-      const server = join(dirname(fileURLToPath(import.meta.url)), "mcp-echo-server.mjs");
+      const server = join(dirname(fileURLToPath(import.meta.url)), "..", "mcp-echo-server.mjs");
       writeFileSync(mcpFile, JSON.stringify({ mcpServers: { echo: { command: process.execPath, args: [server], readOnlyTools: ["add"] } } }));
       chmodSync(mcpFile, 0o644);
       try {

@@ -90,7 +90,9 @@ npm run dev
 
 协议金样本在 `shared/protocol-fixtures.ts`。改了 `shared/protocol.ts` 就同步改样本（`npm test` 会检查每个 type 都有样本），再跑 `npm run gen:protocol-fixtures` 重生成 `shared/fixtures/protocol.json`，然后用 `SWIFT_BIN=<工具链 bin 目录> npm run check:ios-protocol` 在本地跑 iOS 契约。iOS 解码结果有预期变化时加 `-- --update` 重写 `ios/ContractTests/server-decode.snapshot.txt`；iOS 故意不处理的 type 写进 `ios/ContractTests/ios-ignored-server-types.txt`。改到 `ios/Jiebo/Jiebo/Gateway`、`Session`、`ios/ContractTests` 或 `shared/` 时，`.github/workflows/ios-contract.yml` 会在 GitHub Actions 上跑同一个检查。
 
-`scripts/ci-gateway-smoke.sh` 会在临时目录里生成两个测试用户（管理员和普通用户，口令随机），起一个独立网关跑 `slim-smoke`、`resume-smoke`，结束后清掉。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
+`scripts/smoke/ci-gateway-smoke.sh` 会在临时目录里生成两个测试用户（管理员和普通用户，口令随机），起一个独立网关跑 `slim-smoke`、`resume-smoke`，结束后清掉。
+
+冒烟统一入口是 `npm run smoke`（`scripts/smoke/run.mjs`）：`-- --list` 列出全部冒烟及其运行条件（纯离线 / 自带网关 / 需要已运行的网关 / 需要真实模型密钥），`--offline`、`--ci`、`--only=a,b`、`--real-key`、`--timeout=秒` 挑选和限时，串行跑完打印汇总，有失败退出码为 1。`npm run ci:smoke` 就是 `--ci` 那一组。除 `--list` 外都会监听本地端口或连网关，不要在跑着线上服务的机器上跑。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
 
 ## 端口
 

@@ -3,8 +3,8 @@
 //
 // 用法:
 //   CURSOR_REMOTE_TOKEN=xxx npm run bench:dialect -- --models kimi-k3-max,glm-5.2
-//   node scripts/dialect-bench.mjs --plan
-//   node scripts/dialect-bench.mjs --from scripts/dialect-bench/results/<stamp>.json
+//   node scripts/bench/dialect-bench.mjs --plan
+//   node scripts/bench/dialect-bench.mjs --from scripts/bench/dialect-bench/results/<stamp>.json
 //
 // 默认连本机 ws://127.0.0.1:8787。不要把 composer 放进默认模型：它吃不到方言 overlay。
 import WebSocket from "ws";
@@ -22,10 +22,10 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURES = join(ROOT, "scripts/dialect-bench/fixtures");
-const TASKS_FILE = join(ROOT, "scripts/dialect-bench/tasks.json");
-const OUT_DIR = join(ROOT, "scripts/dialect-bench/results");
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const FIXTURES = join(ROOT, "scripts/bench/dialect-bench/fixtures");
+const TASKS_FILE = join(ROOT, "scripts/bench/dialect-bench/tasks.json");
+const OUT_DIR = join(ROOT, "scripts/bench/dialect-bench/results");
 const CHINESE_VENDORS = /glm|zhipu|kimi|moonshot|deepseek|qwen/;
 const KNOWN_TOOLS = new Set([
   "read",

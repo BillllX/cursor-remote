@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # 用临时目录和临时测试用户起一个无模型密钥的网关，跑同步冒烟（slim / resume）。
 # CI 和本机都能跑，不读写 /etc/cursor-remote，也不碰真实用户数据。
-# 用法: bash scripts/ci-gateway-smoke.sh   （端口默认 18797，可用 CI_GATEWAY_PORT 改）
+# 用法: bash scripts/smoke/ci-gateway-smoke.sh   （端口默认 18797，可用 CI_GATEWAY_PORT 改）
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${CI_GATEWAY_PORT:-18797}"
 TMP="$(mktemp -d)"
 ADMIN_TOKEN="ci-admin-$(node -e 'console.log(require("crypto").randomBytes(12).toString("hex"))')"
@@ -63,10 +63,10 @@ fi
 
 status=0
 export JIEBO_WS_URL="ws://127.0.0.1:$PORT/bridge"
-CURSOR_REMOTE_TOKEN="$ADMIN_TOKEN" SMOKE_USER_TOKEN="$USER_TOKEN" node scripts/slim-smoke.mjs || status=1
-CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/resume-smoke.mjs || status=1
-CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/workspace-smoke.mjs || status=1
-CURSOR_REMOTE_TOKEN="$USER_TOKEN" FAKE_LLM_PORT="$FAKE_LLM_PORT" node scripts/multidevice-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$ADMIN_TOKEN" SMOKE_USER_TOKEN="$USER_TOKEN" node scripts/smoke/slim-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/smoke/resume-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$USER_TOKEN" node scripts/smoke/workspace-smoke.mjs || status=1
+CURSOR_REMOTE_TOKEN="$USER_TOKEN" FAKE_LLM_PORT="$FAKE_LLM_PORT" node scripts/smoke/multidevice-smoke.mjs || status=1
 
 if [ "$status" -ne 0 ]; then
   echo "---- 网关日志 ----"; cat "$TMP/gateway.log"

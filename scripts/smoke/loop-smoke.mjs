@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // L2：本地网关 Loop 两拍后按 maxTicks 停止。模型走 MiniMax，避免拉起 Cursor agent。
 import { createRequire } from "node:module";
-const require = createRequire(new URL("../gateway/package.json", import.meta.url));
+const require = createRequire(new URL("../../gateway/package.json", import.meta.url));
 const WebSocket = require("ws");
 
 const url = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";

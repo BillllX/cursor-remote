@@ -11,7 +11,7 @@ export default tseslint.config(
       "web/public/**",
       "web/next-env.d.ts",
       // 基准测试的 fixtures 和结果目录不是本仓库代码
-      "scripts/*/**",
+      "scripts/bench/*/**",
     ],
   },
   js.configs.recommended,
@@ -20,7 +20,7 @@ export default tseslint.config(
     files: [
       "gateway/**/*.{ts,mjs}",
       "shared/**/*.ts",
-      "scripts/*.{js,mjs,cjs,mts}",
+      "scripts/**/*.{js,mjs,cjs,mts}",
       "web/**/*.{js,mjs,cjs}",
       "eslint.config.mjs",
     ],

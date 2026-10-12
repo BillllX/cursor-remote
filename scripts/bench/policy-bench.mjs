@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 对照 baseline / plane 两条 harness 路径。
 // 用法:
-//   CURSOR_REMOTE_TOKEN=xxx node scripts/policy-bench.mjs
+//   CURSOR_REMOTE_TOKEN=xxx node scripts/bench/policy-bench.mjs
 //   --models composer-2.5,kimi-k3-max --policies baseline,plane --tasks ask-readonly
 // 默认连本机 ws://127.0.0.1:8787
 import WebSocket from "ws";
@@ -17,10 +17,10 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const FIXTURE = join(ROOT, "scripts/policy-bench/fixtures/mini-lib");
-const TASKS_FILE = join(ROOT, "scripts/policy-bench/tasks.json");
-const OUT_DIR = join(ROOT, "scripts/policy-bench/results");
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const FIXTURE = join(ROOT, "scripts/bench/policy-bench/fixtures/mini-lib");
+const TASKS_FILE = join(ROOT, "scripts/bench/policy-bench/tasks.json");
+const OUT_DIR = join(ROOT, "scripts/bench/policy-bench/results");
 
 const WS_URL = process.env.JIEBO_WS_URL || process.env.POLICY_BENCH_WS || "ws://127.0.0.1:8787";
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();

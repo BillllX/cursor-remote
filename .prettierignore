@@ -5,7 +5,8 @@ web/public/
 web/next-env.d.ts
 *.tsbuildinfo
 package-lock.json
-scripts/*/results/
+# 基准测试的夹具、任务表和结果目录
+scripts/bench/*/
 
 # >>> 遗留文件：格式化后从这里删掉（npm run format:baseline 重新生成本区块，区块外的内容不动）
 gateway/src/apns-smoke.ts
@@ -54,18 +55,18 @@ gateway/src/seghash-smoke.ts
 gateway/src/tenants.ts
 gateway/src/turnFiles.ts
 gateway/src/turnfiles-smoke.ts
+scripts/bench/dialect-bench.mjs
+scripts/bench/policy-bench.mjs
 scripts/build-icons.mjs
-scripts/dialect-bench.mjs
-scripts/ios-smoke.mjs
-scripts/loop-smoke.mjs
 scripts/mcp-echo-server.mjs
-scripts/multidevice-smoke.mjs
-scripts/native-e2e.mjs
-scripts/policy-bench.mjs
-scripts/resume-smoke.mjs
-scripts/slim-smoke.mjs
-scripts/state-unsplit.mjs
-scripts/workspace-smoke.mjs
+scripts/migrate/state-unsplit.mjs
+scripts/smoke/ios-smoke.mjs
+scripts/smoke/loop-smoke.mjs
+scripts/smoke/multidevice-smoke.mjs
+scripts/smoke/native-e2e.mjs
+scripts/smoke/resume-smoke.mjs
+scripts/smoke/slim-smoke.mjs
+scripts/smoke/workspace-smoke.mjs
 shared/crew.ts
 shared/protocol.ts
 web/app/lab/lab.css

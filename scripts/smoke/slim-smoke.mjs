@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // P8 slim_state / load_chat 分页冒烟（本地 dev gateway）。
-// 用法: CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/slim-smoke.mjs   （默认连 127.0.0.1:8787）
+// 用法: CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/smoke/slim-smoke.mjs   （默认连 127.0.0.1:8787）
 import WebSocket from "ws";
 import { createHash, randomUUID } from "node:crypto";
 

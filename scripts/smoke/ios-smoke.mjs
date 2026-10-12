@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 接驳 iOS 协议冒烟：直连东京站 wss，验证 iPad 客户端依赖的协议行为。
-// 用法: CURSOR_REMOTE_TOKEN=xxx node scripts/ios-smoke.mjs [--skip-agent]
+// 用法: CURSOR_REMOTE_TOKEN=xxx node scripts/smoke/ios-smoke.mjs [--skip-agent]
 // 退出码 0 = 全绿；任何一步失败 = 1。
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
