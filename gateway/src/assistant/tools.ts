@@ -389,6 +389,7 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
         "不会马上写：这个线程空闲后，攒下的提议合成一张确认卡请用户批准，批准了才写。",
         "一条一句话，写具体（文件、命令、原因）。不要写用户的个人信息、密钥，也不要写这次任务的流水账。",
         "refs 填这条依赖的相对路径（如 gateway/src/index.ts），文件没了会自动标“待核实”。",
+        "调用它不代表任务结束：尽量在给用户写最终汇报之前调用，调完继续手上的事，最后照常用文字向用户汇报结果。",
       ].join(""),
       {
         section: { type: "string", enum: ["约定", "命令", "坑", "决定", "进行中"] },

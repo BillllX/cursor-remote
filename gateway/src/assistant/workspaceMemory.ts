@@ -366,10 +366,10 @@ export function proposeWorkspaceMemory(tenant: WorkspaceRoot, input: ProposeInpu
   if (queued.length >= MAX_QUEUED_PER_CHAT) return { ok: false, error: `这个线程攒了 ${MAX_QUEUED_PER_CHAT} 条待确认，先等用户确认。` };
   const inFile = parseMemoryFile(readText(resolve(target, MEMORY_FILE))).some((line) => line.text === text);
   const pending = data.proposals.some((item) => item.dir === dir && item.text === text);
-  if (inFile || pending) return { ok: true, duplicate: true, note: "已经记过或已在等确认。" };
+  if (inFile || pending) return { ok: true, duplicate: true, note: "已经记过或已在等确认。继续手上的事，最后照常给用户写汇报。" };
   data.proposals.push({ id: newId("wm"), kind: "workspace", chatId: input.chatId, dir, section, text, refs, createdAt: Date.now() });
   writeStore(ref, data);
-  return { ok: true, queued: queued.length + 1, note: "先攒着，线程空闲后合成一张确认卡请用户批准，批准了才写进 .jiebo/memory.md。" };
+  return { ok: true, queued: queued.length + 1, note: "先攒着，线程空闲后合成一张确认卡请用户批准，批准了才写进 .jiebo/memory.md。不用等它，继续手上的事，最后照常给用户写汇报。" };
 }
 
 function cardSummary(items: Proposal[]) {
