@@ -58,6 +58,27 @@
 		A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000711 /* InboxHome.swift */; };
 		A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000712 /* MenuScreens.swift */; };
 		A1B2C3D4E5F6071829000813 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000713 /* AppDelegate.swift */; };
+		A1B2C3D4E5F6071829000814 /* ChatStore+Lifecycle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000714 /* ChatStore+Lifecycle.swift */; };
+		A1B2C3D4E5F6071829000815 /* ChatStore+Turns.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000715 /* ChatStore+Turns.swift */; };
+		A1B2C3D4E5F6071829000816 /* ChatStore+Chats.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000716 /* ChatStore+Chats.swift */; };
+		A1B2C3D4E5F6071829000817 /* ChatStore+Assistant.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000717 /* ChatStore+Assistant.swift */; };
+		A1B2C3D4E5F6071829000818 /* ChatStore+TurnsLoad.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000718 /* ChatStore+TurnsLoad.swift */; };
+		A1B2C3D4E5F6071829000819 /* ChatStore+Preview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000719 /* ChatStore+Preview.swift */; };
+		A1B2C3D4E5F6071829000820 /* ChatStore+QuickLook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000720 /* ChatStore+QuickLook.swift */; };
+		A1B2C3D4E5F6071829000821 /* ChatStore+Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000721 /* ChatStore+Composer.swift */; };
+		A1B2C3D4E5F6071829000822 /* ChatStore+Review.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000722 /* ChatStore+Review.swift */; };
+		A1B2C3D4E5F6071829000823 /* ChatStore+Handle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000723 /* ChatStore+Handle.swift */; };
+		A1B2C3D4E5F6071829000824 /* ChatStore+ToolLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000724 /* ChatStore+ToolLayer.swift */; };
+		A1B2C3D4E5F6071829000825 /* ChatStore+Merge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000725 /* ChatStore+Merge.swift */; };
+		A1B2C3D4E5F6071829000826 /* ChatStore+Sync.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000726 /* ChatStore+Sync.swift */; };
+		A1B2C3D4E5F6071829000827 /* ThreadView+Header.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000727 /* ThreadView+Header.swift */; };
+		A1B2C3D4E5F6071829000828 /* ThreadView+Scroll.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000728 /* ThreadView+Scroll.swift */; };
+		A1B2C3D4E5F6071829000829 /* ThreadView+EmptyState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000729 /* ThreadView+EmptyState.swift */; };
+		A1B2C3D4E5F6071829000830 /* TurnView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000730 /* TurnView.swift */; };
+		A1B2C3D4E5F6071829000831 /* AssistantMessageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000731 /* AssistantMessageView.swift */; };
+		A1B2C3D4E5F6071829000832 /* ProseViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000732 /* ProseViews.swift */; };
+		A1B2C3D4E5F6071829000833 /* AttachmentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */; };
+		A1B2C3D4E5F6071829000834 /* ThreadAssistantRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -114,6 +135,27 @@
 		A1B2C3D4E5F6071829000711 /* InboxHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxHome.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000712 /* MenuScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuScreens.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000713 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000714 /* ChatStore+Lifecycle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Lifecycle.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000715 /* ChatStore+Turns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Turns.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000716 /* ChatStore+Chats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Chats.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000717 /* ChatStore+Assistant.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Assistant.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000718 /* ChatStore+TurnsLoad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+TurnsLoad.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000719 /* ChatStore+Preview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Preview.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000720 /* ChatStore+QuickLook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+QuickLook.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000721 /* ChatStore+Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Composer.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000722 /* ChatStore+Review.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Review.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000723 /* ChatStore+Handle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Handle.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000724 /* ChatStore+ToolLayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+ToolLayer.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000725 /* ChatStore+Merge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Merge.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000726 /* ChatStore+Sync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Sync.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000727 /* ThreadView+Header.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThreadView+Header.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000728 /* ThreadView+Scroll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThreadView+Scroll.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000729 /* ThreadView+EmptyState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThreadView+EmptyState.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000730 /* TurnView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000731 /* AssistantMessageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantMessageView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000732 /* ProseViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProseViews.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentViews.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadAssistantRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000750 /* Jiebo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Jiebo.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -198,6 +240,19 @@
 				A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */,
 				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
 				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
+				A1B2C3D4E5F6071829000714 /* ChatStore+Lifecycle.swift */,
+				A1B2C3D4E5F6071829000715 /* ChatStore+Turns.swift */,
+				A1B2C3D4E5F6071829000716 /* ChatStore+Chats.swift */,
+				A1B2C3D4E5F6071829000717 /* ChatStore+Assistant.swift */,
+				A1B2C3D4E5F6071829000718 /* ChatStore+TurnsLoad.swift */,
+				A1B2C3D4E5F6071829000719 /* ChatStore+Preview.swift */,
+				A1B2C3D4E5F6071829000720 /* ChatStore+QuickLook.swift */,
+				A1B2C3D4E5F6071829000721 /* ChatStore+Composer.swift */,
+				A1B2C3D4E5F6071829000722 /* ChatStore+Review.swift */,
+				A1B2C3D4E5F6071829000723 /* ChatStore+Handle.swift */,
+				A1B2C3D4E5F6071829000724 /* ChatStore+ToolLayer.swift */,
+				A1B2C3D4E5F6071829000725 /* ChatStore+Merge.swift */,
+				A1B2C3D4E5F6071829000726 /* ChatStore+Sync.swift */,
 				A1B2C3D4E5F6071829000117 /* Crew.swift */,
 				A1B2C3D4E5F6071829000120 /* Preview.swift */,
 				A1B2C3D4E5F6071829000191 /* ChatCache.swift */,
@@ -218,6 +273,14 @@
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
+				A1B2C3D4E5F6071829000727 /* ThreadView+Header.swift */,
+				A1B2C3D4E5F6071829000728 /* ThreadView+Scroll.swift */,
+				A1B2C3D4E5F6071829000729 /* ThreadView+EmptyState.swift */,
+				A1B2C3D4E5F6071829000730 /* TurnView.swift */,
+				A1B2C3D4E5F6071829000731 /* AssistantMessageView.swift */,
+				A1B2C3D4E5F6071829000732 /* ProseViews.swift */,
+				A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */,
+				A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */,
 				A1B2C3D4E5F6071829000114 /* ComposerView.swift */,
 				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
 				A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */,
@@ -359,10 +422,31 @@
 				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */,
 				A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */,
+				A1B2C3D4E5F6071829000814 /* ChatStore+Lifecycle.swift in Sources */,
+				A1B2C3D4E5F6071829000815 /* ChatStore+Turns.swift in Sources */,
+				A1B2C3D4E5F6071829000816 /* ChatStore+Chats.swift in Sources */,
+				A1B2C3D4E5F6071829000817 /* ChatStore+Assistant.swift in Sources */,
+				A1B2C3D4E5F6071829000818 /* ChatStore+TurnsLoad.swift in Sources */,
+				A1B2C3D4E5F6071829000819 /* ChatStore+Preview.swift in Sources */,
+				A1B2C3D4E5F6071829000820 /* ChatStore+QuickLook.swift in Sources */,
+				A1B2C3D4E5F6071829000821 /* ChatStore+Composer.swift in Sources */,
+				A1B2C3D4E5F6071829000822 /* ChatStore+Review.swift in Sources */,
+				A1B2C3D4E5F6071829000823 /* ChatStore+Handle.swift in Sources */,
+				A1B2C3D4E5F6071829000824 /* ChatStore+ToolLayer.swift in Sources */,
+				A1B2C3D4E5F6071829000825 /* ChatStore+Merge.swift in Sources */,
+				A1B2C3D4E5F6071829000826 /* ChatStore+Sync.swift in Sources */,
 				A1B2C3D4E5F6071829000310 /* RootView.swift in Sources */,
 				A1B2C3D4E5F6071829000311 /* LoginView.swift in Sources */,
 				A1B2C3D4E5F6071829000312 /* SidebarView.swift in Sources */,
 				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
+				A1B2C3D4E5F6071829000827 /* ThreadView+Header.swift in Sources */,
+				A1B2C3D4E5F6071829000828 /* ThreadView+Scroll.swift in Sources */,
+				A1B2C3D4E5F6071829000829 /* ThreadView+EmptyState.swift in Sources */,
+				A1B2C3D4E5F6071829000830 /* TurnView.swift in Sources */,
+				A1B2C3D4E5F6071829000831 /* AssistantMessageView.swift in Sources */,
+				A1B2C3D4E5F6071829000832 /* ProseViews.swift in Sources */,
+				A1B2C3D4E5F6071829000833 /* AttachmentViews.swift in Sources */,
+				A1B2C3D4E5F6071829000834 /* ThreadAssistantRows.swift in Sources */,
 				A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */,
 				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
 				A1B2C3D4E5F6071829000393 /* ToolRunSummaryView.swift in Sources */,
