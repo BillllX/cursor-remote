@@ -138,15 +138,6 @@
 }
 
 /* 更多工作区：没有对话的工作区收在这里，点一下就在里面开新对话 */
-.chat-more {
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .chat-more-toggle,
 .chat-more-item,
 .chat-more-all {
@@ -177,37 +168,13 @@
   transform: rotate(90deg);
 }
 
-.chat-more-title {
-  min-width: 0;
-  flex: 1;
-}
-
 .chat-more-toggle .chat-group-count {
   margin-left: auto;
   font-size: var(--fs-2xs);
 }
 
-.chat-more-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
 .chat-more-item {
   padding-left: 28px;
-}
-
-.chat-more-hint {
-  margin-left: auto;
-  flex: none;
-  font-size: var(--fs-2xs);
-  color: var(--accent);
-  opacity: 0;
-}
-
-.chat-more-item:hover .chat-more-hint,
-.chat-more-item:focus-visible .chat-more-hint {
-  opacity: 1;
 }
 
 .chat-more-all {

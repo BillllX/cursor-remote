@@ -5,6 +5,7 @@ import { fmtAgo } from "../../lib/chat/format";
 import { relToCwd, sameCwd } from "../../lib/chat/workspace";
 import { FolderMark } from "./FolderMark";
 import { Highlight } from "./markdown";
+import styles from "./WorkspaceOverlay.module.css";
 
 type WorkspaceOverlayProps = {
   workspaceMenuOpen: boolean;
@@ -77,9 +78,9 @@ export function WorkspaceOverlay({
         aria-label="新对话：选择工作区"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="workspace-dialog-head">
+        <div className={styles.head}>
           <div className="loop-title">新对话</div>
-          <div className="workspace-dialog-sub">选一个工作区，对话里的读写都在这个目录下进行</div>
+          <div className={styles.sub}>选一个工作区，对话里的读写都在这个目录下进行</div>
         </div>
         <input
           autoFocus={workspaceMenuOpen}
@@ -113,7 +114,7 @@ export function WorkspaceOverlay({
           {workspaceChoices.map((item, index) => (
             <Fragment key={item.path}>
               {index === 0 || item.recent !== workspaceChoices[index - 1].recent ? (
-                <div className="workspace-choice-section" role="presentation">
+                <div className={styles.section} role="presentation">
                   {item.recent ? "最近用过" : "全部工作区"}
                 </div>
               ) : null}
@@ -130,17 +131,17 @@ export function WorkspaceOverlay({
                 onClick={() => startChatIn(item.path)}
               >
                 <FolderMark />
-                <span className="workspace-choice-text">
-                  <span className="workspace-choice-name">
+                <span className={styles.text}>
+                  <span className={styles.name}>
                     <Highlight text={item.name} query={workspaceQuery} />
                   </span>
                   {item.dup || (relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
-                    <span className="workspace-choice-path">{relToCwd(item.path, workspaceRoot) || item.path}</span>
+                    <span className={styles.path}>{relToCwd(item.path, workspaceRoot) || item.path}</span>
                   ) : null}
                 </span>
-                {sameCwd(item.path, cwd) ? <span className="workspace-choice-tag">当前</span> : null}
+                {sameCwd(item.path, cwd) ? <span className={styles.tag}>当前</span> : null}
                 {item.chats ? (
-                  <span className="workspace-choice-count">
+                  <span className={styles.count}>
                     {item.chats} 个对话{item.touched ? ` · ${fmtAgo(item.touched, true)}` : ""}
                   </span>
                 ) : null}
@@ -148,15 +149,15 @@ export function WorkspaceOverlay({
             </Fragment>
           ))}
           {!workspaceChoices.length ? (
-            <div className="workspace-choice-empty">
+            <div className={styles.empty}>
               {otherMenuWorkspaces.length ? "没有匹配的工作区" : "还没有工作区，先新建一个"}
             </div>
           ) : null}
         </div>
-        <div className="workspace-dialog-foot">
+        <div className={styles.foot}>
           {workspaceCreating ? (
             <form
-              className="workspace-create"
+              className={styles.create}
               onSubmit={(event) => {
                 event.preventDefault();
                 submitNewWorkspace();
@@ -169,14 +170,14 @@ export function WorkspaceOverlay({
                 placeholder="新目录名"
                 onChange={(event) => setWorkspaceNameDraft(event.target.value)}
               />
-              <button type="submit" className="workspace-create-ok" disabled={!workspaceNameDraft.trim()}>
+              <button type="submit" className={styles.createOk} disabled={!workspaceNameDraft.trim()}>
                 创建
               </button>
             </form>
           ) : workspaceQuery.trim() && !workspaceExact ? (
             <button
               type="button"
-              className="workspace-new"
+              className={styles.newWorkspace}
               onClick={() => send({ type: "create_workspace", name: workspaceQuery.trim() })}
             >
               + 新建工作区「{workspaceQuery.trim()}」
@@ -184,7 +185,7 @@ export function WorkspaceOverlay({
           ) : (
             <button
               type="button"
-              className="workspace-new"
+              className={styles.newWorkspace}
               onClick={() => {
                 setWorkspaceNameDraft("");
                 setWorkspaceCreating(true);

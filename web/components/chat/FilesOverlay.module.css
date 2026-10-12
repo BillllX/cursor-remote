@@ -1,0 +1,22 @@
+.title {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.cwd {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.gitEmpty {
+  color: var(--dim);
+  font-size: var(--fs-md);
+  padding: 16px 14px;
+}

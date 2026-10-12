@@ -1,0 +1,9 @@
+.fileKind {
+  flex: none;
+  width: 32px;
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--dim);
+  font-family: var(--mono);
+}

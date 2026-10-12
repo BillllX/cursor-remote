@@ -2,6 +2,7 @@
 import { useRef } from "react";
 import { friendlyError } from "../../lib/chat/format";
 import { JieboMark as Mark } from "../JieboMark";
+import styles from "./LoginGate.module.css";
 
 export function LoginGate({
   connected,
@@ -53,7 +54,7 @@ export function LoginGate({
         <button type="submit" className="login-btn" disabled={!value.trim()}>
           {verifying ? "正在验证…" : "进入"}
         </button>
-        <div className="login-status">{connected ? "已连上服务器" : "正在连接服务器…"}</div>
+        <div className={styles.status}>{connected ? "已连上服务器" : "正在连接服务器…"}</div>
       </form>
     </div>
   );

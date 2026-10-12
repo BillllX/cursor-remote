@@ -1,4 +1,5 @@
 // 助理对话的标题行
+import styles from "./AssistantChatHead.module.css";
 
 type AssistantChatHeadProps = {
   assistantName: string;
@@ -17,8 +18,8 @@ export function AssistantChatHead({
 }: AssistantChatHeadProps) {
   return (
     <div className="assistant-chat-head">
-      <span className="assistant-chat-title">{assistantName}</span>
-      <span className="assistant-chat-sub">助理</span>
+      <span className={styles.title}>{assistantName}</span>
+      <span className={styles.sub}>助理</span>
       <button
         type="button"
         className={`pill assistant-today${wideIDE && sidePane === "assistant" ? " on" : ""}`}

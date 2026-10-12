@@ -1,26 +1,3 @@
-.tree-block {
-  flex: 0 0 auto;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.tree-block[open] {
-  flex: 1 1 38%;
-}
-
-.tree-block > summary {
-  list-style: none;
-  cursor: pointer;
-  padding: 4px 2px 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tree-block > summary::-webkit-details-marker {
-  display: none;
-}
-
 .changes-list {
   display: flex;
   flex-direction: column;

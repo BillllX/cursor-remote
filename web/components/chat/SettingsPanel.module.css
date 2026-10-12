@@ -1,0 +1,6 @@
+.workspacePath {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  word-break: break-all;
+  padding: 0 2px;
+}

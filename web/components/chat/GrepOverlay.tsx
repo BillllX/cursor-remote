@@ -1,6 +1,7 @@
 // 全文搜索弹层
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { SearchHit } from "@shared/protocol";
+import styles from "./GrepOverlay.module.css";
 
 type GrepOverlayProps = {
   grepOpen: boolean;
@@ -119,9 +120,9 @@ export function GrepOverlay({
                     >
                       <span className="search-item-name">
                         {hit.path.split("/").pop()}
-                        <span className="search-item-line">:{hit.line}</span>
+                        <span className={styles.line}>:{hit.line}</span>
                       </span>
-                      <span className="search-item-snip">{hit.text}</span>
+                      <span className={styles.snip}>{hit.text}</span>
                       <span className="search-item-dir">
                         {hit.path.includes("/") ? hit.path.slice(0, hit.path.lastIndexOf("/")) : "."}
                       </span>

@@ -1,0 +1,5 @@
+.count {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}

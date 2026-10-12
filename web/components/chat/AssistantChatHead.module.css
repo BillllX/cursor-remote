@@ -1,0 +1,10 @@
+.title {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sub {
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}

@@ -1,0 +1,5 @@
+.cmd {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}

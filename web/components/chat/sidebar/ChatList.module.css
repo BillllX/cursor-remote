@@ -1,0 +1,14 @@
+.empty {
+  padding: 12px 10px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+.groupLive {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+}

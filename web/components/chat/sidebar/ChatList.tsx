@@ -5,6 +5,7 @@ import type { Chat } from "../../../lib/chat/types";
 import { normPath, relToCwd, sameCwd } from "../../../lib/chat/workspace";
 import { FolderMark } from "../FolderMark";
 import { ChatMore } from "./ChatMore";
+import styles from "./ChatList.module.css";
 
 type ChatListProps = {
   sidebarGroups: {
@@ -80,7 +81,7 @@ export function ChatList({
   return (
     <div className="chats">
       {sidebarGroups.length ? null : (
-        <div className="chats-empty">
+        <div className={styles.empty}>
           {moreGroups.length
             ? "还没有对话。点“新对话”，或展开下面的“更多工作区”开始。"
             : "还没有对话。点“新对话”选一个工作区开始。"}
@@ -123,7 +124,7 @@ export function ChatList({
                   <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
                 ) : null}
                 {group.chats.some((chat) => chat.turns.some((turn) => turn.running)) ? (
-                  <span className="chat-group-live" title="有对话在运行" />
+                  <span className={styles.groupLive} title="有对话在运行" />
                 ) : null}
                 <span className="chat-group-meta">
                   {group.touched ? <span className="chat-group-time">{fmtAgo(group.touched)}</span> : null}

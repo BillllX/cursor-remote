@@ -2,6 +2,7 @@
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import { sameFile, workspaceLabel } from "../../lib/chat/workspace";
 import FileTree, { FileGlyph, GIT_LABEL } from "../FileTree";
+import styles from "./FilesOverlay.module.css";
 
 type FilesOverlayProps = {
   filesOpen: boolean;
@@ -69,9 +70,9 @@ export function FilesOverlay({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="files-browser-head">
-          <div className="files-browser-title">
+          <div className={styles.title}>
             <span>{sidePane === "git" && wideIDE ? "Git" : "文件"}</span>
-            <span className="files-browser-cwd" title={cwd || workspaceRoot}>
+            <span className={styles.cwd} title={cwd || workspaceRoot}>
               {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
             </span>
           </div>
@@ -118,7 +119,7 @@ export function FilesOverlay({
                 ))}
             </div>
           ) : wideIDE && sidePane === "git" ? (
-            <div className="git-empty">工作区干净</div>
+            <div className={styles.gitEmpty}>工作区干净</div>
           ) : null}
           <FileTree
             paths={treePaths}

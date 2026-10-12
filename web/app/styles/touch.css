@@ -3,10 +3,6 @@
     display: none;
   }
 
-  .touch-only {
-    display: block;
-  }
-
   .chat-item-x {
     opacity: 1;
   }
@@ -40,7 +36,6 @@
 
   .new-chat,
   .chat-item,
-  .chat-item-empty,
   .mode-btn,
   .pill,
   .empty-chip,
@@ -79,8 +74,7 @@
     gap: 12px;
   }
 
-  .chat-item,
-  .chat-item-empty {
+  .chat-item {
     min-height: 72px;
     padding: 12px 12px;
   }
@@ -183,7 +177,6 @@
     font-size: var(--fs-base);
   }
 
-  .composer-select,
   .model-picker-btn {
     height: 48px;
     font-size: var(--fs-xl);

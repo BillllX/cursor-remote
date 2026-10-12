@@ -1,0 +1,4 @@
+.status {
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}

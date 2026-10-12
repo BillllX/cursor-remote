@@ -1,0 +1,33 @@
+.head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.headActions {
+  display: flex;
+  gap: 4px;
+}
+
+.section {
+  display: grid;
+  gap: 6px;
+}
+
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
+.badge {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--brass, #a6843d);
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--brass, #a6843d) 12%, transparent);
+}

@@ -3,6 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { AdminTenantStats, CursorBill } from "@shared/protocol";
 import { fmtClock, fmtCount, fmtDuration, fmtRelative, fmtTokens } from "../../lib/chat/format";
 import { CursorBillPanel } from "./CursorBillPanel";
+import styles from "./AdminOverlay.module.css";
 
 type AdminOverlayProps = {
   setAdminOpen: Dispatch<SetStateAction<boolean>>;
@@ -31,9 +32,9 @@ export function AdminOverlay({
         aria-label="使用统计"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="admin-head">
+        <div className={styles.head}>
           <div className="loop-title">使用统计</div>
-          <div className="admin-head-actions">
+          <div className={styles.headActions}>
             <button type="button" className="logout-btn" onClick={openAdminStats}>
               刷新
             </button>
@@ -44,14 +45,14 @@ export function AdminOverlay({
         </div>
         {adminStats.length || cursorBill ? (
           <div className="admin-body">
-            <div className="admin-section">
-              <div className="admin-section-label">
+            <div className={styles.section}>
+              <div className={styles.sectionLabel}>
                 Cursor 账单{cursorBill ? ` · ${fmtClock(cursorBill.fetchedAt)}` : ""}
               </div>
               <CursorBillPanel bill={cursorBill} ready={adminStatsAt != null} />
             </div>
-            <div className="admin-section">
-              <div className="admin-section-label">
+            <div className={styles.section}>
+              <div className={styles.sectionLabel}>
                 各账号估算消耗{adminStatsAt ? ` · ${fmtClock(adminStatsAt)} 更新` : ""}
               </div>
               <div className="admin-summary">
@@ -74,11 +75,11 @@ export function AdminOverlay({
               </div>
             </div>
             {adminStats.map((row) => (
-              <div key={row.id} className="admin-section">
-                <div className="admin-section-label">
+              <div key={row.id} className={styles.section}>
+                <div className={styles.sectionLabel}>
                   <span className={`admin-online${row.online > 0 ? " on" : ""}`} />
                   {row.name}
-                  {row.admin ? <span className="admin-badge">管理员</span> : null}
+                  {row.admin ? <span className={styles.badge}>管理员</span> : null}
                   {row.online > 0 ? <span className="admin-online-count">{row.online} 在线</span> : null}
                 </div>
                 <div className="admin-row">

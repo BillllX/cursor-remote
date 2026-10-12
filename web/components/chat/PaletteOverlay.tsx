@@ -1,5 +1,6 @@
 // 打开文件弹层
 import type { Dispatch, RefObject, SetStateAction } from "react";
+import styles from "./PaletteOverlay.module.css";
 
 type PaletteOverlayProps = {
   paletteOpen: boolean;
@@ -76,7 +77,7 @@ export function PaletteOverlay({
                     setPaletteOpen(false);
                   }}
                 >
-                  <span className="file-kind">{ext.slice(0, 4)}</span>
+                  <span className={styles.fileKind}>{ext.slice(0, 4)}</span>
                   <span className="search-item-name">{base}</span>
                   <span className="search-item-dir">{dir || "."}</span>
                 </button>

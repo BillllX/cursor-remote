@@ -3,6 +3,7 @@ import type { Dispatch, JSX, SetStateAction } from "react";
 import type { Chat } from "../../../lib/chat/types";
 import { MORE_GROUPS_SHOWN, relToCwd, sameCwd } from "../../../lib/chat/workspace";
 import { FolderMark } from "../FolderMark";
+import styles from "./ChatMore.module.css";
 
 type ChatMoreProps = {
   moreOpen: boolean;
@@ -44,7 +45,7 @@ export function ChatMore({
   openNewChatMenu,
 }: ChatMoreProps) {
   return (
-    <div className="chat-more">
+    <div className={styles.more}>
       <button
         type="button"
         className={`chat-more-toggle${moreOpen ? " open" : ""}`}
@@ -52,11 +53,11 @@ export function ChatMore({
         onClick={() => setMoreOpen((open) => !open)}
       >
         <span className="chat-group-chevron" aria-hidden="true" />
-        <span className="chat-more-title">更多工作区</span>
+        <span className={styles.title}>更多工作区</span>
         <span className="chat-group-count">{moreGroups.length}</span>
       </button>
       {moreOpen ? (
-        <div className="chat-more-list">
+        <div className={styles.list}>
           {moreGroups.slice(0, MORE_GROUPS_SHOWN).map((group) => (
             <div
               key={group.path}

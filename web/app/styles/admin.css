@@ -15,37 +15,12 @@
   padding: 14px;
 }
 
-.admin-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.admin-head-actions {
-  display: flex;
-  gap: 4px;
-}
-
 .admin-body {
   min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 14px;
-}
-
-.admin-section {
-  display: grid;
-  gap: 6px;
-}
-
-.admin-section-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: var(--fs-sm);
-  color: var(--dim);
 }
 
 .admin-summary {
@@ -94,24 +69,9 @@
   background: var(--ok, #3d8b6e);
 }
 
-.admin-badge {
-  font-size: var(--fs-2xs);
-  font-weight: 600;
-  color: var(--brass, #a6843d);
-  padding: 1px 5px;
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--brass, #a6843d) 12%, transparent);
-}
-
 .admin-note {
   margin: 0;
   font-size: var(--fs-xs);
   line-height: 1.45;
   color: var(--dim);
-}
-
-.git-empty {
-  color: var(--dim);
-  font-size: var(--fs-md);
-  padding: 16px 14px;
 }

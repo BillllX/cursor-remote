@@ -1,6 +1,7 @@
 // 线程内查找条
 import type { Dispatch, SetStateAction } from "react";
 import type { Turn } from "../../lib/chat/types";
+import styles from "./ThreadFind.module.css";
 
 type ThreadFindProps = {
   threadFindQ: string;
@@ -46,7 +47,7 @@ export function ThreadFind({
           }
         }}
       />
-      <span className="thread-find-count">
+      <span className={styles.count}>
         {threadFindQ.trim() ? (threadFindHits.length ? `${threadFindHi + 1}/${threadFindHits.length}` : "无") : ""}
       </span>
       <button

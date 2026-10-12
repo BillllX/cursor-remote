@@ -1,6 +1,7 @@
 // 侧栏底部的设置面板（外观、配色、退出登录）
 import type { Dispatch, SetStateAction } from "react";
 import { type AppearanceId, APPEARANCES, type PaletteId, PALETTES, readThemeChoice } from "../../lib/theme";
+import styles from "./SettingsPanel.module.css";
 
 type SettingsPanelProps = {
   themeChoice: {
@@ -90,7 +91,7 @@ export function SettingsPanel({ themeChoice, setThemeChoice, cwd, workspaceRoot,
           ))}
         </div>
       </div>
-      <div className="workspace-path" title={cwd}>
+      <div className={styles.workspacePath} title={cwd}>
         {cwd || workspaceRoot || "工作区"}
       </div>
       <button type="button" className="logout-btn" onClick={logout}>

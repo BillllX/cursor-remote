@@ -82,11 +82,6 @@
   cursor: default;
 }
 
-.login-status {
-  font-size: var(--fs-sm);
-  color: var(--dim);
-}
-
 .logout-btn {
   width: auto;
   margin-top: 0;
@@ -123,11 +118,6 @@
 
 .side-files-btn:hover {
   background: var(--hover);
-}
-
-.side-files-meta {
-  color: var(--muted);
-  font-size: var(--fs-sm);
 }
 
 .side-foot {
@@ -177,7 +167,6 @@
 }
 
 .pad-bar,
-.nav-scrim,
-.touch-only {
+.nav-scrim {
   display: none;
 }

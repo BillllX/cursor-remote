@@ -8,6 +8,7 @@ import { JieboMark as Mark } from "../JieboMark";
 import { ChatList } from "./sidebar/ChatList";
 import { SideActions } from "./sidebar/SideActions";
 import { SideFoot } from "./sidebar/SideFoot";
+import styles from "./Sidebar.module.css";
 
 type SidebarProps = {
   navDrag: {
@@ -157,11 +158,11 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside className="sidebar" ref={navDrag.ref}>
-      <div className="brand">
+      <div className={styles.brand}>
         <Mark />
         <div>
-          <div className="brand-title">接驳</div>
-          <div className="brand-sub" title={cwd || workspaceRoot}>
+          <div className={styles.brandTitle}>接驳</div>
+          <div className={styles.brandSub} title={cwd || workspaceRoot}>
             {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
           </div>
         </div>
@@ -177,9 +178,9 @@ export function Sidebar({
             <IconRail name="assistant" size={14} />
             {assistantBadge > 0 ? <span className="loop-live" /> : null}
           </span>
-          <span className="assistant-pin-copy">
-            <span className="assistant-pin-name">{assistantName}</span>
-            <span className="assistant-pin-preview">{assistantPreview}</span>
+          <span className={styles.pinCopy}>
+            <span className={styles.pinName}>{assistantName}</span>
+            <span className={styles.pinPreview}>{assistantPreview}</span>
           </span>
           {assistantChat?.turns.some((turn) => turn.running) ? (
             <span className="chat-mark run">跑</span>
@@ -188,7 +189,7 @@ export function Sidebar({
           ) : null}
         </button>
       ) : null}
-      <div className={`workspace-picker${workspaceMenuOpen ? " open" : ""}`}>
+      <div className={`${styles.workspacePicker}${workspaceMenuOpen ? " open" : ""}`}>
         <SideActions
           workspaceMenuOpen={workspaceMenuOpen}
           newChat={newChat}
@@ -229,7 +230,7 @@ export function Sidebar({
       />
       <button type="button" className="side-files-btn" onClick={openFilesBrowser}>
         <span>文件</span>
-        <span className="side-files-meta">
+        <span className={styles.filesMeta}>
           {Object.keys(gitStatus).length
             ? `${Object.keys(gitStatus).length} 处改动`
             : treePaths.length

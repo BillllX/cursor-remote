@@ -1,0 +1,15 @@
+.line {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.snip {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}

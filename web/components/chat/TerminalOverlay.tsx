@@ -1,5 +1,6 @@
 // 终端输出弹层
 import type { Dispatch, RefObject, SetStateAction } from "react";
+import styles from "./TerminalOverlay.module.css";
 
 type TerminalOverlayProps = {
   terminalOpen: boolean;
@@ -44,7 +45,7 @@ export function TerminalOverlay({
           <div className="terminal-log" ref={terminalLogRef}>
             {shellEntries.map((row) => (
               <div key={row.id} className="terminal-row">
-                <div className="terminal-cmd">$ {row.command}</div>
+                <div className={styles.cmd}>$ {row.command}</div>
                 <pre className={`terminal-out${row.output ? "" : " muted"}`}>
                   {row.output || (row.running ? "正在跑…" : "没有输出")}
                 </pre>

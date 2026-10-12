@@ -1,5 +1,6 @@
 // 侧栏顶部：新对话与工具栏（文件、搜索、Git、终端、Loop）
 import { IconRail } from "../../chromeIcons";
+import styles from "./SideActions.module.css";
 
 type SideActionsProps = {
   workspaceMenuOpen: boolean;
@@ -34,7 +35,7 @@ export function SideActions({
         </svg>
         新对话
       </button>
-      <div className="side-tools" role="toolbar" aria-label="工具">
+      <div className={styles.tools} role="toolbar" aria-label="工具">
         {(
           [
             ["files", "文件"],

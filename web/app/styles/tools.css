@@ -51,8 +51,7 @@
 
 .thinking summary::before,
 .tool summary::before,
-.tool-pack > summary::before,
-.tree-block > summary::before {
+.tool-pack > summary::before {
   content: "";
   width: 12px;
   height: 12px;
@@ -73,8 +72,7 @@
 
 .thinking[open] summary::before,
 .tool[open] summary::before,
-.tool-pack[open] > summary::before,
-.tree-block[open] > summary::before {
+.tool-pack[open] > summary::before {
   transform: rotate(90deg);
 }
 
@@ -196,13 +194,6 @@
   margin-top: 6px;
 }
 
-.tool-count {
-  margin-left: auto;
-  color: var(--dim);
-  font-size: var(--fs-xs);
-  font-variant-numeric: tabular-nums;
-}
-
 .tool-title.link {
   color: var(--text);
   cursor: pointer;
@@ -213,11 +204,6 @@
 .tool.running,
 .tool-pack.running {
   border-color: color-mix(in srgb, var(--run) 45%, var(--border));
-}
-
-.tool-live {
-  margin-left: auto;
-  color: var(--run);
 }
 
 .tool-review-done {
@@ -269,13 +255,6 @@
 .shell-err {
   color: var(--danger-fg);
   white-space: pre-wrap;
-}
-
-.recent-files {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 0 0 8px;
 }
 
 .diff-line {

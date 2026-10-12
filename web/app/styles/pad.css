@@ -248,7 +248,6 @@
 
   .new-chat,
   .chat-item,
-  .chat-item-empty,
   .mode-btn,
   .pill,
   .empty-chip,
@@ -286,8 +285,7 @@
     gap: 12px;
   }
 
-  .chat-item,
-  .chat-item-empty {
+  .chat-item {
     min-height: 72px;
     padding: 12px 12px;
     gap: 8px;
@@ -312,10 +310,6 @@
 
   .desk-only {
     display: none;
-  }
-
-  .touch-only {
-    display: block;
   }
 
   .main.with-preview .composer-bar > .confirm-btn {
@@ -384,7 +378,6 @@
     font-size: var(--fs-base);
   }
 
-  .composer-select,
   .model-picker-btn {
     height: 48px;
     font-size: var(--fs-xl);
@@ -509,7 +502,6 @@
     height: 48px;
   }
 
-  .main.with-preview .composer-select,
   .main.with-preview .model-picker-btn {
     flex: 0 1 168px;
     min-width: 0;
@@ -744,8 +736,7 @@
     padding-bottom: 8px;
   }
 
-  .chat-item,
-  .chat-item-empty {
+  .chat-item {
     min-height: 56px;
   }
 
@@ -786,7 +777,6 @@
     font-size: var(--fs-md);
   }
 
-  .main.with-preview .composer-select,
   .main.with-preview .model-picker-btn {
     flex: 0 1 148px;
     min-width: 0;
@@ -934,7 +924,6 @@
   .thinking summary::before,
   .tool summary::before,
   .tool-pack > summary::before,
-  .tree-block > summary::before,
   .pad-bar-btn,
   .send,
   .stop,
@@ -1034,11 +1023,6 @@
   .chats {
     flex: 1 1 52%;
     min-height: 120px;
-  }
-
-  .tree-block[open] {
-    flex: 1 1 42%;
-    min-height: 160px;
   }
 
   .tool,

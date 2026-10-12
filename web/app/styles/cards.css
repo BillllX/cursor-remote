@@ -276,8 +276,7 @@
   text-decoration: line-through;
 }
 
-.todo-item.in_progress,
-.todo-item.in-progress {
+.todo-item.in_progress {
   color: var(--text);
 }
 
