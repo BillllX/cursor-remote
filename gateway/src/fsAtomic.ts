@@ -1,6 +1,16 @@
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { randomBytes } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 export type AtomicWriteOptions = {
   /** 新文件权限；临时文件总是新建，所以每次都生效（仍受 umask 影响） */
@@ -46,4 +56,50 @@ export function atomicWriteFileSync(
     }
     throw err;
   }
+}
+
+/** atomicWriteFileSync 的临时文件名：`<file>.<pid>.<8 位 hex>.tmp` */
+export const ATOMIC_TMP_RE = /\.\d+\.[0-9a-f]{8}\.tmp$/;
+/** 状态目录顶层：原子写临时文件，以及旧版网关的固定名临时文件 */
+export const STATE_TMP_PATTERNS: readonly RegExp[] = [
+  ATOMIC_TMP_RE,
+  /^(state|usage)\.json\.tmp$/,
+  /^loops\.json.*\.tmp$/,
+];
+
+export type SweepOptions = {
+  /** 文件名任一匹配才删，默认 STATE_TMP_PATTERNS */
+  patterns?: readonly RegExp[];
+  /** mtime 早于 now - maxAgeMs 才删，默认 1 小时；别的进程可能正在写新的临时文件 */
+  maxAgeMs?: number;
+  now?: number;
+};
+
+/**
+ * 删掉 dir 下（不递归）崩溃残留的临时文件：只碰普通文件，不跟符号链接。
+ * 目录不存在返回空；单个文件删不掉就跳过。返回删掉的文件名。
+ */
+export function sweepStaleTmp(dir: string, opts: SweepOptions = {}): string[] {
+  const patterns = opts.patterns ?? STATE_TMP_PATTERNS;
+  const cutoff = (opts.now ?? Date.now()) - (opts.maxAgeMs ?? 60 * 60_000);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!patterns.some((re) => re.test(name))) continue;
+    const file = join(dir, name);
+    try {
+      const stat = lstatSync(file);
+      if (!stat.isFile() || stat.mtimeMs >= cutoff) continue;
+      unlinkSync(file);
+      removed.push(name);
+    } catch {
+      // 并发删除、权限：留到下次启动
+    }
+  }
+  return removed;
 }

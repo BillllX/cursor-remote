@@ -23,12 +23,11 @@ import { emitRunSnapshots } from "../../sync/transcript.ts";
 import { sendCheckpoints } from "../../workspace/checkpoints.ts";
 import { emitWorkspaces } from "../../workspace/workspaces.ts";
 import { send } from "../send.ts";
-import { listModels, modelsCache } from "../../chat/models.ts";
-import { defaultModel } from "../../runtime/env.ts";
+import { cachedModels, listModels } from "../../chat/models.ts";
 import type { MessageOf, WsConnCtx } from "./types.ts";
 
-export function onHello({ ws, conn }: WsConnCtx, message: MessageOf<"hello">) {
-  if (loginBlocked(conn.ip)) {
+export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hello">) {
+  if (loginBlocked(conn.ip, state.loginHits)) {
     send(ws, { type: "auth", ok: false, message: "试太多次了，过几分钟再试。" });
     return;
   }
@@ -42,11 +41,11 @@ export function onHello({ ws, conn }: WsConnCtx, message: MessageOf<"hello">) {
   }
   const tenant = resolveTenant(message.token || "");
   if (!tenant) {
-    noteLoginFail(conn.ip);
+    noteLoginFail(conn.ip, state.loginHits);
     send(ws, { type: "auth", ok: false, message: "密码不对。" });
     return;
   }
-  noteLoginOk(conn.ip);
+  noteLoginOk(conn.ip, state.loginHits);
   if (conn.authed) detachConn(conn);
   // 客户端声明的单条消息接收上限（iOS URLSessionWebSocketTask 约 1MiB）；0 = 不限
   const declared = Number(message.client?.maxMessageBytes) || 0;
@@ -61,7 +60,7 @@ export function onHello({ ws, conn }: WsConnCtx, message: MessageOf<"hello">) {
   const apiKey = gatewayEnv.cursorApiKey();
   hydrateConn(conn);
   attachLiveSlots(conn);
-  const cached = modelsCache?.ids?.length ? modelsCache.ids : [defaultModel()];
+  const cached = cachedModels();
   const emitReady = (models: string[]) => {
     send(ws, {
       type: "ready",

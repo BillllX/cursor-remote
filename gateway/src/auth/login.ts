@@ -1,6 +1,6 @@
 // 登录来源 IP 与失败限流
 import type { IncomingMessage } from "node:http";
-import { loginHits } from "../runtime/state.ts";
+import { gatewayState, type LoginHit } from "../runtime/state.ts";
 
 export function peerIp(req?: IncomingMessage) {
   if (!req) return "unknown";
@@ -20,23 +20,23 @@ export function peerIp(req?: IncomingMessage) {
   return remote || "unknown";
 }
 
-export function loginBlocked(ip: string) {
-  const row = loginHits.get(ip);
+export function loginBlocked(ip: string, hits: Map<string, LoginHit> = gatewayState.loginHits) {
+  const row = hits.get(ip);
   return Boolean(row && row.blockedUntil > Date.now());
 }
 
-export function noteLoginFail(ip: string) {
+export function noteLoginFail(ip: string, hits: Map<string, LoginHit> = gatewayState.loginHits) {
   const now = Date.now();
-  const row = loginHits.get(ip) || { count: 0, resetAt: now + 10 * 60_000, blockedUntil: 0 };
+  const row = hits.get(ip) || { count: 0, resetAt: now + 10 * 60_000, blockedUntil: 0 };
   if (now > row.resetAt) {
     row.count = 0;
     row.resetAt = now + 10 * 60_000;
   }
   row.count += 1;
   if (row.count >= 8) row.blockedUntil = now + 10 * 60_000;
-  loginHits.set(ip, row);
+  hits.set(ip, row);
 }
 
-export function noteLoginOk(ip: string) {
-  loginHits.delete(ip);
+export function noteLoginOk(ip: string, hits: Map<string, LoginHit> = gatewayState.loginHits) {
+  hits.delete(ip);
 }

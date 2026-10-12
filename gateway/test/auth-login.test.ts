@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, test } from "node:test";
 import { loginBlocked, noteLoginFail, noteLoginOk, peerIp } from "../src/auth/login.ts";
-import { loginHits } from "../src/runtime/state.ts";
+import { gatewayState } from "../src/runtime/state.ts";
 
 const req = (remoteAddress: string, forwarded?: string) =>
   ({
@@ -26,7 +26,7 @@ describe("peerIp", () => {
 });
 
 describe("登录失败限流", () => {
-  afterEach(() => loginHits.clear());
+  afterEach(() => gatewayState.loginHits.clear());
 
   test("连续失败 8 次后封禁，成功登录清掉记录", () => {
     const ip = "10.0.0.1";
@@ -42,9 +42,9 @@ describe("登录失败限流", () => {
   test("计数窗口过期后重新计数", () => {
     const ip = "10.0.0.3";
     for (let i = 0; i < 7; i += 1) noteLoginFail(ip);
-    loginHits.get(ip)!.resetAt = Date.now() - 1;
+    gatewayState.loginHits.get(ip)!.resetAt = Date.now() - 1;
     noteLoginFail(ip);
-    assert.equal(loginHits.get(ip)?.count, 1);
+    assert.equal(gatewayState.loginHits.get(ip)?.count, 1);
     assert.equal(loginBlocked(ip), false);
   });
 });

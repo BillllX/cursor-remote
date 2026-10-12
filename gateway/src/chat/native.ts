@@ -4,7 +4,7 @@ import { isPlane, toolFingerprint } from "../../../shared/policy.ts";
 import type { AgentMode } from "../../../shared/protocol.ts";
 import { assistantName, chatToolHost, workspaceToolsFor } from "../assistant/service.ts";
 import { assistantToolSpecs, toolSpecs } from "../assistant/tools.ts";
-import { log } from "../log.ts";
+import { log, slotLog } from "../log.ts";
 import { adapterFor } from "../native/adapters/index.ts";
 import { budgetFor, makeCompactor, modelSummarizer } from "../native/compact.ts";
 import { buildSystemPrompt } from "../native/context.ts";
@@ -94,7 +94,7 @@ export async function runNativeChat(
     allowStdio: !sandbox,
     signal: abort.signal,
   });
-  if (mcp.errors.length) log.error("mcp", mcp.errors.join(" | "));
+  if (mcp.errors.length) slotLog(slot).error("mcp", mcp.errors.join(" | "));
   if (abort.signal.aborted || slot.epoch !== epoch || slot.finished) {
     if (slot.externalAbort === abort) slot.externalAbort = null;
     return;
@@ -256,7 +256,7 @@ export async function runNativeChat(
         messages: saved,
       });
     } catch (err) {
-      log.error("native session save", err instanceof Error ? err.message : err);
+      slotLog(slot).error("native session save", err instanceof Error ? err.message : err);
     }
   };
 

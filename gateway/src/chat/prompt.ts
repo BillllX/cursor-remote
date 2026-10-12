@@ -15,7 +15,7 @@ export function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string 
     try {
       return workspaceContextFor(tenant, cwd);
     } catch (err) {
-      log.error("workspace context", err);
+      log.with({ tenant: tenant.id }).error("workspace context", err);
     }
   }
   const chunks: string[] = [];

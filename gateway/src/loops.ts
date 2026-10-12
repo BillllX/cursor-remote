@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import type { AgentMode, LoopState, LoopTick, LoopTickStatus } from "../../shared/protocol.ts";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { stateDir } from "./tenants.ts";
+import { log } from "./log.ts";
 
 /**
  * 产品 Loop 调度（docs/IDE.md L2）。
@@ -85,7 +86,7 @@ function persist() {
     mkdirSync(dirname(path), { recursive: true });
     atomicWriteFileSync(path, body);
   } catch (err) {
-    console.error("loops.json 写入失败：", err instanceof Error ? err.message : err);
+    log.error("loops.json 写入失败：", err instanceof Error ? err.message : err);
   }
 }
 
@@ -121,7 +122,7 @@ function load() {
       loops.set(key(tenantId, chatId), row);
     }
   } catch (err) {
-    console.error("loops.json 读取失败：", err instanceof Error ? err.message : err);
+    log.error("loops.json 读取失败：", err instanceof Error ? err.message : err);
   }
 }
 

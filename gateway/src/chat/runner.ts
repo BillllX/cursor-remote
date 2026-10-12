@@ -19,14 +19,14 @@ import {
 import type { AgentMode, PolicyId } from "../../../shared/protocol.ts";
 import { clockLine, noteWorkspaceTurnStart, userRootPreamble } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
-import { log } from "../log.ts";
+import { log, slotLog } from "../log.ts";
 import { deleteSession } from "../native/session.ts";
 import { type ChatHistoryItem, externalRoute } from "../providers.ts";
 import { cancelRun, isAbortError, withTimeout } from "../runtime/abort.ts";
 import { rememberApproved, resolveApprovalWait, waitForApproval } from "../runtime/approvals.ts";
 import { isAssistantChat } from "../runtime/chats.ts";
 import { cwdOf, disposeSlot, globalRunningCount, maxRunning } from "../runtime/slots.ts";
-import { assistantRolledAt, conns, liveSlotsOf } from "../runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn, RunHandle, Slot } from "../runtime/types.ts";
 import { continueTranscript, openTranscript } from "../sync/transcript.ts";
 import { allTenants, workspaceFenceForTenant } from "../tenants.ts";
@@ -167,7 +167,7 @@ export async function handlePrompt(
     try {
       assistantBlock = userRootPreamble(conn.tenant);
     } catch (err) {
-      log.error("assistant preamble", err);
+      slotLog(slot).error("assistant preamble", err);
     }
   }
   let prompt = wrapPrompt(
@@ -506,8 +506,8 @@ export async function handlePrompt(
     }
     if (isAssistantChat(conn.tenant, slot.chatId) && (slot.agent || slot.agentId)) {
       const turns = diskChatTurns(conn.tenant, slot.chatId).length;
-      if (turns > 0 && turns % ASSISTANT_ROLL_TURNS === 0 && assistantRolledAt.get(slot) !== turns) {
-        assistantRolledAt.set(slot, turns);
+      if (turns > 0 && turns % ASSISTANT_ROLL_TURNS === 0 && gatewayState.assistantRolledAt.get(slot) !== turns) {
+        gatewayState.assistantRolledAt.set(slot, turns);
         if (slot.agent) await disposeSlot(slot);
         slot.agentId = null;
         slot.reseed = true;
@@ -675,7 +675,7 @@ export async function handlePrompt(
       run = await startSend(sendOpts);
     } catch (err) {
       if (!sendOpts.disallowedTools) throw err;
-      log.error("disallowedTools rejected, retrying without them", err);
+      slotLog(slot).error("disallowedTools rejected, retrying without them", err);
       const { disallowedTools: _drop, ...rest } = sendOpts;
       run = await startSend(rest);
     }
@@ -685,7 +685,7 @@ export async function handlePrompt(
         await cancelRun(run);
       } catch (err) {
         // Stale run after cancel or a newer prompt.
-        log.warn("取消过期运行失败", slot.chatId, err instanceof Error ? err.message : err);
+        slotLog(slot).warn("取消过期运行失败", err instanceof Error ? err.message : err);
       }
       return;
     }
@@ -950,7 +950,7 @@ function kickGlobalQueue() {
       if (!slot.pending.length || !slot.finished || slot.run || slot.externalAbort) continue;
       const owner = slot.owner;
       if (!owner || owner.readyState !== WebSocket.OPEN) continue;
-      const ownerConn = conns.get(owner);
+      const ownerConn = gatewayState.conns.get(owner);
       if (!ownerConn?.tenant || ownerConn.tenant.id !== tenant.id) continue;
       const next = slot.pending.shift();
       if (!next) continue;

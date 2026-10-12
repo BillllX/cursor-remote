@@ -1,32 +1,79 @@
 /**
  * 网关日志：人读的单行文本，前面加级别标签。debug/info 走 stdout，warn/error 走 stderr。
- * 级别由 GATEWAY_LOG_LEVEL 控制（默认 info），每次输出时读取。
+ * 级别由 GATEWAY_LOG_LEVEL 控制（默认 info），格式由 GATEWAY_LOG_FORMAT 控制（默认 text），都在每次输出时读取。
  * 消息里的英文关键词（frame clipped、frame dropped、upload 等）运维会在 journalctl 里 grep，改文案时保留。
+ *
+ * text：`[warn] 消息`；log.with({ tenant, chatId }) 的子 logger 是 `[warn] [t=租户 c=会话] 消息`。
+ * json：每条一行 {"level","time","tenant","chatId","msg"}，tenant/chatId 没有就不出现；横幅也按 info 输出成 JSON 行。
  */
 import { format } from "node:util";
 import { gatewayEnv, type LogLevel } from "./config.ts";
 
 const RANK: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
+export type LogContext = { tenant?: string; chatId?: string };
+
 export function logEnabled(level: LogLevel) {
   return RANK[level] >= RANK[gatewayEnv.logLevel()];
 }
 
-function emit(level: LogLevel, args: unknown[]) {
-  if (!logEnabled(level)) return;
-  const line = `[${level}] ${format(...args)}`;
+function textPrefix(ctx: LogContext) {
+  const parts: string[] = [];
+  if (ctx.tenant) parts.push(`t=${ctx.tenant}`);
+  if (ctx.chatId) parts.push(`c=${ctx.chatId}`);
+  return parts.length ? `[${parts.join(" ")}] ` : "";
+}
+
+function write(level: LogLevel, line: string) {
   if (level === "warn" || level === "error") console.error(line);
   else console.log(line);
 }
 
-export const log = {
-  debug: (...args: unknown[]) => emit("debug", args),
-  info: (...args: unknown[]) => emit("info", args),
-  warn: (...args: unknown[]) => emit("warn", args),
-  error: (...args: unknown[]) => emit("error", args),
-  /** 启动横幅：原样输出到 stdout，不加标签、不受级别限制 */
-  banner: (text: string) => console.log(text),
+function jsonLine(level: LogLevel, ctx: LogContext, msg: string) {
+  return JSON.stringify({
+    level,
+    time: new Date().toISOString(),
+    tenant: ctx.tenant || undefined,
+    chatId: ctx.chatId || undefined,
+    msg,
+  });
+}
+
+function emit(level: LogLevel, args: unknown[], ctx: LogContext = {}) {
+  if (!logEnabled(level)) return;
+  const msg = format(...args);
+  write(level, gatewayEnv.logFormat() === "json" ? jsonLine(level, ctx, msg) : `[${level}] ${textPrefix(ctx)}${msg}`);
+}
+
+export type Logger = {
+  debug: (...args: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  /** 子 logger：上下文与父级合并，后给的字段覆盖先给的 */
+  with: (ctx: LogContext) => Logger;
 };
+
+function logger(ctx: LogContext): Logger {
+  return {
+    debug: (...args) => emit("debug", args, ctx),
+    info: (...args) => emit("info", args, ctx),
+    warn: (...args) => emit("warn", args, ctx),
+    error: (...args) => emit("error", args, ctx),
+    with: (more) => logger({ ...ctx, ...more }),
+  };
+}
+
+export const log = {
+  ...logger({}),
+  /** 启动横幅：text 格式原样输出到 stdout，不加标签、不受级别限制 */
+  banner: (text: string) => console.log(gatewayEnv.logFormat() === "json" ? jsonLine("info", {}, text) : text),
+};
+
+/** 对话运行路径上的子 logger：带槽位的租户与会话 */
+export function slotLog(slot: { tenantId: string; chatId: string }): Logger {
+  return log.with({ tenant: slot.tenantId, chatId: slot.chatId });
+}
 
 const throttledAt = new Map<string, number>();
 const THROTTLE_KEYS_MAX = 1000;

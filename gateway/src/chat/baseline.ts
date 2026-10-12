@@ -1,7 +1,7 @@
 // 每轮运行的检查点与本轮文件基线
 import type { WebSocket } from "ws";
 import type { AgentMode } from "../../../shared/protocol.ts";
-import { log } from "../log.ts";
+import { slotLog } from "../log.ts";
 import { persistConn } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
 import { snapshotTree, TREE_BASELINE_MAX_FILES } from "../turnFiles.ts";
@@ -57,7 +57,8 @@ export function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
     const now = Date.now();
     const quiet = now - (baselineWarnedAt.get(cwd) ?? -Infinity) < BASELINE_WARN_MS;
     if (!quiet) baselineWarnedAt.set(cwd, now);
-    (quiet ? log.debug : log.warn)("本轮文件基线没建成", slot.chatId, cwd, err instanceof Error ? err.message : err);
+    const slog = slotLog(slot);
+    (quiet ? slog.debug : slog.warn)("本轮文件基线没建成", cwd, err instanceof Error ? err.message : err);
   }
 }
 

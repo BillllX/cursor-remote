@@ -11,6 +11,7 @@ import {
   sandboxEnabledForTenant,
   saveDiskNow,
   stateDir,
+  sweepStateTmp,
 } from "./tenants.ts";
 import { bindLoops } from "./loops.ts";
 import { bindBackground } from "./assistant/background.ts";
@@ -39,6 +40,11 @@ const PROXY_WEB = gatewayEnv.proxyWeb();
 defaultModel();
 
 loadTenants();
+const sweptTmp = sweepStateTmp(
+  [stateDir(), ...allTenants().map((tenant) => tenant.stateDir)],
+  allTenants().map((tenant) => tenant.workspaceRoot),
+);
+if (sweptTmp) log.info(`已清理状态目录里残留的临时文件 ${sweptTmp} 个`);
 for (const tenant of allTenants()) {
   if (!sandboxEnabledForTenant(tenant)) {
     log.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);

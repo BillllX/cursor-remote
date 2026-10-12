@@ -3,20 +3,19 @@ import { allTenants } from "../../tenants.ts";
 import { cursorBill } from "../../cursorBill.ts";
 import { usageSnapshot } from "../../usage.ts";
 import { gatewayEnv } from "../../config.ts";
-import { conns } from "../../runtime/state.ts";
 import { send } from "../send.ts";
 import type { WsCtx } from "./types.ts";
 
 // P9：管理员查询全租户使用统计。租户行是网关自计量；
 // cursor 是当前 CURSOR_API_KEY 的官方账单（与 CLI /usage 同一接口）。
-export async function onAdminStats({ ws, tenant }: WsCtx) {
+export async function onAdminStats({ ws, state, tenant }: WsCtx) {
   if (!tenant.admin) {
     send(ws, { type: "error", message: "需要管理员权限。" });
     return;
   }
   const rows = allTenants().map((item) => {
     const usage = usageSnapshot(item.id);
-    const online = [...conns.values()].filter((other) => other.authed && other.tenant?.id === item.id).length;
+    const online = [...state.conns.values()].filter((other) => other.authed && other.tenant?.id === item.id).length;
     return {
       id: item.id,
       name: item.name,

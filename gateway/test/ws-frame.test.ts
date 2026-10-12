@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, describe, test } from "node:test";
 import type { WebSocket } from "ws";
 import type { HistoryTurn, ServerMessage } from "../../shared/protocol.ts";
-import { conns } from "../src/runtime/state.ts";
+import { gatewayState } from "../src/runtime/state.ts";
 import type { Conn } from "../src/runtime/types.ts";
 import { frameFor, shrinkMessage } from "../src/ws/frame.ts";
 
@@ -13,14 +13,14 @@ const CLIPPED_NOTE = "\n\n…（内容过长，这台设备只显示前一部分
 /** frameFor 只读 conns 里的 maxMessageBytes，用假 socket 登记一条连接即可 */
 function fakeConn(maxMessageBytes: number): WebSocket {
   const sock = {} as WebSocket;
-  conns.set(sock, { maxMessageBytes } as Conn);
+  gatewayState.conns.set(sock, { maxMessageBytes } as Conn);
   return sock;
 }
 
 const ios = fakeConn(IOS_LIMIT);
 const web = fakeConn(0);
 const unknownSock = {} as WebSocket;
-after(() => conns.clear());
+after(() => gatewayState.conns.clear());
 
 const bytes = (text: string) => Buffer.byteLength(text);
 const big = (n: number, ch = "x") => ch.repeat(n);

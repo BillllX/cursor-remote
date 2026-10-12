@@ -4,6 +4,7 @@ import { apnsEnv, gatewayEnv } from "../config.ts";
 import { connect, constants as h2, type ClientHttp2Session } from "node:http2";
 import { appendJsonl, assistantPath, type TenantRef } from "./store.ts";
 import { listApnsSubscriptions, removeApnsSubscription, type ApnsSubscription } from "./push.ts";
+import { log } from "../log.ts";
 
 /**
  * APNs 推送：Node 内置 http2 + ES256 provider token（JWT），不依赖第三方包。
@@ -70,7 +71,7 @@ export function apnsConfig(env?: NodeJS.ProcessEnv): ApnsConfig | null {
   } catch (err) {
     if (warnedSig !== sig) {
       warnedSig = sig;
-      console.error("apns: 私钥读取失败，已跳过 APNs 推送：", err instanceof Error ? err.message : String(err));
+      log.error("apns: 私钥读取失败，已跳过 APNs 推送：", err instanceof Error ? err.message : String(err));
     }
     return null;
   }

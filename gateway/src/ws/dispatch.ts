@@ -82,7 +82,7 @@ export const handlers: HandlerTable = {
 };
 
 export async function handleMessage(ctx: WsConnCtx, data: RawData, table: HandlerTable = handlers) {
-  const { ws, conn } = ctx;
+  const { ws, conn, state } = ctx;
   const message = parseClient(String(data));
   if (!message) return;
 
@@ -104,7 +104,7 @@ export async function handleMessage(ctx: WsConnCtx, data: RawData, table: Handle
     const tenant = conn.tenant;
 
     const handler = table[message.type] as Handler<typeof message.type> | undefined;
-    if (handler) await handler({ ws, conn, tenant }, message);
+    if (handler) await handler({ ws, conn, state, tenant }, message);
   } catch (err) {
     const messageText =
       err instanceof CursorAgentError ? err.message : err instanceof Error ? err.message : "gateway 出错了";

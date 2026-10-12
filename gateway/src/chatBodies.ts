@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync } from "node:fs";
 import { resolve } from "node:path";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
+import { log } from "./log.ts";
 
 /**
  * 会话正文单独存放：state.json 只留元数据，正文按会话分目录、每 SEGMENT_TURNS 轮一个文件。
@@ -127,7 +128,7 @@ function loadBody(store: BodyStore, id: string, info: BodyInfo): unknown[] {
       rows = parsed;
     } catch (err) {
       broken = true;
-      console.warn("会话正文分段读取失败，有改动时会先把原目录复制到 chats-broken/", id, segName(info.segs[i]), err instanceof Error ? err.message : err);
+      log.warn("会话正文分段读取失败，有改动时会先把原目录复制到 chats-broken/", id, segName(info.segs[i]), err instanceof Error ? err.message : err);
     }
     let seg = rows;
     if (!record?.fresh) {
@@ -350,7 +351,7 @@ function quarantine(store: BodyStore, id: string) {
   if (!existsSync(dir)) return;
   const target = resolve(store.dir, "..", "chats-broken", `${dir.slice(store.dir.length + 1)}-${Date.now()}`);
   cpSync(dir, target, { recursive: true });
-  console.warn("会话正文有损坏，原目录已复制到", target);
+  log.warn("会话正文有损坏，原目录已复制到", target);
 }
 
 /** state.json 写成功后调用：删掉已不存在的会话的正文目录，以及本轮换下来的旧分段 */
@@ -387,7 +388,7 @@ export function dropRemovedBodies(store: BodyStore, chats: unknown[]) {
       if (record) sweepChat(store, id, record);
       store.sweep.delete(id);
     } catch (err) {
-      console.warn("清理旧分段失败，下次写盘再试", id, err instanceof Error ? err.message : err);
+      log.warn("清理旧分段失败，下次写盘再试", id, err instanceof Error ? err.message : err);
     }
   }
 }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import type { ServerMessage } from "../../shared/protocol.ts";
-import { conns } from "../src/runtime/state.ts";
+import { createGatewayState } from "../src/runtime/state.ts";
 import type { Conn, Slot } from "../src/runtime/types.ts";
 import type { Tenant } from "../src/tenants.ts";
 import { handleMessage, handlers } from "../src/ws/dispatch.ts";
@@ -20,7 +20,6 @@ process.env.CURSOR_REMOTE_CWD = join(dir, "ws");
 process.env.CURSOR_REMOTE_STATE_DIR = join(dir, "state");
 process.env.CURSOR_REMOTE_MEDIA_SECRET = "test";
 after(() => {
-  conns.clear();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -29,7 +28,7 @@ const PRE_AUTH = ["ping", "hello"];
 /** 协议里有、但网关有意不处理的 ClientMessage type → 理由（目前没有） */
 const EXEMPT: Record<string, string> = {};
 
-/** 假连接：send 的帧解析后记下来 */
+/** 假连接：send 的帧解析后记下来；每个用例一份独立的运行时状态，不碰进程内的 gatewayState */
 function fake(authed: boolean, slots: Array<Partial<Slot>> = []) {
   const sent: ServerMessage[] = [];
   const ws = {
@@ -44,7 +43,9 @@ function fake(authed: boolean, slots: Array<Partial<Slot>> = []) {
     caps: new Set(),
     maxMessageBytes: 0,
   } as unknown as Conn;
-  return { ctx: { ws, conn }, sent };
+  const state = createGatewayState();
+  state.conns.set(ws, conn);
+  return { ctx: { ws, conn, state }, sent };
 }
 const raw = (value: unknown) => Buffer.from(typeof value === "string" ? value : JSON.stringify(value));
 
@@ -89,15 +90,30 @@ describe("handleMessage 入口顺序", () => {
     assert.deepEqual(sent, []);
   });
 
-  test("处理函数拿到 ws / conn / 鉴权时的 tenant 与原消息", async () => {
+  test("处理函数拿到 ws / conn / state / 鉴权时的 tenant 与原消息", async () => {
     const { ctx } = fake(true);
     const seen: unknown[] = [];
     await handleMessage(ctx, raw({ type: "drop_queued", chatId: "c", text: "x" }), {
       drop_queued: (handlerCtx, message) => {
-        seen.push(handlerCtx.ws, handlerCtx.conn, handlerCtx.tenant, message);
+        seen.push(handlerCtx.ws, handlerCtx.conn, handlerCtx.state, handlerCtx.tenant, message);
       },
     });
-    assert.deepEqual(seen, [ctx.ws, ctx.conn, ctx.conn.tenant, { type: "drop_queued", chatId: "c", text: "x" }]);
+    assert.equal(seen[2], ctx.state);
+    assert.deepEqual(seen, [
+      ctx.ws,
+      ctx.conn,
+      ctx.state,
+      ctx.conn.tenant,
+      { type: "drop_queued", chatId: "c", text: "x" },
+    ]);
+  });
+
+  test("口令错误只记在这份状态的 loginHits 里", async () => {
+    const { ctx } = fake(false);
+    const other = fake(false);
+    await handleMessage(ctx, raw({ type: "hello", token: "wrong" }));
+    assert.equal(ctx.state.loginHits.get("203.0.113.9")?.count, 1);
+    assert.equal(other.ctx.state.loginHits.size, 0);
   });
 });
 

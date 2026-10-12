@@ -5,7 +5,7 @@ import { readRunMark } from "../../runlog.ts";
 import { log } from "../../log.ts";
 import { assistantChatIdOf, chatIdOf, isAssistantChat } from "../../runtime/chats.ts";
 import { chatIdsFrom, lockedChatCwd, persistConn, pruneDroppedSlots, runningChatIds } from "../../runtime/slots.ts";
-import { conns, liveSlotsOf } from "../../runtime/state.ts";
+import { liveSlotsOf } from "../../runtime/state.ts";
 import {
   broadcastDigest,
   effectiveChatRevs,
@@ -159,7 +159,7 @@ export function onLoadState({ ws, tenant }: WsCtx) {
 }
 
 // 编辑、重试：截掉 turnId 及之后的回合
-export function onTruncateTurns({ ws, conn, tenant }: WsCtx, message: MessageOf<"truncate_turns">) {
+export function onTruncateTurns({ ws, conn, state, tenant }: WsCtx, message: MessageOf<"truncate_turns">) {
   const id = typeof message.chatId === "string" ? message.chatId : "";
   const turnId = typeof message.turnId === "string" ? message.turnId : "";
   if (!id || !turnId) return;
@@ -181,7 +181,7 @@ export function onTruncateTurns({ ws, conn, tenant }: WsCtx, message: MessageOf<
     ackCurrent();
     return;
   }
-  const slot = liveSlotsOf(tenant).get(id);
+  const slot = liveSlotsOf(tenant, state).get(id);
   if (runningChatIds(tenant).includes(id) || slot?.transcript?.phase === "running") {
     ackCurrent();
     return;
@@ -310,12 +310,12 @@ export function onSyncChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"sync
 }
 
 // P4c：stored_digest 后按需拉取单个会话全量
-export function onLoadChats({ ws, tenant }: WsCtx, message: MessageOf<"load_chats">) {
+export function onLoadChats({ ws, state, tenant }: WsCtx, message: MessageOf<"load_chats">) {
   const ids = (Array.isArray(message.ids) ? message.ids : [])
     .filter((item): item is string => typeof item === "string" && Boolean(item))
     .slice(0, 200); // 上限防滥用；正常分叉差异只有几条
   const gone = new Set(tenant.disk.deletedIds);
-  const connNow = conns.get(ws);
+  const connNow = state.conns.get(ws);
   const limit = connNow?.maxMessageBytes ?? 0;
   // 注意：load_chats 对 slim_state 客户端也回全量——它只服务 digest 差异对账（通常单会话），
   // 是跨设备 turns 更新的唯一通道。带 slim_chats 的客户端按 segHashes 自己走 load_chat 补正文

@@ -2,7 +2,12 @@
 import { Cursor } from "@cursor/sdk";
 import { defaultModel } from "../runtime/env.ts";
 
-export let modelsCache: { at: number; ids: string[] } | null = null;
+let modelsCache: { at: number; ids: string[] } | null = null;
+
+/** 不发请求：有缓存（不论是否过期）用缓存，否则默认模型 */
+export function cachedModels(): string[] {
+  return modelsCache?.ids?.length ? modelsCache.ids : [defaultModel()];
+}
 
 export async function listModels(apiKey: string): Promise<string[]> {
   if (modelsCache && Date.now() - modelsCache.at < 10 * 60_000) return modelsCache.ids;

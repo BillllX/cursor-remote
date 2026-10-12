@@ -9,7 +9,7 @@ import type { AgentOptions } from "@cursor/sdk";
  * 不调用真实模型：后台通道的 prompt 由测试注入。
  */
 
-const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(resolve(gatewayDir, ".assistant-smoke-"));
 process.env.CURSOR_REMOTE_STATE_DIR = dir;
 
@@ -22,20 +22,20 @@ function check(ok: boolean, label: string) {
 }
 
 try {
-  const bg = await import("./assistant/background.ts");
-  const inbox = await import("./assistant/inbox.ts");
-  const runs = await import("./assistant/runs.ts");
-  const memory = await import("./assistant/memory.ts");
-  const chatIndex = await import("./assistant/chatIndex.ts");
-  const retrieval = await import("./assistant/retrieval.ts");
-  const name = await import("./assistant/name.ts");
-  const cron = await import("./assistant/cron.ts");
-  const schedules = await import("./assistant/schedules.ts");
-  const push = await import("./assistant/push.ts");
-  const tools = await import("./assistant/tools.ts");
-  const jobs = await import("./assistant/jobs.ts");
-  const todos = await import("./assistant/todos.ts");
-  const { writeJson, assistantPath } = await import("./assistant/store.ts");
+  const bg = await import("../../src/assistant/background.ts");
+  const inbox = await import("../../src/assistant/inbox.ts");
+  const runs = await import("../../src/assistant/runs.ts");
+  const memory = await import("../../src/assistant/memory.ts");
+  const chatIndex = await import("../../src/assistant/chatIndex.ts");
+  const retrieval = await import("../../src/assistant/retrieval.ts");
+  const name = await import("../../src/assistant/name.ts");
+  const cron = await import("../../src/assistant/cron.ts");
+  const schedules = await import("../../src/assistant/schedules.ts");
+  const push = await import("../../src/assistant/push.ts");
+  const tools = await import("../../src/assistant/tools.ts");
+  const jobs = await import("../../src/assistant/jobs.ts");
+  const todos = await import("../../src/assistant/todos.ts");
+  const { writeJson, assistantPath } = await import("../../src/assistant/store.ts");
 
   const ref = { id: "t1", stateDir: resolve(dir, "t1") };
 
@@ -318,7 +318,7 @@ try {
   await Promise.all(first);
   schedules.setSchedule(sref, { kind: "remind", cron: "* * * * *", tz: "UTC", prompt: "y", title: "崩" }, t0);
   const occFile = assistantPath(sref, "occurrences.jsonl");
-  const { appendJsonl } = await import("./assistant/store.ts");
+  const { appendJsonl } = await import("../../src/assistant/store.ts");
   appendJsonl(occFile, { occurrenceId: "x@1", scheduleId: "s_x", plannedAt: t0, state: "running" });
   check(schedules.recoverSchedules(sref) === 1 && inbox.listInbox(sref).some((i) => i.title.includes("日程被中断")), "日程：崩溃时在跑的记中断并进收件箱");
 
@@ -345,7 +345,7 @@ try {
   todos.addTodo(kref, { text: "没日期的事" });
 
   /* ── 客户端时钟 ── */
-  const svc = await import("./assistant/service.ts");
+  const svc = await import("../../src/assistant/service.ts");
   const at = Date.parse("2026-10-05T19:22:00Z");
   const ny = svc.parseClientClock({ now: at + 90_000, tz: "America/New_York" }, at);
   check(ny?.tz === "America/New_York" && ny.skew === 90_000, "时钟：收下客户端时区和时差");
@@ -355,7 +355,7 @@ try {
   check(svc.clockLine(undefined, at).includes("2026-10-06") && svc.clockLine(undefined, at).includes("UTC+08:00"), "时钟：没收到客户端时钟按默认时区");
   check(svc.clockLine({ tz: "UTC", skew: 0 }, at).includes("Z 结尾"), "时钟：UTC 用 Z");
 
-  const calendar = await import("./assistant/calendar.ts");
+  const calendar = await import("../../src/assistant/calendar.ts");
   const info = calendar.calendarInfo(kref);
   check(info.enabled && info.token.length >= 40 && calendar.calendarInfo(kref).token === info.token, "日历：默认开，口令生成一次后复用");
   check(calendar.matchesToken(kref, info.token) && !calendar.matchesToken(kref, `${info.token.slice(0, -1)}x`), "日历：口令要完全对上");
@@ -456,8 +456,8 @@ try {
   check(existsSync(assistantPath(iref, "integrator.json")), "整理者：进度落盘");
 
   /* ── 委派挂起审批 ── */
-  const approvals = await import("./assistant/approvals.ts");
-  const delegations = await import("./assistant/delegations.ts");
+  const approvals = await import("../../src/assistant/approvals.ts");
+  const delegations = await import("../../src/assistant/delegations.ts");
   const aref = { id: "t5", stateDir: resolve(dir, "t5") };
   const d = delegations.createDelegation(aref, { parentChatId: "p1", childChatId: "c1", workspace: "ws", title: "改 README", task: "改", mode: "foreground" });
   const a1 = approvals.addApproval(aref, { chatId: "c1", callId: "k1", tool: "edit", summary: approvals.summarizeArgs({ path: "README.md", content: "x".repeat(5000) }), delegationId: d.id, parentChatId: "p1" }, 1000);
@@ -484,7 +484,7 @@ try {
   check(stale.length === 1 && delegations.getDelegation(aref, d.id)?.status === "failed", "委派：重启时待批的委派记为失败");
 
   /* ── 助理新建工作区：先问用户 ── */
-  const wsa = await import("./assistant/workspaceAsk.ts");
+  const wsa = await import("../../src/assistant/workspaceAsk.ts");
   const wref = { id: "t6", stateDir: resolve(dir, "t6") };
   let changes = 0;
   const pending = wsa.askWorkspace(wref, { chatId: "asst", name: "acrabat", reason: "讲稿要单独成项目" }, () => (changes += 1));

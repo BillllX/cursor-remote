@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import { drainPending } from "../src/chat/runner.ts";
-import { conns, liveSlotsOf } from "../src/runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../src/runtime/state.ts";
 import type { Conn, Slot } from "../src/runtime/types.ts";
 import { allTenants } from "../src/tenants.ts";
 
@@ -17,7 +17,7 @@ process.env.CURSOR_REMOTE_CWD = join(dir, "ws");
 process.env.CURSOR_REMOTE_STATE_DIR = join(dir, "state");
 process.env.CURSOR_REMOTE_MEDIA_SECRET = "test";
 after(() => {
-  conns.clear();
+  gatewayState.conns.clear();
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -72,7 +72,7 @@ describe("drainPending 排队守卫", () => {
     const noOwner = slotWith({ chatId: "a" });
     const closedSock = { readyState: WebSocket.CLOSED } as WebSocket;
     const closedOwner = slotWith({ chatId: "b", owner: closedSock });
-    conns.set(closedSock, { tenant } as Conn);
+    gatewayState.conns.set(closedSock, { tenant } as Conn);
     live.set("a", noOwner);
     live.set("b", closedOwner);
     try {
@@ -82,7 +82,7 @@ describe("drainPending 排队守卫", () => {
       assert.equal(closedOwner.pending.length, 1);
     } finally {
       live.clear();
-      conns.delete(closedSock);
+      gatewayState.conns.delete(closedSock);
     }
   });
 });

@@ -1,4 +1,5 @@
 import { assistantPath, clip, newId, readJson, writeJson, type TenantRef } from "./store.ts";
+import { log } from "../log.ts";
 
 export type InboxKind = "approval" | "delegation" | "reminder" | "brief" | "run" | "memory" | "info";
 
@@ -62,7 +63,7 @@ export function postInbox(
     try {
       listener(ref, item);
     } catch (err) {
-      console.error("inbox listener", err);
+      log.error("inbox listener", err);
     }
   }
   return { item, created: true };

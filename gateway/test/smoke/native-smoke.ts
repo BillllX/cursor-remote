@@ -5,22 +5,22 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { openaiAdapter } from "./adapters/openai.ts";
-import { adapterFor } from "./adapters/index.ts";
-import { messagesUrl, toAnthropic } from "./adapters/anthropic.ts";
-import { parseToolCallBody, ToolCallSplitter, toXmlMessages } from "./adapters/xml.ts";
-import { closeAllMcp, loadMcpConfig, mcpToolName, mcpTools, normalizeSchema, scrub } from "./mcp.ts";
+import { openaiAdapter } from "../../src/native/adapters/openai.ts";
+import { adapterFor } from "../../src/native/adapters/index.ts";
+import { messagesUrl, toAnthropic } from "../../src/native/adapters/anthropic.ts";
+import { parseToolCallBody, ToolCallSplitter, toXmlMessages } from "../../src/native/adapters/xml.ts";
+import { closeAllMcp, loadMcpConfig, mcpToolName, mcpTools, normalizeSchema, scrub } from "../../src/native/mcp.ts";
 
 type WireAnthropic = { role: string; content: Array<Record<string, unknown>> };
-import { ConfineError, resolveInside } from "./confine.ts";
-import { runNativeLoop, type NativeHooks } from "./loop.ts";
-import { fsTools, globToRegExp, setRgPathForTest } from "./tools/fs.ts";
-import { toolsForMode } from "./tools/registry.ts";
-import { isReadOnlyCommand, sandboxArgv, shellEnv, shellTool } from "./tools/shell.ts";
-import { clipOldToolResults, makeCompactor, mechanicalSummary, renderTranscript, sizeOf } from "./compact.ts";
-import { deleteSession, loadSession, normalizeSequence, noteSession, resumeMessages, saveSession, slimMessages } from "./session.ts";
-import { taskTool } from "./tools/task.ts";
-import type { ChatMessage, ModelEndpoint, ToolCall, ToolSpec } from "./types.ts";
+import { ConfineError, resolveInside } from "../../src/native/confine.ts";
+import { runNativeLoop, type NativeHooks } from "../../src/native/loop.ts";
+import { fsTools, globToRegExp, setRgPathForTest } from "../../src/native/tools/fs.ts";
+import { toolsForMode } from "../../src/native/tools/registry.ts";
+import { isReadOnlyCommand, sandboxArgv, shellEnv, shellTool } from "../../src/native/tools/shell.ts";
+import { clipOldToolResults, makeCompactor, mechanicalSummary, renderTranscript, sizeOf } from "../../src/native/compact.ts";
+import { deleteSession, loadSession, normalizeSequence, noteSession, resumeMessages, saveSession, slimMessages } from "../../src/native/session.ts";
+import { taskTool } from "../../src/native/tools/task.ts";
+import type { ChatMessage, ModelEndpoint, ToolCall, ToolSpec } from "../../src/native/types.ts";
 
 let failed = 0;
 let passed = 0;

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
  * 不调用模型、不起网关：直接调 assistant/ 下的模块。
  */
 
-const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(resolve(gatewayDir, ".memory-layers-smoke-"));
 process.env.CURSOR_REMOTE_STATE_DIR = dir;
 
@@ -24,13 +24,13 @@ const write = (path: string, text: string) => {
 };
 
 try {
-  const memory = await import("./assistant/memory.ts");
-  const wm = await import("./assistant/workspaceMemory.ts");
-  const migrate = await import("./assistant/migrate.ts");
-  const approvals = await import("./assistant/approvals.ts");
-  const tools = await import("./assistant/tools.ts");
-  const inbox = await import("./assistant/inbox.ts");
-  const { writeJson, assistantPath, assistantDir } = await import("./assistant/store.ts");
+  const memory = await import("../../src/assistant/memory.ts");
+  const wm = await import("../../src/assistant/workspaceMemory.ts");
+  const migrate = await import("../../src/assistant/migrate.ts");
+  const approvals = await import("../../src/assistant/approvals.ts");
+  const tools = await import("../../src/assistant/tools.ts");
+  const inbox = await import("../../src/assistant/inbox.ts");
+  const { writeJson, assistantPath, assistantDir } = await import("../../src/assistant/store.ts");
 
   /* ── 租户布局：USER 根 / 子工作区 / 仓库 ── */
   const root = resolve(dir, "ws");
@@ -231,8 +231,8 @@ try {
   check(memory.CORE_TOKEN_BUDGET === 1200 && memory.INDEX_TOKEN_BUDGET === 300 && memory.WORK_PREF_TOKEN_BUDGET === 200, "预算：核心 1200 / 索引 300 / 工作偏好 200");
 
   // 后台委派：只读工具 + 提议，没有个人记忆工具；提示词带工作区上下文
-  const bg = await import("./assistant/background.ts");
-  const service = await import("./assistant/service.ts");
+  const bg = await import("../../src/assistant/background.ts");
+  const service = await import("../../src/assistant/service.ts");
   let seen: { prompt: string; tools: string[] } | null = null;
   bg.bindBackground({
     apiKey: () => "key",

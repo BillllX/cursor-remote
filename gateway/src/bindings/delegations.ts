@@ -20,7 +20,7 @@ import { handlePrompt } from "../chat/runner.ts";
 import { cancelRun } from "../runtime/abort.ts";
 import { resolveApprovalWait } from "../runtime/approvals.ts";
 import { persistTenant, slotOf } from "../runtime/slots.ts";
-import { conns, liveSlotsOf } from "../runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import { broadcastDigest } from "../sync/storedState.ts";
 import { confinedCwd, getTenant, type Tenant } from "../tenants.ts";
 import {
@@ -103,7 +103,7 @@ export async function requestWorkspace(req: CreateWorkspaceRequest): Promise<str
   } catch {
     return JSON.stringify({ ok: false, error: "建不了这个工作区目录。" });
   }
-  for (const conn of conns.values()) {
+  for (const conn of gatewayState.conns.values()) {
     if (conn.authed && conn.tenant?.id === tenant.id) emitWorkspaces(conn.ws, tenant);
   }
   return JSON.stringify({ ok: true, name, note: "已建好，可以 delegate 了。" });
@@ -127,7 +127,7 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
   if (busy)
     return JSON.stringify({ ok: false, error: `子工作区 ${name} 已有委派「${busy.title}」在跑，等它完成再交新的。` });
   const parent = req.parentChatId ? liveSlotsOf(tenant).get(req.parentChatId) : undefined;
-  const ownerConn = parent?.owner?.readyState === WebSocket.OPEN ? conns.get(parent.owner) : undefined;
+  const ownerConn = parent?.owner?.readyState === WebSocket.OPEN ? gatewayState.conns.get(parent.owner) : undefined;
   const conn = req.background ? undefined : ownerConn?.authed ? ownerConn : openConn(tenant.id);
   const background = !conn;
   const title = (req.title || task.split("\n")[0]).slice(0, 30);

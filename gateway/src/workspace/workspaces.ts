@@ -7,7 +7,7 @@ import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { log } from "../log.ts";
 import { chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { disposeSlot, persistTenant, runningChatIds } from "../runtime/slots.ts";
-import { conns, liveSlotsOf } from "../runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn } from "../runtime/types.ts";
 import { broadcastDigest } from "../sync/storedState.ts";
 import { confinedCwd, isBillXuTenant, saveDiskNow, type Tenant } from "../tenants.ts";
@@ -178,7 +178,7 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
     await disposeSlot(slot);
     slot.agentId = null;
   }
-  for (const other of conns.values()) {
+  for (const other of gatewayState.conns.values()) {
     if (other.tenant?.id === tenant.id && underDir(other.cwd, from.dir)) other.cwd = move(other.cwd);
   }
   persistTenant(tenant);

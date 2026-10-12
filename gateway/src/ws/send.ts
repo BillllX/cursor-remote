@@ -4,13 +4,13 @@ import type { ServerMessage } from "../../../shared/protocol.ts";
 import { applyStreamEvent, clipSnapshot, isStreamEvent, snapshotMessage } from "../runlog.ts";
 import { noteDelegationApproval } from "../runtime/approvals.ts";
 import { slotByChat } from "../runtime/slots.ts";
-import { conns, wsTenant } from "../runtime/state.ts";
+import { gatewayState } from "../runtime/state.ts";
 import type { Slot } from "../runtime/types.ts";
 import { frameFor, reply } from "./frame.ts";
 
 export function send(ws: WebSocket, message: ServerMessage) {
   const chatId = "chatId" in message && typeof message.chatId === "string" ? message.chatId : "";
-  const tenantId = wsTenant.get(ws);
+  const tenantId = gatewayState.wsTenant.get(ws);
   const slot = chatId && tenantId ? slotByChat(tenantId, chatId) : undefined;
   if (slot?.transcript && isStreamEvent(message.type)) applyStreamEvent(slot.transcript, message);
   let out = message;
@@ -53,7 +53,7 @@ function flushMirror(slot: Slot) {
   if (!transcript || transcript.epoch !== slot.epoch) return;
   const live = slot.owner?.readyState === WebSocket.OPEN ? slot.owner : null;
   let full: ServerMessage | null = null;
-  for (const conn of conns.values()) {
+  for (const conn of gatewayState.conns.values()) {
     if (conn.ws === live || !conn.authed || conn.tenant?.id !== slot.tenantId) continue;
     if (conn.ws.readyState !== WebSocket.OPEN) continue;
     full ??= snapshotMessage(slot.chatId, transcript, queuedRows(slot));

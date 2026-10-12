@@ -4,7 +4,7 @@ import { buildCrewAgents, pickReviewPanel, type ReviewBinding } from "../../../s
 import { dialectOverlay } from "../../../shared/dialect.ts";
 import { foregroundTools, workspaceToolsFor } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
-import { log } from "../log.ts";
+import { slotLog } from "../log.ts";
 import { isAssistantChat } from "../runtime/chats.ts";
 import { defaultModel } from "../runtime/env.ts";
 import { cwdOf, disposeSlot, persistConn } from "../runtime/slots.ts";
@@ -71,11 +71,11 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
         if (bare) throw err;
         if (next.length) {
           const dropped = next[next.length - 1];
-          log.error("drop reviewer after crew reject", dropped.modelId, err);
+          slotLog(slot).error("drop reviewer after crew reject", dropped.modelId, err);
           next = next.slice(0, -1);
           continue;
         }
-        log.error("crew agents rejected, retrying without them", err);
+        slotLog(slot).error("crew agents rejected, retrying without them", err);
         bare = true;
       }
     }
@@ -86,7 +86,7 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
     slot.agent = await openWithCrewFallback(resumeId);
   } catch (err) {
     if (!resumeId || !isAgentMissing(err)) throw err;
-    log.warn("agent missing, opening a new one", { chatId: slot.chatId, agentId: resumeId });
+    slotLog(slot).warn("agent missing, opening a new one", { agentId: resumeId });
     await disposeSlot(slot);
     slot.agentId = null;
     slot.reseed = true;

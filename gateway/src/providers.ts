@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { stateDir } from "./tenants.js";
 import type { AdapterKind, ModelEndpoint } from "./native/types.ts";
+import { log } from "./log.ts";
 
 /**
  * P11：第三方 OpenAI 兼容模型接入（MiniMax / GLM / Kimi / Grok 等）。
@@ -93,19 +94,19 @@ export function loadExternalProviders(): ExternalProvider[] {
           : undefined) ??
         (typeof rec.apiKey === "string" ? rec.apiKey.trim() : "");
       if (!ID_RE.test(id)) {
-        console.error(`providers.json：id「${id || "?"}」不合法（小写字母/数字/短横线），跳过`);
+        log.error(`providers.json：id「${id || "?"}」不合法（小写字母/数字/短横线），跳过`);
         continue;
       }
       if (!baseURL.startsWith("https://") && !baseURL.startsWith("http://127.0.0.1")) {
-        console.error(`providers.json：${id} 的 baseURL 必须是 https，跳过`);
+        log.error(`providers.json：${id} 的 baseURL 必须是 https，跳过`);
         continue;
       }
       if (!models.length) {
-        console.error(`providers.json：${id} 没配 models，跳过`);
+        log.error(`providers.json：${id} 没配 models，跳过`);
         continue;
       }
       if (!apiKey) {
-        console.error(`providers.json：${id} 缺 API key（apiKeyEnv 指向的环境变量为空），跳过`);
+        log.error(`providers.json：${id} 缺 API key（apiKeyEnv 指向的环境变量为空），跳过`);
         continue;
       }
       const adapter: AdapterKind = rec.adapter === "anthropic" || rec.adapter === "xml" ? rec.adapter : "openai";
@@ -125,10 +126,10 @@ export function loadExternalProviders(): ExternalProvider[] {
       });
     }
   } catch (err) {
-    console.error("providers.json 解析失败：", err instanceof Error ? err.message : err);
+    log.error("providers.json 解析失败：", err instanceof Error ? err.message : err);
   }
   if (cache.length) {
-    console.error(`第三方模型：${cache.map((p) => `${p.id}(${p.models.length})`).join("、")}`);
+    log.info(`第三方模型：${cache.map((p) => `${p.id}(${p.models.length})`).join("、")}`);
   }
   return cache;
 }

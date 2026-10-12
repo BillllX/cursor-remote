@@ -764,7 +764,7 @@ export function createPublishController(options: {
     if (wait && Date.now() < wait.nextAt) return;
     const cwd = confine(row.cwd, tenant);
     if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory() || !DNS_LABEL.test(tenant.id)) {
-      console.warn(`publish revive ${tenant.id}: 工作目录没了，放弃自动拉起`);
+      log.warn(`publish revive ${tenant.id}: 工作目录没了，放弃自动拉起`);
       clearPersisted(tenant);
       backoff.delete(tenant.id);
       return;
@@ -773,12 +773,12 @@ export function createPublishController(options: {
     if (result.ok) {
       writePersisted(tenant, result.slot);
       backoff.delete(tenant.id);
-      console.log(`publish revive ${tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
+      log.info(`publish revive ${tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
       return;
     }
     const failures = (wait?.failures || 0) + 1;
     backoff.set(tenant.id, { failures, nextAt: Date.now() + reviveDelay(failures) });
-    console.warn(`publish revive ${tenant.id} 第 ${failures} 次失败：${result.message.split("\n")[0]}`);
+    log.warn(`publish revive ${tenant.id} 第 ${failures} 次失败：${result.message.split("\n")[0]}`);
   }
 
   async function statusOf(cwd: string, presented: string): Promise<Outcome> {
@@ -828,7 +828,7 @@ export function createPublishController(options: {
     clearPersisted(found.tenant);
     backoff.delete(found.tenant.id);
     if (!slot && !hadRow) return { status: 200, body: { ok: true, message: "当前没有公开的服务。" } };
-    console.log(`publish stop ${found.tenant.id}`);
+    log.info(`publish stop ${found.tenant.id}`);
     return { status: 200, body: { ok: true, message: "已停止。外网地址现在显示默认介绍页。" } };
   }
 
@@ -865,7 +865,7 @@ export function createPublishController(options: {
     writePersisted(found.tenant, result.slot);
     backoff.delete(found.tenant.id);
     const view = messageFor(result.slot, true);
-    console.log(`publish start ${found.tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
+    log.info(`publish start ${found.tenant.id} 127.0.0.1:${result.slot.port} pid ${result.slot.pid}`);
     return { status: 200, body: { ok: true, port: result.slot.port, ...view } };
   }
 
@@ -1013,7 +1013,7 @@ export function createPublishController(options: {
         // 异常也计入退避，否则外部请求能反复触发
         const failures = (backoff.get(tenant.id)?.failures || 0) + 1;
         backoff.set(tenant.id, { failures, nextAt: Date.now() + reviveDelay(failures) });
-        console.error("publish revive", err instanceof Error ? err.message : err);
+        log.error("publish revive", err instanceof Error ? err.message : err);
       })
       .finally(() => reviving.delete(tenant.id));
   }
@@ -1034,7 +1034,7 @@ export function createPublishController(options: {
         const cwd = confine(row.cwd, tenant);
         if (cwd && groupAlive(row.pid) && groupOwned(row.pid, row.marker)) {
           slots.set(tenant.id, { ...row, cwd, tenantId: tenant.id, workspaceRoot: tenant.workspaceRoot });
-          console.log(`publish attach ${tenant.id} 127.0.0.1:${row.port} pid ${row.pid}`);
+          log.info(`publish attach ${tenant.id} 127.0.0.1:${row.port} pid ${row.pid}`);
         }
       }
       // 平台重启会带走这些进程（同一个 systemd cgroup），开机就按 publish.json 拉回来
@@ -1045,7 +1045,7 @@ export function createPublishController(options: {
       }
       const name = host();
       const proto = scheme() === "http" ? "http" : "https";
-      console.log(name ? `对外预览               ${proto}://${name}/p/<id>/（公开访问，常驻）` : "对外预览               未配置 JIEBO_PUBLISH_HOST");
+      log.banner(name ? `对外预览               ${proto}://${name}/p/<id>/（公开访问，常驻）` : "对外预览               未配置 JIEBO_PUBLISH_HOST");
     },
     close() {
       if (timer) clearInterval(timer);
@@ -1057,7 +1057,7 @@ export function createPublishController(options: {
         try {
           handlePublic(req, res, label);
         } catch (err) {
-          console.error("publish", err instanceof Error ? err.message : err);
+          log.error("publish", err instanceof Error ? err.message : err);
           text(res, 500, "发布路由出错。");
         }
         return true;
@@ -1066,7 +1066,7 @@ export function createPublishController(options: {
       if (!CONTROL_PATHS.has(path)) return false;
       const op = path.endsWith("/start") ? "start" : path.endsWith("/stop") ? "stop" : "status";
       void control(req, res, op).catch((err) => {
-        console.error("publish", err instanceof Error ? err.message : err);
+        log.error("publish", err instanceof Error ? err.message : err);
         json(res, 500, { ok: false, message: "发布路由出错。" });
       });
       return true;

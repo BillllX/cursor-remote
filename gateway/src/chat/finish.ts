@@ -2,7 +2,7 @@
 import { WebSocket } from "ws";
 import type { TurnFile } from "../../../shared/protocol.ts";
 import { noteUserTurn, noteWorkspaceTurnEnd } from "../assistant/service.ts";
-import { log } from "../log.ts";
+import { slotLog } from "../log.ts";
 import { assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import type { Slot } from "../runtime/types.ts";
 import { flushTranscript, stopRunFlush } from "../sync/transcript.ts";
@@ -104,7 +104,7 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
     else delete transcript.files;
     return files;
   } catch (err) {
-    log.error("turn files", err instanceof Error ? err.message : err);
+    slotLog(slot).error("turn files", err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -126,7 +126,7 @@ function indexUserTurn(slot: Slot) {
       assistant: transcript.assistant || "",
     });
   } catch (err) {
-    log.error("index user turn", err);
+    slotLog(slot).error("index user turn", err);
   }
 }
 
@@ -145,6 +145,6 @@ function noteWorkspaceTurn(slot: Slot) {
       assistant: transcript.assistant || "",
     });
   } catch (err) {
-    log.error("workspace turn", err);
+    slotLog(slot).error("workspace turn", err);
   }
 }

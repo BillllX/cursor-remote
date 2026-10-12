@@ -6,7 +6,7 @@ import type { WebSocket } from "ws";
 import { gatewayEnv } from "../config.ts";
 import { log } from "../log.ts";
 import { defaultModel } from "../runtime/env.ts";
-import { namedChats, namingChats } from "../runtime/state.ts";
+import { gatewayState } from "../runtime/state.ts";
 import type { Tenant } from "../tenants.ts";
 import { noteOutput, noteRun } from "../usage.ts";
 import { send } from "../ws/send.ts";
@@ -21,10 +21,10 @@ function sanitizeChatTitle(raw: string) {
 }
 
 export async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, text: string) {
-  if (!chatId || namedChats.has(chatId) || namingChats.has(chatId)) return;
+  if (!chatId || gatewayState.namedChats.has(chatId) || gatewayState.namingChats.has(chatId)) return;
   const apiKey = gatewayEnv.cursorApiKey();
   if (!apiKey) return;
-  namingChats.add(chatId);
+  gatewayState.namingChats.add(chatId);
   const titleT0 = Date.now();
   try {
     const scratch = resolve(tenant.stateDir, "title-scratch");
@@ -39,13 +39,13 @@ export async function titleChat(ws: WebSocket, tenant: Tenant, chatId: string, t
     });
     const title = sanitizeChatTitle(result.result || "");
     if (!title || title === "新对话") return;
-    namedChats.add(chatId);
+    gatewayState.namedChats.add(chatId);
     noteOutput(tenant.id, title.length); // 标题输出也走同一 API key
     send(ws, { type: "chat_title", chatId, title });
   } catch (err) {
-    log.error("titleChat", err instanceof Error ? err.message : err);
+    log.with({ tenant: tenant.id, chatId }).error("titleChat", err instanceof Error ? err.message : err);
   } finally {
-    namingChats.delete(chatId);
+    gatewayState.namingChats.delete(chatId);
     noteRun(tenant.id, Date.now() - titleT0); // 起标题是一次真实 agent 调用（Kimi R1 M3），成败都计
   }
 }

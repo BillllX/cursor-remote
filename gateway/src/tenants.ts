@@ -8,7 +8,7 @@ import {
   statSync,
 } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { basename, isAbsolute, relative, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   createBodyStore,
   dropRemovedBodies,
@@ -19,7 +19,8 @@ import {
   type BodyStore,
 } from "./chatBodies.ts";
 import { gatewayEnv } from "./config.ts";
-import { atomicWriteFileSync } from "./fsAtomic.ts";
+import { ATOMIC_TMP_RE, atomicWriteFileSync, sweepStaleTmp } from "./fsAtomic.ts";
+import { log } from "./log.ts";
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -124,13 +125,55 @@ export function loadTenants(): TenantsRegistry {
     tenant.disk = readDisk(tenant.stateFile, tenant.bodies);
   }
   if (registry.derivedMediaSecret) {
-    console.warn("未设 CURSOR_REMOTE_MEDIA_SECRET：已从本机配置派生预览签名密钥。");
+    log.warn("未设 CURSOR_REMOTE_MEDIA_SECRET：已从本机配置派生预览签名密钥。");
   }
   return registry;
 }
 
 export function allTenants(): Tenant[] {
   return loadTenants().tenants;
+}
+
+function realOrResolved(path: string) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/** dir 就是 root 或在 root 里面（都已是 realpath） */
+function sameOrUnder(dir: string, root: string) {
+  const rel = relative(root, dir);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+/**
+ * 清状态目录里崩溃残留的临时文件：每个目录的顶层和它下面的 native-sessions/，不递归。
+ * 单租户时全局状态目录就是租户目录，重复的只扫一次。
+ * 待扫目录（按 realpath）就是某个工作区根或在工作区里面时跳过并 warn：STATE_DIR 与 CWD 可以配成同一目录，
+ * 那里的临时文件可能是用户的。工作区在状态目录里面（线上 /var/lib/cursor-remote/workspace）不跳过，因为不递归。
+ * 返回删掉的文件数。
+ */
+export function sweepStateTmp(dirs: Iterable<string>, workspaceRoots: Iterable<string>, now = Date.now()): number {
+  const roots = [...new Set([...workspaceRoots].map(realOrResolved))];
+  /** 与工作区重叠时 warn 并返回 null */
+  const sweep = (dir: string, patterns?: readonly RegExp[]) => {
+    const real = realOrResolved(dir);
+    const root = roots.find((item) => sameOrUnder(real, item));
+    if (root) {
+      log.warn("状态目录与工作区重叠，跳过临时文件清理", real, "工作区", root);
+      return null;
+    }
+    return sweepStaleTmp(real, { now, patterns }).length;
+  };
+  let count = 0;
+  for (const dir of new Set([...dirs].map(realOrResolved))) {
+    const top = sweep(dir);
+    if (top === null) continue;
+    count += top + (sweep(resolve(dir, "native-sessions"), [ATOMIC_TMP_RE, /\.json\.tmp$/]) ?? 0);
+  }
+  return count;
 }
 
 export function getTenant(id: string): Tenant | undefined {
@@ -243,7 +286,7 @@ export function saveDiskNow(tenant: Tenant) {
     evictBodies(tenant.bodies, chats, rows);
   } catch (err) {
     // disk full or permission — keep running
-    console.warn("state 落盘失败", tenant.id, err instanceof Error ? err.message : err);
+    log.warn("state 落盘失败", tenant.id, err instanceof Error ? err.message : err);
   }
 }
 
@@ -418,7 +461,7 @@ function readDisk(file: string, bodies: BodyStore): DiskState {
       try {
         if (!existsSync(backup)) copyFileSync(file, backup);
       } catch (err) {
-        console.warn("state.json 拆分前备份失败", backup, err instanceof Error ? err.message : err);
+        log.warn("state.json 拆分前备份失败", backup, err instanceof Error ? err.message : err);
       }
     }
     const chats = rows
@@ -455,7 +498,7 @@ function readDisk(file: string, bodies: BodyStore): DiskState {
       // 挪不开就不能按空状态启动：之后写盘会盖掉唯一的原件
       throw new Error(`state.json 读不出也挪不开，停止启动：${file}`, { cause: moveErr });
     }
-    console.warn("state.json 读取失败，按空状态启动，原文件挪到", aside, err instanceof Error ? err.message : err);
+    log.warn("state.json 读取失败，按空状态启动，原文件挪到", aside, err instanceof Error ? err.message : err);
     return emptyDisk();
   }
 }

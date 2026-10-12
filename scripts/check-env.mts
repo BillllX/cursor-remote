@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 环境变量护栏（用 TypeScript 编译器 API 做 AST 检查，注释和字符串里的文字不算）：
-// 1. gateway/src 里（不含 *-smoke.ts 和 test 目录）除 config.ts 外，不许按具名键读 process.env，改走 config.ts 的访问器。
+// 1. gateway/src 里（不含 test 目录）除 config.ts 外，不许按具名键读 process.env，改走 config.ts 的访问器。
 //    具名读取包括：process.env.X、process.env?.X、process.env["X"]、const { X } = process.env、"X" in process.env，
 //    以及同文件内把 process.env 赋给变量 / 参数默认值 / 传给本文件函数的参数后，对该变量的具名访问。
 //    整份展开 { ...process.env }、Object.entries(process.env) 允许；动态键 process.env[key] 只允许白名单文件。
@@ -299,7 +299,7 @@ function walk(dir: string, acc: string[] = []): string[] {
     if (entry.isDirectory()) {
       if (entry.name === "test" || entry.name === "node_modules") continue;
       walk(full, acc);
-    } else if (/\.(ts|mts|js|mjs)$/.test(entry.name) && !/-smoke\.[mc]?[tj]s$/.test(entry.name)) {
+    } else if (/\.(ts|mts|js|mjs)$/.test(entry.name)) {
       acc.push(full);
     }
   }

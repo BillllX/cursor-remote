@@ -6,7 +6,7 @@ import { log } from "../log.ts";
 import { keepToolsAt, keepTurnFiles } from "../runlog.ts";
 import { assistantChatIdOf, assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { chatIdsFrom, persistTenant, runningChatIds } from "../runtime/slots.ts";
-import { conns } from "../runtime/state.ts";
+import { gatewayState } from "../runtime/state.ts";
 import { settlePersistedChats, type Tenant } from "../tenants.ts";
 import { send } from "../ws/send.ts";
 
@@ -81,7 +81,7 @@ export function pruneChatRevs(tenant: Tenant) {
 /// sync 被接受后向同租户其他支持 digest 的连接广播目录（P4 审核：多设备实时对账，
 /// 否则对端要等自己 rev 分叉才发现变化，互相覆盖）。旧客户端无 caps 不收。
 export function broadcastDigest(tenant: Tenant, except?: WebSocket) {
-  for (const other of conns.values()) {
+  for (const other of gatewayState.conns.values()) {
     if (other.ws === except || !other.authed || other.tenant?.id !== tenant.id) continue;
     if (!other.caps.has("stored_digest")) continue;
     send(other.ws, {
@@ -223,7 +223,7 @@ export function storedStatePayload(tenant: Tenant, slim = false) {
 
 /// 分叉时的状态对齐：支持 digest 的客户端发目录（P4c），否则全量 stored_state（含 deferral 护栏）
 export function emitStateSync(ws: WebSocket, tenant: Tenant) {
-  const conn = conns.get(ws);
+  const conn = gatewayState.conns.get(ws);
   if (conn?.caps.has("stored_digest")) {
     send(ws, {
       type: "stored_digest",
@@ -238,7 +238,7 @@ export function emitStateSync(ws: WebSocket, tenant: Tenant) {
 }
 
 export function emitStoredState(ws: WebSocket, tenant: Tenant) {
-  const conn = conns.get(ws);
+  const conn = gatewayState.conns.get(ws);
   const payload = storedStatePayload(tenant, conn?.caps.has("slim_state") ?? false);
   const limit = conn?.maxMessageBytes ?? 0;
   if (limit > 0) {

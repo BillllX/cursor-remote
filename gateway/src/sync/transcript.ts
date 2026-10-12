@@ -12,7 +12,7 @@ import {
 } from "../runlog.ts";
 import { chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { persistTenant } from "../runtime/slots.ts";
-import { conns, liveSlotsOf } from "../runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Slot } from "../runtime/types.ts";
 import { getTenant, type Tenant } from "../tenants.ts";
 import { mirrorRun, queuedRows, send } from "../ws/send.ts";
@@ -102,7 +102,7 @@ export function flushTranscript(slot: Slot, broadcast: boolean) {
 }
 
 export function emitRunSnapshots(ws: WebSocket, tenant: Tenant) {
-  const limit = conns.get(ws)?.maxMessageBytes ?? 0;
+  const limit = gatewayState.conns.get(ws)?.maxMessageBytes ?? 0;
   const covered = new Set<string>();
   for (const slot of liveSlotsOf(tenant).values()) {
     if (slot.transcript && slot.transcript.epoch === slot.epoch) {

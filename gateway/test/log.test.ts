@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { after, afterEach, beforeEach, describe, test } from "node:test";
-import { errText, log, logEnabled, warnThrottled } from "../src/log.ts";
+import { errText, log, logEnabled, slotLog, warnThrottled } from "../src/log.ts";
 
 type Captured = { stream: "stdout" | "stderr"; line: string };
 
@@ -108,6 +108,80 @@ describe("log 级别过滤与输出流", () => {
     assert.equal(errText("plain"), "plain");
   });
 
+  test("log.with：text 格式在级别标签后加 [t= c=]，只给一个字段时只出一个；子 logger 可再叠加", () => {
+    delete process.env.GATEWAY_LOG_LEVEL;
+    delete process.env.GATEWAY_LOG_FORMAT;
+    const runLog = log.with({ tenant: "billxu", chatId: "c-123" });
+    runLog.warn("取消过期运行失败", "boom");
+    runLog.error("turn files", 3);
+    runLog.info("frame clipped");
+    log.with({ tenant: "t1" }).warn("state 落盘失败");
+    log.with({ chatId: "c9" }).with({ tenant: "t2" }).warn("x");
+    log.with({ tenant: "t1", chatId: "a" }).with({ chatId: "b" }).warn("y");
+    log.with({}).warn("plain");
+    slotLog({ tenantId: "t3", chatId: "c3" }).error("mcp", "x");
+    assert.deepEqual(out, [
+      { stream: "stderr", line: "[warn] [t=billxu c=c-123] 取消过期运行失败 boom" },
+      { stream: "stderr", line: "[error] [t=billxu c=c-123] turn files 3" },
+      { stream: "stdout", line: "[info] [t=billxu c=c-123] frame clipped" },
+      { stream: "stderr", line: "[warn] [t=t1] state 落盘失败" },
+      { stream: "stderr", line: "[warn] [t=t2 c=c9] x" },
+      { stream: "stderr", line: "[warn] [t=t1 c=b] y" },
+      { stream: "stderr", line: "[warn] plain" },
+      { stream: "stderr", line: "[error] [t=t3 c=c3] mcp x" },
+    ]);
+  });
+
+  test("子 logger 同样受级别过滤", () => {
+    process.env.GATEWAY_LOG_LEVEL = "warn";
+    log.with({ tenant: "t" }).info("hidden");
+    log.with({ tenant: "t" }).debug("hidden");
+    assert.deepEqual(out, []);
+  });
+
+  test("GATEWAY_LOG_FORMAT=json：每条一行 JSON，含 level/time/tenant/chatId/msg，输出流不变", (t) => {
+    delete process.env.GATEWAY_LOG_LEVEL;
+    process.env.GATEWAY_LOG_FORMAT = " JSON ";
+    t.after(() => delete process.env.GATEWAY_LOG_FORMAT);
+    t.mock.timers.enable({ apis: ["Date"], now: Date.UTC(2026, 0, 2, 3, 4, 5) });
+    log.with({ tenant: "t1", chatId: "c1" }).warn("frame dropped", { n: 1 });
+    log.info("upload", "/tmp/a");
+    log.error(new Error("bad"));
+    log.banner("cursor-remote gateway  http://h:1");
+    assert.deepEqual(
+      out.map((item) => item.stream),
+      ["stderr", "stdout", "stderr", "stdout"],
+    );
+    const rows = out.map((item) => JSON.parse(item.line) as Record<string, unknown>);
+    assert.ok(out.every((item) => !item.line.includes("\n")));
+    assert.deepEqual(rows[0], {
+      level: "warn",
+      time: "2026-01-02T03:04:05.000Z",
+      tenant: "t1",
+      chatId: "c1",
+      msg: "frame dropped { n: 1 }",
+    });
+    assert.deepEqual(rows[1], { level: "info", time: "2026-01-02T03:04:05.000Z", msg: "upload /tmp/a" });
+    assert.equal(rows[2].level, "error");
+    assert.match(String(rows[2].msg), /^Error: bad\n/);
+    assert.deepEqual(rows[3], {
+      level: "info",
+      time: "2026-01-02T03:04:05.000Z",
+      msg: "cursor-remote gateway  http://h:1",
+    });
+  });
+
+  test("GATEWAY_LOG_FORMAT 其它值按 text", () => {
+    delete process.env.GATEWAY_LOG_LEVEL;
+    process.env.GATEWAY_LOG_FORMAT = "yaml";
+    try {
+      log.with({ tenant: "t" }).warn("x");
+    } finally {
+      delete process.env.GATEWAY_LOG_FORMAT;
+    }
+    assert.deepEqual(out, [{ stream: "stderr", line: "[warn] [t=t] x" }]);
+  });
+
   test("对象和 Error 按 util.format 展开成单行前缀", () => {
     delete process.env.GATEWAY_LOG_LEVEL;
     log.warn("agent missing, opening a new one", { chatId: "c1" });
@@ -137,6 +211,7 @@ describe("log 真实输出流", () => {
     );
     const env: NodeJS.ProcessEnv = { ...process.env };
     delete env.GATEWAY_LOG_LEVEL;
+    delete env.GATEWAY_LOG_FORMAT;
     const result = spawnSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8", env });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, "[info] upload /tmp/a 3\ncursor-remote gateway  http://h:1\n");

@@ -57,6 +57,13 @@ export const ENV_SPECS = [
     group: "网关",
     doc: "日志级别 debug/info/warn/error，其它值按 info",
   },
+  {
+    name: "GATEWAY_LOG_FORMAT",
+    type: "enum",
+    default: "text",
+    group: "网关",
+    doc: "日志格式 text/json；json 每条一行（level、time、tenant、chatId、msg），其它值按 text",
+  },
 
   { name: "CURSOR_API_KEY", type: "string", group: "Cursor", doc: "Cursor User API Key，必填；读取时去首尾空格" },
   { name: "CURSOR_REMOTE_MODEL", type: "string", default: "composer-2.5", group: "Cursor", doc: "默认模型" },
@@ -65,7 +72,7 @@ export const ENV_SPECS = [
     type: "string",
     default: "https://api2.cursor.sh",
     group: "Cursor",
-    doc: "用量/计费接口地址，去掉末尾斜杠；cursorBill.ts 在模块加载时读一次",
+    doc: "用量/计费接口地址，去掉末尾斜杠；每次请求时读取",
   },
   {
     name: "CURSOR_REMOTE_POLICY",
@@ -210,6 +217,7 @@ export type EnvName = (typeof ENV_SPECS)[number]["name"];
 
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
+export type LogFormat = "text" | "json";
 
 const FALSY = /^(0|false|off|no)$/i;
 
@@ -249,6 +257,7 @@ export const gatewayEnv = {
     const value = (raw("GATEWAY_LOG_LEVEL") || "").trim().toLowerCase();
     return (LOG_LEVELS as readonly string[]).includes(value) ? (value as LogLevel) : "info";
   },
+  logFormat: (): LogFormat => ((raw("GATEWAY_LOG_FORMAT") || "").trim().toLowerCase() === "json" ? "json" : "text"),
 
   /** 去首尾空格；未设置为空串 */
   cursorApiKey: () => raw("CURSOR_API_KEY")?.trim() || "",

@@ -156,7 +156,7 @@ export function noteWorkspaceTurnEnd(
   try {
     noteWorkspaceThread(tenant, row);
   } catch (err) {
-    console.error("workspace thread index", err);
+    log.error("workspace thread index", err);
   }
   scheduleFlush(refOf(tenant), row.chatId, () => void publishState(tenant));
 }
@@ -372,9 +372,9 @@ export function onTenantHello(tenant: AssistantTenant) {
 function runMigration(tenant: AssistantTenant) {
   try {
     const report = migrateMemory(tenant);
-    if (report) console.log(`memory migrate v2 tenant=${tenant.id} ${JSON.stringify(report)}`);
+    if (report) log.info(`memory migrate v2 tenant=${tenant.id} ${JSON.stringify(report)}`);
   } catch (err) {
-    console.error("memory migrate", tenant.id, err);
+    log.error("memory migrate", tenant.id, err);
   }
 }
 
@@ -532,7 +532,7 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
       kind: item.kind,
       title: `${label}：${item.title}`.slice(0, 80),
       url: `${base}?inbox=${encodeURIComponent(item.id)}`,
-    }).catch((err) => console.error("push", err)),
+    }).catch((err) => log.error("push", err)),
     sendApns(ref, {
       itemId: item.id,
       kind: item.kind,
@@ -540,7 +540,7 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
       body: item.title.slice(0, 80),
       chatId: item.chatId,
       delegationId: item.delegationId,
-    }).catch((err) => console.error("apns", err)),
+    }).catch((err) => log.error("apns", err)),
   ]);
 }
 
@@ -550,11 +550,11 @@ async function slowTick(tenant: AssistantTenant) {
   try {
     if (expireCards(ref)) void publishState(tenant);
   } catch (err) {
-    console.error("expire memory cards", err);
+    log.error("expire memory cards", err);
   }
-  await runMaintenance(ref, runner).catch((err) => console.error("maintenance", err));
-  await runEpisodes(ref, runner).catch((err) => console.error("episodes", err));
-  await runIntegrator(ref, runner).catch((err) => console.error("integrator", err));
+  await runMaintenance(ref, runner).catch((err) => log.error("maintenance", err));
+  await runEpisodes(ref, runner).catch((err) => log.error("episodes", err));
+  await runIntegrator(ref, runner).catch((err) => log.error("integrator", err));
 }
 
 function tick() {
@@ -595,7 +595,7 @@ export function startAssistant(next: AssistantDeps) {
     try {
       restoreCards(ref);
     } catch (err) {
-      console.error("restore memory cards", err);
+      log.error("restore memory cards", err);
     }
     for (const item of recoverDelegations(ref)) {
       postInbox(ref, {

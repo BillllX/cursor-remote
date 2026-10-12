@@ -9,8 +9,6 @@ package-lock.json
 scripts/bench/*/
 
 # >>> 遗留文件：格式化后从这里删掉（npm run format:baseline 重新生成本区块，区块外的内容不动）
-gateway/src/apns-smoke.ts
-gateway/src/assistant-smoke.ts
 gateway/src/assistant/apns.ts
 gateway/src/assistant/approvals.ts
 gateway/src/assistant/background.ts
@@ -30,10 +28,8 @@ gateway/src/assistant/workspaceAsk.ts
 gateway/src/assistant/workspaceMemory.ts
 gateway/src/chatBodies.ts
 gateway/src/cursorBill.ts
-gateway/src/loops-smoke.ts
 gateway/src/loops.ts
 gateway/src/media.ts
-gateway/src/memory-layers-smoke.ts
 gateway/src/native/adapters/anthropic.ts
 gateway/src/native/adapters/openai.ts
 gateway/src/native/adapters/xml.ts
@@ -41,20 +37,24 @@ gateway/src/native/compact.ts
 gateway/src/native/context.ts
 gateway/src/native/loop.ts
 gateway/src/native/mcp.ts
-gateway/src/native/native-smoke.ts
 gateway/src/native/session.ts
 gateway/src/native/tools/fs.ts
 gateway/src/native/tools/shell.ts
 gateway/src/native/tools/task.ts
 gateway/src/native/types.ts
 gateway/src/providers.ts
-gateway/src/publish-smoke.ts
 gateway/src/publish.ts
 gateway/src/runlog.ts
-gateway/src/seghash-smoke.ts
 gateway/src/tenants.ts
 gateway/src/turnFiles.ts
-gateway/src/turnfiles-smoke.ts
+gateway/test/smoke/apns-smoke.ts
+gateway/test/smoke/assistant-smoke.ts
+gateway/test/smoke/loops-smoke.ts
+gateway/test/smoke/memory-layers-smoke.ts
+gateway/test/smoke/native-smoke.ts
+gateway/test/smoke/publish-smoke.ts
+gateway/test/smoke/seghash-smoke.ts
+gateway/test/smoke/turnfiles-smoke.ts
 scripts/bench/dialect-bench.mjs
 scripts/bench/policy-bench.mjs
 scripts/build-icons.mjs

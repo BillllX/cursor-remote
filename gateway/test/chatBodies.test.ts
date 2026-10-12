@@ -178,7 +178,7 @@ describe("persistBodies / hydrateChat 往返", () => {
   });
 
   test("分段损坏：没改动时沿用旧描述；有改动时先把目录复制到 chats-broken/", (t) => {
-    const warn = t.mock.method(console, "warn", () => {});
+    const warn = t.mock.method(console, "error", () => {});
     const stateDir = tempStateDir();
     const [row] = persistBodies(createBodyStore(stateDir, identity), [{ id: "c1", turns: makeTurns(2) }]) as Array<{
       body: BodyInfo;

@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { filePayload } from "./media.ts";
-import { keepTurnFiles, mergeUploadedTurns, turnFromTranscript, type RunTool, type RunTranscript } from "./runlog.ts";
+import { filePayload } from "../../src/media.ts";
+import { keepTurnFiles, mergeUploadedTurns, turnFromTranscript, type RunTool, type RunTranscript } from "../../src/runlog.ts";
 import {
   artifactPath,
   artifactsDir,
@@ -24,7 +24,7 @@ import {
   storeArtifact,
   toolPaths,
   type TurnBaseline,
-} from "./turnFiles.ts";
+} from "../../src/turnFiles.ts";
 
 /**
  * 每轮文件清单冒烟：工具路径提取、带基线的清单与行数、无基线退回、快照存取与配额、合并保护。

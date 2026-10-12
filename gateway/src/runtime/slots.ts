@@ -8,11 +8,11 @@ import { allTenants, confinedCwd, type DiskSlot, requireCwd, saveDisk, type Tena
 import { cancelRun } from "./abort.ts";
 import { resolveApprovalWait } from "./approvals.ts";
 import { assistantCwd, chatIdOf, isAssistantChat } from "./chats.ts";
-import { liveByTenant, liveSlotsOf, wsTenant } from "./state.ts";
+import { gatewayState, liveSlotsOf } from "./state.ts";
 import type { Checkpoint, Conn, Slot } from "./types.ts";
 
 export function bindTenant(conn: Conn, tenant: Tenant) {
-  wsTenant.set(conn.ws, tenant.id);
+  gatewayState.wsTenant.set(conn.ws, tenant.id);
   conn.tenant = tenant;
   conn.slots = liveSlotsOf(tenant);
   conn.cwd = tenant.workspaceRoot;
@@ -39,7 +39,7 @@ function claimSlot(slot: Slot, ws: WebSocket) {
 
 /** 会话编号由客户端生成，不同租户可能撞号：只在发起连接所属租户里找。 */
 export function slotByChat(tenantId: string, chatId: string): Slot | undefined {
-  return liveByTenant.get(tenantId)?.get(chatId);
+  return gatewayState.liveByTenant.get(tenantId)?.get(chatId);
 }
 
 export function persistConn(conn: Conn) {

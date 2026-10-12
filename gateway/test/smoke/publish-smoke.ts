@@ -14,7 +14,7 @@ import {
   tenantFromPublishPath,
   type PublishController,
   type PublishTenant,
-} from "./publish.ts";
+} from "../../src/publish.ts";
 
 const WIDE = `import { createServer } from "node:http";
 createServer((req, res) => res.end("wide")).listen(Number(process.env.PORT), "0.0.0.0");
@@ -379,7 +379,7 @@ async function main() {
     });
 
     const cli = await new Promise<{ code: number; out: string }>((resolvePromise, reject) => {
-      const child = spawn(node, [resolve(fileURLToPath(new URL("../../scripts/jiebo-publish.mjs", import.meta.url))), "status"], {
+      const child = spawn(node, [resolve(fileURLToPath(new URL("../../../scripts/jiebo-publish.mjs", import.meta.url))), "status"], {
         cwd: alpha.workspaceRoot,
         env: { ...process.env, JIEBO_PUBLISH_SECRET: alphaToken, GATEWAY_PORT: String(port), GATEWAY_HOST: "127.0.0.1" },
       });

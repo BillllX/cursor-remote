@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { readSse, redactSecrets } from "./sse.ts";
 import type { ToolResult, ToolSpec } from "./types.ts";
+import { log } from "../log.ts";
 
 /**
  * 精简 MCP 客户端：initialize → tools/list → tools/call，传输支持 stdio 与 Streamable HTTP。
@@ -108,7 +109,7 @@ export function loadMcpConfig(dirs: string[]): McpServerConfig[] {
         if (cfg.command || cfg.url) byName.set(name, cfg);
       }
     } catch (err) {
-      console.error(`mcp.json 解析失败（${file}）`, err instanceof Error ? err.message : err);
+      log.error(`mcp.json 解析失败（${file}）`, err instanceof Error ? err.message : err);
     }
   }
   return [...byName.values()];

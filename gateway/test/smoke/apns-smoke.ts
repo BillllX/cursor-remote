@@ -40,11 +40,11 @@ reply.set(T_ERR, { status: 500, reason: "InternalServerError" });
 reply.set(T_OTHER400, { status: 400, reason: "PayloadTooLarge" });
 
 try {
-  const apns = await import("./assistant/apns.ts");
-  const push = await import("./assistant/push.ts");
-  const inbox = await import("./assistant/inbox.ts");
-  const service = await import("./assistant/service.ts");
-  const { writeJson, assistantPath } = await import("./assistant/store.ts");
+  const apns = await import("../../src/assistant/apns.ts");
+  const push = await import("../../src/assistant/push.ts");
+  const inbox = await import("../../src/assistant/inbox.ts");
+  const service = await import("../../src/assistant/service.ts");
+  const { writeJson, assistantPath } = await import("../../src/assistant/store.ts");
 
   const ref = (id: string) => ({ id, stateDir: resolve(dir, id) });
   const subsOf = (r: { id: string; stateDir: string }) => JSON.parse(readFileSync(assistantPath(r, "push-subs.json"), "utf8")) as { web: unknown[]; apns: Array<{ token: string; environment?: string; ua?: string; bundleId: string }>; subs?: unknown };

@@ -13,7 +13,6 @@ import { gatewayEnv } from "./config.ts";
  * 这里不启动 agent 进程，避免 CLI 把 Key 的登录态写进磁盘。
  */
 
-const ENDPOINT = gatewayEnv.cursorApiEndpoint();
 const TIMEOUT_MS = 12_000;
 
 type Session = { hash: string; token: string; until: number };
@@ -62,7 +61,7 @@ async function exchange(apiKey: string): Promise<string> {
   const hash = keyHash(apiKey);
   if (session && session.hash === hash && session.until > Date.now()) return session.token;
   const payload = record(
-    await post(`${ENDPOINT}/auth/exchange_user_api_key`, apiKey, {}),
+    await post(`${gatewayEnv.cursorApiEndpoint()}/auth/exchange_user_api_key`, apiKey, {}),
   );
   const token = payload && typeof payload.accessToken === "string" ? payload.accessToken : "";
   if (!token) throw new Error("这把 API Key 换不到 Cursor 登录态。");
@@ -71,7 +70,7 @@ async function exchange(apiKey: string): Promise<string> {
 }
 
 function dash(token: string, method: string, body: unknown): Promise<unknown> {
-  return post(`${ENDPOINT}/aiserver.v1.DashboardService/${method}`, token, body);
+  return post(`${gatewayEnv.cursorApiEndpoint()}/aiserver.v1.DashboardService/${method}`, token, body);
 }
 
 function percent(explicit: unknown, used: unknown, limit: unknown): number {

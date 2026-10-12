@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
  * 状态目录放在 gateway 目录下的临时子目录，跑完删除。
  */
 
-const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const gatewayDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const dir = mkdtempSync(resolve(gatewayDir, ".loops-smoke-"));
 process.env.CURSOR_REMOTE_STATE_DIR = dir;
 process.env.CURSOR_REMOTE_TENANTS_FILE = resolve(dir, "tenants.json");
@@ -55,8 +55,8 @@ try {
     }),
   );
 
-  const { bindLoops } = await import("./loops.ts");
-  const { sandboxEnabledForTenant, isBillXuTenant, loadTenants, getTenant } = await import("./tenants.ts");
+  const { bindLoops } = await import("../../src/loops.ts");
+  const { sandboxEnabledForTenant, isBillXuTenant, loadTenants, getTenant } = await import("../../src/tenants.ts");
 
   const ticks: Array<{ chatId: string; status: string; summary: string; tick: number }> = [];
   const dispatched: string[] = [];

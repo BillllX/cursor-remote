@@ -5,13 +5,13 @@ import { runLoopInBackground } from "../assistant/service.ts";
 import { handlePrompt } from "../chat/runner.ts";
 import type { LoopJob } from "../loops.ts";
 import { cwdForChat, globalRunningCount, maxRunning, slotOf } from "../runtime/slots.ts";
-import { conns, liveSlotsOf } from "../runtime/state.ts";
+import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn } from "../runtime/types.ts";
 import { getTenant } from "../tenants.ts";
 import { reply } from "../ws/frame.ts";
 
 export function openConn(tenantId: string): Conn | undefined {
-  for (const conn of conns.values()) {
+  for (const conn of gatewayState.conns.values()) {
     if (conn.authed && conn.tenant?.id === tenantId && conn.ws.readyState === WebSocket.OPEN) return conn;
   }
   return undefined;
@@ -35,7 +35,7 @@ export async function dispatchLoop(job: LoopJob) {
   const tenant = getTenant(job.tenantId);
   const previous = tenant ? liveSlotsOf(tenant).get(job.chatId) : undefined;
   const previousOwner = previous?.owner?.readyState === WebSocket.OPEN ? previous.owner : null;
-  const ownerConn = previousOwner ? conns.get(previousOwner) : undefined;
+  const ownerConn = previousOwner ? gatewayState.conns.get(previousOwner) : undefined;
   // 优先用会话当前 owner 的连接跑，免得工作区、事件去向和 owner 分属两台设备
   const conn = ownerConn?.authed && ownerConn.tenant?.id === job.tenantId ? ownerConn : openConn(job.tenantId);
   if (!conn) {
@@ -109,7 +109,7 @@ export async function dispatchLoop(job: LoopJob) {
 }
 
 export function publishLoop(tenantId: string, message: ServerMessage) {
-  for (const conn of conns.values()) {
+  for (const conn of gatewayState.conns.values()) {
     if (conn.authed && conn.tenant?.id === tenantId) reply(conn.ws, message);
   }
 }

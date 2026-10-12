@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import { formatBytes } from "../../../shared/preview.ts";
 import type { HistoryTurn, ServerMessage } from "../../../shared/protocol.ts";
 import { log } from "../log.ts";
-import { conns } from "../runtime/state.ts";
+import { gatewayState } from "../runtime/state.ts";
 import type { WorkspaceFiles } from "../runtime/types.ts";
 
 export function reply(ws: WebSocket, message: ServerMessage) {
@@ -18,7 +18,7 @@ export function reply(ws: WebSocket, message: ServerMessage) {
  */
 export function frameFor(sock: WebSocket, message: ServerMessage): string | null {
   const text = JSON.stringify(message);
-  const limit = conns.get(sock)?.maxMessageBytes ?? 0;
+  const limit = gatewayState.conns.get(sock)?.maxMessageBytes ?? 0;
   // UTF-16 码元数 ×3 一定不小于 UTF-8 字节数，小消息不必逐字节计算
   if (limit <= 0 || text.length * 3 <= limit) return text;
   const bytes = Buffer.byteLength(text);

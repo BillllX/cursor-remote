@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import type { ServerMessage } from "../../shared/protocol.ts";
+import type { ServerMessage } from "../../../shared/protocol.ts";
 import {
   createBodyStore,
   hydrateChat,
@@ -11,8 +11,8 @@ import {
   SEGMENT_TURNS,
   segmentHashes,
   slimChat,
-} from "./chatBodies.ts";
-import { applyStreamEvent, clipSnapshot, keepToolsAt, mergeUploadedTurns, snapshotMessage, turnFromTranscript, type RunTranscript } from "./runlog.ts";
+} from "../../src/chatBodies.ts";
+import { applyStreamEvent, clipSnapshot, keepToolsAt, mergeUploadedTurns, snapshotMessage, turnFromTranscript, type RunTranscript } from "../../src/runlog.ts";
 
 /**
  * 分段哈希与工具位置冒烟：segHashes 装回前后一致、只变改动的分段、不触发装回；
