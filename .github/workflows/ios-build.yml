@@ -1,0 +1,31 @@
+name: ios-build
+
+on:
+  push:
+    branches: [main, "refactor/**"]
+    paths:
+      - "ios/Jiebo/**"
+      - ".github/workflows/ios-build.yml"
+  pull_request:
+    paths:
+      - "ios/Jiebo/**"
+      - ".github/workflows/ios-build.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 模拟器构建（不签名）
+        working-directory: ios/Jiebo
+        run: |
+          set -o pipefail
+          xcodebuild -project Jiebo.xcodeproj -scheme Jiebo \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug CODE_SIGNING_ALLOWED=NO build | tail -n 200
