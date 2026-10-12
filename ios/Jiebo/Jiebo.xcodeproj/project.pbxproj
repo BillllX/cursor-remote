@@ -79,6 +79,17 @@
 		A1B2C3D4E5F6071829000832 /* ProseViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000732 /* ProseViews.swift */; };
 		A1B2C3D4E5F6071829000833 /* AttachmentViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */; };
 		A1B2C3D4E5F6071829000834 /* ThreadAssistantRows.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */; };
+		A1B2C3D4E5F6071829000835 /* WorkspacePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */; };
+		A1B2C3D4E5F6071829000836 /* AgoLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000736 /* AgoLabel.swift */; };
+		A1B2C3D4E5F6071829000837 /* LoopSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000737 /* LoopSheet.swift */; };
+		A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */; };
+		A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */; };
+		A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */; };
+		A1B2C3D4E5F6071829000841 /* ChatRowActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */; };
+		A1B2C3D4E5F6071829000842 /* ComposerView+Strips.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */; };
+		A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */; };
+		A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */; };
+		A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -157,6 +168,17 @@
 		A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentViews.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadAssistantRows.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000750 /* Jiebo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Jiebo.entitlements; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePickerSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000736 /* AgoLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgoLabel.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000737 /* LoopSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantEntryRow.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkStatusDot.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeSettingsSheet.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRowActions.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Strips.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Voice.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+AssistantBar.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Toolbar.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -272,6 +294,13 @@
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
+				A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */,
+				A1B2C3D4E5F6071829000736 /* AgoLabel.swift */,
+				A1B2C3D4E5F6071829000737 /* LoopSheet.swift */,
+				A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */,
+				A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */,
+				A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */,
+				A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */,
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
 				A1B2C3D4E5F6071829000727 /* ThreadView+Header.swift */,
 				A1B2C3D4E5F6071829000728 /* ThreadView+Scroll.swift */,
@@ -282,6 +311,10 @@
 				A1B2C3D4E5F6071829000733 /* AttachmentViews.swift */,
 				A1B2C3D4E5F6071829000734 /* ThreadAssistantRows.swift */,
 				A1B2C3D4E5F6071829000114 /* ComposerView.swift */,
+				A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */,
+				A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */,
+				A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */,
+				A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */,
 				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
 				A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */,
 				A1B2C3D4E5F6071829000190 /* FileCardView.swift */,
@@ -438,6 +471,13 @@
 				A1B2C3D4E5F6071829000310 /* RootView.swift in Sources */,
 				A1B2C3D4E5F6071829000311 /* LoginView.swift in Sources */,
 				A1B2C3D4E5F6071829000312 /* SidebarView.swift in Sources */,
+				A1B2C3D4E5F6071829000835 /* WorkspacePickerSheet.swift in Sources */,
+				A1B2C3D4E5F6071829000836 /* AgoLabel.swift in Sources */,
+				A1B2C3D4E5F6071829000837 /* LoopSheet.swift in Sources */,
+				A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */,
+				A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */,
+				A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */,
+				A1B2C3D4E5F6071829000841 /* ChatRowActions.swift in Sources */,
 				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
 				A1B2C3D4E5F6071829000827 /* ThreadView+Header.swift in Sources */,
 				A1B2C3D4E5F6071829000828 /* ThreadView+Scroll.swift in Sources */,
@@ -448,6 +488,10 @@
 				A1B2C3D4E5F6071829000833 /* AttachmentViews.swift in Sources */,
 				A1B2C3D4E5F6071829000834 /* ThreadAssistantRows.swift in Sources */,
 				A1B2C3D4E5F6071829000314 /* ComposerView.swift in Sources */,
+				A1B2C3D4E5F6071829000842 /* ComposerView+Strips.swift in Sources */,
+				A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */,
+				A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */,
+				A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */,
 				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
 				A1B2C3D4E5F6071829000393 /* ToolRunSummaryView.swift in Sources */,
 				A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */,

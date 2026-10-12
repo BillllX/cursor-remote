@@ -5,11 +5,13 @@ import UIKit
 /// 引用导向仍走 Composer 的扁平 FileBrowserSheet——入口分流，各自语义单一）。
 ///
 /// 形态（评审共识）：
-/// - fullScreenCover + 自定义 HStack 双栏——不嵌 NavigationSplitView
+/// - fullScreenCover 内按 horizontalSizeClass 分两种布局，都不嵌 NavigationSplitView
 ///  （Workbench 已是 NSV，modal 里再套会列宽塌缩/toolbar 跑错栏）
-/// - 右栏复用 P5 预览管线：单击文件走 store.openPreview（写 previewTabs），
+///   - 非 compact 宽度：自定义 HStack 双栏，左目录树（定宽 340）右预览并排
+///   - compact 宽度（iPhone 竖屏、Stage Manager 窄窗/Slide Over）：单栏，按 store.activePreviewTab 是否为 nil
+///     在目录树与预览之间整页切换；点文件整页换成预览，左上「文件」（dismissPreviewPanel）回到目录
+/// - 预览复用 P5 预览管线：单击文件走 store.loadPreview（面板能渲染的写 previewTabs，其余走 openMention），
 ///   关掉 cover 后工作台 overlay 停在最后浏览的文件——有意的连续性，与 FileBrowserSheet 眼睛按钮一致
-/// - compact 宽度（Stage Manager 窄窗/Slide Over）退化单栏：点文件整页换成预览，左上「文件」回到目录
 struct FileBrowserCover: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
