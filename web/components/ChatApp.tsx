@@ -50,10 +50,11 @@ import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../lib/
 import { useHeldOpen, useSheetDrag } from "../lib/chat/hooks/sheet";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
-import { chatHasContent, chatMeta, EMPTY_STARTERS, isUntitled, mergeSlimChats, metaKey, shortPadTitle, stopOrphanRuns, usableDraft } from "../lib/chat/sessions";
+import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, loopsFromReady, markUnread, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
+import { chatHasContent, chatMeta, EMPTY_STARTERS, isUntitled, mergeSlimChats, metaKey, shortPadTitle, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, GROUPS_KEY, MAX_DELETED, pushRecent, rememberDeleted, TOKEN_KEY } from "../lib/chat/storage";
-import { mergeToolOutput, pathFromPayload, searchQuery, shellRows, toolPreview } from "../lib/chat/tools";
-import { applyRunSnapshot, editPathsOf, extractTodos, historyToTurns, liveTurn, mergeHistoryTurns, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, turnSuperseded, uid, withLiveTurns, writesWereRejected } from "../lib/chat/turns";
+import { pathFromPayload, searchQuery, shellRows, toolPreview } from "../lib/chat/tools";
+import { editPathsOf, liveTurn, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, turnSuperseded, uid, withLiveTurns, writesWereRejected } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
 import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel } from "../lib/chat/workspace";
 import { AdminOverlay } from "./chat/AdminOverlay";
@@ -550,47 +551,17 @@ export default function ChatApp() {
     });
   }, []);
 
+  const applyChats = useCallback((reduce: (chats: Chat[]) => Chat[]) => {
+    setChats((prev) => {
+      const next = reduce(prev);
+      chatsRef.current = next;
+      return next;
+    });
+  }, []);
+
   const patchActive = useCallback(
     (updater: (chat: Chat) => Chat) => {
       patchChat(activeIdRef.current, updater);
-    },
-    [patchChat],
-  );
-
-  const patchRunningTurnIn = useCallback(
-    (chatId: string, updater: (turn: Turn) => Turn) => {
-      patchChat(chatId, (chat) => {
-        let index = -1;
-        for (let i = chat.turns.length - 1; i >= 0; i -= 1) {
-          if (chat.turns[i].running) {
-            index = i;
-            break;
-          }
-        }
-        if (index < 0) return chat;
-        const turns = chat.turns.slice();
-        turns[index] = updater(turns[index]);
-        return { ...chat, turns };
-      });
-    },
-    [patchChat],
-  );
-
-  const patchOpenTurnIn = useCallback(
-    (chatId: string, updater: (turn: Turn) => Turn) => {
-      patchChat(chatId, (chat) => {
-        let index = -1;
-        for (let i = chat.turns.length - 1; i >= 0; i -= 1) {
-          if (chat.turns[i].running || turnHasOpenTools(chat.turns[i])) {
-            index = i;
-            break;
-          }
-        }
-        if (index < 0) return chat;
-        const turns = chat.turns.slice();
-        turns[index] = updater(turns[index]);
-        return { ...chat, turns };
-      });
     },
     [patchChat],
   );
@@ -719,8 +690,9 @@ export default function ChatApp() {
 
   const onServer = useCallback(
     (message: ServerMessage) => {
-      const chatId =
-        "chatId" in message && message.chatId ? message.chatId : activeIdRef.current;
+      const ctx: ChatReduceContext = { activeId: activeIdRef.current };
+      const chatId = serverChatId(message, ctx.activeId);
+      const reduceChats = () => applyChats((prev) => applyServerMessage(prev, message, ctx));
       if (
         chatId &&
         (message.type === "text-delta" ||
@@ -749,7 +721,7 @@ export default function ChatApp() {
           message.type === "error" ||
           message.type === "approval")
       ) {
-        patchChat(chatId, (chat) => (chat.unread ? chat : { ...chat, unread: true }));
+        applyChats((prev) => markUnread(prev, chatId));
       }
       switch (message.type) {
         case "ready":
@@ -795,30 +767,8 @@ export default function ChatApp() {
               if (wideIDERef.current) chooseSide("assistant");
               else setAssistantOpen(true);
             }
-            {
-              const next: Record<string, LoopState> = {};
-              for (const row of message.loops || []) {
-                if (!row?.chatId || row.status === "stopped" || row.status === "idle") continue;
-                next[row.chatId] = row;
-              }
-              setLoops(next);
-            }
-            setChats((prev) => {
-              const keep = [...(message.runningChatIds || []), ...(message.queuedChatIds || [])];
-              const queued = new Set(message.queuedChatIds || []);
-              return stopOrphanRuns(prev, keep).map((chat) => {
-                if (!queued.has(chat.id)) return chat;
-                if (chat.turns.some((turn) => turn.queued || turn.running)) return chat;
-                const last = [...chat.turns].reverse().find((turn) => turn.user.trim());
-                if (!last) return chat;
-                return {
-                  ...chat,
-                  turns: chat.turns.map((turn) =>
-                    turn.id === last.id ? { ...turn, queued: true } : turn,
-                  ),
-                };
-              });
-            });
+            setLoops(loopsFromReady(message.loops));
+            setChats((prev) => applyReadyRuns(prev, message));
             {
               const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
               const preferred =
@@ -1075,19 +1025,12 @@ export default function ChatApp() {
             const chat = chatsRef.current.find((item) => item.id === message.chatId);
             const nextCwd = preferChatCwd(chat?.cwd, message.cwd);
             if (message.chatId === activeIdRef.current && nextCwd) setCwd(nextCwd);
-            patchChat(message.chatId, (item) => ({
-              ...item,
-              cwd: nextCwd || item.cwd,
-              agentId: message.agentId || undefined,
-            }));
+            applyChats((prev) => applySession(prev, message, ctx.activeId, nextCwd));
           } else if (message.cwd) {
             const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
             const nextCwd = preferChatCwd(chat?.cwd, message.cwd);
             if (nextCwd) setCwd(nextCwd);
-            patchActive((item) => {
-              const cwd = preferChatCwd(item.cwd, message.cwd);
-              return cwd === item.cwd ? item : { ...item, cwd };
-            });
+            applyChats((prev) => applySession(prev, message, ctx.activeId));
           }
           if (
             !message.chatId ||
@@ -1126,83 +1069,21 @@ export default function ChatApp() {
           break;
         case "tool-output":
           if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => {
-            const tools = [...turn.tools];
-            const index = tools.findIndex((tool) => tool.callId === message.callId);
-            if (index < 0) {
-              tools.push({
-                callId: message.callId,
-                name: "shell",
-                status: "running",
-                result: mergeToolOutput(undefined, message),
-              });
-            } else {
-              tools[index] = {
-                ...tools[index],
-                result: mergeToolOutput(tools[index].result, message),
-              };
-            }
-            return { ...turn, tools };
-          });
+          reduceChats();
           break;
         case "pong":
           break;
         case "loop_state":
-          setLoops((prev) => {
-            if (!message.chatId) return prev;
-            const prevRow = prev[message.chatId];
-            return {
-              ...prev,
-              [message.chatId]: {
-                chatId: message.chatId,
-                status: message.status,
-                goal: message.goal,
-                intervalSec: message.intervalSec,
-                tick: message.tick,
-                maxTicks: message.maxTicks,
-                lastSummary: message.lastSummary,
-                nextAt: message.nextAt,
-                tickStatus: prevRow?.tickStatus,
-              },
-            };
-          });
-          break;
         case "loop_tick":
-          setLoops((prev) => {
-            const row = prev[message.chatId];
-            if (!row) return prev;
-            return {
-              ...prev,
-              [message.chatId]: {
-                ...row,
-                tick: message.tick,
-                lastSummary: message.summary,
-                tickStatus: message.status,
-                status: message.status === "stopped" ? "stopped" : row.status,
-              },
-            };
-          });
+          setLoops((prev) => applyLoopMessage(prev, message));
           break;
         case "assistant_state":
           setAssistantState(message.state);
           if (message.state.name?.trim()) setAssistantName(message.state.name.trim());
           break;
         case "inbox_item":
-          setAssistantState((prev) => {
-            if (!prev) return prev;
-            const inbox = [message.item, ...prev.inbox.filter((row) => row.id !== message.item.id)];
-            return { ...prev, inbox };
-          });
-          break;
         case "delegation_state":
-          setAssistantState((prev) => {
-            if (!prev) return prev;
-            const { delegation, approval } = message;
-            const delegations = [delegation, ...prev.delegations.filter((row) => row.id !== delegation.id)];
-            const others = prev.approvals.filter((row) => row.delegationId !== delegation.id);
-            const approvals = delegation.status === "awaiting" && approval ? [...others, approval] : others;
-            return { ...prev, delegations, approvals };
-          });
+          setAssistantState((prev) => applyAssistantMessage(prev, message));
           break;
         case "assistant_result":
           if (!message.ok && message.error) setNotice(message.error);
@@ -1215,104 +1096,33 @@ export default function ChatApp() {
           setAdminStatsAt(message.serverTime || Date.now());
           setCursorBill(message.cursor ?? null);
           break;
-        case "chat_title": {
-          const title = message.title.trim();
-          if (!message.chatId || !title) break;
-          patchChat(message.chatId, (chat) => (isUntitled(chat.title) ? { ...chat, title } : chat));
+        case "chat_title":
+          reduceChats();
           break;
-        }
         case "history":
           // 正文还没对齐服务端时不掺 Cursor 端历史，免得和随后到的分页打架
           if (bodyRef.current.get(chatId)?.state !== "complete") break;
-          patchChat(chatId, (chat) => {
-            const incoming = historyToTurns(Array.isArray(message.turns) ? message.turns : []);
-            if (!incoming.length) return chat;
-            const turns = mergeHistoryTurns(chat.turns, incoming);
-            return turns === chat.turns ? chat : { ...chat, turns };
-          });
+          reduceChats();
           break;
         case "status":
           if (message.message) setNotice(message.message);
-          if (message.status === "RUNNING" || message.status === "CREATING") {
-            patchChat(chatId, (chat) => {
-              const last = [...chat.turns].reverse().find((turn) => turn.user || turn.running);
-              if (!last || last.running) return chat;
-              return {
-                ...chat,
-                turns: chat.turns.map((turn) =>
-                  turn.id === last.id ? { ...turn, running: true, queued: false, status: message.status } : turn,
-                ),
-              };
-            });
-          }
-          if (
-            message.status === "FINISHED" ||
-            message.status === "ERROR" ||
-            message.status === "CANCELLED" ||
-            message.status === "EXPIRED"
-          ) {
-            const settled =
-              message.status === "ERROR" || message.status === "EXPIRED"
-                ? "error"
-                : message.status === "CANCELLED"
-                  ? "cancelled"
-                  : "finished";
-            patchOpenTurnIn(chatId, (turn) => settleTurn(turn, settled));
-          }
-          if (/已拒绝写入/.test(message.message || "")) {
-            patchChat(chatId, (chat) => {
-              const last = [...chat.turns].reverse().find((turn) => turn.running || turn.pendingTool || turn.tools.length);
-              if (!last) return chat;
-              return {
-                ...chat,
-                turns: chat.turns.map((turn) => (turn.id === last.id ? rejectMutatingTools(turn) : turn)),
-              };
-            });
-          }
+          reduceChats();
           break;
         case "run_snapshot":
           holdSnapshotRef.current.delete(message.chatId);
           sawSnapshotRef.current.add(message.chatId);
-          patchChat(message.chatId, (chat) => {
-            const turns = applyRunSnapshot(chat.turns, message);
-            return turns === chat.turns ? chat : { ...chat, turns };
-          });
+          reduceChats();
           break;
         case "text-delta":
-          if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => ({
-            ...turn,
-            assistant: turn.assistant + message.text,
-          }));
-          break;
         case "thinking-delta":
           if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => ({
-            ...turn,
-            thinking: turn.thinking + message.text,
-          }));
+          reduceChats();
           break;
         case "tool-started":
           if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => {
-            const tools = turn.tools.filter((tool) => tool.callId !== message.callId);
-            tools.push({
-              callId: message.callId,
-              name: message.name,
-              args: message.args,
-              status: "running",
-              parentCallId: message.parentCallId,
-              agent: message.agent,
-              model: message.model,
-            });
-            return { ...turn, tools };
-          });
+          reduceChats();
           {
             const args = message.args;
-            const todos = extractTodos(message.name, args);
-            if (todos) {
-              patchRunningTurnIn(chatId, (turn) => ({ ...turn, todos }));
-            }
             if (args && typeof args === "object") {
               const record = args as Record<string, unknown>;
               for (const key of ["path", "file", "target", "file_path"]) {
@@ -1351,28 +1161,7 @@ export default function ChatApp() {
           break;
         case "tool-completed":
           if (holdSnapshotRef.current.has(chatId)) break;
-          patchOpenTurnIn(chatId, (turn) => {
-            const existing = turn.tools.find((tool) => tool.callId === message.callId);
-            if (existing?.status === "error" && message.status === "completed") {
-              return turn;
-            }
-            const tools = turn.tools.filter((tool) => tool.callId !== message.callId);
-            tools.push({
-              callId: message.callId,
-              name: message.name,
-              args: existing?.args,
-              result: message.result,
-              status: message.status,
-              review: existing?.review,
-              parentCallId: existing?.parentCallId || message.parentCallId,
-              agent: existing?.agent || message.agent,
-              model: existing?.model || message.model,
-            });
-            const todos =
-              extractTodos(message.name, existing?.args) ||
-              extractTodos(message.name, message.result);
-            return { ...turn, tools, todos: todos || turn.todos };
-          });
+          reduceChats();
           if (chatId === activeIdRef.current) {
             const running = chatsRef.current
               .find((chat) => chat.id === chatId)
@@ -1421,35 +1210,16 @@ export default function ChatApp() {
           }
           break;
         case "task":
-          if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => ({ ...turn, task: message.text }));
-          break;
         case "approval":
           if (holdSnapshotRef.current.has(chatId)) break;
-          patchRunningTurnIn(chatId, (turn) => ({
-            ...turn,
-            pendingTool: { callId: message.callId, name: message.name, args: message.args },
-          }));
+          reduceChats();
           break;
         case "error":
           setError(message.message);
-          patchOpenTurnIn(chatId, (turn) =>
-            settleTurn(
-              {
-                ...turn,
-                error: message.message,
-              },
-              "error",
-            ),
-          );
+          reduceChats();
           break;
         case "done":
-          patchOpenTurnIn(chatId, (turn) => {
-            const next = settleTurn(turn, message.status, message.durationMs);
-            return writesWereRejected(next) || writesWereRejected(turn)
-              ? rejectMutatingTools(next)
-              : next;
-          });
+          reduceChats();
           {
             if (chatId === activeIdRef.current && mentionQueryRef.current == null) {
               send({ type: "list_files", query: "", chatId });
@@ -1485,28 +1255,16 @@ export default function ChatApp() {
           }
           break;
         case "run_meta":
-          patchRunningTurnIn(chatId, (turn) => ({
-            ...turn,
-            model: message.model || turn.model,
-            mode: message.mode || turn.mode,
-          }));
-          if (message.policy) {
-            patchChat(chatId, (chat) =>
-              chat.policy === message.policy ? chat : { ...chat, policy: message.policy },
-            );
-          }
+          reduceChats();
           break;
         case "policy":
           if (message.policy) {
-            const id = message.chatId || activeIdRef.current;
             policyRef.current = message.policy;
-            patchChat(id, (chat) =>
-              chat.policy === message.policy ? chat : { ...chat, policy: message.policy },
-            );
+            reduceChats();
           }
           break;
         case "checkpoints":
-          patchChat(message.chatId, (chat) => ({ ...chat, checkpoints: message.items }));
+          reduceChats();
           if (message.chatId === activeIdRef.current) {
             setCheckpoints(message.items);
             const newest = message.items[0];
@@ -1679,14 +1437,8 @@ export default function ChatApp() {
             const path = message.path;
             const token = `@${path} `;
             if (message.chatId && message.chatId !== activeIdRef.current) {
-              patchChat(message.chatId, (chat) => {
-                const draft = chat.draft || "";
-                if (draft.includes(`@${path}`)) return chat;
-                return {
-                  ...chat,
-                  draft: `${draft}${draft && !draft.endsWith(" ") ? " " : ""}${token}`,
-                };
-              });
+              const target = message.chatId;
+              applyChats((prev) => appendDraftMention(prev, target, path));
             } else {
               const current = draftRef.current;
               if (!current.includes(`@${path}`)) {
@@ -1755,13 +1507,8 @@ export default function ChatApp() {
           break;
         case "workspace_renamed": {
           // 网关已把会话的目录改到新路径；本地先照改，再拉一次存档对齐版本号
-          const move = (path?: string) =>
-            path && inWorkspaceRoot(path, message.from) ? message.path + path.slice(message.from.length) : path;
-          setChats((prev) => {
-            const next = prev.map((chat) => (chat.cwd && move(chat.cwd) !== chat.cwd ? { ...chat, cwd: move(chat.cwd) } : chat));
-            chatsRef.current = next;
-            return next;
-          });
+          const move = workspaceMover(message);
+          reduceChats();
           setCwd((prev) => move(prev) || prev);
           setExpandedGroups((prev) => {
             const from = normPath(message.from);
@@ -1788,7 +1535,7 @@ export default function ChatApp() {
           break;
       }
     },
-    [flushQueue, flushOutbox, patchChat, patchOpenTurnIn, patchRunningTurnIn, rememberRecent, send],
+    [applyChats, flushQueue, flushOutbox, patchChat, rememberRecent, send],
   );
 
   const onServerRef = useRef(onServer);
