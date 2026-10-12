@@ -18,14 +18,24 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # 代码用到 iOS 26 SDK（glassEffect 等），选机器上最新的 Xcode
+      - name: 选择 Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)"
+          xcodebuild -version
       - name: 模拟器构建（不签名）
         working-directory: ios/Jiebo
         run: |
           set -o pipefail
           xcodebuild -project Jiebo.xcodeproj -scheme Jiebo \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -configuration Debug CODE_SIGNING_ALLOWED=NO build | tail -n 200
+            -configuration Debug CODE_SIGNING_ALLOWED=NO build > build.log 2>&1 || status=$?
+          # 公开仓库的原始日志需要登录才能下载，编译错误转成注解以便直接查看
+          grep -E '^/.+:[0-9]+:[0-9]+: error: ' build.log | sort -u | head -n 40 | \
+            sed -E 's#^'"$GITHUB_WORKSPACE"'/([^:]+):([0-9]+):[0-9]+: error: (.*)$#::error file=\1,line=\2::\3#' || true
+          tail -n 80 build.log
+          exit "${status:-0}"
