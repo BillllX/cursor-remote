@@ -1,0 +1,326 @@
+.composer-dock {
+  position: relative;
+  z-index: 6;
+  grid-column: 1;
+  grid-row: 2;
+  flex: none;
+  padding: 8px 0 24px;
+  background: var(--bg);
+}
+
+.thread-jump {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  translate: -50% 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--bg-panel);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+}
+
+.thread-jump:hover {
+  color: var(--text);
+}
+
+.thread-jump.new {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  color: var(--accent);
+}
+
+@media (pointer: coarse) {
+  .thread-jump {
+    height: 40px;
+    padding: 0 18px 0 14px;
+    font-size: var(--fs-base);
+  }
+}
+
+.composer-dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -20px;
+  height: 20px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-composer);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  padding: 10px 12px 8px;
+  container-type: inline-size;
+  container-name: composer;
+  transition: border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
+}
+
+.composer-body {
+  min-width: 0;
+}
+
+.composer .hint {
+  position: static;
+  margin-top: 10px;
+}
+
+.composer:focus-within {
+  border-color: var(--accent-line);
+  box-shadow: var(--shadow-float), var(--focus);
+}
+
+.composer-input {
+  width: 100%;
+  min-height: 36px;
+  max-height: 220px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  outline: none;
+  padding: 6px 8px 2px;
+  line-height: 1.5;
+  touch-action: manipulation;
+}
+
+.composer-input::placeholder {
+  color: var(--dim);
+}
+
+.composer.centered .composer-input {
+  min-height: 40px;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  padding: 0;
+  min-width: 0;
+  overflow: visible;
+}
+
+.pill {
+  height: 24px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--hover);
+  background: transparent;
+  padding: 0 8px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.pill.on {
+  background: var(--fill);
+  color: var(--fill-fg);
+  border-color: transparent;
+}
+
+.pill:hover {
+  background: var(--hover);
+}
+
+.pill.on:hover {
+  background: var(--fill);
+  opacity: 0.88;
+}
+
+.tool-review .pill,
+.turn-review .pill,
+.turn-actions .pill {
+  border-radius: var(--radius-sm);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.tool-review .pill:hover,
+.turn-review .pill:hover,
+.turn-actions .pill:hover {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.model-picker-btn {
+  width: auto;
+  height: 32px;
+  margin-left: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath fill='none' stroke='%23a3a3a3' stroke-width='1.35' stroke-linecap='round' d='M1.6 2.8 4 5.2 6.4 2.8'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding: 0 22px 0 10px;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+  appearance: none;
+  transition: background-color 180ms var(--ease-out), color 180ms var(--ease-out);
+}
+
+.model-picker {
+  position: relative;
+  min-width: 28px;
+  flex: 0 1 180px;
+}
+
+.model-picker-btn {
+  display: inline-flex;
+  align-items: center;
+  max-width: 180px;
+  cursor: pointer;
+}
+
+.model-picker-btn.open {
+  border-color: var(--border);
+  background-color: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.model-picker-btn:hover {
+  background-color: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.model-picker-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 12em;
+  flex: 1 1 auto;
+  transition:
+    max-width 180ms var(--ease-out),
+    opacity 140ms var(--ease-out);
+}
+
+.model-menu {
+  position: fixed;
+  min-width: 228px;
+  max-width: min(320px, 72vw);
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px;
+  box-shadow: var(--shadow);
+  z-index: 40;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+  transform-origin: top left;
+}
+
+.model-menu-group + .model-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.model-menu-vendor {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+  padding: 6px 10px 2px;
+  letter-spacing: 0.04em;
+}
+
+.model-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.model-menu button:hover {
+  background: var(--bg-composer);
+}
+
+.model-menu button.on {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.grow {
+  flex: 1 1 8px;
+  min-width: 0;
+}
+
+.send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--fill);
+  color: var(--fill-fg);
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: 1;
+  padding: 0;
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background 220ms var(--ease-out),
+    color 220ms var(--ease-out),
+    box-shadow 220ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+
+.send:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fill) 88%, var(--text));
+  box-shadow: none;
+}
+
+.send:active:not(:disabled) {
+  transform: scale(0.94);
+  box-shadow: none;
+}
+
+.send:disabled {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: color-mix(in srgb, var(--dim) 70%, transparent);
+  box-shadow: none;
+  transform: scale(0.94);
+  cursor: default;
+}
+
+.stop {
+  background: var(--danger);
+  color: var(--fill-fg);
+  box-shadow: none;
+}
+
+.hint {
+  margin-top: 16px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}

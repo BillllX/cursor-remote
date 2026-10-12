@@ -1,0 +1,50 @@
+.text-shimmer {
+  font-weight: 500;
+  background-image: linear-gradient(to right, var(--dim) 30%, var(--text) 50%, var(--dim) 70%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: jiebo-shimmer 4s linear infinite;
+}
+
+@keyframes jiebo-in {
+  from {
+    opacity: 0;
+    translate: 0 6px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes jiebo-in-user {
+  from {
+    opacity: 0;
+    translate: 8px 4px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes jiebo-shimmer {
+  from {
+    background-position: 200% 50%;
+  }
+  to {
+    background-position: -200% 50%;
+  }
+}
+
+@keyframes jiebo-spin {
+  to {
+    rotate: 360deg;
+  }
+}
+
+nextjs-portal {
+  display: none !important;
+}

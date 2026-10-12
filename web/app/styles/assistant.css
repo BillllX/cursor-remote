@@ -1,0 +1,226 @@
+/* ── 个人助理：和 Loop、终端同一套壳（search-box + loop-*），宽屏收进侧栏列 ── */
+.assistant-box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(82vh, 720px);
+  text-align: left;
+}
+
+.app.ide.pane-assistant .assistant-box {
+  background: var(--bg-sidebar);
+}
+
+.assistant-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.assistant-head-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.assistant-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-notice {
+  color: var(--accent);
+}
+
+.assistant-body {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assistant-section {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-pre {
+  white-space: pre-wrap;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.assistant-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-item {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.assistant-item.muted {
+  color: var(--dim);
+}
+
+.assistant-item-btn {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 160ms var(--ease-out), border-color 160ms var(--ease-out);
+}
+
+.assistant-item-btn:hover {
+  background: var(--hover);
+}
+
+.assistant-item-btn.unread {
+  border-color: var(--accent-line);
+}
+
+.assistant-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.assistant-item-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.assistant-item-btn.unread .assistant-item-title {
+  font-weight: 600;
+}
+
+.assistant-item-body {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-inline-form {
+  display: flex;
+  gap: 8px;
+}
+
+.assistant-inline-form .side-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.assistant-inline-form .new-chat {
+  flex: none;
+}
+
+.assistant-col-form {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.assistant-core {
+  display: grid;
+  gap: 8px;
+}
+
+.assistant-approval {
+  margin-bottom: 0;
+}
+
+/* chat-mark 的色调变体：只用主题里的 ok / danger / warn 三组 */
+.chat-mark.ok {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.chat-mark.danger {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.chat-mark.warn {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.chat-mark:not(.run):not(.ok):not(.danger):not(.warn):not(.unread) {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+.pill.danger {
+  color: var(--danger);
+}
+
+.pill.danger:hover {
+  background: var(--danger-bg);
+}
+
+/* 父会话输入框上方的委派条：没有待批时是中性信息，有待批才用 approval-row 的提醒色 */
+.delegation-row.idle {
+  border-color: var(--border);
+  background: var(--bg-panel);
+  color: var(--muted);
+}
+
+/* 会话行的删除按钮：不抢标题的视觉。触屏没有悬停，保留但缩小变淡；鼠标设备悬停或键盘聚焦时才出现 */
+.chats .chat-item .chat-item-x {
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--dim);
+  background: transparent;
+  border-radius: var(--radius-sm);
+}
+
+.chats .chat-item .chat-item-x:hover {
+  color: var(--danger);
+  background: var(--hover-strong);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chats .chat-item .chat-item-x {
+    width: 26px;
+    height: 26px;
+    font-size: var(--fs-xl);
+  }
+
+  .chats .chat-item:not(:hover):not(:focus-within) .chat-item-x {
+    opacity: 0;
+  }
+
+  /* 键盘 Tab 到会话行时也要能看到删除按钮 */
+  .chats .chat-item:focus-within .chat-item-x {
+    opacity: 1;
+  }
+}

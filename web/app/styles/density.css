@@ -1,0 +1,120 @@
+/* Density classes beat Pad media queries; named @container composer is unreliable in some webviews. */
+.composer.density-mid .confirm-label,
+.composer.density-compact .confirm-label,
+.composer.density-tight .confirm-label {
+  max-width: 0;
+  opacity: 0;
+  margin: 0;
+}
+
+.composer.density-mid .composer-bar > .confirm-btn,
+.composer.density-compact .composer-bar > .confirm-btn,
+.composer.density-tight .composer-bar > .confirm-btn {
+  gap: 0;
+  padding: 0 8px;
+}
+
+.composer.density-full .mode-label,
+.composer.density-mid .mode-label,
+.composer.density-full .mode-switch,
+.composer.density-mid .mode-switch,
+.composer.density-full .mode-switch .mode-btn,
+.composer.density-mid .mode-switch .mode-btn {
+  flex: none;
+}
+
+.composer.density-mid .mode-label,
+.composer.density-compact .mode-label,
+.composer.density-tight .mode-label {
+  max-width: 0;
+  opacity: 0;
+  margin: 0;
+}
+
+.composer.density-mid .mode-switch .mode-btn,
+.composer.density-compact .mode-switch .mode-btn,
+.composer.density-tight .mode-switch .mode-btn {
+  gap: 0;
+  padding: 0 8px;
+}
+
+/* 窄屏下策略层开关只剩一个空按钮，收进“···”菜单 */
+.composer-menu .narrow-only {
+  display: none;
+}
+
+.composer.density-mid .policy-btn,
+.composer.density-compact .policy-btn,
+.composer.density-tight .policy-btn {
+  display: none;
+}
+
+.composer.density-mid .composer-menu .narrow-only,
+.composer.density-compact .composer-menu .narrow-only,
+.composer.density-tight .composer-menu .narrow-only {
+  display: block;
+}
+
+.composer.density-tight .mode-switch {
+  flex: none;
+}
+
+.composer.density-tight .composer-bar {
+  gap: 4px;
+}
+
+/* 窄屏下只有图标时看不出当前是哪种模式，选中的那个保留文字 */
+.composer.density-mid .mode-switch .mode-btn.on,
+.composer.density-compact .mode-switch .mode-btn.on,
+.composer.density-tight .mode-switch .mode-btn.on {
+  gap: 4px;
+}
+
+.composer.density-mid .mode-switch .mode-btn.on .mode-label,
+.composer.density-compact .mode-switch .mode-btn.on .mode-label,
+.composer.density-tight .mode-switch .mode-btn.on .mode-label {
+  max-width: 3em;
+  opacity: 1;
+}
+
+.composer.density-compact .model-picker-btn,
+.composer.density-tight .model-picker-btn {
+  max-width: 128px;
+}
+
+.composer.density-tight .model-picker-label {
+  max-width: 0;
+  opacity: 0;
+}
+
+.composer.density-tight .model-picker {
+  flex: 0 0 auto;
+}
+
+.composer.density-tight .model-picker-btn {
+  width: 28px;
+  max-width: 28px;
+  padding: 0;
+  background-position: center;
+}
+
+.composer.density-tight .send,
+.composer.density-tight .stop {
+  width: 32px;
+  height: 32px;
+}
+
+@media (pointer: coarse) {
+  .composer.density-tight .send,
+  .composer.density-tight .stop {
+    width: 48px;
+    height: 48px;
+  }
+
+  .composer.density-tight .model-picker-btn {
+    width: 48px;
+    max-width: 48px;
+    height: 48px;
+    padding: 0;
+  }
+}

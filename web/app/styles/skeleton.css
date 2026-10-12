@@ -1,0 +1,56 @@
+/* 加载占位：用灰色块摆出内容的大致形状，切换会话、读取文件时版面不跳 */
+.skeleton {
+  display: grid;
+  gap: 18px;
+  width: 100%;
+  padding: 8px 0;
+}
+
+.file-skeleton {
+  padding: 20px 18px;
+  justify-items: start;
+}
+
+.skel-block {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.skel-line {
+  height: 12px;
+  max-width: 100%;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  animation: skel-pulse 1.4s ease-in-out infinite;
+}
+
+.skel-user {
+  height: 34px;
+  justify-self: end;
+  border-radius: var(--radius-lg);
+}
+
+.skel-block .skel-line:nth-child(2) {
+  animation-delay: 120ms;
+}
+
+.skel-block .skel-line:nth-child(3) {
+  animation-delay: 240ms;
+}
+
+@keyframes skel-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel-line {
+    animation: none;
+  }
+}

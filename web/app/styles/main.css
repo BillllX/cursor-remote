@@ -1,0 +1,119 @@
+.main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 0fr;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app.nav-ready .main {
+  transition: grid-template-columns var(--dur-sheet) var(--ease-out);
+}
+
+.main-col {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.main.with-preview {
+  grid-template-columns: minmax(0, 1fr) minmax(480px, 46vw);
+}
+
+.main.with-preview .main-col {
+  min-height: 0;
+}
+
+.main.with-preview .file-preview {
+  grid-column: 2;
+  grid-row: 1 / -1;
+}
+
+.main.with-preview .composer-dock {
+  grid-column: 1;
+}
+
+.main.with-preview.with-canvas {
+  grid-template-columns: minmax(0, 1fr) minmax(560px, 58vw);
+}
+
+.preview-scrim,
+.preview-reopen {
+  display: none;
+}
+
+.file-preview-tab.canvas .file-preview-tab-name::after {
+  content: " · 画布";
+  color: var(--dim);
+  font-size: var(--fs-2xs);
+}
+
+.file-preview-body.canvas-live {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  position: relative;
+}
+
+.canvas-host {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+}
+
+.canvas-host-keep {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+.canvas-host-keep.is-idle {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  pointer-events: none;
+}
+
+.canvas-host-status {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: var(--fs-base);
+  background: var(--bg);
+}
+
+.canvas-frame {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
+.canvas-runtime-page {
+  position: fixed;
+  inset: 0;
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}

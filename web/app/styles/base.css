@@ -1,0 +1,125 @@
+:root {
+  color-scheme: light;
+  --jiebo-pine: #1a4f41;
+  --jiebo-pine-deep: #12362d;
+  --jiebo-pine-soft: #8fbfb0;
+  --jiebo-brass: #c4a36a;
+  --jiebo-paper: #f3eee4;
+  --jiebo-mist: #e7e1d4;
+  --jiebo-white: #fffcfa;
+  --jiebo-ink: #1c1916;
+  --jiebo-clay: #a35c3c;
+  --bg: #f3eee4;
+  --bg-sidebar: #ebe5d9;
+  --bg-panel: #fffcf8;
+  --bg-composer: #fffdfa;
+  --bg-user: #e2ebe4;
+  --border: #ddd5c7;
+  --border-strong: #cdc4b4;
+  --text: #1c1916;
+  --muted: #5c574f;
+  --dim: #746d62;
+  --accent: #1a4f41;
+  --accent-2: var(--jiebo-brass);
+  --danger: #b42318;
+  --ok: #2f7d4a;
+  --ok-bg: #e1eee3;
+  --run: #8a6526;
+  --run-bg: #f2e8d2;
+  --hover: color-mix(in srgb, #1c1916 5%, transparent);
+  --hover-strong: color-mix(in srgb, #1c1916 9%, transparent);
+  --fill: #1a4f41;
+  --fill-fg: #fffcf8;
+  --danger-bg: #f8e5e0;
+  --danger-fg: #9a1d14;
+  --ok-fg: #24633a;
+  --add-bg: #e5efe5;
+  --del-bg: #f7e5e0;
+  --warn-bg: #f7eedb;
+  --warn-fg: #7a581b;
+  --warn-border: #e3cf9f;
+  --mark-bg: #f0e0b2;
+  --shadow: 0 1px 2px rgba(28, 25, 22, 0.05), 0 12px 32px rgba(28, 25, 22, 0.08);
+  --shadow-card: 0 1px 2px color-mix(in srgb, var(--text) 6%, transparent);
+  --shadow-float: 0 1px 2px color-mix(in srgb, var(--text) 5%, transparent), 0 10px 28px -8px color-mix(in srgb, var(--text) 14%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, var(--border));
+  --focus: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  --scrim: color-mix(in srgb, #12100d 46%, transparent);
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --fs-2xs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: 15px;
+  --fs-xl: 16px;
+  --fs-2xl: 18px;
+  --fs-3xl: 22px;
+  --fs-4xl: 26px;
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", sans-serif;
+  --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+  --mono: var(--font-mono), "Noto Sans Mono", "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in: cubic-bezier(0.32, 0, 0.67, 0);
+  --dur-sheet: 340ms;
+  --dur-scrim: 280ms;
+  --dur-press: 90ms;
+  --dur-micro: 180ms;
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.composer-input:focus-visible,
+.search-input:focus-visible,
+.thread-find-input:focus-visible,
+.login-card input:focus-visible,
+.file-preview-edit:focus-visible {
+  outline: none;
+}
+
+button:active:not(.send):not(.stop):not(.new-chat):not(.login-btn):not(.mode-btn),
+.pill:active,
+.pad-bar-btn:active,
+.chat-item-x:active,
+.empty-chip:active {
+  background: var(--hover-strong);
+}

@@ -1,0 +1,201 @@
+@media (pointer: coarse) {
+  .desk-only {
+    display: none;
+  }
+
+  .touch-only {
+    display: block;
+  }
+
+  .chat-item-x {
+    opacity: 1;
+  }
+
+  .turn-actions {
+    opacity: 1;
+  }
+
+  .turn-actions button {
+    min-height: 48px;
+    min-width: 48px;
+    padding: 0 14px;
+    font-size: var(--fs-lg);
+    border-radius: var(--radius-md);
+    background: var(--hover);
+  }
+
+  .composer-input,
+  .search-input,
+  .side-input,
+  .thread-find-input,
+  .login-card input,
+  textarea {
+    font-size: var(--fs-xl);
+  }
+
+  .composer-input {
+    min-height: 52px;
+    padding: 10px 8px 8px;
+  }
+
+  .new-chat,
+  .chat-item,
+  .chat-item-empty,
+  .mode-btn,
+  .pill,
+  .empty-chip,
+  .login-btn,
+  .pad-bar-btn {
+    min-height: 44px;
+  }
+
+  .send,
+  .stop {
+    width: 48px;
+    height: 48px;
+  }
+
+  .composer-bar > .confirm-btn {
+    padding: 0 12px;
+  }
+
+  .mode-btn,
+  .mode-switch .mode-btn {
+    height: 48px;
+    min-height: 48px;
+    padding: 0 14px;
+  }
+
+  .thread-spacer {
+    height: 160px;
+  }
+
+  .pill {
+    height: 44px;
+    padding: 0 12px;
+  }
+
+  .chats {
+    gap: 12px;
+  }
+
+  .chat-item,
+  .chat-item-empty {
+    min-height: 72px;
+    padding: 12px 12px;
+  }
+
+  .chat-item-main {
+    min-height: 44px;
+  }
+
+  .chat-item-x,
+  .chat-item.active .chat-item-x,
+  .chat-item:hover .chat-item-x {
+    opacity: 1;
+    width: 48px;
+    height: 48px;
+    font-size: var(--fs-4xl);
+    color: var(--text);
+    background: var(--hover);
+    border-radius: var(--radius-md);
+  }
+
+  .search-item,
+  .file-hit {
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .file-preview-tab,
+  .file-preview-bar .pill,
+  .tool-review .pill,
+  .turn-review .pill {
+    min-height: 44px;
+  }
+
+  .file-preview-x,
+  .mention-chip-drop,
+  .queue-chip-drop {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    font-size: var(--fs-3xl);
+  }
+
+  .chat-item:hover,
+  .empty-chip:hover,
+  .tool summary:hover,
+  .tool-pack > summary:hover,
+  .pill:hover,
+  .tree-file:hover,
+  .file-preview-x:hover {
+    background: transparent;
+  }
+
+  .chat-item:active,
+  .empty-chip:active,
+  .pill:active,
+  .pad-bar-btn:active,
+  .file-preview-x:active,
+  .chat-item-x:active,
+  .tool summary:active,
+  .tool-pack > summary:active {
+    background: var(--hover);
+  }
+
+  .pad-bar-btn,
+  .send,
+  .stop,
+  .pill.icon,
+  .empty-chip,
+  .file-preview-x,
+  .chat-item-x {
+    transition:
+      transform var(--dur-press) var(--ease-out),
+      background-color var(--dur-press) ease;
+  }
+
+  .pad-bar-btn:active,
+  .send:active,
+  .stop:active,
+  .pill.icon:active,
+  .empty-chip:active,
+  .file-preview-x:active,
+  .chat-item-x:active {
+    transform: scale(0.94);
+  }
+
+  .pad-bar-btn:active,
+  .pill.icon:active,
+  .empty-chip:active,
+  .file-preview-x:active,
+  .chat-item-x:active {
+    background: var(--hover-strong);
+  }
+
+  .tool-title.link,
+  .tool-review-done {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    font-size: var(--fs-base);
+  }
+
+  .composer-select,
+  .model-picker-btn {
+    height: 48px;
+    font-size: var(--fs-xl);
+  }
+
+  .pill.icon {
+    width: 48px;
+    height: 48px;
+    display: grid;
+    place-items: center;
+    font-size: var(--fs-2xl);
+    background: transparent;
+    border-radius: var(--radius-sm);
+  }
+}

@@ -1,0 +1,155 @@
+.composer-upload {
+  font-size: var(--fs-sm);
+  color: var(--dim);
+  padding: 2px 2px 8px;
+}
+
+.composer .error-line,
+.composer .notice-line {
+  margin: 0 2px 8px;
+}
+
+.user-thumbs,
+.composer-thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.user-thumbs img,
+.composer-thumb img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.composer-thumb {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pill.icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+  border: 1px solid var(--border);
+  background: transparent;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  transition:
+    background 180ms var(--ease-out),
+    border-color 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+
+.pill.icon:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.composer-bar .pill.icon,
+.composer-bar .model-picker-btn {
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+}
+
+.composer-bar .model-picker-btn.open {
+  border-color: transparent;
+  background-color: var(--hover);
+  color: var(--text);
+}
+
+@media (hover: hover) {
+  .composer-bar .pill.icon:hover,
+  .composer-bar .model-picker-btn:hover {
+    border-color: transparent;
+    background-color: var(--hover);
+    color: var(--text);
+  }
+}
+
+.composer-attach svg {
+  transition: rotate 280ms var(--ease-out);
+}
+
+.composer-attach:hover svg {
+  rotate: 90deg;
+}
+
+.composer-attach {
+  position: relative;
+  overflow: hidden;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.composer-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.01;
+  font-size: 48px;
+  cursor: pointer;
+}
+
+.composer-more {
+  position: relative;
+}
+
+.composer-menu {
+  position: absolute;
+  right: 0;
+  bottom: 36px;
+  min-width: 168px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  box-shadow: var(--shadow);
+  z-index: 8;
+  display: grid;
+  animation: jiebo-pop 150ms var(--ease-out) both;
+  transform-origin: bottom right;
+}
+
+.composer-menu-label {
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+  padding: 6px 10px 2px;
+}
+
+.composer-menu button,
+.composer-menu label {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  padding: 7px 10px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+
+.composer-menu button:hover,
+.composer-menu label:hover {
+  background: var(--bg-composer);
+}
+
+.composer-menu .on {
+  color: var(--accent);
+}

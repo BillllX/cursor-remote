@@ -1,0 +1,117 @@
+.activity-bar {
+  display: none;
+}
+
+.app.ide .activity-admin {
+  margin-top: auto;
+}
+
+.admin-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(78vh, 720px);
+  padding: 14px;
+}
+
+.admin-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-head-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.admin-body {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.admin-section {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
+.admin-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 8px;
+}
+
+.admin-summary div {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+}
+
+.admin-summary strong {
+  font-size: var(--fs-3xl);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.admin-summary span,
+.admin-online-count {
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
+.admin-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-md);
+}
+
+.admin-row span:first-child {
+  color: var(--muted, #71717a);
+}
+
+.admin-online {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--dim) 40%, transparent);
+}
+
+.admin-online.on {
+  background: var(--ok, #3d8b6e);
+}
+
+.admin-badge {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--brass, #a6843d);
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--brass, #a6843d) 12%, transparent);
+}
+
+.admin-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--dim);
+}
+
+.git-empty {
+  color: var(--dim);
+  font-size: var(--fs-md);
+  padding: 16px 14px;
+}

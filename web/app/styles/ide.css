@@ -1,0 +1,285 @@
+@media (min-width: 960px) {
+  .app.ide {
+    grid-template-columns: 56px minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .app.ide .activity-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    grid-column: 1;
+    grid-row: 1;
+    min-height: 0;
+    padding: 16px 0 12px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+  }
+
+  .app.ide .activity-bar button {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+  }
+
+  .app.ide .activity-bar button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  .app.ide .activity-bar button.on {
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+    color: var(--accent);
+  }
+
+  .app.ide .activity-bar .loop-live {
+    top: -2px;
+    right: -2px;
+  }
+
+  .app.ide .sidebar {
+    position: relative;
+    transform: none;
+    width: auto;
+    inset: auto;
+    z-index: 1;
+    box-shadow: none;
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 0;
+  }
+
+  .app.ide .nav-scrim,
+  .app.ide .pad-bar {
+    display: none;
+  }
+
+  .app.ide .main {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .app.ide .main.with-preview {
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .app.ide .main.with-preview .main-col {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .app.ide .main.with-preview .composer-dock {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .app.ide .main.with-preview .file-preview {
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+
+  .app.ide.pane-git .sidebar,
+  .app.ide.pane-search .sidebar,
+  .app.ide.pane-terminal .sidebar,
+  .app.ide.pane-loop .sidebar,
+  .app.ide.pane-assistant .sidebar {
+    display: none;
+  }
+
+  .app.ide.pane-git > .files-overlay.open,
+  .app.ide.pane-search > .search-overlay.open,
+  .app.ide.pane-terminal > .search-overlay.open,
+  .app.ide.pane-loop > .search-overlay.open,
+  .app.ide.pane-assistant > .assistant-overlay.open {
+    position: relative;
+    inset: auto;
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+    display: flex;
+    padding: 0;
+    background: var(--bg-sidebar);
+    opacity: 1;
+    pointer-events: auto;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    place-items: stretch;
+  }
+
+  .app.ide.pane-git .files-browser,
+  .app.ide.pane-search .search-box,
+  .app.ide.pane-terminal .terminal-box,
+  .app.ide.pane-loop .loop-box,
+  .app.ide.pane-assistant .assistant-box {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .app.ide.pane-search .search-list,
+  .app.ide.pane-terminal .terminal-log {
+    min-height: 0;
+    overflow: auto;
+    flex: 1;
+  }
+
+  .app.ide.pane-git .file-tree,
+  .app.ide.pane-git .tree-empty,
+  .app.ide.pane-git .files-browser-search {
+    display: none;
+  }
+
+  /* 921–1366 精细指针下，旧的 :has(.main.with-preview) 会把三列压成抽屉。ide 必须压过它。 */
+  .app.ide:has(.main.with-preview) {
+    grid-template-columns: 56px minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .app.ide:has(.main.with-preview) .sidebar,
+  .app.ide.nav-ready:has(.main.with-preview) .sidebar,
+  .app.ide.nav-open:has(.main.with-preview) .sidebar {
+    position: relative;
+    inset: auto;
+    z-index: 1;
+    width: auto;
+    transform: none;
+    box-shadow: none;
+    grid-column: 2;
+    grid-row: 1;
+    padding-top: 20px;
+    padding-bottom: 16px;
+  }
+
+  .app.ide:has(.main.with-preview) .pad-bar-nav,
+  .app.ide.nav-open:has(.main.with-preview) .nav-scrim {
+    display: none;
+  }
+
+  .app.ide:has(.main.with-preview) .main.with-preview,
+  .app.ide:has(.main.with-preview) .main.with-preview.preview-max {
+    grid-template-columns: minmax(320px, 1.1fr) minmax(300px, 0.9fr);
+  }
+
+  .app.ide:has(.main.with-preview) .main.with-preview.with-canvas,
+  .app.ide:has(.main.with-preview) .main.with-preview.with-canvas.preview-max {
+    grid-template-columns: minmax(310px, 1fr) minmax(310px, 1fr);
+  }
+
+  /* 触屏 ≤1366 的预览是右侧抽屉（position: fixed）；ide 下必须落回第二列，否则留一列空白。 */
+  .app.ide:has(.main.with-preview) .main.with-preview .file-preview,
+  .app.ide:has(.main.with-preview) .main.with-preview.preview-max .file-preview {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    width: auto;
+    height: 100%;
+    padding-top: 0;
+    padding-bottom: 0;
+    transform: none;
+    transition: none;
+    pointer-events: auto;
+    box-shadow: none;
+    border-left: 1px solid var(--border);
+    grid-column: 2;
+    grid-row: 1 / -1;
+  }
+
+  .app.ide .preview-scrim,
+  .app.ide .main.with-preview.preview-max .preview-scrim,
+  .app.ide .preview-reopen,
+  .app.ide .main.with-preview:not(.preview-max) .preview-reopen,
+  .app.ide .preview-expand {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .mode-switch .mode-btn {
+    height: 34px;
+    min-height: 34px;
+    padding: 0 12px;
+  }
+
+  .model-picker-btn {
+    height: 40px;
+    font-size: var(--fs-md);
+  }
+
+  .composer.density-tight .model-picker-btn {
+    width: 40px;
+    max-width: 40px;
+    height: 40px;
+  }
+
+  .composer-bar > .confirm-btn {
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .composer-bar .pill.icon {
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+  }
+
+  .send,
+  .stop,
+  .composer.density-tight .send,
+  .composer.density-tight .stop {
+    width: 40px;
+    height: 40px;
+  }
+
+  .file-preview-bar .pill {
+    height: 30px;
+    min-height: 30px;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: var(--fs-sm);
+    border-radius: var(--radius-sm);
+  }
+
+  .file-preview-bar .pill:not(.pill-text) {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+    border-radius: 50%;
+  }
+}
+
+@media (max-width: 1366px) {
+  .main.with-preview .file-preview-bar .pill,
+  .file-preview-bar .pill {
+    height: 30px;
+    min-height: 30px;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: var(--fs-sm);
+    border-radius: var(--radius-sm);
+  }
+
+  .file-preview-bar .pill:not(.pill-text) {
+    width: 30px;
+    min-width: 30px;
+    padding: 0;
+    border-radius: 50%;
+  }
+}
