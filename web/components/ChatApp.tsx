@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -27,14 +26,13 @@ import type {
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import AssistantPanel, { DELEGATION_STATUS } from "./AssistantPanel";
 import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
-import FileTree, { GIT_LABEL, FileGlyph } from "./FileTree";
 import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
 import { isWideKind, kindFromPath, mediaSrc, preferHttpText, tabKind } from "../lib/preview";
 import { fetchPreviewText, peekPreviewText, putPreviewText } from "../lib/previewCache";
 import { clearBodies, dropBody, readBody, writeBody } from "../lib/chatCache";
-import { APPEARANCES, PALETTES, applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
+import { applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
 import {
   DEFAULT_MODEL,
   modelLabel,
@@ -48,7 +46,7 @@ import { useFocusTrap } from "../lib/useFocusTrap";
 import { JieboGlyph, JieboMark as Mark } from "./JieboMark";
 import { IconRail } from "./chromeIcons";
 import { gatewayUrl, HELLO_CLIENT, uploadUrl, wire } from "../lib/chat/connection";
-import { fmtAgo, fmtClock, fmtCount, fmtDuration, fmtRelative, fmtTokens, formatDuration, friendlyError, isProgressBlurb, runMeta } from "../lib/chat/format";
+import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../lib/chat/format";
 import { useHeldOpen, useSheetDrag } from "../lib/chat/hooks/sheet";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
@@ -57,13 +55,20 @@ import { clearBrowserChatStore, GROUPS_KEY, MAX_DELETED, pushRecent, rememberDel
 import { mergeToolOutput, pathFromPayload, searchQuery, shellRows, toolPreview } from "../lib/chat/tools";
 import { applyRunSnapshot, editPathsOf, extractTodos, historyToTurns, liveTurn, mergeHistoryTurns, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, turnSuperseded, uid, withLiveTurns, writesWereRejected } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
-import { gitLetterOf, inWorkspaceRoot, MORE_GROUPS_SHOWN, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel } from "../lib/chat/workspace";
+import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel } from "../lib/chat/workspace";
+import { AdminOverlay } from "./chat/AdminOverlay";
 import { Composer } from "./chat/Composer";
-import { CursorBillPanel } from "./chat/CursorBillPanel";
-import { FolderMark } from "./chat/FolderMark";
+import { FilesOverlay } from "./chat/FilesOverlay";
+import { GrepOverlay } from "./chat/GrepOverlay";
 import { LoginGate } from "./chat/LoginGate";
+import { LoopOverlay } from "./chat/LoopOverlay";
 import { CiteText, Highlight, markdownComponents, MemoMarkdown, REMARK_PLUGINS } from "./chat/markdown";
+import { PaletteOverlay } from "./chat/PaletteOverlay";
+import { SearchOverlay } from "./chat/SearchOverlay";
+import { Sidebar } from "./chat/Sidebar";
 import { StallHint } from "./chat/StallHint";
+import { TerminalOverlay } from "./chat/TerminalOverlay";
+import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -4231,342 +4236,58 @@ export default function ChatApp() {
           </button>
         ) : null}
       </nav>
-      {adminOpen ? (
-        <div className="search-overlay open" onClick={() => setAdminOpen(false)}>
-          <div
-            ref={adminTrap}
-            className="search-box admin-box"
-            role="dialog"
-            aria-modal="true"
-            aria-label="使用统计"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="admin-head">
-              <div className="loop-title">使用统计</div>
-              <div className="admin-head-actions">
-                <button type="button" className="logout-btn" onClick={openAdminStats}>
-                  刷新
-                </button>
-                <button type="button" className="logout-btn" onClick={() => setAdminOpen(false)}>
-                  关闭
-                </button>
-              </div>
-            </div>
-            {adminStats.length || cursorBill ? (
-              <div className="admin-body">
-                <div className="admin-section">
-                  <div className="admin-section-label">
-                    Cursor 账单{cursorBill ? ` · ${fmtClock(cursorBill.fetchedAt)}` : ""}
-                  </div>
-                  <CursorBillPanel bill={cursorBill} ready={adminStatsAt != null} />
-                </div>
-                <div className="admin-section">
-                  <div className="admin-section-label">
-                    各账号估算消耗{adminStatsAt ? ` · ${fmtClock(adminStatsAt)} 更新` : ""}
-                  </div>
-                  <div className="admin-summary">
-                    <div>
-                      <strong>{fmtTokens(adminStats.reduce((sum, row) => sum + row.estTokens, 0))}</strong>
-                      <span>估算 token</span>
-                    </div>
-                    <div>
-                      <strong>{fmtCount(adminStats.reduce((sum, row) => sum + row.turns, 0))}</strong>
-                      <span>消息</span>
-                    </div>
-                    <div>
-                      <strong>{fmtCount(adminStats.reduce((sum, row) => sum + row.runs, 0))}</strong>
-                      <span>运行</span>
-                    </div>
-                    <div>
-                      <strong>{fmtDuration(adminStats.reduce((sum, row) => sum + row.runMs, 0))}</strong>
-                      <span>运行时长</span>
-                    </div>
-                  </div>
-                </div>
-                {adminStats.map((row) => (
-                  <div key={row.id} className="admin-section">
-                    <div className="admin-section-label">
-                      <span className={`admin-online${row.online > 0 ? " on" : ""}`} />
-                      {row.name}
-                      {row.admin ? <span className="admin-badge">管理员</span> : null}
-                      {row.online > 0 ? <span className="admin-online-count">{row.online} 在线</span> : null}
-                    </div>
-                    <div className="admin-row"><span>会话</span><span>{row.chats}</span></div>
-                    <div className="admin-row">
-                      <span>消息 / 运行 / 工具</span>
-                      <span>{fmtCount(row.turns)} / {fmtCount(row.runs)} / {fmtCount(row.toolCalls)}</span>
-                    </div>
-                    <div className="admin-row"><span>运行时长</span><span>{fmtDuration(row.runMs)}</span></div>
-                    <div className="admin-row">
-                      <span>输入 / 输出</span>
-                      <span>{fmtCount(row.inChars)} / {fmtCount(row.outChars)} 字符</span>
-                    </div>
-                    <div className="admin-row"><span>估算 token</span><span>{fmtTokens(row.estTokens)}</span></div>
-                    {row.modelInTokens || row.modelOutTokens ? (
-                      <div className="admin-row">
-                        <span>第三方模型 token（实计）</span>
-                        <span>
-                          入 {fmtTokens(row.modelInTokens ?? 0)} / 出 {fmtTokens(row.modelOutTokens ?? 0)}
-                          {row.modelCacheTokens ? ` / 缓存 ${fmtTokens(row.modelCacheTokens)}` : ""}
-                        </span>
-                      </div>
-                    ) : null}
-                    <div className="admin-row"><span>最后活跃</span><span>{fmtRelative(row.lastActiveAt)}</span></div>
-                  </div>
-                ))}
-                <p className="admin-note">
-                  上面是这台服务器 CURSOR_API_KEY 的官方账单，和 Cursor CLI 的 /usage 同一口径。下面各账号的 token 仍是按字符估算（英文 ≈4 字符/token；中文实际更高），只用来看相对消耗。
-                </p>
-              </div>
-            ) : (
-              <div className="terminal-empty">
-                <div>暂无数据</div>
-                <div className="loop-meta">连上服务器后自动拉取。</div>
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
-      {searchShown ? (
-        <div className={`search-overlay${searchOpen ? " open" : ""}`} onClick={() => setSearchOpen(false)}>
-          <div
-            ref={searchTrap}
-            className="search-box"
-            role="dialog"
-            aria-modal="true"
-            aria-label="搜索对话"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <input
-              autoFocus={searchOpen}
-              className="search-input"
-              placeholder="搜索对话"
-              value={searchQ}
-              onChange={(event) => setSearchQ(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setSearchOpen(false);
-                if (event.key === "Enter" && searchHits[0]) selectChat(searchHits[0]);
-              }}
-            />
-            <div className="search-list">
-              {searchHits.map((chat) => (
-                <button
-                  key={chat.id}
-                  type="button"
-                  className={`search-item${chat.id === activeId ? " active" : ""}`}
-                  onClick={() => selectChat(chat)}
-                >
-                  {isAssistantChat(chat.id) ? assistantName : chat.title}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {workspaceShown ? (
-        <div
-          className={`search-overlay${workspaceMenuOpen ? " open" : ""}`}
-          onClick={() => {
-            setWorkspaceMenuOpen(false);
-            setWorkspaceCreating(false);
-          }}
-        >
-          <div
-            ref={workspaceTrap}
-            className="search-box workspace-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-label="新对话：选择工作区"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="workspace-dialog-head">
-              <div className="loop-title">新对话</div>
-              <div className="workspace-dialog-sub">选一个工作区，对话里的读写都在这个目录下进行</div>
-            </div>
-            <input
-              autoFocus={workspaceMenuOpen}
-              className="search-input"
-              placeholder={otherMenuWorkspaces.length > 6 ? `搜索 ${otherMenuWorkspaces.length} 个工作区` : "搜索工作区"}
-              value={workspaceQuery}
-              role="combobox"
-              aria-expanded="true"
-              aria-controls="workspace-choices"
-              aria-activedescendant={workspaceChoices.length ? `workspace-choice-${workspacePick}` : undefined}
-              onChange={(event) => {
-                setWorkspaceQuery(event.target.value);
-                setWorkspaceIndex(0);
-              }}
-              onKeyDown={(event) => {
-                if (event.nativeEvent.isComposing) return;
-                if ((event.key === "ArrowDown" || event.key === "ArrowUp") && workspaceChoices.length) {
-                  event.preventDefault();
-                  const step = event.key === "ArrowDown" ? 1 : -1;
-                  setWorkspaceIndex((workspacePick + step + workspaceChoices.length) % workspaceChoices.length);
-                  return;
-                }
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                const pick = workspaceChoices[workspacePick];
-                if (pick) startChatIn(pick.path);
-                else if (workspaceQuery.trim()) send({ type: "create_workspace", name: workspaceQuery.trim() });
-              }}
-            />
-            <div className="search-list workspace-choices" id="workspace-choices" role="listbox" aria-label="工作区">
-              {workspaceChoices.map((item, index) => (
-                <Fragment key={item.path}>
-                  {index === 0 || item.recent !== workspaceChoices[index - 1].recent ? (
-                    <div className="workspace-choice-section" role="presentation">
-                      {item.recent ? "最近用过" : "全部工作区"}
-                    </div>
-                  ) : null}
-                  <button
-                    id={`workspace-choice-${index}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === workspacePick}
-                    tabIndex={-1}
-                    className={`workspace-choice${index === workspacePick ? " active" : ""}`}
-                    onMouseMove={() => {
-                      if (index !== workspacePick) setWorkspaceIndex(index);
-                    }}
-                    onClick={() => startChatIn(item.path)}
-                  >
-                    <FolderMark />
-                    <span className="workspace-choice-text">
-                      <span className="workspace-choice-name">
-                        <Highlight text={item.name} query={workspaceQuery} />
-                      </span>
-                      {item.dup || (relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
-                        <span className="workspace-choice-path">{relToCwd(item.path, workspaceRoot) || item.path}</span>
-                      ) : null}
-                    </span>
-                    {sameCwd(item.path, cwd) ? <span className="workspace-choice-tag">当前</span> : null}
-                    {item.chats ? (
-                      <span className="workspace-choice-count">
-                        {item.chats} 个对话{item.touched ? ` · ${fmtAgo(item.touched, true)}` : ""}
-                      </span>
-                    ) : null}
-                  </button>
-                </Fragment>
-              ))}
-              {!workspaceChoices.length ? (
-                <div className="workspace-choice-empty">
-                  {otherMenuWorkspaces.length ? "没有匹配的工作区" : "还没有工作区，先新建一个"}
-                </div>
-              ) : null}
-            </div>
-            <div className="workspace-dialog-foot">
-              {workspaceCreating ? (
-                <form
-                  className="workspace-create"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    submitNewWorkspace();
-                  }}
-                >
-                  <input
-                    className="side-input"
-                    autoFocus
-                    value={workspaceNameDraft}
-                    placeholder="新目录名"
-                    onChange={(event) => setWorkspaceNameDraft(event.target.value)}
-                  />
-                  <button type="submit" className="workspace-create-ok" disabled={!workspaceNameDraft.trim()}>
-                    创建
-                  </button>
-                </form>
-              ) : workspaceQuery.trim() && !workspaceExact ? (
-                <button
-                  type="button"
-                  className="workspace-new"
-                  onClick={() => send({ type: "create_workspace", name: workspaceQuery.trim() })}
-                >
-                  + 新建工作区「{workspaceQuery.trim()}」
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="workspace-new"
-                  onClick={() => {
-                    setWorkspaceNameDraft("");
-                    setWorkspaceCreating(true);
-                  }}
-                >
-                  + 新建工作区
-                </button>
-              )}
-              <span className="workspace-dialog-keys" aria-hidden="true">
-                ↑↓ 选择 · Enter 打开 · Esc 关闭
-              </span>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {paletteShown ? (
-        <div className={`search-overlay${paletteOpen ? " open" : ""}`} onClick={() => setPaletteOpen(false)}>
-          <div
-            ref={paletteTrap}
-            className="search-box"
-            role="dialog"
-            aria-modal="true"
-            aria-label="打开文件"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <input
-              autoFocus={paletteOpen}
-              className="search-input"
-              placeholder="打开文件"
-              value={paletteQ}
-              onChange={(event) => {
-                setPaletteQ(event.target.value);
-                setPaletteIndex(0);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") setPaletteOpen(false);
-                if (event.key === "ArrowDown") {
-                  event.preventDefault();
-                  setPaletteIndex((index) => Math.min(index + 1, Math.max(0, paletteHits.length - 1)));
-                }
-                if (event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setPaletteIndex((index) => Math.max(index - 1, 0));
-                }
-                if (event.key === "Enter" && paletteHits[paletteHi]) {
-                  event.preventDefault();
-                  openFile(paletteHits[paletteHi]);
-                  setPaletteOpen(false);
-                }
-              }}
-            />
-            <div className="search-list">
-              {paletteHits.length ? (
-                paletteHits.map((path, index) => {
-                  const base = path.split("/").pop() || path;
-                  const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-                  const ext = (base.includes(".") ? base.split(".").pop() : "") || "file";
-                  return (
-                  <button
-                    key={path}
-                    type="button"
-                    className={`search-item file-hit${index === paletteHi ? " active" : ""}`}
-                    onClick={() => {
-                      openFile(path);
-                      setPaletteOpen(false);
-                    }}
-                  >
-                    <span className="file-kind">{ext.slice(0, 4)}</span>
-                    <span className="search-item-name">{base}</span>
-                    <span className="search-item-dir">{dir || "."}</span>
-                  </button>
-                  );
-                })
-              ) : (
-                <div className="search-item">没有匹配的文件</div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {adminOpen ? <AdminOverlay
+        setAdminOpen={setAdminOpen}
+        adminTrap={adminTrap}
+        openAdminStats={openAdminStats}
+        adminStats={adminStats}
+        cursorBill={cursorBill}
+        adminStatsAt={adminStatsAt}
+      /> : null}
+      {searchShown ? <SearchOverlay
+        searchOpen={searchOpen}
+        setSearchOpen={setSearchOpen}
+        searchTrap={searchTrap}
+        searchQ={searchQ}
+        setSearchQ={setSearchQ}
+        searchHits={searchHits}
+        selectChat={selectChat}
+        activeId={activeId}
+        isAssistantChat={isAssistantChat}
+        assistantName={assistantName}
+      /> : null}
+      {workspaceShown ? <WorkspaceOverlay
+        workspaceMenuOpen={workspaceMenuOpen}
+        setWorkspaceMenuOpen={setWorkspaceMenuOpen}
+        setWorkspaceCreating={setWorkspaceCreating}
+        workspaceTrap={workspaceTrap}
+        otherMenuWorkspaces={otherMenuWorkspaces}
+        workspaceQuery={workspaceQuery}
+        workspaceChoices={workspaceChoices}
+        workspacePick={workspacePick}
+        setWorkspaceQuery={setWorkspaceQuery}
+        setWorkspaceIndex={setWorkspaceIndex}
+        startChatIn={startChatIn}
+        send={send}
+        workspaceRoot={workspaceRoot}
+        cwd={cwd}
+        workspaceCreating={workspaceCreating}
+        submitNewWorkspace={submitNewWorkspace}
+        workspaceNameDraft={workspaceNameDraft}
+        setWorkspaceNameDraft={setWorkspaceNameDraft}
+        workspaceExact={workspaceExact}
+      /> : null}
+      {paletteShown ? <PaletteOverlay
+        paletteOpen={paletteOpen}
+        setPaletteOpen={setPaletteOpen}
+        paletteTrap={paletteTrap}
+        paletteQ={paletteQ}
+        setPaletteQ={setPaletteQ}
+        setPaletteIndex={setPaletteIndex}
+        paletteHits={paletteHits}
+        paletteHi={paletteHi}
+        openFile={openFile}
+      /> : null}
       <AssistantPanel
         open={assistantOpen}
         docked={wideIDE && sidePane === "assistant"}
@@ -4583,343 +4304,73 @@ export default function ChatApp() {
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
         onOpenChat={openChatById}
       />
-      {loopOpen ? (
-        <div className="search-overlay open" onClick={() => { if (wideIDE && sidePane === "loop") return; setLoopOpen(false); }}>
-          <form
-            ref={loopTrap}
-            className="search-box loop-box"
-            aria-label="循环任务"
-            onClick={(event) => event.stopPropagation()}
-            onSubmit={(event) => {
-              event.preventDefault();
-              const goal = loopGoal.trim();
-              const intervalSec = Math.round(Number(loopInterval));
-              const maxTicks = loopMax.trim() ? Math.round(Number(loopMax)) : undefined;
-              if (!goal) {
-                setNotice("Loop 需要一段目标");
-                return;
-              }
-              if (goal.length > 4000) {
-                setNotice("Loop 目标超过 4000 字");
-                return;
-              }
-              if (!Number.isInteger(intervalSec) || intervalSec < 30 || intervalSec > 86400) {
-                setNotice("间隔要在 30 秒到 24 小时之间");
-                return;
-              }
-              if (maxTicks != null && (!Number.isInteger(maxTicks) || maxTicks < 1 || maxTicks > 100)) {
-                setNotice("最多 1 到 100 拍");
-                return;
-              }
-              send({
-                type: "loop_start",
-                chatId: activeId,
-                goal,
-                intervalSec,
-                maxTicks,
-                model,
-                mode,
-              });
-            }}
-          >
-            <div className="loop-title">Loop · 当前对话</div>
-            <textarea
-              className="loop-goal"
-              rows={4}
-              placeholder="每拍要做的事。做完时让它在最后一行写 LOOP_DONE"
-              value={loopGoal}
-              onChange={(event) => setLoopGoal(event.target.value)}
-            />
-            <label className="loop-field">
-              间隔（秒）
-              <input
-                className="side-input"
-                inputMode="numeric"
-                value={loopInterval}
-                onChange={(event) => setLoopInterval(event.target.value)}
-              />
-            </label>
-            <label className="loop-field">
-              最多拍数，可空
-              <input
-                className="side-input"
-                inputMode="numeric"
-                value={loopMax}
-                onChange={(event) => setLoopMax(event.target.value)}
-              />
-            </label>
-            {loops[activeId] ? (
-              <div className="loop-meta">
-                {loops[activeId].status === "running"
-                  ? "正在跑"
-                  : loops[activeId].status === "armed"
-                    ? "等待下一拍"
-                    : loops[activeId].status === "stopped"
-                      ? "已停止"
-                      : "空闲"}
-                {" · "}第 {loops[activeId].tick} 拍
-                {loops[activeId].maxTicks ? ` / ${loops[activeId].maxTicks}` : ""}
-                {loops[activeId].tickStatus === "skipped"
-                  ? " · 顺延"
-                  : loops[activeId].tickStatus === "error"
-                    ? " · 出错"
-                    : ""}
-                {loops[activeId].lastSummary ? ` · ${loops[activeId].lastSummary}` : ""}
-              </div>
-            ) : (
-              <div className="loop-meta">还没开始。关上网页也会继续，重新打开后状态还在。</div>
-            )}
-            <div className="loop-actions">
-              <button
-                className="new-chat"
-                type="submit"
-                disabled={
-                  !!loops[activeId] &&
-                  loops[activeId].status !== "stopped" &&
-                  loops[activeId].status !== "idle"
-                }
-              >
-                开始
-              </button>
-              <button
-                className="new-chat"
-                type="button"
-                disabled={!loops[activeId] || loops[activeId].status === "stopped"}
-                onClick={() => send({ type: "loop_stop", chatId: activeId })}
-              >
-                停止
-              </button>
-            </div>
-          </form>
-        </div>
-      ) : null}
-      {terminalShown ? (
-        <div
-          className={`search-overlay${terminalOpen ? " open" : ""}`}
-          onClick={() => {
-            if (wideIDE && sidePane === "terminal") return;
-            setTerminalOpen(false);
-          }}
-        >
-          <div ref={terminalTrap} className="search-box terminal-box" aria-label="终端" onClick={(event) => event.stopPropagation()}>
-            <div className="loop-title">终端 · 当前对话</div>
-            {shellEntries.length ? (
-              <div className="terminal-log" ref={terminalLogRef}>
-                {shellEntries.map((row) => (
-                  <div key={row.id} className="terminal-row">
-                    <div className="terminal-cmd">$ {row.command}</div>
-                    <pre className={`terminal-out${row.output ? "" : " muted"}`}>
-                      {row.output || (row.running ? "正在跑…" : "没有输出")}
-                    </pre>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="terminal-empty">
-                <div>这个会话还没有 shell 输出</div>
-                <div className="loop-meta">让 Agent 跑一条命令，输出会出现在这里。</div>
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
-      {grepShown ? (
-        <div className={`search-overlay${grepOpen ? " open" : ""}`} onClick={() => { if (wideIDE && sidePane === "search") return; setGrepOpen(false); }}>
-          <div ref={grepTrap} className="search-box grep-box" aria-label="全文搜索" onClick={(event) => event.stopPropagation()}>
-            <input
-              autoFocus={grepOpen}
-              className="search-input"
-              placeholder="搜文件名或内容"
-              value={grepQ}
-              onChange={(event) => {
-                setGrepQ(event.target.value);
-                setGrepIndex(0);
-              }}
-              onKeyDown={(event) => {
-                const total = grepNameHits.length + grepHits.length;
-                if (event.key === "Escape") setGrepOpen(false);
-                if (event.key === "ArrowDown") {
-                  event.preventDefault();
-                  setGrepIndex((index) => Math.min(index + 1, Math.max(0, total - 1)));
-                }
-                if (event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setGrepIndex((index) => Math.max(index - 1, 0));
-                }
-                if (event.key === "Enter" && total) {
-                  event.preventDefault();
-                  if (grepHi < grepNameHits.length) {
-                    openFile(grepNameHits[grepHi]);
-                  } else {
-                    const hit = grepHits[grepHi - grepNameHits.length];
-                    if (hit) openFile(hit.path, hit.line, false);
-                  }
-                  if (!wideIDERef.current) setGrepOpen(false);
-                }
-              }}
-            />
-            <div className="search-list">
-              {grepQ.trim() ? (
-                !grepNameHits.length && !grepHits.length ? (
-                  grepWait ? (
-                    <div className="search-item">正在搜索…</div>
-                  ) : (
-                    <div className="search-item">文件名和内容里都没有「{grepQ.trim()}」</div>
-                  )
-                ) : (
-                  <>
-                    {grepNameHits.map((path, index) => (
-                      <button
-                        key={`name:${path}`}
-                        type="button"
-                        className={`search-item file-hit${index === grepHi ? " active" : ""}`}
-                        onClick={() => {
-                          openFile(path);
-                          if (!wideIDERef.current) setGrepOpen(false);
-                        }}
-                      >
-                        <span className="search-item-name">{path.split("/").pop()}</span>
-                        <span className="search-item-dir">文件名</span>
-                      </button>
-                    ))}
-                    {grepHits.map((hit, index) => {
-                      const at = grepNameHits.length + index;
-                      return (
-                        <button
-                          key={`${hit.path}:${hit.line}:${index}`}
-                          type="button"
-                          className={`search-item file-hit${at === grepHi ? " active" : ""}`}
-                          onClick={() => {
-                            openFile(hit.path, hit.line, false);
-                            if (!wideIDERef.current) setGrepOpen(false);
-                          }}
-                        >
-                          <span className="search-item-name">
-                            {hit.path.split("/").pop()}
-                            <span className="search-item-line">:{hit.line}</span>
-                          </span>
-                          <span className="search-item-snip">{hit.text}</span>
-                          <span className="search-item-dir">{hit.path.includes("/") ? hit.path.slice(0, hit.path.lastIndexOf("/")) : "."}</span>
-                        </button>
-                      );
-                    })}
-                    {grepWait ? <div className="search-item">正在搜索内容…</div> : null}
-                  </>
-                )
-              ) : (
-                <div className="search-item">搜文件名或内容</div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {filesShown ? (
-        <div
-          className={`files-overlay${filesOpen ? " open" : ""}`}
-          onClick={() => {
-            if (filesDocked) return;
-            closeFiles();
-          }}
-        >
-          <div
-            ref={filesTrap}
-            className="files-browser"
-            role="dialog"
-            aria-modal={filesDocked ? undefined : true}
-            aria-label="文件浏览器"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="files-browser-head">
-              <div className="files-browser-title">
-                <span>{sidePane === "git" && wideIDE ? "Git" : "文件"}</span>
-                <span className="files-browser-cwd" title={cwd || workspaceRoot}>
-                  {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
-                </span>
-              </div>
-              <button
-                type="button"
-                className="files-browser-close"
-                aria-label="关闭文件浏览器"
-                onClick={closeFiles}
-              >
-                ×
-              </button>
-            </div>
-            <input
-              autoFocus={filesOpen}
-              className="files-browser-search"
-              placeholder="搜索文件名或路径"
-              value={filesQuery}
-              onChange={(event) => setFilesQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") closeFiles();
-              }}
-            />
-            <div className={`files-browser-body${wideIDE && sidePane === "git" ? " git-only" : ""}`}>
-              {Object.keys(gitStatus).length ? (
-                <div className="changes-list files-browser-changes">
-                  <div className="side-label">改动 · {Object.keys(gitStatus).length}</div>
-                  {Object.entries(gitStatus)
-                    .sort(([a], [b]) => a.localeCompare(b))
-                    .map(([path, letter]) => (
-                      <button
-                        key={path}
-                        type="button"
-                        className={`tree-file${sameFile(previewPath, path) ? " on" : ""}`}
-                        title={path}
-                        onClick={() => {
-                          openFile(path, undefined, true);
-                          if (!filesDocked) closeFiles();
-                        }}
-                      >
-                        <FileGlyph path={path} />
-                        <span className="tree-file-copy">
-                          <span className="tree-file-name">{path.split("/").pop() || path}</span>
-                          <span className="tree-file-path">{path}</span>
-                        </span>
-                        <span className={`git-mark ${letter}`} title={GIT_LABEL[letter] || letter}>
-                          {letter}
-                        </span>
-                      </button>
-                    ))}
-                </div>
-              ) : wideIDE && sidePane === "git" ? (
-                <div className="git-empty">工作区干净</div>
-              ) : null}
-              <FileTree
-                paths={treePaths}
-                truncated={treeTruncated}
-                status={gitStatus}
-                query={filesQuery}
-                variant="browser"
-                onPick={(path) => {
-                  handlePickFile(path);
-                  if (!filesDocked) closeFiles();
-                }}
-                onOpen={(path) => {
-                  openFile(path);
-                  if (!filesDocked) closeFiles();
-                }}
-                onCopyPath={(path) => {
-                  const clip = navigator.clipboard;
-                  if (!clip?.writeText) {
-                    setNotice("复制失败");
-                    return;
-                  }
-                  void clip.writeText(path).then(
-                    () => setNotice("已复制路径"),
-                    () => setNotice("复制失败"),
-                  );
-                }}
-                onDownload={downloadWorkspaceFile}
-                onCreate={handleTreeCreate}
-                onRename={handleTreeRename}
-                onDelete={handleTreeDelete}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {loopOpen ? <LoopOverlay
+        wideIDE={wideIDE}
+        sidePane={sidePane}
+        setLoopOpen={setLoopOpen}
+        loopTrap={loopTrap}
+        loopGoal={loopGoal}
+        loopInterval={loopInterval}
+        loopMax={loopMax}
+        setNotice={setNotice}
+        send={send}
+        activeId={activeId}
+        model={model}
+        mode={mode}
+        setLoopGoal={setLoopGoal}
+        setLoopInterval={setLoopInterval}
+        setLoopMax={setLoopMax}
+        loops={loops}
+      /> : null}
+      {terminalShown ? <TerminalOverlay
+        terminalOpen={terminalOpen}
+        wideIDE={wideIDE}
+        sidePane={sidePane}
+        setTerminalOpen={setTerminalOpen}
+        terminalTrap={terminalTrap}
+        shellEntries={shellEntries}
+        terminalLogRef={terminalLogRef}
+      /> : null}
+      {grepShown ? <GrepOverlay
+        grepOpen={grepOpen}
+        wideIDE={wideIDE}
+        sidePane={sidePane}
+        setGrepOpen={setGrepOpen}
+        grepTrap={grepTrap}
+        grepQ={grepQ}
+        setGrepQ={setGrepQ}
+        setGrepIndex={setGrepIndex}
+        grepNameHits={grepNameHits}
+        grepHits={grepHits}
+        grepHi={grepHi}
+        openFile={openFile}
+        wideIDERef={wideIDERef}
+        grepWait={grepWait}
+      /> : null}
+      {filesShown ? <FilesOverlay
+        filesOpen={filesOpen}
+        filesDocked={filesDocked}
+        closeFiles={closeFiles}
+        filesTrap={filesTrap}
+        sidePane={sidePane}
+        wideIDE={wideIDE}
+        cwd={cwd}
+        workspaceRoot={workspaceRoot}
+        assistantName={assistantName}
+        filesQuery={filesQuery}
+        setFilesQuery={setFilesQuery}
+        gitStatus={gitStatus}
+        previewPath={previewPath}
+        openFile={openFile}
+        treePaths={treePaths}
+        treeTruncated={treeTruncated}
+        handlePickFile={handlePickFile}
+        setNotice={setNotice}
+        downloadWorkspaceFile={downloadWorkspaceFile}
+        handleTreeCreate={handleTreeCreate}
+        handleTreeRename={handleTreeRename}
+        handleTreeDelete={handleTreeDelete}
+      /> : null}
       <button
         type="button"
         className="nav-scrim"
@@ -4931,413 +4382,63 @@ export default function ChatApp() {
         }}
         onClick={() => setNavOpen(false)}
       />
-      <aside className="sidebar" ref={navDrag.ref}>
-        <div className="brand">
-          <Mark />
-          <div>
-            <div className="brand-title">接驳</div>
-            <div className="brand-sub" title={cwd || workspaceRoot}>
-              {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
-            </div>
-          </div>
-        </div>
-        {assistantChatId ? (
-          <button
-            type="button"
-            className={`chat-item assistant-pin${assistantActive ? " active" : ""}${assistantChat?.unread && !assistantActive ? " unread" : ""}`}
-            title={`${assistantName} · 助理`}
-            onClick={openAssistantChat}
-          >
-            <span className="assistant-pin-icon">
-              <IconRail name="assistant" size={14} />
-              {assistantBadge > 0 ? <span className="loop-live" /> : null}
-            </span>
-            <span className="assistant-pin-copy">
-              <span className="assistant-pin-name">{assistantName}</span>
-              <span className="assistant-pin-preview">{assistantPreview}</span>
-            </span>
-            {assistantChat?.turns.some((turn) => turn.running) ? (
-              <span className="chat-mark run">跑</span>
-            ) : assistantChat?.unread && !assistantActive ? (
-              <span className="chat-mark unread">新</span>
-            ) : null}
-          </button>
-        ) : null}
-        <div className={`workspace-picker${workspaceMenuOpen ? " open" : ""}`}>
-          <div className="side-actions">
-          <button
-            className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`}
-            type="button"
-            onClick={newChat}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-            </svg>
-            新对话
-          </button>
-          <div className="side-tools" role="toolbar" aria-label="工具">
-            {(
-              [
-                ["files", "文件"],
-                ["search", "搜索"],
-                ["git", "Git"],
-                ["terminal", "终端"],
-                ["loop", "Loop"],
-              ] as const
-            ).map(([pane, label]) => {
-              const on = wideIDE
-                ? sidePane === pane
-                : pane === "search"
-                  ? grepOpen
-                  : pane === "terminal"
-                    ? terminalOpen
-                    : pane === "loop"
-                      ? loopOpen
-                      : pane === "git"
-                        ? false
-                        : filesOpen;
-              return (
-                <button
-                  key={pane}
-                  type="button"
-                  className={`side-tool${on ? " on" : ""}`}
-                  aria-label={label}
-                  aria-pressed={on}
-                  onClick={() => chooseSide(pane)}
-                >
-                  <span className="side-tool-icon">
-                    <IconRail name={pane} size={14} />
-                    {pane === "loop" && loopLive ? <span className="loop-live" /> : null}
-                  </span>
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-          </div>
-        </div>
-        <div className="chats">
-          {sidebarGroups.length ? null : (
-            <div className="chats-empty">
-              {moreGroups.length ? "还没有对话。点“新对话”，或展开下面的“更多工作区”开始。" : "还没有对话。点“新对话”选一个工作区开始。"}
-            </div>
-          )}
-          {sidebarGroups.map((group) => {
-            const key = normPath(group.path);
-            const holdsActive = group.chats.some((chat) => chat.id === activeId);
-            const open = holdsActive || expandedGroups.has(key);
-            return (
-            <div key={group.path} className="chat-group">
-              <div className={`chat-group-head${groupMenu && sameCwd(groupMenu.path, group.path) ? " menu-open" : ""}`}>
-              <button
-                type="button"
-                className={`chat-group-label${open ? " open" : ""}${holdsActive ? " locked" : ""}`}
-                title={group.path}
-                aria-expanded={group.chats.length ? open : undefined}
-                onClick={() => {
-                  if (!group.chats.length) {
-                    startChatIn(group.path);
-                    return;
-                  }
-                  if (holdsActive) return;
-                  setExpandedGroups((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(key)) next.delete(key);
-                    else next.add(key);
-                    return next;
-                  });
-                }}
-              >
-                {group.chats.length ? <span className="chat-group-chevron" aria-hidden="true" /> : <span className="chat-group-chevron spacer" aria-hidden="true" />}
-                <FolderMark className="chat-group-folder" />
-                <span className="chat-group-name">{group.name}</span>
-                {duplicateGroupNames.has(group.name) ? (
-                  <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
-                ) : null}
-                {group.chats.some((chat) => chat.turns.some((turn) => turn.running)) ? (
-                  <span className="chat-group-live" title="有对话在运行" />
-                ) : null}
-                <span className="chat-group-meta">
-                  {group.touched ? <span className="chat-group-time">{fmtAgo(group.touched)}</span> : null}
-                  {group.chats.length ? <span className="chat-group-count">{group.chats.length}</span> : null}
-                </span>
-              </button>
-              <div className="chat-group-actions">
-                <button
-                  type="button"
-                  className="chat-group-act"
-                  title={`在「${group.name}」新建对话`}
-                  aria-label={`在「${group.name}」新建对话`}
-                  onClick={() => startChatIn(group.path)}
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  className="chat-group-act"
-                  title="更多"
-                  aria-label={`「${group.name}」的更多操作`}
-                  aria-haspopup="menu"
-                  data-group-trigger={group.path}
-                  aria-expanded={Boolean(groupMenu && sameCwd(groupMenu.path, group.path))}
-                  onClick={() =>
-                    setGroupMenu((cur) => (cur && sameCwd(cur.path, group.path) ? null : { path: group.path, name: group.name }))
-                  }
-                >
-                  <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-                    <circle cx="3" cy="8" r="1.4" fill="currentColor" />
-                    <circle cx="8" cy="8" r="1.4" fill="currentColor" />
-                    <circle cx="13" cy="8" r="1.4" fill="currentColor" />
-                  </svg>
-                </button>
-              </div>
-              {groupMenu && sameCwd(groupMenu.path, group.path) ? groupMenuNode(group.path, group.name, group.chats.length) : null}
-              </div>
-              {open ? group.chats.map((chat) => (
-            <div
-              key={chat.id}
-              className={`chat-item${chat.id === activeId ? " active" : ""}${chat.turns.some((turn) => turn.running) ? " busy" : ""}${chat.unread && chat.id !== activeId ? " unread" : ""}`}
-            >
-              {renameId === chat.id ? (
-                <input
-                  className="chat-rename"
-                  value={renameDraft}
-                  autoFocus
-                  onChange={(event) => setRenameDraft(event.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      commitRename();
-                    }
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      renameSkipRef.current = true;
-                      setRenameId(null);
-                    }
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="chat-item-main"
-                  title="单击打开，双击改名"
-                  onClick={() => selectChat(chat)}
-                  onDoubleClick={(event) => {
-                    event.preventDefault();
-                    startRename(chat);
-                  }}
-                >
-                  <span className="chat-item-title">{chat.title}</span>
-                  {chat.turns.some((turn) => turn.running) ? (
-                    <span className="chat-mark run">跑</span>
-                  ) : chat.unread ? (
-                    <span className="chat-mark unread">新</span>
-                  ) : null}
-                  {chat.touchedAt ? <span className="chat-item-time">{fmtAgo(chat.touchedAt)}</span> : null}
-                </button>
-              )}
-              <button
-                type="button"
-                className="chat-item-x"
-                title="删除会话"
-                aria-label="删除会话"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  deleteChat(chat.id);
-                }}
-              >
-                ×
-              </button>
-            </div>
-              )) : null}
-            </div>
-            );
-          })}
-          {moreGroups.length ? (
-            <div className="chat-more">
-              <button
-                type="button"
-                className={`chat-more-toggle${moreOpen ? " open" : ""}`}
-                aria-expanded={moreOpen}
-                onClick={() => setMoreOpen((open) => !open)}
-              >
-                <span className="chat-group-chevron" aria-hidden="true" />
-                <span className="chat-more-title">更多工作区</span>
-                <span className="chat-group-count">{moreGroups.length}</span>
-              </button>
-              {moreOpen ? (
-                <div className="chat-more-list">
-                  {moreGroups.slice(0, MORE_GROUPS_SHOWN).map((group) => (
-                    <div
-                      key={group.path}
-                      className={`chat-group-head chat-more-row${groupMenu && sameCwd(groupMenu.path, group.path) ? " menu-open" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="chat-more-item"
-                        title={`${group.path}\n点一下在这里开始新对话`}
-                        onClick={() => startChatIn(group.path)}
-                      >
-                        <FolderMark className="chat-group-folder" />
-                        <span className="chat-group-name">{group.name}</span>
-                        {duplicateGroupNames.has(group.name) ? (
-                          <span className="chat-group-path">{relToCwd(group.path, workspaceRoot) || group.path}</span>
-                        ) : null}
-                      </button>
-                      <div className="chat-group-actions">
-                        <button
-                          type="button"
-                          className="chat-group-act"
-                          title="更多"
-                          aria-label={`「${group.name}」的更多操作`}
-                          aria-haspopup="menu"
-                          data-group-trigger={group.path}
-                          aria-expanded={Boolean(groupMenu && sameCwd(groupMenu.path, group.path))}
-                          onClick={() =>
-                            setGroupMenu((cur) => (cur && sameCwd(cur.path, group.path) ? null : { path: group.path, name: group.name }))
-                          }
-                        >
-                          <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-                            <circle cx="3" cy="8" r="1.4" fill="currentColor" />
-                            <circle cx="8" cy="8" r="1.4" fill="currentColor" />
-                            <circle cx="13" cy="8" r="1.4" fill="currentColor" />
-                          </svg>
-                        </button>
-                      </div>
-                      {groupMenu && sameCwd(groupMenu.path, group.path) ? groupMenuNode(group.path, group.name, 0) : null}
-                    </div>
-                  ))}
-                  {moreGroups.length > MORE_GROUPS_SHOWN ? (
-                    <button type="button" className="chat-more-all" onClick={openNewChatMenu}>
-                      查看全部 {moreGroups.length} 个…
-                    </button>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          className="side-files-btn"
-          onClick={openFilesBrowser}
-        >
-          <span>文件</span>
-          <span className="side-files-meta">
-            {Object.keys(gitStatus).length
-              ? `${Object.keys(gitStatus).length} 处改动`
-              : treePaths.length
-                ? `${treePaths.length}`
-                : "浏览"}
-          </span>
-        </button>
-        <div className="side-foot">
-          {isAdmin ? (
-            <button type="button" className="side-foot-btn" onClick={openAdminStats}>
-              查看使用统计
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="side-foot-btn"
-            onClick={() => setSettingsOpen((open) => !open)}
-            title={cwd || "工作目录"}
-          >
-            <span className={`dot ${connected && unlocked ? (busy ? "busy" : "on") : "off"}`} />
-            <span className="side-foot-cwd">
-              {connected
-                ? !unlocked
-                  ? "正在登录…"
-                  : busy
-                    ? "服务器正在干活"
-                    : workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)
-                : "没连上"}
-            </span>
-          </button>
-          {settingsOpen ? (
-            <div className="side-settings">
-              <div className="theme-settings">
-                <div className="theme-label">外观</div>
-                <div className="theme-seg" role="group" aria-label="外观">
-                  {APPEARANCES.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={themeChoice?.appearance === item.id ? "on" : ""}
-                      aria-pressed={themeChoice?.appearance === item.id}
-                      onClick={() =>
-                        setThemeChoice((current) => ({
-                          palette: current?.palette || readThemeChoice().palette,
-                          appearance: item.id,
-                        }))
-                      }
-                    >
-                      {item.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="theme-label">配色</div>
-                <div className="theme-list" role="radiogroup" aria-label="配色">
-                  {PALETTES.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={themeChoice?.palette === item.id}
-                      aria-label={`${item.name}，${item.note}`}
-                      className={`theme-card${themeChoice?.palette === item.id ? " on" : ""}`}
-                      onClick={() =>
-                        setThemeChoice((current) => ({
-                          palette: item.id,
-                          appearance: current?.appearance || readThemeChoice().appearance,
-                        }))
-                      }
-                    >
-                      <span className="theme-card-preview" aria-hidden>
-                        {(["light", "dark"] as const).map((kind) => (
-                          <span
-                            key={kind}
-                            className={`theme-mini${themeChoice && themeChoice.appearance !== "system" && themeChoice.appearance !== kind ? " idle" : ""}`}
-                            data-palette={item.id}
-                            data-theme={kind}
-                          >
-                            <span className="theme-mini-side">
-                              <span className="theme-mini-line" />
-                              <span className="theme-mini-line" />
-                              <span className="theme-mini-line" />
-                            </span>
-                            <span className="theme-mini-main">
-                              <span className="theme-mini-line text" style={{ width: "80%" }} />
-                              <span className="theme-mini-line" style={{ width: "60%" }} />
-                              <span className="theme-mini-bubble" />
-                              <span className="theme-mini-composer">
-                                <span className="theme-mini-send" />
-                              </span>
-                            </span>
-                          </span>
-                        ))}
-                      </span>
-                      <span className="theme-card-meta">
-                        <b>{item.name}</b>
-                        <span>{item.note}</span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="workspace-path" title={cwd}>
-                {cwd || workspaceRoot || "工作区"}
-              </div>
-              <button type="button" className="logout-btn" onClick={logout}>
-                退出登录
-              </button>
-            </div>
-          ) : null}
-        </div>
-      </aside>
+      <Sidebar
+        navDrag={navDrag}
+        cwd={cwd}
+        workspaceRoot={workspaceRoot}
+        assistantName={assistantName}
+        assistantChatId={assistantChatId}
+        assistantActive={assistantActive}
+        assistantChat={assistantChat}
+        openAssistantChat={openAssistantChat}
+        assistantBadge={assistantBadge}
+        assistantPreview={assistantPreview}
+        workspaceMenuOpen={workspaceMenuOpen}
+        newChat={newChat}
+        wideIDE={wideIDE}
+        sidePane={sidePane}
+        grepOpen={grepOpen}
+        terminalOpen={terminalOpen}
+        loopOpen={loopOpen}
+        filesOpen={filesOpen}
+        chooseSide={chooseSide}
+        loopLive={loopLive}
+        sidebarGroups={sidebarGroups}
+        moreGroups={moreGroups}
+        activeId={activeId}
+        expandedGroups={expandedGroups}
+        groupMenu={groupMenu}
+        startChatIn={startChatIn}
+        setExpandedGroups={setExpandedGroups}
+        duplicateGroupNames={duplicateGroupNames}
+        setGroupMenu={setGroupMenu}
+        groupMenuNode={groupMenuNode}
+        renameId={renameId}
+        renameDraft={renameDraft}
+        setRenameDraft={setRenameDraft}
+        commitRename={commitRename}
+        renameSkipRef={renameSkipRef}
+        setRenameId={setRenameId}
+        selectChat={selectChat}
+        startRename={startRename}
+        deleteChat={deleteChat}
+        moreOpen={moreOpen}
+        setMoreOpen={setMoreOpen}
+        openNewChatMenu={openNewChatMenu}
+        openFilesBrowser={openFilesBrowser}
+        gitStatus={gitStatus}
+        treePaths={treePaths}
+        isAdmin={isAdmin}
+        openAdminStats={openAdminStats}
+        setSettingsOpen={setSettingsOpen}
+        connected={connected}
+        unlocked={unlocked}
+        busy={busy}
+        settingsOpen={settingsOpen}
+        themeChoice={themeChoice}
+        setThemeChoice={setThemeChoice}
+        logout={logout}
+      />
 
       <main className={`main${previewTabs.length ? " with-preview" : ""}${previewMax ? " preview-max" : ""}${previewTabs.some((tab) => isWideKind(tabKind(tab.path, tab.kind)) && sameFile(tab.path, previewPath)) ? " with-canvas" : ""}`}>
         <div className="main-col">
