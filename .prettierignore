@@ -29,7 +29,6 @@ gateway/src/assistant/workspaceAsk.ts
 gateway/src/assistant/workspaceMemory.ts
 gateway/src/chatBodies.ts
 gateway/src/cursorBill.ts
-gateway/src/index.ts
 gateway/src/loops-smoke.ts
 gateway/src/loops.ts
 gateway/src/media.ts
@@ -68,7 +67,6 @@ scripts/slim-smoke.mjs
 scripts/state-unsplit.mjs
 scripts/workspace-smoke.mjs
 shared/crew.ts
-shared/dialect.ts
 shared/protocol.ts
 web/app/globals.css
 web/app/lab/lab.css
