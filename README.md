@@ -94,6 +94,8 @@ npm run dev
 
 冒烟统一入口是 `npm run smoke`（`scripts/smoke/run.mjs`）：`-- --list` 列出全部冒烟及其运行条件（纯离线 / 自带网关 / 需要已运行的网关 / 需要真实模型密钥），`--offline`、`--ci`、`--only=a,b`、`--real-key`、`--timeout=秒` 挑选和限时，串行跑完打印汇总，有失败退出码为 1。`npm run ci:smoke` 就是 `--ci` 那一组。除 `--list` 外都会监听本地端口或连网关，不要在跑着线上服务的机器上跑。`slim-smoke`、`resume-smoke`、`loop-smoke` 没有默认口令，单独跑时用 `CURSOR_REMOTE_TOKEN` 传测试用户的口令，不要用真实用户的。
 
+登录态界面冒烟：先 `cd web && NEXT_PUBLIC_GATEWAY_WS= NEXT_PUBLIC_BASE_PATH=/cursor-remote npx next build`（`NEXT_PUBLIC_GATEWAY_WS` 显式置空，网页走同源 `/bridge`），再 `UI_KIT=<含 node_modules/playwright、browsers、libs 的目录> bash scripts/smoke/ui-smoke.sh`（或 `npm run smoke -- --only=ui`，没设 `UI_KIT` 时跳过）。它在临时目录起假模型、随机口令的临时网关和网页，用 headless 浏览器走登录、各浮层开关、发消息、刷新恢复、改名删除、管理员统计，截图写到 `UI_SHOTS`；端口用 `UI_WEB_PORT` / `UI_GATEWAY_PORT` / `UI_FAKE_LLM_PORT` 改。
+
 ## 端口
 
 | 服务 | 端口 | 作用 |

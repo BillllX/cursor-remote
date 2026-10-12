@@ -6,6 +6,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PORT="${CI_GATEWAY_PORT:-18797}"
+# 网关 loadDotEnv 会把 gateway/.env、仓库根 .env 里未定义的变量补进来，providers.json 的 apiKeyEnv 又能指向任意变量名，
+# 没法逐个置空：有这些文件就不跑，免得测试网关拿到真实密钥
+dotenv=$(find "$ROOT" "$ROOT/gateway" -maxdepth 1 -name '.env*' ! -name '*.example' 2>/dev/null)
+[ -z "$dotenv" ] || { echo "检测到 .env 文件，拒绝运行："; echo "$dotenv"; exit 2; }
 TMP="$(mktemp -d)"
 ADMIN_TOKEN="ci-admin-$(node -e 'console.log(require("crypto").randomBytes(12).toString("hex"))')"
 USER_TOKEN="ci-user-$(node -e 'console.log(require("crypto").randomBytes(12).toString("hex"))')"
@@ -40,7 +44,11 @@ cat > "$TMP/state/providers.json" <<EOF
 EOF
 
 cd "$ROOT/gateway"
-env -u CURSOR_API_KEY -u CURSOR_REMOTE_TOKEN \
+mkdir -p "$TMP/home"
+# 清空环境起网关，只放白名单；已知的密钥类变量再显式置空（loadDotEnv 只填未定义的，空串不会被覆盖）
+env -i "PATH=$PATH" "HOME=$TMP/home" "LANG=${LANG:-C.UTF-8}" "TMPDIR=${TMPDIR:-/tmp}" \
+  CURSOR_API_KEY= CURSOR_REMOTE_TOKEN= CURSOR_REMOTE_PASSWORD= JIEBO_PUBLISH_SECRET= \
+  APNS_TEAM_ID= APNS_KEY_ID= APNS_PRIVATE_KEY= APNS_PRIVATE_KEY_PATH= \
   CURSOR_REMOTE_STATE_DIR="$TMP/state" \
   CURSOR_REMOTE_TENANTS_FILE="$TMP/tenants.json" \
   CURSOR_REMOTE_MEDIA_SECRET="ci-media-secret" \

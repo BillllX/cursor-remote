@@ -19,6 +19,7 @@ const NEEDS = {
   "self-gw": "自带网关（临时目录 + 临时测试用户，起在 127.0.0.1）",
   "gw-url": "需要已运行的网关：JIEBO_WS_URL + CURSOR_REMOTE_TOKEN（测试用户）",
   "real-key": "需要目标网关配好真实模型密钥（加 --real-key 确认）",
+  "ui-kit": "需要 UI_KIT（playwright 套件目录），web 已按 /cursor-remote 构建",
 };
 
 const gw = (name) => ({ cmd: "npm", args: ["run", `smoke:${name}`, "-w", "gateway"] });
@@ -41,6 +42,14 @@ const SMOKES = [
     note: "内含 slim / resume / workspace / multidevice",
     cmd: "bash",
     args: ["scripts/smoke/ci-gateway-smoke.sh"],
+  },
+  {
+    name: "ui",
+    needs: ["self-gw", "ui-kit"],
+    timeout: 300,
+    note: "登录态界面冒烟：假模型 + 临时网关 + 网页 + headless 浏览器",
+    cmd: "bash",
+    args: ["scripts/smoke/ui-smoke.sh"],
   },
   {
     name: "slim",
@@ -113,6 +122,7 @@ function skipReason(smoke, opts) {
     if (!process.env.CURSOR_REMOTE_TOKEN) missing.push("CURSOR_REMOTE_TOKEN");
   }
   if (smoke.needs.includes("real-key") && !opts.realKey) missing.push("--real-key");
+  if (smoke.needs.includes("ui-kit") && !process.env.UI_KIT) missing.push("UI_KIT");
   return missing.length ? `缺 ${missing.join("、")}` : null;
 }
 
