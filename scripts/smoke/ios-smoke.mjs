@@ -1,11 +1,15 @@
 #!/usr/bin/env node
-// 接驳 iOS 协议冒烟：直连东京站 wss，验证 iPad 客户端依赖的协议行为。
-// 用法: CURSOR_REMOTE_TOKEN=xxx node scripts/smoke/ios-smoke.mjs [--skip-agent]
+// 接驳 iOS 协议冒烟：连 JIEBO_WS_URL 指向的网关（没有默认值），验证 iPad 客户端依赖的协议行为。
+// 用法: JIEBO_WS_URL=ws://127.0.0.1:<端口>/bridge CURSOR_REMOTE_TOKEN=xxx node scripts/smoke/ios-smoke.mjs [--skip-agent]
 // 退出码 0 = 全绿；任何一步失败 = 1。
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 
-const WS_URL = process.env.JIEBO_WS_URL || "wss://jiebo.aiagentswitcher.com/bridge";
+const WS_URL = (process.env.JIEBO_WS_URL || "").trim();
+if (!WS_URL) {
+  console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>/bridge。不会默认连本机 8787（生产机上那就是线上网关）。");
+  process.exit(2);
+}
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
 const SKIP_AGENT = process.argv.includes("--skip-agent");
 

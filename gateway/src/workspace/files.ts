@@ -17,6 +17,7 @@ import { isPolicyProtectedPath } from "../../../shared/policy.ts";
 import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
 import type { ServerMessage } from "../../../shared/protocol.ts";
 import { log } from "../log.ts";
+import { relEscapes } from "../pathInside.ts";
 import { filePayload } from "../media.ts";
 import { cwdOf } from "../runtime/slots.ts";
 import type { Conn, Slot, WorkspaceFile, WorkspaceFiles } from "../runtime/types.ts";
@@ -39,7 +40,7 @@ export function payload(
 export function workspacePath(cwd: string, raw: string): string | null {
   const abs = raw.startsWith("/") ? raw : resolve(cwd, raw);
   const rel = relative(cwd, abs);
-  if (!rel || rel.startsWith("..")) return null;
+  if (!rel || relEscapes(rel)) return null;
   return rel;
 }
 
@@ -346,7 +347,7 @@ function parsePorcelain(out: string, root: string, cwd: string): Record<string, 
     }
     if (!file) continue;
     const rel = relative(cwd, resolve(root, file));
-    if (!rel || rel.startsWith("..")) continue;
+    if (!rel || relEscapes(rel)) continue;
     map[rel] = gitLetter(xy);
   }
   return map;

@@ -67,7 +67,23 @@ describe("isSha / isTextKind", () => {
 
 describe("toolWritesFiles", () => {
   test("编辑、写入、生成图片类算写文件", () => {
-    for (const name of ["edit", "Write", "StrReplace", "apply_patch", "EditNotebook", "createFile", "generate_image"]) {
+    for (const name of [
+      "edit",
+      "Write",
+      "StrReplace",
+      "apply_patch",
+      "EditNotebook",
+      "createFile",
+      "generate_image",
+      "GenerateImage",
+      "image_gen",
+      "MultiEdit",
+      "multiedit",
+      "search_replace",
+      "str_replace_editor",
+      "write_file",
+      "mcp_fs_edit_file",
+    ]) {
       assert.equal(toolWritesFiles(name), true, name);
     }
   });
@@ -88,8 +104,10 @@ describe("toolWritesFiles", () => {
     }
   });
 
-  test("按子串匹配：名字里含 edit 的也算（例如 credit）", () => {
-    assert.equal(toolWritesFiles("credit_check"), true);
+  test("按单词匹配：credit、editor、rewriter 这类只是含子串的名字不算", () => {
+    for (const name of ["credit_check", "CreditCheck", "open_editor", "rewriter", "creator", "patchwork"]) {
+      assert.equal(toolWritesFiles(name), false, name);
+    }
   });
 });
 
@@ -156,8 +174,10 @@ describe("workspaceRel", () => {
     assert.equal(workspaceRel(cwd, ".gitignore"), ".gitignore");
   });
 
-  test("现状：根目录下以 .. 开头的文件名也被当成越界", () => {
-    assert.equal(workspaceRel(cwd, "..notes.md"), null);
+  test("根目录下以 .. 开头的文件名不算越界", () => {
+    assert.equal(workspaceRel(cwd, "..notes.md"), "..notes.md");
+    assert.equal(workspaceRel(cwd, "/w/...x/a.md"), "...x/a.md");
+    assert.equal(workspaceRel(cwd, "/w/../x"), null);
   });
 });
 
@@ -167,9 +187,13 @@ describe("canvasPathsFromAssistant", () => {
     assert.deepEqual(canvasPathsFromAssistant(text), ["canvases/a.canvas.tsx", "canvases/b.canvas.tsx"]);
   });
 
-  test("现状：@ 提及后紧跟全角逗号再接文字时，整段被当成路径而认不出", () => {
-    assert.deepEqual(canvasPathsFromAssistant("@b.canvas.tsx，再看"), []);
+  test("@ 提及在全角标点处结束，后面紧跟文字也认得出", () => {
+    assert.deepEqual(canvasPathsFromAssistant("@b.canvas.tsx，再看"), ["b.canvas.tsx"]);
     assert.deepEqual(canvasPathsFromAssistant("@b.canvas.tsx，"), ["b.canvas.tsx"]);
+    assert.deepEqual(canvasPathsFromAssistant("先看@c.canvas.tsx。然后@d.canvas.tsx）"), [
+      "c.canvas.tsx",
+      "d.canvas.tsx",
+    ]);
   });
 
   test("去掉行号、锚点、查询串和结尾标点，并做百分号解码", () => {
@@ -194,12 +218,19 @@ describe("canvasPathsFromAssistant", () => {
     assert.deepEqual(canvasPathsFromAssistant(""), []);
   });
 
-  test("现状：不带目录的文件名加 :行号 会被当成 URL scheme 丢掉", () => {
-    assert.deepEqual(canvasPathsFromAssistant("[a](x.canvas.tsx:12) @y.canvas.tsx:3"), []);
+  test("不带目录的文件名加 :行号 不当成 URL scheme", () => {
+    assert.deepEqual(canvasPathsFromAssistant("[a](x.canvas.tsx:12) @y.canvas.tsx:3 [b](z.canvas.tsx:3:5)"), [
+      "x.canvas.tsx",
+      "z.canvas.tsx",
+      "y.canvas.tsx",
+    ]);
+    assert.deepEqual(canvasPathsFromAssistant("[外](https://e.com/a.canvas.tsx:12) [m](mailto:a.canvas.tsx)"), []);
   });
 
-  test("现状：尖括号包住的带空格路径会在空格处截断，因而认不出", () => {
-    assert.deepEqual(canvasPathsFromAssistant("[a](<my dir/a.canvas.tsx>)"), []);
+  test("尖括号包住的带空格路径整段保留，后面的链接标题去掉", () => {
+    assert.deepEqual(canvasPathsFromAssistant("[a](<my dir/a.canvas.tsx>)"), ["my dir/a.canvas.tsx"]);
+    assert.deepEqual(canvasPathsFromAssistant('[b](<my dir/b.canvas.tsx> "标题")'), ["my dir/b.canvas.tsx"]);
+    assert.deepEqual(canvasPathsFromAssistant('[c](c.canvas.tsx "标题")'), ["c.canvas.tsx"]);
   });
 });
 
@@ -255,9 +286,31 @@ describe("git 输出解析", () => {
     assert.deepEqual(countDiffLines(""), { added: 0, removed: 0 });
   });
 
-  test("现状：内容本身以 -- 或 ++ 开头的改动行会被当成文件头漏数", () => {
-    const diff = "@@ -1 +1 @@\n--- 旧的 SQL 注释\n+++新的\n+普通";
-    assert.deepEqual(countDiffLines(diff), { added: 1, removed: 0 });
+  test("hunk 内以 -- 或 ++ 开头的改动行照样计数", () => {
+    const diff = "--- a/x.sql\n+++ b/x.sql\n@@ -1,2 +1,3 @@\n--- 旧的 SQL 注释\n+++新的\n+普通\n 上下文";
+    assert.deepEqual(countDiffLines(diff), { added: 2, removed: 1 });
+  });
+
+  test("多个文件、多个 hunk：hunk 结束后的 ---/+++ 又是文件头", () => {
+    const diff = [
+      "diff --git a/a b/a",
+      "--- a/a",
+      "+++ b/a",
+      "@@ -1 +1 @@",
+      "-x",
+      "+y",
+      "\\ No newline at end of file",
+      "diff --git a/b b/b",
+      "--- a/b",
+      "+++ b/b",
+      "@@ -1,0 +1,2 @@",
+      "+++ 内容",
+      "+-- 也是内容",
+      "@@ -5 +7 @@",
+      "---",
+      "+++",
+    ].join("\n");
+    assert.deepEqual(countDiffLines(diff), { added: 4, removed: 2 });
   });
 });
 
@@ -360,6 +413,18 @@ describe("快照配额", () => {
     ]);
     assert.equal(enforceArtifactQuota(stateDir, 1000, 900), 0);
     assert.deepEqual(readdirSync(dir).sort(), [".new.tmp", hex("a")].sort());
+  });
+
+  test("判断残留临时文件用传入的 now，不用当前时间", () => {
+    const stateDir = tempDir("tmpnow");
+    const dir = seed(stateDir, [
+      { name: hex("a"), size: 10, ageMs: 0 },
+      { name: ".x.tmp", size: 10, ageMs: 0 },
+    ]);
+    assert.equal(enforceArtifactQuota(stateDir, 1000, 900, Date.now() - 2 * 60 * 60_000), 0);
+    assert.deepEqual(readdirSync(dir).sort(), [".x.tmp", hex("a")].sort());
+    enforceArtifactQuota(stateDir, 1000, 900, Date.now() + 2 * 60 * 60_000);
+    assert.deepEqual(readdirSync(dir), [hex("a")]);
   });
 
   test("目录不存在时返回 0", () => {

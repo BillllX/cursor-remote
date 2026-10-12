@@ -2,13 +2,15 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   statSync,
+  type Dirent,
 } from "node:fs";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import {
   createBodyStore,
   dropRemovedBodies,
@@ -21,6 +23,7 @@ import {
 import { gatewayEnv } from "./config.ts";
 import { ATOMIC_TMP_RE, atomicWriteFileSync, sweepStaleTmp } from "./fsAtomic.ts";
 import { log } from "./log.ts";
+import { isInside } from "./pathInside.ts";
 
 const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
@@ -142,12 +145,6 @@ function realOrResolved(path: string) {
   }
 }
 
-/** dir 就是 root 或在 root 里面（都已是 realpath） */
-function sameOrUnder(dir: string, root: string) {
-  const rel = relative(root, dir);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
 /**
  * 清状态目录里崩溃残留的临时文件：每个目录的顶层和它下面的 native-sessions/，不递归。
  * 单租户时全局状态目录就是租户目录，重复的只扫一次。
@@ -157,21 +154,74 @@ function sameOrUnder(dir: string, root: string) {
  */
 export function sweepStateTmp(dirs: Iterable<string>, workspaceRoots: Iterable<string>, now = Date.now()): number {
   const roots = [...new Set([...workspaceRoots].map(realOrResolved))];
-  /** 与工作区重叠时 warn 并返回 null */
-  const sweep = (dir: string, patterns?: readonly RegExp[]) => {
-    const real = realOrResolved(dir);
-    const root = roots.find((item) => sameOrUnder(real, item));
-    if (root) {
-      log.warn("状态目录与工作区重叠，跳过临时文件清理", real, "工作区", root);
-      return null;
-    }
-    return sweepStaleTmp(real, { now, patterns }).length;
-  };
+  const sweep = (dir: string, patterns?: readonly RegExp[]) => guardedSweep(dir, roots, now, patterns, true);
   let count = 0;
   for (const dir of new Set([...dirs].map(realOrResolved))) {
     const top = sweep(dir);
     if (top === null) continue;
     count += top + (sweep(resolve(dir, "native-sessions"), [ATOMIC_TMP_RE, /\.json\.tmp$/]) ?? 0);
+  }
+  return count;
+}
+
+/** 与工作区重叠时返回 null（warn 为 true 时打日志），否则返回删掉的文件数 */
+function guardedSweep(
+  dir: string,
+  roots: string[],
+  now: number,
+  patterns: readonly RegExp[] | undefined,
+  warn: boolean,
+): number | null {
+  const real = realOrResolved(dir);
+  const root = roots.find((item) => isInside(real, item));
+  if (root) {
+    if (warn) log.warn("状态目录与工作区重叠，跳过临时文件清理", real, "工作区", root);
+    return null;
+  }
+  return sweepStaleTmp(real, { now, patterns }).length;
+}
+
+/** chats/<会话>/：旧版固定名 `<sha1>.json.tmp`（更早是序号），以及原子写临时文件 */
+export const CHAT_TMP_PATTERNS: readonly RegExp[] = [ATOMIC_TMP_RE, /^(?:[0-9a-f]{40}|\d+)\.json\.tmp$/];
+/** artifacts/：旧版 `.<sha256>.<pid>.<hex>.tmp`，原子写后是不带点的同名 */
+export const ARTIFACT_TMP_PATTERNS: readonly RegExp[] = [/^\.?[0-9a-f]{64}\.\d+\.[0-9a-f]{8}\.tmp$/];
+/** assistant/ 下有原子写的各层目录 */
+const ASSISTANT_TMP_DIRS = ["", "memory", "memory/episodes", "chat-index", "briefs"];
+
+/**
+ * sweepStateTmp 没覆盖的子目录：每个状态目录下的 chats/<会话>/、artifacts/、assistant/ 各层。
+ * 会话目录可能很多，每扫一批让出一次事件循环，启动时延后调用、不等它。
+ * 与工作区重叠的保护同 sweepStateTmp：状态目录本身在工作区里就整个跳过（那边已 warn），子目录各自再判一次。
+ */
+export async function sweepNestedStateTmp(
+  dirs: Iterable<string>,
+  workspaceRoots: Iterable<string>,
+  now = Date.now(),
+  batch = 50,
+): Promise<number> {
+  const roots = [...new Set([...workspaceRoots].map(realOrResolved))];
+  const sweep = (dir: string, patterns: readonly RegExp[]) => guardedSweep(dir, roots, now, patterns, false) ?? 0;
+  let count = 0;
+  let sinceYield = 0;
+  for (const dir of new Set([...dirs].map(realOrResolved))) {
+    if (roots.some((root) => isInside(dir, root))) continue;
+    count += sweep(resolve(dir, "artifacts"), ARTIFACT_TMP_PATTERNS);
+    for (const sub of ASSISTANT_TMP_DIRS) count += sweep(resolve(dir, "assistant", sub), [ATOMIC_TMP_RE]);
+    let chats: Dirent[] = [];
+    try {
+      chats = readdirSync(resolve(dir, "chats"), { withFileTypes: true });
+    } catch {
+      // 没有 chats/ 的状态目录（全局目录、新租户）
+    }
+    for (const entry of chats) {
+      // Dirent 不跟符号链接：链到别处的会话目录不进去
+      if (!entry.isDirectory()) continue;
+      count += sweep(resolve(dir, "chats", entry.name), CHAT_TMP_PATTERNS);
+      if ((sinceYield += 1) >= batch) {
+        sinceYield = 0;
+        await new Promise((done) => setImmediate(done));
+      }
+    }
   }
   return count;
 }
@@ -235,12 +285,12 @@ export function confinedCwd(raw: string | undefined, root: string): string | nul
   const input = (raw || base).trim();
   if (!input) return null;
   const next = resolve(isAbsolute(input) ? input : resolve(base, input));
-  if (!inside(next, base)) return null;
+  if (!isInside(next, base)) return null;
   try {
     if (existsSync(next)) {
       const real = realpathSync(next);
       const realRoot = existsSync(base) ? realpathSync(base) : base;
-      if (!inside(real, realRoot)) return null;
+      if (!isInside(real, realRoot)) return null;
       return real;
     }
   } catch {
@@ -396,12 +446,6 @@ function resolveMediaSecret(file: string | null): { secret: string; derived: boo
     secret: createHash("sha256").update(`cursor-remote-media\n${api}\n${stamp}`).digest("hex"),
     derived: true,
   };
-}
-
-function inside(path: string, root: string) {
-  if (path === root) return true;
-  const rel = relative(root, path);
-  return Boolean(rel) && !rel.startsWith("..") && !rel.split(/[/\\]/).includes("..");
 }
 
 function settlePersistedChats(chats: unknown[]): unknown[] {

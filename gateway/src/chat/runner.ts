@@ -61,6 +61,11 @@ import {
 /** 助理会话不分段新建：每满这么多轮换一个新的模型会话，靠记忆块 + 最近摘录续上 */
 const ASSISTANT_ROLL_TURNS = 40;
 
+/** 这条消息实际要用的模型：本条消息带的优先，没带才沿用会话和连接上次的 */
+export function promptModel(model: string | undefined, slot: { model?: string }, conn: { model: string }) {
+  return (model && model.trim()) || slot.model || conn.model;
+}
+
 export async function handlePrompt(
   ws: WebSocket,
   conn: Conn,
@@ -147,7 +152,7 @@ export async function handlePrompt(
   const safeImages = sanitizeImages(images);
   const cwd = cwdOf(conn, slot);
   const userText = text.trim() || (safeImages.length ? "请看附图。" : "");
-  const usedModel = (model && model.trim()) || slot.model || conn.model;
+  const usedModel = promptModel(model, slot, conn);
   if (slot.policy !== nextPolicy || slot.dialect !== nextDialect) {
     await disposeSlot(slot);
     slot.agentId = null;

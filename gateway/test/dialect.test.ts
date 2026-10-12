@@ -52,10 +52,17 @@ describe("dialectOverlay", () => {
     assert.ok(dialectOverlay("zhipu-glm").endsWith("按用户说的范围做，不要顺手重构邻文件。"));
   });
 
-  test("glm 附注只认开头是 glm 的名字；带前缀的 glm 有通用约束但没有附注", () => {
-    const text = dialectOverlay("openrouter/glm-4.6");
-    assert.ok(text.length > 0);
-    assert.ok(!text.includes("不要顺手重构邻文件"));
+  test("带路由前缀的模型按去掉前缀后的名字拿厂商附注", () => {
+    const glm = "按用户说的范围做，不要顺手重构邻文件。";
+    assert.ok(dialectOverlay("openrouter/glm-4.6").endsWith(glm));
+    assert.ok(dialectOverlay("z-ai/GLM-4.5").endsWith(glm));
+    assert.ok(dialectOverlay("zai:glm-4.6").endsWith(glm));
+    assert.ok(dialectOverlay("openrouter/deepseek-v3").endsWith("不要为了快整段覆盖文件，只改需要改的地方。"));
+    assert.ok(dialectOverlay("openrouter/moonshotai/kimi-k2").endsWith("不要把大段无关文件贴进回复。"));
+  });
+
+  test("glm 只出现在名字中间不算 glm 附注", () => {
+    assert.ok(!dialectOverlay("qwen-glm-distill").includes("不要顺手重构邻文件"));
   });
 });
 

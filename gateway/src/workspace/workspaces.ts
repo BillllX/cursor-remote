@@ -5,6 +5,7 @@ import type { WebSocket } from "ws";
 import { assistantName } from "../assistant/service.ts";
 import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { log } from "../log.ts";
+import { relEscapes } from "../pathInside.ts";
 import { chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { disposeSlot, persistTenant, runningChatIds } from "../runtime/slots.ts";
 import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
@@ -101,7 +102,7 @@ function topLevelWorkspace(tenant: Tenant, raw: string): { dir: string; name: st
   const dir = confinedCwd(raw, root);
   if (!dir || dir === root) return null;
   const rel = relative(root, dir);
-  if (!rel || rel.startsWith("..") || rel.includes("/") || rel.startsWith(".")) return null;
+  if (!rel || relEscapes(rel) || rel.includes("/") || rel.startsWith(".")) return null;
   return { dir, name: rel };
 }
 

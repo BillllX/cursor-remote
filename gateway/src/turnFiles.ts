@@ -14,8 +14,10 @@ import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import type { HistoryTurn, PreviewKind, TurnFile } from "../../shared/protocol.ts";
 import { formatBytes, isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../shared/preview.ts";
+import { toolWritesFiles } from "../../shared/toolNames.ts";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { errText, warnThrottled } from "./log.ts";
+import { relEscapes } from "./pathInside.ts";
 
 type RunTool = NonNullable<HistoryTurn["tools"]>[number];
 
@@ -68,13 +70,8 @@ const PATH_KEYS = [
 const LIST_KEYS = ["paths", "files"];
 const PATCH_LINE = /^\*\*\* (?:Add|Update) File:[ \t]*(.+?)[ \t]*$/gm;
 
-/** 判定规则与 iOS 端一致，改这里要同步改 iOS */
-export function toolWritesFiles(name: string): boolean {
-  const n = name.toLowerCase();
-  if (/todo|createplan/.test(n)) return false;
-  if (/delete|unlink|remove/.test(n)) return false;
-  return /strreplace|replace|apply.?patch|editnotebook|edit|write|create|generateimage|generate_image|image_gen/.test(n);
-}
+/** 规则在 shared/toolNames.ts，网页和 iOS 同一套 */
+export { toolWritesFiles };
 
 function cleanPath(raw: string): string {
   const value = raw.trim();
@@ -138,7 +135,7 @@ export function workspaceRel(cwd: string, raw: string): string | null {
   if (!raw) return null;
   const abs = raw.startsWith("/") ? raw : resolve(cwd, raw);
   const rel = relative(cwd, abs).replace(/\\/g, "/");
-  if (!rel || rel.startsWith("..")) return null;
+  if (!rel || relEscapes(rel)) return null;
   if (rel.split("/").includes(".git")) return null;
   return rel;
 }
@@ -147,13 +144,18 @@ const CANVAS_PATH = /\.canvas\.tsx$/i;
 
 function normalizeCanvasTarget(raw: string): string | null {
   let path = cleanPath(raw.trim());
-  if (path.startsWith("<") && path.endsWith(">")) path = path.slice(1, -1).trim();
-  const space = path.search(/\s/);
-  if (space >= 0) path = path.slice(0, space);
+  // markdown 的 <...> 目标允许空格，> 之后可能跟着链接标题
+  const close = path.startsWith("<") ? path.indexOf(">") : -1;
+  if (close > 0) path = path.slice(1, close).trim();
+  else {
+    const space = path.search(/\s/);
+    if (space >= 0) path = path.slice(0, space);
+  }
+  path = path.split(/[#?]/, 1)[0] ?? path;
+  // 先去行号再判 scheme：x.canvas.tsx:12 不是 URL
+  path = path.replace(/:\d+(?::\d+)?(?:-\d+)?$/, "");
   if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !path.toLowerCase().startsWith("file://")) return null;
   path = cleanPath(path);
-  path = path.split(/[#?]/, 1)[0] ?? path;
-  path = path.replace(/:\d+(?:-\d+)?$/, "");
   path = path.replace(/[.,;:!?。，；：！？、）」』]+$/u, "");
   path = path.replace(/\/+$/, "").replace(/^\.\//, "");
   try {
@@ -177,7 +179,7 @@ export function canvasPathsFromAssistant(text: string): string[] {
   };
   if (!text) return out;
   for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) push(match[1]);
-  for (const match of text.matchAll(/@([^\s`[\]()<>,;]+)/g)) push(match[1]);
+  for (const match of text.matchAll(/@([^\s`[\]()<>,;，。；：！？、（）「」『』【】《》“”‘’]+)/g)) push(match[1]);
   return out;
 }
 
@@ -529,7 +531,7 @@ export function enforceArtifactQuota(
   }
   const rows: Array<{ file: string; size: number; mtime: number }> = [];
   let total = 0;
-  const staleBefore = Date.now() - 60 * 60_000;
+  const staleBefore = now - 60 * 60_000;
   for (const name of names) {
     const file = resolve(dir, name);
     try {
@@ -604,10 +606,34 @@ export function readSnapshotDiff(stateDir: string, path: string, sha: string): S
 
 // ---------- 每轮清单 ----------
 
+const HUNK_HEAD = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/;
+
+/** hunk 内按 @@ 头给的行数逐行数，内容本身以 --/++ 开头的改动行照样算；只有 hunk 外的 ---/+++ 是文件头 */
 export function countDiffLines(text: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
+  let oldLeft = 0;
+  let newLeft = 0;
   for (const line of text.split("\n")) {
+    if (oldLeft > 0 || newLeft > 0) {
+      if (line.startsWith("+")) {
+        added += 1;
+        newLeft -= 1;
+      } else if (line.startsWith("-")) {
+        removed += 1;
+        oldLeft -= 1;
+      } else if (!line.startsWith("\\")) {
+        oldLeft -= 1;
+        newLeft -= 1;
+      }
+      continue;
+    }
+    const hunk = HUNK_HEAD.exec(line);
+    if (hunk) {
+      oldLeft = hunk[1] == null ? 1 : Number(hunk[1]);
+      newLeft = hunk[2] == null ? 1 : Number(hunk[2]);
+      continue;
+    }
     if (line.startsWith("+++") || line.startsWith("---")) continue;
     if (line.startsWith("+")) added += 1;
     else if (line.startsWith("-")) removed += 1;

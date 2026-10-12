@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 // P8 slim_state / load_chat 分页冒烟（本地 dev gateway）。
-// 用法: CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/smoke/slim-smoke.mjs   （默认连 127.0.0.1:8787）
+// 用法: JIEBO_WS_URL=ws://127.0.0.1:<端口>/bridge CURSOR_REMOTE_TOKEN=<测试管理员口令> node scripts/smoke/slim-smoke.mjs
 import WebSocket from "ws";
 import { createHash, randomUUID } from "node:crypto";
 
-const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
+const WS_URL = (process.env.JIEBO_WS_URL || "").trim();
+if (!WS_URL) {
+  console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>/bridge。不会默认连本机 8787（生产机上那就是线上网关）。");
+  process.exit(2);
+}
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
 if (!TOKEN) {
   console.error("缺少 CURSOR_REMOTE_TOKEN：请用测试用户的口令，不要用真实用户的。");

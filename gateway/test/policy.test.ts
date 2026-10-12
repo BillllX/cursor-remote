@@ -96,9 +96,12 @@ describe("toolCategory", () => {
     assert.equal(toolCategory("edit_file"), "write");
   });
 
-  test("edit 必须是独立单词：粘连在别的字母里不算", () => {
-    assert.equal(toolCategory("multiedit"), "other");
-    assert.equal(toolCategory("MultiEdit"), "other");
+  test("MultiEdit 是写文件工具；edit 粘连在别的字母里仍不算", () => {
+    assert.equal(toolCategory("multiedit"), "write");
+    assert.equal(toolCategory("MultiEdit"), "write");
+    assert.equal(toolCategory("multi_edit"), "write");
+    assert.equal(toolCategory("credit_check"), "other");
+    assert.equal(toolCategory("editor_open"), "other");
   });
 
   test("shell / terminal / command 归为 shell", () => {

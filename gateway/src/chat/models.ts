@@ -9,13 +9,20 @@ export function cachedModels(): string[] {
   return modelsCache?.ids?.length ? modelsCache.ids : [defaultModel()];
 }
 
-export async function listModels(apiKey: string): Promise<string[]> {
+type ListFn = (opts: { apiKey: string }) => Promise<Array<{ id: string }>>;
+
+export async function listModels(
+  apiKey: string,
+  list: ListFn = (opts) => Cursor.models.list(opts),
+  timeoutMs = 4000,
+): Promise<string[]> {
   if (modelsCache && Date.now() - modelsCache.at < 10 * 60_000) return modelsCache.ids;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const listed = await Promise.race([
-      Cursor.models.list({ apiKey }),
+      list({ apiKey }),
       new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error("models timeout")), 4000);
+        timer = setTimeout(() => reject(new Error("models timeout")), timeoutMs);
       }),
     ]);
     const ids = listed.map((item) => item.id).filter(Boolean);
@@ -24,5 +31,7 @@ export async function listModels(apiKey: string): Promise<string[]> {
     return next;
   } catch {
     return modelsCache?.ids || [defaultModel()];
+  } finally {
+    clearTimeout(timer);
   }
 }

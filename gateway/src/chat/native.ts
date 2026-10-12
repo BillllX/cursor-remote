@@ -108,7 +108,7 @@ export async function runNativeChat(
   const nativeVet = (spec: ToolSpec, args: Record<string, unknown>) => {
     if (spec.category !== "shell") return null;
     if (workspaceFenceForTenant(conn.tenant) && toolEscapesWorkspace(cwd, spec.name, args)) {
-      return "命令的工作目录或输出重定向超出了当前工作区，已拦截。";
+      return "命令的工作目录、输出重定向或写入的路径超出了当前工作区，已拦截。";
     }
     if (shellPublishes(spec.name, args) && !mayPublishHere(conn.tenant, cwd)) {
       return "对外网站只能在 USER 工作区里创建，这个会话不能执行 jiebo-publish。";

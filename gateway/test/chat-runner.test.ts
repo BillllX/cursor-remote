@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
-import { drainPending } from "../src/chat/runner.ts";
+import { drainPending, handlePrompt, promptModel } from "../src/chat/runner.ts";
 import { gatewayState, liveSlotsOf } from "../src/runtime/state.ts";
 import type { Conn, Slot } from "../src/runtime/types.ts";
 import { allTenants } from "../src/tenants.ts";
@@ -84,5 +84,25 @@ describe("drainPending 排队守卫", () => {
       live.clear();
       gatewayState.conns.delete(closedSock);
     }
+  });
+});
+
+describe("promptModel 本条消息用的模型", () => {
+  test("排队时 slot.model 还是旧的，起标题要用这条消息选的模型", async () => {
+    const slot = slotWith({
+      run: {} as Slot["run"],
+      pending: [],
+      model: "cursor-old",
+      openTools: new Map(),
+    } as Partial<Slot>);
+    const busyConn = { model: "conn-default", policy: undefined } as unknown as Conn;
+    await handlePrompt(ws, busyConn, slot, "你好", "deepseek:deepseek-chat");
+    assert.equal(slot.pending.length, 1);
+    assert.equal(slot.model, "cursor-old");
+    assert.equal(promptModel("deepseek:deepseek-chat", slot, busyConn), "deepseek:deepseek-chat");
+  });
+  test("消息没带模型时沿用会话，再退到连接的", () => {
+    assert.equal(promptModel(" ", { model: "a" }, { model: "b" }), "a");
+    assert.equal(promptModel(undefined, {}, { model: "b" }), "b");
   });
 });

@@ -30,7 +30,7 @@ export function isPolicyProtectedPath(rel: string): boolean {
 
 export function toolCategory(name: string, args?: unknown): ToolCategory {
   const n = name.toLowerCase();
-  if (/(write|strreplace|apply.?patch|editnotebook|delete|unlink|createfile|applyagentdiff)/.test(n)) {
+  if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile|applyagentdiff)/.test(n)) {
     return "write";
   }
   if (/(^|[^a-z])edit([^a-z]|$)/.test(n) && !/read/.test(n)) return "write";

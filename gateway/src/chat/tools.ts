@@ -1,10 +1,14 @@
 // 工具调用辅助：shell 输出增量、工具参数展示与脱敏、编辑记录、写入/越界/发布判断
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, resolve } from "node:path";
 import type { WebSocket } from "ws";
+import { isInside } from "../pathInside.ts";
 import type { Slot } from "../runtime/types.ts";
 import { workspacePath } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 import { isRecord } from "./history.ts";
+import { shellWriteTargets } from "./shellWrites.ts";
 
 function shellToolName(name: string) {
   return /(shell|bash|terminal|command)/i.test(name);
@@ -186,7 +190,7 @@ export function shellPublishes(name: string, args: unknown) {
 export function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
-  if (/(write|strreplace|apply.?patch|editnotebook|delete|unlink|createfile)/.test(n)) {
+  if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile)/.test(n)) {
     return true;
   }
   if (/(^|[^a-z])edit([^a-z]|$)/.test(n) && !/read/.test(n)) return true;
@@ -215,5 +219,61 @@ export function toolEscapesWorkspace(cwd: string, name: string, args: unknown): 
     if (abs === "/dev/null" || abs.startsWith("/dev/")) continue;
     if (!workspacePath(cwd, abs)) return true;
   }
+  // 绝对路径和 ~ 路径按解析符号链接后的真实位置判断；相对路径字面上越界认不准不报，
+  // 只防工作区里的符号链接指到外面
+  const root = resolve(cwd);
+  const realRoot = realOf(root);
+  const shellCwd = working ? resolve(cwd, working) : root;
+  for (const raw of shellWriteTargets(cmd)) {
+    const expanded = raw === "~" ? homedir() : raw.startsWith("~/") ? resolve(homedir(), raw.slice(2)) : raw;
+    if (raw.startsWith("~") && expanded === raw) return true;
+    const abs = resolve(shellCwd, expanded);
+    if (!expanded.startsWith("/") && !isInside(abs, root)) continue;
+    if (!writableTarget(abs, realRoot)) return true;
+  }
   return false;
+}
+
+/**
+ * 写入命令检查放过的位置：工作区、/tmp、os.tmpdir() 及其子路径、/dev 下的设备，都按真实路径比。
+ * 重定向检查不用这条
+ */
+function writableTarget(abs: string, realRoot: string) {
+  const real = realOf(abs);
+  if (isInside(real, realRoot)) return true;
+  // /dev/stdout 这类会链到 /proc/self/fd
+  if (abs !== "/dev" && isInside(abs, "/dev") && (isInside(real, "/dev") || isInside(real, "/proc"))) return true;
+  return tmpRoots().some((tmp) => isInside(real, tmp));
+}
+
+/** 解析符号链接后的路径：不存在就解析最近一层存在的祖先再接上剩下的部分；解析不了按字面 */
+export function realOf(abs: string): string {
+  const tail: string[] = [];
+  let head = abs;
+  for (;;) {
+    try {
+      return resolve(realpathSync(head), ...tail);
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return abs;
+      tail.unshift(basename(head));
+      head = parent;
+    }
+  }
+}
+
+let tmpRootsCache: string[] | null = null;
+function tmpRoots() {
+  if (!tmpRootsCache) {
+    const roots = ["/tmp", resolve(tmpdir())];
+    for (const root of [...roots]) {
+      try {
+        roots.push(realpathSync(root));
+      } catch {
+        // 不存在就只按字面路径比
+      }
+    }
+    tmpRootsCache = [...new Set(roots)];
+  }
+  return tmpRootsCache;
 }

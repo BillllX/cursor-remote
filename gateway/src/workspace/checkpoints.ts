@@ -5,6 +5,7 @@ import { relative, resolve } from "node:path";
 import type { WebSocket } from "ws";
 import { log } from "../log.ts";
 import { noteSession } from "../native/session.ts";
+import { relEscapes } from "../pathInside.ts";
 import { cwdOf } from "../runtime/slots.ts";
 import type { Checkpoint, Conn, Slot } from "../runtime/types.ts";
 import { confinedCwd, getTenant } from "../tenants.ts";
@@ -54,7 +55,7 @@ export function checkpointGit(cwd: string, checkpoint?: Checkpoint): { cwd: stri
     const workTree = confinedCwd(checkpoint.workTree || cwd, tenant.workspaceRoot) || cwd;
     const gitDir = resolve(checkpoint.gitDir);
     const rel = relative(tenant.stateDir, gitDir);
-    if (rel && !rel.startsWith("..") && !rel.split(/[/\\]/).includes("..")) {
+    if (rel && !relEscapes(rel)) {
       return {
         cwd: workTree,
         env: {
@@ -97,7 +98,7 @@ export function sendCheckpoints(ws: WebSocket, slot: Slot) {
 export function workspacePrefix(root: string, cwd: string): string {
   const rel = relative(resolve(root), resolve(cwd)).replace(/\\/g, "/");
   if (!rel || rel === ".") return "";
-  if (rel === ".." || rel.startsWith("../") || rel.split("/").includes("..")) {
+  if (relEscapes(rel)) {
     throw new Error("检查点工作区不在仓库内");
   }
   return rel;

@@ -6,11 +6,17 @@ export function usesChineseDialect(modelId: string): boolean {
   return CHINESE_VENDORS.test(modelId.trim().toLowerCase());
 }
 
+/** 去掉路由前缀：openrouter/glm-4.6、zai:glm-4.6 → glm-4.6 */
+function bareModel(modelId: string): string {
+  const n = modelId.trim().toLowerCase();
+  return n.slice(Math.max(n.lastIndexOf("/"), n.lastIndexOf(":")) + 1);
+}
+
 function vendorNote(modelId: string): string {
   const n = modelId.trim().toLowerCase();
   if (n.includes("deepseek")) return "不要为了快整段覆盖文件，只改需要改的地方。";
   if (n.includes("kimi") || n.includes("moonshot")) return "不要把大段无关文件贴进回复。";
-  if (n.startsWith("glm") || n.includes("zhipu")) return "按用户说的范围做，不要顺手重构邻文件。";
+  if (bareModel(n).startsWith("glm") || n.includes("zhipu")) return "按用户说的范围做，不要顺手重构邻文件。";
   return "";
 }
 

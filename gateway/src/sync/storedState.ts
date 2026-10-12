@@ -6,7 +6,7 @@ import { log } from "../log.ts";
 import { keepToolsAt, keepTurnFiles } from "../runlog.ts";
 import { assistantChatIdOf, assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { chatIdsFrom, persistTenant, runningChatIds } from "../runtime/slots.ts";
-import { gatewayState } from "../runtime/state.ts";
+import { forgetChatName, gatewayState } from "../runtime/state.ts";
 import { settlePersistedChats, type Tenant } from "../tenants.ts";
 import { send } from "../ws/send.ts";
 
@@ -42,6 +42,7 @@ export function tombstoneChat(tenant: Tenant, chatId: string) {
   tenant.disk.deletedIds = [chatId, ...tenant.disk.deletedIds.filter((id) => id !== chatId)].slice(0, 500);
   tenant.disk.chats = tenant.disk.chats.filter((item) => chatIdOf(item) !== chatId);
   delete tenant.disk.chatRevs[chatId];
+  forgetChatName(gatewayState, tenant.id, chatId);
   noteChatDeleted(tenant, chatId);
 }
 

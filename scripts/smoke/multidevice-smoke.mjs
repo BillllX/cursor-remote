@@ -3,12 +3,16 @@
 // 校验：旁观设备收到运行快照、中途连上不抢流式输出、digest 带 reason、无变化推送不推高 rev、
 // 有回合的会话目录不被 set_workspace / sync_chat 改掉。
 // 需要网关的 providers.json 里配一个指向本脚本假模型服务的 "fake" 提供方（tools: false），
-// 见 scripts/smoke/ci-gateway-smoke.sh。用法: CURSOR_REMOTE_TOKEN=<测试用户口令> FAKE_LLM_PORT=18798 node scripts/smoke/multidevice-smoke.mjs
+// 见 scripts/smoke/ci-gateway-smoke.sh。用法: JIEBO_WS_URL=ws://127.0.0.1:<端口>/bridge CURSOR_REMOTE_TOKEN=<测试用户口令> FAKE_LLM_PORT=18798 node scripts/smoke/multidevice-smoke.mjs
 import WebSocket from "ws";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
-const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
+const WS_URL = (process.env.JIEBO_WS_URL || "").trim();
+if (!WS_URL) {
+  console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>/bridge。不会默认连本机 8787（生产机上那就是线上网关）。");
+  process.exit(2);
+}
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
 const FAKE_PORT = Number(process.env.FAKE_LLM_PORT || 18798);
 if (!TOKEN) {

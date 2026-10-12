@@ -1,7 +1,6 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
-  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -11,11 +10,10 @@ import {
   realpathSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect as netConnect, createServer as netCreateServer } from "node:net";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { Duplex } from "node:stream";
 import { defaultWorkbenchPage, workbenchDownPage } from "./publish-home.ts";
 import { confinedCwd, isBillXuTenant } from "./tenants.ts";
@@ -449,11 +447,13 @@ function writePersisted(tenant: PublishTenant, row: Persisted) {
   atomicWriteFileSync(persistedPath(tenant), JSON.stringify(plain));
 }
 
-function clearPersisted(tenant: PublishTenant) {
+export function clearPersisted(tenant: PublishTenant) {
   try {
     unlinkSync(persistedPath(tenant));
-  } catch {
-    // already gone
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+    // 删不掉的话进程没了还会被当成要重新拉起
+    log.warn("publish.json 删除失败", tenant.id, errText(err));
   }
 }
 
@@ -461,7 +461,7 @@ function genPath(tenant: PublishTenant) {
   return resolve(tenant.stateDir, "publish-gen");
 }
 
-function readGen(tenant: PublishTenant) {
+export function readGen(tenant: PublishTenant) {
   try {
     const value = Number(readFileSync(genPath(tenant), "utf8"));
     return Number.isInteger(value) && value > 0 ? value : 0;
@@ -470,9 +470,9 @@ function readGen(tenant: PublishTenant) {
   }
 }
 
-function writeGen(tenant: PublishTenant, gen: number) {
+export function writeGen(tenant: PublishTenant, gen: number) {
   mkdirSync(tenant.stateDir, { recursive: true });
-  writeFileSync(genPath(tenant), String(gen));
+  atomicWriteFileSync(genPath(tenant), String(gen));
 }
 
 function readTokenFile(file: string) {
@@ -484,15 +484,9 @@ function readTokenFile(file: string) {
   }
 }
 
-function writeTokenFile(file: string, token: string) {
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${token}\n`, { mode: 0o600 });
-  try {
-    chmodSync(file, 0o600);
-  } catch (err) {
-    // best effort
-    log.warn("口令文件改权限失败", file, errText(err));
-  }
+export function writeTokenFile(file: string, token: string) {
+  // 临时文件每次新建，0o600 在 rename 前就生效，旧文件的宽权限不会带过来
+  atomicWriteFileSync(file, `${token}\n`, { mode: 0o600, mkdir: true });
 }
 
 /** 这个口令只管 Agent 能不能 start/stop 自己的工作台，访问工作台不需要它 */

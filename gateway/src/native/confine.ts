@@ -1,13 +1,9 @@
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { isPolicyProtectedPath } from "../../../shared/policy.ts";
+import { isInside } from "../pathInside.ts";
 
 export class ConfineError extends Error {}
-
-function inside(child: string, parent: string) {
-  const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
 
 function realOrSelf(path: string) {
   try {
@@ -40,9 +36,9 @@ export function resolveInside(cwd: string, raw: unknown, opts: { write?: boolean
   const input = typeof raw === "string" ? raw.trim() : "";
   const root = realOrSelf(resolve(cwd));
   const abs = resolve(root, input || ".");
-  if (!inside(abs, root)) throw new ConfineError(`路径不在工作区内：${input}`);
+  if (!isInside(abs, root)) throw new ConfineError(`路径不在工作区内：${input}`);
   const real = realResolved(abs);
-  if (!inside(real, root)) throw new ConfineError(`路径经符号链接指向工作区外：${input}`);
+  if (!isInside(real, root)) throw new ConfineError(`路径经符号链接指向工作区外：${input}`);
   const rel = relative(root, real).split(sep).join("/");
   if (rel.split("/").includes(".git")) throw new ConfineError("不能访问 .git 内部");
   if (opts.write && isPolicyProtectedPath(rel)) throw new ConfineError(`受保护的文件，不能改：${rel}`);

@@ -10,7 +10,9 @@ export type GatewayState = {
   /** 租户 id → 会话 id → 活动槽位；同租户的所有连接共用同一张表 */
   liveByTenant: Map<string, Map<string, Slot>>;
   conns: Map<WebSocket, Conn>;
+  /** 键是 chatNameKey(租户, 会话)：不同租户的会话 id 可以相同 */
   namingChats: Set<string>;
+  /** 已起过标题的会话，键同上；会话删除时清掉，超过 NAMED_CHATS_MAX 淘汰最早的 */
   namedChats: Set<string>;
   /** 按来源 IP 的登录失败计数 */
   loginHits: Map<string, LoginHit>;
@@ -33,6 +35,28 @@ export function createGatewayState(): GatewayState {
 }
 
 export const gatewayState = createGatewayState();
+
+export const NAMED_CHATS_MAX = 5_000;
+
+export function chatNameKey(tenantId: string, chatId: string) {
+  return `${tenantId}\u0000${chatId}`;
+}
+
+export function markChatNamed(state: GatewayState, tenantId: string, chatId: string, max = NAMED_CHATS_MAX) {
+  const key = chatNameKey(tenantId, chatId);
+  state.namedChats.delete(key);
+  state.namedChats.add(key);
+  for (const old of state.namedChats) {
+    if (state.namedChats.size <= max) break;
+    state.namedChats.delete(old);
+  }
+}
+
+export function forgetChatName(state: GatewayState, tenantId: string, chatId: string) {
+  const key = chatNameKey(tenantId, chatId);
+  state.namedChats.delete(key);
+  state.namingChats.delete(key);
+}
 
 export function liveSlotsOf(tenant: Tenant, state: GatewayState = gatewayState): Map<string, Slot> {
   let map = state.liveByTenant.get(tenant.id);

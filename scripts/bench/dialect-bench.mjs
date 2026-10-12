@@ -2,11 +2,11 @@
 // 中文系方言 overlay 对照：同一任务、同一模型、policy=baseline，只翻转 dialect。
 //
 // 用法:
-//   CURSOR_REMOTE_TOKEN=xxx npm run bench:dialect -- --models kimi-k3-max,glm-5.2
+//   JIEBO_WS_URL=ws://127.0.0.1:<端口> CURSOR_REMOTE_TOKEN=xxx npm run bench:dialect -- --models kimi-k3-max,glm-5.2
 //   node scripts/bench/dialect-bench.mjs --plan
 //   node scripts/bench/dialect-bench.mjs --from scripts/bench/dialect-bench/results/<stamp>.json
 //
-// 默认连本机 ws://127.0.0.1:8787。不要把 composer 放进默认模型：它吃不到方言 overlay。
+// JIEBO_WS_URL（或 DIALECT_BENCH_WS）必填，没有默认值；--plan 和 --from 不连网关，不需要。不要把 composer 放进默认模型：它吃不到方言 overlay。
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
 import {
@@ -67,7 +67,7 @@ const SHELL_EDIT =
 const EDIT_TOOLS = /^(edit|strreplace|applypatch|apply_patch|write|writefile|createfile|editnotebook)$/i;
 const SHELL_TOOLS = /^(shell|bash|terminal|command)$/i;
 
-const WS_URL = process.env.JIEBO_WS_URL || process.env.DIALECT_BENCH_WS || "ws://127.0.0.1:8787";
+const WS_URL = (process.env.JIEBO_WS_URL || process.env.DIALECT_BENCH_WS || "").trim();
 const TOKEN = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
 const POLICY = "baseline";
 
@@ -644,6 +644,10 @@ async function main() {
   printPlan(tasks);
   if (PLAN_ONLY) return;
 
+  if (!WS_URL) {
+    console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>。不会默认连本机 8787（生产机上那就是线上网关）。");
+    process.exit(2);
+  }
   if (!TOKEN) {
     console.error("缺少 CURSOR_REMOTE_TOKEN");
     process.exit(2);

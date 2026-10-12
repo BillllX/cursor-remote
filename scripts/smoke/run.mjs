@@ -173,7 +173,10 @@ function run(smoke, timeoutSec) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const selected = SMOKES.filter((s) => (!opts.ci || s.ci) && (!opts.only || opts.only.includes(s.name)));
+// --only 按参数里写的顺序跑
+const selected = opts.only
+  ? [...new Set(opts.only)].flatMap((name) => SMOKES.filter((s) => s.name === name && (!opts.ci || s.ci)))
+  : SMOKES.filter((s) => !opts.ci || s.ci);
 
 if (opts.list) {
   for (const [tag, desc] of Object.entries(NEEDS)) console.log(`${tag.padEnd(9)} ${desc}`);

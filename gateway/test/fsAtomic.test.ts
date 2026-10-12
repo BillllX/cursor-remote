@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { after, describe, test, type TestContext } from "node:test";
 import { atomicWriteFileSync, sweepStaleTmp } from "../src/fsAtomic.ts";
-import { sweepStateTmp } from "../src/tenants.ts";
+import { sweepNestedStateTmp, sweepStateTmp } from "../src/tenants.ts";
 
 describe("atomicWriteFileSync", () => {
   const root = mkdtempSync(resolve(tmpdir(), "cr-fsatomic-test-"));
@@ -257,4 +257,60 @@ describe("sweepStaleTmp / sweepStateTmp", () => {
     assert.deepEqual(readdirSync(workspace), ["state.json.tmp"]);
     assert.equal(warns(), 0);
   });
+
+  test("sweepNestedStateTmp：chats/<会话>/、artifacts/、assistant/ 各层的过期临时文件", async () => {
+    const state = freshDir();
+    const sha1 = "a".repeat(40);
+    const sha = "b".repeat(64);
+    const chats = Array.from({ length: 5 }, (_, i) => resolve(state, "chats", `c${i}`));
+    for (const dir of chats) mkdirSync(dir, { recursive: true });
+    put(chats[0], `${sha1}.json`, 2 * HOUR);
+    put(chats[0], `${sha1}.json.tmp`, 2 * HOUR);
+    put(chats[1], "00003.json.tmp", 2 * HOUR);
+    put(chats[2], `${sha1}.json.12.0a1b2c3d.tmp`, 2 * HOUR);
+    put(chats[3], `${sha1}.json.13.0a1b2c3d.tmp`, 10 * 60_000);
+    put(chats[4], "notes.tmp", 2 * HOUR);
+    const artifacts = resolve(state, "artifacts");
+    mkdirSync(artifacts);
+    put(artifacts, sha, 2 * HOUR);
+    put(artifacts, `.${sha}.7.0a1b2c3d.tmp`, 2 * HOUR);
+    put(artifacts, `${sha}.8.0a1b2c3d.tmp`, 2 * HOUR);
+    put(artifacts, `${sha}.9.0a1b2c3d.tmp`, 0);
+    const assistant = resolve(state, "assistant");
+    mkdirSync(resolve(assistant, "memory", "episodes"), { recursive: true });
+    put(assistant, "todos.json.3.0a1b2c3d.tmp", 2 * HOUR);
+    put(resolve(assistant, "memory"), "entries.json.3.0a1b2c3d.tmp", 2 * HOUR);
+    put(resolve(assistant, "memory", "episodes"), "2026-09.json.3.0a1b2c3d.tmp", 2 * HOUR);
+    put(assistant, "todos.json", 2 * HOUR);
+    assert.equal(await sweepNestedStateTmp([state, state], [resolve(state, "workspace")], now, 2), 8);
+    assert.deepEqual(readdirSync(chats[0]), [`${sha1}.json`]);
+    assert.deepEqual(readdirSync(chats[1]), []);
+    assert.deepEqual(readdirSync(chats[2]), []);
+    assert.deepEqual(readdirSync(chats[3]), [`${sha1}.json.13.0a1b2c3d.tmp`]);
+    assert.deepEqual(readdirSync(chats[4]), ["notes.tmp"]);
+    assert.deepEqual(readdirSync(artifacts).sort(), [sha, `${sha}.9.0a1b2c3d.tmp`].sort());
+    assert.deepEqual(readdirSync(assistant).sort(), ["memory", "todos.json"]);
+    assert.deepEqual(readdirSync(resolve(assistant, "memory", "episodes")), []);
+  });
+
+  test(
+    "sweepNestedStateTmp：状态目录在工作区里就整个跳过；符号链接的会话目录不进去",
+    { skip: process.platform === "win32" },
+    async () => {
+      const workspace = freshDir();
+      const state = resolve(workspace, ".state");
+      mkdirSync(resolve(state, "chats", "c1"), { recursive: true });
+      put(resolve(state, "chats", "c1"), "00001.json.tmp", 2 * HOUR);
+      assert.equal(await sweepNestedStateTmp([state], [workspace], now), 0);
+      assert.deepEqual(readdirSync(resolve(state, "chats", "c1")), ["00001.json.tmp"]);
+
+      const other = freshDir();
+      const outside = freshDir();
+      put(outside, "00001.json.tmp", 2 * HOUR);
+      mkdirSync(resolve(other, "chats"));
+      symlinkSync(outside, resolve(other, "chats", "linked"));
+      assert.equal(await sweepNestedStateTmp([other], [], now), 0);
+      assert.deepEqual(readdirSync(outside), ["00001.json.tmp"]);
+    },
+  );
 });

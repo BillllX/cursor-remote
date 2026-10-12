@@ -4,7 +4,11 @@ import { createRequire } from "node:module";
 const require = createRequire(new URL("../../gateway/package.json", import.meta.url));
 const WebSocket = require("ws");
 
-const url = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
+const url = (process.env.JIEBO_WS_URL || "").trim();
+if (!url) {
+  console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>/bridge。不会默认连本机 8787（生产机上那就是线上网关）。");
+  process.exit(2);
+}
 const token = (process.env.CURSOR_REMOTE_TOKEN || "").trim();
 if (!token) {
   console.error("缺少 CURSOR_REMOTE_TOKEN：请用测试用户的口令，不要用真实用户的。");

@@ -2,7 +2,7 @@
 // 自研 Agent 端到端：连真实网关 + 真实第三方模型，在临时子工作区里跑，跑完删掉。
 // 用法（在网关所在机器上）：
 //   set -a; . /etc/cursor-remote/gateway.env; set +a
-//   NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/smoke/native-e2e.mjs [场景...]
+//   JIEBO_WS_URL=ws://127.0.0.1:<端口>/bridge NATIVE_E2E_MODEL=minimax:MiniMax-M2 node scripts/smoke/native-e2e.mjs [场景...]
 // 场景：create undo restore approve ask cancel shell memory mcp task usage（缺省全跑）
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
@@ -10,7 +10,11 @@ import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const WS_URL = process.env.JIEBO_WS_URL || "ws://127.0.0.1:8787/bridge";
+const WS_URL = (process.env.JIEBO_WS_URL || "").trim();
+if (!WS_URL) {
+  console.error("缺少 JIEBO_WS_URL：请指向测试网关，例如 ws://127.0.0.1:<端口>/bridge。不会默认连本机 8787（生产机上那就是线上网关）。");
+  process.exit(2);
+}
 const TOKEN = process.env.CURSOR_REMOTE_TOKEN || "";
 const MODEL = process.env.NATIVE_E2E_MODEL || "minimax:MiniMax-M2";
 const RUN_TIMEOUT = Number(process.env.NATIVE_E2E_TIMEOUT_MS || 240_000);

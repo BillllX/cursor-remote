@@ -11,6 +11,7 @@ import {
   sandboxEnabledForTenant,
   saveDiskNow,
   stateDir,
+  sweepNestedStateTmp,
   sweepStateTmp,
 } from "./tenants.ts";
 import { bindLoops } from "./loops.ts";
@@ -45,6 +46,17 @@ const sweptTmp = sweepStateTmp(
   allTenants().map((tenant) => tenant.workspaceRoot),
 );
 if (sweptTmp) log.info(`已清理状态目录里残留的临时文件 ${sweptTmp} 个`);
+// 会话目录可能上千个，延后到启动之后再扫子目录
+setTimeout(() => {
+  sweepNestedStateTmp(
+    [stateDir(), ...allTenants().map((tenant) => tenant.stateDir)],
+    allTenants().map((tenant) => tenant.workspaceRoot),
+  )
+    .then((count) => {
+      if (count) log.info(`已清理会话、快照、助理目录里残留的临时文件 ${count} 个`);
+    })
+    .catch((err) => log.warn("子目录临时文件清理失败", err instanceof Error ? err.message : err));
+}, 10_000).unref();
 for (const tenant of allTenants()) {
   if (!sandboxEnabledForTenant(tenant)) {
     log.warn(`租户 ${tenant.name}（${tenant.id}）不启用沙箱。`);

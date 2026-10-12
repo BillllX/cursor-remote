@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, test } from "node:test";
-import { loginBlocked, noteLoginFail, noteLoginOk, peerIp } from "../src/auth/login.ts";
-import { gatewayState } from "../src/runtime/state.ts";
+import { loginBlocked, noteLoginFail, noteLoginOk, peerIp, sweepExpiredLoginHits } from "../src/auth/login.ts";
+import { gatewayState, type LoginHit } from "../src/runtime/state.ts";
 
 const req = (remoteAddress: string, forwarded?: string) =>
   ({
@@ -46,5 +46,56 @@ describe("登录失败限流", () => {
     noteLoginFail(ip);
     assert.equal(gatewayState.loginHits.get(ip)?.count, 1);
     assert.equal(loginBlocked(ip), false);
+  });
+
+  test("过期条目惰性清掉：查询时删，表长了以后失败时顺手扫", () => {
+    const hits = new Map<string, LoginHit>();
+    const t0 = 1_000_000;
+    noteLoginFail("a", hits, t0);
+    assert.equal(loginBlocked("a", hits, t0 + 11 * 60_000), false);
+    assert.equal(hits.has("a"), false);
+
+    for (let i = 0; i < 600; i += 1) noteLoginFail(`old-${i}`, hits, t0);
+    assert.equal(hits.size, 600, "都还在计数窗口里，一条不删");
+    const later = t0 + 11 * 60_000;
+    noteLoginFail("new", hits, later);
+    assert.deepEqual([...hits.keys()], ["new"]);
+  });
+
+  test("封禁期内的条目即使计数窗口过了也不清，限速不变", () => {
+    const hits = new Map<string, LoginHit>();
+    const t0 = 1_000_000;
+    for (let i = 0; i < 8; i += 1) noteLoginFail("b", hits, t0 + i * 60_000);
+    // 第 8 次在 t0+7min，封到 t0+17min；计数窗口在 t0+10min 就过了
+    sweepExpiredLoginHits(hits, t0 + 12 * 60_000);
+    assert.equal(loginBlocked("b", hits, t0 + 12 * 60_000), true);
+    assert.equal(loginBlocked("b", hits, t0 + 18 * 60_000), false);
+    assert.equal(hits.size, 0);
+  });
+
+  test("条目数超上限时淘汰最久没失败过的", () => {
+    const hits = new Map<string, LoginHit>();
+    const t0 = 1_000_000;
+    for (const ip of ["a", "b", "c", "d"]) noteLoginFail(ip, hits, t0, 2);
+    assert.deepEqual([...hits.keys()], ["c", "d"]);
+    noteLoginFail("c", hits, t0 + 1, 2);
+    noteLoginFail("e", hits, t0 + 2, 2);
+    assert.deepEqual([...hits.keys()], ["c", "e"]);
+  });
+
+  test("全表扫过期条目按时间节流：上次扫完不到 60 秒不再扫", () => {
+    const hits = new Map<string, LoginHit>();
+    const t0 = 1_000_000;
+    const min = 60_000;
+    // 第 512 条时扫过一次（t0）
+    for (let i = 0; i < 600; i += 1) noteLoginFail(`old-${i}`, hits, t0);
+    for (let i = 0; i < 600; i += 1) noteLoginFail(`mid-${i}`, hits, t0 + 30_000);
+    assert.equal(hits.size, 1200, "离上次扫不到 60 秒，表再长也不扫");
+    noteLoginFail("a1", hits, t0 + 10 * min + 1_000);
+    assert.equal(hits.size, 601, "old-* 过期被扫掉，mid-* 还在窗口里");
+    noteLoginFail("a2", hits, t0 + 10 * min + 31_000);
+    assert.equal(hits.size, 602, "mid-* 已过期，但离上次扫只有 30 秒，不扫");
+    noteLoginFail("a3", hits, t0 + 11 * min + 2_000);
+    assert.deepEqual([...hits.keys()], ["a1", "a2", "a3"]);
   });
 });

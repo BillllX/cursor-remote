@@ -3,7 +3,7 @@ import { parsePolicy } from "../../../../shared/policy.ts";
 import { noteTurn } from "../../usage.ts";
 import { parseClientClock } from "../../assistant/service.ts";
 import { slotOf } from "../../runtime/slots.ts";
-import { handlePrompt } from "../../chat/runner.ts";
+import { handlePrompt, promptModel } from "../../chat/runner.ts";
 import { titleChat } from "../../chat/title.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
 
@@ -31,5 +31,6 @@ export async function onPrompt({ ws, conn, tenant }: WsCtx, message: MessageOf<"
     true,
     message.turnId,
   );
-  if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text);
+  // 排队时 handlePrompt 不更新 slot.model，要按这条消息自己选的模型起标题
+  if (message.nameChat) void titleChat(ws, tenant, slot.chatId, message.text, promptModel(message.model, slot, conn));
 }

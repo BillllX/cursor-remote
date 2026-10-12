@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
-import { atomicWriteFileSync } from "../fsAtomic.ts";
+import { dirname, relative, resolve, sep } from "node:path";
+import { atomicWriteFileSync, sweepStaleTmp } from "../fsAtomic.ts";
+import { isInside } from "../pathInside.ts";
 import { addApproval, settleApproval } from "./approvals.ts";
 import { postInbox } from "./inbox.ts";
 import {
@@ -28,6 +29,7 @@ import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type T
 export type WorkspaceRoot = { id: string; stateDir: string; workspaceRoot: string };
 
 export const MEMORY_FILE = ".jiebo/memory.md";
+const MEMORY_TMP_RE = /^memory\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
 export const SECTIONS = ["约定", "命令", "坑", "决定", "进行中"] as const;
 export type Section = (typeof SECTIONS)[number];
 export const RULES_CHAR_CAP = 16_000;
@@ -52,8 +54,7 @@ function realOr(path: string) {
 }
 
 function within(root: string, path: string) {
-  const rel = relative(root, path);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+  return isInside(path, root);
 }
 
 function isDir(path: string) {
@@ -179,6 +180,8 @@ export function appendMemoryLines(dir: string, lines: MemoryLine[]) {
     rows.splice(end, 0, formatLine(line));
   }
   writeTextAtomic(path, `${rows.join("\n").trim()}\n`);
+  // 这是用户工作区，只清自己这个文件名的残留临时文件，不在启动时扫
+  sweepStaleTmp(dirname(path), { patterns: [MEMORY_TMP_RE] });
   return fresh.length;
 }
 
