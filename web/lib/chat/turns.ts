@@ -1,6 +1,6 @@
 // 回合：结算（收尾未结束的工具）、服务端回合/快照/历史合并、待办提取
 import type { HistoryTurn, ServerMessage } from "@shared/protocol";
-import { mutatingTool } from "../../components/ToolCard";
+import { mutatingTool } from "./toolKinds";
 import { pathFromPayload } from "./tools";
 import type { TodoItem, Turn } from "./types";
 

@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { crewLabel } from "../lib/crew";
 import { modelLabel } from "../lib/models";
+import { asRecord, field, toolKind } from "../lib/chat/toolKinds";
+
+export { mutatingTool, toolKind } from "../lib/chat/toolKinds";
 
 type ToolCall = {
   callId: string;
@@ -13,19 +16,6 @@ type ToolCall = {
   agent?: string;
   model?: string;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
-}
-
-function field(args: unknown, ...keys: string[]): string {
-  const record = asRecord(args);
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  return "";
-}
 
 function KindGlyph({ kind }: { kind: string }) {
   const d =
@@ -43,24 +33,6 @@ function KindGlyph({ kind }: { kind: string }) {
       <path d={d} />
     </svg>
   );
-}
-
-export function toolKind(name: string, args?: unknown): "read" | "edit" | "write" | "shell" | "search" | "other" {
-  const n = name.toLowerCase();
-  if (/(todo|createplan)/.test(n)) return "other";
-  if (/(shell|bash|terminal|command)/.test(n)) return "shell";
-  if (/(grep|glob|search|find|ripgrep)/.test(n)) return "search";
-  if (/(strreplace|replace|apply.?patch|editnotebook|edit)/.test(n)) return "edit";
-  if (/(write|create|delete|unlink)/.test(n)) return "write";
-  if (/(read|cat|open|getfile)/.test(n)) return "read";
-  if (/(todo|task)/.test(n)) return "other";
-  if (field(args, "globPattern", "glob", "glob_pattern", "pattern", "query")) return "search";
-  return "other";
-}
-
-export function mutatingTool(name: string) {
-  const kind = toolKind(name);
-  return kind === "edit" || kind === "write";
 }
 
 function clip(text: string, max = 12_000) {

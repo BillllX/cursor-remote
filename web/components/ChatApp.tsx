@@ -3,7 +3,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,8 +23,8 @@ import type {
   CursorBill,
 } from "@shared/protocol";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
-import AssistantPanel, { DELEGATION_STATUS } from "./AssistantPanel";
-import ToolCard, { extractDiff, mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "./ToolCard";
+import AssistantPanel from "./AssistantPanel";
+import { extractDiff, mutatingTool } from "./ToolCard";
 import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
 import type { CanvasAction } from "../lib/canvas/host";
@@ -43,37 +42,40 @@ import {
   writeLastModel,
 } from "../lib/models";
 import { useFocusTrap } from "../lib/useFocusTrap";
-import { JieboGlyph, JieboMark as Mark } from "./JieboMark";
 import { IconRail } from "./chromeIcons";
 import { gatewayUrl, HELLO_CLIENT, uploadUrl, wire } from "../lib/chat/connection";
-import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../lib/chat/format";
+import { friendlyError } from "../lib/chat/format";
 import { useHeldOpen, useSheetDrag } from "../lib/chat/hooks/sheet";
+import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
+import { useWorkspaceGroups } from "../lib/chat/hooks/useWorkspaceGroups";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
 import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, loopsFromReady, markUnread, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
-import { chatHasContent, chatMeta, EMPTY_STARTERS, isUntitled, mergeSlimChats, metaKey, shortPadTitle, usableDraft } from "../lib/chat/sessions";
+import { chatHasContent, chatMeta, isUntitled, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, GROUPS_KEY, MAX_DELETED, pushRecent, rememberDeleted, TOKEN_KEY } from "../lib/chat/storage";
-import { pathFromPayload, searchQuery, shellRows, toolPreview } from "../lib/chat/tools";
-import { editPathsOf, liveTurn, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, turnSuperseded, uid, withLiveTurns, writesWereRejected } from "../lib/chat/turns";
+import { pathFromPayload, shellRows } from "../lib/chat/tools";
+import { editPathsOf, liveTurn, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
-import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel } from "../lib/chat/workspace";
+import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile } from "../lib/chat/workspace";
 import { AdminOverlay } from "./chat/AdminOverlay";
-import { Composer } from "./chat/Composer";
+import { AssistantChatHead } from "./chat/AssistantChatHead";
+import { ComposerDock } from "./chat/ComposerDock";
+import { EmptyState } from "./chat/EmptyState";
 import { FilesOverlay } from "./chat/FilesOverlay";
 import { GrepOverlay } from "./chat/GrepOverlay";
 import { LoginGate } from "./chat/LoginGate";
 import { LoopOverlay } from "./chat/LoopOverlay";
-import { CiteText, Highlight, markdownComponents, MemoMarkdown, REMARK_PLUGINS } from "./chat/markdown";
+import { markdownComponents } from "./chat/markdown";
+import { PadBar } from "./chat/PadBar";
 import { PaletteOverlay } from "./chat/PaletteOverlay";
 import { SearchOverlay } from "./chat/SearchOverlay";
 import { Sidebar } from "./chat/Sidebar";
-import { StallHint } from "./chat/StallHint";
 import { TerminalOverlay } from "./chat/TerminalOverlay";
+import { Thread } from "./chat/Thread";
 import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
-  const threadRef = useRef<HTMLDivElement | null>(null);
   const [connected, setConnected] = useState(false);
   const [hasApiKey, setHasApiKey] = useState(true);
   const [cwd, setCwd] = useState("");
@@ -276,115 +278,15 @@ export default function ChatApp() {
     return assistantChat?.preview?.trim().slice(0, 80) || "今日 · 收件箱 · 记忆";
   }, [assistantChat?.turns, assistantChat?.preview]);
 
-  const recentWorkspaces = useMemo(() => {
-    const seen = new Set<string>();
-    const out: { path: string; name: string; user?: boolean }[] = [];
-    for (const chat of chats) {
-      const path = chat.cwd || workspaceRoot;
-      if (!path) continue;
-      const key = normPath(path);
-      if (seen.has(key) || !inWorkspaceRoot(path, workspaceRoot || path)) continue;
-      seen.add(key);
-      const known = workspaces.find((item) => sameCwd(item.path, path));
-      const user = Boolean(known?.user) || sameCwd(path, workspaceRoot);
-      out.push({
-        path,
-        name: user ? assistantName : known?.name || workspaceLabel(path, workspaceRoot, assistantName),
-        user,
-      });
-    }
-    return out;
-  }, [assistantName, chats, workspaceRoot, workspaces]);
-
-  const catalogWorkspaces = useMemo(() => {
-    const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
-    return workspaces.filter((item) => !recent.has(normPath(item.path)));
-  }, [workspaces, recentWorkspaces]);
-
-  const workspaceGroups = useMemo(() => {
-    const root = workspaceRoot || cwd;
-    const known = workspaces.length
-      ? workspaces
-      : root
-        ? [{ path: root, name: workspaceLabel(root, root, assistantName) }]
-        : [];
-    const byPath = new Map(known.map((item) => [normPath(item.path), { ...item, chats: [] as Chat[] }]));
-    for (const chat of sidebarChats) {
-      const key = normPath(chat.cwd || root);
-      const cur = byPath.get(key);
-      if (cur) cur.chats.push(chat);
-      else {
-        const path = chat.cwd || root;
-        const user = sameCwd(path, root);
-        byPath.set(key, {
-          path,
-          name: user ? assistantName : workspaceLabel(path, root, assistantName),
-          user,
-          chats: [chat],
-        });
-      }
-    }
-    const groups = [...byPath.values()].map((group) => {
-      const user = Boolean(group.user) || sameCwd(group.path, root);
-      const touched = group.chats.reduce((max, chat) => Math.max(max, chat.touchedAt || 0), 0);
-      return { ...group, user, touched, name: user ? assistantName : group.name };
-    });
-    // USER 根目录只承载助理会话，由侧栏置顶入口代替，不进工作区分组
-    return groups
-      .filter((group) => !group.user && (!root || !sameCwd(group.path, root)))
-      // 最近动过的工作区排前面；没有时间的保持原来的顺序（sort 是稳定的）
-      .sort((a, b) => b.touched - a.touched);
-  }, [assistantName, sidebarChats, workspaces, workspaceRoot, cwd]);
-
-  const duplicateGroupNames = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const group of workspaceGroups) counts.set(group.name, (counts.get(group.name) || 0) + 1);
-    return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [workspaceGroups]);
-
-  const menuWorkspaces = useMemo(
-    () => [...recentWorkspaces, ...catalogWorkspaces],
-    [recentWorkspaces, catalogWorkspaces],
-  );
-  // 新对话只能开在子工作区；USER 根目录留给助理会话
-  const otherMenuWorkspaces = useMemo(
-    () => menuWorkspaces.filter((item) => !item.user && !(workspaceRoot && sameCwd(item.path, workspaceRoot))),
-    [menuWorkspaces, workspaceRoot],
-  );
-
-  // 侧栏主区只列有对话的工作区（外加当前所在的）；没对话的收进底部“更多工作区”，工作区再多也不会把侧栏撑满
-  const sidebarGroups = useMemo(
-    () => workspaceGroups.filter((group) => group.chats.length || sameCwd(group.path, cwd)),
-    [workspaceGroups, cwd],
-  );
-  const moreGroups = useMemo(
-    () =>
-      workspaceGroups
-        .filter((group) => !group.chats.length && !sameCwd(group.path, cwd))
-        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
-    [workspaceGroups, cwd],
-  );
-
-  // 新对话浮层的候选：最近用过的排前面，按名字或路径过滤，附带每个工作区已有几个对话
-  const workspaceChoices = useMemo(() => {
-    const q = workspaceQuery.trim().toLowerCase();
-    const recent = new Set(recentWorkspaces.map((item) => normPath(item.path)));
-    const counts = new Map(workspaceGroups.map((group) => [normPath(group.path), group.chats.length]));
-    const touchedBy = new Map(workspaceGroups.map((group) => [normPath(group.path), group.touched]));
-    const names = new Map<string, number>();
-    for (const item of otherMenuWorkspaces) names.set(item.name, (names.get(item.name) || 0) + 1);
-    return otherMenuWorkspaces
-      .filter((item) => !q || item.name.toLowerCase().includes(q) || item.path.toLowerCase().includes(q))
-      .map((item) => ({
-        ...item,
-        recent: recent.has(normPath(item.path)),
-        chats: counts.get(normPath(item.path)) || 0,
-        touched: touchedBy.get(normPath(item.path)) || 0,
-        // 重名的工作区必须带路径才分得清
-        dup: (names.get(item.name) || 0) > 1,
-      }))
-      .sort((a, b) => Number(b.recent) - Number(a.recent) || b.touched - a.touched);
-  }, [workspaceQuery, recentWorkspaces, workspaceGroups, otherMenuWorkspaces]);
+  const { duplicateGroupNames, otherMenuWorkspaces, sidebarGroups, moreGroups, workspaceChoices } = useWorkspaceGroups({
+    chats,
+    workspaceRoot,
+    workspaces,
+    assistantName,
+    sidebarChats,
+    cwd,
+    workspaceQuery,
+  });
   const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
   const workspaceExact = workspaceChoices.some(
     (item) => item.name.toLowerCase() === workspaceQuery.trim().toLowerCase(),
@@ -393,15 +295,6 @@ export default function ChatApp() {
   chatsRef.current = chats;
   const activeIdRef = useRef(activeId);
   activeIdRef.current = activeId;
-  // -1 表示离开时贴在底部，回来继续贴底
-  const scrollMap = useRef<Record<string, number>>({});
-  const stickRef = useRef(true);
-  const lastTopRef = useRef(0);
-  const restoreRef = useRef<number | null>(null);
-  const restoreTimerRef = useRef(0);
-  const expectTopRef = useRef(-1);
-  const shownChatRef = useRef("");
-  const [jumpState, setJumpState] = useState<"" | "far" | "new">("");
   const draftRef = useRef(draft);
   const imagesRef = useRef<Record<string, PromptImage[]>>({});
   const newChatRef = useRef<() => void>(() => {});
@@ -2137,102 +2030,12 @@ export default function ChatApp() {
     };
   }, [send]);
 
-  // 只在“贴底”时跟随新内容；用户往上翻过就不再拽回，直到他自己回到底部或点“回到最新”。
-  // 代码挪动滚动位置时记下目标值，onScroll 据此区分“程序滚”和“用户滚”（滚轮、键盘、拖滚动条、查找跳转）。
-  const moveThread = useCallback((el: HTMLDivElement, top: number) => {
-    el.scrollTop = top;
-    expectTopRef.current = el.scrollTop;
-    lastTopRef.current = el.scrollTop;
-  }, []);
-
-  // 待还原优先；否则贴底时跟到最底。正文还在分段加载时，等够高了再还原。
-  const reconcileThread = useCallback(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    const want = restoreRef.current;
-    if (want != null) {
-      if (el.scrollHeight - el.clientHeight >= want) {
-        moveThread(el, want);
-        restoreRef.current = null;
-      }
-      return;
-    }
-    if (stickRef.current) moveThread(el, el.scrollHeight);
-  }, [moveThread]);
-
-  const scrollThreadToEnd = useCallback((smooth = false) => {
-    const el = threadRef.current;
-    stickRef.current = true;
-    restoreRef.current = null;
-    setJumpState("");
-    if (!el) return;
-    scrollMap.current[activeIdRef.current] = -1;
-    const far = el.scrollHeight - el.scrollTop - el.clientHeight > el.clientHeight * 3;
-    if (smooth && !far) {
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-      return;
-    }
-    reconcileThread();
-    requestAnimationFrame(reconcileThread);
-  }, [reconcileThread]);
-
-  const onThreadScroll = useCallback(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    const top = el.scrollTop;
-    const programmatic = Math.abs(top - expectTopRef.current) <= 1;
-    expectTopRef.current = -1;
-    if (!programmatic) restoreRef.current = null;
-    const dist = el.scrollHeight - top - el.clientHeight;
-    const movedUp = top < lastTopRef.current - 1;
-    lastTopRef.current = top;
-    if (dist <= 4) stickRef.current = true;
-    else if (movedUp && !programmatic) stickRef.current = false;
-    if (restoreRef.current == null) scrollMap.current[activeIdRef.current] = stickRef.current ? -1 : top;
-    const show = !stickRef.current && dist > 160;
-    setJumpState((prev) => (show ? prev || "far" : ""));
-  }, []);
-
-  useLayoutEffect(() => {
-    const el = threadRef.current;
-    if (!el) return;
-    if (shownChatRef.current !== activeId) {
-      shownChatRef.current = activeId;
-      setJumpState("");
-      window.clearTimeout(restoreTimerRef.current);
-      const saved = scrollMap.current[activeId];
-      if (saved == null || saved < 0) {
-        stickRef.current = true;
-        restoreRef.current = null;
-      } else {
-        stickRef.current = false;
-        restoreRef.current = saved;
-        // 正文最终没那么高（被删减、折叠）时，不让还原一直挂着
-        restoreTimerRef.current = window.setTimeout(() => {
-          const node = threadRef.current;
-          const want = restoreRef.current;
-          restoreRef.current = null;
-          if (node && want != null) moveThread(node, Math.min(want, node.scrollHeight - node.clientHeight));
-        }, 1500);
-      }
-    }
-    const pending = restoreRef.current != null;
-    reconcileThread();
-    if (!pending && !stickRef.current && el.scrollHeight - el.scrollTop - el.clientHeight > 160) setJumpState("new");
-  }, [active?.turns, activeId, moveThread, reconcileThread]);
-
-  useEffect(() => () => window.clearTimeout(restoreTimerRef.current), []);
-
-  const hasThread = Boolean(active?.turns.length);
-  useEffect(() => {
-    const el = threadRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    // 图片、代码高亮、折叠展开、查找栏开合这类不改 turns 的高度变化
-    const ro = new ResizeObserver(() => reconcileThread());
-    ro.observe(el);
-    for (const child of Array.from(el.children)) ro.observe(child);
-    return () => ro.disconnect();
-  }, [activeId, hasThread, threadFindOpen, reconcileThread]);
+  const { threadRef, scrollMap, stickRef, restoreRef, jumpState, scrollThreadToEnd, onThreadScroll } = useThreadScroll({
+    activeIdRef,
+    active,
+    activeId,
+    threadFindOpen,
+  });
 
   function submit(raw?: string) {
     if (raw != null) draftRef.current = raw;
@@ -3870,7 +3673,7 @@ export default function ChatApp() {
     const id = threadFindHits[threadFindHi]?.id;
     if (!id || !threadRef.current) return;
     threadRef.current.querySelector(`[data-turn="${id}"]`)?.scrollIntoView({ block: "center" });
-  }, [threadFindOpen, threadFindHi, threadFindQ, activeId]);
+  }, [threadFindOpen, threadFindHi, threadFindQ, activeId, threadRef]);
 
   // 读屏播报：提示信息直接读；当前会话一轮跑完时补一句“回复完成”
   // 每次播报换一个 key，同一句话第二次出现时读屏也会再读
@@ -4189,528 +3992,68 @@ export default function ChatApp() {
 
       <main className={`main${previewTabs.length ? " with-preview" : ""}${previewMax ? " preview-max" : ""}${previewTabs.some((tab) => isWideKind(tabKind(tab.path, tab.kind)) && sameFile(tab.path, previewPath)) ? " with-canvas" : ""}`}>
         <div className="main-col">
-        <div className="pad-bar">
-          <button
-            type="button"
-            className="pad-bar-btn pad-bar-nav"
-            aria-label={navOpen ? "关闭对话列表" : "打开对话列表"}
-            onClick={() => {
-              setNavOpen((open) => {
-                const next = !open;
-                if (next) setPreviewMax(false);
-                return next;
-              });
-            }}
-          >
-            <svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-            </svg>
-          </button>
-          <div className="pad-bar-title" title={assistantActive ? assistantName : active?.title || "新对话"}>
-            {assistantActive ? assistantName : shortPadTitle(active?.title, active?.turns.find((turn) => turn.user)?.user)}
-          </div>
-          {assistantActive ? (
-            <button
-              type="button"
-              className={`pill assistant-today${assistantOpen ? " on" : ""}`}
-              aria-label="打开今日、收件箱和记忆"
-              onClick={() => chooseSide("assistant")}
-            >
-              今日
-              {assistantBadge > 0 ? <span className="loop-live" /> : null}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="pad-bar-btn"
-            aria-label="打开文件"
-            onClick={openFilesBrowser}
-          >
-            <svg viewBox="0 0 16 16" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6">
-              <path d="M3.5 2.5h6l3 3v8h-9z" />
-              <path d="M9.5 2.5v3h3" />
-            </svg>
-          </button>
-          <button type="button" className="pad-bar-btn" aria-label="新对话" onClick={newChat}>
-            +
-          </button>
-        </div>
+        <PadBar
+          navOpen={navOpen}
+          setNavOpen={setNavOpen}
+          setPreviewMax={setPreviewMax}
+          assistantActive={assistantActive}
+          assistantName={assistantName}
+          active={active}
+          assistantOpen={assistantOpen}
+          chooseSide={chooseSide}
+          assistantBadge={assistantBadge}
+          openFilesBrowser={openFilesBrowser}
+          newChat={newChat}
+        />
         {assistantActive ? (
-          <div className="assistant-chat-head">
-            <span className="assistant-chat-title">{assistantName}</span>
-            <span className="assistant-chat-sub">助理</span>
-            <button
-              type="button"
-              className={`pill assistant-today${wideIDE && sidePane === "assistant" ? " on" : ""}`}
-              aria-label="打开今日、收件箱和记忆"
-              onClick={() => chooseSide("assistant")}
-            >
-              今日
-              {assistantBadge > 0 ? <span className="loop-live" /> : null}
-            </button>
-          </div>
+          <AssistantChatHead
+            assistantName={assistantName}
+            wideIDE={wideIDE}
+            sidePane={sidePane}
+            chooseSide={chooseSide}
+            assistantBadge={assistantBadge}
+          />
         ) : null}
         {empty ? (
-          <div className="empty">
-            <div className="empty-mark">
-              <Mark />
-            </div>
-            <h1>从这里开始</h1>
-            <p className="empty-lead">网页说话，远端动手。从左侧接着聊，或先打开一个工作区文件。</p>
-            {error ? <div className="error-line">{friendlyError(error)}</div> : null}
-            {notice ? <div className="notice-line">{notice}</div> : null}
-            <div className="empty-starters">
-              <button
-                type="button"
-                className="empty-chip"
-                onClick={openFilesBrowser}
-              >
-                打开工作区文件
-              </button>
-              {EMPTY_STARTERS.map((text) => (
-                <button
-                  key={text}
-                  type="button"
-                  className="empty-chip"
-                  onClick={() => applyDraft(text, text.length)}
-                >
-                  {text}
-                </button>
-              ))}
-            </div>
-            <p className="empty-foot empty-foot-portrait">点左上角打开对话列表 · 可粘贴图片</p>
-            <p className="empty-foot empty-foot-land">对话列表在左侧 · 可粘贴图片</p>
-          </div>
+          <EmptyState
+            error={error}
+            notice={notice}
+            openFilesBrowser={openFilesBrowser}
+            applyDraft={applyDraft}
+          />
         ) : (
-            <div
-              className="thread"
-              ref={threadRef}
-              onScroll={onThreadScroll}
-            >
-              {threadFindOpen ? (
-                <div className="thread-find">
-                  <input
-                    autoFocus
-                    className="thread-find-input"
-                    placeholder="在对话里找"
-                    value={threadFindQ}
-                    onChange={(event) => {
-                      setThreadFindQ(event.target.value);
-                      setThreadFindIndex(0);
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault();
-                        setThreadFindOpen(false);
-                      }
-                      if (event.key === "Enter" && threadFindHits.length) {
-                        event.preventDefault();
-                        setThreadFindIndex((index) => {
-                          const next = event.shiftKey
-                            ? (index - 1 + threadFindHits.length) % threadFindHits.length
-                            : (index + 1) % threadFindHits.length;
-                          return next;
-                        });
-                      }
-                    }}
-                  />
-                  <span className="thread-find-count">
-                    {threadFindQ.trim()
-                      ? threadFindHits.length
-                        ? `${threadFindHi + 1}/${threadFindHits.length}`
-                        : "无"
-                      : ""}
-                  </span>
-                  <button
-                    type="button"
-                    className="pill"
-                    disabled={!threadFindHits.length}
-                    onClick={() =>
-                      setThreadFindIndex(
-                        (index) =>
-                          (index - 1 + threadFindHits.length) % threadFindHits.length,
-                      )
-                    }
-                  >
-                    ↑
-                  </button>
-                  <button
-                    type="button"
-                    className="pill"
-                    disabled={!threadFindHits.length}
-                    onClick={() =>
-                      setThreadFindIndex((index) => (index + 1) % threadFindHits.length)
-                    }
-                  >
-                    ↓
-                  </button>
-                  <button type="button" className="pill" onClick={() => setThreadFindOpen(false)}>
-                    关闭
-                  </button>
-                </div>
-              ) : null}
-              <div className="thread-inner">
-                {!hasApiKey || error ? (
-                  <div className="warn">{friendlyError(error)}</div>
-                ) : null}
-                {notice ? <div className="warn">{notice}</div> : null}
-                {bodyPending && !active.turns.length ? (
-                  <div className="skeleton" role="status" aria-live="polite">
-                    <span className="sr-only">正在加载对话…</span>
-                    <div className="skel-line skel-user" style={{ width: "42%" }} />
-                    <div className="skel-block">
-                      {["94%", "86%", "58%"].map((width) => (
-                        <div key={width} className="skel-line" style={{ width }} />
-                      ))}
-                    </div>
-                    <div className="skel-line skel-user" style={{ width: "30%" }} />
-                    <div className="skel-block">
-                      {["90%", "72%"].map((width) => (
-                        <div key={width} className="skel-line" style={{ width }} />
-                      ))}
-                    </div>
-                  </div>
-                ) : loadingOlder ? (
-                  <div className="thread-loading">正在加载更早的内容…</div>
-                ) : null}
-                {active.turns.map((turn, turnIndex) => {
-                  if (turnSuperseded(active.turns, turnIndex)) return null;
-                  let prevIndex = turnIndex - 1;
-                  while (prevIndex >= 0 && turnSuperseded(active.turns, prevIndex)) {
-                    prevIndex -= 1;
-                  }
-                  const prevTurn = prevIndex >= 0 ? active.turns[prevIndex] : undefined;
-                  const hideUser = Boolean(
-                    prevTurn && prevTurn.user.trim() && prevTurn.user.trim() === turn.user.trim(),
-                  );
-                  return (
-                  <article
-                    className={`turn${hideUser ? " turn-continue" : ""}${threadFindHits[threadFindHi]?.id === turn.id ? " find-hit" : ""}`}
-                    data-turn={turn.id}
-                    key={turn.id}
-                  >
-                    {hideUser ? null : (
-                    <div className="turn-user">
-                      <div className="user-kicker">你</div>
-                      <div className="user-bubble">
-                        {turn.images?.length ? (
-                          <div className="user-thumbs">
-                            {turn.images.map((img, index) => (
-                              <img
-                                key={`${turn.id}-${index}`}
-                                src={`data:${img.mimeType};base64,${img.data}`}
-                                alt=""
-                              />
-                            ))}
-                          </div>
-                        ) : null}
-                        <CiteText
-                          text={turn.user}
-                          onOpen={openFile}
-                          query={threadFindOpen ? threadFindQ : undefined}
-                        />
-                        {turn.model || turn.mode ? (
-                          <div className="user-meta">
-                            {turn.mode ? turn.mode : ""}
-                            {turn.mode && turn.model ? " · " : ""}
-                            {turn.model ? modelLabel(turn.model) : ""}
-                          </div>
-                        ) : null}
-                      </div>
-                      {!turn.running && !turn.queued ? (
-                        <div className="turn-actions">
-                          <button type="button" className="pill" onClick={() => editTurn(turn)}>
-                            编辑
-                          </button>
-                          <button
-                            type="button"
-                            className="pill"
-                            disabled={!connected || busy}
-                            onClick={() => retryTurn(turn)}
-                          >
-                            重试
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                    )}
-                    <div className="assistant-row">
-                    <span className="bot-avatar" aria-hidden="true"><JieboGlyph size={16} /></span>
-                    <div className="assistant">
-                      {turn.thinking && (turn.running || formatDuration(turn.durationMs)) ? (
-                        <details
-                          key={turn.running ? "live" : "done"}
-                          className="thinking"
-                          open={turn.running || undefined}
-                        >
-                          <summary>
-                            <span className={turn.running ? "text-shimmer" : undefined}>
-                            {turn.running
-                              ? "正在思考"
-                              : formatDuration(turn.durationMs)
-                                ? `思考了 ${formatDuration(turn.durationMs)}`
-                                : "思考过程"}
-                            </span>
-                          </summary>
-                          <pre>
-                            <Highlight
-                              text={turn.thinking}
-                              query={threadFindOpen ? threadFindQ : undefined}
-                            />
-                          </pre>
-                        </details>
-                      ) : null}
-                      {turn.queued ? <div className="task-line">排队中</div> : null}
-                      {turn.todos?.length ? (
-                        <ul className="todo-list">
-                          {turn.todos.map((item) => (
-                            <li
-                              key={item.id}
-                              className={`todo-item ${item.status.replace(/\s+/g, "-")}`}
-                            >
-                              <span className="todo-mark">
-                                {item.status === "completed"
-                                  ? "✓"
-                                  : item.status === "in_progress"
-                                    ? "…"
-                                    : "○"}
-                              </span>
-                              <Highlight
-                                text={item.content}
-                                query={threadFindOpen ? threadFindQ : undefined}
-                              />
-                            </li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      {(() => {
-                        const visible = turn.tools.filter((tool) => !/todo/i.test(tool.name));
-                        const ids = new Set(visible.map((tool) => tool.callId));
-                        const kids = new Map<string, typeof visible>();
-                        const roots: typeof visible = [];
-                        for (const tool of visible) {
-                          if (tool.parentCallId && ids.has(tool.parentCallId)) {
-                            const list = kids.get(tool.parentCallId) || [];
-                            list.push(tool);
-                            kids.set(tool.parentCallId, list);
-                          } else {
-                            roots.push(tool);
-                          }
-                        }
-                        const groups: (typeof visible)[] = [];
-                        for (const tool of roots) {
-                          const prev = groups[groups.length - 1];
-                          const prevKind = prev
-                            ? toolKind(prev[0].name, prev[0].args)
-                            : "";
-                          const kind = toolKind(tool.name, tool.args);
-                          const prevFile = prev ? toolPath(prev[0]) : "";
-                          const file = toolPath(tool);
-                          if (
-                            prev &&
-                            prevKind === "search" &&
-                            kind === "search"
-                          ) {
-                            prev.push(tool);
-                          } else if (
-                            prev &&
-                            file &&
-                            file === prevFile &&
-                            (kind === "edit" || kind === "write" || kind === "read") &&
-                            kind === prevKind
-                          ) {
-                            prev.push(tool);
-                          } else {
-                            groups.push([tool]);
-                          }
-                        }
-                        const card = (tool: (typeof visible)[number]) => {
-                          const asked = parseAskQuestions(tool.name, tool.args);
-                          if (asked) {
-                            const last = turnIndex === active.turns.length - 1;
-                            return (
-                              <QuestionCard
-                                key={tool.callId}
-                                asked={asked}
-                                canAnswer={last && !turn.running && !turn.queued}
-                                onAnswer={(text) => submit(text)}
-                              />
-                            );
-                          }
-                          const nested = kids.get(tool.callId);
-                          const nestedLive = Boolean(
-                            turn.running && nested?.some((item) => item.status === "running"),
-                          );
-                          return (
-                            <ToolCard
-                              key={tool.callId}
-                              tool={tool}
-                              settled={!turn.running}
-                              nestedLive={nestedLive}
-                              nested={nested?.length ? nested.map(card) : undefined}
-                              onOpen={openFile}
-                              onAccept={
-                                !turn.running && mutatingTool(tool.name) && !tool.review
-                                  ? () => keepTool(turn.id, tool)
-                                  : undefined
-                              }
-                              onReject={
-                                !turn.running && mutatingTool(tool.name) && !tool.review
-                                  ? () => rejectTool(turn, tool)
-                                  : undefined
-                              }
-                            />
-                          );
-                        };
-                        return groups.map((group) => {
-                          const packKind = toolKind(group[0].name, group[0].args);
-                          if (group.length > 1 && packKind === "search") {
-                            const live = Boolean(
-                              turn.running && group.some((tool) => tool.status === "running"),
-                            );
-                            return (
-                              <details
-                                className={`tool-pack${live ? " running" : ""}`}
-                                open={live}
-                                key={group.map((tool) => tool.callId).join("-")}
-                              >
-                                <summary>
-                                  <span className={`tool-dot ${live ? "running" : "completed"}`}>
-                                    <svg
-                                      viewBox="0 0 16 16"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      strokeWidth="1.4"
-                                      aria-hidden="true"
-                                    >
-                                      <path d="M11.5 11.5 15 15M7 12a5 5 0 1 1 0-10 5 5 0 1 0 0 10Z" />
-                                    </svg>
-                                  </span>
-                                  <span className="tool-kind">Searched</span>
-                                  <span className="tool-title">
-                                    {searchQuery(group[0]) || "·"}
-                                  </span>
-                                  <span className={`tool-badge${live ? " run" : ""}`}>
-                                    {live ? <span className="text-shimmer">Processing</span> : "Completed"}
-                                  </span>
-                                </summary>
-                                {group.map(card)}
-                              </details>
-                            );
-                          }
-                          if (
-                            group.length > 1 &&
-                            (packKind === "edit" || packKind === "write" || packKind === "read")
-                          ) {
-                            const live = Boolean(
-                              turn.running && group.some((tool) => tool.status === "running"),
-                            );
-                            const packLabel =
-                              packKind === "edit"
-                                ? "Edited"
-                                : packKind === "write"
-                                  ? "Wrote"
-                                  : "Read";
-                            const file = toolPath(group[0]);
-                            const short = file.split("/").pop() || file;
-                            return (
-                              <details
-                                className={`tool-pack${live ? " running" : ""}`}
-                                open={live}
-                                key={group.map((tool) => tool.callId).join("-")}
-                              >
-                                <summary>
-                                  <span className={`tool-dot ${live ? "running" : "completed"}`}>
-                                    <svg
-                                      viewBox="0 0 16 16"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      strokeWidth="1.4"
-                                      aria-hidden="true"
-                                    >
-                                      <path d="M3 13.5 12.5 4l2 2L5 15.5H3Z" />
-                                    </svg>
-                                  </span>
-                                  <span className="tool-kind">{packLabel}</span>
-                                  <span className="tool-title">
-                                    {short} · {group.length} 次
-                                  </span>
-                                  <span className={`tool-badge${live ? " run" : ""}`}>
-                                    {live ? <span className="text-shimmer">Processing</span> : "Completed"}
-                                  </span>
-                                </summary>
-                                {group.map(card)}
-                              </details>
-                            );
-                          }
-                          return card(group[0]);
-                        });
-                      })()}
-                      {turn.assistant && !(isProgressBlurb(turn.assistant) && !turn.running) ? (
-                        <div className={`markdown${turn.running ? " streaming" : ""}`}>
-                          <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
-                            {turn.assistant}
-                          </MemoMarkdown>
-                        </div>
-                      ) : turn.running ? (
-                        <div className="task-line">{turn.task || "开始动手"}</div>
-                      ) : null}
-                      {turn.running && !turn.pendingTool ? (
-                        <StallHint
-                          lastProgress={() => lastProgressRef.current[activeId]}
-                          onStop={() => stopChat(activeId)}
-                        />
-                      ) : null}
-                      {turn.error ? <div className="error-line">{friendlyError(turn.error)}</div> : null}
-                      {!turn.running &&
-                      !turn.queued &&
-                      !turn.error &&
-                      /approval/i.test(turn.status || "") ? (
-                        <div className="run-meta">{runMeta(turn.status, turn.durationMs)}</div>
-                      ) : null}
-                      {turn.mode === "plan" && turn.assistant && !turn.running && !turn.queued ? (
-                        <button
-                          type="button"
-                          className="apply-plan"
-                          disabled={!connected || busy}
-                          onClick={() => applyPlan(turn)}
-                        >
-                          执行这个计划
-                        </button>
-                      ) : null}
-                      {(() => {
-                        const paths = editPathsOf(turn);
-                        const pending = turn.tools.some(
-                          (tool) => mutatingTool(tool.name) && !tool.review,
-                        );
-                        if (
-                          !paths.length ||
-                          turn.running ||
-                          turn.queued ||
-                          !pending ||
-                          writesWereRejected(turn)
-                        )
-                          return null;
-                        return (
-                          <div className="turn-review">
-                            <span>{paths.length} 个文件改动</span>
-                            <button type="button" className="pill" onClick={() => keepTurnFiles(turn)}>
-                              全部保留
-                            </button>
-                            <button type="button" className="pill" onClick={() => restoreTurnFiles(turn)}>
-                              全部还原
-                            </button>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    </div>
-                  </article>
-                  );
-                })}
-                <div className="thread-spacer" aria-hidden="true" />
-              </div>
-            </div>
+            <Thread
+              threadRef={threadRef}
+              onThreadScroll={onThreadScroll}
+              threadFindOpen={threadFindOpen}
+              hasApiKey={hasApiKey}
+              error={error}
+              notice={notice}
+              bodyPending={bodyPending}
+              active={active}
+              loadingOlder={loadingOlder}
+              threadFindHits={threadFindHits}
+              threadFindHi={threadFindHi}
+              openFile={openFile}
+              threadFindQ={threadFindQ}
+              editTurn={editTurn}
+              connected={connected}
+              busy={busy}
+              retryTurn={retryTurn}
+              submit={submit}
+              keepTool={keepTool}
+              rejectTool={rejectTool}
+              mdComponents={mdComponents}
+              lastProgressRef={lastProgressRef}
+              activeId={activeId}
+              stopChat={stopChat}
+              applyPlan={applyPlan}
+              keepTurnFiles={keepTurnFiles}
+              restoreTurnFiles={restoreTurnFiles}
+              setThreadFindQ={setThreadFindQ}
+              setThreadFindIndex={setThreadFindIndex}
+              setThreadFindOpen={setThreadFindOpen}
+            />
         )}
         </div>
         {previewTabs.length ? (
@@ -4783,134 +4126,51 @@ export default function ChatApp() {
             </button>
           </>
         ) : null}
-            <div className="composer-dock">
-              {jumpState && !empty ? (
-                <button
-                  type="button"
-                  className={`thread-jump${jumpState === "new" ? " new" : ""}`}
-                  onClick={() => scrollThreadToEnd(true)}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <path d="M8 3.5v8.5M4 8.5l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  {jumpState === "new" ? "有新内容" : "回到最新"}
-                </button>
-              ) : null}
-              <div className="composer-wrap">
-                {(() => {
-                  const mine = (assistantState?.delegations || []).filter(
-                    (row) => row.parentChatId === activeId && (row.status === "running" || row.status === "awaiting"),
-                  );
-                  if (!mine.length) return null;
-                  return mine.map((row) => {
-                    const approval = assistantState?.approvals.find((item) => item.delegationId === row.id);
-                    return (
-                      <div className={`approval-row delegation-row${approval ? "" : " idle"}`} key={row.id}>
-                        <span>
-                          委派「{row.title}」→ {row.workspace} · {DELEGATION_STATUS[row.status]}
-                          {approval ? `：要${approval.tool === "shell" ? "跑命令" : "改文件"} ${approval.summary}` : ""}
-                        </span>
-                        {approval ? (
-                          <>
-                            <button type="button" className="pill" onClick={() => answerDelegation(approval, true)}>
-                              批准
-                            </button>
-                            <button type="button" className="pill" onClick={() => answerDelegation(approval, false)}>
-                              拒绝
-                            </button>
-                          </>
-                        ) : null}
-                        <button type="button" className="pill" onClick={() => openChatById(row.childChatId)}>
-                          打开子会话
-                        </button>
-                      </div>
-                    );
-                  });
-                })()}
-                {(() => {
-                  const pending = empty
-                    ? undefined
-                    : [...active.turns].reverse().find((turn) => turn.pendingTool)?.pendingTool;
-                  if (!pending) return null;
-                  return (
-                    <div className="approval-row">
-                      <span>要改文件：{toolPreview(pending.name, pending.args)}。允许会先还原再写；拒绝还原到发送前。</span>
-                      <button type="button" className="pill" onClick={() => resolveApproval(true)}>
-                        允许
-                      </button>
-                      <button type="button" className="pill" onClick={() => resolveApproval(false)}>
-                        拒绝
-                      </button>
-                    </div>
-                  );
-                })()}
-                {empty || !active.turns.some((turn) => turn.queued) ? null : (
-                  <div className="queue-row">
-                    {active.turns
-                      .filter((turn) => turn.queued)
-                      .map((turn) => (
-                        <span className="queue-chip" key={turn.id}>
-                          <button
-                            type="button"
-                            className="queue-chip-send"
-                            disabled={busy}
-                            title={busy ? "等当前这条跑完，或先停止" : "现在发送这条"}
-                            onClick={() => sendQueued(turn.id)}
-                          >
-                            排队 · {turn.user.slice(0, 24)}
-                          </button>
-                          <button
-                            type="button"
-                            className="queue-chip-drop"
-                            title="去掉这条排队"
-                            onClick={() => dropQueued(turn.id)}
-                          >
-                            ×
-                          </button>
-                        </span>
-                      ))}
-                  </div>
-                )}
-                <Composer
-                  draft={draft}
-                  epoch={composerEpoch}
-                  images={images}
-                  uploading={uploading}
-                  notice={notice}
-                  error={error}
-                  model={model}
-                  models={models}
-                  setModel={persistModel}
-                  mode={mode}
-                  setMode={persistMode}
-                  confirmWrites={Boolean(active?.confirmWrites)}
-                  setConfirmWrites={persistConfirmWrites}
-                  policy={policyRef.current}
-                  setPolicy={persistPolicy}
-                  busy={busy}
-                  connected={connected}
-                  onSubmit={submit}
-                  onStop={() => stopChat(activeId)}
-                  onUndo={() => send({ type: "undo", chatId: activeId })}
-                  onRestore={(id) => send({ type: "restore", chatId: activeId, checkpointId: id })}
-                  onOpenMenu={() => send({ type: "list_checkpoints", chatId: activeId })}
-                  checkpoints={checkpoints}
-                  onAddImages={addImages}
-                  onDropFiles={handleComposerFiles}
-                  onRemoveImage={removeImage}
-                  fileHits={fileHits}
-                  mentionQuery={mentionQuery}
-                  onDraftChange={handleDraftChange}
-                  onPickFile={handlePickFile}
-                  onOpenFile={openFile}
-                  onRemoveMention={removeDraftMention}
-                  onDismissMention={dismissMention}
-                  caret={draftCaret}
-                  onCaretApplied={() => setDraftCaret(null)}
-                  centered={empty}
-                />
-              </div>
-            </div>
+            <ComposerDock
+              jumpState={jumpState}
+              empty={empty}
+              scrollThreadToEnd={scrollThreadToEnd}
+              assistantState={assistantState}
+              activeId={activeId}
+              answerDelegation={answerDelegation}
+              openChatById={openChatById}
+              active={active}
+              resolveApproval={resolveApproval}
+              busy={busy}
+              sendQueued={sendQueued}
+              dropQueued={dropQueued}
+              draft={draft}
+              composerEpoch={composerEpoch}
+              images={images}
+              uploading={uploading}
+              notice={notice}
+              error={error}
+              model={model}
+              models={models}
+              persistModel={persistModel}
+              mode={mode}
+              persistMode={persistMode}
+              persistConfirmWrites={persistConfirmWrites}
+              policyRef={policyRef}
+              persistPolicy={persistPolicy}
+              connected={connected}
+              submit={submit}
+              stopChat={stopChat}
+              send={send}
+              checkpoints={checkpoints}
+              addImages={addImages}
+              handleComposerFiles={handleComposerFiles}
+              removeImage={removeImage}
+              fileHits={fileHits}
+              mentionQuery={mentionQuery}
+              handleDraftChange={handleDraftChange}
+              handlePickFile={handlePickFile}
+              openFile={openFile}
+              removeDraftMention={removeDraftMention}
+              dismissMention={dismissMention}
+              draftCaret={draftCaret}
+              setDraftCaret={setDraftCaret}
+            />
       </main>
     </div>
   );

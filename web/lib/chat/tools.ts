@@ -1,5 +1,5 @@
 // 工具调用的展示辅助：搜索词、一行预览、payload 里的路径、shell 命令与输出
-import { toolKind } from "../../components/ToolCard";
+import { toolKind } from "./toolKinds";
 import type { ToolCall, Turn } from "./types";
 
 export function searchQuery(tool: { args?: unknown }) {
