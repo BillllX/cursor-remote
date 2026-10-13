@@ -286,6 +286,29 @@
   container-name: preview;
 }
 
+/* 全屏预览：原生全屏不可用时（如 iPhone Safari）靠这组样式铺满视口；
+   用 !important 压过 pad.css 里各断点下的抽屉定位与位移 */
+.file-preview.is-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  z-index: 1000 !important;
+  transform: none !important;
+  translate: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  pointer-events: auto !important;
+  background: var(--bg-panel);
+  padding-top: env(safe-area-inset-top, 0px) !important;
+  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
+.file-preview.is-fullscreen .preview-expand {
+  display: none !important;
+}
+
 @container preview (max-width: 520px) {
   .file-preview-path {
     display: none;

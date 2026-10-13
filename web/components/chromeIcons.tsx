@@ -159,6 +159,48 @@ const RAIL: Record<"chats" | "files" | "search" | "git" | "terminal" | "loop" | 
   ],
 };
 
+export function IconFullscreen({ size = 14 }: { size?: number }) {
+  return (
+    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.8 6V2.8H6M10 2.8h3.2V6M13.2 10v3.2H10M6 13.2H2.8V10"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function IconExitFullscreen({ size = 14 }: { size?: number }) {
+  return (
+    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M6 2.8V6H2.8M13.2 6H10V2.8M10 13.2V10h3.2M2.8 10H6v3.2"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+export function IconExport({ size = 14 }: { size?: number }) {
+  return (
+    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 2.8v6.4M5.4 6.8 8 9.4l2.6-2.6M3 11.2v1.6c0 .4.3.7.7.7h8.6c.4 0 .7-.3.7-.7v-1.6"
+        stroke="currentColor"
+        strokeWidth="1.35"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function IconCollapse({ size = 14 }: { size?: number }) {
   return (
     <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">

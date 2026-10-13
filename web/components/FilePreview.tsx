@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import CodeBlock from "./CodeBlock";
 import CanvasHost from "./CanvasHost";
 import HtmlPreview from "./HtmlPreview";
 import MarkdownPreview from "./MarkdownPreview";
 import MediaPreview from "./MediaPreview";
 import { isCanvasPath } from "../lib/canvas/path";
+import { exportCanvasFrame } from "../lib/canvas/exportHtml";
 import type { CanvasAction } from "../lib/canvas/host";
 import type { MediaTicket, PreviewKind } from "@shared/protocol";
 import { isLiveKind, previewSrc, tabKind } from "../lib/preview";
@@ -13,6 +14,9 @@ import {
   IconCode,
   IconCollapse,
   IconDiff,
+  IconExitFullscreen,
+  IconExport,
+  IconFullscreen,
   IconLive,
   IconQuote,
 } from "./chromeIcons";
@@ -169,6 +173,8 @@ export default function FilePreview({
   const [askSel, setAskSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [viewMode, setViewMode] = useState<"live" | "source">("live");
   const [canvasError, setCanvasError] = useState<string | null>(null);
+  const [full, setFull] = useState(false);
+  const nativeFullRef = useRef(false);
 
   const hits = useMemo(() => {
     if (!query.trim() || !active?.content) return [];
@@ -208,6 +214,59 @@ export default function FilePreview({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // 全屏：优先用浏览器原生全屏（iframe 不会重载）；不支持时（如 iPhone Safari）退回铺满视口的样式全屏
+  const exitFullscreen = useCallback(() => {
+    const root = rootRef.current;
+    if (root && document.fullscreenElement === root) {
+      void document.exitFullscreen().catch(() => {});
+    }
+    nativeFullRef.current = false;
+    setFull(false);
+  }, []);
+
+  const enterFullscreen = useCallback(() => {
+    setFull(true);
+    const root = rootRef.current;
+    if (!root || typeof root.requestFullscreen !== "function") return;
+    root
+      .requestFullscreen({ navigationUI: "hide" })
+      .then(() => {
+        nativeFullRef.current = true;
+      })
+      .catch(() => {
+        // 被拒绝就保留样式全屏
+      });
+  }, []);
+
+  useEffect(() => {
+    function onChange() {
+      // 用户按 Esc 退出原生全屏时，同步状态
+      if (!document.fullscreenElement && nativeFullRef.current) {
+        nativeFullRef.current = false;
+        setFull(false);
+      }
+    }
+    document.addEventListener("fullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      if (nativeFullRef.current && document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => {});
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!full) return;
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      // 编辑框里的 Esc 是「取消编辑」，不抢
+      if ((event.target as HTMLElement | null)?.tagName === "TEXTAREA") return;
+      exitFullscreen();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full, exitFullscreen]);
 
   const focusLine = hits.length ? hits[hit % hits.length] : active?.diff ? undefined : active?.line;
   const citeLine =
@@ -265,7 +324,7 @@ export default function FilePreview({
 
   return (
     <aside
-      className="file-preview"
+      className={`file-preview${full ? " is-fullscreen" : ""}`}
       ref={(node) => {
         rootRef.current = node;
         if (typeof sheetRef === "function") sheetRef(node);
@@ -437,6 +496,34 @@ export default function FilePreview({
             下载
           </a>
         ) : null}
+        {canvasVisible && !canvasError ? (
+          <button
+            type="button"
+            className="pill"
+            title="导出 HTML"
+            onClick={() => {
+              const frame = bodyRef.current?.querySelector<HTMLIFrameElement>(
+                ".canvas-host-keep:not(.is-idle) iframe.canvas-frame",
+              );
+              if (!exportCanvasFrame(frame ?? null, active.path)) {
+                window.alert("画布还没渲染完，请稍等一下再导出。");
+              }
+            }}
+          >
+            <IconExport />
+            <span className="pill-label">导出 HTML</span>
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={`pill preview-fullscreen${full ? " on" : ""}`}
+          title={full ? "退出全屏" : "全屏预览"}
+          aria-pressed={full}
+          onClick={full ? exitFullscreen : enterFullscreen}
+        >
+          {full ? <IconExitFullscreen /> : <IconFullscreen />}
+          <span className="pill-label">{full ? "退出全屏" : "全屏"}</span>
+        </button>
         {onToggleExpand ? (
           <button type="button" className={`pill preview-expand${expanded ? " on" : ""}`} title="收起" onClick={onToggleExpand}>
             <IconCollapse />
