@@ -30,8 +30,9 @@ import {
   type CoreField,
   type MemoryEntry,
 } from "./memory.ts";
-import { addApnsSubscription, addSubscription, listApnsSubscriptions, listSubscriptions, removeApnsSubscription, removeSubscription, retryFailedPushes, sendPush, vapidKeys, type PushSubscription } from "./push.ts";
-import { apnsReady, sendApns } from "./apns.ts";
+import { addSubscription, listApnsSubscriptions, listSubscriptions, removeSubscription, retryFailedPushes, sendPush, subscribeApnsDevice, unsubscribeApnsDevice, vapidKeys, type PushSubscription } from "./push.ts";
+import { apnsReady, sendApns, type BadgeParts } from "./apns.ts";
+import { assistantBadgeCached, BADGE_WAIT_MS, STATE_INBOX_LIMIT, within } from "./badge.ts";
 import { listRuns, recoverRuns } from "./runs.ts";
 import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaults, setSchedule, tickSchedules, type ScheduleKind } from "./schedules.ts";
 import { assistantDir, estimateTokens, writeJson, type TenantRef } from "./store.ts";
@@ -83,6 +84,8 @@ export type AssistantDeps = {
   createWorkspace: (req: CreateWorkspaceRequest) => Promise<string>;
   /** 推送点开后跳转的页面地址前缀，如 https://host/cursor-remote/ */
   appUrl: () => string;
+  /** 该租户聊天（IM）未读合计：APNs 角标分量的 IM 部分 */
+  imBadge?: (tenantId: string) => Promise<number>;
 };
 
 let deps: AssistantDeps | null = null;
@@ -310,7 +313,7 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
     background: { model: BACKGROUND_MODEL, ok: model.ok, reason: model.reason },
     pushKey: vapid().publicKey,
     pushApns: apnsReady(),
-    inbox: listInbox(ref, 60),
+    inbox: listInbox(ref, STATE_INBOX_LIMIT),
     todos: listTodos(ref, { includeDone: true }),
     schedules: listSchedules(ref),
     delegations: listDelegations(ref, 20),
@@ -495,15 +498,20 @@ export async function handleOp(
     }
     case "push_subscribe": {
       if (args.kind === "apns") {
-        const result = addApnsSubscription(ref, { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua, im: args.im, assistant: args.assistant });
-        return result.ok ? { ok: true, data: { count: result.count, ready: apnsReady() } } : fail(result.error);
+        // 写本租户 + 从其他租户摘掉都做完才回成功（按 token 串行）
+        const refs = (deps?.tenants() ?? []).map(refOf);
+        const input = { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua, im: args.im, assistant: args.assistant };
+        const result = await subscribeApnsDevice(ref, input, refs);
+        if (!result.ok) return fail(result.error);
+        if (result.released.length) log.info(`apns token 转绑到 ${tenant.id}，已从 ${result.released.join("、")} 摘掉`);
+        return { ok: true, data: { count: result.count, ready: apnsReady() } };
       }
       if (args.kind !== undefined && args.kind !== "web") return fail("kind 只能是 web 或 apns。");
       const result = addSubscription(ref, args.subscription as PushSubscription);
       return result.ok ? { ok: true, data: { count: result.count } } : fail(result.error);
     }
     case "push_unsubscribe":
-      if (args.kind === "apns") return { ok: true, data: { removed: removeApnsSubscription(ref, str(args.token)) } };
+      if (args.kind === "apns") return { ok: true, data: { removed: await unsubscribeApnsDevice(ref, str(args.token)) } };
       return { ok: true, data: { removed: removeSubscription(ref, str(args.endpoint)) } };
     case "push_test": {
       const { item } = postInbox(ref, { kind: "reminder", title: "测试通知", body: "这是一条测试通知，看到就说明推送通了。" });
@@ -533,15 +541,31 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
       title: `${label}：${item.title}`.slice(0, 80),
       url: `${base}?inbox=${encodeURIComponent(item.id)}`,
     }).catch((err) => log.error("push", err)),
-    sendApns(ref, {
-      itemId: item.id,
-      kind: item.kind,
-      title: label,
-      body: item.title.slice(0, 80),
-      chatId: item.chatId,
-      delegationId: item.delegationId,
-    }).catch((err) => log.error("apns", err)),
+    pushBadge(tenant)
+      .then((badgeParts) =>
+        sendApns(ref, {
+          itemId: item.id,
+          kind: item.kind,
+          title: label,
+          body: item.title.slice(0, 80),
+          chatId: item.chatId,
+          delegationId: item.delegationId,
+          badgeParts,
+        }),
+      )
+      .catch((err) => log.error("apns", err)),
   ]);
+}
+
+/** APNs 角标分部：助理待处理数 + 聊天未读合计（和 IM 推送带的是同一份）。
+ *  设备按自己订阅的类别合计（见 apns.ts 的 apnsBadgeFor）：只订阅聊天的 iPad 不算助理待处理，
+ *  因为助理变化不会推给它。哪个分量超时拿不到就是 undefined——助理那份有短缓存顶着（badge.ts） */
+export async function pushBadge(tenant: AssistantTenant): Promise<BadgeParts> {
+  const imBadge = deps?.imBadge;
+  return {
+    assistant: await assistantBadgeCached(refOf(tenant)),
+    im: imBadge ? await within(imBadge(tenant.id).catch(() => undefined), BADGE_WAIT_MS) : undefined,
+  };
 }
 
 async function slowTick(tenant: AssistantTenant) {

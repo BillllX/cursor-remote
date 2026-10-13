@@ -45,6 +45,7 @@ try {
   const inbox = await import("../../src/assistant/inbox.ts");
   const service = await import("../../src/assistant/service.ts");
   const { writeJson, assistantPath } = await import("../../src/assistant/store.ts");
+  const { assistantBadge } = await import("../../src/assistant/badge.ts");
 
   const ref = (id: string) => ({ id, stateDir: resolve(dir, id) });
   const subsOf = (r: { id: string; stateDir: string }) => JSON.parse(readFileSync(assistantPath(r, "push-subs.json"), "utf8")) as { web: unknown[]; apns: Array<{ token: string; environment?: string; ua?: string; bundleId: string }>; subs?: unknown };
@@ -210,11 +211,13 @@ try {
     workspaces: () => [],
     createWorkspace: async () => "",
     appUrl: () => "https://example.test/app/",
+    imBadge: async () => 5,
   };
   writeJson(assistantPath(tenant, "marker.json"), {});
   service.startAssistant(deps);
   reply.delete(T_OK);
-  await op("push_subscribe", { kind: "apns", token: T_OK, bundleId: "com.example.jiebo", environment: "sandbox" });
+  // im: true → iPhone 口径（助理+聊天都订阅），下面的角标断言按这个合计
+  await op("push_subscribe", { kind: "apns", token: T_OK, bundleId: "com.example.jiebo", environment: "sandbox", im: true });
   seen.length = 0;
   const test = await op("push_test", {});
   check(test.ok && (test.data as { apns: number }).apns >= 1, "push_test：返回 APNs 订阅数");
@@ -233,6 +236,8 @@ try {
   check(!got.body.includes("SECRET-BODY") && !got.body.includes("/home/u/ws"), "payload：不含收件箱 body 全文 / 路径");
   check(gotBody.aps.alert.title === "有一项待你批准" && gotBody.aps.alert.body.length <= 80 && long.startsWith(gotBody.aps.alert.body), "payload：alert.body 为截断到 80 字的条目标题");
   check(gotBody.cr.chatId === "c_9" && gotBody.cr.delegationId === "d_9" && gotBody.cr.kind === "approval" && got.headers["apns-priority"] === "10", "pushItem：cr 带 chatId/delegationId，approval 高优先级");
+  const expectBadge = (await assistantBadge(tenant)) + 5;
+  check(expectBadge > 5 && gotBody.aps.badge === expectBadge, `pushItem：aps.badge = 助理待处理 + 聊天未读（${gotBody.aps.badge}）`);
   const state = await service.buildState(tenant).catch(() => null);
   check(state?.pushApns === true, "assistant_state：配置后 pushApns=true");
   service.stopAssistant();

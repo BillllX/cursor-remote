@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { apnsPayload } from "../src/assistant/apns.ts";
-import { apnsWants } from "../src/assistant/push.ts";
+import { apnsBadgeFor, apnsPayload } from "../src/assistant/apns.ts";
+import { apnsWants, type ApnsSubscription } from "../src/assistant/push.ts";
 import { blobsOf, checkBody } from "../src/im/body.ts";
 import { ImError } from "../src/im/errors.ts";
 import { BLOB_LIMITS, blobMimeOk, sniffImageMime } from "../src/im/http.ts";
@@ -283,7 +283,7 @@ describe("推送规则", () => {
     senderNickname: "爱丽丝",
     notifyPreview: false,
     convUnread: 1,
-    badge: 3,
+    badgeParts: { im: 3, assistant: 2 },
     foregroundOnline: false,
     muted: false,
     rejected: false,
@@ -303,13 +303,19 @@ describe("推送规则", () => {
     assert.equal(one.channel, "im");
     assert.equal(one.priority, 10);
     assert.equal(one.redactLog, true);
-    const payload = apnsPayload(one);
+    // 角标分部按设备订阅的类别合计：iPhone（助理+聊天）5、只聊天的 iPad 3、只助理的 2
+    assert.equal(apnsBadgeFor({ assistant: true, im: true }, one), 5);
+    assert.equal(apnsBadgeFor({ assistant: false, im: true }, one), 3);
+    assert.equal(apnsBadgeFor({ assistant: true, im: false }, one), 2);
+    // 没有 badgeParts 的助理推送照旧带原数
+    assert.equal(apnsBadgeFor({ assistant: true, im: true }, { badge: 7 }), 7);
+    const payload = apnsPayload(one, 5);
     assert.deepEqual(payload, {
       aps: {
         alert: { title: "爱丽丝", body: "发来一条消息" },
         sound: "default",
         "thread-id": "im-dm~alice~bob",
-        badge: 3,
+        badge: 5,
       },
       cr: { kind: "im", convId: "dm~alice~bob", seq: 7 },
     });
@@ -330,15 +336,22 @@ describe("推送规则", () => {
     assert.equal(imPreviewText(row("location", { lat: 0, lng: 0, name: "", address: "黄浦" })), "[位置] 黄浦");
   });
 
-  test("撤回用同一个 collapse-id；已读是静默推送", () => {
-    const recall = imRecallAlert("dm~alice~bob", 7, "爱丽丝", 2);
+  test("撤回用同一个 collapse-id；已读是静默推送，aps.badge 按设备订阅的类别合计", () => {
+    const recall = imRecallAlert("dm~alice~bob", 7, "爱丽丝", { im: 2 });
     assert.equal(recall.collapseId, imCollapseId("dm~alice~bob", 7));
     assert.equal(recall.body, "撤回了一条消息");
-    const read = imReadPush("dm~alice~bob", 0);
+    assert.deepEqual(recall.badgeParts, { im: 2 });
+    const read = imReadPush("dm~alice~bob", { im: 0, assistant: 0 });
     assert.equal(read.pushType, "background");
     assert.equal(read.priority, 5);
-    assert.deepEqual(apnsPayload(read), {
+    assert.deepEqual(read.badgeParts, { im: 0, assistant: 0 });
+    assert.deepEqual(apnsPayload(read, apnsBadgeFor({ assistant: true, im: true }, read)), {
       aps: { "content-available": 1, badge: 0 },
+      cr: { kind: "im_read", convId: "dm~alice~bob" },
+    });
+    // badgeParts 在场时不缺省落 aps.badge（合计因设备而异，不能拿一个数硬套所有人）
+    assert.deepEqual(apnsPayload(read), {
+      aps: { "content-available": 1 },
       cr: { kind: "im_read", convId: "dm~alice~bob" },
     });
   });
@@ -348,7 +361,8 @@ describe("推送规则", () => {
       aps: { alert: { title: "提醒", body: "喝水" }, sound: "default", "thread-id": "assistant-inbox" },
       cr: { itemId: "i_1", kind: "reminder", chatId: "c" },
     });
-    const sub = { token: "a".repeat(64), bundleId: "x" };
+    // 两个旗标都没写：缺省 assistant=true、im=false
+    const sub: Pick<ApnsSubscription, "assistant" | "im"> = {};
     assert.equal(apnsWants(sub, "assistant"), true);
     assert.equal(apnsWants(sub, "im"), false);
     assert.equal(apnsWants({ ...sub, im: true, assistant: false }, "assistant"), false);

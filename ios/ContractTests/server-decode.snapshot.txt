@@ -727,22 +727,263 @@
 .pong
 
 ## server[53] im_contacts #1
-.ignored("im_contacts")
+.im(.contacts(
+  me: ImMe(
+    id: "alice"
+    nickname: "爱丽丝"
+    avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    notifyPreview: true
+  )
+  users: [
+    ImUser(
+      id: "bob-2"
+      nickname: "鲍勃"
+      avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    )
+    ImUser(
+      id: "carol"
+      nickname: "carol"
+      avatar: nil
+    )
+  ]
+  avatarTicket: ImTicket(
+    exp: 1739007200000
+    sig: "c2lnLWltLXNhbXBsZQ"
+  )
+))
 
 ## server[54] im_list #1
-.ignored("im_list")
+.im(.list(
+  convs: [
+    ImConvRow(
+      convId: "dm~alice~bob-2"
+      peer: "bob-2"
+      last: ImMessage(
+        convId: "dm~alice~bob-2"
+        seq: 37
+        from: "bob-2"
+        at: 1739000004000
+        kind: "image"
+        body: .image(
+          blob: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+          thumb: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+          w: 1170
+          h: 2532
+          original: true
+        )
+        replyTo: nil
+        recalled: false
+        rejected: false
+        clientId: "c-ios-1739000004000-2"
+      )
+      unread: 2
+      readSeq: 40
+      maxSeq: 42
+      pin: true
+      mute: true
+      hideBefore: 3
+      ticket: ImTicket(
+        exp: 1739007200000
+        sig: "c2lnLWltLXNhbXBsZQ"
+      )
+    )
+  ]
+  blocked: [
+    "mallory"
+  ]
+  more: true
+  cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ"
+))
 
 ## server[55] im_history #1
-.ignored("im_history")
+.im(.history(
+  convId: "dm~alice~bob-2"
+  messages: [
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 36
+      from: "alice"
+      at: 1739000003000
+      kind: "text"
+      body: .text("晚上一起吃饭？")
+      replyTo: 35
+      recalled: false
+      rejected: true
+      clientId: "c-ios-1739000003000-1"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 37
+      from: "bob-2"
+      at: 1739000004000
+      kind: "image"
+      body: .image(
+        blob: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        thumb: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        w: 1170
+        h: 2532
+        original: true
+      )
+      replyTo: nil
+      recalled: false
+      rejected: false
+      clientId: "c-ios-1739000004000-2"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 38
+      from: "alice"
+      at: 1739000005000
+      kind: "voice"
+      body: .voice(
+        blob: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+        durationMs: 12000
+        waveform: [
+          0.1
+          0.5
+          0.9
+        ]
+      )
+      replyTo: nil
+      recalled: false
+      rejected: false
+      clientId: "c-ios-1739000005000-3"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 39
+      from: "bob-2"
+      at: 1739000006000
+      kind: "file"
+      body: .file(
+        blob: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+        name: "报价单.pdf"
+        size: 48213
+        mime: "application/pdf"
+      )
+      replyTo: nil
+      recalled: false
+      rejected: false
+      clientId: "c-ios-1739000006000-4"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 40
+      from: "alice"
+      at: 1739000007000
+      kind: "link"
+      body: .link(
+        url: "https://example.com/a"
+        title: "示例"
+        desc: "一段描述"
+        icon: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      )
+      replyTo: nil
+      recalled: false
+      rejected: false
+      clientId: "c-ios-1739000007000-5"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 41
+      from: "bob-2"
+      at: 1739000008000
+      kind: "location"
+      body: .location(
+        lat: 31.2304
+        lng: 121.4737
+        name: "人民广场"
+        address: "上海市黄浦区人民大道"
+      )
+      replyTo: nil
+      recalled: false
+      rejected: false
+      clientId: "c-ios-1739000008000-6"
+    )
+    ImMessage(
+      convId: "dm~alice~bob-2"
+      seq: 42
+      from: "alice"
+      at: 1739000009000
+      kind: "text"
+      body: nil
+      replyTo: nil
+      recalled: true
+      rejected: false
+      clientId: "c-ios-1739000009000-7"
+    )
+  ]
+  more: true
+  ticket: ImTicket(
+    exp: 1739007200000
+    sig: "c2lnLWltLXNhbXBsZQ"
+  )
+  before: 50
+  after: 10
+))
 
 ## server[56] im_ack #1
-.ignored("im_ack")
+.im(.ack(
+  clientId: "c-ios-1739000000000-1"
+  convId: "dm~alice~bob-2"
+  seq: 42
+  at: 1739000009000
+  rejected: true
+))
 
 ## server[57] im_message #1
-.ignored("im_message")
+.im(.message(
+  .0: ImMessage(
+    convId: "dm~alice~bob-2"
+    seq: 36
+    from: "alice"
+    at: 1739000003000
+    kind: "text"
+    body: .text("晚上一起吃饭？")
+    replyTo: 35
+    recalled: false
+    rejected: true
+    clientId: "c-ios-1739000003000-1"
+  )
+  ticket: ImTicket(
+    exp: 1739007200000
+    sig: "c2lnLWltLXNhbXBsZQ"
+  )
+  unread: 2
+))
 
 ## server[58] im_update #1
-.ignored("im_update")
+.im(.update(ImUpdate(
+  what: "settings"
+  convId: "dm~alice~bob-2"
+  seq: 42
+  pin: true
+  mute: true
+  hideBefore: 3
+  me: ImMe(
+    id: "alice"
+    nickname: "爱丽丝"
+    avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+    notifyPreview: true
+  )
+  user: ImUser(
+    id: "bob-2"
+    nickname: "鲍勃"
+    avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e"
+  )
+  avatarTicket: ImTicket(
+    exp: 1739007200000
+    sig: "c2lnLWltLXNhbXBsZQ"
+  )
+  blocked: [
+    "mallory"
+  ]
+  unread: 1
+)))
 
 ## server[59] im_error #1
-.ignored("im_error")
+.im(.error(
+  clientId: "c-ios-1739000000000-1"
+  code: "rate_limited"
+  message: "发得太快了，稍等一会儿再发"
+))

@@ -22,6 +22,7 @@ struct PendingBadge: View {
 /// 从左缘向右拖就打开；push 页上这条热区撤掉，左缘右滑归系统的返回手势。
 struct MenuDrawer: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// VoiceOver 焦点：0 是首项「待处理」。nil 时没有行被选中
@@ -145,7 +146,8 @@ struct MenuDrawer: View {
                     }
                     divider
                         .padding(.vertical, 8)
-                    menuRow("gearshape", "设置", tag: 3) {
+                    // 聊天未读挂在这里：主页切换在设置页最上面
+                    menuRow("gearshape", "设置", chatUnread: im.totalUnread, tag: 3) {
                         router.go(.settings)
                     }
                     divider
@@ -206,11 +208,20 @@ struct MenuDrawer: View {
         _ symbol: String,
         _ title: String,
         badge: Int = 0,
+        chatUnread: Int = 0,
         destructive: Bool = false,
         tag: Int,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let label: String
+        if badge > 0 {
+            label = "\(title)，\(badge) 项"
+        } else if chatUnread > 0 {
+            label = "\(title)，聊天有 \(chatUnread) 条未读"
+        } else {
+            label = title
+        }
+        return Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
                     .font(JieboFont.text(.callout, weight: .medium))
@@ -222,6 +233,9 @@ struct MenuDrawer: View {
                 Spacer(minLength: 8)
                 if badge > 0 {
                     PendingBadge(count: badge)
+                }
+                if chatUnread > 0 {
+                    ImUnreadBadge(count: chatUnread)
                 }
                 if !destructive {
                     Image(systemName: "chevron.right")
@@ -236,7 +250,7 @@ struct MenuDrawer: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 项" : title)
+        .accessibilityLabel(label)
         .accessibilityFocused($focusedRow, equals: tag)
     }
 

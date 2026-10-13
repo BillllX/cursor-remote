@@ -28,6 +28,7 @@ import { dispatchLoop, loopBusy, publishLoop } from "./bindings/loops.ts";
 import { listModels } from "./chat/models.ts";
 import { healthPayload } from "./http/health.ts";
 import { handleImMedia, handleImUpload } from "./im/http.ts";
+import { imRuntime } from "./im/runtime.ts";
 import { proxyUpgrade, proxyWeb } from "./http/proxy.ts";
 import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
@@ -224,6 +225,7 @@ startAssistant({
     return full ? delegationWorkspaces(full) : [];
   },
   appUrl: () => "./",
+  imBadge: (tenantId) => imRuntime().service.badge(tenantId),
 });
 
 httpServer.listen(PORT, gatewayHost(), () => {

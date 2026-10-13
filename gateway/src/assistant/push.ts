@@ -7,6 +7,7 @@ import {
   randomBytes,
   sign,
 } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { appendJsonl, assistantPath, readJson, readJsonl, writeJson, writeJsonl, type TenantRef } from "./store.ts";
 
 /**
@@ -89,7 +90,7 @@ export type ApnsSubscription = {
 };
 
 /** 这条订阅收不收某一类推送（缺省 assistant=true、im=false） */
-export function apnsWants(sub: ApnsSubscription, channel: "assistant" | "im") {
+export function apnsWants(sub: Pick<ApnsSubscription, "assistant" | "im">, channel: "assistant" | "im") {
   return channel === "im" ? sub.im === true : sub.assistant !== false;
 }
 
@@ -184,6 +185,65 @@ export function removeApnsSubscription(ref: TenantRef, token: string) {
   const next = file.apns.filter((item) => item.token.toLowerCase() !== key);
   if (next.length !== file.apns.length) writeSubs(ref, { ...file, apns: next });
   return file.apns.length - next.length;
+}
+
+/**
+ * 设备转绑：一台设备（APNs token）同时只属于最后订阅它的租户。owner 订阅成功后，从其他租户的订阅里摘掉它，
+ * 免得换账号登录后旧账号的推送还落到这台设备上（旧账号退订帧没发到也一样）。
+ * 逐个异步读订阅文件，只有确实含这个 token 的才同步改写；返回摘掉了的租户 id
+ */
+export async function releaseApnsToken(token: string, owner: string, refs: TenantRef[]): Promise<string[]> {
+  const key = token.trim().toLowerCase();
+  if (!APNS_TOKEN_RE.test(key)) return [];
+  const released: string[] = [];
+  for (const ref of refs) {
+    if (ref.id === owner) continue;
+    let text: string;
+    try {
+      text = await readFile(subsFile(ref), "utf8");
+    } catch {
+      continue;
+    }
+    if (!text.toLowerCase().includes(key)) continue;
+    if (removeApnsSubscription(ref, key) > 0) released.push(ref.id);
+  }
+  return released;
+}
+
+/** 按 token 串行：同一台设备的订阅 / 退订 / 转绑一个接一个跑，前一个失败不影响后一个 */
+const tokenChains = new Map<string, Promise<void>>();
+
+export function withApnsToken<T>(token: string, work: () => Promise<T>): Promise<T> {
+  const key = token.trim().toLowerCase();
+  const run = (tokenChains.get(key) ?? Promise.resolve()).then(work);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  tokenChains.set(key, tail);
+  void tail.then(() => {
+    if (tokenChains.get(key) === tail) tokenChains.delete(key);
+  });
+  return run;
+}
+
+/**
+ * APNs 订阅 + 转绑：「写进本租户」和「从其他租户摘掉」在同一个 token 串行段里做完才返回。
+ * 两个租户并发订阅同一 token 时按到达顺序排队，最后订阅的那个留着，其余的都被摘掉
+ */
+export function subscribeApnsDevice(ref: TenantRef, input: Parameters<typeof addApnsSubscription>[1], refs: TenantRef[]) {
+  const token = typeof input.token === "string" ? input.token : "";
+  return withApnsToken(token, async () => {
+    const result = addApnsSubscription(ref, input);
+    if (!result.ok) return { ...result, released: [] as string[] };
+    const released = await releaseApnsToken(token, ref.id, refs);
+    return { ...result, released };
+  });
+}
+
+/** 退订也排进同一个 token 的队列，免得和并发的订阅交错 */
+export function unsubscribeApnsDevice(ref: TenantRef, token: string) {
+  return withApnsToken(token, async () => removeApnsSubscription(ref, token));
 }
 
 export type PushMessage = { itemId: string; kind: string; title: string; url: string };

@@ -101,6 +101,8 @@ extension ChatStore {
         tenantName = ""
         resetTenantSession()
         ChatCache.clearAll() // 退出登录：本机缓存的正文和列表全部清掉
+        imSink?.logout()
+        ImImageCache.shared.removeAll()
         client.disconnect()
     }
 
@@ -132,6 +134,8 @@ extension ChatStore {
             guard let self else { return }
             self.connected = false
             self.armOfflineTimer()
+            self.failAssistantReplyWaiters()
+            self.imSink?.connectionLost()
             // P4：断线时在途的 sync_chat 永远等不到 ack——倒回脏集合，重连后随 diff/重推恢复
             if !self.inflightChatIds.isEmpty {
                 self.dirtyChatIds.formUnion(self.inflightChatIds)
@@ -220,6 +224,7 @@ extension ChatStore {
         localTurnsPendingSync = []
         // 本机缓存：换账号清掉旧租户的（登出时 tenantId 已清空，由 logout 整体清），在途读写作废
         if !tenantId.isEmpty { ChatCache.clear(tenant: tenantId) }
+        imSink?.resetTenant()
         ThumbnailStore.shared.reset(tenant: tenantId)
         cacheEpoch += 1
         for task in bodyCacheTasks.values { task.cancel() }

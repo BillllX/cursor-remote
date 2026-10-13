@@ -1022,7 +1022,8 @@
       "ticket": {
         "exp": 1739007200000,
         "sig": "c2lnLWltLXNhbXBsZQ"
-      }
+      },
+      "unread": 2
     },
     {
       "type": "im_update",
@@ -1042,6 +1043,7 @@
       "mute": true,
       "pin": true,
       "seq": 42,
+      "unread": 1,
       "user": {
         "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
         "id": "bob-2",

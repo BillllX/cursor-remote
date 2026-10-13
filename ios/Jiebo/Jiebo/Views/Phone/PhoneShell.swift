@@ -6,6 +6,7 @@ import UIKit
 /// 打开时置 `store.assistantOnly = true`：activeId 只会是助理会话，工作区会话没有任何入口。
 struct PhoneShell: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var router = PhoneRouter()
     @State private var logoutConfirm = false
@@ -56,9 +57,11 @@ struct PhoneShell: View {
         }
         .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
             Button("退出登录", role: .destructive) {
-                // 先退订 APNs：logout 之后 unlocked 为 false，assistant_op 会被丢弃
-                PushRegistrar.shared.unsubscribe(store: store)
-                store.logout()
+                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
+                Task { @MainActor in
+                    await PushRegistrar.shared.unsubscribe(store: store)
+                    store.logout()
+                }
             }
             Button("取消", role: .cancel) {}
         } message: {
@@ -159,7 +162,7 @@ struct PhoneShell: View {
         // 旧网关没有助理会话：openAssistantChat 只记下意图，助理页显示降级说明
         store.openAssistantChat()
         if store.assistantChatId != nil {
-            PushRegistrar.shared.start(store: store) // 幂等；内部只在 iPhone 上生效
+            PushRegistrar.shared.start(store: store, im: im) // 幂等
         }
         router.bootstrapped = true
         #if DEBUG
@@ -171,9 +174,10 @@ struct PhoneShell: View {
 
     // MARK: 通知点击路由（§7.1.5）
 
+    /// 聊天通知（kind=im）归主页层分发（HomeShell），这里不碰
     @MainActor
     private func consumePendingPush() async {
-        guard router.bootstrapped, PushRouting.shared.pending != nil else { return }
+        guard router.bootstrapped, PushRouting.shared.pending.map({ !$0.isIm }) == true else { return }
         // 冷启动时助理状态可能还没到：多等几秒，免得委派 / 收件箱条目找不到
         if store.assistantState == nil {
             store.requestAssistant()
@@ -183,7 +187,7 @@ struct PhoneShell: View {
                 waited += 1
             }
         }
-        guard let target = PushRouting.shared.consume() else { return }
+        guard PushRouting.shared.pending?.isIm != true, let target = PushRouting.shared.consume() else { return }
         if let itemId = target.itemId,
            let item = store.assistantState?.inbox.first(where: { $0.id == itemId }) {
             store.markInboxRead(item)

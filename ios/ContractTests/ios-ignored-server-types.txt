@@ -3,10 +3,3 @@
 # 不在这里却解码成 .ignored，或在这里却能解码，check:ios-protocol 都会失败。
 policy set_policy 的回执；iOS 切策略时先本地改 chat.policy 再发 set_policy，不等回执
 fs_done fs_op 的回执；iOS 没有文件树增删改名，不发 fs_op
-im_contacts 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_list 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_history 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_ack 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_message 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_update 即时消息 P0 只做网关；iOS 解码在 P1 实现
-im_error 即时消息 P0 只做网关；iOS 解码在 P1 实现

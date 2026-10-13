@@ -42,6 +42,7 @@ APP=ios/Jiebo/Jiebo
 # 协议的最小依赖闭包：都只 import Foundation，原样参与编译
 SOURCES=(
   "$APP/Gateway/Protocol.swift"
+  "$APP/Gateway/ImProtocol.swift"
   "$APP/Gateway/JSONValue.swift"
   "$APP/Gateway/ModelCatalog.swift"
   "$APP/Session/Preview.swift"

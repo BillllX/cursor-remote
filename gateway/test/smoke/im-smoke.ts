@@ -202,6 +202,7 @@ try {
     m1.message.from === "a" && (m1.message.body as { text: string }).text === "你好 b" && Boolean(m1.ticket.sig),
     "b 收到 im_message（带票据）",
   );
+  check(m1.unread === 1, "im_message 带收件人的权威未读 unread=1");
   check(!a.got.some((m) => m.type === "im_message"), "发件连接不收自己的 im_message（只收 ack）");
   check(apnsSeen.length === 0, "b 在前台：不发 APNs");
 
@@ -415,7 +416,9 @@ try {
     recall.type === "im_update" && recall.what === "recall" && recall.seq === imgSeq,
     "a 撤回图片：im_update recall",
   );
-  check((await bRecall).seq === imgSeq, "b 收到撤回");
+  const bRecallMsg = await bRecall;
+  check(bRecallMsg.seq === imgSeq, "b 收到撤回");
+  check(typeof bRecallMsg.unread === "number", "撤回的 im_update 带 b 自己的权威未读");
   check(await waitFor(() => apnsSeen.length === 4), "推过的消息撤回后补发替换通知");
   const recallPush = apnsSeen[3]?.body.includes("撤回了一条消息") ? apnsSeen[3] : undefined;
   check(

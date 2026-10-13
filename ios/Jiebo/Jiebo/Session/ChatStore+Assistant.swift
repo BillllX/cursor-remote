@@ -30,6 +30,28 @@ extension ChatStore {
         send(.assistantOp(op: op, args: args, reqId: UUID().uuidString))
     }
 
+    /// 发 assistant_op 并等网关的 assistant_result（按 reqId 配对）。没连上直接 false；超时或断线也是 false
+    func assistantOpReply(_ op: String, args: [String: JSONValue] = [:], timeout: Duration) async -> Bool {
+        guard connected, unlocked else { return false }
+        let reqId = UUID().uuidString
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            assistantReplyWaiters[reqId] = { ok in continuation.resume(returning: ok) }
+            send(.assistantOp(op: op, args: args, reqId: reqId))
+            // 强引用：store 活到超时，保证 continuation 一定被 resume
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                self.assistantReplyWaiters.removeValue(forKey: reqId)?(false)
+            }
+        }
+    }
+
+    /// 断线：在等的回包不会来了
+    func failAssistantReplyWaiters() {
+        let waiters = assistantReplyWaiters
+        assistantReplyWaiters = [:]
+        for waiter in waiters.values { waiter(false) }
+    }
+
     func answerAssistantApproval(_ approval: AssistantApproval, allow: Bool) {
         assistantOp("approval_answer", args: [
             "chatId": .string(approval.chatId),

@@ -116,6 +116,8 @@ struct PhoneSettingsScreen: View {
 
     var body: some View {
         List {
+            HomeModeSection()
+
             Section {
                 Button {
                     themeOpen = true

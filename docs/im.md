@@ -85,9 +85,9 @@ type ImConvRow = {
 | `im_list { cursor?, limit? }`                                | `im_list { convs, blocked, more, cursor? }`（分页，见下）               |
 | `im_history { convId, before?, after?, limit? }`             | `im_history { convId, messages, more, ticket, before?, after? }`        |
 | `im_send { clientId, to? \| convId?, kind, body, replyTo? }` | 发件连接：`im_ack { clientId, convId, seq, at, rejected? }`             |
-| `im_recall { convId, seq }`                                  | `im_update { what: "recall", convId, seq }`                             |
+| `im_recall { convId, seq }`                                  | `im_update { what: "recall", convId, seq, unread }`                     |
 | `im_read { convId, seq }`                                    | 无（自己的其他连接收 `im_update read`）                                 |
-| `im_settings { convId, pin?, mute?, hideBefore? }`           | `im_update { what: "settings", convId, pin, mute, hideBefore }`         |
+| `im_settings { convId, pin?, mute?, hideBefore? }`           | `im_update { what: "settings", convId, pin, mute, hideBefore, unread }` |
 | `im_profile { nickname?, avatar?, notifyPreview? }`          | `im_update { what: "prefs", me }`；`avatar` 传 `""` 或 `null` 去掉头像  |
 | `im_block { tenantId, on }`                                  | `im_update { what: "block", blocked }`                                  |
 | `im_presence { foreground }`                                 | 无                                                                      |
@@ -110,6 +110,16 @@ type ImConvRow = {
 - `limit` 默认 50，最大 100。`more=true` 时带 `cursor`，下一页原样回传 `cursor`，取排在那一行之后的会话。`cursor` 对客户端不透明（目前是排序键的 base64url），坏的回 `bad_body`。
 - 翻页期间被新消息顶到前面的会话不会在后面的页里重复出现，客户端靠 `im_message` 更新它；想要全新的视图就不带 `cursor` 从头拉。
 - 帧太大时网关只发前面装得下的行，同样置 `more=true` 和对应 `cursor`（见帧大小）。
+- 翻页期间到达的推送比后面页里的行新：客户端合并时把 `maxSeq` 当版本，旧行（`maxSeq` 更小，或相等但 `readSeq` 更小）不能覆盖 `last / maxSeq / unread / readSeq`。
+
+**权威未读**：客户端不自己加减未读，只用网关带来的值——`im_list` 行的 `unread`，以及：
+
+- `im_message.unread`：收件人在这个会话的最新未读（发件人自己的其他连接收到的是自己的未读，通常不变）。
+- `im_update read.unread`：readSeq 前进后自己的未读。
+- `im_update recall.unread`：按收件连接所属租户各算各的（双方各收自己的值；撤回的若是未读消息，对方未读会减一）。
+- `im_update settings.unread`：`hideBefore` 前进后自己的未读。
+
+老网关不带这些字段时，客户端退回「等下次 `im_list` 对账」。
 
 ### 下行推送给谁
 
@@ -159,6 +169,16 @@ iOS 声明 `maxMessageBytes=900000`。`shrinkMessage` 的裁法：
 
 `assistant_op push_subscribe { kind: "apns", token, bundleId, environment?, ua?, im?, assistant? }`。`push-subs.json` 的 apns 条目新增可选 `im`、`assistant`：缺省 `assistant=true`、`im=false`，所以老版本 App 收不到聊天推送。新 App 订阅时带 `im: true`；iPad 以后带 `assistant: false, im: true`。每次订阅都声明完整偏好（没带就按缺省，不沿用旧值）。助理推送跳过 `assistant === false` 的订阅，聊天推送只发 `im === true` 的订阅。
 
+**一个 token 只属于一个租户**：某租户订阅成功后，网关在后台（不阻塞回包）把同一 token 从其他所有租户的 `push-subs.json` 里摘掉（`releaseApnsToken`），所以同一台手机换账号登录后不会再收到上一个账号的推送，即使上一个账号登出时退订没送到。App 登出时仍先发 `push_unsubscribe` 并等 `assistant_result`（按 `reqId` 配对，最多 3 秒）再清本地凭据。
+
+### 角标
+
+推送带的是**角标分部**（`badgeParts = { assistant?, im? }`），每台设备按自己订阅的类别合计出 `aps.badge`（`apnsBadgeFor`）：iPhone 订阅助理 + 聊天，得**助理待处理 + 聊天未读合计**；iPad 只订阅聊天，只算聊天未读——助理变化不推给 iPad，App 没开着的时候那部分永远补不上，所以干脆不算它。哪个分量超时拿不到，这台设备要的部分就不落 `aps.badge`（不改现值）。
+
+- 助理待处理和 App 的 `assistantBadgeCount` 同一口径：`assistant_state.inbox`（最近 60 条）里未读的条数 + 待批数（`approvals.json`）。网关异步读这两个文件（`gateway/src/assistant/badge.ts`），最多等 500 毫秒；超时用 5 分钟内最近一次读到的数顶着（`assistantBadgeCached`，IM 推送和助理推送共用同一份）。
+- 聊天未读合计 = 各会话封顶后的未读之和（含免打扰会话）。
+- App 在前台按同样的规则自己设角标：iPhone 算两类之和（聊天列表和 `assistant_state` 都到了才设），iPad 只算聊天未读。
+
 ### 新消息
 
 条件：收件人没有任何「caps 含 im 且 foreground=true」的在线连接，且该会话没免打扰、发件人没被收件人拉黑。
@@ -168,16 +188,16 @@ iOS 声明 `maxMessageBytes=900000`。`shrinkMessage` 的裁法：
 - `aps.thread-id` = `im-<convId>`（APNs 对 thread-id 字符没有限制，原样用）。
 - `apns-collapse-id` = `im-<sha256(convId) 前 24 位>-<seq>`（≤ 64 字节）。
 - `apns-priority: 10`，`apns-push-type: alert`，`sound: default`。
-- `aps.badge` = 该用户所有会话未读合计（含免打扰会话）。
+- `aps.badge` = 这台设备按订阅类别合计的角标（见上；iPhone 是助理待处理 + 聊天未读）。
 - `cr = { kind: "im", convId, seq }`。
 
 ### 撤回
 
-只有原消息**确实发过 APNs alert** 才用同一个 collapse-id 再发一条替换通知：body「撤回了一条消息」，badge 为最新合计。推过的记录只在内存（每个收件人最近 500 条、10 分钟过期，撤回窗口只有 2 分钟），重启后忘掉可以接受——那种情况下原通知留着「发来一条消息」，点开看到已撤回。前台收到、后来退到后台再被撤回的不发，免得凭空冒出一条通知。
+只有原消息**确实发过 APNs alert** 才用同一个 collapse-id 再发一条替换通知：body「撤回了一条消息」，角标分部同上（按设备订阅的类别合计）。推过的记录只在内存（每个收件人最近 500 条、10 分钟过期，撤回窗口只有 2 分钟），重启后忘掉可以接受——那种情况下原通知留着「发来一条消息」，点开看到已撤回。前台收到、后来退到后台再被撤回的不发，免得凭空冒出一条通知。
 
 ### 已读
 
-`im_read` 让 readSeq 前进后（以及 `hideBefore` 把 readSeq 推前时），给该用户的 im 订阅发静默推送：`apns-push-type: background`、`apns-priority: 5`、`aps = { "content-available": 1, badge }`，没有 alert / sound，`cr = { kind: "im_read", convId }`。其他设备据此清通知、更新角标。
+`im_read` 让 readSeq 前进后（以及 `hideBefore` 把 readSeq 推前时），给该用户的 im 订阅发静默推送：`apns-push-type: background`、`apns-priority: 5`、`aps = { "content-available": 1, badge }`，没有 alert / sound，`cr = { kind: "im_read", convId }`。角标分部同上（按设备订阅的类别合计）。其他设备据此清通知、更新角标，iOS 还把列表标成待对账（在线就立刻、否则回前台时重拉 `im_list`）。
 
 没配 APNs 时全部安静跳过。推送日志（`push-log.jsonl`）里聊天推送的 title / body 记成空串，网关日志也不写消息正文。
 

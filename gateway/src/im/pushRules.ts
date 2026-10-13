@@ -1,6 +1,6 @@
 // IM 推送规则（纯函数）：什么时候发、发什么。真正发送走 assistant/apns.ts 的 sendApns(channel "im")
 import type { ImFileBody, ImLinkBody, ImLocationBody, ImTextBody, ImVoiceBody } from "../../../shared/protocol.ts";
-import type { ApnsMessage } from "../assistant/apns.ts";
+import type { ApnsMessage, BadgeParts } from "../assistant/apns.ts";
 import { imCollapseId, imThreadId } from "./ids.ts";
 import type { StoredMessage } from "./store.ts";
 
@@ -89,8 +89,8 @@ export type ImAlertInput = {
   notifyPreview: boolean;
   /** 收件人这个会话的未读（含这一条） */
   convUnread: number;
-  /** 收件人所有会话未读合计 */
-  badge: number;
+  /** 角标分部：IM 未读合计 + 助理待处理数；设备按自己订阅的类别合计（apnsBadgeFor） */
+  badgeParts: BadgeParts;
   /** 收件人有 caps 含 im 且在前台的在线连接 */
   foregroundOnline: boolean;
   muted: boolean;
@@ -117,14 +117,19 @@ export function imAlertFor(input: ImAlertInput): ApnsMessage | null {
     collapseId: imCollapseId(convId, message.seq),
     priority: 10,
     pushType: "alert",
-    badge: input.badge,
+    badgeParts: input.badgeParts,
     cr: { kind: "im", convId, seq: message.seq },
     redactLog: true,
   };
 }
 
 /** 撤回：用同一个 collapse-id 替换掉之前那条通知 */
-export function imRecallAlert(convId: string, seq: number, senderNickname: string, badge: number): ApnsMessage {
+export function imRecallAlert(
+  convId: string,
+  seq: number,
+  senderNickname: string,
+  badgeParts: BadgeParts,
+): ApnsMessage {
   return {
     itemId: `${convId}#${seq}`,
     kind: "im",
@@ -135,14 +140,14 @@ export function imRecallAlert(convId: string, seq: number, senderNickname: strin
     collapseId: imCollapseId(convId, seq),
     priority: 10,
     pushType: "alert",
-    badge,
+    badgeParts,
     cr: { kind: "im", convId, seq },
     redactLog: true,
   };
 }
 
 /** 读过之后的静默推送：其他设备据此清通知、更新角标 */
-export function imReadPush(convId: string, badge: number): ApnsMessage {
+export function imReadPush(convId: string, badgeParts: BadgeParts): ApnsMessage {
   return {
     itemId: `${convId}#read`,
     kind: "im_read",
@@ -152,7 +157,7 @@ export function imReadPush(convId: string, badge: number): ApnsMessage {
     pushType: "background",
     priority: 5,
     sound: null,
-    badge,
+    badgeParts,
     cr: { kind: "im_read", convId },
     redactLog: true,
   };

@@ -671,13 +671,16 @@ export type ServerMessage =
     }
   /** 只发给发件连接；rejected=被对方拒收（消息已发出，只有自己看得到） */
   | { type: "im_ack"; clientId: string; convId: ImConvId; seq: number; at: number; rejected?: boolean }
-  /** 发给会话双方 caps 含 im 的在线连接，发件连接本身除外（它收 im_ack）；客户端仍可按 clientId 去重 */
-  | { type: "im_message"; message: ImMessage; ticket: ImTicket }
   /**
-   * what 决定带哪些字段：
-   *   recall   → convId, seq（双方）
-   *   read     → convId, seq（自己的其他连接）
-   *   settings → convId, pin, mute, hideBefore（自己所有连接）
+   * 发给会话双方 caps 含 im 的在线连接，发件连接本身除外（它收 im_ack）；客户端仍可按 clientId 去重。
+   * unread：收件这一方在这个会话的未读（发件人自己的其他设备收到的是发件人的未读），客户端直接用，不自己累加
+   */
+  | { type: "im_message"; message: ImMessage; ticket: ImTicket; unread?: number }
+  /**
+   * what 决定带哪些字段（unread 都是收到这条的那个人在这个会话的权威未读）：
+   *   recall   → convId, seq, unread（双方，各自的未读）
+   *   read     → convId, seq, unread（自己的其他连接）
+   *   settings → convId, pin, mute, hideBefore, unread（自己所有连接）
    *   prefs    → me（自己所有连接）
    *   profile  → user, avatarTicket（所有可见用户）
    *   block    → blocked（自己所有连接）
@@ -694,6 +697,7 @@ export type ServerMessage =
       user?: ImUser;
       avatarTicket?: ImTicket;
       blocked?: string[];
+      unread?: number;
     }
   | { type: "im_error"; clientId?: string; code: ImErrorCode; message: string };
 

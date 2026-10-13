@@ -2,6 +2,7 @@
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { sendApns } from "../assistant/apns.ts";
+import { assistantBadgeCached } from "../assistant/badge.ts";
 import { log } from "../log.ts";
 import { gatewayState } from "../runtime/state.ts";
 import { allTenants, getTenant, mediaSecret, stateDir } from "../tenants.ts";
@@ -40,6 +41,11 @@ export function imRuntime() {
       void sendApns({ id: tenant.id, stateDir: tenant.stateDir }, message).catch((err) =>
         log.error("im apns", err instanceof Error ? err.message : err),
       );
+    },
+    assistantBadge: async (tenantId) => {
+      const tenant = getTenant(tenantId);
+      // 带超时和短缓存（badge.ts）：慢文件系统不拖慢聊天推送，超时先拿上次的数顶着
+      return tenant ? await assistantBadgeCached({ id: tenant.id, stateDir: tenant.stateDir }) : 0;
     },
   });
   instance = { service, store };

@@ -581,7 +581,7 @@ export const serverSamples: ServerMessage[] = [
     after: 10,
   },
   { type: "im_ack", clientId: "c-ios-1739000000000-1", convId: IM_CONV, seq: 42, at: T0 + 9000, rejected: true },
-  { type: "im_message", message: imMessages[0], ticket: imTicketSample },
+  { type: "im_message", message: imMessages[0], ticket: imTicketSample, unread: 2 },
   {
     type: "im_update",
     what: "settings",
@@ -594,6 +594,7 @@ export const serverSamples: ServerMessage[] = [
     user: { id: "bob-2", nickname: "鲍勃", avatar: BLOB_AVATAR },
     avatarTicket: imTicketSample,
     blocked: ["mallory"],
+    unread: 1,
   },
   { type: "im_error", clientId: "c-ios-1739000000000-1", code: "rate_limited", message: "发得太快了，稍等一会儿再发" },
 ];

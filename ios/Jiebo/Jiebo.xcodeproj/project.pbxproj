@@ -90,6 +90,17 @@
 		A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */; };
 		A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */; };
 		A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */; };
+		A1B2C3D4E5F6071829000B01 /* ImProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */; };
+		A1B2C3D4E5F6071829000B02 /* ChatStore+Im.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */; };
+		A1B2C3D4E5F6071829000B03 /* ImModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A03 /* ImModels.swift */; };
+		A1B2C3D4E5F6071829000B04 /* ImCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A04 /* ImCache.swift */; };
+		A1B2C3D4E5F6071829000B05 /* ImStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A05 /* ImStore.swift */; };
+		A1B2C3D4E5F6071829000B06 /* ImMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A06 /* ImMedia.swift */; };
+		A1B2C3D4E5F6071829000B07 /* HomeShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A07 /* HomeShell.swift */; };
+		A1B2C3D4E5F6071829000B08 /* ChatHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A08 /* ChatHome.swift */; };
+		A1B2C3D4E5F6071829000B09 /* ChatThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A09 /* ChatThreadView.swift */; };
+		A1B2C3D4E5F6071829000B0A /* ChatComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0A /* ChatComposer.swift */; };
+		A1B2C3D4E5F6071829000B0B /* ChatSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0B /* ChatSettingsSheet.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -179,6 +190,17 @@
 		A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Voice.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+AssistantBar.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Toolbar.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImProtocol.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Im.swift"; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A03 /* ImModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImModels.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A04 /* ImCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImCache.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A05 /* ImStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImStore.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A06 /* ImMedia.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImMedia.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A07 /* HomeShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeShell.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A08 /* ChatHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatHome.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A09 /* ChatThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatThreadView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A0A /* ChatComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatComposer.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A0B /* ChatSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatSettingsSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -239,6 +261,7 @@
 			children = (
 				A1B2C3D4E5F6071829000103 /* JSONValue.swift */,
 				A1B2C3D4E5F6071829000104 /* Protocol.swift */,
+				A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */,
 				A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */,
 				A1B2C3D4E5F6071829000106 /* GatewayClient.swift */,
 				A1B2C3D4E5F6071829000116 /* Uploader.swift */,
@@ -257,6 +280,8 @@
 		A1B2C3D4E5F6071829000009 /* Session */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6071829000C01 /* IM */,
+				A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */,
 				A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */,
 				A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */,
 				A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */,
@@ -290,6 +315,8 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6071829000900 /* Phone */,
+				A1B2C3D4E5F6071829000C02 /* IM */,
+				A1B2C3D4E5F6071829000A07 /* HomeShell.swift */,
 				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
@@ -354,6 +381,28 @@
 				A1B2C3D4E5F6071829000713 /* AppDelegate.swift */,
 			);
 			path = App;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000C01 /* IM */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000A03 /* ImModels.swift */,
+				A1B2C3D4E5F6071829000A04 /* ImCache.swift */,
+				A1B2C3D4E5F6071829000A05 /* ImStore.swift */,
+				A1B2C3D4E5F6071829000A06 /* ImMedia.swift */,
+			);
+			path = IM;
+			sourceTree = "<group>";
+		};
+		A1B2C3D4E5F6071829000C02 /* IM */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D4E5F6071829000A08 /* ChatHome.swift */,
+				A1B2C3D4E5F6071829000A09 /* ChatThreadView.swift */,
+				A1B2C3D4E5F6071829000A0A /* ChatComposer.swift */,
+				A1B2C3D4E5F6071829000A0B /* ChatSettingsSheet.swift */,
+			);
+			path = IM;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -450,6 +499,17 @@
 				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
 				A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */,
 				A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */,
+				A1B2C3D4E5F6071829000B01 /* ImProtocol.swift in Sources */,
+				A1B2C3D4E5F6071829000B02 /* ChatStore+Im.swift in Sources */,
+				A1B2C3D4E5F6071829000B03 /* ImModels.swift in Sources */,
+				A1B2C3D4E5F6071829000B04 /* ImCache.swift in Sources */,
+				A1B2C3D4E5F6071829000B05 /* ImStore.swift in Sources */,
+				A1B2C3D4E5F6071829000B06 /* ImMedia.swift in Sources */,
+				A1B2C3D4E5F6071829000B07 /* HomeShell.swift in Sources */,
+				A1B2C3D4E5F6071829000B08 /* ChatHome.swift in Sources */,
+				A1B2C3D4E5F6071829000B09 /* ChatThreadView.swift in Sources */,
+				A1B2C3D4E5F6071829000B0A /* ChatComposer.swift in Sources */,
+				A1B2C3D4E5F6071829000B0B /* ChatSettingsSheet.swift in Sources */,
 				A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */,
 				A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */,
 				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
@@ -642,6 +702,7 @@
 				INFOPLIST_FILE = Jiebo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住输入框或点话筒说话时录音，转成文字填进输入框";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";
@@ -682,6 +743,7 @@
 				INFOPLIST_FILE = Jiebo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住输入框或点话筒说话时录音，转成文字填进输入框";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";

@@ -230,6 +230,10 @@ final class ChatStore {
     }
 
     let client = GatewayClient()
+    /// 即时消息借这条连接：im_* 下行转给它，连上/断线/换账号也通知它
+    @ObservationIgnored weak var imSink: ImStore?
+    /// 等 assistant_result 的 assistant_op（按 reqId）：回包、超时或断线时调一次，参数是 ok
+    @ObservationIgnored var assistantReplyWaiters: [String: (Bool) -> Void] = [:]
     var started = false
     /// 推送用的乐观版本号：每次推送先自增，推送丢了也不回退
     var stateRev = 0

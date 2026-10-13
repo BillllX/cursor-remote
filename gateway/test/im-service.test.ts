@@ -39,6 +39,8 @@ function setup() {
   const clock = { now: 1_800_000_000_000 };
   const conns: Array<ImLiveConn & { got: ServerMessage[] }> = [];
   const pushes: Array<{ to: string; message: ApnsMessage }> = [];
+  /** 各租户的助理待处理数（推送角标要加上它） */
+  const assistant = new Map<string, number>();
   const tenants: ImPeer[] = [
     { id: "alice", name: "Alice" },
     { id: "bob", name: "Bob" },
@@ -55,6 +57,7 @@ function setup() {
       secret: () => SECRET,
       conns: () => conns,
       push: (to, message) => pushes.push({ to, message }),
+      assistantBadge: async (id) => assistant.get(id) ?? 0,
       now: () => clock.now,
     });
   const connect = (tenantId: string, foreground = true) => {
@@ -73,7 +76,7 @@ function setup() {
     ...extra,
   });
   const store = makeStore();
-  return { dir, clock, conns, pushes, tenants, make, makeStore, connect, text, store, service: make(store) };
+  return { dir, clock, conns, pushes, assistant, tenants, make, makeStore, connect, text, store, service: make(store) };
 }
 
 async function failure(work: Promise<unknown>): Promise<{ code: string; message: string }> {
@@ -434,7 +437,7 @@ describe("被拉黑隐藏的消息不能被探测（评审 2）", () => {
 
     const b2 = connect("bob");
     await service.read("bob", null, { type: "im_read", convId: AB, seq: 2 });
-    assert.deepEqual(ofType(b2.got, "im_update"), [{ type: "im_update", what: "read", convId: AB, seq: 1 }]);
+    assert.deepEqual(ofType(b2.got, "im_update"), [{ type: "im_update", what: "read", convId: AB, seq: 1, unread: 0 }]);
     const list = await service.list("bob");
     assert.equal(list.convs[0].readSeq, 1);
     assert.equal(list.convs[0].maxSeq, 1);
@@ -740,7 +743,7 @@ describe("撤回", () => {
     assert.equal(await code(service.recall("bob", null, { type: "im_recall", convId: AB, seq: ack.seq })), "forbidden");
     clock.now += 119_000;
     const update = await service.recall("alice", a1.key, { type: "im_recall", convId: AB, seq: ack.seq });
-    assert.deepEqual(update, { type: "im_update", what: "recall", convId: AB, seq: 1 });
+    assert.deepEqual(update, { type: "im_update", what: "recall", convId: AB, seq: 1, unread: 0 });
     assert.deepEqual(ofType(b1.got, "im_update"), [update]);
     assert.equal(ofType(a1.got, "im_update").length, 0);
     const msg = (await service.history("bob", { type: "im_history", convId: AB })).messages[0];
@@ -907,13 +910,13 @@ describe("已读、未读与设置", () => {
     pushes.length = 0;
     assert.equal(await service.read("bob", b1.key, { type: "im_read", convId: AB, seq: 1 }), null);
     assert.equal(await service.unread("bob", AB), 1);
-    assert.deepEqual(ofType(b2.got, "im_update"), [{ type: "im_update", what: "read", convId: AB, seq: 1 }]);
+    assert.deepEqual(ofType(b2.got, "im_update"), [{ type: "im_update", what: "read", convId: AB, seq: 1, unread: 1 }]);
     assert.equal(b1.got.length, 0);
     assert.equal(a1.got.length, 0);
     assert.equal(pushes.length, 1);
     assert.equal(pushes[0].to, "bob");
     assert.equal(pushes[0].message.pushType, "background");
-    assert.equal(pushes[0].message.badge, 1);
+    assert.deepEqual(pushes[0].message.badgeParts, { im: 1, assistant: 0 });
     await service.read("bob", b1.key, { type: "im_read", convId: AB, seq: 1 });
     assert.equal(pushes.length, 1);
     await service.read("bob", b1.key, { type: "im_read", convId: AB, seq: 999 });
@@ -921,12 +924,59 @@ describe("已读、未读与设置", () => {
     assert.equal(await service.badge("bob"), 0);
   });
 
+  test("权威未读随更新下发：im_message 带收件人视角的未读，撤回各自扣，read 带剩下的（seq 空洞不影响）", async () => {
+    const { service, connect, text, clock } = setup();
+    const b1 = connect("bob");
+    const a1 = connect("alice");
+    const a2 = connect("alice");
+    await service.send("alice", a1.key, text("bob", "1"));
+    await service.send("bob", null, text("alice", "2"));
+    const third = await service.send("alice", a1.key, text("bob", "3"));
+    assert.deepEqual(
+      ofType(b1.got, "im_message").map((m) => [m.message.seq, m.unread]),
+      [
+        [1, 1],
+        [2, 1],
+        [3, 2],
+      ],
+    );
+    // 发件人自己的另一台设备收到的是发件人的未读（bob 发的那条）
+    assert.deepEqual(
+      ofType(a2.got, "im_message").map((m) => [m.message.seq, m.unread]),
+      [
+        [1, 0],
+        [2, 1],
+        [3, 1],
+      ],
+    );
+    clock.now += 1000;
+    const recall = await service.recall("alice", a1.key, { type: "im_recall", convId: AB, seq: third.seq });
+    assert.equal(recall.unread, 1);
+    assert.equal(ofType(b1.got, "im_update").find((u) => u.what === "recall")?.unread, 1);
+    assert.equal(ofType(a2.got, "im_update").find((u) => u.what === "recall")?.unread, 1);
+    // bob 读到 1：后面是他自己发的 2 和撤回了的 3，剩 0（按 maxSeq - readSeq 推算会得 2）
+    const b2 = connect("bob");
+    await service.read("bob", b1.key, { type: "im_read", convId: AB, seq: 1 });
+    assert.deepEqual(
+      ofType(b2.got, "im_update").map((u) => [u.what, u.seq, u.unread]),
+      [["read", 1, 0]],
+    );
+  });
+
   test("置顶、免打扰同步到自己所有连接；拉黑列表随 im_list 下发", async () => {
     const { service, connect } = setup();
     const a1 = connect("alice");
     const a2 = connect("alice");
     const update = await service.settings("alice", a1.key, { type: "im_settings", convId: AB, pin: true, mute: true });
-    assert.deepEqual(update, { type: "im_update", what: "settings", convId: AB, pin: true, mute: true, hideBefore: 0 });
+    assert.deepEqual(update, {
+      type: "im_update",
+      what: "settings",
+      convId: AB,
+      pin: true,
+      mute: true,
+      hideBefore: 0,
+      unread: 0,
+    });
     assert.deepEqual(ofType(a2.got, "im_update"), [update]);
     await service.block("alice", null, { type: "im_block", tenantId: "bob", on: true });
     assert.deepEqual((await service.list("alice")).blocked, ["bob"]);
@@ -974,17 +1024,33 @@ describe("推送决策", () => {
     assert.equal(pushes[0].to, "bob");
     assert.equal(pushes[0].message.title, "Alice");
     assert.equal(pushes[0].message.body, "发来 2 条消息");
-    assert.equal(pushes[0].message.badge, 2);
+    assert.deepEqual(pushes[0].message.badgeParts, { im: 2, assistant: 0 });
     assert.ok(!JSON.stringify(pushes[0]).includes("秘密内容"));
     await service.profile("bob", null, { type: "im_profile", notifyPreview: true });
     await service.send("alice", null, text("bob", "秘密内容三"));
     assert.equal(pushes[1].message.body, "秘密内容三");
-    assert.equal(pushes[1].message.badge, 3);
+    assert.deepEqual(pushes[1].message.badgeParts, { im: 3, assistant: 0 });
     assert.equal(pushes[1].message.threadId, `im-${AB}`);
     await service.settings("bob", null, { type: "im_settings", convId: AB, mute: true });
     await service.send("alice", null, text("bob", "免打扰"));
     assert.equal(pushes.length, 2);
     assert.equal(await service.unread("bob", AB), 4);
+  });
+
+  test("推送角标分部 { im, assistant }：新消息、撤回替换、静默已读带的是同一份，设备按订阅的类别合计", async () => {
+    const { service, text, pushes, assistant } = setup();
+    assistant.set("bob", 3);
+    const first = await service.send("alice", null, text("bob", "1"));
+    assert.deepEqual(pushes[0].message.badgeParts, { im: 1, assistant: 3 });
+    assert.deepEqual(await service.pushBadge("bob"), { im: 1, assistant: 3 });
+    assert.equal(await service.badge("bob"), 1);
+    await service.recall("alice", null, { type: "im_recall", convId: AB, seq: first.seq });
+    assert.deepEqual(pushes[1].message.badgeParts, { im: 0, assistant: 3 });
+    await service.send("alice", null, text("bob", "2"));
+    assert.deepEqual(pushes[2].message.badgeParts, { im: 1, assistant: 3 });
+    await service.read("bob", null, { type: "im_read", convId: AB, seq: 99 });
+    assert.equal(pushes[3].message.pushType, "background");
+    assert.deepEqual(pushes[3].message.badgeParts, { im: 0, assistant: 3 });
   });
 
   test("撤回只替换确实推过 alert 的通知：同 collapse-id；前台收到后退后台再撤回不发；免打扰、被拒收、重启后都不发", async () => {
@@ -995,7 +1061,7 @@ describe("推送决策", () => {
     assert.equal(pushes.length, 2);
     assert.equal(pushes[1].message.body, "撤回了一条消息");
     assert.equal(pushes[1].message.collapseId, pushes[0].message.collapseId);
-    assert.equal(pushes[1].message.badge, 0);
+    assert.deepEqual(pushes[1].message.badgeParts, { im: 0, assistant: 0 });
 
     const b1 = connect("bob");
     const quiet = await service.send("alice", null, text("bob", "前台收到的"));

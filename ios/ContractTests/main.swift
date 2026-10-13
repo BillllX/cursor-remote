@@ -202,6 +202,7 @@ enum ClientCase: String, CaseIterable {
     case uploadFile, listFiles, searchText, revertFile, listCheckpoints, restore, readFile, writeFile, undo, ping
     case syncChat, truncateTurns, toolReview, loadChats, loadChat, loadState, adminStats, loopStart, loopStop
     case assistantGet, assistantOp
+    case imContacts, imList, imHistory, imSend, imRecall, imRead, imSettings, imProfile, imBlock, imPresence
 }
 
 func clientCase(of message: ClientMessage) -> ClientCase {
@@ -243,8 +244,22 @@ func clientCase(of message: ClientMessage) -> ClientCase {
     case .loopStop: return .loopStop
     case .assistantGet: return .assistantGet
     case .assistantOp: return .assistantOp
+    case .imContacts: return .imContacts
+    case .imList: return .imList
+    case .imHistory: return .imHistory
+    case .imSend: return .imSend
+    case .imRecall: return .imRecall
+    case .imRead: return .imRead
+    case .imSettings: return .imSettings
+    case .imProfile: return .imProfile
+    case .imBlock: return .imBlock
+    case .imPresence: return .imPresence
     }
 }
+
+let conv = "dm~alice~bob-2"
+let blobA = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+let blobB = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 let chat = "c-7f3a9e21"
 let turn = "t-1739000000000-k2"
@@ -313,7 +328,49 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .assistantGet: return .assistantGet(memory: true)
     case .assistantOp:
         return .assistantOp(op: "todo_add", args: ["text": .string("周三前回复报价"), "due": .string("2026-02-11")], reqId: "rq-todo-1")
+    case .imContacts: return .imContacts
+    case .imList: return .imList(cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ", limit: 50)
+    case .imHistory: return .imHistory(convId: conv, before: 50, after: 10, limit: 20)
+    case .imSend:
+        return .imSend(
+            clientId: "c-ios-1739000003000-1",
+            to: "bob-2",
+            convId: conv,
+            kind: "image",
+            body: .image(blob: blobA, thumb: blobB, w: 1170, h: 2532, original: true),
+            replyTo: 35
+        )
+    case .imRecall: return .imRecall(convId: conv, seq: 42)
+    case .imRead: return .imRead(convId: conv, seq: 41)
+    case .imSettings: return .imSettings(convId: conv, pin: true, mute: true, hideBefore: 3)
+    case .imProfile: return .imProfile(nickname: "爱丽丝", avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e", notifyPreview: true)
+    case .imBlock: return .imBlock(tenantId: "mallory", on: true)
+    case .imPresence: return .imPresence(foreground: false)
     }
+}
+
+/// 每种消息体编码后再解回来要一样（本机缓存和 im_send 都靠它）
+func checkImBodies() -> [String] {
+    let bodies: [(String, ImBody)] = [
+        ("text", .text("晚上一起吃饭？")),
+        ("image", .image(blob: blobA, thumb: blobB, w: 1170, h: 2532, original: false)),
+        ("voice", .voice(blob: blobA, durationMs: 12000, waveform: [0.1, 0.5, 0.9])),
+        ("file", .file(blob: blobB, name: "报价单.pdf", size: 48213, mime: "application/pdf")),
+        ("link", .link(url: "https://example.com/a", title: "示例", desc: nil, icon: blobB)),
+        ("location", .location(lat: 31.2304, lng: 121.4737, name: "人民广场", address: "上海市黄浦区人民大道")),
+    ]
+    var problems: [String] = []
+    for (kind, body) in bodies {
+        let back = ImBody.from(kind: kind, body.json())
+        if back != body { problems.append("ImBody \(kind) 编码再解码不一致：\(String(describing: back))") }
+    }
+    if ImConv.dm("bob-2", "alice") != conv { problems.append("ImConv.dm 排序不对") }
+    if ImConv.peer(of: conv, me: "alice") != "bob-2" || ImConv.peer(of: conv, me: "bob-2") != "alice" {
+        problems.append("ImConv.peer 解析不对")
+    }
+    if ImConv.peer(of: conv, me: "carol") != nil { problems.append("ImConv.peer 不含自己时应为 nil") }
+    print("即时消息体往返：\(bodies.count) 种，\(problems.count) 条不符")
+    return problems
 }
 
 func writeClientSamples(_ options: Options) -> [String] {
@@ -400,6 +457,33 @@ func checkToolNames() -> [String] {
     return problems
 }
 
+// MARK: JSONValue 数字 / 布尔（JSON 里的 0/1 是数字，不能借 NSNumber 解成布尔）
+
+func checkJSONValue() -> [String] {
+    var problems: [String] = []
+    let sample = Data(#"{"n0":0,"n1":1,"f":false,"t":true,"big":2}"#.utf8)
+    guard let object = try? JSONValue.parse(sample).object else {
+        return ["JSONValue：样例解析失败"]
+    }
+    func expectNumber(_ key: String) {
+        guard case .number(let value)? = object[key] else {
+            problems.append("JSONValue：\(key) 应解成 .number，实得 \(renderJSON(object[key] ?? .null))")
+            return
+        }
+        let expected: Double = key == "n0" ? 0 : (key == "n1" ? 1 : 2)
+        if value != expected { problems.append("JSONValue：\(key) = \(value)，应为 \(expected)") }
+    }
+    expectNumber("n0")
+    expectNumber("n1")
+    expectNumber("big")
+    if case .bool? = object["n0"] { problems.append("JSONValue：数字 0 被解成了 .bool") }
+    if case .bool? = object["n1"] { problems.append("JSONValue：数字 1 被解成了 .bool") }
+    if case .bool(let f)? = object["f"], !f {} else { problems.append("JSONValue：false 应解成 .bool(false)") }
+    if case .bool(let t)? = object["t"], t {} else { problems.append("JSONValue：true 应解成 .bool(true)") }
+    print("JSONValue 数字 / 布尔：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -408,7 +492,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

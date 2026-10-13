@@ -11,7 +11,7 @@ import type {
   ImUser,
   ServerMessage,
 } from "../../../shared/protocol.ts";
-import type { ApnsMessage } from "../assistant/apns.ts";
+import type { ApnsMessage, BadgeParts } from "../assistant/apns.ts";
 import { log } from "../log.ts";
 import { blobsOf, checkBody, isBlobId, type BlobUse } from "./body.ts";
 import { ImError } from "./errors.ts";
@@ -57,6 +57,8 @@ export type ImDeps = {
   conns: () => Iterable<ImLiveConn>;
   /** 给某租户的 im 订阅发 APNs；不等结果 */
   push: (tenantId: string, message: ApnsMessage) => void;
+  /** 该租户助理待处理数（未读收件箱 + 待批），和 App 里助理入口的角标同一口径；拿不到时 undefined（角标分量不带） */
+  assistantBadge?: (tenantId: string) => Promise<number | undefined>;
   now?: () => number;
 };
 
@@ -196,6 +198,22 @@ export class ImService {
       total += this.store.unread(conv, viewer, thresholdOf(this.settingsIn(user, conv.meta.convId)));
     }
     return total;
+  }
+
+  /** APNs 角标分部：IM 未读合计 + 助理待处理数（哪个分量拿不到就是 undefined）。
+   *  设备按自己订阅的类别合计（apnsBadgeFor）：只订阅聊天的 iPad 不算助理待处理，助理变化不会推给它 */
+  async pushBadge(viewer: string): Promise<BadgeParts> {
+    const assistant = this.deps.assistantBadge
+      ? this.deps.assistantBadge(viewer).catch(() => undefined)
+      : Promise.resolve(undefined);
+    const [im, extra] = await Promise.all([this.badge(viewer), assistant]);
+    return { im, assistant: extra };
+  }
+
+  /** 这些租户各自在这个会话的未读，随更新下发给他们（客户端只用这个权威值，不自己推算） */
+  private async unreadOf(tenantIds: string[], convId: string): Promise<Map<string, number>> {
+    const pairs = await Promise.all(tenantIds.map(async (id) => [id, await this.unread(id, convId)] as const));
+    return new Map(pairs);
   }
 
   /** 发给这些租户的在线 im 连接；except 是发起请求那条连接的 key */
@@ -401,11 +419,19 @@ export class ImService {
       await this.store.addBlobRef(use.sha, { convId, seq: row.seq, kind: use.kind });
     }
     const audience = row.rejectedFor?.length ? [row.from] : [row.from, peer];
+    const unread = await this.unreadOf(audience, convId);
     this.fanout(
       audience,
       (tenantId) => {
         const view = this.view(convId, row, tenantId);
-        return view ? { type: "im_message", message: view, ticket: this.ticket(tenantId, convId) } : null;
+        return view
+          ? {
+              type: "im_message",
+              message: view,
+              ticket: this.ticket(tenantId, convId),
+              unread: unread.get(tenantId) ?? 0,
+            }
+          : null;
       },
       origin,
     );
@@ -515,7 +541,7 @@ export class ImService {
       senderNickname: this.nickname(row.from),
       notifyPreview: user.notifyPreview,
       convUnread: await this.unread(recipient, convId),
-      badge: await this.badge(recipient),
+      badgeParts: await this.pushBadge(recipient),
       foregroundOnline: false,
       muted: false,
       rejected: false,
@@ -540,14 +566,17 @@ export class ImService {
       await this.store.recall(conv, row, now);
       return { update, row, changed: true };
     });
-    if (!changed) return update;
+    if (!changed) return { ...update, unread: await this.unread(me.id, convId) };
     const peerSees = !row.rejectedFor?.includes(peer.id);
-    this.fanout(peerSees ? [me.id, peer.id] : [me.id], () => update, origin);
+    const audience = peerSees ? [me.id, peer.id] : [me.id];
+    // 撤回的那条不再算未读：每个人带自己的未读
+    const unread = await this.unreadOf(audience, convId);
+    this.fanout(audience, (tenantId) => ({ ...update, unread: unread.get(tenantId) ?? 0 }), origin);
     // 只替换确实推过的通知（同一个 collapse-id）；没推过的（当时在前台、免打扰）不发，网关重启后忘掉的也不发
     if (peerSees && this.pushed.take(peer.id, convId, row.seq, now)) {
-      this.deps.push(peer.id, imRecallAlert(convId, row.seq, this.nickname(me.id), await this.badge(peer.id)));
+      this.deps.push(peer.id, imRecallAlert(convId, row.seq, this.nickname(me.id), await this.pushBadge(peer.id)));
     }
-    return update;
+    return { ...update, unread: unread.get(me.id) ?? 0 };
   }
 
   /** readSeq 推到 min(seq, 自己可见的 maxSeq)；没前进就什么都不做 */
@@ -570,8 +599,9 @@ export class ImService {
     await this.persistUser(me.id);
     const conv = await this.store.open(convId);
     if (conv) this.store.trimUnread(conv, me.id, thresholdOf(this.settingsIn(user, convId)));
-    this.fanout([me.id], () => ({ type: "im_update", what: "read", convId, seq: moved }), origin);
-    this.deps.push(me.id, imReadPush(convId, await this.badge(me.id)));
+    const unread = await this.unread(me.id, convId);
+    this.fanout([me.id], () => ({ type: "im_update", what: "read", convId, seq: moved, unread }), origin);
+    this.deps.push(me.id, imReadPush(convId, await this.pushBadge(me.id)));
     return null;
   }
 
@@ -611,9 +641,10 @@ export class ImService {
       pin: settings.pin,
       mute: settings.mute,
       hideBefore: settings.hideBefore,
+      unread: await this.unread(me.id, convId),
     };
     this.fanout([me.id], () => update, origin);
-    if (readMoved) this.deps.push(me.id, imReadPush(convId, await this.badge(me.id)));
+    if (readMoved) this.deps.push(me.id, imReadPush(convId, await this.pushBadge(me.id)));
     return update;
   }
 

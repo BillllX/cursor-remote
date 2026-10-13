@@ -110,6 +110,7 @@ extension ChatStore {
             requestFileIndex()
             requestAssistant(memory: assistantState?.memory != nil)
             fulfillPendingAssistantOpen()
+            imSink?.connectionReady(features: gatewayFeatures)
         case .auth(let ok, let messageText):
             if !ok {
                 unlocked = false
@@ -743,7 +744,11 @@ extension ChatStore {
             // 别的连接触发的推送可能不带记忆：记忆页已加载过就留着旧的，等下一次带记忆的推送覆盖
             if next.memory == nil { next.memory = assistantState?.memory }
             assistantState = next
-        case .assistantResult(_, let op, let ok, let error, _):
+        case .assistantResult(let reqId, let op, let ok, let error, _):
+            if let reqId, let waiter = assistantReplyWaiters.removeValue(forKey: reqId) {
+                waiter(ok)
+                break
+            }
             if !ok {
                 flash(error ?? "助理操作失败（\(op)）")
             } else if op == "memory_save" {
@@ -767,6 +772,8 @@ extension ChatStore {
                 assistantState?.memory?.entries.insert(entry, at: 0)
             }
             flash("\(assistantName) 记住了：\(entry.topic.nilIfEmpty ?? String(entry.text.prefix(24)))")
+        case .im(let event):
+            imSink?.handle(event)
         case .pong, .ignored:
             break
         }

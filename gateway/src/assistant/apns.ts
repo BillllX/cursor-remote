@@ -37,6 +37,11 @@ export type ApnsMessage = {
   /** background = 静默推送：没有 alert / sound，aps.content-available=1 */
   pushType?: "alert" | "background";
   badge?: number;
+  /**
+   * 按设备算角标：设备订阅了 assistant 才加助理待处理数，订阅了 im 才加聊天未读合计（和 App 前台同一口径）。
+   * 带了它就忽略 badge；设备要的部分都拿不到时不带 aps.badge
+   */
+  badgeParts?: BadgeParts;
   /** 缺省 default；null 不带 sound */
   sound?: string | null;
   /** 替换 cr 路由字段（缺省 { itemId, kind, chatId?, delegationId? }） */
@@ -44,6 +49,19 @@ export type ApnsMessage = {
   /** 推送日志里不记 title / body（聊天正文不能落日志） */
   redactLog?: boolean;
 };
+
+/** 角标的两部分；undefined = 这次没拿到 */
+export type BadgeParts = { assistant?: number; im?: number };
+
+/** 这台设备（按它订阅的类别）该显示的角标；它要的部分一个都没拿到时 undefined */
+export function apnsBadgeFor(sub: Pick<ApnsSubscription, "assistant" | "im">, message: Pick<ApnsMessage, "badge" | "badgeParts">) {
+  const parts = message.badgeParts;
+  if (!parts) return message.badge;
+  let total: number | undefined;
+  if (apnsWants(sub, "assistant") && parts.assistant !== undefined) total = (total ?? 0) + parts.assistant;
+  if (apnsWants(sub, "im") && parts.im !== undefined) total = (total ?? 0) + parts.im;
+  return total;
+}
 
 export type ApnsConfig = { teamId: string; keyId: string; key: KeyObject; bundleId?: string; defaultEnv: "sandbox" | "production" };
 
@@ -126,7 +144,7 @@ export function apnsHost(environment: "sandbox" | "production", override = gatew
   return environment === "sandbox" ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
 }
 
-export function apnsPayload(message: ApnsMessage) {
+export function apnsPayload(message: ApnsMessage, badge = message.badgeParts ? undefined : message.badge) {
   let cr: Record<string, string | number> = { itemId: message.itemId, kind: message.kind };
   if (message.cr) cr = message.cr;
   else {
@@ -142,7 +160,7 @@ export function apnsPayload(message: ApnsMessage) {
     if (sound) aps.sound = sound;
     aps["thread-id"] = message.threadId ?? "assistant-inbox";
   }
-  if (typeof message.badge === "number") aps.badge = message.badge;
+  if (typeof badge === "number") aps.badge = badge;
   return { aps, cr };
 }
 
@@ -205,7 +223,17 @@ export async function sendApns(
   const channel = message.channel ?? "assistant";
   const subs = listApnsSubscriptions(ref).filter((sub) => apnsWants(sub, channel));
   if (!subs.length) return { sent: 0, total: 0 };
-  const body = JSON.stringify(apnsPayload(message));
+  // 每台设备的角标按它订阅的类别算；同一个角标数共用一份 body
+  const bodies = new Map<number | undefined, string>();
+  const bodyFor = (sub: ApnsSubscription) => {
+    const badge = apnsBadgeFor(sub, message);
+    let body = bodies.get(badge);
+    if (body === undefined) {
+      body = JSON.stringify(apnsPayload(message, badge));
+      bodies.set(badge, body);
+    }
+    return body;
+  };
   const jwt = apnsJwt(config, opts.now);
   const sessions = new Map<string, ClientHttp2Session>();
   const sessionFor = (origin: string) => {
@@ -235,7 +263,7 @@ export async function sendApns(
         };
         if (!headers["apns-collapse-id"]) delete headers["apns-collapse-id"];
         const origin = apnsHost(sub.environment ?? config.defaultEnv, opts.host ?? gatewayEnv.apnsHostOverride());
-        result = await post(sessionFor(origin), sub.token, headers, body);
+        result = await post(sessionFor(origin), sub.token, headers, bodyFor(sub));
       }
       const ok = result.status >= 200 && result.status < 300;
       if (ok) sent += 1;

@@ -7,7 +7,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if store.unlocked || store.resumingLogin {
-                WorkbenchView()
+                HomeShell()
             } else {
                 LoginView()
             }
@@ -21,6 +21,7 @@ struct WorkbenchView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.homeActive) private var homeActive
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var workbenchWidth: CGFloat = 0
     /// 侧栏实际宽（用户可拖 240–380）
@@ -51,7 +52,11 @@ struct WorkbenchView: View {
             }
         }
         .background(JieboColor.paper)
-        .fullScreenCover(isPresented: Bindable(store).fileBrowserOpen) {
+        // 切到聊天主页时文件浏览器先收起（状态留着，切回来再盖上）
+        .fullScreenCover(isPresented: Binding(
+            get: { store.fileBrowserOpen && homeActive },
+            set: { open in if homeActive { store.fileBrowserOpen = open } }
+        )) {
             FileBrowserCover()
         }
         #if DEBUG
@@ -199,6 +204,7 @@ struct CollapsedSidebarRail: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var expand: () -> Void
+    @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     @State private var adminOpen = false
     @State private var themeOpen = false
     @State private var logoutConfirm = false
@@ -225,6 +231,7 @@ struct CollapsedSidebarRail: View {
             }
             Spacer()
             railButton("square.stack.3d.up", label: "切换工作区", action: store.openWorkspaceSwitcher)
+            railButton(HomeMode.chat.symbol, label: "切换到聊天") { homeMode = .chat }
             railButton("paintpalette", label: "主题") { themeOpen = true }
             if store.isAdmin {
                 railButton("chart.bar", label: "查看使用统计") { adminOpen = true }
@@ -242,7 +249,13 @@ struct CollapsedSidebarRail: View {
             AdminStatsView()
         }
         .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive, action: store.logout)
+            Button("退出登录", role: .destructive) {
+                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
+                Task { @MainActor in
+                    await PushRegistrar.shared.unsubscribe(store: store)
+                    store.logout()
+                }
+            }
             Button("取消", role: .cancel) {}
         } message: {
             Text("退出后需要重新输入访问码才能连回来。")

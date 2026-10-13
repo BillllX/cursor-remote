@@ -199,7 +199,7 @@ struct ClientInfo: Sendable, Equatable {
     var maxMessageBytes: Int?
     /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）+ slim_state（P8 懒加载：
     /// stored_state/stored_chat 只给元数据，内容走 load_chat 分页；sync_chat 可不写 turns 键）
-    /// + slim_chats（load_chats 也只回元数据壳）
+    /// + slim_chats（load_chats 也只回元数据壳）+ im（收发平台用户之间的即时消息）
     var caps: [String]
 
     static var current: ClientInfo {
@@ -214,7 +214,7 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats"]
+            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im"]
         )
     }
 
@@ -293,6 +293,21 @@ enum ClientMessage {
     case assistantGet(memory: Bool)
     /// 个人助理操作（inbox_read / todo_add / memory_* / approval_answer …），args 由网关逐项校验
     case assistantOp(op: String, args: [String: JSONValue], reqId: String?)
+    // 即时消息（见 docs/im.md）。只有 hello caps 含 "im" 的连接网关才处理
+    case imContacts
+    case imList(cursor: String?, limit: Int?)
+    case imHistory(convId: String, before: Int?, after: Int?, limit: Int?)
+    /// to（对方租户 id）和 convId 二选一；同一 clientId 重发只回原 ack
+    case imSend(clientId: String, to: String?, convId: String?, kind: String, body: ImBody, replyTo: Int?)
+    case imRecall(convId: String, seq: Int)
+    case imRead(convId: String, seq: Int)
+    /// hideBefore 只增不减（清空聊天记录）
+    case imSettings(convId: String, pin: Bool?, mute: Bool?, hideBefore: Int?)
+    /// avatar 传空串去掉头像，nil 不改
+    case imProfile(nickname: String?, avatar: String?, notifyPreview: Bool?)
+    case imBlock(tenantId: String, on: Bool)
+    /// App 进出前台；没有回包
+    case imPresence(foreground: Bool)
 
     func json() -> JSONValue {
         switch self {
@@ -476,6 +491,50 @@ enum ClientMessage {
             if !args.isEmpty { object["args"] = .object(args) }
             if let reqId { object["reqId"] = .string(reqId) }
             return .object(object)
+        case .imContacts:
+            return .object(["type": .string("im_contacts")])
+        case .imList(let cursor, let limit):
+            var object: [String: JSONValue] = ["type": .string("im_list")]
+            if let cursor, !cursor.isEmpty { object["cursor"] = .string(cursor) }
+            if let limit { object["limit"] = .number(Double(limit)) }
+            return .object(object)
+        case .imHistory(let convId, let before, let after, let limit):
+            var object: [String: JSONValue] = ["type": .string("im_history"), "convId": .string(convId)]
+            if let before { object["before"] = .number(Double(before)) }
+            if let after { object["after"] = .number(Double(after)) }
+            if let limit { object["limit"] = .number(Double(limit)) }
+            return .object(object)
+        case .imSend(let clientId, let to, let convId, let kind, let body, let replyTo):
+            var object: [String: JSONValue] = [
+                "type": .string("im_send"),
+                "clientId": .string(clientId),
+                "kind": .string(kind),
+                "body": body.json(),
+            ]
+            if let to, !to.isEmpty { object["to"] = .string(to) }
+            if let convId, !convId.isEmpty { object["convId"] = .string(convId) }
+            if let replyTo { object["replyTo"] = .number(Double(replyTo)) }
+            return .object(object)
+        case .imRecall(let convId, let seq):
+            return .object(["type": .string("im_recall"), "convId": .string(convId), "seq": .number(Double(seq))])
+        case .imRead(let convId, let seq):
+            return .object(["type": .string("im_read"), "convId": .string(convId), "seq": .number(Double(seq))])
+        case .imSettings(let convId, let pin, let mute, let hideBefore):
+            var object: [String: JSONValue] = ["type": .string("im_settings"), "convId": .string(convId)]
+            if let pin { object["pin"] = .bool(pin) }
+            if let mute { object["mute"] = .bool(mute) }
+            if let hideBefore { object["hideBefore"] = .number(Double(hideBefore)) }
+            return .object(object)
+        case .imProfile(let nickname, let avatar, let notifyPreview):
+            var object: [String: JSONValue] = ["type": .string("im_profile")]
+            if let nickname { object["nickname"] = .string(nickname) }
+            if let avatar { object["avatar"] = .string(avatar) }
+            if let notifyPreview { object["notifyPreview"] = .bool(notifyPreview) }
+            return .object(object)
+        case .imBlock(let tenantId, let on):
+            return .object(["type": .string("im_block"), "tenantId": .string(tenantId), "on": .bool(on)])
+        case .imPresence(let foreground):
+            return .object(["type": .string("im_presence"), "foreground": .bool(foreground)])
         }
     }
 }
@@ -991,6 +1050,8 @@ enum ServerMessage {
     /// 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带
     case delegationState(delegation: AssistantDelegation, approval: AssistantApproval?)
     case memoryWritten(chatId: String?, entry: AssistantMemoryEntry)
+    /// 即时消息的全部下行（im_contacts / im_list / im_history / im_ack / im_message / im_update / im_error）
+    case im(ImEvent)
     case pong
     case ignored(String)
 
@@ -1318,6 +1379,9 @@ enum ServerMessage {
             return .memoryWritten(chatId: object["chatId"]?.string?.nilIfEmpty, entry: entry)
         case "pong":
             return .pong
+        case _ where type.hasPrefix("im_"):
+            guard let event = ImEvent.decode(type: type, object) else { return .ignored(type) }
+            return .im(event)
         default:
             return .ignored(type)
         }

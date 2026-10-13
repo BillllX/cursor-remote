@@ -9,6 +9,9 @@ struct PushTarget: Equatable, Sendable {
     var kind: String?
     var chatId: String?
     var delegationId: String?
+    /// 即时消息（kind = im / im_read）：会话号和那条消息的 seq
+    var convId: String?
+    var seq: Int?
 
     /// userInfo["cr"] 缺失或不是字典 → nil
     init?(userInfo: [AnyHashable: Any]) {
@@ -21,7 +24,12 @@ struct PushTarget: Equatable, Sendable {
         kind = text("kind")
         chatId = text("chatId")
         delegationId = text("delegationId")
+        convId = text("convId")
+        seq = (cr["seq"] as? NSNumber)?.intValue
     }
+
+    /// 点开要去聊天主页的那个会话
+    var isIm: Bool { kind == "im" && convId != nil }
 }
 
 /// 点击通知后待消费的路由目标。壳（PhoneShell）等 bootstrapped 后 `consume()` 取走
@@ -40,12 +48,14 @@ final class PushRouting {
     }
 }
 
-/// iPhone APNs：授权 → 注册 → 拿到 token → 连上网关且 assistant_state 到达后上报 push_subscribe
+/// APNs：授权 → 注册 → 拿到 token → 连上网关且 assistant_state 到达后上报 push_subscribe。
+/// iPhone 订阅助理和聊天两类；iPad 只订阅聊天（助理在桌面面板里看，不重复推）
 @MainActor
 final class PushRegistrar {
     static let shared = PushRegistrar()
 
     private weak var store: ChatStore?
+    private weak var im: ImStore?
     private var started = false
     private var loopTask: Task<Void, Never>?
     /// 已向系统请求过授权（授权弹窗只在登录后第一次出现）
@@ -55,6 +65,9 @@ final class PushRegistrar {
     private var reportedKey: String?
     /// 上一次设置的应用角标数
     private var appliedBadge: Int?
+    /// 正在退订、马上登出：不再上报订阅、不再改角标
+    private var signingOut = false
+    private var lastAssistantRequest: Date?
 
     private init() {}
 
@@ -68,10 +81,12 @@ final class PushRegistrar {
 
     // MARK: 生命周期
 
-    /// 幂等。仅 iPhone 工作（iPad 不注册 APNs，避免与桌面助理面板重复）
-    func start(store: ChatStore) {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+    private static var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
+    /// 幂等
+    func start(store: ChatStore, im: ImStore) {
         self.store = store
+        self.im = im
         guard !started else { return }
         started = true
         loopTask = Task { @MainActor [weak self] in
@@ -84,16 +99,36 @@ final class PushRegistrar {
 
     /// 条件满足就同步一次：请求授权 / 注册远程通知 / 上报订阅 / 更新角标。可重复调用
     func syncIfPossible() {
-        guard started, let store else { return }
+        guard started, !signingOut, let store else { return }
         guard store.unlocked else {
             // 未登录或已登出：下次登录重新上报
             reportedKey = nil
             return
         }
         requestAuthorizationIfNeeded()
+        // iPad 没有助理首页去要 assistant_state：这里补要（最多 30 秒一次），订阅上报靠它
+        if store.connected, store.assistantState == nil,
+           lastAssistantRequest.map({ Date().timeIntervalSince($0) > 30 }) ?? true {
+            lastAssistantRequest = Date()
+            store.requestAssistant()
+        }
         reportIfPossible(store: store)
-        if store.assistantState != nil {
-            applyBadge(store.assistantBadgeCount)
+        // 前台角标按这台设备订阅的类别算，和网关推送里的 aps.badge 同一个口径（apnsBadgeFor）：
+        // iPhone 订阅助理 + 聊天 = 聊天未读 + 助理待处理（两边都到齐才设合计，免得闪一下半截数）；
+        // iPad 只订阅聊天 = 只算聊天未读（助理在面板里看，变化不推给它，角标就不算它）。
+        // 聊天列表还没到（或网关不支持 im）时：iPhone 先只设助理待处理，别让一个分量缺失停掉
+        // 整个角标；iPad 没有别的分量可设，先不动（设 0 会把网关推来的角标抹掉）
+        let imLoaded = im?.listLoaded == true
+        if Self.isPhone {
+            if imLoaded {
+                guard store.assistantState != nil else { return }
+                applyBadge((im?.totalUnread ?? 0) + store.assistantBadgeCount)
+            } else if store.assistantState != nil {
+                applyBadge(store.assistantBadgeCount)
+            }
+        } else {
+            guard imLoaded else { return }
+            applyBadge(im?.totalUnread ?? 0)
         }
     }
 
@@ -111,14 +146,21 @@ final class PushRegistrar {
         print("[Push] registerForRemoteNotifications failed: \(error.localizedDescription)")
     }
 
-    /// 登出前调用（ChatStore.logout() 之后 unlocked 为 false，op 会被丢弃，所以必须先于 logout）
-    func unsubscribe(store: ChatStore) {
-        guard UIDevice.current.userInterfaceIdiom == .phone else { return }
+    /// 退订最多等网关回包这么久，超时照样登出（换账号时网关也会把同一 token 从别的租户摘掉）
+    static let unsubscribeTimeout: Duration = .seconds(3)
+
+    /// 登出前调用并 await：等到 push_unsubscribe 的 assistant_result（或超时 / 断线）再 logout。
+    /// ChatStore.logout() 之后 unlocked 为 false，op 会被丢弃，所以必须先于 logout；
+    /// 等待期间 signingOut 挡住同步循环，免得又把订阅报上去
+    func unsubscribe(store: ChatStore) async {
+        signingOut = true
+        defer { signingOut = false }
         if let token = deviceToken, store.unlocked {
-            store.assistantOp("push_unsubscribe", args: [
+            let ok = await store.assistantOpReply("push_unsubscribe", args: [
                 "kind": .string("apns"),
                 "token": .string(token),
-            ])
+            ], timeout: Self.unsubscribeTimeout)
+            if !ok { print("[Push] push_unsubscribe 没有确认，照常登出") }
         }
         reportedKey = nil
         applyBadge(0)
@@ -145,7 +187,8 @@ final class PushRegistrar {
         guard store.connected, store.assistantState != nil, let token = deviceToken else { return }
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return }
         let environment = Self.environment
-        let key = [store.tenantId, token, environment, bundleId].joined(separator: "|")
+        let assistant = Self.isPhone
+        let key = [store.tenantId, token, environment, bundleId, assistant ? "assistant+im" : "im"].joined(separator: "|")
         guard key != reportedKey else { return }
         reportedKey = key
         store.assistantOp("push_subscribe", args: [
@@ -153,6 +196,8 @@ final class PushRegistrar {
             "token": .string(token),
             "bundleId": .string(bundleId),
             "environment": .string(environment),
+            "im": .bool(true),
+            "assistant": .bool(assistant),
         ])
     }
 

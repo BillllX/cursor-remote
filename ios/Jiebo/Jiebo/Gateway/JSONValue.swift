@@ -54,14 +54,12 @@ enum JSONValue: Sendable, Hashable {
         switch any {
         case let value as String:
             self = .string(value)
+        // NSNumber 必须先于 Bool：JSONSerialization 给的数字 0 / 1 也能 `as? Bool` 成功，
+        // 先判 Bool 会把 unread: 1、seq: 1 这类值变成 .bool，.int 就读不到了
+        case let value as NSNumber:
+            self = Self.isBoolean(value) ? .bool(value.boolValue) : .number(value.doubleValue)
         case let value as Bool:
             self = .bool(value)
-        case let value as NSNumber:
-            if CFGetTypeID(value) == CFBooleanGetTypeID() {
-                self = .bool(value.boolValue)
-            } else {
-                self = .number(value.doubleValue)
-            }
         case let value as [String: Any]:
             self = .object(value.mapValues(JSONValue.init))
         case let value as [Any]:
@@ -71,6 +69,15 @@ enum JSONValue: Sendable, Hashable {
         default:
             self = .null
         }
+    }
+
+    private static func isBoolean(_ number: NSNumber) -> Bool {
+        #if canImport(Darwin)
+        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        #else
+        // swift-corelibs-foundation 的布尔 NSNumber 不是 CFBoolean，只能看编码类型
+        return String(cString: number.objCType) == "c"
+        #endif
     }
 
     func jsonObject() -> Any {

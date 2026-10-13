@@ -5,7 +5,9 @@ import UIKit
 /// 多出来的只有收起按钮；点对话不收起侧栏。
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     var collapse: () -> Void = {}
     @State private var chatActions = ChatActionTargets()
     /// P9：管理员统计面板
@@ -78,7 +80,13 @@ struct SidebarView: View {
         }
         .chatActionAlerts($chatActions)
         .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive, action: store.logout)
+            Button("退出登录", role: .destructive) {
+                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
+                Task { @MainActor in
+                    await PushRegistrar.shared.unsubscribe(store: store)
+                    store.logout()
+                }
+            }
             Button("取消", role: .cancel) {}
         } message: {
             Text("退出后需要重新输入访问码才能连回来。")
@@ -226,6 +234,10 @@ struct SidebarView: View {
     private var footer: some View {
         HStack {
             Menu {
+                Button { homeMode = .chat } label: {
+                    Label(im.totalUnread > 0 ? "切换到聊天（\(ImFormat.badge(im.totalUnread)) 条未读）" : "切换到聊天", systemImage: HomeMode.chat.symbol)
+                }
+                Divider()
                 Button { themeOpen = true } label: {
                     Label("主题 · \(JieboTheme.shared.palette.title)", systemImage: "paintpalette")
                 }
@@ -239,12 +251,18 @@ struct SidebarView: View {
                     Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
                 }
             } label: {
-                Label("设置", systemImage: "gearshape")
-                    .font(JieboFont.ui(14, weight: .medium))
-                    .foregroundStyle(JieboColor.ink2)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
+                HStack(spacing: 6) {
+                    Label("设置", systemImage: "gearshape")
+                        .font(JieboFont.ui(14, weight: .medium))
+                        .foregroundStyle(JieboColor.ink2)
+                    if im.totalUnread > 0 {
+                        ImUnreadBadge(count: im.totalUnread)
+                    }
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
+            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
