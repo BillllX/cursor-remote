@@ -1,5 +1,5 @@
 {
   "tenants": [
-    { "id": "default", "name": "Default", "token": "change-me-unique-token" }
+    { "id": "default", "name": "Default", "token": "change-me-unique-token", "imHidden": false }
   ]
 }

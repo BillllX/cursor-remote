@@ -55,6 +55,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       ? message.client.caps.filter((item): item is string => typeof item === "string")
       : [],
   );
+  conn.imForeground = conn.caps.has("im") ? true : undefined;
   bindTenant(conn, tenant);
   usageRec(tenant.id); // P9：建行 + touch lastActiveAt（登录即活动）
   const apiKey = gatewayEnv.cursorApiKey();
@@ -79,7 +80,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       loops: loopsForTenant(tenant.id),
       assistantName: assistantName(tenant),
       assistantChatId: assistantChatIdOf(tenant),
-      features: ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats"],
+      features: ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats", "im"],
     });
   };
   try {

@@ -12,6 +12,7 @@
     "smoke:assistant": "tsx test/smoke/assistant-smoke.ts",
     "smoke:memory": "tsx test/smoke/memory-layers-smoke.ts",
     "smoke:apns": "tsx test/smoke/apns-smoke.ts",
+    "smoke:im": "tsx test/smoke/im-smoke.ts",
     "smoke:turnfiles": "tsx test/smoke/turnfiles-smoke.ts",
     "smoke:seghash": "tsx test/smoke/seghash-smoke.ts"
   },

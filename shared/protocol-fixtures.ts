@@ -10,6 +10,8 @@ import type {
   AssistantState,
   ClientMessage,
   HistoryTurn,
+  ImMessage,
+  ImTicket,
   ServerMessage,
   TurnFile,
 } from "./protocol.ts";
@@ -190,6 +192,81 @@ const slimChat = {
   preview: "已修好：路由守卫漏了 await。",
   segHashes: ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"],
 };
+
+const IM_CONV = "dm~alice~bob-2";
+const BLOB_A = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const BLOB_B = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+const BLOB_AVATAR = "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e";
+const imTicketSample: ImTicket = { exp: T0 + 7200000, sig: "c2lnLWltLXNhbXBsZQ" };
+
+/** 六种 kind 各一条，外加一条撤回（没有 body） */
+const imMessages: ImMessage[] = [
+  {
+    convId: IM_CONV,
+    seq: 36,
+    from: "alice",
+    at: T0 + 3000,
+    kind: "text",
+    body: { text: "晚上一起吃饭？" },
+    replyTo: 35,
+    rejected: true,
+    clientId: "c-ios-1739000003000-1",
+  },
+  {
+    convId: IM_CONV,
+    seq: 37,
+    from: "bob-2",
+    at: T0 + 4000,
+    kind: "image",
+    body: { blob: BLOB_A, thumb: BLOB_B, w: 1170, h: 2532, original: true },
+    clientId: "c-ios-1739000004000-2",
+  },
+  {
+    convId: IM_CONV,
+    seq: 38,
+    from: "alice",
+    at: T0 + 5000,
+    kind: "voice",
+    body: { blob: BLOB_A, durationMs: 12000, waveform: [0.1, 0.5, 0.9] },
+    clientId: "c-ios-1739000005000-3",
+  },
+  {
+    convId: IM_CONV,
+    seq: 39,
+    from: "bob-2",
+    at: T0 + 6000,
+    kind: "file",
+    body: { blob: BLOB_B, name: "报价单.pdf", size: 48213, mime: "application/pdf" },
+    clientId: "c-ios-1739000006000-4",
+  },
+  {
+    convId: IM_CONV,
+    seq: 40,
+    from: "alice",
+    at: T0 + 7000,
+    kind: "link",
+    body: { url: "https://example.com/a", title: "示例", desc: "一段描述", icon: BLOB_B },
+    clientId: "c-ios-1739000007000-5",
+  },
+  {
+    convId: IM_CONV,
+    seq: 41,
+    from: "bob-2",
+    at: T0 + 8000,
+    kind: "location",
+    body: { lat: 31.2304, lng: 121.4737, name: "人民广场", address: "上海市黄浦区人民大道" },
+    clientId: "c-ios-1739000008000-6",
+  },
+  {
+    convId: IM_CONV,
+    seq: 42,
+    from: "alice",
+    at: T0 + 9000,
+    kind: "text",
+    recalled: true,
+    clientId: "c-ios-1739000009000-7",
+  },
+];
 
 export const serverSamples: ServerMessage[] = [
   {
@@ -465,6 +542,60 @@ export const serverSamples: ServerMessage[] = [
   { type: "delegation_state", delegation, approval },
   { type: "memory_written", chatId: ASSISTANT_CHAT, entry: memoryEntry },
   { type: "pong" },
+  {
+    type: "im_contacts",
+    me: { id: "alice", nickname: "爱丽丝", avatar: BLOB_AVATAR, notifyPreview: true },
+    users: [
+      { id: "bob-2", nickname: "鲍勃", avatar: BLOB_AVATAR },
+      { id: "carol", nickname: "carol" },
+    ],
+    avatarTicket: imTicketSample,
+  },
+  {
+    type: "im_list",
+    convs: [
+      {
+        convId: IM_CONV,
+        peer: "bob-2",
+        last: imMessages[1],
+        unread: 2,
+        readSeq: 40,
+        maxSeq: 42,
+        pin: true,
+        mute: true,
+        hideBefore: 3,
+        ticket: imTicketSample,
+      },
+    ],
+    blocked: ["mallory"],
+    more: true,
+    cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ",
+  },
+  {
+    type: "im_history",
+    convId: IM_CONV,
+    messages: imMessages,
+    more: true,
+    ticket: imTicketSample,
+    before: 50,
+    after: 10,
+  },
+  { type: "im_ack", clientId: "c-ios-1739000000000-1", convId: IM_CONV, seq: 42, at: T0 + 9000, rejected: true },
+  { type: "im_message", message: imMessages[0], ticket: imTicketSample },
+  {
+    type: "im_update",
+    what: "settings",
+    convId: IM_CONV,
+    seq: 42,
+    pin: true,
+    mute: true,
+    hideBefore: 3,
+    me: { id: "alice", nickname: "爱丽丝", avatar: BLOB_AVATAR, notifyPreview: true },
+    user: { id: "bob-2", nickname: "鲍勃", avatar: BLOB_AVATAR },
+    avatarTicket: imTicketSample,
+    blocked: ["mallory"],
+  },
+  { type: "im_error", clientId: "c-ios-1739000000000-1", code: "rate_limited", message: "发得太快了，稍等一会儿再发" },
 ];
 
 export const clientSamples: ClientMessage[] = [
@@ -557,6 +688,24 @@ export const clientSamples: ClientMessage[] = [
   { type: "assistant_get", memory: true },
   { type: "assistant_op", op: "todo_add", args: { text: "周三前回复报价", due: "2026-02-11" }, reqId: "rq-todo-1" },
   { type: "assistant_op", op: "approval_answer", args: { chatId: CHILD_CHAT, callId: "call-w1", allow: true } },
+  { type: "im_contacts" },
+  { type: "im_list", cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ", limit: 50 },
+  { type: "im_history", convId: IM_CONV, before: 50, after: 10, limit: 20 },
+  {
+    type: "im_send",
+    clientId: "c-ios-1739000003000-1",
+    to: "bob-2",
+    convId: IM_CONV,
+    kind: "image",
+    body: { blob: BLOB_A, thumb: BLOB_B, w: 1170, h: 2532, original: true },
+    replyTo: 35,
+  },
+  { type: "im_recall", convId: IM_CONV, seq: 42 },
+  { type: "im_read", convId: IM_CONV, seq: 41 },
+  { type: "im_settings", convId: IM_CONV, pin: true, mute: true, hideBefore: 3 },
+  { type: "im_profile", nickname: "爱丽丝", avatar: BLOB_AVATAR, notifyPreview: true },
+  { type: "im_block", tenantId: "mallory", on: true },
+  { type: "im_presence", foreground: false },
 ];
 
 function sortKeys(value: unknown): unknown {

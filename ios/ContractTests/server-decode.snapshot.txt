@@ -725,3 +725,24 @@
 
 ## server[52] pong #1
 .pong
+
+## server[53] im_contacts #1
+.ignored("im_contacts")
+
+## server[54] im_list #1
+.ignored("im_list")
+
+## server[55] im_history #1
+.ignored("im_history")
+
+## server[56] im_ack #1
+.ignored("im_ack")
+
+## server[57] im_message #1
+.ignored("im_message")
+
+## server[58] im_update #1
+.ignored("im_update")
+
+## server[59] im_error #1
+.ignored("im_error")

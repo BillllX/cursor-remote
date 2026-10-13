@@ -10,6 +10,18 @@ import { onAssistantGet, onAssistantOp } from "./handlers/assistant.ts";
 import { onListCheckpoints, onRevertFile, onRevertHunk, onUndoOrRestore } from "./handlers/checkpoints.ts";
 import { onFsOp, onListFiles, onReadFile, onSearchText, onUploadFile, onWriteFile } from "./handlers/files.ts";
 import { onHello } from "./handlers/hello.ts";
+import {
+  onImBlock,
+  onImContacts,
+  onImHistory,
+  onImList,
+  onImPresence,
+  onImProfile,
+  onImRead,
+  onImRecall,
+  onImSend,
+  onImSettings,
+} from "./handlers/im.ts";
 import { onLoopStart, onLoopStop } from "./handlers/loops.ts";
 import { onPrompt } from "./handlers/prompt.ts";
 import {
@@ -79,6 +91,16 @@ export const handlers: HandlerTable = {
   undo: onUndoOrRestore,
   restore: onUndoOrRestore,
   prompt: onPrompt,
+  im_contacts: onImContacts,
+  im_list: onImList,
+  im_history: onImHistory,
+  im_send: onImSend,
+  im_recall: onImRecall,
+  im_read: onImRead,
+  im_settings: onImSettings,
+  im_profile: onImProfile,
+  im_block: onImBlock,
+  im_presence: onImPresence,
 };
 
 export async function handleMessage(ctx: WsConnCtx, data: RawData, table: HandlerTable = handlers) {

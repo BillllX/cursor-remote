@@ -38,7 +38,8 @@
     "ci:smoke": "node scripts/smoke/run.mjs --ci",
     "smoke": "node scripts/smoke/run.mjs",
     "smoke:native": "npm run smoke:native -w gateway",
-    "smoke:assistant": "npm run smoke:assistant -w gateway"
+    "smoke:assistant": "npm run smoke:assistant -w gateway",
+    "smoke:im": "npm run smoke:im -w gateway"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

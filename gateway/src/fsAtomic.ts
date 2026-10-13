@@ -9,6 +9,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import {
+  mkdir as mkdirAsync,
+  rename as renameAsync,
+  unlink as unlinkAsync,
+  writeFile as writeFileAsync,
+} from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 
@@ -54,6 +60,23 @@ export function atomicWriteFileSync(
     } catch {
       // 临时文件可能根本没建出来（目录不存在、权限），原错误更有用
     }
+    throw err;
+  }
+}
+
+/** atomicWriteFileSync 的异步版：不阻塞事件循环，语义相同（同目录临时文件 + rename） */
+export async function atomicWriteFile(
+  file: string,
+  data: string | NodeJS.ArrayBufferView,
+  opts: Pick<AtomicWriteOptions, "mkdir" | "encoding"> = {},
+): Promise<void> {
+  if (opts.mkdir) await mkdirAsync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFileAsync(tmp, data, { encoding: opts.encoding });
+    await renameAsync(tmp, file);
+  } catch (err) {
+    await unlinkAsync(tmp).catch(() => undefined);
     throw err;
   }
 }

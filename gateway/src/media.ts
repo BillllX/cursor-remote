@@ -107,7 +107,7 @@ export function filePayload(
   };
 }
 
-function parseRange(header: string | undefined, size: number) {
+export function parseRange(header: string | undefined, size: number) {
   if (!header) return null;
   const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
   if (!match) return null;

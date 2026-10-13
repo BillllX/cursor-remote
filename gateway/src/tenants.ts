@@ -56,6 +56,8 @@ export type Tenant = {
   admin: boolean;
   /** Agent 是否进沙箱。只由部署配置决定，不看显示名 */
   sandbox: boolean;
+  /** IM 可见性分组：imHidden 相同的租户互相可见（验收账号设 true，和正式用户互不可见） */
+  imHidden?: boolean;
   workspaceRoot: string;
   stateDir: string;
   stateFile: string;
@@ -377,7 +379,14 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
   const seenHash = new Set<string>();
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
-    const rec = row as { id?: unknown; name?: unknown; token?: unknown; admin?: unknown; sandbox?: unknown };
+    const rec = row as {
+      id?: unknown;
+      name?: unknown;
+      token?: unknown;
+      admin?: unknown;
+      sandbox?: unknown;
+      imHidden?: unknown;
+    };
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     const token = typeof rec.token === "string" ? rec.token : "";
     const name = typeof rec.name === "string" && rec.name.trim() ? rec.name.trim() : id;
@@ -399,6 +408,7 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
         stateDir: resolve(dataRoot, "tenants", id),
         admin,
         sandbox: !(rec.sandbox === false || rec.sandbox === "false" || id === "billxu"),
+        imHidden: rec.imHidden === true || rec.imHidden === "true",
       }),
     );
   }
@@ -410,7 +420,7 @@ function makeTenant(
   id: string,
   name: string,
   token: string,
-  paths: { workspaceRoot: string; stateDir: string; admin: boolean; sandbox: boolean },
+  paths: { workspaceRoot: string; stateDir: string; admin: boolean; sandbox: boolean; imHidden?: boolean },
 ): Tenant {
   return {
     id,
@@ -418,6 +428,7 @@ function makeTenant(
     tokenHash: hashToken(token),
     admin: paths.admin,
     sandbox: paths.sandbox,
+    imHidden: Boolean(paths.imHidden),
     workspaceRoot: resolve(paths.workspaceRoot),
     stateDir: resolve(paths.stateDir),
     stateFile: resolve(paths.stateDir, "state.json"),

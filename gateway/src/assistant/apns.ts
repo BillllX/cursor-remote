@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { apnsEnv, gatewayEnv } from "../config.ts";
 import { connect, constants as h2, type ClientHttp2Session } from "node:http2";
 import { appendJsonl, assistantPath, type TenantRef } from "./store.ts";
-import { listApnsSubscriptions, removeApnsSubscription, type ApnsSubscription } from "./push.ts";
+import { apnsWants, listApnsSubscriptions, removeApnsSubscription, type ApnsSubscription } from "./push.ts";
 import { log } from "../log.ts";
 
 /**
@@ -25,6 +25,24 @@ export type ApnsMessage = {
   body: string;
   chatId?: string;
   delegationId?: string;
+  /** 下面这些缺省时就是助理推送原来的行为 */
+  /** 发给哪一类订阅：assistant（缺省，跳过 assistant===false）/ im（只发 im===true） */
+  channel?: "assistant" | "im";
+  /** aps.thread-id，缺省 assistant-inbox */
+  threadId?: string;
+  /** apns-collapse-id，缺省用 itemId 去掉非法字符；都会截到 64 字节 */
+  collapseId?: string;
+  /** 缺省 approval 为 10，其余 5 */
+  priority?: 5 | 10;
+  /** background = 静默推送：没有 alert / sound，aps.content-available=1 */
+  pushType?: "alert" | "background";
+  badge?: number;
+  /** 缺省 default；null 不带 sound */
+  sound?: string | null;
+  /** 替换 cr 路由字段（缺省 { itemId, kind, chatId?, delegationId? }） */
+  cr?: Record<string, string | number>;
+  /** 推送日志里不记 title / body（聊天正文不能落日志） */
+  redactLog?: boolean;
 };
 
 export type ApnsConfig = { teamId: string; keyId: string; key: KeyObject; bundleId?: string; defaultEnv: "sandbox" | "production" };
@@ -109,13 +127,28 @@ export function apnsHost(environment: "sandbox" | "production", override = gatew
 }
 
 export function apnsPayload(message: ApnsMessage) {
-  const cr: Record<string, string> = { itemId: message.itemId, kind: message.kind };
-  if (message.chatId) cr.chatId = message.chatId;
-  if (message.delegationId) cr.delegationId = message.delegationId;
-  return {
-    aps: { alert: { title: message.title, body: message.body }, sound: "default", "thread-id": "assistant-inbox" },
-    cr,
-  };
+  let cr: Record<string, string | number> = { itemId: message.itemId, kind: message.kind };
+  if (message.cr) cr = message.cr;
+  else {
+    if (message.chatId) cr.chatId = message.chatId;
+    if (message.delegationId) cr.delegationId = message.delegationId;
+  }
+  const aps: Record<string, unknown> = {};
+  if (message.pushType === "background") {
+    aps["content-available"] = 1;
+  } else {
+    aps.alert = { title: message.title, body: message.body };
+    const sound = message.sound === undefined ? "default" : message.sound;
+    if (sound) aps.sound = sound;
+    aps["thread-id"] = message.threadId ?? "assistant-inbox";
+  }
+  if (typeof message.badge === "number") aps.badge = message.badge;
+  return { aps, cr };
+}
+
+/** apns-collapse-id 只留安全字符并截到 64 字节 */
+export function apnsCollapseId(raw: string) {
+  return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
 }
 
 export function isDeadToken(status: number, reason?: string) {
@@ -169,7 +202,8 @@ export async function sendApns(
 ) {
   const config = apnsConfig();
   if (!config) return { sent: 0, total: 0 };
-  const subs = listApnsSubscriptions(ref);
+  const channel = message.channel ?? "assistant";
+  const subs = listApnsSubscriptions(ref).filter((sub) => apnsWants(sub, channel));
   if (!subs.length) return { sent: 0, total: 0 };
   const body = JSON.stringify(apnsPayload(message));
   const jwt = apnsJwt(config, opts.now);
@@ -192,11 +226,11 @@ export async function sendApns(
         const headers: Record<string, string> = {
           authorization: `bearer ${jwt}`,
           "apns-topic": topic,
-          "apns-push-type": "alert",
+          "apns-push-type": message.pushType ?? "alert",
           // 10 立即送达（待批），5 省电时机送达（其余）
-          "apns-priority": message.kind === "approval" ? "10" : "5",
+          "apns-priority": String(message.priority ?? (message.kind === "approval" ? 10 : 5)),
           "apns-expiration": String(Math.floor((opts.now ?? Date.now()) / 1000) + 86400),
-          "apns-collapse-id": message.itemId.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64),
+          "apns-collapse-id": apnsCollapseId(message.collapseId ?? message.itemId),
           "content-type": "application/json",
         };
         if (!headers["apns-collapse-id"]) delete headers["apns-collapse-id"];
@@ -224,6 +258,6 @@ function logApns(ref: TenantRef, sub: ApnsSubscription, message: ApnsMessage, ok
     status: result.status,
     ...(result.reason ? { reason: result.reason } : {}),
     attempts,
-    message,
+    message: message.redactLog ? { ...message, title: "", body: "" } : message,
   });
 }

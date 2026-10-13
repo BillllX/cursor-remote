@@ -44,6 +44,14 @@ const SMOKES = [
     args: ["scripts/smoke/ci-gateway-smoke.sh"],
   },
   {
+    name: "im",
+    ci: true,
+    needs: ["self-gw"],
+    timeout: 300,
+    note: "即时消息端到端：临时网关 + 假 APNs + 两台模拟 iOS",
+    ...gw("im"),
+  },
+  {
     name: "ui",
     needs: ["self-gw", "ui-kit"],
     timeout: 300,

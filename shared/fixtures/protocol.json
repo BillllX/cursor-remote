@@ -829,6 +829,231 @@
     },
     {
       "type": "pong"
+    },
+    {
+      "type": "im_contacts",
+      "avatarTicket": {
+        "exp": 1739007200000,
+        "sig": "c2lnLWltLXNhbXBsZQ"
+      },
+      "me": {
+        "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "id": "alice",
+        "nickname": "爱丽丝",
+        "notifyPreview": true
+      },
+      "users": [
+        {
+          "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+          "id": "bob-2",
+          "nickname": "鲍勃"
+        },
+        {
+          "id": "carol",
+          "nickname": "carol"
+        }
+      ]
+    },
+    {
+      "type": "im_list",
+      "blocked": ["mallory"],
+      "convs": [
+        {
+          "convId": "dm~alice~bob-2",
+          "hideBefore": 3,
+          "last": {
+            "at": 1739000004000,
+            "body": {
+              "blob": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+              "h": 2532,
+              "original": true,
+              "thumb": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+              "w": 1170
+            },
+            "clientId": "c-ios-1739000004000-2",
+            "convId": "dm~alice~bob-2",
+            "from": "bob-2",
+            "kind": "image",
+            "seq": 37
+          },
+          "maxSeq": 42,
+          "mute": true,
+          "peer": "bob-2",
+          "pin": true,
+          "readSeq": 40,
+          "ticket": {
+            "exp": 1739007200000,
+            "sig": "c2lnLWltLXNhbXBsZQ"
+          },
+          "unread": 2
+        }
+      ],
+      "cursor": "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ",
+      "more": true
+    },
+    {
+      "type": "im_history",
+      "after": 10,
+      "before": 50,
+      "convId": "dm~alice~bob-2",
+      "messages": [
+        {
+          "at": 1739000003000,
+          "body": {
+            "text": "晚上一起吃饭？"
+          },
+          "clientId": "c-ios-1739000003000-1",
+          "convId": "dm~alice~bob-2",
+          "from": "alice",
+          "kind": "text",
+          "rejected": true,
+          "replyTo": 35,
+          "seq": 36
+        },
+        {
+          "at": 1739000004000,
+          "body": {
+            "blob": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "h": 2532,
+            "original": true,
+            "thumb": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "w": 1170
+          },
+          "clientId": "c-ios-1739000004000-2",
+          "convId": "dm~alice~bob-2",
+          "from": "bob-2",
+          "kind": "image",
+          "seq": 37
+        },
+        {
+          "at": 1739000005000,
+          "body": {
+            "blob": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+            "durationMs": 12000,
+            "waveform": [0.1, 0.5, 0.9]
+          },
+          "clientId": "c-ios-1739000005000-3",
+          "convId": "dm~alice~bob-2",
+          "from": "alice",
+          "kind": "voice",
+          "seq": 38
+        },
+        {
+          "at": 1739000006000,
+          "body": {
+            "blob": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "mime": "application/pdf",
+            "name": "报价单.pdf",
+            "size": 48213
+          },
+          "clientId": "c-ios-1739000006000-4",
+          "convId": "dm~alice~bob-2",
+          "from": "bob-2",
+          "kind": "file",
+          "seq": 39
+        },
+        {
+          "at": 1739000007000,
+          "body": {
+            "desc": "一段描述",
+            "icon": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "title": "示例",
+            "url": "https://example.com/a"
+          },
+          "clientId": "c-ios-1739000007000-5",
+          "convId": "dm~alice~bob-2",
+          "from": "alice",
+          "kind": "link",
+          "seq": 40
+        },
+        {
+          "at": 1739000008000,
+          "body": {
+            "address": "上海市黄浦区人民大道",
+            "lat": 31.2304,
+            "lng": 121.4737,
+            "name": "人民广场"
+          },
+          "clientId": "c-ios-1739000008000-6",
+          "convId": "dm~alice~bob-2",
+          "from": "bob-2",
+          "kind": "location",
+          "seq": 41
+        },
+        {
+          "at": 1739000009000,
+          "clientId": "c-ios-1739000009000-7",
+          "convId": "dm~alice~bob-2",
+          "from": "alice",
+          "kind": "text",
+          "recalled": true,
+          "seq": 42
+        }
+      ],
+      "more": true,
+      "ticket": {
+        "exp": 1739007200000,
+        "sig": "c2lnLWltLXNhbXBsZQ"
+      }
+    },
+    {
+      "type": "im_ack",
+      "at": 1739000009000,
+      "clientId": "c-ios-1739000000000-1",
+      "convId": "dm~alice~bob-2",
+      "rejected": true,
+      "seq": 42
+    },
+    {
+      "type": "im_message",
+      "message": {
+        "at": 1739000003000,
+        "body": {
+          "text": "晚上一起吃饭？"
+        },
+        "clientId": "c-ios-1739000003000-1",
+        "convId": "dm~alice~bob-2",
+        "from": "alice",
+        "kind": "text",
+        "rejected": true,
+        "replyTo": 35,
+        "seq": 36
+      },
+      "ticket": {
+        "exp": 1739007200000,
+        "sig": "c2lnLWltLXNhbXBsZQ"
+      }
+    },
+    {
+      "type": "im_update",
+      "avatarTicket": {
+        "exp": 1739007200000,
+        "sig": "c2lnLWltLXNhbXBsZQ"
+      },
+      "blocked": ["mallory"],
+      "convId": "dm~alice~bob-2",
+      "hideBefore": 3,
+      "me": {
+        "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "id": "alice",
+        "nickname": "爱丽丝",
+        "notifyPreview": true
+      },
+      "mute": true,
+      "pin": true,
+      "seq": 42,
+      "user": {
+        "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        "id": "bob-2",
+        "nickname": "鲍勃"
+      },
+      "what": "settings"
+    },
+    {
+      "type": "im_error",
+      "clientId": "c-ios-1739000000000-1",
+      "code": "rate_limited",
+      "message": "发得太快了，稍等一会儿再发"
     }
   ],
   "client": [
@@ -1102,6 +1327,68 @@
         "chatId": "c-child-5b10"
       },
       "op": "approval_answer"
+    },
+    {
+      "type": "im_contacts"
+    },
+    {
+      "type": "im_list",
+      "cursor": "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ",
+      "limit": 50
+    },
+    {
+      "type": "im_history",
+      "after": 10,
+      "before": 50,
+      "convId": "dm~alice~bob-2",
+      "limit": 20
+    },
+    {
+      "type": "im_send",
+      "body": {
+        "blob": "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
+        "h": 2532,
+        "original": true,
+        "thumb": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+        "w": 1170
+      },
+      "clientId": "c-ios-1739000003000-1",
+      "convId": "dm~alice~bob-2",
+      "kind": "image",
+      "replyTo": 35,
+      "to": "bob-2"
+    },
+    {
+      "type": "im_recall",
+      "convId": "dm~alice~bob-2",
+      "seq": 42
+    },
+    {
+      "type": "im_read",
+      "convId": "dm~alice~bob-2",
+      "seq": 41
+    },
+    {
+      "type": "im_settings",
+      "convId": "dm~alice~bob-2",
+      "hideBefore": 3,
+      "mute": true,
+      "pin": true
+    },
+    {
+      "type": "im_profile",
+      "avatar": "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+      "nickname": "爱丽丝",
+      "notifyPreview": true
+    },
+    {
+      "type": "im_block",
+      "on": true,
+      "tenantId": "mallory"
+    },
+    {
+      "type": "im_presence",
+      "foreground": false
     }
   ]
 }

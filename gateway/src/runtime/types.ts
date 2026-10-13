@@ -116,6 +116,8 @@ export type Conn = {
   maxMessageBytes: number;
   /** hello.client.caps：客户端能力集（"sync_chat" / "stored_digest"） */
   caps: Set<string>;
+  /** caps 含 "im" 时 hello 置 true；im_presence 切换。前台连接在线时聊天不发 APNs */
+  imForeground?: boolean;
   policy: PolicyId;
   /** 最近一条 prompt 带来的客户端时钟（时区 + 与网关的时差），助理会话每轮据此写“现在几点” */
   clock?: ClientClock;

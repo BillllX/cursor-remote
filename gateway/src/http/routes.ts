@@ -38,7 +38,7 @@ function uploadCorsOrigin(req: IncomingMessage): string | null {
   return null;
 }
 
-function applyUploadCors(req: IncomingMessage, res: ServerResponse) {
+export function applyUploadCors(req: IncomingMessage, res: ServerResponse) {
   const origin = uploadCorsOrigin(req);
   if (origin) res.setHeader("access-control-allow-origin", origin);
   const requested = String(req.headers["access-control-request-headers"] || "")
@@ -50,7 +50,7 @@ function applyUploadCors(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("vary", "origin");
 }
 
-function parseMultipartUpload(
+export function parseMultipartUpload(
   buf: Buffer,
   contentType: string,
 ): {
@@ -90,7 +90,7 @@ function parseMultipartUpload(
   return out;
 }
 
-function readRequestBody(req: IncomingMessage, limit: number): Promise<Buffer> {
+export function readRequestBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;

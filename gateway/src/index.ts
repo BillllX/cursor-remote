@@ -27,6 +27,7 @@ import { delegationWorkspaces, requestWorkspace, startDelegation } from "./bindi
 import { dispatchLoop, loopBusy, publishLoop } from "./bindings/loops.ts";
 import { listModels } from "./chat/models.ts";
 import { healthPayload } from "./http/health.ts";
+import { handleImMedia, handleImUpload } from "./im/http.ts";
 import { proxyUpgrade, proxyWeb } from "./http/proxy.ts";
 import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
@@ -123,6 +124,14 @@ const httpServer = createServer((req, res) => {
     res.end(req.method === "HEAD" ? undefined : body);
     return;
   }
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media/im") {
+    void handleImMedia(req, res, url).catch((err) => {
+      log.error("im media", err instanceof Error ? err.message : err);
+      if (!res.headersSent) res.writeHead(500).end("media failed");
+      else res.destroy();
+    });
+    return;
+  }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media") {
     try {
       handleMedia(req, res, url);
@@ -135,6 +144,15 @@ const httpServer = createServer((req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/state") {
     handleState(req, res);
+    return;
+  }
+  if (url.pathname === "/upload/im") {
+    void handleImUpload(req, res, url).catch((err) => {
+      log.error("im upload", err instanceof Error ? err.message : err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "上传失败" }));
+      }
+    });
     return;
   }
   if (url.pathname === "/upload") {

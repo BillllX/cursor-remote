@@ -495,7 +495,7 @@ export async function handleOp(
     }
     case "push_subscribe": {
       if (args.kind === "apns") {
-        const result = addApnsSubscription(ref, { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua });
+        const result = addApnsSubscription(ref, { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua, im: args.im, assistant: args.assistant });
         return result.ok ? { ok: true, data: { count: result.count, ready: apnsReady() } } : fail(result.error);
       }
       if (args.kind !== undefined && args.kind !== "web") return fail("kind 只能是 web 或 apns。");

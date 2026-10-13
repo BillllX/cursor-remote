@@ -2,6 +2,7 @@
 import { WebSocket } from "ws";
 import { formatBytes } from "../../../shared/preview.ts";
 import type { HistoryTurn, ServerMessage } from "../../../shared/protocol.ts";
+import { encodeCursor, rowKey } from "../im/listCursor.ts";
 import { log } from "../log.ts";
 import { gatewayState } from "../runtime/state.ts";
 import type { WorkspaceFiles } from "../runtime/types.ts";
@@ -38,6 +39,8 @@ export function frameFor(sock: WebSocket, message: ServerMessage): string | null
 export function shrinkMessage(message: ServerMessage, budget: number): ServerMessage | null {
   if (message.type === "file_content") return fitFileContent(message, budget);
   if (message.type === "search_hits") return fitSearchHits(message, budget);
+  if (message.type === "im_history") return fitImHistory(message, budget);
+  if (message.type === "im_list") return fitImList(message, budget);
   if (message.type === "history")
     return { ...message, turns: fitTurnsFromEnd(message.turns, budget, 40) as HistoryTurn[] };
   if (message.type === "files") {
@@ -124,6 +127,56 @@ function fitSearchHits(message: SearchHitsMessage, budget: number): SearchHitsMe
   }
   return { ...message, hits, truncated: true };
 }
+
+type ImHistoryMessage = Extract<ServerMessage, { type: "im_history" }>;
+
+/**
+ * 从翻页方向的远端丢消息并置 more=true：默认 / before 翻页丢最旧的（客户端接着用 before=最旧 seq 往前翻），
+ * after 翻页丢最新的（接着用 after=最新 seq 往后翻），这样丢掉的消息下一页还能拿到
+ */
+function fitImHistory(message: ImHistoryMessage, budget: number): ImHistoryMessage {
+  const forward = message.after !== undefined;
+  const messages = [...message.messages];
+  let used = Buffer.byteLength(JSON.stringify({ ...message, messages: [], more: true }));
+  const sizes = messages.map((item) => Buffer.byteLength(JSON.stringify(item)) + 1);
+  used += sizes.reduce((sum, size) => sum + size, 0);
+  while (messages.length && used > budget) {
+    used -= (forward ? sizes.pop() : sizes.shift()) ?? 0;
+    if (forward) messages.pop();
+    else messages.shift();
+  }
+  return { ...message, messages, more: true };
+}
+
+type ImListMessage = Extract<ServerMessage, { type: "im_list" }>;
+type ImLast = NonNullable<ImListMessage["convs"][number]["last"]>;
+
+/**
+ * 先把每行 last 正文里的长字符串截到 100 字（blob id 64 位不受影响）；还装不下就从末尾丢行，
+ * 置 more=true、cursor=最后保留那行的排序键，客户端接着用 cursor 翻下一页，丢掉的行都能拿到
+ */
+function fitImList(message: ImListMessage, budget: number): ImListMessage | null {
+  const convs = message.convs.map((row) =>
+    row.last?.body
+      ? { ...row, last: { ...row.last, body: clipLongStrings(row.last.body, 100) as ImLast["body"] } }
+      : row,
+  );
+  const clipped = { ...message, convs };
+  if (Buffer.byteLength(JSON.stringify(clipped)) <= budget) return clipped;
+  const probe = { ...message, convs: [], more: true, cursor: encodeCursor(rowKey(convs[0] ?? emptyRow)) };
+  let used = Buffer.byteLength(JSON.stringify(probe)) + 64;
+  const kept: ImListMessage["convs"] = [];
+  for (const row of convs) {
+    const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
+    if (used + cost > budget) break;
+    kept.push(row);
+    used += cost;
+  }
+  if (!kept.length) return null;
+  return { ...message, convs: kept, more: true, cursor: encodeCursor(rowKey(kept[kept.length - 1])) };
+}
+
+const emptyRow = { pin: false, convId: "" };
 
 /** 从最后一条往前装，条数和字节双上限；单条超预算先按 load_chat 的规则截短 */
 export function fitTurnsFromEnd(all: unknown[], budget: number, maxCount: number): unknown[] {

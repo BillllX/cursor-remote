@@ -158,9 +158,78 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
 //                     网页 v2 起不再上传正文：图片随网关转录落盘，截断走 truncate_turns
 //   "slim_chats"    —— stored_chat 也只给元数据（同 slim_state 的行），内容走 load_chat 分页
+//   "im"            —— 收发平台用户之间的即时消息（im_*，见 docs/im.md）；连接默认在前台，im_presence 切换
 // slim 行对有内容的会话带 segHashes：第 i 个是 turns[i*100, (i+1)*100) 的 sha1(JSON.stringify(分段))，
 // 客户端据此只重拉变了的分段
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
+
+// ── 平台用户之间的即时消息（IM，见 docs/im.md）。只有 hello caps 含 "im" 的连接才处理 / 收到 im_* ──
+
+/** 会话号。单聊 = `dm~<较小租户 id>~<较大租户 id>`（按字符串排序；租户 id 不含 "~"） */
+export type ImConvId = string;
+export type ImKind = "text" | "image" | "voice" | "file" | "link" | "location";
+export type ImTextBody = { text: string };
+/** blob / thumb 是 POST /upload/im 返回的 blob（sha256 hex）；original=发的是原图 */
+export type ImImageBody = { blob: string; thumb: string; w: number; h: number; original: boolean };
+/** durationMs ≤ 60000；waveform 最多 100 个 0..1 */
+export type ImVoiceBody = { blob: string; durationMs: number; waveform: number[] };
+/** size 以网关记录的 blob 大小为准 */
+export type ImFileBody = { blob: string; name: string; size: number; mime: string };
+/** url 只能 http/https；icon 是 blob */
+export type ImLinkBody = { url: string; title?: string; desc?: string; icon?: string };
+/** WGS-84 */
+export type ImLocationBody = { lat: number; lng: number; name: string; address: string };
+export type ImBody = ImTextBody | ImImageBody | ImVoiceBody | ImFileBody | ImLinkBody | ImLocationBody;
+
+export type ImMessage = {
+  convId: ImConvId;
+  /** 会话内从 1 递增 */
+  seq: number;
+  /** 发件人租户 id */
+  from: string;
+  /** 网关落盘时间（毫秒） */
+  at: number;
+  kind: ImKind;
+  /** 撤回后没有 body */
+  body?: ImBody;
+  /** 回复的同会话 seq */
+  replyTo?: number;
+  recalled?: true;
+  /** 只出现在发件人自己的视图里：被对方拉黑拒收 */
+  rejected?: true;
+  clientId: string;
+};
+
+/** 下载票据，签名绑定（租户, scope, exp）；scope 是会话号或 "avatars"，2 小时有效 */
+export type ImTicket = { exp: number; sig: string };
+export type ImUser = { id: string; nickname: string; avatar?: string };
+export type ImMe = ImUser & { notifyPreview: boolean };
+export type ImConvRow = {
+  convId: ImConvId;
+  peer: string;
+  /** 自己可见的最后一条；缺省 = 没有可见消息（比如清空过），客户端可不显示这一行 */
+  last?: ImMessage;
+  /** 最多 1000（封顶），客户端等于 1000 时显示「999+」 */
+  unread: number;
+  readSeq: number;
+  /** 自己可见的最大 seq */
+  maxSeq: number;
+  pin: boolean;
+  mute: boolean;
+  /** seq ≤ hideBefore 的消息对自己不再返回 */
+  hideBefore: number;
+  ticket: ImTicket;
+};
+export type ImErrorCode =
+  | "no_cap"
+  | "not_visible"
+  | "rate_limited"
+  | "too_large"
+  | "bad_body"
+  | "not_found"
+  | "recall_expired"
+  | "forbidden"
+  | "internal";
 
 export type ClientMessage =
   | { type: "hello"; token?: string; client?: HelloClient }
@@ -263,7 +332,35 @@ export type ClientMessage =
   | { type: "loop_stop"; chatId: string }
   // 个人助理（今日页、记忆页、推送）。memory: true 时一并下发记忆全量
   | { type: "assistant_get"; memory?: boolean }
-  | { type: "assistant_op"; op: AssistantOp; args?: Record<string, unknown>; reqId?: string };
+  | { type: "assistant_op"; op: AssistantOp; args?: Record<string, unknown>; reqId?: string }
+  // IM（需 caps 含 "im"，否则回 im_error code=no_cap）
+  | { type: "im_contacts" }
+  /**
+   * 会话列表分页：置顶在前，再按最后一条可见消息时间倒序。limit 默认 50，最大 100；
+   * cursor 原样回传上一页回包里的 cursor，取排在它后面的会话
+   */
+  | { type: "im_list"; cursor?: string; limit?: number }
+  /** 默认最新一页；before：取 seq < before 的上一页；after：取 seq > after 的下一页。limit 默认 30，最大 50 */
+  | { type: "im_history"; convId: ImConvId; before?: number; after?: number; limit?: number }
+  /** to（对方租户 id）和 convId 二选一；同一 clientId 重发只回原 ack */
+  | {
+      type: "im_send";
+      clientId: string;
+      to?: string;
+      convId?: ImConvId;
+      kind: ImKind;
+      body: ImBody;
+      replyTo?: number;
+    }
+  | { type: "im_recall"; convId: ImConvId; seq: number }
+  | { type: "im_read"; convId: ImConvId; seq: number }
+  /** hideBefore 只增不减（清空聊天记录） */
+  | { type: "im_settings"; convId: ImConvId; pin?: boolean; mute?: boolean; hideBefore?: number }
+  /** avatar 传空串或 null 去掉头像 */
+  | { type: "im_profile"; nickname?: string; avatar?: string | null; notifyPreview?: boolean }
+  | { type: "im_block"; tenantId: string; on: boolean }
+  /** App 进出前台；没有回包 */
+  | { type: "im_presence"; foreground: boolean };
 
 export type PreviewKind =
   | "text"
@@ -374,7 +471,8 @@ export type ServerMessage =
       assistantChatId?: string;
       /**
        * 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId）、
-       * "seg_hashes"（slim 行带 segHashes）、"tool_at"（工具带 at）、"slim_chats"（认 slim_chats cap）
+       * "seg_hashes"（slim 行带 segHashes）、"tool_at"（工具带 at）、"slim_chats"（认 slim_chats cap）、
+       * "im"（支持 im_* 即时消息）
        */
       features?: string[];
     }
@@ -550,7 +648,54 @@ export type ServerMessage =
   /** 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带 */
   | { type: "delegation_state"; delegation: AssistantDelegation; approval?: AssistantApproval }
   | { type: "memory_written"; chatId?: string; entry: AssistantMemoryEntry }
-  | { type: "pong" };
+  | { type: "pong" }
+  // IM 下行（只发给 caps 含 "im" 的连接）
+  | { type: "im_contacts"; me: ImMe; users: ImUser[]; avatarTicket: ImTicket }
+  /**
+   * more=true 时还有下一页，带上 cursor 再请求一次。超过单条上限时网关从末尾丢行并置 more / cursor。
+   * 翻页期间被新消息顶到前面的会话不会在后面的页里重复出现，靠 im_message 更新
+   */
+  | { type: "im_list"; convs: ImConvRow[]; blocked: string[]; more: boolean; cursor?: string }
+  /**
+   * messages 按 seq 升序。more：请求带 after 时表示后面还有，否则表示前面还有。
+   * before / after 原样回显请求。超过单条上限时网关从翻页方向的远端丢消息并置 more=true
+   */
+  | {
+      type: "im_history";
+      convId: ImConvId;
+      messages: ImMessage[];
+      more: boolean;
+      ticket: ImTicket;
+      before?: number;
+      after?: number;
+    }
+  /** 只发给发件连接；rejected=被对方拒收（消息已发出，只有自己看得到） */
+  | { type: "im_ack"; clientId: string; convId: ImConvId; seq: number; at: number; rejected?: boolean }
+  /** 发给会话双方 caps 含 im 的在线连接，发件连接本身除外（它收 im_ack）；客户端仍可按 clientId 去重 */
+  | { type: "im_message"; message: ImMessage; ticket: ImTicket }
+  /**
+   * what 决定带哪些字段：
+   *   recall   → convId, seq（双方）
+   *   read     → convId, seq（自己的其他连接）
+   *   settings → convId, pin, mute, hideBefore（自己所有连接）
+   *   prefs    → me（自己所有连接）
+   *   profile  → user, avatarTicket（所有可见用户）
+   *   block    → blocked（自己所有连接）
+   */
+  | {
+      type: "im_update";
+      what: "recall" | "read" | "settings" | "prefs" | "profile" | "block";
+      convId?: ImConvId;
+      seq?: number;
+      pin?: boolean;
+      mute?: boolean;
+      hideBefore?: number;
+      me?: ImMe;
+      user?: ImUser;
+      avatarTicket?: ImTicket;
+      blocked?: string[];
+    }
+  | { type: "im_error"; clientId?: string; code: ImErrorCode; message: string };
 
 /** 当前 CURSOR_API_KEY 的官方账单，口径与 Cursor CLI `/usage` 相同。
  *  套餐内三项是已用百分比；spendCents / limitCents 是美分。Enterprise 通常没有百分比，
