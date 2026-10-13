@@ -92,7 +92,7 @@ export function readRunMark(chat: unknown): RunMark | null {
   };
 }
 
-function turnIdOf(turn: unknown) {
+export function turnIdOf(turn: unknown) {
   if (!isRecord(turn)) return "";
   return typeof turn.id === "string" ? turn.id : "";
 }
@@ -303,7 +303,7 @@ function longerTurn(disk: unknown, incoming: unknown): unknown {
 }
 
 /** 客户端本地拼的回合没有 files 键（旧客户端也不认识它）：缺键时留用磁盘那份，带键时以上传为准 */
-function withDiskFiles(disk: unknown, incoming: unknown): unknown {
+export function withDiskFiles(disk: unknown, incoming: unknown): unknown {
   if (!isRecord(incoming) || "files" in incoming) return incoming;
   if (!isRecord(disk) || !Array.isArray(disk.files) || !disk.files.length) return incoming;
   // 只认同 id；按用户原文配上的可能是重问的另一轮
@@ -359,6 +359,35 @@ export function keepToolsAt(prevTurns: unknown[] | undefined, turns: unknown[]):
     });
     return hit ? { ...turn, tools } : turn;
   });
+}
+
+/**
+ * 单个回合里「有数字 at 的工具」的 callId→at 表，没有则返回 undefined。
+ * 与 keepToolsAt 里按回合建表的口径一致（同回合重复 callId 后者覆盖），供增量压缩的索引复用。
+ */
+export function toolsAtMapOf(turn: unknown): Map<string, number> | undefined {
+  if (!isRecord(turn) || !Array.isArray(turn.tools)) return undefined;
+  const atById = new Map<string, number>();
+  for (const tool of turn.tools) {
+    if (isRecord(tool) && typeof tool.callId === "string" && tool.callId && typeof tool.at === "number") {
+      atById.set(tool.callId, tool.at);
+    }
+  }
+  return atById.size ? atById : undefined;
+}
+
+/** keepToolsAt 对单个回合的补回：没补到任何工具时原样返回同一个对象 */
+export function fillTurnToolsAt(atById: Map<string, number> | undefined, turn: unknown): unknown {
+  if (!atById || !isRecord(turn) || !Array.isArray(turn.tools)) return turn;
+  let hit = false;
+  const tools = turn.tools.map((tool) => {
+    if (!isRecord(tool) || typeof tool.at === "number" || typeof tool.callId !== "string") return tool;
+    const at = atById.get(tool.callId);
+    if (at == null) return tool;
+    hit = true;
+    return { ...tool, at };
+  });
+  return hit ? { ...turn, tools } : turn;
 }
 
 function findDiskTurn(turns: unknown[], turn: unknown, used: Set<number>): number {

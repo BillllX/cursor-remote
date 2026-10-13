@@ -3,12 +3,13 @@ import type { WebSocket } from "ws";
 import { assistantName, noteChatDeleted } from "../assistant/service.ts";
 import { isBodyLoaded, slimChat } from "../chatBodies.ts";
 import { log } from "../log.ts";
-import { keepToolsAt, keepTurnFiles } from "../runlog.ts";
+import { fillTurnToolsAt, keepToolsAt, keepTurnFiles, turnIdOf, withDiskFiles } from "../runlog.ts";
 import { assistantChatIdOf, assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { chatIdsFrom, persistTenant, runningChatIds } from "../runtime/slots.ts";
 import { forgetChatName, gatewayState } from "../runtime/state.ts";
 import { settlePersistedChats, type Tenant } from "../tenants.ts";
 import { send } from "../ws/send.ts";
+import { CompactIndex, indexFor, noteDerived } from "./compactIndex.ts";
 
 /** 工具正文落盘上限。高于网页卡片的 1.2 万展示截断，diff 字段仍留得住。 */
 const TOOL_TEXT_CAP = 24_000;
@@ -138,10 +139,10 @@ function capStoredValue(value: unknown, hit: { n: number }, depth = 0): unknown 
 }
 
 /**
- * 回填已确认过的工具正文，再截断过长的 result/args。
- * keepBody 只表示「这轮没带正文」，正文从上一份磁盘记录按 callId 拷回。
+ * 旧的全量实现，逐字保留，仅作为等价性测试的对照基准（生产路径用下面的 mergeAndCompactChat）。
+ * 每次遍历 prev 全部回合建工具表、再 map 全部回合，耗时随回合数线性增长。
  */
-export function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = { n: 0 }): unknown {
+export function mergeAndCompactChatFull(prev: unknown, next: unknown, hit: { n: number } = { n: 0 }): unknown {
   if (!next || typeof next !== "object") return next;
   const row = next as { turns?: unknown };
   if (!Array.isArray(row.turns)) return next;
@@ -194,6 +195,147 @@ export function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: numb
     return { ...(turn as Record<string, unknown>), tools };
   });
   return { ...(next as Record<string, unknown>), turns };
+}
+
+/**
+ * 回填已确认过的工具正文，再截断过长的 result/args。
+ * keepBody 只表示「这轮没带正文」，正文从上一份磁盘记录按 callId 拷回。
+ *
+ * 增量实现，输出与 mergeAndCompactChatFull 逐字段等价（含 hit 计数）：
+ * - prev 回合的 callId/files/at 三张表缓存在 prev.turns 数组上（见 compactIndex.ts），不再每次重建；
+ * - 「已压缩过的回合」（settled）若与 prev 同位置同引用，且当前上下文下三类补回/图片淘汰都不会改它，
+ *   直接沿用原对象，不再复制工具、不再深度截断；其余回合（当前 transcript 回合、按 turnId 被更新的
+ *   非末轮、跨过 KEEP_TURN_IMAGES 边界的回合、没压缩过的回合）走和全量一样的逐回合逻辑。
+ */
+export function mergeAndCompactChat(prev: unknown, next: unknown, hit: { n: number } = { n: 0 }): unknown {
+  if (!next || typeof next !== "object") return next;
+  const row = next as { turns?: unknown };
+  if (!Array.isArray(row.turns)) return next;
+  const prevTurns = prev && typeof prev === "object" ? (prev as { turns?: unknown }).turns : undefined;
+  const diskTurns = Array.isArray(prevTurns) ? prevTurns : undefined;
+  const index = diskTurns?.length ? indexFor(diskTurns) : new CompactIndex();
+  const inTurns = row.turns as unknown[];
+  const keepImagesFrom = inTurns.length - KEEP_TURN_IMAGES;
+  const turns = new Array<unknown>(inTurns.length);
+  for (let i = 0; i < inTurns.length; i += 1) {
+    const turn = inTurns[i];
+    turns[i] =
+      diskTurns && turn === diskTurns[i] && canReuseTurn(turn, i, keepImagesFrom, index)
+        ? turn
+        : compactTurn(turn, i, keepImagesFrom, index, hit);
+  }
+  if (diskTurns?.length) noteDerived(turns, diskTurns, index);
+  return { ...(next as Record<string, unknown>), turns };
+}
+
+/** 压缩产出的回合 → 再次压缩时能否跳过的静态信息（只在产出时算一次） */
+type SettledInfo = {
+  /** 没有「缺 at 且有 callId 的工具」：at 补回对它必然是空操作 */
+  noAtFill: boolean;
+  /** review 为空且有 callId 的工具的 callId：prev 里出现重复 callId 时才需要逐个核对 */
+  emptyReviewIds: string[];
+};
+
+/** 以回合对象为键，回合被替换/会话被删除后随对象一起回收，不挂在 tenant 上 */
+const settledTurns = new WeakMap<object, SettledInfo>();
+
+function settle(turn: unknown) {
+  if (!turn || typeof turn !== "object") return;
+  let noAtFill = true;
+  const emptyReviewIds: string[] = [];
+  const tools = (turn as { tools?: unknown }).tools;
+  if (Array.isArray(tools)) {
+    for (const tool of tools) {
+      if (!tool || typeof tool !== "object") continue;
+      const rec = tool as { callId?: unknown; at?: unknown; review?: unknown };
+      if (typeof rec.callId !== "string") continue;
+      if (typeof rec.at !== "number" && !Array.isArray(tool)) noAtFill = false;
+      if (rec.callId && (rec.review == null || rec.review === "")) emptyReviewIds.push(rec.callId);
+    }
+  }
+  settledTurns.set(turn, { noAtFill, emptyReviewIds });
+}
+
+/**
+ * 同位置同引用的已压缩回合能否原样沿用。必须是「全量逻辑的结果与它深度相等」的充分条件：
+ * 1) 它是压缩产出（工具已截断、keepBody 已清、补回已落实）；
+ * 2) 图片淘汰边界没有越过它的图片；
+ * 3) files / 工具 at 补回在当前 prev 索引下不会改它；
+ * 4) review 补回：prev 里没有重复 callId 时每个工具查到的就是它自己，不会改；有重复时逐个核对。
+ */
+function canReuseTurn(turn: unknown, at: number, keepImagesFrom: number, index: CompactIndex): boolean {
+  if (!turn || typeof turn !== "object") return false;
+  const info = settledTurns.get(turn);
+  if (!info) return false;
+  if (at < keepImagesFrom && "images" in turn) return false;
+  const id = turnIdOf(turn);
+  if (id) {
+    const files = index.files.get(id);
+    if (files && withDiskFiles(files.v, turn) !== turn) return false;
+    if (!info.noAtFill) {
+      const atById = index.at.get(id);
+      if (atById && fillTurnToolsAt(atById.v, turn) !== turn) return false;
+    }
+  }
+  if (index.dupTools > 0) {
+    for (const callId of info.emptyReviewIds) {
+      const old = index.tools.get(callId)?.v;
+      if (old?.review === "accepted" || old?.review === "rejected") return false;
+    }
+  }
+  return true;
+}
+
+/** 单个回合的完整压缩：与全量实现里 keepTurnFiles → keepToolsAt → map 对该回合做的事一致 */
+function compactTurn(
+  item: unknown,
+  at: number,
+  keepImagesFrom: number,
+  index: CompactIndex,
+  hit: { n: number },
+): unknown {
+  let turn = item;
+  // files 补回（keepTurnFiles）
+  let id = turnIdOf(turn);
+  const disk = id ? index.files.get(id) : undefined;
+  if (disk) turn = withDiskFiles(disk.v, turn);
+  // 工具 at 补回（keepToolsAt）
+  id = turnIdOf(turn);
+  turn = fillTurnToolsAt(id ? index.at.get(id)?.v : undefined, turn);
+  if (at < keepImagesFrom && turn && typeof turn === "object" && "images" in turn) {
+    const rest = { ...(turn as Record<string, unknown>) };
+    delete rest.images;
+    turn = rest;
+    hit.n += 1;
+  }
+  if (!turn || typeof turn !== "object" || !Array.isArray((turn as { tools?: unknown }).tools)) {
+    settle(turn);
+    return turn;
+  }
+  const tools = (turn as { tools: unknown[] }).tools.map((tool) => {
+    if (!tool || typeof tool !== "object") return tool;
+    const rowTool = { ...(tool as Record<string, unknown>) };
+    const callId = typeof rowTool.callId === "string" ? rowTool.callId : "";
+    const old = callId ? index.tools.get(callId)?.v : undefined;
+    if (rowTool.keepBody === true && old) {
+      if (!("args" in rowTool) && "args" in old) rowTool.args = old.args;
+      if (!("result" in rowTool) && "result" in old) rowTool.result = old.result;
+    }
+    // 在途的整段同步可能早于「保留」，别把刚落盘的标记盖掉
+    if (
+      (rowTool.review == null || rowTool.review === "") &&
+      (old?.review === "accepted" || old?.review === "rejected")
+    ) {
+      rowTool.review = old.review;
+    }
+    delete rowTool.keepBody;
+    if ("args" in rowTool) rowTool.args = capStoredValue(rowTool.args, hit);
+    if ("result" in rowTool) rowTool.result = capStoredValue(rowTool.result, hit);
+    return rowTool;
+  });
+  const out = { ...(turn as Record<string, unknown>), tools };
+  settle(out);
+  return out;
 }
 
 /** 启动时把磁盘上已经超长的工具记录截掉。不改版本号，避免把打开着的客户端整页刷掉。 */

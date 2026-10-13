@@ -74,12 +74,14 @@ export function flushTranscript(slot: Slot, broadcast: boolean) {
   if (transcript.epoch !== slot.epoch) return;
   if (tenant.disk.deletedIds.includes(slot.chatId)) return;
   const mark = markFromTranscript(transcript);
-  let chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId);
-  if (!chat) {
+  // 只定位一次会话下标，写回时只替换命中项，不再整表 find + map
+  let at = tenant.disk.chats.findIndex((item) => chatIdOf(item) === slot.chatId);
+  if (at < 0) {
     if (tenant.disk.chats.length >= MAX_STORED_CHATS) return;
-    chat = { id: slot.chatId, title: "新对话", turns: [], cwd: slot.cwd };
-    tenant.disk.chats = [...tenant.disk.chats, chat];
+    tenant.disk.chats = [...tenant.disk.chats, { id: slot.chatId, title: "新对话", turns: [], cwd: slot.cwd }];
+    at = tenant.disk.chats.length - 1;
   }
+  const chat = tenant.disk.chats[at];
   if (!chat || typeof chat !== "object") return;
   const row = chat as Record<string, unknown>;
   const turns = Array.isArray(row.turns) ? row.turns : [];
@@ -90,7 +92,10 @@ export function flushTranscript(slot: Slot, broadcast: boolean) {
   };
   // transcript 里的工具没有保留标记，也可能带着未截断的正文
   const next = mergeAndCompactChat(chat, stamped);
-  tenant.disk.chats = tenant.disk.chats.map((item) => (item === chat ? next : item));
+  // 仍保持「换新数组」的语义（别处可能持有旧数组引用），只是不再逐项回调
+  const chats = tenant.disk.chats.slice();
+  chats[at] = next;
+  tenant.disk.chats = chats;
   if (broadcast && transcript.phase === "done") {
     tenant.disk.rev += 1;
     tenant.disk.chatRevs[slot.chatId] = tenant.disk.rev;
