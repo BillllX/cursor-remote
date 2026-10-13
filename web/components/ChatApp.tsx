@@ -31,6 +31,8 @@ import type { CanvasAction } from "../lib/canvas/host";
 import { isWideKind, kindFromPath, mediaSrc, preferHttpText, tabKind } from "../lib/preview";
 import { fetchPreviewText, peekPreviewText, putPreviewText } from "../lib/previewCache";
 import { clearBodies, dropBody, readBody, writeBody } from "../lib/chatCache";
+import { installPerfApi, PERF } from "../lib/chat/perf";
+import { armPerfLive, isPerfTurn, keepPerfTurns, makePerfTurns } from "../lib/chat/perfSeed";
 import { applyJieboTheme, readThemeChoice, type AppearanceId, type PaletteId } from "../lib/theme";
 import {
   DEFAULT_MODEL,
@@ -52,7 +54,7 @@ import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
 import { useWorkspaceGroups } from "../lib/chat/hooks/useWorkspaceGroups";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
-import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
+import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows } from "../lib/chat/tools";
@@ -75,6 +77,12 @@ import { Sidebar } from "./chat/Sidebar";
 import { TerminalOverlay } from "./chat/TerminalOverlay";
 import { Thread } from "./chat/Thread";
 import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
+
+
+// 服务端正文覆盖本地回合时，保留“还在跑 / 排队 / 待批”的回合（withLiveTurns）；测量开关打开时再保留合成的回合，
+// 否则网关随后推来的正文会把长会话场景造的回合冲掉。没开测量时就是 withLiveTurns 本身。
+const mergeBodyTurns = (local: Turn[], server: Turn[]): Turn[] =>
+  PERF ? keepPerfTurns(local, withLiveTurns(local, server)) : withLiveTurns(local, server);
 
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -2012,6 +2020,32 @@ export default function ChatApp() {
     };
   }, [send]);
 
+  // 长会话渲染测量入口：只有 ?perf=1 或 localStorage cr-perf=1 才挂上，默认整段不执行（界面冒烟的“长会话”场景用）
+  useEffect(() => {
+    if (!PERF) return;
+    return installPerfApi({
+      seed: (count) => {
+        const started = performance.now();
+        patchChat(activeIdRef.current, (chat) => ({ ...chat, turns: [...chat.turns, ...makePerfTurns(count)] }));
+        return new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - started))),
+        );
+      },
+      arm: () =>
+        applyChats((prev) =>
+          patchChatIn(prev, activeIdRef.current, (chat) => {
+            const turns = armPerfLive(chat.turns);
+            return turns === chat.turns ? chat : { ...chat, turns };
+          }),
+        ),
+      // 走和线上一样的 ws.onmessage 路径，text-delta 会经过同样的按帧合并
+      feed: (message) => {
+        const ws = wsRef.current;
+        ws?.onmessage?.call(ws, { data: JSON.stringify(message) } as MessageEvent);
+      },
+    });
+  }, [patchChat, applyChats]);
+
   const { threadRef, scrollMap, stickRef, restoreRef, jumpState, scrollThreadToEnd, onThreadScroll } = useThreadScroll({
     activeIdRef,
     active,
@@ -2889,6 +2923,8 @@ export default function ChatApp() {
         if (body.rev !== chatRevsRef.current[id] || chat.turns.some(liveTurn)) return;
         // 超大回合分页时是截断副本，不能当完整正文缓存
         if (chat.turns.some((turn) => (turn as { clipped?: boolean }).clipped)) return;
+        // 测量开关下合成的回合不能进缓存，否则关掉开关后刷新还会读到它们
+        if (PERF && chat.turns.some(isPerfTurn)) return;
         void writeBody(tenant, id, body.rev, chat.turns);
       }, 1500),
     );
@@ -2897,7 +2933,7 @@ export default function ChatApp() {
   function commitBody(id: string, turns: Turn[], rev: number) {
     bodyRef.current.set(id, { state: "complete", rev });
     applyChats((prev) =>
-      prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, turns) } : chat)),
+      prev.map((chat) => (chat.id === id ? { ...chat, turns: mergeBodyTurns(chat.turns, turns) } : chat)),
     );
     setBodyTick((n) => n + 1);
     scheduleBodyCache(id);
@@ -2949,7 +2985,7 @@ export default function ChatApp() {
         cur.base = cached.turns;
         applyChats((prev) =>
           prev.map((item) =>
-            item.id === id ? { ...item, turns: withLiveTurns(item.turns, cached.turns) } : item,
+            item.id === id ? { ...item, turns: mergeBodyTurns(item.turns, cached.turns) } : item,
           ),
         );
       }
@@ -2989,7 +3025,7 @@ export default function ChatApp() {
     if (cur.progressive) {
       const shown = cur.buf;
       applyChats((prev) =>
-        prev.map((chat) => (chat.id === id ? { ...chat, turns: withLiveTurns(chat.turns, shown) } : chat)),
+        prev.map((chat) => (chat.id === id ? { ...chat, turns: mergeBodyTurns(chat.turns, shown) } : chat)),
       );
     }
     setBodyTick((n) => n + 1);

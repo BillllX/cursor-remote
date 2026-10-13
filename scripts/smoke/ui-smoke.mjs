@@ -422,6 +422,235 @@ async function main() {
     { shot: true, critical: true },
   );
 
+  // p. 长会话渲染性能（页面侧测量开关 localStorage cr-perf=1，默认关闭）：
+  //    往当前会话合成 240 个旧回合 + 1 个运行中回合，按真实 ws 路径灌流式 text-delta，量旧回合渲染次数、帧间隔和主线程 longtask；
+  //    再验证旧回合启用 content-visibility 之后，自动滚到底、“回到最新”、线程内查找定位、图片解码都不受影响。
+  //    数字只在这里打印（[perf] 开头的 JSON 行），断言只守“流式期间旧回合不该被重渲染”这条底线。
+  const PERF_TURNS = 240;
+  const STREAM_DELTAS = 150;
+  const perf = { ready: false, chatId: "" };
+  const thread = page.locator(".thread");
+  const threadBox = () =>
+    thread.evaluate((el) => ({ top: el.scrollTop, height: el.scrollHeight, client: el.clientHeight }));
+  const expectAtBottom = async (what) => {
+    const m = await threadBox();
+    const dist = m.height - m.top - m.client;
+    if (dist > 8) throw new Error(`${what}：离底部还有 ${Math.round(dist)}px`);
+  };
+  // 往页面里灌 count 条 text-delta（间隔 gapMs），同时按帧记录帧间隔；返回帧统计
+  const streamDeltas = (count, gapMs, from = 0) =>
+    page.evaluate(
+      async ({ chatId, count, gapMs, from }) => {
+        const api = globalThis.__crPerf;
+        const gaps = [];
+        let last = performance.now();
+        let running = true;
+        const tick = (now) => {
+          gaps.push(now - last);
+          last = now;
+          if (running) globalThis.requestAnimationFrame(tick);
+        };
+        globalThis.requestAnimationFrame(tick);
+        for (let i = from; i < from + count; i += 1) {
+          api.arm(); // 网关随后推来的快照可能把合成的运行中回合结算掉，每条前确认它还在跑（已在跑时是空操作）
+          api.feed({ type: "text-delta", chatId, text: `片段${i} 流式输出，` });
+          await new Promise((resolve) => setTimeout(resolve, gapMs));
+        }
+        await new Promise((resolve) =>
+          globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve)),
+        );
+        running = false;
+        const sorted = [...gaps].sort((a, b) => a - b);
+        return {
+          frames: gaps.length,
+          avgFrameMs: gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length),
+          p95FrameMs: sorted[Math.floor(sorted.length * 0.95)] || 0,
+          over50: gaps.filter((g) => g > 50).length,
+        };
+      },
+      { chatId: perf.chatId, count, gapMs, from },
+    );
+
+  await step(
+    "p1",
+    "长会话：开测量开关、合成 240 回合并渲染",
+    async () => {
+      await page.evaluate(() => globalThis.localStorage.setItem("cr-perf", "1"));
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expectMain();
+      await page.waitForFunction(() => Boolean(globalThis.__crPerf), null, { timeout: 15_000 });
+      await page
+        .locator("article.turn .assistant", { hasText: ECHO_PREFIX })
+        .filter({ hasText: nonce })
+        .waitFor({ timeout: 15_000 });
+      // 刷新后网关还会推 ready（会把本地“还在跑”的回合当孤儿结算）和会话正文（以服务端为准覆盖本地回合），
+      // 得等这轮握手落定再造数据，否则合成回合会被冲掉
+      await page.waitForTimeout(3_000);
+      perf.chatId = await page.evaluate(() => globalThis.localStorage.getItem("cursor-remote-active") || "");
+      if (!perf.chatId) throw new Error("读不到当前会话 id");
+      perf.seedMs = await page.evaluate((n) => globalThis.__crPerf.seed(n), PERF_TURNS);
+      await page.waitForTimeout(1_500);
+      const turns = await page.locator("article.turn").count();
+      if (turns < PERF_TURNS + 1) throw new Error(`只渲染了 ${turns} 个回合，应不少于 ${PERF_TURNS + 1}`);
+      const m = await threadBox();
+      perf.heightAfterSeed = m.height;
+      await expectAtBottom("合成数据后线程没停在底部");
+      perf.ready = true;
+      console.log(`[perf] ${JSON.stringify({ seedMs: Math.round(perf.seedMs), turns, scrollHeight: m.height })}`);
+      return `${turns} 个回合，首次渲染到两帧后 ${Math.round(perf.seedMs)}ms，scrollHeight ${m.height}`;
+    },
+    { shot: true },
+  );
+  await step("p2", "长会话流式输出：旧回合不重渲染、帧间隔与 longtask", async () => {
+    if (!perf.ready) throw new Error("p1 没成功");
+    await page.waitForTimeout(500);
+    await page.evaluate(() => globalThis.__crPerf.reset());
+    const frame = await streamDeltas(STREAM_DELTAS, 20);
+    await page.waitForTimeout(300); // longtask 回调是异步投递的
+    const raw = await page.evaluate(() => {
+      const api = globalThis.__crPerf;
+      return { rows: api.rows, longtasks: api.longtasks, threadRenders: api.threadRenders };
+    });
+    const oldIds = Object.keys(raw.rows).filter((id) => id !== "perf-live");
+    const oldRenders = oldIds.reduce((sum, id) => sum + raw.rows[id], 0);
+    const oldRowCount = PERF_TURNS + 1;
+    const stat = {
+      deltas: STREAM_DELTAS,
+      threadRenders: raw.threadRenders,
+      liveRowRenders: raw.rows["perf-live"] || 0,
+      oldRowRenders: oldRenders,
+      oldRowsRenderedAtLeastOnce: oldIds.length,
+      oldRenderPerRow: Number((oldRenders / oldRowCount).toFixed(2)),
+      longtasks: raw.longtasks.n,
+      longtaskTotalMs: Math.round(raw.longtasks.total),
+      longtaskMaxMs: Math.round(raw.longtasks.max),
+      frames: frame.frames,
+      avgFrameMs: Number(frame.avgFrameMs.toFixed(1)),
+      p95FrameMs: Math.round(frame.p95FrameMs),
+      framesOver50ms: frame.over50,
+    };
+    console.log(`[perf] ${JSON.stringify(stat)}`);
+    const lastText = await page.locator("article.turn").last().innerText();
+    if (!lastText.includes(`片段${STREAM_DELTAS - 1}`)) throw new Error("流式增量没有渲染到最后一个回合");
+    await expectAtBottom("流式输出期间没有贴底");
+    if (oldRenders > oldRowCount * 0.1) {
+      throw new Error(`流式期间旧回合被重渲染 ${oldRenders} 次（约 ${stat.oldRenderPerRow} 次/回合），应接近 0`);
+    }
+    return `旧回合渲染 ${oldRenders} 次，末轮 ${stat.liveRowRenders} 次，Thread ${raw.threadRenders} 次；longtask ${raw.longtasks.n} 个共 ${stat.longtaskTotalMs}ms；p95 帧 ${stat.p95FrameMs}ms`;
+  });
+  await step("p3", "旧回合 content-visibility：末几轮不启用、整屏滚一遍后高度偏差、图片仍解码", async () => {
+    if (!perf.ready) throw new Error("p1 没成功");
+    const info = await page.evaluate(() => {
+      const rows = [...globalThis.document.querySelectorAll("article.turn")];
+      const cv = (row) => row.classList.contains("turn-cv");
+      return {
+        total: rows.length,
+        cv: rows.filter(cv).length,
+        tailCv: rows.slice(-6).filter(cv).length,
+        firstStyle: globalThis.getComputedStyle(rows[0]).contentVisibility,
+        lastStyle: globalThis.getComputedStyle(rows[rows.length - 1]).contentVisibility,
+      };
+    });
+    console.log(`[perf] ${JSON.stringify({ cvRows: info })}`);
+    if (!info.cv) throw new Error("没有任何回合带 turn-cv：旧回合没启用 content-visibility");
+    if (info.tailCv) throw new Error(`末 6 个回合里有 ${info.tailCv} 个带了 turn-cv`);
+    if (info.firstStyle !== "auto" || info.lastStyle === "auto") {
+      throw new Error(`computed content-visibility 不对：首个 ${info.firstStyle}，末个 ${info.lastStyle}`);
+    }
+    // 先真实滚轮往上一下（让 useThreadScroll 记下“用户翻过”），再从顶到底逐屏滚一遍，让每个旧回合都渲染一次
+    const before = (await threadBox()).height;
+    await thread.hover();
+    await page.mouse.wheel(0, -300);
+    await page.waitForTimeout(200);
+    await thread.evaluate(async (el) => {
+      for (let y = 0; y < el.scrollHeight; y += el.clientHeight * 0.8) {
+        el.scrollTop = y;
+        await new Promise((resolve) => globalThis.requestAnimationFrame(resolve));
+      }
+      el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(500);
+    const after = (await threadBox()).height;
+    const drift = Math.abs(after - before) / after;
+    console.log(
+      `[perf] ${JSON.stringify({ heightEstimated: before, heightMeasured: after, driftPct: Number((drift * 100).toFixed(1)) })}`,
+    );
+    const img = await page.evaluate(() => {
+      const el = globalThis.document.querySelector('[data-turn="perf-0002"] .user-thumbs img');
+      return el ? { complete: el.complete, w: el.naturalWidth } : null;
+    });
+    if (!img || !img.complete || img.w < 1) throw new Error(`旧回合里的图片没有解码成功：${JSON.stringify(img)}`);
+    return `${info.cv}/${info.total} 个回合启用；高度估算 ${before}px → 实测 ${after}px（偏差 ${(drift * 100).toFixed(1)}%）；图片 ${img.w}px 已解码`;
+  });
+  await step("p4", "自动滚到底：向上滚出现“回到最新”，点击后回底，流式输出继续贴底", async () => {
+    if (!perf.ready) throw new Error("p1 没成功");
+    await thread.hover();
+    await page.mouse.wheel(0, -2500);
+    const jump = page.locator("button.thread-jump");
+    await jump.waitFor({ state: "visible", timeout: 5_000 });
+    await jump.click();
+    await page.waitForTimeout(600);
+    await expectAtBottom("点“回到最新”后没回到底部");
+    await streamDeltas(30, 20, STREAM_DELTAS);
+    await page.waitForTimeout(300);
+    await expectAtBottom("回到底部后继续流式输出没有贴底");
+    const lastText = await page.locator("article.turn").last().innerText();
+    if (!lastText.includes(`片段${STREAM_DELTAS + 29}`)) throw new Error("继续灌入的增量没渲染出来");
+  });
+  await step("p5", "线程内查找：命中行定位到视口内，打开期间所有回合不启用 content-visibility", async () => {
+    if (!perf.ready) throw new Error("p1 没成功");
+    await thread.hover();
+    await page.keyboard.press("Control+f");
+    const find = page.locator(".thread-find-input");
+    await find.waitFor({ state: "visible" });
+    const details = [];
+    for (const n of [3, 200]) {
+      await find.fill(`第 ${n} 个问题`);
+      const row = page.locator(`[data-turn="perf-${String(n).padStart(4, "0")}"]`);
+      await row.locator(".find-mark").first().waitFor({ state: "attached", timeout: 5_000 });
+      await page.waitForTimeout(500);
+      const view = await page.evaluate(
+        (id) => {
+          const { document } = globalThis;
+          const t = document.querySelector(".thread").getBoundingClientRect();
+          const row = document.querySelector(`[data-turn="${id}"]`);
+          const r = row.getBoundingClientRect();
+          return {
+            inView: r.top >= t.top - 2 && r.bottom <= t.bottom + 2,
+            top: Math.round(r.top - t.top),
+            bottom: Math.round(t.bottom - r.bottom),
+            hit: row.classList.contains("find-hit"),
+            cvRows: document.querySelectorAll("article.turn.turn-cv").length,
+          };
+        },
+        `perf-${String(n).padStart(4, "0")}`,
+      );
+      if (!view.hit) throw new Error(`第 ${n} 轮没有 find-hit 标记`);
+      if (!view.inView) throw new Error(`第 ${n} 轮命中后没滚进视口：${JSON.stringify(view)}`);
+      if (view.cvRows) throw new Error(`查找打开期间仍有 ${view.cvRows} 个回合带 turn-cv`);
+      details.push(`第 ${n} 轮 上${view.top}/下${view.bottom}px`);
+    }
+    await esc();
+    await find.waitFor({ state: "detached" });
+    await page.waitForTimeout(300);
+    const restored = await page.locator("article.turn.turn-cv").count();
+    if (!restored) throw new Error("关闭查找后旧回合没有恢复 content-visibility");
+    return `${details.join("；")}；关闭后 ${restored} 个回合恢复`;
+  });
+  // 无论前面成败都收尾：关掉测量开关、刷新丢掉合成回合，保证后面的步骤面对的是干净状态，并确认默认不挂测量入口
+  await step("p6", "关闭测量开关刷新：测量入口与合成回合都消失", async () => {
+    await page.evaluate(() => globalThis.localStorage.removeItem("cr-perf"));
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expectMain();
+    await page
+      .locator("article.turn .assistant", { hasText: ECHO_PREFIX })
+      .filter({ hasText: nonce })
+      .waitFor({ timeout: 15_000 });
+    if (await page.evaluate(() => Boolean(globalThis.__crPerf))) throw new Error("默认状态下页面上仍有 __crPerf");
+    const fake = await page.locator('article.turn[data-turn^="perf-"]').count();
+    if (fake) throw new Error(`刷新后仍有 ${fake} 个合成回合`);
+  });
+
   // e. 改名、删除
   await step("e1", "双击改名", async () => {
     await projGroup.locator(".chat-item .chat-item-main").first().dblclick();

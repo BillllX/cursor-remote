@@ -175,6 +175,19 @@
   max-width: 100%;
 }
 
+/* 已结算的旧回合：屏外时浏览器跳过布局和绘制，长会话流式输出时不再为几百个旧回合重排。
+   占位高度由 TurnRow 按内容估算后写进行内样式（auto 表示渲染过一次后改用浏览器记下的真实高度），这里的值只是兜底。
+   末尾几轮、运行中的回合、线程内查找打开时都不会带 turn-cv，所以贴底滚动和 scrollIntoView 定位不受影响。
+   content-visibility 会带 paint 裁剪，键盘焦点进到回合里时先恢复，免得焦点环被裁掉。 */
+.turn.turn-cv {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
+}
+
+.turn.turn-cv:focus-within {
+  content-visibility: visible;
+}
+
 .turn:first-child {
   border-top: 0;
   padding-top: 4px;
