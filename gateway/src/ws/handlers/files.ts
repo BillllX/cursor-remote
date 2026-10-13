@@ -4,19 +4,20 @@ import { cwdOf, slotOf } from "../../runtime/slots.ts";
 import type { WorkspaceFile } from "../../runtime/types.ts";
 import {
   filesMessage,
-  listWorkspaceFilesForClient,
+  listWorkspaceFilesForClientAsync,
   MAX_UPLOAD_BYTES,
   payload,
   pushWorkspace,
-  readWorkspaceDiff,
-  readWorkspaceFile,
+  readWorkspaceDiffAsync,
+  readWorkspaceFileAsync,
   runFsOp,
-  searchWorkspace,
+  searchWorkspaceAsync,
   uniqueUploadPath,
   workspacePath,
   writeWorkspaceBytes,
   writeWorkspaceFile,
 } from "../../workspace/files.ts";
+import { beginRequest, HeavyBusyError, isAbortError } from "../../workspace/heavy.ts";
 import { reply } from "../frame.ts";
 import { send } from "../send.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
@@ -101,30 +102,51 @@ export function onFsOp({ ws, conn }: WsCtx, message: MessageOf<"fs_op">) {
   }
 }
 
-export function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_files">) {
+/**
+ * 列文件 / 搜索 / 读文件都走异步实现，慢仓库上不再卡住同进程其它连接的流式输出。
+ * - 同一连接上同类的新请求会取消还没完成的旧请求（旧请求不再回包，客户端以最新一次为准）；
+ * - 连接断开时进行中的请求一并取消，子进程被杀；
+ * - 同租户并发重任务超限且排队也满时，回一条明确的“服务器正忙”错误，不静默丢。
+ */
+export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_files">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
-  const listed = listWorkspaceFilesForClient(cwd, message.query || "");
-  send(
-    ws,
-    filesMessage(
-      conn,
-      { chatId: message.chatId, query: message.query || "", mention: Boolean(message.mention) },
-      listed,
-    ),
-  );
+  const { signal, end } = beginRequest(ws, `list_files:${message.chatId || ""}:${message.mention ? 1 : 0}`);
+  try {
+    const listed = await listWorkspaceFilesForClientAsync(cwd, message.query || "", { signal });
+    send(
+      ws,
+      filesMessage(
+        conn,
+        { chatId: message.chatId, query: message.query || "", mention: Boolean(message.mention) },
+        listed,
+      ),
+    );
+  } catch (err) {
+    if (isAbortError(err)) return;
+    // 不带 chatId：只在顶部提示，不影响某个会话的运行状态
+    if (err instanceof HeavyBusyError) send(ws, { type: "error", message: err.message });
+    else throw err;
+  } finally {
+    end();
+  }
 }
 
-export function onSearchText({ ws, conn }: WsCtx, message: MessageOf<"search_text">) {
+export async function onSearchText({ ws, conn }: WsCtx, message: MessageOf<"search_text">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
-  send(ws, {
-    type: "search_hits",
-    chatId: message.chatId,
-    query: message.query,
-    hits: searchWorkspace(cwd, message.query),
-  });
+  const { signal, end } = beginRequest(ws, `search_text:${message.chatId || ""}`);
+  try {
+    const hits = await searchWorkspaceAsync(cwd, message.query, { signal });
+    send(ws, { type: "search_hits", chatId: message.chatId, query: message.query, hits });
+  } catch (err) {
+    if (isAbortError(err)) return;
+    if (err instanceof HeavyBusyError) send(ws, { type: "error", message: err.message });
+    else throw err;
+  } finally {
+    end();
+  }
 }
 
-export function onReadFile({ ws, conn, tenant }: WsCtx, message: MessageOf<"read_file">) {
+export async function onReadFile({ ws, conn, tenant }: WsCtx, message: MessageOf<"read_file">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
   const echo = {
     reqId: typeof message.reqId === "string" ? message.reqId : undefined,
@@ -138,7 +160,20 @@ export function onReadFile({ ws, conn, tenant }: WsCtx, message: MessageOf<"read
       ? readSnapshotDiff(tenant.stateDir, rel, echo.sha)
       : readSnapshotFile(tenant.stateDir, rel, echo.sha);
   } else {
-    file = message.diff ? readWorkspaceDiff(cwd, message.path) : readWorkspaceFile(cwd, message.path);
+    // 读文件按 reqId 对应，多个预览可以并发，不互相覆盖；只在连接断开时取消
+    const { signal, end } = beginRequest(ws, "read_file", { supersede: false });
+    try {
+      file = message.diff
+        ? await readWorkspaceDiffAsync(cwd, message.path, { signal })
+        : await readWorkspaceFileAsync(cwd, message.path, { signal });
+    } catch (err) {
+      if (isAbortError(err)) return;
+      // 排队满：用文件自带的 error 字段回给对应的 reqId，预览处会直接显示原因
+      if (err instanceof HeavyBusyError) file = { path: message.path, error: err.message };
+      else throw err;
+    } finally {
+      end();
+    }
   }
   reply(ws, payload(tenant, message.chatId, message.path, file, Boolean(message.diff), echo));
 }

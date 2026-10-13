@@ -32,7 +32,7 @@ import { continueTranscript, openTranscript } from "../sync/transcript.ts";
 import { allTenants, workspaceFenceForTenant } from "../tenants.ts";
 import { noteOutput, noteToolCall } from "../usage.ts";
 import { nativeStateDir, rollbackToLatestCheckpoint, undoEdits } from "../workspace/checkpoints.ts";
-import { pushWorkspace, workspacePath } from "../workspace/files.ts";
+import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { isUserWorkspace, mayPublishHere } from "../workspace/workspaces.ts";
 import { send } from "../ws/send.ts";
 import { ensureAgent } from "./agent.ts";
@@ -866,8 +866,10 @@ export async function handlePrompt(
             });
           }
         } else if (slot.edited.length) {
-          pushWorkspace(ws, slot, conn, slot.edited);
+          // pushWorkspace 现在是异步的；等它发完再收尾，保持“文件推送在 done 之前”的顺序
+          await pushWorkspace(ws, slot, conn, slot.edited);
         }
+        await settleWorkspacePushes(ws);
         finishRun(ws, slot, slot.awaitingApproval ? "approval" : result.status, result.durationMs, epoch);
       }
     }

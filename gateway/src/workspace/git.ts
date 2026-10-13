@@ -48,7 +48,8 @@ export function isTracked(cwd: string, path: string): boolean {
   }
 }
 
-function gitIdentity(): Record<string, string> {
+/** 异步版 git（gitAsync.ts）复用同一份身份与影子仓库目录规则 */
+export function gitIdentity(): Record<string, string> {
   const name = gatewayEnv.gitAuthorName();
   const email = gatewayEnv.gitAuthorEmail();
   return {
@@ -87,7 +88,7 @@ export function git(cwd: string, args: string[], extraEnv?: Record<string, strin
   return gitBytes(cwd, args, extraEnv).toString("utf8").trim();
 }
 
-function shadowGitDir(cwd: string, stateDir: string) {
+export function shadowGitDir(cwd: string, stateDir: string) {
   const id = createHash("sha1").update(cwd).digest("hex").slice(0, 16);
   return resolve(stateDir, "shadow-git", id);
 }

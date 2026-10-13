@@ -22,7 +22,7 @@ import type { Conn, Slot } from "../runtime/types.ts";
 import { sandboxEnabledForTenant, stateDir, workspaceFenceForTenant } from "../tenants.ts";
 import { noteModelTokens, noteOutput, noteToolCall } from "../usage.ts";
 import { nativeStateDir, rollbackToLatestCheckpoint } from "../workspace/checkpoints.ts";
-import { pushWorkspace } from "../workspace/files.ts";
+import { pushWorkspace, settleWorkspacePushes } from "../workspace/files.ts";
 import { mayPublishHere } from "../workspace/workspaces.ts";
 import { send } from "../ws/send.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
@@ -356,6 +356,8 @@ export async function runNativeChat(
       finishRun(ws, slot, "error", Date.now() - t0, epoch);
       return;
     }
+    // 工具完成时的文件推送是异步的；收尾前等它们发完，保持“文件推送在 done 之前”的顺序（最多等 5 秒）
+    await settleWorkspacePushes(ws);
     finishRun(ws, slot, result.status === "cancelled" ? "cancelled" : "completed", Date.now() - t0, epoch);
   } catch (err) {
     if (!live()) return;

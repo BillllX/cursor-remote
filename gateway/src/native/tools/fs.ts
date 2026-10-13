@@ -8,11 +8,11 @@ import {
   openSync,
   readdirSync,
   readFileSync,
-  readSync,
   statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
+import { open as fsOpen, readdir as fsReaddir, stat as fsStat, lstat as fsLstat, type FileHandle } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConfineError, resolveInside } from "../confine.ts";
@@ -73,21 +73,103 @@ export function walk(base: string, limit = 20_000): string[] {
   return out;
 }
 
-/** 只读前 max 字节，大文件不整块进内存 */
-function readHead(abs: string, max: number): Buffer {
-  const fd = openSync(abs, constants.O_RDONLY);
-  try {
-    const buf = Buffer.alloc(max);
-    let total = 0;
-    while (total < max) {
-      const n = readSync(fd, buf, total, max - total, null);
-      if (!n) break;
-      total += n;
-    }
-    return buf.subarray(0, total);
-  } finally {
-    closeSync(fd);
+/**
+ * 读路径的异步实现统一遵守的约定（与写路径 safeWrite 的同步安全打开语义区分开）：
+ * 1. 路径先过 resolveInside（拒绝 ..、符号链接逃逸、.git、绝对路径越界）；
+ * 2. 打开一律带 O_NOFOLLOW（落在最后一段是符号链接就失败）和 O_NONBLOCK（不被 FIFO 卡死线程池）；
+ * 3. 异步读完整个文件 / 目录之前，没有“校验之后可被替换的间隙”：open 之后立刻 fstat，
+ *    再解析一次路径，要求仍是同一个真实路径、同一个 inode，否则按越界处理（先 open 后复核）。
+ * 写路径（safeWrite / edit_file / write_file / delete_file）保持同步，校验与打开之间不插 await。
+ */
+function isErrno(err: unknown, ...codes: string[]) {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && codes.includes(code);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined) {
+  if (signal?.aborted) {
+    const err = new Error("已取消");
+    err.name = "AbortError";
+    throw err;
   }
+}
+
+/** 打开并复核：句柄指向的 inode 必须就是复核时这个路径解析到的那个文件 */
+/** 测试用导出 */
+export async function openForRead(cwd: string, raw: unknown, abs: string): Promise<FileHandle> {
+  const fh = await fsOpen(abs, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const st = await fh.stat();
+    const again = resolveInside(cwd, raw);
+    const now = lstatSync(again.abs);
+    if (again.abs !== abs || now.dev !== st.dev || now.ino !== st.ino) {
+      throw new ConfineError(`路径在校验后发生变化：${again.rel}`);
+    }
+    return fh;
+  } catch (err) {
+    await fh.close().catch(() => undefined);
+    throw err;
+  }
+}
+
+/** 遍历里逐个文件用：只带 O_NOFOLLOW，目录层的复核已在 walkAsync 里做 */
+async function openNoFollow(abs: string): Promise<FileHandle> {
+  return fsOpen(abs, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+}
+
+/** 只读前 max 字节，大文件不整块进内存 */
+async function readHead(fh: FileHandle, max: number, signal?: AbortSignal): Promise<Buffer> {
+  const buf = Buffer.alloc(max);
+  let total = 0;
+  while (total < max) {
+    throwIfAborted(signal);
+    const { bytesRead } = await fh.read(buf, total, max - total, null);
+    if (!bytesRead) break;
+    total += bytesRead;
+  }
+  return buf.subarray(0, total);
+}
+
+/** 目录读完后复核：路径仍解析到同一个真实目录、同一个 inode，否则丢弃结果 */
+/** 测试用导出 */
+export function recheckDir(cwd: string, raw: unknown, before: { abs: string; dev: number; ino: number }) {
+  const again = resolveInside(cwd, raw);
+  const now = lstatSync(again.abs);
+  if (again.abs !== before.abs || now.dev !== before.dev || now.ino !== before.ino) {
+    throw new ConfineError(`路径在校验后发生变化：${again.rel}`);
+  }
+}
+
+/**
+ * walk 的异步版：同样的顺序（目录内按名排序、栈式深度优先）、同样的跳过规则与条数上限，不跟随符号链接。
+ * 用 readdir 的 Dirent 类型代替逐项 lstat（目录项类型来自 d_type，符号链接不算目录也不算文件，与 lstat 一致）；
+ * 每个子目录读完后再 lstat 一次确认它没被换成符号链接，换了就丢弃这一层。
+ */
+export async function walkAsync(base: string, limit = 20_000, signal?: AbortSignal): Promise<string[]> {
+  const out: string[] = [];
+  const stack = [base];
+  while (stack.length && out.length < limit) {
+    throwIfAborted(signal);
+    const dir = stack.pop()!;
+    let entries;
+    try {
+      entries = await fsReaddir(dir, { withFileTypes: true });
+      if (dir !== base && !(await fsLstat(dir)).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const ent of entries) {
+      const abs = join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (!SKIP_DIRS.has(ent.name)) stack.push(abs);
+      } else if (ent.isFile()) {
+        out.push(relative(base, abs).split("\\").join("/"));
+        if (out.length >= limit) break;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -204,10 +286,24 @@ const readFile: ToolSpec = {
   },
   async run(args, ctx) {
     const { abs, rel } = resolveInside(ctx.cwd, args.path);
-    if (!existsSync(abs)) return fail(`文件不存在：${rel}`);
-    const st = statSync(abs);
-    if (st.isDirectory()) return fail(`${rel} 是目录，用 list_dir`);
-    const buf = readHead(abs, MAX_READ_BYTES);
+    let fh: FileHandle;
+    try {
+      fh = await openForRead(ctx.cwd, args.path, abs);
+    } catch (err) {
+      if (isErrno(err, "ENOENT", "ENOTDIR")) return fail(`文件不存在：${rel}`);
+      if (isErrno(err, "ELOOP")) throw new ConfineError(`不读符号链接：${rel}`);
+      throw err;
+    }
+    let st;
+    let buf: Buffer;
+    try {
+      st = await fh.stat();
+      if (st.isDirectory()) return fail(`${rel} 是目录，用 list_dir`);
+      if (!st.isFile()) return fail(`${rel} 不是普通文件`);
+      buf = await readHead(fh, MAX_READ_BYTES, ctx.signal);
+    } finally {
+      await fh.close().catch(() => undefined);
+    }
     if (isBinary(buf)) return fail(`${rel} 是二进制文件（${st.size} 字节）`);
     const text = buf.toString("utf8");
     const lines = text.split("\n");
@@ -238,20 +334,26 @@ const listDir: ToolSpec = {
   },
   async run(args, ctx) {
     const { abs, rel } = resolveInside(ctx.cwd, args.path || ".");
-    if (!existsSync(abs) || !statSync(abs).isDirectory()) return fail(`不是目录：${rel || "."}`);
+    const dir = await fsStat(abs).catch(() => null);
+    if (!dir?.isDirectory()) return fail(`不是目录：${rel || "."}`);
+    const before = lstatSync(abs);
+    const names = (await fsReaddir(abs)).sort();
+    // 读完目录再复核一次：期间路径被换成别处（符号链接等）就丢弃，不把越界目录的名字回给模型
+    recheckDir(ctx.cwd, args.path || ".", { abs, dev: before.dev, ino: before.ino });
     const rows: string[] = [];
-    for (const name of readdirSync(abs).sort()) {
-      if (name === ".git") continue;
-      let st;
-      try {
-        st = statSync(join(abs, name));
-      } catch {
-        continue;
-      }
-      rows.push(st.isDirectory() ? `${name}/` : `${name}  (${st.size} B)`);
-      if (rows.length >= 500) {
-        rows.push("…（超过 500 项，已截断）");
-        break;
+    scan: for (let i = 0; i < names.length; i += 64) {
+      throwIfAborted(ctx.signal);
+      const batch = names.slice(i, i + 64).filter((name) => name !== ".git");
+      // 分批并发 stat（跟随符号链接，与旧版 statSync 一致），再按原顺序处理
+      const stats = await Promise.all(batch.map((name) => fsStat(join(abs, name)).catch(() => null)));
+      for (let k = 0; k < batch.length; k++) {
+        const st = stats[k];
+        if (!st) continue;
+        rows.push(st.isDirectory() ? `${batch[k]}/` : `${batch[k]}  (${st.size} B)`);
+        if (rows.length >= 500) {
+          rows.push("…（超过 500 项，已截断）");
+          break scan;
+        }
       }
     }
     return { ok: true, content: rows.length ? rows.join("\n") : "（空目录）" };
@@ -275,7 +377,9 @@ const glob: ToolSpec = {
     if (!pattern) return fail("缺 pattern");
     const { abs, rel } = resolveInside(ctx.cwd, args.path || ".");
     const re = globToRegExp(pattern);
-    const hits = walk(abs).filter((path) => re.test(path));
+    const before = lstatSync(abs);
+    const hits = (await walkAsync(abs, 20_000, ctx.signal)).filter((path) => re.test(path));
+    recheckDir(ctx.cwd, args.path || ".", { abs, dev: before.dev, ino: before.ino });
     const prefix = rel ? `${rel}/` : "";
     const shown = hits.slice(0, 500).map((path) => prefix + path);
     if (!shown.length) return { ok: true, content: "没有匹配的文件" };
@@ -306,8 +410,9 @@ const grep: ToolSpec = {
     const max = Math.min(num(args.max_results, 200), 1000);
     const fileGlob = str(args.glob);
     const ignoreCase = args.ignore_case === true;
-    if (!existsSync(abs)) return fail(`路径不存在：${rel}`);
-    const isDir = statSync(abs).isDirectory();
+    const target = await fsStat(abs).catch(() => null);
+    if (!target) return fail(`路径不存在：${rel}`);
+    const isDir = target.isDirectory();
     const root = resolveInside(ctx.cwd, ".").abs;
     const lines: string[] = [];
     if (findRg()) {
@@ -335,18 +440,26 @@ const grep: ToolSpec = {
       return fail(`正则不合法：${(err as Error).message}`);
     }
     const prefix = rel ? `${rel}/` : "";
+    const before = lstatSync(abs);
     const files = isDir
-      ? walk(abs).map((p) => ({ abs: join(abs, p), shown: prefix + p, local: p }))
+      ? (await walkAsync(abs, 20_000, ctx.signal)).map((p) => ({ abs: join(abs, p), shown: prefix + p, local: p }))
       : [{ abs, shown: rel, local: rel.split("/").pop() || rel }];
     const filter = fileGlob ? globToRegExp(fileGlob) : null;
     for (const file of files) {
+      throwIfAborted(ctx.signal);
       if (filter && !filter.test(file.local)) continue;
       let buf: Buffer;
+      let fh: FileHandle | undefined;
       try {
-        if (statSync(file.abs).size > 1_000_000) continue;
-        buf = readFileSync(file.abs);
-      } catch {
+        fh = await openNoFollow(file.abs);
+        const st = await fh.stat();
+        if (!st.isFile() || st.size > 1_000_000) continue;
+        buf = await readHead(fh, st.size, ctx.signal);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") throw err;
         continue;
+      } finally {
+        await fh?.close().catch(() => undefined);
       }
       if (isBinary(buf)) continue;
       const rows = buf.toString("utf8").split("\n");
@@ -357,6 +470,8 @@ const grep: ToolSpec = {
       }
       if (lines.length >= max) break;
     }
+    // 遍历 / 读完再复核起点路径：期间被换成别处就丢弃结果，不把越界内容回给模型
+    recheckDir(ctx.cwd, args.path || ".", { abs, dev: before.dev, ino: before.ino });
     return { ok: true, content: lines.length ? lines.join("\n") : "没有匹配" };
   },
 };
