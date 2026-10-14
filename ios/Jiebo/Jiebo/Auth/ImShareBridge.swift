@@ -1,6 +1,10 @@
 import Foundation
 import Darwin
 
+// iOS 27 的 Swift 把同名的 `struct flock` 盖住了 C 函数 `flock(2)`。
+@_silgen_name("flock")
+private func posixFlock(_ fd: Int32, _ operation: Int32) -> Int32
+
 enum ImShareBridge {
     static let appGroup = "group.ai.jiebo.ipad"
     static let snapshotName = "im-share-directory.json"
@@ -232,10 +236,10 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         for state in current {
             state.session.getAllTasks { [weak self] tasks in
                 guard let self else { return }
-                for task in tasks where taskIdentity(task.taskDescription).map({ removedIds.contains($0.id) }) == true {
+                for task in tasks where self.taskIdentity(task.taskDescription).map({ removedIds.contains($0.id) }) == true {
                     task.cancel()
                 }
-                reconcile(state.identifier)
+                self.reconcile(state.identifier)
             }
         }
         if !removedIds.isEmpty { notifyChanged() }
@@ -351,24 +355,24 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
 
         state.session.getAllTasks { [weak self, weak state] tasks in
             guard let self, let state else { return }
-            let taskRows = tasks.map { ($0, taskIdentity($0.taskDescription)) }
+            let taskRows = tasks.map { ($0, self.taskIdentity($0.taskDescription)) }
             let active = Set(taskRows.compactMap { $0.1?.id })
             let systemHasTask = !tasks.isEmpty
             let deliveringEvents: Bool = {
-                lock.lock()
-                defer { lock.unlock() }
+                self.lock.lock()
+                defer { self.lock.unlock() }
                 return !state.backgroundCompletions.isEmpty
             }()
 
-            let plan = try? withJobsLock { () -> (Job?, Bool, TimeInterval?) in
-                try isolateLegacyQueueLocked()
-                var jobs = try readJobsLocked().filter { $0.sessionIdentifier == identifier }
+            let plan = try? self.withJobsLock { () -> (Job?, Bool, TimeInterval?) in
+                try self.isolateLegacyQueueLocked()
+                var jobs = try self.readJobsLocked().filter { $0.sessionIdentifier == identifier }
                 let now = Date().timeIntervalSince1970
                 var reserved = false
                 var retryAfter: TimeInterval?
                 for index in jobs.indices {
                     if active.contains(jobs[index].id) {
-                        removeClaimLocked(jobs[index].id)
+                        self.removeClaimLocked(jobs[index].id)
                         let identity = taskRows.compactMap { $0.1 }.first {
                             $0.id == jobs[index].id
                                 && (jobs[index].taskToken == nil || $0.token == jobs[index].taskToken)
@@ -376,13 +380,13 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
                         jobs[index].state = .running
                         jobs[index].runningAt = now
                         jobs[index].taskToken = identity?.token ?? jobs[index].taskToken
-                        try writeJobLocked(jobs[index])
+                        try self.writeJobLocked(jobs[index])
                         continue
                     }
                     if jobs[index].state == .running {
                         if jobs[index].runningAt == nil {
                             jobs[index].runningAt = now
-                            try writeJobLocked(jobs[index])
+                            try self.writeJobLocked(jobs[index])
                         }
                         let remaining = Self.orphanRunningTimeout - (now - (jobs[index].runningAt ?? now))
                         if deliveringEvents || remaining > 0 {
@@ -394,28 +398,28 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
                         jobs[index].state = .queued
                         jobs[index].runningAt = nil
                         jobs[index].taskToken = nil
-                        removeClaimLocked(jobs[index].id)
-                        try writeJobLocked(jobs[index])
+                        self.removeClaimLocked(jobs[index].id)
+                        try self.writeJobLocked(jobs[index])
                     }
-                    if claimExistsLocked(jobs[index].id) {
+                    if self.claimExistsLocked(jobs[index].id) {
                         let remaining = Self.startingClaimGrace
-                            - Date().timeIntervalSince(claimDateLocked(jobs[index].id) ?? .distantPast)
+                            - Date().timeIntervalSince(self.claimDateLocked(jobs[index].id) ?? .distantPast)
                         if remaining > 0 {
                             reserved = true
                             retryAfter = min(retryAfter ?? remaining, remaining)
                             continue
                         }
-                        removeClaimLocked(jobs[index].id)
+                        self.removeClaimLocked(jobs[index].id)
                     }
                 }
                 let next = (systemHasTask || reserved) ? nil : jobs.first {
-                    $0.state == .queued && !claimExistsLocked($0.id)
+                    $0.state == .queued && !self.claimExistsLocked($0.id)
                 }
                 return (next, systemHasTask || active.count > 0, retryAfter)
             }
 
             guard let plan else {
-                finishReconcile(state, id: reconcileID)
+                self.finishReconcile(state, id: reconcileID)
                 DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
                     self?.reconcile(identifier)
                 }
@@ -426,31 +430,31 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             for (task, identity) in taskRows where identity != nil && task.state == .suspended {
                 task.resume()
             }
-            let again = finishReconcile(state, id: reconcileID)
+            let again = self.finishReconcile(state, id: reconcileID)
             if let next = plan.0 {
-                if start(next, in: state.session) {
-                    finishRegistration(identifier, result: .success(()))
-                    finishBackgroundEventsIfReady(identifier, chainEstablished: true)
+                if self.start(next, in: state.session) {
+                    self.finishRegistration(identifier, result: .success(()))
+                    self.finishBackgroundEventsIfReady(identifier, chainEstablished: true)
                 } else {
-                    reconcile(identifier)
+                    self.reconcile(identifier)
                 }
             } else if again {
-                reconcile(identifier)
+                self.reconcile(identifier)
             } else if let retryAfter = plan.2 {
                 DispatchQueue.global().asyncAfter(deadline: .now() + max(0.05, retryAfter)) { [weak self] in
                     self?.reconcile(identifier)
                 }
             } else {
                 if plan.1 {
-                    finishRegistration(identifier, result: .success(()))
-                } else if batchHasPendingJobs(identifier) == false {
-                    finishRegistration(
+                    self.finishRegistration(identifier, result: .success(()))
+                } else if self.batchHasPendingJobs(identifier) == false {
+                    self.finishRegistration(
                         identifier,
                         result: .failure(QueueError.sessionEnded("后台任务未能启动，请检查登录状态后重试"))
                     )
                 }
-                finishBackgroundEventsIfReady(identifier, chainEstablished: plan.1)
-                retireSessionIfTerminal(identifier)
+                self.finishBackgroundEventsIfReady(identifier, chainEstablished: plan.1)
+                self.retireSessionIfTerminal(identifier)
             }
         }
     }
@@ -566,14 +570,14 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             guard let self else { return }
             let another = tasks.contains {
                 $0.taskIdentifier != task.taskIdentifier
-                    && taskIdentity($0.taskDescription)?.id == identity.id
+                    && self.taskIdentity($0.taskDescription)?.id == identity.id
             }
             guard !another else {
-                reconcile(identifier)
+                self.reconcile(identifier)
                 return
             }
             if error == nil, let status, (200 ..< 300).contains(status) {
-                complete(identity.id, token: identity.token)
+                self.complete(identity.id, token: identity.token)
             } else {
                 let reason = error?.localizedDescription ?? "服务器返回 \(status ?? 0)"
                 let retry = error != nil || status == 408 || status == 429 || status.map { $0 >= 500 } == true
@@ -584,9 +588,9 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
                     let wait = min(max(header.flatMap(Double.init) ?? 60, 5), 300) + 5
                     notBefore = Date().timeIntervalSince1970 + wait
                 }
-                fail(identity.id, token: identity.token, reason: reason, retry: retry, notBefore: notBefore)
+                self.fail(identity.id, token: identity.token, reason: reason, retry: retry, notBefore: notBefore)
             }
-            reconcile(identifier)
+            self.reconcile(identifier)
         }
     }
 
@@ -758,8 +762,8 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         let descriptor = file.path.withCString { Darwin.open($0, O_CREAT | O_RDWR, mode_t(0o600)) }
         guard descriptor >= 0 else { throw QueueError.storage }
         defer { Darwin.close(descriptor) }
-        guard Darwin.flock(descriptor, LOCK_EX) == 0 else { throw QueueError.storage }
-        defer { _ = Darwin.flock(descriptor, LOCK_UN) }
+        guard posixFlock(descriptor, LOCK_EX) == 0 else { throw QueueError.storage }
+        defer { _ = posixFlock(descriptor, LOCK_UN) }
         return try body()
     }
 

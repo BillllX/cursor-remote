@@ -28,7 +28,7 @@ extension ChatStore {
         forgetBodyCache(chat.id) // 截断回合：本机缓存作废
         send(.newSession(chatId: chat.id, cwd: chat.cwd))
         saveDraft(text == "（附图）" ? "" : text, forChat: targetId)
-        let restoredImages = turn.images.compactMap { image in
+        let restoredImages: [PendingImage] = turn.images.compactMap { image -> PendingImage? in
             guard let data = Data(base64Encoded: image.data), !data.isEmpty else { return nil }
             return PendingImage(data: data, mimeType: image.mimeType, base64: image.data)
         }

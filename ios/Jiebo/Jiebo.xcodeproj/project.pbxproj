@@ -242,7 +242,7 @@
 		A1B2C3D4E5F6071829000A0F /* ImRichViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImRichViews.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A11 /* JieboShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = JieboShare.entitlements; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000A12 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A13 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -466,7 +466,7 @@
 			children = (
 				A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */,
 				A1B2C3D4E5F6071829000A11 /* JieboShare.entitlements */,
-				A1B2C3D4E5F6071829000A12 /* Info.plist */,
+				A1B2C3D4E5F6071829000A13 /* Info.plist */,
 			);
 			path = JieboShare;
 			sourceTree = "<group>";

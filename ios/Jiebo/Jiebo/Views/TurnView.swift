@@ -620,6 +620,9 @@ private struct ShareItem: Identifiable {
 /// 单独成 View，只有它读 store.stallSeconds，每秒刷新不影响整条对话。
 struct StallHintRow: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.threadChatId) private var environmentChatId
+
+    private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     var body: some View {
         let seconds = store.stallSeconds
