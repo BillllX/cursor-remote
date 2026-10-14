@@ -167,3 +167,5 @@ tenants/<id>/
 - 客户端不再用全局 `cwd` 给没目录的会话补值；网页收到工作区列表时不再改写会话的 `cwd`；切到没目录的会话时界面回落到 `workspaceRoot`
 - 冒烟：`scripts/smoke/multidevice-smoke.mjs`（`scripts/smoke/ci-gateway-smoke.sh` 里用本地假模型跑）
 
+委派子会话产出的文件如何在父会话（助理）展示文件卡片，见 [delegation-parent-turn-files-design.md](./delegation-parent-turn-files-design.md)。
+
