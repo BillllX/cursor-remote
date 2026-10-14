@@ -78,7 +78,7 @@ struct ThreadView: View {
                   let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let path = components.queryItems?.first(where: { $0.name == "path" })?.value
             else { return .systemAction }
-            store.openPreview(path)
+            store.openPreview(path, chatId: resolvedChatId)
             return .handled
         })
         // P6：预览面板 overlay 上移到 WorkbenchView（RootView）——遮罩盖住侧栏 + detail，

@@ -3,6 +3,7 @@ import SwiftUI
 struct ToolCardView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.threadChatId) private var environmentChatId
     var tool: ToolCall
     var compactPresentation = false
     var showBorder = true
@@ -10,6 +11,7 @@ struct ToolCardView: View {
     var forceExpanded = false
     @State private var expanded = false
     @State private var userPinned = false
+    private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     init(
         tool: ToolCall,
@@ -61,7 +63,7 @@ struct ToolCardView: View {
                 if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
                     let imagePath = Self.imagePath(tool)
                     Button {
-                        if let imagePath { store.openPreview(imagePath) }
+                        if let imagePath { store.openPreview(imagePath, chatId: chatId) }
                     } label: {
                         Label(imagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
                             .font(JieboFont.text(.caption, weight: .medium))
@@ -80,7 +82,7 @@ struct ToolCardView: View {
                    !path.isEmpty
                 {
                     Button {
-                        store.openToolFile(path)
+                        store.openToolFile(path, chatId: chatId)
                     } label: {
                         Image(systemName: "plus.forwardslash.minus")
                             .font(.system(size: 11, weight: .medium))

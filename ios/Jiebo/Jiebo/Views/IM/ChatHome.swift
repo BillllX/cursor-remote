@@ -8,6 +8,7 @@ struct ChatHome: View {
     @Environment(ImStore.self) private var im
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var settingsOpen = false
 
     private var split: Bool {
@@ -28,6 +29,25 @@ struct ChatHome: View {
         }
         .sheet(isPresented: $settingsOpen) {
             ChatSettingsSheet()
+        }
+        // 两个主页一直同时挂着。预览层原来只在 WorkbenchView 里，聊天主页位于其上方时
+        // 卡片虽然已打开页签，画面却被聊天主页挡住；这里给聊天主页挂同一份全屏预览。
+        .overlay {
+            ZStack {
+                if store.previewPanelOpen, let tab = store.activePreviewTab {
+                    Color.black.opacity(0.28)
+                        .ignoresSafeArea()
+                        .onTapGesture { store.collapsePreview() }
+                        .transition(.opacity)
+                        .accessibilityHidden(true)
+                    PreviewPanelView(tab: tab)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(JieboColor.white)
+                        .transition(.move(edge: .trailing))
+                        .zIndex(3)
+                }
+            }
+            .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
         }
     }
 

@@ -66,14 +66,14 @@ extension ChatStore {
     /// 工具卡「看改动」入口：归一路径后按类型路由——skipDiff 类型走 openPreview
     /// （markdown/html/canvas 开原文页签，pdf/audio 面板播放，binary 转 Quick Look），
     /// image/svg 开 diff 页签做双图对照（P5c），其余文本开 diff 页签
-    func openToolFile(_ rawPath: String) {
-        let path = relToCwd(rawPath)
+    func openToolFile(_ rawPath: String, chatId: String? = nil) {
+        let path = chatId.map { relToCwd(rawPath, chatId: $0) } ?? relToCwd(rawPath)
         guard !path.isEmpty else { return }
         switch previewKind(of: path) {
         case .canvas, .markdown, .html, .pdf, .audio, .video:
-            openPreview(path)
+            openPreview(path, chatId: chatId)
         default:
-            openPreview(path, diff: true)
+            openPreview(path, diff: true, chatId: chatId)
         }
     }
 
