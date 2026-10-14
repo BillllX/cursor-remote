@@ -99,7 +99,10 @@ struct ChatThreadView: View {
             ImImageViewer(convId: convId, startId: target.id)
         }
         .onAppear { im.open(convId: convId) }
-        .onDisappear { im.close(convId: convId) }
+        .onDisappear {
+            ImVoicePlayer.shared.stop()
+            im.close(convId: convId)
+        }
     }
 
     // MARK: 行
@@ -276,23 +279,39 @@ struct ImBubbleRow: View {
                 .onTapGesture(perform: openImage)
                 .accessibilityLabel("图片")
                 .accessibilityAddTraits(.isButton)
+        } else if message.kind == "voice" {
+            ImVoiceBubble(message: message, mine: mine)
+        } else if message.kind == "file" {
+            ImFileBubble(message: message, mine: mine)
+        } else if case .link? = message.body, let body = message.body {
+            ImLinkBubble(payload: body, mine: mine, convId: message.convId)
+        } else if case .location? = message.body, let body = message.body {
+            ImLocationBubble(payload: body)
+        } else if let url = ImLinkMetadata.recognized(bubbleText) {
+            Link(destination: url) {
+                textBubble
+            }
         } else {
-            Text(bubbleText)
-                .font(JieboFont.text(.body))
-                .foregroundStyle(textColor)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(bubbleColor)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    if !mine {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
-                    }
-                }
-                .frame(maxWidth: JieboMeasure.bubble, alignment: mine ? .trailing : .leading)
-                .fixedSize(horizontal: false, vertical: true)
+            textBubble
         }
+    }
+
+    private var textBubble: some View {
+        Text(bubbleText)
+            .font(JieboFont.text(.body))
+            .foregroundStyle(textColor)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(bubbleColor)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                if !mine {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                }
+            }
+            .frame(maxWidth: JieboMeasure.bubble, alignment: mine ? .trailing : .leading)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var bubbleText: String {
@@ -326,6 +345,13 @@ struct ImBubbleRow: View {
         if message.seq != nil {
             Button(action: quote) {
                 Label("引用", systemImage: "quote.bubble")
+            }
+        }
+        if message.kind == "voice", message.seq != nil {
+            Button {
+                ImVoicePlayer.shared.transcribe(message, store: im)
+            } label: {
+                Label("转文字", systemImage: "text.bubble")
             }
         }
         if im.canRecall(message) {

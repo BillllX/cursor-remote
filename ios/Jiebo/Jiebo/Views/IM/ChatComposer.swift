@@ -3,10 +3,12 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// 「+」菜单里的项。以后加文件、位置等往这里添
+/// 「+」菜单里的相册、相机、文件和位置
 private enum ComposerAttachment: CaseIterable, Identifiable {
     case album
     case camera
+    case file
+    case location
 
     var id: Self { self }
 
@@ -14,6 +16,8 @@ private enum ComposerAttachment: CaseIterable, Identifiable {
         switch self {
         case .album: return "相册"
         case .camera: return "拍照"
+        case .file: return "文件"
+        case .location: return "位置"
         }
     }
 
@@ -21,6 +25,8 @@ private enum ComposerAttachment: CaseIterable, Identifiable {
         switch self {
         case .album: return "photo.on.rectangle"
         case .camera: return "camera"
+        case .file: return "doc"
+        case .location: return "location"
         }
     }
 
@@ -28,6 +34,7 @@ private enum ComposerAttachment: CaseIterable, Identifiable {
         switch self {
         case .album: return true
         case .camera: return UIImagePickerController.isSourceTypeAvailable(.camera)
+        case .file, .location: return true
         }
     }
 }
@@ -65,9 +72,15 @@ struct ChatComposer: View {
     @State private var cameraOpen = false
     @State private var cameraShot: URL?
     @State private var picked: ImPickedImages?
-
-    /// 语音消息还没做：切换按钮的位置留着，做了把它打开
-    private static let voiceEnabled = false
+    @State private var voiceMode = false
+    @State private var recorder = ImVoiceRecorder()
+    @State private var voiceStarted = false
+    @State private var voiceBeganAt: Date?
+    @State private var voiceStartFailed = false
+    /// 录音被系统停掉后已自动收尾；手指没抬起前不再重新开始录
+    @State private var voiceAutoFinished = false
+    @State private var fileOpen = false
+    @State private var locationOpen = false
     static let maxPhotos = 9
 
     private var canSend: Bool {
@@ -80,22 +93,27 @@ struct ChatComposer: View {
                 replyStrip(seq)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                if Self.voiceEnabled {
-                    iconButton("waveform", label: "按住说话") {}
+                iconButton(voiceMode ? "keyboard" : "waveform", label: voiceMode ? "切换到键盘" : "切换到语音") {
+                    voiceMode.toggle()
+                    if voiceMode { focused.wrappedValue = false }
                 }
-                TextField("发消息", text: $text, axis: .vertical)
-                    .lineLimit(1 ... 5)
-                    .focused(focused)
-                    .font(JieboFont.text(.body))
-                    .foregroundStyle(JieboColor.ink)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 9)
-                    .background(JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
-                    )
+                if voiceMode {
+                    voiceButton
+                } else {
+                    TextField("发消息", text: $text, axis: .vertical)
+                        .lineLimit(1 ... 5)
+                        .focused(focused)
+                        .font(JieboFont.text(.body))
+                        .foregroundStyle(JieboColor.ink)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(JieboColor.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
+                }
                 if canSend {
                     Button(action: send) {
                         Image(systemName: "arrow.up.circle.fill")
@@ -126,6 +144,13 @@ struct ChatComposer: View {
         .onChange(of: text) { _, value in
             im.setDraft(value, convId: convId)
         }
+        .onDisappear {
+            recorder.cancel()
+            voiceStarted = false
+            voiceBeganAt = nil
+            voiceStartFailed = false
+            voiceAutoFinished = false
+        }
         .photosPicker(isPresented: $pickerOpen, selection: $photoItems, maxSelectionCount: Self.maxPhotos, matching: .images)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -152,6 +177,34 @@ struct ChatComposer: View {
                 sendImages(batch.files, original: original)
             }
         }
+        .fileImporter(isPresented: $fileOpen, allowedContentTypes: [.data, .content], allowsMultipleSelection: false) { result in
+            guard let source = try? result.get().first else { return }
+            let tenant = im.tenant
+            // adopt 在本回调内先取得 security scope，再在后台复制，复制结束后才 stop。
+            ImFilePrep.adopt(source, tenant: tenant) { prepared in
+                guard tenant == im.tenant else {
+                    if let prepared, let dir = ImCache.outboxDir(tenant: tenant) {
+                        try? FileManager.default.removeItem(at: dir.appendingPathComponent(prepared.file))
+                    }
+                    return
+                }
+                if let prepared {
+                    im.sendFile(file: prepared.file, name: prepared.name, size: prepared.size, mime: prepared.mime, to: peer)
+                    onSent()
+                } else {
+                    im.showToast("文件读不出来，或超过 32MB")
+                }
+            }
+        }
+        .sheet(isPresented: $locationOpen) {
+            ImLocationPicker { place in
+                im.sendLocation(
+                    lat: place.coordinate.latitude, lng: place.coordinate.longitude,
+                    name: place.name, address: place.address, to: peer
+                )
+                onSent()
+            }
+        }
     }
 
     private var attachMenu: some View {
@@ -161,6 +214,8 @@ struct ChatComposer: View {
                     switch item {
                     case .album: pickerOpen = true
                     case .camera: cameraOpen = true
+                    case .file: fileOpen = true
+                    case .location: locationOpen = true
                     }
                 } label: {
                     Label(item.title, systemImage: item.symbol)
@@ -173,7 +228,7 @@ struct ChatComposer: View {
                 .frame(width: 40, height: 40)
                 .contentShape(Rectangle())
         }
-        .accessibilityLabel("发图片")
+        .accessibilityLabel("发送附件")
     }
 
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
@@ -220,9 +275,105 @@ struct ChatComposer: View {
     // MARK: 发
 
     private func send() {
-        guard im.sendText(text, to: peer) else { return }
-        text = ""
-        onSent()
+        let value = text
+        if let url = ImLinkMetadata.recognized(value) {
+            text = ""
+            let tenant = im.tenant
+            Task {
+                let metadata = await ImLinkMetadata.load(url, tenant: tenant)
+                guard tenant == im.tenant else { return }
+                im.sendLink(url: url, title: metadata.title, desc: metadata.desc, iconFile: metadata.iconFile, to: peer)
+                onSent()
+            }
+        } else {
+            guard im.sendText(value, to: peer) else { return }
+            text = ""
+            onSent()
+        }
+    }
+
+    private var voiceButton: some View {
+        HStack(spacing: 8) {
+            if recorder.recording {
+                HStack(alignment: .center, spacing: 2) {
+                    ForEach(0 ..< 5, id: \.self) { index in
+                        Capsule()
+                            .frame(width: 2, height: CGFloat(5 + recorder.level * Double(5 + index * 3)))
+                    }
+                }
+            }
+            Text(recorder.recording ? (recorder.cancelling ? "松开取消" : "松开发送 · \(Int(recorder.seconds))″") : "按住说话")
+                .font(JieboFont.text(.body, weight: .medium))
+        }
+            .foregroundStyle(recorder.cancelling ? JieboColor.danger : JieboColor.ink)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(recorder.recording ? JieboColor.well : JieboColor.white)
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(JieboColor.line)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        if !voiceStarted, !voiceAutoFinished {
+                            voiceStarted = true
+                            voiceBeganAt = Date()
+                            voiceStartFailed = false
+                            Task {
+                                if let warning = await recorder.start() {
+                                    im.showToast(warning)
+                                    voiceStartFailed = true
+                                    voiceStarted = false
+                                    voiceBeganAt = nil
+                                } else if !voiceStarted {
+                                    _ = recorder.finish(cancel: true)
+                                }
+                            }
+                        }
+                        recorder.setCancelling(value.translation.height < -60)
+                    }
+                    .onEnded { _ in
+                        if voiceAutoFinished {
+                            voiceAutoFinished = false
+                        } else {
+                            finishVoice()
+                        }
+                    }
+            )
+            .onChange(of: recorder.autoStopped) { _, stopped in
+                guard stopped, voiceStarted else { return }
+                voiceAutoFinished = true
+                finishVoice()
+            }
+            .accessibilityLabel("按住说话，上滑取消")
+    }
+
+    private func finishVoice() {
+        let pressedFor = voiceBeganAt.map { Date().timeIntervalSince($0) } ?? 0
+        defer {
+            voiceStarted = false
+            voiceBeganAt = nil
+            voiceStartFailed = false
+        }
+        let elapsed = recorder.seconds
+        let wasCancelling = recorder.cancelling
+        guard let recording = recorder.finish(cancel: wasCancelling) else {
+            if !voiceStartFailed, !wasCancelling, elapsed > 0 || pressedFor < 1 { im.showToast("说话时间太短") }
+            return
+        }
+        guard let dir = ImCache.outboxDir(tenant: im.tenant) else { return }
+        let name = "voice-\(UUID().uuidString.lowercased()).m4a"
+        let target = dir.appendingPathComponent(name)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: recording.0, to: target)
+            im.sendVoice(file: name, durationMs: recording.1, waveform: recording.2, to: peer)
+            onSent()
+        } catch {
+            try? FileManager.default.removeItem(at: recording.0)
+            im.showToast("录音保存不了")
+        }
     }
 
     /// 一张一张落成临时文件（同一时刻最多一张图的字节在内存里）

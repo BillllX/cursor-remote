@@ -141,6 +141,29 @@ iOS 声明 `maxMessageBytes=900000`。`shrinkMessage` 的裁法：
 - `im_list`：先把每行 `last.body` 里的长字符串截到 100 字；还不够就只保留前面装得下的行，置 `more=true`、`cursor` = 最后保留那行，客户端接着翻页就能拿到丢掉的行。
 - 其余 `im_*` 本身很小，走通用截断。
 
+## 分享扩展 HTTP 发送
+
+分享扩展没有 WebSocket，使用 Bearer 鉴权的两个 HTTP 入口；两者最终都调用
+`ImService.send`，所以可见性、拉黑拒收、每分钟 30 条、`clientId` 去重、在线多端投递和
+APNs 与 `im_send` 完全同义：
+
+这两个入口只供已认证的原生分享扩展使用，网页 UI 不调用。HTTP 没有 WebSocket 的
+`hello.client.caps`：caps 是连接能力协商，不是认证安全边界，因此这里不接受客户端自报 cap。
+原生请求不需要 CORS；两个入口拒绝任何带 `Origin` 的请求（包括 OPTIONS 预检），且不返回
+`Access-Control-Allow-Origin`，降低网页上下文滥用用户 token 的风险。普通附件上传
+`POST /upload/im` 的既有网页兼容行为不变。
+
+- `POST /upload/im/send-json`：请求体是 `im_send` 去掉
+  `type` 也可的 JSON，最大 64KB；只用于 text/link/location，其他 kind 回 400。限流 429 带 `Retry-After: 60`。
+- `POST /upload/im/send?kind=&mime=`：原始附件字节，消息 JSON 放在
+  `X-Jiebo-IM: <base64url(JSON)>`。先鉴权和校验头，再按 `/upload/im` 相同的上限、
+  租户并发数流式写盘，归位成功后把 blob 填进 body 并发送。支持 image/voice/file，
+  以及 link 的 icon；分享图片先在扩展压到 ≤1MB，同一份图片同时登记为 image 和 thumb。
+
+成功返回 `im_ack`；upload-and-send 另带 `blob/size/mime`。错误用 HTTP 401/403/404/
+429/413/400，并保留 `ImError` 的 `error` code 和中文 `message`。扩展必须为每个收件人、
+每条消息生成稳定的 `clientId`；后台任务重试时不能换 id。
+
 ## 附件
 
 ### 上传：`POST /upload/im?kind=<kind>&mime=<mime>`

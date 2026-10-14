@@ -1261,6 +1261,21 @@ export class ImStore {
     });
   }
 
+  /** 已归位的同一份字节补登记另一个用途。分享扩展上传图片时原图同时作为缩略图使用。 */
+  registerBlobKind(sha: string, kind: BlobKind, mime: string, uploader: string): Promise<BlobMeta | null> {
+    return this.serial(`blob:${sha}`, async () => {
+      const known = await this.blobMeta(sha);
+      if (!known) return null;
+      const meta: BlobMeta = { ...known, kinds: { ...known.kinds }, uploaders: [...known.uploaders] };
+      const changed = !meta.kinds[kind] || !meta.uploaders.includes(uploader);
+      meta.kinds[kind] ??= mime;
+      if (!meta.uploaders.includes(uploader)) meta.uploaders.push(uploader);
+      if (changed) await this.writeBlobMeta(meta);
+      this.blobs.set(sha, meta);
+      return meta;
+    });
+  }
+
   /** 测试和内部用：直接存一段字节，sha 由调用方给 */
   async putBlob(sha: string, buf: Buffer, mime: string, kind: BlobKind, uploader: string, now: number) {
     const upload = await this.ingest(buf, Number.MAX_SAFE_INTEGER);

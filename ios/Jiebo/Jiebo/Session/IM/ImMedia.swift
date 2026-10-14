@@ -5,7 +5,7 @@ import Photos
 import UIKit
 import UniformTypeIdentifiers
 
-// 即时消息的图片：上传（POST /upload/im）、下载与内存/磁盘缓存、发送前压缩、头像裁剪、存相册。
+// 即时消息附件：通用上传/下载缓存，以及图片发送前压缩、头像裁剪、存相册。
 
 enum ImMediaError: LocalizedError {
     case tooLarge(String)
@@ -19,6 +19,8 @@ enum ImMediaError: LocalizedError {
             switch kind {
             case "thumb": return "缩略图太大，发不了"
             case "avatar": return "头像图片超过 5MB"
+            case "voice": return "语音超过 2MB，发不了"
+            case "file": return "文件超过 32MB，发不了"
             default: return "图片超过 20MB，发不了"
             }
         case .http(let code, let message):
@@ -37,6 +39,9 @@ struct ImHTTPUploader: ImBlobUploader {
         "image": 20 * 1024 * 1024,
         "thumb": 1024 * 1024,
         "avatar": 5 * 1024 * 1024,
+        "voice": 2 * 1024 * 1024,
+        "file": 32 * 1024 * 1024,
+        "icon": 512 * 1024,
     ]
 
     func upload(file: URL, kind: String, mime: String, token: String, progress: @escaping @Sendable (Double) -> Void) async throws -> String {
@@ -432,6 +437,38 @@ enum ImPhotoSaver {
             return "已存到相册"
         } catch {
             return "没存进相册：\(error.localizedDescription)"
+        }
+    }
+}
+
+// MARK: 通用附件下载
+
+enum ImAttachmentCache {
+    /// 语音、文件和链接图标共用 media/<blob>；下载写临时文件后原子搬入。
+    static func file(blob: String, tenant: String, remote: URL?) async -> URL? {
+        guard ImCache.isBlob(blob), let dir = ImCache.mediaDir(tenant: tenant) else { return nil }
+        let target = dir.appendingPathComponent(blob)
+        if FileManager.default.fileExists(atPath: target.path) {
+            ImCache.noteUse(target)
+            return target
+        }
+        guard let remote else { return nil }
+        do {
+            let (temp, response) = try await URLSession.shared.download(from: remote)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                try? FileManager.default.removeItem(at: temp)
+                return nil
+            }
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.removeItem(at: temp)
+            } else {
+                try FileManager.default.moveItem(at: temp, to: target)
+                ImCache.noteDownloaded(target)
+            }
+            return target
+        } catch {
+            return FileManager.default.fileExists(atPath: target.path) ? target : nil
         }
     }
 }

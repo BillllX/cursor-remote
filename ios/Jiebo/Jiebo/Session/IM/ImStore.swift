@@ -73,6 +73,10 @@ final class ImStore {
     var hidden: [String: Set<Int>] = [:]
     /// 引用回复：会话号 → 被引用的 seq
     var replyTo: [String: Int] = [:]
+    /// 收到的语音在本机听过；不做对方可见回执
+    var heardVoice: [String: Set<Int>] = [:]
+    /// 本机 SFSpeech 转写结果：会话号 → seq → 文字
+    var voiceText: [String: [Int: String]] = [:]
     var listLoaded = false
     var contactsLoaded = false
 
@@ -212,7 +216,9 @@ final class ImStore {
 
     /// 换账号：清内存和旧租户的缓存
     func resetTenant() {
-        let old = tenant
+        let old = tenant.isEmpty ? (ImShareBridge.load()?.tenant ?? "") : tenant
+        ImShareBackgroundQueue.shared.cancel(tenant: old)
+        ImShareBridge.clear()
         clearMemory()
         tenant = ""
         if !old.isEmpty { ImCache.clear(tenant: old) }
@@ -220,9 +226,12 @@ final class ImStore {
 
     /// 退出登录：所有租户的聊天缓存都删掉
     func logout() {
+        let old = tenant.isEmpty ? (ImShareBridge.load()?.tenant ?? "") : tenant
+        ImShareBackgroundQueue.shared.cancel(tenant: old)
         clearMemory()
         tenant = ""
         ImCache.clearAll()
+        ImShareBridge.clear()
     }
 
     /// App 进出前台
@@ -275,6 +284,14 @@ final class ImStore {
         }
         for (key, text) in snapshot.drafts where drafts[key] == nil { drafts[key] = text }
         for (key, seqs) in snapshot.hidden { hidden[key, default: []].formUnion(seqs) }
+        for (key, seqs) in snapshot.heardVoice { heardVoice[key, default: []].formUnion(seqs) }
+        for (convId, rows) in snapshot.voiceText {
+            for (seq, text) in rows {
+                if let number = Int(seq), voiceText[convId]?[number] == nil {
+                    voiceText[convId, default: [:]][number] = text
+                }
+            }
+        }
         for convId in Array(hidden.keys) { pruneHidden(convId) }
         for (convId, items) in snapshot.timelines {
             let merged = ImTimeline.merge(items, timelines[convId] ?? [], me: meId)
@@ -320,6 +337,8 @@ final class ImStore {
         drafts = [:]
         hidden = [:]
         replyTo = [:]
+        heardVoice = [:]
+        voiceText = [:]
         listLoaded = false
         contactsLoaded = false
         selectedPeer = nil
@@ -590,7 +609,7 @@ final class ImStore {
         hidden[convId] = gone.isEmpty ? nil : gone
     }
 
-    /// 还没发出去的图在 outbox 里的文件名
+    /// 还没发出去的附件在 outbox 里的文件名
     private func pendingOutboxFiles() -> Set<String> {
         var names = Set<String>()
         for items in timelines.values {
@@ -598,6 +617,9 @@ final class ImStore {
                 guard let outgoing = item.outgoing else { continue }
                 names.insert(outgoing.file)
                 names.insert(outgoing.thumbFile)
+            }
+            for item in items where item.seq == nil {
+                if let upload = item.upload { names.insert(upload.file) }
             }
         }
         return names
@@ -759,16 +781,80 @@ final class ImStore {
         }
     }
 
+    /// 录好的 m4a 已放进 outbox。
+    func sendVoice(file: String, durationMs: Int, waveform: [Double], to peer: String) {
+        let upload = ImOutgoingUpload(
+            file: file, uploadKind: "voice", mime: "audio/mp4", name: nil,
+            size: nil, durationMs: min(max(durationMs, 1), 60_000), waveform: Array(waveform.prefix(100)),
+            linkURL: nil, linkTitle: nil, linkDesc: nil, blob: nil
+        )
+        appendUpload(kind: "voice", upload: upload, to: peer)
+    }
+
+    /// 文件选择器给的文件已拷进 outbox。
+    func sendFile(file: String, name: String, size: Double, mime: String, to peer: String) {
+        let upload = ImOutgoingUpload(
+            file: file, uploadKind: "file", mime: mime, name: name, size: size, durationMs: nil, waveform: nil,
+            linkURL: nil, linkTitle: nil, linkDesc: nil, blob: nil
+        )
+        appendUpload(kind: "file", upload: upload, to: peer)
+    }
+
+    func sendLink(url: URL, title: String?, desc: String?, iconFile: String? = nil, to peer: String) {
+        if let iconFile {
+            let upload = ImOutgoingUpload(
+                file: iconFile, uploadKind: "icon", mime: "image/png", name: nil, size: nil, durationMs: nil, waveform: nil,
+                linkURL: url.absoluteString, linkTitle: title, linkDesc: desc, blob: nil
+            )
+            appendUpload(
+                kind: "link", upload: upload,
+                body: .link(url: url.absoluteString, title: title, desc: desc, icon: nil),
+                to: peer
+            )
+        } else {
+            appendBody(kind: "link", body: .link(url: url.absoluteString, title: title, desc: desc, icon: nil), to: peer)
+        }
+    }
+
+    func sendLocation(lat: Double, lng: Double, name: String, address: String, to peer: String) {
+        appendBody(kind: "location", body: .location(lat: lat, lng: lng, name: name, address: address), to: peer)
+    }
+
+    private func appendBody(kind: String, body: ImBody, to peer: String) {
+        let convId = convId(with: peer)
+        let item = ImLocalMessage(
+            pending: ImFormat.newClientId(), convId: convId, from: meId, at: Self.nowMs,
+            kind: kind, body: body, replyTo: replyTo.removeValue(forKey: convId), outgoing: nil
+        )
+        append(item)
+        transmit(clientId: item.clientId, convId: convId, peer: peer)
+    }
+
+    private func appendUpload(kind: String, upload: ImOutgoingUpload, body: ImBody? = nil, to peer: String) {
+        let convId = convId(with: peer)
+        var item = ImLocalMessage(
+            pending: ImFormat.newClientId(), convId: convId, from: meId, at: Self.nowMs,
+            kind: kind, body: body, replyTo: replyTo.removeValue(forKey: convId), outgoing: nil
+        )
+        item.upload = upload
+        append(item)
+        uploadAndSendAttachment(clientId: item.clientId, convId: convId, peer: peer)
+    }
+
     /// 失败的手动重发：同一个 clientId（网关去重，不会发成两条）
     func resend(_ item: ImLocalMessage) {
         guard item.seq == nil, item.state == .failed else { return }
         let peer = ImConv.peer(of: item.convId, me: meId) ?? ""
         guard !peer.isEmpty else { return }
-        if item.kind == "image", item.outgoing?.blob == nil || item.outgoing?.thumb == nil {
+        if item.kind == "image", let outgoing = item.outgoing, outgoing.blob == nil || outgoing.thumb == nil {
             uploadAndSend(clientId: item.clientId, convId: item.convId, peer: peer)
-        } else {
-            transmit(clientId: item.clientId, convId: item.convId, peer: peer)
+            return
         }
+        if let upload = item.upload, upload.blob == nil {
+            uploadAndSendAttachment(clientId: item.clientId, convId: item.convId, peer: peer)
+            return
+        }
+        transmit(clientId: item.clientId, convId: item.convId, peer: peer)
     }
 
     private func append(_ item: ImLocalMessage) {
@@ -782,8 +868,20 @@ final class ImStore {
         if item.kind == "image", let outgoing = item.outgoing, let blob = outgoing.blob, let thumb = outgoing.thumb {
             body = .image(blob: blob, thumb: thumb, w: outgoing.w, h: outgoing.h, original: outgoing.original)
         }
-        // 图传完了 outbox 里的文件就搬进 media 了：先把消息体写上，没连上时气泡也能按 blob 显示
-        if item.body == nil, let body { mutatePending(clientId, convId) { $0.body = body } }
+        if let upload = item.upload, let blob = upload.blob {
+            if item.kind == "voice" {
+                body = .voice(blob: blob, durationMs: upload.durationMs ?? 1, waveform: upload.waveform ?? [])
+            } else if item.kind == "file" {
+                body = .file(blob: blob, name: upload.name ?? "文件", size: upload.size ?? 0, mime: upload.mime)
+            } else if item.kind == "link", let url = upload.linkURL {
+                body = .link(url: url, title: upload.linkTitle, desc: upload.linkDesc, icon: blob)
+            }
+        }
+        // 上传完成后回写权威本地 body；链接最初已有无 icon 的 body，也必须替换才能立即显示图标。
+        if let body, item.body != body {
+            mutatePending(clientId, convId) { $0.body = body }
+            saveTimelineSoon(convId)
+        }
         guard let body, online, let transport, transport.imLinkOpen else {
             setState(clientId, convId, .failed)
             return
@@ -834,6 +932,39 @@ final class ImStore {
         }
     }
 
+    private func uploadAndSendAttachment(clientId: String, convId: String, peer: String) {
+        guard let item = find(clientId, convId), let start = item.upload else { return }
+        guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
+            setState(clientId, convId, .failed)
+            return
+        }
+        setState(clientId, convId, .sending)
+        setProgress(clientId, convId, 0)
+        let tenantAtStart = tenant
+        let box = ImWeakStore(self)
+        Task { [weak self] in
+            var upload = start
+            do {
+                if upload.blob == nil {
+                    upload.blob = try await uploader.upload(
+                        file: dir.appendingPathComponent(upload.file), kind: upload.uploadKind, mime: upload.mime, token: token,
+                        progress: { value in Task { @MainActor in box.value?.setProgress(clientId, convId, value) } }
+                    )
+                }
+            } catch {
+                guard let self, self.tenant == tenantAtStart else { return }
+                self.setUpload(clientId, convId, upload)
+                self.setState(clientId, convId, .failed)
+                self.showToast((error as? LocalizedError)?.errorDescription ?? "附件没传上去，点红色感叹号重发")
+                return
+            }
+            guard let self, self.tenant == tenantAtStart else { return }
+            self.setUpload(clientId, convId, upload)
+            if let blob = upload.blob { ImCache.adopt(tenant: tenantAtStart, file: dir.appendingPathComponent(upload.file), blob: blob) }
+            self.transmit(clientId: clientId, convId: convId, peer: peer)
+        }
+    }
+
     private func armSendTimeout(_ clientId: String, _ convId: String) {
         sendTimers[clientId]?.cancel()
         sendTimers[clientId] = Task { [weak self] in
@@ -876,6 +1007,11 @@ final class ImStore {
         saveTimelineSoon(convId)
     }
 
+    private func setUpload(_ clientId: String, _ convId: String, _ upload: ImOutgoingUpload) {
+        mutatePending(clientId, convId) { $0.upload = upload }
+        saveTimelineSoon(convId)
+    }
+
     private func markFailed(clientId: String) {
         for (convId, items) in timelines where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
             setState(clientId, convId, .failed)
@@ -906,6 +1042,9 @@ final class ImStore {
             timelines[item.convId]?.removeAll { $0.seq == nil && $0.clientId == item.clientId }
             if let outgoing = item.outgoing {
                 ImCache.removeOutbox(tenant: tenant, files: [outgoing.file, outgoing.thumbFile])
+            }
+            if let upload = item.upload {
+                ImCache.removeOutbox(tenant: tenant, files: [upload.file])
             }
             saveTimelineSoon(item.convId)
         }
@@ -1066,6 +1205,28 @@ final class ImStore {
         return GatewayConfig.imMediaURL(scope: "avatars", blob: blob, ticket: ticket)
     }
 
+    func isVoiceHeard(_ item: ImLocalMessage) -> Bool {
+        guard item.from != meId, let seq = item.seq else { return true }
+        return heardVoice[item.convId]?.contains(seq) == true
+    }
+
+    func markVoiceHeard(_ item: ImLocalMessage) {
+        guard item.from != meId, let seq = item.seq else { return }
+        heardVoice[item.convId, default: []].insert(seq)
+        saveStateSoon()
+    }
+
+    func setVoiceText(_ text: String, for item: ImLocalMessage) {
+        guard let seq = item.seq else { return }
+        voiceText[item.convId, default: [:]][seq] = text
+        saveStateSoon()
+    }
+
+    func voiceTranscript(_ item: ImLocalMessage) -> String? {
+        guard let seq = item.seq else { return nil }
+        return voiceText[item.convId]?[seq]
+    }
+
     /// 票据快过期（或已过期）：重新拉联系人和列表换票。一分钟内最多一次
     func refreshTicketsIfNeeded(force: Bool = false) {
         guard online, Date().timeIntervalSince(lastRefreshAt) > 60 else { return }
@@ -1202,9 +1363,28 @@ final class ImStore {
             "blocked": .array(blocked.sorted().map(JSONValue.string)),
             "drafts": .object(drafts.filter { !$0.value.isEmpty }.mapValues(JSONValue.string)),
             "hidden": .object(hidden.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
+            "heardVoice": .object(heardVoice.mapValues { seqs in .array(seqs.sorted().map { .number(Double($0)) }) }),
+            "voiceText": .object(voiceText.mapValues { rows in
+                .object(Dictionary<String, JSONValue>(uniqueKeysWithValues: rows.map { (String($0.key), .string($0.value)) }))
+            }),
         ]
         if let me { object["me"] = me.json() }
         ImCache.saveState(tenant: tenant, state: .object(object))
+        writeShareDirectory()
+    }
+
+    /// 分享扩展不启动主 App，只读 App Group 里这份小快照；最近会话排前，其余联系人按昵称。
+    private func writeShareDirectory() {
+        guard let send = GatewayConfig.imHTTPSendURL?.absoluteString,
+              let upload = GatewayConfig.imHTTPUploadAndSendURL?.absoluteString
+        else { return }
+        let people = users.values.map { user in
+            ImShareBridge.Person(id: user.id, nickname: user.nickname, recentAt: lastActivity(convs[convId(with: user.id)]))
+        }.sorted {
+            if $0.recentAt != $1.recentAt { return $0.recentAt > $1.recentAt }
+            return $0.nickname.localizedStandardCompare($1.nickname) == .orderedAscending
+        }
+        ImShareBridge.save(.init(tenant: tenant, sendURL: send, uploadSendURL: upload, people: people))
     }
 
     private func saveTimelineSoon(_ convId: String) {

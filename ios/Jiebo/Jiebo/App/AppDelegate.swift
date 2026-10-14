@@ -3,13 +3,49 @@ import UserNotifications
 
 /// APNs 注册回调 + 通知展示/点击。业务逻辑都在 PushRegistrar / PushRouting 里
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    private let shareFailureNotificationId = "im-share-background-failed"
+    private var shareQueueObserver: NSObjectProtocol?
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
         ImPickTemp.sweep()
+        shareQueueObserver = NotificationCenter.default.addObserver(
+            forName: ImShareBackgroundQueue.changedNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.reportShareFailure()
+        }
+        reportShareFailure()
         return true
+    }
+
+    deinit {
+        if let shareQueueObserver {
+            NotificationCenter.default.removeObserver(shareQueueObserver)
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        ImShareBackgroundQueue.shared.handleEvents(identifier: identifier, completion: completionHandler)
+    }
+
+    /// 分享扩展退出后仍由主 App 续传；最终失败必须让用户看见，不能只留在队列文件里。
+    private func reportShareFailure() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [shareFailureNotificationId])
+        center.removeDeliveredNotifications(withIdentifiers: [shareFailureNotificationId])
+        guard let summary = ImShareBackgroundQueue.shared.failureSummary() else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "分享发送失败"
+        content.body = summary
+        content.sound = .default
+        center.add(UNNotificationRequest(identifier: shareFailureNotificationId, content: content, trigger: nil))
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

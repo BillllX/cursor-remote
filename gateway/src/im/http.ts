@@ -8,12 +8,14 @@
 import { createReadStream } from "node:fs";
 import { open, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ClientMessage, ImBody, ImKind } from "../../../shared/protocol.ts";
 import { applyUploadCors, parseMultipartUpload } from "../http/routes.ts";
 import { log } from "../log.ts";
 import { parseRange } from "../media.ts";
 import { allTenants, mediaSecret, resolveTenant } from "../tenants.ts";
 import { MAX_UPLOAD_BYTES } from "../workspace/files.ts";
 import { isBlobId } from "./body.ts";
+import { ImError } from "./errors.ts";
 import { imRuntime } from "./runtime.ts";
 import { BlobTooLarge, type BlobKind, type ImStore } from "./store.ts";
 import { matchImTicketTenant } from "./ticket.ts";
@@ -38,6 +40,7 @@ const MIME_RE = /^[\w.+-]{1,64}\/[\w.+-]{1,64}$/;
 
 let multipartUploads = 0;
 const streamUploads = new Map<string, number>();
+const HTTP_SEND_LIMIT = 64 * 1024;
 
 /** 这个用途接受的 mime；图片类不收 svg（可执行脚本） */
 export function blobMimeOk(kind: BlobKind, mime: string): boolean {
@@ -81,6 +84,8 @@ async function readHead(file: string): Promise<Buffer> {
 /** 回完就断开：没读完的 body 不再收（不先 destroy，否则客户端拿不到状态码） */
 function json(req: IncomingMessage, res: ServerResponse, status: number, body: unknown, close = false) {
   const headers: Record<string, string> = { "content-type": "application/json", "cache-control": "private, no-store" };
+  // 429 带上建议等待秒数：发送限流窗口是一分钟，客户端据此退避，不要立刻重试
+  if (status === 429) headers["retry-after"] = "60";
   if (close) {
     headers.connection = "close";
     res.on("finish", () => req.destroy());
@@ -125,6 +130,146 @@ function readLimited(req: IncomingMessage, limit: number): Promise<Buffer> {
     req.on("error", onError);
     req.on("close", onClose);
   });
+}
+
+type ImSend = Extract<ClientMessage, { type: "im_send" }>;
+
+function bearerTenant(req: IncomingMessage) {
+  const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ""))?.[1]?.trim() || "";
+  return bearer ? resolveTenant(bearer) : null;
+}
+
+function httpStatus(err: ImError): number {
+  if (err.code === "rate_limited") return 429;
+  if (err.code === "too_large") return 413;
+  if (err.code === "not_visible" || err.code === "not_found") return 404;
+  if (err.code === "forbidden") return 403;
+  if (err.code === "internal") return 500;
+  return 400;
+}
+
+async function sendFromHTTP(tenantId: string, message: ImSend) {
+  const { service } = imRuntime();
+  return service.send(tenantId, Symbol("im-http"), message);
+}
+
+/** 原生分享扩展不发送 Origin；拒绝浏览器来源，避免网页拿用户 token 调用这条旁路。 */
+function rejectBrowserOrigin(req: IncomingMessage, res: ServerResponse): boolean {
+  if (req.headers.origin === undefined) return false;
+  json(req, res, 403, { error: "forbidden", message: "仅供原生分享扩展调用" }, true);
+  return true;
+}
+
+/** 分享扩展的无附件发送：鉴权、校验、去重、投递和 APNs 全部复用 ImService.send。 */
+export async function handleImSend(req: IncomingMessage, res: ServerResponse) {
+  if (rejectBrowserOrigin(req, res)) return;
+  if (req.method !== "POST") return json(req, res, 405, { error: "method" }, true);
+  const tenant = bearerTenant(req);
+  if (!tenant) return json(req, res, 401, { error: "unauthorized" }, true);
+  try {
+    const input = JSON.parse((await readLimited(req, HTTP_SEND_LIMIT)).toString("utf8")) as Partial<ImSend>;
+    // 无附件入口只收 text/link/location；image/voice/file 必须走带字节的 /upload/im/send
+    if (input.kind !== "text" && input.kind !== "link" && input.kind !== "location") {
+      return json(req, res, 400, { error: "bad_body", message: "此入口只能发文字、链接、位置" });
+    }
+    const ack = await sendFromHTTP(tenant.id, { ...input, type: "im_send" } as ImSend);
+    json(req, res, 200, ack);
+  } catch (err) {
+    if (err instanceof ImError) return json(req, res, httpStatus(err), { error: err.code, message: err.message });
+    const tooLarge = err instanceof BlobTooLarge;
+    json(req, res, tooLarge ? 413 : 400, { error: tooLarge ? "too_large" : "bad_body", message: "请求内容不对" }, true);
+  }
+}
+
+function decodeSendHeader(req: IncomingMessage): ImSend | null {
+  const encoded = String(req.headers["x-jiebo-im"] || "");
+  if (!encoded || encoded.length > 16_384) return null;
+  try {
+    const input = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Partial<ImSend>;
+    return { ...input, type: "im_send" } as ImSend;
+  } catch {
+    return null;
+  }
+}
+
+function bodyWithUpload(kind: ImKind, body: ImBody, blob: string, size: number, mime: string): ImBody | null {
+  const row = body && typeof body === "object" ? body : {};
+  if (kind === "image") {
+    const image = row as { w?: unknown; h?: unknown; original?: unknown };
+    return {
+      blob,
+      thumb: blob,
+      w: Number(image.w),
+      h: Number(image.h),
+      original: image.original === true,
+    };
+  }
+  if (kind === "voice") {
+    const voice = row as { durationMs?: unknown; waveform?: unknown };
+    return {
+      blob,
+      durationMs: Number(voice.durationMs),
+      waveform: Array.isArray(voice.waveform) ? voice.waveform.map(Number) : [],
+    };
+  }
+  if (kind === "file") {
+    const file = row as { name?: unknown };
+    return { blob, name: String(file.name || "文件"), size, mime };
+  }
+  if (kind === "link") return { ...(row as object), icon: blob } as ImBody;
+  return null;
+}
+
+/**
+ * 分享扩展的附件上传并发送。消息 JSON 放在 X-Jiebo-IM(base64url)；请求体只放附件字节，
+ * 所以仍是边收边写盘，不会把 32MB 文件装进内存。
+ */
+export async function handleImUploadAndSend(req: IncomingMessage, res: ServerResponse, url: URL, now = Date.now()) {
+  if (rejectBrowserOrigin(req, res)) return;
+  if (req.method !== "POST") return json(req, res, 405, { error: "method" }, true);
+  const tenant = bearerTenant(req);
+  if (!tenant) return json(req, res, 401, { error: "unauthorized" }, true);
+  const message = decodeSendHeader(req);
+  if (!message) return json(req, res, 400, { error: "bad_body", message: "缺少消息资料" }, true);
+  const kind = (url.searchParams.get("kind") || "") as BlobKind;
+  const declaredMime = (url.searchParams.get("mime") || "").trim().toLowerCase();
+  if (!Object.hasOwn(BLOB_LIMITS, kind) || !blobMimeOk(kind, declaredMime)) {
+    return json(req, res, 400, { error: "bad_body", message: "附件 kind 或 mime 不对" }, true);
+  }
+  const expected: Partial<Record<ImKind, BlobKind>> = { image: "image", voice: "voice", file: "file", link: "icon" };
+  if (expected[message.kind] !== kind)
+    return json(req, res, 400, { error: "bad_body", message: "附件和消息类型对不上" }, true);
+  const running = streamUploads.get(tenant.id) ?? 0;
+  if (running >= MAX_STREAM_UPLOADS_PER_TENANT)
+    return json(req, res, 429, { error: "同时上传太多，等前面的传完" }, true);
+  // 单请求图片会同时作为气泡缩略图，必须同时满足 thumb 的 1MB 上限。
+  const limit = message.kind === "image" ? Math.min(BLOB_LIMITS[kind], BLOB_LIMITS.thumb) : BLOB_LIMITS[kind];
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > limit) return json(req, res, 413, { error: "文件太大" }, true);
+  streamUploads.set(tenant.id, running + 1);
+  try {
+    const { store } = imRuntime();
+    const upload = await store.ingest(req, limit);
+    const committed = await finishUpload(store, upload, { kind, mime: declaredMime, tenantId: tenant.id, now });
+    if (committed.status !== 200) return json(req, res, committed.status, committed.body, true);
+    const blob = String(committed.body.blob || "");
+    const size = Number(committed.body.size || 0);
+    const mime = String(committed.body.mime || declaredMime);
+    if (message.kind === "image") await store.registerBlobKind(blob, "thumb", mime, tenant.id);
+    const body = bodyWithUpload(message.kind, message.body, blob, size, mime);
+    if (!body) return json(req, res, 400, { error: "bad_body", message: "这种消息不能带附件" });
+    const ack = await sendFromHTTP(tenant.id, { ...message, body });
+    json(req, res, 200, { ...ack, blob, size, mime });
+  } catch (err) {
+    if (err instanceof ImError) return json(req, res, httpStatus(err), { error: err.code, message: err.message });
+    if (err instanceof BlobTooLarge) return json(req, res, 413, { error: "too_large", message: "文件太大" }, true);
+    log.warn("im upload-and-send failed", tenant.id, err instanceof Error ? err.message : err);
+    json(req, res, 400, { error: "bad_body", message: "上传或发送失败" }, true);
+  } finally {
+    const left = (streamUploads.get(tenant.id) ?? 1) - 1;
+    if (left > 0) streamUploads.set(tenant.id, left);
+    else streamUploads.delete(tenant.id);
+  }
 }
 
 export async function handleImUpload(req: IncomingMessage, res: ServerResponse, url: URL, now = Date.now()) {

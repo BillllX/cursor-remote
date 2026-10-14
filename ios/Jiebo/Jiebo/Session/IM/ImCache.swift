@@ -3,8 +3,8 @@ import Foundation
 /// 即时消息的本机缓存：Application Support/im/<租户>/
 ///   state.json            我的资料、联系人、会话列表、拉黑、草稿、本地删除的 seq
 ///   conv/<会话号>.json     每会话最近 300 条 + 没发出去的
-///   outbox/               本机发图压好的原图和缩略图（没传完时重传、气泡先显示本地图用；传完搬进 media）
-///   media/<blob>          下载过的附件和头像（blob 是 sha256，同内容一份；超过 300MB 按最近使用删旧的）
+///   outbox/               待发图片、语音、文件和链接图标（没传完时重传；传完搬进 media）
+///   media/<blob>          下载/上传过的全部附件和头像（blob 是 sha256，同内容一份；超过 300MB 删旧的）
 /// 读写都排在一条串行队列上；退出登录整个 im 目录删掉，换账号删旧租户的
 enum ImCache {
     private static let queue = DispatchQueue(label: "ai.jiebo.im-cache", qos: .utility)
@@ -16,6 +16,8 @@ enum ImCache {
         var blocked: [String] = []
         var drafts: [String: String] = [:]
         var hidden: [String: [Int]] = [:]
+        var heardVoice: [String: [Int]] = [:]
+        var voiceText: [String: [String: String]] = [:]
         var timelines: [String: [ImLocalMessage]] = [:]
     }
 
@@ -44,6 +46,12 @@ enum ImCache {
         }
         for (key, value) in state["hidden"]?.object ?? [:] {
             snapshot.hidden[key] = value.array?.compactMap(\.int) ?? []
+        }
+        for (key, value) in state["heardVoice"]?.object ?? [:] {
+            snapshot.heardVoice[key] = value.array?.compactMap(\.int) ?? []
+        }
+        for (convId, value) in state["voiceText"]?.object ?? [:] {
+            snapshot.voiceText[convId] = value.object?.compactMapValues(\.string) ?? [:]
         }
         let convDir = dir.appendingPathComponent("conv", isDirectory: true)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: convDir.path)) ?? []
@@ -86,7 +94,7 @@ enum ImCache {
 
     // MARK: 附件
 
-    /// 发图前压好的原图和缩略图放这里，消息里只记文件名
+    /// 待发附件放这里，消息里只记文件名
     static func outboxDir(tenant: String) -> URL? {
         tenantDir(tenant)?.appendingPathComponent("outbox", isDirectory: true)
     }

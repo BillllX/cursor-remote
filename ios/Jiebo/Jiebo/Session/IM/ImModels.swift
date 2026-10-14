@@ -49,6 +49,58 @@ struct ImOutgoingImage: Sendable, Hashable {
     }
 }
 
+/// 语音或文件的待上传资料。文件一直留在 outbox，上传成功后按 blob 搬到 media；
+/// 消息体在拿到 blob 后生成，失败重试沿用同一个 clientId。
+struct ImOutgoingUpload: Sendable, Hashable {
+    var file: String
+    var uploadKind: String
+    var mime: String
+    var name: String?
+    var size: Double?
+    var durationMs: Int?
+    var waveform: [Double]?
+    var linkURL: String?
+    var linkTitle: String?
+    var linkDesc: String?
+    var blob: String?
+
+    static func from(_ json: JSONValue?) -> ImOutgoingUpload? {
+        guard let row = json?.object,
+              let file = row["file"]?.string,
+              let uploadKind = row["uploadKind"]?.string,
+              let mime = row["mime"]?.string
+        else { return nil }
+        return ImOutgoingUpload(
+            file: file,
+            uploadKind: uploadKind,
+            mime: mime,
+            name: row["name"]?.string,
+            size: row["size"]?.number,
+            durationMs: row["durationMs"]?.int,
+            waveform: row["waveform"]?.array?.compactMap(\.number),
+            linkURL: row["linkURL"]?.string,
+            linkTitle: row["linkTitle"]?.string,
+            linkDesc: row["linkDesc"]?.string,
+            blob: row["blob"]?.string?.nilIfEmpty
+        )
+    }
+
+    func json() -> JSONValue {
+        var row: [String: JSONValue] = [
+            "file": .string(file), "uploadKind": .string(uploadKind), "mime": .string(mime),
+        ]
+        if let name { row["name"] = .string(name) }
+        if let size { row["size"] = .number(size) }
+        if let durationMs { row["durationMs"] = .number(Double(durationMs)) }
+        if let waveform { row["waveform"] = .array(waveform.map(JSONValue.number)) }
+        if let linkURL { row["linkURL"] = .string(linkURL) }
+        if let linkTitle { row["linkTitle"] = .string(linkTitle) }
+        if let linkDesc { row["linkDesc"] = .string(linkDesc) }
+        if let blob { row["blob"] = .string(blob) }
+        return .object(row)
+    }
+}
+
 /// 时间线里的一条：网关来的消息（seq 有值）或本机还没回 ack 的（seq 为 nil）
 struct ImLocalMessage: Sendable, Hashable, Identifiable {
     var clientId: String
@@ -63,7 +115,8 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
     var rejected: Bool
     var state: ImSendState
     var outgoing: ImOutgoingImage?
-    /// 图片上传进度 0...1，只在内存里
+    var upload: ImOutgoingUpload?
+    /// 附件上传进度 0...1，只在内存里
     var progress: Double?
 
     /// 本机发的那条 ack 前后 id 不变，气泡不会重建
@@ -90,6 +143,7 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         recalled = message.recalled
         rejected = message.rejected
         state = .sent
+        upload = nil
     }
 
     init(pending clientId: String, convId: String, from: String, at: Double, kind: String, body: ImBody?, replyTo: Int?, outgoing: ImOutgoingImage?) {
@@ -105,14 +159,17 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         rejected = false
         state = .sending
         self.outgoing = outgoing
+        upload = nil
     }
 
     static func from(_ json: JSONValue?) -> ImLocalMessage? {
         guard let row = json?.object else { return nil }
         let outgoing = ImOutgoingImage.from(row["outgoing"])
+        let upload = ImOutgoingUpload.from(row["upload"])
         if let message = ImMessage.from(json) {
             var local = ImLocalMessage(message)
             local.outgoing = outgoing
+            local.upload = upload
             return local
         }
         guard let clientId = row["clientId"]?.string, !clientId.isEmpty, let convId = row["convId"]?.string else { return nil }
@@ -129,6 +186,7 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         )
         // 上次退出时还在发的，重启后一律算失败，等用户手动重发
         local.state = .failed
+        local.upload = upload
         return local
     }
 
@@ -146,6 +204,7 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         if recalled { object["recalled"] = .bool(true) }
         if rejected { object["rejected"] = .bool(true) }
         if let outgoing { object["outgoing"] = outgoing.json() }
+        if let upload { object["upload"] = upload.json() }
         return .object(object)
     }
 }
@@ -174,10 +233,12 @@ enum ImTimeline {
             var next = item
             if let index = pending.firstIndex(where: { $0.clientId == item.clientId && item.from == me }) {
                 next.outgoing = next.outgoing ?? pending[index].outgoing
+                next.upload = next.upload ?? pending[index].upload
                 pending.remove(at: index)
             }
             if let old = bySeq[seq] {
                 next.outgoing = next.outgoing ?? old.outgoing
+                next.upload = next.upload ?? old.upload
             }
             bySeq[seq] = next
         }

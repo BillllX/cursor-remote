@@ -357,6 +357,120 @@ try {
   for (const item of streams) item.req.destroy();
   await sleep(300);
   const streamAgain = await upload(T.b, "file", "application/octet-stream", Buffer.from("名额归还"));
+  check(streamAgain.status === 200, "已鉴权流式上传断开后名额归还");
+
+  /* ── 分享扩展 HTTP send / upload-and-send ── */
+  b.send({ type: "im_presence", foreground: true });
+  await sleep(50);
+  const httpSend = async (token: string, message: Record<string, unknown>) => {
+    const res = await fetch(`${base}/upload/im/send-json`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify(message),
+    });
+    return { status: res.status, json: (await res.json()) as { type?: string; seq?: number; clientId?: string } };
+  };
+  check(
+    (await httpSend("wrong", { clientId: "http-no", to: "b", kind: "text", body: { text: "x" } })).status === 401,
+    "HTTP send：Bearer 不对 401",
+  );
+  for (const kind of ["image", "voice", "file"]) {
+    check(
+      (await httpSend(T.a, { clientId: `http-kind-${kind}`, to: "b", kind, body: {} })).status === 400,
+      `send-json 不收 ${kind}（附件必须走 /upload/im/send）`,
+    );
+  }
+  const browserSend = await fetch(`${base}/upload/im/send-json`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${T.a}`,
+      "content-type": "application/json",
+      origin: "https://app.example.test",
+    },
+    body: JSON.stringify({ clientId: "browser-no", to: "b", kind: "text", body: { text: "x" } }),
+  });
+  check(
+    browserSend.status === 403 && browserSend.headers.get("access-control-allow-origin") == null,
+    "HTTP send：拒绝带 Origin 的网页请求且不下发 CORS",
+  );
+  const browserPreflight = await fetch(`${base}/upload/im/send-json`, {
+    method: "OPTIONS",
+    headers: { origin: "https://app.example.test", "access-control-request-method": "POST" },
+  });
+  check(
+    browserPreflight.status === 403 && browserPreflight.headers.get("access-control-allow-origin") == null,
+    "HTTP send：浏览器预检同样拒绝",
+  );
+  const httpText = { clientId: "http-text-1", to: "b", kind: "text", body: { text: "来自分享扩展" } };
+  const hs1 = await httpSend(T.a, httpText);
+  const hs2 = await httpSend(T.a, httpText);
+  check(
+    hs1.status === 200 && hs1.json.type === "im_ack" && hs1.json.seq === hs2.json.seq,
+    "HTTP send：复用 send 且 clientId 去重",
+  );
+
+  const sharedFile = Buffer.from("share extension file");
+  const uploadMessage = {
+    clientId: "http-file-1",
+    to: "b",
+    kind: "file",
+    body: { name: "分享.txt", size: 0, mime: "text/plain" },
+  };
+  const browserUpload = await fetch(`${base}/upload/im/send?kind=file&mime=text%2Fplain`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${T.a}`,
+      "content-type": "text/plain",
+      origin: "https://app.example.test",
+      "x-jiebo-im": Buffer.from(JSON.stringify(uploadMessage)).toString("base64url"),
+    },
+    body: new Uint8Array(Buffer.from("browser")),
+  });
+  check(
+    browserUpload.status === 403 && browserUpload.headers.get("access-control-allow-origin") == null,
+    "upload-and-send：拒绝带 Origin 的网页请求",
+  );
+  const bHTTPFile = b.next("im_message", (m) => m.message.clientId === "http-file-1");
+  const uploadSend = await fetch(`${base}/upload/im/send?kind=file&mime=text%2Fplain`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${T.a}`,
+      "content-type": "text/plain",
+      "x-jiebo-im": Buffer.from(JSON.stringify(uploadMessage)).toString("base64url"),
+    },
+    body: new Uint8Array(sharedFile),
+  });
+  const uploadAck = (await uploadSend.json()) as { type?: string; blob?: string };
+  const deliveredFile = await bHTTPFile;
+  check(
+    uploadSend.status === 200 &&
+      uploadAck.type === "im_ack" &&
+      /^[0-9a-f]{64}$/.test(uploadAck.blob ?? "") &&
+      deliveredFile.message.kind === "file" &&
+      deliveredFile.message.body != null &&
+      "size" in deliveredFile.message.body &&
+      deliveredFile.message.body.size === sharedFile.length,
+    "upload-and-send：流式归位后复用 send、校正文件大小并在线投递",
+  );
+  const oversizedSharedImage = await fetch(`${base}/upload/im/send?kind=image&mime=image%2Fjpeg`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${T.a}`,
+      "content-type": "image/jpeg",
+      "x-jiebo-im": Buffer.from(
+        JSON.stringify({
+          clientId: "http-image-big",
+          to: "b",
+          kind: "image",
+          body: { w: 1000, h: 1000, original: false },
+        }),
+      ).toString("base64url"),
+    },
+    body: new Uint8Array(Buffer.alloc(1024 * 1024 + 1)),
+  });
+  check(oversizedSharedImage.status === 413, "upload-and-send 图片同时作缩略图，强制不超过 1MB");
+  b.send({ type: "im_presence", foreground: false });
+  await sleep(50);
   check(streamAgain.status === 200, "流式上传断开后名额归还");
   const aborted = hanging(
     { authorization: `Bearer ${T.a}`, "content-type": "application/octet-stream" },
@@ -493,8 +607,8 @@ try {
   );
   check(!gatewayLog.includes(secret) && !gatewayLog.includes("看得见的正文"), "网关日志不含消息正文");
   check(
-    readdirSync(resolve(dir, "state", "im", "blobs")).filter((name) => /^[0-9a-f]{64}$/.test(name)).length === 6,
-    "blobs 目录按 sha256 存了 6 个附件（被拒的上传不留文件）",
+    readdirSync(resolve(dir, "state", "im", "blobs")).filter((name) => /^[0-9a-f]{64}$/.test(name)).length === 7,
+    "blobs 目录按 sha256 存了 7 个附件（含 upload-and-send；被拒的上传不留文件）",
   );
 } catch (err) {
   failed += 1;

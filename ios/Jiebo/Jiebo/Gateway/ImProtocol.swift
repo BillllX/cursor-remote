@@ -370,4 +370,8 @@ extension GatewayConfig {
         guard let relative = components.string else { return nil }
         return resolveHTTP(relative)
     }
+
+    /// 放在 /upload 前缀下，沿用线上已经开放给网关的反向代理路径。
+    static var imHTTPSendURL: URL? { resolveHTTP("/upload/im/send-json") }
+    static var imHTTPUploadAndSendURL: URL? { resolveHTTP("/upload/im/send") }
 }
