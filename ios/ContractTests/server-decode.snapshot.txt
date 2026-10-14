@@ -987,3 +987,43 @@
   code: "rate_limited"
   message: "发得太快了，稍等一会儿再发"
 ))
+
+## server[60] workspace_agents #1
+.workspaceAgents(
+  items: [
+    WorkspaceAgentItem(
+      path: "/workspace/demo/notes"
+      directoryName: "notes"
+      displayName: "讲稿项目"
+      avatarBlob: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+      mainChatId: "c-7f3a9e21"
+      status: "awaiting"
+      unread: 2
+      readSeq: 7
+      finishedSeq: 9
+      lastActivityAt: 1739000000000
+    )
+  ]
+  avatarTicket: ImTicket(
+    exp: 1739007200000
+    sig: "c2lnLWltLXNhbXBsZQ"
+  )
+  reset: true
+  more: true
+  after: nil
+  cursor: "notes"
+)
+
+## server[61] workspace_agent_opened #1
+.workspaceAgentOpened(
+  path: "/workspace/demo/notes"
+  chatId: "c-7f3a9e21"
+)
+
+## server[62] workspace_agent_update #1
+.workspaceAgentUpdate(
+  chatId: "c-7f3a9e21"
+  unread: 0
+  readSeq: 9
+  finishedSeq: 9
+)

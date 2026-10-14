@@ -1056,6 +1056,42 @@
       "clientId": "c-ios-1739000000000-1",
       "code": "rate_limited",
       "message": "发得太快了，稍等一会儿再发"
+    },
+    {
+      "type": "workspace_agents",
+      "avatarTicket": {
+        "exp": 1739007200000,
+        "sig": "c2lnLWltLXNhbXBsZQ"
+      },
+      "cursor": "notes",
+      "more": true,
+      "reset": true,
+      "workspaces": [
+        {
+          "avatarBlob": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+          "directoryName": "notes",
+          "displayName": "讲稿项目",
+          "finishedSeq": 9,
+          "lastActivityAt": 1739000000000,
+          "mainChatId": "c-7f3a9e21",
+          "path": "/workspace/demo/notes",
+          "readSeq": 7,
+          "status": "awaiting",
+          "unread": 2
+        }
+      ]
+    },
+    {
+      "type": "workspace_agent_opened",
+      "chatId": "c-7f3a9e21",
+      "path": "/workspace/demo/notes"
+    },
+    {
+      "type": "workspace_agent_update",
+      "chatId": "c-7f3a9e21",
+      "finishedSeq": 9,
+      "readSeq": 9,
+      "unread": 0
     }
   ],
   "client": [
@@ -1090,6 +1126,29 @@
     {
       "type": "delete_workspace",
       "path": "/workspace/demo/old"
+    },
+    {
+      "type": "workspace_agent_list",
+      "cursor": "notes"
+    },
+    {
+      "type": "workspace_agent_open",
+      "path": "/workspace/demo/notes"
+    },
+    {
+      "type": "workspace_agent_profile",
+      "avatar": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "displayName": "讲稿项目",
+      "path": "/workspace/demo/notes"
+    },
+    {
+      "type": "workspace_agent_read",
+      "chatId": "c-7f3a9e21",
+      "seq": 9
+    },
+    {
+      "type": "workspace_agent_viewing",
+      "chatId": "c-7f3a9e21"
     },
     {
       "type": "prompt",

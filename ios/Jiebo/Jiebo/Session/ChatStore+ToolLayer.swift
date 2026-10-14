@@ -60,7 +60,7 @@ extension ChatStore {
     }
 
     /// 文件名走本地索引，内容走 search_text。空查询不发请求。
-    func scheduleSearch() {
+    func scheduleSearch(chatId requestedId: String? = nil) {
         searchTask?.cancel()
         searchEpoch += 1
         let epoch = searchEpoch
@@ -74,10 +74,11 @@ extension ChatStore {
         searchLoading = true
         searchHits = []
         searchTruncated = false
-        let chatId = activeId
+        let chatId = requestedId ?? activeId
         searchTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, searchEpoch == epoch else { return }
+            searchRequestChatId = chatId
             send(.searchText(query: query, chatId: chatId))
         }
     }

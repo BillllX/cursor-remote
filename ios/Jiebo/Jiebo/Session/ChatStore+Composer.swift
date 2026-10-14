@@ -24,7 +24,8 @@ extension ChatStore {
     }
 
     /// 打字时只更新 @ 候选，不把草稿写进会话列表。
-    func updateMentions(for text: String) {
+    func updateMentions(for text: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
         guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
             if mentionQuery != nil { mentionQuery = nil }
             mentionTask?.cancel()
@@ -41,22 +42,25 @@ extension ChatStore {
         mentionTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
-            self?.send(.listFiles(query: queryString, chatId: self?.activeId, mention: true))
+            self?.mentionRequestChatId = targetId
+            self?.send(.listFiles(query: queryString, chatId: targetId, mention: true))
         }
     }
 
     // MARK: @补全
 
     /// 点选候选：把草稿尾部的 @查询 替换成 @路径（保留查询前的空白分隔）
-    func insertMention(_ path: String) {
-        guard let range = draft.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }
-        let leading = draft[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
-        var next = draft
+    func insertMention(_ path: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        let current = draft(for: targetId)
+        guard let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }
+        let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+        var next = current
         next.replaceSubrange(range, with: "\(leading)@\(path) ")
         mentionQuery = nil
         mentionTask?.cancel()
         mentionSuggestions = []
-        saveDraft(next)
+        saveDraft(next, forChat: targetId)
     }
 
     /// 候选排序：文件名前缀 > 文件名包含 > 路径包含，同分短路径优先（对齐网页 mentionHits 的意图）
@@ -83,14 +87,16 @@ extension ChatStore {
     }
 
     /// 拉当前会话工作区的文件索引（@补全的本地底数据 + 文件清单 sheet）
-    func requestFileIndex() {
+    func requestFileIndex(chatId: String? = nil) {
         guard unlocked else { return }
-        send(.listFiles(query: "", chatId: activeId, mention: nil))
+        let targetId = chatId ?? activeId
+        fileIndexRequestChatId = targetId
+        send(.listFiles(query: "", chatId: targetId, mention: nil))
     }
 
     /// 文件清单 sheet 用：把 @path 追加到当前会话草稿（带去重）
-    func appendMentionToDraft(_ path: String) {
-        appendMention(path, to: activeId)
+    func appendMentionToDraft(_ path: String, chatId: String? = nil) {
+        appendMention(path, to: chatId ?? activeId)
     }
 
     // MARK: 附件与图片
@@ -121,36 +127,45 @@ extension ChatStore {
         pendingImages.removeAll { $0.id == id }
     }
 
-    func toggleConfirmWrites() {
-        patch(activeId) { chat in
+    func removePendingImage(_ imageId: UUID, chatId: String) {
+        if chatId == activeId {
+            removePendingImage(imageId)
+        } else {
+            imagesByChat[chatId]?.removeAll { $0.id == imageId }
+        }
+    }
+
+    func toggleConfirmWrites(chatId: String? = nil) {
+        patch(chatId ?? activeId) { chat in
             var next = chat
             next.confirmWrites.toggle()
             return next
         }
     }
 
-    func togglePolicy() {
-        let next = (active?.policy == "plane") ? "baseline" : "plane"
-        patch(activeId) { chat in
+    func togglePolicy(chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        let next = (chatSession(targetId)?.policy == "plane") ? "baseline" : "plane"
+        patch(targetId) { chat in
             var copy = chat
             copy.policy = next
             return copy
         }
-        send(.setPolicy(policy: next, chatId: activeId))
+        send(.setPolicy(policy: next, chatId: targetId))
     }
 
-    func attachFiles(_ urls: [URL]) {
+    func attachFiles(_ urls: [URL], chatId: String? = nil) {
+        let targetId = chatId ?? activeId
         // 对齐网页端 MAX_UPLOAD_FILES = 10
         if urls.count > 10 { flash("一次最多传 10 个文件") }
         for url in urls.prefix(10) {
             let item = UploadItem(id: UUID().uuidString.lowercased(), name: url.lastPathComponent)
             uploads.append(item)
-            Task { await uploadAttachment(item: item, source: url) }
+            Task { await uploadAttachment(item: item, source: url, chatId: targetId) }
         }
     }
 
-    func uploadAttachment(item: UploadItem, source: URL) async {
-        let chatId = activeId
+    func uploadAttachment(item: UploadItem, source: URL, chatId: String) async {
         let tenantAtStart = tenantId
         do {
             // 重 I/O（安全作用域 + 复制 iCloud 文件）放后台线程，避免卡主 actor

@@ -1,5 +1,29 @@
 import Foundation
 
+/// turn_files 可能先于 snapshot/history 到达；按会话和回合暂存，回合出现后一次取走。
+struct DeferredTurnFiles {
+    private var values: [String: [String: [TurnFile]]] = [:]
+
+    var isEmpty: Bool { values.isEmpty }
+
+    mutating func store(chatId: String, turnId: String, files: [TurnFile]) {
+        values[chatId, default: [:]][turnId] = files
+    }
+
+    mutating func take(chatId: String, availableTurnIds: Set<String>) -> [String: [TurnFile]] {
+        guard let pending = values[chatId] else { return [:] }
+        let ready = pending.filter { availableTurnIds.contains($0.key) }
+        guard !ready.isEmpty else { return [:] }
+        for turnId in ready.keys { values[chatId]?[turnId] = nil }
+        if values[chatId]?.isEmpty == true { values[chatId] = nil }
+        return ready
+    }
+
+    mutating func removeAll() {
+        values = [:]
+    }
+}
+
 struct ToolCall: Identifiable, Hashable {
     var callId: String
     var name: String

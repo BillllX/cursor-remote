@@ -10,7 +10,8 @@ extension ThreadView {
             ScrollView {
                 // 不用 LazyVStack：流式增高时未实现的底部锚点会让 scrollTo 落空，跟随就断。
                 VStack(alignment: .leading, spacing: 18) {
-                    if let chat = store.active, chat.turns.isEmpty, chat.turnsComplete, !store.coldStartPlaceholder {
+                    if let chat = threadChat, chat.turns.isEmpty, chat.turnsComplete,
+                       !(chatId == nil && store.coldStartPlaceholder) {
                         // 未加载完的壳（!turnsComplete）不算空会话——由下方遮罩覆盖
                         if chrome == .embedded {
                             assistantEmptyState
@@ -18,7 +19,7 @@ extension ThreadView {
                             emptyState
                         }
                     }
-                    if let chat = store.active, !chat.turnsComplete, !chat.turns.isEmpty,
+                    if let chat = threadChat, !chat.turnsComplete, !chat.turns.isEmpty,
                        store.loadingChatIds.contains(chat.id), !store.refreshingChatIds.contains(chat.id) {
                         // 只在真的往前翻页时出现；显示本机缓存、增量补齐期间由导航栏的同步转圈提示
                         // 分页加载更早内容的轻提示（不抢滚动，对齐「分段加载」的可感知性）
@@ -31,8 +32,8 @@ extension ThreadView {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                     }
-                    let allTurns = Turn.uniqued(store.active?.turns ?? [])
-                    let renderLimit = renderedTurnLimit(for: store.activeId, total: allTurns.count)
+                    let allTurns = Turn.uniqued(threadChat?.turns ?? [])
+                    let renderLimit = renderedTurnLimit(for: resolvedChatId, total: allTurns.count)
                     let hiddenCount = max(0, allTurns.count - renderLimit)
                     let turns = Array(allTurns.suffix(renderLimit))
                     let inviteTurnId = calendarInviteTurnId(turns)
@@ -92,7 +93,7 @@ extension ThreadView {
             .onAppear {
                 let height = geo.size.height - geo.safeAreaInsets.bottom
                 viewportHeight = height
-                guard height > 1, pinnedMinHeight <= 1, let id = store.active?.turns.last?.id else { return }
+                guard height > 1, pinnedMinHeight <= 1, let id = threadChat?.turns.last?.id else { return }
                 pinToTurn(id, proxy: proxy, height: height)
             }
             .onChange(of: geo.size.height - geo.safeAreaInsets.bottom) { _, h in viewportHeight = h }
@@ -109,7 +110,7 @@ extension ThreadView {
                                     .foregroundStyle(JieboColor.ink)
                                     .frame(width: 44, height: 44)
                                     .jieboGlass(in: Circle(), interactive: true)
-                                if store.active?.turns.last?.running == true {
+                                if threadChat?.turns.last?.running == true {
                                     Circle()
                                         .fill(JieboColor.run)
                                         .frame(width: 9, height: 9)
@@ -119,7 +120,7 @@ extension ThreadView {
                             .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityValue(store.active?.turns.last?.running == true ? "有新内容正在生成" : "")
+                        .accessibilityValue(threadChat?.turns.last?.running == true ? "有新内容正在生成" : "")
                         .padding(.bottom, 10)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                         .accessibilityLabel("滚动到最新消息")
@@ -160,15 +161,15 @@ extension ThreadView {
             .modifier(UnstickDrag(embedded: true) {
                 releaseFollow()
             })
-            .onChange(of: store.active?.turns.count) { _, _ in
-                guard let id = store.active?.turns.last?.id else { return }
+            .onChange(of: threadChat?.turns.count) { _, _ in
+                guard let id = threadChat?.turns.last?.id else { return }
                 pinToTurn(id, proxy: proxy, height: viewportHeight)
             }
             .onChange(of: liveTail) { _, _ in
                 guard pinExceeded, stickToBottom else { return }
                 scrollToEndNow(proxy)
             }
-            .onChange(of: store.active?.turns.last?.running) { _, running in
+            .onChange(of: threadChat?.turns.last?.running) { _, running in
                 // 流式时不追；停更后代码和表格还会长高，超出钉顶才再贴一次底
                 guard running == false, pinExceeded, stickToBottom else { return }
                 scrollToEndNow(proxy)
@@ -190,27 +191,27 @@ extension ThreadView {
                     pinnedMinHeight = newHeight
                 }
             }
-            .onChange(of: store.activeId) { _, id in
+            .onChange(of: resolvedChatId) { _, id in
                 // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
                 followTask?.cancel()
                 stickToBottom = true
                 motionChatId = id
-                if let last = store.active?.turns.last?.id, viewportHeight > 1 {
+                if let last = threadChat?.turns.last?.id, viewportHeight > 1 {
                     pinToTurn(last, proxy: proxy, height: viewportHeight)
                 } else {
-                    pinnedTurnId = store.active?.turns.last?.id
+                    pinnedTurnId = threadChat?.turns.last?.id
                     pinExceeded = false
                     pinBaselineReady = false
                     pinBaselineMinY = nil
                 }
             }
             .onAppear {
-                motionChatId = store.activeId
+                motionChatId = resolvedChatId
                 stickToBottom = true
-                if let last = store.active?.turns.last?.id, viewportHeight > 1 {
+                if let last = threadChat?.turns.last?.id, viewportHeight > 1 {
                     pinToTurn(last, proxy: proxy, height: viewportHeight)
                 } else {
-                    pinnedTurnId = store.active?.turns.last?.id
+                    pinnedTurnId = threadChat?.turns.last?.id
                     pinExceeded = false
                 }
             }
@@ -374,7 +375,7 @@ extension ThreadView {
         loadingEarlierBatch = true
         let anchorId = Array(allTurns.suffix(limit)).first?.id
         let next = min(allTurns.count, limit + Self.renderedTurnStep)
-        renderedTurnLimitByChat[store.activeId] = next
+        renderedTurnLimitByChat[resolvedChatId] = next
         followTask?.cancel()
         followTask = Task { @MainActor in
             defer { loadingEarlierBatch = false }

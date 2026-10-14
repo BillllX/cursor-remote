@@ -202,6 +202,19 @@ export type ImMessage = {
 
 /** 下载票据，签名绑定（租户, scope, exp）；scope 是会话号或 "avatars"，2 小时有效 */
 export type ImTicket = { exp: number; sig: string };
+export type WorkspaceAgentRow = {
+  path: string;
+  directoryName: string;
+  displayName: string;
+  avatarBlob?: string;
+  mainChatId?: string;
+  status: "idle" | "running" | "queued" | "awaiting";
+  unread: number;
+  /** 服务端单调注意序号：每轮审批或完成首次出现时 +1；同轮审批后完成不重复。read 只允许向前推进 */
+  readSeq: number;
+  finishedSeq: number;
+  lastActivityAt: number;
+};
 export type ImUser = { id: string; nickname: string; avatar?: string };
 export type ImMe = ImUser & { notifyPreview: boolean };
 export type ImConvRow = {
@@ -240,6 +253,12 @@ export type ClientMessage =
   | { type: "rename_workspace"; path: string; name: string }
   /** 空目录真删，有文件只隐藏，还有对话就拒绝 */
   | { type: "delete_workspace"; path: string }
+  | { type: "workspace_agent_list"; cursor?: string }
+  | { type: "workspace_agent_open"; path: string }
+  /** displayName/avatar 缺字段表示不改，null/空串表示恢复默认 */
+  | { type: "workspace_agent_profile"; path: string; displayName?: string | null; avatar?: string | null }
+  | { type: "workspace_agent_read"; chatId: string; seq: number }
+  | { type: "workspace_agent_viewing"; chatId: string | null }
   | {
       type: "prompt";
       text: string;
@@ -480,6 +499,20 @@ export type ServerMessage =
   | { type: "workspace_created"; path: string; name: string }
   | { type: "workspace_renamed"; from: string; path: string; name: string }
   | { type: "workspace_removed"; path: string; name: string; mode: "deleted" | "hidden" }
+  | {
+      type: "workspace_agents";
+      workspaces: WorkspaceAgentRow[];
+      avatarTicket: ImTicket;
+      /** 首次请求和广播页为 true：客户端先清空旧列表；后续 cursor 页为 false。 */
+      reset: boolean;
+      more: boolean;
+      /** 本页请求所带 cursor；客户端用来丢弃迟到的旧分页。 */
+      after?: string;
+      /** more=true 时继续请求 workspace_agent_list(cursor)。 */
+      cursor?: string;
+    }
+  | { type: "workspace_agent_opened"; path: string; chatId: string }
+  | { type: "workspace_agent_update"; chatId: string; unread: number; readSeq: number; finishedSeq: number }
   /**
    * 三个字段网关总会带上，“没有”用空串表示而不是省略：chatId 为空串 = 还没有会话时切了工作区（只看 cwd）；
    * agentId 为空串 = 这个会话当前没有 agent（客户端清掉本地旧值）
@@ -549,7 +582,7 @@ export type ServerMessage =
       /** 超过连接声明的单条上限：有 url 时去掉了 content（客户端走 HTTP），否则 content 被截短 */
       truncated?: boolean;
     }
-  // 一轮结束时的文件清单，只发给发起这一轮的连接；同一份也写进 turn.files 落盘
+  // 一轮结束时的文件清单，广播给同租户连接；同一份也写进 turn.files 落盘
   | { type: "turn_files"; chatId: string; turnId: string; files: TurnFile[] }
   | { type: "file_written"; path: string; chatId?: string; error?: string }
   | {

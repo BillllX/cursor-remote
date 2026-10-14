@@ -41,6 +41,8 @@ import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./c
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
 import { errText, log } from "../log.ts";
+import { workspaceUnread } from "../workspace/agents.ts";
+import { getTenant } from "../tenants.ts";
 import { migrateMemory } from "./migrate.ts";
 import {
   answerCard,
@@ -503,7 +505,15 @@ export async function handleOp(
       if (args.kind === "apns") {
         // 写本租户 + 从其他租户摘掉都做完才回成功（按 token 串行）
         const refs = (deps?.tenants() ?? []).map(refOf);
-        const input = { token: args.token, bundleId: args.bundleId, environment: args.environment, ua: args.ua, im: args.im, assistant: args.assistant };
+        const input = {
+          token: args.token,
+          bundleId: args.bundleId,
+          environment: args.environment,
+          ua: args.ua,
+          im: args.im,
+          assistant: args.assistant,
+          workspace: args.workspace,
+        };
         const result = await subscribeApnsDevice(ref, input, refs);
         if (!result.ok) return fail(result.error);
         if (result.released.length) log.info(`apns token 转绑到 ${tenant.id}，已从 ${result.released.join("、")} 摘掉`);
@@ -565,9 +575,11 @@ async function pushItem(tenant: AssistantTenant, item: { id: string; kind: strin
  *  因为助理变化不会推给它。哪个分量超时拿不到就是 undefined——助理那份有短缓存顶着（badge.ts） */
 export async function pushBadge(tenant: AssistantTenant): Promise<BadgeParts> {
   const imBadge = deps?.imBadge;
+  const fullTenant = getTenant(tenant.id);
   return {
     assistant: await assistantBadgeCached(refOf(tenant)),
     im: imBadge ? await within(imBadge(tenant.id).catch(() => undefined), BADGE_WAIT_MS) : undefined,
+    workspace: fullTenant ? workspaceUnread(fullTenant) : undefined,
   };
 }
 

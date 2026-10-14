@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync
 import { basename, relative, resolve } from "node:path";
 import type { WebSocket } from "ws";
 import { assistantName } from "../assistant/service.ts";
+import { bodySummary } from "../chatBodies.ts";
 import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { log } from "../log.ts";
 import { relEscapes } from "../pathInside.ts";
@@ -10,9 +11,16 @@ import { chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import { disposeSlot, persistTenant, runningChatIds } from "../runtime/slots.ts";
 import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn } from "../runtime/types.ts";
-import { broadcastDigest } from "../sync/storedState.ts";
+import { broadcastDigest, tombstoneChat } from "../sync/storedState.ts";
 import { confinedCwd, isBillXuTenant, saveDiskNow, type Tenant } from "../tenants.ts";
 import { send } from "../ws/send.ts";
+import {
+  broadcastWorkspaceAgents,
+  migrateWorkspaceAgent,
+  removeWorkspaceAgent,
+  workspaceAgentByChat,
+  workspaceKey,
+} from "./agents.ts";
 
 export function sanitizeWorkspaceName(raw: string): string | null {
   const name = raw
@@ -112,14 +120,22 @@ function underDir(path: string | undefined, dir: string) {
   return abs === dir || abs.startsWith(`${dir}/`);
 }
 
-/** 目录下有多少条没被删掉的会话 */
-function chatsUnder(tenant: Tenant, dir: string) {
+/** 目录下所有没被删掉的会话；重命名必须连空的工作区主会话一起迁移。 */
+function allChatsUnder(tenant: Tenant, dir: string) {
   const gone = new Set(tenant.disk.deletedIds);
   return tenant.disk.chats.filter((item) => {
     const id = chatIdOf(item);
     if (!id || gone.has(id) || isAssistantChat(tenant, id)) return false;
     const cwd = (item as { cwd?: unknown })?.cwd;
     return typeof cwd === "string" && underDir(cwd, dir);
+  });
+}
+
+/** 删除计数豁免从聊天列表懒创建、但还没说过话的主会话。 */
+function deletionBlockingChatsUnder(tenant: Tenant, dir: string) {
+  return allChatsUnder(tenant, dir).filter((item) => {
+    const id = chatIdOf(item);
+    return !(id && workspaceAgentByChat(tenant, id) && bodySummary(item)?.count === 0);
   });
 }
 
@@ -138,7 +154,7 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
   const to = confinedCwd(resolve(root, name), root);
   if (!to || to === root) return fail("工作区必须在允许的目录里。");
   if (existsSync(to) || readHiddenWorkspaces(tenant).includes(name)) return fail(`已经有叫「${name}」的工作区。`);
-  const chats = chatsUnder(tenant, from.dir);
+  const chats = allChatsUnder(tenant, from.dir);
   const busy = new Set(runningChatIds(tenant));
   if (
     chats.some((item) => busy.has(chatIdOf(item) || "")) ||
@@ -150,6 +166,17 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
     renameSync(from.dir, to);
   } catch {
     return fail("改名失败，目录可能被占用。");
+  }
+  // 目录改名成功后、任何 await 和事件发布前同步迁移映射，保留 chatId、资料和未读。
+  try {
+    migrateWorkspaceAgent(tenant, from.name, name, to);
+  } catch {
+    try {
+      renameSync(to, from.dir);
+    } catch (rollbackError) {
+      log.error("工作区 Agent 映射迁移失败且目录回滚失败", tenant.id, rollbackError);
+    }
+    return fail("改名失败：聊天映射没能安全迁移。");
   }
   const move = (path: string) => (underDir(path, from.dir) ? resolve(to, relative(from.dir, resolve(path))) : path);
   for (const item of chats) {
@@ -187,6 +214,7 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
   send(ws, { type: "workspace_renamed", from: from.dir, path: to, name });
   emitWorkspaces(ws, tenant);
   broadcastDigest(tenant, ws);
+  broadcastWorkspaceAgents(tenant);
 }
 
 /**
@@ -196,7 +224,7 @@ export function deleteWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn, rawPa
   const fail = (message: string) => send(ws, { type: "error", message });
   const target = topLevelWorkspace(tenant, rawPath);
   if (!target) return fail("只能删根目录下的工作区。");
-  const count = chatsUnder(tenant, target.dir).length;
+  const count = deletionBlockingChatsUnder(tenant, target.dir).length;
   if (count) return fail(`里面还有 ${count} 个对话，先清空对话再删。`);
   let entries: string[] = [];
   try {
@@ -216,8 +244,22 @@ export function deleteWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn, rawPa
     writeHiddenWorkspaces(tenant, [...readHiddenWorkspaces(tenant), target.name]);
   }
   if (underDir(conn.cwd, target.dir)) conn.cwd = resolve(tenant.workspaceRoot);
+  const key = workspaceKey(tenant, target.dir);
+  const mainChatId = key ? removeWorkspaceAgent(tenant, key) : undefined;
+  if (mainChatId) {
+    const chat = tenant.disk.chats.find((item) => chatIdOf(item) === mainChatId);
+    if (bodySummary(chat)?.count === 0) {
+      tombstoneChat(tenant, mainChatId);
+      tenant.disk.rev += 1;
+      tenant.disk.slots = tenant.disk.slots.filter((item) => item.chatId !== mainChatId);
+      persistTenant(tenant);
+      saveDiskNow(tenant);
+      broadcastDigest(tenant);
+    }
+  }
   send(ws, { type: "workspace_removed", path: target.dir, name: target.name, mode });
   emitWorkspaces(ws, tenant);
+  broadcastWorkspaceAgents(tenant);
 }
 
 export function emitWorkspaces(ws: WebSocket, tenant: Tenant) {

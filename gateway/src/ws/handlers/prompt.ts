@@ -6,8 +6,22 @@ import { slotOf } from "../../runtime/slots.ts";
 import { handlePrompt, promptModel } from "../../chat/runner.ts";
 import { titleChat } from "../../chat/title.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
+import { chatIdOf } from "../../runtime/chats.ts";
+import { openWorkspaceAgent, workspaceAgentByChat } from "../../workspace/agents.ts";
+import { send } from "../send.ts";
 
 export async function onPrompt({ ws, conn, tenant }: WsCtx, message: MessageOf<"prompt">) {
+  const workspace = workspaceAgentByChat(tenant, message.chatId);
+  if (
+    workspace &&
+    (tenant.disk.deletedIds.includes(message.chatId) ||
+      !tenant.disk.chats.some((item) => chatIdOf(item) === message.chatId))
+  ) {
+    const opened = openWorkspaceAgent(tenant, workspace.item.path);
+    if (opened) send(ws, { type: "workspace_agent_opened", path: opened.path, chatId: opened.chatId });
+    send(ws, { type: "error", chatId: message.chatId, message: "工作区主会话已失效，已自动重建，请重新发送。" });
+    return;
+  }
   const slot = slotOf(conn, message.chatId);
   // P9 计量：一条用户消息记一个 turn（排队也算——用户确实发了）；
   // 埋点在分发处而非 handlePrompt，pending 重放不会重复计数
@@ -22,8 +36,8 @@ export async function onPrompt({ ws, conn, tenant }: WsCtx, message: MessageOf<"
     message.mode,
     message.files,
     message.images,
-    Boolean(message.confirmWrites),
-    Boolean(message.autoApprove),
+    workspace ? false : Boolean(message.confirmWrites),
+    workspace ? false : Boolean(message.autoApprove),
     Boolean(message.fresh),
     parsePolicy(message.policy, conn.policy),
     message.dialect,

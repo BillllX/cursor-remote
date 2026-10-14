@@ -8,27 +8,34 @@ extension ChatStore {
 
     /// 有可还原的最近一轮（对齐网页：undo 作用于最后一轮）
     var canUndo: Bool {
-        guard !busy, let chat = active else { return false }
+        canUndo(activeId)
+    }
+
+    func canUndo(_ chatId: String) -> Bool {
+        guard !isBusy(chatId), let chat = chatSession(chatId) else { return false }
         return chat.turns.contains { !$0.running && !$0.queued }
     }
 
-    func undoLast() {
-        guard canUndo else { return }
-        send(.undo(chatId: activeId))
+    func undoLast(chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        guard canUndo(targetId) else { return }
+        send(.undo(chatId: targetId))
     }
 
-    func keepTurnFiles(_ turnId: String) {
-        guard let chat = active, chat.turns.contains(where: { $0.id == turnId }) else { return }
-        markTurnReview(turnId, review: "accepted", onlyEmpty: true)
+    func keepTurnFiles(_ turnId: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        guard let chat = chatSession(targetId), chat.turns.contains(where: { $0.id == turnId }) else { return }
+        markTurnReview(turnId, review: "accepted", onlyEmpty: true, chatId: targetId)
     }
 
     /// 发出还原后先挂「还原中」，等 undone/restored 回执确认这一轮的文件真回去了才标 rejected
-    func restoreTurnFiles(_ turnId: String) {
+    func restoreTurnFiles(_ turnId: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
         guard !restoringTurnIds.contains(turnId) else { return }
-        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId), let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
         // 绝对路径和 files 里的相对路径归一后可能重合：去重保序，revert_file 一个路径只发一次
         var paths: [String] = []
-        for path in turn.reviewPaths.map({ relToCwd($0) }) where !path.isEmpty && !paths.contains(path) {
+        for path in turn.reviewPaths.map({ relToCwd($0, chatId: targetId) }) where !path.isEmpty && !paths.contains(path) {
             paths.append(path)
         }
         guard !paths.isEmpty else { return }
@@ -123,17 +130,19 @@ extension ChatStore {
         send(.toolReview(chatId: chat.id, turnId: turnId, reviews: reviews))
     }
 
-    func refreshCheckpoints() {
-        guard client.isOpen, activeId != "boot" else { return }
-        send(.listCheckpoints(chatId: activeId))
+    func refreshCheckpoints(chatId: String? = nil) {
+        let targetId = chatId ?? activeId
+        guard client.isOpen, targetId != "boot" else { return }
+        send(.listCheckpoints(chatId: targetId))
     }
 
-    func restoreCheckpoint(_ id: String) {
+    func restoreCheckpoint(_ id: String, chatId: String? = nil) {
+        let targetId = chatId ?? activeId
         guard client.isOpen else { return }
-        guard !busy else {
+        guard !isBusy(targetId) else {
             flash("等当前这条跑完再还原")
             return
         }
-        send(.restore(chatId: activeId, checkpointId: id))
+        send(.restore(chatId: targetId, checkpointId: id))
     }
 }

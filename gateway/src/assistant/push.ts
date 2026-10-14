@@ -87,11 +87,18 @@ export type ApnsSubscription = {
   assistant?: boolean;
   /** 收聊天（IM）推送；缺省 false，新 App 订阅时带 im: true */
   im?: boolean;
+  /** 收工作区 Agent 推送；缺省 false */
+  workspace?: boolean;
 };
 
-/** 这条订阅收不收某一类推送（缺省 assistant=true、im=false） */
-export function apnsWants(sub: Pick<ApnsSubscription, "assistant" | "im">, channel: "assistant" | "im") {
-  return channel === "im" ? sub.im === true : sub.assistant !== false;
+/** 这条订阅收不收某一类推送（缺省 assistant=true，其他=false） */
+export function apnsWants(
+  sub: Pick<ApnsSubscription, "assistant" | "im" | "workspace">,
+  channel: "assistant" | "im" | "workspace",
+) {
+  if (channel === "im") return sub.im === true;
+  if (channel === "workspace") return sub.workspace === true;
+  return sub.assistant !== false;
 }
 
 function optionalFlag(value: unknown): boolean | undefined {
@@ -152,7 +159,15 @@ export function removeSubscription(ref: TenantRef, endpoint: string) {
 /** 校验并登记 APNs 订阅；同 token 重复注册更新 bundleId / environment / ua */
 export function addApnsSubscription(
   ref: TenantRef,
-  input: { token?: unknown; bundleId?: unknown; environment?: unknown; ua?: unknown; im?: unknown; assistant?: unknown },
+  input: {
+    token?: unknown;
+    bundleId?: unknown;
+    environment?: unknown;
+    ua?: unknown;
+    im?: unknown;
+    assistant?: unknown;
+    workspace?: unknown;
+  },
 ) {
   const token = typeof input.token === "string" ? input.token.trim() : "";
   if (!APNS_TOKEN_RE.test(token) || token.length % 2 !== 0) return { ok: false as const, error: "APNs token 格式不对（要 64 位以上的偶数长度 hex）。" };
@@ -169,11 +184,13 @@ export function addApnsSubscription(
   const known = file.apns.find((item) => item.token.toLowerCase() === key);
   const apns = file.apns.filter((item) => item.token.toLowerCase() !== key);
   // 每次订阅都声明完整偏好：没带 im / assistant 就按缺省，不沿用旧值
-  const flags: Pick<ApnsSubscription, "im" | "assistant"> = {};
+  const flags: Pick<ApnsSubscription, "im" | "assistant" | "workspace"> = {};
   const im = optionalFlag(input.im);
   const assistant = optionalFlag(input.assistant);
+  const workspace = optionalFlag(input.workspace);
   if (im !== undefined) flags.im = im;
   if (assistant !== undefined) flags.assistant = assistant;
+  if (workspace !== undefined) flags.workspace = workspace;
   apns.push({ token: key, bundleId, environment, createdAt: known?.createdAt ?? Date.now(), ua: ua ?? known?.ua, ...flags });
   writeSubs(ref, { ...file, apns });
   return { ok: true as const, count: Math.min(apns.length, MAX_SUBS_PER_CHANNEL) };

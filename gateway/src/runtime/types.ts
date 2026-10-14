@@ -118,6 +118,8 @@ export type Conn = {
   caps: Set<string>;
   /** caps 含 "im" 时 hello 置 true；im_presence 切换。前台连接在线时聊天不发 APNs */
   imForeground?: boolean;
+  /** 当前正在看的工作区 Agent 主会话；离开、后台或断线时为空 */
+  workspaceViewingChatId?: string;
   policy: PolicyId;
   /** 最近一条 prompt 带来的客户端时钟（时区 + 与网关的时差），助理会话每轮据此写“现在几点” */
   clock?: ClientClock;

@@ -59,6 +59,7 @@ export type ImDeps = {
   push: (tenantId: string, message: ApnsMessage) => void;
   /** 该租户助理待处理数（未读收件箱 + 待批），和 App 里助理入口的角标同一口径；拿不到时 undefined（角标分量不带） */
   assistantBadge?: (tenantId: string) => Promise<number | undefined>;
+  workspaceBadge?: (tenantId: string) => Promise<number | undefined>;
   now?: () => number;
 };
 
@@ -206,8 +207,11 @@ export class ImService {
     const assistant = this.deps.assistantBadge
       ? this.deps.assistantBadge(viewer).catch(() => undefined)
       : Promise.resolve(undefined);
-    const [im, extra] = await Promise.all([this.badge(viewer), assistant]);
-    return { im, assistant: extra };
+    const workspace = this.deps.workspaceBadge
+      ? this.deps.workspaceBadge(viewer).catch(() => undefined)
+      : Promise.resolve(undefined);
+    const [im, extra, workspaceUnread] = await Promise.all([this.badge(viewer), assistant, workspace]);
+    return { im, assistant: extra, ...(workspaceUnread === undefined ? {} : { workspace: workspaceUnread }) };
   }
 
   /** 这些租户各自在这个会话的未读，随更新下发给他们（客户端只用这个权威值，不自己推算） */

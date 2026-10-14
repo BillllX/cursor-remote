@@ -76,6 +76,13 @@ enum ContentDiscard {
     case deleteChat(String)
 }
 
+/// 聊天主页的类型化目标，避免用户 id、助理和工作区路径发生字符串碰撞。
+enum ChatDestination: Hashable {
+    case assistant
+    case person(String)
+    case workspace(String)
+}
+
 @Observable
 @MainActor
 final class ChatStore {
@@ -108,6 +115,17 @@ final class ChatStore {
     var pendingAssistantOpen = false
     /// iPhone 的 PhoneShell 出现时置 true：activeId 只允许是助理会话。iPad / 网页永远 false
     var assistantOnly = false
+    /// 聊天主页自己的导航；不复用工作台 activeId。
+    var chatHomeDestination: ChatDestination?
+    /// 聊天主页线程目标，可指助理或工作区主会话；绝不写回工作台 activeId。
+    var chatHomeThreadChatId: String?
+    var workspaceAgents: [WorkspaceAgentItem] = []
+    var workspaceAgentsLoaded = false
+    var workspaceAgentsPendingCursor: String?
+    var workspaceAvatarTicket: ImTicket?
+    var pendingWorkspacePath: String?
+    /// turn_files 可能早于非 owner 的 snapshot/history；按会话和回合暂存，回合出现时再合并。
+    var pendingTurnFiles = DeferredTurnFiles()
     var workspaces: [WorkspaceItem] = []
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
@@ -122,6 +140,7 @@ final class ChatStore {
     var loops: [String: LoopSnapshot] = [:]
     var searchQuery = ""
     var searchHits: [SearchHit] = []
+    var searchRequestChatId: String?
     /// 网关为了不超单条上限裁掉了一部分命中
     var searchTruncated = false
     var searchLoading = false
@@ -193,9 +212,11 @@ final class ChatStore {
     // MARK: P3 - @补全 / 文件清单 / Quick Look / undo
     /// 当前会话工作区的文件索引（list_files query:"" 的全量结果）
     var fileIndex: [String] = []
+    var fileIndexRequestChatId: String?
     var treeTruncated = false
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
+    var mentionRequestChatId: String?
     /// Quick Look 预览中的文件（sheet 驱动）
     var previewFile: PreviewFile?
     var previewLoading = false

@@ -50,6 +50,13 @@ import {
   onRenameWorkspace,
   onSetWorkspace,
 } from "./handlers/workspaces.ts";
+import {
+  onWorkspaceAgentList,
+  onWorkspaceAgentOpen,
+  onWorkspaceAgentProfile,
+  onWorkspaceAgentRead,
+  onWorkspaceAgentViewing,
+} from "./handlers/workspaceAgents.ts";
 import type { Handler, HandlerTable, WsConnCtx } from "./handlers/types.ts";
 
 /** 鉴权之后的“消息类型 → 处理函数”注册表 */
@@ -77,6 +84,11 @@ export const handlers: HandlerTable = {
   create_workspace: onCreateWorkspace,
   rename_workspace: onRenameWorkspace,
   delete_workspace: onDeleteWorkspace,
+  workspace_agent_list: onWorkspaceAgentList,
+  workspace_agent_open: onWorkspaceAgentOpen,
+  workspace_agent_profile: onWorkspaceAgentProfile,
+  workspace_agent_read: onWorkspaceAgentRead,
+  workspace_agent_viewing: onWorkspaceAgentViewing,
   resume_session: onResumeSession,
   delete_session: onDeleteSession,
   new_session: onNewSession,

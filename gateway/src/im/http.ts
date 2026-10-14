@@ -12,7 +12,8 @@ import type { ClientMessage, ImBody, ImKind } from "../../../shared/protocol.ts"
 import { applyUploadCors, parseMultipartUpload } from "../http/routes.ts";
 import { log } from "../log.ts";
 import { parseRange } from "../media.ts";
-import { allTenants, mediaSecret, resolveTenant } from "../tenants.ts";
+import { allTenants, getTenant, mediaSecret, resolveTenant } from "../tenants.ts";
+import { WORKSPACE_AVATARS_SCOPE, workspaceAvatarAllowed } from "../workspace/agents.ts";
 import { MAX_UPLOAD_BYTES } from "../workspace/files.ts";
 import { isBlobId } from "./body.ts";
 import { ImError } from "./errors.ts";
@@ -414,7 +415,14 @@ export async function handleImMedia(req: IncomingMessage, res: ServerResponse, u
     return;
   }
   const { service, store } = imRuntime();
-  const mime = await service.canDownload(tenantId, scope, sha);
+  let mime: string | null;
+  if (scope === WORKSPACE_AVATARS_SCOPE) {
+    const tenant = getTenant(tenantId);
+    const meta = tenant && workspaceAvatarAllowed(tenant, sha) ? await store.blobMeta(sha) : null;
+    mime = meta?.kinds.avatar ?? null;
+  } else {
+    mime = await service.canDownload(tenantId, scope, sha);
+  }
   const file = store.blobFile(sha);
   const info = mime ? await stat(file).catch(() => null) : null;
   if (!mime || !info) {

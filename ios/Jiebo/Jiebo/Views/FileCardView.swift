@@ -80,8 +80,10 @@ enum TurnFileStyle {
 /// 一轮文件审阅：与卡片是否渲染无关（内联卡片、无 card 的 delete 改动也要能保留/还原）
 struct TurnReviewBar: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.threadChatId) private var environmentChatId
     let turn: Turn
     @State private var confirmRestore = false
+    private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     var body: some View {
         let restoring = store.restoringTurnIds.contains(turn.id)
@@ -94,7 +96,7 @@ struct TurnReviewBar: View {
                 .buttonStyle(.bordered)
                 .tint(JieboColor.ink2)
                 .disabled(restoring)
-            Button("全部保留") { store.keepTurnFiles(turn.id) }
+            Button("全部保留") { store.keepTurnFiles(turn.id, chatId: chatId) }
                 .buttonStyle(.borderedProminent)
                 .tint(JieboColor.pine)
                 .disabled(restoring)
@@ -108,7 +110,7 @@ struct TurnReviewBar: View {
             isPresented: $confirmRestore,
             titleVisibility: .visible
         ) {
-            Button("全部还原", role: .destructive) { store.restoreTurnFiles(turn.id) }
+            Button("全部还原", role: .destructive) { store.restoreTurnFiles(turn.id, chatId: chatId) }
             Button("取消", role: .cancel) {}
         } message: {
             Text("文件会回到这一轮开始之前的样子。")

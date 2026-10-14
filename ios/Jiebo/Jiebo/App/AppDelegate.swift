@@ -66,7 +66,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
-        guard let target = PushTarget(userInfo: userInfo), target.kind == "im_read", let convId = target.convId else {
+        guard let target = PushTarget(userInfo: userInfo) else {
+            completionHandler(.noData)
+            return
+        }
+        if target.kind == "workspace_agent_read", let chatId = target.chatId {
+            clearWorkspaceNotifications(chatId: chatId) {
+                DispatchQueue.main.async { completionHandler(.newData) }
+            }
+            return
+        }
+        guard target.kind == "im_read", let convId = target.convId else {
             completionHandler(.noData)
             return
         }
@@ -86,7 +96,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         let target = PushTarget(userInfo: notification.request.content.userInfo)
-        if let target, target.kind == "im_read" || (target.isIm && target.convId == ImViewingBeacon.shared.current()) {
+        if let target,
+           target.kind == "im_read"
+               || target.kind == "workspace_agent_read"
+               || (target.isIm && target.convId == ImViewingBeacon.shared.current())
+               || (target.isWorkspace && target.chatId == WorkspaceViewingBeacon.shared.current())
+        {
             completionHandler([])
             return
         }
@@ -109,5 +124,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
         }
         completionHandler()
+    }
+
+    private func clearWorkspaceNotifications(chatId: String, completion: @escaping () -> Void) {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notifications in
+            let ids = notifications.compactMap { notification -> String? in
+                let target = PushTarget(userInfo: notification.request.content.userInfo)
+                return target?.chatId == chatId ? notification.request.identifier : nil
+            }
+            center.removeDeliveredNotifications(withIdentifiers: ids)
+            completion()
+        }
     }
 }

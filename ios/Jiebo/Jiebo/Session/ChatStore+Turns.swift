@@ -4,12 +4,13 @@ import Photos
 import UIKit
 
 extension ChatStore {
-    func editTurn(_ turnId: String) {
-        guard !busy else {
+    func editTurn(_ turnId: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        guard !isBusy(targetId) else {
             flash("等当前这条跑完再编辑")
             return
         }
-        guard let chat = active, let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId), let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
         // 显示的是旧正文（还在补齐）：截断不会随 sync_chat 上去，补齐完成又被服务端盖回
         guard chat.turnsComplete else {
             flash("正文还在同步，稍后再编辑")
@@ -26,27 +27,35 @@ extension ChatStore {
         }
         forgetBodyCache(chat.id) // 截断回合：本机缓存作废
         send(.newSession(chatId: chat.id, cwd: chat.cwd))
-        draft = text == "（附图）" ? "" : text
-        pendingImages = turn.images.compactMap { image in
+        saveDraft(text == "（附图）" ? "" : text, forChat: targetId)
+        let restoredImages = turn.images.compactMap { image in
             guard let data = Data(base64Encoded: image.data), !data.isEmpty else { return nil }
             return PendingImage(data: data, mimeType: image.mimeType, base64: image.data)
         }
+        if targetId == activeId { pendingImages = restoredImages }
+        else { imagesByChat[targetId] = restoredImages }
     }
 
-    func retryTurn(_ turnId: String) {
+    func retryTurn(_ turnId: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
         guard client.isOpen else { return }
-        guard !busy else {
+        guard !isBusy(targetId) else {
             flash("等当前这条跑完再重试")
             return
         }
-        guard let chat = active, let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId), let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
         guard chat.turnsComplete else {
             flash("正文还在同步，稍后再重试")
             return
         }
         let turn = chat.turns[index]
         let visible = turn.user == "（附图）" && !turn.images.isEmpty ? "" : turn.user
-        var next = Turn.blank(user: turn.user, model: turn.model ?? model, mode: turn.mode ?? mode, running: true)
+        var next = Turn.blank(
+            user: turn.user,
+            model: turn.model ?? model(for: targetId),
+            mode: turn.mode ?? mode(for: targetId),
+            running: true
+        )
         next.id = turn.id
         next.images = turn.images
         let prior = Array(chat.turns.prefix(index))
@@ -67,8 +76,8 @@ extension ChatStore {
             chatId: chat.id,
             files: mentions.isEmpty ? nil : mentions,
             images: turn.images.isEmpty ? nil : turn.images,
-            confirmWrites: chat.confirmWrites,
-            autoApprove: nil,
+            confirmWrites: workspaceAgent(chatId: targetId) == nil ? chat.confirmWrites : false,
+            autoApprove: workspaceAgent(chatId: targetId) == nil ? nil : false,
             fresh: true,
             nameChat: chat.isUntitled,
             policy: chat.policy,
@@ -85,20 +94,22 @@ extension ChatStore {
         send(.truncateTurns(chatId: chatId, turnId: turnId, rev: stateRev))
     }
 
-    func applyPlan(_ turnId: String) {
-        guard client.isOpen, !busy else {
-            if busy { flash("等当前这条跑完再执行") }
+    func applyPlan(_ turnId: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        guard client.isOpen, !isBusy(targetId) else {
+            if isBusy(targetId) { flash("等当前这条跑完再执行") }
             return
         }
-        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId), let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
         guard !cachedOnlyIds.contains(chat.id) else {
             flash("正在同步会话，稍后再执行")
             return
         }
-        chooseMode(.agent)
+        chooseMode(.agent, chatId: targetId)
         let visible = "执行这个计划"
         let text = "请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n\(turn.assistant.prefix(4000))"
-        let next = Turn.blank(user: visible, model: model, mode: .agent, running: true)
+        let targetModel = model(for: targetId)
+        let next = Turn.blank(user: visible, model: targetModel, mode: .agent, running: true)
         patch(chat.id) { item in
             var row = item
             row.turns.append(next)
@@ -110,24 +121,27 @@ extension ChatStore {
         flash("按计划开始执行")
         send(.prompt(
             text: text,
-            model: model,
+            model: targetModel,
             mode: .agent,
             chatId: chat.id,
             files: nil,
             images: nil,
-            confirmWrites: chat.confirmWrites,
-            autoApprove: nil,
+            confirmWrites: workspaceAgent(chatId: targetId) == nil ? chat.confirmWrites : false,
+            autoApprove: workspaceAgent(chatId: targetId) == nil ? nil : false,
             fresh: nil,
             nameChat: chat.isUntitled,
             policy: chat.policy,
-            history: ChatStore.externalHistory(model: model, turns: chat.turns),
+            history: ChatStore.externalHistory(model: targetModel, turns: chat.turns),
             turnId: next.id
         ))
         markProgress(chat.id)
     }
 
-    func dropQueuedTurn(_ turnId: String) {
-        guard let chat = active, let turn = chat.turns.first(where: { $0.id == turnId && $0.queued }) else { return }
+    func dropQueuedTurn(_ turnId: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        guard let chat = chatSession(targetId),
+              let turn = chat.turns.first(where: { $0.id == turnId && $0.queued })
+        else { return }
         patch(chat.id) { item in
             var next = item
             next.turns.removeAll { $0.id == turnId }
@@ -144,8 +158,12 @@ extension ChatStore {
     }
 
     func submit() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let images = pendingImages
+        submit(chatId: activeId, text: draft)
+    }
+
+    func submit(chatId: String, text rawText: String) {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = pendingImages(for: chatId)
         guard !text.isEmpty || !images.isEmpty else { return }
         // 带图 prompt 不进 outbox（base64 太大），掉线时直接拒发
         if !images.isEmpty, !client.isOpen {
@@ -157,42 +175,36 @@ extension ChatStore {
             flash("正在连接服务器，稍后再发")
             return
         }
-        ensureActiveChat()
-        let chatId = activeId
         // 冷启动缓存列表里的会话还没跟服务端对上：只读，草稿留着等同步完再发
         guard !cachedOnlyIds.contains(chatId) else {
             flash("正在同步会话，稍后再发")
             return
         }
-        // USER 根目录不开新的普通会话：等助理会话同步，或先选子工作区
+        // 工作台 USER 根目录的普通占位不发；聊天主页助理会话本身就在根目录，允许发送。
         if let target = chats.first(where: { $0.id == chatId }),
            !isAssistantChat(target.id), target.turnsComplete, target.turns.isEmpty,
            isUserRoot(target.cwd?.nilIfEmpty ?? workspaceRoot) {
-            if let home = assistantChat {
-                // 输入的文字和图片跟着搬到助理会话，不留在看不见的占位里
-                let carryText = draft
-                select(home.id)
-                patch(chatId) { chat in
-                    var next = chat
-                    next.draft = ""
-                    return next
-                }
-                imagesByChat[chatId] = nil
-                draft = carryText
-                pendingImages = images
-            } else {
-                flash("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。")
-            }
+            flash("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。")
             return
         }
+        guard let session = chatSession(chatId) else { return }
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
+        let targetModel = model(for: chatId)
+        let targetMode = mode(for: chatId)
         // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
-        let history = ChatStore.externalHistory(model: model, turns: active?.turns ?? [])
+        let history = ChatStore.externalHistory(model: targetModel, turns: session.turns)
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
-        var turn = Turn.blank(user: text.isEmpty ? "（附图）" : text, model: model, mode: mode, running: !busy)
+        var turn = Turn.blank(
+            user: text.isEmpty ? "（附图）" : text,
+            model: targetModel,
+            mode: targetMode,
+            running: !isBusy(chatId)
+        )
         turn.images = images.map(\.promptImage)
-        draft = ""
-        pendingImages = []
+        if chatId == activeId {
+            draft = ""
+            pendingImages = []
+        }
         imagesByChat[chatId] = nil
         bannerError = ""
         notice = ""
@@ -210,16 +222,16 @@ extension ChatStore {
         let mentions = ChatStore.extractMentions(text)
         send(.prompt(
             text: text,
-            model: model,
-            mode: mode,
+            model: targetModel,
+            mode: targetMode,
             chatId: chatId,
             files: mentions.isEmpty ? nil : mentions,
             images: images.isEmpty ? nil : images.map(\.promptImage),
-            confirmWrites: active?.confirmWrites,
-            autoApprove: nil,
+            confirmWrites: workspaceAgent(chatId: chatId) == nil ? session.confirmWrites : false,
+            autoApprove: workspaceAgent(chatId: chatId) == nil ? nil : false,
             fresh: nil,
             nameChat: untitled,
-            policy: active?.policy,
+            policy: session.policy,
             history: history,
             turnId: turn.id
         ))
@@ -252,11 +264,12 @@ extension ChatStore {
         return out
     }
 
-    func stop() {
-        send(.cancel(chatId: activeId))
-        runningChatIds.removeAll { $0 == activeId }
-        queuedChatIds.removeAll { $0 == activeId }
-        patch(activeId) { chat in
+    func stop(chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        send(.cancel(chatId: targetId))
+        runningChatIds.removeAll { $0 == targetId }
+        queuedChatIds.removeAll { $0 == targetId }
+        patch(targetId) { chat in
             var next = chat
             next.turns = next.turns.map { turn in
                 turn.running || turn.tools.contains(where: { $0.status == "running" })
@@ -269,28 +282,35 @@ extension ChatStore {
         clearStallHint()
     }
 
-    func chooseModel(_ id: String) {
-        model = id
-        rememberModel(id)
-        patch(activeId) { chat in
+    func chooseModel(_ id: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        if targetId == activeId {
+            model = id
+            rememberModel(id)
+        }
+        patch(targetId) { chat in
             var next = chat
             next.model = id
             return next
         }
-        send(.setModel(model: id, chatId: activeId))
+        send(.setModel(model: id, chatId: targetId))
     }
 
-    func chooseMode(_ value: AgentMode) {
-        mode = value
-        patch(activeId) { chat in
+    func chooseMode(_ value: AgentMode, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        if targetId == activeId { mode = value }
+        patch(targetId) { chat in
             var next = chat
             next.mode = value
             return next
         }
     }
 
-    func replyToApproval(allow: Bool) {
-        guard let chat = active, let pending = chat.turns.last(where: { $0.pendingTool != nil })?.pendingTool else { return }
+    func replyToApproval(allow: Bool, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        guard let chat = chatSession(targetId),
+              let pending = chat.turns.last(where: { $0.pendingTool != nil })?.pendingTool
+        else { return }
         send(.approvalReply(chatId: chat.id, callId: pending.callId, allow: allow))
         patchRunning(chat.id) { turn in
             var next = turn

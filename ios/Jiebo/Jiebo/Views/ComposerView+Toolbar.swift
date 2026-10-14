@@ -47,8 +47,8 @@ extension ComposerView {
 
     private func sendCluster(enabled: Bool) -> some View {
         HStack(spacing: 8) {
-            if store.busy {
-                Button(action: store.stop) {
+            if chatBusy {
+                Button { store.stop(chatId: chatId) } label: {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(JieboColor.paper)
@@ -80,51 +80,51 @@ extension ComposerView {
     }
 
     private var moreMenu: some View {
-        let plane = store.active?.policy == "plane"
-        let confirm = store.active?.confirmWrites == true
+        let plane = chat?.policy == "plane"
+        let confirm = chat?.confirmWrites == true
         return Menu {
             if style == .assistant {
                 Menu {
                     ForEach(AgentMode.allCases, id: \.self) { item in
                         Button {
-                            store.chooseMode(item)
+                            store.chooseMode(item, chatId: chatId)
                         } label: {
-                            Label(item.label, systemImage: store.mode == item ? "checkmark" : "circle")
+                            Label(item.label, systemImage: chatMode == item ? "checkmark" : "circle")
                         }
                     }
                 } label: {
-                    Label("模式 · \(store.mode.label)", systemImage: "slider.horizontal.3")
+                    Label("模式 · \(chatMode.label)", systemImage: "slider.horizontal.3")
                 }
                 Menu {
                     ForEach(ModelCatalog.groups(from: store.models)) { group in
                         Section(group.label) {
                             ForEach(group.models) { item in
-                                Button(item.name) { store.chooseModel(item.id) }
+                                Button(item.name) { store.chooseModel(item.id, chatId: chatId) }
                             }
                         }
                     }
                 } label: {
-                    Label("模型 · \(ModelCatalog.label(for: store.model))", systemImage: "cpu")
+                    Label("模型 · \(ModelCatalog.label(for: chatModel))", systemImage: "cpu")
                 }
                 Divider()
             }
-            Button(action: store.togglePolicy) {
+            Button { store.togglePolicy(chatId: chatId) } label: {
                 Label(plane ? "正在用策略层" : "切到策略层", systemImage: plane ? "checkmark" : "circle")
             }
-            Button(action: store.toggleConfirmWrites) {
+            Button { store.toggleConfirmWrites(chatId: chatId) } label: {
                 Label(confirm ? "确认写" : "直写", systemImage: confirm ? "checkmark.shield.fill" : "checkmark.shield")
             }
-            Button(action: store.undoLast) {
+            Button { store.undoLast(chatId: chatId) } label: {
                 Label("撤销上一次", systemImage: "arrow.uturn.backward")
             }
-            .disabled(!store.canUndo)
+            .disabled(!store.canUndo(chatId))
             if store.checkpoints.isEmpty {
-                Button(store.mode == .ask ? "只问不会打检查点" : "动手或出方案时会记下检查点") {}
+                Button(chatMode == .ask ? "只问不会打检查点" : "动手或出方案时会记下检查点") {}
                     .disabled(true)
             } else {
                 ForEach(store.checkpoints) { item in
-                    Button("还原 · \(item.label)") { store.restoreCheckpoint(item.id) }
-                        .disabled(store.busy)
+                    Button("还原 · \(item.label)") { store.restoreCheckpoint(item.id, chatId: chatId) }
+                        .disabled(chatBusy)
                 }
             }
         } label: {
@@ -177,8 +177,8 @@ extension ComposerView {
     }
 
     private var confirmToggle: some View {
-        let on = store.active?.confirmWrites == true
-        return Button(action: store.toggleConfirmWrites) {
+        let on = chat?.confirmWrites == true
+        return Button { store.toggleConfirmWrites(chatId: chatId) } label: {
             HStack(spacing: 4) {
                 Image(systemName: on ? "checkmark.shield.fill" : "checkmark.shield")
                     .font(.system(size: 11, weight: .regular))
@@ -198,8 +198,8 @@ extension ComposerView {
     }
 
     private var policyToggle: some View {
-        let plane = store.active?.policy == "plane"
-        return Button(action: store.togglePolicy) {
+        let plane = chat?.policy == "plane"
+        return Button { store.togglePolicy(chatId: chatId) } label: {
             Text(plane ? "策略层" : "现状")
                 .font(JieboFont.text(.caption2, weight: .regular))
                 .foregroundStyle(plane ? JieboColor.brass : JieboColor.ink2)
@@ -217,15 +217,15 @@ extension ComposerView {
         HStack(spacing: 0) {
             ForEach(AgentMode.allCases, id: \.self) { item in
                 Button {
-                    store.chooseMode(item)
+                    store.chooseMode(item, chatId: chatId)
                 } label: {
                     Text(item.label)
                         .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(store.mode == item ? JieboColor.ink : JieboColor.ink2)
+                        .foregroundStyle(chatMode == item ? JieboColor.ink : JieboColor.ink2)
                         .padding(.horizontal, 12)
                         .frame(minHeight: 32)
                         .background {
-                            if store.mode == item {
+                            if chatMode == item {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                                     .fill(JieboColor.ink.opacity(0.06))
                                     .matchedGeometryEffect(id: "mode-thumb", in: modeThumb)
@@ -242,16 +242,16 @@ extension ComposerView {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         )
-        .animation(JieboMotion.snappy(reduceMotion), value: store.mode)
+        .animation(JieboMotion.snappy(reduceMotion), value: chatMode)
     }
 
     private var compactMode: some View {
         Menu {
             ForEach(AgentMode.allCases, id: \.self) { item in
-                Button(item.label) { store.chooseMode(item) }
+                Button(item.label) { store.chooseMode(item, chatId: chatId) }
             }
         } label: {
-            Text(store.mode.label)
+            Text(chatMode.label)
                 .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
                 .padding(.horizontal, 10)
@@ -265,7 +265,7 @@ extension ComposerView {
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("模式 \(store.mode.label)")
+        .accessibilityLabel("模式 \(chatMode.label)")
     }
 
     private func modelPicker(maxWidth: CGFloat) -> some View {
@@ -273,13 +273,13 @@ extension ComposerView {
             ForEach(ModelCatalog.groups(from: store.models)) { group in
                 Section(group.label) {
                     ForEach(group.models) { item in
-                        Button(item.name) { store.chooseModel(item.id) }
+                        Button(item.name) { store.chooseModel(item.id, chatId: chatId) }
                     }
                 }
             }
         } label: {
             HStack(spacing: 6) {
-                Text(ModelCatalog.label(for: store.model))
+                Text(ModelCatalog.label(for: chatModel))
                     .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)

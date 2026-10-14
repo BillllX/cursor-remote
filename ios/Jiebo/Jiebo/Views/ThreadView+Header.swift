@@ -16,7 +16,7 @@ extension ThreadView {
     }
 
     var headerTitle: String {
-        store.assistantChatActive ? store.assistantName : (store.active?.title ?? "新对话")
+        resolvedChatId == store.assistantChatId ? store.assistantName : (threadChat?.title ?? "新对话")
     }
 
     /// 助理会话里打开今日/收件箱/记忆层；有未读或待批时挂点
@@ -33,27 +33,27 @@ extension ThreadView {
     var padSubtitle: String {
         if !store.connected { return store.linkState.title }
         if !store.hasApiKey { return "服务器还没配 API Key" }
-        if store.busy { return "正在回复" }
-        return store.mode.label
+        if threadBusy { return "正在回复" }
+        return store.mode(for: resolvedChatId).label
     }
 
     var phoneSubtitle: String {
         if !store.connected { return store.linkState.title }
-        if store.assistantChatActive {
-            return store.hasApiKey ? "个人助理 · \(store.mode.label)" : "服务器还没配 API Key"
+        if resolvedChatId == store.assistantChatId {
+            return store.hasApiKey ? "个人助理 · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
         }
         let place = store.currentWorkspaceName
-        return store.hasApiKey ? "\(place) · \(store.mode.label)" : "服务器还没配 API Key"
+        return store.hasApiKey ? "\(place) · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
     }
 
     var phoneStatus: String? {
-        if let row = store.loops[store.activeId], row.status == "armed" || row.status == "running" {
+        if let row = store.loops[resolvedChatId], row.status == "armed" || row.status == "running" {
             if let summary = row.lastSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
                 return "Loop · 第 \(row.tick) 拍 · \(summary)"
             }
             return "Loop · 第 \(row.tick) 拍"
         }
-        if store.busy { return "正在回复" }
+        if threadBusy { return "正在回复" }
         return nil
     }
 
@@ -78,11 +78,13 @@ extension ThreadView {
                     .accessibilityElement(children: .combine)
                 }
                 .frame(maxWidth: .infinity)
-                if store.assistantChatActive {
+                if resolvedChatId == store.assistantChatId {
                     assistantTodayButton
                 }
-                if store.canUndo {
-                    phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动", action: store.undoLast)
+                if store.canUndo(resolvedChatId) {
+                    phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动") {
+                        store.undoLast(chatId: resolvedChatId)
+                    }
                 }
                 phoneIcon("folder", label: "文件") {
                     if !(store.fileBrowserOpen && store.fileBrowserPane == .files) {
@@ -96,7 +98,7 @@ extension ThreadView {
             .padding(.bottom, phoneStatus == nil ? 8 : 4)
             if let phoneStatus {
                 Button {
-                    if store.loops[store.activeId] != nil { store.toggleTool(.loop) }
+                    if store.loops[resolvedChatId] != nil { store.toggleTool(.loop) }
                 } label: {
                     HStack(spacing: 6) {
                         Circle().fill(JieboColor.ok).frame(width: 6, height: 6)
@@ -116,7 +118,7 @@ extension ThreadView {
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(store.loops[store.activeId] == nil)
+                .disabled(store.loops[resolvedChatId] == nil)
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
             }
@@ -161,11 +163,13 @@ extension ThreadView {
                     .controlSize(.small)
                     .tint(JieboColor.dim)
             }
-            if store.assistantChatActive {
+            if resolvedChatId == store.assistantChatId {
                 assistantTodayButton
             }
-            if store.canUndo {
-                Button(action: store.undoLast) {
+            if store.canUndo(resolvedChatId) {
+                Button {
+                    store.undoLast(chatId: resolvedChatId)
+                } label: {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)

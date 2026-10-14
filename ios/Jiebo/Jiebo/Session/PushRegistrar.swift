@@ -30,6 +30,30 @@ struct PushTarget: Equatable, Sendable {
 
     /// 点开要去聊天主页的那个会话
     var isIm: Bool { kind == "im" && convId != nil }
+    var isWorkspace: Bool {
+        kind?.hasPrefix("workspace_agent") == true
+            && kind != "workspace_agent_read"
+            && chatId != nil
+    }
+}
+
+/// 通知回调不在主 actor，用锁保存当前正在看的工作区线程。
+final class WorkspaceViewingBeacon: @unchecked Sendable {
+    static let shared = WorkspaceViewingBeacon()
+    private let lock = NSLock()
+    private var chatId: String?
+
+    func set(_ value: String?) {
+        lock.lock()
+        chatId = value
+        lock.unlock()
+    }
+
+    func current() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return chatId
+    }
 }
 
 /// 点击通知后待消费的路由目标。壳（PhoneShell）等 bootstrapped 后 `consume()` 取走
@@ -116,19 +140,17 @@ final class PushRegistrar {
         // 前台角标按这台设备订阅的类别算，和网关推送里的 aps.badge 同一个口径（apnsBadgeFor）：
         // iPhone 订阅助理 + 聊天 = 聊天未读 + 助理待处理（两边都到齐才设合计，免得闪一下半截数）；
         // iPad 只订阅聊天 = 只算聊天未读（助理在面板里看，变化不推给它，角标就不算它）。
-        // 聊天列表还没到（或网关不支持 im）时：iPhone 先只设助理待处理，别让一个分量缺失停掉
-        // 整个角标；iPad 没有别的分量可设，先不动（设 0 会把网关推来的角标抹掉）
+        // 工作区列表未加载时不重算，避免把推送刚带来的工作区角标抹掉。
+        guard store.workspaceAgentsLoaded else { return }
         let imLoaded = im?.listLoaded == true
         if Self.isPhone {
             if imLoaded {
                 guard store.assistantState != nil else { return }
-                applyBadge((im?.totalUnread ?? 0) + store.assistantBadgeCount)
-            } else if store.assistantState != nil {
-                applyBadge(store.assistantBadgeCount)
+                applyBadge((im?.totalUnread ?? 0) + store.assistantBadgeCount + store.workspaceUnreadCount)
             }
         } else {
             guard imLoaded else { return }
-            applyBadge(im?.totalUnread ?? 0)
+            applyBadge((im?.totalUnread ?? 0) + store.workspaceUnreadCount)
         }
     }
 
@@ -188,7 +210,7 @@ final class PushRegistrar {
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return }
         let environment = Self.environment
         let assistant = Self.isPhone
-        let key = [store.tenantId, token, environment, bundleId, assistant ? "assistant+im" : "im"].joined(separator: "|")
+        let key = [store.tenantId, token, environment, bundleId, assistant ? "assistant+im+workspace" : "im+workspace"].joined(separator: "|")
         guard key != reportedKey else { return }
         reportedKey = key
         store.assistantOp("push_subscribe", args: [
@@ -198,6 +220,7 @@ final class PushRegistrar {
             "environment": .string(environment),
             "im": .bool(true),
             "assistant": .bool(assistant),
+            "workspace": .bool(true),
         ])
     }
 

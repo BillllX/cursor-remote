@@ -4,11 +4,11 @@ import UniformTypeIdentifiers
 
 extension ComposerView {
     var pendingApproval: PendingTool? {
-        store.active?.turns.reversed().first { $0.pendingTool != nil }?.pendingTool
+        chat?.turns.reversed().first { $0.pendingTool != nil }?.pendingTool
     }
 
     var queuedTurns: [Turn] {
-        store.active?.turns.filter(\.queued) ?? []
+        chat?.turns.filter(\.queued) ?? []
     }
 
     func approvalBar(_ tool: PendingTool) -> some View {
@@ -19,9 +19,9 @@ extension ComposerView {
                 .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.ink)
             HStack(spacing: 8) {
-                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false) }
+                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false, chatId: chatId) }
                     .buttonStyle(.bordered)
-                Button("允许") { store.replyToApproval(allow: true) }
+                Button("允许") { store.replyToApproval(allow: true, chatId: chatId) }
                     .buttonStyle(.borderedProminent)
                     .tint(JieboColor.pine)
             }
@@ -49,7 +49,7 @@ extension ComposerView {
                             .lineLimit(1)
                             .padding(.leading, 4)
                         Button {
-                            store.dropQueuedTurn(turn.id)
+                            store.dropQueuedTurn(turn.id, chatId: chatId)
                         } label: {
                             Image(systemName: "xmark")
                                 .font(JieboFont.text(.caption2, weight: .bold))
@@ -89,7 +89,7 @@ extension ComposerView {
                             ? (path as NSString).deletingLastPathComponent.components(separatedBy: "/").last.map { "\($0)/\(name)" } ?? name
                             : name
                         Button {
-                            store.insertMention(path)
+                            store.insertMention(path, chatId: chatId)
                         } label: {
                             Text("@\(label)")
                                 .font(JieboFont.monoText(.caption))
@@ -113,10 +113,10 @@ extension ComposerView {
 
     @ViewBuilder
     var attachmentStrip: some View {
-        if !store.pendingImages.isEmpty || !store.uploads.isEmpty {
+        if !chatImages.isEmpty || !store.uploads.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 26) {
-                    ForEach(store.pendingImages) { image in
+                    ForEach(chatImages) { image in
                         ZStack(alignment: .topTrailing) {
                             let data = image.data
                             Button {
@@ -129,7 +129,7 @@ extension ComposerView {
                             .accessibilityLabel("待发送的图片")
                             .accessibilityHint("轻点两下查看大图")
                             Button {
-                                store.removePendingImage(image.id)
+                                store.removePendingImage(image.id, chatId: chatId)
                             } label: {
                                 // 图标 20pt 压在右上角，命中框 44×44 以图片角为中心，不盖住图片中部（中部是看大图）
                                 Image(systemName: "xmark.circle.fill")
@@ -145,7 +145,7 @@ extension ComposerView {
                         }
                         .contextMenu {
                             Button(role: .destructive) {
-                                store.removePendingImage(image.id)
+                                store.removePendingImage(image.id, chatId: chatId)
                             } label: {
                                 Label("移除图片", systemImage: "trash")
                             }

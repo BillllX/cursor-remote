@@ -75,5 +75,6 @@ export const onImBlock = (ctx: WsCtx, message: MessageOf<"im_block">) =>
 export const onImPresence = (ctx: WsCtx, message: MessageOf<"im_presence">) =>
   run(ctx, message, () => {
     ctx.conn.imForeground = message.foreground !== false;
+    if (!ctx.conn.imForeground) ctx.conn.workspaceViewingChatId = undefined;
     return null;
   });

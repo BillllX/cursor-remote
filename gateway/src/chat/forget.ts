@@ -9,11 +9,13 @@ import { chatIdsFrom, disposeSlot, persistConn, pruneDroppedSlots } from "../run
 import type { Conn } from "../runtime/types.ts";
 import { broadcastDigest, tombstoneChat } from "../sync/storedState.ts";
 import { stopRunFlush } from "../sync/transcript.ts";
+import { forgetWorkspaceAgentChat } from "../workspace/agents.ts";
 
 export async function forgetChat(conn: Conn, chatId: string) {
   const tenant = conn.tenant;
   if (!tenant || isAssistantChat(tenant, chatId)) return;
   tombstoneChat(tenant, chatId);
+  forgetWorkspaceAgentChat(tenant, chatId);
   const stopped = stopLoop(tenant.id, chatId);
   if (stopped) publishLoop(tenant.id, { type: "loop_state", ...stopped });
   const slot = conn.slots.get(chatId);

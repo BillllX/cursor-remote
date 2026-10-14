@@ -202,6 +202,18 @@ extension ChatStore {
         cwd = ""
         workspaceRoot = ""
         workspaces = []
+        workspaceAgents = []
+        workspaceAgentsLoaded = false
+        workspaceAgentsPendingCursor = nil
+        workspaceAvatarTicket = nil
+        pendingWorkspacePath = nil
+        pendingTurnFiles.removeAll()
+        fileIndexRequestChatId = nil
+        mentionRequestChatId = nil
+        searchRequestChatId = nil
+        chatHomeThreadChatId = nil
+        chatHomeDestination = nil
+        WorkspaceViewingBeacon.shared.set(nil)
         stateRev = 0
         confirmedRev = 0
         inflightBases = [:]

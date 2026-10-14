@@ -197,7 +197,9 @@ func checkServer(_ options: Options, samples: [JSONValue]) -> [String] {
 /// 与 ClientMessage 一一对应。ClientMessage 加了 case，clientCase(of:) 的 switch 编译不过；
 /// 这里补上 case 后 sample(_:) 的 switch 又编译不过，逼着补样本
 enum ClientCase: String, CaseIterable {
-    case hello, setWorkspace, listWorkspaces, createWorkspace, renameWorkspace, deleteWorkspace, prompt, cancel
+    case hello, setWorkspace, listWorkspaces, createWorkspace, renameWorkspace, deleteWorkspace
+    case workspaceAgentList, workspaceAgentOpen, workspaceAgentProfile, workspaceAgentRead, workspaceAgentViewing
+    case prompt, cancel
     case dropQueued, setModel, newSession, deleteSession, resumeSession, syncState, approvalReply, setPolicy
     case uploadFile, listFiles, searchText, revertFile, listCheckpoints, restore, readFile, writeFile, undo, ping
     case syncChat, truncateTurns, toolReview, loadChats, loadChat, loadState, adminStats, loopStart, loopStop
@@ -213,6 +215,11 @@ func clientCase(of message: ClientMessage) -> ClientCase {
     case .createWorkspace: return .createWorkspace
     case .renameWorkspace: return .renameWorkspace
     case .deleteWorkspace: return .deleteWorkspace
+    case .workspaceAgentList: return .workspaceAgentList
+    case .workspaceAgentOpen: return .workspaceAgentOpen
+    case .workspaceAgentProfile: return .workspaceAgentProfile
+    case .workspaceAgentRead: return .workspaceAgentRead
+    case .workspaceAgentViewing: return .workspaceAgentViewing
     case .prompt: return .prompt
     case .cancel: return .cancel
     case .dropQueued: return .dropQueued
@@ -278,6 +285,12 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .createWorkspace: return .createWorkspace(name: "slides")
     case .renameWorkspace: return .renameWorkspace(path: "/workspace/demo/slides", name: "talks")
     case .deleteWorkspace: return .deleteWorkspace(path: "/workspace/demo/old")
+    case .workspaceAgentList: return .workspaceAgentList(cursor: "notes")
+    case .workspaceAgentOpen: return .workspaceAgentOpen(path: "/workspace/demo/notes")
+    case .workspaceAgentProfile:
+        return .workspaceAgentProfile(path: "/workspace/demo/notes", displayName: "讲稿项目", avatar: blobA)
+    case .workspaceAgentRead: return .workspaceAgentRead(chatId: chat, seq: 9)
+    case .workspaceAgentViewing: return .workspaceAgentViewing(chatId: chat)
     case .prompt:
         return .prompt(
             text: "登录页白屏，帮我看看",
@@ -484,6 +497,33 @@ func checkJSONValue() -> [String] {
     return problems
 }
 
+// MARK: turn_files 迟到合并
+
+func checkDeferredTurnFiles() -> [String] {
+    var pending = DeferredTurnFiles()
+    let file = TurnFile(
+        path: "Sources/App.swift",
+        kind: .text,
+        op: "modified",
+        size: nil,
+        sha: nil,
+        diffSha: nil,
+        added: 2,
+        removed: 1
+    )
+    pending.store(chatId: "chat-a", turnId: "turn-late", files: [file])
+    if !pending.take(chatId: "chat-a", availableTurnIds: []).isEmpty {
+        return ["turn_files：回合出现前不应提前消费"]
+    }
+    let merged = pending.take(chatId: "chat-a", availableTurnIds: ["turn-late"])
+    guard merged["turn-late"]?.first?.path == file.path else {
+        return ["turn_files：回合出现后没有合并暂存文件"]
+    }
+    if !pending.isEmpty { return ["turn_files：成功合并后暂存没有清理"] }
+    print("turn_files 迟到合并：通过")
+    return []
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -492,7 +532,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

@@ -26,6 +26,7 @@ export function detachConn(conn: Conn) {
     if (slot.owner === conn.ws) slot.owner = null;
   }
   conn.tenant = null;
+  conn.workspaceViewingChatId = undefined;
   conn.slots = new Map();
   conn.authed = false;
 }

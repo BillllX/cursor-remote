@@ -23,6 +23,20 @@ struct WorkspaceItem: Sendable, Hashable, Identifiable {
     var id: String { path }
 }
 
+struct WorkspaceAgentItem: Sendable, Hashable, Identifiable {
+    var path: String
+    var directoryName: String
+    var displayName: String
+    var avatarBlob: String?
+    var mainChatId: String?
+    var status: String
+    var unread: Int
+    var readSeq: Int
+    var finishedSeq: Int
+    var lastActivityAt: Double
+    var id: String { path }
+}
+
 struct PromptImage: Sendable, Hashable {
     var data: String
     var mimeType: String
@@ -214,7 +228,7 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im"]
+            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "workspace_agents"]
         )
     }
 
@@ -235,6 +249,11 @@ enum ClientMessage {
     case renameWorkspace(path: String, name: String)
     /// 空目录真删，有文件只隐藏，还有对话就拒绝
     case deleteWorkspace(path: String)
+    case workspaceAgentList(cursor: String?)
+    case workspaceAgentOpen(path: String)
+    case workspaceAgentProfile(path: String, displayName: String?, avatar: String?)
+    case workspaceAgentRead(chatId: String, seq: Int)
+    case workspaceAgentViewing(chatId: String?)
     case prompt(
         text: String,
         model: String?,
@@ -329,6 +348,27 @@ enum ClientMessage {
             return .object(["type": .string("rename_workspace"), "path": .string(path), "name": .string(name)])
         case .deleteWorkspace(let path):
             return .object(["type": .string("delete_workspace"), "path": .string(path)])
+        case .workspaceAgentList(let cursor):
+            var object: [String: JSONValue] = ["type": .string("workspace_agent_list")]
+            if let cursor { object["cursor"] = .string(cursor) }
+            return .object(object)
+        case .workspaceAgentOpen(let path):
+            return .object(["type": .string("workspace_agent_open"), "path": .string(path)])
+        case .workspaceAgentProfile(let path, let displayName, let avatar):
+            var object: [String: JSONValue] = ["type": .string("workspace_agent_profile"), "path": .string(path)]
+            if let displayName { object["displayName"] = .string(displayName) }
+            if let avatar { object["avatar"] = .string(avatar) }
+            return .object(object)
+        case .workspaceAgentRead(let chatId, let seq):
+            return .object([
+                "type": .string("workspace_agent_read"),
+                "chatId": .string(chatId),
+                "seq": .number(Double(seq)),
+            ])
+        case .workspaceAgentViewing(let chatId):
+            var object: [String: JSONValue] = ["type": .string("workspace_agent_viewing")]
+            object["chatId"] = chatId.map(JSONValue.string) ?? .null
+            return .object(object)
         case .prompt(let text, let model, let mode, let chatId, let files, let images, let confirmWrites, let autoApprove, let fresh, let nameChat, let policy, let history, let turnId):
             var object: [String: JSONValue] = [
                 "type": .string("prompt"),
@@ -956,6 +996,9 @@ enum ServerMessage {
     case workspaceRenamed(from: String, path: String, name: String)
     /// mode：deleted（空目录已删）/ hidden（有文件，只从列表隐藏）
     case workspaceRemoved(path: String, name: String, mode: String)
+    case workspaceAgents(items: [WorkspaceAgentItem], avatarTicket: ImTicket, reset: Bool, more: Bool, after: String?, cursor: String?)
+    case workspaceAgentOpened(path: String, chatId: String)
+    case workspaceAgentUpdate(chatId: String, unread: Int, readSeq: Int, finishedSeq: Int)
     case session(chatId: String, agentId: String, cwd: String)
     case runMeta(chatId: String, model: String, mode: AgentMode?)
     case textDelta(chatId: String, text: String)
@@ -1069,7 +1112,8 @@ enum ServerMessage {
              .done(let chatId, _, _),
              .history(let chatId, _),
              .runSnapshot(let chatId, _, _, _, _, _, _, _, _, _, _, _, _, _, _),
-             .chatTitle(let chatId, _):
+             .chatTitle(let chatId, _),
+             .workspaceAgentUpdate(let chatId, _, _, _):
             return chatId
         case .status(let chatId, _, _), .error(let chatId, _):
             return chatId
@@ -1140,6 +1184,44 @@ enum ServerMessage {
                 path: object["path"]?.string ?? "",
                 name: object["name"]?.string ?? "",
                 mode: object["mode"]?.string ?? "hidden"
+            )
+        case "workspace_agents":
+            let items = object["workspaces"]?.array?.compactMap { value -> WorkspaceAgentItem? in
+                guard let row = value.object, let path = row["path"]?.string?.nilIfEmpty else { return nil }
+                return WorkspaceAgentItem(
+                    path: path,
+                    directoryName: row["directoryName"]?.string ?? workspaceName(path),
+                    displayName: row["displayName"]?.string ?? workspaceName(path),
+                    avatarBlob: row["avatarBlob"]?.string?.nilIfEmpty,
+                    mainChatId: row["mainChatId"]?.string?.nilIfEmpty,
+                    status: row["status"]?.string ?? "idle",
+                    unread: row["unread"]?.int ?? 0,
+                    readSeq: row["readSeq"]?.int ?? 0,
+                    finishedSeq: row["finishedSeq"]?.int ?? 0,
+                    lastActivityAt: row["lastActivityAt"]?.number ?? 0
+                )
+            } ?? []
+            let ticketRow = object["avatarTicket"]?.object
+            let ticket = ImTicket(
+                exp: ticketRow?["exp"]?.number ?? 0,
+                sig: ticketRow?["sig"]?.string ?? ""
+            )
+            return .workspaceAgents(
+                items: items,
+                avatarTicket: ticket,
+                reset: object["reset"]?.bool ?? true,
+                more: object["more"]?.bool ?? false,
+                after: object["after"]?.string,
+                cursor: object["cursor"]?.string
+            )
+        case "workspace_agent_opened":
+            return .workspaceAgentOpened(path: object["path"]?.string ?? "", chatId: chatId)
+        case "workspace_agent_update":
+            return .workspaceAgentUpdate(
+                chatId: chatId,
+                unread: object["unread"]?.int ?? 0,
+                readSeq: object["readSeq"]?.int ?? 0,
+                finishedSeq: object["finishedSeq"]?.int ?? 0
             )
         case "session":
             return .session(chatId: chatId, agentId: object["agentId"]?.string ?? "", cwd: object["cwd"]?.string ?? "")

@@ -6,10 +6,24 @@ import ImageIO
 /// embedded = iPhone 助理页（PhoneShell）：头部为空、导航栏由宿主管理。
 enum ThreadChrome { case pad, phoneLegacy, embedded }
 
+private struct ThreadChatIdKey: EnvironmentKey {
+    static let defaultValue = ""
+}
+
+extension EnvironmentValues {
+    /// 当前 ThreadView 明确绑定的会话；空串表示工作台 activeId。
+    var threadChatId: String {
+        get { self[ThreadChatIdKey.self] }
+        set { self[ThreadChatIdKey.self] = newValue }
+    }
+}
+
 struct ThreadView: View {
     @Environment(ChatStore.self) var store
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     var chrome: ThreadChrome = .pad
+    /// nil = 工作台 activeId；聊天主页必须显式传助理或工作区 chatId。
+    var chatId: String?
     var openDrawer: () -> Void = {}
     /// 仅 .embedded 使用：渲染在消息列表与输入框之间的插槽（ActionDock）。输入框仍然只有 ThreadView 里这一个。
     var dock: AnyView? = nil
@@ -23,15 +37,16 @@ struct ThreadView: View {
     @State var loadingEarlierBatch = false
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
-    init(chrome: ThreadChrome = .pad, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
+    init(chrome: ThreadChrome = .pad, chatId: String? = nil, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
         self.chrome = chrome
+        self.chatId = chatId
         self.openDrawer = openDrawer
         self.dock = dock
     }
 
     /// 旧写法：窄屏手机标题栏。保留给 PhoneWorkbench 等现有调用点。
     init(phoneChrome: Bool, openDrawer: @escaping () -> Void = {}) {
-        self.init(chrome: phoneChrome ? .phoneLegacy : .pad, openDrawer: openDrawer)
+        self.init(chrome: phoneChrome ? .phoneLegacy : .pad, chatId: nil, openDrawer: openDrawer)
     }
 
     /// 不用 safeAreaBar：键盘弹起或文字换行时，那条玻璃底会把输入框和发送按钮错开，点不中也选不了字。
@@ -53,6 +68,7 @@ struct ThreadView: View {
         }
         .frame(maxWidth: JieboMeasure.thread)
         .frame(maxWidth: .infinity)
+        .environment(\.threadChatId, resolvedChatId)
         .background(JieboColor.paper.ignoresSafeArea())
         .toolbar(chrome == .embedded ? .automatic : .hidden, for: .navigationBar)
         .toolbar(removing: .sidebarToggle)
@@ -77,12 +93,16 @@ struct ThreadView: View {
         }
     }
 
+    var resolvedChatId: String { chatId ?? store.activeId }
+    var threadChat: ChatSession? { store.chats.first { $0.id == resolvedChatId } }
+    var threadBusy: Bool { threadChat?.turns.contains(where: \.running) == true }
+
     /// 输入框上方的委派待批、ActionDock 和输入框本身。输入框只有这一个
     @ViewBuilder
     var bottomStack: some View {
         VStack(spacing: 0) {
             // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
-            let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: store.activeId)
+            let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: resolvedChatId)
             Group {
                 if let approval = delegated.first {
                     delegatedApprovalBanner(approval, more: delegated.count - 1)
@@ -95,7 +115,7 @@ struct ThreadView: View {
             }
             ComposerView(
                 focusNonce: composerFocusNonce,
-                style: store.assistantChatActive && chrome == .embedded ? .assistant : .full
+                style: resolvedChatId == store.assistantChatId && chrome == .embedded ? .assistant : .full
             )
                 // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
                 .transaction { $0.animation = nil }

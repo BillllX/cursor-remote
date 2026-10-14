@@ -27,7 +27,7 @@ export type ApnsMessage = {
   delegationId?: string;
   /** 下面这些缺省时就是助理推送原来的行为 */
   /** 发给哪一类订阅：assistant（缺省，跳过 assistant===false）/ im（只发 im===true） */
-  channel?: "assistant" | "im";
+  channel?: "assistant" | "im" | "workspace";
   /** aps.thread-id，缺省 assistant-inbox */
   threadId?: string;
   /** apns-collapse-id，缺省用 itemId 去掉非法字符；都会截到 64 字节 */
@@ -51,15 +51,19 @@ export type ApnsMessage = {
 };
 
 /** 角标的两部分；undefined = 这次没拿到 */
-export type BadgeParts = { assistant?: number; im?: number };
+export type BadgeParts = { assistant?: number; im?: number; workspace?: number };
 
 /** 这台设备（按它订阅的类别）该显示的角标；它要的部分一个都没拿到时 undefined */
-export function apnsBadgeFor(sub: Pick<ApnsSubscription, "assistant" | "im">, message: Pick<ApnsMessage, "badge" | "badgeParts">) {
+export function apnsBadgeFor(
+  sub: Pick<ApnsSubscription, "assistant" | "im" | "workspace">,
+  message: Pick<ApnsMessage, "badge" | "badgeParts">,
+) {
   const parts = message.badgeParts;
   if (!parts) return message.badge;
   let total: number | undefined;
   if (apnsWants(sub, "assistant") && parts.assistant !== undefined) total = (total ?? 0) + parts.assistant;
   if (apnsWants(sub, "im") && parts.im !== undefined) total = (total ?? 0) + parts.im;
+  if (apnsWants(sub, "workspace") && parts.workspace !== undefined) total = (total ?? 0) + parts.workspace;
   return total;
 }
 

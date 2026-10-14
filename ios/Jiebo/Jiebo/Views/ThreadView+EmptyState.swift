@@ -5,7 +5,7 @@ import ImageIO
 extension ThreadView {
     /// 最后一轮的正文、思考、工具和确认都会变高。只盯 assistant 的话，调工具时不会滚。
     var liveTail: String {
-        guard let turn = store.active?.turns.last else { return "" }
+        guard let turn = threadChat?.turns.last else { return "" }
         let tools = turn.tools.map { tool in
             let size = tool.result?.pretty(160).count ?? 0
             return "\(tool.callId):\(tool.status):\(size):\(tool.summary.count)"
@@ -14,8 +14,8 @@ extension ThreadView {
     }
 
     var showThreadLoading: Bool {
-        if store.coldStartPlaceholder { return true }
-        guard let chat = store.active else { return false }
+        if chatId == nil, store.coldStartPlaceholder { return true }
+        guard let chat = threadChat else { return false }
         return !chat.turnsComplete && chat.turns.isEmpty
     }
 
@@ -66,7 +66,7 @@ extension ThreadView {
             VStack(spacing: 8) {
                 ForEach(assistantStarters, id: \.self) { text in
                     Button {
-                        store.saveDraft(text)
+                        store.saveDraft(text, forChat: resolvedChatId)
                         composerFocusNonce += 1
                     } label: {
                         Text(text)
@@ -102,7 +102,7 @@ extension ThreadView {
                         store.toggleFileBrowser(.files)
                     }
                 } else {
-                    store.saveDraft(text)
+                    store.saveDraft(text, forChat: resolvedChatId)
                     composerFocusNonce += 1
                 }
             } label: {

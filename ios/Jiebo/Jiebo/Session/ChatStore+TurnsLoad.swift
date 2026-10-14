@@ -78,7 +78,7 @@ extension ChatStore {
             self.client.probe()
             if streak <= 2, self.client.isOpen {
                 self.ensureTurnsLoaded(chatId)
-            } else if chatId == self.activeId {
+            } else if chatId == self.activeId || chatId == self.chatHomeThreadChatId {
                 self.flash(self.client.isOpen ? "聊天记录加载超时，稍后切回这个会话再试" : "聊天记录加载超时，正在重连…")
             }
         }
@@ -162,6 +162,7 @@ extension ChatStore {
                 let cachedIds = Set(body.turns.map(\.id))
                 let local = self.chats[index].turns.filter { !cachedIds.contains($0.id) }
                 self.chats[index].turns = body.turns + local
+                self.mergePendingTurnFiles(chatId: chatId)
                 self.bodyRevs[chatId] = body.rev
                 self.bodySegs[chatId] = body.serverSegs.map { SegHashes(rev: body.rev, hashes: $0) }
             }
@@ -192,7 +193,7 @@ extension ChatStore {
         if !truncated || bodyRevs[id] == nil { bodyRevs[id] = Int.min }
         bodySegs[id] = nil
         markNeedsRefresh(id, rev: bodyRevs[id])
-        if id == activeId { ensureTurnsLoaded(id) }
+        if id == activeId || id == chatHomeThreadChatId { ensureTurnsLoaded(id) }
     }
 
     /// 增量补齐的一页。acc 覆盖服务端 [from, total)；from 落进基线后比对 base[from] 与这页第一条：
@@ -250,6 +251,7 @@ extension ChatStore {
             }
         }
         chats[index].turns = result
+        mergePendingTurnFiles(chatId: chatId)
         chats[index].turnsComplete = true
         chats[index].serverPreview = nil
         completeTurnsLoad(chatId)
@@ -306,7 +308,7 @@ extension ChatStore {
         // 加载途中服务端版本又前进了（别端在写）：这份正文留作基线，当前会话立刻再补一次
         if !hasLocalPriority(chatId), let bodyRev = bodyRevs[chatId], let serverRev = chatRevs[chatId], bodyRev != serverRev {
             markNeedsRefresh(chatId, rev: bodyRev)
-            if chatId == activeId { ensureTurnsLoaded(chatId) }
+            if chatId == activeId || chatId == chatHomeThreadChatId { ensureTurnsLoaded(chatId) }
         }
     }
 

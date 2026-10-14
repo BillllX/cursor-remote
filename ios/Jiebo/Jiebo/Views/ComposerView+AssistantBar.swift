@@ -24,12 +24,12 @@ extension ComposerView {
                 }
                 .onChange(of: text) { _, value in
                     if value.contains("@") || !store.mentionSuggestions.isEmpty {
-                        store.updateMentions(for: value)
+                        store.updateMentions(for: value, chatId: chatId)
                     }
                     schedulePersist()
                 }
             // 忙碌时停止和发送并存：发送会排在当前这轮之后（与 iPad 的完整输入框一致）
-            if store.busy {
+            if chatBusy {
                 if !canSendNow { micButton }
                 stopButton
                 if canSendNow { sendButton(queued: true) }
@@ -42,13 +42,13 @@ extension ComposerView {
         .padding(.leading, 4)
         .padding(.trailing, 4)
         .padding(.vertical, 2)
-        .animation(JieboMotion.snappy(reduceMotion), value: store.busy)
+        .animation(JieboMotion.snappy(reduceMotion), value: chatBusy)
         .animation(JieboMotion.snappy(reduceMotion), value: canSendNow)
         .modifier(CapsuleSurface(focused: focused))
     }
 
     private var stopButton: some View {
-        Button(action: store.stop) {
+        Button { store.stop(chatId: chatId) } label: {
             Image(systemName: "stop.fill")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(JieboColor.danger)
@@ -82,7 +82,7 @@ extension ComposerView {
     /// 胶囊上方一行小字：当前模式和模型。原来只藏在「＋」里，看不出这次会不会动手改文件
     var assistantStatusLine: some View {
         Menu {
-            Picker(selection: Binding(get: { store.mode }, set: { store.chooseMode($0) })) {
+            Picker(selection: Binding(get: { chatMode }, set: { store.chooseMode($0, chatId: chatId) })) {
                 ForEach(AgentMode.allCases, id: \.self) { item in
                     Text(item.label).tag(item)
                 }
@@ -90,7 +90,7 @@ extension ComposerView {
                 Label("模式", systemImage: "slider.horizontal.3")
             }
             .pickerStyle(.menu)
-            Picker(selection: Binding(get: { store.model }, set: { store.chooseModel($0) })) {
+            Picker(selection: Binding(get: { chatModel }, set: { store.chooseModel($0, chatId: chatId) })) {
                 ForEach(ModelCatalog.groups(from: store.models)) { group in
                     Section(group.label) {
                         ForEach(group.models) { item in
@@ -104,10 +104,10 @@ extension ComposerView {
             .pickerStyle(.menu)
         } label: {
             HStack(spacing: 4) {
-                Text(store.mode.label)
-                    .foregroundStyle(store.mode == .agent ? JieboColor.ink2 : JieboColor.pine)
+                Text(chatMode.label)
+                    .foregroundStyle(chatMode == .agent ? JieboColor.ink2 : JieboColor.pine)
                 Text("·")
-                Text(ModelCatalog.label(for: store.model))
+                Text(ModelCatalog.label(for: chatModel))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(JieboFont.text(.caption2, weight: .semibold))
@@ -124,7 +124,7 @@ extension ComposerView {
         .menuOrder(.fixed)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, -4)
-        .accessibilityLabel("模式 \(store.mode.label)，模型 \(ModelCatalog.label(for: store.model))")
+        .accessibilityLabel("模式 \(chatMode.label)，模型 \(ModelCatalog.label(for: chatModel))")
         .accessibilityHint("轻点切换")
     }
 
@@ -133,27 +133,27 @@ extension ComposerView {
             Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
             Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
             Section {
-                Toggle(isOn: Binding(get: { store.active?.policy == "plane" }, set: { on in
-                    if on != (store.active?.policy == "plane") { store.togglePolicy() }
+                Toggle(isOn: Binding(get: { chat?.policy == "plane" }, set: { on in
+                    if on != (chat?.policy == "plane") { store.togglePolicy(chatId: chatId) }
                 })) {
                     Label("策略层", systemImage: "square.stack.3d.up")
                 }
-                Toggle(isOn: Binding(get: { store.active?.confirmWrites == true }, set: { on in
-                    if on != (store.active?.confirmWrites == true) { store.toggleConfirmWrites() }
+                Toggle(isOn: Binding(get: { chat?.confirmWrites == true }, set: { on in
+                    if on != (chat?.confirmWrites == true) { store.toggleConfirmWrites(chatId: chatId) }
                 })) {
                     Label("写入前确认", systemImage: "checkmark.shield")
                 }
             }
             Section {
-                Button(action: store.undoLast) {
+                Button { store.undoLast(chatId: chatId) } label: {
                     Label("撤销上一次", systemImage: "arrow.uturn.backward")
                 }
-                .disabled(!store.canUndo)
+                .disabled(!store.canUndo(chatId))
                 if !store.checkpoints.isEmpty {
                     Menu {
                         ForEach(store.checkpoints) { item in
-                            Button(item.label) { store.restoreCheckpoint(item.id) }
-                                .disabled(store.busy)
+                            Button(item.label) { store.restoreCheckpoint(item.id, chatId: chatId) }
+                                .disabled(chatBusy)
                         }
                     } label: {
                         Label("还原到检查点", systemImage: "clock.arrow.circlepath")

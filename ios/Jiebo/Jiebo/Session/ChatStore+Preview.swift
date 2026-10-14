@@ -131,14 +131,14 @@ extension ChatStore {
     // MARK: P5 - 预览面板
 
     /// 从对话点文件：停在对话旁边，不把人带进文件浏览器。浏览器已经开着就在里面读。
-    func openPreview(_ path: String, diff: Bool = false) {
+    func openPreview(_ path: String, diff: Bool = false, chatId: String? = nil) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else {
             if !trimmed.isEmpty { flash("这类内容暂不支持预览") }
             return
         }
         if !fileBrowserOpen { previewExpanded = true }
-        loadPreview(trimmed, diff: diff)
+        loadPreview(trimmed, diff: diff, chatId: chatId)
     }
 
     func expandPreview() {
@@ -153,14 +153,14 @@ extension ChatStore {
     }
 
     /// 浮层已经在屏幕上时读文件。binary 仍走 Quick Look。
-    func loadPreview(_ path: String, diff: Bool) {
+    func loadPreview(_ path: String, diff: Bool, chatId: String? = nil) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasSuffix("/"), trimmed.lowercased() != "diff" else { return }
         let kind = previewKind(of: trimmed)
         if kind.panelRenderable {
-            openPreviewTab(path: trimmed, kind: kind, diff: diff)
+            openPreviewTab(path: trimmed, kind: kind, diff: diff, chatId: chatId)
         } else {
-            openMention(trimmed)
+            openMention(trimmed, chatId: chatId)
         }
     }
 

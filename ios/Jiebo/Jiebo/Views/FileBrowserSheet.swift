@@ -6,6 +6,7 @@ struct FileBrowserSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var filter = ""
 
+    let chatId: String
     let onPick: (String) -> Void
 
     var body: some View {
@@ -34,7 +35,7 @@ struct FileBrowserSheet: View {
                         .buttonStyle(.plain)
                         // 眼睛：直接预览（不进草稿）
                         Button {
-                            store.openPreview(path)
+                            store.openPreview(path, chatId: chatId)
                             dismiss()
                         } label: {
                             Image(systemName: "eye")
@@ -64,7 +65,7 @@ struct FileBrowserSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .onAppear { store.requestFileIndex() }
+            .onAppear { store.requestFileIndex(chatId: chatId) }
         }
         .presentationDetents([.medium, .large])
     }

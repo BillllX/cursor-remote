@@ -9,6 +9,7 @@ import { allTenants, getTenant, mediaSecret, stateDir } from "../tenants.ts";
 import { reply } from "../ws/frame.ts";
 import { ImService, type ImLiveConn } from "./service.ts";
 import { ImStore } from "./store.ts";
+import { workspaceUnread } from "../workspace/agents.ts";
 
 export const IM_CAP = "im";
 
@@ -46,6 +47,10 @@ export function imRuntime() {
       const tenant = getTenant(tenantId);
       // 带超时和短缓存（badge.ts）：慢文件系统不拖慢聊天推送，超时先拿上次的数顶着
       return tenant ? await assistantBadgeCached({ id: tenant.id, stateDir: tenant.stateDir }) : 0;
+    },
+    workspaceBadge: async (tenantId) => {
+      const tenant = getTenant(tenantId);
+      return tenant ? workspaceUnread(tenant) : 0;
     },
   });
   instance = { service, store };

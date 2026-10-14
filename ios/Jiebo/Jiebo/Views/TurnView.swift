@@ -4,6 +4,7 @@ import ImageIO
 
 struct TurnView: View, Equatable {
     @Environment(ChatStore.self) private var store
+    @Environment(\.threadChatId) private var environmentChatId
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var turn: Turn
     var canAnswer = false
@@ -21,6 +22,7 @@ struct TurnView: View, Equatable {
     @State private var thinkingPinned = false
     @State private var shareItem: ShareItem?
     @State private var viewerItem: AttachmentViewerItem?
+    private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
@@ -117,8 +119,8 @@ struct TurnView: View, Equatable {
                             if let meta = turnMeta {
                                 Section(meta) {}
                             }
-                            Button { store.editTurn(turn.id) } label: { Label("编辑", systemImage: "pencil") }
-                            Button { store.retryTurn(turn.id) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                            Button { store.editTurn(turn.id, chatId: chatId) } label: { Label("编辑", systemImage: "pencil") }
+                            Button { store.retryTurn(turn.id, chatId: chatId) } label: { Label("重试", systemImage: "arrow.clockwise") }
                             Button { copy(turn.user) } label: { Label("复制", systemImage: "doc.on.doc") }
                         }
                         .fullScreenCover(item: $viewerItem) { item in
@@ -129,7 +131,7 @@ struct TurnView: View, Equatable {
                                 Text("排队中")
                                     .font(JieboFont.text(.caption, weight: .medium))
                                     .foregroundStyle(JieboColor.run)
-                                Button("去掉") { store.dropQueuedTurn(turn.id) }
+                                Button("去掉") { store.dropQueuedTurn(turn.id, chatId: chatId) }
                                     .font(JieboFont.text(.caption))
                                     .foregroundStyle(JieboColor.ink2)
                                     .buttonStyle(.plain)
@@ -137,7 +139,7 @@ struct TurnView: View, Equatable {
                                     .accessibilityLabel("去掉这条排队消息")
                             }
                         } else if userFailed {
-                            Button("重试") { store.retryTurn(turn.id) }
+                            Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
                                 .font(JieboFont.text(.caption, weight: .semibold))
                                 .foregroundStyle(JieboColor.danger)
                                 .buttonStyle(.plain)
@@ -231,7 +233,7 @@ struct TurnView: View, Equatable {
                                     if !part.files.isEmpty {
                                         TurnFileCards(
                                             turn: turn,
-                                            chatId: store.activeId,
+                                            chatId: chatId,
                                             files: part.files
                                         )
                                     }
@@ -245,7 +247,7 @@ struct TurnView: View, Equatable {
                             )
                         }
                         if turn.mode == .plan, !turn.running, !turn.queued {
-                            Button("执行这个计划") { store.applyPlan(turn.id) }
+                            Button("执行这个计划") { store.applyPlan(turn.id, chatId: chatId) }
                                 .buttonStyle(.borderedProminent)
                                 .tint(JieboColor.pine)
                                 .font(JieboFont.text(.subheadline, weight: .semibold))
@@ -255,7 +257,7 @@ struct TurnView: View, Equatable {
                     .contextMenu {
                         if !turn.assistant.isEmpty {
                             Button { copy(turn.assistant) } label: { Label("复制", systemImage: "doc.on.doc") }
-                            Button { store.retryTurn(turn.id) } label: { Label("重新生成", systemImage: "arrow.clockwise") }
+                            Button { store.retryTurn(turn.id, chatId: chatId) } label: { Label("重新生成", systemImage: "arrow.clockwise") }
                             // 菜单收起后 ShareLink 的宿主会被销毁：改成先记下、再由本视图弹分享面板
                             Button { shareItem = ShareItem(text: turn.assistant) } label: {
                                 Label("分享", systemImage: "square.and.arrow.up")
@@ -298,7 +300,7 @@ struct TurnView: View, Equatable {
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.danger)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("重试") { store.retryTurn(turn.id) }
+                    Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                         .tint(JieboColor.danger)
@@ -314,11 +316,11 @@ struct TurnView: View, Equatable {
             // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
             if let inline {
                 if !inline.tail.isEmpty {
-                    TurnFileCards(turn: turn, chatId: store.activeId, files: inline.tail)
+                    TurnFileCards(turn: turn, chatId: chatId, files: inline.tail)
                         .padding(.leading, embedded ? 0 : 40)
                 }
             } else if !turn.cardFiles.isEmpty {
-                TurnFileCards(turn: turn, chatId: store.activeId)
+                TurnFileCards(turn: turn, chatId: chatId)
                     .padding(.leading, embedded ? 0 : 40)
             }
             if turn.needsFileReview, store.localTurnReviews[turn.id] == nil {
@@ -358,7 +360,7 @@ struct TurnView: View, Equatable {
     private var assistantActionRow: some View {
         HStack(spacing: 0) {
             actionIcon("doc.on.doc", label: "复制回复") { copy(turn.assistant) }
-            actionIcon("arrow.clockwise", label: "重新生成") { store.retryTurn(turn.id) }
+            actionIcon("arrow.clockwise", label: "重新生成") { store.retryTurn(turn.id, chatId: chatId) }
             ShareLink(item: turn.assistant) {
                 Image(systemName: "square.and.arrow.up")
                     .font(JieboFont.text(.subheadline))
@@ -628,7 +630,7 @@ struct StallHintRow: View {
                     .foregroundStyle(JieboColor.dim)
                     .monospacedDigit()
                 if seconds >= 15 {
-                    Button("停止") { store.stop() }
+                    Button("停止") { store.stop(chatId: chatId) }
                         .font(JieboFont.text(.caption, weight: .semibold))
                         .buttonStyle(.bordered)
                         .controlSize(.mini)

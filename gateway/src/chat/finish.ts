@@ -13,6 +13,8 @@ import { checkpointGit, workspacePrefix } from "../workspace/checkpoints.ts";
 import { listWorkspaceFiles, readWorkspaceDiff } from "../workspace/files.ts";
 import { reply } from "../ws/frame.ts";
 import { send } from "../ws/send.ts";
+import { gatewayState } from "../runtime/state.ts";
+import { notifyWorkspaceAgentAttention } from "../workspace/agentNotifications.ts";
 
 function closeOpenTools(ws: WebSocket, slot: Slot, runStatus: string) {
   if (!slot.openTools) slot.openTools = new Map();
@@ -62,8 +64,13 @@ export function finishRun(ws: WebSocket, slot: Slot, status: string, durationMs?
   if (!approval) indexUserTurn(slot);
   if (!approval) noteWorkspaceTurn(slot);
   if (files.length && turnId) {
-    const target = slot.owner?.readyState === WebSocket.OPEN ? slot.owner : ws;
-    reply(target, { type: "turn_files", chatId: slot.chatId, turnId, files });
+    for (const conn of gatewayState.conns.values()) {
+      if (!conn.authed || conn.tenant?.id !== slot.tenantId || conn.ws.readyState !== WebSocket.OPEN) continue;
+      reply(conn.ws, { type: "turn_files", chatId: slot.chatId, turnId, files });
+    }
+  }
+  if (!approval && !/cancel/i.test(status)) {
+    notifyWorkspaceAgentAttention(slot, /error|fail/i.test(status) ? "failed" : "completed");
   }
 }
 

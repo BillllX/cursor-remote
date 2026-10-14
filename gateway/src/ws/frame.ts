@@ -41,6 +41,7 @@ export function shrinkMessage(message: ServerMessage, budget: number): ServerMes
   if (message.type === "search_hits") return fitSearchHits(message, budget);
   if (message.type === "im_history") return fitImHistory(message, budget);
   if (message.type === "im_list") return fitImList(message, budget);
+  if (message.type === "workspace_agents") return fitWorkspaceAgents(message, budget);
   if (message.type === "history")
     return { ...message, turns: fitTurnsFromEnd(message.turns, budget, 40) as HistoryTurn[] };
   if (message.type === "files") {
@@ -129,6 +130,27 @@ function fitSearchHits(message: SearchHitsMessage, budget: number): SearchHitsMe
 }
 
 type ImHistoryMessage = Extract<ServerMessage, { type: "im_history" }>;
+type WorkspaceAgentsMessage = Extract<ServerMessage, { type: "workspace_agents" }>;
+
+/** 裁掉的工作区行用最后保留行的目录名续页，不能像旧 truncated 一样永久丢尾部。 */
+export function fitWorkspaceAgents(message: WorkspaceAgentsMessage, budget: number): WorkspaceAgentsMessage | null {
+  let used = Buffer.byteLength(JSON.stringify({ ...message, workspaces: [], more: true, cursor: "" }));
+  const rows: WorkspaceAgentsMessage["workspaces"] = [];
+  for (const row of message.workspaces) {
+    const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
+    if (used + cost > budget) break;
+    rows.push(row);
+    used += cost;
+  }
+  if (!rows.length) return null;
+  if (rows.length === message.workspaces.length) return message;
+  return {
+    ...message,
+    workspaces: rows,
+    more: true,
+    cursor: rows[rows.length - 1].directoryName,
+  };
+}
 
 /**
  * 从翻页方向的远端丢消息并置 more=true：默认 / before 翻页丢最旧的（客户端接着用 before=最旧 seq 往前翻），

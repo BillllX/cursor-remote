@@ -1181,6 +1181,29 @@ final class ImStore {
         }
     }
 
+    /// 工作区头像走同一条 512px JPEG / 5MB 上传链，但资料写回 workspace_agent_profile。
+    func uploadWorkspaceAvatar(file: String, path: String) {
+        guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
+            showToast("还没连上服务器，等连上再换头像")
+            return
+        }
+        let url = dir.appendingPathComponent(file)
+        let tenantAtStart = tenant
+        showToast("正在上传头像…")
+        Task { [weak self] in
+            do {
+                let blob = try await uploader.upload(file: url, kind: "avatar", mime: "image/jpeg", token: token, progress: { _ in })
+                guard let self, self.tenant == tenantAtStart else { return }
+                ImCache.adopt(tenant: tenantAtStart, file: url, blob: blob)
+                self.send(.workspaceAgentProfile(path: path, displayName: nil, avatar: blob))
+                self.showToast("头像已更新")
+            } catch {
+                guard let self, self.tenant == tenantAtStart else { return }
+                self.showToast((error as? LocalizedError)?.errorDescription ?? "头像没传上去，再试一次")
+            }
+        }
+    }
+
     func setDraft(_ text: String, convId: String) {
         guard drafts[convId] ?? "" != text else { return }
         drafts[convId] = text.isEmpty ? nil : text

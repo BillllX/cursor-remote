@@ -1,10 +1,12 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 
 /// 聊天主页：列表 → 聊天页，只有两层。手机和 iPad 窄窗用导航栈，iPad 宽窗左右分栏。
 /// 打开哪个会话只看 im.selectedPeer，导航栈的路径和分栏的右边都从它来
 struct ChatHome: View {
     @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var settingsOpen = false
 
@@ -29,18 +31,31 @@ struct ChatHome: View {
         }
     }
 
-    private var path: Binding<[String]> {
+    private var path: Binding<[ChatDestination]> {
         Binding(
-            get: { im.selectedPeer.map { [$0] } ?? [] },
-            set: { im.selectedPeer = $0.last }
+            get: { store.chatHomeDestination.map { [$0] } ?? [] },
+            set: { destinations in
+                let next = destinations.last
+                if let next, case .person(let peer) = next {
+                    im.selectedPeer = peer
+                } else {
+                    im.selectedPeer = nil
+                }
+                if case .some(.workspace(_)) = next {
+                    // 工作区线程自行维护 viewing。
+                } else {
+                    store.leaveWorkspaceThread()
+                }
+                store.chatHomeDestination = next
+            }
         )
     }
 
     private var stackLayout: some View {
         NavigationStack(path: path) {
             ChatListView(openSettings: { settingsOpen = true })
-                .navigationDestination(for: String.self) { peer in
-                    ChatThreadView(peer: peer)
+                .navigationDestination(for: ChatDestination.self) { destination in
+                    destinationView(destination)
                 }
         }
     }
@@ -50,11 +65,11 @@ struct ChatHome: View {
             ChatListView(openSettings: { settingsOpen = true })
                 .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 420)
         } detail: {
-            if let peer = im.selectedPeer {
+            if let destination = store.chatHomeDestination {
                 NavigationStack {
-                    ChatThreadView(peer: peer)
+                    destinationView(destination)
                 }
-                .id(peer)
+                .id(destination)
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "bubble.left.and.bubble.right")
@@ -70,6 +85,25 @@ struct ChatHome: View {
         }
         .navigationSplitViewStyle(.balanced)
     }
+
+    @ViewBuilder
+    private func destinationView(_ destination: ChatDestination) -> some View {
+        switch destination {
+        case .person(let peer):
+            ChatThreadView(peer: peer)
+        case .assistant:
+            if let chatId = store.assistantChatId {
+                ThreadView(chrome: .embedded, chatId: chatId)
+                    .onAppear { store.openAssistantFromChatHome() }
+            } else {
+                ProgressView("正在加载助理…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onAppear { store.openAssistantFromChatHome() }
+            }
+        case .workspace(let path):
+            WorkspaceAgentThread(path: path)
+        }
+    }
 }
 
 // MARK: 列表
@@ -79,10 +113,38 @@ struct ChatListView: View {
     @Environment(ChatStore.self) private var store
     var openSettings: () -> Void
     @State private var query = ""
+    @State private var editingWorkspace: WorkspaceAgentItem?
 
     var body: some View {
         let rows = im.directory(query: query)
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let agents = store.workspaceAgents.filter {
+            needle.isEmpty
+                || $0.displayName.lowercased().contains(needle)
+                || $0.directoryName.lowercased().contains(needle)
+        }
         List {
+            Section {
+                Button {
+                    store.openAssistantFromChatHome()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(JieboColor.brass)
+                            .frame(width: 48, height: 48)
+                            .background(JieboColor.sidebar)
+                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        Text(store.assistantName)
+                            .font(JieboFont.text(.body, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(store.chatHomeDestination == .assistant ? JieboColor.mist : JieboColor.paper)
+            }
             if !rows.chatted.isEmpty {
                 Section {
                     ForEach(rows.chatted) { row in
@@ -99,12 +161,19 @@ struct ChatListView: View {
                     Text(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
                 }
             }
+            if !agents.isEmpty {
+                Section("工作区") {
+                    ForEach(agents) { item in
+                        workspaceRow(item)
+                    }
+                }
+            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
         .overlay {
-            if rows.chatted.isEmpty, rows.others.isEmpty {
+            if rows.chatted.isEmpty, rows.others.isEmpty, agents.isEmpty {
                 emptyState
             }
         }
@@ -135,6 +204,9 @@ struct ChatListView: View {
                 .accessibilityElement(children: .combine)
             }
         }
+        .sheet(item: $editingWorkspace) { item in
+            WorkspaceAgentProfileSheet(item: item)
+        }
     }
 
     // MARK: 行
@@ -144,6 +216,7 @@ struct ChatListView: View {
         let selected = im.selectedPeer == row.user.id
         return Button {
             im.selectedPeer = row.user.id
+            store.chatHomeDestination = .person(row.user.id)
         } label: {
             HStack(spacing: 12) {
                 ImAvatar(user: row.user, size: 48)
@@ -212,6 +285,7 @@ struct ChatListView: View {
     private func contactRow(_ row: ImDirectoryRow) -> some View {
         Button {
             im.selectedPeer = row.user.id
+            store.chatHomeDestination = .person(row.user.id)
         } label: {
             HStack(spacing: 12) {
                 ImAvatar(user: row.user, size: 40)
@@ -227,6 +301,59 @@ struct ChatListView: View {
         .buttonStyle(.plain)
         .listRowBackground(im.selectedPeer == row.user.id ? JieboColor.mist : JieboColor.paper)
         .accessibilityLabel(row.user.nickname)
+    }
+
+    private func workspaceRow(_ item: WorkspaceAgentItem) -> some View {
+        Button {
+            store.openWorkspaceAgent(item)
+        } label: {
+            HStack(spacing: 12) {
+                WorkspaceAgentAvatar(item: item, size: 44)
+                    .overlay(alignment: .topTrailing) {
+                        if item.unread > 0 {
+                            ImUnreadBadge(count: item.unread)
+                                .offset(x: 6, y: -6)
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.displayName)
+                        .font(JieboFont.text(.body, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    if item.displayName != item.directoryName {
+                        Text(item.directoryName)
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                if item.status != "idle" {
+                    Text(item.status == "awaiting" ? "需处理" : "运行中")
+                        .font(JieboFont.text(.caption2, weight: .medium))
+                        .foregroundStyle(item.status == "awaiting" ? JieboColor.danger : JieboColor.pine)
+                }
+            }
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(store.chatHomeDestination == .workspace(item.path) ? JieboColor.mist : JieboColor.paper)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button {
+                editingWorkspace = item
+            } label: {
+                Label("聊天资料", systemImage: "pencil")
+            }
+            .tint(JieboColor.brass)
+        }
+        .contextMenu {
+            Button {
+                editingWorkspace = item
+            } label: {
+                Label("编辑聊天资料", systemImage: "person.crop.square")
+            }
+        }
     }
 
     @ViewBuilder
@@ -310,6 +437,144 @@ struct ChatListView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: 工作区 Agent
+
+struct WorkspaceAgentThread: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.scenePhase) private var scenePhase
+    let path: String
+
+    private var item: WorkspaceAgentItem? { store.workspaceAgent(path: path) }
+
+    var body: some View {
+        Group {
+            if let item, let chatId = item.mainChatId, store.chats.contains(where: { $0.id == chatId }) {
+                ThreadView(chrome: .embedded, chatId: chatId)
+                    .navigationTitle(item.directoryName)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .onAppear { store.enterWorkspaceThread(path: path, chatId: chatId) }
+            } else {
+                ProgressView("正在打开工作区…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .task {
+                        if let item { store.openWorkspaceAgent(item) }
+                    }
+            }
+        }
+        .onChange(of: item?.mainChatId) { _, chatId in
+            if let chatId { store.enterWorkspaceThread(path: path, chatId: chatId) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard let chatId = item?.mainChatId else { return }
+            if phase == .active {
+                store.enterWorkspaceThread(path: path, chatId: chatId)
+            } else {
+                store.send(.workspaceAgentViewing(chatId: nil))
+            }
+        }
+        .onDisappear { store.leaveWorkspaceThread() }
+    }
+}
+
+struct WorkspaceAgentAvatar: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
+    @Environment(\.displayScale) private var displayScale
+    let item: WorkspaceAgentItem
+    let size: CGFloat
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                JieboColor.sidebar
+                Image(systemName: "folder.fill")
+                    .font(.system(size: size * 0.42, weight: .medium))
+                    .foregroundStyle(JieboColor.brass)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .task(id: "\(item.avatarBlob ?? "")|\(store.workspaceAvatarTicket?.sig ?? "")") {
+            guard let blob = item.avatarBlob, let ticket = store.workspaceAvatarTicket else {
+                image = nil
+                return
+            }
+            let pixel = Int(size * displayScale)
+            let url = GatewayConfig.imMediaURL(scope: "workspace-avatars", blob: blob, ticket: ticket)
+            image = await ImImageCache.shared.image(blob: blob, tenant: im.tenant, remote: url, maxPixel: pixel)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+struct WorkspaceAgentProfileSheet: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
+    @Environment(\.dismiss) private var dismiss
+    let item: WorkspaceAgentItem
+    @State private var displayName: String
+    @State private var avatarItem: PhotosPickerItem?
+
+    init(item: WorkspaceAgentItem) {
+        self.item = item
+        _displayName = State(initialValue: item.displayName)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("显示名", text: $displayName)
+                    PhotosPicker(selection: $avatarItem, matching: .images) {
+                        Label("更换头像", systemImage: "photo")
+                    }
+                    Button("恢复默认") {
+                        store.updateWorkspaceProfile(path: item.path, displayName: "", avatar: "")
+                        dismiss()
+                    }
+                } header: {
+                    Text("聊天列表资料")
+                } footer: {
+                    Text("只改变聊天列表里的名称和头像，不会修改目录名、工作目录或会话标题。")
+                }
+            }
+            .navigationTitle("工作区聊天资料")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        store.updateWorkspaceProfile(path: item.path, displayName: displayName, avatar: nil)
+                        dismiss()
+                    }
+                }
+            }
+            .onChange(of: avatarItem) { _, picked in
+                guard let picked else { return }
+                avatarItem = nil
+                uploadAvatar(picked)
+            }
+        }
+    }
+
+    private func uploadAvatar(_ picked: PhotosPickerItem) {
+        let tenant = im.tenant
+        Task { @MainActor in
+            guard let source = await ImPickTemp.load(picked) else { return }
+            let file = await Task.detached(priority: .userInitiated) {
+                let output = ImImagePrep.avatar(file: source, tenant: tenant)
+                ImPickTemp.remove([source])
+                return output
+            }.value
+            guard tenant == im.tenant, let file else { return }
+            im.uploadWorkspaceAvatar(file: file, path: item.path)
+        }
     }
 }
 

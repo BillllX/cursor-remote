@@ -597,6 +597,29 @@ export const serverSamples: ServerMessage[] = [
     unread: 1,
   },
   { type: "im_error", clientId: "c-ios-1739000000000-1", code: "rate_limited", message: "发得太快了，稍等一会儿再发" },
+  {
+    type: "workspace_agents",
+    workspaces: [
+      {
+        path: CWD,
+        directoryName: "notes",
+        displayName: "讲稿项目",
+        avatarBlob: SHA,
+        mainChatId: CHAT,
+        status: "awaiting",
+        unread: 2,
+        readSeq: 7,
+        finishedSeq: 9,
+        lastActivityAt: T0,
+      },
+    ],
+    avatarTicket: imTicketSample,
+    reset: true,
+    more: true,
+    cursor: "notes",
+  },
+  { type: "workspace_agent_opened", path: CWD, chatId: CHAT },
+  { type: "workspace_agent_update", chatId: CHAT, unread: 0, readSeq: 9, finishedSeq: 9 },
 ];
 
 export const clientSamples: ClientMessage[] = [
@@ -615,6 +638,11 @@ export const clientSamples: ClientMessage[] = [
   { type: "create_workspace", name: "slides" },
   { type: "rename_workspace", path: `${ROOT}/slides`, name: "talks" },
   { type: "delete_workspace", path: `${ROOT}/old` },
+  { type: "workspace_agent_list", cursor: "notes" },
+  { type: "workspace_agent_open", path: CWD },
+  { type: "workspace_agent_profile", path: CWD, displayName: "讲稿项目", avatar: SHA },
+  { type: "workspace_agent_read", chatId: CHAT, seq: 9 },
+  { type: "workspace_agent_viewing", chatId: CHAT },
   {
     type: "prompt",
     text: "登录页白屏，帮我看看",

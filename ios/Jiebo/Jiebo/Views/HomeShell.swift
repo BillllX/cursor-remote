@@ -70,11 +70,28 @@ struct HomeShell: View {
             _ = PushRouting.shared.consume()
             mode = .chat
             openConversation(convId)
+        } else if target.isWorkspace, let chatId = target.chatId {
+            _ = PushRouting.shared.consume()
+            mode = .chat
+            openWorkspace(chatId)
         } else if UIDevice.current.userInterfaceIdiom == .phone {
             mode = .workbench
         } else {
             // iPad 不订阅助理推送，没有壳会来取，丢掉免得一直挂着
             _ = PushRouting.shared.consume()
+        }
+    }
+
+    private func openWorkspace(_ chatId: String) {
+        Task { @MainActor in
+            store.requestWorkspaceAgents()
+            while store.workspaceAgent(chatId: chatId) == nil, !store.workspaceAgentsLoaded {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard !Task.isCancelled else { return }
+            }
+            guard let item = store.workspaceAgent(chatId: chatId) else { return }
+            store.chatHomeDestination = .workspace(item.path)
+            store.enterWorkspaceThread(path: item.path, chatId: chatId)
         }
     }
 
@@ -88,6 +105,7 @@ struct HomeShell: View {
             }
             guard let peer = ImConv.peer(of: convId, me: im.meId) else { return }
             im.selectedPeer = peer
+            store.chatHomeDestination = .person(peer)
         }
     }
 }

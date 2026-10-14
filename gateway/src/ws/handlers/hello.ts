@@ -22,6 +22,7 @@ import { emitStoredState, ensureAssistantChat } from "../../sync/storedState.ts"
 import { emitRunSnapshots } from "../../sync/transcript.ts";
 import { sendCheckpoints } from "../../workspace/checkpoints.ts";
 import { emitWorkspaces } from "../../workspace/workspaces.ts";
+import { workspaceAgentsMessage } from "../../workspace/agents.ts";
 import { send } from "../send.ts";
 import { cachedModels, listModels } from "../../chat/models.ts";
 import type { MessageOf, WsConnCtx } from "./types.ts";
@@ -80,7 +81,17 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       loops: loopsForTenant(tenant.id),
       assistantName: assistantName(tenant),
       assistantChatId: assistantChatIdOf(tenant),
-      features: ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats", "im"],
+      features: [
+        "turn_files",
+        "read_sha",
+        "read_req_id",
+        "seg_hashes",
+        "tool_at",
+        "slim_chats",
+        "im",
+        "workspace_agents",
+        "workspace_agent_viewing",
+      ],
     });
   };
   try {
@@ -92,6 +103,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
   emitReady(cached);
   emitStoredState(ws, tenant);
   emitWorkspaces(ws, tenant);
+  send(ws, workspaceAgentsMessage(tenant));
   for (const chatId of runningChatIds(tenant)) {
     send(ws, { type: "status", chatId, status: "RUNNING" });
   }

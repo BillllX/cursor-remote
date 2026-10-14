@@ -6,6 +6,7 @@ import { noteDelegationApproval } from "../runtime/approvals.ts";
 import { slotByChat } from "../runtime/slots.ts";
 import { gatewayState } from "../runtime/state.ts";
 import type { Slot } from "../runtime/types.ts";
+import { notifyWorkspaceAgentAttention } from "../workspace/agentNotifications.ts";
 import { frameFor, reply } from "./frame.ts";
 
 export function send(ws: WebSocket, message: ServerMessage) {
@@ -13,6 +14,8 @@ export function send(ws: WebSocket, message: ServerMessage) {
   const tenantId = gatewayState.wsTenant.get(ws);
   const slot = chatId && tenantId ? slotByChat(tenantId, chatId) : undefined;
   if (slot?.transcript && isStreamEvent(message.type)) applyStreamEvent(slot.transcript, message);
+  // applyStreamEvent 先写 awaitingApproval，再广播列表/快照；非 owner 收到的快照可直接恢复审批卡。
+  if (message.type === "approval" && slot?.transcript) notifyWorkspaceAgentAttention(slot, "approval");
   let out = message;
   if (message.type === "tool-started" && slot?.transcript) {
     const at = slot.transcript.tools.find((item) => item.callId === message.callId)?.at;

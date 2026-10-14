@@ -70,6 +70,13 @@ extension ChatStore {
                     row.tools = parsedTools
                     row.task = task
                     row.queued = false
+                    if phase == "running", let awaitingApproval, let object = awaitingApproval.object {
+                        row.pendingTool = PendingTool(
+                            callId: object["callId"]?.string ?? "",
+                            name: object["name"]?.string ?? "",
+                            args: object["args"]
+                        )
+                    }
                     if phase == "done" {
                         row = row.settled(status: status ?? "finished", durationMs: durationMs)
                     }
@@ -287,11 +294,31 @@ extension ChatStore {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         let before = chats[index]
         chats[index] = update(before)
+        mergePendingTurnFiles(chatId: id)
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
         if bodySegs[id] != nil, chats[index].turns != before.turns { bodySegs[id] = nil }
         // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
         if id != "boot", !cachedOnlyIds.contains(id) { dirtyChatIds.insert(id) }
         scheduleSync()
+    }
+
+    /// turn_files 是网关最终结果，不回推；目标回合尚未由 snapshot/history 建好时先保留。
+    func mergeOrQueueTurnFiles(chatId: String, turnId: String, files: [TurnFile]) {
+        pendingTurnFiles.store(chatId: chatId, turnId: turnId, files: files)
+        mergePendingTurnFiles(chatId: chatId)
+    }
+
+    func mergePendingTurnFiles(chatId: String) {
+        guard let chatIndex = chats.firstIndex(where: { $0.id == chatId }) else { return }
+        let available = Set(chats[chatIndex].turns.map(\.id))
+        let ready = pendingTurnFiles.take(chatId: chatId, availableTurnIds: available)
+        guard !ready.isEmpty else { return }
+        for (turnId, files) in ready {
+            guard let turnIndex = chats[chatIndex].turns.firstIndex(where: { $0.id == turnId }) else { continue }
+            chats[chatIndex].turns[turnIndex].files = files
+        }
+        bodySegs[chatId] = nil
+        scheduleBodyCache(chatId)
     }
 
     func patchRunning(_ id: String, _ update: (Turn) -> Turn) {

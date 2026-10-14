@@ -8,6 +8,7 @@ enum ComposerStyle { case full, assistant }
 
 struct ComposerView: View {
     @Environment(ChatStore.self) var store
+    @Environment(\.threadChatId) private var environmentChatId
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
     var style: ComposerStyle = .full
@@ -37,6 +38,13 @@ struct ComposerView: View {
     @State var tapVoice = false
     @Namespace var modeThumb
     @Environment(\.accessibilityReduceMotion) var reduceMotion
+
+    var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
+    var chat: ChatSession? { store.chatSession(chatId) }
+    var chatBusy: Bool { store.isBusy(chatId) }
+    var chatMode: AgentMode { store.mode(for: chatId) }
+    var chatModel: String { store.model(for: chatId) }
+    var chatImages: [PendingImage] { store.pendingImages(for: chatId) }
 
     var body: some View {
         @Bindable var store = store
@@ -76,7 +84,7 @@ struct ComposerView: View {
                     .accessibilityHint("长按说话，松开后转成文字")
                     .onChange(of: text) { _, value in
                         if value.contains("@") || !store.mentionSuggestions.isEmpty {
-                            store.updateMentions(for: value)
+                            store.updateMentions(for: value, chatId: chatId)
                         }
                         schedulePersist()
                     }
@@ -116,18 +124,21 @@ struct ComposerView: View {
         // 浮动玻璃底栏：不铺实底，让消息从胶囊下面透过去
         .background(floating ? Color.clear : JieboColor.paper)
         .onAppear {
-            text = store.draft
-            store.refreshCheckpoints()
+            text = store.draft(for: chatId)
+            store.refreshCheckpoints(chatId: chatId)
         }
-        .onDisappear(perform: stopVoice)
-        .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
-        .onChange(of: store.activeId) { _, _ in
+        .onDisappear {
             stopVoice()
             flushDraft()
-            text = store.draft
-            store.refreshCheckpoints()
         }
-        .onChange(of: store.draft) { _, value in
+        .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
+        .onChange(of: chatId) { oldId, _ in
+            stopVoice()
+            flushDraft(currentChatId: oldId)
+            text = store.draft(for: chatId)
+            store.refreshCheckpoints(chatId: chatId)
+        }
+        .onChange(of: store.draft(for: chatId)) { _, value in
             if value == ignoreDraftEcho { return }
             if value != text { text = value }
         }
@@ -137,7 +148,7 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
-            let chatId = store.activeId
+            let targetChatId = chatId
             Task {
                 var prepared: [PendingImage] = []
                 var failed = 0
@@ -154,7 +165,7 @@ struct ComposerView: View {
                         failed += 1
                     }
                 }
-                store.addPendingImages(prepared, toChat: chatId)
+                store.addPendingImages(prepared, toChat: targetChatId)
                 if failed > 0 { store.flash("\(failed) 张图片读取失败，换一张试试") }
             }
         }
@@ -169,18 +180,18 @@ struct ComposerView: View {
             guard !paths.isEmpty else { return false }
             // 本地刚打的字 350ms 后才落到 store.draft；先落盘，否则追加会基于旧草稿把新字盖掉
             flushDraft()
-            for path in paths { store.appendMentionToDraft(path) }
+            for path in paths { store.appendMentionToDraft(path, chatId: chatId) }
             return true
         }
         .photosPicker(isPresented: $photoPickerOpen, selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images)
         .fileImporter(isPresented: $filePickerOpen, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
-                store.attachFiles(urls)
+                store.attachFiles(urls, chatId: chatId)
             }
         }
         .sheet(isPresented: $fileBrowserOpen) {
-            FileBrowserSheet { path in
-                store.appendMentionToDraft(path)
+            FileBrowserSheet(chatId: chatId) { path in
+                store.appendMentionToDraft(path, chatId: chatId)
             }
         }
     }
@@ -191,12 +202,12 @@ struct ComposerView: View {
     var placeholder: String {
         if style == .assistant {
             if !store.connected { return "正在连服务器…" }
-            if store.busy { return "正在回复，发送会排队" }
+            if chatBusy { return "正在回复，发送会排队" }
             return "跟\(store.assistantName)说点什么"
         }
         if !store.connected { return "正在连服务器…" }
-        if store.busy { return "正在动手，Enter 会排队" }
-        switch store.mode {
+        if chatBusy { return "正在动手，Enter 会排队" }
+        switch chatMode {
         case .ask: return "问一句，不改文件，@ 引用 · 长按说话"
         case .plan: return "描述任务，只出方案 · 长按说话"
         case .agent: return "交代要做的事，@ 引用 · 长按说话"
@@ -205,13 +216,13 @@ struct ComposerView: View {
 
     var canSendNow: Bool {
         store.uploads.isEmpty
-            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !store.pendingImages.isEmpty)
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !chatImages.isEmpty)
     }
 
     func schedulePersist() {
-        if let pendingDraft, pendingDraft.chatId != store.activeId { flushDraft() }
+        if let pendingDraft, pendingDraft.chatId != chatId { flushDraft() }
         persistTask?.cancel()
-        pendingDraft = (store.activeId, text)
+        pendingDraft = (chatId, text)
         persistTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
@@ -219,11 +230,11 @@ struct ComposerView: View {
         }
     }
 
-    private func flushDraft() {
+    private func flushDraft(currentChatId: String? = nil) {
         persistTask?.cancel()
         guard let pending = pendingDraft else { return }
         pendingDraft = nil
-        if pending.chatId == store.activeId { ignoreDraftEcho = pending.text }
+        if pending.chatId == (currentChatId ?? chatId) { ignoreDraftEcho = pending.text }
         store.saveDraft(pending.text, forChat: pending.chatId)
     }
 
@@ -232,9 +243,9 @@ struct ComposerView: View {
         persistTask?.cancel()
         pendingDraft = nil
         ignoreDraftEcho = ""
-        store.saveDraft(text)
-        store.submit()
-        text = store.draft
+        store.saveDraft(text, forChat: chatId)
+        store.submit(chatId: chatId, text: text)
+        text = store.draft(for: chatId)
     }
 }
 
