@@ -103,11 +103,39 @@ try {
   memory.saveMemory(ref, { topic: "运动", text: "用户周末跑步", basis: "user_said" }, "chat");
   check(memory.renderMemoryBlock(ref).includes("周末跑步"), "推断：用户确认后常驻");
 
-  /* ── 工作区记忆提议 → 确认卡 ── */
+  /* ── 工作区记忆：默认直接写 ── */
+  {
+    const directChat = "c-direct";
+    const directCwd = resolve(root, "proj");
+    const before = approvals.listApprovals(ref).length;
+    const direct = wm.proposeWorkspaceMemory(tenant, { chatId: directChat, cwd: directCwd, section: "命令", text: "直写测试：构建用 make all" }) as {
+      ok: boolean;
+      written?: number;
+      error?: string;
+    };
+    check(direct.ok && direct.written === 1, "直写：默认不出卡，马上写下");
+    const directFile = existsSync(resolve(directCwd, ".jiebo/memory.md")) ? readFileSync(resolve(directCwd, ".jiebo/memory.md"), "utf8") : "";
+    check(directFile.includes("直写测试：构建用 make all"), "直写：.jiebo/memory.md 里有这条");
+    check(approvals.listApprovals(ref).length === before, "直写：没有挂起确认卡");
+    check(
+      (wm.proposeWorkspaceMemory(tenant, { chatId: directChat, cwd: directCwd, section: "命令", text: "直写测试：构建用 make all" }) as { duplicate?: boolean }).duplicate === true,
+      "直写：重复的不再写",
+    );
+    check(!wm.proposeWorkspaceMemory(tenant, { chatId: directChat, cwd: directCwd, section: "约定", text: "key: sk-abcdefghijklmnopqrstuv" }).ok, "直写：密钥照样拒");
+    check(!wm.proposeWorkspaceMemory(tenant, { chatId: directChat, cwd: directCwd, section: "约定", text: "越界", path: ".." }).ok, "直写：越界照样拒");
+    check(!wm.memoryNeedsConfirm(), "直写：不设环境变量就是直写");
+    process.env.WORKSPACE_MEMORY_CONFIRM = "1";
+    check(wm.memoryNeedsConfirm(), "直写：WORKSPACE_MEMORY_CONFIRM=1 切回确认卡");
+    delete process.env.WORKSPACE_MEMORY_CONFIRM;
+    // 清掉这条，免得影响后面按全文断言的用例
+    writeFileSync(resolve(directCwd, ".jiebo/memory.md"), directFile.split("\n").filter((row) => !row.includes("直写测试")).join("\n"));
+  }
+
+  /* ── 工作区记忆提议 → 确认卡（WORKSPACE_MEMORY_CONFIRM=1 时的路径） ── */
   const chatId = "c-proj";
   const cwd = resolve(root, "proj");
   const propose = (args: Partial<Parameters<typeof wm.proposeWorkspaceMemory>[1]>) =>
-    wm.proposeWorkspaceMemory(tenant, { chatId, cwd, section: "约定", text: "", ...args }) as { ok: boolean; error?: string; duplicate?: boolean };
+    wm.proposeWorkspaceMemory(tenant, { chatId, cwd, section: "约定", text: "", ...args }, { confirm: true }) as { ok: boolean; error?: string; duplicate?: boolean };
   check(propose({ text: "依赖统一用 pnpm 装" }).ok, "提议：当前工作区能提");
   check(propose({ text: "app 的入口在 src/main.ts", path: "app", section: "约定", refs: "src/main.ts" }).ok, "提议：能指定到下面的仓库");
   check(!propose({ text: "越界", path: ".." }).ok, "提议：不能写到 USER 根目录");
@@ -198,7 +226,7 @@ try {
   // 空闲出卡
   propose({ text: "空闲出卡的一条", path: "app" });
   const chat2 = "c-idle";
-  wm.proposeWorkspaceMemory(tenant, { chatId: chat2, cwd, section: "坑", text: "别在 proj 根目录跑 npm i" });
+  wm.proposeWorkspaceMemory(tenant, { chatId: chat2, cwd, section: "坑", text: "别在 proj 根目录跑 npm i" }, { confirm: true });
   let flushed = false;
   wm.scheduleFlush(ref, chat2, () => (flushed = true), 20);
   wm.cancelFlush(ref, chat2);

@@ -221,7 +221,8 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
     "agent",
     undefined,
     undefined,
-    true,
+    // confirmWrites=false：委派子会话改文件不再逐项等用户批准（越界拦截、工作区围栏照旧生效）
+    false,
     false,
     false,
     slot.policy,
@@ -239,6 +240,6 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
     id: record.id,
     childChatId,
     mode: "foreground",
-    note: "子会话已开工，写文件要你批准；完成后汇报到收件箱。",
+    note: "子会话已开工，改文件不用批准；完成后汇报到收件箱。",
   });
 }

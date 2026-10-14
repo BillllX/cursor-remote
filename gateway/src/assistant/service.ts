@@ -48,6 +48,7 @@ import {
   dropWorkspaceThread,
   expireCards,
   flushChat,
+  memoryNeedsConfirm,
   noteWorkspaceThread,
   proposeWorkspaceMemory,
   readWorkspaceMemory,
@@ -138,7 +139,9 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
 
 /** 子工作区会话（含委派子会话）挂的工具：只能提议写工作区记忆 */
 export function workspaceToolsFor(tenant: AssistantTenant, chatId: string, cwd: string): Record<string, SDKCustomTool> {
-  return workspaceSessionTools({ propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }) });
+  return workspaceSessionTools({
+    propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }, { confirm: memoryNeedsConfirm() }),
+  });
 }
 
 /** W0 工作偏好 + 从 cwd 往上的各层规则；所有会话都用这一份 */

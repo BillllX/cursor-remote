@@ -129,6 +129,13 @@ export const ENV_SPECS = [
     doc: "单租户模式是否启用沙箱；只有 0/false/off/no 算关",
   },
   {
+    name: "WORKSPACE_MEMORY_CONFIRM",
+    type: "boolean",
+    default: "0",
+    group: "租户与状态",
+    doc: "工作区记忆提议要不要先出确认卡；默认 0 直接写进 .jiebo/memory.md，1/true/yes/on 才攒着请用户批准",
+  },
+  {
     name: "CURSOR_REMOTE_MEDIA_SECRET",
     type: "string",
     group: "租户与状态",
@@ -275,6 +282,8 @@ export const gatewayEnv = {
   /** 未 resolve 的单租户工作区 */
   singleTenantCwd: () => raw("CURSOR_REMOTE_CWD") || `${homedir()}/Projects`,
   singleTenantSandbox: () => flag("CURSOR_REMOTE_SANDBOX", ""),
+  /** 只有明确设成 1/true/yes/on 才要确认卡；默认直接写 */
+  workspaceMemoryConfirm: () => /^(1|true|yes|on)$/i.test((raw("WORKSPACE_MEMORY_CONFIRM") || "").trim()),
   mediaSecret: () => (raw("CURSOR_REMOTE_MEDIA_SECRET") || "").trim(),
 
   gitAuthorName: () => raw("GIT_AUTHOR_NAME") || raw("CURSOR_REMOTE_GIT_NAME") || "cursor-remote",

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
+import { gatewayEnv } from "../config.ts";
 import { atomicWriteFileSync, sweepStaleTmp } from "../fsAtomic.ts";
 import { isInside } from "../pathInside.ts";
 import { addApproval, settleApproval } from "./approvals.ts";
@@ -22,7 +23,8 @@ import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type T
  * - 规则：从 cwd 往上走到 USER 根目录，每层读 .cursorrules、AGENTS.md、.cursor/rules/*、.jiebo/memory.md，近层放后面；
  *   USER 根目录那层属于助理（人设），只在根目录会话里读。
  * - .jiebo/memory.md 由机器维护、人可以改：每条一行，行尾注释记来源和引用的路径，引用失效就标“待核实”。
- * - 写入只走“提议 → 线程空闲时合成一张确认卡 → 用户批准”，不直接写。
+ * - 写入默认直接落进 .jiebo/memory.md（过密钥、个人信息、越界检查；文件人可以改可以删）；
+ *   设了 WORKSPACE_MEMORY_CONFIRM=1 才走“提议 → 线程空闲时合成一张确认卡 → 用户批准”。
  * - 会话摘要索引只存每个工作区线程的一行摘要，供助理只读查询；整理者不读。
  */
 
@@ -341,7 +343,12 @@ function leaksPersonal(ref: TenantRef, text: string) {
 
 export type ProposeInput = { chatId: string; cwd: string; path?: string; section: string; text: string; refs?: string };
 
-export function proposeWorkspaceMemory(tenant: WorkspaceRoot, input: ProposeInput) {
+/** 默认直接写；env 里要求确认时退回“攒着出确认卡”。 */
+export function memoryNeedsConfirm() {
+  return gatewayEnv.workspaceMemoryConfirm();
+}
+
+export function proposeWorkspaceMemory(tenant: WorkspaceRoot, input: ProposeInput, opts: { confirm?: boolean } = {}) {
   const ref = { id: tenant.id, stateDir: tenant.stateDir };
   const base = realOr(tenant.workspaceRoot);
   const cwd = realOr(input.cwd);
@@ -367,7 +374,17 @@ export function proposeWorkspaceMemory(tenant: WorkspaceRoot, input: ProposeInpu
   const inFile = parseMemoryFile(readText(resolve(target, MEMORY_FILE))).some((line) => line.text === text);
   const pending = data.proposals.some((item) => item.dir === dir && item.text === text);
   if (inFile || pending) return { ok: true, duplicate: true, note: "已经记过或已在等确认。继续手上的事，最后照常给用户写汇报。" };
-  data.proposals.push({ id: newId("wm"), kind: "workspace", chatId: input.chatId, dir, section, text, refs, createdAt: Date.now() });
+  const id = newId("wm");
+  if (!opts.confirm) {
+    // 默认：校验都过了就直接写，不出确认卡
+    try {
+      const written = appendMemoryLines(target, [{ section, text, id, from: input.chatId, at: today(), refs }]);
+      return { ok: true, written, note: `已写进 ${dir}/${MEMORY_FILE}。继续手上的事，最后照常给用户写汇报。` };
+    } catch (err) {
+      return { ok: false, error: `写 ${dir}/${MEMORY_FILE} 失败：${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+  data.proposals.push({ id, kind: "workspace", chatId: input.chatId, dir, section, text, refs, createdAt: Date.now() });
   writeStore(ref, data);
   return { ok: true, queued: queued.length + 1, note: "先攒着，线程空闲后合成一张确认卡请用户批准，批准了才写进 .jiebo/memory.md。不用等它，继续手上的事，最后照常给用户写汇报。" };
 }

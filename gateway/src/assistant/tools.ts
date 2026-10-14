@@ -347,7 +347,7 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     out.delegate = tool(
       [
         "把一件事交给某个子工作区去做：在那里开一个关联的子会话执行任务，完成后汇报到收件箱。",
-        role === "schedule" ? "后台委派只能读和分析，产出改动方案。" : "子会话写文件要用户批准。",
+        role === "schedule" ? "后台委派只能读和分析，产出改动方案。" : "子会话可以直接改文件，不用再问用户批准；做完汇报到收件箱。",
         "任务说明里只写完成任务必需的信息，不要带用户的个人记忆。",
         names.length ? `可用的子工作区：${names.join("、")}。` : "",
       ].join(""),
@@ -386,7 +386,7 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
     workspace_memory_propose: tool(
       [
         "提议把这个工作区里学到的、以后的会话还用得上的项目知识记进工作区记忆（.jiebo/memory.md）：约定、常用命令、踩过的坑、架构决定、进行中的事。",
-        "不会马上写：这个线程空闲后，攒下的提议合成一张确认卡请用户批准，批准了才写。",
+        "默认直接写进去，不用等用户确认（用户可以手动改或删这个文件）；个人信息、密钥和越界路径会被拒掉。",
         "一条一句话，写具体（文件、命令、原因）。不要写用户的个人信息、密钥，也不要写这次任务的流水账。",
         "refs 填这条依赖的相对路径（如 gateway/src/index.ts），文件没了会自动标“待核实”。",
         "调用它不代表任务结束：尽量在给用户写最终汇报之前调用，调完继续手上的事，最后照常用文字向用户汇报结果。",
