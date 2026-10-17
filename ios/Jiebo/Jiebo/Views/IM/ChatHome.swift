@@ -198,7 +198,7 @@ struct ChatListView: View {
             }
         }
         .searchable(text: $query, prompt: "搜昵称或拼音首字母")
-        .refreshable { await im.refreshList() }
+        .refreshable { im.refreshList() }
         .navigationTitle("聊天")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

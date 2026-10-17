@@ -239,7 +239,7 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         do {
             try session.setCategory(
                 .playAndRecord, mode: .voiceChat,
-                options: [.defaultToSpeaker, .allowBluetooth]
+                options: [.defaultToSpeaker, .allowBluetoothHFP]
             )
             if UIDevice.current.proximityState {
                 try session.overrideOutputAudioPort(.none)

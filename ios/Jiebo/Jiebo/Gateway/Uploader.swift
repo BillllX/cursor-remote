@@ -302,25 +302,17 @@ enum MediaShrink {
         }
         // 源轨首帧时间不一定是 0，从 0 起会多出前置空白
         writer.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(first))
-        let pump = AudioPump(first: first)
+        let pump = AudioPump(first: first, input: input, output: readerOutput, writer: writer, reader: reader)
         let queue = DispatchQueue(label: "jiebo.media-shrink.audio")
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             input.requestMediaDataWhenReady(on: queue) {
-                while input.isReadyForMoreMediaData {
-                    guard let buffer = pump.next(readerOutput), input.append(buffer) else {
-                        if pump.finish() {
-                            input.markAsFinished()
-                            continuation.resume()
-                        }
-                        return
-                    }
-                }
+                if pump.drain() { continuation.resume() }
             }
             // writer 中途失败后 input 不再 ready、回调也不再来，靠轮询状态收尾
             Task.detached {
                 while !pump.isFinished {
                     try? await Task.sleep(for: .milliseconds(500))
-                    if writer.status == .failed || reader.status == .failed, pump.finish() {
+                    if pump.pipelineFailed, pump.finish() {
                         continuation.resume()
                     }
                 }
@@ -341,12 +333,38 @@ private final class AudioPump: @unchecked Sendable {
     private let lock = NSLock()
     private var pending: CMSampleBuffer?
     private var finished = false
+    private let input: AVAssetWriterInput
+    private let output: AVAssetReaderOutput
+    private let writer: AVAssetWriter
+    private let reader: AVAssetReader
 
-    init(first: CMSampleBuffer) {
+    init(first: CMSampleBuffer, input: AVAssetWriterInput, output: AVAssetReaderOutput, writer: AVAssetWriter, reader: AVAssetReader) {
         pending = first
+        self.input = input
+        self.output = output
+        self.writer = writer
+        self.reader = reader
     }
 
-    func next(_ output: AVAssetReaderOutput) -> CMSampleBuffer? {
+    /// 在 requestMediaDataWhenReady 的队列上抽干当前可写的帧。这次调用完成收尾时返回 true。
+    func drain() -> Bool {
+        while input.isReadyForMoreMediaData {
+            guard let buffer = takeNext(), input.append(buffer) else {
+                if finish() {
+                    input.markAsFinished()
+                    return true
+                }
+                return false
+            }
+        }
+        return false
+    }
+
+    var pipelineFailed: Bool {
+        writer.status == .failed || reader.status == .failed
+    }
+
+    private func takeNext() -> CMSampleBuffer? {
         lock.lock()
         let buffer = pending
         pending = nil

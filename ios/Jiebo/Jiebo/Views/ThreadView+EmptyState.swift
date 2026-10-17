@@ -57,19 +57,21 @@ extension ThreadView {
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
 
-            if dynamicTypeSize >= .xxLarge {
-                VStack(spacing: 8) {
-                    ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
-                        assistantStarterButton(item.element.0, symbol: item.element.1)
+            Group {
+                if dynamicTypeSize >= .xxLarge {
+                    VStack(spacing: 8) {
+                        ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
+                            assistantStarterButton(item.element.0, symbol: item.element.1)
+                        }
                     }
-                }
-            } else {
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
-                    spacing: 8
-                ) {
-                    ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
-                        assistantStarterButton(item.element.0, symbol: item.element.1)
+                } else {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
+                        spacing: 8
+                    ) {
+                        ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
+                            assistantStarterButton(item.element.0, symbol: item.element.1)
+                        }
                     }
                 }
             }

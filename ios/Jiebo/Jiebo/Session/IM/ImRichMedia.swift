@@ -1,7 +1,7 @@
 import CoreLocation
 import Combine
 import Foundation
-import LinkPresentation
+@preconcurrency import LinkPresentation
 import MapKit
 import UIKit
 import UniformTypeIdentifiers
@@ -47,13 +47,12 @@ enum ImLinkMetadata {
     static func load(_ url: URL, tenant: String) async -> (title: String?, desc: String?, iconFile: String?) {
         let metadata: LPLinkMetadata? = await withCheckedContinuation { continuation in
             let provider = LPMetadataProvider()
-            let gate = ImMetadataGate(continuation)
+            let gate = ImMetadataGate(continuation, provider: provider)
             provider.startFetchingMetadata(for: url) { metadata, _ in
                 gate.finish(metadata)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                provider.cancel()
-                gate.finish(nil)
+                gate.cancel()
             }
         }
         guard let metadata else { return (nil, nil, nil) }
@@ -85,9 +84,11 @@ enum ImLinkMetadata {
 private final class ImMetadataGate: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<LPLinkMetadata?, Never>?
+    private let provider: LPMetadataProvider
 
-    init(_ continuation: CheckedContinuation<LPLinkMetadata?, Never>) {
+    init(_ continuation: CheckedContinuation<LPLinkMetadata?, Never>, provider: LPMetadataProvider) {
         self.continuation = continuation
+        self.provider = provider
     }
 
     func finish(_ metadata: LPLinkMetadata?) {
@@ -96,6 +97,11 @@ private final class ImMetadataGate: @unchecked Sendable {
         continuation = nil
         lock.unlock()
         pending?.resume(returning: metadata)
+    }
+
+    func cancel() {
+        provider.cancel()
+        finish(nil)
     }
 }
 
@@ -142,18 +148,24 @@ final class ImLocationManager: NSObject, ObservableObject, CLLocationManagerDele
         manager.requestLocation()
     }
 
-    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        coordinate = locations.last?.coordinate
-    }
-
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        denied = manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted
-        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
-            manager.requestLocation()
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let coordinate = locations.last?.coordinate
+        Task { @MainActor in
+            self.coordinate = coordinate
         }
     }
 
-    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let status = manager.authorizationStatus
+        Task { @MainActor in
+            denied = status == .denied || status == .restricted
+            if status == .authorizedAlways || status == .authorizedWhenInUse {
+                self.manager.requestLocation()
+            }
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {}
 }
 
 struct ImPlace: Identifiable, Hashable {
