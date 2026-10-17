@@ -455,6 +455,10 @@ struct ShimmerText: View {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let t = CGFloat(context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 4) / 4)
                 let center = t * 1.6 - 0.3 // 高亮窗从 -0.3 扫到 1.3
+                // 进出两端时窗口挤在 0/1 上，色标位置必须严格递增
+                let tail = min(1, max(0.02, center + 0.3))
+                let mid = min(max(center, 0.01), tail - 0.01)
+                let lead = min(max(0, center - 0.3), mid - 0.01)
                 ZStack {
                     Text(text)
                         .font(font)
@@ -465,9 +469,9 @@ struct ShimmerText: View {
                         .mask(
                             LinearGradient(
                                 stops: [
-                                    .init(color: .clear, location: max(0, center - 0.3)),
-                                    .init(color: .black, location: min(max(center, 0.01), 0.99)),
-                                    .init(color: .clear, location: min(1, max(0.02, center + 0.3))),
+                                    .init(color: .clear, location: lead),
+                                    .init(color: .black, location: mid),
+                                    .init(color: .clear, location: tail),
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
