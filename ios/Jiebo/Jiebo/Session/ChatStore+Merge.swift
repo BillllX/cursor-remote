@@ -137,6 +137,7 @@ extension ChatStore {
             !$0.user.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !$0.tools.isEmpty
+                || $0.filesSource != .none
         }
         if !localHas { return incoming }
         var merged = local
@@ -145,8 +146,11 @@ extension ChatStore {
         var seenLocal = false
         for remote in incoming {
             let finger = userFingerprint(remote.user)
-            if finger.isEmpty { continue }
-            let index = merged.indices.reversed().first { !used.contains($0) && userFingerprint(merged[$0].user) == finger }
+            let index = merged.indices.reversed().first {
+                !used.contains($0)
+                    && (merged[$0].id == remote.id
+                        || (!finger.isEmpty && userFingerprint(merged[$0].user) == finger))
+            }
             if let index {
                 used.insert(index)
                 seenLocal = true
@@ -155,8 +159,9 @@ extension ChatStore {
                 if remote.assistant.count > row.assistant.count { row.assistant = remote.assistant }
                 if remote.thinking.count > row.thinking.count { row.thinking = remote.thinking }
                 row.tools = mergeHistoryTools(local: row.tools, remote: remote.tools)
+                row = row.mergingFiles(from: remote)
                 merged[index] = row
-            } else if !seenLocal {
+            } else if !finger.isEmpty, !seenLocal {
                 var row = remote
                 row.running = false
                 row.queued = false
@@ -246,6 +251,15 @@ extension ChatStore {
         dirtyChatIds.contains(id) || localTurnsPendingSync.contains(id)
     }
 
+    /// 保留 base 的正文与顺序，只从同 id 的另一份回合补文件状态。
+    static func mergingTurnFiles(base: [Turn], other: [Turn]) -> [Turn] {
+        let otherById = Dictionary(uniqueKeysWithValues: Turn.uniqued(other).map { ($0.id, $0) })
+        return base.map { turn in
+            guard turn.filesSource != .authoritative, let remote = otherById[turn.id] else { return turn }
+            return turn.mergingFiles(from: remote)
+        }
+    }
+
     func merge(local: [ChatSession], remote: [ChatSession]) -> [ChatSession] {
         let localById = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
         return remote.map { chat in
@@ -268,8 +282,13 @@ extension ChatStore {
             // 本地优先例外：脏/待回推新 turn 的壳被远端全量（含真空会话的 turns:[] 行）覆盖会
             // 丢本地内容且 localTurnsPendingSync 无释放路径（Kimi R2 MINOR1）
             if !current.turnsComplete {
-                if hasLocalPriority(chat.id) { return current }
+                if hasLocalPriority(chat.id) {
+                    var keep = current
+                    keep.turns = Self.mergingTurnFiles(base: current.turns, other: chat.turns)
+                    return keep
+                }
                 var next = chat
+                next.turns = Self.mergingTurnFiles(base: chat.turns, other: current.turns)
                 next.cwd = current.cwd ?? chat.cwd
                 next.draft = current.draft.isEmpty ? chat.draft : current.draft
                 next.agentId = current.agentId ?? chat.agentId
@@ -279,12 +298,14 @@ extension ChatStore {
             let remoteWeight = chat.turns.reduce(0) { $0 + $1.user.count + $1.assistant.count }
             if current.turns.contains(where: \.running) || localWeight > remoteWeight {
                 var keep = current
+                keep.turns = Self.mergingTurnFiles(base: current.turns, other: chat.turns)
                 keep.agentId = current.agentId ?? chat.agentId
                 keep.cwd = current.cwd ?? chat.cwd
                 keep.draft = current.draft.isEmpty ? chat.draft : current.draft
                 return keep
             }
             var next = chat
+            next.turns = Self.mergingTurnFiles(base: chat.turns, other: current.turns)
             next.cwd = current.cwd ?? chat.cwd
             next.draft = current.draft.isEmpty ? chat.draft : current.draft
             next.agentId = current.agentId ?? chat.agentId
@@ -319,7 +340,11 @@ extension ChatStore {
         guard !ready.isEmpty else { return }
         for (turnId, files) in ready {
             guard let turnIndex = chats[chatIndex].turns.firstIndex(where: { $0.id == turnId }) else { continue }
-            chats[chatIndex].turns[turnIndex].files = files
+            let turn = chats[chatIndex].turns[turnIndex]
+            chats[chatIndex].turns[turnIndex].files = turn.filesSource == .authoritative
+                ? Turn.stableAuthoritativeFiles(current: turn.files, incoming: files)
+                : (files.isEmpty ? [] : Turn.stableAuthoritativeFiles(current: turn.cardFiles, incoming: files))
+            chats[chatIndex].turns[turnIndex].filesSource = .authoritative
         }
         if bumpRevision { turnRenderRevisions[chatId, default: 0] &+= 1 }
         bodySegs[chatId] = nil

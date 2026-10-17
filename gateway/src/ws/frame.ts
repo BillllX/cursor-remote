@@ -42,6 +42,8 @@ export function shrinkMessage(message: ServerMessage, budget: number): ServerMes
   if (message.type === "im_history") return fitImHistory(message, budget);
   if (message.type === "im_list") return fitImList(message, budget);
   if (message.type === "workspace_agents") return fitWorkspaceAgents(message, budget);
+  if (message.type === "turn_files") return fitTurnFiles(message, budget);
+  if (message.type === "canvas_versions") return fitCanvasVersions(message, budget);
   if (message.type === "history")
     return { ...message, turns: fitTurnsFromEnd(message.turns, budget, 40) as HistoryTurn[] };
   if (message.type === "files") {
@@ -131,6 +133,33 @@ function fitSearchHits(message: SearchHitsMessage, budget: number): SearchHitsMe
 
 type ImHistoryMessage = Extract<ServerMessage, { type: "im_history" }>;
 type WorkspaceAgentsMessage = Extract<ServerMessage, { type: "workspace_agents" }>;
+type TurnFilesMessage = Extract<ServerMessage, { type: "turn_files" }>;
+type CanvasVersionsMessage = Extract<ServerMessage, { type: "canvas_versions" }>;
+
+function fitRows<T>(base: object, rows: T[], budget: number): T[] {
+  let used = Buffer.byteLength(JSON.stringify(base));
+  const kept: T[] = [];
+  for (const row of rows) {
+    const cost = Buffer.byteLength(JSON.stringify(row)) + 1;
+    if (used + cost > budget) break;
+    kept.push(row);
+    used += cost;
+  }
+  return kept;
+}
+
+/** 文件卡可从 turn 落盘状态补齐；超限时保住帧和前面的交付物，不让连接断开。 */
+export function fitTurnFiles(message: TurnFilesMessage, budget: number): TurnFilesMessage | null {
+  const { files, ...base } = message;
+  const kept = fitRows({ ...base, files: [] }, files, budget);
+  return kept.length ? { ...message, files: kept } : null;
+}
+
+/** 版本历史有固定上限；小帧设备只收到能装下的最新版本。 */
+export function fitCanvasVersions(message: CanvasVersionsMessage, budget: number): CanvasVersionsMessage {
+  const { versions, ...base } = message;
+  return { ...message, versions: fitRows({ ...base, versions: [] }, versions, budget) };
+}
 
 /** 裁掉的工作区行用最后保留行的目录名续页，不能像旧 truncated 一样永久丢尾部。 */
 export function fitWorkspaceAgents(message: WorkspaceAgentsMessage, budget: number): WorkspaceAgentsMessage | null {

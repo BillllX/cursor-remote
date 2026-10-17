@@ -1,5 +1,5 @@
 // 会话与回合的数据形状（网页本地状态）
-import type { AgentMode, CheckpointInfo, PolicyId, PromptImage } from "@shared/protocol";
+import type { AgentMode, CheckpointInfo, PolicyId, PromptImage, TurnFile } from "@shared/protocol";
 
 export type ToolCall = {
   callId: string;
@@ -30,6 +30,7 @@ export type Turn = {
   status?: string;
   durationMs?: number;
   pendingTool?: { callId: string; name: string; args?: unknown };
+  files?: TurnFile[];
 };
 
 export type Chat = {

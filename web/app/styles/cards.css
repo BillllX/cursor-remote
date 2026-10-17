@@ -150,6 +150,14 @@
   font-size: var(--fs-xs);
   letter-spacing: 0;
 }
+.copy-btn.on {
+  color: var(--accent);
+}
+.code-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
 
 .code-block pre {
   margin: 0;
@@ -168,6 +176,23 @@
   gap: 12px;
   padding: 0 12px;
   white-space: pre;
+}
+.code-lines.wrap .code-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.code-lines.wrap .code-line code {
+  min-width: 0;
+}
+.diff-gap {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-block: 1px solid var(--border);
+  background: var(--bg-sidebar);
+  color: var(--dim);
+  padding: 4px;
+  font: 11px var(--mono);
 }
 
 .code-line.on {

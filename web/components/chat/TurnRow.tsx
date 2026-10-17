@@ -20,7 +20,7 @@ import { StallHint } from "./StallHint";
 
 /** 行里要用的全部回调；Thread 保证这个对象和里面的函数引用终身不变 */
 export type TurnRowActions = {
-  openFile: (path: string, line?: number, asDiff?: boolean) => void;
+  openFile: (path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string) => void;
   editTurn: (turn: Turn) => void;
   retryTurn: (turn: Turn) => void;
   submit: (raw?: string) => void;
@@ -302,6 +302,38 @@ function TurnRowView({
             <button type="button" className="apply-plan" disabled={locked} onClick={() => actions.applyPlan(turn)}>
               执行这个计划
             </button>
+          ) : null}
+          {turn.files?.length && !turn.running && !turn.queued ? (
+            <div className="turn-files">
+              <div className="turn-files-title">本回合文件 · {turn.files.length}</div>
+              {turn.files.map((file) => (
+                <div
+                  className="turn-file"
+                  key={`${file.sourceChatId || ""}:${file.sourceTurnId || ""}:${file.path}:${file.sha || ""}`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => actions.openFile(file.path, undefined, false, file.sha, file.sourceChatId)}
+                  >
+                    <span>{file.path.split("/").pop()}</span>
+                    <small>
+                      {file.op === "added" ? "新增" : "修改"}
+                      {file.added != null ? ` +${file.added}` : ""}
+                      {file.removed != null ? ` −${file.removed}` : ""}
+                    </small>
+                  </button>
+                  {file.diffSha ? (
+                    <button
+                      type="button"
+                      className="pill"
+                      onClick={() => actions.openFile(file.path, undefined, true, file.diffSha, file.sourceChatId)}
+                    >
+                      Diff
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
           ) : null}
           {paths.length && !turn.running && !turn.queued && pendingReview && !writesWereRejected(turn) ? (
             <div className="turn-review">

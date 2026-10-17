@@ -86,11 +86,12 @@ final class ThumbnailStore {
     }
 
     func request(file: TurnFile, chatId: String, store: ChatStore) {
+        let sourceChatId = file.sourceChatId ?? chatId
         guard Self.renderable(file.kind),
               store.connected,
               store.gatewayFeatures.contains("read_req_id"),
               !store.tenantId.isEmpty,
-              !chatId.isEmpty, chatId != "boot"
+              !sourceChatId.isEmpty, sourceChatId != "boot"
         else { return }
         let (key, sha) = cacheKey(for: file, chatId: chatId, store: store)
         chatStore = store
@@ -100,7 +101,7 @@ final class ThumbnailStore {
             return
         }
         attempted.insert(key)
-        let job = Pending(key: key, kind: file.kind, path: file.path, chatId: chatId, tenant: store.tenantId, sha: sha)
+        let job = Pending(key: key, kind: file.kind, path: file.path, chatId: sourceChatId, tenant: store.tenantId, sha: sha)
         // 读盘期间也算 loading：骨架要 0.3 秒后才淡入，命中缓存时看不到它
         states[key] = .loading
         guard job.persist else {
@@ -140,6 +141,22 @@ final class ThumbnailStore {
             waiting.remove(at: index)
             forget(key)
         }
+    }
+
+    /// 当前版本没有 sha，文件变化后必须丢掉同路径的内存结果和在途请求。
+    func invalidateCurrent(chatId: String, path: String, store: ChatStore) {
+        let prefix = "\(store.tenantId)|\(chatId)|\(path)|size:"
+        let keys = Set(
+            states.keys.filter { $0.hasPrefix(prefix) }
+                + attempted.filter { $0.hasPrefix(prefix) }
+                + waiting.filter { $0.chatId == chatId && $0.path == path && $0.sha == nil }.map(\.key)
+                + pending.values.filter { $0.chatId == chatId && $0.path == path && $0.sha == nil }.map(\.key)
+        )
+        waiting.removeAll { keys.contains($0.key) }
+        let reqIds = pending.compactMap { keys.contains($0.value.key) ? $0.key : nil }
+        for reqId in reqIds { pending[reqId] = nil }
+        for key in keys { forget(key) }
+        pump()
     }
 
     /// ChatStore 收到 reqId 以 thumb: 开头的 file_content 时转交
@@ -203,6 +220,7 @@ final class ThumbnailStore {
     // MARK: 内部
 
     func cacheKey(for file: TurnFile, chatId: String, store: ChatStore) -> (key: String, sha: String?) {
+        let chatId = file.sourceChatId ?? chatId
         let sha = store.gatewayFeatures.contains("read_sha") ? file.sha : nil
         if let sha { return ("\(store.tenantId)|\(chatId)|\(file.path)|\(sha)", sha) }
         // 没有 sha 时，同样大小的改写也得换键：把差异指纹和增删行数一起算进去

@@ -149,6 +149,7 @@ export function historyToTurns(items: HistoryTurn[]): Turn[] {
       agent: tool.agent,
       model: tool.model,
     })),
+    files: item.files,
     running: false,
   }));
 }
@@ -181,6 +182,15 @@ function mergeTools(local: Turn["tools"], remote: Turn["tools"]): Turn["tools"] 
 
 function userFingerprint(text: string) {
   return text.trim().replace(/\s+/g, " ").slice(0, 240);
+}
+
+export function mergeTurnFileLists(local: NonNullable<Turn["files"]>, incoming: NonNullable<Turn["files"]>) {
+  const key = (file: (typeof local)[number]) => `${file.sourceChatId || ""}\0${file.sourceTurnId || ""}\0${file.path}`;
+  const remote = new Map(incoming.map((file) => [key(file), file]));
+  const out = local.map((file) => remote.get(key(file)) || file);
+  const seen = new Set(out.map(key));
+  for (const file of incoming) if (!seen.has(key(file))) out.push(file);
+  return out;
 }
 
 export function applyRunSnapshot(turns: Turn[], message: Extract<ServerMessage, { type: "run_snapshot" }>): Turn[] {
@@ -295,6 +305,7 @@ export function mergeHistoryTurns(local: Turn[], incoming: Turn[]): Turn[] {
       assistant: remote.assistant.length > cur.assistant.length ? remote.assistant : cur.assistant,
       thinking: (remote.thinking || "").length > (cur.thinking || "").length ? remote.thinking || "" : cur.thinking,
       tools: mergeTools(cur.tools, remote.tools),
+      files: remote.files ? mergeTurnFileLists(cur.files || [], remote.files) : cur.files,
     };
   }
   return prefix.length ? [...prefix, ...merged] : merged;

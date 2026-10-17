@@ -21,6 +21,7 @@ import type {
   MediaTicket,
   AdminTenantStats,
   CursorBill,
+  CanvasVersion,
 } from "@shared/protocol";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import AssistantPanel from "./AssistantPanel";
@@ -58,7 +59,7 @@ import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReady
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows } from "../lib/chat/tools";
-import { editPathsOf, liveTurn, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
+import { editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
 import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile } from "../lib/chat/workspace";
 import { AdminOverlay } from "./chat/AdminOverlay";
@@ -191,6 +192,7 @@ export default function ChatApp() {
   previewDraftsRef.current = previewDrafts;
   const [previewPath, setPreviewPath] = useState("");
   const [previewMax, setPreviewMax] = useState(false);
+  const [canvasVersions, setCanvasVersions] = useState<Record<string, CanvasVersion[]>>({});
   const [fileHits, setFileHits] = useState<string[]>([]);
   const [treePaths, setTreePaths] = useState<string[]>([]);
   const [treeTruncated, setTreeTruncated] = useState(false);
@@ -322,6 +324,9 @@ export default function ChatApp() {
   const mediaTicketRef = useRef<{ chatId: string; media: MediaTicket } | null>(null);
   /** 还没拿到票据时先发 read_file 换一张，reqId → 路径 */
   const pendingDownloadRef = useRef<Map<string, string>>(new Map());
+  const pendingHistoricalRef = useRef<
+    Map<string, { path: string; chatId: string; ownerActiveChatId: string }>
+  >(new Map());
   const grepQRef = useRef("");
   const appliedStoreRef = useRef(false);
   const stateRevRef = useRef(0);
@@ -717,6 +722,7 @@ export default function ChatApp() {
             setError("");
             send({ type: "list_files", query: "", chatId: activeIdRef.current });
             for (const tab of previewTabsRef.current) {
+              if (tab.sha) continue;
               previewWantedRef.current.add(tab.path);
               send({ type: "read_file", path: tab.path, chatId: activeIdRef.current, diff: tab.diff || undefined });
             }
@@ -808,6 +814,7 @@ export default function ChatApp() {
                     path: tab.path,
                     line: tab.line,
                     kind: kindFromPath(tab.path),
+                    pinned: true,
                   })),
                 );
                 setPreviewPath(keep.previewPath || tabs[0].path);
@@ -1077,15 +1084,17 @@ export default function ChatApp() {
                 );
                 setPreviewPath(path);
               }
-              send({
-                type: "read_file",
-                path: tab?.path || path,
-                chatId,
-                diff: skipDiff ? undefined : true,
-              });
+              if (!tab?.sha) {
+                send({
+                  type: "read_file",
+                  path: tab?.path || path,
+                  chatId,
+                  diff: skipDiff ? undefined : true,
+                });
+              }
             } else if (path) {
               const tab = previewTabsRef.current.find((item) => sameFile(item.path, path, cwdRef.current));
-              if (tab) {
+              if (tab && !tab.sha) {
                 send({
                   type: "read_file",
                   path: tab.path,
@@ -1111,6 +1120,7 @@ export default function ChatApp() {
             if (chatId === activeIdRef.current && mentionQueryRef.current == null) {
               send({ type: "list_files", query: "", chatId });
               for (const tab of previewTabsRef.current) {
+                if (tab.sha) continue;
                 send({
                   type: "read_file",
                   path: tab.path,
@@ -1120,6 +1130,41 @@ export default function ChatApp() {
               }
             }
           }
+          break;
+        case "turn_files":
+          patchChat(message.chatId, (chat) => ({
+            ...chat,
+            turns: chat.turns.map((turn) =>
+              turn.id === message.turnId
+                ? { ...turn, files: mergeTurnFileLists(turn.files || [], message.files) }
+                : turn,
+            ),
+          }));
+          break;
+        case "file_changed":
+          if (message.chatId === activeIdRef.current) {
+            send({ type: "list_files", query: "", chatId: message.chatId });
+            const tab = previewTabsRef.current.find((item) => sameFile(item.path, message.path, cwdRef.current));
+            if (tab && !tab.sha && previewDraftsRef.current[tab.path] == null) {
+              send({
+                type: "read_file",
+                path: tab.path,
+                chatId: tab.sourceChatId || message.chatId,
+                diff: tab.diff || undefined,
+              });
+            }
+          }
+          break;
+        case "canvas_versions":
+          setCanvasVersions((prev) => ({ ...prev, [message.path]: message.versions }));
+          break;
+        case "canvas_published":
+          setNotice(message.error || (message.url ? `分享地址：${message.url}` : "Canvas 已发布"));
+          send({ type: "canvas_versions", chatId: message.chatId, path: message.path });
+          break;
+        case "canvas_restored":
+          setNotice(message.error || "Canvas 版本已恢复");
+          if (!message.error) openFile(message.path);
           break;
         case "undone":
           setNotice(
@@ -1132,6 +1177,7 @@ export default function ChatApp() {
           if (!message.chatId || message.chatId === activeIdRef.current) {
             send({ type: "list_files", query: "", chatId: activeIdRef.current });
             for (const tab of previewTabsRef.current) {
+              if (tab.sha) continue;
               send({
                 type: "read_file",
                 path: tab.path,
@@ -1173,6 +1219,7 @@ export default function ChatApp() {
           );
           send({ type: "list_files", query: "", chatId: activeIdRef.current });
           for (const tab of previewTabsRef.current) {
+            if (tab.sha) continue;
             send({ type: "read_file", path: tab.path, chatId: activeIdRef.current, diff: tab.diff || undefined });
           }
           break;
@@ -1190,21 +1237,28 @@ export default function ChatApp() {
             }
             const cwd = cwdRef.current;
             const match = (path: string) => sameFile(path, message.path, cwd);
-            if (message.chatId && message.chatId !== activeIdRef.current) break;
+            const historical = message.reqId ? pendingHistoricalRef.current.get(message.reqId) : undefined;
+            if (message.reqId && historical) pendingHistoricalRef.current.delete(message.reqId);
+            if (historical && historical.ownerActiveChatId !== activeIdRef.current) break;
+            if (!historical && message.chatId && message.chatId !== activeIdRef.current) break;
+            const matchTab = (tab: PreviewTab) =>
+              match(tab.path) &&
+              (tab.sourceChatId || activeIdRef.current) === ticketChat &&
+              (!message.sha || tab.sha === message.sha);
             if (message.diff && message.error === "没有未提交的改动") {
               send({ type: "read_file", path: message.path, chatId: activeIdRef.current });
               setPreviewTabs((prev) =>
-                prev.map((tab) => (match(tab.path) ? { ...tab, diff: false, error: undefined } : tab)),
+                prev.map((tab) => (matchTab(tab) ? { ...tab, diff: false, error: undefined } : tab)),
               );
               break;
             }
             if (message.error && /读不了|不是文件|不在工作区/.test(message.error)) {
               if (Date.now() < replayQuietUntilRef.current) break;
-              const had = previewTabsRef.current.find((tab) => match(tab.path));
+              const had = previewTabsRef.current.find(matchTab);
               if (had?.content) break;
               setPreviewTabs((prev) =>
                 prev.map((tab) =>
-                  match(tab.path)
+                  matchTab(tab)
                     ? { ...tab, error: "文件已不在当前工作区，换工作区后再打开，或关掉这个预览。" }
                     : tab,
                 ),
@@ -1222,8 +1276,9 @@ export default function ChatApp() {
               url: message.url,
               headUrl: message.headUrl,
               media: message.media,
+              sha: message.sha,
             };
-            if (typeof message.content === "string") putPreviewText(message.path, message.content);
+            if (typeof message.content === "string" && !message.sha) putPreviewText(message.path, message.content);
             const rel = relToCwd(message.path, cwd) || message.path;
             const draft = previewDraftsRef.current[rel] ?? previewDraftsRef.current[message.path];
             if (
@@ -1237,8 +1292,9 @@ export default function ChatApp() {
               setNotice(`${name} 在磁盘上有新内容，未保存的修改还留着`);
             }
             setPreviewTabs((prev) => {
-              const idx = prev.findIndex((tab) => match(tab.path));
+              const idx = prev.findIndex(matchTab);
               if (idx < 0) {
+                if (historical) return prev;
                 const wanted =
                   match(previewPathRef.current) ||
                   [...previewWantedRef.current].some((path) => match(path));
@@ -1453,11 +1509,21 @@ export default function ChatApp() {
           continue;
         }
         previewWantedRef.current.add(tab.path);
+        const reqId = tab.sha ? uid() : undefined;
+        if (reqId) {
+          pendingHistoricalRef.current.set(reqId, {
+            path: tab.path,
+            chatId: tab.sourceChatId || activeIdRef.current,
+            ownerActiveChatId: activeIdRef.current,
+          });
+        }
         send({
           type: "read_file",
           path: tab.path,
-          chatId: activeIdRef.current,
+          chatId: tab.sourceChatId || activeIdRef.current,
           diff: tab.diff || undefined,
+          sha: tab.sha,
+          reqId,
         });
       }
     }, 2500);
@@ -1476,7 +1542,7 @@ export default function ChatApp() {
       const key = `${tab.path}|${tab.url}`;
       if (httpHydratedRef.current.has(key)) continue;
       httpHydratedRef.current.add(key);
-      const cached = peekPreviewText(tab.path);
+      const cached = tab.sha ? undefined : peekPreviewText(tab.path);
       if (cached != null && tab.content == null) {
         setPreviewTabs((prev) =>
           prev.map((item) =>
@@ -1488,7 +1554,7 @@ export default function ChatApp() {
       }
       fetchPreviewText(tab.url as string)
         .then((text) => {
-          putPreviewText(tab.path, text);
+          if (!tab.sha) putPreviewText(tab.path, text);
           setPreviewTabs((prev) =>
             prev.map((item) =>
               sameFile(item.path, tab.path, cwdRef.current)
@@ -1499,20 +1565,32 @@ export default function ChatApp() {
         })
         .catch(() => {
           httpHydratedRef.current.delete(key);
-          if (peekPreviewText(tab.path) != null) return;
+          if (!tab.sha && peekPreviewText(tab.path) != null) return;
           previewWantedRef.current.add(tab.path);
+          const reqId = tab.sha ? uid() : undefined;
+          if (reqId) {
+            pendingHistoricalRef.current.set(reqId, {
+              path: tab.path,
+              chatId: tab.sourceChatId || activeIdRef.current,
+              ownerActiveChatId: activeIdRef.current,
+            });
+          }
           send({
             type: "read_file",
             path: tab.path,
-            chatId: activeIdRef.current,
+            chatId: tab.sourceChatId || activeIdRef.current,
             diff: tab.diff || undefined,
+            sha: tab.sha,
+            reqId,
           });
         });
     }
   }, [
     unlocked,
     send,
-    previewTabs.map((tab) => `${tab.path}:${tab.url || ""}:${tab.diff ? 1 : 0}`).join("|"),
+    previewTabs
+      .map((tab) => `${tab.sourceChatId || ""}:${tab.path}:${tab.sha || ""}:${tab.url || ""}:${tab.diff ? 1 : 0}`)
+      .join("|"),
   ]);
 
   useEffect(() => {
@@ -2438,7 +2516,12 @@ export default function ChatApp() {
     }
     const savedTabs = chat.previewTabs || [];
     if (savedTabs.length) {
-      const next = savedTabs.map((tab) => ({ path: tab.path, line: tab.line, kind: kindFromPath(tab.path) }));
+      const next = savedTabs.map((tab) => ({
+        path: tab.path,
+        line: tab.line,
+        kind: kindFromPath(tab.path),
+        pinned: true,
+      }));
       setPreviewTabs(next);
       setPreviewPath(chat.previewPath || savedTabs[0]?.path || "");
       for (const tab of next) {
@@ -2801,8 +2884,11 @@ export default function ChatApp() {
     applyDraft(stripMention(draftRef.current, token));
   }
 
-  function openFile(path: string, line?: number, asDiff?: boolean) {
-    const rel = relToCwd(path, cwdRef.current) || path;
+  function openFile(path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string) {
+    const lineHash = /#L(\d+)(?:-L?\d+)?$/i.exec(path);
+    const cleanPath = lineHash ? path.slice(0, lineHash.index) : path;
+    const targetLine = line ?? (lineHash ? Number(lineHash[1]) : undefined);
+    const rel = relToCwd(cleanPath, cwdRef.current) || cleanPath;
     const kind = kindFromPath(rel);
     const dirty = Boolean(gitLetterOf(rel, gitStatus, cwdRef.current));
     const diff =
@@ -2815,7 +2901,7 @@ export default function ChatApp() {
             (kind === "text" || kind === "image" || kind === "svg");
     const current = previewTabsRef.current.find((tab) => sameFile(tab.path, rel, cwdRef.current));
     const sendPath = current?.path || rel;
-    const cached = !diff ? peekPreviewText(rel) : undefined;
+    const cached = !diff && !sha ? peekPreviewText(rel) : undefined;
     previewWantedRef.current.add(sendPath);
     previewWantedRef.current.add(rel);
     previewTriesRef.current[sendPath] = 0;
@@ -2831,9 +2917,11 @@ export default function ChatApp() {
           sameFile(tab.path, rel, cwdRef.current)
             ? {
                 ...tab,
-                line,
+                line: targetLine,
                 diff,
                 kind,
+                sha,
+                sourceChatId,
                 content: diff !== tab.diff ? cached : tab.content ?? cached,
                 url: diff !== tab.diff ? undefined : tab.url,
                 headUrl: diff !== tab.diff ? undefined : tab.headUrl,
@@ -2842,13 +2930,38 @@ export default function ChatApp() {
             : tab,
         );
       }
-      return [...prev, { path: rel, line, diff, kind, content: cached }].slice(-8);
+      const tab: PreviewTab = {
+        path: rel,
+        line: targetLine,
+        diff,
+        kind,
+        content: cached,
+        sha,
+        sourceChatId,
+      };
+      const previewIndex = prev.findIndex((item) => !item.pinned);
+      if (previewIndex >= 0) {
+        const replaced = prev[previewIndex];
+        previewWantedRef.current.delete(replaced.path);
+        delete previewTriesRef.current[replaced.path];
+        return prev.map((item, index) => index === previewIndex ? tab : item);
+      }
+      return [...prev, tab].slice(-8);
     });
     setPreviewPath(sendPath);
     rememberRecent(rel);
     setNavOpen(false);
     setPreviewMax(true);
-    send({ type: "read_file", path: sendPath, chatId: activeIdRef.current, diff: diff || undefined });
+    const requestChatId = sourceChatId || activeIdRef.current;
+    const reqId = sha ? uid() : undefined;
+    if (reqId) {
+      pendingHistoricalRef.current.set(reqId, {
+        path: sendPath,
+        chatId: requestChatId,
+        ownerActiveChatId: activeIdRef.current,
+      });
+    }
+    send({ type: "read_file", path: sendPath, chatId: requestChatId, diff: diff || undefined, sha, reqId });
   }
 
   function handleCanvasAction(action: CanvasAction, canvasPath: string) {
@@ -2870,7 +2983,8 @@ export default function ChatApp() {
   }
 
   function togglePreviewDiff(path: string, diff: boolean) {
-    openFile(path, undefined, diff);
+    const tab = previewTabsRef.current.find((item) => sameFile(item.path, path, cwdRef.current));
+    openFile(path, undefined, diff, undefined, tab?.sourceChatId);
   }
 
   function revertFile(path: string, silent = false) {
@@ -4094,6 +4208,7 @@ export default function ChatApp() {
             tabs={previewTabs}
             activePath={previewPath}
             onSelect={setPreviewPath}
+            onPinTab={(path) => setPreviewTabs((prev) => prev.map((tab) => sameFile(tab.path, path, cwdRef.current) ? { ...tab, pinned: true } : tab))}
             onCloseTab={closePreviewTab}
             onCloseAll={() => {
               const dirty = previewTabsRef.current.filter((tab) => previewDraftDirty(tab.path));
@@ -4128,6 +4243,14 @@ export default function ChatApp() {
             chatId={activeId}
             onCanvasAction={handleCanvasAction}
             onOpenFile={openFile}
+            onComposerInsert={(text) => applyDraft(text, text.length)}
+            canvasVersions={canvasVersions[relToCwd(previewPath, cwd) || previewPath] || []}
+            onCanvasVersions={(path) => send({ type: "canvas_versions", chatId: activeIdRef.current, path })}
+            onCanvasSaveVersion={(path, sourceSha, html) => send({ type: "canvas_version_save", chatId: activeIdRef.current, path, sourceSha, html })}
+            onCanvasPublish={(path, sha) => send({ type: "canvas_publish", chatId: activeIdRef.current, path, sha })}
+            onCanvasRestore={(path, sha) => {
+              if (window.confirm("恢复这个 Canvas 版本？当前文件会被覆盖。")) send({ type: "canvas_restore", chatId: activeIdRef.current, path, sha });
+            }}
             canRevert={Boolean(
               gitLetterOf(previewPath, gitStatus, cwd) ||
                 previewTabs.find((tab) => sameFile(tab.path, previewPath))?.diff,

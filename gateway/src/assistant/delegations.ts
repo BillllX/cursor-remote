@@ -5,6 +5,8 @@ export type DelegationStatus = "running" | "awaiting" | "done" | "failed";
 export type Delegation = {
   id: string;
   parentChatId?: string;
+  /** 委派工具所在父回合；子会话交付物靠它幂等回填父 turn。 */
+  parentTurnId?: string;
   childChatId: string;
   workspace: string;
   title: string;

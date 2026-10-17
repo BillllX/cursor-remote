@@ -245,7 +245,12 @@ extension ChatStore {
         for turn in chats[index].turns {
             let live = ChatStore.isLiveTurn(turn)
             if let offset = position[turn.id] {
-                if live { result[offset] = turn }
+                if live {
+                    result[offset] = turn
+                } else {
+                    // turn_files 可能已合进本机，而 load_chat 页还是落盘前的副本；不能在补齐收尾时丢掉。
+                    result[offset] = turn.mergingFiles(from: result[offset])
+                }
             } else if live || keepLocal || !baseIds.contains(turn.id) {
                 result.append(turn)
             }
@@ -259,6 +264,8 @@ extension ChatStore {
 
     /// 正文齐了（全量分页、增量补齐、基线版本一致）之后的公共收尾。调用前已置 turnsComplete = true
     func completeTurnsLoad(_ chatId: String) {
+        // 基线版本相同、空会话等不经过并页路径，也必须消费先到的 turn_files。
+        mergePendingTurnFiles(chatId: chatId)
         let startSegs = loadStartSegs.removeValue(forKey: chatId)
         if let rev = loadStartRevs.removeValue(forKey: chatId) ?? chatRevs[chatId] {
             bodyRevs[chatId] = rev
@@ -304,6 +311,8 @@ extension ChatStore {
                 }
             }
         }
+        // pending history / snapshot 可能刚创建目标回合，再消费一次。
+        mergePendingTurnFiles(chatId: chatId)
         scheduleBodyCache(chatId)
         // 加载途中服务端版本又前进了（别端在写）：这份正文留作基线，当前会话立刻再补一次
         if !hasLocalPriority(chatId), let bodyRev = bodyRevs[chatId], let serverRev = chatRevs[chatId], bodyRev != serverRev {

@@ -37,6 +37,7 @@ export type AssistantMemoryEntry = {
 export type AssistantDelegation = {
   id: string;
   parentChatId?: string;
+  parentTurnId?: string;
   childChatId: string;
   workspace: string;
   title: string;
@@ -299,6 +300,13 @@ export type ClientMessage =
   // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
   | { type: "read_file"; path: string; chatId?: string; diff?: boolean; sha?: string; reqId?: string }
   | { type: "write_file"; path: string; content: string; chatId?: string }
+  /** 保存 Canvas 的源码快照及客户端渲染出的静态 HTML；sourceSha 缺省时由网关读取当前源码并存快照 */
+  | { type: "canvas_version_save"; chatId: string; path: string; sourceSha?: string; html: string }
+  | { type: "canvas_versions"; chatId: string; path: string }
+  /** sha 是 canvas_versions 返回的源码 sha；发布它对应的静态 HTML */
+  | { type: "canvas_publish"; chatId: string; path: string; sha: string }
+  /** 把指定源码 sha 原子写回当前工作区文件 */
+  | { type: "canvas_restore"; chatId: string; path: string; sha: string }
   | {
       type: "upload_file";
       chatId: string;
@@ -409,6 +417,19 @@ export type TurnFile = {
   added?: number;
   /** 删除行数 */
   removed?: number;
+  /** 委派交付物合并到父回合时，保留来源子会话和子回合 */
+  sourceChatId?: string;
+  sourceTurnId?: string;
+};
+
+export type CanvasVersion = {
+  /** Canvas 源码 artifact sha */
+  sha: string;
+  /** 对应的静态 HTML artifact sha；旧版本可能尚未保存 */
+  htmlSha?: string;
+  createdAt: number;
+  /** 当前公开的是这一版时才有 */
+  shareUrl?: string;
 };
 
 export type MediaTicket = { exp: number; sig: string };
@@ -491,7 +512,7 @@ export type ServerMessage =
       /**
        * 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId）、
        * "seg_hashes"（slim 行带 segHashes）、"tool_at"（工具带 at）、"slim_chats"（认 slim_chats cap）、
-       * "im"（支持 im_* 即时消息）
+       * "im"（支持 im_* 即时消息）、"file_changed"、"canvas_versions"
        */
       features?: string[];
     }
@@ -584,6 +605,18 @@ export type ServerMessage =
     }
   // 一轮结束时的文件清单，广播给同租户连接；同一份也写进 turn.files 落盘
   | { type: "turn_files"; chatId: string; turnId: string; files: TurnFile[] }
+  /** 工作区文件内容已经变化；path 相对该 chat 的 cwd，同租户连接均会收到 */
+  | { type: "file_changed"; chatId: string; path: string }
+  | { type: "canvas_versions"; chatId: string; path: string; versions: CanvasVersion[] }
+  | {
+      type: "canvas_published";
+      chatId: string;
+      path: string;
+      sha: string;
+      url?: string;
+      error?: string;
+    }
+  | { type: "canvas_restored"; chatId: string; path: string; sha: string; error?: string }
   | { type: "file_written"; path: string; chatId?: string; error?: string }
   | {
       type: "file_uploaded";

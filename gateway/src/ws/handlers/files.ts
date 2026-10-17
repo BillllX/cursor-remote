@@ -1,4 +1,6 @@
 // 工作区文件：写入、上传、文件操作、列表、搜索、读取
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { resolve, sep } from "node:path";
 import { readSnapshotDiff, readSnapshotFile } from "../../turnFiles.ts";
 import { cwdOf, slotOf } from "../../runtime/slots.ts";
 import type { WorkspaceFile } from "../../runtime/types.ts";
@@ -21,6 +23,17 @@ import { beginRequest, HeavyBusyError, isAbortError } from "../../workspace/heav
 import { reply } from "../frame.ts";
 import { send } from "../send.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
+import { broadcastCanvasVersions, broadcastFileChanged } from "../../fileEvents.ts";
+import {
+  isCanvasPath,
+  listCanvasVersions,
+  publishCanvasVersion,
+  readCanvasVersionSource,
+  saveCanvasVersion,
+} from "../../canvasVersions.ts";
+import { publishedCanvasUrl } from "../../publish.ts";
+import { chatIdOf } from "../../runtime/chats.ts";
+import { confinedCwd } from "../../tenants.ts";
 
 export function onWriteFile({ ws, conn }: WsCtx, message: MessageOf<"write_file">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
@@ -31,6 +44,7 @@ export function onWriteFile({ ws, conn }: WsCtx, message: MessageOf<"write_file"
     path: written.path,
     error: written.error,
   });
+  if (!written.error && message.chatId) broadcastFileChanged(conn.tenant!.id, message.chatId, [written.path]);
 }
 
 export function onUploadFile({ ws, conn }: WsCtx, message: MessageOf<"upload_file">) {
@@ -83,6 +97,7 @@ export function onUploadFile({ ws, conn }: WsCtx, message: MessageOf<"upload_fil
   });
   if (!written.error && message.chatId) {
     pushWorkspace(ws, slotOf(conn, message.chatId), conn, [written.path]);
+    broadcastFileChanged(conn.tenant!.id, message.chatId, [written.path]);
   }
 }
 
@@ -99,7 +114,101 @@ export function onFsOp({ ws, conn }: WsCtx, message: MessageOf<"fs_op">) {
   });
   if (!result.error && message.chatId) {
     pushWorkspace(ws, slotOf(conn, message.chatId), conn, [result.to || result.path]);
+    broadcastFileChanged(conn.tenant!.id, message.chatId, [result.path, result.to || ""]);
   }
+}
+
+function canvasPath(ctx: WsCtx, chatId: string, raw: string) {
+  if (!chatId || ctx.tenant.disk.deletedIds.includes(chatId)) return null;
+  const chat = ctx.tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+  if (!chat || typeof chat !== "object") return null;
+  const storedCwd = (chat as { cwd?: unknown }).cwd;
+  const cwd = confinedCwd(
+    typeof storedCwd === "string" && storedCwd ? storedCwd : ctx.tenant.workspaceRoot,
+    ctx.tenant.workspaceRoot,
+  );
+  if (!cwd) return null;
+  const path = workspacePath(cwd, raw);
+  const key = path ? workspacePath(ctx.tenant.workspaceRoot, resolve(cwd, path)) : null;
+  if (!path || !key || !isCanvasPath(path)) return null;
+  try {
+    const root = realpathSync(cwd);
+    const expected = resolve(root, path);
+    const diskPath = realpathSync(expected);
+    if (diskPath !== expected || (!diskPath.startsWith(`${root}${sep}`) && diskPath !== root)) return null;
+    if (!lstatSync(expected).isFile() || lstatSync(expected).isSymbolicLink()) return null;
+    return { cwd, path, key, diskPath };
+  } catch {
+    return null;
+  }
+}
+
+export function onCanvasVersionSave(ctx: WsCtx, message: MessageOf<"canvas_version_save">) {
+  const target = canvasPath(ctx, message.chatId, message.path);
+  if (!target) throw new Error("Canvas 路径不合法。");
+  const source = readFileSync(target.diskPath);
+  saveCanvasVersion(ctx.tenant, target.key, message.sourceSha, message.html, Date.now(), source);
+  broadcastCanvasVersions(
+    ctx.tenant.id,
+    message.chatId,
+    target.path,
+    listCanvasVersions(ctx.tenant, target.key, (token) => publishedCanvasUrl(ctx.tenant.id, token)),
+  );
+}
+
+export function onCanvasVersions(ctx: WsCtx, message: MessageOf<"canvas_versions">) {
+  const target = canvasPath(ctx, message.chatId, message.path);
+  if (!target) throw new Error("Canvas 路径不合法。");
+  send(ctx.ws, {
+    type: "canvas_versions",
+    chatId: message.chatId,
+    path: target.path,
+    versions: listCanvasVersions(ctx.tenant, target.key, (token) => publishedCanvasUrl(ctx.tenant.id, token)),
+  });
+}
+
+export function onCanvasPublish(ctx: WsCtx, message: MessageOf<"canvas_publish">) {
+  const target = canvasPath(ctx, message.chatId, message.path);
+  if (!target) throw new Error("Canvas 路径不合法。");
+  try {
+    const result = publishCanvasVersion(ctx.tenant, target.key, message.sha, (token) =>
+      publishedCanvasUrl(ctx.tenant.id, token),
+    );
+    send(ctx.ws, { type: "canvas_published", chatId: message.chatId, path: target.path, ...result });
+    broadcastCanvasVersions(
+      ctx.tenant.id,
+      message.chatId,
+      target.path,
+      listCanvasVersions(ctx.tenant, target.key, (token) => publishedCanvasUrl(ctx.tenant.id, token)),
+    );
+  } catch (err) {
+    send(ctx.ws, {
+      type: "canvas_published",
+      chatId: message.chatId,
+      path: target.path,
+      sha: message.sha,
+      error: err instanceof Error ? err.message : "发布失败。",
+    });
+  }
+}
+
+export function onCanvasRestore(ctx: WsCtx, message: MessageOf<"canvas_restore">) {
+  const target = canvasPath(ctx, message.chatId, message.path);
+  let error = target ? undefined : "Canvas 路径不合法。";
+  const source = target && !error ? readCanvasVersionSource(ctx.tenant, target.key, message.sha) : null;
+  if (!error && !source) error = "这个 Canvas 版本未登记、已清理或不合法。";
+  if (target && source) {
+    const written = writeWorkspaceBytes(target.cwd, target.path, source);
+    error = written.error;
+    if (!error) broadcastFileChanged(ctx.tenant.id, message.chatId, [target.path]);
+  }
+  send(ctx.ws, {
+    type: "canvas_restored",
+    chatId: message.chatId,
+    path: target?.path || message.path,
+    sha: message.sha,
+    error,
+  });
 }
 
 /**

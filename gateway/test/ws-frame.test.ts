@@ -4,7 +4,7 @@ import type { WebSocket } from "ws";
 import type { HistoryTurn, ServerMessage } from "../../shared/protocol.ts";
 import { gatewayState } from "../src/runtime/state.ts";
 import type { Conn } from "../src/runtime/types.ts";
-import { frameFor, shrinkMessage } from "../src/ws/frame.ts";
+import { fitCanvasVersions, fitTurnFiles, frameFor, shrinkMessage } from "../src/ws/frame.ts";
 
 // iOS 在 hello 里声明的单条消息接收上限
 const IOS_LIMIT = 900 * 1024;
@@ -201,6 +201,30 @@ describe("frameFor：iOS 900KB 上限", () => {
     const result = parsed.result as { stdout: string; exitCode: number };
     assert.equal(result.exitCode, 0);
     assert.equal(result.stdout, `${big(64 * 1024)}…（过长已截断）`);
+  });
+
+  test("turn_files / canvas_versions 按完整行裁切，不截坏 path、sha 和来源字段", () => {
+    const files = Array.from({ length: 20_000 }, (_, i) => ({
+      path: `generated/${i}-${big(80)}.md`,
+      kind: "markdown" as const,
+      op: "added" as const,
+      sha: "a".repeat(64),
+      sourceChatId: "child-chat",
+      sourceTurnId: "child-turn",
+    }));
+    const turn = fitTurnFiles({ type: "turn_files", chatId: "parent", turnId: "turn", files }, 20_000);
+    assert.ok(turn && turn.files.length > 0 && turn.files.length < files.length);
+    assert.deepEqual(turn?.files, files.slice(0, turn.files.length));
+
+    const versions = Array.from({ length: 1000 }, (_, i) => ({
+      sha: i.toString(16).padStart(64, "0"),
+      htmlSha: "b".repeat(64),
+      createdAt: i,
+      shareUrl: `https://example.com/${big(100)}/${i}`,
+    }));
+    const canvas = fitCanvasVersions({ type: "canvas_versions", chatId: "c", path: "a.canvas.tsx", versions }, 20_000);
+    assert.ok(canvas.versions.length > 0 && canvas.versions.length < versions.length);
+    assert.deepEqual(canvas.versions, versions.slice(0, canvas.versions.length));
   });
 
   test("字符串截到 1KB 仍超限（海量短字段）就丢弃", () => {

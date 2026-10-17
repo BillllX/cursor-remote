@@ -76,19 +76,9 @@ export function buildCanvasExportHtml(doc: Document, title: string): string {
 
 // 点击时从画布 iframe 里取文档并触发下载；画布还没渲染好时返回 false
 export function exportCanvasFrame(frame: HTMLIFrameElement | null, path: string): boolean {
-  let doc: Document | null | undefined;
-  try {
-    doc = frame?.contentDocument;
-  } catch {
-    doc = null;
-  }
-  if (!doc || !doc.querySelector(".canvas-runtime-page")) return false;
-  // 还在「正在打开画布…」占位时不导出
-  if (!doc.querySelector(".canvas-runtime-page > *") || doc.querySelector(".canvas-runtime-page .tree-empty")) {
-    return false;
-  }
+  const html = canvasFrameHtml(frame, path);
+  if (!html) return false;
   const name = canvasExportName(path);
-  const html = buildCanvasExportHtml(doc, name.replace(/\.html$/i, ""));
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -99,4 +89,20 @@ export function exportCanvasFrame(frame: HTMLIFrameElement | null, path: string)
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   return true;
+}
+
+export function canvasFrameHtml(frame: HTMLIFrameElement | null, path: string): string | null {
+  let doc: Document | null | undefined;
+  try {
+    doc = frame?.contentDocument;
+  } catch {
+    doc = null;
+  }
+  if (!doc || !doc.querySelector(".canvas-runtime-page")) return null;
+  // 还在「正在打开画布…」占位时不导出
+  if (!doc.querySelector(".canvas-runtime-page > *") || doc.querySelector(".canvas-runtime-page .tree-empty")) {
+    return null;
+  }
+  const name = canvasExportName(path);
+  return buildCanvasExportHtml(doc, name.replace(/\.html$/i, ""));
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 function escape(text: string) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -51,6 +51,9 @@ export default function CodeBlock({
   onRejectHunk?: (hunk: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [wrap, setWrap] = useState(false);
+  const [hunkIndex, setHunkIndex] = useState(0);
+  const [expandedGaps, setExpandedGaps] = useState<Set<string>>(new Set());
   const bodyRef = useRef<HTMLPreElement | null>(null);
 
   useEffect(() => {
@@ -59,8 +62,42 @@ export default function CodeBlock({
     row?.scrollIntoView({ block: "center" });
   }, [highlight, code]);
 
+  useEffect(() => {
+    setHunkIndex(0);
+    setExpandedGaps(new Set());
+  }, [code, diff]);
+
   const needle = query?.trim().toLowerCase() || "";
   const lines = lineNumbers ? code.split("\n") : null;
+  const hunks = useMemo(
+    () => (diff && lines ? lines.map((line, index) => (line.startsWith("@@") ? index + 1 : 0)).filter(Boolean) : []),
+    [diff, lines],
+  );
+  const hidden = useMemo(() => {
+    const result = new Map<number, { end: number; key: string }>();
+    if (!diff || !lines) return result;
+    const changed = lines
+      .map((line, i) =>
+        (/^[+-]/.test(line) && !/^(---|\+\+\+)/.test(line)) ||
+        /^(?:@@|diff |index |--- |\+\+\+ )/.test(line)
+          ? i
+          : -1,
+      )
+      .filter((i) => i >= 0);
+    for (let i = 0; i < changed.length - 1; i += 1) {
+      const start = changed[i] + 4;
+      const end = changed[i + 1] - 4;
+      if (end - start >= 4) result.set(start, { end, key: `${start}-${end}` });
+    }
+    return result;
+  }, [diff, lines]);
+
+  function goHunk(delta: number) {
+    if (!hunks.length || !bodyRef.current) return;
+    const next = (hunkIndex + delta + hunks.length) % hunks.length;
+    setHunkIndex(next);
+    bodyRef.current.querySelector(`[data-line="${hunks[next]}"]`)?.scrollIntoView({ block: "center" });
+  }
 
   function hunkAt(index: number) {
     if (!lines || !lines[index]?.startsWith("@@")) return "";
@@ -79,6 +116,21 @@ export default function CodeBlock({
           {language || "code"}
           {highlight ? ` · L${highlight}` : ""}
         </span>
+        <span className="code-bar-actions">
+          {diff && hunks.length ? (
+            <>
+              <button type="button" className="copy-btn" onClick={() => goHunk(-1)}>↑ 改动</button>
+              <button type="button" className="copy-btn" onClick={() => goHunk(1)}>↓ {hunkIndex + 1}/{hunks.length}</button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className={`copy-btn${wrap ? " on" : ""}`}
+            aria-pressed={wrap}
+            onClick={() => setWrap((value) => !value)}
+          >
+            折行
+          </button>
         <button
           type="button"
           className="copy-btn"
@@ -90,11 +142,12 @@ export default function CodeBlock({
         >
           {copied ? "已复制" : "复制"}
         </button>
+        </span>
       </div>
       {lines ? (
         <pre
           ref={bodyRef}
-          className="code-lines"
+          className={`code-lines${wrap ? " wrap" : ""}`}
           onMouseUp={() => {
             if (!onSelectRange || !bodyRef.current) return;
             const sel = window.getSelection();
@@ -112,6 +165,22 @@ export default function CodeBlock({
           }}
         >
           {lines.map((line, index) => {
+            for (const [start, gap] of hidden) {
+              if (index > start && index <= gap.end && !expandedGaps.has(gap.key)) return null;
+            }
+            const gap = hidden.get(index);
+            if (gap && !expandedGaps.has(gap.key)) {
+              return (
+                <button
+                  type="button"
+                  key={`gap-${gap.key}`}
+                  className="diff-gap"
+                  onClick={() => setExpandedGaps((prev) => new Set(prev).add(gap.key))}
+                >
+                  展开 {gap.end - index + 1} 行未改动上下文
+                </button>
+              );
+            }
             const n = index + 1;
             const hit = Boolean(needle && line.toLowerCase().includes(needle));
             const kind = diff

@@ -1,7 +1,9 @@
 // 一轮运行收尾：关闭未结束的工具、本轮文件改动、索引用户消息、工作区轮次记录
-import { WebSocket } from "ws";
+import type { WebSocket } from "ws";
 import type { TurnFile } from "../../../shared/protocol.ts";
 import { noteUserTurn, noteWorkspaceTurnEnd } from "../assistant/service.ts";
+import { attachDelegatedFiles, mergeTurnFiles } from "../delegationFiles.ts";
+import { broadcastFileChanged, broadcastTurnFiles } from "../fileEvents.ts";
 import { slotLog } from "../log.ts";
 import { assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import type { Slot } from "../runtime/types.ts";
@@ -11,9 +13,7 @@ import { computeTurnFiles, type TurnBaseline } from "../turnFiles.ts";
 import { noteRun } from "../usage.ts";
 import { checkpointGit, workspacePrefix } from "../workspace/checkpoints.ts";
 import { listWorkspaceFiles, readWorkspaceDiff } from "../workspace/files.ts";
-import { reply } from "../ws/frame.ts";
 import { send } from "../ws/send.ts";
-import { gatewayState } from "../runtime/state.ts";
 import { notifyWorkspaceAgentAttention } from "../workspace/agentNotifications.ts";
 
 function closeOpenTools(ws: WebSocket, slot: Slot, runStatus: string) {
@@ -64,10 +64,16 @@ export function finishRun(ws: WebSocket, slot: Slot, status: string, durationMs?
   if (!approval) indexUserTurn(slot);
   if (!approval) noteWorkspaceTurn(slot);
   if (files.length && turnId) {
-    for (const conn of gatewayState.conns.values()) {
-      if (!conn.authed || conn.tenant?.id !== slot.tenantId || conn.ws.readyState !== WebSocket.OPEN) continue;
-      reply(conn.ws, { type: "turn_files", chatId: slot.chatId, turnId, files });
-    }
+    broadcastTurnFiles(slot.tenantId, slot.chatId, turnId, files);
+    // shell 等工具可能无法在完成事件里精确报告 changed；回合清单是统一兜底。
+    broadcastFileChanged(
+      slot.tenantId,
+      slot.chatId,
+      files.filter((file) => !file.sourceChatId).map((file) => file.path),
+    );
+    const tenant = getTenant(slot.tenantId);
+    const parent = tenant ? attachDelegatedFiles(tenant, slot, turnId, files) : null;
+    if (parent) broadcastTurnFiles(slot.tenantId, parent.chatId, parent.turnId, parent.files);
   }
   if (!approval && !/cancel/i.test(status)) {
     notifyWorkspaceAgentAttention(slot, /error|fail/i.test(status) ? "failed" : "completed");
@@ -107,9 +113,11 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
       assistantBody: transcript.assistant,
       fallbackDiff: (rel) => readWorkspaceDiff(cwd, rel).content ?? null,
     });
-    if (files.length) transcript.files = files;
+    const delegated = (transcript.files || []).filter((file) => Boolean(file.sourceChatId));
+    const merged = mergeTurnFiles(files, delegated);
+    if (merged.length) transcript.files = merged;
     else delete transcript.files;
-    return files;
+    return merged;
   } catch (err) {
     slotLog(slot).error("turn files", err instanceof Error ? err.message : err);
     return [];

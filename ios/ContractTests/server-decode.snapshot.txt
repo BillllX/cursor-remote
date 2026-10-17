@@ -43,6 +43,8 @@
     "seg_hashes"
     "tool_at"
     "slim_chats"
+    "file_changed"
+    "canvas_versions"
   ]
 )
 
@@ -247,6 +249,8 @@
       diffSha: "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
       added: 12
       removed: 3
+      sourceChatId: nil
+      sourceTurnId: nil
     )
     TurnFile(
       path: "docs/截图.png"
@@ -257,18 +261,35 @@
       diffSha: nil
       added: nil
       removed: nil
+      sourceChatId: "c-child-5b10"
+      sourceTurnId: "t-child-1"
     )
   ]
 )
 
-## server[23] file_written #1
+## server[23] file_changed #1
+.fileChanged(
+  chatId: "c-7f3a9e21"
+  path: "canvases/dashboard.canvas.tsx"
+)
+
+## server[24] canvas_versions #1
+.ignored("canvas_versions")
+
+## server[25] canvas_published #1
+.ignored("canvas_published")
+
+## server[26] canvas_restored #1
+.ignored("canvas_restored")
+
+## server[27] file_written #1
 .fileWritten(
   path: "notes/todo.md"
   chatId: "c-7f3a9e21"
   error: "磁盘已满"
 )
 
-## server[24] file_uploaded #1
+## server[28] file_uploaded #1
 .fileUploaded(
   path: ".cursor-remote/uploads/截图.png"
   chatId: "c-7f3a9e21"
@@ -278,10 +299,10 @@
   id: "up-3"
 )
 
-## server[25] fs_done #1
+## server[29] fs_done #1
 .ignored("fs_done")
 
-## server[26] stored_state #1
+## server[30] stored_state #1
 .storedState(
   chats: [
     JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
@@ -296,12 +317,12 @@
   ]
 )
 
-## server[27] stored_state_deferred #1
+## server[31] stored_state_deferred #1
 .storedStateDeferred(
   rev: 41
 )
 
-## server[28] sync_ack #1
+## server[32] sync_ack #1
 .syncAck(
   rev: 42
   chatRevs: [
@@ -311,7 +332,7 @@
   truncated: true
 )
 
-## server[29] sync_ack #2
+## server[33] sync_ack #2
 .syncAck(
   rev: 43
   chatRevs: [
@@ -321,7 +342,7 @@
   truncated: false
 )
 
-## server[30] stored_digest #1
+## server[34] stored_digest #1
 .storedDigest(
   rev: 44
   deletedIds: [
@@ -333,7 +354,7 @@
   rejected: false
 )
 
-## server[31] stored_digest #2
+## server[35] stored_digest #2
 .storedDigest(
   rev: 45
   deletedIds: []
@@ -343,36 +364,36 @@
   rejected: true
 )
 
-## server[32] stored_chat #1
+## server[36] stored_chat #1
 .storedChat(
   chat: JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
   rev: 44
 )
 
-## server[33] chat_turns #1
+## server[37] chat_turns #1
 .chatTurns(
   chatId: "c-7f3a9e21"
   turns: [
-    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
+    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213, "sourceChatId": "c-child-5b10", "sourceTurnId": "t-child-1"}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
   ]
   from: 100
   hasMore: true
   nonce: 3
 )
 
-## server[34] auth #1
+## server[38] auth #1
 .auth(
   ok: true
   message: "已登录"
 )
 
-## server[35] auth #2
+## server[39] auth #2
 .auth(
   ok: false
   message: "口令无效"
 )
 
-## server[36] tool-output #1
+## server[40] tool-output #1
 .toolOutput(
   chatId: "c-7f3a9e21"
   callId: "call-sh1"
@@ -382,7 +403,7 @@
   stderr: nil
 )
 
-## server[37] tool-output #2
+## server[41] tool-output #2
 .toolOutput(
   chatId: "c-7f3a9e21"
   callId: "call-sh1"
@@ -392,15 +413,15 @@
   stderr: "1 warning\n"
 )
 
-## server[38] history #1
+## server[42] history #1
 .history(
   chatId: "c-7f3a9e21"
   turns: [
-    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
+    JSON {"assistant": "已修好：路由守卫漏了 await。", "files": [{"added": 12, "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b", "kind": "text", "op": "modified", "path": "src/login.ts", "removed": 3, "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 2048}, {"kind": "image", "op": "added", "path": "docs/截图.png", "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c", "size": 48213, "sourceChatId": "c-child-5b10", "sourceTurnId": "t-child-1"}], "id": "t-1739000000000-k2", "startedAt": 1739000000000, "thinking": "先看路由守卫", "tools": [{"agent": "explore", "args": {"path": "src/login.ts"}, "at": 6, "callId": "call-r1", "model": "composer-2.5", "name": "read", "parentCallId": "call-task-0", "result": {"ok": true}, "status": "completed"}], "user": "登录页白屏，帮我看看"}
   ]
 )
 
-## server[39] run_snapshot #1
+## server[43] run_snapshot #1
 .runSnapshot(
   chatId: "c-7f3a9e21"
   turnId: "t-1739000000000-k2"
@@ -423,7 +444,7 @@
   clipped: true
 )
 
-## server[40] undone #1
+## server[44] undone #1
 .undone(
   chatId: "c-7f3a9e21"
   paths: [
@@ -432,7 +453,7 @@
   error: "部分文件已被改动"
 )
 
-## server[41] checkpoints #1
+## server[45] checkpoints #1
 .checkpoints(
   chatId: "c-7f3a9e21"
   items: [
@@ -444,7 +465,7 @@
   ]
 )
 
-## server[42] restored #1
+## server[46] restored #1
 .restored(
   chatId: "c-7f3a9e21"
   checkpointId: "cp-2"
@@ -453,13 +474,13 @@
   silent: true
 )
 
-## server[43] chat_title #1
+## server[47] chat_title #1
 .chatTitle(
   chatId: "c-7f3a9e21"
   title: "修登录白屏"
 )
 
-## server[44] admin_stats #1
+## server[48] admin_stats #1
 .adminStats(
   tenants: [
     AdminTenantStats(
@@ -507,7 +528,7 @@
   )
 )
 
-## server[45] loop_state #1
+## server[49] loop_state #1
 .loopState(
   chatId: "c-7f3a9e21"
   status: "running"
@@ -519,7 +540,7 @@
   nextAt: 1739007200000
 )
 
-## server[46] loop_tick #1
+## server[50] loop_tick #1
 .loopTick(
   chatId: "c-7f3a9e21"
   tick: 3
@@ -527,7 +548,7 @@
   summary: "上一轮还没跑完，跳过"
 )
 
-## server[47] assistant_state #1
+## server[51] assistant_state #1
 .assistantState(AssistantState(
   name: "阿驳"
   background: AssistantBackground(
@@ -655,7 +676,7 @@
   )
 ))
 
-## server[48] assistant_result #1
+## server[52] assistant_result #1
 .assistantResult(
   reqId: "rq-todo-1"
   op: "todo_add"
@@ -664,7 +685,7 @@
   data: JSON {"id": "td_2"}
 )
 
-## server[49] inbox_item #1
+## server[53] inbox_item #1
 .inboxItem(AssistantInboxItem(
   id: "i_k8f2m1"
   kind: "approval"
@@ -677,7 +698,7 @@
   delegationId: "d_q7w3"
 ))
 
-## server[50] delegation_state #1
+## server[54] delegation_state #1
 .delegationState(
   delegation: AssistantDelegation(
     id: "d_q7w3"
@@ -704,7 +725,7 @@
   )
 )
 
-## server[51] memory_written #1
+## server[55] memory_written #1
 .memoryWritten(
   chatId: "c-assistant-01"
   entry: AssistantMemoryEntry(
@@ -723,10 +744,10 @@
   )
 )
 
-## server[52] pong #1
+## server[56] pong #1
 .pong
 
-## server[53] im_contacts #1
+## server[57] im_contacts #1
 .im(.contacts(
   me: ImMe(
     id: "alice"
@@ -752,7 +773,7 @@
   )
 ))
 
-## server[54] im_list #1
+## server[58] im_list #1
 .im(.list(
   convs: [
     ImConvRow(
@@ -795,7 +816,7 @@
   cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ"
 ))
 
-## server[55] im_history #1
+## server[59] im_history #1
 .im(.history(
   convId: "dm~alice~bob-2"
   messages: [
@@ -922,7 +943,7 @@
   after: 10
 ))
 
-## server[56] im_ack #1
+## server[60] im_ack #1
 .im(.ack(
   clientId: "c-ios-1739000000000-1"
   convId: "dm~alice~bob-2"
@@ -931,7 +952,7 @@
   rejected: true
 ))
 
-## server[57] im_message #1
+## server[61] im_message #1
 .im(.message(
   .0: ImMessage(
     convId: "dm~alice~bob-2"
@@ -952,7 +973,7 @@
   unread: 2
 ))
 
-## server[58] im_update #1
+## server[62] im_update #1
 .im(.update(ImUpdate(
   what: "settings"
   convId: "dm~alice~bob-2"
@@ -981,14 +1002,14 @@
   unread: 1
 )))
 
-## server[59] im_error #1
+## server[63] im_error #1
 .im(.error(
   clientId: "c-ios-1739000000000-1"
   code: "rate_limited"
   message: "发得太快了，稍等一会儿再发"
 ))
 
-## server[60] workspace_agents #1
+## server[64] workspace_agents #1
 .workspaceAgents(
   items: [
     WorkspaceAgentItem(
@@ -1014,13 +1035,13 @@
   cursor: "notes"
 )
 
-## server[61] workspace_agent_opened #1
+## server[65] workspace_agent_opened #1
 .workspaceAgentOpened(
   path: "/workspace/demo/notes"
   chatId: "c-7f3a9e21"
 )
 
-## server[62] workspace_agent_update #1
+## server[66] workspace_agent_update #1
 .workspaceAgentUpdate(
   chatId: "c-7f3a9e21"
   unread: 0

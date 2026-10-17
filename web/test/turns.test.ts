@@ -3,6 +3,7 @@ import { describe, test } from "node:test";
 import type { ServerMessage } from "@shared/protocol";
 import {
   applyRunSnapshot,
+  historyToTurns,
   mergeHistoryTurns,
   serverTurn,
   settleTurn,
@@ -148,11 +149,37 @@ describe("applyRunSnapshot", () => {
 });
 
 describe("mergeHistoryTurns / withLiveTurns / serverTurn", () => {
+  test("historyToTurns 保留回合文件卡片和来源会话信息", () => {
+    const [out] = historyToTurns([
+      {
+        id: "h",
+        user: "u",
+        assistant: "a",
+        files: [{ path: "report.md", kind: "markdown", op: "added", sha: "a".repeat(64), sourceChatId: "child" }],
+      },
+    ]);
+    assert.equal(out.files?.[0].path, "report.md");
+    assert.equal(out.files?.[0].sourceChatId, "child");
+  });
+
   test("历史为空返回本地；本地没内容直接用历史", () => {
     const local = [turn({ user: "" })];
     assert.equal(mergeHistoryTurns(local, []), local);
     const incoming = [turn({ id: "h" })];
     assert.equal(mergeHistoryTurns(local, incoming), incoming);
+  });
+
+  test("分页旧历史不会删掉稍后收到的委派文件", () => {
+    const newest = {
+      path: "report.md",
+      kind: "markdown" as const,
+      op: "added" as const,
+      sourceChatId: "child",
+      sourceTurnId: "child-turn",
+    };
+    const local = [turn({ id: "l", user: "问题", files: [newest] })];
+    const incoming = [turn({ id: "h", user: "问题", files: [] })];
+    assert.deepEqual(mergeHistoryTurns(local, incoming)[0].files, [newest]);
   });
 
   test("按用户消息对上：取更长的回答、合并工具；本地第一条之前的历史补在前面", () => {

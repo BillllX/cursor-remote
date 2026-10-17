@@ -8,7 +8,16 @@
       "assistantChatId": "c-assistant-01",
       "assistantName": "阿驳",
       "cwd": "/workspace/demo/notes",
-      "features": ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats"],
+      "features": [
+        "turn_files",
+        "read_sha",
+        "read_req_id",
+        "seg_hashes",
+        "tool_at",
+        "slim_chats",
+        "file_changed",
+        "canvas_versions"
+      ],
       "hasApiKey": true,
       "loops": [
         {
@@ -232,10 +241,45 @@
           "op": "added",
           "path": "docs/截图.png",
           "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
-          "size": 48213
+          "size": 48213,
+          "sourceChatId": "c-child-5b10",
+          "sourceTurnId": "t-child-1"
         }
       ],
       "turnId": "t-1739000000000-k2"
+    },
+    {
+      "type": "file_changed",
+      "chatId": "c-7f3a9e21",
+      "path": "canvases/dashboard.canvas.tsx"
+    },
+    {
+      "type": "canvas_versions",
+      "chatId": "c-7f3a9e21",
+      "path": "canvases/dashboard.canvas.tsx",
+      "versions": [
+        {
+          "createdAt": 1739000000000,
+          "htmlSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+          "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+          "shareUrl": "https://demo.example/p/demo/c/token"
+        }
+      ]
+    },
+    {
+      "type": "canvas_published",
+      "chatId": "c-7f3a9e21",
+      "error": "版本已清理",
+      "path": "canvases/dashboard.canvas.tsx",
+      "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "url": "https://demo.example/p/demo/c/token"
+    },
+    {
+      "type": "canvas_restored",
+      "chatId": "c-7f3a9e21",
+      "error": "文件只读",
+      "path": "canvases/dashboard.canvas.tsx",
+      "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
     },
     {
       "type": "file_written",
@@ -360,7 +404,9 @@
               "op": "added",
               "path": "docs/截图.png",
               "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
-              "size": 48213
+              "size": 48213,
+              "sourceChatId": "c-child-5b10",
+              "sourceTurnId": "t-child-1"
             }
           ],
           "id": "t-1739000000000-k2",
@@ -433,7 +479,9 @@
               "op": "added",
               "path": "docs/截图.png",
               "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
-              "size": 48213
+              "size": 48213,
+              "sourceChatId": "c-child-5b10",
+              "sourceTurnId": "t-child-1"
             }
           ],
           "id": "t-1739000000000-k2",
@@ -642,6 +690,7 @@
             "id": "d_q7w3",
             "mode": "foreground",
             "parentChatId": "c-assistant-01",
+            "parentTurnId": "t-1739000000000-k2",
             "result": "讲稿已整理成 slides.md",
             "status": "awaiting",
             "title": "整理讲稿",
@@ -795,6 +844,7 @@
         "id": "d_q7w3",
         "mode": "foreground",
         "parentChatId": "c-assistant-01",
+        "parentTurnId": "t-1739000000000-k2",
         "result": "讲稿已整理成 slides.md",
         "status": "awaiting",
         "title": "整理讲稿",
@@ -1261,6 +1311,30 @@
       "chatId": "c-7f3a9e21",
       "content": "- [ ] 回报价\n",
       "path": "notes/todo.md"
+    },
+    {
+      "type": "canvas_version_save",
+      "chatId": "c-7f3a9e21",
+      "html": "<!doctype html><html><body>dashboard</body></html>",
+      "path": "canvases/dashboard.canvas.tsx",
+      "sourceSha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+    },
+    {
+      "type": "canvas_versions",
+      "chatId": "c-7f3a9e21",
+      "path": "canvases/dashboard.canvas.tsx"
+    },
+    {
+      "type": "canvas_publish",
+      "chatId": "c-7f3a9e21",
+      "path": "canvases/dashboard.canvas.tsx",
+      "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+    },
+    {
+      "type": "canvas_restore",
+      "chatId": "c-7f3a9e21",
+      "path": "canvases/dashboard.canvas.tsx",
+      "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
     },
     {
       "type": "upload_file",

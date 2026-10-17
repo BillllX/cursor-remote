@@ -24,6 +24,19 @@ struct DeferredTurnFiles {
     }
 }
 
+/// 回合文件卡片的数据来源。`authoritative` 包括网关明确给出的空数组：
+/// 空数组表示这一轮确认没有文件，不能再退回工具推导。
+enum TurnFilesSource: String, Hashable {
+    case none
+    case provisional
+    case authoritative
+}
+
+struct TurnFilesState: Hashable {
+    var source: TurnFilesSource
+    var files: [TurnFile]
+}
+
 struct ToolCall: Identifiable, Hashable {
     var callId: String
     var name: String
@@ -173,6 +186,8 @@ struct Turn: Identifiable, Hashable {
     var images: [PromptImage] = []
     /// 网关在每轮结束后给的文件清单（turn_files / 落盘的 turn.files）。旧网关没有，为空
     var files: [TurnFile] = []
+    /// `files` 是否由网关明确给出。单独记录以区分“尚未收到”和“权威空数组”。
+    var filesSource: TurnFilesSource = .none
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
 
@@ -182,17 +197,51 @@ struct Turn: Identifiable, Hashable {
         "files",
     ]
 
-    /// 文件卡片的数据源：网关给了 files 就用它；否则从工具推导（没有 sha，只能打开当前版本）。
-    /// 只读过的文件不出卡
-    var cardFiles: [TurnFile] {
-        if !files.isEmpty { return files }
+    /// 文件卡片的数据源：权威清单（包括空数组）优先；旧网关/运行中才从工具推导。
+    /// 推导值只用于过渡，没有 sha；权威清单到达时按现有路径顺序补齐元数据，避免整组重排。
+    var cardFilesState: TurnFilesState {
+        if filesSource != .none {
+            return TurnFilesState(source: filesSource, files: files)
+        }
         var seen = Set<String>()
         var out: [TurnFile] = []
         for tool in tools {
             guard let path = Turn.cardPath(of: tool), seen.insert(path).inserted else { continue }
             out.append(TurnFile(path: path, kind: previewKind(of: path), op: "modified"))
         }
+        return TurnFilesState(source: out.isEmpty ? .none : .provisional, files: out)
+    }
+
+    var cardFiles: [TurnFile] { cardFilesState.files }
+
+    /// 权威清单到达时保持已显示顺序并补齐元数据；分页旧副本不能删掉更晚的 turn_files。
+    static func stableAuthoritativeFiles(current: [TurnFile], incoming: [TurnFile]) -> [TurnFile] {
+        var remaining = incoming
+        var out: [TurnFile] = []
+        for old in current {
+            if let index = remaining.firstIndex(where: { sameFile($0, old) }) {
+                out.append(remaining.remove(at: index))
+            } else {
+                out.append(old)
+            }
+        }
+        out.append(contentsOf: remaining)
         return out
+    }
+
+    /// 把远端回合的文件状态合入当前回合；缺少 files 字段的旧副本不能抹掉已有权威状态。
+    func mergingFiles(from remote: Turn) -> Turn {
+        var row = self
+        if remote.filesSource == .authoritative {
+            row.files = filesSource == .authoritative
+                ? Turn.stableAuthoritativeFiles(current: files, incoming: remote.files)
+                : (remote.files.isEmpty ? [] : Turn.stableAuthoritativeFiles(current: cardFiles, incoming: remote.files))
+            row.filesSource = .authoritative
+        } else if filesSource != .authoritative, !remote.files.isEmpty {
+            row.files = Turn.stableAuthoritativeFiles(current: cardFiles, incoming: remote.files)
+            row.filesSource = remote.filesSource
+        }
+        return row
     }
 
     /// 工具写到的文件路径（去掉 ./ 前缀）；删除类、失败的、不改文件的返回 nil。口径同网关 toolWritesFiles
@@ -209,8 +258,18 @@ struct Turn: Identifiable, Hashable {
         lhs == rhs || lhs.hasSuffix("/" + rhs) || rhs.hasSuffix("/" + lhs)
     }
 
+    static func sameFile(_ lhs: TurnFile, _ rhs: TurnFile) -> Bool {
+        if lhs.sourceChatId != nil || rhs.sourceChatId != nil {
+            return lhs.sourceChatId == rhs.sourceChatId
+                && lhs.sourceTurnId == rhs.sourceTurnId
+                && samePath(lhs.path, rhs.path)
+        }
+        return samePath(lhs.path, rhs.path)
+    }
+
     private func writers(of file: TurnFile) -> [ToolCall] {
-        tools.filter { tool in
+        guard file.sourceChatId == nil else { return [] }
+        return tools.filter { tool in
             guard let path = Turn.cardPath(of: tool) else { return false }
             return Turn.samePath(path, file.path)
         }
@@ -223,6 +282,7 @@ struct Turn: Identifiable, Hashable {
 
     /// 这一轮已还原（相关工具都标了 rejected）。对不上工具时（shell 写的文件）按整轮带标记的工具算
     func isRestored(_ file: TurnFile) -> Bool {
+        guard file.sourceChatId == nil else { return false }
         let related = writers(of: file)
         let ids = reviewCallIds
         let pool = related.isEmpty ? tools.filter { ids.contains($0.callId) } : related
@@ -242,7 +302,7 @@ struct Turn: Identifiable, Hashable {
     /// 「全部保留 / 全部还原」作用的路径：editPaths 加上 files 里工具对不上的（shell 写的），去重保序
     var reviewPaths: [String] {
         var paths = editPaths
-        for file in files where !paths.contains(where: { Turn.samePath($0, file.path) }) {
+        for file in files where file.sourceChatId == nil && !paths.contains(where: { Turn.samePath($0, file.path) }) {
             paths.append(file.path)
         }
         return paths
@@ -254,7 +314,9 @@ struct Turn: Identifiable, Hashable {
     var reviewCallIds: Set<String> {
         var ids = Set(tools.filter { $0.kind.isMutating }.map(\.callId))
         let edits = editPaths
-        let uncovered = files.contains { file in !edits.contains { Turn.samePath($0, file.path) } }
+        let uncovered = files.contains { file in
+            file.sourceChatId == nil && !edits.contains { Turn.samePath($0, file.path) }
+        }
         if uncovered {
             ids.formUnion(tools.filter { $0.kind == .shell || $0.kind == .other }.map(\.callId))
         }
@@ -357,7 +419,10 @@ struct Turn: Identifiable, Hashable {
                 .object(["data": .string($0.data), "mimeType": .string($0.mimeType)])
             })
         }
-        if !files.isEmpty { object["files"] = .array(files.map { $0.json() }) }
+        // 权威空数组也必须落盘，否则恢复/多设备加载后会误退回工具推导。
+        if filesSource == .authoritative {
+            object["files"] = .array(files.map { $0.json() })
+        }
         return .object(object)
     }
 
@@ -382,7 +447,7 @@ struct Turn: Identifiable, Hashable {
                 at: row["at"]?.int
             )
         } ?? []
-        return Turn(
+        var turn = Turn(
             id: id,
             user: object["user"]?.string ?? "",
             assistant: object["assistant"]?.string ?? "",
@@ -406,8 +471,18 @@ struct Turn: Identifiable, Hashable {
                 return PromptImage(data: data, mimeType: mime)
             } ?? [],
             files: object["files"]?.array?.compactMap(TurnFile.from) ?? [],
+            filesSource: object["files"] == nil ? .none : .authoritative,
             extra: object.filter { !Turn.knownKeys.contains($0.key) }
         )
+        // 历史/缓存里的已结束旧回合没有 files 字段时，也立即冻结工具推导值。
+        if !turn.running, !turn.queued, turn.filesSource == .none {
+            let inferred = turn.cardFiles
+            if !inferred.isEmpty {
+                turn.files = inferred
+                turn.filesSource = .provisional
+            }
+        }
+        return turn
     }
 
     func settled(status: String, durationMs: Double? = nil) -> Turn {
@@ -424,6 +499,15 @@ struct Turn: Identifiable, Hashable {
             var row = tool
             if row.status == "running" { row.status = toolStatus }
             return row
+        }
+        // 结束瞬间冻结工具推导结果；后续 history/snapshot 改写工具列表不会让卡片跳动。
+        // turn_files 到达后仍会原位升级为 authoritative 并补齐 sha/diffSha。
+        if next.filesSource == .none {
+            let inferred = next.cardFiles
+            if !inferred.isEmpty {
+                next.files = inferred
+                next.filesSource = .provisional
+            }
         }
         return next
     }

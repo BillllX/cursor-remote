@@ -20,7 +20,7 @@ type ThreadProps = {
   loadingOlder: boolean;
   threadFindHits: Turn[];
   threadFindHi: number;
-  openFile: (path: string, line?: number, asDiff?: boolean) => void;
+  openFile: (path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string) => void;
   threadFindQ: string;
   editTurn: (turn: Turn) => void;
   connected: boolean;

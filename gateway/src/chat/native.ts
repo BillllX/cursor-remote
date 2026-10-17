@@ -4,6 +4,7 @@ import { isPlane, toolFingerprint } from "../../../shared/policy.ts";
 import type { AgentMode } from "../../../shared/protocol.ts";
 import { assistantName, chatToolHost, workspaceToolsFor } from "../assistant/service.ts";
 import { assistantToolSpecs, toolSpecs } from "../assistant/tools.ts";
+import { broadcastFileChanged } from "../fileEvents.ts";
 import { log, slotLog } from "../log.ts";
 import { adapterFor } from "../native/adapters/index.ts";
 import { budgetFor, makeCompactor, modelSummarizer } from "../native/compact.ts";
@@ -178,8 +179,10 @@ export async function runNativeChat(
       parentCallId,
       agent,
     });
-    if (result.changed?.length) pushWorkspace(ws, slot, conn, result.changed);
-    else if (spec?.category === "shell") pushWorkspace(ws, slot, conn);
+    if (result.changed?.length) {
+      pushWorkspace(ws, slot, conn, result.changed);
+      broadcastFileChanged(slot.tenantId, slot.chatId, result.changed);
+    } else if (spec?.category === "shell") pushWorkspace(ws, slot, conn);
   };
   const baseTools = toolsForMode(mode, [...extraTools, ...mcp.tools]);
   const compactor = makeCompactor({

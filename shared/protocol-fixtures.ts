@@ -38,7 +38,15 @@ const turnFiles: TurnFile[] = [
     added: 12,
     removed: 3,
   },
-  { path: "docs/截图.png", kind: "image", op: "added", size: 48213, sha: SHA },
+  {
+    path: "docs/截图.png",
+    kind: "image",
+    op: "added",
+    size: 48213,
+    sha: SHA,
+    sourceChatId: CHILD_CHAT,
+    sourceTurnId: "t-child-1",
+  },
 ];
 
 const inboxItem: AssistantInboxItem = {
@@ -75,6 +83,7 @@ const memoryEntry: AssistantMemoryEntry = {
 const delegation: AssistantDelegation = {
   id: "d_q7w3",
   parentChatId: ASSISTANT_CHAT,
+  parentTurnId: TURN,
   childChatId: CHILD_CHAT,
   workspace: CWD,
   title: "整理讲稿",
@@ -297,7 +306,16 @@ export const serverSamples: ServerMessage[] = [
     ],
     assistantName: "阿驳",
     assistantChatId: ASSISTANT_CHAT,
-    features: ["turn_files", "read_sha", "read_req_id", "seg_hashes", "tool_at", "slim_chats"],
+    features: [
+      "turn_files",
+      "read_sha",
+      "read_req_id",
+      "seg_hashes",
+      "tool_at",
+      "slim_chats",
+      "file_changed",
+      "canvas_versions",
+    ],
   },
   {
     type: "workspaces",
@@ -398,6 +416,28 @@ export const serverSamples: ServerMessage[] = [
     truncated: true,
   },
   { type: "turn_files", chatId: CHAT, turnId: TURN, files: turnFiles },
+  { type: "file_changed", chatId: CHAT, path: "canvases/dashboard.canvas.tsx" },
+  {
+    type: "canvas_versions",
+    chatId: CHAT,
+    path: "canvases/dashboard.canvas.tsx",
+    versions: [{ sha: SHA, htmlSha: DIFF_SHA, createdAt: T0, shareUrl: "https://demo.example/p/demo/c/token" }],
+  },
+  {
+    type: "canvas_published",
+    chatId: CHAT,
+    path: "canvases/dashboard.canvas.tsx",
+    sha: SHA,
+    url: "https://demo.example/p/demo/c/token",
+    error: "版本已清理",
+  },
+  {
+    type: "canvas_restored",
+    chatId: CHAT,
+    path: "canvases/dashboard.canvas.tsx",
+    sha: SHA,
+    error: "文件只读",
+  },
   { type: "file_written", path: "notes/todo.md", chatId: CHAT, error: "磁盘已满" },
   {
     type: "file_uploaded",
@@ -679,6 +719,16 @@ export const clientSamples: ClientMessage[] = [
   { type: "search_text", query: "await guard", chatId: CHAT },
   { type: "read_file", path: "src/login.ts", chatId: CHAT, diff: true, sha: DIFF_SHA, reqId: "rq-17" },
   { type: "write_file", path: "notes/todo.md", content: "- [ ] 回报价\n", chatId: CHAT },
+  {
+    type: "canvas_version_save",
+    chatId: CHAT,
+    path: "canvases/dashboard.canvas.tsx",
+    sourceSha: SHA,
+    html: "<!doctype html><html><body>dashboard</body></html>",
+  },
+  { type: "canvas_versions", chatId: CHAT, path: "canvases/dashboard.canvas.tsx" },
+  { type: "canvas_publish", chatId: CHAT, path: "canvases/dashboard.canvas.tsx", sha: SHA },
+  { type: "canvas_restore", chatId: CHAT, path: "canvases/dashboard.canvas.tsx", sha: SHA },
   {
     type: "upload_file",
     chatId: CHAT,

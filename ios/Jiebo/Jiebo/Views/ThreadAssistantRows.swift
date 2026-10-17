@@ -192,7 +192,7 @@ enum AssistantToolText {
 }
 
 /// delegate / create_workspace 的一行说明（不展开原始参数）。
-/// 委派能对上本机已同步的子会话时，下面挂它最后一轮的前 3 个文件，按子会话 id 读
+/// 子会话文件只在子回合末尾和委派详情展示，避免父入口重复一组卡片。
 struct AssistantActionRow: View {
     @Environment(ChatStore.self) private var store
     /// 只有 PhoneShell 注入；为 nil 时不出「全部」
@@ -200,8 +200,6 @@ struct AssistantActionRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var tool: ToolCall
     var text: String
-
-    private static let fileLimit = 3
 
     /// 委派 id 与子会话 id：先看工具结果，缺的一个从 assistantState.delegations 互查
     private var delegateRefs: (delegationId: String?, childChatId: String?) {
@@ -219,15 +217,6 @@ struct AssistantActionRow: View {
         return (delegationId, childId)
     }
 
-    private var childTurn: (chatId: String, turn: Turn)? {
-        guard let childId = delegateRefs.childChatId,
-              let chat = store.chats.first(where: { $0.id == childId }),
-              let turn = chat.turns.last,
-              !turn.cardFiles.isEmpty
-        else { return nil }
-        return (chat.id, turn)
-    }
-
     private var failed: Bool {
         tool.status == "error" || tool.result?["ok"]?.bool == false
     }
@@ -243,12 +232,7 @@ struct AssistantActionRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            summaryRow
-            if let child = childTurn {
-                childFiles(child.turn, chatId: child.chatId)
-            }
-        }
+        summaryRow
     }
 
     private var summaryRow: some View {
@@ -288,33 +272,5 @@ struct AssistantActionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(openDelegation != nil && delegateRefs.delegationId != nil ? .isButton : [])
         .accessibilityHint(openDelegation != nil && delegateRefs.delegationId != nil ? "轻点两下查看委派详情" : "")
-    }
-
-    /// 委派产出的文件：与本轮文件同一套卡片（能预览的出缩略图），最多 3 个，更多进详情
-    private func childFiles(_ turn: Turn, chatId: String) -> some View {
-        let all = turn.cardFiles
-        let files = Array(all.prefix(Self.fileLimit))
-        let delegationId = delegateRefs.delegationId
-        return VStack(alignment: .leading, spacing: 4) {
-            TurnFileCards(turn: turn, chatId: chatId, files: files)
-            if let openDelegation, let delegationId, all.count > files.count {
-                Button {
-                    openDelegation(delegationId)
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("查看全部 \(all.count) 个文件")
-                            .font(JieboFont.text(.footnote, weight: .medium))
-                        Image(systemName: "chevron.right")
-                            .font(JieboFont.text(.caption2, weight: .semibold))
-                    }
-                    .foregroundStyle(JieboColor.pine)
-                    .frame(minHeight: 44)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("查看委派的全部 \(all.count) 个文件和过程")
-            }
-        }
-        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
     }
 }

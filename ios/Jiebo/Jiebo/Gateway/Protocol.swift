@@ -72,7 +72,12 @@ struct TurnFile: Sendable, Hashable, Identifiable {
     var diffSha: String?
     var added: Int?
     var removed: Int?
-    var id: String { path }
+    /// 父回合聚合委派交付物时，文件仍应从来源子会话读取。
+    var sourceChatId: String? = nil
+    var sourceTurnId: String? = nil
+    var id: String {
+        sourceChatId.map { "\($0)|\(sourceTurnId ?? "")|\(path)" } ?? path
+    }
 
     static func from(_ json: JSONValue) -> TurnFile? {
         guard let row = json.object, let path = row["path"]?.string?.nilIfEmpty else { return nil }
@@ -84,7 +89,9 @@ struct TurnFile: Sendable, Hashable, Identifiable {
             sha: row["sha"]?.string?.nilIfEmpty,
             diffSha: row["diffSha"]?.string?.nilIfEmpty,
             added: row["added"]?.int,
-            removed: row["removed"]?.int
+            removed: row["removed"]?.int,
+            sourceChatId: row["sourceChatId"]?.string?.nilIfEmpty,
+            sourceTurnId: row["sourceTurnId"]?.string?.nilIfEmpty
         )
     }
 
@@ -99,6 +106,8 @@ struct TurnFile: Sendable, Hashable, Identifiable {
         if let diffSha { object["diffSha"] = .string(diffSha) }
         if let added { object["added"] = .number(Double(added)) }
         if let removed { object["removed"] = .number(Double(removed)) }
+        if let sourceChatId { object["sourceChatId"] = .string(sourceChatId) }
+        if let sourceTurnId { object["sourceTurnId"] = .string(sourceTurnId) }
         return .object(object)
     }
 }
@@ -1083,6 +1092,8 @@ enum ServerMessage {
     )
     /// 每轮结束后下发这一轮的文件清单
     case turnFiles(chatId: String, turnId: String, files: [TurnFile])
+    /// 工作区文件已变化；客户端只刷新当前版本，不覆盖历史快照。
+    case fileChanged(chatId: String, path: String)
     case undone(chatId: String, paths: [String], error: String?)
     case checkpoints(chatId: String, items: [CheckpointInfo])
     case restored(chatId: String, checkpointId: String?, label: String?, error: String?, silent: Bool)
@@ -1124,6 +1135,8 @@ enum ServerMessage {
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _, _, _):
             return chatId
         case .turnFiles(let chatId, _, _):
+            return chatId
+        case .fileChanged(let chatId, _):
             return chatId
         case .undone(let chatId, _, _),
              .checkpoints(let chatId, _),
@@ -1400,6 +1413,9 @@ enum ServerMessage {
                 turnId: turnId,
                 files: object["files"]?.array?.compactMap(TurnFile.from) ?? []
             )
+        case "file_changed":
+            guard !chatId.isEmpty, let path = object["path"]?.string?.nilIfEmpty else { return .ignored(type) }
+            return .fileChanged(chatId: chatId, path: path)
         case "undone":
             return .undone(
                 chatId: chatId,

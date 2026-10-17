@@ -134,6 +134,7 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
   const childChatId = crypto.randomUUID();
   const record = createDelegation(tenant, {
     parentChatId: req.parentChatId,
+    parentTurnId: parent?.transcript?.turnId,
     childChatId,
     workspace: name,
     title,

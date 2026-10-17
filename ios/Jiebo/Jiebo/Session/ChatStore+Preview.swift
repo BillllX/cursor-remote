@@ -36,6 +36,26 @@ extension ChatStore {
         }
     }
 
+    /// 文件变化推送只刷新对应会话的当前版本；卡片历史快照保持不变。
+    func reloadPreview(path rawPath: String, chatId: String) {
+        let path = relToCwd(rawPath, chatId: chatId)
+        for index in previewTabs.indices {
+            let tab = previewTabs[index]
+            guard readChatId(tab) == chatId,
+                  (tab.path == path || tab.path == rawPath),
+                  tab.readSha == nil else { continue }
+            previewTabs[index].content = nil
+            previewTabs[index].error = nil
+            previewTabs[index].url = nil
+            previewTabs[index].headUrl = nil
+            previewTabs[index].media = nil
+            previewTabs[index].mime = nil
+            previewTabs[index].size = nil
+            previewTabs[index].loading = true
+            sendTabRead(previewTabs[index])
+        }
+    }
+
     /// 网关是否认 read_file.sha。旧网关不认，发了也只会读到当前版本，干脆不发
     var supportsReadSha: Bool { gatewayFeatures.contains("read_sha") }
 
@@ -234,16 +254,17 @@ extension ChatStore {
     /// 从文件卡片打开。代码/纯文本看这一轮的对照，其余可预览类型看文件本身，binary 走 Quick Look。
     /// 一律按卡片所属会话读，绝不 select 过去（iPhone 上 activeId 只能是助理会话）
     func openTurnFile(_ file: TurnFile, chatId: String) {
-        let path = relToCwd(file.path, chatId: chatId)
+        let sourceChatId = file.sourceChatId ?? chatId
+        let path = relToCwd(file.path, chatId: sourceChatId)
         guard !path.isEmpty, !path.hasSuffix("/") else { return }
         switch file.kind {
         case .binary:
-            openMention(path, chatId: chatId, sha: file.sha)
+            openMention(path, chatId: sourceChatId, sha: file.sha)
         case .text:
             // 有 diffSha 读这一轮的对照；没有就退回实时 diff（file.sha 留给切到原文时用）
-            openPreviewTab(path: path, kind: .text, diff: true, chatId: chatId, sha: file.sha, diffSha: file.diffSha)
+            openPreviewTab(path: path, kind: .text, diff: true, chatId: sourceChatId, sha: file.sha, diffSha: file.diffSha)
         default:
-            openPreviewTab(path: path, kind: file.kind, diff: false, chatId: chatId, sha: file.sha)
+            openPreviewTab(path: path, kind: file.kind, diff: false, chatId: sourceChatId, sha: file.sha)
         }
     }
 

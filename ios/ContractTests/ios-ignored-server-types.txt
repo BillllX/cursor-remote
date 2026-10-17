@@ -3,3 +3,6 @@
 # 不在这里却解码成 .ignored，或在这里却能解码，check:ios-protocol 都会失败。
 policy set_policy 的回执；iOS 切策略时先本地改 chat.policy 再发 set_policy，不等回执
 fs_done fs_op 的回执；iOS 没有文件树增删改名，不发 fs_op
+canvas_versions Canvas 版本管理当前只在 Web 文件预览工具栏提供
+canvas_published Canvas 发布操作当前只由 Web 发起，iOS 不等待其回执
+canvas_restored Canvas 版本恢复当前只由 Web 发起，iOS 通过 file_changed 刷新预览

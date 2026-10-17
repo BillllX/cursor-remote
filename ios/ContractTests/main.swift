@@ -524,6 +524,81 @@ func checkDeferredTurnFiles() -> [String] {
     return []
 }
 
+// MARK: 回合文件来源 / 恢复合并
+
+func checkTurnFilesState() -> [String] {
+    var problems: [String] = []
+    let provisionalJSON: JSONValue = .object([
+        "id": .string("turn-files"),
+        "assistant": .string("done"),
+        "tools": .array([
+            .object([
+                "callId": .string("write-a"),
+                "name": .string("Write"),
+                "status": .string("completed"),
+                "args": .object(["path": .string("A.swift")]),
+            ]),
+            .object([
+                "callId": .string("write-b"),
+                "name": .string("Write"),
+                "status": .string("completed"),
+                "args": .object(["path": .string("B.swift")]),
+            ]),
+        ]),
+    ])
+    guard let provisional = Turn.from(provisionalJSON) else { return ["turn files state：provisional 解析失败"] }
+    if provisional.cardFilesState.source != .provisional || provisional.cardFiles.map(\.path) != ["A.swift", "B.swift"] {
+        problems.append("turn files state：缺少 files 时没有按工具形成 provisional")
+    }
+    let settled = provisional.settled(status: "finished")
+    if settled.filesSource != .provisional || settled.files.map(\.path) != ["A.swift", "B.swift"] {
+        problems.append("turn files state：done 后没有冻结 provisional 清单")
+    }
+
+    let fileA = TurnFile(path: "A.swift", kind: .text, op: "modified", size: 10, sha: "sha-a", diffSha: "diff-a", added: 2, removed: 1)
+    let fileB = TurnFile(path: "B.swift", kind: .text, op: "modified", size: 20, sha: "sha-b", diffSha: "diff-b", added: 3, removed: 0)
+    var authoritative = provisional
+    authoritative.files = [fileB, fileA]
+    authoritative.filesSource = .authoritative
+    let merged = provisional.mergingFiles(from: authoritative)
+    if merged.cardFilesState.source != .authoritative || merged.cardFiles.map(\.path) != ["A.swift", "B.swift"] {
+        problems.append("turn files state：权威切换没有保持 provisional 路径顺序")
+    }
+    if merged.cardFiles.first?.sha != "sha-a" || merged.cardFiles.first?.diffSha != "diff-a" {
+        problems.append("turn files state：权威 sha/diffSha 没有合入")
+    }
+    var delegated = fileA
+    delegated.sourceChatId = "child-chat"
+    delegated.sourceTurnId = "child-turn"
+    let delegatedRoundTrip = TurnFile.from(delegated.json())
+    if delegatedRoundTrip?.sourceChatId != "child-chat" || delegatedRoundTrip?.sourceTurnId != "child-turn" {
+        problems.append("turn files state：委派来源会话/回合没有协议往返")
+    }
+
+    var stale = provisional
+    stale.files = []
+    stale.filesSource = .none
+    let preserved = merged.mergingFiles(from: stale)
+    if preserved.filesSource != .authoritative || preserved.files.map(\.path) != ["A.swift", "B.swift"] {
+        problems.append("turn files state：history 的无 files 旧副本抹掉了权威清单")
+    }
+
+    var empty = provisional
+    empty.files = []
+    empty.filesSource = .authoritative
+    guard let restored = Turn.from(empty.json()) else {
+        problems.append("turn files state：权威空数组无法恢复")
+        print("回合文件来源 / 恢复合并：\(problems.count) 条不符")
+        return problems
+    }
+    if restored.filesSource != .authoritative || !restored.cardFiles.isEmpty {
+        problems.append("turn files state：权威空数组恢复后退回了工具推导")
+    }
+
+    print("回合文件来源 / 恢复合并：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -532,7 +607,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles() + checkTurnFilesState()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

@@ -222,6 +222,18 @@
   color: var(--muted);
 }
 
+.turn-files {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.turn-files-title { padding: 7px 10px; color: var(--dim); font-size: var(--fs-xs); background: var(--bg-sidebar); }
+.turn-file { display: flex; align-items: center; border-top: 1px solid var(--border); }
+.turn-file > button:first-child { flex: 1; min-width: 0; display: flex; justify-content: space-between; gap: 10px; border: 0; background: transparent; color: var(--text); padding: 8px 10px; text-align: left; }
+.turn-file > button:first-child span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-file small { color: var(--dim); white-space: nowrap; }
+
 .turn-review {
   margin-top: 8px;
   padding: 8px 0 0;

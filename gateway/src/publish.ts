@@ -20,6 +20,7 @@ import { confinedCwd, isBillXuTenant } from "./tenants.ts";
 import { gatewayEnv } from "./config.ts";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { errText, log } from "./log.ts";
+import { servePublishedCanvas } from "./canvasVersions.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const CONTROL_PATHS = new Set([
@@ -537,6 +538,13 @@ function publicUrl(scheme: string, host: string, tenantId: string) {
   return `${proto}://${name}${publishBasePath(tenantId)}/`;
 }
 
+export function publishedCanvasUrl(tenantId: string, token: string) {
+  const name = cleanPublishHost(gatewayEnv.publishHost() || "");
+  const path = `${publishBasePath(tenantId)}/c/${token}`;
+  if (!name) return path;
+  return `${gatewayEnv.publishScheme() === "http" ? "http" : "https"}://${name}${path}`;
+}
+
 export function createPublishController(options: {
   tenants: () => PublishTenant[];
   host?: () => string;
@@ -940,6 +948,14 @@ export function createPublishController(options: {
       text(res, 404, "没有这个用户。");
       return;
     }
+    const path = pathnameOf(req.url || "/");
+    const canvasPrefix = `${publishBasePath(label)}/c/`;
+    if ((req.method === "GET" || req.method === "HEAD") && path.startsWith(canvasPrefix)) {
+      const token = path.slice(canvasPrefix.length);
+      if (servePublishedCanvas(tenant, token, req, res)) return;
+      text(res, 404, "没有这个 Canvas 分享。");
+      return;
+    }
     const slot = liveSlot(label);
     if (slot) {
       proxyHttp(req, res, slot.port, label);
@@ -951,7 +967,6 @@ export function createPublishController(options: {
       html(res, 503, workbenchDownPage(tenant.id, tenant.name), head);
       return;
     }
-    const path = pathnameOf(req.url || "/");
     const atRoot = path === publishBasePath(label) || path === `${publishBasePath(label)}/`;
     html(res, atRoot ? 200 : 404, defaultWorkbenchPage(tenant.id, tenant.name), head);
   }

@@ -8,7 +8,18 @@ import { finishRun } from "../chat/finish.ts";
 import { onAdminStats } from "./handlers/admin.ts";
 import { onAssistantGet, onAssistantOp } from "./handlers/assistant.ts";
 import { onListCheckpoints, onRevertFile, onRevertHunk, onUndoOrRestore } from "./handlers/checkpoints.ts";
-import { onFsOp, onListFiles, onReadFile, onSearchText, onUploadFile, onWriteFile } from "./handlers/files.ts";
+import {
+  onCanvasPublish,
+  onCanvasRestore,
+  onCanvasVersions,
+  onCanvasVersionSave,
+  onFsOp,
+  onListFiles,
+  onReadFile,
+  onSearchText,
+  onUploadFile,
+  onWriteFile,
+} from "./handlers/files.ts";
 import { onHello } from "./handlers/hello.ts";
 import {
   onImBlock,
@@ -74,6 +85,10 @@ export const handlers: HandlerTable = {
   load_chats: onLoadChats,
   load_chat: onLoadChat,
   write_file: onWriteFile,
+  canvas_version_save: onCanvasVersionSave,
+  canvas_versions: onCanvasVersions,
+  canvas_publish: onCanvasPublish,
+  canvas_restore: onCanvasRestore,
   upload_file: onUploadFile,
   fs_op: onFsOp,
   list_files: onListFiles,

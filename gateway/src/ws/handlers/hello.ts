@@ -91,6 +91,8 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
         "im",
         "workspace_agents",
         "workspace_agent_viewing",
+        "file_changed",
+        "canvas_versions",
       ],
     });
   };

@@ -542,9 +542,17 @@ extension ChatStore {
             // 替换（或 deferred 降级重载）自愈，不在这里做复杂对账
             let page = rows.compactMap(Turn.from)
             let existing = Set(chats[index].turns.map(\.id))
+            // 缓存基线可能已有同 id 回合但没有 files；分页去重前先合文件状态。
+            for remote in page {
+                if let turnIndex = chats[index].turns.firstIndex(where: { $0.id == remote.id }) {
+                    chats[index].turns[turnIndex] = chats[index].turns[turnIndex].mergingFiles(from: remote)
+                }
+            }
             let fresh = page.filter { !existing.contains($0.id) }
             chats[index].turns = fresh + chats[index].turns
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
+            // turn_files 可早于其所在分页；每页落入内存后立即尝试合并，不能只等最后一页。
+            mergePendingTurnFiles(chatId: chatId)
             if hasMore {
                 sendLoadChat(chatId, from: from) // 继续向前翻 turns[..<from]
             } else {
@@ -750,6 +758,10 @@ extension ChatStore {
         case .turnFiles(let filesChatId, let turnId, let files):
             // 网关落盘时已经写进 turn.files：这里只同步到本机，不标脏、不回传
             mergeOrQueueTurnFiles(chatId: filesChatId, turnId: turnId, files: files)
+        case .fileChanged(let changedChatId, let path):
+            ThumbnailStore.shared.invalidateCurrent(chatId: changedChatId, path: path, store: self)
+            reloadPreview(path: path, chatId: changedChatId)
+            if changedChatId == activeId { requestFileIndex(chatId: changedChatId) }
         case .undone(_, let paths, let error):
             settleRestore(chatId: chatId, paths: paths, error: error?.nilIfEmpty)
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）

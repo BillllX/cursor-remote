@@ -19,6 +19,7 @@ import {
 import type { AgentMode, PolicyId } from "../../../shared/protocol.ts";
 import { clockLine, noteWorkspaceTurnStart, userRootPreamble } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
+import { broadcastFileChanged } from "../fileEvents.ts";
 import { log, slotLog } from "../log.ts";
 import { deleteSession } from "../native/session.ts";
 import { type ChatHistoryItem, externalRoute } from "../providers.ts";
@@ -488,8 +489,10 @@ export async function handlePrompt(
     });
     if (!slot.awaitingApproval && status !== "error" && isMutatingTool(name, args)) {
       const raw = pathFromTool(args);
-      const rel = raw ? workspacePath(cwd, raw) || raw : "";
-      pushWorkspace(ws, slot, conn, rel ? [rel] : slot.edited);
+      const rel = raw ? workspacePath(cwd, raw) || "" : "";
+      const changed = rel ? [rel] : slot.edited;
+      pushWorkspace(ws, slot, conn, changed);
+      broadcastFileChanged(slot.tenantId, slot.chatId, changed);
     }
   };
 

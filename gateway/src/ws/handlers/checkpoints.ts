@@ -1,5 +1,6 @@
 // 检查点与还原：列出、还原文件/片段、撤销/恢复检查点
 import { cwdOf, persistConn, slotOf } from "../../runtime/slots.ts";
+import { broadcastFileChanged } from "../../fileEvents.ts";
 import { noteNativeRestore, restoreCheckpoint, sendCheckpoints, undoEdits } from "../../workspace/checkpoints.ts";
 import { pushWorkspace, revertHunk, workspacePath } from "../../workspace/files.ts";
 import { send } from "../send.ts";
@@ -33,6 +34,7 @@ export function onRevertFile({ ws, conn }: WsCtx, message: MessageOf<"revert_fil
       return !path || !gone.has(path);
     });
     pushWorkspace(ws, slot, conn, result.paths);
+    broadcastFileChanged(slot.tenantId, slot.chatId, result.paths);
     noteNativeRestore(conn, slot, undefined, result.paths);
   }
 }
@@ -56,6 +58,7 @@ export function onRevertHunk({ ws, conn }: WsCtx, message: MessageOf<"revert_hun
   });
   if (!result.error) {
     pushWorkspace(ws, slot, conn, [result.path]);
+    broadcastFileChanged(slot.tenantId, slot.chatId, [result.path]);
     noteNativeRestore(conn, slot, undefined, [result.path]);
   }
 }
@@ -87,6 +90,7 @@ export function onUndoOrRestore({ ws, conn }: WsCtx, message: MessageOf<"undo" |
       const preview = slot.edited.slice();
       slot.edited = [];
       pushWorkspace(ws, slot, conn, preview);
+      broadcastFileChanged(slot.tenantId, slot.chatId, preview);
       noteNativeRestore(conn, slot, wanted.label);
     }
     persistConn(conn);
@@ -111,6 +115,7 @@ export function onUndoOrRestore({ ws, conn }: WsCtx, message: MessageOf<"undo" |
   if (result.paths.length) {
     slot.edited = [];
     pushWorkspace(ws, slot, conn, result.paths);
+    broadcastFileChanged(slot.tenantId, slot.chatId, result.paths);
     noteNativeRestore(conn, slot, undefined, result.paths);
   }
 }

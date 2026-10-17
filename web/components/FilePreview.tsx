@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "rea
 import CodeBlock from "./CodeBlock";
 import CanvasHost from "./CanvasHost";
 import HtmlPreview from "./HtmlPreview";
-import MarkdownPreview from "./MarkdownPreview";
+import MarkdownPreview, { MarkdownDiffPreview } from "./MarkdownPreview";
 import MediaPreview from "./MediaPreview";
+import DataPreview from "./DataPreview";
 import { isCanvasPath } from "../lib/canvas/path";
-import { exportCanvasFrame } from "../lib/canvas/exportHtml";
+import { canvasFrameHtml, exportCanvasFrame } from "../lib/canvas/exportHtml";
 import type { CanvasAction } from "../lib/canvas/host";
-import type { MediaTicket, PreviewKind } from "@shared/protocol";
+import type { CanvasVersion, MediaTicket, PreviewKind } from "@shared/protocol";
 import { isLiveKind, previewSrc, tabKind } from "../lib/preview";
 import {
   IconClose,
@@ -35,6 +36,9 @@ export type PreviewTab = {
   url?: string;
   headUrl?: string;
   media?: MediaTicket;
+  pinned?: boolean;
+  sha?: string;
+  sourceChatId?: string;
 };
 
 function diffRowToFileLine(diff: string, row: number): number | undefined {
@@ -129,6 +133,13 @@ export default function FilePreview({
   chatId,
   onCanvasAction,
   onOpenFile,
+  onPinTab,
+  onComposerInsert,
+  canvasVersions,
+  onCanvasVersions,
+  onCanvasSaveVersion,
+  onCanvasPublish,
+  onCanvasRestore,
   sheetRef,
 }: {
   tabs: PreviewTab[];
@@ -151,6 +162,13 @@ export default function FilePreview({
   chatId?: string;
   onCanvasAction?: (action: CanvasAction, path: string) => void;
   onOpenFile?: (path: string) => void;
+  onPinTab?: (path: string) => void;
+  onComposerInsert?: (text: string) => void;
+  canvasVersions?: CanvasVersion[];
+  onCanvasVersions?: (path: string) => void;
+  onCanvasSaveVersion?: (path: string, sourceSha: string | undefined, html: string) => void;
+  onCanvasPublish?: (path: string, sha: string) => void;
+  onCanvasRestore?: (path: string, sha: string) => void;
   sheetRef?: Ref<HTMLElement | null>;
 }) {
   const active = tabs.find((tab) => sameTab(tab.path, activePath)) ?? tabs[0];
@@ -173,6 +191,7 @@ export default function FilePreview({
   const [askSel, setAskSel] = useState<{ start: number; end: number; text: string } | null>(null);
   const [viewMode, setViewMode] = useState<"live" | "source">("live");
   const [canvasError, setCanvasError] = useState<string | null>(null);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [full, setFull] = useState(false);
   const nativeFullRef = useRef(false);
 
@@ -191,6 +210,7 @@ export default function FilePreview({
     setAskSel(null);
     setViewMode("live");
     setCanvasError(null);
+    setVersionsOpen(false);
     if (!onDraft) {
       setEditingLocal(false);
       setEditDraftLocal("");
@@ -285,7 +305,8 @@ export default function FilePreview({
   if (!active) return null;
   const language = active.path.split(".").pop() || "";
   const kind = tabKind(active.path, active.kind);
-  const liveable = isLiveKind(kind) && !active.diff;
+  const dataKind = !active.diff && /\.(csv|json|ipynb)$/i.test(active.path);
+  const liveable = (isLiveKind(kind) || dataKind) && !active.diff;
   const live = liveable && viewMode === "live" && !editing;
   const canvasVisible = Boolean(live && kind === "canvas" && !active.error && active.content != null);
   const canvasKeep = canvasVisible
@@ -293,7 +314,7 @@ export default function FilePreview({
     : tabs.find(
         (tab) => tabKind(tab.path, tab.kind) === "canvas" && tab.content != null && !tab.error,
       );
-  const mediaKind = kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio";
+  const mediaKind = kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video";
   const showSource = !live && !(mediaKind && kind !== "svg");
   const savedText = active.content ?? "";
   const draftDirty = editing && editDraft !== savedText;
@@ -308,6 +329,7 @@ export default function FilePreview({
     live && (kind === "canvas" || kind === "html") ? "canvas-live" : "",
     (kind === "pdf" ||
       kind === "audio" ||
+      kind === "video" ||
       kind === "image" ||
       (kind === "svg" && (live || Boolean(active.diff)))) &&
     !editing
@@ -335,7 +357,8 @@ export default function FilePreview({
         {tabs.map((tab) => (
           <div
             key={tab.path}
-            className={`file-preview-tab${sameTab(tab.path, active.path) ? " on" : ""}${tab.diff ? " diff" : ""}${tabKind(tab.path, tab.kind) === "canvas" || isCanvasPath(tab.path) ? " canvas" : ""}${drafts && Object.prototype.hasOwnProperty.call(drafts, tab.path) && drafts[tab.path] !== (tab.content ?? "") ? " dirty" : ""}`}
+            className={`file-preview-tab${sameTab(tab.path, active.path) ? " on" : ""}${tab.diff ? " diff" : ""}${tab.pinned ? " pinned" : " preview"}${tabKind(tab.path, tab.kind) === "canvas" || isCanvasPath(tab.path) ? " canvas" : ""}${drafts && Object.prototype.hasOwnProperty.call(drafts, tab.path) && drafts[tab.path] !== (tab.content ?? "") ? " dirty" : ""}`}
+            onDoubleClick={() => onPinTab?.(tab.path)}
           >
             <button
               type="button"
@@ -369,6 +392,7 @@ export default function FilePreview({
                 ? ` · ${kind}`
                 : ""}
           {(active.diff ? citeLine : focusLine) ? `:${active.diff ? citeLine : focusLine}` : ""}
+          {active.sha ? " · 历史快照" : ""}
         </span>
         {liveable ? (
           <button
@@ -391,12 +415,12 @@ export default function FilePreview({
             <span className="pill-label">{active.diff ? "原文" : "改动"}</span>
           </button>
         ) : null}
-        {!live && onKeep && active.diff ? (
+        {!active.sha && !live && onKeep && active.diff ? (
           <button type="button" className="pill pill-text" title="留下这些改动" onClick={() => onKeep(active.path)}>
             保留
           </button>
         ) : null}
-        {!live && onRevert && canRevert ? (
+        {!active.sha && !live && onRevert && canRevert ? (
           <button
             type="button"
             className="pill pill-text"
@@ -409,7 +433,7 @@ export default function FilePreview({
         {oversized ? (
           <span className="preview-save-state dirty">超过 500KB，这里只能看，不能保存</span>
         ) : null}
-        {!live && onSave && !active.diff && active.content != null && !oversized ? (
+        {!active.sha && !live && onSave && !active.diff && active.content != null && !oversized ? (
           editing ? (
             <>
               <span className={`preview-save-state${draftDirty ? " dirty" : ""}`}>
@@ -451,6 +475,7 @@ export default function FilePreview({
                   setEditDraftLocal(next);
                   setEditingLocal(true);
                 }
+                onPinTab?.(active.path);
               }}
             >
               编辑
@@ -514,6 +539,27 @@ export default function FilePreview({
             <span className="pill-label">导出 HTML</span>
           </button>
         ) : null}
+        {canvasVisible && onCanvasSaveVersion ? (
+          <button type="button" className="pill pill-text" onClick={() => {
+            const frame = bodyRef.current?.querySelector<HTMLIFrameElement>(".canvas-host-keep:not(.is-idle) iframe.canvas-frame");
+            const html = canvasFrameHtml(frame ?? null, active.path);
+            if (html) onCanvasSaveVersion(active.path, active.sha, html);
+          }}>存版本</button>
+        ) : null}
+        {canvasVisible && onCanvasVersions ? (
+          <button
+            type="button"
+            className={`pill pill-text${versionsOpen ? " on" : ""}`}
+            aria-pressed={versionsOpen}
+            onClick={() => {
+              const next = !versionsOpen;
+              setVersionsOpen(next);
+              if (next) onCanvasVersions(active.path);
+            }}
+          >
+            版本
+          </button>
+        ) : null}
         <button
           type="button"
           className={`pill preview-fullscreen${full ? " on" : ""}`}
@@ -567,6 +613,18 @@ export default function FilePreview({
                 />
               </div>
             ) : null}
+            {canvasVisible && versionsOpen && canvasVersions?.length ? (
+              <details className="canvas-versions" open>
+                <summary>版本历史 · {canvasVersions.length}</summary>
+                {canvasVersions.map((version) => (
+                  <div key={version.sha}>
+                    <span>{new Date(version.createdAt).toLocaleString()} · {version.sha.slice(0, 8)}</span>
+                    {version.shareUrl ? <a href={version.shareUrl} target="_blank" rel="noreferrer">打开分享</a> : onCanvasPublish ? <button type="button" onClick={() => onCanvasPublish(active.path, version.sha)}>分享</button> : null}
+                    {onCanvasRestore ? <button type="button" onClick={() => onCanvasRestore(active.path, version.sha)}>恢复</button> : null}
+                  </div>
+                ))}
+              </details>
+            ) : null}
             {canvasVisible ? null : live && kind === "canvas" ? (
           <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
         ) : live && kind === "markdown" ? (
@@ -581,13 +639,15 @@ export default function FilePreview({
           ) : (
             <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
+        ) : active.diff && kind === "markdown" && active.content != null ? (
+          <MarkdownDiffPreview path={active.path} content={active.content} chatId={chatId} media={active.media} onOpen={onOpenFile} />
         ) : live && kind === "html" ? (
           active.content != null ? (
-            <HtmlPreview path={active.path} content={active.content} chatId={chatId} media={active.media} />
+            <HtmlPreview path={active.path} content={active.content} chatId={chatId} media={active.media} onElementSelect={onComposerInsert} />
           ) : (
             <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
-        ) : (kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio") &&
+        ) : (kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video") &&
           (kind !== "svg" || live || active.diff) &&
           !editing ? (
           active.url ? (
@@ -633,6 +693,8 @@ export default function FilePreview({
               }
             }}
           />
+        ) : active.content != null && dataKind && live ? (
+          <DataPreview path={active.path} content={active.content} />
         ) : active.content != null && showSource ? (
           <>
             <CodeBlock
