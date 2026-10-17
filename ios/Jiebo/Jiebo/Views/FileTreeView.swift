@@ -109,6 +109,7 @@ func fileGlyph(_ path: String, isDir: Bool, open: Bool) -> String {
 /// 单击文件 = 预览（onOpen）；@引用 在长按菜单（浏览导向入口；引用导向走 Composer 的扁平 sheet——入口分流）。
 struct FileTreeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let paths: [String]
     let truncated: Bool
     let filter: String
@@ -130,7 +131,7 @@ struct FileTreeView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if rows.isEmpty {
                     Text(filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件")
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.top, 40)
@@ -143,7 +144,7 @@ struct FileTreeView: View {
                     // 网关会报 truncated；客户端 toTree 还有 8000 硬顶，旧网关多发时也要提示。
                     // 搜索时隐藏——用户已经在「缩小范围」，再提示「用搜索缩小范围」自相矛盾（GLM R2 MINOR）
                     Text("工作区文件太多，清单被截断了，用搜索缩小范围。")
-                        .font(JieboFont.ui(12))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
@@ -185,28 +186,37 @@ struct FileTreeView: View {
                 onOpen(node.path)
             }
         } label: {
-            HStack(spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
                 Image(systemName: fileGlyph(node.path, isDir: node.isDir, open: isOpen))
-                    .font(.system(size: 13))
+                    .font(JieboFont.text(.subheadline, weight: node.isDir ? .medium : .regular))
                     .foregroundStyle(node.isDir ? JieboColor.brass : JieboColor.ink2)
-                    .frame(width: 18)
-                Text(node.name)
-                    .font(JieboFont.ui(13, weight: node.isDir ? .medium : .regular))
-                    .foregroundStyle(node.isDir ? JieboColor.ink : JieboColor.ink2)
-                    .lineLimit(1)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(node.name)
+                        .font(JieboFont.text(.subheadline, weight: node.isDir ? .medium : .regular))
+                        .foregroundStyle(node.isDir ? JieboColor.ink : JieboColor.ink2)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                    if !filter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, node.path != node.name {
+                        Text(node.path)
+                            .font(JieboFont.monoText(.caption2))
+                            .foregroundStyle(JieboColor.dim)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            .truncationMode(.middle)
+                    }
+                }
                 Spacer(minLength: 0)
                 if node.isDir {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(JieboColor.dim)
                         .rotationEffect(.degrees(isOpen ? 90 : 0))
                         .animation(JieboMotion.snappy(reduceMotion), value: isOpen)
                 }
             }
-            .padding(.leading, 14 + CGFloat(row.depth) * 16)
+            .padding(.leading, 14 + CGFloat(row.depth) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
             .padding(.trailing, 12)
-            .padding(.vertical, 5)
-            .frame(minHeight: 44)
+            .padding(.vertical, 6)
+            .frame(minHeight: 48)
             .background(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
             .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
             .contentShape(Rectangle())
@@ -214,10 +224,11 @@ struct FileTreeView: View {
         }
         .buttonStyle(.plain)
         .draggableMention(node.isDir ? nil : node.path)
-        .accessibilityLabel(node.isDir ? "文件夹 \(node.name)" : node.name)
-        .accessibilityValue(node.isDir ? (isOpen ? "已展开" : "已收起") : "")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(node.isDir ? "文件夹 \(node.name)" : "文件 \(node.name)")
+        .accessibilityValue(accessibilityValue(for: node, isOpen: isOpen))
         .accessibilityHint(node.isDir ? "轻点展开或收起" : "轻点预览")
-        .accessibilityAddTraits(selectedPath == node.path ? .isSelected : [])
+        .accessibilityAddTraits(selectedPath == node.path ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             if node.isDir {
                 Button { onCopyPath(node.path) } label: { Label("复制路径", systemImage: "doc.on.doc") }
@@ -227,5 +238,13 @@ struct FileTreeView: View {
                 Button { onQuickLook(node.path) } label: { Label("用系统打开", systemImage: "arrow.up.forward.app") }
             }
         }
+    }
+
+    private func accessibilityValue(for node: FileNode, isOpen: Bool) -> String {
+        var values: [String] = []
+        if node.isDir {
+            values.append(isOpen ? "已展开" : "已收起")
+        }
+        return values.joined(separator: "，")
     }
 }

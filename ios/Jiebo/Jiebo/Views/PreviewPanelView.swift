@@ -7,6 +7,7 @@ struct PreviewPanelView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let tab: PreviewTab
     /// 盖满时是模态；iPad 横屏分栏时和对话并排，读屏两边都要能摸到
     var modal = true
@@ -14,10 +15,11 @@ struct PreviewPanelView: View {
     @State private var dragX: CGFloat = 0
 
     private var compact: Bool { sizeClass == .compact }
+    private var usesCompactHeader: Bool { compact || dynamicTypeSize.isAccessibilitySize }
 
     var body: some View {
         VStack(spacing: 0) {
-            if compact {
+            if usesCompactHeader {
                 compactHeader
                 if store.previewTabs.count > 1 {
                     Divider().overlay(JieboColor.line)
@@ -110,6 +112,7 @@ struct PreviewPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .accessibilityLabel("返回对话")
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
@@ -148,6 +151,7 @@ struct PreviewPanelView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
             .accessibilityLabel("分享 \(tab.filename)")
             moreMenu
@@ -206,7 +210,7 @@ struct PreviewPanelView: View {
                 if let content = tab.content {
                     Button {
                         UIPasteboard.general.string = content
-                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        JieboHaptic.notification(.success)
                     } label: {
                         Label(tab.diff ? "复制改动" : "复制全部内容", systemImage: "doc.on.doc")
                     }
@@ -222,6 +226,7 @@ struct PreviewPanelView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
         }
+        .hoverEffect(.highlight)
         .accessibilityLabel("更多操作")
     }
 
@@ -264,6 +269,7 @@ struct PreviewPanelView: View {
                 .hoverEffect(.highlight)
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .draggableMention(item.path)
             .accessibilityLabel(item.filename)
             .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : .isButton)
@@ -277,6 +283,7 @@ struct PreviewPanelView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .accessibilityLabel("关闭 \(item.filename)")
         }
         .background(
@@ -331,6 +338,7 @@ struct PreviewPanelView: View {
                         .hitTarget() // P6：视觉 30，命中 44
                 }
                 .buttonStyle(.plain)
+                .hoverEffect(.highlight)
                 .accessibilityLabel(tab.diff ? "查看原文" : "查看改动")
             }
             // canvas 的 源码/画布 切换（P5d；对齐网页 live 开关，图标固定、当前态高亮）。
@@ -349,6 +357,7 @@ struct PreviewPanelView: View {
                         .hitTarget()
                 }
                 .buttonStyle(.plain)
+                .hoverEffect(.highlight)
                 .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
             }
             // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
@@ -365,6 +374,7 @@ struct PreviewPanelView: View {
                         .hitTarget()
                 }
                 .buttonStyle(.plain)
+                .hoverEffect(.highlight)
                 .disabled(store.exportLoading) // 与分享按钮同一互斥位（GLM R1 M2）
                 .accessibilityLabel("保存 \(tab.filename) 到相册")
             }
@@ -389,6 +399,7 @@ struct PreviewPanelView: View {
                 .hitTarget()
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
             .accessibilityLabel("分享 \(tab.filename)")
             if tab.content != nil {
@@ -404,6 +415,7 @@ struct PreviewPanelView: View {
                         .hitTarget()
                 }
                 .buttonStyle(.plain)
+                .hoverEffect(.highlight)
                 .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
             }
             Button {
@@ -418,6 +430,7 @@ struct PreviewPanelView: View {
                     .hitTarget()
             }
             .buttonStyle(.plain)
+            .hoverEffect(.highlight)
             .accessibilityLabel("收起预览")
         }
         .padding(.horizontal, 14)

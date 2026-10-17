@@ -16,12 +16,16 @@ struct WorkspacePickerSheet: View {
     var body: some View {
         @Bindable var store = store
         let all = store.recentSubWorkspaces
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let items = needle.isEmpty
-            ? all
-            : all.filter { $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle) }
-        let duplicates = Set(Dictionary(grouping: all, by: \.name).filter { $0.value.count > 1 }.keys)
         let stats = store.workspaceStatsByKey
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let items = all.filter { $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle) }
+        let recent = Array(all.filter {
+            (stats[normPath($0.path)]?.touched ?? 0) > 0
+                || sameCwd($0.path, store.currentWorkspacePath)
+        }.prefix(5))
+        let recentPaths = Set(recent.map { normPath($0.path) })
+        let remaining = all.filter { !recentPaths.contains(normPath($0.path)) }
+        let duplicates = Set(Dictionary(grouping: all, by: \.name).filter { $0.value.count > 1 }.keys)
         NavigationStack {
             List {
                 if all.isEmpty {
@@ -30,28 +34,45 @@ struct WorkspacePickerSheet: View {
                             HStack(spacing: 10) {
                                 ProgressView()
                                 Text("正在读取工作区…")
-                                    .font(JieboFont.ui(15))
+                                    .font(JieboFont.text(.body))
                                     .foregroundStyle(JieboColor.dim)
                             }
                         } else {
                             Text("还没有子工作区，点右上角 + 新建一个。")
-                                .font(JieboFont.ui(15))
+                                .font(JieboFont.text(.body))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
-                } else if items.isEmpty {
+                } else if !needle.isEmpty, items.isEmpty {
                     Section {
                         Text("没有匹配的工作区")
-                            .font(JieboFont.ui(15))
+                            .font(JieboFont.text(.body))
                             .foregroundStyle(JieboColor.dim)
                     }
-                } else {
-                    Section {
+                } else if !needle.isEmpty {
+                    Section("搜索结果") {
                         ForEach(items) { item in
-                            row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
+                            row(item, showPath: true, stat: stats[normPath(item.path)])
                         }
-                    } footer: {
-                        Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
+                    }
+                } else {
+                    if !recent.isEmpty {
+                        Section("最近") {
+                            ForEach(recent) { item in
+                                row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
+                            }
+                        }
+                    }
+                    if !remaining.isEmpty {
+                        Section {
+                            ForEach(remaining) { item in
+                                row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
+                            }
+                        } header: {
+                            Text("其他工作区")
+                        } footer: {
+                            Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
+                        }
                     }
                 }
             }
@@ -148,34 +169,34 @@ struct WorkspacePickerSheet: View {
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "folder")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(JieboFont.text(.body, weight: .medium))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.name)
-                        .font(JieboFont.ui(16, weight: current ? .semibold : .regular))
+                        .font(JieboFont.text(.body, weight: current ? .semibold : .regular))
                         .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     if let stat, stat.chats > 0 {
                         TimelineView(.everyMinute) { _ in
                             Text(detailLine(stat) ?? "")
-                                .font(JieboFont.ui(12))
+                                .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.dim)
-                                .lineLimit(1)
+                                .lineLimit(2)
                         }
                     }
                     if showPath {
                         Text(item.path)
-                            .font(JieboFont.mono(11))
+                            .font(JieboFont.monoText(.caption2))
                             .foregroundStyle(JieboColor.dim)
-                            .lineLimit(1)
+                            .lineLimit(2)
                             .truncationMode(.middle)
                     }
                 }
                 Spacer(minLength: 8)
                 if current {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.pine)
                 }
             }
@@ -183,7 +204,14 @@ struct WorkspacePickerSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityAddTraits(current ? .isSelected : [])
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(showPath ? "\(item.name)，\(item.path)" : item.name)
+        .accessibilityValue([
+            current ? "当前工作区" : nil,
+            detailLine(stat)
+        ].compactMap { $0 }.joined(separator: "，"))
+        .accessibilityHint("切换到这个工作区")
+        .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if manage {
                 Button(role: .destructive) { deleting = item } label: {
@@ -208,36 +236,42 @@ struct WorkspacePickerSheet: View {
             }
         }
         .contextMenu {
-            Button {
-                store.switchWorkspace(to: item.path)
-                dismiss()
-            } label: {
-                Label("打开", systemImage: "folder")
-            }
-            if manage {
+            Section {
                 Button {
-                    renameDraft = item.name
-                    renaming = item
+                    store.switchWorkspace(to: item.path)
+                    dismiss()
                 } label: {
-                    Label("重命名", systemImage: "pencil")
+                    Label("打开", systemImage: "folder")
+                }
+                if manage {
+                    Button {
+                        renameDraft = item.name
+                        renaming = item
+                    } label: {
+                        Label("重命名", systemImage: "pencil")
+                    }
+                }
+                Button {
+                    UIPasteboard.general.string = item.path
+                    store.flash("已复制路径")
+                } label: {
+                    Label("复制路径", systemImage: "doc.on.doc")
                 }
             }
-            Button {
-                UIPasteboard.general.string = item.path
-                store.flash("已复制路径")
-            } label: {
-                Label("复制路径", systemImage: "doc.on.doc")
-            }
-            if chatCount > 0 {
-                Button(role: .destructive) { clearing = item } label: {
-                    Label("清空对话（\(chatCount)）", systemImage: "tray")
+            if chatCount > 0 || manage {
+                Section {
+                    if chatCount > 0 {
+                        Button(role: .destructive) { clearing = item } label: {
+                            Label("清空对话（\(chatCount)）", systemImage: "tray")
+                        }
+                    }
+                    if manage {
+                        Button(role: .destructive) { deleting = item } label: {
+                            Label(chatCount > 0 ? "删除工作区（先清空对话）" : "删除工作区", systemImage: "trash")
+                        }
+                        .disabled(chatCount > 0)
+                    }
                 }
-            }
-            if manage {
-                Button(role: .destructive) { deleting = item } label: {
-                    Label(chatCount > 0 ? "删除工作区（先清空对话）" : "删除工作区", systemImage: "trash")
-                }
-                .disabled(chatCount > 0)
             }
         }
     }

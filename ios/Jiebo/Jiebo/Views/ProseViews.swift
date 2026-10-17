@@ -17,7 +17,7 @@ private struct CodeHeader: View {
             Spacer(minLength: 8)
             Button {
                 UIPasteboard.general.string = code
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                JieboHaptic.notification(.success)
                 copied = true
             } label: {
                 Label(copied ? "已复制" : "复制", systemImage: copied ? "checkmark" : "doc.on.doc")

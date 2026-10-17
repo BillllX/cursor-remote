@@ -46,7 +46,7 @@ struct FileBrowserCover: View {
                                 store.dismissPreviewPanel()
                             } label: {
                                 Label("文件", systemImage: "chevron.left")
-                                    .font(JieboFont.ui(15, weight: .medium))
+                                    .font(JieboFont.text(.subheadline, weight: .medium))
                                     .foregroundStyle(JieboColor.ink)
                             }
                             .buttonStyle(.plain)
@@ -60,7 +60,7 @@ struct FileBrowserCover: View {
                     treeColumn
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: store.activePreviewTab != nil)
+            .animation(JieboMotion.standard(reduceMotion), value: store.activePreviewTab != nil)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -86,7 +86,7 @@ struct FileBrowserCover: View {
             .overlay(alignment: .top) {
                 if !store.bannerError.isEmpty {
                     Text(friendlyError(store.bannerError))
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.danger)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -98,11 +98,11 @@ struct FileBrowserCover: View {
                         )
                         .padding(.top, 8)
                         .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(.easeInOut(duration: 0.2), value: store.bannerError.isEmpty)
+                        .animation(JieboMotion.standard(reduceMotion), value: store.bannerError.isEmpty)
                         .allowsHitTesting(false)
                 } else if !store.notice.isEmpty {
                     Text(store.notice)
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
@@ -114,7 +114,7 @@ struct FileBrowserCover: View {
                         )
                         .padding(.top, 8)
                         .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(.easeInOut(duration: 0.2), value: store.notice.isEmpty)
+                        .animation(JieboMotion.standard(reduceMotion), value: store.notice.isEmpty)
                         .allowsHitTesting(false) // 纯提示，别挡搜索框（Grok R2 MINOR）
                 }
             }
@@ -175,10 +175,10 @@ struct FileBrowserCover: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
-                    .font(.system(size: 13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
                 TextField("搜文件名或路径", text: $filter)
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .textFieldStyle(.plain)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -188,7 +188,7 @@ struct FileBrowserCover: View {
                         filter = ""
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
+                            .font(JieboFont.text(.subheadline))
                             .foregroundStyle(JieboColor.dim)
                             .hitTarget(30)
                     }
@@ -233,14 +233,14 @@ struct FileBrowserCover: View {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Image(systemName: fileGlyph(tab.path, isDir: false, open: false))
-                        .font(.system(size: 13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                     Text(tab.filename)
-                        .font(JieboFont.ui(14, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     Text(tab.path)
-                        .font(JieboFont.mono(11))
+                        .font(JieboFont.monoText(.caption2))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -293,10 +293,10 @@ struct FileBrowserCover: View {
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "doc.text.magnifyingglass")
-                    .font(.system(size: 30))
+                    .font(JieboFont.text(.largeTitle))
                     .foregroundStyle(JieboColor.dim)
                 Text("点左侧文件在这里预览")
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.dim)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

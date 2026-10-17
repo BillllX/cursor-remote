@@ -42,14 +42,15 @@ extension EnvironmentValues {
 struct HomeShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(HomeMode.storageKey) private var mode: HomeMode = .workbench
 
     var body: some View {
         ZStack {
             WorkbenchView()
-                .homeLayer(visible: mode == .workbench)
+                .homeLayer(visible: mode == .workbench, reduceMotion: reduceMotion)
             ChatHome()
-                .homeLayer(visible: mode == .chat)
+                .homeLayer(visible: mode == .chat, reduceMotion: reduceMotion)
         }
         .onAppear {
             im.setHomeVisible(mode == .chat)
@@ -111,8 +112,10 @@ struct HomeShell: View {
 }
 
 extension View {
-    fileprivate func homeLayer(visible: Bool) -> some View {
+    fileprivate func homeLayer(visible: Bool, reduceMotion: Bool) -> some View {
         opacity(visible ? 1 : 0)
+            // 两层始终常驻，只让透明度交叉变化，保留各自导航和滚动状态。
+            .animation(JieboMotion.standard(reduceMotion), value: visible)
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)
             .disabled(!visible)

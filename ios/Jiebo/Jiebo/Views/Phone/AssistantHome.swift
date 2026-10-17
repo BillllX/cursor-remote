@@ -7,13 +7,6 @@ struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    /// 页面宽度。小屏或大字号时，撤销按钮收进 ⋯ 菜单，不挤掉「今日」
-    @State private var viewWidth: CGFloat = 0
-
-    private var crowdedToolbar: Bool {
-        dynamicTypeSize >= .xLarge || (viewWidth > 0 && viewWidth < 380)
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,13 +19,6 @@ struct AssistantHome: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JieboColor.paper.ignoresSafeArea())
-        .background {
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear { viewWidth = geo.size.width }
-                    .onChange(of: geo.size.width) { _, width in viewWidth = width }
-            }
-        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -42,7 +28,7 @@ struct AssistantHome: View {
                 titleView
             }
             ToolbarItem(placement: .topBarTrailing) {
-                trailingItems
+                todayButton
             }
         }
         .task { store.requestAssistant() }
@@ -62,9 +48,11 @@ struct AssistantHome: View {
             router.openMenu()
         } label: {
             Image(systemName: "line.3.horizontal")
-                .font(JieboFont.text(.body, weight: .semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
-                .frame(width: 32, height: 32)
+                .frame(width: 36, height: 36)
+                .background(JieboColor.mist)
+                .clipShape(Circle())
                 .hitTarget()
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
@@ -100,64 +88,32 @@ struct AssistantHome: View {
 
     /// 连接状态由圆点表达；只有连上之后还有话要说才出字。优先级：没配 API Key > 助理在跑 > 后台状态
     private var subtitleText: String? {
-        guard store.connected else { return nil }
-        if !store.hasApiKey { return "服务器还没配 API Key" }
-        if store.assistantRunning { return "正在回复" }
-        if let background = store.assistantState?.background, !background.ok {
-            return background.reason?.nilIfEmpty ?? "后台模型未就绪"
+        if store.connected {
+            if !store.hasApiKey { return "服务器还没配 API Key" }
+            if store.assistantRunning { return "正在回复" }
+            if let background = store.assistantState?.background, !background.ok {
+                return background.reason?.nilIfEmpty ?? "后台模型未就绪"
+            }
         }
-        return nil
+        return store.linkState.title
     }
 
     private var todayButton: some View {
-        AssistantTodayButton(
-            on: router.hubOpen,
-            // 待处理的提示只在 ☰ 上；今日面板里没有待批 / 收件箱，这里再挂点会指向一个看不到东西的地方
-            marked: false
-        ) {
+        Button {
+            JieboHaptic.selection()
             router.openHub()
+        } label: {
+            Image(systemName: ToolLayer.assistant.symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
+                .frame(width: 36, height: 36)
+                .background(router.hubOpen ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
+                .clipShape(Circle())
+                .hitTarget()
         }
-    }
-
-    @ViewBuilder
-    private var trailingItems: some View {
-        HStack(spacing: 4) {
-            if store.canUndo {
-                if crowdedToolbar {
-                    Menu {
-                        Button {
-                            store.undoLast()
-                        } label: {
-                            Label("还原上一轮的改动", systemImage: "arrow.uturn.backward")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(JieboFont.text(.subheadline, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink)
-                            .frame(width: 32, height: 32)
-                            .background(JieboColor.mist)
-                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                            .hitTarget()
-                    }
-                    .accessibilityLabel("更多")
-                } else {
-                    Button {
-                        store.undoLast()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(JieboFont.text(.subheadline, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink)
-                            .frame(width: 32, height: 32)
-                            .background(JieboColor.mist)
-                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                            .hitTarget()
-                    }
-                    .buttonStyle(PressScaleButtonStyle())
-                    .accessibilityLabel("还原上一轮的改动")
-                }
-            }
-            todayButton
-        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel("今日")
+        .accessibilityAddTraits(router.hubOpen ? .isSelected : [])
     }
 
     // MARK: 降级（§4.1.6）

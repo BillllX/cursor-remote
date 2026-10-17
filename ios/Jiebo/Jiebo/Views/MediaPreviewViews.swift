@@ -69,6 +69,7 @@ struct ImageFileView: View {
 /// 注意 scaleEffect 不改布局——zoomed 模式必须用「原始尺寸 × 倍率」的显式 frame 撑开
 /// ScrollView 的 contentSize，否则放大后边缘滚不到、超出布局框的部分不响应手势。
 private struct SingleImageView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
     let label: String?
     let caption: String?
@@ -158,7 +159,7 @@ private struct SingleImageView: View {
                 if !zoomed {
                     guard value.magnification > 1.15 else { return }
                     scale = min(max(value.magnification, 1), 5)
-                    withAnimation(.easeOut(duration: 0.2)) { zoomed = true }
+                    withAnimation(JieboMotion.spatial(reduceMotion)) { zoomed = true }
                 } else {
                     let next = min(max(scale * value.magnification, 0.5), 5)
                     if next < 1 { exitZoom() } else { scale = next }
@@ -167,7 +168,7 @@ private struct SingleImageView: View {
     }
 
     private func exitZoom() {
-        withAnimation(.easeOut(duration: 0.2)) {
+        withAnimation(JieboMotion.spatial(reduceMotion)) {
             zoomed = false
             scale = 1
         }
@@ -182,7 +183,7 @@ private struct SingleImageView: View {
             }
             RemoteImage(url: url)
                 .onTapGesture {
-                    withAnimation(.easeOut(duration: 0.2)) { zoomed = true }
+                    withAnimation(JieboMotion.spatial(reduceMotion)) { zoomed = true }
                 }
                 .accessibilityLabel("放大为原始尺寸")
             if let caption {
@@ -198,11 +199,12 @@ private struct SingleImageView: View {
 /// 带加载/失败态的远程图（票据 URL 无需额外鉴权头）。
 /// 容器有界宽 → scaledToFit 即 contain；双向 ScrollView 无界提议 → 原始像素尺寸。
 struct RemoteImage: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
 
     var body: some View {
         if let url {
-            AsyncImage(url: url, transaction: Transaction(animation: .easeInOut(duration: 0.2))) { phase in
+            AsyncImage(url: url, transaction: Transaction(animation: JieboMotion.standard(reduceMotion))) { phase in
                 switch phase {
                 case .empty:
                     ProgressView().controlSize(.regular).tint(JieboColor.dim)

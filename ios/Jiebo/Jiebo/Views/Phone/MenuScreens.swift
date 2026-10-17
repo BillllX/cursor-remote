@@ -105,6 +105,7 @@ struct PhoneSettingsScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var themeOpen = false
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
@@ -210,26 +211,35 @@ struct PhoneSettingsScreen: View {
     // MARK: 行
 
     private func settingsRow(symbol: String, title: String, trailing: String?, chevron: Bool) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(JieboFont.text(.subheadline, weight: .medium))
-                .foregroundStyle(JieboColor.ink2)
-                .frame(width: 24)
-            Text(title)
-                .font(JieboFont.text(.subheadline))
-                .foregroundStyle(JieboColor.ink)
-            Spacer(minLength: 8)
-            if let trailing {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(width: 24)
+                Text(title)
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink)
+                Spacer(minLength: 8)
+                if let trailing, !dynamicTypeSize.isAccessibilitySize {
+                    Text(trailing)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.dim)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if chevron {
+                    Image(systemName: "chevron.right")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            }
+            if let trailing, dynamicTypeSize.isAccessibilitySize {
                 Text(trailing)
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            if chevron {
-                Image(systemName: "chevron.right")
-                    .font(JieboFont.text(.caption2, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 36)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)

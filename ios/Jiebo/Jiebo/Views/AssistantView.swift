@@ -461,7 +461,7 @@ private struct SwipeDeleteRow<Content: View>: View {
     var body: some View {
         ZStack(alignment: .trailing) {
             Button {
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                JieboHaptic.notification(.warning)
                 onDelete()
             } label: {
                 Text("删除")

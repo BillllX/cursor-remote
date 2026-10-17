@@ -21,6 +21,7 @@ extension EnvironmentValues {
 struct ThreadView: View {
     @Environment(ChatStore.self) var store
     @Environment(\.accessibilityReduceMotion) var reduceMotion
+    @Environment(\.dynamicTypeSize) var dynamicTypeSize
     var chrome: ThreadChrome = .pad
     /// nil = 工作台 activeId；聊天主页必须显式传助理或工作区 chatId。
     var chatId: String?
@@ -96,6 +97,14 @@ struct ThreadView: View {
     var resolvedChatId: String { chatId ?? store.activeId }
     var threadChat: ChatSession? { store.chats.first { $0.id == resolvedChatId } }
     var threadBusy: Bool { threadChat?.turns.contains(where: \.running) == true }
+    var embeddedUndoTurn: Turn? {
+        guard store.canUndo(resolvedChatId),
+              let turn = threadChat?.turns.last(where: { !$0.running && !$0.queued }),
+              turn.needsFileReview,
+              store.localTurnReviews[turn.id] == nil
+        else { return nil }
+        return turn
+    }
 
     /// 输入框上方的委派待批、ActionDock 和输入框本身。输入框只有这一个
     @ViewBuilder
@@ -113,6 +122,13 @@ struct ThreadView: View {
             if chrome == .embedded, let dock {
                 dock
             }
+            Group {
+                if chrome == .embedded, store.bannerError.isEmpty, let turn = embeddedUndoTurn {
+                    embeddedUndoBar(turn)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(JieboMotion.fade(reduceMotion), value: embeddedUndoTurn?.id)
             ComposerView(
                 focusNonce: composerFocusNonce,
                 style: resolvedChatId == store.assistantChatId && chrome == .embedded ? .assistant : .full
@@ -125,24 +141,69 @@ struct ThreadView: View {
     @ViewBuilder
     var floatingBanners: some View {
         VStack(spacing: 6) {
-            if !store.notice.isEmpty {
-                floatingBanner(store.notice, color: JieboColor.dim)
-                    .allowsHitTesting(false)
-            }
-            if !store.bannerError.isEmpty {
-                Button {
-                    store.dismissBannerError()
-                } label: {
-                    floatingBanner(friendlyError(store.bannerError), color: JieboColor.danger, closable: true)
+            if chrome == .embedded {
+                if !store.bannerError.isEmpty {
+                    dismissibleErrorBanner
+                } else if !store.notice.isEmpty {
+                    floatingBanner(store.notice, color: JieboColor.dim)
+                        .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                .accessibilityHint("轻点关闭")
+            } else {
+                if !store.notice.isEmpty {
+                    floatingBanner(store.notice, color: JieboColor.dim)
+                        .allowsHitTesting(false)
+                }
+                if !store.bannerError.isEmpty {
+                    dismissibleErrorBanner
+                }
             }
         }
         .padding(.top, 8)
         .padding(.horizontal, 16)
         .animation(JieboMotion.fade(reduceMotion), value: store.notice.isEmpty)
         .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
+    }
+
+    private var dismissibleErrorBanner: some View {
+        Button {
+            store.dismissBannerError()
+        } label: {
+            floatingBanner(friendlyError(store.bannerError), color: JieboColor.danger, closable: true)
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("轻点关闭")
+    }
+
+    private func embeddedUndoBar(_ turn: Turn) -> some View {
+        Button {
+            store.undoLast(chatId: resolvedChatId)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(JieboFont.text(.footnote, weight: .semibold))
+                    .accessibilityHidden(true)
+                Text("已改动 \(turn.reviewPaths.count) 个文件")
+                    .font(JieboFont.text(.footnote))
+                    .lineLimit(2)
+                Spacer(minLength: 8)
+                Text("撤销")
+                    .font(JieboFont.text(.footnote, weight: .semibold))
+            }
+            .foregroundStyle(JieboColor.ink)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(JieboColor.white)
+            .clipShape(Capsule())
+            .overlay {
+                Capsule().stroke(JieboColor.line, lineWidth: 1)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel("还原上一轮的改动")
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
     }
 
     func floatingBanner(_ text: String, color: Color, closable: Bool = false) -> some View {

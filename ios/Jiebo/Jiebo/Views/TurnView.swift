@@ -399,7 +399,7 @@ struct TurnView: View, Equatable {
 
     private func copy(_ text: String) {
         UIPasteboard.general.string = text
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        JieboHaptic.notification(.success)
         store.flash("已复制")
     }
 

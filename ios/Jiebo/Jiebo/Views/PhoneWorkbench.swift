@@ -122,6 +122,7 @@ private struct PhoneDrawer: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var close: () -> Void
     var openWorkspaces: () -> Void
     var newChat: () -> Void
@@ -199,23 +200,45 @@ private struct PhoneDrawer: View {
     // MARK: 品牌行（只是标识，不可点）
 
     private var brandBar: some View {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    brandIdentity
+                    linkStatus
+                }
+            } else {
+                HStack(spacing: 10) {
+                    brandIdentity
+                    Spacer(minLength: 8)
+                    linkStatus
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var brandIdentity: some View {
         HStack(spacing: 10) {
             JieboMark(size: 22)
             Text("接驳")
                 .font(JieboFont.display(17))
                 .tracking(0.34)
                 .foregroundStyle(JieboColor.ink)
-            Spacer(minLength: 8)
+        }
+    }
+
+    private var linkStatus: some View {
+        HStack(spacing: 6) {
             LinkStatusDot(state: store.linkState, size: 8)
                 .accessibilityHidden(true)
             Text(store.linkState.title)
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
+                .lineLimit(1)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 12)
-        .accessibilityElement(children: .combine)
     }
 
     // MARK: 当前工作区
@@ -224,7 +247,7 @@ private struct PhoneDrawer: View {
         Button(action: openWorkspaces) {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
-                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 30, height: 30)
                     .background(JieboColor.brass.opacity(0.12))
@@ -236,7 +259,7 @@ private struct PhoneDrawer: View {
                     Text(store.currentWorkspaceName)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
@@ -262,9 +285,23 @@ private struct PhoneDrawer: View {
     }
 
     private var toolStrip: some View {
-        HStack(spacing: 0) {
-            ForEach(ToolLayer.workTools) { layer in
-                toolButton(layer)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 0),
+                    GridItem(.flexible(), spacing: 0),
+                    GridItem(.flexible(), spacing: 0)
+                ], spacing: 0) {
+                    ForEach(ToolLayer.workTools) { layer in
+                        toolButton(layer)
+                    }
+                }
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(ToolLayer.workTools) { layer in
+                        toolButton(layer)
+                    }
+                }
             }
         }
     }
@@ -279,7 +316,7 @@ private struct PhoneDrawer: View {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: layer.symbol)
-                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(on ? JieboColor.pine : JieboColor.ink2)
                         .frame(width: 32, height: 32)
                         .background(on ? JieboColor.pine.opacity(0.12) : Color.clear)

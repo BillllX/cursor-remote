@@ -48,7 +48,7 @@ struct MenuDrawer: View {
         }
         .animation(JieboMotion.panel(reduceMotion), value: router.menuOpen)
         .onChange(of: router.menuOpen) { _, open in
-            if open { UISelectionFeedbackGenerator().selectionChanged() }
+            if open { JieboHaptic.selection() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardUp = true

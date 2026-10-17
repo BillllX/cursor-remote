@@ -45,48 +45,85 @@ extension ThreadView {
 
     /// iPhone 助理页的空状态：不是「工作区」语境，快捷句也是跟助理说的话
     var assistantEmptyState: some View {
-        VStack(spacing: 16) {
-            Spacer(minLength: 40)
-            JieboMark(size: 36)
-            Text("\(store.assistantName) 在这儿")
-                .font(JieboFont.display(30))
-                .tracking(0.6)
+        VStack(spacing: 14) {
+            Spacer(minLength: 32)
+            Text(assistantGreeting)
+                .font(JieboFont.display(32))
+                .tracking(0.64)
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
-            Text("记事、提醒、查东西，或者让它去某个项目里干活，不用你自己打开任何东西。")
+            Text("今天想先做点什么？")
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-            VStack(spacing: 8) {
-                ForEach(assistantStarters, id: \.self) { text in
-                    Button {
-                        store.saveDraft(text, forChat: resolvedChatId)
-                        composerFocusNonce += 1
-                    } label: {
-                        Text(text)
-                            .font(JieboFont.text(.footnote))
-                            .foregroundStyle(JieboColor.ink)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 44)
-                            .background(JieboColor.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(JieboColor.line, lineWidth: 1)
-                            )
-                            .hitTarget()
+
+            if dynamicTypeSize >= .xxLarge {
+                VStack(spacing: 8) {
+                    ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
+                        assistantStarterButton(item.element.0, symbol: item.element.1)
                     }
-                    .buttonStyle(PressScaleButtonStyle())
+                }
+            } else {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
+                    spacing: 8
+                ) {
+                    ForEach(Array(zip(assistantStarters, assistantStarterSymbols).enumerated()), id: \.offset) { item in
+                        assistantStarterButton(item.element.0, symbol: item.element.1)
+                    }
                 }
             }
-            .padding(.top, 8)
-            Spacer(minLength: 40)
+            .padding(.top, 18)
+            Spacer(minLength: 32)
         }
         .frame(maxWidth: .infinity)
         .frame(minHeight: viewportHeight > 120 ? viewportHeight - 24 : 0)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 20)
+    }
+
+    private var assistantGreeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: return "早上好"
+        case 12..<18: return "下午好"
+        default: return "晚上好"
+        }
+    }
+
+    private var assistantStarterSymbols: [String] {
+        ["magnifyingglass", "note.text", "alarm", "folder.badge.gearshape"]
+    }
+
+    private func assistantStarterButton(_ text: String, symbol: String) -> some View {
+        Button {
+            store.saveDraft(text, forChat: resolvedChatId)
+            composerFocusNonce += 1
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(JieboFont.text(.title3, weight: .medium))
+                    .foregroundStyle(JieboColor.pine)
+                    .frame(width: 24)
+                    .accessibilityHidden(true)
+                Text(text)
+                    .font(JieboFont.text(.footnote, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .background(JieboColor.white)
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityLabel(text)
+        .accessibilityHint("填入输入框")
     }
 
     func starterRow(axis: Axis) -> some View {

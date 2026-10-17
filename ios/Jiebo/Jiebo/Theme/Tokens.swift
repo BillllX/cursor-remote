@@ -355,8 +355,23 @@ enum JieboMeasure {
 }
 
 enum JieboMotion {
-    static func panel(_ reduceMotion: Bool) -> Animation? {
+    /// 快速反馈：淡入淡出、轻量状态变化。
+    static func quick(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: 0.16)
+    }
+
+    /// 标准过渡：页面内常规状态切换。
+    static func standard(_ reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.2)
+    }
+
+    /// 空间变化：面板、缩放等带位置或尺寸变化的过渡。
+    static func spatial(_ reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.05)
+    }
+
+    static func panel(_ reduceMotion: Bool) -> Animation? {
+        spatial(reduceMotion)
     }
 
     static func snappy(_ reduceMotion: Bool) -> Animation? {
@@ -365,7 +380,22 @@ enum JieboMotion {
     }
 
     static func fade(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.16)
+        quick(reduceMotion)
+    }
+}
+
+/// 全 App 共用的触觉词汇，避免各页面各自选择强度。
+enum JieboHaptic {
+    static func selection() {
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+
+    static func impact(_ style: UIImpactFeedbackGenerator.FeedbackStyle = .light) {
+        UIImpactFeedbackGenerator(style: style).impactOccurred()
+    }
+
+    static func notification(_ type: UINotificationFeedbackGenerator.FeedbackType) {
+        UINotificationFeedbackGenerator().notificationOccurred(type)
     }
 }
 

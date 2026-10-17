@@ -555,7 +555,7 @@ struct ApprovalCard: View {
     }
 
     private func answer(_ allow: Bool) {
-        UINotificationFeedbackGenerator().notificationOccurred(allow ? .success : .warning)
+        JieboHaptic.notification(allow ? .success : .warning)
         store.answerAssistantApproval(approval, allow: allow)
     }
 }

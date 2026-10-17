@@ -30,7 +30,7 @@ extension ComposerView {
                 let armed = value.translation.height < -60
                 if armed != voiceCancelArmed {
                     voiceCancelArmed = armed
-                    UISelectionFeedbackGenerator().selectionChanged()
+                    JieboHaptic.selection()
                 }
             }
             .onEnded { value in
@@ -111,7 +111,7 @@ extension ComposerView {
 
     private func beginVoice(tap: Bool = false) async {
         focused = false
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        JieboHaptic.impact(.medium)
         if let message = await dictation.start() {
             store.flash(message)
         }

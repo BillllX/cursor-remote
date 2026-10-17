@@ -659,6 +659,7 @@ struct ImImageViewer: View {
 
 private struct ImViewerPage: View {
     @Environment(ImStore.self) private var im
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let message: ImLocalMessage
     @State private var image: UIImage?
     @State private var failed = false
@@ -680,7 +681,7 @@ private struct ImViewerPage: View {
                             .onEnded { _ in settledScale = scale }
                     )
                     .onTapGesture(count: 2) {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(JieboMotion.spatial(reduceMotion)) {
                             scale = scale > 1 ? 1 : 2.5
                             settledScale = scale
                         }

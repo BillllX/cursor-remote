@@ -311,7 +311,7 @@ extension ThreadView {
             }
         }
         if animated {
-            withAnimation(.easeOut(duration: 0.25)) { scroll() }
+            withAnimation(JieboMotion.standard(reduceMotion)) { scroll() }
         } else {
             var transaction = Transaction()
             transaction.disablesAnimations = true

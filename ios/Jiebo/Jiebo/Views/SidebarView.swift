@@ -7,6 +7,7 @@ struct SidebarView: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     var collapse: () -> Void = {}
     @State private var chatActions = ChatActionTargets()
@@ -43,7 +44,7 @@ struct SidebarView: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if store.currentWorkspaceChats.isEmpty {
                         Text("这个工作区还没有对话")
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
@@ -94,56 +95,89 @@ struct SidebarView: View {
     }
 
     private var brandBar: some View {
-        HStack(spacing: 10) {
-            JieboMark(size: 22)
-            Text("接驳")
-                .font(JieboFont.display(17))
-                .tracking(0.34)
-                .foregroundStyle(JieboColor.ink)
-            Spacer(minLength: 8)
-            LinkStatusDot(state: store.linkState, size: 8)
-                .accessibilityHidden(true)
-            Text(store.linkState.title)
-                .font(JieboFont.ui(12))
-                .foregroundStyle(JieboColor.dim)
-                .lineLimit(1)
-            Button(action: collapse) {
-                Image(systemName: "sidebar.left")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(JieboColor.ink2)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 10) {
+                        brandIdentity
+                        Spacer(minLength: 8)
+                        collapseButton
+                    }
+                    linkStatus
+                }
+            } else {
+                HStack(spacing: 10) {
+                    brandIdentity
+                    Spacer(minLength: 8)
+                    linkStatus
+                    collapseButton
+                }
             }
-            .buttonStyle(PressScaleButtonStyle())
-            .accessibilityLabel("收起侧栏")
         }
         .padding(.horizontal, 16)
         .padding(.top, 18)
         .padding(.bottom, 12)
     }
 
+    private var brandIdentity: some View {
+        HStack(spacing: 10) {
+            JieboMark(size: 22)
+            Text("接驳")
+                .font(JieboFont.display(17))
+                .tracking(0.34)
+                .foregroundStyle(JieboColor.ink)
+        }
+    }
+
+    private var linkStatus: some View {
+        HStack(spacing: 6) {
+            LinkStatusDot(state: store.linkState, size: 8)
+                .accessibilityHidden(true)
+            Text(store.linkState.title)
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("连接状态，\(store.linkState.title)")
+    }
+
+    private var collapseButton: some View {
+        Button(action: collapse) {
+            Image(systemName: "sidebar.left")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(width: 36, height: 36)
+                .hitTarget()
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .hoverEffect(.highlight)
+        .accessibilityLabel("收起侧栏")
+    }
+
     private var workspaceCard: some View {
         Button(action: store.openWorkspaceSwitcher) {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 30, height: 30)
                     .background(JieboColor.brass.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("当前工作区")
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                     Text(store.currentWorkspaceName)
-                        .font(JieboFont.ui(15, weight: .semibold))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
             }
             .padding(.horizontal, 10)
@@ -164,9 +198,23 @@ struct SidebarView: View {
     }
 
     private var toolStrip: some View {
-        HStack(spacing: 0) {
-            ForEach(ToolLayer.workTools) { layer in
-                toolButton(layer)
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                LazyVGrid(columns: [
+                    GridItem(.flexible(), spacing: 0),
+                    GridItem(.flexible(), spacing: 0),
+                    GridItem(.flexible(), spacing: 0)
+                ], spacing: 0) {
+                    ForEach(ToolLayer.workTools) { layer in
+                        toolButton(layer)
+                    }
+                }
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(ToolLayer.workTools) { layer in
+                        toolButton(layer)
+                    }
+                }
             }
         }
     }
@@ -196,7 +244,7 @@ struct SidebarView: View {
                         .opacity(marked ? 1 : 0)
                 }
                 Text(layer.title)
-                    .font(JieboFont.ui(11, weight: on ? .semibold : .regular))
+                    .font(JieboFont.text(.caption2, weight: on ? .semibold : .regular))
                     .foregroundStyle(on ? JieboColor.ink : JieboColor.dim)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -213,13 +261,13 @@ struct SidebarView: View {
     private var chatsHeader: some View {
         HStack(spacing: 8) {
             Text("对话")
-                .font(JieboFont.ui(12, weight: .medium))
+                .font(JieboFont.text(.caption, weight: .medium))
                 .tracking(0.6)
                 .foregroundStyle(JieboColor.dim)
             Spacer(minLength: 8)
             Button(action: store.openNewChat) {
                 Label("新对话", systemImage: "square.and.pencil")
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.pine)
                     .frame(minHeight: 44)
                     .contentShape(Rectangle())
@@ -253,7 +301,7 @@ struct SidebarView: View {
             } label: {
                 HStack(spacing: 6) {
                     Label("设置", systemImage: "gearshape")
-                        .font(JieboFont.ui(14, weight: .medium))
+                        .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                     if im.totalUnread > 0 {
                         ImUnreadBadge(count: im.totalUnread)
@@ -286,15 +334,15 @@ struct SidebarView: View {
         } label: {
             HStack(spacing: 8) {
                 Text(chat.title)
-                    .font(JieboFont.ui(15, weight: chat.unread ? .semibold : .regular))
+                    .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if !live, let touched = chat.touchedAt {
-                    AgoLabel(epochMs: touched, font: JieboFont.ui(11))
+                    AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
                 }
                 if live {
                     Text("跑")
-                        .font(JieboFont.ui(10, weight: .medium))
+                        .font(JieboFont.text(.caption2, weight: .medium))
                         .foregroundStyle(JieboColor.run)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)

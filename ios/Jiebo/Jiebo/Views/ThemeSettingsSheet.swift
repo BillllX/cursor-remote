@@ -8,11 +8,8 @@ struct ThemeSettingsSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("外观")
-                        .font(JieboFont.ui(12))
-                        .foregroundStyle(JieboColor.dim)
+            List {
+                Section("外观") {
                     Picker("外观", selection: Bindable(theme).appearance) {
                         ForEach(JieboAppearance.allCases) { item in
                             Text(item.title).tag(item)
@@ -20,26 +17,26 @@ struct ThemeSettingsSheet: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
+                    .listRowBackground(JieboColor.white)
+                }
 
-                    Text("配色")
-                        .font(JieboFont.ui(12))
-                        .foregroundStyle(JieboColor.dim)
-                    VStack(spacing: 14) {
-                        ForEach(JieboPalette.allCases) { palette in
-                            ThemePaletteCard(
-                                palette: palette,
-                                selected: theme.palette == palette,
-                                appearance: theme.appearance
-                            ) {
-                                withAnimation(JieboMotion.fade(reduceMotion)) { theme.palette = palette }
-                            }
+                Section("配色") {
+                    ForEach(JieboPalette.allCases) { palette in
+                        ThemePaletteCard(
+                            palette: palette,
+                            selected: theme.palette == palette,
+                            appearance: theme.appearance
+                        ) {
+                            withAnimation(JieboMotion.fade(reduceMotion)) { theme.palette = palette }
                         }
+                        .listRowInsets(EdgeInsets(top: 7, leading: 0, bottom: 7, trailing: 0))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     }
                 }
-                .padding(20)
-                .frame(maxWidth: 560, alignment: .leading)
-                .frame(maxWidth: .infinity)
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
             .navigationTitle("主题")
             .navigationBarTitleDisplayMode(.inline)
@@ -70,10 +67,10 @@ private struct ThemePaletteCard: View {
                 HStack(alignment: .center, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(palette.title)
-                            .font(JieboFont.ui(16, weight: .semibold))
+                            .font(JieboFont.text(.body, weight: .semibold))
                             .foregroundStyle(JieboColor.ink)
                         Text(palette.subtitle)
-                            .font(JieboFont.ui(12))
+                            .font(JieboFont.text(.caption))
                             .foregroundStyle(JieboColor.dim)
                     }
                     Spacer(minLength: 0)
@@ -160,7 +157,7 @@ private struct ThemeMiniThread: View {
                     .stroke(Color(hex: ink.border), lineWidth: 1)
             )
             Text(dark ? "深色" : "浅色")
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption2))
                 .foregroundStyle(JieboColor.dim)
         }
         .opacity(idle ? 0.4 : 1)

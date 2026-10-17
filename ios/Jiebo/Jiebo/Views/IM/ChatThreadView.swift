@@ -9,6 +9,7 @@ struct ImViewerTarget: Identifiable, Hashable {
 /// 进来停在最底下；在底部时新消息跟着滚，往上翻着的时候不打扰
 struct ChatThreadView: View {
     @Environment(ImStore.self) private var im
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let peer: String
     @State private var atBottom = true
     @State private var profileOpen = false
@@ -48,7 +49,7 @@ struct ChatThreadView: View {
             .onChange(of: messages.last?.id) { _, _ in
                 let mineJustSent = messages.last.map { $0.from == im.meId && $0.seq == nil } ?? false
                 guard atBottom || mineJustSent else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
+                withAnimation(JieboMotion.standard(reduceMotion)) {
                     proxy.scrollTo(Self.bottomId, anchor: .bottom)
                 }
             }
@@ -68,7 +69,7 @@ struct ChatThreadView: View {
                             .background(JieboColor.sidebar)
                     }
                     ChatComposer(peer: peer, convId: convId, focused: $composerFocused) {
-                        withAnimation(.easeOut(duration: 0.2)) {
+                        withAnimation(JieboMotion.standard(reduceMotion)) {
                             proxy.scrollTo(Self.bottomId, anchor: .bottom)
                         }
                     }
