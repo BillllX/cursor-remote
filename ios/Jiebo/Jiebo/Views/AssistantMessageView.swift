@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import os
+
+private let markdownStreamSignposter = OSSignposter(
+    subsystem: Bundle.main.bundleIdentifier ?? "Jiebo",
+    category: "WorkbenchMarkdown"
+)
 
 /// 流式时每个 token 都会改 text。界面只读 rendered：换行或 80ms 才排一次，停下立刻排完整版。
 struct StreamingAssistantText: View {
@@ -14,11 +20,11 @@ struct StreamingAssistantText: View {
 
     var body: some View {
         // live 时禁止在 body 里 transform：父视图每个 token 都会重算，那会把节流绕开。
-        ChunkedAssistantMessage(text: live ? (rendered ?? "") : transform(text))
+        ChunkedAssistantMessage(text: live ? (rendered ?? "") : measuredTransform(text))
             .equatable()
             .onAppear {
                 latest = text
-                if live { rendered = transform(text) }
+                if live { rendered = measuredTransform(text) }
             }
             .onChange(of: text) { old, value in
                 latest = value
@@ -33,18 +39,18 @@ struct StreamingAssistantText: View {
                 flush = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled else { return }
-                    rendered = transform(latest)
+                    rendered = measuredTransform(latest)
                     flush = nil
                 }
             }
             .onChange(of: live) { _, isLive in
                 flush?.cancel()
                 flush = nil
-                rendered = isLive ? transform(latest.isEmpty ? text : latest) : nil
+                rendered = isLive ? measuredTransform(latest.isEmpty ? text : latest) : nil
             }
             .onDisappear {
                 if live {
-                    rendered = transform(latest.isEmpty ? text : latest)
+                    rendered = measuredTransform(latest.isEmpty ? text : latest)
                 }
                 flush?.cancel()
                 flush = nil
@@ -54,7 +60,13 @@ struct StreamingAssistantText: View {
     private func flushNow(_ value: String) {
         flush?.cancel()
         flush = nil
-        rendered = transform(value)
+        rendered = measuredTransform(value)
+    }
+
+    private func measuredTransform(_ value: String) -> String {
+        let interval = markdownStreamSignposter.beginInterval("Markdown transform")
+        defer { markdownStreamSignposter.endInterval("Markdown transform", interval) }
+        return transform(value)
     }
 }
 

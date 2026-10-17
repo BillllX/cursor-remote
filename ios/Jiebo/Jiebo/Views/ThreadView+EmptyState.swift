@@ -3,14 +3,9 @@ import UIKit
 import ImageIO
 
 extension ThreadView {
-    /// 最后一轮的正文、思考、工具和确认都会变高。只盯 assistant 的话，调工具时不会滚。
-    var liveTail: String {
-        guard let turn = threadChat?.turns.last else { return "" }
-        let tools = turn.tools.map { tool in
-            let size = tool.result?.pretty(160).count ?? 0
-            return "\(tool.callId):\(tool.status):\(size):\(tool.summary.count)"
-        }.joined(separator: ",")
-        return "\(turn.id)|\(turn.running)|\(turn.assistant.count)|\(turn.thinking.count)|\(turn.task ?? "")|\(turn.pendingTool?.callId ?? "")|\(tools)"
+    /// ChatStore 每批正文变化只递增一次；避免每次 body 都序列化工具结果、拼一条 liveTail 大字符串。
+    var liveTail: UInt64 {
+        store.turnRenderRevisions[resolvedChatId, default: 0]
     }
 
     var showThreadLoading: Bool {

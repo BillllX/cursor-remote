@@ -30,6 +30,10 @@ struct TurnView: View, Equatable {
             && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
             && lhs.captured == rhs.captured && lhs.calendarInvite == rhs.calendarInvite
     }
+
+    private var thinkingShimmerActive: Bool {
+        turn.running && turn.assistant.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
+    }
     private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
         let base64 = image.data
         let title = total > 1 ? "附图 \(index + 1)/\(total)" : "附图"
@@ -161,7 +165,7 @@ struct TurnView: View, Equatable {
                                 .font(JieboFont.text(.caption2, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink2)
                                 .rotationEffect(.degrees(thinkingOpen ? 90 : 0))
-                            if turn.running {
+                            if thinkingShimmerActive {
                                 ShimmerText(text: "正在思考", font: JieboFont.text(.footnote))
                             } else {
                                 Text("思考过程")
@@ -271,7 +275,13 @@ struct TurnView: View, Equatable {
                 }
             }
             if turn.running, turn.assistant.isEmpty {
-                ShimmerText(text: turn.task?.nilIfEmpty ?? "开始动手", font: JieboFont.text(.subheadline))
+                if let task = turn.task?.nilIfEmpty {
+                    Text(task)
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.ink2)
+                } else if turn.thinking.isEmpty, turn.tools.isEmpty {
+                    ShimmerText(text: "开始动手", font: JieboFont.text(.subheadline))
+                }
             }
             if turn.running, isLastAssistant {
                 StallHintRow()
@@ -323,7 +333,7 @@ struct TurnView: View, Equatable {
                 TurnFileCards(turn: turn, chatId: chatId)
                     .padding(.leading, embedded ? 0 : 40)
             }
-            if turn.needsFileReview, store.localTurnReviews[turn.id] == nil {
+            if turn.needsFileReview, reviewMark == nil {
                 TurnReviewBar(turn: turn)
                     .padding(.leading, embedded ? 0 : 40)
             }

@@ -266,6 +266,7 @@ extension ChatStore {
 
     func stop(chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
+        flushStreamDeltas(targetId)
         send(.cancel(chatId: targetId))
         runningChatIds.removeAll { $0 == targetId }
         queuedChatIds.removeAll { $0 == targetId }

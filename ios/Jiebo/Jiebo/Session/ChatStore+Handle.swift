@@ -2,6 +2,12 @@ import Foundation
 import Observation
 import Photos
 import UIKit
+import os
+
+private let workbenchStreamSignposter = OSSignposter(
+    subsystem: Bundle.main.bundleIdentifier ?? "Jiebo",
+    category: "WorkbenchStream"
+)
 
 extension ChatStore {
     func handle(_ message: ServerMessage) {
@@ -21,16 +27,23 @@ extension ChatStore {
         }
         if chatId != activeId && chatId != chatHomeThreadChatId {
             switch message {
-            case .textDelta, .thinkingDelta, .toolStarted, .done, .error, .approval:
-                patch(chatId) { chat in
-                    guard !chat.unread else { return chat }
-                    var next = chat
-                    next.unread = true
-                    return next
+            case .textDelta, .thinkingDelta, .toolStarted, .toolCompleted, .toolOutput, .task, .status, .done, .error, .approval:
+                // 已经未读后不要再为每个 token 走一次 patch/scheduleSync。
+                if chats.first(where: { $0.id == chatId })?.unread == false {
+                    patch(chatId) { chat in
+                        var next = chat
+                        next.unread = true
+                        return next
+                    }
                 }
             default:
                 break
             }
+        }
+        if message.flushesAllStreamDeltaBuffers {
+            flushAllStreamDeltas()
+        } else if !message.keepsStreamDeltaBufferOpen {
+            flushStreamDeltas(chatId)
         }
 
         switch message {
@@ -203,6 +216,7 @@ extension ChatStore {
             serverSupportsP4 = true
             if let id = value.object?["id"]?.string { pendingChatLoads.remove(id) } // 解析失败也别白等安全网
             guard let remote = ChatSession.from(value), !deletedIds.contains(remote.id) else { break }
+            flushStreamDeltas(remote.id)
             pendingChatLoads.remove(remote.id)
             let priorRev = chatRevs[remote.id]
             if let rev { chatRevs[remote.id] = rev }
@@ -330,19 +344,10 @@ extension ChatStore {
                 heldDeltas[id, default: []].append(text)
                 break
             }
-            patchRunning(id) { turn in
-                var next = turn
-                next.assistant += text
-                return next
-            }
+            enqueueStreamDelta(.text(text), chatId: id, flushNow: text.contains("\n"))
         case .thinkingDelta(let id, let text):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
-            patchRunning(id) { turn in
-                var next = turn
-                next.thinking += text
-                return next
-            }
-            showThinkingIds.insert(id)
+            enqueueStreamDelta(.thinking(text), chatId: id, flushNow: text.contains("\n"))
         case .toolStarted(let id, let callId, let name, let args, let parent, let agent, let toolModel, let toolAt):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
@@ -387,25 +392,10 @@ extension ChatStore {
             }
         case .toolOutput(let id, let callId, let stream, let chunk, let stdout, let stderr):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
-            patchRunning(id) { turn in
-                var next = turn
-                if let index = next.tools.firstIndex(where: { $0.callId == callId }) {
-                    next.tools[index].result = mergeOutput(next.tools[index].result, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr)
-                } else {
-                    next.tools.append(ToolCall(
-                        callId: callId,
-                        name: "shell",
-                        args: nil,
-                        result: mergeOutput(nil, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
-                        status: "running",
-                        parentCallId: nil,
-                        agent: nil,
-                        model: nil,
-                        at: nil
-                    ))
-                }
-                return next
-            }
+            enqueueStreamDelta(
+                .toolOutput(callId: callId, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
+                chatId: id
+            )
         case .task(let id, let text):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
             patchRunning(id) { turn in
@@ -813,6 +803,99 @@ extension ChatStore {
             imSink?.handle(event)
         case .pong, .ignored:
             break
+        }
+    }
+
+    func enqueueStreamDelta(_ event: BufferedStreamEvent, chatId: String, flushNow: Bool = false) {
+        streamDeltaBuffers[chatId, default: []].append(event)
+        if flushNow {
+            flushStreamDeltas(chatId)
+            return
+        }
+        guard streamDeltaFlushTasks[chatId] == nil else { return }
+        streamDeltaFlushTasks[chatId] = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.streamDeltaFlushDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.flushStreamDeltas(chatId)
+        }
+    }
+
+    /// 一批事件只写一次 ChatSession；数组逐项应用，保留正文、思考、工具 stdout/stderr 的到达顺序。
+    func flushStreamDeltas(_ chatId: String) {
+        streamDeltaFlushTasks.removeValue(forKey: chatId)?.cancel()
+        guard let events = streamDeltaBuffers.removeValue(forKey: chatId), !events.isEmpty else { return }
+        let interval = workbenchStreamSignposter.beginInterval("Delta flush")
+        defer { workbenchStreamSignposter.endInterval("Delta flush", interval) }
+        patchRunning(chatId) { turn in
+            var next = turn
+            for event in events {
+                switch event {
+                case .text(let text):
+                    next.assistant += text
+                case .thinking(let text):
+                    next.thinking += text
+                case .toolOutput(let callId, let stream, let chunk, let stdout, let stderr):
+                    if let index = next.tools.firstIndex(where: { $0.callId == callId }) {
+                        next.tools[index].result = mergeOutput(
+                            next.tools[index].result,
+                            stream: stream,
+                            chunk: chunk,
+                            stdout: stdout,
+                            stderr: stderr
+                        )
+                    } else {
+                        next.tools.append(ToolCall(
+                            callId: callId,
+                            name: "shell",
+                            args: nil,
+                            result: mergeOutput(nil, stream: stream, chunk: chunk, stdout: stdout, stderr: stderr),
+                            status: "running",
+                            parentCallId: nil,
+                            agent: nil,
+                            model: nil,
+                            at: nil
+                        ))
+                    }
+                }
+            }
+            return next
+        }
+    }
+
+    func flushAllStreamDeltas() {
+        for id in Array(streamDeltaBuffers.keys) {
+            flushStreamDeltas(id)
+        }
+    }
+
+    func discardStreamDeltas(_ chatId: String? = nil) {
+        if let chatId {
+            streamDeltaFlushTasks.removeValue(forKey: chatId)?.cancel()
+            streamDeltaBuffers[chatId] = nil
+            return
+        }
+        for task in streamDeltaFlushTasks.values { task.cancel() }
+        streamDeltaFlushTasks = [:]
+        streamDeltaBuffers = [:]
+    }
+}
+
+extension ServerMessage {
+    fileprivate var keepsStreamDeltaBufferOpen: Bool {
+        switch self {
+        case .textDelta, .thinkingDelta, .toolOutput:
+            return true
+        default:
+            return false
+        }
+    }
+
+    fileprivate var flushesAllStreamDeltaBuffers: Bool {
+        switch self {
+        case .ready, .storedState, .storedStateDeferred, .storedDigest:
+            return true
+        default:
+            return false
         }
     }
 }

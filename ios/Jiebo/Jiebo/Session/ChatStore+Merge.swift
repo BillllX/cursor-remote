@@ -225,6 +225,8 @@ extension ChatStore {
 
     /// 会话从列表消失（远端删除/全量替换取消分页）时清理其分页/暂存状态（Kimi 评审 MINOR5）
     func dropChatState(_ id: String) {
+        discardStreamDeltas(id)
+        turnRenderRevisions[id] = nil
         clearLoadTimeout(id)
         loadingChatIds.remove(id)
         loadedPageTurnCounts[id] = nil
@@ -294,9 +296,11 @@ extension ChatStore {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         let before = chats[index]
         chats[index] = update(before)
-        mergePendingTurnFiles(chatId: id)
+        mergePendingTurnFiles(chatId: id, bumpRevision: false)
+        let turnsChanged = chats[index].turns != before.turns
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
-        if bodySegs[id] != nil, chats[index].turns != before.turns { bodySegs[id] = nil }
+        if bodySegs[id] != nil, turnsChanged { bodySegs[id] = nil }
+        if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }
         // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
         if id != "boot", !cachedOnlyIds.contains(id) { dirtyChatIds.insert(id) }
         scheduleSync()
@@ -308,7 +312,7 @@ extension ChatStore {
         mergePendingTurnFiles(chatId: chatId)
     }
 
-    func mergePendingTurnFiles(chatId: String) {
+    func mergePendingTurnFiles(chatId: String, bumpRevision: Bool = true) {
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatId }) else { return }
         let available = Set(chats[chatIndex].turns.map(\.id))
         let ready = pendingTurnFiles.take(chatId: chatId, availableTurnIds: available)
@@ -317,6 +321,7 @@ extension ChatStore {
             guard let turnIndex = chats[chatIndex].turns.firstIndex(where: { $0.id == turnId }) else { continue }
             chats[chatIndex].turns[turnIndex].files = files
         }
+        if bumpRevision { turnRenderRevisions[chatId, default: 0] &+= 1 }
         bodySegs[chatId] = nil
         scheduleBodyCache(chatId)
     }

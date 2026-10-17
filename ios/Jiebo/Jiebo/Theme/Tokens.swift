@@ -413,9 +413,11 @@ struct ShimmerText: View {
     let text: String
     var font: Font = JieboFont.ui(14)
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.homeActive) private var homeActive
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        if reduceMotion {
+        if reduceMotion || !homeActive || scenePhase != .active {
             Text(text)
                 .font(font)
                 .foregroundStyle(JieboColor.ink2)

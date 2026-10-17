@@ -43,7 +43,7 @@ struct ToolRunSummaryView: View {
                         .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(JieboColor.ink2)
                         .rotationEffect(.degrees(detailOpen ? 90 : 0))
-                    if turnRunning {
+                    if turnRunning, runningToolId != nil {
                         ShimmerText(text: summaryLine, font: JieboFont.text(.footnote, weight: .medium))
                     } else {
                         Text(summaryLine)

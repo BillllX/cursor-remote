@@ -132,6 +132,8 @@ extension ChatStore {
         }
         client.onClose = { [weak self] in
             guard let self else { return }
+            // 连接断开前已经收到的增量必须先落进 turn；否则取消 50ms flush Task 会丢最后一小段。
+            self.flushAllStreamDeltas()
             self.connected = false
             self.armOfflineTimer()
             self.failAssistantReplyWaiters()
@@ -195,6 +197,8 @@ extension ChatStore {
     func resetTenantSession() {
         syncTask?.cancel()
         stallTask?.cancel()
+        // 换租户/退出登录不能把旧账号尚未 flush 的增量带进新会话。
+        discardStreamDeltas()
         client.clearOutbox()
         chats = [ChatSession.blank(id: "boot")]
         activeId = "boot"
@@ -259,6 +263,7 @@ extension ChatStore {
         sawSnapshot = []
         snapshotHold = []
         heldDeltas = [:]
+        turnRenderRevisions = [:]
         previewTabs = []
         previewActivePath = nil
         runningChatIds = []
@@ -283,7 +288,6 @@ extension ChatStore {
         adminStats = []
         cursorBill = nil
         adminStatsAt = nil
-        showThinkingIds = []
         bannerError = ""
         notice = ""
         pendingImages = []

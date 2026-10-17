@@ -201,7 +201,6 @@ final class ChatStore {
     var loopError = ""
     var hasApiKey = true
     var draft = ""
-    var showThinkingIds: Set<String> = []
     var tenantId = ""
     var tenantName = ""
     var pendingImages: [PendingImage] = []
@@ -321,6 +320,18 @@ final class ChatStore {
     /// 快照超限、正文改走分页时，先攒着随后的增量
     var snapshotHold = Set<String>()
     var heldDeltas: [String: [String]] = [:]
+    /// 网关增量先在主线程短暂合并，再一次写入 running turn，避免每个 token 都触发整棵观察树。
+    /// 事件数组保留正文、思考和工具输出之间的到达顺序；快照专用的 heldDeltas 仍保持独立。
+    enum BufferedStreamEvent {
+        case text(String)
+        case thinking(String)
+        case toolOutput(callId: String, stream: String?, chunk: String?, stdout: String?, stderr: String?)
+    }
+    @ObservationIgnored var streamDeltaBuffers: [String: [BufferedStreamEvent]] = [:]
+    @ObservationIgnored var streamDeltaFlushTasks: [String: Task<Void, Never>] = [:]
+    static let streamDeltaFlushDelay: Duration = .milliseconds(50)
+    /// ThreadView 只关心「这一批可能改变了末轮高度」，不再为每次重算拼 liveTail 大字符串。
+    var turnRenderRevisions: [String: UInt64] = [:]
     /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
     var loadedPageTurnCounts: [String: Int] = [:]
     /// P8 slim：每会话分页代际（单调递增，会话内不复用）。load_chat 携带、chat_turns 回显，

@@ -1,6 +1,12 @@
 import SwiftUI
 import UIKit
 import ImageIO
+import os
+
+private let workbenchScrollSignposter = OSSignposter(
+    subsystem: Bundle.main.bundleIdentifier ?? "Jiebo",
+    category: "WorkbenchScroll"
+)
 
 extension ThreadView {
     var thread: some View {
@@ -167,11 +173,17 @@ extension ThreadView {
             }
             .onChange(of: liveTail) { _, _ in
                 guard pinExceeded, stickToBottom else { return }
-                scrollToEndNow(proxy)
+                scheduleStreamScroll(proxy)
+            }
+            .onChange(of: pinHeightRevision) { _, _ in
+                // 以真实布局高度兜底 80ms Markdown 排版、文件卡、回执和首次跨过 pinExceeded 的时序。
+                guard pinExceeded, stickToBottom else { return }
+                scheduleStreamScroll(proxy)
             }
             .onChange(of: threadChat?.turns.last?.running) { _, running in
                 // 流式时不追；停更后代码和表格还会长高，超出钉顶才再贴一次底
                 guard running == false, pinExceeded, stickToBottom else { return }
+                cancelStreamScroll()
                 scrollToEndNow(proxy)
                 followTask?.cancel()
                 followTask = Task { @MainActor in
@@ -193,6 +205,7 @@ extension ThreadView {
             }
             .onChange(of: resolvedChatId) { _, id in
                 // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
+                cancelStreamScroll()
                 followTask?.cancel()
                 stickToBottom = true
                 motionChatId = id
@@ -263,8 +276,10 @@ extension ThreadView {
 
     /// 把这一轮顶对齐到可视区上方。height 还没量到时只记下 id，等 viewportHeight 再滚。
     func pinToTurn(_ id: String, proxy: ScrollViewProxy, height: CGFloat) {
+        cancelStreamScroll()
         pinnedTurnId = id
         pinExceeded = false
+        pinnedContentHeight = 0
         pinRecaptureBaseline = false
         pinBaselineMinY = nil
         pinBaselineReady = false
@@ -286,6 +301,7 @@ extension ThreadView {
     }
 
     func revealLatest(_ proxy: ScrollViewProxy, animated: Bool) {
+        cancelStreamScroll()
         armScrollGuard()
         let scroll = {
             if pinExceeded {
@@ -314,10 +330,30 @@ extension ThreadView {
     /// 超出钉顶之后才贴底。贴底后的下一次 minY 当作新基线，上滑 24pt 就能松开。
     func scrollToEndNow(_ proxy: ScrollViewProxy) {
         guard stickToBottom else { return }
+        workbenchScrollSignposter.emitEvent("Scroll to end")
         pinRecaptureBaseline = true
         scrollingProgrammatically = true
         scrollWithoutAnimation(proxy, id: "thread-end", anchor: .bottom)
         scrollingProgrammatically = false
+    }
+
+    func scheduleStreamScroll(_ proxy: ScrollViewProxy) {
+        guard streamScrollTask == nil else { return }
+        streamScrollGeneration &+= 1
+        let generation = streamScrollGeneration
+        streamScrollTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(16))
+            guard !Task.isCancelled, generation == streamScrollGeneration else { return }
+            streamScrollTask = nil
+            guard pinExceeded, stickToBottom else { return }
+            scrollToEndNow(proxy)
+        }
+    }
+
+    func cancelStreamScroll() {
+        streamScrollGeneration &+= 1
+        streamScrollTask?.cancel()
+        streamScrollTask = nil
     }
 
     func scrollWithoutAnimation(_ proxy: ScrollViewProxy, id: String, anchor: UnitPoint) {
@@ -335,6 +371,7 @@ extension ThreadView {
 
     func releaseFollow() {
         guard Date() >= pinScrollGuardUntil else { return }
+        cancelStreamScroll()
         followTask?.cancel()
         scrollingProgrammatically = false
         stickToBottom = false
@@ -342,9 +379,12 @@ extension ThreadView {
 
     func notePinContentHeight(_ height: CGFloat) {
         guard pinnedMinHeight > 1 else { return }
+        let grew = height > pinnedContentHeight + 0.5
+        pinnedContentHeight = height
         if height > pinnedMinHeight + 0.5 {
             pinExceeded = true
         }
+        if grew { pinHeightRevision &+= 1 }
     }
 
     /// iOS 17 没有滚动相位。基线是最近一次定位后的位置：钉顶时在轮顶，贴底后改到贴底位置。
@@ -376,6 +416,7 @@ extension ThreadView {
         let anchorId = Array(allTurns.suffix(limit)).first?.id
         let next = min(allTurns.count, limit + Self.renderedTurnStep)
         renderedTurnLimitByChat[resolvedChatId] = next
+        cancelStreamScroll()
         followTask?.cancel()
         followTask = Task { @MainActor in
             defer { loadingEarlierBatch = false }

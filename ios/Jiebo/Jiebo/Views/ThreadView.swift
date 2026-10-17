@@ -229,6 +229,8 @@ struct ThreadView: View {
     @State var pinnedTurnId: String?
     /// 钉住时的可视高度。键盘变矮不减小，变高可以增大。
     @State var pinnedMinHeight: CGFloat = 0
+    @State var pinnedContentHeight: CGFloat = 0
+    @State var pinHeightRevision: UInt64 = 0
     /// 内容列高度一旦超过 pinnedMinHeight 就闩住，不再用底锚点的视口坐标判断。
     @State var pinExceeded = false
     @State var pinBaselineMinY: CGFloat?
@@ -239,6 +241,9 @@ struct ThreadView: View {
     /// 贴底滚动之后，下一次 minY 只用来重记基线，不拿去和旧的钉顶位置比。
     @State var pinRecaptureBaseline = false
     @State var followTask: Task<Void, Never>?
+    /// 同一帧内多次结构更新只发一次贴底请求；与结束后的二次排版 followTask 分开。
+    @State var streamScrollTask: Task<Void, Never>?
+    @State var streamScrollGeneration: UInt64 = 0
     /// showThreadLoading 持续超过 350ms 才亮的加载遮罩
     @State var loadingVisible = false
 
