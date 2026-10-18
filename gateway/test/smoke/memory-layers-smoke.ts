@@ -162,7 +162,10 @@ try {
   check(readFileSync(resolve(root, "proj", "app", ".jiebo/.gitignore"), "utf8").includes("memory.md"), "批准：新建的 memory.md 默认不进版本库");
   write(resolve(root, "other", ".jiebo", ".gitignore"), "# 我自己的\n");
   wm.appendMemoryLines(resolve(root, "other"), [{ section: "约定", text: "手动写入", refs: [] }]);
-  check(readFileSync(resolve(root, "other", ".jiebo/.gitignore"), "utf8") === "# 我自己的\n", "批准：已有的 .jiebo/.gitignore 不动");
+  check(
+    readFileSync(resolve(root, "other", ".jiebo/.gitignore"), "utf8") === "# 我自己的\n.memory.md.lock/\n",
+    "批准：已有的 .jiebo/.gitignore 只追加锁目录规则",
+  );
   check(!approvals.listApprovals(ref).some((item) => item.callId === card!.callId), "批准：卡摘掉了");
   check(wm.answerCard(tenant, chatId, "nope", true) === null, "批准：不认识的卡交回给别的审批");
   const ctxAfter = wm.workspaceContext(tenant, resolve(root, "proj", "app"));
@@ -186,9 +189,10 @@ try {
   propose({ text: "会过期的一条" });
   const card4 = wm.flushChat(ref, chatId)!;
   check(wm.expireCards(ref, card4.expiresAt + 1) === 1 && wm.listProposals(ref).proposals.length === 0, "过期：卡和提议一起作废");
-  write(resolve(root, "proj", "lib", ".jiebo"), "挡路的文件");
+  mkdirSync(resolve(root, "proj", "lib"), { recursive: true });
   propose({ text: "写失败要重试的一条", path: "lib" });
   const card6 = wm.flushChat(ref, chatId)!;
+  write(resolve(root, "proj", "lib", ".jiebo"), "挡路的文件");
   const failed = wm.answerCard(tenant, chatId, card6.callId, true);
   const retryProposal = wm.listProposals(ref).proposals.find((item) => item.text === "写失败要重试的一条" && item.cardId);
   const retryCard = retryProposal
@@ -252,10 +256,23 @@ try {
   const host = (role: "chat" | "integrator" | "schedule" | "loop") => ({ ref, role, workspaceMemory: () => ({ ok: true }) });
   const chatTools = Object.keys(tools.assistantTools(host("chat")));
   const integratorTools = Object.keys(tools.assistantTools(host("integrator")));
+  const loopTools = Object.keys(tools.assistantTools(host("loop")));
   check(chatTools.includes("work_preference_add") && chatTools.includes("workspace_memory_read"), "工具：前台助理有工作偏好和只读工作区");
   check(!integratorTools.includes("work_preference_add") && !integratorTools.includes("workspace_memory_read"), "工具：整理者既不能写工作偏好，也不读工作区");
-  const sessionTools = Object.keys(tools.workspaceSessionTools({ propose: () => ({ ok: true }) }));
-  check(sessionTools.length === 1 && sessionTools[0] === "workspace_memory_propose", "工具：工作区会话只有提议这一个");
+  const sessionTools = Object.keys(
+    tools.workspaceSessionTools({
+      propose: () => ({ ok: true }),
+      search: () => [],
+      markUsed: () => ({ ok: true }),
+    }),
+  );
+  check(
+    JSON.stringify(sessionTools.sort()) ===
+      JSON.stringify(["workspace_memory_mark_used", "workspace_memory_propose", "workspace_memory_search"]),
+    "工具：工作区会话精确拥有 propose/search/mark_used",
+  );
+  check(!integratorTools.some((name) => name.startsWith("workspace_memory_")), "工具：整理者没有普通工作区记忆工具");
+  check(!loopTools.some((name) => name.startsWith("workspace_memory_")), "工具：无工作区 host 的后台模型权限不变");
   check(memory.CORE_TOKEN_BUDGET === 1200 && memory.INDEX_TOKEN_BUDGET === 300 && memory.WORK_PREF_TOKEN_BUDGET === 200, "预算：核心 1200 / 索引 300 / 工作偏好 200");
 
   // 后台委派：只读工具 + 提议，没有个人记忆工具；提示词带工作区上下文
@@ -273,7 +290,11 @@ try {
   });
   await service.runDelegateInBackground({ ...tenant, name: "t" }, { chatId: "c-bg", cwd: resolve(root, "proj"), task: "看看", label: "后台" });
   const bgSeen = seen as { prompt: string; tools: string[] } | null;
-  check(Boolean(bgSeen?.tools.includes("workspace_memory_propose")) && !bgSeen?.tools.some((name) => name.startsWith("memory_") || name.startsWith("work_preference")), "后台委派：能提议，没有个人记忆工具");
+  check(
+    ["workspace_memory_propose", "workspace_memory_search", "workspace_memory_mark_used"].every((name) => Boolean(bgSeen?.tools.includes(name))) &&
+      !bgSeen?.tools.some((name) => name.startsWith("memory_") || name.startsWith("work_preference")),
+    "后台委派：精确拥有工作区记忆工具，没有个人记忆工具",
+  );
   check(Boolean(bgSeen?.prompt.includes("proj 用 pnpm")) && Boolean(bgSeen?.prompt.includes("回复用中文")), "后台委派：提示词带工作偏好和分层规则");
 
   /* ── v1 → v2 迁移 ── */

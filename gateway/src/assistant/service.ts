@@ -51,11 +51,13 @@ import {
   expireCards,
   flushChat,
   memoryNeedsConfirm,
+  markWorkspaceMemoryUsed,
   noteWorkspaceThread,
   proposeWorkspaceMemory,
   readWorkspaceMemory,
   restoreCards,
   scheduleFlush,
+  searchWorkspaceMemory,
   scrubWorkspaceIndex,
   workspaceContext,
 } from "./workspaceMemory.ts";
@@ -139,16 +141,18 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
   };
 }
 
-/** 子工作区会话（含委派子会话）挂的工具：只能提议写工作区记忆 */
+/** 子工作区会话（含委派子会话）挂的工具：提议、检索，以及真正采用检索结果后的续期 */
 export function workspaceToolsFor(tenant: AssistantTenant, chatId: string, cwd: string): Record<string, SDKCustomTool> {
   return workspaceSessionTools({
     propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }, { confirm: memoryNeedsConfirm() }),
+    search: ({ query }) => searchWorkspaceMemory(tenant, cwd, query),
+    markUsed: ({ id }) => markWorkspaceMemoryUsed(tenant, cwd, id),
   });
 }
 
 /** W0 工作偏好 + 从 cwd 往上的各层规则；所有会话都用这一份 */
-export function workspaceContextFor(tenant: AssistantTenant, cwd: string) {
-  return workspaceContext(tenant, cwd);
+export function workspaceContextFor(tenant: AssistantTenant, cwd: string, query = "") {
+  return workspaceContext(tenant, cwd, query);
 }
 
 /** 子工作区会话一轮开始：线程又活跃了，先不出确认卡 */
@@ -271,7 +275,7 @@ function runnerFor(tenant: AssistantTenant): JobRunner {
 
 /** Loop 没人在线时走后台策略：只读工具 + inbox_post，模型固定 grok-4.7 */
 export async function runLoopInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; text: string; label: string }) {
-  const context = workspaceContext(tenant, input.cwd);
+  const context = workspaceContext(tenant, input.cwd, input.text);
   return runBackground(refOf(tenant), {
     origin: "loop",
     label: input.label,
@@ -284,13 +288,13 @@ export async function runLoopInBackground(tenant: AssistantTenant, input: { chat
 
 /** 后台委派：子工作区里只读分析，产出改动方案；没有记忆工具 */
 export async function runDelegateInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; task: string; label: string }) {
-  const context = workspaceContext(tenant, input.cwd);
+  const context = workspaceContext(tenant, input.cwd, input.task);
   return runBackground(refOf(tenant), {
     origin: "delegate",
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。读代码时发现以后还用得上的约定、命令、坑，可以用 workspace_memory_propose 提议（用户确认后才写）。`,
+    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；只有确实采用结果时才用 workspace_memory_mark_used。读代码时发现以后还用得上的约定、命令、坑，可以用 workspace_memory_propose 提议。`,
     customTools: { ...assistantTools(toolHost(tenant, "loop", input.chatId)), ...workspaceToolsFor(tenant, input.chatId, input.cwd) },
   });
 }

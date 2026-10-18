@@ -180,7 +180,7 @@ export async function handlePrompt(
     userText,
     mode,
     files,
-    loadWorkspaceRules(cwd, conn.tenant),
+    loadWorkspaceRules(cwd, conn.tenant, userText),
     cwd,
     slot.reviewRoster || [],
     atUserRoot,

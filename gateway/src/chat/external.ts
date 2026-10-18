@@ -44,7 +44,7 @@ export async function runExternalChat(
     finishRun(ws, slot, "error", Date.now() - t0, epoch);
     return;
   }
-  const rules = loadWorkspaceRules(input.cwd, getTenant(slot.tenantId));
+  const rules = loadWorkspaceRules(input.cwd, getTenant(slot.tenantId), input.text);
   const system = input.assistantBlock
     ? [
         input.assistantBlock,

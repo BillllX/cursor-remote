@@ -11,6 +11,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# UI 源码级契约：所有 chrome 都过滤 silent，但 workspace_memory_propose 必须可见。
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+const turn = readFileSync("ios/Jiebo/Jiebo/Views/TurnView.swift", "utf8");
+const tools = readFileSync("ios/Jiebo/Jiebo/Views/ThreadAssistantRows.swift", "utf8");
+if (!turn.includes("return tools.filter { !AssistantToolText.isSilent($0) }") || turn.includes("return embedded ? tools.filter")) {
+  throw new Error("iOS chrome 必须统一过滤 AssistantToolText.isSilent");
+}
+const silentBody = tools.match(/static func isSilent\(_ tool: ToolCall\) -> Bool \{([\s\S]*?)\n    \}/)?.[1] ?? "";
+if (!silentBody.includes("workspace_memory_search") || silentBody.includes("workspace_memory_propose")) {
+  throw new Error("iOS silent 工具集合必须隐藏 search/mark_used，但保留 propose");
+}
+console.log("iOS silent tool chrome 源码契约：通过");
+NODE
+
 update=0
 for arg in "$@"; do
   case "$arg" in

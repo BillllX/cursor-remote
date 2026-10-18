@@ -10,10 +10,10 @@ import type { Tenant } from "../tenants.ts";
 import { expandAttachments } from "./attachments.ts";
 
 /** 有租户时：W0 工作偏好 + 从 cwd 往上到 USER 根目录的分层规则；没有租户只读 cwd 这一层 */
-export function loadWorkspaceRules(cwd: string, tenant?: Tenant | null): string {
+export function loadWorkspaceRules(cwd: string, tenant?: Tenant | null, query = ""): string {
   if (tenant) {
     try {
-      return workspaceContextFor(tenant, cwd);
+      return workspaceContextFor(tenant, cwd, query);
     } catch (err) {
       log.with({ tenant: tenant.id }).error("workspace context", err);
     }

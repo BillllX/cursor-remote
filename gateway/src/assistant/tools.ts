@@ -39,9 +39,11 @@ export type ToolHost = {
   workspaceMemory?: (workspace: string, query: string) => unknown;
 };
 
-/** 子工作区会话（含委派子会话）挂的工具：只有提议写工作区记忆，没有任何个人记忆工具 */
+/** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
 export type WorkspaceToolHost = {
   propose: (args: { section: string; text: string; refs?: string; path?: string }) => unknown;
+  search: (args: { query: string }) => unknown;
+  markUsed: (args: { id: string }) => unknown;
 };
 
 type Args = Record<string, SDKJsonValue>;
@@ -405,6 +407,25 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
           refs: str(args.refs) || undefined,
           path: str(args.path) || undefined,
         }),
+    ),
+    workspace_memory_search: tool(
+      [
+        "检索当前目录及其祖先工作区的完整 .jiebo/memory.md（不含 USER 根目录，也不会搜索兄弟工作区）。",
+        "返回相关条目的 id、层、正文、引用缺失和生命周期；cold/done/expired 也可检索。搜索本身绝不更新 used/uses。",
+        "只有当你确实把某条搜索结果用于回答、分析或实现时，才对该条调用 workspace_memory_mark_used；仅仅看过不要调用。",
+      ].join(""),
+      { query: S("要查的项目知识关键词") },
+      ["query"],
+      (args) => host.search({ query: str(args.query) }),
+    ),
+    workspace_memory_mark_used: tool(
+      [
+        "仅在确实采用 workspace_memory_search 返回的某条结果后调用，按其稳定 id 更新 used 和 uses。",
+        "搜索本身、未采用的结果都不要续期；无 id、done 或 expired 条目不能续期。",
+      ].join(""),
+      { id: S("workspace_memory_search 返回的稳定 id") },
+      ["id"],
+      (args) => host.markUsed({ id: str(args.id) }),
     ),
   };
 }

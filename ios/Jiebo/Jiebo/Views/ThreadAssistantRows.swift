@@ -144,10 +144,12 @@ enum AssistantToolText {
         return base
     }
 
-    /// 记忆是沉默的：memory_*、work_preference_*、workspace_memory_read 与 chat_search 不出卡片
+    /// 记忆检索和续期是沉默的，不产生噪声卡片
     static func isSilent(_ tool: ToolCall) -> Bool {
         let base = baseName(tool.name)
-        return base.hasPrefix("memory_") || base.hasPrefix("work_preference_") || base == "workspace_memory_read" || base == "chat_search"
+        return base.hasPrefix("memory_") || base.hasPrefix("work_preference_") ||
+            base == "workspace_memory_read" || base == "workspace_memory_search" ||
+            base == "workspace_memory_mark_used" || base == "chat_search"
     }
 
     static func friendly(_ tool: ToolCall) -> String? {

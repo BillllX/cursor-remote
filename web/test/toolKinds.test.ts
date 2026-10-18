@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { mutatingTool, toolKind } from "../lib/chat/toolKinds";
+import { mutatingTool, silentAssistantTool, toolKind } from "../lib/chat/toolKinds";
 
 describe("toolKind", () => {
   test("MultiEdit 等改文件工具归为 edit", () => {
@@ -36,5 +36,11 @@ describe("toolKind", () => {
     assert.equal(mutatingTool("MultiEdit"), true);
     assert.equal(mutatingTool("Write"), true);
     assert.equal(mutatingTool("read"), false);
+  });
+
+  test("工作区记忆检索和采用续期静默，提议仍可见", () => {
+    assert.equal(silentAssistantTool("workspace_memory_search"), true);
+    assert.equal(silentAssistantTool("mcp__jiebo__workspace_memory_mark_used"), true);
+    assert.equal(silentAssistantTool("workspace_memory_propose"), false);
   });
 });

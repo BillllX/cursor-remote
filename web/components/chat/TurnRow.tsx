@@ -8,6 +8,7 @@ import { memo, type CSSProperties, type RefObject } from "react";
 import type { Components } from "react-markdown";
 import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../../lib/chat/format";
 import { PERF, perfCountRow } from "../../lib/chat/perf";
+import { silentAssistantTool } from "../../lib/chat/toolKinds";
 import { searchQuery } from "../../lib/chat/tools";
 import { estimateTurnHeight } from "../../lib/chat/threadRows";
 import { editPathsOf, writesWereRejected } from "../../lib/chat/turns";
@@ -56,7 +57,7 @@ type ToolGroup = ToolCall[];
 
 /** 工具分组：搜索连续合并；同一文件的读 / 写 / 改连续合并；带父调用的挂到父卡片下面 */
 function groupTools(turn: Turn) {
-  const visible = turn.tools.filter((tool) => !/todo/i.test(tool.name));
+  const visible = turn.tools.filter((tool) => !/todo/i.test(tool.name) && !silentAssistantTool(tool.name));
   const ids = new Set(visible.map((tool) => tool.callId));
   const kids = new Map<string, ToolCall[]>();
   const roots: ToolCall[] = [];

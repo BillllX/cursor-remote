@@ -30,3 +30,20 @@ export function mutatingTool(name: string) {
   const kind = toolKind(name);
   return kind === "edit" || kind === "write";
 }
+
+/** 助理记忆检索/续期只服务模型上下文，不在 Web 回合里制造工具卡片。 */
+export function silentAssistantTool(name: string) {
+  const base =
+    name
+      .toLowerCase()
+      .split(/__|[./:]/)
+      .at(-1) || "";
+  return (
+    base.startsWith("memory_") ||
+    base.startsWith("work_preference_") ||
+    base === "workspace_memory_read" ||
+    base === "workspace_memory_search" ||
+    base === "workspace_memory_mark_used" ||
+    base === "chat_search"
+  );
+}

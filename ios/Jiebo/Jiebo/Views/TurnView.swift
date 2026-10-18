@@ -55,10 +55,10 @@ struct TurnView: View, Equatable {
         .accessibilityHint("轻点两下查看大图")
     }
 
-    /// .embedded 下 memory_* / chat_search 整张不渲染；其它端原样
+    /// 所有 chrome（含 iPad）都隐藏沉默工具；propose 不属于 silent，仍正常显示
     private var visibleTools: [ToolCall] {
         let tools = ToolCall.uniqued(turn.tools)
-        return embedded ? tools.filter { !AssistantToolText.isSilent($0) } : tools
+        return tools.filter { !AssistantToolText.isSilent($0) }
     }
 
     private var processTools: [ToolCall] {
