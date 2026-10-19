@@ -10,6 +10,7 @@
 		A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000100 /* JieboApp.swift */; };
 		A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000101 /* Tokens.swift */; };
 		A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000102 /* JieboMark.swift */; };
+		PN100201 /* ProductNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = PN100101 /* ProductNavigation.swift */; };
 		A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000103 /* JSONValue.swift */; };
 		A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000104 /* Protocol.swift */; };
 		A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */; };
@@ -156,6 +157,7 @@
 		A1B2C3D4E5F6071829000100 /* JieboApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000101 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000102 /* JieboMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboMark.swift; sourceTree = "<group>"; };
+		PN100101 /* ProductNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProductNavigation.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000103 /* JSONValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONValue.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000104 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
@@ -327,6 +329,7 @@
 			children = (
 				A1B2C3D4E5F6071829000101 /* Tokens.swift */,
 				A1B2C3D4E5F6071829000102 /* JieboMark.swift */,
+				PN100101 /* ProductNavigation.swift */,
 			);
 			path = Theme;
 			sourceTree = "<group>";
@@ -637,6 +640,7 @@
 				A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */,
 				A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */,
 				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
+				PN100201 /* ProductNavigation.swift in Sources */,
 				A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */,
 				A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */,
 				MC100201 /* MemoryCenterTypes.swift in Sources */,

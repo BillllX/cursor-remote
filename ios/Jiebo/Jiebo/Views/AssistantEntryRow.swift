@@ -19,18 +19,17 @@ struct AssistantEntryRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: ToolLayer.assistant.symbol)
+                    Image(systemName: NavigationIconId.assistant.symbol)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(JieboColor.pine)
                         .frame(width: 30, height: 30)
                         .background(JieboColor.pine.opacity(0.12))
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-                    Circle()
-                        .fill(JieboColor.ok)
-                        .frame(width: 7, height: 7)
-                        .offset(x: 2, y: -2)
-                        .opacity(badge > 0 ? 1 : 0)
-                        .animation(JieboMotion.fade(reduceMotion), value: badge > 0)
+                    if badge > 0 {
+                        PendingBadge(count: badge)
+                            .offset(x: 7, y: -6)
+                            .animation(JieboMotion.fade(reduceMotion), value: badge)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.assistantName)
@@ -45,17 +44,10 @@ struct AssistantEntryRow: View {
                 }
                 Spacer(minLength: 0)
                 if live {
-                    Text("跑")
-                        .font(JieboFont.ui(10, weight: .medium))
-                        .foregroundStyle(JieboColor.run)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(JieboColor.runBg)
-                        .clipShape(Capsule())
-                } else if unread {
                     Circle()
-                        .fill(JieboColor.pine)
-                        .frame(width: 6, height: 6)
+                        .fill(JieboColor.run)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.horizontal, 10)
@@ -74,8 +66,16 @@ struct AssistantEntryRow: View {
             .animation(JieboMotion.fade(reduceMotion), value: live)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(badge > 0 ? "\(store.assistantName)，\(badge) 条待处理" : store.assistantName)
+        .accessibilityLabel(accessibilityLabel(name: store.assistantName, badge: badge, running: live, unread: unread))
         .accessibilityValue(preview)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func accessibilityLabel(name: String, badge: Int, running: Bool, unread: Bool) -> String {
+        var parts = [name]
+        if badge > 0 { parts.append(StatusLegendId.attention.accessibilityLabel(count: badge)) }
+        if unread { parts.append("助理会话\(StatusLegendId.unread.label)") }
+        if running { parts.append(StatusLegendId.running.label) }
+        return parts.joined(separator: "，")
     }
 }

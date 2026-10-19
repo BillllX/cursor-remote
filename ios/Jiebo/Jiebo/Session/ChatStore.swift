@@ -38,22 +38,26 @@ enum ToolLayer: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .files: return "文件"
-        case .search: return "搜索"
-        case .git: return "Git"
-        case .terminal: return "终端"
+        case .search: return "工作区搜索"
+        case .git: return "源代码管理"
+        case .terminal: return "终端输出"
         case .loop: return "Loop"
         case .assistant: return "助理"
         }
     }
 
     var symbol: String {
+        navigationIcon.symbol
+    }
+
+    var navigationIcon: NavigationIconId {
         switch self {
-        case .files: return "folder"
-        case .search: return "magnifyingglass"
-        case .git: return "arrow.triangle.branch"
-        case .terminal: return "terminal"
-        case .loop: return "arrow.triangle.2.circlepath"
-        case .assistant: return "sparkles"
+        case .files: return .files
+        case .search: return .search
+        case .git: return .git
+        case .terminal: return .terminal
+        case .loop: return .loop
+        case .assistant: return .assistant
         }
     }
 }

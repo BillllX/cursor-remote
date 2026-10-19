@@ -497,6 +497,34 @@ func checkJSONValue() -> [String] {
     return problems
 }
 
+func checkProductNavigation() -> [String] {
+    var problems: [String] = []
+    let navigationKeys = [
+        "assistant", "workspace", "account", "overview", "chats", "files",
+        "search", "git", "memory", "terminal", "loop", "stats",
+    ]
+    let statusKeys = ["normal", "running", "attention", "error", "disabled", "unread"]
+    if NavigationIconId.allCases.map(\.rawValue) != navigationKeys {
+        problems.append("product navigation：NavigationIconId 键或顺序不符")
+    }
+    if StatusLegendId.allCases.map(\.rawValue) != statusKeys {
+        problems.append("product navigation：StatusLegendId 键或顺序不符")
+    }
+    if NavigationIconId.allCases.contains(where: { $0.symbol.isEmpty || $0.label.isEmpty }) {
+        problems.append("product navigation：导航项缺 SF Symbol 或文案")
+    }
+    if StatusLegendId.allCases.contains(where: { $0.symbol.isEmpty || $0.label.isEmpty }) {
+        problems.append("product navigation：状态项缺 SF Symbol 或文案")
+    }
+    if StatusLegendId.unread.accessibilityLabel(count: 3) != "未读 3"
+        || StatusLegendId.running.accessibilityLabel(count: 3) != "运行中"
+    {
+        problems.append("product navigation：状态 accessibilityLabel(count:) 不符")
+    }
+    print("产品导航与状态语义：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: turn_files 迟到合并
 
 func checkDeferredTurnFiles() -> [String] {
@@ -1254,7 +1282,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples)
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples)
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

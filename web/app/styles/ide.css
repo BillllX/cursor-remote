@@ -93,16 +93,14 @@
   .app.ide.pane-git .sidebar,
   .app.ide.pane-search .sidebar,
   .app.ide.pane-terminal .sidebar,
-  .app.ide.pane-loop .sidebar,
-  .app.ide.pane-assistant .sidebar {
+  .app.ide.pane-loop .sidebar {
     display: none;
   }
 
   .app.ide.pane-git > .files-overlay.open,
   .app.ide.pane-search > .search-overlay.open,
   .app.ide.pane-terminal > .search-overlay.open,
-  .app.ide.pane-loop > .search-overlay.open,
-  .app.ide.pane-assistant > .assistant-overlay.open {
+  .app.ide.pane-loop > .search-overlay.open {
     position: relative;
     inset: auto;
     grid-column: 2;
@@ -122,8 +120,7 @@
   .app.ide.pane-git .files-browser,
   .app.ide.pane-search .search-box,
   .app.ide.pane-terminal .terminal-box,
-  .app.ide.pane-loop .loop-box,
-  .app.ide.pane-assistant .assistant-box {
+  .app.ide.pane-loop .loop-box {
     width: 100%;
     height: 100%;
     max-width: none;

@@ -4,6 +4,7 @@
   gap: 10px;
   min-width: 0;
   overflow: hidden;
+  flex: 1;
 }
 
 .searchBar {
@@ -36,6 +37,8 @@
   gap: 10px;
   min-height: 0;
   min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .layoutStack {
@@ -43,7 +46,7 @@
 }
 
 .layoutThree {
-  grid-template-columns: minmax(160px, 0.85fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: 220px minmax(0, 1fr) 320px;
 }
 
 .nav {
@@ -51,7 +54,6 @@
   flex-direction: column;
   gap: 4px;
   min-width: 0;
-  max-height: min(52vh, 480px);
   overflow: auto;
 }
 

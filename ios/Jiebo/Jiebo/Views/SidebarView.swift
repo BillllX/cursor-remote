@@ -8,13 +8,9 @@ struct SidebarView: View {
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     var collapse: () -> Void = {}
     @State private var chatActions = ChatActionTargets()
-    /// P9：管理员统计面板
-    @State private var adminStatsOpen = false
-    @State private var themeOpen = false
-    @State private var logoutConfirm = false
+    @State private var settingsOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -73,25 +69,15 @@ struct SidebarView: View {
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspacePickerSheet()
         }
-        .sheet(isPresented: $themeOpen) {
-            ThemeSettingsSheet()
-        }
-        .sheet(isPresented: $adminStatsOpen) {
-            AdminStatsView()
+        .sheet(isPresented: $settingsOpen) {
+            NavigationStack {
+                PhoneSettingsScreen()
+                    .navigationDestination(for: PhoneRoute.self) { route in
+                        if route == .memory { AssistantMemoryScreen() }
+                    }
+            }
         }
         .chatActionAlerts($chatActions)
-        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) {
-                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
-                Task { @MainActor in
-                    await PushRegistrar.shared.unsubscribe(store: store)
-                    store.logout()
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("退出后需要重新输入访问码才能连回来。")
-        }
     }
 
     private var brandBar: some View {
@@ -159,7 +145,7 @@ struct SidebarView: View {
     private var workspaceCard: some View {
         Button(action: store.openWorkspaceSwitcher) {
             HStack(spacing: 10) {
-                Image(systemName: "folder")
+                Image(systemName: NavigationIconId.workspace.symbol)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 30, height: 30)
@@ -254,7 +240,7 @@ struct SidebarView: View {
         }
         .buttonStyle(PressScaleButtonStyle())
         .animation(JieboMotion.fade(reduceMotion), value: on)
-        .accessibilityLabel(marked ? "\(layer.title)，正在运行" : layer.title)
+        .accessibilityLabel(marked ? "\(layer.title)，\(StatusLegendId.running.label)" : layer.title)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
@@ -281,26 +267,11 @@ struct SidebarView: View {
 
     private var footer: some View {
         HStack {
-            Menu {
-                Button { homeMode = .chat } label: {
-                    Label(im.totalUnread > 0 ? "切换到聊天（\(ImFormat.badge(im.totalUnread)) 条未读）" : "切换到聊天", systemImage: HomeMode.chat.symbol)
-                }
-                Divider()
-                Button { themeOpen = true } label: {
-                    Label("主题 · \(JieboTheme.shared.palette.title)", systemImage: "paintpalette")
-                }
-                if store.isAdmin {
-                    Button { adminStatsOpen = true } label: {
-                        Label("使用统计", systemImage: "chart.bar")
-                    }
-                }
-                Divider()
-                Button(role: .destructive) { logoutConfirm = true } label: {
-                    Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                }
+            Button {
+                settingsOpen = true
             } label: {
                 HStack(spacing: 6) {
-                    Label("设置", systemImage: "gearshape")
+                    Label("账户与设置", systemImage: NavigationIconId.account.symbol)
                         .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                     if im.totalUnread > 0 {
@@ -310,7 +281,8 @@ struct SidebarView: View {
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
+            .buttonStyle(.plain)
+            .accessibilityLabel(im.totalUnread > 0 ? "账户与设置，聊天有 \(im.totalUnread) 条未读" : "账户与设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
@@ -367,7 +339,7 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(live ? "\(chat.title)，正在运行" : chat.title)
+        .accessibilityLabel(live ? "\(chat.title)，\(StatusLegendId.running.label)" : chat.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .chatRowMenu(
             chat,

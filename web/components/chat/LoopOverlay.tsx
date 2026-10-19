@@ -4,7 +4,7 @@ import type { AgentMode, ClientMessage, LoopState } from "@shared/protocol";
 
 type LoopOverlayProps = {
   wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop" | "assistant";
+  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   setLoopOpen: Dispatch<SetStateAction<boolean>>;
   loopTrap: RefObject<HTMLFormElement | null>;
   loopGoal: string;

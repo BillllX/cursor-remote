@@ -2,6 +2,7 @@
 import { useMemo } from "react";
 import type { Chat } from "../types";
 import {
+  currentWorkspaceGroupsOf,
   duplicateNamesOf,
   normPath,
   recentWorkspacesOf,
@@ -55,18 +56,12 @@ export function useWorkspaceGroups({
     [menuWorkspaces, workspaceRoot],
   );
 
-  // 侧栏主区只列有对话的工作区（外加当前所在的）；没对话的收进底部“更多工作区”，工作区再多也不会把侧栏撑满
+  // 侧栏只属于当前工作区；其它工作区统一从顶部切换器进入。
   const sidebarGroups = useMemo(
-    () => workspaceGroups.filter((group) => group.chats.length || sameCwd(group.path, cwd)),
+    () => currentWorkspaceGroupsOf(workspaceGroups, cwd),
     [workspaceGroups, cwd],
   );
-  const moreGroups = useMemo(
-    () =>
-      workspaceGroups
-        .filter((group) => !group.chats.length && !sameCwd(group.path, cwd))
-        .sort((a, b) => a.name.localeCompare(b.name, "zh-CN")),
-    [workspaceGroups, cwd],
-  );
+  const moreGroups = useMemo(() => [], []);
 
   // 新对话浮层的候选：最近用过的排前面，按名字或路径过滤，附带每个工作区已有几个对话
   const workspaceChoices = useMemo(() => {

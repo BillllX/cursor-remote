@@ -108,6 +108,7 @@ struct PhoneSettingsScreen: View {
     @State private var themeOpen = false
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
+    @State private var logoutConfirm = false
 
     init() {}
 
@@ -145,7 +146,7 @@ struct PhoneSettingsScreen: View {
 
                 NavigationLink(value: PhoneRoute.memory) {
                     HStack(spacing: 12) {
-                        Image(systemName: "brain.head.profile")
+                        Image(systemName: NavigationIconId.memory.symbol)
                             .font(JieboFont.text(.subheadline, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
                             .frame(width: 24)
@@ -170,13 +171,28 @@ struct PhoneSettingsScreen: View {
                     Button {
                         adminStatsOpen = true
                     } label: {
-                        settingsRow(symbol: "chart.bar", title: "使用统计", trailing: nil, chevron: true)
+                        settingsRow(symbol: NavigationIconId.stats.symbol, title: "使用统计", trailing: nil, chevron: true)
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(JieboColor.white)
                 } header: {
                     Text("用量")
                 }
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    logoutConfirm = true
+                } label: {
+                    settingsRow(
+                        symbol: "rectangle.portrait.and.arrow.right",
+                        title: "退出登录",
+                        trailing: nil,
+                        chevron: false
+                    )
+                }
+            } header: {
+                Label("账户", systemImage: NavigationIconId.account.symbol)
             }
         }
         .listStyle(.insetGrouped)
@@ -189,6 +205,17 @@ struct PhoneSettingsScreen: View {
         }
         .sheet(isPresented: $adminStatsOpen) {
             AdminStatsView()
+        }
+        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
+            Button("退出登录", role: .destructive) {
+                Task { @MainActor in
+                    await PushRegistrar.shared.unsubscribe(store: store)
+                    store.logout()
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("退出后需要重新输入访问码才能连回来。")
         }
         .task { await refreshNotifyStatus() }
         .onChange(of: scenePhase) { _, phase in

@@ -134,6 +134,27 @@ type Options = {
   resultTick: number;
 };
 
+type MemoryCenterLoadState = {
+  active: boolean;
+  searchActive: boolean;
+  navId: McNavId;
+  hasOverview: boolean;
+  loadingOverview: boolean;
+  detailScopeId?: string;
+  loadingScope: boolean;
+};
+
+/** 返回本轮缺少的数据；undefined 代表 overview，其余字符串代表 scope。 */
+export function memoryCenterLoadPlan(state: MemoryCenterLoadState): (string | undefined)[] {
+  if (!state.active) return [];
+  const loads: (string | undefined)[] = [];
+  if (!state.hasOverview && !state.loadingOverview) loads.push(undefined);
+  if (state.searchActive) return loads;
+  const scope = scopeIdForNav(state.navId);
+  if (scope && state.detailScopeId !== scope && !state.loadingScope) loads.push(scope);
+  return loads;
+}
+
 export function useMemoryCenter({ active, send, lastResult, resultTick }: Options) {
   const [ui, dispatchUi] = useReducer(uiReducer, undefined, initialMemoryCenterUi);
   const [data, dispatchData] = useReducer(dataReducer, undefined, initialMemoryCenterData);
@@ -285,17 +306,16 @@ export function useMemoryCenter({ active, send, lastResult, resultTick }: Option
   }, [sendGet]);
 
   useEffect(() => {
-    if (!active) return;
-    const current = uiRef.current;
-    if (current.searchActive) return;
-    if (current.navId === "overview") {
-      if (!data.overview && !data.loadingOverview) sendGet();
-      return;
-    }
-    const scope = scopeIdForNav(current.navId);
-    if (!scope) return;
-    const detailOk = data.detail?.scope.id === scope;
-    if (!detailOk && !data.loadingScope) sendGet(scope);
+    const loads = memoryCenterLoadPlan({
+      active,
+      searchActive: ui.searchActive,
+      navId: ui.navId,
+      hasOverview: Boolean(data.overview),
+      loadingOverview: data.loadingOverview,
+      detailScopeId: data.detail?.scope.id,
+      loadingScope: data.loadingScope,
+    });
+    for (const scope of loads) sendGet(scope);
   }, [
     active,
     ui.navId,

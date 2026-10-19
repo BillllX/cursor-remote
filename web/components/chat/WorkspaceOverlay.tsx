@@ -9,6 +9,8 @@ import styles from "./WorkspaceOverlay.module.css";
 
 type WorkspaceOverlayProps = {
   workspaceMenuOpen: boolean;
+  mode: "switch" | "new-chat";
+  onPickWorkspace: (path: string) => void;
   setWorkspaceMenuOpen: Dispatch<SetStateAction<boolean>>;
   setWorkspaceCreating: Dispatch<SetStateAction<boolean>>;
   workspaceTrap: RefObject<HTMLDivElement | null>;
@@ -30,7 +32,6 @@ type WorkspaceOverlayProps = {
   workspacePick: number;
   setWorkspaceQuery: Dispatch<SetStateAction<string>>;
   setWorkspaceIndex: Dispatch<SetStateAction<number>>;
-  startChatIn: (path: string) => void;
   send: (message: ClientMessage) => void;
   workspaceRoot: string;
   cwd: string;
@@ -43,6 +44,8 @@ type WorkspaceOverlayProps = {
 
 export function WorkspaceOverlay({
   workspaceMenuOpen,
+  mode,
+  onPickWorkspace,
   setWorkspaceMenuOpen,
   setWorkspaceCreating,
   workspaceTrap,
@@ -52,7 +55,6 @@ export function WorkspaceOverlay({
   workspacePick,
   setWorkspaceQuery,
   setWorkspaceIndex,
-  startChatIn,
   send,
   workspaceRoot,
   cwd,
@@ -75,12 +77,14 @@ export function WorkspaceOverlay({
         className="search-box workspace-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label="新对话：选择工作区"
+        aria-label={mode === "switch" ? "切换工作区" : "新对话：选择工作区"}
         onClick={(event) => event.stopPropagation()}
       >
         <div className={styles.head}>
-          <div className="loop-title">新对话</div>
-          <div className={styles.sub}>选一个工作区，对话里的读写都在这个目录下进行</div>
+          <div className="loop-title">{mode === "switch" ? "切换工作区" : "新对话"}</div>
+          <div className={styles.sub}>
+            {mode === "switch" ? "切换后只显示该工作区的会话和工具" : "选一个工作区，对话里的读写都在这个目录下进行"}
+          </div>
         </div>
         <input
           autoFocus={workspaceMenuOpen}
@@ -106,7 +110,7 @@ export function WorkspaceOverlay({
             if (event.key !== "Enter") return;
             event.preventDefault();
             const pick = workspaceChoices[workspacePick];
-            if (pick) startChatIn(pick.path);
+            if (pick) onPickWorkspace(pick.path);
             else if (workspaceQuery.trim()) send({ type: "create_workspace", name: workspaceQuery.trim() });
           }}
         />
@@ -128,7 +132,7 @@ export function WorkspaceOverlay({
                 onMouseMove={() => {
                   if (index !== workspacePick) setWorkspaceIndex(index);
                 }}
-                onClick={() => startChatIn(item.path)}
+                onClick={() => onPickWorkspace(item.path)}
               >
                 <FolderMark />
                 <span className={styles.text}>

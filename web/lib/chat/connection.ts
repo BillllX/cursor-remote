@@ -24,11 +24,17 @@ export function uploadUrl(chatId: string, name: string) {
   return `${base}/upload?${query}`;
 }
 
+/** 超大回合只走同源代理，令牌留在 Authorization 头，不放进 URL。 */
+export function turnUrl(chatId: string, turnId: string) {
+  const base = process.env.NEXT_PUBLIC_BASE_PATH || "";
+  return `${base}/api/turn?chatId=${encodeURIComponent(chatId)}&turnId=${encodeURIComponent(turnId)}`;
+}
+
 /** hello 携带的客户端标识（P2 协议护栏，网关可据此区分客户端与版本） */
 export const HELLO_CLIENT: HelloClient = {
   name: "cursor-remote-web",
   version: process.env.NEXT_PUBLIC_APP_VERSION ?? "dev",
-  caps: ["sync_chat", "stored_digest", "slim_state"],
+  caps: ["sync_chat", "stored_digest", "slim_state", "deferred_turn"],
   maxMessageBytes: 8 * 1024 * 1024,
 };
 

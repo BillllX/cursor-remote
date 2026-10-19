@@ -36,6 +36,9 @@ type ThreadProps = {
   applyPlan: (turn: Turn) => void;
   keepTurnFiles: (turn: Turn) => void;
   restoreTurnFiles: (turn: Turn) => void;
+  turnBodyLoads: Readonly<Record<string, "loading" | "error">>;
+  loadTurnBody: (chatId: string, turnId: string) => void;
+  releaseTurnBody: (chatId: string, turnId: string) => void;
   setThreadFindQ: Dispatch<SetStateAction<string>>;
   setThreadFindIndex: Dispatch<SetStateAction<number>>;
   setThreadFindOpen: Dispatch<SetStateAction<boolean>>;
@@ -68,6 +71,9 @@ export function Thread({
   applyPlan,
   keepTurnFiles,
   restoreTurnFiles,
+  turnBodyLoads,
+  loadTurnBody,
+  releaseTurnBody,
   setThreadFindQ,
   setThreadFindIndex,
   setThreadFindOpen,
@@ -85,6 +91,8 @@ export function Thread({
     applyPlan,
     keepTurnFiles,
     restoreTurnFiles,
+    loadTurnBody,
+    releaseTurnBody,
   });
   // 每行依赖的派生值（前一有效回合、是否末轮）一次扫描算好，行组件只收原始值
   const rows = planTurnRows(active.turns);
@@ -135,6 +143,9 @@ export function Thread({
             findHit={turn.id === findHitId}
             findQuery={findQuery}
             locked={locked}
+            oversizedState={
+              turnBodyLoads[`${activeId}:${turn.id}`] || (turn.oversized && !turn.deferred ? "loaded" : "idle")
+            }
             activeId={activeId}
             mdComponents={mdComponents}
             lastProgressRef={lastProgressRef}

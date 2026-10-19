@@ -157,7 +157,10 @@ async function main() {
   const passwordInput = loginGate.locator('input[type="password"]');
   const sidebar = page.locator("aside.sidebar");
   const activity = page.getByRole("navigation", { name: "活动栏" });
-  const railButton = (label) => activity.getByRole("button", { name: label, exact: true });
+  const workspaceNav = sidebar.getByRole("navigation", { name: "工作区功能" });
+  const workspaceButton = (label) => workspaceNav.getByRole("button", { name: label, exact: true });
+  const sessionTools = sidebar.getByRole("toolbar", { name: "当前会话工具" });
+  const sessionTool = (label) => sessionTools.getByRole("button", { name: label, exact: true });
   const settingsToggle = page.locator(".side-foot .side-foot-btn:has(.side-foot-cwd)");
   const composer = page.locator("textarea.composer-input");
   const stopButton = page.locator("button.send.stop");
@@ -231,22 +234,22 @@ async function main() {
   );
   await step("b3", "文件浮层", () =>
     overlay(
-      () => railButton("文件").click(),
+      () => workspaceButton("文件").click(),
       page.locator('.files-overlay.open .files-browser[role="dialog"]'),
       () => page.locator(".files-overlay.open .files-browser-close").click(),
     ),
   );
   // 1440 宽是停靠模式：弹层收进侧栏列，是对话框但不是模态
   await step("b4", "全文搜索", () =>
-    overlay(() => railButton("搜索").click(), openBox('.grep-box[role="dialog"]:not([aria-modal])'), esc),
+    overlay(() => workspaceButton("工作区搜索").click(), openBox('.grep-box[role="dialog"]:not([aria-modal])'), esc),
   );
   await step("b5", "终端", () =>
-    overlay(() => railButton("终端").click(), openBox('.terminal-box[role="dialog"]:not([aria-modal])'), esc),
+    overlay(() => sessionTool("终端输出").click(), openBox('.terminal-box[role="dialog"]:not([aria-modal])'), esc),
   );
-  await step("b6", "循环", () => overlay(() => railButton("Loop").click(), openBox(".loop-box"), esc));
+  await step("b6", "循环", () => overlay(() => sessionTool("Loop").click(), openBox(".loop-box"), esc));
   await step("b7", "工作区选择（新对话）：列表撑满对话框、对话框不出屏", () =>
     overlay(
-      () => sidebar.locator(".side-actions .new-chat.primary").click(),
+      () => sidebar.locator(".new-chat.primary").click(),
       openBox(".workspace-dialog"),
       async () => {
         const box = await openBox(".workspace-dialog").evaluate((dialog) => {
@@ -336,7 +339,7 @@ async function main() {
     "c1",
     "新对话选工作区",
     async () => {
-      await sidebar.locator(".side-actions .new-chat.primary").click();
+      await sidebar.locator(".new-chat.primary").click();
       const dialog = openBox(".workspace-dialog");
       await dialog.waitFor({ state: "visible" });
       await dialog.locator('[role="option"]').filter({ hasText: WORKSPACE }).first().click();
@@ -379,7 +382,7 @@ async function main() {
     return `标题「${(await projGroup.locator(".chat-item.active .chat-item-title").innerText()).trim()}」`;
   });
   await step("c5", "停靠搜索上面还有一层时，Esc 只关上层", async () => {
-    await railButton("搜索").click();
+    await workspaceButton("工作区搜索").click();
     const grep = openBox(".grep-box");
     await grep.waitFor({ state: "visible" });
     await page.keyboard.press("Control+f");
@@ -415,7 +418,8 @@ async function main() {
       if ((await projGroup.locator(".chat-group-label").getAttribute("aria-expanded")) !== "true") {
         throw new Error("刷新后该会话所在的分组没展开");
       }
-      if (await sidebar.locator(".assistant-pin.active").count()) throw new Error("刷新后落到了助理会话");
+      if (await activity.locator('button[aria-label*="助理"][aria-pressed="true"]').count())
+        throw new Error("刷新后落到了助理会话");
       if (!(await reply.isVisible())) throw new Error("刷新后的回复又不见了");
       return landing.join("；");
     },
@@ -704,7 +708,7 @@ async function main() {
     "f3",
     "管理统计入口可见并打开",
     async () => {
-      const entry = railButton("查看使用统计");
+      const entry = sidebar.getByRole("button", { name: "查看使用统计", exact: true });
       await entry.waitFor({ state: "visible" });
       await entry.click();
       const box = page.locator('.search-overlay.open .admin-box[role="dialog"]');

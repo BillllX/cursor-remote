@@ -28,13 +28,6 @@ struct MenuDrawer: View {
     /// VoiceOver 焦点：0 是首项「待处理」。nil 时没有行被选中
     @AccessibilityFocusState private var focusedRow: Int?
     @State private var keyboardUp = false
-    /// 「退出登录」由 PhoneShell 弹确认框（抽屉一关，挂在它身上的对话框会跟着消失）
-    var requestLogout: () -> Void
-
-    init(requestLogout: @escaping () -> Void = {}) {
-        self.requestLogout = requestLogout
-    }
-
     private var edgeOpenEnabled: Bool {
         router.path.isEmpty && !keyboardUp
     }
@@ -131,7 +124,7 @@ struct MenuDrawer: View {
                     sectionTitle("助理")
                     menuRow(
                         store.assistantBadgeCount > 0 ? "tray.full" : "tray",
-                        "待处理",
+                        "需要处理",
                         badge: store.assistantBadgeCount,
                         tag: 0
                     ) {
@@ -147,13 +140,8 @@ struct MenuDrawer: View {
                     divider
                         .padding(.vertical, 8)
                     // 聊天未读挂在这里：主页切换在设置页最上面
-                    menuRow("gearshape", "设置", chatUnread: im.totalUnread, tag: 3) {
+                    menuRow(NavigationIconId.account.symbol, "设置", chatUnread: im.totalUnread, tag: 3) {
                         router.go(.settings)
-                    }
-                    divider
-                        .padding(.vertical, 8)
-                    menuRow("rectangle.portrait.and.arrow.right", "退出登录", destructive: true, tag: 4) {
-                        requestLogout()
                     }
                 }
                 .padding(.bottom, 12)

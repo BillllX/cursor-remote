@@ -207,15 +207,16 @@ struct CollapsedSidebarRail: View {
     @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     @State private var adminOpen = false
     @State private var themeOpen = false
-    @State private var logoutConfirm = false
+    @State private var settingsOpen = false
 
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
             railButton(
-                ToolLayer.assistant.symbol,
-                label: store.assistantBadgeCount > 0 ? "\(store.assistantName)，\(store.assistantBadgeCount) 条待处理" : store.assistantName,
-                marked: store.assistantBadgeCount > 0,
+                NavigationIconId.assistant.symbol,
+                label: assistantAccessibilityLabel,
+                badge: store.assistantBadgeCount,
+                marked: store.assistantRunning,
                 on: store.assistantChatActive || store.toolLayer == .assistant,
                 tint: JieboColor.pine,
                 action: store.toggleAssistantRail
@@ -225,20 +226,25 @@ struct CollapsedSidebarRail: View {
                 .frame(width: 24, height: 1)
                 .padding(.vertical, 4)
             ForEach(ToolLayer.workTools) { layer in
-                railButton(layer.symbol, label: layer.title, marked: marked(layer), on: store.toolSelected(layer)) {
+                railButton(
+                    layer.symbol,
+                    label: marked(layer) ? "\(layer.title)，\(StatusLegendId.running.label)" : layer.title,
+                    marked: marked(layer),
+                    on: store.toolSelected(layer)
+                ) {
                     store.toggleTool(layer)
                 }
             }
             Spacer()
-            railButton("square.stack.3d.up", label: "切换工作区", action: store.openWorkspaceSwitcher)
+            railButton(NavigationIconId.workspace.symbol, label: "切换工作区", action: store.openWorkspaceSwitcher)
             railButton(HomeMode.chat.symbol, label: "切换到聊天") { homeMode = .chat }
             railButton("paintpalette", label: "主题") { themeOpen = true }
             if store.isAdmin {
-                railButton("chart.bar", label: "查看使用统计") { adminOpen = true }
+                railButton(NavigationIconId.stats.symbol, label: "查看使用统计") { adminOpen = true }
             }
             LinkStatusDot(state: store.linkState, size: 8)
                 .padding(.top, 4)
-            railButton("rectangle.portrait.and.arrow.right", label: "退出登录") { logoutConfirm = true }
+            railButton(NavigationIconId.account.symbol, label: "账户与设置") { settingsOpen = true }
                 .padding(.bottom, 12)
         }
         .padding(.top, 16)
@@ -248,17 +254,13 @@ struct CollapsedSidebarRail: View {
         .sheet(isPresented: $adminOpen) {
             AdminStatsView()
         }
-        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) {
-                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
-                Task { @MainActor in
-                    await PushRegistrar.shared.unsubscribe(store: store)
-                    store.logout()
-                }
+        .sheet(isPresented: $settingsOpen) {
+            NavigationStack {
+                PhoneSettingsScreen()
+                    .navigationDestination(for: PhoneRoute.self) { route in
+                        if route == .memory { AssistantMemoryScreen() }
+                    }
             }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("退出后需要重新输入访问码才能连回来。")
         }
         .sheet(isPresented: $themeOpen) {
             ThemeSettingsSheet()
@@ -270,6 +272,15 @@ struct CollapsedSidebarRail: View {
         return row.status == "armed" || row.status == "running"
     }
 
+    private var assistantAccessibilityLabel: String {
+        var parts = [store.assistantName]
+        if store.assistantBadgeCount > 0 {
+            parts.append(StatusLegendId.attention.accessibilityLabel(count: store.assistantBadgeCount))
+        }
+        if store.assistantRunning { parts.append(StatusLegendId.running.label) }
+        return parts.joined(separator: "，")
+    }
+
     private func marked(_ layer: ToolLayer) -> Bool {
         layer == .loop && loopLive
     }
@@ -277,6 +288,7 @@ struct CollapsedSidebarRail: View {
     private func railButton(
         _ symbol: String,
         label: String,
+        badge: Int = 0,
         marked: Bool = false,
         on: Bool = false,
         tint: Color? = nil,
@@ -303,11 +315,15 @@ struct CollapsedSidebarRail: View {
                     }
                     .animation(JieboMotion.fade(reduceMotion), value: on)
                 Circle()
-                    .fill(JieboColor.pine)
+                    .fill(JieboColor.run)
                     .frame(width: 6, height: 6)
-                    .offset(x: 2, y: -2)
+                    .offset(x: badge > 0 ? -28 : 2, y: -2)
                     .opacity(marked ? 1 : 0)
                     .animation(JieboMotion.fade(reduceMotion), value: marked)
+                if badge > 0 {
+                    PendingBadge(count: badge)
+                        .offset(x: 5, y: -5)
+                }
             }
             .hitTarget()
         }

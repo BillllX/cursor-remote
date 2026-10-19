@@ -61,7 +61,11 @@ struct AssistantHome: View {
                 }
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(badge > 0 ? "菜单，\(badge) 项待处理" : "菜单")
+        .accessibilityLabel(
+            badge > 0
+                ? "菜单，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
+                : "菜单"
+        )
     }
 
     private var titleView: some View {
@@ -103,7 +107,7 @@ struct AssistantHome: View {
             JieboHaptic.selection()
             router.openHub()
         } label: {
-            Image(systemName: ToolLayer.assistant.symbol)
+            Image(systemName: NavigationIconId.assistant.symbol)
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
                 .frame(width: 36, height: 36)

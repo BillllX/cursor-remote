@@ -160,7 +160,8 @@ export async function sendAgentHistory(ws: WebSocket, conn: Conn, slot: Slot) {
       // 与 load_chat 同口径：条数 40、字节为接收上限的 80%（不限的连接按 800KB）
       const declared = conn.maxMessageBytes;
       const budget = declared > 0 ? Math.floor(declared * 0.8) : 800 * 1024;
-      const page = fitTurnsFromEnd(turns, budget, 40) as HistoryTurn[];
+      const overhead = Buffer.byteLength(JSON.stringify({ type: "history", chatId: slot.chatId, turns: [] }));
+      const page = fitTurnsFromEnd(turns, Math.max(0, budget - overhead + 2), 40) as HistoryTurn[];
       if (page.length) send(ws, { type: "history", chatId: slot.chatId, turns: page });
     }
   } catch (err) {

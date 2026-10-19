@@ -3,10 +3,14 @@ import { describe, test } from "node:test";
 import type { ServerMessage } from "@shared/protocol";
 import {
   applyRunSnapshot,
+  deferredPlaceholder,
+  formatBodyBytes,
   historyToTurns,
   mergeHistoryTurns,
+  preferCompleteTurns,
   serverTurn,
   settleTurn,
+  turnAllowsActions,
   turnHasOpenTools,
   withLiveTurns,
 } from "../lib/chat/turns";
@@ -106,6 +110,15 @@ describe("settleTurn", () => {
   });
 });
 
+describe("formatBodyBytes", () => {
+  test("按 B / KB / MB 显示超大回合大小，未知大小留空", () => {
+    assert.equal(formatBodyBytes(), "");
+    assert.equal(formatBodyBytes(900), "900 B");
+    assert.equal(formatBodyBytes(1536), "1.5 KB");
+    assert.equal(formatBodyBytes(12 * 1024 * 1024), "12 MB");
+  });
+});
+
 describe("applyRunSnapshot", () => {
   test("找不到回合时按 turnId 新建；phase=done 时直接结算", () => {
     const out = applyRunSnapshot(
@@ -146,9 +159,89 @@ describe("applyRunSnapshot", () => {
       ],
     );
   });
+
+  test("普通未打标正文不能吞掉 deferred 快照；同 rev 的 HTTP 正文才可保留", () => {
+    const deferred = { turnId: "a", assistant: "不完整", deferred: true, bodyBytes: 1234 } as Partial<Snapshot> & {
+      deferred: true;
+      bodyBytes: number;
+    };
+    const [ordinary] = applyRunSnapshot([turn({ id: "a", assistant: "可能只是半截" })], snapshot(deferred), 7);
+    assert.equal(ordinary.assistant, "");
+    assert.equal(ordinary.deferred, true);
+    const [streamingPartial] = applyRunSnapshot(
+      [turn({ id: "a", assistant: "仍在流式的半截", running: true })],
+      snapshot(deferred),
+      7,
+    );
+    assert.equal(streamingPartial.assistant, "");
+    assert.equal(streamingPartial.deferred, true);
+    const hydrated = turn({
+      id: "a",
+      assistant: "HTTP 完整正文",
+      oversized: true,
+      oversizedRev: 7,
+    });
+    assert.equal(applyRunSnapshot([hydrated], snapshot(deferred), 7)[0].assistant, "HTTP 完整正文");
+    assert.equal(applyRunSnapshot([hydrated], snapshot(deferred), 8)[0].deferred, true);
+  });
 });
 
 describe("mergeHistoryTurns / withLiveTurns / serverTurn", () => {
+  test("完整回合优先只信任同 rev 的 oversized 标记，版本前进恢复新占位", () => {
+    const complete = turn({
+      id: "same",
+      assistant: "完整正文",
+      oversized: true,
+      oversizedRev: 7,
+      bodyBytes: 9_000_000,
+    });
+    for (const partial of [
+      turn({ id: "same", assistant: "", clipped: true }),
+      turn({ id: "same", assistant: "", deferred: true, bodyBytes: 9_000_000 }),
+    ]) {
+      const out = preferCompleteTurns([complete], [partial, turn({ id: "new" })], 7);
+      assert.equal(out[0], complete);
+      assert.equal(out[1].id, "new");
+      assert.equal(withLiveTurns([complete], [partial], 7)[0], complete);
+      assert.equal(preferCompleteTurns([complete], [partial], 8)[0], partial);
+    }
+    const ordinary = turn({ id: "same", assistant: "未打标旧正文" });
+    const placeholder = turn({ id: "same", deferred: true });
+    assert.equal(preferCompleteTurns([ordinary], [placeholder], 7)[0], placeholder);
+    const livePartial = turn({ id: "same", assistant: "还在流式", running: true });
+    assert.equal(withLiveTurns([livePartial], [placeholder], 7)[0], placeholder);
+    assert.deepEqual(withLiveTurns([ordinary], [], 7), []);
+  });
+
+  test("完整服务端回合可以替换 deferred 占位", () => {
+    const placeholder = turn({ id: "same", deferred: true, bodyBytes: 99 });
+    const complete = turn({ id: "same", assistant: "完整正文" });
+    assert.equal(preferCompleteTurns([placeholder], [complete], 1)[0], complete);
+  });
+
+  test("释放超大正文可直接生成轻量 deferred 占位，且不完整回合禁止破坏性操作", () => {
+    const full = turn({
+      id: "big",
+      user: "问".repeat(300),
+      assistant: "答".repeat(500),
+      thinking: "很长思考",
+      tools: [tool()],
+      oversized: true,
+      oversizedRev: 3,
+      bodyBytes: 9999,
+    });
+    const out = deferredPlaceholder(full);
+    assert.equal(out.deferred, true);
+    assert.equal(out.clipped, true);
+    assert.equal(out.bodyBytes, 9999);
+    assert.equal(out.tools.length, 0);
+    assert.equal(out.thinking, "");
+    assert.ok(out.user.length < full.user.length);
+    assert.equal(turnAllowsActions(out), false);
+    assert.equal(turnAllowsActions(turn({ clipped: true })), false);
+    assert.equal(turnAllowsActions(full), true);
+  });
+
   test("historyToTurns 保留回合文件卡片和来源会话信息", () => {
     const [out] = historyToTurns([
       {

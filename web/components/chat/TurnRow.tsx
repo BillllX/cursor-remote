@@ -11,7 +11,7 @@ import { PERF, perfCountRow } from "../../lib/chat/perf";
 import { silentAssistantTool } from "../../lib/chat/toolKinds";
 import { searchQuery } from "../../lib/chat/tools";
 import { estimateTurnHeight } from "../../lib/chat/threadRows";
-import { editPathsOf, writesWereRejected } from "../../lib/chat/turns";
+import { editPathsOf, formatBodyBytes, turnAllowsActions, writesWereRejected } from "../../lib/chat/turns";
 import type { ToolCall, Turn } from "../../lib/chat/types";
 import { modelLabel } from "../../lib/models";
 import { JieboGlyph } from "../JieboMark";
@@ -31,6 +31,8 @@ export type TurnRowActions = {
   applyPlan: (turn: Turn) => void;
   keepTurnFiles: (turn: Turn) => void;
   restoreTurnFiles: (turn: Turn) => void;
+  loadTurnBody: (chatId: string, turnId: string) => void;
+  releaseTurnBody: (chatId: string, turnId: string) => void;
 };
 
 export type TurnRowProps = {
@@ -47,6 +49,7 @@ export type TurnRowProps = {
   findQuery: string | undefined;
   /** 未连上或有回合在跑：重试、执行计划按钮禁用 */
   locked: boolean;
+  oversizedState: "idle" | "loading" | "error" | "loaded";
   activeId: string;
   mdComponents: Components;
   lastProgressRef: RefObject<Record<string, number>>;
@@ -194,6 +197,7 @@ function TurnRowView({
   findHit,
   findQuery,
   locked,
+  oversizedState,
   activeId,
   mdComponents,
   lastProgressRef,
@@ -207,6 +211,9 @@ function TurnRowView({
     : undefined;
   const paths = editPathsOf(turn);
   const pendingReview = turn.tools.some((tool) => mutatingTool(tool.name) && !tool.review);
+  const oversized = Boolean(turn.deferred || turn.oversized);
+  const actionsDisabled = !turnAllowsActions(turn);
+  const bodySize = formatBodyBytes(turn.bodyBytes);
   return (
     <article
       className={`turn${hideUser ? " turn-continue" : ""}${findHit ? " find-hit" : ""}${deferred ? " turn-cv" : ""}`}
@@ -235,10 +242,15 @@ function TurnRowView({
           </div>
           {!turn.running && !turn.queued ? (
             <div className="turn-actions">
-              <button type="button" className="pill" onClick={() => actions.editTurn(turn)}>
+              <button type="button" className="pill" disabled={actionsDisabled} onClick={() => actions.editTurn(turn)}>
                 编辑
               </button>
-              <button type="button" className="pill" disabled={locked} onClick={() => actions.retryTurn(turn)}>
+              <button
+                type="button"
+                className="pill"
+                disabled={locked || actionsDisabled}
+                onClick={() => actions.retryTurn(turn)}
+              >
                 重试
               </button>
             </div>
@@ -250,6 +262,28 @@ function TurnRowView({
           <JieboGlyph size={16} />
         </span>
         <div className="assistant">
+          {oversized ? (
+            <div className="turn-oversized" role={oversizedState === "error" ? "alert" : undefined}>
+              <span>
+                {oversizedState === "error" ? "内容加载失败" : turn.deferred ? "内容过大，暂未加载" : "内容过大"}
+                {bodySize ? ` · ${bodySize}` : ""}
+              </span>
+              {turn.deferred ? (
+                <button
+                  type="button"
+                  className="pill"
+                  disabled={oversizedState === "loading"}
+                  onClick={() => actions.loadTurnBody(activeId, turn.id)}
+                >
+                  {oversizedState === "loading" ? "加载中…" : oversizedState === "error" ? "重试" : "加载完整内容"}
+                </button>
+              ) : (
+                <button type="button" className="pill" onClick={() => actions.releaseTurnBody(activeId, turn.id)}>
+                  释放
+                </button>
+              )}
+            </div>
+          ) : null}
           {turn.thinking && (turn.running || formatDuration(turn.durationMs)) ? (
             <details key={turn.running ? "live" : "done"} className="thinking" open={turn.running || undefined}>
               <summary>
@@ -300,7 +334,12 @@ function TurnRowView({
             <div className="run-meta">{runMeta(turn.status, turn.durationMs)}</div>
           ) : null}
           {turn.mode === "plan" && turn.assistant && !turn.running && !turn.queued ? (
-            <button type="button" className="apply-plan" disabled={locked} onClick={() => actions.applyPlan(turn)}>
+            <button
+              type="button"
+              className="apply-plan"
+              disabled={locked || actionsDisabled}
+              onClick={() => actions.applyPlan(turn)}
+            >
               执行这个计划
             </button>
           ) : null}

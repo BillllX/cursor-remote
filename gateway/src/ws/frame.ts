@@ -44,8 +44,13 @@ export function shrinkMessage(message: ServerMessage, budget: number): ServerMes
   if (message.type === "workspace_agents") return fitWorkspaceAgents(message, budget);
   if (message.type === "turn_files") return fitTurnFiles(message, budget);
   if (message.type === "canvas_versions") return fitCanvasVersions(message, budget);
-  if (message.type === "history")
-    return { ...message, turns: fitTurnsFromEnd(message.turns, budget, 40) as HistoryTurn[] };
+  if (message.type === "history") {
+    const overhead = Buffer.byteLength(JSON.stringify({ ...message, turns: [] }));
+    return {
+      ...message,
+      turns: fitTurnsFromEnd(message.turns, Math.max(0, budget - overhead + 2), 40) as HistoryTurn[],
+    };
+  }
   if (message.type === "files") {
     const { paths, status, truncated, ...base } = message;
     const overhead = Buffer.byteLength(JSON.stringify({ ...base, truncated: true }));
@@ -229,22 +234,68 @@ function fitImList(message: ImListMessage, budget: number): ImListMessage | null
 
 const emptyRow = { pin: false, convId: "" };
 
-/** 从最后一条往前装，条数和字节双上限；单条超预算先按 load_chat 的规则截短 */
+/** 从最后一条往前装，条数和字节双上限；没有持久化定位信息的历史只能截短，不能承诺 HTTP 回取。 */
 export function fitTurnsFromEnd(all: unknown[], budget: number, maxCount: number): unknown[] {
   const page: unknown[] = [];
-  let bytes = 0;
+  let bytes = 2; // JSON 数组的 []
   for (let i = all.length - 1; i >= 0 && page.length < maxCount; i -= 1) {
     let turn = all[i];
     let size = Buffer.byteLength(JSON.stringify(turn));
-    if (size > budget) {
-      turn = clipTurnForPage(turn, budget);
+    if (size + 2 > budget) {
+      turn = clipTurnForPage(turn, Math.max(0, budget - 2));
       size = Buffer.byteLength(JSON.stringify(turn));
     }
-    if (bytes + size > budget) break;
+    const separator = page.length ? 1 : 0;
+    if (bytes + separator + size > budget) break;
     page.unshift(turn);
-    bytes += size;
+    bytes += separator + size;
   }
   return page;
+}
+
+/** 超大 turn 的轻量非权威占位；按 UTF-8 字节预算缩预览，id 保持不变以便按需拉正文。 */
+export function deferTurnForPage(turn: unknown, bodyBytes: number, budget: number): HistoryTurn | null {
+  const row = turn && typeof turn === "object" ? (turn as Record<string, unknown>) : {};
+  const user = typeof row.user === "string" ? row.user : "";
+  const assistant = typeof row.assistant === "string" ? row.assistant : "";
+  const placeholder = (userChars: number, assistantChars: number): HistoryTurn => ({
+    id: typeof row.id === "string" ? row.id : "",
+    user: preview(user, userChars),
+    assistant: preview(assistant, assistantChars),
+    clipped: true,
+    deferred: true,
+    bodyBytes,
+  });
+  const minimum = placeholder(0, 0);
+  if (Buffer.byteLength(JSON.stringify(minimum)) > budget) return null;
+
+  let low = 0;
+  let high = Math.min(400, user.length + assistant.length);
+  let best = minimum;
+  while (low <= high) {
+    const chars = Math.floor((low + high) / 2);
+    const userChars = Math.min(user.length, Math.floor(chars * 0.4));
+    const candidate = placeholder(userChars, chars - userChars);
+    if (Buffer.byteLength(JSON.stringify(candidate)) <= budget) {
+      best = candidate;
+      low = chars + 1;
+    } else {
+      high = chars - 1;
+    }
+  }
+  return best;
+}
+
+function preview(value: string, chars: number) {
+  if (!chars) return "";
+  let result = "";
+  let count = 0;
+  for (const point of value) {
+    if (count === chars) return `${result}…`;
+    result += point;
+    count += 1;
+  }
+  return result;
 }
 
 /// load_chat 组页时单条 turn 超预算的兜底截断：砍长字符串字段并打 clipped 标记。

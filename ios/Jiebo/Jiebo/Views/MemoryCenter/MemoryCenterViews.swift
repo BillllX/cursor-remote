@@ -356,8 +356,8 @@ struct MemoryCenterNavColumn: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                navButton("overview", title: "总览", symbol: "square.grid.2x2")
-                navButton("personal", title: "关于我", symbol: "person.crop.circle")
+                navButton("overview", title: "总览", symbol: NavigationIconId.overview.symbol)
+                navButton("personal", title: "关于我", symbol: NavigationIconId.account.symbol)
                 navButton("work_preference", title: "工作偏好", symbol: "briefcase")
                 AssistantSection("工作区") {
                     ForEach(MemoryCenterReducer.buildScopeTreeRows(scopes: data.overview?.scopes ?? [])) { row in
@@ -366,7 +366,7 @@ struct MemoryCenterNavColumn: View {
                 }
                 navButton("activity", title: "活动", symbol: "clock")
                 navButton("suggestions", title: "整理建议", symbol: "lightbulb")
-                navButton("settings", title: "设置", symbol: "gearshape")
+                navButton("settings", title: "设置", symbol: NavigationIconId.account.symbol)
             }
             .padding(10)
         }
@@ -1268,7 +1268,7 @@ struct MemoryCenterPhoneHome: View {
                         stateFilter: $stateFilter
                     )
                 } label: {
-                    Label("关于我", systemImage: "person.crop.circle")
+                    Label("关于我", systemImage: NavigationIconId.account.symbol)
                 }
                 NavigationLink {
                     MemoryCenterPhoneScopeList(

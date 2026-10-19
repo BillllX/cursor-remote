@@ -6,7 +6,7 @@ import styles from "./GrepOverlay.module.css";
 type GrepOverlayProps = {
   grepOpen: boolean;
   wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop" | "assistant";
+  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   setGrepOpen: Dispatch<SetStateAction<boolean>>;
   grepTrap: RefObject<HTMLDivElement | null>;
   grepQ: string;

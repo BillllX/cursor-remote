@@ -20,7 +20,7 @@ import { startAssistant, calendarFeed } from "./assistant/service.ts";
 import { createPublishController } from "./publish.ts";
 import { gatewayEnv, loadDotEnv } from "./config.ts";
 import { log } from "./log.ts";
-import { agentSocketPath, handleMedia, handleState, handleUpload } from "./http/routes.ts";
+import { agentSocketPath, handleMedia, handleState, handleStateTurn, handleUpload } from "./http/routes.ts";
 import { isAbortError } from "./runtime/abort.ts";
 import { compactTenantChats } from "./sync/storedState.ts";
 import { delegationWorkspaces, requestWorkspace, startDelegation } from "./bindings/delegations.ts";
@@ -140,6 +140,21 @@ const httpServer = createServer((req, res) => {
       log.error("media", err instanceof Error ? err.message : err);
       if (!res.headersSent) res.writeHead(500).end("media failed");
       else res.destroy();
+    }
+    return;
+  }
+  if (req.method === "GET" && url.pathname === "/state/turn") {
+    try {
+      handleStateTurn(req, res);
+    } catch (err) {
+      log.error("state turn", err instanceof Error ? err.message : err);
+      if (!res.headersSent) {
+        res
+          .writeHead(500, { "content-type": "application/json", "cache-control": "private, no-store" })
+          .end(JSON.stringify({ error: "internal_error" }));
+      } else {
+        res.destroy();
+      }
     }
     return;
   }

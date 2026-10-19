@@ -48,8 +48,9 @@ import MemoryCenterImportPane from "./MemoryCenterImportPane";
 import { useMemoryCenter } from "./useMemoryCenter";
 
 type Props = {
-  docked: boolean;
   active: boolean;
+  initialScopeId?: string;
+  openRequest: number;
   name: string;
   state: AssistantState | null;
   send: (message: ClientMessage) => void;
@@ -77,7 +78,7 @@ function ScopeHealthDot({ health, error }: { health?: string | null; error?: str
     return (
       <span className={`${styles.healthDot} ${styles.healthWarn}`} title={error || "降级"} aria-label="作用域降级" />
     );
-  return <span className={`${styles.healthDot} ${styles.healthOk}`} aria-hidden />;
+  return <span className={`${styles.healthDot} ${styles.healthOk}`} title="正常" aria-label="作用域正常" />;
 }
 
 function ItemRow({
@@ -324,8 +325,9 @@ function RuleDetail({ rule }: { rule: RuleFile }) {
 }
 
 export default function MemoryCenterPanel({
-  docked,
   active,
+  initialScopeId,
+  openRequest,
   name,
   state,
   send,
@@ -335,6 +337,7 @@ export default function MemoryCenterPanel({
   onNotice,
 }: Props) {
   const mc = useMemoryCenter({ active, send, lastResult, resultTick });
+  const dispatchMemoryUi = mc.dispatchUi;
   const [wideThree, setWideThree] = useState(false);
   const middleTitleRef = useRef<HTMLHeadingElement>(null);
   const detailBackRef = useRef<HTMLButtonElement>(null);
@@ -347,18 +350,26 @@ export default function MemoryCenterPanel({
     mc.data.scopeError && currentScopeId && mc.data.activeScopeId === currentScopeId && !mc.ui.searchActive;
 
   useEffect(() => {
-    if (docked) {
-      setWideThree(false);
-      return;
-    }
     const mq = window.matchMedia("(min-width: 960px)");
     const apply = () => setWideThree(mq.matches);
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
-  }, [docked]);
+  }, []);
 
-  const layoutThree = wideThree && !docked;
+  const layoutThree = wideThree;
+
+  useEffect(() => {
+    if (!active) return;
+    dispatchMemoryUi({ type: "set_nav", navId: initialScopeId || "overview" });
+  }, [active, dispatchMemoryUi, initialScopeId, openRequest]);
+
+  useEffect(() => {
+    if (!active || !initialScopeId || !mc.data.overview) return;
+    if (!mc.data.overview.scopes.some((scope) => scope.id === initialScopeId)) {
+      dispatchMemoryUi({ type: "set_nav", navId: "overview" });
+    }
+  }, [active, dispatchMemoryUi, initialScopeId, mc.data.overview, openRequest]);
 
   useEffect(() => {
     if (layoutThree) return;

@@ -19,6 +19,16 @@ export type Turn = {
   assistant: string;
   thinking: string;
   tools: ToolCall[];
+  /** WebSocket 分页中为控制单帧大小而截掉正文。 */
+  clipped?: boolean;
+  /** 正文过大，需按需通过同源 HTTP 接口加载完整回合。 */
+  deferred?: boolean;
+  /** 完整回合序列化后的字节数，供界面提示和缓存决策使用。 */
+  bodyBytes?: number;
+  /** 曾经通过 HTTP 加载过；释放正文后也保留，禁止写入正文缓存。 */
+  oversized?: boolean;
+  /** oversized 正文对应的服务端 chatRev；版本不一致时必须回退到新占位。 */
+  oversizedRev?: number;
   task?: string;
   error?: string;
   running: boolean;

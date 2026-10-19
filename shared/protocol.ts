@@ -629,6 +629,7 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //                     该客户端 sync_chat 可不写 turns 键（=保留服务端 turns，键缺失≠清空）
 //                     网页 v2 起不再上传正文：图片随网关转录落盘，截断走 truncate_turns
 //   "slim_chats"    —— stored_chat 也只给元数据（同 slim_state 的行），内容走 load_chat 分页
+//   "deferred_turn" —— 超大单回合先收轻量占位，再用 GET /state/turn 按需取完整正文
 //   "im"            —— 收发平台用户之间的即时消息（im_*，见 docs/im.md）；连接默认在前台，im_presence 切换
 // slim 行对有内容的会话带 segHashes：第 i 个是 turns[i*100, (i+1)*100) 的 sha1(JSON.stringify(分段))，
 // 客户端据此只重拉变了的分段
@@ -916,6 +917,12 @@ export type HistoryTurn = {
   id: string;
   user: string;
   assistant: string;
+  /** 仅用于传输的非权威副本；上传时网关按 id 保留服务端完整正文 */
+  clipped?: boolean;
+  /** 正文未随本消息发送，客户端应按需从 /state/turn 拉取 */
+  deferred?: boolean;
+  /** 完整 turn 的 JSON UTF-8 字节数 */
+  bodyBytes?: number;
   /** 回合开始时间（毫秒 epoch） */
   startedAt?: number;
   thinking?: string;

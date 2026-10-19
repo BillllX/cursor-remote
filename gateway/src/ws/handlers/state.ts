@@ -19,7 +19,7 @@ import {
   tombstoneChat,
 } from "../../sync/storedState.ts";
 import { protectChatUpload, stopRunFlush } from "../../sync/transcript.ts";
-import { clipTurnForPage } from "../frame.ts";
+import { clipTurnForPage, deferTurnForPage } from "../frame.ts";
 import { send } from "../send.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
 import { workspaceMainChatIds } from "../../workspace/agents.ts";
@@ -253,7 +253,7 @@ export function onSyncChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"sync
   }
   // P8 slim 合并：incoming 没有 turns 键 = 元数据更新，保留服务端 turns
   //（键缺失 ≠ 清空，空数组才是清空；web 永远带 turns 走全量替换，不受影响）。
-  // incoming 带 turns 时，clipped 标记的 turn 是 load_chat 分页的截断展示副本——
+  // incoming 带 turns 时，clipped/deferred 标记的 turn 是 load_chat 分页的非权威展示副本——
   // 按 id 回退服务端完整版，截断内容不允许回写落盘
   if (next && typeof next === "object") {
     const row = next as Record<string, unknown>;
@@ -268,7 +268,12 @@ export function onSyncChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"sync
         next = {
           ...row,
           turns: row.turns.flatMap((t) => {
-            if (!t || typeof t !== "object" || (t as { clipped?: unknown }).clipped !== true) return [t];
+            if (
+              !t ||
+              typeof t !== "object" ||
+              ((t as { clipped?: unknown }).clipped !== true && (t as { deferred?: unknown }).deferred !== true)
+            )
+              return [t];
             // 残片按 id 回退服务端完整版；id 对不上（服务端没有）则丢弃——
             // 保留残片会把截断占位内容永久落盘（GLM 评审 M1）
             const full = fullById.get((t as { id?: unknown }).id);
@@ -370,24 +375,49 @@ export function onLoadChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"load
   const declared = conn.maxMessageBytes;
   const budget = declared > 0 ? Math.floor(declared * 0.8) : 800 * 1024;
   const page: unknown[] = [];
-  let bytes = 0;
   let from = to;
+  const canDefer = conn.caps.has("deferred_turn");
+  const live = runningChatIds(tenant).includes(id);
+  const settle = (turns: unknown[]) =>
+    live ? turns : (settlePersistedChats([{ turns }])[0] as { turns: unknown[] }).turns;
+  const envelopeBytes = (nextFrom: number) =>
+    Buffer.byteLength(
+      JSON.stringify({
+        type: "chat_turns",
+        chatId: id,
+        turns: [],
+        from: nextFrom,
+        hasMore: nextFrom > 0,
+        total: all.length,
+        nonce,
+      }),
+    );
+  let turnBytes = 0;
   while (from > 0 && page.length < 40) {
-    let turn = all[from - 1];
-    let size = Buffer.byteLength(JSON.stringify(turn));
-    if (size > budget) {
-      turn = clipTurnForPage(turn, budget);
-      size = Buffer.byteLength(JSON.stringify(turn));
+    const nextFrom = from - 1;
+    let turn = settle([all[from - 1]])[0];
+    let encoded = JSON.stringify(turn);
+    let size = Buffer.byteLength(encoded);
+    const separatorBytes = page.length ? 1 : 0;
+    const baseBytes = envelopeBytes(nextFrom);
+    if (baseBytes + turnBytes + separatorBytes + size > budget) {
+      if (page.length > 0) break;
+      const available = Math.max(0, budget - baseBytes);
+      turn = canDefer ? deferTurnForPage(turn, size, available) : clipTurnForPage(turn, available);
+      encoded = JSON.stringify(turn);
+      size = Buffer.byteLength(encoded);
+      // 连 id 都塞不进极小预算时，消费这一回合并结束本页，避免客户端永远请求同一个 from。
+      if (turn === null || baseBytes + size > budget) {
+        from = nextFrom;
+        break;
+      }
     }
-    if (bytes + size > budget && page.length > 0) break;
     page.unshift(turn);
-    bytes += size;
+    turnBytes += separatorBytes + size;
     from -= 1;
   }
   // 与 stored_state 同口径的 settle：非 live 会话的磁盘 running 残留（崩溃遗留）
   // 不能原样下发，否则 iOS 上永远转圈（Kimi 设计评审 MINOR6）
-  const settledPage = runningChatIds(tenant).includes(id)
-    ? page
-    : (settlePersistedChats([{ turns: page }])[0] as { turns: unknown[] }).turns;
+  const settledPage = settle(page);
   send(ws, { type: "chat_turns", chatId: id, turns: settledPage, from, hasMore: from > 0, total: all.length, nonce });
 }

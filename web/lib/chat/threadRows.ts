@@ -1,6 +1,6 @@
 // 线程回合列表的纯逻辑：哪些回合要渲染、各行依赖前一有效回合的派生值、哪些旧回合可以让浏览器跳过渲染。
 // 抽成纯函数是为了单测，也让 Thread 每次渲染只扫一遍（原先每行都要 O(n) 地回头找前一有效回合）。
-import { turnSuperseded } from "./turns";
+import { incompleteTurn, turnSuperseded } from "./turns";
 import type { Turn } from "./types";
 
 /** 末尾这几个回合永远不启用 content-visibility：贴底滚动、流式输出、提问卡片都发生在这里 */
@@ -27,7 +27,9 @@ export function planTurnRows(turns: readonly Turn[], liveTail: number = LIVE_TAI
     const prevUser = prev?.user.trim();
     rows.push({
       turn,
-      hideUser: Boolean(prevUser && prevUser === turn.user.trim()),
+      hideUser: Boolean(
+        prevUser && prevUser === turn.user.trim() && prev && !incompleteTurn(prev) && !incompleteTurn(turn),
+      ),
       isLast: index === turns.length - 1,
       deferrable: index < settledUntil && !turn.running && !turn.queued && !turn.pendingTool,
     });

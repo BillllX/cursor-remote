@@ -111,7 +111,7 @@ export function IconRail({
   name,
   size = 16,
 }: {
-  name: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats" | "assistant";
+  name: NavigationIconId;
   size?: number;
 }) {
   const [tint, line] = RAIL[name];
@@ -124,7 +124,37 @@ export function IconRail({
 }
 
 // [填充底色, 线稿]，16 格，线宽 1.4。
-const RAIL: Record<"chats" | "files" | "search" | "git" | "terminal" | "loop" | "stats" | "assistant", [string, string]> = {
+export type NavigationIconId =
+  | "assistant"
+  | "workspace"
+  | "account"
+  | "overview"
+  | "chats"
+  | "files"
+  | "search"
+  | "git"
+  | "memory"
+  | "terminal"
+  | "loop"
+  | "stats";
+
+const RAIL: Record<NavigationIconId, [string, string]> = {
+  workspace: [
+    "M2.5 4.8h11v7.4a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1Z",
+    "M2.5 4.8h4l1.2-1.6h4.8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1ZM5.4 7.4h2.1v2.1H5.4zm3.2 0h2.1v2.1H8.6z",
+  ],
+  account: [
+    "M8 8.1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm-4.4 5.1c.5-2.2 2-3.4 4.4-3.4s3.9 1.2 4.4 3.4",
+    "M8 8.1a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Zm-4.4 5.1c.5-2.2 2-3.4 4.4-3.4s3.9 1.2 4.4 3.4",
+  ],
+  overview: [
+    "M2.8 2.8h4.1v4.1H2.8zm6.3 0h4.1v4.1H9.1zM2.8 9.1h4.1v4.1H2.8zm6.3 0h4.1v4.1H9.1z",
+    "M2.8 2.8h4.1v4.1H2.8zm6.3 0h4.1v4.1H9.1zM2.8 9.1h4.1v4.1H2.8zm6.3 0h4.1v4.1H9.1z",
+  ],
+  memory: [
+    "M3 3.2h3.8a2 2 0 0 1 1.2.4 2 2 0 0 1 1.2-.4H13v9.2H9.2a2 2 0 0 0-1.2.4 2 2 0 0 0-1.2-.4H3Z",
+    "M3 3.2h3.8a2 2 0 0 1 1.2.4 2 2 0 0 1 1.2-.4H13v9.2H9.2a2 2 0 0 0-1.2.4 2 2 0 0 0-1.2-.4H3Zm5 .4v9.2",
+  ],
   chats: [
     "M3.6 3.2h8.8a1.4 1.4 0 0 1 1.4 1.4v5.4a1.4 1.4 0 0 1-1.4 1.4H7.4l-2.8 2.1v-2.1h-1a1.4 1.4 0 0 1-1.4-1.4V4.6a1.4 1.4 0 0 1 1.4-1.4Z",
     "M3.6 3.2h8.8a1.4 1.4 0 0 1 1.4 1.4v5.4a1.4 1.4 0 0 1-1.4 1.4H7.4l-2.8 2.1v-2.1h-1a1.4 1.4 0 0 1-1.4-1.4V4.6a1.4 1.4 0 0 1 1.4-1.4ZM5.4 6h5.2M5.4 8.4h3.2",

@@ -4,7 +4,7 @@ import type { WebSocket } from "ws";
 import type { HistoryTurn, ServerMessage } from "../../shared/protocol.ts";
 import { gatewayState } from "../src/runtime/state.ts";
 import type { Conn } from "../src/runtime/types.ts";
-import { fitCanvasVersions, fitTurnFiles, frameFor, shrinkMessage } from "../src/ws/frame.ts";
+import { fitCanvasVersions, fitTurnFiles, fitTurnsFromEnd, frameFor, shrinkMessage } from "../src/ws/frame.ts";
 
 // iOS 在 hello 里声明的单条消息接收上限
 const IOS_LIMIT = 900 * 1024;
@@ -42,6 +42,20 @@ describe("frameFor：未声明上限的连接不裁", () => {
   test("stored_state 再大也原样发", () => {
     const state: ServerMessage = { type: "stored_state", chats: [{ id: "c", body: big(2 * 1024 * 1024) }] };
     assert.equal(frameFor(web, state), JSON.stringify(state));
+  });
+});
+
+describe("fitTurnsFromEnd：数组边界计入预算", () => {
+  test("预算恰好等于方括号加单条 JSON 时不会意外返回空页", () => {
+    const turn = { id: "t", user: "q", assistant: "a" };
+    const budget = Buffer.byteLength(JSON.stringify(turn)) + 2;
+    assert.deepEqual(fitTurnsFromEnd([turn], budget, 40), [turn]);
+  });
+
+  test("history 的超大回合只能 clip，不会标成可 HTTP 回取的 deferred", () => {
+    const [turn] = fitTurnsFromEnd([{ id: "t", user: "q", assistant: big(10_000) }], 500, 40) as HistoryTurn[];
+    assert.equal(turn.clipped, true);
+    assert.equal(turn.deferred, undefined);
   });
 });
 

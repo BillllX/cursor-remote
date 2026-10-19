@@ -19,7 +19,7 @@ struct AssistantTodayButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: ToolLayer.assistant.symbol)
+                Image(systemName: NavigationIconId.assistant.symbol)
                     .font(.system(size: 12, weight: .semibold))
                 Text("今日")
                     .font(JieboFont.text(.footnote, weight: .medium))
@@ -41,7 +41,11 @@ struct AssistantTodayButton: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(marked ? "今日，\(store.assistantBadgeCount) 条待处理" : "今日")
+        .accessibilityLabel(
+            marked
+                ? "今日，\(StatusLegendId.attention.accessibilityLabel(count: store.assistantBadgeCount))"
+                : "今日"
+        )
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

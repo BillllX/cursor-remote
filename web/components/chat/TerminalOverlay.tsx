@@ -5,7 +5,7 @@ import styles from "./TerminalOverlay.module.css";
 type TerminalOverlayProps = {
   terminalOpen: boolean;
   wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop" | "assistant";
+  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   setTerminalOpen: Dispatch<SetStateAction<boolean>>;
   terminalTrap: RefObject<HTMLDivElement | null>;
   shellEntries: {

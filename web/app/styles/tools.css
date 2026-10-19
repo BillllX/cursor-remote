@@ -239,6 +239,24 @@
   padding: 8px 0 0;
 }
 
+.turn-oversized {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  background: var(--bg-sidebar);
+  font-size: var(--fs-sm);
+}
+
+.turn-oversized .pill {
+  flex: none;
+}
+
 .diff-body,
 .shell-body,
 .shell-out,
@@ -368,8 +386,7 @@ button:hover .side-tool-icon .rail-icon-tint {
 }
 
 button.on .rail-icon-tint,
-button[aria-pressed="true"] .rail-icon-tint,
-.assistant-pin.active .rail-icon-tint {
+button[aria-pressed="true"] .rail-icon-tint {
   opacity: 0.2;
 }
 

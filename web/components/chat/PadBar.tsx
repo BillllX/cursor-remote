@@ -55,11 +55,11 @@ export function PadBar({
         <button
           type="button"
           className={`pill assistant-today${assistantOpen ? " on" : ""}`}
-          aria-label="打开今日、收件箱和记忆"
+          aria-label={`打开助理总览、收件箱和通知${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}`}
           onClick={() => chooseSide("assistant")}
         >
-          今日
-          {assistantBadge > 0 ? <span className="loop-live" /> : null}
+          助理
+          {assistantBadge > 0 ? <span className="assistant-attention-badge" aria-hidden="true">{assistantBadge}</span> : null}
         </button>
       ) : null}
       <button type="button" className="pad-bar-btn" aria-label="打开文件" onClick={openFilesBrowser}>

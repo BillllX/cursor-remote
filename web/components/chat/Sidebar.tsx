@@ -1,14 +1,14 @@
 // 左侧对话列表侧栏
 import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
-import { showsUnread } from "../../lib/chat/sessions";
 import type { Chat } from "../../lib/chat/types";
-import { workspaceLabel } from "../../lib/chat/workspace";
+import { sameCwd, workspaceLabel } from "../../lib/chat/workspace";
 import type { AppearanceId, PaletteId } from "../../lib/theme";
+import type { WorkspaceNavId } from "../../lib/productNavigation";
 import { IconRail } from "../chromeIcons";
 import { JieboMark as Mark } from "../JieboMark";
 import { ChatList } from "./sidebar/ChatList";
-import { SideActions } from "./sidebar/SideActions";
 import { SideFoot } from "./sidebar/SideFoot";
+import { WorkspaceNavigation } from "./WorkspaceNavigation";
 import styles from "./Sidebar.module.css";
 
 type SidebarProps = {
@@ -19,20 +19,19 @@ type SidebarProps = {
   cwd: string;
   workspaceRoot: string;
   assistantName: string;
-  assistantChatId: string;
   assistantActive: boolean;
-  assistantChat: Chat | undefined;
+  assistantOpen: boolean;
   openAssistantChat: () => boolean;
   assistantBadge: number;
-  assistantPreview: string;
   workspaceMenuOpen: boolean;
+  workspaceSection: WorkspaceNavId;
+  openWorkspaceDomain: () => void;
+  openWorkspaceSwitcher: () => void;
+  openWorkspaceMemory: () => void;
+  openWorkspaceManagement: () => void;
   newChat: () => void;
-  wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop" | "assistant";
-  grepOpen: boolean;
   terminalOpen: boolean;
   loopOpen: boolean;
-  filesOpen: boolean;
   chooseSide: (pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") => void;
   loopLive: boolean;
   sidebarGroups: {
@@ -77,9 +76,6 @@ type SidebarProps = {
   moreOpen: boolean;
   setMoreOpen: Dispatch<SetStateAction<boolean>>;
   openNewChatMenu: () => void;
-  openFilesBrowser: () => void;
-  gitStatus: Record<string, string>;
-  treePaths: string[];
   isAdmin: boolean;
   openAdminStats: () => void;
   setSettingsOpen: Dispatch<SetStateAction<boolean>>;
@@ -105,21 +101,20 @@ export function Sidebar({
   cwd,
   workspaceRoot,
   assistantName,
-  assistantChatId,
   assistantActive,
-  assistantChat,
+  assistantOpen,
   openAssistantChat,
   assistantBadge,
-  assistantPreview,
   workspaceMenuOpen,
+  workspaceSection,
+  openWorkspaceDomain,
+  openWorkspaceSwitcher,
+  openWorkspaceMemory,
+  openWorkspaceManagement,
   newChat,
-  wideIDE,
-  sidePane,
-  grepOpen,
+  chooseSide,
   terminalOpen,
   loopOpen,
-  filesOpen,
-  chooseSide,
   loopLive,
   sidebarGroups,
   moreGroups,
@@ -143,9 +138,6 @@ export function Sidebar({
   moreOpen,
   setMoreOpen,
   openNewChatMenu,
-  openFilesBrowser,
-  gitStatus,
-  treePaths,
   isAdmin,
   openAdminStats,
   setSettingsOpen,
@@ -157,6 +149,11 @@ export function Sidebar({
   setThemeChoice,
   logout,
 }: SidebarProps) {
+  const currentGroup = sidebarGroups[0];
+  const canManageWorkspace = Boolean(
+    currentGroup && !currentGroup.user && !sameCwd(currentGroup.path, workspaceRoot),
+  );
+  const assistantSelected = assistantActive || assistantOpen;
   return (
     <aside className="sidebar" ref={navDrag.ref}>
       <div className={styles.brand}>
@@ -168,43 +165,68 @@ export function Sidebar({
           </div>
         </div>
       </div>
-      {assistantChatId ? (
+      <div className="mobile-domain-nav" aria-label="一级导航">
         <button
           type="button"
-          className={`chat-item assistant-pin${assistantActive ? " active" : ""}${showsUnread(assistantChat, activeId) ? " unread" : ""}`}
-          title={`${assistantName} · 助理`}
-          onClick={openAssistantChat}
+          className={assistantSelected ? "on" : ""}
+          aria-pressed={assistantSelected}
+          aria-label={`助理${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}`}
+          onClick={() => {
+            openAssistantChat();
+            chooseSide("assistant");
+          }}
         >
-          <span className="assistant-pin-icon">
-            <IconRail name="assistant" size={14} />
-            {assistantBadge > 0 ? <span className="loop-live" /> : null}
-          </span>
-          <span className={styles.pinCopy}>
-            <span className={styles.pinName}>{assistantName}</span>
-            <span className={styles.pinPreview}>{assistantPreview}</span>
-          </span>
-          {assistantChat?.turns.some((turn) => turn.running) ? (
-            <span className="chat-mark run">跑</span>
-          ) : showsUnread(assistantChat, activeId) ? (
-            <span className="chat-mark unread">新</span>
-          ) : null}
+          <IconRail name="assistant" size={14} />
+          助理
         </button>
-      ) : null}
-      <div className={`${styles.workspacePicker}${workspaceMenuOpen ? " open" : ""}`}>
-        <SideActions
-          workspaceMenuOpen={workspaceMenuOpen}
-          newChat={newChat}
-          wideIDE={wideIDE}
-          sidePane={sidePane}
-          grepOpen={grepOpen}
-          terminalOpen={terminalOpen}
-          loopOpen={loopOpen}
-          filesOpen={filesOpen}
-          chooseSide={chooseSide}
-          loopLive={loopLive}
-        />
+        <button
+          type="button"
+          className={assistantSelected ? "" : "on"}
+          aria-pressed={!assistantSelected}
+          aria-label="工作区"
+          onClick={openWorkspaceDomain}
+        >
+          <IconRail name="workspace" size={14} />
+          工作区
+        </button>
       </div>
-      <ChatList
+      <WorkspaceNavigation
+        workspaceName={sidebarGroups[0]?.name || workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
+        workspacePath={sidebarGroups[0]?.path || cwd || workspaceRoot}
+        active={workspaceSection}
+        loopLive={loopLive}
+        activeSessionTool={loopOpen ? "loop" : terminalOpen ? "terminal" : undefined}
+        managementDisabled={!canManageWorkspace}
+        managementHint="当前没有可管理的子工作区；请先切换或新建工作区。"
+        onSwitchWorkspace={openWorkspaceSwitcher}
+        onNavigate={(id) => {
+          if (id === "files") chooseSide("files");
+          else if (id === "search") chooseSide("search");
+          else if (id === "git") chooseSide("git");
+          else if (id === "memory") openWorkspaceMemory();
+          else if (id === "management") openWorkspaceManagement();
+          else chooseSide("chats");
+        }}
+        onSessionTool={(id) => chooseSide(id)}
+      />
+      <button className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`} type="button" onClick={newChat}>
+        + 新对话
+      </button>
+      {workspaceSection === "management" ? (
+        <section className="workspace-management" aria-label="工作区管理">
+          <div className="side-label">工作区管理</div>
+          {canManageWorkspace && currentGroup ? (
+            <>
+              <p className="loop-meta">管理「{currentGroup.name}」的名称或从列表移除。</p>
+              <div className="workspace-management-menu">
+                {groupMenuNode(currentGroup.path, currentGroup.name, currentGroup.chats.length)}
+              </div>
+            </>
+          ) : (
+            <p className="loop-meta">当前没有可管理的子工作区。USER 根目录不能在这里管理，请先切换或新建工作区。</p>
+          )}
+        </section>
+      ) : <ChatList
         sidebarGroups={sidebarGroups}
         moreGroups={moreGroups}
         activeId={activeId}
@@ -228,17 +250,7 @@ export function Sidebar({
         moreOpen={moreOpen}
         setMoreOpen={setMoreOpen}
         openNewChatMenu={openNewChatMenu}
-      />
-      <button type="button" className="side-files-btn" onClick={openFilesBrowser}>
-        <span>文件</span>
-        <span className={styles.filesMeta}>
-          {Object.keys(gitStatus).length
-            ? `${Object.keys(gitStatus).length} 处改动`
-            : treePaths.length
-              ? `${treePaths.length}`
-              : "浏览"}
-        </span>
-      </button>
+      />}
       <SideFoot
         isAdmin={isAdmin}
         openAdminStats={openAdminStats}

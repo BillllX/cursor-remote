@@ -414,7 +414,7 @@ export function mergeUploadedTurns(
   const fullById = new Map(prevTurns.map((item) => [turnIdOf(item), item]));
   const used = new Set<number>();
   const merged = incoming.flatMap((item) => {
-    if (isRecord(item) && item.clipped === true) {
+    if (isRecord(item) && (item.clipped === true || item.deferred === true)) {
       const full = fullById.get(turnIdOf(item));
       return full ? [full] : [];
     }
@@ -446,11 +446,11 @@ export function mergeUploadedTurns(
 function uploadCoversMark(incoming: unknown[], mark: RunMark | null) {
   if (!mark || mark.phase !== "done") return false;
   const match = [...incoming].reverse().find((item) => {
-    if (!isRecord(item) || item.clipped === true) return false;
+    if (!isRecord(item) || item.clipped === true || item.deferred === true) return false;
     if (turnIdOf(item) === mark.turnId) return true;
     return userFingerprint(textOf(item, "user")) === userFingerprint(mark.userText);
   });
-  if (!match || !isRecord(match) || match.clipped === true) return false;
+  if (!match || !isRecord(match) || match.clipped === true || match.deferred === true) return false;
   return (
     textOf(match, "assistant").length >= mark.assistantChars &&
     textOf(match, "thinking").length >= mark.thinkingChars

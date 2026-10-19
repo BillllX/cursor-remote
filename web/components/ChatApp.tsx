@@ -26,7 +26,8 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
-import AssistantPanel from "./AssistantPanel";
+import AssistantPanel, { type AssistantView } from "./AssistantPanel";
+import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { extractDiff, mutatingTool } from "./ToolCard";
 import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
@@ -50,7 +51,7 @@ import {
 } from "../lib/models";
 import { useFocusTrap } from "../lib/useFocusTrap";
 import { IconRail } from "./chromeIcons";
-import { gatewayUrl, HELLO_CLIENT, uploadUrl, wire } from "../lib/chat/connection";
+import { gatewayUrl, HELLO_CLIENT, turnUrl, uploadUrl, wire } from "../lib/chat/connection";
 import { friendlyError } from "../lib/chat/format";
 import { useHeldOpen, useSheetDrag } from "../lib/chat/hooks/sheet";
 import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
@@ -61,9 +62,11 @@ import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReady
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows } from "../lib/chat/tools";
-import { editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
+import { cancelTurnBodyRequest, startTurnBodyRequest, type TurnBodyRequest } from "../lib/chat/turnBodyRequest";
+import { deferredPlaceholder, editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnAllowsActions, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
-import { gitLetterOf, inWorkspaceRoot, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile } from "../lib/chat/workspace";
+import { gitLetterOf, inWorkspaceRoot, moveWorkspacePath, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceRemovalRecovery } from "../lib/chat/workspace";
+import type { WorkspaceNavId } from "../lib/productNavigation";
 import { AdminOverlay } from "./chat/AdminOverlay";
 import { AssistantChatHead } from "./chat/AssistantChatHead";
 import { ComposerDock } from "./chat/ComposerDock";
@@ -84,8 +87,14 @@ import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 
 // 服务端正文覆盖本地回合时，保留“还在跑 / 排队 / 待批”的回合（withLiveTurns）；测量开关打开时再保留合成的回合，
 // 否则网关随后推来的正文会把长会话场景造的回合冲掉。没开测量时就是 withLiveTurns 本身。
-const mergeBodyTurns = (local: Turn[], server: Turn[]): Turn[] =>
-  PERF ? keepPerfTurns(local, withLiveTurns(local, server)) : withLiveTurns(local, server);
+const mergeBodyTurns = (
+  local: Turn[],
+  server: Turn[],
+  targetRev: number,
+): Turn[] => {
+  const merged = withLiveTurns(local, server, targetRev);
+  return PERF ? keepPerfTurns(local, merged) : merged;
+};
 
 export default function ChatApp() {
   const wsRef = useRef<WebSocket | null>(null);
@@ -93,12 +102,21 @@ export default function ChatApp() {
   const [modelUsable, setModelUsable] = useState(true);
   const [cwd, setCwd] = useState("");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const workspaceRootRef = useRef(workspaceRoot);
+  workspaceRootRef.current = workspaceRoot;
   const [workspaces, setWorkspaces] = useState<{ path: string; name: string; user?: boolean }[]>([]);
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const [workspaceCreating, setWorkspaceCreating] = useState(false);
   const [workspaceQuery, setWorkspaceQuery] = useState("");
   const [workspaceIndex, setWorkspaceIndex] = useState(0);
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
+  const [workspacePickerMode, setWorkspacePickerMode] = useState<"switch" | "new-chat">("new-chat");
+  const [workspaceSection, setWorkspaceSection] = useState<WorkspaceNavId>("chats");
+  const [emptyWorkspacePath, setEmptyWorkspacePath] = useState("");
+  const emptyWorkspacePathRef = useRef(emptyWorkspacePath);
+  emptyWorkspacePathRef.current = emptyWorkspacePath;
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   /** 侧栏里“更多工作区”（还没有对话的）是否展开 */
   const [moreOpen, setMoreOpen] = useState(false);
@@ -118,6 +136,7 @@ export default function ChatApp() {
   const [models, setModels] = useState<string[]>([DEFAULT_MODEL]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [turnBodyLoads, setTurnBodyLoads] = useState<Record<string, "loading" | "error">>({});
   const [draft, setDraft] = useState("");
   const [composerEpoch, setComposerEpoch] = useState(0);
   const [draftCaret, setDraftCaret] = useState<number | null>(null);
@@ -134,11 +153,17 @@ export default function ChatApp() {
   const [grepOpen, setGrepOpen] = useState(false);
   const [loopOpen, setLoopOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantInitialView, setAssistantInitialView] = useState<AssistantView>("overview");
+  const [assistantMemoryScopeId, setAssistantMemoryScopeId] = useState<string>();
+  const [assistantMemorySource, setAssistantMemorySource] = useState<AssistantMemorySource>("assistant");
+  const [assistantOpenRequest, setAssistantOpenRequest] = useState(0);
   const [assistantName, setAssistantName] = useState(DEFAULT_ASSISTANT_NAME);
   const [assistantChatId, setAssistantChatId] = useState("");
   // 助理会话：每个租户唯一，固定在 USER 根目录，不能删、不能换工作区
   const assistantChatIdRef = useRef("");
   const isAssistantChat = (id?: string) => Boolean(id) && id === assistantChatIdRef.current;
+  const lastWorkspaceChatIdRef = useRef("");
+  const lastWorkspacePathRef = useRef("");
   // 自动选中（非用户点选）的会话；助理会话就绪后可被它替换
   const autoPickedIdRef = useRef("");
   const [assistantState, setAssistantState] = useState<AssistantState | null>(null);
@@ -160,7 +185,7 @@ export default function ChatApp() {
     }
   };
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant">("chats");
+  const [sidePane, setSidePane] = useState<"chats" | "files" | "search" | "git" | "terminal" | "loop">("chats");
   const [wideIDE, setWideIDE] = useState(false);
   const wideIDERef = useRef(false);
   wideIDERef.current = wideIDE;
@@ -183,6 +208,12 @@ export default function ChatApp() {
   const filesShown = useHeldOpen(filesOpen);
   const [filesQuery, setFilesQuery] = useState("");
   const [grepHits, setGrepHits] = useState<SearchHit[]>([]);
+
+  useEffect(() => {
+    if ((workspaceSection === "files" || workspaceSection === "git") && !filesOpen) setWorkspaceSection("chats");
+    if (workspaceSection === "search" && !grepOpen) setWorkspaceSection("chats");
+    if (workspaceSection === "memory" && !assistantOpen) setWorkspaceSection("chats");
+  }, [assistantOpen, filesOpen, grepOpen, workspaceSection]);
   const [grepIndex, setGrepIndex] = useState(0);
   const [grepWait, setGrepWait] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -285,22 +316,24 @@ export default function ChatApp() {
     () => (assistantChatId ? chats.find((chat) => chat.id === assistantChatId) : undefined),
     [chats, assistantChatId],
   );
-  const assistantPreview = useMemo(() => {
-    const turns = assistantChat?.turns || [];
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const text = (turns[i].assistant.trim() || turns[i].user.trim()).replace(/\s+/g, " ");
-      if (text) return text.slice(0, 80);
-    }
-    return assistantChat?.preview?.trim().slice(0, 80) || "今日 · 收件箱 · 记忆";
-  }, [assistantChat?.turns, assistantChat?.preview]);
-
+  const workspaceContextCwd =
+    emptyWorkspacePath ||
+    (isAssistantChat(activeId)
+      ? (chats.find((chat) => chat.id === lastWorkspaceChatIdRef.current)?.cwd ||
+        lastWorkspacePathRef.current ||
+        chats
+          .filter((chat) => !isAssistantChat(chat.id) && chat.cwd)
+          .sort((a, b) => (b.touchedAt || 0) - (a.touchedAt || 0))[0]?.cwd ||
+        workspaces.find((workspace) => !sameCwd(workspace.path, workspaceRoot))?.path ||
+        cwd)
+      : cwd);
   const { duplicateGroupNames, otherMenuWorkspaces, sidebarGroups, moreGroups, workspaceChoices } = useWorkspaceGroups({
     chats,
     workspaceRoot,
     workspaces,
     assistantName,
     sidebarChats,
-    cwd,
+    cwd: workspaceContextCwd,
     workspaceQuery,
   });
   const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
@@ -315,6 +348,7 @@ export default function ChatApp() {
   const imagesRef = useRef<Record<string, PromptImage[]>>({});
   const newChatRef = useRef<() => void>(() => {});
   const startChatInRef = useRef<(path: string) => void>(() => {});
+  const selectChatRef = useRef<(chat: Chat) => void>(() => {});
   const searchOpenRef = useRef(false);
   const paletteOpenRef = useRef(false);
   const threadFindOpenRef = useRef(false);
@@ -344,6 +378,8 @@ export default function ChatApp() {
   const bodyRef = useRef<Map<string, BodyState>>(new Map());
   const loadNonceRef = useRef(0);
   const cacheTimersRef = useRef<Map<string, number>>(new Map());
+  const deferredTurnsRef = useRef<Map<string, Turn>>(new Map());
+  const turnBodyRequestRef = useRef<TurnBodyRequest | null>(null);
   const stateTimerRef = useRef<number | undefined>(undefined);
   /// load_state 已发、stored_state 还没回：先别上传元数据，否则旧字段会盖掉别处的改动
   const stateWaitRef = useRef(0);
@@ -370,6 +406,19 @@ export default function ChatApp() {
   const stallNoticedRef = useRef<Set<string>>(new Set());
   const tenantIdRef = useRef("");
 
+  useEffect(() => {
+    const request = turnBodyRequestRef.current;
+    if (!request || request.key.startsWith(`${activeId}:`)) return;
+    cancelTurnBodyRequest(request);
+    turnBodyRequestRef.current = null;
+    setTurnBodyLoads((prev) => {
+      if (!(request.key in prev)) return prev;
+      const next = { ...prev };
+      delete next[request.key];
+      return next;
+    });
+  }, [activeId]);
+
   function resetTenantSession() {
     const boot: Chat = { id: "boot", title: "新对话", turns: [] };
     chatsRef.current = [boot];
@@ -387,6 +436,10 @@ export default function ChatApp() {
     syncedMetaRef.current = new Map();
     inflightMetaRef.current = new Map();
     bodyRef.current = new Map();
+    deferredTurnsRef.current = new Map();
+    turnBodyRequestRef.current?.controller.abort();
+    turnBodyRequestRef.current = null;
+    setTurnBodyLoads({});
     stateWaitRef.current = 0;
     for (const timer of cacheTimersRef.current.values()) window.clearTimeout(timer);
     cacheTimersRef.current = new Map();
@@ -504,6 +557,8 @@ export default function ChatApp() {
   busyRef.current = busy;
   const workspaceMenuOpenRef = useRef(false);
   workspaceMenuOpenRef.current = workspaceMenuOpen;
+  const assistantOpenRef = useRef(false);
+  assistantOpenRef.current = assistantOpen;
   const mentionQueryRef = useRef(mentionQuery);
   mentionQueryRef.current = mentionQuery;
   const mentionRangeRef = useRef<{ query: string; start: number } | null>(null);
@@ -599,7 +654,7 @@ export default function ChatApp() {
 
   const onServer = useCallback(
     (message: ServerMessage) => {
-      const ctx: ChatReduceContext = { activeId: activeIdRef.current };
+      const ctx: ChatReduceContext = { activeId: activeIdRef.current, chatRevs: chatRevsRef.current };
       const chatId = serverChatId(message, ctx.activeId);
       const reduceChats = () => applyChats((prev) => applyServerMessage(prev, message, ctx));
       if (
@@ -673,8 +728,7 @@ export default function ChatApp() {
             setAssistantChatId(message.assistantChatId || "");
             send({ type: "assistant_get" });
             if (inboxDeepLinkRef.current) {
-              if (wideIDERef.current) chooseSide("assistant");
-              else setAssistantOpen(true);
+              chooseSide("assistant");
             }
             setLoops(loopsFromReady(message.loops));
             applyChats((prev) => applyReadyRuns(prev, message));
@@ -1475,6 +1529,19 @@ export default function ChatApp() {
           const move = workspaceMover(message);
           reduceChats();
           setCwd((prev) => move(prev) || prev);
+          setWorkspaces((prev) =>
+            prev.map((item) =>
+              sameCwd(item.path, message.from)
+                ? { ...item, path: message.path, name: message.name }
+                : item,
+            ),
+          );
+          setEmptyWorkspacePath((prev) => moveWorkspacePath(prev, message.from, message.path));
+          lastWorkspacePathRef.current = moveWorkspacePath(
+            lastWorkspacePathRef.current,
+            message.from,
+            message.path,
+          );
           setExpandedGroups((prev) => {
             const from = normPath(message.from);
             const next = new Set([...prev].map((key) => (key === from ? normPath(message.path) : key)));
@@ -1484,18 +1551,43 @@ export default function ChatApp() {
           send({ type: "load_state" });
           break;
         }
-        case "workspace_removed":
+        case "workspace_removed": {
+          const affected =
+            inWorkspaceRoot(emptyWorkspacePathRef.current, message.path) ||
+            inWorkspaceRoot(lastWorkspacePathRef.current, message.path) ||
+            inWorkspaceRoot(cwdRef.current, message.path);
+          const remainingWorkspaces = workspacesRef.current.filter(
+            (item) => !inWorkspaceRoot(item.path, message.path),
+          );
+          const recovery = workspaceRemovalRecovery(
+            message.path,
+            chatsRef.current,
+            remainingWorkspaces,
+            workspaceRootRef.current,
+            lastWorkspaceChatIdRef.current,
+            assistantChatIdRef.current,
+          );
+          setWorkspaces(remainingWorkspaces);
           setExpandedGroups((prev) => {
             const next = new Set(prev);
             next.delete(normPath(message.path));
             return next;
           });
+          if (affected) {
+            lastWorkspaceChatIdRef.current = recovery.chat?.id || "";
+            lastWorkspacePathRef.current = recovery.path;
+            setEmptyWorkspacePath(recovery.chat ? "" : recovery.path);
+            setWorkspaceSection("chats");
+            if (recovery.chat) selectChatRef.current(recovery.chat);
+            else setCwd(recovery.path || workspaceRootRef.current);
+          }
           setNotice(
             message.mode === "deleted"
               ? `已删除工作区「${message.name}」`
               : `「${message.name}」里有文件，已从列表隐藏（文件没动）`,
           );
           break;
+        }
         default:
           break;
       }
@@ -1756,6 +1848,7 @@ export default function ChatApp() {
 
   const layerSeqRef = useRef<Record<string, number>>({});
   const layerOpen: Record<string, boolean> = {
+    assistant: assistantOpen,
     groupMenu: groupMenu != null,
     admin: adminOpen,
     workspace: workspaceMenuOpen,
@@ -1786,6 +1879,7 @@ export default function ChatApp() {
       if (event.key === "Escape") {
         // 同时开着几层时先关最后打开的那层；打开时间一样时按这里的先后
         const layers: [string, boolean, () => void][] = [
+          ["assistant", assistantOpenRef.current, () => setAssistantOpen(false)],
           [
             "groupMenu",
             groupMenuRef.current != null,
@@ -1852,6 +1946,8 @@ export default function ChatApp() {
           }
         }
         if (top) {
+          event.preventDefault();
+          event.stopPropagation();
           top();
           return;
         }
@@ -1865,6 +1961,7 @@ export default function ChatApp() {
       }
       if (meta && event.key.toLowerCase() === "k") {
         event.preventDefault();
+        setAssistantOpen(false);
         setPaletteOpen(false);
         setThreadFindOpen(false);
         setGrepOpen(false);
@@ -1875,6 +1972,7 @@ export default function ChatApp() {
       }
       if (meta && event.key.toLowerCase() === "p") {
         event.preventDefault();
+        setAssistantOpen(false);
         setSearchOpen(false);
         setThreadFindOpen(false);
         setGrepOpen(false);
@@ -1887,6 +1985,7 @@ export default function ChatApp() {
       if (meta && event.key.toLowerCase() === "f") {
         if (event.shiftKey) {
           event.preventDefault();
+          setAssistantOpen(false);
           setSearchOpen(false);
           setPaletteOpen(false);
           setThreadFindOpen(false);
@@ -1903,6 +2002,7 @@ export default function ChatApp() {
             : Boolean(document.activeElement?.closest(".file-preview"));
         if (inPreview) return;
         event.preventDefault();
+        setAssistantOpen(false);
         setSearchOpen(false);
         setPaletteOpen(false);
         setThreadFindOpen(true);
@@ -2278,6 +2378,9 @@ export default function ChatApp() {
     setWorkspaceCreating(false);
     setWorkspaceNameDraft("");
     setNavOpen(false);
+    setEmptyWorkspacePath("");
+    setWorkspaceSection("chats");
+    lastWorkspacePathRef.current = next;
     if (empties.length) {
       const keep = {
         ...empties[0],
@@ -2295,6 +2398,7 @@ export default function ChatApp() {
         cwd: next,
         model: chat.model || nextModel,
       }));
+      lastWorkspaceChatIdRef.current = keep.id;
       selectChat({ ...keep, cwd: next });
       return;
     }
@@ -2324,6 +2428,7 @@ export default function ChatApp() {
     };
     applyChats((prev) => [chat, ...prev]);
     autoPickedIdRef.current = "";
+    lastWorkspaceChatIdRef.current = chat.id;
     setActiveId(chat.id);
     if (nextModel) {
       modelRef.current = nextModel;
@@ -2344,15 +2449,45 @@ export default function ChatApp() {
   startChatInRef.current = startChatIn;
 
   function openNewChatMenu() {
+    setWorkspaceSection("chats");
+    setWorkspacePickerMode("new-chat");
     send({ type: "list_workspaces" });
     setWorkspaceCreating(false);
     setWorkspaceQuery("");
     setWorkspaceIndex(0);
     setSearchOpen(false);
     setPaletteOpen(false);
+    setAssistantOpen(false);
     // 窄屏抽屉的层级比浮层高，先收起抽屉
     setNavOpen(false);
     setWorkspaceMenuOpen(true);
+  }
+
+  function openWorkspaceSwitcher() {
+    setWorkspacePickerMode("switch");
+    send({ type: "list_workspaces" });
+    setWorkspaceCreating(false);
+    setWorkspaceQuery("");
+    setWorkspaceIndex(0);
+    setAssistantOpen(false);
+    setNavOpen(false);
+    setWorkspaceMenuOpen(true);
+  }
+
+  function switchWorkspace(path: string) {
+    const target = chatsRef.current
+      .filter((chat) => !isAssistantChat(chat.id) && sameCwd(chat.cwd || workspaceRoot, path))
+      .sort((a, b) => (b.touchedAt || 0) - (a.touchedAt || 0))[0];
+    setWorkspaceMenuOpen(false);
+    setWorkspaceSection("chats");
+    if (target) {
+      setEmptyWorkspacePath("");
+      selectChat(target);
+    } else {
+      lastWorkspacePathRef.current = path;
+      setEmptyWorkspacePath(path);
+      setAssistantOpen(false);
+    }
   }
   newChatRef.current = openNewChatMenu;
 
@@ -2401,8 +2536,30 @@ export default function ChatApp() {
   }
 
   function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") {
+    setNavOpen(false);
+    if (pane === "assistant") {
+      setWorkspaceMenuOpen(false);
+      setGroupMenu(null);
+      setAdminOpen(false);
+      setSearchOpen(false);
+      setPaletteOpen(false);
+      setThreadFindOpen(false);
+      setFilesOpen(false);
+      setGrepOpen(false);
+      setLoopOpen(false);
+      setTerminalOpen(false);
+      setAssistantInitialView("overview");
+      setAssistantMemoryScopeId(undefined);
+      setAssistantMemorySource("assistant");
+      setAssistantOpenRequest((value) => value + 1);
+      setAssistantOpen(true);
+      return;
+    }
+    if (pane === "chats") setWorkspaceSection("chats");
+    if (pane === "files") setWorkspaceSection("files");
+    if (pane === "search") setWorkspaceSection("search");
+    if (pane === "git") setWorkspaceSection("git");
     if (!wideIDERef.current) {
-      if (pane === "chats") setNavOpen(true);
       if (pane === "files" || pane === "git") openFilesBrowser();
       if (pane === "search") {
         setPaletteOpen(false);
@@ -2416,12 +2573,6 @@ export default function ChatApp() {
         setTerminalOpen(false);
         setAssistantOpen(false);
         setLoopOpen(true);
-      }
-      if (pane === "assistant") {
-        setGrepOpen(false);
-        setLoopOpen(false);
-        setTerminalOpen(false);
-        setAssistantOpen(true);
       }
       if (pane === "terminal") {
         setGrepOpen(false);
@@ -2439,7 +2590,7 @@ export default function ChatApp() {
     setFilesOpen(pane === "files" || pane === "git");
     setGrepOpen(pane === "search");
     setLoopOpen(pane === "loop");
-    setAssistantOpen(pane === "assistant");
+    setAssistantOpen(false);
     setTerminalOpen(pane === "terminal");
     if (pane === "files") setFilesQuery("");
   }
@@ -2451,6 +2602,7 @@ export default function ChatApp() {
       if (assistantChatIdRef.current) setNotice("助理会话还没同步到本机，稍后再试。");
       return false;
     }
+    setEmptyWorkspacePath("");
     if (chat.id === activeIdRef.current) setNavOpen(false);
     else selectChat(chat);
     return true;
@@ -2461,9 +2613,43 @@ export default function ChatApp() {
     chooseSide("assistant");
   }
 
+  function openWorkspaceDomain() {
+    setNavOpen(false);
+    setAssistantOpen(false);
+    const recent =
+      chatsRef.current.find((chat) => chat.id === lastWorkspaceChatIdRef.current && !isAssistantChat(chat.id)) ||
+      chatsRef.current
+        .filter((chat) => !isAssistantChat(chat.id) && chat.id !== "boot")
+        .sort((a, b) => (b.touchedAt || 0) - (a.touchedAt || 0))[0];
+    if (recent) {
+      setEmptyWorkspacePath("");
+      selectChat(recent);
+    } else if (otherMenuWorkspaces[0]) {
+      lastWorkspacePathRef.current = otherMenuWorkspaces[0].path;
+      setEmptyWorkspacePath(otherMenuWorkspaces[0].path);
+    }
+    chooseSide("chats");
+  }
+
+  function openWorkspaceMemory() {
+    const scopeId = relToCwd(workspaceContextCwd || "", workspaceRoot);
+    setNavOpen(false);
+    setWorkspaceSection("memory");
+    setAssistantInitialView("memory");
+    setAssistantMemoryScopeId(scopeId || undefined);
+    setAssistantMemorySource("workspace");
+    setAssistantOpenRequest((value) => value + 1);
+    setAssistantOpen(true);
+  }
+
+  function openWorkspaceManagement() {
+    setWorkspaceSection("management");
+    setGroupMenu(null);
+  }
+
   function openChatById(chatId: string) {
     if (!chatId) {
-      if (openAssistantChat() && !wideIDERef.current) setAssistantOpen(false);
+      if (openAssistantChat()) setAssistantOpen(false);
       return;
     }
     const chat = chatsRef.current.find((row) => row.id === chatId);
@@ -2472,8 +2658,8 @@ export default function ChatApp() {
       return;
     }
     selectChat(chat);
-    // 和收件箱一致：宽屏助理留在侧栏列，窄屏关掉浮层才能看见会话
-    if (!wideIDERef.current) setAssistantOpen(false);
+    setAssistantOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>("main.main")?.focus());
   }
 
   function answerDelegation(approval: AssistantApproval, allow: boolean) {
@@ -2492,20 +2678,25 @@ export default function ChatApp() {
     if (!chat) {
       // 没有关联会话（提醒、简报）：回助理会话；助理会话也没同步时留在收件箱里看正文
       if (!item.chatId && openAssistantChat()) {
-        if (wideIDERef.current) chooseSide("assistant");
-        else setAssistantOpen(false);
+        setAssistantOpen(false);
+        requestAnimationFrame(() => document.querySelector<HTMLElement>("main.main")?.focus());
         return;
       }
-      if (wideIDERef.current) chooseSide("assistant");
-      else setAssistantOpen(true);
+      setAssistantOpen(false);
+      requestAnimationFrame(() => document.querySelector<HTMLElement>("main.main")?.focus());
       return;
     }
     selectChat(chat);
-    // 宽屏时助理留在侧栏列，主区换成这个会话；窄屏关掉浮层才能看见会话
-    if (!wideIDERef.current) setAssistantOpen(false);
+    setAssistantOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>("main.main")?.focus());
   }
 
   function selectChat(chat: Chat) {
+    if (!isAssistantChat(chat.id) && chat.id !== "boot") {
+      lastWorkspaceChatIdRef.current = chat.id;
+      lastWorkspacePathRef.current = chat.cwd || workspaceRoot;
+    }
+    setEmptyWorkspacePath("");
     if (chat.id !== activeIdRef.current) {
       const leaving = chatsRef.current.find((item) => item.id === activeIdRef.current);
       const cross =
@@ -2567,6 +2758,7 @@ export default function ChatApp() {
       send({ type: "resume_session", chatId: chat.id, agentId: chat.agentId });
     }
   }
+  selectChatRef.current = selectChat;
 
   async function addImages(files: FileList | File[]) {
     const next = await filesToImages(files);
@@ -2715,6 +2907,8 @@ export default function ChatApp() {
 
   function openAdminStats() {
     if (!isAdmin) return;
+    setNavOpen(false);
+    setAssistantOpen(false);
     setAdminOpen(true);
     send({ type: "admin_stats" });
   }
@@ -3041,11 +3235,119 @@ export default function ChatApp() {
     bodyRef.current.delete(id);
     syncedMetaRef.current.delete(id);
     inflightMetaRef.current.delete(id);
+    for (const key of deferredTurnsRef.current.keys()) {
+      if (key.startsWith(`${id}:`)) deferredTurnsRef.current.delete(key);
+    }
+    if (turnBodyRequestRef.current?.key.startsWith(`${id}:`)) {
+      turnBodyRequestRef.current.controller.abort();
+    }
+    setTurnBodyLoads((prev) =>
+      Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith(`${id}:`))),
+    );
     delete chatRevsRef.current[id];
     const timer = cacheTimersRef.current.get(id);
     if (timer) window.clearTimeout(timer);
     cacheTimersRef.current.delete(id);
     void dropBody(tenantIdRef.current, id);
+  }
+
+  function setTurnBodyLoad(key: string, state?: "loading" | "error") {
+    setTurnBodyLoads((prev) => {
+      if (state && prev[key] === state) return prev;
+      if (state) return { ...prev, [key]: state };
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
+
+  async function loadTurnBody(chatId: string, turnId: string) {
+    const key = `${chatId}:${turnId}`;
+    const chat = chatsRef.current.find((item) => item.id === chatId);
+    const placeholder = chat?.turns.find((turn) => turn.id === turnId);
+    if (!placeholder?.deferred) return;
+    const started = startTurnBodyRequest(turnBodyRequestRef.current, key);
+    if (!started.started) return;
+    if (started.canceledKey) setTurnBodyLoad(started.canceledKey);
+    const requestedRev = chatRevsRef.current[chatId];
+    const auth = tokenRef.current.trim();
+    if (requestedRev == null || !auth) {
+      setTurnBodyLoad(key, "error");
+      return;
+    }
+    const controller = started.request.controller;
+    turnBodyRequestRef.current = started.request;
+    deferredTurnsRef.current.set(key, placeholder);
+    setTurnBodyLoad(key, "loading");
+    const timer = window.setTimeout(() => controller.abort(), 65_000);
+    try {
+      const response = await fetch(turnUrl(chatId, turnId), {
+        headers: { authorization: `Bearer ${auth}` },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            chatId?: string;
+            turnId?: string;
+            chatRev?: number;
+            rev?: number;
+            turn?: unknown;
+            error?: string;
+          }
+        | null;
+      if (!response.ok || !payload) throw new Error(payload?.error || `加载失败（${response.status}）`);
+      const responseRev = payload.chatRev ?? payload.rev;
+      const full = serverTurn(payload.turn);
+      if (
+        payload.chatId !== chatId ||
+        (payload.turnId != null && payload.turnId !== turnId) ||
+        responseRev !== requestedRev ||
+        chatRevsRef.current[chatId] !== requestedRev ||
+        full?.id !== turnId ||
+        full.deferred ||
+        full.clipped
+      ) {
+        throw new Error("回合版本已变化，请重试");
+      }
+      patchChat(chatId, (item) => ({
+        ...item,
+        turns: item.turns.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...full,
+                oversized: true,
+                oversizedRev: requestedRev,
+                bodyBytes: full.bodyBytes ?? placeholder.bodyBytes,
+              }
+            : turn,
+        ),
+      }));
+      // 这份正文只供当前内存查看，已有的整会话缓存也不能继续冒充完整副本。
+      void dropBody(tenantIdRef.current, chatId);
+      setTurnBodyLoad(key);
+    } catch {
+      if (!controller.signal.aborted && chatsRef.current.some((item) => item.id === chatId)) {
+        setTurnBodyLoad(key, "error");
+      }
+    } finally {
+      window.clearTimeout(timer);
+      if (turnBodyRequestRef.current?.key === key) turnBodyRequestRef.current = null;
+    }
+  }
+
+  function releaseTurnBody(chatId: string, turnId: string) {
+    const key = `${chatId}:${turnId}`;
+    patchChat(chatId, (chat) => ({
+      ...chat,
+      turns: chat.turns.map((turn) => {
+        if (turn.id !== turnId || (!turn.oversized && !turn.deferred)) return turn;
+        return deferredTurnsRef.current.get(key) || deferredPlaceholder(turn);
+      }),
+    }));
+    deferredTurnsRef.current.delete(key);
+    setTurnBodyLoad(key);
   }
 
   /** 正文完整、和服务端同版本、没有在跑的回合时，写进浏览器缓存 */
@@ -3064,7 +3366,7 @@ export default function ChatApp() {
         if (!chat || body?.state !== "complete" || body.rev == null) return;
         if (body.rev !== chatRevsRef.current[id] || chat.turns.some(liveTurn)) return;
         // 超大回合分页时是截断副本，不能当完整正文缓存
-        if (chat.turns.some((turn) => (turn as { clipped?: boolean }).clipped)) return;
+        if (chat.turns.some((turn) => turn.clipped || turn.deferred || turn.oversized)) return;
         // 测量开关下合成的回合不能进缓存，否则关掉开关后刷新还会读到它们
         if (PERF && chat.turns.some(isPerfTurn)) return;
         void writeBody(tenant, id, body.rev, chat.turns);
@@ -3072,10 +3374,14 @@ export default function ChatApp() {
     );
   }
 
+  function mergeServerBody(id: string, local: Turn[], server: Turn[], rev: number) {
+    return mergeBodyTurns(local, server, rev);
+  }
+
   function commitBody(id: string, turns: Turn[], rev: number) {
     bodyRef.current.set(id, { state: "complete", rev });
     applyChats((prev) =>
-      prev.map((chat) => (chat.id === id ? { ...chat, turns: mergeBodyTurns(chat.turns, turns) } : chat)),
+      prev.map((chat) => (chat.id === id ? { ...chat, turns: mergeServerBody(id, chat.turns, turns, rev) } : chat)),
     );
     setBodyTick((n) => n + 1);
     scheduleBodyCache(id);
@@ -3127,7 +3433,7 @@ export default function ChatApp() {
         cur.base = cached.turns;
         applyChats((prev) =>
           prev.map((item) =>
-            item.id === id ? { ...item, turns: mergeBodyTurns(item.turns, cached.turns) } : item,
+            item.id === id ? { ...item, turns: mergeServerBody(id, item.turns, cached.turns, target) } : item,
           ),
         );
       }
@@ -3167,7 +3473,9 @@ export default function ChatApp() {
     if (cur.progressive) {
       const shown = cur.buf;
       applyChats((prev) =>
-        prev.map((chat) => (chat.id === id ? { ...chat, turns: mergeBodyTurns(chat.turns, shown) } : chat)),
+        prev.map((chat) =>
+          chat.id === id ? { ...chat, turns: mergeServerBody(id, chat.turns, shown, cur.target) } : chat,
+        ),
       );
     }
     setBodyTick((n) => n + 1);
@@ -3311,6 +3619,10 @@ export default function ChatApp() {
   }
 
   function retryTurn(turn: Turn) {
+    if (!turnAllowsActions(turn)) {
+      setNotice("请先加载完整内容再重试");
+      return;
+    }
     if (!connected) return;
     if (busyRef.current) {
       setNotice("等当前这条跑完再重试");
@@ -3359,6 +3671,10 @@ export default function ChatApp() {
   }
 
   function editTurn(turn: Turn) {
+    if (!turnAllowsActions(turn)) {
+      setNotice("请先加载完整内容再编辑");
+      return;
+    }
     if (busyRef.current) {
       setNotice("等当前这条跑完再编辑");
       return;
@@ -3677,6 +3993,10 @@ export default function ChatApp() {
   }
 
   function applyPlan(turn: Turn) {
+    if (!turnAllowsActions(turn)) {
+      setNotice("请先加载完整内容再执行计划");
+      return;
+    }
     if (!connected || busyRef.current) return;
     setMode("agent");
     modeRef.current = "agent";
@@ -3854,6 +4174,7 @@ export default function ChatApp() {
   const searchTrap = useFocusTrap<HTMLDivElement>(searchOpen);
   const paletteTrap = useFocusTrap<HTMLDivElement>(paletteOpen);
   const workspaceTrap = useFocusTrap<HTMLDivElement>(workspaceMenuOpen);
+  const assistantTrap = useFocusTrap<HTMLDivElement>(assistantOpen);
   useEffect(() => {
     if (!workspaceMenuOpen) return;
     document.getElementById(`workspace-choice-${workspacePick}`)?.scrollIntoView({ block: "nearest" });
@@ -3874,7 +4195,9 @@ export default function ChatApp() {
   const loopRow = loops[activeId];
   const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
   const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
-  const assistantActive = Boolean(assistantChatId) && activeId === assistantChatId;
+  const assistantActive = !emptyWorkspacePath && Boolean(assistantChatId) && activeId === assistantChatId;
+  const assistantDomainActive = assistantActive || assistantOpen;
+  const assistantChatUnread = Boolean(assistantChat?.unread) && !assistantActive;
 
   // 用户选中的会话记在本机，刷新后 stored_state 据此落回原会话；自动挑的不记，免得下次被当成用户选的
   useEffect(() => {
@@ -3918,38 +4241,40 @@ export default function ChatApp() {
         {error ? friendlyError(error) : ""}
       </div>
       <nav className="activity-bar" aria-label="活动栏">
-        {(
-          [
-            ["assistant", `${assistantName} · 助理`],
-            ["chats", "对话"],
-            ["files", "文件"],
-            ["search", "搜索"],
-            ["git", "Git"],
-            ["terminal", "终端"],
-            ["loop", "Loop"],
-          ] as const
-        ).map(([pane, label]) => {
-          const marked = (pane === "loop" && loopLive) || (pane === "assistant" && assistantBadge > 0);
-          return (
-            <button
-              key={pane}
-              type="button"
-              className={`${sidePane === pane ? "on" : ""}${marked ? " live" : ""}`}
-              aria-pressed={sidePane === pane}
-              aria-label={label}
-              title={label}
-              onClick={() => (pane === "assistant" ? openAssistantFromRail() : chooseSide(pane))}
-            >
-              <IconRail name={pane} />
-              {marked ? <span className="loop-live" /> : null}
-            </button>
-          );
-        })}
-        {isAdmin ? (
-          <button type="button" className="activity-admin" aria-label="查看使用统计" onClick={openAdminStats}>
-            <IconRail name="stats" />
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className={`${assistantDomainActive ? "on" : ""}${assistantBadge > 0 ? " live" : ""}`}
+          aria-pressed={assistantDomainActive}
+          aria-label={`${assistantName} · 助理${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}${assistantChatUnread ? "，助理会话未读" : ""}`}
+          title={`${assistantName} · 助理`}
+          onClick={openAssistantFromRail}
+        >
+          <IconRail name="assistant" />
+          {assistantBadge > 0 ? <span className="assistant-attention-badge" aria-hidden="true">{assistantBadge}</span> : null}
+        </button>
+        <button
+          type="button"
+          className={assistantDomainActive ? "" : "on"}
+          aria-pressed={!assistantDomainActive}
+          aria-label="工作区"
+          title="工作区"
+          onClick={openWorkspaceDomain}
+        >
+          <IconRail name="workspace" />
+        </button>
+        <button
+          type="button"
+          className="activity-account"
+          aria-label="账户与设置"
+          title="账户与设置"
+          onClick={() => {
+            setAssistantOpen(false);
+            chooseSide("chats");
+            setSettingsOpen(true);
+          }}
+        >
+          <IconRail name="account" />
+        </button>
       </nav>
       {adminOpen ? <AdminOverlay
         setAdminOpen={setAdminOpen}
@@ -3973,6 +4298,8 @@ export default function ChatApp() {
       /> : null}
       {workspaceShown ? <WorkspaceOverlay
         workspaceMenuOpen={workspaceMenuOpen}
+        mode={workspacePickerMode}
+        onPickWorkspace={workspacePickerMode === "switch" ? switchWorkspace : startChatIn}
         setWorkspaceMenuOpen={setWorkspaceMenuOpen}
         setWorkspaceCreating={setWorkspaceCreating}
         workspaceTrap={workspaceTrap}
@@ -3982,7 +4309,6 @@ export default function ChatApp() {
         workspacePick={workspacePick}
         setWorkspaceQuery={setWorkspaceQuery}
         setWorkspaceIndex={setWorkspaceIndex}
-        startChatIn={startChatIn}
         send={send}
         workspaceRoot={workspaceRoot}
         cwd={cwd}
@@ -4005,11 +4331,14 @@ export default function ChatApp() {
       /> : null}
       <AssistantPanel
         open={assistantOpen}
-        docked={wideIDE && sidePane === "assistant"}
+        dialogRef={assistantTrap}
+        initialView={assistantInitialView}
+        initialMemoryScopeId={assistantMemoryScopeId}
+        initialMemorySource={assistantMemorySource}
+        openRequest={assistantOpenRequest}
         onClose={() => {
           clearInboxDeepLink();
-          if (wideIDE && sidePane === "assistant") chooseSide("chats");
-          else setAssistantOpen(false);
+          setAssistantOpen(false);
         }}
         name={assistantName}
         state={assistantState}
@@ -4101,23 +4430,22 @@ export default function ChatApp() {
       />
       <Sidebar
         navDrag={navDrag}
-        cwd={cwd}
+        cwd={workspaceContextCwd}
         workspaceRoot={workspaceRoot}
         assistantName={assistantName}
-        assistantChatId={assistantChatId}
         assistantActive={assistantActive}
-        assistantChat={assistantChat}
+        assistantOpen={assistantOpen}
         openAssistantChat={openAssistantChat}
         assistantBadge={assistantBadge}
-        assistantPreview={assistantPreview}
         workspaceMenuOpen={workspaceMenuOpen}
+        workspaceSection={workspaceSection}
+        openWorkspaceDomain={openWorkspaceDomain}
+        openWorkspaceSwitcher={openWorkspaceSwitcher}
+        openWorkspaceMemory={openWorkspaceMemory}
+        openWorkspaceManagement={openWorkspaceManagement}
         newChat={newChat}
-        wideIDE={wideIDE}
-        sidePane={sidePane}
-        grepOpen={grepOpen}
         terminalOpen={terminalOpen}
         loopOpen={loopOpen}
-        filesOpen={filesOpen}
         chooseSide={chooseSide}
         loopLive={loopLive}
         sidebarGroups={sidebarGroups}
@@ -4142,9 +4470,6 @@ export default function ChatApp() {
         moreOpen={moreOpen}
         setMoreOpen={setMoreOpen}
         openNewChatMenu={openNewChatMenu}
-        openFilesBrowser={openFilesBrowser}
-        gitStatus={gitStatus}
-        treePaths={treePaths}
         isAdmin={isAdmin}
         openAdminStats={openAdminStats}
         setSettingsOpen={setSettingsOpen}
@@ -4157,7 +4482,7 @@ export default function ChatApp() {
         logout={logout}
       />
 
-      <main className={`main${previewTabs.length ? " with-preview" : ""}${previewMax ? " preview-max" : ""}${previewTabs.some((tab) => isWideKind(tabKind(tab.path, tab.kind)) && sameFile(tab.path, previewPath)) ? " with-canvas" : ""}`}>
+      <main tabIndex={-1} className={`main${previewTabs.length ? " with-preview" : ""}${previewMax ? " preview-max" : ""}${previewTabs.some((tab) => isWideKind(tabKind(tab.path, tab.kind)) && sameFile(tab.path, previewPath)) ? " with-canvas" : ""}`}>
         <div className="main-col">
         <PadBar
           navOpen={navOpen}
@@ -4175,13 +4500,19 @@ export default function ChatApp() {
         {assistantActive ? (
           <AssistantChatHead
             assistantName={assistantName}
-            wideIDE={wideIDE}
-            sidePane={sidePane}
             chooseSide={chooseSide}
             assistantBadge={assistantBadge}
           />
         ) : null}
-        {empty ? (
+        {emptyWorkspacePath ? (
+          <div className="empty-state">
+            <h1>这个工作区还没有会话</h1>
+            <p>新建对话后，会话会显示在这里。</p>
+            <button type="button" className="new-chat primary" onClick={() => startChatIn(emptyWorkspacePath)}>
+              + 新对话
+            </button>
+          </div>
+        ) : empty ? (
           <EmptyState
             error={error}
             notice={notice}
@@ -4216,6 +4547,9 @@ export default function ChatApp() {
               applyPlan={applyPlan}
               keepTurnFiles={keepTurnFiles}
               restoreTurnFiles={restoreTurnFiles}
+              turnBodyLoads={turnBodyLoads}
+              loadTurnBody={loadTurnBody}
+              releaseTurnBody={releaseTurnBody}
               setThreadFindQ={setThreadFindQ}
               setThreadFindIndex={setThreadFindIndex}
               setThreadFindOpen={setThreadFindOpen}
@@ -4301,7 +4635,7 @@ export default function ChatApp() {
             </button>
           </>
         ) : null}
-            <ComposerDock
+            {!emptyWorkspacePath ? <ComposerDock
               jumpState={jumpState}
               empty={empty}
               scrollThreadToEnd={scrollThreadToEnd}
@@ -4345,7 +4679,7 @@ export default function ChatApp() {
               dismissMention={dismissMention}
               draftCaret={draftCaret}
               setDraftCaret={setDraftCaret}
-            />
+            /> : null}
       </main>
     </div>
   );

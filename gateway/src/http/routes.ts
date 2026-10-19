@@ -4,9 +4,10 @@ import { resolve } from "node:path";
 import { isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
 import { log } from "../log.ts";
 import { matchMediaTenant, sendMediaBuffer, sendMediaFile } from "../media.ts";
-import { chatOwnedByOther, cwdForChat } from "../runtime/slots.ts";
+import { chatIdOf } from "../runtime/chats.ts";
+import { chatOwnedByOther, cwdForChat, runningChatIds } from "../runtime/slots.ts";
 import { storedStatePayload } from "../sync/storedState.ts";
-import { allTenants, getTenant, hasAuth, mediaSecret, resolveTenant } from "../tenants.ts";
+import { allTenants, getTenant, hasAuth, mediaSecret, resolveTenant, settlePersistedChats } from "../tenants.ts";
 import { isSha, readArtifact, SNAPSHOT_GONE } from "../turnFiles.ts";
 import { MAX_UPLOAD_BYTES, uniqueUploadPath, workspacePath, writeWorkspaceBytes } from "../workspace/files.ts";
 import { gitBytes, gitRoot, shadowGitEnv } from "../workspace/git.ts";
@@ -270,4 +271,43 @@ export function handleState(req: IncomingMessage, res: ServerResponse) {
   const slim = new URL(req.url || "/", "http://127.0.0.1").searchParams.get("slim") === "1";
   res.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
   res.end(JSON.stringify(storedStatePayload(tenant, slim)));
+}
+
+/// GET /state/turn：按会话和回合 id 拉取被 deferred 的完整正文。
+/// 读取 chat.turns 会触发 BodyStore 的按需 hydrate，避免另写一套正文读取逻辑。
+export function handleStateTurn(req: IncomingMessage, res: ServerResponse) {
+  const headers = { "content-type": "application/json", "cache-control": "private, no-store" };
+  try {
+    const header = String(req.headers.authorization || "");
+    const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1]?.trim() || "";
+    const tenant = bearer ? resolveTenant(bearer) : null;
+    if (!hasAuth() || !tenant) {
+      res.writeHead(401, headers).end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    const params = new URL(req.url || "/", "http://127.0.0.1").searchParams;
+    const chatId = params.get("chatId") || "";
+    const turnId = params.get("turnId") || "";
+    const chat =
+      chatId && turnId && !tenant.disk.deletedIds.includes(chatId)
+        ? tenant.disk.chats.find((item) => chatIdOf(item) === chatId)
+        : null;
+    const turns =
+      chat && typeof chat === "object" && Array.isArray((chat as { turns?: unknown }).turns)
+        ? (chat as { turns: unknown[] }).turns
+        : [];
+    const stored = turns.find((item) => item && typeof item === "object" && (item as { id?: unknown }).id === turnId);
+    if (!stored) {
+      res.writeHead(404, headers).end(JSON.stringify({ error: "not_found" }));
+      return;
+    }
+    const turn = runningChatIds(tenant).includes(chatId)
+      ? stored
+      : (settlePersistedChats([{ turns: [stored] }])[0] as { turns: unknown[] }).turns[0];
+    const body = JSON.stringify({ chatId, turnId, chatRev: tenant.disk.chatRevs[chatId] ?? 0, turn });
+    res.writeHead(200, headers).end(body);
+  } catch {
+    if (!res.headersSent) res.writeHead(500, headers).end(JSON.stringify({ error: "internal_error" }));
+    else res.destroy();
+  }
 }

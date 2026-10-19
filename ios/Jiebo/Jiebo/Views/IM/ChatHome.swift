@@ -149,7 +149,7 @@ struct ChatListView: View {
                     store.openAssistantFromChatHome()
                 } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: "sparkles")
+                        Image(systemName: NavigationIconId.assistant.symbol)
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(JieboColor.brass)
                             .frame(width: 48, height: 48)
@@ -204,7 +204,7 @@ struct ChatListView: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(action: openSettings) {
-                    Image(systemName: "gearshape")
+                    Image(systemName: NavigationIconId.account.symbol)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(JieboColor.ink2)
                 }

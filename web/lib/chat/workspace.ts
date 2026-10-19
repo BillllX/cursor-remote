@@ -40,6 +40,41 @@ export function inWorkspaceRoot(path: string, root: string) {
   return abs === base || abs.startsWith(`${base}/`);
 }
 
+/** 工作区改名时同步保存的工作区路径及其子路径。 */
+export function moveWorkspacePath(path: string, from: string, to: string) {
+  return path && inWorkspaceRoot(path, from) ? normPath(to) + normPath(path).slice(normPath(from).length) : path;
+}
+
+export type WorkspaceRemovalRecovery = {
+  chat?: Chat;
+  path: string;
+};
+
+/** 删除当前工作区后，优先回到上次会话，再回到最近会话，最后保留一个可新建会话的工作区。 */
+export function workspaceRemovalRecovery(
+  removedPath: string,
+  chats: Chat[],
+  workspaces: WorkspaceItem[],
+  workspaceRoot: string,
+  lastChatId: string,
+  assistantChatId = "",
+): WorkspaceRemovalRecovery {
+  const availableChats = chats
+    .filter(
+      (item) =>
+        item.id !== "boot" &&
+        item.id !== assistantChatId &&
+        !inWorkspaceRoot(item.cwd || workspaceRoot, removedPath),
+    )
+    .sort((a, b) => (b.touchedAt || 0) - (a.touchedAt || 0));
+  const chat = availableChats.find((item) => item.id === lastChatId) || availableChats[0];
+  if (chat) return { chat, path: chat.cwd || workspaceRoot };
+  const workspace = workspaces.find(
+    (item) => !sameCwd(item.path, workspaceRoot) && !inWorkspaceRoot(item.path, removedPath),
+  );
+  return { path: workspace?.path || "" };
+}
+
 export function preferChatCwd(current?: string, incoming?: string) {
   if (!incoming) return current;
   if (!current) return incoming;
@@ -178,6 +213,11 @@ export function workspaceGroupsOf(
 }
 
 export type WorkspaceGroup = ReturnType<typeof workspaceGroupsOf>[number];
+
+/** 当前工作区侧栏只保留一个分组，避免把其它项目的会话混进当前上下文。 */
+export function currentWorkspaceGroupsOf(workspaceGroups: WorkspaceGroup[], cwd: string) {
+  return workspaceGroups.filter((group) => sameCwd(group.path, cwd));
+}
 
 /** 出现不止一次的分组名（重名的要带路径才分得清） */
 export function duplicateNamesOf(workspaceGroups: WorkspaceGroup[]) {

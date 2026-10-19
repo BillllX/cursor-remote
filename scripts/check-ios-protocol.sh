@@ -25,6 +25,7 @@ if (!silentBody.includes("workspace_memory_search") || silentBody.includes("work
 }
 console.log("iOS silent tool chrome 源码契约：通过");
 NODE
+node scripts/check-ios-navigation-contract.mjs
 
 update=0
 for arg in "$@"; do
@@ -56,6 +57,7 @@ fi
 APP=ios/Jiebo/Jiebo
 # 协议的最小依赖闭包：都只 import Foundation，原样参与编译
 SOURCES=(
+  "$APP/Theme/ProductNavigation.swift"
   "$APP/Gateway/Protocol.swift"
   "$APP/Gateway/MemoryCenterTypes.swift"
   "$APP/Gateway/MemoryCenterImportTypes.swift"

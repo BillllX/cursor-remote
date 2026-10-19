@@ -47,6 +47,18 @@ describe("planTurnRows", () => {
     assert.equal(rows[1].hideUser, false);
   });
 
+  test("clipped/deferred 的用户文本可能被截短，不参与 hideUser 去重", () => {
+    const rows = planTurnRows([
+      turn({ id: "a", user: "相同问题" }),
+      turn({ id: "b", user: "相同问题", clipped: true }),
+      turn({ id: "c", user: "相同问题", deferred: true }),
+    ]);
+    assert.deepEqual(
+      rows.map((row) => row.hideUser),
+      [false, false, false],
+    );
+  });
+
   test("被后一轮取代的失败回合不输出，hideUser 跳过它找前一个有效回合", () => {
     const failed = turn({ id: "b", user: "同一句", assistant: "", error: "boom" });
     const rows = planTurnRows([turn({ id: "a", user: "同一句" }), failed, turn({ id: "c", user: "同一句" })]);

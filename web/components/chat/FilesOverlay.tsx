@@ -9,7 +9,7 @@ type FilesOverlayProps = {
   filesDocked: boolean;
   closeFiles: () => void;
   filesTrap: RefObject<HTMLDivElement | null>;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop" | "assistant";
+  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   wideIDE: boolean;
   cwd: string;
   workspaceRoot: string;

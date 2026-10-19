@@ -6,12 +6,9 @@ import SwiftUI
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     @State private var drawerOpen = false
     @State private var preferredRunning = false
-    @State private var themeOpen = false
-    @State private var adminStatsOpen = false
-    @State private var logoutConfirm = false
+    @State private var settingsOpen = false
     @State private var chatActions = ChatActionTargets()
 
     var body: some View {
@@ -39,10 +36,7 @@ struct PhoneWorkbench: View {
                     close: closeDrawer,
                     openWorkspaces: { closeDrawer(then: store.openWorkspaceSwitcher) },
                     newChat: { closeDrawer(then: store.openNewChat) },
-                    openTheme: { closeDrawer { themeOpen = true } },
-                    openAdminStats: { closeDrawer { adminStatsOpen = true } },
-                    openChat: { closeDrawer { homeMode = .chat } },
-                    logout: { closeDrawer { logoutConfirm = true } },
+                    openSettings: { closeDrawer { settingsOpen = true } },
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
@@ -70,23 +64,13 @@ struct PhoneWorkbench: View {
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspacePickerSheet()
         }
-        .sheet(isPresented: $themeOpen) {
-            ThemeSettingsSheet()
-        }
-        .sheet(isPresented: $adminStatsOpen) {
-            AdminStatsView()
-        }
-        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) {
-                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
-                Task { @MainActor in
-                    await PushRegistrar.shared.unsubscribe(store: store)
-                    store.logout()
-                }
+        .sheet(isPresented: $settingsOpen) {
+            NavigationStack {
+                PhoneSettingsScreen()
+                    .navigationDestination(for: PhoneRoute.self) { route in
+                        if route == .memory { AssistantMemoryScreen() }
+                    }
             }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("退出后需要重新输入访问码才能连回来。")
         }
         .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
@@ -126,10 +110,7 @@ private struct PhoneDrawer: View {
     var close: () -> Void
     var openWorkspaces: () -> Void
     var newChat: () -> Void
-    var openTheme: () -> Void
-    var openAdminStats: () -> Void
-    var openChat: () -> Void
-    var logout: () -> Void
+    var openSettings: () -> Void
     var renameChat: (ChatSession) -> Void
     var deleteChat: (ChatSession) -> Void
 
@@ -246,7 +227,7 @@ private struct PhoneDrawer: View {
     private var workspaceCard: some View {
         Button(action: openWorkspaces) {
             HStack(spacing: 10) {
-                Image(systemName: "folder")
+                Image(systemName: NavigationIconId.workspace.symbol)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(JieboColor.brass)
                     .frame(width: 30, height: 30)
@@ -342,7 +323,7 @@ private struct PhoneDrawer: View {
         }
         .buttonStyle(PressScaleButtonStyle())
         .animation(JieboMotion.fade(reduceMotion), value: on)
-        .accessibilityLabel(marked ? "\(layer.title)，正在运行" : layer.title)
+        .accessibilityLabel(marked ? "\(layer.title)，\(StatusLegendId.running.label)" : layer.title)
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 
@@ -411,7 +392,7 @@ private struct PhoneDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(live ? "\(chat.title)，正在运行" : chat.title)
+        .accessibilityLabel(live ? "\(chat.title)，\(StatusLegendId.running.label)" : chat.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .chatRowMenu(chat, rename: renameChat, delete: deleteChat)
     }
@@ -420,26 +401,9 @@ private struct PhoneDrawer: View {
 
     private var footer: some View {
         HStack {
-            Menu {
-                Button(action: openChat) {
-                    Label(im.totalUnread > 0 ? "切换到聊天（\(ImFormat.badge(im.totalUnread)) 条未读）" : "切换到聊天", systemImage: HomeMode.chat.symbol)
-                }
-                Divider()
-                Button(action: openTheme) {
-                    Label("主题 · \(JieboTheme.shared.palette.title)", systemImage: "paintpalette")
-                }
-                if store.isAdmin {
-                    Button(action: openAdminStats) {
-                        Label("使用统计", systemImage: "chart.bar")
-                    }
-                }
-                Divider()
-                Button(role: .destructive, action: logout) {
-                    Label("退出登录", systemImage: "rectangle.portrait.and.arrow.right")
-                }
-            } label: {
+            Button(action: openSettings) {
                 HStack(spacing: 6) {
-                    Label("设置", systemImage: "gearshape")
+                    Label("账户与设置", systemImage: NavigationIconId.account.symbol)
                         .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                     if im.totalUnread > 0 {
@@ -449,7 +413,8 @@ private struct PhoneDrawer: View {
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
             }
-            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
+            .buttonStyle(.plain)
+            .accessibilityLabel(im.totalUnread > 0 ? "账户与设置，聊天有 \(im.totalUnread) 条未读" : "账户与设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)

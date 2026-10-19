@@ -3,16 +3,12 @@ import styles from "./AssistantChatHead.module.css";
 
 type AssistantChatHeadProps = {
   assistantName: string;
-  wideIDE: boolean;
-  sidePane: "search" | "assistant" | "chats" | "files" | "git" | "terminal" | "loop";
   chooseSide: (pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") => void;
   assistantBadge: number;
 };
 
 export function AssistantChatHead({
   assistantName,
-  wideIDE,
-  sidePane,
   chooseSide,
   assistantBadge,
 }: AssistantChatHeadProps) {
@@ -22,12 +18,12 @@ export function AssistantChatHead({
       <span className={styles.sub}>助理</span>
       <button
         type="button"
-        className={`pill assistant-today${wideIDE && sidePane === "assistant" ? " on" : ""}`}
-        aria-label="打开今日、收件箱和记忆"
+        className="pill assistant-today"
+        aria-label={`打开助理总览、收件箱和通知${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}`}
         onClick={() => chooseSide("assistant")}
       >
-        今日
-        {assistantBadge > 0 ? <span className="loop-live" /> : null}
+        助理
+        {assistantBadge > 0 ? <span className="assistant-attention-badge" aria-hidden="true">{assistantBadge}</span> : null}
       </button>
     </div>
   );

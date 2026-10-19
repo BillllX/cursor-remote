@@ -1,12 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
 import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
+import {
+  assistantMemoryEntryText,
+  initialAssistantMemoryNavigation,
+  openAssistantMemoryNavigation,
+  revisitAssistantMemoryNavigation,
+  type AssistantMemorySource,
+} from "./assistant/assistantMemoryNavigation";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
-type Tab = "today" | "inbox" | "memory" | "notify";
+export type AssistantView = "overview" | "inbox" | "memory" | "notify";
 
 export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = {
   running: "进行中",
@@ -25,9 +32,12 @@ const DELEGATION_TONE: Record<AssistantDelegation["status"], string> = {
 
 type Props = {
   open: boolean;
-  /** 宽屏 IDE 下收在侧栏列里：点遮罩不关，标题栏不显示关闭 */
-  docked: boolean;
   onClose: () => void;
+  dialogRef: RefObject<HTMLDivElement | null>;
+  initialView?: AssistantView;
+  initialMemoryScopeId?: string;
+  initialMemorySource?: AssistantMemorySource;
+  openRequest: number;
   name: string;
   state: AssistantState | null;
   send: (message: ClientMessage) => void;
@@ -54,8 +64,12 @@ function Empty({ children }: { children: ReactNode }) {
 
 export default function AssistantPanel({
   open,
-  docked,
   onClose,
+  dialogRef,
+  initialView = "overview",
+  initialMemoryScopeId,
+  initialMemorySource = "assistant",
+  openRequest,
   name,
   state,
   send,
@@ -66,7 +80,9 @@ export default function AssistantPanel({
   lastAssistantResult,
   assistantResultTick,
 }: Props) {
-  const [tab, setTab] = useState<Tab>("today");
+  const [tab, setTab] = useState<AssistantView>("overview");
+  const [memoryNavigation, setMemoryNavigation] = useState(initialAssistantMemoryNavigation);
+  const [appliedOpenRequest, setAppliedOpenRequest] = useState(-1);
   const [memoryLoaded, setMemoryLoaded] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -82,6 +98,18 @@ export default function AssistantPanel({
     if (!open) return;
     send({ type: "assistant_get", memory: memoryLoaded });
   }, [open, memoryLoaded, send]);
+
+  useEffect(() => {
+    if (!open) return;
+    setTab(initialView);
+    setMemoryNavigation((current) =>
+      openAssistantMemoryNavigation(current, initialMemorySource, initialMemoryScopeId),
+    );
+    setAppliedOpenRequest(openRequest);
+    if (initialView === "memory") {
+      setMemoryLoaded(true);
+    }
+  }, [initialMemoryScopeId, initialMemorySource, initialView, open, openRequest]);
 
   useEffect(() => {
     if (!open || !initialInboxId || !state?.inbox.length) return;
@@ -112,19 +140,30 @@ export default function AssistantPanel({
     }
   }
 
+  function selectTab(next: AssistantView) {
+    setTab(next);
+    if (next === "memory") {
+      setMemoryLoaded(true);
+      setMemoryNavigation(revisitAssistantMemoryNavigation);
+    }
+  }
+
   if (!open) return null;
 
   const approvals = state?.approvals || [];
   const backgroundOk = state?.background.ok ?? false;
   const todosOpen = (state?.todos || []).filter((t) => !t.done);
   const brief = state?.brief?.text?.trim();
+  const memoryEntry = assistantMemoryEntryText(memoryNavigation);
 
   return (
-    <div className="search-overlay open assistant-overlay" onClick={docked ? undefined : onClose}>
+    <div className="search-overlay open assistant-overlay" onClick={onClose}>
       <div
-        className={`search-box assistant-box${tab === "memory" && !docked ? " memory-center-wide" : ""}`}
+        ref={dialogRef}
+        className={`search-box assistant-box${tab === "memory" ? " memory-center-wide" : ""}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
+        aria-modal="true"
         aria-label={`${name} · 助理`}
       >
         <div className="assistant-head">
@@ -134,40 +173,73 @@ export default function AssistantPanel({
               后台 {state?.background.model || "grok-4.7"} · {backgroundOk ? "就绪" : state?.background.reason || "未就绪"}
             </div>
           </div>
-          {docked ? null : (
-            <button type="button" className="logout-btn" onClick={onClose}>
-              关闭
-            </button>
-          )}
+          <button type="button" className="logout-btn" onClick={onClose}>
+            关闭
+          </button>
         </div>
-        <div className="assistant-tabs" role="tablist">
+        <div
+          className="assistant-tabs"
+          role="tablist"
+          aria-label="助理功能"
+          onKeyDown={(event) => {
+            const tabs: AssistantView[] = ["overview", "inbox", "notify", "memory"];
+            const index = tabs.indexOf(tab);
+            let next = index;
+            if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+            else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+            else if (event.key === "Home") next = 0;
+            else if (event.key === "End") next = tabs.length - 1;
+            else return;
+            event.preventDefault();
+            const nextTab = tabs[next] ?? "overview";
+            selectTab(nextTab);
+            requestAnimationFrame(() => document.getElementById(`assistant-tab-${nextTab}`)?.focus());
+          }}
+        >
           {(
             [
-              ["today", approvals.length ? `今日 · ${approvals.length}` : "今日"],
+              ["overview", approvals.length ? `总览 · ${approvals.length}` : "总览"],
               ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
-              ["memory", "记忆"],
               ["notify", "通知"],
             ] as const
           ).map(([id, label]) => (
             <button
               key={id}
               type="button"
+              id={`assistant-tab-${id}`}
               role="tab"
+              aria-controls="assistant-tabpanel"
               aria-selected={tab === id}
+              tabIndex={tab === id ? 0 : -1}
               className={`pill${tab === id ? " on" : ""}`}
-              onClick={() => {
-                setTab(id);
-                if (id === "memory") setMemoryLoaded(true);
-              }}
+              onClick={() => selectTab(id)}
             >
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            id="assistant-tab-memory"
+            role="tab"
+            aria-controls="assistant-tabpanel"
+            aria-selected={tab === "memory"}
+            tabIndex={tab === "memory" ? 0 : -1}
+            className={`pill assistant-memory-entry${tab === "memory" ? " on" : ""}`}
+            aria-label={memoryEntry.ariaLabel}
+            onClick={() => selectTab("memory")}
+          >
+            {memoryEntry.label}
+          </button>
         </div>
         {notice ? <div className="loop-meta assistant-notice">{notice}</div> : null}
 
-        <div className="assistant-body">
-          {tab === "today" ? (
+        <div
+          id="assistant-tabpanel"
+          className="assistant-body"
+          role="tabpanel"
+          aria-labelledby={`assistant-tab-${tab}`}
+        >
+          {tab === "overview" ? (
             <>
               {approvals.length ? (
                 <Section title="待批">
@@ -317,12 +389,13 @@ export default function AssistantPanel({
           ) : null}
 
           {tab === "memory" ? (
-            !state?.memory ? (
+            !state?.memory || appliedOpenRequest !== openRequest ? (
               <Empty>正在加载记忆…</Empty>
             ) : (
               <MemoryCenterPanel
-                docked={docked}
                 active={memoryLoaded}
+                initialScopeId={memoryNavigation.target}
+                openRequest={memoryNavigation.request}
                 name={name}
                 state={state}
                 send={send}

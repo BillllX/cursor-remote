@@ -24,7 +24,7 @@ struct AdminStatsView: View {
                     } else {
                         ContentUnavailableView(
                             store.connected ? "暂无数据" : "没连上服务器",
-                            systemImage: "chart.bar",
+                            systemImage: NavigationIconId.stats.symbol,
                             description: Text(store.connected ? "点右上角刷新再试一次。" : "连上以后会自动拉取。")
                         )
                     }

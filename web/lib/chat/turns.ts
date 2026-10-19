@@ -99,6 +99,64 @@ export function liveTurn(turn: Turn): boolean {
   return Boolean(turn.running || turn.queued || turn.pendingTool);
 }
 
+export function incompleteTurn(turn: Turn): boolean {
+  return Boolean(turn.clipped || turn.deferred);
+}
+
+export function turnAllowsActions(turn: Turn): boolean {
+  return !incompleteTurn(turn);
+}
+
+/** 把已加载的超大正文释放成小占位；不依赖先前是否保存过服务端占位。 */
+export function deferredPlaceholder(turn: Turn): Turn {
+  const short = (text: string, cap: number) => (text.length > cap ? `${text.slice(0, cap)}…` : text);
+  return {
+    id: turn.id,
+    user: short(turn.user, 160),
+    assistant: short(turn.assistant, 240),
+    thinking: "",
+    tools: [],
+    running: false,
+    clipped: true,
+    deferred: true,
+    bodyBytes: turn.bodyBytes,
+    mode: turn.mode,
+    model: turn.model,
+    status: turn.status,
+    durationMs: turn.durationMs,
+  };
+}
+
+export function formatBodyBytes(bytes?: number): string {
+  if (!Number.isFinite(bytes) || !bytes || bytes < 1) return "";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/**
+ * 按 id 合并服务端回合；完整正文一旦到达，迟到的截断分页或 deferred 快照只能补其它回合，
+ * 不能把同 id 的完整正文降级成占位。
+ */
+export function preferCompleteTurns(local: Turn[], incoming: Turn[], targetRev?: number): Turn[] {
+  if (!incoming.length) return [];
+  const complete = new Map(
+    local
+      .filter(
+        (turn) =>
+          !incompleteTurn(turn) && turn.oversized === true && targetRev != null && turn.oversizedRev === targetRev,
+      )
+      .map((turn) => [turn.id, turn]),
+  );
+  let changed = false;
+  const out = incoming.map((turn) => {
+    const preferred = incompleteTurn(turn) ? complete.get(turn.id) : undefined;
+    if (preferred) changed = true;
+    return preferred ?? turn;
+  });
+  return changed ? out : incoming;
+}
+
 export function serverTurn(raw: unknown): Turn | null {
   if (!raw || typeof raw !== "object") return null;
   const row = raw as Partial<Turn>;
@@ -123,35 +181,46 @@ export function serverTurn(raw: unknown): Turn | null {
 }
 
 /** 服务端正文为准；本地还在跑、排队或待批的回合保留本地版本，服务端没有的接在末尾。 */
-export function withLiveTurns(local: Turn[], server: Turn[]): Turn[] {
+export function withLiveTurns(local: Turn[], server: Turn[], targetRev?: number): Turn[] {
   const live = local.filter(liveTurn);
-  if (!live.length) return server;
+  const preferred = preferCompleteTurns(local, server, targetRev);
+  if (!live.length) return preferred;
   const byId = new Map(live.map((turn) => [turn.id, turn]));
-  const out = server.map((turn) => byId.get(turn.id) ?? turn);
+  const out = preferred.map((turn) => {
+    const localLive = byId.get(turn.id);
+    // 非权威占位不能再被任意本地半截流吞掉；完整服务端回合仍沿用既有的 live 保护。
+    return localLive && !incompleteTurn(turn) ? localLive : turn;
+  });
   const seen = new Set(out.map((turn) => turn.id));
   for (const turn of live) if (!seen.has(turn.id)) out.push(turn);
   return out;
 }
 
 export function historyToTurns(items: HistoryTurn[]): Turn[] {
-  return items.map((item) => ({
-    id: item.id || uid(),
-    user: item.user || "",
-    assistant: item.assistant || "",
-    thinking: item.thinking || "",
-    tools: (item.tools || []).map((tool) => ({
-      callId: tool.callId || uid(),
-      name: tool.name,
-      args: tool.args,
-      result: tool.result,
-      status: tool.status === "running" ? "completed" : tool.status,
-      parentCallId: tool.parentCallId,
-      agent: tool.agent,
-      model: tool.model,
-    })),
-    files: item.files,
-    running: false,
-  }));
+  return items.map((item) => {
+    const source = item as HistoryTurn & Pick<Turn, "clipped" | "deferred" | "bodyBytes">;
+    return {
+      id: source.id || uid(),
+      user: source.user || "",
+      assistant: source.assistant || "",
+      thinking: source.thinking || "",
+      clipped: source.clipped,
+      deferred: source.deferred,
+      bodyBytes: source.bodyBytes,
+      tools: (source.tools || []).map((tool) => ({
+        callId: tool.callId || uid(),
+        name: tool.name,
+        args: tool.args,
+        result: tool.result,
+        status: tool.status === "running" ? "completed" : tool.status,
+        parentCallId: tool.parentCallId,
+        agent: tool.agent,
+        model: tool.model,
+      })),
+      files: source.files,
+      running: false,
+    };
+  });
 }
 
 function mergeTools(local: Turn["tools"], remote: Turn["tools"]): Turn["tools"] {
@@ -193,7 +262,11 @@ export function mergeTurnFileLists(local: NonNullable<Turn["files"]>, incoming: 
   return out;
 }
 
-export function applyRunSnapshot(turns: Turn[], message: Extract<ServerMessage, { type: "run_snapshot" }>): Turn[] {
+export function applyRunSnapshot(
+  turns: Turn[],
+  message: Extract<ServerMessage, { type: "run_snapshot" }>,
+  targetRev?: number,
+): Turn[] {
   const next = turns.slice();
   const queued = message.queued || [];
   const skipBody = !message.turnId && !message.userText && !message.assistant;
@@ -218,13 +291,21 @@ export function applyRunSnapshot(turns: Turn[], message: Extract<ServerMessage, 
       agent: tool.agent,
       model: tool.model,
     }));
+    const snapshotMeta = message as typeof message & {
+      deferred?: boolean;
+      bodyBytes?: number;
+    };
+    const snapshotIncomplete = Boolean(message.clipped || snapshotMeta.deferred);
     if (index < 0) {
       const created: Turn = {
         id: message.turnId || uid(),
         user: message.userText,
-        assistant: message.clipped ? "" : message.assistant,
-        thinking: message.clipped ? "" : message.thinking || "",
-        tools: message.clipped ? [] : tools,
+        assistant: snapshotIncomplete ? "" : message.assistant,
+        thinking: snapshotIncomplete ? "" : message.thinking || "",
+        tools: snapshotIncomplete ? [] : tools,
+        clipped: message.clipped || undefined,
+        deferred: snapshotMeta.deferred || undefined,
+        bodyBytes: snapshotMeta.bodyBytes,
         task: message.task,
         running: message.phase === "running",
         queued: false,
@@ -239,24 +320,52 @@ export function applyRunSnapshot(turns: Turn[], message: Extract<ServerMessage, 
       );
     } else {
       const cur = next[index];
-      const replaced: Turn = {
-        ...cur,
-        assistant:
-          message.clipped || message.assistant.length < cur.assistant.length ? cur.assistant : message.assistant,
-        thinking:
-          message.clipped || (message.thinking || "").length < (cur.thinking || "").length
-            ? cur.thinking
-            : message.thinking || "",
-        tools: message.clipped || tools.length < cur.tools.length ? cur.tools : tools,
-        task: message.task || cur.task,
-        model: message.model || cur.model,
-        mode: message.mode || cur.mode,
-        running: message.phase === "running",
-        queued: false,
-        pendingTool: message.phase === "running" ? message.awaitingApproval : undefined,
-      };
-      next[index] =
-        message.phase === "done" ? settleTurn(replaced, message.status || "finished", message.durationMs) : replaced;
+      const keepComplete =
+        snapshotIncomplete && cur.oversized === true && targetRev != null && cur.oversizedRev === targetRev;
+      if (snapshotIncomplete && !keepComplete) {
+        const replaced: Turn = {
+          ...cur,
+          user: message.userText || cur.user,
+          assistant: "",
+          thinking: "",
+          tools: [],
+          clipped: message.clipped || undefined,
+          deferred: snapshotMeta.deferred || undefined,
+          bodyBytes: snapshotMeta.bodyBytes,
+          task: message.task || cur.task,
+          model: message.model || cur.model,
+          mode: message.mode || cur.mode,
+          running: message.phase === "running",
+          queued: false,
+          pendingTool: message.phase === "running" ? message.awaitingApproval : undefined,
+        };
+        delete replaced.oversized;
+        delete replaced.oversizedRev;
+        next[index] =
+          message.phase === "done" ? settleTurn(replaced, message.status || "finished", message.durationMs) : replaced;
+      } else {
+        const replaced: Turn = {
+          ...cur,
+          assistant:
+            snapshotIncomplete || message.assistant.length < cur.assistant.length ? cur.assistant : message.assistant,
+          thinking:
+            snapshotIncomplete || (message.thinking || "").length < (cur.thinking || "").length
+              ? cur.thinking
+              : message.thinking || "",
+          tools: snapshotIncomplete || tools.length < cur.tools.length ? cur.tools : tools,
+          clipped: keepComplete ? cur.clipped : message.clipped || undefined,
+          deferred: keepComplete ? cur.deferred : snapshotMeta.deferred || undefined,
+          bodyBytes: snapshotMeta.bodyBytes ?? cur.bodyBytes,
+          task: message.task || cur.task,
+          model: message.model || cur.model,
+          mode: message.mode || cur.mode,
+          running: message.phase === "running",
+          queued: false,
+          pendingTool: message.phase === "running" ? message.awaitingApproval : undefined,
+        };
+        next[index] =
+          message.phase === "done" ? settleTurn(replaced, message.status || "finished", message.durationMs) : replaced;
+      }
     }
   }
   for (const item of queued) {
@@ -282,6 +391,7 @@ export function mergeHistoryTurns(local: Turn[], incoming: Turn[]): Turn[] {
   if (!localHasContent) return incoming;
   const fingerprint = (turn: Turn) => turn.user.trim().replace(/\s+/g, " ").slice(0, 240);
   const merged = local.map((turn) => ({ ...turn }));
+  const byId = new Map(merged.map((turn, index) => [turn.id, index]));
   const byFp = new Map<string, number>();
   merged.forEach((turn, index) => {
     const fp = fingerprint(turn);
@@ -290,6 +400,12 @@ export function mergeHistoryTurns(local: Turn[], incoming: Turn[]): Turn[] {
   const prefix: Turn[] = [];
   let seenLocal = false;
   for (const remote of incoming) {
+    const sameId = byId.get(remote.id);
+    if (sameId != null && incompleteTurn(remote)) {
+      seenLocal = true;
+      if (!liveTurn(merged[sameId])) merged[sameId] = { ...remote, running: false };
+      continue;
+    }
     const fp = fingerprint(remote);
     if (!fp) continue;
     const index = byFp.get(fp);

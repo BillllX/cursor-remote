@@ -20,6 +20,8 @@ export type LoopRow = LoopState & { tickStatus?: string };
 export type ChatReduceContext = {
   /** 收到消息当下的 activeIdRef.current；必须由调用方在 setState 之前读好，updater 可能推迟到渲染时才跑 */
   activeId: string;
+  /** 当前服务端会话版本；超大正文只有同版本才可压过迟到的截断快照。 */
+  chatRevs?: Readonly<Record<string, number>>;
 };
 
 /** 没带 chatId 的消息算到当前会话上 */
@@ -245,7 +247,7 @@ export function applyServerMessage(chats: Chat[], message: ServerMessage, ctx: C
     }
     case "run_snapshot":
       return patchChatIn(chats, message.chatId, (chat) => {
-        const turns = applyRunSnapshot(chat.turns, message);
+        const turns = applyRunSnapshot(chat.turns, message, ctx.chatRevs?.[message.chatId]);
         return turns === chat.turns ? chat : { ...chat, turns };
       });
     case "text-delta":

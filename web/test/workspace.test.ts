@@ -3,9 +3,11 @@ import { describe, test } from "node:test";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import type { Chat } from "../lib/chat/types";
 import {
+  currentWorkspaceGroupsOf,
   duplicateNamesOf,
   gitLetterOf,
   inWorkspaceRoot,
+  moveWorkspacePath,
   normPath,
   preferChatCwd,
   recentWorkspacesOf,
@@ -15,6 +17,7 @@ import {
   workspaceChoicesOf,
   workspaceGroupsOf,
   workspaceLabel,
+  workspaceRemovalRecovery,
 } from "../lib/chat/workspace";
 
 describe("工作区归属", () => {
@@ -35,6 +38,13 @@ describe("工作区归属", () => {
     assert.equal(inWorkspaceRoot("/rootx", "/root"), false);
     assert.equal(inWorkspaceRoot("", "/root"), false);
     assert.equal(inWorkspaceRoot("/root", ""), false);
+  });
+
+  test("moveWorkspacePath：改名会搬工作区本身和子路径，不碰同前缀兄弟路径", () => {
+    assert.equal(moveWorkspacePath("/r/old", "/r/old", "/r/new"), "/r/new");
+    assert.equal(moveWorkspacePath("/r/old/sub", "/r/old/", "/r/new/"), "/r/new/sub");
+    assert.equal(moveWorkspacePath("/r/older", "/r/old", "/r/new"), "/r/older");
+    assert.equal(moveWorkspacePath("", "/r/old", "/r/new"), "");
   });
 
   test("preferChatCwd：缺一边取另一边；相同或本地更深时保留本地，否则用服务端的", () => {
@@ -84,6 +94,27 @@ describe("文件路径", () => {
 const chat = (id: string, cwd?: string, touchedAt?: number): Chat => ({ id, title: id, turns: [], cwd, touchedAt });
 
 describe("工作区分组与新对话候选", () => {
+  test("workspaceRemovalRecovery：删除当前路径后优先未删除的上次会话，否则最近会话或空工作区", () => {
+    const chats = [
+      chat("removed", "/r/a", 30),
+      chat("recent", "/r/b", 20),
+      chat("last", "/r/c", 10),
+      chat("assistant", "/r", 99),
+    ];
+    assert.deepEqual(
+      workspaceRemovalRecovery("/r/a", chats, [{ path: "/r/d", name: "d" }], "/r", "last", "assistant"),
+      { chat: chats[2], path: "/r/c" },
+    );
+    assert.deepEqual(
+      workspaceRemovalRecovery("/r/a", [chats[0], chats[3]], [{ path: "/r/d", name: "d" }], "/r", "", "assistant"),
+      { path: "/r/d" },
+    );
+    assert.deepEqual(
+      workspaceRemovalRecovery("/r/a", [chats[0]], [], "/r", "", "assistant"),
+      { path: "" },
+    );
+  });
+
   test("recentWorkspacesOf：按对话顺序去重，跳过根外目录；根显示助理名，已知工作区用目录里的名字", () => {
     const got = recentWorkspacesOf(
       [chat("1", "/r/a"), chat("2", "/r/a/"), chat("3"), chat("4", "/elsewhere"), chat("5", "/r/b")],
@@ -144,6 +175,23 @@ describe("工作区分组与新对话候选", () => {
       [],
     );
     assert.deepEqual([...duplicateNamesOf(groups)], ["app"]);
+  });
+
+  test("currentWorkspaceGroupsOf：侧栏只显示当前工作区的会话", () => {
+    const groups = workspaceGroupsOf(
+      "/r",
+      "/r/a",
+      [
+        { path: "/r/a", name: "a" },
+        { path: "/r/b", name: "b" },
+      ],
+      "助理",
+      [chat("a1", "/r/a", 5), chat("b1", "/r/b", 9)],
+    );
+    assert.deepEqual(
+      currentWorkspaceGroupsOf(groups, "/r/a").map((group) => [group.path, group.chats.map((item) => item.id)]),
+      [["/r/a", ["a1"]]],
+    );
   });
 
   test("workspaceChoicesOf：按名字或路径过滤（忽略大小写），最近用过的在前、其次按最近动过，重名标 dup", () => {
