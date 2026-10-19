@@ -811,6 +811,322 @@
       "reqId": "rq-todo-1"
     },
     {
+      "type": "assistant_result",
+      "data": {
+        "mode": "overview",
+        "overview": {
+          "personal": {
+            "coreBudget": 1200,
+            "coreFieldLines": 2,
+            "coreTokens": 88,
+            "invalidEntries": 1,
+            "paused": false,
+            "validEntries": 3,
+            "workPreferenceBudget": 200,
+            "workPreferenceLines": 2
+          },
+          "scopes": [
+            {
+              "cold": 0,
+              "done": 1,
+              "error": null,
+              "expired": 0,
+              "health": null,
+              "hot": 3,
+              "id": "personal",
+              "injectionSelected": 0,
+              "injectionSkipped": 0,
+              "kind": "personal",
+              "label": "关于我",
+              "layer": "L0",
+              "memoryCount": 4,
+              "missingRefs": 0,
+              "parentId": null,
+              "pendingCount": 0,
+              "pinned": 0,
+              "ruleFileCount": 0,
+              "tokenBudget": 1200
+            },
+            {
+              "cold": 2,
+              "done": 1,
+              "error": null,
+              "expired": 1,
+              "health": null,
+              "hot": 8,
+              "id": "notes",
+              "injectionSelected": 6,
+              "injectionSkipped": 4,
+              "kind": "workspace_memory",
+              "label": "notes",
+              "layer": "L2",
+              "memoryCount": 12,
+              "missingRefs": 0,
+              "parentId": null,
+              "pendingCount": 1,
+              "pinned": 1,
+              "ruleFileCount": 2,
+              "tokenBudget": 600
+            }
+          ]
+        }
+      },
+      "ok": true,
+      "op": "memory_center_get",
+      "reqId": "rq-mc-get-1"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "hits": [
+          {
+            "effectiveState": "hot",
+            "id": "m_x1y2z3",
+            "kind": "personal",
+            "layer": "L0",
+            "missingRefs": [],
+            "pinned": true,
+            "reasons": ["text"],
+            "refs": [],
+            "scopeId": "personal",
+            "score": 4.2,
+            "section": "工作偏好",
+            "state": "hot",
+            "text": "代码评审意见用中文写"
+          }
+        ],
+        "truncated": false
+      },
+      "ok": true,
+      "op": "memory_center_search",
+      "reqId": "rq-mc-search-1"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "degraded": false,
+        "entries": [
+          {
+            "action": "update",
+            "actor": "user",
+            "after": {
+              "id": "wm_sample",
+              "pinned": false,
+              "revision": "def456",
+              "section": "约定",
+              "state": "hot",
+              "text": "新文案"
+            },
+            "at": "2026-02-10T12:00:00.000Z",
+            "auditId": "aud_sample1",
+            "before": {
+              "id": "wm_sample",
+              "pinned": false,
+              "revision": "abc123",
+              "section": "约定",
+              "state": "hot",
+              "text": "旧文案"
+            },
+            "canRestore": true,
+            "itemId": "wm_sample",
+            "scope": "notes"
+          }
+        ],
+        "nextCursor": "cursor-sample",
+        "truncated": false
+      },
+      "ok": true,
+      "op": "memory_center_activity",
+      "reqId": "rq-mc-activity-1"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "code": "conflict"
+      },
+      "error": "冲突",
+      "ok": false,
+      "op": "memory_center_restore",
+      "reqId": "rq-mc-restore-fail"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "entries": [
+          {
+            "id": "sug_missing1",
+            "itemIds": ["wm_x"],
+            "kind": "missing_ref",
+            "proposedAction": {
+              "kind": "mark_handled"
+            },
+            "reason": "文件不在",
+            "revisions": ["rev1"],
+            "risk": "low",
+            "scope": "notes",
+            "summary": "引用缺失"
+          }
+        ],
+        "generatedAt": "2026-02-10T08:00:00.000Z",
+        "lastRunAt": "2026-02-10T08:00:00.000Z"
+      },
+      "ok": true,
+      "op": "memory_center_suggestions_get",
+      "reqId": "rq-mc-suggestions-1"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "id": "sug_missing1",
+        "status": "dismissed"
+      },
+      "ok": true,
+      "op": "memory_center_suggestion_answer",
+      "reqId": "rq-mc-sug-answer"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "action": "set_state",
+        "detail": {
+          "diagnostics": null,
+          "items": [],
+          "rules": [],
+          "scope": {
+            "cold": 0,
+            "done": 0,
+            "expired": 0,
+            "hot": 1,
+            "id": "notes",
+            "injectionSelected": 1,
+            "injectionSkipped": 0,
+            "kind": "workspace_memory",
+            "label": "notes",
+            "layer": "L2",
+            "memoryCount": 1,
+            "missingRefs": 0,
+            "parentId": null,
+            "pendingCount": 0,
+            "pinned": 0,
+            "ruleFileCount": 0,
+            "tokenBudget": 600
+          }
+        },
+        "scope": "notes"
+      },
+      "ok": true,
+      "op": "memory_center_mutate",
+      "reqId": "rq-mc-mutate-ok"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "bytes": 1024,
+        "relativePath": ".jiebo/memory-export/memory-center-sample.json",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "summary": {
+          "personalEntries": 2,
+          "rulesInventory": 0,
+          "scopes": ["personal", "notes"],
+          "workspaceScopes": 1
+        }
+      },
+      "ok": true,
+      "op": "memory_center_export",
+      "reqId": "rq-mc-export-1"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "changes": [],
+        "expiresAt": "2026-10-18T13:00:00.000Z",
+        "planId": "mcplan_sample1",
+        "snapshotSummary": {
+          "bytes": 512,
+          "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "exportedAt": "2026-10-18T12:00:00.000Z",
+          "personalEntryCount": 0,
+          "rulesCount": 0,
+          "schemaVersion": 1,
+          "scopeCount": 1
+        },
+        "warnings": [
+          {
+            "code": "rules_changed",
+            "message": "规则只读。"
+          }
+        ]
+      },
+      "ok": true,
+      "op": "memory_center_import_preview",
+      "reqId": "rq-mc-import-preview"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "canRollback": true,
+        "importId": "mcimp_sample1",
+        "summary": {
+          "applied": 1,
+          "conflictsResolved": 0,
+          "skipped": 0
+        }
+      },
+      "ok": true,
+      "op": "memory_center_import_apply",
+      "reqId": "rq-mc-import-apply"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "importId": "mcimp_sample1",
+        "status": "rolled_back"
+      },
+      "ok": true,
+      "op": "memory_center_import_rollback",
+      "reqId": "rq-mc-import-rollback"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "code": "invalid_scope"
+      },
+      "error": "未知 scope：nope",
+      "ok": false,
+      "op": "memory_center_export",
+      "reqId": "rq-mc-export-fail"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "code": "invalid_path"
+      },
+      "error": "路径不在允许目录或格式不对。",
+      "ok": false,
+      "op": "memory_center_import_preview",
+      "reqId": "rq-mc-import-preview-fail"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "code": "plan_not_found"
+      },
+      "error": "计划不存在或已过期。",
+      "ok": false,
+      "op": "memory_center_import_apply",
+      "reqId": "rq-mc-import-apply-fail"
+    },
+    {
+      "type": "assistant_result",
+      "data": {
+        "code": "not_found"
+      },
+      "error": "找不到可回滚的导入。",
+      "ok": false,
+      "op": "memory_center_import_rollback",
+      "reqId": "rq-mc-import-rollback-fail"
+    },
+    {
       "type": "inbox_item",
       "item": {
         "body": "新建工作区 notes · 整理讲稿",
@@ -1453,6 +1769,114 @@
       },
       "op": "todo_add",
       "reqId": "rq-todo-1"
+    },
+    {
+      "type": "assistant_op",
+      "op": "memory_center_get",
+      "reqId": "rq-mc-overview"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "scope": "personal"
+      },
+      "op": "memory_center_get",
+      "reqId": "rq-mc-detail"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "query": "Redis",
+        "scope": "proj"
+      },
+      "op": "memory_center_search",
+      "reqId": "rq-mc-search"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "action": "update",
+        "limit": 20,
+        "scope": "notes"
+      },
+      "op": "memory_center_activity",
+      "reqId": "rq-mc-activity-req"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "auditId": "aud_sample1",
+        "scope": "notes"
+      },
+      "op": "memory_center_restore",
+      "reqId": "rq-mc-restore-req"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "scope": "notes"
+      },
+      "op": "memory_center_suggestions_get",
+      "reqId": "rq-mc-sug-get"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "accept": false,
+        "id": "sug_missing1",
+        "scope": "notes"
+      },
+      "op": "memory_center_suggestion_answer",
+      "reqId": "rq-mc-sug-ans"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "mutation": {
+          "action": "set_state",
+          "id": "wm_sample",
+          "revision": "def456",
+          "state": "cold"
+        },
+        "scope": "notes"
+      },
+      "op": "memory_center_mutate",
+      "reqId": "rq-mc-mutate-req"
+    },
+    {
+      "type": "assistant_op",
+      "op": "memory_center_export",
+      "reqId": "rq-mc-export-req"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "path": ".jiebo/memory-export/memory-center-sample.json"
+      },
+      "op": "memory_center_import_preview",
+      "reqId": "rq-mc-import-preview-req"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "planId": "mcplan_sample1",
+        "resolutions": [
+          {
+            "changeId": "personal:core",
+            "resolution": "keep_current"
+          }
+        ]
+      },
+      "op": "memory_center_import_apply",
+      "reqId": "rq-mc-import-apply-req"
+    },
+    {
+      "type": "assistant_op",
+      "args": {
+        "importId": "mcimp_sample1"
+      },
+      "op": "memory_center_import_rollback",
+      "reqId": "rq-mc-import-rollback-req"
     },
     {
       "type": "assistant_op",

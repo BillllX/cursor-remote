@@ -9,6 +9,26 @@
   text-align: left;
 }
 
+.assistant-box.memory-center-wide {
+  width: min(1120px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+}
+
+.mc-row-selected {
+  border-color: var(--accent-line);
+  background: var(--hover);
+}
+
+.mc-status-error {
+  color: var(--danger);
+  display: grid;
+  gap: 8px;
+}
+
+.mc-truncated {
+  color: var(--warn-fg);
+}
+
 .app.ide.pane-assistant .assistant-box {
   background: var(--bg-sidebar);
 }

@@ -1,0 +1,284 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.searchBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.searchBar .side-input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.searchFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.searchFilters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+
+.layout {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.layoutStack {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layoutThree {
+  grid-template-columns: minmax(160px, 0.85fr) minmax(0, 1.1fr) minmax(0, 1fr);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  max-height: min(52vh, 480px);
+  overflow: auto;
+}
+
+.navBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.navBtn:hover,
+.navBtn:focus-visible {
+  background: var(--hover);
+  border-color: var(--border);
+  outline: none;
+}
+
+.navBtnOn {
+  background: var(--hover-strong);
+  border-color: var(--accent-line);
+}
+
+.navMuted {
+  color: var(--muted);
+}
+
+.navLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.middle,
+.detail {
+  min-width: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.midTabs,
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.statCard {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  display: grid;
+  gap: 4px;
+}
+
+.healthDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.healthOk {
+  background: var(--ok-fg);
+}
+
+.healthWarn {
+  background: var(--warn-fg);
+}
+
+.healthError {
+  background: var(--danger-fg);
+}
+
+.scopeError {
+  color: var(--danger);
+}
+
+.detailBody {
+  display: grid;
+  gap: 10px;
+}
+
+.detailDl {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  font-size: var(--fs-sm);
+}
+
+.detailDl > div {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px;
+}
+
+.detailDl dt {
+  margin: 0;
+  color: var(--muted);
+}
+
+.detailDl dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.mono {
+  font-size: var(--fs-xs);
+  word-break: break-all;
+}
+
+.diagnostics {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.diagList {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.manageToggle {
+  margin-top: 8px;
+}
+
+.drillBack {
+  align-self: flex-start;
+}
+
+.managePanel {
+  display: grid;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.overview {
+  display: grid;
+  gap: 10px;
+}
+
+.paneTitle {
+  margin: 0;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  outline: none;
+}
+
+.editorBlock {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.editorField {
+  display: grid;
+  gap: 4px;
+  font-size: var(--fs-sm);
+}
+
+.editorField textarea,
+.editorField select,
+.editorField input {
+  width: 100%;
+  font: inherit;
+}
+
+.editorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.extrasPane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.extrasFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.filterInput {
+  display: block;
+  margin-top: 4px;
+  min-width: 120px;
+  font: inherit;
+}
+
+.extrasActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}

@@ -17,16 +17,22 @@ struct AssistantView: View {
             statusLine
             tabBar
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    switch tab {
-                    case .today: AssistantTodayPane()
-                    case .inbox: AssistantInboxList()
-                    case .memory: AssistantMemoryPane()
+            Group {
+                if tab == .memory {
+                    MemoryCenterPanelView()
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            switch tab {
+                            case .today: AssistantTodayPane()
+                            case .inbox: AssistantInboxList()
+                            case .memory: EmptyView()
+                            }
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

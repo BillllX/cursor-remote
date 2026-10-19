@@ -599,6 +599,653 @@ func checkTurnFilesState() -> [String] {
     return problems
 }
 
+func checkMemoryCenter() -> [String] {
+    var problems: [String] = []
+    let overviewJSON = """
+    {"mode":"overview","overview":{"personal":{"validEntries":2,"invalidEntries":0,"coreFieldLines":1,"workPreferenceLines":1,"paused":false,"coreBudget":1200,"coreTokens":10,"workPreferenceBudget":200},"scopes":[{"id":"personal","label":"关于我","kind":"personal","layer":"L0","memoryCount":2,"hot":2,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":1200,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0}],"scopesTruncated":true},"payloadTruncated":false}
+    """
+    guard let overviewValue = try? JSONValue.parse(Data(overviewJSON.utf8)),
+          let parsed = MemoryCenterGetData.from(overviewValue)
+    else {
+        problems.append("memory center：overview JSON 无法解码")
+        return problems
+    }
+    if parsed.mode != "overview" || parsed.overview?.personal.validEntries != 2 || parsed.overview?.scopes.count != 1 {
+        problems.append("memory center：overview 字段不符")
+    }
+    if parsed.overview?.scopesTruncated != true {
+        problems.append("memory center：scopesTruncated 未解码")
+    }
+    let detailJSON = """
+    {"mode":"detail","detail":{"scope":{"id":"notes","label":"notes","kind":"workspace_memory","layer":"L2","memoryCount":1,"hot":1,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":600,"injectionSelected":1,"injectionSkipped":0,"pendingCount":0},"items":[{"id":"m1","kind":"workspace_memory","layer":"L2","scopeId":"notes","text":"hello","refs":["a.ts"],"missingRefs":[],"effectiveState":"hot","pinned":true,"revision":"rev1"}],"rules":[],"diagnostics":{"total":1,"selected":1,"skippedBudget":0,"hotSelected":1,"coldRecalled":0,"terminalSkipped":0,"pinnedSelected":1,"relevantSelected":0,"strategy":"test","selectedIds":[{"id":"m1","reason":"pinned"}],"skippedReasons":[]}},"payloadTruncated":true}
+    """
+    var detailParsed: MemoryCenterGetData?
+    if let detailValue = try? JSONValue.parse(Data(detailJSON.utf8)) {
+        detailParsed = MemoryCenterGetData.from(detailValue)
+    }
+    if detailParsed == nil {
+        problems.append("memory center：detail JSON 无法解码")
+    } else if detailParsed?.detail?.items.first?.refs != ["a.ts"] || detailParsed?.payloadTruncated != true {
+        problems.append("memory center：detail 字段不符")
+    }
+    let searchJSON = """
+    {"hits":[{"scopeId":"personal","kind":"personal","layer":"L0","id":"m1","text":"x","refs":[],"missingRefs":[],"effectiveState":"hot","reasons":["text"],"score":1}],"truncated":true}
+    """
+    guard let searchValue = try? JSONValue.parse(Data(searchJSON.utf8)),
+          let search = MemoryCenterSearchData.from(searchValue)
+    else {
+        problems.append("memory center：search JSON 无法解码")
+        return problems
+    }
+    if search.hits.count != 1 || !search.truncated || search.hits.first?.reasons.first != "text" {
+        problems.append("memory center：search 字段不符")
+    }
+
+    var data = MemoryCenterDataState.initial
+    data = MemoryCenterReducer.registerPending(
+        data,
+        req: MemoryCenterPendingRequest(reqId: "o1", kind: .overview, scopeId: nil, query: nil),
+        replaceSameKind: true
+    )
+    let okOverview = MemoryCenterIncomingResult(
+        reqId: "o1",
+        op: "memory_center_get",
+        ok: true,
+        error: nil,
+        getData: parsed,
+        searchData: nil
+    )
+    if let applied = MemoryCenterReducer.applyResult(data, message: okOverview), applied.overview != nil {
+        data = applied
+    } else {
+        problems.append("memory center reducer：overview 成功结果未应用")
+    }
+    data = MemoryCenterReducer.registerPending(
+        data,
+        req: MemoryCenterPendingRequest(reqId: "o2", kind: .overview, scopeId: nil, query: nil),
+        replaceSameKind: true
+    )
+    let stale = MemoryCenterIncomingResult(
+        reqId: "o1",
+        op: "memory_center_get",
+        ok: true,
+        error: nil,
+        getData: parsed,
+        searchData: nil
+    )
+    if MemoryCenterReducer.applyResult(data, message: stale) != nil {
+        problems.append("memory center reducer：非 pending 的 overview 响应不应应用")
+    }
+
+    var scopeData = MemoryCenterReducer.registerPending(
+        MemoryCenterDataState.initial,
+        req: MemoryCenterPendingRequest(reqId: "a1", kind: .scope, scopeId: "alpha", query: nil),
+        replaceSameKind: true
+    )
+    scopeData = MemoryCenterReducer.registerPending(
+        scopeData,
+        req: MemoryCenterPendingRequest(reqId: "b1", kind: .scope, scopeId: "beta", query: nil),
+        replaceSameKind: true
+    )
+    let betaDetailJSON = """
+    {"mode":"detail","detail":{"scope":{"id":"beta","label":"beta","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[],"diagnostics":null}}
+    """
+    if let betaValue = try? JSONValue.parse(Data(betaDetailJSON.utf8)),
+       let betaPayload = MemoryCenterGetData.from(betaValue)
+    {
+        let betaOk = MemoryCenterIncomingResult(
+            reqId: "b1", op: "memory_center_get", ok: true, error: nil, getData: betaPayload, searchData: nil
+        )
+        if let applied = MemoryCenterReducer.applyResult(scopeData, message: betaOk) {
+            scopeData = applied
+        } else {
+            problems.append("memory center reducer：beta scope 成功结果未应用")
+        }
+        let alphaDetailJSON = """
+        {"mode":"detail","detail":{"scope":{"id":"alpha","label":"alpha","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[],"diagnostics":null}}
+        """
+        if let alphaValue = try? JSONValue.parse(Data(alphaDetailJSON.utf8)),
+           let alphaPayload = MemoryCenterGetData.from(alphaValue)
+        {
+            let alphaStale = MemoryCenterIncomingResult(
+                reqId: "a1", op: "memory_center_get", ok: true, error: nil, getData: alphaPayload, searchData: nil
+            )
+            if MemoryCenterReducer.applyResult(scopeData, message: alphaStale) != nil {
+                problems.append("memory center reducer：过期 alpha scope 响应不应覆盖 beta")
+            } else if scopeData.detail?.scope.id != "beta" {
+                problems.append("memory center reducer：scope 乱序后 detail 不是 beta")
+            }
+        }
+    }
+
+    problems += checkMemoryCenterLayoutMetrics()
+    problems += checkMemoryCenterDoubleColumnUI()
+    problems += checkMemoryCenterNegativeDecode()
+    problems += checkMemoryCenterNullableAccept()
+    problems += checkMemoryCenterReducerLifecycle()
+    problems += checkMemoryCenterExtrasRace()
+
+    print("Memory center 结构解码：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterExtrasRace() -> [String] {
+    var problems: [String] = []
+    var state = MemoryCenterExtrasDataState.initial
+    state = MemoryCenterExtrasReducer.beginActivityLoad(state, reqId: "a1", refresh: true)
+    state = MemoryCenterExtrasReducer.beginActivityLoad(state, reqId: "a2", refresh: true)
+    let sample = MemoryCenterActivityData(
+        entries: [
+            MemoryCenterActivityEntry(
+                auditId: "aud1",
+                scope: "ws",
+                itemId: "wm1",
+                action: "create",
+                actor: "user",
+                at: "2026-01-01T00:00:00.000Z",
+                before: nil,
+                after: MemoryCenterActivitySnapshotSummary(
+                    id: "wm1",
+                    section: "约定",
+                    text: "x",
+                    revision: "r1",
+                    state: nil,
+                    pinned: nil
+                ),
+                canRestore: true,
+                restoreBlockedReason: nil,
+                degraded: nil
+            ),
+        ],
+        nextCursor: nil,
+        truncated: nil,
+        degraded: nil
+    )
+    if MemoryCenterExtrasReducer.applyActivity(state, reqId: "a1", generation: 1, append: false, cursor: nil, data: sample) != nil {
+        problems.append("extras reducer：过期 generation 不应应用 activity")
+    }
+    if let applied = MemoryCenterExtrasReducer.applyActivity(state, reqId: "a2", generation: 2, append: false, cursor: nil, data: sample) {
+        if applied.activityRows.count != 1 {
+            problems.append("extras reducer：最新 generation 应写入 activity 行")
+        }
+    } else {
+        problems.append("extras reducer：最新 activity 响应应应用")
+    }
+    state.suggestionRows = [
+        MemoryCenterSuggestionRow(id: "s1", scope: "ws", kind: "stale_hot", summary: "a", risk: "low"),
+        MemoryCenterSuggestionRow(id: "s2", scope: "ws", kind: "stale_hot", summary: "b", risk: "low"),
+    ]
+    state = MemoryCenterExtrasReducer.beginAnswer(state, reqId: "ans1", suggestionId: "s1")
+    state = MemoryCenterExtrasReducer.beginAnswer(state, reqId: "ans2", suggestionId: "s2")
+    guard let mid = MemoryCenterExtrasReducer.applyAnswer(state, reqId: "ans2", suggestionId: "s2", ok: false, error: "冲突", removeId: nil) else {
+        problems.append("extras reducer：answer 应按 reqId 路由")
+        return problems
+    }
+    if let afterOk = MemoryCenterExtrasReducer.applyAnswer(mid, reqId: "ans1", suggestionId: "s1", ok: true, error: nil, removeId: "s1") {
+        if afterOk.suggestionErrorById["s2"] != "冲突" {
+            problems.append("extras reducer：一条失败不应清另一条错误")
+        }
+    } else {
+        problems.append("extras reducer：第二条 answer 成功应独立应用")
+    }
+    return problems
+}
+
+func checkMemoryCenterLayoutMetrics() -> [String] {
+    var problems: [String] = []
+    if MemoryCenterLayoutMetrics.tier(containerWidth: 420.0) != .single {
+        problems.append("layout：420pt 应为 single")
+    }
+    if MemoryCenterLayoutMetrics.tier(containerWidth: 559.0) != .single {
+        problems.append("layout：559pt 应为 single")
+    }
+    if MemoryCenterLayoutMetrics.tier(containerWidth: 560.0) != .double {
+        problems.append("layout：560pt 应为 double")
+    }
+    if MemoryCenterLayoutMetrics.tier(containerWidth: 899.0) != .double {
+        problems.append("layout：899pt 应为 double")
+    }
+    if MemoryCenterLayoutMetrics.tier(containerWidth: 900.0) != .triple {
+        problems.append("layout：900pt 应为 triple")
+    }
+    if MemoryCenterLayoutMetrics.tripleColumnMinWidth != 900.0 || MemoryCenterLayoutMetrics.doubleColumnMinWidth != 560.0 {
+        problems.append("layout：断点常量不符")
+    }
+    print("Memory center 布局断点：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterDoubleColumnUI() -> [String] {
+    var problems: [String] = []
+    if MemoryCenterUILayoutLogic.doubleColumnRightPane(searchActive: true, selectedKey: "k", navId: "notes") != .searchDetail {
+        problems.append("double UI：搜索+选中应为 searchDetail")
+    }
+    if MemoryCenterUILayoutLogic.doubleColumnRightPane(searchActive: true, selectedKey: nil, navId: "notes") != .searchList {
+        problems.append("double UI：搜索无选中应为 searchList")
+    }
+    if MemoryCenterUILayoutLogic.doubleColumnRightPane(searchActive: false, selectedKey: "k", navId: "notes") != .scopeItemDetail {
+        problems.append("double UI：scope 选中应为 scopeItemDetail")
+    }
+    if MemoryCenterUILayoutLogic.doubleColumnRightPane(searchActive: false, selectedKey: nil, navId: "overview") != .embeddedMiddle {
+        problems.append("double UI：默认应为 embeddedMiddle")
+    }
+    var navId = "overview"
+    var searchActive = true
+    var searchText = "redis"
+    var selectedKey: String? = "personal:m1"
+    MemoryCenterUILayoutLogic.applyNavSelection(
+        selectedKey: &selectedKey,
+        searchText: &searchText,
+        searchActive: &searchActive,
+        navId: &navId,
+        targetNavId: "personal"
+    )
+    if searchActive || !searchText.isEmpty || selectedKey != nil || navId != "personal" {
+        problems.append("double UI：切导航应退出搜索并清选中")
+    }
+    print("Memory center 双栏 UI 逻辑：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterNegativeDecode() -> [String] {
+    var problems: [String] = []
+    let badOverview = """
+    {"mode":"overview","overview":{"personal":{"validEntries":"2","invalidEntries":0,"coreFieldLines":1,"workPreferenceLines":1,"paused":false,"coreBudget":1200,"coreTokens":10,"workPreferenceBudget":200},"scopes":[]}}
+    """
+    if let v = try? JSONValue.parse(Data(badOverview.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：personal.validEntries 为 string 应失败")
+    }
+    let badItemRefs = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[{"id":null,"kind":"workspace_memory","layer":"L2","scopeId":"n","text":"t","refs":[1],"missingRefs":[],"effectiveState":"hot"}],"rules":[],"diagnostics":null}}
+    """
+    if let v = try? JSONValue.parse(Data(badItemRefs.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：refs 含非 string 应使整个 detail 失败")
+    }
+    let badHit = """
+    {"hits":[{"scopeId":"p","kind":"personal","layer":"L0","id":null,"text":"x","refs":[],"missingRefs":[],"effectiveState":"hot","reasons":["a"],"score":"bad"}]}
+    """
+    if let v = try? JSONValue.parse(Data(badHit.utf8)), MemoryCenterSearchData.from(v) != nil {
+        problems.append("负向：hit.score 非 number 应失败")
+    }
+    let badRule = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[{"relPath":"AGENTS.md","appliesDir":".","chars":"x","body":""}],"diagnostics":null}}
+    """
+    if let v = try? JSONValue.parse(Data(badRule.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：rule.chars 非 int 应失败")
+    }
+    let badDiag = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[],"diagnostics":{"total":1,"selected":"1","skippedBudget":0,"hotSelected":0,"coldRecalled":0,"terminalSkipped":0,"pinnedSelected":0,"relevantSelected":0,"strategy":"x","selectedIds":[]}}}
+    """
+    if let v = try? JSONValue.parse(Data(badDiag.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：diagnostics.selected 非 int 应失败")
+    }
+    let badScopeInList = """
+    {"mode":"overview","overview":{"personal":{"validEntries":0,"invalidEntries":0,"coreFieldLines":0,"workPreferenceLines":0,"paused":false,"coreBudget":1,"coreTokens":0,"workPreferenceBudget":1},"scopes":[{"id":"x","label":"x","kind":"workspace_memory","layer":"L2","memoryCount":"1","hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0}]}}
+    """
+    if let v = try? JSONValue.parse(Data(badScopeInList.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：scopes 数组内坏元素应使整个 overview 失败")
+    }
+    let badPinned = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[{"id":null,"kind":"workspace_memory","layer":"L2","scopeId":"n","text":"t","refs":[],"missingRefs":[],"effectiveState":"hot","pinned":"wrong"}],"rules":[],"diagnostics":null}}
+    """
+    if let v = try? JSONValue.parse(Data(badPinned.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：item.pinned 为 string 应失败")
+    }
+    let badRuleTrunc = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[{"relPath":"A.md","appliesDir":".","chars":1,"body":"","truncated":"no"}],"diagnostics":null}}
+    """
+    if let v = try? JSONValue.parse(Data(badRuleTrunc.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：rule.truncated 非 bool 应失败")
+    }
+    let badHealth = """
+    {"mode":"overview","overview":{"personal":{"validEntries":0,"invalidEntries":0,"coreFieldLines":0,"workPreferenceLines":0,"paused":false,"coreBudget":1,"coreTokens":0,"workPreferenceBudget":1},"scopes":[{"id":"x","label":"x","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0,"health":true}]}}
+    """
+    if let v = try? JSONValue.parse(Data(badHealth.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：scope.health 非 string 应失败")
+    }
+    let badScopesTrunc = """
+    {"mode":"overview","overview":{"personal":{"validEntries":0,"invalidEntries":0,"coreFieldLines":0,"workPreferenceLines":0,"paused":false,"coreBudget":1,"coreTokens":0,"workPreferenceBudget":1},"scopes":[],"scopesTruncated":"yes"}}
+    """
+    if let v = try? JSONValue.parse(Data(badScopesTrunc.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：scopesTruncated 非 bool 应失败")
+    }
+    let badPayloadTrunc = """
+    {"mode":"overview","overview":{"personal":{"validEntries":0,"invalidEntries":0,"coreFieldLines":0,"workPreferenceLines":0,"paused":false,"coreBudget":1,"coreTokens":0,"workPreferenceBudget":1},"scopes":[]},"payloadTruncated":1}
+    """
+    if let v = try? JSONValue.parse(Data(badPayloadTrunc.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：payloadTruncated 非 bool 应失败")
+    }
+    let badColdSkip = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[],"diagnostics":{"total":0,"selected":0,"skippedBudget":0,"hotSelected":0,"coldRecalled":0,"terminalSkipped":0,"coldUnrelatedSkipped":"x","pinnedSelected":0,"relevantSelected":0,"strategy":"s","selectedIds":[]}}}
+    """
+    if let v = try? JSONValue.parse(Data(badColdSkip.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：coldUnrelatedSkipped 非 int 应失败")
+    }
+    let badSection = """
+    {"hits":[{"scopeId":"p","kind":"personal","layer":"L0","id":null,"text":"x","refs":[],"missingRefs":[],"effectiveState":"hot","reasons":[],"score":1,"section":1}]}
+    """
+    if let v = try? JSONValue.parse(Data(badSection.utf8)), MemoryCenterSearchData.from(v) != nil {
+        problems.append("负向：hit.section 非 string 应失败")
+    }
+    let badUses = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[{"id":null,"kind":"workspace_memory","layer":"L2","scopeId":"n","text":"t","refs":[],"missingRefs":[],"effectiveState":"hot","uses":"many"}],"rules":[],"diagnostics":null}}
+    """
+    if let v = try? JSONValue.parse(Data(badUses.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：item.uses 非 int 应失败")
+    }
+    let badSkipArr = """
+    {"mode":"detail","detail":{"scope":{"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0},"items":[],"rules":[],"diagnostics":{"total":0,"selected":0,"skippedBudget":0,"hotSelected":0,"coldRecalled":0,"terminalSkipped":0,"pinnedSelected":0,"relevantSelected":0,"strategy":"s","selectedIds":[],"skippedReasons":{}}}}
+    """
+    if let v = try? JSONValue.parse(Data(badSkipArr.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：skippedReasons 非 array 应失败")
+    }
+    let badSearchTrunc = """
+    {"hits":[],"truncated":"nope"}
+    """
+    if let v = try? JSONValue.parse(Data(badSearchTrunc.utf8)), MemoryCenterSearchData.from(v) != nil {
+        problems.append("负向：search.truncated 非 bool 应失败")
+    }
+    let scopeStub = """
+    {"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0}
+    """
+    let itemCore = """
+    {"id":null,"kind":"workspace_memory","layer":"L2","scopeId":"n","text":"t","refs":[],"missingRefs":[],"effectiveState":"hot","revision":"r0","pinned":false,"truncated":false}
+    """
+    func detailWithItem(_ itemFragment: String) -> String {
+        """
+        {"mode":"detail","detail":{"scope":\(scopeStub),"items":[\(itemFragment)],"rules":[],"diagnostics":null}}
+        """
+    }
+    if let v = try? JSONValue.parse(Data(detailWithItem(itemCore + ",\"section\":null").utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：section:null（?: string）应失败")
+    }
+    if let v = try? JSONValue.parse(Data(detailWithItem(itemCore + ",\"uses\":null").utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：uses:null（?: number）应失败")
+    }
+    if let v = try? JSONValue.parse(Data(detailWithItem(itemCore + ",\"pinned\":null").utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：pinned:null（?: boolean）应失败")
+    }
+    let diagNullCold = """
+    {"mode":"detail","detail":{"scope":\(scopeStub),"items":[],"rules":[],"diagnostics":{"total":0,"selected":0,"skippedBudget":0,"hotSelected":0,"coldRecalled":0,"terminalSkipped":0,"coldUnrelatedSkipped":null,"pinnedSelected":0,"relevantSelected":0,"strategy":"s","selectedIds":[]}}}
+    """
+    if let v = try? JSONValue.parse(Data(diagNullCold.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：coldUnrelatedSkipped:null（?: number）应失败")
+    }
+    let diagNullSkip = """
+    {"mode":"detail","detail":{"scope":\(scopeStub),"items":[],"rules":[],"diagnostics":{"total":0,"selected":0,"skippedBudget":0,"hotSelected":0,"coldRecalled":0,"terminalSkipped":0,"pinnedSelected":0,"relevantSelected":0,"strategy":"s","selectedIds":[],"skippedReasons":null}}}
+    """
+    if let v = try? JSONValue.parse(Data(diagNullSkip.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：skippedReasons:null（?: array）应失败")
+    }
+    let overviewNullTrunc = """
+    {"mode":"overview","overview":{"personal":{"validEntries":0,"invalidEntries":0,"coreFieldLines":0,"workPreferenceLines":0,"paused":false,"coreBudget":1,"coreTokens":0,"workPreferenceBudget":1},"scopes":[],"scopesTruncated":null}}
+    """
+    if let v = try? JSONValue.parse(Data(overviewNullTrunc.utf8)), MemoryCenterGetData.from(v) != nil {
+        problems.append("负向：scopesTruncated:null（?: boolean）应失败")
+    }
+    print("Memory center 负向解码：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterNullableAccept() -> [String] {
+    var problems: [String] = []
+    let scopeStub = """
+    {"id":"n","label":"n","kind":"workspace_memory","layer":"L2","memoryCount":0,"hot":0,"cold":0,"done":0,"expired":0,"pinned":0,"missingRefs":0,"ruleFileCount":0,"tokenBudget":0,"injectionSelected":0,"injectionSkipped":0,"pendingCount":0,"parentId":null,"health":null,"error":null}
+    """
+    let itemNullable = """
+    {"mode":"detail","detail":{"scope":\(scopeStub),"items":[{"id":null,"kind":"workspace_memory","layer":"L2","scopeId":"n","text":"t","refs":[],"missingRefs":[],"effectiveState":"hot","at":null,"from":null,"state":null,"used":null,"expires":null,"revision":"r0","pinned":false,"truncated":false}],"rules":[],"diagnostics":null}}
+    """
+    guard let itemVal = try? JSONValue.parse(Data(itemNullable.utf8)),
+          let itemParsed = MemoryCenterGetData.from(itemVal),
+          let item = itemParsed.detail?.items.first
+    else {
+        problems.append("正向：item at/from/state/used/expires:null 应解码")
+        return problems
+    }
+    if item.at != nil || item.from != nil || item.state != nil || item.used != nil || item.expires != nil {
+        problems.append("正向：nullable 字符串 null 应映射为 Swift nil")
+    }
+    if itemParsed.detail?.scope.parentId != nil || itemParsed.detail?.scope.health != nil || itemParsed.detail?.scope.error != nil {
+        problems.append("正向：scope parentId/health/error:null 应解码为 nil")
+    }
+    let hitNullState = """
+    {"hits":[{"scopeId":"p","kind":"personal","layer":"L0","id":null,"text":"x","refs":[],"missingRefs":[],"effectiveState":"hot","state":null,"reasons":[],"score":1}]}
+    """
+    if let hitVal = try? JSONValue.parse(Data(hitNullState.utf8)),
+       let hits = MemoryCenterSearchData.from(hitVal)
+    {
+        if hits.hits.first?.state != nil {
+            problems.append("正向：hit.state:null 应解码为 nil")
+        }
+    } else {
+        problems.append("正向：hit.state:null payload 应解码")
+    }
+    print("Memory center nullable 正向：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterReducerLifecycle() -> [String] {
+    var problems: [String] = []
+    var cleared = MemoryCenterReducer.registerPending(
+        MemoryCenterDataState.initial,
+        req: MemoryCenterPendingRequest(reqId: "s1", kind: .search, scopeId: nil, query: "q"),
+        replaceSameKind: true
+    )
+    cleared = MemoryCenterReducer.clearSearchSession(cleared)
+    if cleared.loadingSearch || cleared.activeSearchReqId != nil || cleared.search != nil {
+        problems.append("reducer：clearSearchSession 未清 search 槽")
+    }
+    if cleared.pending.contains(where: { $0.kind == .search }) {
+        problems.append("reducer：clearSearchSession 未淘汰 search pending")
+    }
+    var withSearch = MemoryCenterReducer.registerPending(cleared, req: MemoryCenterPendingRequest(reqId: "s2", kind: .search, scopeId: nil, query: "q"), replaceSameKind: true)
+    withSearch.search = MemoryCenterSearchData(hits: [], truncated: false, payloadTruncated: false)
+    withSearch = MemoryCenterReducer.clearSearchSession(withSearch)
+    let lateSearch = MemoryCenterIncomingResult(reqId: "s2", op: "memory_center_search", ok: true, error: nil, getData: nil, searchData: MemoryCenterSearchData(hits: [], truncated: false, payloadTruncated: false))
+    if MemoryCenterReducer.applyResult(withSearch, message: lateSearch) != nil {
+        problems.append("reducer：clear 后迟到 search 响应不应应用")
+    }
+    var disconnected = MemoryCenterReducer.registerPending(
+        MemoryCenterDataState.initial,
+        req: MemoryCenterPendingRequest(reqId: "o1", kind: .overview, scopeId: nil, query: nil),
+        replaceSameKind: true
+    )
+    disconnected.overview = parsedOverviewStub()
+    disconnected = MemoryCenterReducer.flushInFlight(disconnected)
+    if disconnected.loadingOverview || !disconnected.pending.isEmpty || disconnected.activeOverviewReqId != nil {
+        problems.append("reducer：flushInFlight 未清 overview 在途")
+    }
+    if disconnected.overview == nil {
+        problems.append("reducer：flushInFlight 不应清 overview 缓存")
+    }
+    print("Memory center reducer 生命周期：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+private func parsedOverviewStub() -> MemoryCenterOverview {
+    MemoryCenterOverview(
+        personal: MemoryCenterPersonalOverview(
+            validEntries: 1, invalidEntries: 0, coreFieldLines: 0, workPreferenceLines: 0,
+            paused: false, coreBudget: 1, coreTokens: 0, workPreferenceBudget: 1
+        ),
+        scopes: [],
+        scopesTruncated: false
+    )
+}
+
+func checkMemoryCenterImportMalformedFixturesFile() -> [String] {
+    var problems: [String] = []
+    let path = "shared/fixtures/memory-center-import-malformed.json"
+    guard let data = FileManager.default.contents(atPath: path),
+          let root = try? JSONValue.parse(data),
+          let obj = root.object
+    else {
+        problems.append("import malformed：无法读取 \(path)")
+        return problems
+    }
+    func rejectExport(_ samples: [JSONValue]?) {
+        for sample in samples ?? [] {
+            if MemoryCenterExportData.from(sample) != nil {
+                problems.append("import malformed：export 样本应拒绝")
+            }
+        }
+    }
+    func rejectPreview(_ samples: [JSONValue]?) {
+        for sample in samples ?? [] {
+            if MemoryCenterImportPreviewData.from(sample) != nil {
+                problems.append("import malformed：preview 样本应拒绝")
+            }
+        }
+    }
+    func rejectApply(_ samples: [JSONValue]?) {
+        for sample in samples ?? [] {
+            if MemoryCenterImportApplyData.from(sample) != nil {
+                problems.append("import malformed：apply 样本应拒绝")
+            }
+        }
+    }
+    func rejectRollback(_ samples: [JSONValue]?) {
+        for sample in samples ?? [] {
+            if MemoryCenterImportRollbackData.from(sample) != nil {
+                problems.append("import malformed：rollback 样本应拒绝")
+            }
+        }
+    }
+    rejectExport(obj["memory_center_export"]?.array)
+    rejectPreview(obj["memory_center_import_preview"]?.array)
+    rejectApply(obj["memory_center_import_apply"]?.array)
+    rejectRollback(obj["memory_center_import_rollback"]?.array)
+    print("Memory center import malformed 共享文件：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterImportStrictDecoders() -> [String] {
+    var problems: [String] = []
+    let exportOK: JSONValue = .object([
+        "relativePath": .string(".jiebo/memory-export/x.json"),
+        "sha256": .string(String(repeating: "a", count: 64)),
+        "bytes": .number(100),
+        "summary": .object([
+            "scopes": .array([.string("personal")]),
+            "personalEntries": .number(0),
+            "workspaceScopes": .number(0),
+            "rulesInventory": .number(0),
+        ]),
+    ])
+    if MemoryCenterExportData.from(exportOK) == nil { problems.append("import：export 金样本应解码") }
+    if MemoryCenterExportData.from(.object(["relativePath": .string("x")])) != nil {
+        problems.append("import：export 缺字段应拒绝")
+    }
+    let previewOK: JSONValue = .object([
+        "planId": .string("p1"),
+        "expiresAt": .string("2026-10-18T12:00:00.000Z"),
+        "snapshotSummary": .object([
+            "exportedAt": .string("2026-10-18T12:00:00.000Z"),
+            "schemaVersion": .number(1),
+            "scopeCount": .number(0),
+            "personalEntryCount": .number(0),
+            "rulesCount": .number(0),
+            "bytes": .number(1),
+            "checksum": .string("c"),
+        ]),
+        "changes": .array([]),
+        "warnings": .array([.object(["code": .string("rules_changed"), "message": .string("m")])]),
+    ])
+    if MemoryCenterImportPreviewData.from(previewOK) == nil { problems.append("import：preview 金样本应解码") }
+    if MemoryCenterImportPreviewData.from(.object(["planId": .string("p"), "expiresAt": .string("t"), "snapshotSummary": .object([:]), "changes": .array([]), "warnings": .array([.object(["message": .string("only")])])])) != nil {
+        problems.append("import：preview warning 缺 code 应拒绝")
+    }
+    let applyOK: JSONValue = .object([
+        "importId": .string("mcimp1"),
+        "canRollback": .bool(true),
+        "summary": .object(["applied": .number(1), "skipped": .number(0), "conflictsResolved": .number(0)]),
+    ])
+    if MemoryCenterImportApplyData.from(applyOK) == nil { problems.append("import：apply 金样本应解码") }
+    if MemoryCenterImportApplyData.from(.object(["importId": .string("x"), "canRollback": .bool(false)])) != nil {
+        problems.append("import：apply canRollback false 应拒绝")
+    }
+    let rbOK: JSONValue = .object(["importId": .string("mcimp1"), "status": .string("rolled_back")])
+    if MemoryCenterImportRollbackData.from(rbOK) == nil { problems.append("import：rollback 金样本应解码") }
+    if MemoryCenterImportRollbackData.from(.object(["importId": .string("x"), "status": .string("nope")])) != nil {
+        problems.append("import：rollback status 枚举外应拒绝")
+    }
+    let changeBad: JSONValue = .object([
+        "planId": .string("p"),
+        "expiresAt": .string("t"),
+        "snapshotSummary": .object([
+            "exportedAt": .string("e"), "schemaVersion": .number(1), "scopeCount": .number(0),
+            "personalEntryCount": .number(0), "rulesCount": .number(0), "bytes": .number(1), "checksum": .string("c"),
+        ]),
+        "changes": .array([.object(["changeId": .string("c1"), "layer": .string("x"), "action": .string("add")])]),
+        "warnings": .array([]),
+    ])
+    if MemoryCenterImportPreviewData.from(changeBad) != nil {
+        problems.append("import：change 缺 allowedResolutions 应拒绝")
+    }
+    print("Memory center import 严格解码：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkMemoryCenterServerFixtures(_ samples: [JSONValue]) -> [String] {
+    var problems: [String] = []
+    for sample in samples {
+        guard let row = sample.object,
+              row["type"]?.string == "assistant_result",
+              row["ok"]?.bool == true,
+              let data = row["data"]
+        else { continue }
+        let op = row["op"]?.string ?? ""
+        let reqId = row["reqId"]?.string ?? ""
+        if op == "memory_center_get" {
+            guard let parsed = MemoryCenterGetData.from(data) else {
+                problems.append("memory center server[\(reqId)]：get data 无法解码")
+                continue
+            }
+            if reqId == "rq-mc-get-1" {
+                if parsed.mode != "overview" || parsed.overview?.personal.validEntries != 3 {
+                    problems.append("memory center server：overview personal.validEntries 应为 3")
+                }
+                if parsed.overview?.scopes.first(where: { $0.id == "notes" })?.injectionSelected != 6 {
+                    problems.append("memory center server：notes injectionSelected 应为 6")
+                }
+            }
+        } else if op == "memory_center_search" {
+            guard let search = MemoryCenterSearchData.from(data) else {
+                problems.append("memory center server[\(reqId)]：search data 无法解码")
+                continue
+            }
+            if reqId == "rq-mc-search-1" {
+                let hit = search.hits.first
+                if hit?.reasons.first != "text" || hit?.score != 4.2 {
+                    problems.append("memory center server：search hit reasons/score 不符")
+                }
+            }
+        } else if op == "memory_center_export", reqId == "rq-mc-export-1" {
+            if MemoryCenterExportData.from(data) == nil {
+                problems.append("memory center server：export 成功样本无法解码")
+            }
+        } else if op == "memory_center_import_preview", reqId == "rq-mc-import-preview" {
+            if MemoryCenterImportPreviewData.from(data) == nil {
+                problems.append("memory center server：import preview 成功样本无法解码")
+            }
+        } else if op == "memory_center_import_apply", reqId == "rq-mc-import-apply" {
+            if MemoryCenterImportApplyData.from(data) == nil {
+                problems.append("memory center server：import apply 成功样本无法解码")
+            }
+        } else if op == "memory_center_import_rollback", reqId == "rq-mc-import-rollback" {
+            if MemoryCenterImportRollbackData.from(data) == nil {
+                problems.append("memory center server：import rollback 成功样本无法解码")
+            }
+        }
+    }
+    if problems.isEmpty {
+        print("Memory center server fixtures：通过")
+    } else {
+        print("Memory center server fixtures：\(problems.count) 条不符")
+    }
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -607,7 +1254,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles() + checkTurnFilesState()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples)
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

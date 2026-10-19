@@ -2,6 +2,7 @@
 import { buildState, handleOp, publishState, watchMemory } from "../../assistant/service.ts";
 import { send } from "../send.ts";
 import { answerDelegationApproval, cancelDelegation } from "../../bindings/delegations.ts";
+import type { AssistantResultMessage } from "../../../../shared/protocol.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
 
 export async function onAssistantGet({ ws, tenant }: WsCtx, message: MessageOf<"assistant_get">) {
@@ -17,6 +18,6 @@ export async function onAssistantOp({ ws, tenant }: WsCtx, message: MessageOf<"a
       : message.op === "delegation_cancel"
         ? await cancelDelegation(ws, tenant, args)
         : await handleOp(tenant, message.op, args);
-  send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result });
+  send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result } as AssistantResultMessage);
   if (result.ok) void publishState(tenant);
 }

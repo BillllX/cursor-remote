@@ -91,6 +91,18 @@
 		A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */; };
 		A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */; };
 		A1B2C3D4E5F6071829000B01 /* ImProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */; };
+		MC100201 /* MemoryCenterTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100101 /* MemoryCenterTypes.swift */; };
+		MC100202 /* MemoryCenterReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100102 /* MemoryCenterReducer.swift */; };
+		MC100203 /* ChatStore+MemoryCenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100103 /* ChatStore+MemoryCenter.swift */; };
+		MC100204 /* MemoryCenterLabels.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100104 /* MemoryCenterLabels.swift */; };
+		MC100205 /* MemoryCenterViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100105 /* MemoryCenterViews.swift */; };
+		MC100206 /* MemoryCenterLayoutMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100106 /* MemoryCenterLayoutMetrics.swift */; };
+		MC100207 /* MemoryCenterExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100107 /* MemoryCenterExtras.swift */; };
+		MC100208 /* ChatStore+MemoryCenterExtras.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100108 /* ChatStore+MemoryCenterExtras.swift */; };
+		MC100209 /* MemoryCenterWorkspaceEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100109 /* MemoryCenterWorkspaceEdit.swift */; };
+		MC100210 /* MemoryCenterExtrasReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100112 /* MemoryCenterExtrasReducer.swift */; };
+		MC100211 /* MemoryCenterImportTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100113 /* MemoryCenterImportTypes.swift */; };
+		MC100212 /* MemoryCenterImportPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100114 /* MemoryCenterImportPane.swift */; };
 		A1B2C3D4E5F6071829000B02 /* ChatStore+Im.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */; };
 		A1B2C3D4E5F6071829000B12 /* ChatStore+WorkspaceAgents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A12 /* ChatStore+WorkspaceAgents.swift */; };
 		A1B2C3D4E5F6071829000B03 /* ImModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A03 /* ImModels.swift */; };
@@ -225,6 +237,18 @@
 		A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+AssistantBar.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Toolbar.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImProtocol.swift; sourceTree = "<group>"; };
+		MC100101 /* MemoryCenterTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterTypes.swift; sourceTree = "<group>"; };
+		MC100102 /* MemoryCenterReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterReducer.swift; sourceTree = "<group>"; };
+		MC100103 /* ChatStore+MemoryCenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+MemoryCenter.swift"; sourceTree = "<group>"; };
+		MC100104 /* MemoryCenterLabels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterLabels.swift; sourceTree = "<group>"; };
+		MC100105 /* MemoryCenterViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterViews.swift; sourceTree = "<group>"; };
+		MC100106 /* MemoryCenterLayoutMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterLayoutMetrics.swift; sourceTree = "<group>"; };
+		MC100107 /* MemoryCenterExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterExtras.swift; sourceTree = "<group>"; };
+		MC100108 /* ChatStore+MemoryCenterExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+MemoryCenterExtras.swift"; sourceTree = "<group>"; };
+		MC100109 /* MemoryCenterWorkspaceEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterWorkspaceEdit.swift; sourceTree = "<group>"; };
+		MC100112 /* MemoryCenterExtrasReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterExtrasReducer.swift; sourceTree = "<group>"; };
+		MC100113 /* MemoryCenterImportTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterImportTypes.swift; sourceTree = "<group>"; };
+		MC100114 /* MemoryCenterImportPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterImportPane.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Im.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A12 /* ChatStore+WorkspaceAgents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+WorkspaceAgents.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A03 /* ImModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImModels.swift; sourceTree = "<group>"; };
@@ -312,6 +336,8 @@
 			children = (
 				A1B2C3D4E5F6071829000103 /* JSONValue.swift */,
 				A1B2C3D4E5F6071829000104 /* Protocol.swift */,
+				MC100101 /* MemoryCenterTypes.swift */,
+				MC100113 /* MemoryCenterImportTypes.swift */,
 				A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */,
 				A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */,
 				A1B2C3D4E5F6071829000106 /* GatewayClient.swift */,
@@ -344,6 +370,11 @@
 				A1B2C3D4E5F6071829000715 /* ChatStore+Turns.swift */,
 				A1B2C3D4E5F6071829000716 /* ChatStore+Chats.swift */,
 				A1B2C3D4E5F6071829000717 /* ChatStore+Assistant.swift */,
+				MC100103 /* ChatStore+MemoryCenter.swift */,
+				MC100108 /* ChatStore+MemoryCenterExtras.swift */,
+				MC100102 /* MemoryCenterReducer.swift */,
+				MC100112 /* MemoryCenterExtrasReducer.swift */,
+				MC100106 /* MemoryCenterLayoutMetrics.swift */,
 				A1B2C3D4E5F6071829000718 /* ChatStore+TurnsLoad.swift */,
 				A1B2C3D4E5F6071829000719 /* ChatStore+Preview.swift */,
 				A1B2C3D4E5F6071829000720 /* ChatStore+QuickLook.swift */,
@@ -408,8 +439,21 @@
 				A1B2C3D4E5F6071829000128 /* AdminStatsView.swift */,
 				A1B2C3D4E5F6071829000129 /* PhoneWorkbench.swift */,
 				A1B2C3D4E5F6071829000130 /* AssistantView.swift */,
+				MC100110 /* MemoryCenter */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		MC100110 /* MemoryCenter */ = {
+			isa = PBXGroup;
+			children = (
+				MC100104 /* MemoryCenterLabels.swift */,
+				MC100105 /* MemoryCenterViews.swift */,
+				MC100107 /* MemoryCenterExtras.swift */,
+				MC100109 /* MemoryCenterWorkspaceEdit.swift */,
+				MC100114 /* MemoryCenterImportPane.swift */,
+			);
+			path = MemoryCenter;
 			sourceTree = "<group>";
 		};
 		A1B2C3D4E5F6071829000900 /* Phone */ = {
@@ -595,7 +639,19 @@
 				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
 				A1B2C3D4E5F6071829000303 /* JSONValue.swift in Sources */,
 				A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */,
+				MC100201 /* MemoryCenterTypes.swift in Sources */,
 				A1B2C3D4E5F6071829000B01 /* ImProtocol.swift in Sources */,
+				MC100202 /* MemoryCenterReducer.swift in Sources */,
+				MC100203 /* ChatStore+MemoryCenter.swift in Sources */,
+				MC100204 /* MemoryCenterLabels.swift in Sources */,
+				MC100205 /* MemoryCenterViews.swift in Sources */,
+				MC100206 /* MemoryCenterLayoutMetrics.swift in Sources */,
+				MC100207 /* MemoryCenterExtras.swift in Sources */,
+				MC100208 /* ChatStore+MemoryCenterExtras.swift in Sources */,
+				MC100209 /* MemoryCenterWorkspaceEdit.swift in Sources */,
+				MC100210 /* MemoryCenterExtrasReducer.swift in Sources */,
+				MC100211 /* MemoryCenterImportTypes.swift in Sources */,
+				MC100212 /* MemoryCenterImportPane.swift in Sources */,
 				A1B2C3D4E5F6071829000B02 /* ChatStore+Im.swift in Sources */,
 				A1B2C3D4E5F6071829000B12 /* ChatStore+WorkspaceAgents.swift in Sources */,
 				A1B2C3D4E5F6071829000B03 /* ImModels.swift in Sources */,

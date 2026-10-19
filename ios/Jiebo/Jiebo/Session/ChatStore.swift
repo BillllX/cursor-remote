@@ -109,6 +109,13 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState?
+    /// 统一记忆中心只读数据（overview / scope detail / search）
+    var memoryCenterData = MemoryCenterDataState.initial
+    @ObservationIgnored var memoryCenterActiveCount = 0
+    @ObservationIgnored var memoryCenterSearchDebounceTask: Task<Void, Never>?
+    @ObservationIgnored var memoryCenterPendingSearchKey: String?
+    @ObservationIgnored var memoryCenterLastSearch: MemoryCenterSearchParams?
+    @ObservationIgnored var memoryCenterExtrasStorage = MemoryCenterExtrasDataState.initial
     /// 租户唯一的助理会话（ready 下发，网关建在 stored chats 里）。按租户存一份，冷启动 ready 前也认得出
     var assistantChatId: String?
     /// 想打开助理会话时它还没同步到本机：记下意图，会话到了再切

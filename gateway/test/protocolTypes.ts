@@ -38,7 +38,11 @@ function unionTypes(checker: ts.TypeChecker, file: ts.SourceFile, name: string):
     if (!typeType.isStringLiteral()) {
       throw new Error(`${name} 成员的 type 不是字符串字面量：${checker.typeToString(typeType)}`);
     }
-    if (out.has(typeType.value)) throw new Error(`${name} 里 type "${typeType.value}" 重复`);
+    if (out.has(typeType.value)) {
+      // assistant_op / assistant_result 在 TS 里按 op 二次判别，联合展开会重复 type 字面量
+      if (typeType.value === "assistant_op" || typeType.value === "assistant_result") continue;
+      throw new Error(`${name} 里 type "${typeType.value}" 重复`);
+    }
     out.add(typeType.value);
   }
   return out;

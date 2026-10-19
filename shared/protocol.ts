@@ -34,6 +34,413 @@ export type AssistantMemoryEntry = {
   supplements?: string[];
 };
 
+/** 统一记忆中心：条目种类 */
+export type MemoryCenterKind = "personal" | "work_preference" | "workspace_memory" | "rule" | "document";
+
+/** 统一记忆中心：层级（L0 个人 / L1 工作偏好 / L2+ 工作区与仓库） */
+export type MemoryCenterLayer = "L0" | "L1" | "L2" | "L3" | "L4";
+
+/** 统一记忆中心：生命周期与展示状态 */
+export type MemoryCenterState =
+  | "pinned"
+  | "hot"
+  | "cold"
+  | "done"
+  | "expired"
+  | "待核实";
+
+export type MemoryInjectionReason = "pinned" | "section_anchor" | "relevant" | "rotation";
+export type MemoryInjectionSkipReason = "budget" | "cold_unrelated" | "terminal";
+
+export type WorkspaceMemoryItem = {
+  id: string | null;
+  kind: MemoryCenterKind;
+  layer: MemoryCenterLayer;
+  scopeId: string;
+  section?: string;
+  text: string;
+  refs: string[];
+  missingRefs: string[];
+  at?: string | null;
+  from?: string | null;
+  state?: "hot" | "cold" | "done" | null;
+  effectiveState: "hot" | "cold" | "done" | "expired";
+  pinned?: boolean;
+  used?: string | null;
+  uses?: number;
+  expires?: string | null;
+  truncated?: boolean;
+  /** 可编辑内容与元数据的稳定 hash，用于 CAS；不含 mtime。 */
+  revision: string;
+};
+
+export type RuleFile = {
+  relPath: string;
+  appliesDir: string;
+  chars: number;
+  body: string;
+  truncated?: boolean;
+};
+
+export type InjectionDiagnostics = {
+  total: number;
+  selected: number;
+  skippedBudget: number;
+  hotSelected: number;
+  coldRecalled: number;
+  terminalSkipped: number;
+  coldUnrelatedSkipped?: number;
+  pinnedSelected: number;
+  relevantSelected: number;
+  strategy: string;
+  selectedIds: Array<{ id: string | null; reason: MemoryInjectionReason }>;
+  skippedReasons?: Array<{ id: string | null; reason: MemoryInjectionSkipReason }>;
+  selectedIdsTruncated?: boolean;
+  skippedReasonsTruncated?: boolean;
+  truncated?: boolean;
+};
+
+export type MemoryCenterScopeSummary = {
+  id: string;
+  label: string;
+  kind: MemoryCenterKind;
+  layer: MemoryCenterLayer;
+  parentId?: string | null;
+  memoryCount: number;
+  hot: number;
+  cold: number;
+  done: number;
+  expired: number;
+  pinned: number;
+  missingRefs: number;
+  ruleFileCount: number;
+  tokenBudget: number;
+  injectionSelected: number;
+  injectionSkipped: number;
+  pendingCount: number;
+  health?: string | null;
+  error?: string | null;
+};
+
+export type MemoryCenterPersonalOverview = {
+  validEntries: number;
+  invalidEntries: number;
+  coreFieldLines: number;
+  workPreferenceLines: number;
+  paused: boolean;
+  coreBudget: number;
+  coreTokens: number;
+  workPreferenceBudget: number;
+};
+
+export type MemoryCenterOverview = {
+  personal: MemoryCenterPersonalOverview;
+  scopes: MemoryCenterScopeSummary[];
+  scopesTruncated?: boolean;
+};
+
+export type MemoryCenterScopeDetail = {
+  scope: MemoryCenterScopeSummary;
+  items: WorkspaceMemoryItem[];
+  rules: RuleFile[];
+  diagnostics: InjectionDiagnostics | null;
+  itemsTruncated?: boolean;
+  rulesTruncated?: boolean;
+  rulesPayloadTruncated?: boolean;
+};
+
+export type MemoryCenterGetData =
+  | { mode: "overview"; overview: MemoryCenterOverview; payloadTruncated?: boolean }
+  | { mode: "detail"; detail: MemoryCenterScopeDetail; payloadTruncated?: boolean };
+
+export type MemoryCenterSearchMatchReason =
+  | "text"
+  | "section"
+  | "ref"
+  | "scope"
+  | "state"
+  | "pinned"
+  | "related";
+
+export type MemoryCenterSearchHit = {
+  scopeId: string;
+  kind: MemoryCenterKind;
+  layer: MemoryCenterLayer;
+  id: string | null;
+  section?: string;
+  text: string;
+  refs: string[];
+  missingRefs: string[];
+  state?: "hot" | "cold" | "done" | null;
+  effectiveState: "hot" | "cold" | "done" | "expired";
+  pinned?: boolean;
+  reasons: MemoryCenterSearchMatchReason[];
+  score: number;
+};
+
+export type MemoryCenterSearchData = {
+  hits: MemoryCenterSearchHit[];
+  truncated?: boolean;
+  payloadTruncated?: boolean;
+};
+
+export type MemoryCenterMutateErrorCode =
+  | "invalid_scope"
+  | "not_found"
+  | "conflict"
+  | "invalid_input"
+  | "unsafe_ref"
+  | "sensitive"
+  | "write_failed";
+
+export type MemoryCenterMutatePatch = {
+  section?: string;
+  text?: string;
+  refs?: string[];
+  pinned?: boolean;
+  state?: "hot" | "cold" | "done" | null;
+  expires?: string | null;
+};
+
+export type MemoryCenterMutateMutation =
+  | {
+      action: "create";
+      section: string;
+      text: string;
+      refs?: string[];
+      pinned?: boolean;
+      state?: "hot" | "cold" | "done";
+      expires?: string;
+    }
+  | { action: "update"; id: string; revision: string; patch: MemoryCenterMutatePatch }
+  | { action: "set_state"; id: string; revision: string; state: "hot" | "cold" | "done" }
+  | { action: "set_pinned"; id: string; revision: string; pinned: boolean }
+  | { action: "delete"; id: string; revision: string };
+
+export type MemoryCenterMutateArgs = {
+  scope: string;
+  mutation: MemoryCenterMutateMutation;
+};
+
+export type MemoryCenterMutateData = {
+  scope: string;
+  action: string;
+  item?: WorkspaceMemoryItem;
+  deletedId?: string;
+  detail: MemoryCenterScopeDetail;
+};
+
+export type MemoryCenterMutateFailureData = {
+  code: MemoryCenterMutateErrorCode;
+  detail?: MemoryCenterScopeDetail;
+};
+
+export type MemoryCenterActivityAction =
+  | "create"
+  | "update"
+  | "set_state"
+  | "set_pinned"
+  | "delete"
+  | "restore"
+  | "import";
+
+export type MemoryCenterAuditLineFields = {
+  id: string | null;
+  section: string;
+  text: string;
+  refs: string[];
+  from?: string | null;
+  at?: string | null;
+  pinned?: boolean;
+  state?: "hot" | "cold" | "done" | null;
+  used?: string | null;
+  uses?: number | null;
+  expires?: string | null;
+  meta?: Record<string, string>;
+  metaOrder?: string[];
+};
+
+export type MemoryCenterAuditSnapshot = {
+  line: MemoryCenterAuditLineFields;
+  rawLine: string;
+  rowHint?: number;
+  revision: string;
+};
+
+export type MemoryCenterActivitySnapshotSummary = {
+  id: string | null;
+  section: string;
+  text: string;
+  revision: string;
+  state?: "hot" | "cold" | "done" | null;
+  pinned?: boolean;
+};
+
+export type MemoryCenterActivityEntry = {
+  auditId: string;
+  scope: string;
+  itemId: string;
+  action: MemoryCenterActivityAction;
+  actor: "user" | "maintenance";
+  at: string;
+  before?: MemoryCenterActivitySnapshotSummary;
+  after?: MemoryCenterActivitySnapshotSummary;
+  canRestore: boolean;
+  restoreBlockedReason?: string;
+  degraded?: boolean;
+};
+
+export type MemoryCenterActivityData = {
+  entries: MemoryCenterActivityEntry[];
+  nextCursor?: string;
+  truncated?: boolean;
+  degraded?: boolean;
+};
+
+export type MemoryCenterRestoreData = {
+  scope: string;
+  auditId: string;
+  item?: WorkspaceMemoryItem;
+  deletedId?: string;
+  detail: MemoryCenterScopeDetail;
+};
+
+export type MemoryCenterRestoreErrorCode =
+  | "invalid_scope"
+  | "not_found"
+  | "conflict"
+  | "corrupt_audit"
+  | "write_failed";
+
+export type MemoryCenterRestoreFailureData = {
+  code: MemoryCenterRestoreErrorCode;
+  detail?: MemoryCenterScopeDetail;
+};
+
+export type MemoryCenterSuggestionKind =
+  | "missing_ref"
+  | "stale_hot"
+  | "duplicate"
+  | "budget_pressure"
+  | "stale_ongoing";
+
+export type MemoryCenterSuggestionRisk = "low" | "medium";
+
+export type MemoryCenterSuggestionProposedAction = {
+  kind: "dismiss" | "mark_handled" | "set_state" | "mark_done";
+  state?: "hot" | "cold" | "done";
+  targetId?: string;
+  keepId?: string;
+};
+
+export type MemoryCenterSuggestionEntry = {
+  id: string;
+  scope: string;
+  kind: MemoryCenterSuggestionKind;
+  summary: string;
+  reason: string;
+  risk: MemoryCenterSuggestionRisk;
+  itemIds: string[];
+  revisions: string[];
+  proposedAction: MemoryCenterSuggestionProposedAction;
+};
+
+export type MemoryCenterSuggestionsData = {
+  generatedAt: string;
+  lastRunAt?: string;
+  entries: MemoryCenterSuggestionEntry[];
+  truncated?: boolean;
+};
+
+export type MemoryCenterSuggestionAnswerData = {
+  id: string;
+  status: "accepted" | "dismissed" | "stale";
+  detail?: string;
+};
+
+export type MemoryCenterSuggestionAnswerErrorCode =
+  | "invalid_scope"
+  | "not_found"
+  | "stale"
+  | "conflict"
+  | "write_failed";
+
+/** assistant_op 参数与结果 typed 映射（记忆中心与其它 op 可逐步补齐） */
+export type AssistantOpArgsMap = {
+  memory_center_get: { scope?: string };
+  memory_center_search: {
+    query: string;
+    scope?: string;
+    kind?: MemoryCenterKind;
+    state?: MemoryCenterState;
+  };
+  memory_center_mutate: MemoryCenterMutateArgs;
+  memory_center_activity: {
+    scope?: string;
+    cursor?: string;
+    limit?: number;
+    action?: MemoryCenterActivityAction;
+  };
+  memory_center_restore: { scope: string; auditId: string };
+  memory_center_suggestions_get: { scope?: string };
+  memory_center_suggestion_answer: { scope: string; id: string; accept: boolean };
+  memory_center_export: { scopes?: string[] };
+  memory_center_import_preview: { path: string };
+  memory_center_import_apply: {
+    planId: string;
+    resolutions: Array<{ changeId: string; resolution: "keep_current" | "use_snapshot" | "duplicate" }>;
+  };
+  memory_center_import_rollback: { importId: string };
+};
+
+export type AssistantOpResultMap = {
+  memory_center_get: MemoryCenterGetData;
+  memory_center_search: MemoryCenterSearchData;
+  memory_center_mutate: MemoryCenterMutateData;
+  memory_center_activity: MemoryCenterActivityData;
+  memory_center_restore: MemoryCenterRestoreData;
+  memory_center_suggestions_get: MemoryCenterSuggestionsData;
+  memory_center_suggestion_answer: MemoryCenterSuggestionAnswerData;
+  memory_center_export: import("./memoryCenterImportTypes.ts").MemoryCenterExportData;
+  memory_center_import_preview: import("./memoryCenterImportTypes.ts").MemoryCenterImportPreviewData;
+  memory_center_import_apply: import("./memoryCenterImportTypes.ts").MemoryCenterImportApplyData;
+  memory_center_import_rollback: import("./memoryCenterImportTypes.ts").MemoryCenterImportRollbackData;
+};
+
+type AssistantResultBranchForOp<K extends AssistantOp> = K extends "memory_center_mutate"
+  ? { op: K } & (
+      | { ok: true; data: MemoryCenterMutateData }
+      | { ok: false; error: string; data: MemoryCenterMutateFailureData }
+    )
+  : K extends "memory_center_restore"
+    ? { op: K } & (
+        | { ok: true; data: MemoryCenterRestoreData }
+        | { ok: false; error: string; data: MemoryCenterRestoreFailureData }
+      )
+    : K extends "memory_center_suggestion_answer"
+      ? { op: K } & (
+          | { ok: true; data: MemoryCenterSuggestionAnswerData }
+          | { ok: false; error: string; data: { code: MemoryCenterSuggestionAnswerErrorCode; detail?: string } }
+        )
+      : K extends
+          | "memory_center_export"
+          | "memory_center_import_preview"
+          | "memory_center_import_apply"
+          | "memory_center_import_rollback"
+        ? { op: K } & (
+            | { ok: true; data: AssistantOpResult<K> }
+            | { ok: false; error: string; data?: { code?: string } }
+          )
+        : { op: K; ok: boolean; error?: string; data?: AssistantOpResult<K> };
+
+export type AssistantOpArgs<O extends AssistantOp> = O extends keyof AssistantOpArgsMap
+  ? AssistantOpArgsMap[O]
+  : Record<string, unknown>;
+
+export type AssistantOpResult<O extends AssistantOp> = O extends keyof AssistantOpResultMap
+  ? AssistantOpResultMap[O]
+  : unknown;
+
 export type AssistantDelegation = {
   id: string;
   parentChatId?: string;
@@ -134,6 +541,24 @@ export type AssistantOp =
   | "memory_core"
   | "memory_settings"
   | "memory_export"
+  /** args: { scope?: string }；无 scope 为总览+作用域树，有 scope 为该层详情（只读） */
+  | "memory_center_get"
+  /** args: { query, scope?, kind?, state? }；跨个人/W0/工作区只读搜索，不续期 used */
+  | "memory_center_search"
+  /** args: { scope, mutation }；工作区 .jiebo/memory.md 结构化编辑（revision CAS） */
+  | "memory_center_mutate"
+  /** args: { scope?, cursor?, limit? }；工作区记忆变更审计时间线 */
+  | "memory_center_activity"
+  /** args: { scope, auditId }；按审计回滚最近一次可回滚变更 */
+  | "memory_center_restore"
+  /** args: { scope? }；工作区记忆整理建议（只读扫描结果） */
+  | "memory_center_suggestions_get"
+  /** args: { scope, id, accept }；接受或忽略一条建议 */
+  | "memory_center_suggestion_answer"
+  | "memory_center_export"
+  | "memory_center_import_preview"
+  | "memory_center_import_apply"
+  | "memory_center_import_rollback"
   | "push_subscribe"
   | "push_unsubscribe"
   | "push_test"
@@ -141,6 +566,51 @@ export type AssistantOp =
   | "approval_answer"
   /** args: { delegationId }；停掉一项在跑或等批准的前台委派 */
   | "delegation_cancel";
+
+export type AssistantOpTyped = keyof AssistantOpArgsMap;
+
+export type MemoryCenterRestoreResultBranch = Extract<
+  ServerMessage,
+  { type: "assistant_result"; op: "memory_center_restore" }
+>;
+export type MemoryCenterSuggestionAnswerResultBranch = Extract<
+  ServerMessage,
+  { type: "assistant_result"; op: "memory_center_suggestion_answer" }
+>;
+export type AssistantOpLegacy = Exclude<AssistantOp, AssistantOpTyped>;
+
+/** 网关不依赖 args 字段即可执行的 op；ClientMessage 可省略 args。 */
+export type AssistantOpNoArgs = "memory_export" | "push_test";
+
+type AssistantOpClientBranch<K extends AssistantOp> = K extends
+  | "memory_center_search"
+  | "memory_center_mutate"
+  | "memory_center_restore"
+  | "memory_center_suggestion_answer"
+  | "memory_center_import_preview"
+  | "memory_center_import_apply"
+  | "memory_center_import_rollback"
+  ? { op: K; args: AssistantOpArgsMap[K] }
+  : K extends "memory_center_get" | "memory_center_activity" | "memory_center_suggestions_get" | "memory_center_export"
+    ? { op: K; args?: AssistantOpArgsMap[K] }
+    : K extends AssistantOpNoArgs
+      ? { op: K; args?: undefined }
+      : K extends AssistantOpLegacy
+        ? { op: K; args?: Record<string, unknown> }
+        : never;
+
+/** 按 op 收窄 args 的 assistant_op 判别联合（ClientMessage 成员）。 */
+export type AssistantOpClientMessage = {
+  [K in AssistantOp]: { type: "assistant_op"; reqId?: string } & AssistantOpClientBranch<K>;
+}[AssistantOp];
+
+/** 按 op 收窄 data 的 assistant_result 判别联合（ServerMessage 成员）。 */
+export type AssistantResultMessage = {
+  type: "assistant_result";
+  reqId?: string;
+} & {
+  [K in AssistantOp]: AssistantResultBranchForOp<K>;
+}[AssistantOp];
 
 /** baseline = 现有拦截/整轮重放；plane = 策略层（工具集限制、按指纹放行、方言 overlay） */
 export type PolicyId = "baseline" | "plane";
@@ -359,7 +829,7 @@ export type ClientMessage =
   | { type: "loop_stop"; chatId: string }
   // 个人助理（今日页、记忆页、推送）。memory: true 时一并下发记忆全量
   | { type: "assistant_get"; memory?: boolean }
-  | { type: "assistant_op"; op: AssistantOp; args?: Record<string, unknown>; reqId?: string }
+  | AssistantOpClientMessage
   // IM（需 caps 含 "im"，否则回 im_error code=no_cap）
   | { type: "im_contacts" }
   /**
@@ -709,7 +1179,7 @@ export type ServerMessage =
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
   | { type: "assistant_state"; state: AssistantState }
-  | { type: "assistant_result"; reqId?: string; op: AssistantOp; ok: boolean; error?: string; data?: unknown }
+  | AssistantResultMessage
   | { type: "inbox_item"; item: AssistantInboxItem }
   /** 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带 */
   | { type: "delegation_state"; delegation: AssistantDelegation; approval?: AssistantApproval }

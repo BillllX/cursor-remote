@@ -16,6 +16,8 @@ import {
   renderWorkPreferences,
   splitTerms,
 } from "./memory.ts";
+import { isValidCalendarDateUtc } from "../../../shared/calendarDateUtc.ts";
+import type { InjectionDiagnostics, MemoryInjectionReason, MemoryInjectionSkipReason } from "../../../shared/protocol.ts";
 import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 
 /**
@@ -31,7 +33,7 @@ import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type T
 export type WorkspaceRoot = { id: string; stateDir: string; workspaceRoot: string };
 
 export const MEMORY_FILE = ".jiebo/memory.md";
-const MEMORY_TMP_RE = /^memory\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
+export const MEMORY_TMP_RE = /^memory\.md\.\d+\.[0-9a-f]{8}\.tmp$/;
 export const SECTIONS = ["约定", "命令", "坑", "决定", "进行中"] as const;
 export type Section = (typeof SECTIONS)[number];
 export const RULES_CHAR_CAP = 16_000;
@@ -70,9 +72,9 @@ function isDir(path: string) {
   }
 }
 
-type SafeMemoryPaths = { dir: string; jiebo: string; memory: string; ignore: string; lockTarget: string; lockDir: string };
+export type SafeMemoryPaths = { dir: string; jiebo: string; memory: string; ignore: string; lockTarget: string; lockDir: string };
 
-function rejectSymlink(path: string) {
+export function rejectSymlink(path: string) {
   try {
     if (lstatSync(path).isSymbolicLink()) throw new Error(`工作区记忆路径不能是符号链接：${path}`);
   } catch (err) {
@@ -81,7 +83,7 @@ function rejectSymlink(path: string) {
 }
 
 /** memory 相关路径统一做真实路径与 symlink 检查；调用者提供作用域根，不能只信字符串 resolve。 */
-function safeMemoryPaths(dir: string, allowedRoot = dir): SafeMemoryPaths {
+export function safeMemoryPaths(dir: string, allowedRoot = dir): SafeMemoryPaths {
   const root = realpathSync(allowedRoot);
   const target = realpathSync(dir);
   if (!within(root, target)) throw new Error(`工作区记忆目录越界：${dir}`);
@@ -151,7 +153,7 @@ const META_RE = /\s*<!--\s*(.*?)\s*-->\s*$/;
 const KNOWN_META = new Set(["id", "from", "at", "refs", "pinned", "state", "used", "uses", "expires"]);
 
 function validDate(value: string | undefined) {
-  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+  return value && isValidCalendarDateUtc(value) ? value : undefined;
 }
 
 function validState(value: string | undefined): MemoryLine["state"] {
@@ -161,7 +163,8 @@ function validState(value: string | undefined): MemoryLine["state"] {
 export function parseMemoryFile(text: string): MemoryLine[] {
   const out: MemoryLine[] = [];
   let section = "约定";
-  for (const raw of text.split("\n")) {
+  for (const rawLine of text.split("\n")) {
+    const raw = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     const head = raw.match(/^##\s+(.+?)\s*$/);
     if (head) {
       section = head[1];
@@ -246,21 +249,39 @@ const FILE_HEAD = [
   "<!-- 接驳维护：每条一行，可以手改或删。行尾注释是来源和引用的路径，引用的文件没了会标“待核实”。这里不放个人信息。 -->",
 ].join("\n");
 
-/** 默认不进版本库：.jiebo/ 下放一份只忽略 memory.md 的 .gitignore；已有的不动，删掉它就会被提交 */
-function ensureIgnored(dir: string, allowedRoot = dir) {
+/** 计算 .jiebo/.gitignore 目标内容；无需变更时返回 null。 */
+export function planMemoryJieboGitignore(dir: string, allowedRoot = dir): { path: string; content: string } | null {
   const { ignore } = safeMemoryPaths(dir, allowedRoot);
   const lockRule = ".memory.md.lock/";
   if (existsSync(ignore)) {
     const current = readFileSync(ignore, "utf8");
-    if (!current.split(/\r?\n/).includes(lockRule)) {
-      writeTextAtomic(ignore, `${current}${current && !current.endsWith("\n") ? "\n" : ""}${lockRule}\n`);
+    const lines = current.split(/\r?\n/);
+    let patch = current;
+    if (!lines.includes("memory-audit.jsonl")) {
+      patch = `${patch}${patch && !patch.endsWith("\n") ? "\n" : ""}memory-audit.jsonl\n`;
     }
-    return;
+    if (!lines.includes(lockRule)) {
+      patch = `${patch}${patch.endsWith("\n") ? "" : "\n"}${lockRule}\n`;
+    }
+    if (patch === current) return null;
+    return { path: ignore, content: patch };
   }
-  writeTextAtomic(
-    ignore,
-    `# 接驳的工作区记忆默认不进版本库；想跟代码一起提交就删掉这个文件\nmemory.md\n${lockRule}\n`,
-  );
+  return {
+    path: ignore,
+    content: `# 接驳的工作区记忆默认不进版本库；想跟代码一起提交就删掉这个文件\nmemory.md\nmemory-audit.jsonl\n${lockRule}\n`,
+  };
+}
+
+/** 默认不进版本库：.jiebo/ 下放一份只忽略 memory.md 的 .gitignore；已有的不动，删掉它就会被提交 */
+export function ensureMemoryJieboGitignore(
+  dir: string,
+  allowedRoot = dir,
+  writeFile?: (path: string, data: string | Buffer, mode?: number) => void,
+) {
+  const plan = planMemoryJieboGitignore(dir, allowedRoot);
+  if (!plan) return;
+  if (writeFile) writeFile(plan.path, plan.content);
+  else writeTextAtomic(plan.path, plan.content);
 }
 
 export type MemoryMatch = {
@@ -410,7 +431,7 @@ export type AppendMemoryResult = {
 function appendMemoryLinesUnlocked(dir: string, lines: MemoryLine[], allowedRoot: string): AppendMemoryResult {
   const { memory: path } = safeMemoryPaths(dir, allowedRoot);
   const current = readText(path);
-  ensureIgnored(dir, allowedRoot);
+  ensureMemoryJieboGitignore(dir, allowedRoot);
   const known = parseMemoryFile(current).map((line) => ({ text: line.text, id: line.id }));
   const fresh: MemoryLine[] = [];
   const items: AppendMemoryItemResult[] = [];
@@ -466,7 +487,7 @@ export function appendMemoryLines(dir: string, lines: MemoryLine[], allowedRoot 
   return appendMemoryLinesDetailed(dir, lines, allowedRoot).written;
 }
 
-type RankedMemoryLine = {
+export type RankedMemoryLine = {
   line: MemoryLine;
   index: number;
   relevance: number;
@@ -476,6 +497,131 @@ type RankedMemoryLine = {
   text: string;
   cost: number;
 };
+
+export const INJECTION_STRATEGY = "pinned>分节anchor>高置信相关>分节轮转";
+export const INJECTION_DIAGNOSTIC_CAP = 40;
+
+export type MemoryInjectionPlan = {
+  lines: MemoryLine[];
+  sectionOrder: string[];
+  ranked: RankedMemoryLine[];
+  selected: RankedMemoryLine[];
+  selectedReasons: Map<number, MemoryInjectionReason>;
+  diagnostics: InjectionDiagnostics;
+};
+
+function injectionReasonFor(row: RankedMemoryLine, pinned: RankedMemoryLine[], anchors: RankedMemoryLine[], relevant: RankedMemoryLine[]) {
+  if (row.line.pinned) return "pinned" as const;
+  if (anchors.some((item) => item.index === row.index)) return "section_anchor" as const;
+  if (relevant.some((item) => item.index === row.index)) return "relevant" as const;
+  return "rotation" as const;
+}
+
+function formatInjectionDiagnosticsLine(diagnostics: InjectionDiagnostics) {
+  return `（记忆诊断：总数=${diagnostics.total} 纳入=${diagnostics.selected} 因预算跳过=${diagnostics.skippedBudget} hot命中=${diagnostics.hotSelected} cold召回=${diagnostics.coldRecalled} done或expired跳过=${diagnostics.terminalSkipped} pinned命中=${diagnostics.pinnedSelected} 相关命中=${diagnostics.relevantSelected} 选择策略=${diagnostics.strategy}）`;
+}
+
+/** 与 renderMemoryFile 共用：结构化注入选择 + 诊断，供 UI 与提示词对齐。 */
+export function planMemoryInjection(dir: string, budget: number, query = "", allowedRoot = dir): MemoryInjectionPlan | null {
+  let paths: SafeMemoryPaths;
+  try {
+    paths = safeMemoryPaths(dir, allowedRoot);
+  } catch {
+    return null;
+  }
+  const lines = parseMemoryFile(readText(paths.memory));
+  if (!lines.length) return null;
+  const terms = memoryInjectionTerms(query);
+  const ranked: RankedMemoryLine[] = lines.map((line, index) => {
+    const missing = line.refs.filter((ref) => !existsSync(resolve(dir, ref)));
+    const text = `- ${line.text}${missing.length ? `（待核实：引用的 ${missing.join("、")} 不在了）` : ""}`;
+    const relevance = injectionRelevance(line, terms);
+    return {
+      line,
+      index,
+      relevance: relevance.score,
+      highConfidence: relevance.highConfidence,
+      coldEligible: relevance.coldEligible,
+      effectiveState: effectiveMemoryState(line),
+      text,
+      cost: estimateTokens(text),
+    };
+  });
+  const resident = ranked.filter((row) => row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible));
+  const pinned = resident.filter((row) => row.line.pinned).sort(newerFirst);
+  const sectionOrder = [...new Set(lines.map((line) => line.section))];
+  const anchoredSections = new Set(pinned.map((row) => row.line.section));
+  const anchors = sectionOrder.flatMap((section) => {
+    if (anchoredSections.has(section)) return [];
+    const choices = resident
+      .filter((row) => row.line.section === section && !row.line.pinned)
+      .sort(
+        (a, b) =>
+          Number(b.effectiveState === "hot") - Number(a.effectiveState === "hot") ||
+          Number(b.highConfidence) - Number(a.highConfidence) ||
+          b.relevance - a.relevance ||
+          newerFirst(a, b),
+      );
+    return choices[0] ? [choices[0]] : [];
+  });
+  const reserved = new Set([...pinned, ...anchors].map((row) => row.index));
+  const relevant = resident
+    .filter((row) => !reserved.has(row.index) && row.highConfidence)
+    .sort((a, b) => b.relevance - a.relevance || newerFirst(a, b));
+  const relevantIds = new Set(relevant.map((row) => row.index));
+  const remainder = diverseNewest(resident.filter((row) => !reserved.has(row.index) && !relevantIds.has(row.index)));
+  const candidates = [...pinned, ...anchors, ...relevant, ...remainder];
+  const selected: RankedMemoryLine[] = [];
+  const selectedReasons = new Map<number, MemoryInjectionReason>();
+  let used = 0;
+  let skippedBudget = 0;
+  let coldUnrelatedSkipped = 0;
+  const allSkippedReasons: Array<{ id: string | null; reason: MemoryInjectionSkipReason }> = [];
+  for (const row of candidates) {
+    if (used + row.cost > budget) {
+      skippedBudget += 1;
+      allSkippedReasons.push({ id: row.line.id ?? null, reason: "budget" });
+      continue;
+    }
+    selected.push(row);
+    selectedReasons.set(row.index, injectionReasonFor(row, pinned, anchors, relevant));
+    used += row.cost;
+  }
+  for (const row of ranked) {
+    if (row.effectiveState === "done" || row.effectiveState === "expired") {
+      allSkippedReasons.push({ id: row.line.id ?? null, reason: "terminal" });
+      continue;
+    }
+    if (row.effectiveState === "cold" && !row.coldEligible) {
+      coldUnrelatedSkipped += 1;
+      allSkippedReasons.push({ id: row.line.id ?? null, reason: "cold_unrelated" });
+    }
+  }
+  const selectedIdsTruncated = selected.length > INJECTION_DIAGNOSTIC_CAP;
+  const skippedReasonsTruncated = allSkippedReasons.length > INJECTION_DIAGNOSTIC_CAP;
+  const selectedIds = selected.slice(0, INJECTION_DIAGNOSTIC_CAP).map((row) => ({
+    id: row.line.id ?? null,
+    reason: selectedReasons.get(row.index) ?? "rotation",
+  }));
+  const diagnostics: InjectionDiagnostics = {
+    total: lines.length,
+    selected: selected.length,
+    skippedBudget,
+    hotSelected: selected.filter((row) => row.effectiveState === "hot").length,
+    coldRecalled: selected.filter((row) => row.effectiveState === "cold").length,
+    terminalSkipped: ranked.filter((row) => row.effectiveState === "done" || row.effectiveState === "expired").length,
+    coldUnrelatedSkipped,
+    pinnedSelected: selected.filter((row) => row.line.pinned).length,
+    relevantSelected: selected.filter((row) => row.relevance > 0).length,
+    strategy: INJECTION_STRATEGY,
+    selectedIds,
+    skippedReasons: allSkippedReasons.slice(0, INJECTION_DIAGNOSTIC_CAP),
+    selectedIdsTruncated,
+    skippedReasonsTruncated,
+    truncated: selectedIdsTruncated || skippedReasonsTruncated,
+  };
+  return { lines, sectionOrder, ranked, selected, selectedReasons, diagnostics };
+}
 
 function memoryRelevance(line: MemoryLine, terms: string[]) {
   if (!terms.length) return 0;
@@ -573,79 +719,15 @@ function diverseNewest(rows: RankedMemoryLine[]) {
 
 /** 渲染进提示词：置顶 → query 相关 → 分节轮转；引用失效标待核实，超预算的留在文件里。 */
 export function renderMemoryFile(dir: string, budget: number, query = "", allowedRoot = dir) {
-  let paths: SafeMemoryPaths;
-  try {
-    paths = safeMemoryPaths(dir, allowedRoot);
-  } catch {
-    return "";
-  }
-  const lines = parseMemoryFile(readText(paths.memory));
-  if (!lines.length) return "";
-  const terms = memoryInjectionTerms(query);
-  const ranked: RankedMemoryLine[] = lines.map((line, index) => {
-    const missing = line.refs.filter((ref) => !existsSync(resolve(dir, ref)));
-    const text = `- ${line.text}${missing.length ? `（待核实：引用的 ${missing.join("、")} 不在了）` : ""}`;
-    const relevance = injectionRelevance(line, terms);
-    return {
-      line,
-      index,
-      relevance: relevance.score,
-      highConfidence: relevance.highConfidence,
-      coldEligible: relevance.coldEligible,
-      effectiveState: effectiveMemoryState(line),
-      text,
-      cost: estimateTokens(text),
-    };
-  });
-  const resident = ranked.filter((row) => row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible));
-  const pinned = resident.filter((row) => row.line.pinned).sort(newerFirst);
-  const sectionOrder = [...new Set(lines.map((line) => line.section))];
-  const anchoredSections = new Set(pinned.map((row) => row.line.section));
-  const anchors = sectionOrder.flatMap((section) => {
-    if (anchoredSections.has(section)) return [];
-    const choices = resident
-      .filter((row) => row.line.section === section && !row.line.pinned)
-      .sort(
-        (a, b) =>
-          Number(b.effectiveState === "hot") - Number(a.effectiveState === "hot") ||
-          Number(b.highConfidence) - Number(a.highConfidence) ||
-          b.relevance - a.relevance ||
-          newerFirst(a, b),
-      );
-    return choices[0] ? [choices[0]] : [];
-  });
-  const reserved = new Set([...pinned, ...anchors].map((row) => row.index));
-  const relevant = resident
-    .filter((row) => !reserved.has(row.index) && row.highConfidence)
-    .sort((a, b) => b.relevance - a.relevance || newerFirst(a, b));
-  const relevantIds = new Set(relevant.map((row) => row.index));
-  const remainder = diverseNewest(resident.filter((row) => !reserved.has(row.index) && !relevantIds.has(row.index)));
-  const candidates = [...pinned, ...anchors, ...relevant, ...remainder];
-  const selected: RankedMemoryLine[] = [];
-  let used = 0;
-  let skipped = 0;
-  for (const row of candidates) {
-    if (used + row.cost > budget) {
-      skipped += 1;
-      continue;
-    }
-    selected.push(row);
-    used += row.cost;
-  }
+  const plan = planMemoryInjection(dir, budget, query, allowedRoot);
+  if (!plan) return "";
   const out: string[] = [];
-  for (const section of sectionOrder) {
-    const rows = selected.filter((row) => row.line.section === section);
+  for (const section of plan.sectionOrder) {
+    const rows = plan.selected.filter((row) => row.line.section === section);
     if (!rows.length) continue;
     out.push(`${section}：`, ...rows.map((row) => row.text));
   }
-  const pinnedHits = selected.filter((row) => row.line.pinned).length;
-  const relevantHits = selected.filter((row) => row.relevance > 0).length;
-  const hotHits = selected.filter((row) => row.effectiveState === "hot").length;
-  const coldHits = selected.filter((row) => row.effectiveState === "cold").length;
-  const inactive = ranked.filter((row) => row.effectiveState === "done" || row.effectiveState === "expired").length;
-  out.push(
-    `（记忆诊断：总数=${lines.length} 纳入=${selected.length} 因预算跳过=${skipped} hot命中=${hotHits} cold召回=${coldHits} done或expired跳过=${inactive} pinned命中=${pinnedHits} 相关命中=${relevantHits} 选择策略=pinned>分节anchor>高置信相关>分节轮转）`,
-  );
+  out.push(formatInjectionDiagnosticsLine(plan.diagnostics));
   return out.join("\n");
 }
 
@@ -943,7 +1025,7 @@ function readPersonalNeedles(ref: TenantRef) {
   return needles.map((item) => item.trim()).filter((needle) => needle.length >= 8);
 }
 
-function leaksPersonal(ref: TenantRef, text: string, cachedNeedles?: string[]) {
+export function leaksPersonal(ref: TenantRef, text: string, cachedNeedles?: string[]) {
   return (cachedNeedles ?? readPersonalNeedles(ref)).some((needle) => text.includes(needle));
 }
 

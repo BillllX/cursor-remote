@@ -685,7 +685,142 @@
   data: JSON {"id": "td_2"}
 )
 
-## server[53] inbox_item #1
+## server[53] assistant_result #2
+.assistantResult(
+  reqId: "rq-mc-get-1"
+  op: "memory_center_get"
+  ok: true
+  error: nil
+  data: JSON {"mode": "overview", "overview": {"personal": {"coreBudget": 1200, "coreFieldLines": 2, "coreTokens": 88, "invalidEntries": 1, "paused": false, "validEntries": 3, "workPreferenceBudget": 200, "workPreferenceLines": 2}, "scopes": [{"cold": 0, "done": 1, "error": null, "expired": 0, "health": null, "hot": 3, "id": "personal", "injectionSelected": 0, "injectionSkipped": 0, "kind": "personal", "label": "关于我", "layer": "L0", "memoryCount": 4, "missingRefs": 0, "parentId": null, "pendingCount": 0, "pinned": 0, "ruleFileCount": 0, "tokenBudget": 1200}, {"cold": 2, "done": 1, "error": null, "expired": 1, "health": null, "hot": 8, "id": "notes", "injectionSelected": 6, "injectionSkipped": 4, "kind": "workspace_memory", "label": "notes", "layer": "L2", "memoryCount": 12, "missingRefs": 0, "parentId": null, "pendingCount": 1, "pinned": 1, "ruleFileCount": 2, "tokenBudget": 600}]}}
+)
+
+## server[54] assistant_result #3
+.assistantResult(
+  reqId: "rq-mc-search-1"
+  op: "memory_center_search"
+  ok: true
+  error: nil
+  data: JSON {"hits": [{"effectiveState": "hot", "id": "m_x1y2z3", "kind": "personal", "layer": "L0", "missingRefs": [], "pinned": true, "reasons": ["text"], "refs": [], "scopeId": "personal", "score": 4.2, "section": "工作偏好", "state": "hot", "text": "代码评审意见用中文写"}], "truncated": false}
+)
+
+## server[55] assistant_result #4
+.assistantResult(
+  reqId: "rq-mc-activity-1"
+  op: "memory_center_activity"
+  ok: true
+  error: nil
+  data: JSON {"degraded": false, "entries": [{"action": "update", "actor": "user", "after": {"id": "wm_sample", "pinned": false, "revision": "def456", "section": "约定", "state": "hot", "text": "新文案"}, "at": "2026-02-10T12:00:00.000Z", "auditId": "aud_sample1", "before": {"id": "wm_sample", "pinned": false, "revision": "abc123", "section": "约定", "state": "hot", "text": "旧文案"}, "canRestore": true, "itemId": "wm_sample", "scope": "notes"}], "nextCursor": "cursor-sample", "truncated": false}
+)
+
+## server[56] assistant_result #5
+.assistantResult(
+  reqId: "rq-mc-restore-fail"
+  op: "memory_center_restore"
+  ok: false
+  error: "冲突"
+  data: JSON {"code": "conflict"}
+)
+
+## server[57] assistant_result #6
+.assistantResult(
+  reqId: "rq-mc-suggestions-1"
+  op: "memory_center_suggestions_get"
+  ok: true
+  error: nil
+  data: JSON {"entries": [{"id": "sug_missing1", "itemIds": ["wm_x"], "kind": "missing_ref", "proposedAction": {"kind": "mark_handled"}, "reason": "文件不在", "revisions": ["rev1"], "risk": "low", "scope": "notes", "summary": "引用缺失"}], "generatedAt": "2026-02-10T08:00:00.000Z", "lastRunAt": "2026-02-10T08:00:00.000Z"}
+)
+
+## server[58] assistant_result #7
+.assistantResult(
+  reqId: "rq-mc-sug-answer"
+  op: "memory_center_suggestion_answer"
+  ok: true
+  error: nil
+  data: JSON {"id": "sug_missing1", "status": "dismissed"}
+)
+
+## server[59] assistant_result #8
+.assistantResult(
+  reqId: "rq-mc-mutate-ok"
+  op: "memory_center_mutate"
+  ok: true
+  error: nil
+  data: JSON {"action": "set_state", "detail": {"diagnostics": null, "items": [], "rules": [], "scope": {"cold": 0, "done": 0, "expired": 0, "hot": 1, "id": "notes", "injectionSelected": 1, "injectionSkipped": 0, "kind": "workspace_memory", "label": "notes", "layer": "L2", "memoryCount": 1, "missingRefs": 0, "parentId": null, "pendingCount": 0, "pinned": 0, "ruleFileCount": 0, "tokenBudget": 600}}, "scope": "notes"}
+)
+
+## server[60] assistant_result #9
+.assistantResult(
+  reqId: "rq-mc-export-1"
+  op: "memory_center_export"
+  ok: true
+  error: nil
+  data: JSON {"bytes": 1024, "relativePath": ".jiebo/memory-export/memory-center-sample.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "summary": {"personalEntries": 2, "rulesInventory": 0, "scopes": ["personal", "notes"], "workspaceScopes": 1}}
+)
+
+## server[61] assistant_result #10
+.assistantResult(
+  reqId: "rq-mc-import-preview"
+  op: "memory_center_import_preview"
+  ok: true
+  error: nil
+  data: JSON {"changes": [], "expiresAt": "2026-10-18T13:00:00.000Z", "planId": "mcplan_sample1", "snapshotSummary": {"bytes": 512, "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "exportedAt": "2026-10-18T12:00:00.000Z", "personalEntryCount": 0, "rulesCount": 0, "schemaVersion": 1, "scopeCount": 1}, "warnings": [{"code": "rules_changed", "message": "规则只读。"}]}
+)
+
+## server[62] assistant_result #11
+.assistantResult(
+  reqId: "rq-mc-import-apply"
+  op: "memory_center_import_apply"
+  ok: true
+  error: nil
+  data: JSON {"canRollback": true, "importId": "mcimp_sample1", "summary": {"applied": 1, "conflictsResolved": 0, "skipped": 0}}
+)
+
+## server[63] assistant_result #12
+.assistantResult(
+  reqId: "rq-mc-import-rollback"
+  op: "memory_center_import_rollback"
+  ok: true
+  error: nil
+  data: JSON {"importId": "mcimp_sample1", "status": "rolled_back"}
+)
+
+## server[64] assistant_result #13
+.assistantResult(
+  reqId: "rq-mc-export-fail"
+  op: "memory_center_export"
+  ok: false
+  error: "未知 scope：nope"
+  data: JSON {"code": "invalid_scope"}
+)
+
+## server[65] assistant_result #14
+.assistantResult(
+  reqId: "rq-mc-import-preview-fail"
+  op: "memory_center_import_preview"
+  ok: false
+  error: "路径不在允许目录或格式不对。"
+  data: JSON {"code": "invalid_path"}
+)
+
+## server[66] assistant_result #15
+.assistantResult(
+  reqId: "rq-mc-import-apply-fail"
+  op: "memory_center_import_apply"
+  ok: false
+  error: "计划不存在或已过期。"
+  data: JSON {"code": "plan_not_found"}
+)
+
+## server[67] assistant_result #16
+.assistantResult(
+  reqId: "rq-mc-import-rollback-fail"
+  op: "memory_center_import_rollback"
+  ok: false
+  error: "找不到可回滚的导入。"
+  data: JSON {"code": "not_found"}
+)
+
+## server[68] inbox_item #1
 .inboxItem(AssistantInboxItem(
   id: "i_k8f2m1"
   kind: "approval"
@@ -698,7 +833,7 @@
   delegationId: "d_q7w3"
 ))
 
-## server[54] delegation_state #1
+## server[69] delegation_state #1
 .delegationState(
   delegation: AssistantDelegation(
     id: "d_q7w3"
@@ -725,7 +860,7 @@
   )
 )
 
-## server[55] memory_written #1
+## server[70] memory_written #1
 .memoryWritten(
   chatId: "c-assistant-01"
   entry: AssistantMemoryEntry(
@@ -744,10 +879,10 @@
   )
 )
 
-## server[56] pong #1
+## server[71] pong #1
 .pong
 
-## server[57] im_contacts #1
+## server[72] im_contacts #1
 .im(.contacts(
   me: ImMe(
     id: "alice"
@@ -773,7 +908,7 @@
   )
 ))
 
-## server[58] im_list #1
+## server[73] im_list #1
 .im(.list(
   convs: [
     ImConvRow(
@@ -816,7 +951,7 @@
   cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ"
 ))
 
-## server[59] im_history #1
+## server[74] im_history #1
 .im(.history(
   convId: "dm~alice~bob-2"
   messages: [
@@ -943,7 +1078,7 @@
   after: 10
 ))
 
-## server[60] im_ack #1
+## server[75] im_ack #1
 .im(.ack(
   clientId: "c-ios-1739000000000-1"
   convId: "dm~alice~bob-2"
@@ -952,7 +1087,7 @@
   rejected: true
 ))
 
-## server[61] im_message #1
+## server[76] im_message #1
 .im(.message(
   .0: ImMessage(
     convId: "dm~alice~bob-2"
@@ -973,7 +1108,7 @@
   unread: 2
 ))
 
-## server[62] im_update #1
+## server[77] im_update #1
 .im(.update(ImUpdate(
   what: "settings"
   convId: "dm~alice~bob-2"
@@ -1002,14 +1137,14 @@
   unread: 1
 )))
 
-## server[63] im_error #1
+## server[78] im_error #1
 .im(.error(
   clientId: "c-ios-1739000000000-1"
   code: "rate_limited"
   message: "发得太快了，稍等一会儿再发"
 ))
 
-## server[64] workspace_agents #1
+## server[79] workspace_agents #1
 .workspaceAgents(
   items: [
     WorkspaceAgentItem(
@@ -1035,13 +1170,13 @@
   cursor: "notes"
 )
 
-## server[65] workspace_agent_opened #1
+## server[80] workspace_agent_opened #1
 .workspaceAgentOpened(
   path: "/workspace/demo/notes"
   chatId: "c-7f3a9e21"
 )
 
-## server[66] workspace_agent_update #1
+## server[81] workspace_agent_update #1
 .workspaceAgentUpdate(
   chatId: "c-7f3a9e21"
   unread: 0

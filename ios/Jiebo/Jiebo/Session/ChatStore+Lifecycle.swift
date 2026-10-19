@@ -135,6 +135,7 @@ extension ChatStore {
             // 连接断开前已经收到的增量必须先落进 turn；否则取消 50ms flush Task 会丢最后一小段。
             self.flushAllStreamDeltas()
             self.connected = false
+            self.memoryCenterOnDisconnect()
             self.armOfflineTimer()
             self.failAssistantReplyWaiters()
             self.imSink?.connectionLost()
@@ -313,6 +314,7 @@ extension ChatStore {
         for (_, pending) in orphans {
             pending.resume(throwing: UploadError.notConnected)
         }
+        memoryCenterResetTenant()
     }
 
     func rememberModel(_ id: String) {

@@ -783,13 +783,25 @@ extension ChatStore {
             // 别的连接触发的推送可能不带记忆：记忆页已加载过就留着旧的，等下一次带记忆的推送覆盖
             if next.memory == nil { next.memory = assistantState?.memory }
             assistantState = next
-        case .assistantResult(let reqId, let op, let ok, let error, _):
+        case .assistantResult(let reqId, let op, let ok, let error, let data):
+            if memoryCenterHandleExtrasResult(reqId: reqId, op: op, ok: ok, error: error, data: data) {
+                break
+            }
+            if memoryCenterHandleAssistantResult(reqId: reqId, op: op, ok: ok, error: error, data: data) {
+                break
+            }
             if let reqId, let waiter = assistantReplyWaiters.removeValue(forKey: reqId) {
                 waiter(ok)
                 break
             }
             if !ok {
-                flash(error ?? "助理操作失败（\(op)）")
+                if op != "memory_center_get", op != "memory_center_search", op != "memory_center_mutate",
+                   op != "memory_center_activity", op != "memory_center_restore",
+                   op != "memory_center_suggestions_get", op != "memory_center_suggestion_answer",
+                   op != "memory_center_export", op != "memory_center_import_preview",
+                   op != "memory_center_import_apply", op != "memory_center_import_rollback" {
+                    flash(error ?? "助理操作失败（\(op)）")
+                }
             } else if op == "memory_save" {
                 flash("已记住")
             } else if op == "memory_purge" {

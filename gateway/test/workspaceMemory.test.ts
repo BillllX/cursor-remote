@@ -27,6 +27,7 @@ import {
   memoryTextMatch,
   parseMemoryFile,
   proposeWorkspaceMemory,
+  planMemoryInjection,
   renderMemoryFile,
   restoreCards,
   searchWorkspaceMemory,
@@ -105,7 +106,7 @@ describe("appendMemoryLines", () => {
     mkdirSync(join(dir, ".jiebo"), { recursive: true });
     writeFileSync(join(dir, ".jiebo/.gitignore"), "keep-me\n");
     appendMemoryLines(dir, [{ section: "约定", text: "锁规则测试", refs: [] }]);
-    assert.equal(readFileSync(join(dir, ".jiebo/.gitignore"), "utf8"), "keep-me\n.memory.md.lock/\n");
+    assert.equal(readFileSync(join(dir, ".jiebo/.gitignore"), "utf8"), "keep-me\nmemory-audit.jsonl\n.memory.md.lock/\n");
   });
 
   test("写 memory.md 时顺手清掉同目录一小时前的 memory.md 临时文件，别的文件不碰", () => {
@@ -570,6 +571,39 @@ function memoryFixture(name: string, text: string) {
 }
 
 describe("renderMemoryFile", () => {
+  test("skip reasons 超过 40 条时 skippedReasonsTruncated", () => {
+    const lines = ["## 约定", ...Array.from({ length: 55 }, (_, i) => `- 冷 ${i} <!-- state=cold -->`)].join("\n");
+    const dir = memoryFixture("many-cold-skips", lines);
+    const plan = planMemoryInjection(dir, 80, "");
+    assert.ok(plan);
+    assert.equal(plan!.diagnostics.skippedReasonsTruncated, true);
+    assert.ok((plan!.diagnostics.skippedReasons?.length ?? 0) <= 40);
+    assert.ok((plan!.diagnostics.coldUnrelatedSkipped ?? 0) >= 55);
+  });
+
+  test("planMemoryInjection 与 render 诊断字段一致（空 query）", () => {
+    const dir = memoryFixture("diag-empty-query", ["## 约定", "- 条目一", "- 条目二"].join("\n"));
+    const budget = 200;
+    const plan = planMemoryInjection(dir, budget, "");
+    const rendered = renderMemoryFile(dir, budget, "");
+    assert.ok(plan);
+    for (const key of ["总数", "纳入", "因预算跳过", "hot命中", "cold召回", "pinned命中"] as const) {
+      const field =
+        key === "总数"
+          ? plan!.diagnostics.total
+          : key === "纳入"
+            ? plan!.diagnostics.selected
+            : key === "因预算跳过"
+              ? plan!.diagnostics.skippedBudget
+              : key === "hot命中"
+                ? plan!.diagnostics.hotSelected
+                : key === "cold召回"
+                  ? plan!.diagnostics.coldRecalled
+                  : plan!.diagnostics.pinnedSelected;
+      assert.match(rendered, new RegExp(`${key}=${field}`));
+    }
+  });
+
   test("文件后部的 pinned 会越过早期条目，且仍受预算约束", () => {
     const dir = memoryFixture(
       "pinned-priority",

@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import type { AssistantDelegation, AssistantMemoryEntry, AssistantOp, AssistantState, ClientMessage } from "@shared/protocol";
+import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
+import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
+import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
 type Tab = "today" | "inbox" | "memory" | "notify";
@@ -33,11 +35,9 @@ type Props = {
   onOpenChat: (chatId: string) => void;
   initialInboxId?: string;
   basePath: string;
+  lastAssistantResult: AssistantResultMessage | null;
+  assistantResultTick: number;
 };
-
-function uid() {
-  return crypto.randomUUID();
-}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -63,26 +63,20 @@ export default function AssistantPanel({
   onOpenChat,
   initialInboxId,
   basePath,
+  lastAssistantResult,
+  assistantResultTick,
 }: Props) {
-  const [editing, setEditing] = useState<{ id: string; rev: number; topic: string; text: string } | null>(null);
-  const [coreDraft, setCoreDraft] = useState<Record<string, string> | null>(null);
-  const [showInvalid, setShowInvalid] = useState(false);
   const [tab, setTab] = useState<Tab>("today");
   const [memoryLoaded, setMemoryLoaded] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [todoDraft, setTodoDraft] = useState("");
-  const [memTopic, setMemTopic] = useState("");
-  const [memText, setMemText] = useState("");
 
   const unread = useMemo(() => state?.inbox.filter((item) => !item.read).length ?? 0, [state?.inbox]);
 
-  const op = useCallback(
-    (operation: AssistantOp, args?: Record<string, unknown>) => {
-      send({ type: "assistant_op", op: operation, args, reqId: uid() });
-    },
-    [send],
-  );
+  const op = useCallback((...params: Parameters<BuildAssistantOpMessage>) => {
+    send(buildAssistantOpMessage(...params));
+  }, [send]) as BuildAssistantOpMessage;
 
   useEffect(() => {
     if (!open) return;
@@ -120,22 +114,19 @@ export default function AssistantPanel({
 
   if (!open) return null;
 
-  function purge(entry: AssistantMemoryEntry) {
-    if (!window.confirm(`彻底删除「${entry.topic}」？摘要、简报、收件箱和会话索引里的相关片段会一起抹掉，不能恢复。`)) return;
-    op("memory_purge", { id: entry.id });
-  }
-
   const approvals = state?.approvals || [];
-  const memoryEntries = state?.memory?.entries || [];
-  const validEntries = memoryEntries.filter((entry) => !entry.invalidAt);
-  const invalidEntries = memoryEntries.filter((entry) => entry.invalidAt);
   const backgroundOk = state?.background.ok ?? false;
   const todosOpen = (state?.todos || []).filter((t) => !t.done);
   const brief = state?.brief?.text?.trim();
 
   return (
     <div className="search-overlay open assistant-overlay" onClick={docked ? undefined : onClose}>
-      <div className="search-box assistant-box" onClick={(event) => event.stopPropagation()} role="dialog" aria-label={`${name} · 助理`}>
+      <div
+        className={`search-box assistant-box${tab === "memory" && !docked ? " memory-center-wide" : ""}`}
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+        aria-label={`${name} · 助理`}
+      >
         <div className="assistant-head">
           <div className="assistant-head-text">
             <div className="loop-title">{name} · 助理</div>
@@ -329,171 +320,17 @@ export default function AssistantPanel({
             !state?.memory ? (
               <Empty>正在加载记忆…</Empty>
             ) : (
-              <>
-                <Section title="核心档案">
-                  {coreDraft ? (
-                    <form
-                      className="assistant-col-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        op("memory_core", { fields: coreDraft, rev: state.memory?.core.rev });
-                        setCoreDraft(null);
-                      }}
-                    >
-                      {Object.keys(state.memory.core.fields).map((key) => (
-                        <label key={key} className="loop-field">
-                          {key}
-                          <textarea className="loop-goal" rows={3} value={coreDraft[key] ?? ""} onChange={(e) => setCoreDraft({ ...coreDraft, [key]: e.target.value })} />
-                        </label>
-                      ))}
-                      <div className="loop-actions">
-                        <button type="submit" className="new-chat primary">
-                          保存档案
-                        </button>
-                        <button type="button" className="new-chat" onClick={() => setCoreDraft(null)}>
-                          取消
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
-                    <>
-                      {Object.entries(state.memory.core.fields).some(([, value]) => value.trim()) ? (
-                        <div className="assistant-core">
-                          {Object.entries(state.memory.core.fields).map(([key, value]) =>
-                            value.trim() ? (
-                              <div key={key}>
-                                <div className="loop-field">{key}</div>
-                                <div className="assistant-item-body">{value}</div>
-                              </div>
-                            ) : null,
-                          )}
-                        </div>
-                      ) : (
-                        <Empty>核心档案还是空的。它会在每次对话开头注入。</Empty>
-                      )}
-                      <div className="loop-meta">
-                        约 {state.memory.coreTokens}/{state.memory.coreBudget} token
-                        {state.memory.settings.paused ? " · 记忆已暂停：模型不写新记忆，对话里也不注入" : ""}
-                      </div>
-                      <div className="assistant-row-actions">
-                        <button type="button" className="pill" onClick={() => setCoreDraft({ ...state.memory!.core.fields })}>
-                          编辑档案
-                        </button>
-                        <button type="button" className="pill" onClick={() => op("memory_settings", { paused: !state.memory!.settings.paused })}>
-                          {state.memory.settings.paused ? "恢复记忆" : "暂停记忆"}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </Section>
-                <Section title="新增">
-                  <form
-                    className="assistant-col-form"
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      if (!memTopic.trim() || !memText.trim()) return;
-                      op("memory_save", { topic: memTopic.trim(), text: memText.trim() });
-                      setMemTopic("");
-                      setMemText("");
-                      setNotice("已保存。");
-                    }}
-                  >
-                    <input className="side-input" value={memTopic} onChange={(e) => setMemTopic(e.target.value)} placeholder="主题，例如：饮食" />
-                    <textarea className="loop-goal" rows={3} value={memText} onChange={(e) => setMemText(e.target.value)} placeholder="要记住的内容" />
-                    <div className="loop-actions">
-                      <button type="submit" className="new-chat primary">
-                        保存
-                      </button>
-                    </div>
-                  </form>
-                </Section>
-                <Section title={`条目 · ${validEntries.length}`}>
-                  {validEntries.length ? (
-                    <ul className="assistant-list">
-                      {validEntries.slice(0, 200).map((entry) =>
-                        editing?.id === entry.id ? (
-                          <li key={entry.id} className="assistant-item">
-                            <form
-                              className="assistant-col-form"
-                              onSubmit={(event) => {
-                                event.preventDefault();
-                                if (!editing.topic.trim() || !editing.text.trim()) return;
-                                op("memory_edit", { id: entry.id, rev: editing.rev, topic: editing.topic.trim(), text: editing.text.trim() });
-                                setEditing(null);
-                              }}
-                            >
-                              <input className="side-input" value={editing.topic} onChange={(e) => setEditing({ ...editing, topic: e.target.value })} />
-                              <textarea className="loop-goal" rows={3} value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} />
-                              <div className="loop-actions">
-                                <button type="submit" className="new-chat primary">
-                                  保存
-                                </button>
-                                <button type="button" className="new-chat" onClick={() => setEditing(null)}>
-                                  取消
-                                </button>
-                              </div>
-                            </form>
-                          </li>
-                        ) : (
-                          <li key={entry.id} className="assistant-item">
-                            <div className="assistant-item-head">
-                              <span className="assistant-item-title">{entry.topic}</span>
-                              <span className={`chat-mark ${entry.basis === "inferred" ? "run" : "ok"}`}>{entry.basis === "inferred" ? "推断" : "你说的"}</span>
-                              {entry.validUntil ? <span className="chat-mark">到 {entry.validUntil}</span> : null}
-                            </div>
-                            <div className="assistant-item-body">{entry.text.slice(0, 300)}</div>
-                            <div className="assistant-row-actions">
-                              <button type="button" className="pill" onClick={() => setEditing({ id: entry.id, rev: entry.rev, topic: entry.topic, text: entry.text })}>
-                                编辑
-                              </button>
-                              <button type="button" className="pill" onClick={() => op("memory_invalidate", { id: entry.id })}>
-                                标失效
-                              </button>
-                              <button type="button" className="pill" onClick={() => op("memory_forget", { id: entry.id })}>
-                                遗忘
-                              </button>
-                              <button type="button" className="pill danger" onClick={() => purge(entry)}>
-                                彻底删除
-                              </button>
-                            </div>
-                          </li>
-                        ),
-                      )}
-                    </ul>
-                  ) : (
-                    <Empty>还没有记忆。在对话里说“记住……”，或在上面手动加一条。</Empty>
-                  )}
-                  {invalidEntries.length ? (
-                    <button type="button" className="pill" onClick={() => setShowInvalid(!showInvalid)}>
-                      {showInvalid ? "收起已失效" : `已失效 · ${invalidEntries.length}`}
-                    </button>
-                  ) : null}
-                  {showInvalid ? (
-                    <ul className="assistant-list">
-                      {invalidEntries.slice(0, 100).map((entry) => (
-                        <li key={entry.id} className="assistant-item muted">
-                          <div className="assistant-item-head">
-                            <span className="assistant-item-title">{entry.topic}</span>
-                            <span className="chat-mark">{entry.invalidReason || "已失效"}</span>
-                          </div>
-                          <div className="assistant-item-body">{entry.text.slice(0, 200)}</div>
-                          <div className="assistant-row-actions">
-                            <button type="button" className="pill" onClick={() => op("memory_restore", { id: entry.id })}>
-                              恢复
-                            </button>
-                            <button type="button" className="pill danger" onClick={() => purge(entry)}>
-                              彻底删除
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  <button type="button" className="new-chat" onClick={() => op("memory_export")}>
-                    导出只读快照到 .jiebo/memory-export/
-                  </button>
-                </Section>
-              </>
+              <MemoryCenterPanel
+                docked={docked}
+                active={memoryLoaded}
+                name={name}
+                state={state}
+                send={send}
+                op={op}
+                lastResult={lastAssistantResult}
+                resultTick={assistantResultTick}
+                onNotice={setNotice}
+              />
             )
           ) : null}
 

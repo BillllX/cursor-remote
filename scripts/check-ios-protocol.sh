@@ -57,9 +57,14 @@ APP=ios/Jiebo/Jiebo
 # 协议的最小依赖闭包：都只 import Foundation，原样参与编译
 SOURCES=(
   "$APP/Gateway/Protocol.swift"
+  "$APP/Gateway/MemoryCenterTypes.swift"
+  "$APP/Gateway/MemoryCenterImportTypes.swift"
   "$APP/Gateway/ImProtocol.swift"
   "$APP/Gateway/JSONValue.swift"
   "$APP/Gateway/ModelCatalog.swift"
+  "$APP/Session/MemoryCenterReducer.swift"
+  "$APP/Session/MemoryCenterExtrasReducer.swift"
+  "$APP/Session/MemoryCenterLayoutMetrics.swift"
   "$APP/Session/Preview.swift"
   "$APP/Session/ChatModels.swift"
 )
@@ -91,6 +96,26 @@ BUILD=""
 trap 'rm -rf "$WORK" ${BUILD:+"$BUILD"}' EXIT
 
 echo "Swift：$(head -n 1 <<<"$version_full")"
+
+# 记忆中心 SwiftUI / 会话桥接：契约库不含 Views，单独 swiftc -parse 防语法回归
+PARSE_UI=()
+while IFS= read -r -d '' file; do
+  PARSE_UI+=("$file")
+done < <(find "$APP/Views/MemoryCenter" -name '*.swift' -print0 | sort -z)
+if [[ -f "$APP/Session/ChatStore+MemoryCenter.swift" ]]; then
+  PARSE_UI+=("$APP/Session/ChatStore+MemoryCenter.swift")
+fi
+if [[ -f "$APP/Session/ChatStore+MemoryCenterExtras.swift" ]]; then
+  PARSE_UI+=("$APP/Session/ChatStore+MemoryCenterExtras.swift")
+fi
+if [[ ${#PARSE_UI[@]} -gt 0 ]]; then
+  echo "swiftc -parse：记忆中心 UI/桥接（${#PARSE_UI[@]} 个文件）…"
+  if ! "$SWIFTC" -parse -swift-version 5 -enable-bare-slash-regex "${PARSE_UI[@]}"; then
+    echo "记忆中心 SwiftUI swiftc -parse 失败" >&2
+    exit 1
+  fi
+  echo "记忆中心 SwiftUI swiftc -parse 通过 ✅"
+fi
 # .ready 最后落地：看到它就说明库和模块文件都已就位
 if [[ -f "$LIB/.ready" ]]; then
   echo "协议库命中缓存：$LIB"

@@ -61,6 +61,21 @@ import {
   scrubWorkspaceIndex,
   workspaceContext,
 } from "./workspaceMemory.ts";
+import { memoryCenterActivity } from "./memoryCenterActivity.ts";
+import { memoryCenterGet, memoryCenterSearch } from "./memoryCenter.ts";
+import { memoryCenterMutate, parseMemoryCenterMutateArgs } from "./memoryCenterMutate.ts";
+import { memoryCenterRestore } from "./memoryCenterRestore.ts";
+import { memoryCenterExport } from "./memoryCenterExport.ts";
+import { memoryCenterImportPreview } from "./memoryCenterImportPreview.ts";
+import { memoryCenterImportApply } from "./memoryCenterImportApply.ts";
+import { memoryCenterImportRollback } from "./memoryCenterImportRollback.ts";
+import { recoverPendingMemoryCenterImports } from "./memoryCenterImportRecover.ts";
+import { sweepExpiredPlans } from "./memoryCenterImportPlanStore.ts";
+import {
+  memoryCenterSuggestionAnswer,
+  memoryCenterSuggestionsGet,
+  maybeRunDailySuggestionScan,
+} from "./memoryCenterSuggestions.ts";
 
 export type AssistantTenant = TenantRef & { name: string; workspaceRoot: string };
 
@@ -505,6 +520,124 @@ export async function handleOp(
       writeJson(file, { exportedAt: new Date().toISOString(), note: "只读快照。权威数据在网关，这里改了不会生效。", core: readCore(ref), entries: listMemory(ref).entries });
       return { ok: true, data: { path: `.jiebo/memory-export/memory-${stamp}.json` } };
     }
+    case "memory_center_get": {
+      const scope = typeof args.scope === "string" ? args.scope : undefined;
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      return { ok: true, data: memoryCenterGet(tenant, workspaces, scope) };
+    }
+    case "memory_center_search": {
+      const query = str(args.query);
+      const scope = typeof args.scope === "string" ? args.scope : undefined;
+      const kind = typeof args.kind === "string" ? args.kind : undefined;
+      const state = typeof args.state === "string" ? args.state : undefined;
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterSearch(tenant, workspaces, { query, scope, kind, state });
+      return result.ok ? { ok: true, data: result.data } : fail(result.error);
+    }
+    case "memory_center_mutate": {
+      try {
+        const parsed = parseMemoryCenterMutateArgs(args);
+        if (!parsed.ok) {
+          return { ok: false, error: parsed.message, data: { code: parsed.code } };
+        }
+        const workspaces = deps?.workspaces(tenant) ?? [];
+        const result = memoryCenterMutate(tenant, workspaces, parsed.value);
+        if (!result.ok) {
+          return { ok: false, error: result.message, data: { code: result.code, detail: result.detail } };
+        }
+        return { ok: true, data: result.data };
+      } catch (err) {
+        log.error("memory_center_mutate", errText(err));
+        return { ok: false, error: "记忆写入失败。", data: { code: "write_failed" } };
+      }
+    }
+    case "memory_center_activity": {
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const scope = typeof args.scope === "string" ? args.scope : undefined;
+      const cursor = typeof args.cursor === "string" ? args.cursor : undefined;
+      const limit = typeof args.limit === "number" ? args.limit : undefined;
+      const actionRaw = typeof args.action === "string" ? args.action : undefined;
+      const action =
+        actionRaw === "create" ||
+        actionRaw === "update" ||
+        actionRaw === "set_state" ||
+        actionRaw === "set_pinned" ||
+        actionRaw === "delete" ||
+        actionRaw === "restore" ||
+        actionRaw === "import"
+          ? actionRaw
+          : undefined;
+      return {
+        ok: true,
+        data: memoryCenterActivity(tenant, workspaces, { scope, cursor, limit, action }),
+      };
+    }
+    case "memory_center_restore": {
+      const scope = str(args.scope);
+      const auditId = str(args.auditId);
+      if (!scope || !auditId) return fail("scope 与 auditId 必填。");
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterRestore(tenant, workspaces, { scope, auditId });
+      if (!result.ok) {
+        return { ok: false, error: result.message, data: { code: result.code, detail: result.detail } };
+      }
+      return { ok: true, data: result.data };
+    }
+    case "memory_center_suggestions_get": {
+      const scope = typeof args.scope === "string" ? args.scope : undefined;
+      return { ok: true, data: memoryCenterSuggestionsGet(refOf(tenant), scope) };
+    }
+    case "memory_center_suggestion_answer": {
+      const scope = str(args.scope);
+      const id = str(args.id);
+      const accept = args.accept === true;
+      if (!scope || !id) return fail("scope 与 id 必填。");
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterSuggestionAnswer(tenant, workspaces, refOf(tenant), { scope, id, accept });
+      if (!result.ok) {
+        return { ok: false, error: result.message, data: { code: result.code, detail: result.detail } };
+      }
+      return { ok: true, data: result.data };
+    }
+    case "memory_center_export": {
+      const scopes = Array.isArray(args.scopes)
+        ? args.scopes.filter((s): s is string => typeof s === "string")
+        : undefined;
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterExport(tenant, workspaces, scopes);
+      return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, data: { code: result.code } };
+    }
+    case "memory_center_import_preview": {
+      const path = str(args.path);
+      if (!path) return fail("path 必填。");
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterImportPreview(tenant, workspaces, path);
+      return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, data: { code: result.code } };
+    }
+    case "memory_center_import_apply": {
+      const planId = str(args.planId);
+      if (!planId) return fail("planId 必填。");
+      const resolutionsRaw = Array.isArray(args.resolutions) ? args.resolutions : [];
+      const resolutions: { changeId: string; resolution: "keep_current" | "use_snapshot" | "duplicate" }[] = [];
+      for (const row of resolutionsRaw) {
+        if (!row || typeof row !== "object") continue;
+        const changeId = str((row as Record<string, unknown>).changeId);
+        const resolution = str((row as Record<string, unknown>).resolution);
+        if (!changeId || !resolution) continue;
+        if (resolution !== "keep_current" && resolution !== "use_snapshot" && resolution !== "duplicate") continue;
+        resolutions.push({ changeId, resolution });
+      }
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterImportApply(tenant, workspaces, planId, resolutions);
+      return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, data: { code: result.code } };
+    }
+    case "memory_center_import_rollback": {
+      const importId = str(args.importId);
+      if (!importId) return fail("importId 必填。");
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const result = memoryCenterImportRollback(tenant, workspaces, importId);
+      return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, data: { code: result.code } };
+    }
     case "push_subscribe": {
       if (args.kind === "apns") {
         // 写本租户 + 从其他租户摘掉都做完才回成功（按 token 串行）
@@ -598,6 +731,12 @@ async function slowTick(tenant: AssistantTenant) {
   await runMaintenance(ref, runner).catch((err) => log.error("maintenance", err));
   await runEpisodes(ref, runner).catch((err) => log.error("episodes", err));
   await runIntegrator(ref, runner).catch((err) => log.error("integrator", err));
+  try {
+    const workspaces = deps?.workspaces(tenant) ?? [];
+    maybeRunDailySuggestionScan(tenant, workspaces, ref);
+  } catch (err) {
+    log.error("memory center suggestions", err);
+  }
 }
 
 function tick() {
@@ -634,6 +773,13 @@ export function startAssistant(next: AssistantDeps) {
     // 挂起审批跟着运行一起丢了；对应的委派下面会记为中断并进收件箱
     recoverApprovals(ref);
     runMigration(tenant);
+    try {
+      const workspaces = next.workspaces(tenant);
+      recoverPendingMemoryCenterImports(ref, tenant, workspaces);
+      sweepExpiredPlans(ref);
+    } catch (err) {
+      log.error("recover memory import journals", err);
+    }
     // 记忆确认卡不挂在运行上，重启后挂回去
     try {
       restoreCards(ref);

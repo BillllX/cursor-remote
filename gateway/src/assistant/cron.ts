@@ -146,3 +146,15 @@ export function describeLocal(utcMs: number, tz: string) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${p.year}-${pad(p.month)}-${pad(p.day)} ${pad(p.hour)}:${pad(p.minute)}`;
 }
+
+/** ISO 8601 周键（按 IANA 时区的日历日），如 2026-W07 */
+export function isoWeekKey(utcMs: number, tz: string): string {
+  const day = describeLocal(utcMs, tz).slice(0, 10);
+  const [y, m, d] = day.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil(((date.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}

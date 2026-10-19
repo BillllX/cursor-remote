@@ -1,0 +1,43 @@
+{
+  "comment": "记忆中心四 op 畸形样本（不得进入 protocol.json 金样本）；TS/Swift 严格解码须全部拒绝。",
+  "memory_center_export": [
+    {
+      "relativePath": 1,
+      "sha256": "not-a-hash",
+      "bytes": "large",
+      "summary": { "scopes": "personal", "personalEntries": [], "nested": { "bad": true } }
+    }
+  ],
+  "memory_center_import_preview": [
+    {
+      "planId": "p1",
+      "expiresAt": "2026-10-18T12:00:00.000Z",
+      "snapshotSummary": {
+        "exportedAt": "2026-10-18T12:00:00.000Z",
+        "schemaVersion": 1,
+        "scopeCount": 0,
+        "personalEntryCount": 0,
+        "rulesCount": 0,
+        "bytes": 1,
+        "checksum": "c",
+        "extraNested": { "probe": [1, { "deep": true }] }
+      },
+      "changes": [{ "changeId": "c1", "layer": "personal_core", "action": "add" }],
+      "warnings": [{ "code": "x", "message": { "nested": "no" } }]
+    }
+  ],
+  "memory_center_import_apply": [
+    {
+      "importId": "mcimp1",
+      "canRollback": "yes",
+      "summary": { "applied": "one", "skipped": 0, "conflictsResolved": { "n": 1 } }
+    }
+  ],
+  "memory_center_import_rollback": [
+    {
+      "importId": "mcimp1",
+      "status": "rolled_back_partial",
+      "meta": { "rollback": { "failed": true } }
+    }
+  ]
+}

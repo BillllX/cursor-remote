@@ -178,6 +178,30 @@ export function withFileLockSync<T>(file: string, fn: () => T, opts: FileLockOpt
  * 临时文件名带 pid 和随机串，同进程并发或多进程同写一个文件时互不覆盖。
  * 失败时尽力删掉临时文件，再抛出原错误。
  */
+function fsyncParentDir(file: string) {
+  try {
+    const dir = dirname(file);
+    const dfd = openSync(dir, "r");
+    try {
+      fsyncSync(dfd);
+    } finally {
+      closeSync(dfd);
+    }
+  } catch {
+    // 只读打开目录失败时不阻断写入
+  }
+}
+
+/** temp + chmod + fsync 文件 + rename + fsync 父目录 */
+export function durableAtomicWriteFileSync(
+  file: string,
+  data: string | NodeJS.ArrayBufferView,
+  opts: AtomicWriteOptions = {},
+): void {
+  atomicWriteFileSync(file, data, { ...opts, fsync: true });
+  fsyncParentDir(file);
+}
+
 export function atomicWriteFileSync(
   file: string,
   data: string | NodeJS.ArrayBufferView,

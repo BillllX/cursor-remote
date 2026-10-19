@@ -10,6 +10,7 @@ import {
 import type {
   AgentMode,
   AssistantApproval,
+  AssistantResultMessage,
   AssistantState,
   CheckpointInfo,
   ClientMessage,
@@ -23,6 +24,7 @@ import type {
   CursorBill,
   CanvasVersion,
 } from "@shared/protocol";
+import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import AssistantPanel from "./AssistantPanel";
 import { extractDiff, mutatingTool } from "./ToolCard";
@@ -140,6 +142,8 @@ export default function ChatApp() {
   // 自动选中（非用户点选）的会话；助理会话就绪后可被它替换
   const autoPickedIdRef = useRef("");
   const [assistantState, setAssistantState] = useState<AssistantState | null>(null);
+  const [lastAssistantResult, setLastAssistantResult] = useState<AssistantResultMessage | null>(null);
+  const [assistantResultTick, setAssistantResultTick] = useState(0);
   const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     return new URLSearchParams(window.location.search).get("inbox") || undefined;
@@ -980,7 +984,25 @@ export default function ChatApp() {
           setAssistantState((prev) => applyAssistantMessage(prev, message));
           break;
         case "assistant_result":
-          if (!message.ok && message.error) setNotice(message.error);
+          setLastAssistantResult(message);
+          setAssistantResultTick((tick) => tick + 1);
+          if (
+            !message.ok &&
+            message.error &&
+            message.op !== "memory_center_get" &&
+            message.op !== "memory_center_search" &&
+            message.op !== "memory_center_mutate" &&
+            message.op !== "memory_center_activity" &&
+            message.op !== "memory_center_restore" &&
+            message.op !== "memory_center_suggestions_get" &&
+            message.op !== "memory_center_suggestion_answer" &&
+            message.op !== "memory_center_export" &&
+            message.op !== "memory_center_import_preview" &&
+            message.op !== "memory_center_import_apply" &&
+            message.op !== "memory_center_import_rollback"
+          ) {
+            setNotice(message.error);
+          }
           break;
         case "memory_written":
           if (message.entry?.topic) setNotice(`已记住：${message.entry.topic}`);
@@ -2455,7 +2477,13 @@ export default function ChatApp() {
   }
 
   function answerDelegation(approval: AssistantApproval, allow: boolean) {
-    send({ type: "assistant_op", op: "approval_answer", args: { chatId: approval.chatId, callId: approval.callId, allow }, reqId: crypto.randomUUID() });
+    send(
+      buildAssistantOpMessage("approval_answer", {
+        chatId: approval.chatId,
+        callId: approval.callId,
+        allow,
+      }),
+    );
   }
 
   function openAssistantInboxItem(item: { chatId?: string; id: string }) {
@@ -3990,6 +4018,8 @@ export default function ChatApp() {
         basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
         onOpenChat={openChatById}
+        lastAssistantResult={lastAssistantResult}
+        assistantResultTick={assistantResultTick}
       />
       {loopOpen ? <LoopOverlay
         wideIDE={wideIDE}

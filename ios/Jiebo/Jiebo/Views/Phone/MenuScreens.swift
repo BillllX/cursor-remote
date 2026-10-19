@@ -105,11 +105,9 @@ struct PhoneSettingsScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var themeOpen = false
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
-    @State private var rotateConfirm = false
 
     init() {}
 
@@ -117,8 +115,6 @@ struct PhoneSettingsScreen: View {
 
     var body: some View {
         List {
-            HomeModeSection()
-
             Section {
                 Button {
                     themeOpen = true
@@ -137,8 +133,6 @@ struct PhoneSettingsScreen: View {
             }
 
             notificationSection
-
-            calendarSection
 
             Section {
                 settingsRow(
@@ -196,10 +190,7 @@ struct PhoneSettingsScreen: View {
         .sheet(isPresented: $adminStatsOpen) {
             AdminStatsView()
         }
-        .task {
-            store.requestAssistant()
-            await refreshNotifyStatus()
-        }
+        .task { await refreshNotifyStatus() }
         .onChange(of: scenePhase) { _, phase in
             // 从系统设置回来时刷新
             if phase == .active {
@@ -211,35 +202,26 @@ struct PhoneSettingsScreen: View {
     // MARK: 行
 
     private func settingsRow(symbol: String, title: String, trailing: String?, chevron: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(JieboFont.text(.subheadline, weight: .medium))
-                    .foregroundStyle(JieboColor.ink2)
-                    .frame(width: 24)
-                Text(title)
-                    .font(JieboFont.text(.subheadline))
-                    .foregroundStyle(JieboColor.ink)
-                Spacer(minLength: 8)
-                if let trailing, !dynamicTypeSize.isAccessibilitySize {
-                    Text(trailing)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.dim)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                if chevron {
-                    Image(systemName: "chevron.right")
-                        .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.dim)
-                }
-            }
-            if let trailing, dynamicTypeSize.isAccessibilitySize {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(width: 24)
+            Text(title)
+                .font(JieboFont.text(.subheadline))
+                .foregroundStyle(JieboColor.ink)
+            Spacer(minLength: 8)
+            if let trailing {
                 Text(trailing)
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 36)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            if chevron {
+                Image(systemName: "chevron.right")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -247,9 +229,7 @@ struct PhoneSettingsScreen: View {
     }
 
     private var backgroundModelText: String {
-        // 断线后 assistantState 不清空，先看连接，免得把旧的「就绪」当成现在
-        guard store.connected else { return "未连接" }
-        guard let background = state?.background else { return "正在获取…" }
+        guard let background = state?.background else { return "正在连接…" }
         let model = background.model.nilIfEmpty ?? "未知"
         let status = background.ok ? "就绪" : (background.reason ?? "未就绪")
         return "\(model) · \(status)"
@@ -276,7 +256,7 @@ struct PhoneSettingsScreen: View {
     private var notificationSection: some View {
         Section {
             if notifyStatus == nil {
-                settingsRow(symbol: "bell", title: "通知", trailing: "查询中…", chevron: false)
+                settingsRow(symbol: "bell", title: "通知", trailing: nil, chevron: false)
                     .listRowBackground(JieboColor.white)
             } else if notifyEnabled {
                 settingsRow(symbol: "bell.badge", title: "通知", trailing: "已开启", chevron: false)
@@ -312,79 +292,6 @@ struct PhoneSettingsScreen: View {
         }
     }
 
-    // MARK: 日历
-
-    @ViewBuilder
-    private var calendarSection: some View {
-        if let calendar = state?.calendar {
-            Section {
-                Toggle(isOn: Binding(
-                    get: { calendar.enabled },
-                    set: { on in store.assistantOp("calendar_set", args: ["enabled": .bool(on)]) }
-                )) {
-                    HStack(spacing: 12) {
-                        Image(systemName: "calendar")
-                            .font(JieboFont.text(.subheadline, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                            .frame(width: 24)
-                        Text("待办同步到日历")
-                            .font(JieboFont.text(.subheadline))
-                            .foregroundStyle(JieboColor.ink)
-                    }
-                }
-                .tint(JieboColor.pine)
-                .frame(minHeight: 44)
-                .listRowBackground(JieboColor.white)
-
-                if calendar.enabled {
-                    Button {
-                        if let url = calendar.webcalURL { openURL(url) }
-                    } label: {
-                        settingsRow(symbol: "calendar.badge.plus", title: "添加到苹果日历", trailing: calendarStatus(calendar), chevron: true)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(JieboColor.white)
-
-                    Button {
-                        if let url = calendar.httpsURL {
-                            UIPasteboard.general.string = url.absoluteString
-                            store.flash("已复制订阅链接")
-                        }
-                    } label: {
-                        settingsRow(symbol: "link", title: "复制订阅链接", trailing: nil, chevron: false)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(JieboColor.white)
-
-                    Button {
-                        rotateConfirm = true
-                    } label: {
-                        settingsRow(symbol: "arrow.triangle.2.circlepath", title: "重新生成链接", trailing: nil, chevron: false)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(JieboColor.white)
-                    .confirmationDialog("旧链接会立刻失效，已订阅的日历需要重新添加。", isPresented: $rotateConfirm, titleVisibility: .visible) {
-                        Button("重新生成", role: .destructive) {
-                            store.assistantOp("calendar_set", args: ["rotate": .bool(true)])
-                        }
-                    }
-                }
-            } header: {
-                Text("日历")
-            } footer: {
-                Text(calendar.enabled
-                    ? "带日期的待办会出现在苹果日历里，大约每 15 分钟同步一次，只读。知道链接的人能看到待办标题，链接外泄了就重新生成。"
-                    : "关掉后日历里的待办会在下次同步时清空。不想让旧链接再能打开，就打开后重新生成。")
-            }
-        }
-    }
-
-    private func calendarStatus(_ calendar: AssistantCalendar) -> String {
-        guard let last = calendar.lastFetchAt else { return "未订阅" }
-        if calendar.stale { return "好几天没同步了" }
-        return "已订阅 · \(assistantRelativeTime(last))同步"
-    }
-
     private func refreshNotifyStatus() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         notifyStatus = settings.authorizationStatus
@@ -411,19 +318,35 @@ struct PhoneSettingsScreen: View {
 
 struct AssistantMemoryScreen: View {
     @Environment(ChatStore.self) private var store
-
-    init() {}
+    @State private var navId = "overview"
+    @State private var middleTab = "pinned"
+    @State private var stateFilter = "all"
+    @State private var searchText = ""
+    @State private var searchScopeFilter = "all"
+    @State private var searchKindFilter = "all"
+    @State private var searchStateFilter = "all"
+    @State private var searchActive = false
 
     var body: some View {
-        ScrollView {
-            AssistantMemoryPane()
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        MemoryCenterPhoneHome(
+            navId: $navId,
+            middleTab: $middleTab,
+            stateFilter: $stateFilter,
+            searchText: $searchText,
+            searchScopeFilter: $searchScopeFilter,
+            searchKindFilter: $searchKindFilter,
+            searchStateFilter: $searchStateFilter,
+            searchActive: $searchActive
+        )
         .scrollDismissesKeyboard(.interactively)
         .background(JieboColor.paper)
-        .navigationTitle("记忆")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { store.requestAssistant(memory: true) }
+        .memoryCenterLifecycle(
+            navId: navId,
+            searchActive: searchActive,
+            searchText: searchText,
+            searchScopeFilter: searchScopeFilter,
+            searchKindFilter: searchKindFilter,
+            searchStateFilter: searchStateFilter
+        )
     }
 }
