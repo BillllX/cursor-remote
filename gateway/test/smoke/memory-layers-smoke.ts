@@ -163,8 +163,9 @@ try {
   write(resolve(root, "other", ".jiebo", ".gitignore"), "# 我自己的\n");
   wm.appendMemoryLines(resolve(root, "other"), [{ section: "约定", text: "手动写入", refs: [] }]);
   check(
-    readFileSync(resolve(root, "other", ".jiebo/.gitignore"), "utf8") === "# 我自己的\n.memory.md.lock/\n",
-    "批准：已有的 .jiebo/.gitignore 只追加锁目录规则",
+    readFileSync(resolve(root, "other", ".jiebo/.gitignore"), "utf8") ===
+      "# 我自己的\nmemory-audit.jsonl\n.memory.md.lock/\n",
+    "批准：已有的 .jiebo/.gitignore 只追加审计与锁目录规则",
   );
   check(!approvals.listApprovals(ref).some((item) => item.callId === card!.callId), "批准：卡摘掉了");
   check(wm.answerCard(tenant, chatId, "nope", true) === null, "批准：不认识的卡交回给别的审批");
