@@ -298,19 +298,19 @@ struct CollapsedSidebarRail: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(on ? JieboColor.ink : (tint ?? JieboColor.ink2))
+                    .foregroundStyle(on ? (tint ?? JieboColor.pine) : (tint ?? JieboColor.ink2))
                     .frame(width: 36, height: 36)
-                    .background(on ? JieboColor.ink.opacity(0.06) : Color.clear)
+                    .background(on ? (tint ?? JieboColor.pine).opacity(0.12) : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
+                            .stroke(on ? (tint ?? JieboColor.pine).opacity(0.42) : JieboColor.line, lineWidth: 1)
                     )
                     .overlay(alignment: .leading) {
                         if on {
-                            Rectangle()
-                                .fill(JieboColor.ink)
-                                .frame(width: 2)
+                            Capsule()
+                                .fill(tint ?? JieboColor.pine)
+                                .frame(width: 3, height: 22)
                         }
                     }
                     .animation(JieboMotion.fade(reduceMotion), value: on)
@@ -329,6 +329,8 @@ struct CollapsedSidebarRail: View {
         }
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(label)
+        .accessibilityValue(on ? "当前" : "")
+        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

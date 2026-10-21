@@ -143,27 +143,51 @@ struct ChatListView: View {
                 || $0.displayName.lowercased().contains(needle)
                 || $0.directoryName.lowercased().contains(needle)
         }
+        let assistantSelected = store.chatHomeDestination == .assistant
         List {
             Section {
                 Button {
                     store.openAssistantFromChatHome()
                 } label: {
                     HStack(spacing: 12) {
+                        Capsule()
+                            .fill(assistantSelected ? JieboColor.pine : Color.clear)
+                            .frame(width: 3, height: 28)
+                            .accessibilityHidden(true)
                         Image(systemName: NavigationIconId.assistant.symbol)
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(JieboColor.brass)
                             .frame(width: 48, height: 48)
                             .background(JieboColor.sidebar)
                             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                        Text(store.assistantName)
-                            .font(JieboFont.text(.body, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(store.assistantName)
+                                .font(JieboFont.text(.body, weight: .semibold))
+                                .foregroundStyle(JieboColor.ink)
+                            Text("个人助理")
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                        }
                         Spacer()
+                        if assistantSelected {
+                            Text("当前")
+                                .font(JieboFont.text(.caption2, weight: .semibold))
+                                .foregroundStyle(JieboColor.pine)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(JieboColor.pine.opacity(0.12))
+                                .clipShape(Capsule())
+                                .accessibilityHidden(true)
+                        }
                     }
                     .padding(.vertical, 6)
                 }
                 .buttonStyle(.plain)
-                .listRowBackground(store.chatHomeDestination == .assistant ? JieboColor.mist : JieboColor.paper)
+                .listRowBackground(assistantSelected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
+                .accessibilityLabel(assistantSelected ? "\(store.assistantName)，个人助理，当前会话" : "\(store.assistantName)，个人助理")
+                .accessibilityAddTraits(assistantSelected ? .isSelected : [])
             }
             if !rows.chatted.isEmpty {
                 Section {
@@ -182,7 +206,7 @@ struct ChatListView: View {
                 }
             }
             if !agents.isEmpty {
-                Section("工作区") {
+                Section("工作区对话") {
                     ForEach(agents) { item in
                         workspaceRow(item)
                     }
@@ -324,10 +348,15 @@ struct ChatListView: View {
     }
 
     private func workspaceRow(_ item: WorkspaceAgentItem) -> some View {
+        let selected = store.chatHomeDestination == .workspace(item.path)
         Button {
             store.openWorkspaceAgent(item)
         } label: {
             HStack(spacing: 12) {
+                Capsule()
+                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .frame(width: 3, height: 28)
+                    .accessibilityHidden(true)
                 WorkspaceAgentAvatar(item: item, size: 44)
                     .overlay(alignment: .topTrailing) {
                         if item.unread > 0 {
@@ -348,17 +377,38 @@ struct ChatListView: View {
                     }
                 }
                 Spacer()
+                if selected {
+                    Text("当前")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(JieboColor.pine.opacity(0.12))
+                        .clipShape(Capsule())
+                        .accessibilityHidden(true)
+                }
                 if item.status != "idle" {
                     Text(item.status == "awaiting" ? "需处理" : "运行中")
                         .font(JieboFont.text(.caption2, weight: .medium))
                         .foregroundStyle(item.status == "awaiting" ? JieboColor.danger : JieboColor.pine)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
             .padding(.vertical, 5)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(store.chatHomeDestination == .workspace(item.path) ? JieboColor.mist : JieboColor.paper)
+        .listRowBackground(selected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
+        .accessibilityLabel([
+            item.displayName,
+            "工作区对话",
+            selected ? "当前会话" : nil,
+            item.status == "idle" ? nil : (item.status == "awaiting" ? "需处理" : "运行中")
+        ].compactMap { $0 }.joined(separator: "，"))
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button {
                 editingWorkspace = item

@@ -331,7 +331,7 @@ private struct PhoneDrawer: View {
 
     private var chatsHeader: some View {
         HStack(spacing: 8) {
-            Text("对话")
+            Text("工作区对话")
                 .font(JieboFont.text(.caption, weight: .medium))
                 .tracking(0.6)
                 .foregroundStyle(JieboColor.dim)
@@ -358,11 +358,26 @@ private struct PhoneDrawer: View {
             close()
         } label: {
             HStack(spacing: 8) {
+                Capsule()
+                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .frame(width: 3, height: 22)
+                    .accessibilityHidden(true)
                 Text(chat.title)
                     .font(JieboFont.text(.subheadline, weight: chat.unread ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if !live, let touched = chat.touchedAt {
+                if selected {
+                    Text("当前")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(JieboColor.pine.opacity(0.12))
+                        .clipShape(Capsule())
+                        .accessibilityHidden(true)
+                } else if !live, let touched = chat.touchedAt {
                     AgoLabel(epochMs: touched, font: JieboFont.text(.caption2))
                 }
                 if live {
@@ -380,11 +395,11 @@ private struct PhoneDrawer: View {
             .foregroundStyle(JieboColor.ink)
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
-            .background(selected ? JieboColor.white : Color.clear)
+            .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(selected ? JieboColor.line : Color.clear, lineWidth: 1)
+                    .stroke(selected ? JieboColor.pine.opacity(0.42) : Color.clear, lineWidth: 1)
             )
             .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
             .hoverEffect(.highlight)
@@ -392,7 +407,11 @@ private struct PhoneDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(live ? "\(chat.title)，\(StatusLegendId.running.label)" : chat.title)
+        .accessibilityLabel([
+            chat.title,
+            selected ? "当前工作区会话" : nil,
+            live ? StatusLegendId.running.label : nil
+        ].compactMap { $0 }.joined(separator: "，"))
         .accessibilityAddTraits(selected ? .isSelected : [])
         .chatRowMenu(chat, rename: renameChat, delete: deleteChat)
     }

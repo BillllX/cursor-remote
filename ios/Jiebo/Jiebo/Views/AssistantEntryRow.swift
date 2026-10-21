@@ -18,6 +18,10 @@ struct AssistantEntryRow: View {
         let preview = store.assistantPreview
         Button(action: action) {
             HStack(spacing: 10) {
+                Capsule()
+                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .frame(width: 3, height: 26)
+                    .accessibilityHidden(true)
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: NavigationIconId.assistant.symbol)
                         .font(.system(size: 14, weight: .semibold))
@@ -43,6 +47,18 @@ struct AssistantEntryRow: View {
                         .truncationMode(.tail)
                 }
                 Spacer(minLength: 0)
+                if selected {
+                    Text("当前")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(JieboColor.pine.opacity(0.12))
+                        .clipShape(Capsule())
+                        .accessibilityHidden(true)
+                }
                 if live {
                     Circle()
                         .fill(JieboColor.run)
@@ -55,10 +71,10 @@ struct AssistantEntryRow: View {
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .fill(selected ? JieboColor.white : JieboColor.white.opacity(0.4))
+                    .fill(selected ? JieboColor.pine.opacity(0.1) : JieboColor.white.opacity(0.4))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                            .stroke(selected ? JieboColor.pine.opacity(0.28) : JieboColor.line, lineWidth: 1)
+                            .stroke(selected ? JieboColor.pine.opacity(0.42) : JieboColor.line, lineWidth: 1)
                     )
             )
             .contentShape(Rectangle())
@@ -67,7 +83,7 @@ struct AssistantEntryRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel(name: store.assistantName, badge: badge, running: live, unread: unread))
-        .accessibilityValue(preview)
+        .accessibilityValue(selected ? "当前助理会话，\(preview)" : preview)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
