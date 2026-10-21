@@ -21,7 +21,7 @@ type SidebarProps = {
   assistantName: string;
   assistantActive: boolean;
   assistantOpen: boolean;
-  openAssistantChat: () => boolean;
+  openAssistantDomain: () => void;
   assistantBadge: number;
   workspaceMenuOpen: boolean;
   workspaceSection: WorkspaceNavId;
@@ -103,7 +103,7 @@ export function Sidebar({
   assistantName,
   assistantActive,
   assistantOpen,
-  openAssistantChat,
+  openAssistantDomain,
   assistantBadge,
   workspaceMenuOpen,
   workspaceSection,
@@ -171,10 +171,7 @@ export function Sidebar({
           className={assistantSelected ? "on" : ""}
           aria-pressed={assistantSelected}
           aria-label={`助理${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}`}
-          onClick={() => {
-            openAssistantChat();
-            chooseSide("assistant");
-          }}
+          onClick={openAssistantDomain}
         >
           <IconRail name="assistant" size={14} />
           助理

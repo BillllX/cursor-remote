@@ -2609,8 +2609,8 @@ export default function ChatApp() {
   }
 
   function openAssistantFromRail() {
+    setAssistantOpen(false);
     openAssistantChat();
-    chooseSide("assistant");
   }
 
   function openWorkspaceDomain() {
@@ -4435,7 +4435,7 @@ export default function ChatApp() {
         assistantName={assistantName}
         assistantActive={assistantActive}
         assistantOpen={assistantOpen}
-        openAssistantChat={openAssistantChat}
+        openAssistantDomain={openAssistantFromRail}
         assistantBadge={assistantBadge}
         workspaceMenuOpen={workspaceMenuOpen}
         workspaceSection={workspaceSection}
