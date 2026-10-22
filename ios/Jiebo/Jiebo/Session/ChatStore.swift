@@ -325,6 +325,8 @@ final class ChatStore {
     var pendingHistory: [String: [Turn]] = [:]
     /// 快照到达时分页还没完成：先暂存，正文齐了再按 turnId 盖上
     var pendingSnapshots: [String: ServerMessage] = [:]
+    /// 分页期间跨过多轮时保留前一轮终态快照，不能被下一轮首帧覆盖。
+    var pendingSnapshotBacklog: [String: [ServerMessage]] = [:]
     /// ready 之后、快照之前的增量丢掉，避免拼到半截正文上
     var awaitSnapshot = Set<String>()
     var sawSnapshot = Set<String>()

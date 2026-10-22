@@ -26,7 +26,7 @@ extension ChatStore {
             let skipBody = (turnId ?? "").isEmpty && userText.isEmpty && assistant.isEmpty
             if !skipBody {
                 var index = turnId.flatMap { id in next.turns.firstIndex(where: { $0.id == id }) }
-                if index == nil, !userText.isEmpty {
+                if index == nil, (turnId ?? "").isEmpty, !userText.isEmpty {
                     let fp = Self.userFingerprint(userText)
                     index = next.turns.indices.reversed().first(where: { Self.userFingerprint(next.turns[$0].user) == fp })
                 }
@@ -88,9 +88,11 @@ extension ChatStore {
                 let queuedId = object["turnId"]?.string
                 let queuedText = object["userText"]?.string ?? ""
                 if let queuedId, next.turns.contains(where: { $0.id == queuedId }) { continue }
-                let fp = Self.userFingerprint(queuedText)
-                if !fp.isEmpty, next.turns.contains(where: { Self.userFingerprint($0.user) == fp && ($0.queued || $0.running) }) {
-                    continue
+                if (queuedId ?? "").isEmpty {
+                    let fp = Self.userFingerprint(queuedText)
+                    if !fp.isEmpty, next.turns.contains(where: { Self.userFingerprint($0.user) == fp && ($0.queued || $0.running) }) {
+                        continue
+                    }
                 }
                 var row = Turn.blank(user: queuedText, model: nil, mode: nil, running: false)
                 if let queuedId, !queuedId.isEmpty { row.id = queuedId }
@@ -209,7 +211,6 @@ extension ChatStore {
 
     func markLive(running: [String], queued: [String]) {
         let keep = Set(running + queued)
-        let queuedSet = Set(queued)
         chats = chats.map { chat in
             var next = chat
             if !keep.contains(chat.id) {
@@ -218,11 +219,6 @@ extension ChatStore {
                         ? turn.settled(status: turn.status ?? "cancelled")
                         : turn
                 }
-            }
-            if queuedSet.contains(chat.id), !next.turns.contains(where: { $0.queued || $0.running }),
-               let last = next.turns.lastIndex(where: { !$0.user.trimmingCharacters(in: .whitespaces).isEmpty })
-            {
-                next.turns[last].queued = true
             }
             return next
         }
@@ -356,18 +352,6 @@ extension ChatStore {
             var next = chat
             if let index = next.turns.lastIndex(where: \.running) {
                 next.turns[index] = update(next.turns[index])
-            } else if let index = next.turns.indices.last,
-                      // slim 壳分页期间不把 delta 挂到已加载的旧尾 turn——正常路径 delta 只回发起端
-                      // （本端 send 前已 append running turn，走上面 if 分支），这是别端运行场景的防御（GLM 评审 M2）
-                      next.turnsComplete,
-                      !next.turns[index].user.isEmpty,
-                      next.turns[index].status == nil || next.turns[index].queued || runningChatIds.contains(id) || queuedChatIds.contains(id) {
-                var turn = next.turns[index]
-                turn.running = true
-                turn.queued = false
-                turn.status = nil
-                turn.error = nil
-                next.turns[index] = update(turn)
             }
             return next
         }

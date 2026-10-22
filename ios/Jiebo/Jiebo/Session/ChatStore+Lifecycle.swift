@@ -166,6 +166,7 @@ extension ChatStore {
             self.snapshotHold = []
             self.heldDeltas = [:]
             self.pendingSnapshots = [:]
+            self.pendingSnapshotBacklog = [:]
             if !self.unlocked {
                 self.verifying = false
             } else {
@@ -260,6 +261,7 @@ extension ChatStore {
         stateReloadPending = false
         pendingHistory = [:]
         pendingSnapshots = [:]
+        pendingSnapshotBacklog = [:]
         awaitSnapshot = []
         sawSnapshot = []
         snapshotHold = []

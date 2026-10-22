@@ -36,7 +36,7 @@ export function AssistantNavigation({ assistantName, active, inboxBadge, overvie
               aria-label={`${item.label}${count > 0 ? `，需要处理 ${count}` : ""}`}
               onClick={() => onNavigate(item.id)}
             >
-              <IconRail name={item.icon} size={14} />
+              <IconRail name={item.glyph} size={14} />
               <span>{item.label}</span>
               {count > 0 ? (
                 <span className="assistant-nav-badge" aria-hidden="true">

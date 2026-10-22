@@ -7,7 +7,7 @@ import { broadcastFileChanged, broadcastTurnFiles } from "../fileEvents.ts";
 import { slotLog } from "../log.ts";
 import { assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
 import type { Slot } from "../runtime/types.ts";
-import { flushTranscript, stopRunFlush } from "../sync/transcript.ts";
+import { emitOwnerRunSnapshot, flushTranscript, stopRunFlush } from "../sync/transcript.ts";
 import { getTenant, requireCwd } from "../tenants.ts";
 import { computeTurnFiles, type TurnBaseline } from "../turnFiles.ts";
 import { noteRun } from "../usage.ts";
@@ -61,6 +61,7 @@ export function finishRun(ws: WebSocket, slot: Slot, status: string, durationMs?
   const files = approval ? [] : attachTurnFiles(slot);
   const turnId = slot.transcript?.turnId || "";
   flushTranscript(slot, !approval);
+  emitOwnerRunSnapshot(ws, slot);
   if (!approval) indexUserTurn(slot);
   if (!approval) noteWorkspaceTurn(slot);
   if (files.length && turnId) {

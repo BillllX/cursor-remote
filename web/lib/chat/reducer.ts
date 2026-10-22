@@ -109,23 +109,10 @@ export function chatsToFlush(chats: Chat[], serverQueued: readonly string[] = []
     .map((chat) => chat.id);
 }
 
-/** ready：网关上没在跑/排队的回合收尾；网关说在排队、本地却没有排队回合的，把最后一条用户消息标回排队 */
+/** ready：网关上没在跑/排队的回合收尾；具体运行/排队回合由随后带 turnId 的快照定位。 */
 export function applyReadyRuns(chats: Chat[], message: Msg<"ready">): Chat[] {
   const keep = [...(message.runningChatIds || []), ...(message.queuedChatIds || [])];
-  const queued = new Set(message.queuedChatIds || []);
-  return keepIfSame(
-    chats,
-    stopOrphanRuns(chats, keep).map((chat) => {
-      if (!queued.has(chat.id)) return chat;
-      if (chat.turns.some((turn) => turn.queued || turn.running)) return chat;
-      const last = [...chat.turns].reverse().find((turn) => turn.user.trim());
-      if (!last) return chat;
-      return {
-        ...chat,
-        turns: chat.turns.map((turn) => (turn.id === last.id ? { ...turn, queued: true } : turn)),
-      };
-    }),
-  );
+  return keepIfSame(chats, stopOrphanRuns(chats, keep));
 }
 
 /**
@@ -207,18 +194,7 @@ export function applyServerMessage(chats: Chat[], message: ServerMessage, ctx: C
       });
     case "status": {
       let next = chats;
-      if (message.status === "RUNNING" || message.status === "CREATING") {
-        next = patchChatIn(next, chatId, (chat) => {
-          const last = [...chat.turns].reverse().find((turn) => turn.user || turn.running);
-          if (!last || last.running) return chat;
-          return {
-            ...chat,
-            turns: chat.turns.map((turn) =>
-              turn.id === last.id ? { ...turn, running: true, queued: false, status: message.status } : turn,
-            ),
-          };
-        });
-      }
+      // RUNNING/CREATING 不带 turnId，不能据此改变具体回合；本机乐观状态与 run_snapshot 会精确定位。
       if (
         message.status === "FINISHED" ||
         message.status === "ERROR" ||

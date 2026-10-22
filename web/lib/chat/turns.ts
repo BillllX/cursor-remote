@@ -272,7 +272,9 @@ export function applyRunSnapshot(
   const skipBody = !message.turnId && !message.userText && !message.assistant;
   if (!skipBody) {
     let index = message.turnId ? next.findIndex((turn) => turn.id === message.turnId) : -1;
-    if (index < 0 && message.userText) {
+    // 新协议的 turnId 是唯一身份：找不到就追加，不能用相同文案覆盖历史里的旧回合。
+    // 只有旧客户端/旧快照完全没有 turnId 时，才退回按用户文案匹配。
+    if (index < 0 && !message.turnId && message.userText) {
       const fp = userFingerprint(message.userText);
       for (let i = next.length - 1; i >= 0; i -= 1) {
         if (userFingerprint(next[i].user) === fp) {
@@ -370,8 +372,10 @@ export function applyRunSnapshot(
   }
   for (const item of queued) {
     if (item.turnId && next.some((turn) => turn.id === item.turnId)) continue;
-    const fp = userFingerprint(item.userText);
-    if (fp && next.some((turn) => userFingerprint(turn.user) === fp && (turn.queued || turn.running))) continue;
+    if (!item.turnId) {
+      const fp = userFingerprint(item.userText);
+      if (fp && next.some((turn) => userFingerprint(turn.user) === fp && (turn.queued || turn.running))) continue;
+    }
     next.push({
       id: item.turnId || uid(),
       user: item.userText,

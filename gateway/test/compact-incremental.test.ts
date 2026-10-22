@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { upsertTranscriptTurn, type RunTool, type RunTranscript } from "../src/runlog.ts";
+import { mergeUploadedTurns, upsertTranscriptTurn, type RunTool, type RunTranscript } from "../src/runlog.ts";
 import { mergeAndCompactChat, mergeAndCompactChatFull } from "../src/sync/storedState.ts";
 
 type Rec = Record<string, unknown>;
@@ -78,6 +78,75 @@ function flushNext(chat: Chat, transcript: RunTranscript): Chat {
 }
 
 // ---------- 构造用例 ----------
+
+test("transcript 的新 turnId 不覆盖同文案旧回合，只迁移旧客户端的运行中占位", () => {
+  const finished = turn("old", {
+    user: "部署到上海站",
+    assistant: "上一次部署结果",
+    running: false,
+    status: "finished",
+  });
+  const transcript = transcriptOf("new", [], {
+    userText: "部署到上海站",
+    assistant: "本次部署结果",
+  });
+  const appended = upsertTranscriptTurn([finished], transcript) as Rec[];
+  assert.equal(appended.length, 2);
+  assert.equal(appended[0], finished);
+  assert.equal(appended[1].id, "new");
+  assert.equal(appended[1].assistant, "本次部署结果");
+
+  const optimistic = turn("local-temp", {
+    user: "部署到上海站",
+    assistant: "",
+    running: true,
+    queued: true,
+  });
+  const migrated = upsertTranscriptTurn([finished, optimistic], transcript) as Rec[];
+  assert.equal(migrated.length, 2);
+  assert.equal(migrated[0], finished);
+  assert.equal(migrated[1].id, "new");
+  assert.equal(migrated[1].assistant, "本次部署结果");
+  assert.equal(migrated[1].queued, false);
+});
+
+test("旧设备上传同文案旧回合时，不能覆盖或清除新 turnId 的运行水位", () => {
+  const old = turn("old", {
+    user: "部署到上海站",
+    assistant: "旧部署完成",
+    status: "finished",
+  });
+  const current = turn("new", {
+    user: "部署到上海站",
+    assistant: "新部署完成",
+    status: "finished",
+  });
+  const mark = {
+    turnId: "new",
+    assistantChars: "新部署完成".length,
+    thinkingChars: 0,
+    phase: "done" as const,
+    status: "finished",
+    userText: "部署到上海站",
+  };
+  const result = mergeUploadedTurns([old, current], [structuredClone(old)], mark);
+  assert.deepEqual(
+    (result.turns as Rec[]).map((item) => item.id),
+    ["old", "new"],
+  );
+  assert.equal(result.clearMark, false);
+
+  const staleUnknownId = { ...structuredClone(old), id: "old-device-copy" };
+  const againstRunning = mergeUploadedTurns(
+    [old, { ...current, running: true, status: undefined }],
+    [staleUnknownId],
+    { ...mark, phase: "running" },
+  );
+  assert.deepEqual(
+    (againstRunning.turns as Rec[]).map((item) => item.id),
+    ["old-device-copy", "new"],
+  );
+});
 
 test("首次无缓存：prev 为空/无 turns/非对象", () => {
   const next = chatOf([turn("a", { tools: [tool("k1", { keepBody: true, args: undefined })] })]);

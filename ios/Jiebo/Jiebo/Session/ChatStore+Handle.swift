@@ -419,21 +419,12 @@ extension ChatStore {
                     runningChatIds.append(target)
                     touchChat(target)
                 }
-                patch(target) { chat in
-                    guard let index = chat.turns.lastIndex(where: { !$0.user.isEmpty || $0.running }) else { return chat }
-                    var next = chat
-                    if !next.turns[index].running {
-                        next.turns[index].running = true
-                        next.turns[index].queued = false
-                        next.turns[index].status = status
-                    }
-                    return next
-                }
             } else if status == "FINISHED" || status == "ERROR" || status == "CANCELLED" || status == "EXPIRED" {
                 let target = id ?? activeId
                 runningChatIds.removeAll { $0 == target }
                 queuedChatIds.removeAll { $0 == target }
                 let settled = (status == "ERROR" || status == "EXPIRED") ? "error" : (status == "CANCELLED" ? "cancelled" : "finished")
+                settlePendingSnapshot(target, status: settled)
                 patchOpen(target) { $0.settled(status: settled) }
             }
         case .error(let id, let text):
@@ -448,6 +439,7 @@ extension ChatStore {
             }
             runningChatIds.removeAll { $0 == target }
             queuedChatIds.removeAll { $0 == target }
+            settlePendingSnapshot(target, status: "error")
             patchOpen(target) { turn in
                 var next = turn.settled(status: "error")
                 next.error = text
@@ -457,6 +449,7 @@ extension ChatStore {
         case .done(let id, let status, let duration):
             runningChatIds.removeAll { $0 == id }
             queuedChatIds.removeAll { $0 == id }
+            settlePendingSnapshot(id, status: status, durationMs: duration)
             patchOpen(id) { turn in
                 turn.settled(status: status, durationMs: duration)
             }
@@ -470,6 +463,10 @@ extension ChatStore {
         ):
             awaitSnapshot.remove(id)
             sawSnapshot.insert(id)
+            // 快照是累计正文；此前暂存的增量已经被它或 clipped 前的落盘覆盖，只保留快照之后的新增量。
+            if snapshotHold.contains(id) {
+                heldDeltas[id] = []
+            }
             if clipped {
                 snapshotHold.insert(id)
                 if let index = chats.firstIndex(where: { $0.id == id }) {
@@ -482,12 +479,12 @@ extension ChatStore {
                 if bodyRevs[id] != nil { bodyRevs[id] = Int.min }
                 bodySegs[id] = nil
                 cacheCheckedIds.insert(id)
-                pendingSnapshots[id] = message
+                stagePendingSnapshot(id, message: message)
                 ensureTurnsLoaded(id)
                 break
             }
             if let chat = chats.first(where: { $0.id == id }), !chat.turnsComplete {
-                pendingSnapshots[id] = message
+                stagePendingSnapshot(id, message: message)
                 snapshotHold.insert(id)
                 break
             }

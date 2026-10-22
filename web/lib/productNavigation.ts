@@ -25,11 +25,11 @@ export const ASSISTANT_NAV = [
 ] as const;
 
 export const ASSISTANT_SIDEBAR_NAV = [
-  { id: "chat", label: "对话", icon: "chats" },
-  { id: "overview", label: "今日总览", icon: "overview" },
-  { id: "inbox", label: "收件箱", icon: "chats" },
-  { id: "notify", label: "通知", icon: "assistant" },
-  { id: "memory", label: "个人记忆", icon: "memory" },
+  { id: "chat", label: "对话", glyph: "chats" },
+  { id: "overview", label: "今日总览", glyph: "overview" },
+  { id: "inbox", label: "收件箱", glyph: "chats" },
+  { id: "notify", label: "通知", glyph: "assistant" },
+  { id: "memory", label: "个人记忆", glyph: "memory" },
 ] as const;
 
 export const ASSISTANT_SURFACE = {

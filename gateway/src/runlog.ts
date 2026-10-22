@@ -237,6 +237,7 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
     thinking: transcript.thinking,
     tools: transcript.tools,
     running: transcript.phase === "running",
+    queued: false,
   };
   // 没图时不写键，合并时别把旧客户端传上来的图盖掉
   if (transcript.images?.length) row.images = transcript.images;
@@ -255,7 +256,7 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
   return row;
 }
 
-/** 按 turnId 更新已有回合；没有 id 时从后往前按用户原文配对一次。 */
+/** 按 turnId 更新已有回合；只对旧客户端留下的运行中/排队占位按用户原文迁移一次。 */
 export function upsertTranscriptTurn(turns: unknown[], transcript: RunTranscript): unknown[] {
   const next = turns.slice();
   const written = turnFromTranscript(transcript);
@@ -277,7 +278,10 @@ export function upsertTranscriptTurn(turns: unknown[], transcript: RunTranscript
       if (userFingerprint(textOf(next[i], "user")) !== fp) continue;
       const raw = next[i];
       const prev: Record<string, unknown> = isRecord(raw) ? raw : {};
-      next[i] = { ...prev, ...written, id: turnIdOf(prev) || transcript.turnId };
+      // transcript 始终有服务端 ID。ID 不同的已完成同文案回合是另一轮，绝不能覆盖。
+      // 仅兼容旧客户端：它先上传了没有服务端 ID 的乐观占位，仍处于 running/queued。
+      if (prev.running !== true && prev.queued !== true) continue;
+      next[i] = { ...prev, ...written, id: transcript.turnId || turnIdOf(prev) };
       return next;
     }
   }
@@ -396,11 +400,14 @@ function findDiskTurn(turns: unknown[], turn: unknown, used: Set<number>): numbe
     const index = turns.findIndex((item, i) => !used.has(i) && turnIdOf(item) === id);
     if (index >= 0) return index;
   }
+  if (!isRecord(turn) || (turn.running !== true && turn.queued !== true)) return -1;
   const fp = userFingerprint(textOf(turn, "user"));
   if (!fp) return -1;
   for (let i = turns.length - 1; i >= 0; i -= 1) {
     if (used.has(i)) continue;
-    if (userFingerprint(textOf(turns[i], "user")) === fp) return i;
+    const candidate = turns[i];
+    if (!isRecord(candidate) || (candidate.running !== true && candidate.queued !== true)) continue;
+    if (userFingerprint(textOf(candidate, "user")) === fp) return i;
   }
   return -1;
 }
@@ -424,21 +431,11 @@ export function mergeUploadedTurns(
     return [withDiskFiles(prevTurns[index], longerTurn(prevTurns[index], item))];
   });
   const turns = keepToolsAt(prevTurns, merged);
-  const covered = Boolean(
-    mark &&
-      turns.some(
-        (item) =>
-          turnIdOf(item) === mark.turnId ||
-          userFingerprint(textOf(item, "user")) === userFingerprint(mark.userText),
-      ),
-  );
+  // runMark 带服务端 turnId；相同文案可能是另一轮，不能据此宣称已覆盖水位。
+  const covered = Boolean(mark && turns.some((item) => turnIdOf(item) === mark.turnId));
   if (mark && !covered) {
     const diskIndex = prevTurns.findIndex((item) => turnIdOf(item) === mark.turnId);
-    const disk =
-      diskIndex >= 0
-        ? prevTurns[diskIndex]
-        : [...prevTurns].reverse().find((item) => userFingerprint(textOf(item, "user")) === userFingerprint(mark.userText));
-    if (disk && !used.has(diskIndex)) turns.push(disk);
+    if (diskIndex >= 0 && !used.has(diskIndex)) turns.push(prevTurns[diskIndex]);
   }
   return { turns, clearMark: uploadCoversMark(incoming, mark) };
 }
@@ -447,8 +444,7 @@ function uploadCoversMark(incoming: unknown[], mark: RunMark | null) {
   if (!mark || mark.phase !== "done") return false;
   const match = [...incoming].reverse().find((item) => {
     if (!isRecord(item) || item.clipped === true || item.deferred === true) return false;
-    if (turnIdOf(item) === mark.turnId) return true;
-    return userFingerprint(textOf(item, "user")) === userFingerprint(mark.userText);
+    return turnIdOf(item) === mark.turnId;
   });
   if (!match || !isRecord(match) || match.clipped === true || match.deferred === true) return false;
   return (
@@ -488,10 +484,7 @@ export function diskSnapshot(
   cancelled: boolean,
 ): ServerMessage {
   const index = turns.findIndex((item) => turnIdOf(item) === mark.turnId);
-  const turn =
-    index >= 0
-      ? turns[index]
-      : [...turns].reverse().find((item) => userFingerprint(textOf(item, "user")) === userFingerprint(mark.userText));
+  const turn = index >= 0 ? turns[index] : undefined;
   const row = isRecord(turn) ? turn : {};
   return {
     type: "run_snapshot",

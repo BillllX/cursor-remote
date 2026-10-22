@@ -234,14 +234,22 @@ describe("applyServerMessage", () => {
     assert.equal(lastTurn(next).tools[0].review, "rejected");
   });
 
-  test("status RUNNING：把最后一条用户回合标回 running；已在跑时返回同一引用", () => {
+  test("status RUNNING：没有 turnId，不改变任何具体回合", () => {
     const msg = { ...sample("status", (item) => Boolean(item.chatId)), status: "RUNNING", message: undefined };
-    const queued = [chat({ turns: [turn({ queued: true })] })];
-    const next = applyServerMessage(queued, msg, ctx);
-    assert.equal(lastTurn(next).running, true);
-    assert.equal(lastTurn(next).queued, false);
-    assert.equal(lastTurn(next).status, "RUNNING");
-    assert.equal(applyServerMessage(next, msg, ctx), next);
+    const queued = [
+      chat({
+        turns: [
+          turn({ id: "done", status: "finished" }),
+          turn({ id: "queued-1", queued: true }),
+          turn({ id: "queued-2", queued: true }),
+        ],
+      }),
+    ];
+    assert.equal(applyServerMessage(queued, msg, ctx), queued);
+    const running = runningChats();
+    assert.equal(applyServerMessage(running, msg, ctx), running);
+    const settled = [chat({ turns: [turn({ id: "done", status: "finished" })] })];
+    assert.equal(applyServerMessage(settled, msg, ctx), settled);
   });
 
   test("status 终态：CANCELLED 收尾成 cancelled，未结束工具标 error", () => {
@@ -351,7 +359,7 @@ describe("markUnread", () => {
 });
 
 describe("applyReadyRuns", () => {
-  test("网关不在跑的回合收尾；在跑的保留；网关说排队的把最后一条用户消息标回排队", () => {
+  test("网关不在跑的回合收尾；在跑的保留；排队会话等待带 turnId 的快照定位", () => {
     const msg: Msg<"ready"> = { ...sample("ready"), runningChatIds: ["live"], queuedChatIds: ["wait"] };
     const chats = [
       chat({ id: "orphan", turns: [turn({ running: true })] }),
@@ -361,8 +369,7 @@ describe("applyReadyRuns", () => {
     const next = applyReadyRuns(chats, msg);
     assert.equal(next[0].turns[0].running, false);
     assert.equal(next[1], chats[1]);
-    assert.equal(next[2].turns[0].queued, true);
-    assert.equal(next[2].turns[1].queued, undefined);
+    assert.equal(next[2], chats[2]);
   });
 
   test("网关说在跑的会话之外没有可收尾的、也没有排队要补时，内容不变", () => {

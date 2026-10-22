@@ -141,6 +141,48 @@ describe("applyRunSnapshot", () => {
     assert.equal(out[0], turns[0]);
   });
 
+  test("带新 turnId 的重复指令必须追加，不能覆盖同文案的旧回合", () => {
+    const old = turn({
+      id: "old",
+      user: "部署到上海站",
+      assistant: "上一次部署结果",
+      status: "finished",
+    });
+    const out = applyRunSnapshot(
+      [old],
+      snapshot({
+        turnId: "new",
+        userText: "部署到上海站",
+        assistant: "本次部署已经全部完成",
+        phase: "done",
+        status: "finished",
+      }),
+    );
+    assert.equal(out.length, 2);
+    assert.equal(out[0], old);
+    assert.deepEqual(
+      out.map((item) => [item.id, item.assistant]),
+      [
+        ["old", "上一次部署结果"],
+        ["new", "本次部署已经全部完成"],
+      ],
+    );
+  });
+
+  test("相同文案已有新 turnId 的乐观回合时只更新该回合", () => {
+    const old = turn({ id: "old", user: "部署到上海站", assistant: "旧结果", status: "finished" });
+    const current = turn({ id: "new", user: "部署到上海站", assistant: "执行中", running: true });
+    const out = applyRunSnapshot(
+      [old, current],
+      snapshot({ turnId: "new", userText: "部署到上海站", assistant: "新的完整结果" }),
+    );
+    assert.equal(out.length, 2);
+    assert.equal(out[0], old);
+    assert.equal(out[1].id, "new");
+    assert.equal(out[1].assistant, "新的完整结果");
+    assert.equal(out[1].running, true);
+  });
+
   test("排队项追加为 queued 回合，已存在（同 id 或同指纹且在跑/排队）的不重复", () => {
     const turns = [turn({ id: "a", user: "第一句", running: true })];
     const out = applyRunSnapshot(
@@ -156,6 +198,24 @@ describe("applyRunSnapshot", () => {
       [
         ["a", false],
         ["q", true],
+      ],
+    );
+  });
+
+  test("带新 turnId 的同文案排队项不能被正在运行的旧回合吞掉", () => {
+    const out = applyRunSnapshot(
+      [turn({ id: "run", user: "部署到上海站", running: true })],
+      snapshot({
+        turnId: "run",
+        userText: "部署到上海站",
+        queued: [{ turnId: "queued", userText: "部署到上海站" }],
+      }),
+    );
+    assert.deepEqual(
+      out.map((item) => [item.id, Boolean(item.running), Boolean(item.queued)]),
+      [
+        ["run", true, false],
+        ["queued", false, true],
       ],
     );
   });

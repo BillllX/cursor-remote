@@ -31,6 +31,7 @@ function armRunFlush(slot: Slot) {
     const transcript = slot.transcript;
     if (!transcript || transcript.epoch !== slot.epoch || transcript.phase !== "running") return;
     flushTranscript(slot, false);
+    if (slot.owner) emitOwnerRunSnapshot(slot.owner, slot);
     if (slot.transcript?.phase === "running" && slot.transcript.epoch === slot.epoch) armRunFlush(slot);
   }, 3_000);
 }
@@ -141,6 +142,17 @@ export function emitRunSnapshots(ws: WebSocket, tenant: Tenant) {
     const full = diskSnapshot(id, mark, turns, mark.phase === "running");
     send(ws, clipSnapshot(full, limit));
   }
+}
+
+/** 给当前运行的发起连接补首帧；mirrorRun 会跳过 owner，不能靠无 turnId 的 status 定位回合。 */
+export function emitOwnerRunSnapshot(ws: WebSocket, slot: Slot) {
+  const transcript = slot.transcript;
+  if (!transcript || transcript.epoch !== slot.epoch) return;
+  const limit = gatewayState.conns.get(ws)?.maxMessageBytes ?? 0;
+  const full = snapshotMessage(slot.chatId, transcript, queuedRows(slot));
+  const clipped = clipSnapshot(full, limit);
+  if (clipped.type === "run_snapshot" && clipped.clipped) flushTranscript(slot, false);
+  send(ws, clipped);
 }
 
 export function protectChatUpload(tenant: Tenant, chatId: string, incoming: unknown, turnsProvided: boolean): unknown {

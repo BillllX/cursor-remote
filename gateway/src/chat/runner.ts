@@ -29,7 +29,7 @@ import { isAssistantChat } from "../runtime/chats.ts";
 import { cwdOf, disposeSlot, globalRunningCount, maxRunning } from "../runtime/slots.ts";
 import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn, RunHandle, Slot } from "../runtime/types.ts";
-import { continueTranscript, openTranscript } from "../sync/transcript.ts";
+import { continueTranscript, emitOwnerRunSnapshot, openTranscript } from "../sync/transcript.ts";
 import { allTenants, workspaceFenceForTenant } from "../tenants.ts";
 import { noteOutput, noteToolCall } from "../usage.ts";
 import { nativeStateDir, rollbackToLatestCheckpoint, undoEdits } from "../workspace/checkpoints.ts";
@@ -200,6 +200,7 @@ export async function handlePrompt(
   const epoch = ++slot.epoch;
   if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
   else openTranscript(slot, turnId, userText, epoch, safeImages);
+  emitOwnerRunSnapshot(ws, slot);
   if (conn.tenant && !isAssistantChat(conn.tenant, slot.chatId)) noteWorkspaceTurnStart(conn.tenant, slot.chatId);
   slot.finished = false;
   slot.edited = [];

@@ -262,6 +262,51 @@ extension ChatStore {
         completeTurnsLoad(chatId)
     }
 
+    /// 同一轮累计快照直接替换；跨到下一轮时把前一轮终态留在待应用队列。
+    func stagePendingSnapshot(_ chatId: String, message: ServerMessage) {
+        func turnId(of message: ServerMessage) -> String? {
+            guard case .runSnapshot(_, let turnId, _, _, _, _, _, _, _, _, _, _, _, _, _) = message else {
+                return nil
+            }
+            return turnId
+        }
+        if let previous = pendingSnapshots[chatId],
+           let previousId = turnId(of: previous),
+           let nextId = turnId(of: message),
+           !previousId.isEmpty,
+           !nextId.isEmpty,
+           previousId != nextId {
+            pendingSnapshotBacklog[chatId, default: []].append(previous)
+        }
+        pendingSnapshots[chatId] = message
+    }
+
+    /// 分页期间若运行先结束，把终态写进暂存快照，避免加载完成后又恢复成 running。
+    func settlePendingSnapshot(_ chatId: String, status: String, durationMs: Double? = nil) {
+        guard let pending = pendingSnapshots[chatId],
+              case .runSnapshot(
+                _, let turnId, _, _, let userText, let assistant, let thinking,
+                let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
+              ) = pending else { return }
+        pendingSnapshots[chatId] = .runSnapshot(
+            chatId: chatId,
+            turnId: turnId,
+            phase: "done",
+            status: status,
+            userText: userText,
+            assistant: assistant,
+            thinking: thinking,
+            tools: tools,
+            task: task,
+            model: runModel,
+            mode: runMode,
+            awaitingApproval: awaitingApproval,
+            queued: queued,
+            durationMs: durationMs ?? duration,
+            clipped: clipped
+        )
+    }
+
     /// 正文齐了（全量分页、增量补齐、基线版本一致）之后的公共收尾。调用前已置 turnsComplete = true
     func completeTurnsLoad(_ chatId: String) {
         // 基线版本相同、空会话等不经过并页路径，也必须消费先到的 turn_files。
@@ -276,36 +321,66 @@ extension ChatStore {
         if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
             applyHistory(chatId: chatId, incoming: pending)
         }
-        if let snap = pendingSnapshots.removeValue(forKey: chatId) {
+        let latestSnapshot = pendingSnapshots.removeValue(forKey: chatId)
+        var snapshots = pendingSnapshotBacklog.removeValue(forKey: chatId) ?? []
+        if let latestSnapshot { snapshots.append(latestSnapshot) }
+        if !snapshots.isEmpty {
             snapshotHold.remove(chatId)
-            if case .runSnapshot(
-                _, let turnId, let phase, let status, let userText, let assistant, let thinking,
-                let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
-            ) = snap, !clipped {
-                applyRunSnapshot(
-                    chatId: chatId,
-                    turnId: turnId,
-                    phase: phase,
-                    status: status,
-                    userText: userText,
-                    assistant: assistant,
-                    thinking: thinking,
-                    tools: tools,
-                    task: task,
-                    model: runModel,
-                    mode: runMode,
-                    awaitingApproval: awaitingApproval,
-                    queued: queued,
-                    durationMs: duration
-                )
+            var snapshotTurnId: String?
+            var snapshotAssistant = ""
+            for snap in snapshots {
+                if case .runSnapshot(
+                    _, let turnId, let phase, let status, let userText, let assistant, let thinking,
+                    let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
+                ) = snap {
+                    snapshotTurnId = turnId
+                    snapshotAssistant = assistant
+                    if !clipped {
+                        applyRunSnapshot(
+                            chatId: chatId,
+                            turnId: turnId,
+                            phase: phase,
+                            status: status,
+                            userText: userText,
+                            assistant: assistant,
+                            thinking: thinking,
+                            tools: tools,
+                            task: task,
+                            model: runModel,
+                            mode: runMode,
+                            awaitingApproval: awaitingApproval,
+                            queued: queued,
+                            durationMs: duration
+                        )
+                    } else if phase == "done", let turnId, !turnId.isEmpty {
+                        patch(chatId) { chat in
+                            guard let index = chat.turns.lastIndex(where: { $0.id == turnId }) else { return chat }
+                            var next = chat
+                            next.turns[index] = next.turns[index].settled(
+                                status: status ?? "finished",
+                                durationMs: duration
+                            )
+                            return next
+                        }
+                    }
+                }
             }
             let chunks = heldDeltas.removeValue(forKey: chatId) ?? []
             if !chunks.isEmpty {
                 let extra = chunks.joined()
+                let combined = snapshotAssistant + extra
                 patch(chatId) { chat in
                     var next = chat
-                    if let index = next.turns.indices.last {
-                        next.turns[index].assistant += extra
+                    let index = snapshotTurnId.flatMap { id in
+                        id.isEmpty ? nil : next.turns.lastIndex(where: { $0.id == id })
+                    } ?? next.turns.lastIndex(where: \.running)
+                    if let index {
+                        let current = next.turns[index].assistant
+                        if combined.hasPrefix(current) {
+                            next.turns[index].assistant = combined
+                        } else if !current.hasPrefix(combined) && !current.hasSuffix(extra) {
+                            next.turns[index].assistant += extra
+                        }
                     }
                     return next
                 }
