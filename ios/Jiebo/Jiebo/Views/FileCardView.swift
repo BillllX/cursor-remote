@@ -118,8 +118,8 @@ struct TurnReviewBar: View {
     }
 }
 
-/// 一轮（或正文里一段）的文件：能出缩略图的类型 1–2 个时各占一张大卡，更多时排成横向画廊；
-/// 代码、二进制、音频进紧凑行，超过 3 行折叠。
+/// 一轮（或正文里一段）的文件：能出缩略图且已经写完的类型 1–2 个时各占一张大卡，更多时排成横向画廊；
+/// 代码、二进制、音频不在运行中抢占消息流，回合结束后统一收进折叠清单。
 struct TurnFileCards: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -132,7 +132,6 @@ struct TurnFileCards: View {
     @State private var expanded = false
 
     private static let largeLimit = 2
-    private static let compactLimit = 3
 
     init(
         turn: Turn,
@@ -148,16 +147,18 @@ struct TurnFileCards: View {
 
     private var partition: (preview: [TurnFile], rows: [TurnFile]) {
         let scope = files ?? turn.cardFiles
+        // 待审批工具仍属于进行中的回合，不能提前放出回合结束后的折叠清单。
+        let live = ChatStore.isLiveTurn(turn)
         return (
-            scope.filter { ThumbnailStore.renderable($0.kind) },
-            scope.filter { !ThumbnailStore.renderable($0.kind) }
+            scope.filter {
+                ThumbnailStore.renderable($0.kind) && (!live || !turn.isWriting($0))
+            },
+            live ? [] : scope.filter { !ThumbnailStore.renderable($0.kind) }
         )
     }
 
     var body: some View {
         let parts = partition
-        let folded = parts.rows.count > Self.compactLimit && !expanded
-        let rows = folded ? Array(parts.rows.prefix(Self.compactLimit)) : parts.rows
         VStack(alignment: .leading, spacing: 8) {
             if parts.preview.count > Self.largeLimit {
                 gallery(parts.preview)
@@ -167,18 +168,18 @@ struct TurnFileCards: View {
                         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
                 }
             }
-            if !rows.isEmpty {
+            if !parts.rows.isEmpty {
                 VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, file in
-                        if index > 0 {
-                            Rectangle().fill(JieboColor.line).frame(height: 0.5).padding(.leading, 36)
+                    if expanded {
+                        ForEach(Array(parts.rows.enumerated()), id: \.element.id) { index, file in
+                            if index > 0 {
+                                Rectangle().fill(JieboColor.line).frame(height: 0.5).padding(.leading, 36)
+                            }
+                            TurnFileRow(file: file, turn: turn, chatId: chatId, beforeOpen: beforeOpen)
                         }
-                        TurnFileRow(file: file, turn: turn, chatId: chatId, beforeOpen: beforeOpen)
-                    }
-                    if parts.rows.count > Self.compactLimit {
                         Rectangle().fill(JieboColor.line).frame(height: 0.5)
-                        moreButton(hidden: parts.rows.count - Self.compactLimit)
                     }
+                    fileListButton(count: parts.rows.count)
                 }
                 .background(JieboColor.white)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
@@ -215,12 +216,12 @@ struct TurnFileCards: View {
         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
     }
 
-    private func moreButton(hidden: Int) -> some View {
+    private func fileListButton(count: Int) -> some View {
         Button {
             withAnimation(JieboMotion.snappy(reduceMotion)) { expanded.toggle() }
         } label: {
             HStack(spacing: 6) {
-                Text(expanded ? "收起" : "还有 \(hidden) 个文件")
+                Text(expanded ? "收起本回合文件" : "本回合文件 · \(count)")
                     .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
                 Image(systemName: "chevron.down")
@@ -234,7 +235,7 @@ struct TurnFileCards: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(expanded ? "收起文件列表" : "还有 \(hidden) 个文件")
+        .accessibilityLabel(expanded ? "收起本回合文件" : "本回合文件，共 \(count) 个")
         .accessibilityValue(expanded ? "已展开" : "已收起")
         .accessibilityHint(expanded ? "轻点两下收起" : "轻点两下展开")
     }
