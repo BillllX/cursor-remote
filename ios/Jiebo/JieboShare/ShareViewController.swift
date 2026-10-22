@@ -1,5 +1,5 @@
 import ImageIO
-import LinkPresentation
+@preconcurrency import LinkPresentation
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -250,7 +250,8 @@ private enum ShareLoader {
     private static func copiedRepresentation(
         _ provider: NSItemProvider, type: UTType, enforceLimit: Bool
     ) async throws -> (file: URL, name: String)? {
-        try await withCheckedThrowingContinuation { continuation in
+        let suggestedName = provider.suggestedName
+        return try await withCheckedThrowingContinuation { continuation in
             provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { source, _ in
                 guard let source, let dir = outbox else {
                     continuation.resume(returning: nil)
@@ -260,7 +261,7 @@ private enum ShareLoader {
                     continuation.resume(throwing: ShareError.message("文件超过 32MB，无法发送"))
                     return
                 }
-                let original = originalName(provider: provider, source: source, type: type)
+                let original = originalName(suggestedName: suggestedName, source: source, type: type)
                 let target = dir.appendingPathComponent("load-\(UUID().uuidString.lowercased())")
                 do {
                     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -274,6 +275,7 @@ private enum ShareLoader {
     }
 
     private static func copiedItemURL(_ provider: NSItemProvider) async throws -> (file: URL, name: String)? {
+        let suggestedName = provider.suggestedName
         let copied: (file: URL, name: String)? = try await withCheckedThrowingContinuation { continuation in
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { value, _ in
                 guard let source = value as? URL, let dir = outbox else {
@@ -289,7 +291,7 @@ private enum ShareLoader {
                     continuation.resume(throwing: ShareError.message("文件超过 32MB，无法发送"))
                     return
                 }
-                let original = originalName(provider: provider, source: source, type: .data)
+                let original = originalName(suggestedName: suggestedName, source: source, type: .data)
                 let target = dir.appendingPathComponent("load-\(UUID().uuidString.lowercased())")
                 do {
                     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -313,8 +315,8 @@ private enum ShareLoader {
         return size > maxFileBytes
     }
 
-    private static func originalName(provider: NSItemProvider, source: URL, type: UTType) -> String {
-        var name = provider.suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+    private static func originalName(suggestedName: String?, source: URL, type: UTType) -> String {
+        var name = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
         if name?.isEmpty != false { name = source.lastPathComponent }
         if (name as NSString?)?.pathExtension.isEmpty != false {
             let ext = source.pathExtension.nonEmpty ?? type.preferredFilenameExtension
@@ -397,13 +399,7 @@ private enum ShareLoader {
 
     private static func linkPayload(_ url: URL) async -> SharePayload {
         let metadata: LPLinkMetadata? = await withCheckedContinuation { continuation in
-            let provider = LPMetadataProvider()
-            let gate = ShareMetadataGate(continuation)
-            provider.startFetchingMetadata(for: url) { metadata, _ in gate.finish(metadata) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
-                provider.cancel()
-                gate.finish(nil)
-            }
+            ShareMetadataGate(continuation).start(url: url)
         }
         var icon: URL?
         if let provider = metadata?.iconProvider,
@@ -511,9 +507,20 @@ private enum ShareSender {
 private final class ShareMetadataGate: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<LPLinkMetadata?, Never>?
+    private let provider = LPMetadataProvider()
 
     init(_ continuation: CheckedContinuation<LPLinkMetadata?, Never>) {
         self.continuation = continuation
+    }
+
+    func start(url: URL) {
+        provider.startFetchingMetadata(for: url) { [self] metadata, _ in
+            finish(metadata)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [self] in
+            provider.cancel()
+            finish(nil)
+        }
     }
 
     func finish(_ metadata: LPLinkMetadata?) {

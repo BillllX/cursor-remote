@@ -203,7 +203,7 @@ extension ChatStore {
             var next = memoryCenterExtrasStorage
             next.importBusyReqId = nil
             if ok, let data = MemoryCenterImportRollbackData.from(data) {
-                if data.status == "rolled_back" {
+                if data.status == .rolledBack {
                     next.importLastImportId = nil
                 }
                 next.importError = nil

@@ -1007,7 +1007,7 @@ struct MemoryCenterItemDetailView: View {
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             }
-            if item.kind == "workspace_memory", let scopeId, item.id != nil {
+            if item.kind == "workspace_memory", scopeId != nil, item.id != nil {
                 Button("编辑…") { showEdit = true }
                     .buttonStyle(.bordered)
                     .disabled(store.memoryCenterData.mutating)

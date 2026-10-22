@@ -9,7 +9,6 @@ struct PhoneShell: View {
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var router = PhoneRouter()
-    @State private var logoutConfirm = false
     /// 今日面板顶部下拉的位移（抓手和标题行跟手）
     @State private var hubDrag: CGFloat = 0
 
@@ -24,7 +23,7 @@ struct PhoneShell: View {
             }
             // 预览、今日面板、菜单盖在上面时，底下的对话不再让 VoiceOver 摸到
             .accessibilityHidden(store.previewPanelOpen || router.hubOpen || router.menuOpen)
-            MenuDrawer(requestLogout: requestLogout)
+            MenuDrawer()
                 .zIndex(2)
                 .accessibilityHidden(store.previewPanelOpen || router.hubOpen)
             if store.previewPanelOpen, let tab = store.activePreviewTab {
@@ -54,18 +53,6 @@ struct PhoneShell: View {
         .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
         .sheet(item: $router.delegationDetail) { ref in
             DelegationDetailSheet(delegationId: ref.id)
-        }
-        .confirmationDialog("退出登录？", isPresented: $logoutConfirm, titleVisibility: .visible) {
-            Button("退出登录", role: .destructive) {
-                // 先退订 APNs 并等网关确认（最多 3 秒）：logout 之后 unlocked 为 false，assistant_op 会被丢弃
-                Task { @MainActor in
-                    await PushRegistrar.shared.unsubscribe(store: store)
-                    store.logout()
-                }
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("退出后需要重新输入访问码才能连回来。")
         }
         .onAppear { store.assistantOnly = true }
         .onDisappear { store.assistantOnly = false }
@@ -131,15 +118,6 @@ struct PhoneShell: View {
             PhoneSettingsScreen()
         case .memory:
             AssistantMemoryScreen()
-        }
-    }
-
-    /// 先收抽屉再弹确认框：两段动画叠在一起会让对话框从半透明遮罩上冒出来
-    private func requestLogout() {
-        withAnimation(JieboMotion.panel(reduceMotion)) {
-            router.closeMenu()
-        } completion: {
-            logoutConfirm = true
         }
     }
 

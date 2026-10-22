@@ -349,7 +349,7 @@ struct ChatListView: View {
 
     private func workspaceRow(_ item: WorkspaceAgentItem) -> some View {
         let selected = store.chatHomeDestination == .workspace(item.path)
-        Button {
+        return Button {
             store.openWorkspaceAgent(item)
         } label: {
             HStack(spacing: 12) {

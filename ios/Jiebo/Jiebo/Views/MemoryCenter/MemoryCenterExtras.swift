@@ -6,7 +6,7 @@ struct MemoryCenterActivityPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let err = store.memoryCenterActivityError, !err.isEmpty {
-                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warn)
+                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
             if store.memoryCenterActivityLoading {
                 ProgressView().accessibilityLabel("加载活动")
@@ -23,7 +23,7 @@ struct MemoryCenterActivityPane: View {
                         Text(blocked).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
                     }
                     if let err = store.memoryCenterExtrasStorage.restoreErrorByAuditId[row.auditId], !err.isEmpty {
-                        Text(err).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warn)
+                        Text(err).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warnFg)
                     }
                 }
                 .assistantCard()
@@ -39,7 +39,7 @@ struct MemoryCenterSuggestionsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let err = store.memoryCenterSuggestionsError, !err.isEmpty {
-                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warn)
+                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
             if store.memoryCenterSuggestionsLoading {
                 ProgressView().accessibilityLabel("加载建议")
@@ -60,7 +60,7 @@ struct MemoryCenterSuggestionsPane: View {
                     }
                     .font(JieboFont.text(.footnote))
                     if let err = store.memoryCenterExtrasStorage.suggestionErrorById[row.id], !err.isEmpty {
-                        Text(err).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warn)
+                        Text(err).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warnFg)
                     }
                 }
                 .assistantCard()

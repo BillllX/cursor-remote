@@ -25,7 +25,7 @@ struct MemoryCenterImportPane: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("导入 / 导出").font(JieboFont.text(.subheadline, weight: .semibold))
             if let err = extras.importError, !err.isEmpty {
-                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warn)
+                Text(err).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
             Group {
                 Toggle("个人记忆", isOn: $exportPersonal)
@@ -75,7 +75,7 @@ struct MemoryCenterImportPane: View {
             Button("预演") { store.memoryCenterImportPreview(path: importPath) }
                 .disabled(extras.importBusyReqId != nil || importPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             ForEach(extras.importWarnings, id: \.self) { w in
-                Text("⚠ \(w)").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warn)
+                Text("⚠ \(w)").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
             if let planId = extras.importPlanId {
                 Text("计划：\(planId.prefix(12))… · \(extras.importChanges.count) 项")
