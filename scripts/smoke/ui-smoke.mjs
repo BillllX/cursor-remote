@@ -224,6 +224,7 @@ async function main() {
     await page.waitForTimeout(1000);
     await expectNoKeyHint();
   });
+  await activity.getByRole("button", { name: "工作区", exact: true }).click();
 
   // b. 各浮层：打开可见，Esc / 关闭后消失
   await step("b1", "命令面板（⌘P 打开文件）", () =>
