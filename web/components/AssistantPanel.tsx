@@ -38,6 +38,7 @@ type Props = {
   initialMemoryScopeId?: string;
   initialMemorySource?: AssistantMemorySource;
   openRequest: number;
+  onViewChange?: (view: AssistantView) => void;
   name: string;
   state: AssistantState | null;
   send: (message: ClientMessage) => void;
@@ -70,6 +71,7 @@ export default function AssistantPanel({
   initialMemoryScopeId,
   initialMemorySource = "assistant",
   openRequest,
+  onViewChange,
   name,
   state,
   send,
@@ -116,11 +118,12 @@ export default function AssistantPanel({
     const item = state.inbox.find((row) => row.id === initialInboxId);
     if (item) {
       setTab("inbox");
+      onViewChange?.("inbox");
       if (!item.read) op("inbox_read", { ids: [item.id] });
       void closeInboxNotification(item.id);
       onOpenInboxItem(item);
     }
-  }, [open, initialInboxId, state?.inbox, op, onOpenInboxItem]);
+  }, [open, initialInboxId, state?.inbox, op, onOpenInboxItem, onViewChange]);
 
   async function enablePush() {
     if (!state?.pushKey) {
@@ -142,6 +145,7 @@ export default function AssistantPanel({
 
   function selectTab(next: AssistantView) {
     setTab(next);
+    onViewChange?.(next);
     if (next === "memory") {
       setMemoryLoaded(true);
       setMemoryNavigation(revisitAssistantMemoryNavigation);

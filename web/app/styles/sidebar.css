@@ -119,6 +119,38 @@
   background: var(--hover);
 }
 
+.assistant-domain-card {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.assistant-domain-status {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.assistant-nav-badge {
+  min-width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--fill-fg);
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+}
+
 .workspace-switcher-name {
   display: flex;
   align-items: center;

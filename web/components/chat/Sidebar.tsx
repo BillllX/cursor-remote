@@ -6,6 +6,7 @@ import type { AppearanceId, PaletteId } from "../../lib/theme";
 import type { WorkspaceNavId } from "../../lib/productNavigation";
 import { IconRail } from "../chromeIcons";
 import { JieboMark as Mark } from "../JieboMark";
+import { AssistantNavigation, type AssistantSidebarView } from "./AssistantNavigation";
 import { ChatList } from "./sidebar/ChatList";
 import { SideFoot } from "./sidebar/SideFoot";
 import { WorkspaceNavigation } from "./WorkspaceNavigation";
@@ -19,10 +20,12 @@ type SidebarProps = {
   cwd: string;
   workspaceRoot: string;
   assistantName: string;
-  assistantActive: boolean;
-  assistantOpen: boolean;
+  assistantDomainActive: boolean;
+  assistantView: AssistantSidebarView;
   openAssistantDomain: () => void;
-  assistantBadge: number;
+  openAssistantView: (view: Exclude<AssistantSidebarView, "chat">) => void;
+  assistantInboxBadge: number;
+  assistantApprovalBadge: number;
   workspaceMenuOpen: boolean;
   workspaceSection: WorkspaceNavId;
   openWorkspaceDomain: () => void;
@@ -101,10 +104,12 @@ export function Sidebar({
   cwd,
   workspaceRoot,
   assistantName,
-  assistantActive,
-  assistantOpen,
+  assistantDomainActive,
+  assistantView,
   openAssistantDomain,
-  assistantBadge,
+  openAssistantView,
+  assistantInboxBadge,
+  assistantApprovalBadge,
   workspaceMenuOpen,
   workspaceSection,
   openWorkspaceDomain,
@@ -149,27 +154,20 @@ export function Sidebar({
   setThemeChoice,
   logout,
 }: SidebarProps) {
+  const assistantBadge = assistantInboxBadge + assistantApprovalBadge;
   const currentGroup = sidebarGroups[0];
-  const canManageWorkspace = Boolean(
-    currentGroup && !currentGroup.user && !sameCwd(currentGroup.path, workspaceRoot),
-  );
-  const assistantSelected = assistantActive || assistantOpen;
+  const canManageWorkspace = Boolean(currentGroup && !currentGroup.user && !sameCwd(currentGroup.path, workspaceRoot));
   return (
     <aside className="sidebar" ref={navDrag.ref}>
       <div className={styles.brand}>
         <Mark />
-        <div>
-          <div className={styles.brandTitle}>接驳</div>
-          <div className={styles.brandSub} title={cwd || workspaceRoot}>
-            {workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
-          </div>
-        </div>
+        <div className={styles.brandTitle}>接驳</div>
       </div>
       <div className="mobile-domain-nav" aria-label="一级导航">
         <button
           type="button"
-          className={assistantSelected ? "on" : ""}
-          aria-pressed={assistantSelected}
+          className={assistantDomainActive ? "on" : ""}
+          aria-pressed={assistantDomainActive}
           aria-label={`助理${assistantBadge > 0 ? `，需要处理 ${assistantBadge}` : ""}`}
           onClick={openAssistantDomain}
         >
@@ -178,8 +176,8 @@ export function Sidebar({
         </button>
         <button
           type="button"
-          className={assistantSelected ? "" : "on"}
-          aria-pressed={!assistantSelected}
+          className={assistantDomainActive ? "" : "on"}
+          aria-pressed={!assistantDomainActive}
           aria-label="工作区"
           onClick={openWorkspaceDomain}
         >
@@ -187,67 +185,84 @@ export function Sidebar({
           工作区
         </button>
       </div>
-      <WorkspaceNavigation
-        workspaceName={sidebarGroups[0]?.name || workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
-        workspacePath={sidebarGroups[0]?.path || cwd || workspaceRoot}
-        active={workspaceSection}
-        loopLive={loopLive}
-        activeSessionTool={loopOpen ? "loop" : terminalOpen ? "terminal" : undefined}
-        managementDisabled={!canManageWorkspace}
-        managementHint="当前没有可管理的子工作区；请先切换或新建工作区。"
-        onSwitchWorkspace={openWorkspaceSwitcher}
-        onNavigate={(id) => {
-          if (id === "files") chooseSide("files");
-          else if (id === "search") chooseSide("search");
-          else if (id === "git") chooseSide("git");
-          else if (id === "memory") openWorkspaceMemory();
-          else if (id === "management") openWorkspaceManagement();
-          else chooseSide("chats");
-        }}
-        onSessionTool={(id) => chooseSide(id)}
-      />
-      <button className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`} type="button" onClick={newChat}>
-        + 新对话
-      </button>
-      {workspaceSection === "management" ? (
-        <section className="workspace-management" aria-label="工作区管理">
-          <div className="side-label">工作区管理</div>
-          {canManageWorkspace && currentGroup ? (
-            <>
-              <p className="loop-meta">管理「{currentGroup.name}」的名称或从列表移除。</p>
-              <div className="workspace-management-menu">
-                {groupMenuNode(currentGroup.path, currentGroup.name, currentGroup.chats.length)}
-              </div>
-            </>
+      {assistantDomainActive ? (
+        <AssistantNavigation
+          assistantName={assistantName}
+          active={assistantView}
+          inboxBadge={assistantInboxBadge}
+          overviewBadge={assistantApprovalBadge}
+          onNavigate={(view) => {
+            if (view === "chat") openAssistantDomain();
+            else openAssistantView(view);
+          }}
+        />
+      ) : (
+        <>
+          <WorkspaceNavigation
+            workspaceName={sidebarGroups[0]?.name || workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)}
+            workspacePath={sidebarGroups[0]?.path || cwd || workspaceRoot}
+            active={workspaceSection}
+            loopLive={loopLive}
+            activeSessionTool={loopOpen ? "loop" : terminalOpen ? "terminal" : undefined}
+            managementDisabled={!canManageWorkspace}
+            managementHint="当前没有可管理的子工作区；请先切换或新建工作区。"
+            onSwitchWorkspace={openWorkspaceSwitcher}
+            onNavigate={(id) => {
+              if (id === "files") chooseSide("files");
+              else if (id === "search") chooseSide("search");
+              else if (id === "git") chooseSide("git");
+              else if (id === "memory") openWorkspaceMemory();
+              else if (id === "management") openWorkspaceManagement();
+              else chooseSide("chats");
+            }}
+            onSessionTool={(id) => chooseSide(id)}
+          />
+          <button className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`} type="button" onClick={newChat}>
+            + 新对话
+          </button>
+          {workspaceSection === "management" ? (
+            <section className="workspace-management" aria-label="工作区管理">
+              <div className="side-label">工作区管理</div>
+              {canManageWorkspace && currentGroup ? (
+                <>
+                  <p className="loop-meta">管理「{currentGroup.name}」的名称或从列表移除。</p>
+                  <div className="workspace-management-menu">
+                    {groupMenuNode(currentGroup.path, currentGroup.name, currentGroup.chats.length)}
+                  </div>
+                </>
+              ) : (
+                <p className="loop-meta">当前没有可管理的子工作区。USER 根目录不能在这里管理，请先切换或新建工作区。</p>
+              )}
+            </section>
           ) : (
-            <p className="loop-meta">当前没有可管理的子工作区。USER 根目录不能在这里管理，请先切换或新建工作区。</p>
+            <ChatList
+              sidebarGroups={sidebarGroups}
+              moreGroups={moreGroups}
+              activeId={activeId}
+              expandedGroups={expandedGroups}
+              groupMenu={groupMenu}
+              startChatIn={startChatIn}
+              setExpandedGroups={setExpandedGroups}
+              duplicateGroupNames={duplicateGroupNames}
+              workspaceRoot={workspaceRoot}
+              setGroupMenu={setGroupMenu}
+              groupMenuNode={groupMenuNode}
+              renameId={renameId}
+              renameDraft={renameDraft}
+              setRenameDraft={setRenameDraft}
+              commitRename={commitRename}
+              renameSkipRef={renameSkipRef}
+              setRenameId={setRenameId}
+              selectChat={selectChat}
+              startRename={startRename}
+              deleteChat={deleteChat}
+              moreOpen={moreOpen}
+              setMoreOpen={setMoreOpen}
+              openNewChatMenu={openNewChatMenu}
+            />
           )}
-        </section>
-      ) : <ChatList
-        sidebarGroups={sidebarGroups}
-        moreGroups={moreGroups}
-        activeId={activeId}
-        expandedGroups={expandedGroups}
-        groupMenu={groupMenu}
-        startChatIn={startChatIn}
-        setExpandedGroups={setExpandedGroups}
-        duplicateGroupNames={duplicateGroupNames}
-        workspaceRoot={workspaceRoot}
-        setGroupMenu={setGroupMenu}
-        groupMenuNode={groupMenuNode}
-        renameId={renameId}
-        renameDraft={renameDraft}
-        setRenameDraft={setRenameDraft}
-        commitRename={commitRename}
-        renameSkipRef={renameSkipRef}
-        setRenameId={setRenameId}
-        selectChat={selectChat}
-        startRename={startRename}
-        deleteChat={deleteChat}
-        moreOpen={moreOpen}
-        setMoreOpen={setMoreOpen}
-        openNewChatMenu={openNewChatMenu}
-      />}
+        </>
+      )}
       <SideFoot
         isAdmin={isAdmin}
         openAdminStats={openAdminStats}

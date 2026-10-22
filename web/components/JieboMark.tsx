@@ -2,7 +2,7 @@ export function JieboMark({ className = "logo" }: { className?: string }) {
   return (
     <img
       className={className}
-      src={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/favicon.svg`}
+      src={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/icon-192.png`}
       alt=""
       width={32}
       height={32}

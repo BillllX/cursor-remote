@@ -24,6 +24,14 @@ export const ASSISTANT_NAV = [
   { id: "notify", label: "通知" },
 ] as const;
 
+export const ASSISTANT_SIDEBAR_NAV = [
+  { id: "chat", label: "对话", icon: "chats" },
+  { id: "overview", label: "今日总览", icon: "overview" },
+  { id: "inbox", label: "收件箱", icon: "chats" },
+  { id: "notify", label: "通知", icon: "assistant" },
+  { id: "memory", label: "个人记忆", icon: "memory" },
+] as const;
+
 export const ASSISTANT_SURFACE = {
   mode: "floating",
   memoryMode: "same-shell-wide",
@@ -41,6 +49,14 @@ export const STATUS_LEGEND = {
 export type PrimaryNavId = (typeof PRIMARY_NAV)[number]["id"];
 export type WorkspaceNavId = (typeof WORKSPACE_NAV)[number]["id"];
 export type StatusLegendId = keyof typeof STATUS_LEGEND;
+
+export function isAssistantDomainActive(
+  assistantActive: boolean,
+  assistantOpen: boolean,
+  source: "assistant" | "workspace",
+) {
+  return assistantOpen ? source === "assistant" : assistantActive;
+}
 
 export function statusAriaLabel(status: StatusLegendId, count?: number) {
   const label = STATUS_LEGEND[status].label;

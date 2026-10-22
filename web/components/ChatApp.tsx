@@ -66,7 +66,7 @@ import { cancelTurnBodyRequest, startTurnBodyRequest, type TurnBodyRequest } fro
 import { deferredPlaceholder, editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnAllowsActions, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
 import { gitLetterOf, inWorkspaceRoot, moveWorkspacePath, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceRemovalRecovery } from "../lib/chat/workspace";
-import type { WorkspaceNavId } from "../lib/productNavigation";
+import { isAssistantDomainActive, type WorkspaceNavId } from "../lib/productNavigation";
 import { AdminOverlay } from "./chat/AdminOverlay";
 import { AssistantChatHead } from "./chat/AssistantChatHead";
 import { ComposerDock } from "./chat/ComposerDock";
@@ -2535,24 +2535,34 @@ export default function ChatApp() {
     setNotice("正在准备下载…");
   }
 
+  function prepareAssistantDomain() {
+    setNavOpen(false);
+    setWorkspaceMenuOpen(false);
+    setGroupMenu(null);
+    setAdminOpen(false);
+    setSearchOpen(false);
+    setPaletteOpen(false);
+    setThreadFindOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setSidePane("chats");
+  }
+
+  function openAssistantView(view: AssistantView) {
+    prepareAssistantDomain();
+    setAssistantInitialView(view);
+    setAssistantMemoryScopeId(undefined);
+    setAssistantMemorySource("assistant");
+    setAssistantOpenRequest((value) => value + 1);
+    setAssistantOpen(true);
+  }
+
   function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") {
     setNavOpen(false);
     if (pane === "assistant") {
-      setWorkspaceMenuOpen(false);
-      setGroupMenu(null);
-      setAdminOpen(false);
-      setSearchOpen(false);
-      setPaletteOpen(false);
-      setThreadFindOpen(false);
-      setFilesOpen(false);
-      setGrepOpen(false);
-      setLoopOpen(false);
-      setTerminalOpen(false);
-      setAssistantInitialView("overview");
-      setAssistantMemoryScopeId(undefined);
-      setAssistantMemorySource("assistant");
-      setAssistantOpenRequest((value) => value + 1);
-      setAssistantOpen(true);
+      openAssistantView("overview");
       return;
     }
     if (pane === "chats") setWorkspaceSection("chats");
@@ -2609,6 +2619,7 @@ export default function ChatApp() {
   }
 
   function openAssistantFromRail() {
+    prepareAssistantDomain();
     setAssistantOpen(false);
     openAssistantChat();
   }
@@ -4194,9 +4205,15 @@ export default function ChatApp() {
 
   const loopRow = loops[activeId];
   const loopLive = loopRow?.status === "armed" || loopRow?.status === "running";
-  const assistantBadge = (assistantState?.inbox.filter((item) => !item.read).length ?? 0) + (assistantState?.approvals.length ?? 0);
+  const assistantInboxBadge = assistantState?.inbox.filter((item) => !item.read).length ?? 0;
+  const assistantApprovalBadge = assistantState?.approvals.length ?? 0;
+  const assistantBadge = assistantInboxBadge + assistantApprovalBadge;
   const assistantActive = !emptyWorkspacePath && Boolean(assistantChatId) && activeId === assistantChatId;
-  const assistantDomainActive = assistantActive || assistantOpen;
+  const assistantDomainActive = isAssistantDomainActive(
+    assistantActive,
+    assistantOpen,
+    assistantMemorySource,
+  );
   const assistantChatUnread = Boolean(assistantChat?.unread) && !assistantActive;
 
   // 用户选中的会话记在本机，刷新后 stored_state 据此落回原会话；自动挑的不记，免得下次被当成用户选的
@@ -4336,6 +4353,7 @@ export default function ChatApp() {
         initialMemoryScopeId={assistantMemoryScopeId}
         initialMemorySource={assistantMemorySource}
         openRequest={assistantOpenRequest}
+        onViewChange={setAssistantInitialView}
         onClose={() => {
           clearInboxDeepLink();
           setAssistantOpen(false);
@@ -4433,10 +4451,12 @@ export default function ChatApp() {
         cwd={workspaceContextCwd}
         workspaceRoot={workspaceRoot}
         assistantName={assistantName}
-        assistantActive={assistantActive}
-        assistantOpen={assistantOpen}
+        assistantDomainActive={assistantDomainActive}
+        assistantView={assistantOpen && assistantMemorySource === "assistant" ? assistantInitialView : "chat"}
         openAssistantDomain={openAssistantFromRail}
-        assistantBadge={assistantBadge}
+        openAssistantView={openAssistantView}
+        assistantInboxBadge={assistantInboxBadge}
+        assistantApprovalBadge={assistantApprovalBadge}
         workspaceMenuOpen={workspaceMenuOpen}
         workspaceSection={workspaceSection}
         openWorkspaceDomain={openWorkspaceDomain}

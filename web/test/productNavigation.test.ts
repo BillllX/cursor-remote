@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   ASSISTANT_NAV,
+  ASSISTANT_SIDEBAR_NAV,
   ASSISTANT_SURFACE,
   PRIMARY_NAV,
   SESSION_TOOLS,
   STATUS_LEGEND,
   WORKSPACE_NAV,
+  isAssistantDomainActive,
   statusAriaLabel,
 } from "../lib/productNavigation";
 
@@ -24,7 +26,10 @@ describe("Web 产品信息架构", () => {
       ["chats", "files", "search", "git", "memory", "management"],
     );
     assert.equal(WORKSPACE_NAV[0]?.id, "chats");
-    assert.equal(WORKSPACE_NAV.some((item) => (item.id as string) === "overview"), false);
+    assert.equal(
+      WORKSPACE_NAV.some((item) => (item.id as string) === "overview"),
+      false,
+    );
     assert.equal(WORKSPACE_NAV.find((item) => item.id === "search")?.label, "工作区搜索");
   });
 
@@ -33,7 +38,10 @@ describe("Web 产品信息架构", () => {
       SESSION_TOOLS.map((item) => item.id),
       ["loop", "terminal"],
     );
-    assert.equal(PRIMARY_NAV.some((item) => (item.id as string) === "loop"), false);
+    assert.equal(
+      PRIMARY_NAV.some((item) => (item.id as string) === "loop"),
+      false,
+    );
   });
 
   test("助理主导航不把记忆伪装成普通 Tab", () => {
@@ -41,6 +49,26 @@ describe("Web 产品信息架构", () => {
       ASSISTANT_NAV.map((item) => item.id),
       ["overview", "inbox", "notify"],
     );
+  });
+
+  test("助理侧栏只承载个人助理功能", () => {
+    assert.deepEqual(
+      ASSISTANT_SIDEBAR_NAV.map((item) => item.id),
+      ["chat", "overview", "inbox", "notify", "memory"],
+    );
+    assert.equal(
+      ASSISTANT_SIDEBAR_NAV.some((item) =>
+        ["files", "search", "git", "management", "loop", "terminal"].includes(item.id),
+      ),
+      false,
+    );
+  });
+
+  test("浮层来源决定当前一级域，工作区记忆不会误点亮助理", () => {
+    assert.equal(isAssistantDomainActive(true, false, "assistant"), true);
+    assert.equal(isAssistantDomainActive(false, false, "workspace"), false);
+    assert.equal(isAssistantDomainActive(false, true, "assistant"), true);
+    assert.equal(isAssistantDomainActive(true, true, "workspace"), false);
   });
 
   test("助理统一使用单层浮窗，记忆在同一壳内扩展", () => {
