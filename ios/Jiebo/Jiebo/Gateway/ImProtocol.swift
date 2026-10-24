@@ -194,7 +194,12 @@ struct ImMessage: Sendable, Hashable {
 
 struct ImConvRow: Sendable, Hashable {
     var convId: String
+    /// 旧网关不带 kind，按 dm；group 只在声明 im_group + im_collab 后下发。
+    var kind: String
     var peer: String
+    var title: String?
+    var memberCount: Int
+    var activityAt: Double
     /// 自己可见的最后一条；缺省 = 没有可见消息（清空过）
     var last: ImMessage?
     /// 最多 1000（封顶）
@@ -209,12 +214,18 @@ struct ImConvRow: Sendable, Hashable {
 
     static func from(_ json: JSONValue?) -> ImConvRow? {
         guard let row = json?.object,
-              let convId = row["convId"]?.string, !convId.isEmpty,
-              let peer = row["peer"]?.string, !peer.isEmpty
+              let convId = row["convId"]?.string, !convId.isEmpty
         else { return nil }
+        let kind = row["kind"]?.string ?? "dm"
+        let peer = row["peer"]?.string ?? ""
+        guard kind == "group" || !peer.isEmpty else { return nil }
         return ImConvRow(
             convId: convId,
+            kind: kind,
             peer: peer,
+            title: row["title"]?.string?.nilIfEmpty,
+            memberCount: row["memberCount"]?.int ?? 0,
+            activityAt: row["activityAt"]?.number ?? 0,
             last: ImMessage.from(row["last"]),
             unread: row["unread"]?.int ?? 0,
             readSeq: row["readSeq"]?.int ?? 0,
@@ -229,7 +240,7 @@ struct ImConvRow: Sendable, Hashable {
     func json() -> JSONValue {
         var object: [String: JSONValue] = [
             "convId": .string(convId),
-            "peer": .string(peer),
+            "kind": .string(kind),
             "unread": .number(Double(unread)),
             "readSeq": .number(Double(readSeq)),
             "maxSeq": .number(Double(maxSeq)),
@@ -237,6 +248,13 @@ struct ImConvRow: Sendable, Hashable {
             "mute": .bool(mute),
             "hideBefore": .number(Double(hideBefore)),
         ]
+        if kind == "group" {
+            if let title { object["title"] = .string(title) }
+            object["memberCount"] = .number(Double(memberCount))
+            object["activityAt"] = .number(activityAt)
+        } else {
+            object["peer"] = .string(peer)
+        }
         if let last { object["last"] = last.json() }
         if let ticket { object["ticket"] = ticket.json() }
         return .object(object)
@@ -259,6 +277,77 @@ struct ImUpdate: Sendable, Hashable {
     var unread: Int?
 }
 
+/// Collab 复用网关已有安全执行边界；iOS P3 只解码和展示，不发送 collab_op。
+struct CollabRunSnapshot: Sendable, Hashable, Identifiable {
+    struct Task: Sendable, Hashable, Identifiable {
+        var taskId: String
+        var version: Int
+        var workspaceId: String
+        var title: String
+        var status: String
+        var attempt: Int
+        var summary: String?
+        var fileCount: Int
+        var needsApproval: Bool
+        var id: String { taskId }
+
+        static func from(_ value: JSONValue) -> Task? {
+            guard let row = value.object,
+                  let taskId = row["taskId"]?.string, !taskId.isEmpty,
+                  let workspaceId = row["workspaceId"]?.string, !workspaceId.isEmpty
+            else { return nil }
+            return Task(
+                taskId: taskId,
+                version: row["version"]?.int ?? 0,
+                workspaceId: workspaceId,
+                title: row["title"]?.string ?? "未命名任务",
+                status: row["status"]?.string ?? "unknown",
+                attempt: row["attempt"]?.int ?? 0,
+                summary: row["summary"]?.string,
+                fileCount: row["files"]?.array?.count ?? 0,
+                needsApproval: row["approval"]?.object != nil
+            )
+        }
+    }
+
+    var runId: String
+    var version: Int
+    var status: String
+    var createdAt: Double?
+    var wave: Int?
+    var explanation: String?
+    var summary: String?
+    var partial: Bool
+    var tasks: [Task]
+    var id: String { runId }
+
+    static func from(_ value: JSONValue) -> CollabRunSnapshot? {
+        guard let row = value.object,
+              let runId = row["runId"]?.string, !runId.isEmpty
+        else { return nil }
+        return CollabRunSnapshot(
+            runId: runId,
+            version: row["version"]?.int ?? 0,
+            status: row["status"]?.string ?? "unknown",
+            createdAt: row["createdAt"]?.number,
+            wave: row["wave"]?.int,
+            explanation: row["explanation"]?.string,
+            summary: row["summary"]?.string,
+            partial: row["partial"]?.bool ?? false,
+            tasks: row["tasks"]?.array?.compactMap(Task.from) ?? []
+        )
+    }
+}
+
+struct CollabStatePage: Sendable, Hashable {
+    var convId: String
+    var snapshotSeq: Int
+    var runs: [CollabRunSnapshot]
+    var removedRunIds: [String]
+    var more: Bool
+    var cursor: String?
+}
+
 /// 网关下发的 im_*（只发给 hello caps 含 "im" 的连接）
 enum ImEvent: Sendable, Hashable {
     case contacts(me: ImMe, users: [ImUser], avatarTicket: ImTicket?)
@@ -270,9 +359,20 @@ enum ImEvent: Sendable, Hashable {
     case message(ImMessage, ticket: ImTicket?, unread: Int?)
     case update(ImUpdate)
     case error(clientId: String?, code: String, message: String)
+    case collabState(CollabStatePage)
 
     static func decode(type: String, _ object: [String: JSONValue]) -> ImEvent? {
         switch type {
+        case "collab_state":
+            guard let convId = object["convId"]?.string, !convId.isEmpty else { return nil }
+            return .collabState(CollabStatePage(
+                convId: convId,
+                snapshotSeq: object["snapshotSeq"]?.int ?? 0,
+                runs: object["runs"]?.array?.compactMap(CollabRunSnapshot.from) ?? [],
+                removedRunIds: object["removedRunIds"]?.array?.compactMap(\.string) ?? [],
+                more: object["more"]?.bool ?? false,
+                cursor: object["cursor"]?.string
+            ))
         case "im_contacts":
             guard let me = ImMe.from(object["me"]) else { return nil }
             return .contacts(

@@ -14,12 +14,18 @@ import type { TenantRef } from "../assistant/store.ts";
 import { gatewayState } from "../runtime/state.ts";
 import { send } from "../ws/send.ts";
 import { log } from "../log.ts";
-import { hashDeviceId, summarizeDeviceParams, writeDeviceAudit, type DeviceAuditWriter } from "./audit.ts";
+import {
+  hashDeviceId,
+  hashExternalId,
+  summarizeDeviceParams,
+  writeDeviceAudit,
+  type DeviceAuditWriter,
+} from "./audit.ts";
 
 export const DEVICE_READ_TIMEOUT_MS = 30_000;
 export const DEVICE_WRITE_TIMEOUT_MS = 120_000;
 export const DEVICE_IDEMPOTENCY_TTL_MS = 24 * 60 * 60_000;
-export const DEVICE_SETTLED_TTL_MS = 10 * 60_000;
+export const DEVICE_SETTLED_TTL_MS = DEVICE_IDEMPOTENCY_TTL_MS;
 const DEVICE_SETTLED_MAX = 4_096;
 const DEVICE_CACHE_MAX = 4_096;
 
@@ -72,12 +78,18 @@ export type DeviceRegistryDeps = {
   securityLog?: (message: string) => void;
 };
 
-const isWriteOp = (op: DeviceOp) => op === "calendar_event_upsert" || op === "reminders_upsert";
+const isWriteOp = (op: DeviceOp) =>
+  op === "calendar_event_upsert" ||
+  op === "calendar_event_delete" ||
+  op === "reminders_upsert" ||
+  op === "reminder_complete" ||
+  op === "reminder_delete" ||
+  op === "mail_draft_open";
 
 export class DeviceRegistry {
   private readonly pending = new Map<string, Pending>();
   private readonly cache = new Map<string, Cached>();
-  /** 超时调用的有限墓碑：同一 tool call 的传输重试不会再次写，迟到结果也不会复活请求。 */
+  /** 超时调用的有界墓碑：与成功写幂等窗口同为 24h，避免不确定结果在窗口内再次执行。 */
   private readonly settled = new Map<string, Settled>();
   private readonly inflightByKey = new Map<string, Promise<DeviceResult>>();
   private readonly now: () => number;
@@ -91,19 +103,23 @@ export class DeviceRegistry {
   }
 
   /** 只选一个同租户、已鉴权且声明能力的在线连接。 */
-  select(tenantId: string, excluded: ReadonlySet<Conn> = new Set()): Conn | undefined {
+  select(tenantId: string, excluded: ReadonlySet<Conn> = new Set(), requiredCap = "device_bridge"): Conn | undefined {
+    let background: Conn | undefined;
     for (const conn of this.deps.state.conns.values()) {
       if (
         !excluded.has(conn) &&
         conn.authed &&
         conn.tenant?.id === tenantId &&
         conn.caps.has("device_bridge") &&
+        conn.caps.has(requiredCap) &&
         (this.deps.isOpen?.(conn) ?? conn.ws.readyState === WebSocket.OPEN)
       ) {
-        return conn;
+        // App 的 im_presence 与 device_bridge 共用同一条鉴权连接；优先把系统弹窗送到前台设备。
+        if (conn.imForeground !== false) return conn;
+        background ??= conn;
       }
     }
-    return undefined;
+    return background;
   }
 
   invoke(tenant: TenantRef, input: DeviceInvokeInput): Promise<DeviceResult> {
@@ -126,7 +142,7 @@ export class DeviceRegistry {
   }
 
   private startInvoke(tenant: TenantRef, input: DeviceInvokeInput, cacheKey?: string): Promise<DeviceResult> {
-    const conn = this.select(tenant.id);
+    const conn = this.select(tenant.id, new Set(), deviceRequiredCap(input.op));
     if (!conn) return Promise.reject(new DeviceBridgeError("no_device", "没有可用的 Apple 设备。"));
     const reqId = this.deps.reqId?.() ?? `dev_${randomUUID()}`;
     const timeoutMs =
@@ -185,7 +201,7 @@ export class DeviceRegistry {
       return false;
     }
     if (result.status === "unavailable" || result.status === "busy") {
-      const next = this.select(pending!.tenantId, pending!.attempted);
+      const next = this.select(pending!.tenantId, pending!.attempted, deviceRequiredCap(pending!.op));
       if (next) {
         pending!.conn = next;
         pending!.attempted.add(next);
@@ -260,7 +276,7 @@ export class DeviceRegistry {
   }
 
   private retryAfterSendFailure(pending: Pending): boolean {
-    const next = this.select(pending.tenantId, pending.attempted);
+    const next = this.select(pending.tenantId, pending.attempted, deviceRequiredCap(pending.op));
     if (next) {
       pending.conn = next;
       pending.attempted.add(next);
@@ -291,7 +307,7 @@ export class DeviceRegistry {
           deviceHash: hashDeviceId(pending.conn.deviceId || `${tenant.id}:${pending.conn.ip}`),
           summary: summarizeDeviceParams(pending.op, pending.params),
           status,
-          externalId: externalId?.slice(0, 256),
+          externalIdHash: externalId ? hashExternalId(externalId) : undefined,
         },
       );
     } catch (err) {
@@ -330,6 +346,20 @@ function externalIdFrom(value: JSONValue | undefined) {
   if (!value || Array.isArray(value) || typeof value !== "object") return undefined;
   const id = value.externalId ?? value.id;
   return typeof id === "string" ? id : undefined;
+}
+
+const DEVICE_BRIDGE_V2_OPS = new Set<DeviceOp>([
+  "calendar_events_list",
+  "calendar_event_delete",
+  "reminders_list",
+  "reminder_complete",
+  "reminder_delete",
+  "mail_draft_open",
+]);
+
+/** v1 设备仍可承接原有 upsert/联系人；P3 新能力只发给明确声明 v2 的客户端。 */
+function deviceRequiredCap(op: DeviceOp) {
+  return DEVICE_BRIDGE_V2_OPS.has(op) ? "device_bridge_v2" : "device_bridge";
 }
 
 export const deviceRegistry = new DeviceRegistry({

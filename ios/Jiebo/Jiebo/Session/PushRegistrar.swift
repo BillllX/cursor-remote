@@ -73,10 +73,11 @@ final class PushRouting {
 }
 
 /// APNs：授权 → 注册 → 拿到 token → 连上网关且 assistant_state 到达后上报 push_subscribe。
-/// iPhone 订阅助理和聊天两类；iPad 只订阅聊天（助理在桌面面板里看，不重复推）
+/// iPhone、iPad 都可订阅助理；设置键不存在时默认开启，兼容升级前没有该设置的安装。
 @MainActor
 final class PushRegistrar {
     static let shared = PushRegistrar()
+    static let assistantNotificationsKey = "jiebo.assistantNotificationsEnabled"
 
     private weak var store: ChatStore?
     private weak var im: ImStore?
@@ -105,7 +106,14 @@ final class PushRegistrar {
 
     // MARK: 生命周期
 
-    private static var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    static func assistantNotificationsEnabled(storedValue: Bool?) -> Bool {
+        storedValue ?? true
+    }
+
+    private static var assistantNotificationsEnabled: Bool {
+        let stored = UserDefaults.standard.object(forKey: assistantNotificationsKey) as? Bool
+        return assistantNotificationsEnabled(storedValue: stored)
+    }
 
     /// 幂等
     func start(store: ChatStore, im: ImStore) {
@@ -130,7 +138,7 @@ final class PushRegistrar {
             return
         }
         requestAuthorizationIfNeeded()
-        // iPad 没有助理首页去要 assistant_state：这里补要（最多 30 秒一次），订阅上报靠它
+        // 壳尚未挂载或正在其它域时也要补取 assistant_state（最多 30 秒一次），订阅上报靠它。
         if store.connected, store.assistantState == nil,
            lastAssistantRequest.map({ Date().timeIntervalSince($0) > 30 }) ?? true {
             lastAssistantRequest = Date()
@@ -138,12 +146,11 @@ final class PushRegistrar {
         }
         reportIfPossible(store: store)
         // 前台角标按这台设备订阅的类别算，和网关推送里的 aps.badge 同一个口径（apnsBadgeFor）：
-        // iPhone 订阅助理 + 聊天 = 聊天未读 + 助理待处理（两边都到齐才设合计，免得闪一下半截数）；
-        // iPad 只订阅聊天 = 只算聊天未读（助理在面板里看，变化不推给它，角标就不算它）。
+        // 订阅助理时角标含待处理；用户明确关闭助理通知时只算聊天和工作区。
         // 工作区列表未加载时不重算，避免把推送刚带来的工作区角标抹掉。
         guard store.workspaceAgentsLoaded else { return }
         let imLoaded = im?.listLoaded == true
-        if Self.isPhone {
+        if Self.assistantNotificationsEnabled {
             if imLoaded {
                 guard store.assistantState != nil else { return }
                 applyBadge((im?.totalUnread ?? 0) + store.assistantBadgeCount + store.workspaceUnreadCount)
@@ -209,19 +216,28 @@ final class PushRegistrar {
         guard store.connected, store.assistantState != nil, let token = deviceToken else { return }
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return }
         let environment = Self.environment
-        let assistant = Self.isPhone
-        let key = [store.tenantId, token, environment, bundleId, assistant ? "assistant+im+workspace" : "im+workspace"].joined(separator: "|")
+        let assistant = Self.assistantNotificationsEnabled
+        let key = [
+            store.tenantId,
+            token,
+            environment,
+            bundleId,
+            assistant ? "assistant+im+workspace" : "im+workspace",
+        ].joined(separator: "|")
         guard key != reportedKey else { return }
         reportedKey = key
-        store.assistantOp("push_subscribe", args: [
-            "kind": .string("apns"),
-            "token": .string(token),
-            "bundleId": .string(bundleId),
-            "environment": .string(environment),
-            "im": .bool(true),
-            "assistant": .bool(assistant),
-            "workspace": .bool(true),
-        ])
+        store.assistantOp(
+            "push_subscribe",
+            args: [
+                "kind": .string("apns"),
+                "token": .string(token),
+                "bundleId": .string(bundleId),
+                "environment": .string(environment),
+                "im": .bool(true),
+                "assistant": .bool(assistant),
+                "workspace": .bool(true),
+            ]
+        )
     }
 
     private func applyBadge(_ count: Int) {

@@ -7,5 +7,4 @@ canvas_versions Canvas 版本管理当前只在 Web 文件预览工具栏提供
 canvas_published Canvas 发布操作当前只由 Web 发起，iOS 不等待其回执
 canvas_restored Canvas 版本恢复当前只由 Web 发起，iOS 通过 file_changed 刷新预览
 im_group_created iOS 当前不发 im_group_create，群组创建由 Web 协作入口完成
-collab_state iOS 当前只消费协作结果投影，不承载 Web 协作房间状态
 collab_result iOS 当前不发 collab_op，因此无需处理对应操作回执

@@ -84,6 +84,7 @@ enum ContentDiscard {
 enum ChatDestination: Hashable {
     case assistant
     case person(String)
+    case group(String)
     case workspace(String)
 }
 
@@ -113,6 +114,8 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState?
+    /// 每次收到完整 assistant_state 都推进；用于区分缓存状态与 requestAssistant 后的新响应。
+    var assistantStateRevision: UInt64 = 0
     /// 统一记忆中心只读数据（overview / scope detail / search）
     var memoryCenterData = MemoryCenterDataState.initial
     @ObservationIgnored var memoryCenterActiveCount = 0

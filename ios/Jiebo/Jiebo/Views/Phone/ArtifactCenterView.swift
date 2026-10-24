@@ -128,6 +128,7 @@ private enum ArtifactKindFilter: String, CaseIterable, Identifiable {
 
 private struct ArtifactRow: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     let artifact: Artifact
     let onContinue: () -> Void
     @State private var excerptExpanded = false
@@ -209,7 +210,10 @@ private struct ArtifactRow: View {
     private var actions: some View {
         HStack(spacing: 16) {
             if let file = artifact.turnFile, let chatId = artifact.sourceChatId {
-                Button("预览") { store.openTurnFile(file, chatId: chatId) }
+                Button("预览") {
+                    store.openTurnFile(file, chatId: chatId)
+                    sceneSession?.presentPreview(from: store)
+                }
                     .buttonStyle(.plain)
                 Button("分享") {
                     store.exportPreview(path: file.path, content: nil, chatId: chatId)

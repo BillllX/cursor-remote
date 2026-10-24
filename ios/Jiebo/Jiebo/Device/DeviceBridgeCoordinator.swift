@@ -1,4 +1,5 @@
 import Foundation
+import MessageUI
 import Observation
 
 struct DeviceWriteConfirmation: Identifiable, Sendable, Equatable {
@@ -20,11 +21,14 @@ struct DeviceWriteConfirmation: Identifiable, Sendable, Equatable {
 final class DeviceBridgeCoordinator {
     let permissionStore = DevicePermissionStore()
     private(set) var confirmation: DeviceWriteConfirmation?
+    private(set) var mailDraft: MailDraftRequest?
+    private(set) var presenterToken: String?
 
     @ObservationIgnored private let eventKit = AppleEventKitService()
     @ObservationIgnored private let contacts = AppleContactsService()
     @ObservationIgnored private var confirmationContinuation: CheckedContinuation<Bool, Never>?
-    @ObservationIgnored private var hasConfirmationPresenter = false
+    @ObservationIgnored private var presenterCandidates: [String: AssistantSceneCandidate] = [:]
+    @ObservationIgnored private var presenterOrder: UInt64 = 0
 
     func install(on store: ChatStore) {
         store.deviceInvokeHandler = { [weak self, weak store] invoke in
@@ -39,11 +43,23 @@ final class DeviceBridgeCoordinator {
         permissionStore.refresh(forceReport: true)
     }
 
-    func setConfirmationPresenter(active: Bool) {
-        hasConfirmationPresenter = active
-        if !active, confirmationContinuation != nil {
+    func setConfirmationPresenter(token: String, active: Bool) {
+        presenterOrder &+= 1
+        presenterCandidates[token] = AssistantSceneCandidate(token: token, active: active, order: presenterOrder)
+        presenterToken = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+    }
+
+    func removeConfirmationPresenter(token: String) {
+        presenterCandidates.removeValue(forKey: token)
+        presenterToken = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        if presenterToken == nil, confirmationContinuation != nil {
             resolveConfirmation(allowed: false)
         }
+        if presenterToken == nil { mailDraft = nil }
+    }
+
+    func isConfirmationPresenter(token: String) -> Bool {
+        presenterToken == token
     }
 
     func resolveConfirmation(allowed: Bool) {
@@ -105,6 +121,16 @@ final class DeviceBridgeCoordinator {
             try ensureBeforeDeadline(deadline)
             let identifier = try await eventKit.upsertEvent(draft)
             return (.object(["id": .string(identifier)]), identifier)
+        case "calendar_event_delete":
+            let request = try DeviceRequestValidator.entity(invoke.params)
+            try await confirmWrite(
+                invoke: invoke,
+                draft: confirmation(action: "删除日历事件", id: request.identifier, consequence: "允许后将立即从 Apple 日历删除该事件。"),
+                deadline: deadline
+            )
+            try ensureBeforeDeadline(deadline)
+            try await eventKit.deleteEvent(identifier: request.identifier)
+            return (.object(["deleted": .bool(true)]), request.identifier)
         case "reminders_list":
             return (try await eventKit.listReminders(DeviceRequestValidator.remindersList(invoke.params)), nil)
         case "reminders_upsert":
@@ -114,6 +140,36 @@ final class DeviceBridgeCoordinator {
             try ensureBeforeDeadline(deadline)
             let identifier = try await eventKit.upsertReminder(draft)
             return (.object(["id": .string(identifier)]), identifier)
+        case "reminder_complete":
+            let request = try DeviceRequestValidator.reminderCompletion(invoke.params)
+            try await confirmWrite(
+                invoke: invoke,
+                draft: confirmation(
+                    action: request.completed ? "完成提醒事项" : "恢复提醒事项",
+                    id: request.identifier,
+                    consequence: "允许后将立即修改 Apple 提醒事项的完成状态。"
+                ),
+                deadline: deadline
+            )
+            try ensureBeforeDeadline(deadline)
+            try await eventKit.setReminderCompleted(identifier: request.identifier, completed: request.completed)
+            return (.object(["completed": .bool(request.completed)]), request.identifier)
+        case "reminder_delete":
+            let request = try DeviceRequestValidator.entity(invoke.params)
+            try await confirmWrite(
+                invoke: invoke,
+                draft: confirmation(action: "删除提醒事项", id: request.identifier, consequence: "允许后将立即删除 Apple 提醒事项。"),
+                deadline: deadline
+            )
+            try ensureBeforeDeadline(deadline)
+            try await eventKit.deleteReminder(identifier: request.identifier)
+            return (.object(["deleted": .bool(true)]), request.identifier)
+        case "mail_draft_open":
+            let draft = try DeviceRequestValidator.mailDraft(invoke.params)
+            try await confirmWrite(invoke: invoke, draft: confirmation(for: draft), deadline: deadline)
+            try ensureBeforeDeadline(deadline)
+            try presentMailDraft(draft)
+            return (.object(["disposition": .string("presented"), "sentByApp": .bool(false)]), nil)
         case "contacts_search":
             return (try await contacts.search(DeviceRequestValidator.contactsSearch(invoke.params)), nil)
         default:
@@ -130,7 +186,7 @@ final class DeviceBridgeCoordinator {
         guard invoke.approval?.requiresConfirmation == true else {
             throw DeviceRequestError.invalid("写入请求缺少 requiresConfirmation，已拒绝执行。")
         }
-        guard hasConfirmationPresenter else {
+        guard presenterToken != nil else {
             throw DeviceRequestError.unavailable("当前界面无法显示设备写入确认。")
         }
         guard DeviceWriteConfirmationPolicy.begin(
@@ -202,6 +258,46 @@ final class DeviceBridgeCoordinator {
             details: details,
             consequence: "允许后将请求提醒事项权限并立即保存。"
         )
+    }
+
+    private func confirmation(for draft: MailDraftRequest) -> DeviceWriteConfirmation {
+        let recipients = draft.to.count + draft.cc.count + draft.bcc.count
+        return DeviceWriteConfirmation(
+            id: UUID().uuidString,
+            action: "打开邮件草稿",
+            title: draft.subject.isEmpty ? "无主题" : draft.subject,
+            time: nil,
+            calendar: "收件人：\(recipients) 位",
+            details: ["正文：\(draft.body.isEmpty ? "空" : "\(draft.body.count) 个字符")"],
+            consequence: "允许后只会打开 iOS 系统邮件编辑器；应用不会替你发送，最终发送必须由你操作。"
+        )
+    }
+
+    private func confirmation(action: String, id: String, consequence: String) -> DeviceWriteConfirmation {
+        DeviceWriteConfirmation(
+            id: UUID().uuidString,
+            action: action,
+            title: "系统项目",
+            time: nil,
+            calendar: "标识摘要：…\(id.suffix(8))",
+            details: [],
+            consequence: consequence
+        )
+    }
+
+    private func presentMailDraft(_ draft: MailDraftRequest) throws {
+        guard presenterToken != nil else {
+            throw DeviceRequestError.unavailable("当前界面无法显示邮件草稿。")
+        }
+        guard MFMailComposeViewController.canSendMail() else {
+            throw DeviceRequestError.unavailable("这台设备尚未配置可用的系统邮件账户。")
+        }
+        guard mailDraft == nil else { throw DeviceRequestError.busy }
+        mailDraft = draft
+    }
+
+    func dismissMailDraft() {
+        mailDraft = nil
     }
 
     private static func displayDate(_ date: Date) -> String {

@@ -116,6 +116,8 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
     var state: ImSendState
     var outgoing: ImOutgoingImage?
     var upload: ImOutgoingUpload?
+    /// 持久重放元数据；服务端按同一个 clientId 去重。
+    var durableOutbox: ImDurableOutboxMetadata?
     /// 附件上传进度 0...1，只在内存里
     var progress: Double?
 
@@ -144,6 +146,7 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         rejected = message.rejected
         state = .sent
         upload = nil
+        durableOutbox = nil
     }
 
     init(pending clientId: String, convId: String, from: String, at: Double, kind: String, body: ImBody?, replyTo: Int?, outgoing: ImOutgoingImage?) {
@@ -160,6 +163,7 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         state = .sending
         self.outgoing = outgoing
         upload = nil
+        durableOutbox = ImDurableOutboxMetadata(stableID: clientId, now: at)
     }
 
     static func from(_ json: JSONValue?) -> ImLocalMessage? {
@@ -187,6 +191,21 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         // 上次退出时还在发的，重启后一律算失败，等用户手动重发
         local.state = .failed
         local.upload = upload
+        if let box = row["durableOutbox"]?.object,
+           let stableID = box["stableID"]?.string,
+           stableID == clientId {
+            local.durableOutbox = ImDurableOutboxPolicy.restored(
+                ImDurableOutboxMetadata(
+                    stableID: stableID,
+                    attempts: box["attempts"]?.int ?? 0,
+                    nextAttemptAt: box["nextAttemptAt"]?.number ?? 0,
+                    status: ImDurableOutboxStatus(rawValue: box["status"]?.string ?? "") ?? .retrying
+                ),
+                now: Date().timeIntervalSince1970 * 1_000
+            )
+        } else {
+            local.durableOutbox = ImDurableOutboxMetadata(stableID: clientId, now: local.at)
+        }
         return local
     }
 
@@ -205,6 +224,14 @@ struct ImLocalMessage: Sendable, Hashable, Identifiable {
         if rejected { object["rejected"] = .bool(true) }
         if let outgoing { object["outgoing"] = outgoing.json() }
         if let upload { object["upload"] = upload.json() }
+        if let durableOutbox {
+            object["durableOutbox"] = .object([
+                "stableID": .string(durableOutbox.stableID),
+                "attempts": .number(Double(durableOutbox.attempts)),
+                "nextAttemptAt": .number(durableOutbox.nextAttemptAt),
+                "status": .string(durableOutbox.status.rawValue),
+            ])
+        }
         return .object(object)
     }
 }

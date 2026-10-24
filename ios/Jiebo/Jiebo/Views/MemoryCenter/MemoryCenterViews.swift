@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - 入口（按容器宽度分栏，ToolLayer ~420pt 走单栏 drill-down）
 
 struct MemoryCenterPanelView: View {
+    @Environment(\.assistantSceneToken) private var sceneToken
     @State private var navId = "overview"
     @State private var middleTab = "pinned"
     @State private var stateFilter = "all"
@@ -70,6 +71,13 @@ struct MemoryCenterPanelView: View {
             searchKindFilter: searchKindFilter,
             searchStateFilter: searchStateFilter
         )
+        .onReceive(NotificationCenter.default.publisher(for: .padSceneSearchRequested)) { note in
+            guard let delivery = note.object as? PadSceneCommandDelivery,
+                  delivery.sceneToken == sceneToken
+            else { return }
+            navId = "search"
+            searchActive = true
+        }
     }
 }
 

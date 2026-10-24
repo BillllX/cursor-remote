@@ -9,6 +9,7 @@ enum ComposerStyle { case full, assistant }
 struct ComposerView: View {
     @Environment(ChatStore.self) var store
     @Environment(\.threadChatId) private var environmentChatId
+    @Environment(\.sceneSessionState) private var sceneSession
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
     var style: ComposerStyle = .full
@@ -38,6 +39,8 @@ struct ComposerView: View {
     @State var tapVoice = false
     @Namespace var modeThumb
     @Environment(\.accessibilityReduceMotion) var reduceMotion
+    @Environment(\.assistantSceneToken) private var assistantSceneToken
+    @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
     var chat: ChatSession? { store.chatSession(chatId) }
@@ -124,7 +127,7 @@ struct ComposerView: View {
         // 浮动玻璃底栏：不铺实底，让消息从胶囊下面透过去
         .background(floating ? Color.clear : JieboColor.paper)
         .onAppear {
-            text = store.draft(for: chatId)
+            text = sceneDraft(for: chatId)
             store.refreshCheckpoints(chatId: chatId)
         }
         .onDisappear {
@@ -135,22 +138,27 @@ struct ComposerView: View {
         .onChange(of: chatId) { oldId, _ in
             stopVoice()
             flushDraft(currentChatId: oldId)
-            text = store.draft(for: chatId)
+            text = sceneDraft(for: chatId)
             store.refreshCheckpoints(chatId: chatId)
         }
         .onChange(of: store.draft(for: chatId)) { _, value in
+            guard sceneSession == nil else { return }
             if value == ignoreDraftEcho { return }
             if value != text { text = value }
         }
         .onChange(of: focusNonce) { _, _ in
             focused = true
         }
-        .onReceive(NotificationCenter.default.publisher(for: .assistantVoiceRequested)) { notification in
-            guard let capture = notification.object as? AssistantCaptureBridge.Capture,
-                  dictation.phase == .idle, store.isAssistantChat(chatId)
+        .onReceive(NotificationCenter.default.publisher(for: .assistantVoiceComposerRequested)) { notification in
+            handleAssistantVoice(notification)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .assistantComposerFocusRequested)) { notification in
+            guard let delivery = notification.object as? PadSceneCommandDelivery,
+                  delivery.sceneToken == assistantSceneToken,
+                  assistantVoicePresenterActive,
+                  store.isAssistantChat(chatId)
             else { return }
-            toggleVoice()
-            AssistantCaptureBridge.remove(id: capture.id, tenant: capture.tenant)
+            focused = true
         }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
@@ -185,9 +193,22 @@ struct ComposerView: View {
                 return String(trimmed.dropFirst())
             }
             guard !paths.isEmpty else { return false }
-            // 本地刚打的字 350ms 后才落到 store.draft；先落盘，否则追加会基于旧草稿把新字盖掉
-            flushDraft()
-            for path in paths { store.appendMentionToDraft(path, chatId: chatId) }
+            let separator = text.isEmpty || text.hasSuffix(" ") ? "" : " "
+            text += separator + paths.map { "@\($0)" }.joined(separator: " ")
+            schedulePersist()
+            return true
+        }
+        // iPad Files / Safari 拖入：文件走现有上传，网页地址只写入当前草稿，由用户确认后发送。
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            let links = urls.filter { !$0.isFileURL }.map(\.absoluteString)
+            guard !files.isEmpty || !links.isEmpty else { return false }
+            if !files.isEmpty { store.attachFiles(files, chatId: chatId) }
+            if !links.isEmpty {
+                let separator = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+                text += separator + links.joined(separator: "\n")
+                schedulePersist()
+            }
             return true
         }
         .photosPicker(isPresented: $photoPickerOpen, selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images)
@@ -201,6 +222,17 @@ struct ComposerView: View {
                 store.appendMentionToDraft(path, chatId: chatId)
             }
         }
+    }
+
+    private func handleAssistantVoice(_ notification: Notification) {
+        guard let delivery = notification.object as? AssistantVoiceDelivery,
+              delivery.sceneToken == assistantSceneToken,
+              assistantVoicePresenterActive,
+              dictation.phase == .idle,
+              store.isAssistantChat(chatId)
+        else { return }
+        toggleVoice()
+        AssistantCaptureBridge.remove(id: delivery.capture.id, tenant: delivery.capture.tenant)
     }
 
     /// 最低支持 iOS 26：助理胶囊仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
@@ -242,7 +274,11 @@ struct ComposerView: View {
         guard let pending = pendingDraft else { return }
         pendingDraft = nil
         if pending.chatId == (currentChatId ?? chatId) { ignoreDraftEcho = pending.text }
-        store.saveDraft(pending.text, forChat: pending.chatId)
+        if let sceneSession {
+            sceneSession.saveDraft(pending.text, for: pending.chatId)
+        } else {
+            store.saveDraft(pending.text, forChat: pending.chatId)
+        }
     }
 
     func commitAndSend() {
@@ -250,9 +286,16 @@ struct ComposerView: View {
         persistTask?.cancel()
         pendingDraft = nil
         ignoreDraftEcho = ""
+        // 发送接口保持兼容；共享 draft 只在这一瞬间作提交参数，不再作为多窗口编辑状态。
         store.saveDraft(text, forChat: chatId)
         store.submit(chatId: chatId, text: text)
-        text = store.draft(for: chatId)
+        let next = store.draft(for: chatId)
+        sceneSession?.saveDraft(next, for: chatId)
+        text = next
+    }
+
+    private func sceneDraft(for id: String) -> String {
+        sceneSession?.draft(for: id, fallback: store.draft(for: id)) ?? store.draft(for: id)
     }
 }
 

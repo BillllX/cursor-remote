@@ -4,6 +4,7 @@ struct ToolCardView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.threadChatId) private var environmentChatId
+    @Environment(\.sceneSessionState) private var sceneSession
     var tool: ToolCall
     var compactPresentation = false
     var showBorder = true
@@ -63,7 +64,10 @@ struct ToolCardView: View {
                 if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
                     let imagePath = Self.imagePath(tool)
                     Button {
-                        if let imagePath { store.openPreview(imagePath, chatId: chatId) }
+                        if let imagePath {
+                            store.openPreview(imagePath, chatId: chatId)
+                            sceneSession?.presentPreview(from: store)
+                        }
                     } label: {
                         Label(imagePath == nil ? "正在生成图片" : "预览图片", systemImage: "photo")
                             .font(JieboFont.text(.caption, weight: .medium))
@@ -83,6 +87,7 @@ struct ToolCardView: View {
                 {
                     Button {
                         store.openToolFile(path, chatId: chatId)
+                        sceneSession?.presentPreview(from: store)
                     } label: {
                         Image(systemName: "plus.forwardslash.minus")
                             .font(.system(size: 11, weight: .medium))

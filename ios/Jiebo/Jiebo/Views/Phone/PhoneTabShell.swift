@@ -5,13 +5,27 @@ struct PhoneTabShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.sceneSessionState) private var sceneSession
     @State private var router = PhoneRouter()
+    @State private var fallbackSceneToken = UUID().uuidString
+
+    private var sceneToken: String { sceneSession?.token ?? fallbackSceneToken }
+
+    private var activePreviewTab: PreviewTab? {
+        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+    }
+
+    private var previewPanelOpen: Bool {
+        sceneSession != nil ? activePreviewTab != nil : store.previewPanelOpen
+    }
 
     var body: some View {
         @Bindable var router = router
         TabView(selection: $router.selectedTab) {
             Tab("小驳", systemImage: NavigationIconId.assistant.symbol, value: PhoneTab.assistant) {
                 PhoneShell()
+                    .environment(\.assistantVoicePresenterActive, router.selectedTab == .assistant)
             }
 
             Tab("待处理", systemImage: "tray", value: PhoneTab.inbox) {
@@ -33,19 +47,23 @@ struct PhoneTabShell: View {
             .badge(im.totalUnread)
         }
         .environment(router)
+        .environment(\.assistantSceneToken, sceneToken)
         .environment(\.openDelegation, { [router = self.router] id in
             router.delegationDetail = DelegationRef(id: id)
         })
-        .accessibilityHidden(store.previewPanelOpen)
+        .accessibilityHidden(previewPanelOpen)
         .sheet(item: $router.delegationDetail) { ref in
             DelegationDetailSheet(delegationId: ref.id)
         }
         .overlay {
-            if store.previewPanelOpen, let tab = store.activePreviewTab {
+            if previewPanelOpen, let tab = activePreviewTab {
                 ZStack {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
-                        .onTapGesture { store.collapsePreview() }
+                        .onTapGesture {
+                            if let sceneSession { sceneSession.dismissPreview() }
+                            else { store.collapsePreview() }
+                        }
                         .accessibilityHidden(true)
                     PreviewPanelView(tab: tab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -55,10 +73,18 @@ struct PhoneTabShell: View {
                 .zIndex(3)
             }
         }
-        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
+        .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
         .onAppear {
+            AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             synchronizeSelectedTab()
             dispatchPush()
+        }
+        .onDisappear {
+            AssistantScenePresenter.shared.unregister(token: sceneToken)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            AssistantScenePresenter.shared.update(token: sceneToken, active: phase == .active)
+            if phase == .active { dispatchPush() }
         }
         .onChange(of: router.selectedTab) { _, _ in
             synchronizeSelectedTab()
@@ -70,8 +96,22 @@ struct PhoneTabShell: View {
             dispatchPush()
         }
         .onReceive(NotificationCenter.default.publisher(for: .assistantCaptureOpenRequested)) { _ in
+            guard AssistantScenePresenter.shared.isPresenter(token: sceneToken) else { return }
             router.popToRoot()
             store.openAssistantChat()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .assistantVoiceRequested)) { notification in
+            guard AssistantScenePresenter.shared.isPresenter(token: sceneToken),
+                  let capture = notification.object as? AssistantCaptureBridge.Capture
+            else { return }
+            router.queueVoice(capture)
+            store.openAssistantChat()
+        }
+        .task(id: router.pendingVoiceCapture?.id) {
+            guard let capture = router.takePendingVoice() else { return }
+            await Task.yield()
+            let delivery = AssistantVoiceDelivery(sceneToken: sceneToken, capture: capture)
+            NotificationCenter.default.post(name: .assistantVoiceComposerRequested, object: delivery)
         }
     }
 
@@ -86,7 +126,9 @@ struct PhoneTabShell: View {
 
     /// iPhone 推送只在这里消费，避免主页层与小驳空间重复取走 pending。
     private func dispatchPush() {
-        guard let target = PushRouting.shared.pending else { return }
+        guard AssistantScenePresenter.shared.isPresenter(token: sceneToken),
+              let target = PushRouting.shared.pending
+        else { return }
         if target.isIm, let convId = target.convId {
             _ = PushRouting.shared.consume()
             router.selectedTab = .messages

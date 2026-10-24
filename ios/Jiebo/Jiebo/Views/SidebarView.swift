@@ -6,6 +6,7 @@ import UIKit
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var collapse: () -> Void = {}
@@ -82,6 +83,11 @@ struct SidebarView: View {
             }
         }
         .chatActionAlerts($chatActions)
+        .onAppear {
+            if sceneSession?.workbenchChatId == nil {
+                sceneSession?.workbenchChatId = store.activeId
+            }
+        }
     }
 
     private var brandBar: some View {
@@ -263,7 +269,6 @@ struct SidebarView: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: .command)
         }
         .padding(.leading, 20)
         .padding(.trailing, 16)
@@ -296,17 +301,22 @@ struct SidebarView: View {
     }
 
     private var loopLive: Bool {
-        guard let row = store.loops[store.activeId] else { return false }
+        guard let row = store.loops[selectedChatId] else { return false }
         return row.status == "armed" || row.status == "running"
     }
 
     // MARK: 会话行
 
     private func chatRow(_ chat: ChatSession) -> some View {
-        let selected = chat.id == store.activeId
+        let selected = chat.id == selectedChatId
         let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
         return Button {
-            store.select(chat.id)
+            if let sceneSession {
+                sceneSession.workbenchChatId = chat.id
+                store.ensureTurnsLoaded(chat.id)
+            } else {
+                store.select(chat.id)
+            }
         } label: {
             HStack(spacing: 8) {
                 Capsule()
@@ -369,5 +379,9 @@ struct SidebarView: View {
             rename: { chatActions.beginRename($0) },
             delete: { chatActions.delete = $0 }
         )
+    }
+
+    private var selectedChatId: String {
+        sceneSession?.workbenchChatId ?? store.activeId
     }
 }

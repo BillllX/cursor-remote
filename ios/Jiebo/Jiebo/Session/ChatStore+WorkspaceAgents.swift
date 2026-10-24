@@ -43,6 +43,21 @@ extension ChatStore {
         send(.workspaceAgentOpen(path: item.path))
     }
 
+    /// 多窗口入口只请求规范化服务数据，不改任何窗口的导航选择。
+    func requestWorkspaceAgent(_ item: WorkspaceAgentItem) {
+        if let chatId = item.mainChatId {
+            ensureTurnsLoaded(chatId)
+        } else {
+            send(.workspaceAgentOpen(path: item.path))
+        }
+    }
+
+    func prepareWorkspaceThread(_ item: WorkspaceAgentItem, chatId: String) {
+        ensureTurnsLoaded(chatId)
+        send(.workspaceAgentViewing(chatId: chatId))
+        send(.workspaceAgentRead(chatId: chatId, seq: item.finishedSeq))
+    }
+
     func enterWorkspaceThread(path: String, chatId: String) {
         pendingWorkspacePath = nil
         chatHomeThreadChatId = chatId
@@ -84,6 +99,13 @@ extension ChatStore {
         chatHomeThreadChatId = chatId
         ensureTurnsLoaded(chatId)
         WorkspaceViewingBeacon.shared.set(nil)
+        send(.workspaceAgentViewing(chatId: nil))
+    }
+
+    /// 为 scene-local 导航准备助理数据，不写 chatHomeDestination。
+    func prepareAssistantThread() {
+        guard let chatId = assistantChatId else { return }
+        ensureTurnsLoaded(chatId)
         send(.workspaceAgentViewing(chatId: nil))
     }
 }

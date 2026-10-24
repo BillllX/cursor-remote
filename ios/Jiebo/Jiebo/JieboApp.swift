@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct JieboApp: App {
@@ -7,40 +8,62 @@ struct JieboApp: App {
     @State private var im = ImStore()
     @State private var deviceBridge = DeviceBridgeCoordinator()
     @State private var theme = JieboTheme.shared
-    @Environment(\.scenePhase) private var scenePhase
-
     var body: some Scene {
         WindowGroup {
-            RootView()
+            JieboSceneRoot()
                 .environment(store)
                 .environment(im)
                 .environment(deviceBridge)
                 .preferredColorScheme(theme.appearance.colorScheme)
-                .onAppear {
-                    im.attach(store, uploader: ImHTTPUploader())
-                    store.imSink = im
-                    deviceBridge.install(on: store)
-                    store.start()
-                    im.start() // store.start 之后：租户 id 已从本机读出，先把聊天缓存画出来
-                    PushRegistrar.shared.start(store: store, im: im) // 幂等
-                    Task { await AssistantCaptureDrain.run(store: store) }
-                }
-                .onChange(of: store.unlocked) { _, unlocked in
-                    if unlocked { deviceBridge.permissionStore.refresh(forceReport: true) }
-                }
         }
-        .onChange(of: scenePhase) { _, phase in
-            switch phase {
-            case .active:
-                store.appBecameActive()
-                im.setAppActive(true)
-                deviceBridge.permissionStore.refresh(forceReport: store.unlocked)
-                Task { await AssistantCaptureDrain.run(store: store) }
-            case .background:
-                im.setAppActive(false)
-            default:
-                break // inactive（下拉通知中心、来电横幅）不算离开前台
+        .commands {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                PadAppCommands()
             }
         }
+    }
+}
+
+/// WindowGroup 每个窗口各建一份 scene state；网络 Store 仍由 App 共享。
+private struct JieboSceneRoot: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
+    @Environment(DeviceBridgeCoordinator.self) private var deviceBridge
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var scene = SceneSessionState()
+
+    var body: some View {
+        RootView()
+            .environment(\.sceneSessionState, scene)
+            .onAppear {
+                im.attach(store, uploader: ImHTTPUploader())
+                store.imSink = im
+                deviceBridge.install(on: store)
+                store.start()
+                im.start()
+                PushRegistrar.shared.start(store: store, im: im)
+                updateActivity(scenePhase)
+                Task { await AssistantCaptureDrain.run(store: store) }
+            }
+            .onDisappear {
+                let anyActive = SceneActivityRegistry.shared.remove(token: scene.token)
+                im.setAppActive(anyActive)
+            }
+            .onChange(of: scenePhase) { _, phase in
+                updateActivity(phase)
+            }
+            .onChange(of: store.unlocked) { _, unlocked in
+                if unlocked { deviceBridge.permissionStore.refresh(forceReport: true) }
+            }
+    }
+
+    private func updateActivity(_ phase: ScenePhase) {
+        let active = phase == .active
+        let anyActive = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
+        im.setAppActive(anyActive)
+        guard active else { return }
+        store.appBecameActive()
+        deviceBridge.permissionStore.refresh(forceReport: store.unlocked)
+        Task { await AssistantCaptureDrain.run(store: store) }
     }
 }

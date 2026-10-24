@@ -8,7 +8,7 @@ import UIKit
 /// - fullScreenCover 内按 horizontalSizeClass 分两种布局，都不嵌 NavigationSplitView
 ///  （Workbench 已是 NSV，modal 里再套会列宽塌缩/toolbar 跑错栏）
 ///   - 非 compact 宽度：自定义 HStack 双栏，左目录树（定宽 340）右预览并排
-///   - compact 宽度（iPhone 竖屏、Stage Manager 窄窗/Slide Over）：单栏，按 store.activePreviewTab 是否为 nil
+///   - compact 宽度（iPhone 竖屏、Stage Manager 窄窗/Slide Over）：单栏，按当前 scene 的预览选择切换
 ///     在目录树与预览之间整页切换；点文件整页换成预览，左上「文件」（dismissPreviewPanel）回到目录
 /// - 预览复用 P5 预览管线：单击文件走 store.loadPreview（面板能渲染的写 previewTabs，其余走 openMention），
 ///   关掉 cover 后工作台 overlay 停在最后浏览的文件——有意的连续性，与 FileBrowserSheet 眼睛按钮一致
@@ -17,8 +17,13 @@ struct FileBrowserCover: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sceneSessionState) private var sceneSession
     @FocusState private var searchFocused: Bool
     @State private var filter = ""
+
+    private var activePreviewTab: PreviewTab? {
+        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+    }
 
     private var edgeDismiss: some Gesture {
         DragGesture(minimumDistance: 24, coordinateSpace: .local)
@@ -39,11 +44,12 @@ struct FileBrowserCover: View {
                         Divider().overlay(JieboColor.line)
                         rightPane
                     }
-                } else if store.activePreviewTab != nil {
+                } else if activePreviewTab != nil {
                     VStack(spacing: 0) {
                         HStack {
                             Button {
-                                store.dismissPreviewPanel()
+                                if let sceneSession { sceneSession.dismissPreview() }
+                                else { store.dismissPreviewPanel() }
                             } label: {
                                 Label("文件", systemImage: "chevron.left")
                                     .font(JieboFont.text(.subheadline, weight: .medium))
@@ -60,7 +66,7 @@ struct FileBrowserCover: View {
                     treeColumn
                 }
             }
-            .animation(JieboMotion.standard(reduceMotion), value: store.activePreviewTab != nil)
+            .animation(JieboMotion.standard(reduceMotion), value: activePreviewTab != nil)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -213,7 +219,7 @@ struct FileBrowserCover: View {
                 paths: store.fileIndex,
                 truncated: store.treeTruncated,
                 filter: filter,
-                selectedPath: store.previewActivePath,
+                selectedPath: sceneSession?.previewKey ?? store.previewActivePath,
                 onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,
@@ -229,7 +235,7 @@ struct FileBrowserCover: View {
 
     @ViewBuilder
     private var rightPane: some View {
-        if let tab = store.activePreviewTab {
+        if let tab = activePreviewTab {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Image(systemName: fileGlyph(tab.path, isDir: false, open: false))
@@ -308,6 +314,7 @@ struct FileBrowserCover: View {
 
     private func openFile(_ path: String, diff: Bool = false) {
         store.loadPreview(path, diff: diff)
+        sceneSession?.presentPreview(from: store)
     }
 
     private func pickFile(_ path: String) {

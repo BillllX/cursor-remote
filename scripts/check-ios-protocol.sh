@@ -26,6 +26,10 @@ if (!silentBody.includes("workspace_memory_search") || silentBody.includes("work
 console.log("iOS silent tool chrome 源码契约：通过");
 NODE
 node scripts/check-ios-navigation-contract.mjs
+node scripts/check-ios-ipad-p0.mjs
+node scripts/check-ios-ipad-p1.mjs
+node scripts/check-ios-ipad-p2.mjs
+node scripts/check-ios-ipad-p3.mjs
 
 update=0
 for arg in "$@"; do
@@ -68,6 +72,12 @@ SOURCES=(
   "$APP/Session/MemoryCenterReducer.swift"
   "$APP/Session/MemoryCenterExtrasReducer.swift"
   "$APP/Session/MemoryCenterLayoutMetrics.swift"
+  "$APP/Session/AssistantScenePresenter.swift"
+  "$APP/Session/SceneEditingPolicy.swift"
+  "$APP/Session/PadInspectorState.swift"
+  "$APP/Session/PadLayoutMetrics.swift"
+  "$APP/Session/PadSemanticRules.swift"
+  "$APP/Session/IM/ImDurableOutbox.swift"
   "$APP/Session/Preview.swift"
   "$APP/Session/ChatModels.swift"
 )

@@ -6,6 +6,7 @@ import UIKit
 struct WorkspacePickerSheet: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.sceneSessionState) private var sceneSession
     @State private var query = ""
     /// 正在改名 / 删除 / 清空对话的目标
     @State private var renaming: WorkspaceItem?
@@ -165,6 +166,7 @@ struct WorkspacePickerSheet: View {
         let chatCount = store.chatCountUnder(item.path)
         return Button {
             store.switchWorkspace(to: item.path)
+            sceneSession?.workbenchChatId = store.activeId
             dismiss()
         } label: {
             HStack(spacing: 12) {
@@ -239,6 +241,7 @@ struct WorkspacePickerSheet: View {
             Section {
                 Button {
                     store.switchWorkspace(to: item.path)
+                    sceneSession?.workbenchChatId = store.activeId
                     dismiss()
                 } label: {
                     Label("打开", systemImage: "folder")

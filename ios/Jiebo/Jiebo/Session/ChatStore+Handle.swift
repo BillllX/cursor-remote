@@ -311,6 +311,10 @@ extension ChatStore {
                 enterWorkspaceThread(path: path, chatId: chatId)
             }
         case .workspaceAgentOpened(let path, let chatId):
+            if let index = workspaceAgents.firstIndex(where: { $0.path == path }) {
+                workspaceAgents[index].mainChatId = chatId
+            }
+            ensureTurnsLoaded(chatId)
             if chatHomeDestination == .workspace(path) {
                 enterWorkspaceThread(path: path, chatId: chatId)
             }
@@ -780,6 +784,7 @@ extension ChatStore {
             // 别的连接触发的推送可能不带记忆：记忆页已加载过就留着旧的，等下一次带记忆的推送覆盖
             if next.memory == nil { next.memory = assistantState?.memory }
             assistantState = next
+            assistantStateRevision &+= 1
         case .assistantResult(let reqId, let op, let ok, let error, let data):
             if memoryCenterHandleExtrasResult(reqId: reqId, op: op, ok: ok, error: error, data: data) {
                 break

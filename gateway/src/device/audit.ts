@@ -15,11 +15,16 @@ export type DeviceAuditRecord = {
   deviceHash: string;
   summary: Record<string, JSONValue>;
   status: DeviceStatus;
-  externalId?: string;
+  /// 外部对象标识也可能含账号或设备侧信息，审计只留不可逆摘要。
+  externalIdHash?: string;
 };
 
 export function hashDeviceId(deviceId: string) {
   return createHash("sha256").update(deviceId).digest("hex").slice(0, 20);
+}
+
+export function hashExternalId(externalId: string) {
+  return createHash("sha256").update(externalId).digest("hex").slice(0, 20);
 }
 
 const stringField = (row: Record<string, JSONValue>, key: string) =>
@@ -47,6 +52,13 @@ export function summarizeDeviceParams(op: DeviceOp, params: JSONValue): Record<s
     summary.queryLength = typeof row.query === "string" ? row.query.length : 0;
     const limit = numberField(row, "limit");
     if (limit !== undefined) summary.limit = limit;
+  } else if (op === "mail_draft_open") {
+    const count = (key: string) => (Array.isArray(row[key]) ? (row[key] as JSONValue[]).length : 0);
+    summary.toCount = count("to");
+    summary.ccCount = count("cc");
+    summary.bccCount = count("bcc");
+    summary.hasSubject = typeof row.subject === "string" && row.subject.length > 0;
+    summary.hasBody = typeof row.body === "string" && row.body.length > 0;
   } else {
     const externalId = stringField(row, "id") ?? stringField(row, "externalId");
     summary.hasExternalId = Boolean(externalId);

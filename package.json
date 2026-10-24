@@ -27,7 +27,7 @@
     "format:check": "prettier --check --no-error-on-unmatched-pattern \"gateway/src/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"gateway/test/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"shared/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"web/**/*.{ts,tsx,js,mjs,cjs,css,json}\" \"scripts/**/*.{js,mjs,cjs,mts,json}\" \"eslint.config.mjs\"",
     "format:baseline": "node scripts/format-baseline.mjs",
     "check:env": "tsx scripts/check-env.mts",
-    "test": "node --import tsx --test \"gateway/test/**/*.test.ts\" \"shared/**/*.test.ts\" && npm run test:web",
+    "test": "node scripts/check-ios-ipad-p0.mjs && node scripts/check-ios-ipad-p1.mjs && node scripts/check-ios-ipad-p2.mjs && node scripts/check-ios-ipad-p3.mjs && node --import tsx --test \"gateway/test/**/*.test.ts\" \"shared/**/*.test.ts\" && npm run test:web",
     "test:web": "TSX_TSCONFIG_PATH=web/tsconfig.json node --import tsx --test \"web/test/**/*.test.ts\"",
     "lint:swift": "bash scripts/lint-swift.sh",
     "gen:protocol-fixtures": "tsx scripts/gen-protocol-fixtures.mts",

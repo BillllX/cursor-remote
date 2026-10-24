@@ -8,6 +8,7 @@ struct PreviewPanelView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.sceneSessionState) private var sceneSession
     let tab: PreviewTab
     /// 盖满时是模态；iPad 横屏分栏时和对话并排，读屏两边都要能摸到
     var modal = true
@@ -21,7 +22,7 @@ struct PreviewPanelView: View {
         VStack(spacing: 0) {
             if usesCompactHeader {
                 compactHeader
-                if store.previewTabs.count > 1 {
+                if previewTabs.count > 1 {
                     Divider().overlay(JieboColor.line)
                     tabStrip
                 }
@@ -50,16 +51,16 @@ struct PreviewPanelView: View {
             }
         }
         .accessibilityAddTraits(modal ? .isModal : [])
-        .accessibilityAction(.escape) { store.collapsePreview() }
+        .accessibilityAction(.escape) { closePreview() }
         .background { keyboardShortcuts }
     }
 
     /// 外接键盘：Esc / ⌘W 收起预览，⌘⇧[ / ⌘⇧] 切页签。按钮不可见，只为挂快捷键
     private var keyboardShortcuts: some View {
         Group {
-            Button("收起预览") { store.collapsePreview() }
-                .keyboardShortcut(.escape, modifiers: [])
-            Button("关闭预览") { store.collapsePreview() }
+            Button("收起预览") { closePreview() }
+                .modifier(PhonePreviewEscapeShortcut())
+            Button("关闭预览") { closePreview() }
                 .keyboardShortcut("w", modifiers: .command)
             Button("上一个页签") { stepTab(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
@@ -72,10 +73,29 @@ struct PreviewPanelView: View {
     }
 
     private func stepTab(_ delta: Int) {
-        let tabs = store.previewTabs
+        let tabs = previewTabs
         guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.path == tab.path }) else { return }
         let next = (index + delta + tabs.count) % tabs.count
-        store.selectPreviewTab(tabs[next].path)
+        selectPreview(tabs[next].path)
+    }
+
+    private var previewTabs: [PreviewTab] {
+        sceneSession?.previewTabs(in: store) ?? store.previewTabs
+    }
+
+    private func closePreview() {
+        if let sceneSession { sceneSession.dismissPreview() }
+        else { store.collapsePreview() }
+    }
+
+    private func selectPreview(_ path: String) {
+        if let sceneSession { sceneSession.selectPreview(path, in: store) }
+        else { store.selectPreviewTab(path) }
+    }
+
+    private func closePreviewTab(_ path: String) {
+        if let sceneSession { sceneSession.closePreview(path) }
+        else { store.closePreviewTab(path) }
     }
 
     /// 横向为主才跟手；拖过 120 或甩出去就关——不先归位，直接从当前位置滑出
@@ -91,7 +111,7 @@ struct PreviewPanelView: View {
                 let dx = value.translation.width
                 let horizontal = abs(dx) > abs(value.translation.height)
                 if horizontal, dx > 120 || value.predictedEndTranslation.width > 260 {
-                    store.collapsePreview()
+                    closePreview()
                 } else {
                     withAnimation(JieboMotion.snappy(reduceMotion)) { dragX = 0 }
                 }
@@ -103,7 +123,7 @@ struct PreviewPanelView: View {
     private var compactHeader: some View {
         HStack(spacing: 4) {
             Button {
-                store.collapsePreview()
+                closePreview()
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 17, weight: .semibold))
@@ -235,7 +255,7 @@ struct PreviewPanelView: View {
     private var tabStrip: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(store.previewTabs) { item in
+                ForEach(previewTabs) { item in
                     tabChip(item)
                 }
             }
@@ -250,7 +270,7 @@ struct PreviewPanelView: View {
         let isActive = item.path == store.previewActivePath
         return HStack(spacing: 0) {
             Button {
-                store.selectPreviewTab(item.path)
+                selectPreview(item.path)
             } label: {
                 HStack(spacing: 6) {
                     if item.diff {
@@ -274,7 +294,7 @@ struct PreviewPanelView: View {
             .accessibilityLabel(item.filename)
             .accessibilityAddTraits(isActive ? [.isSelected, .isButton] : .isButton)
             Button {
-                store.closePreviewTab(item.path)
+                closePreviewTab(item.path)
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -419,7 +439,7 @@ struct PreviewPanelView: View {
                 .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
             }
             Button {
-                store.collapsePreview()
+                closePreview()
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))
@@ -463,6 +483,17 @@ struct PreviewPanelView: View {
         let base = tab.cwd ?? store.cwd
         if base.isEmpty { return tab.path }
         return base.hasSuffix("/") ? base + tab.path : "\(base)/\(tab.path)"
+    }
+}
+
+private struct PhonePreviewEscapeShortcut: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            content.keyboardShortcut(.escape, modifiers: [])
+        } else {
+            content
+        }
     }
 }
 

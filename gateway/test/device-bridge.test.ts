@@ -10,7 +10,7 @@ import { foregroundTools, startAssistant, stopAssistant } from "../src/assistant
 import { listInbox } from "../src/assistant/inbox.ts";
 import { assistantPath, type TenantRef } from "../src/assistant/store.ts";
 import { DeviceBridgeError, DeviceRegistry, type DeviceInvokeInput } from "../src/device/registry.ts";
-import { summarizeDeviceParams, writeDeviceAudit } from "../src/device/audit.ts";
+import { hashExternalId, summarizeDeviceParams, writeDeviceAudit } from "../src/device/audit.ts";
 import { createGatewayState } from "../src/runtime/state.ts";
 import type { Conn } from "../src/runtime/types.ts";
 
@@ -23,13 +23,15 @@ function ref(id: string): TenantRef {
 
 function fakeConn(
   tenant: TenantRef,
-  options: { cap?: boolean; authed?: boolean; open?: boolean; deviceId?: string } = {},
+  options: { cap?: boolean; v2?: boolean; authed?: boolean; open?: boolean; deviceId?: string } = {},
 ) {
   const ws = { readyState: options.open === false ? 3 : 1 } as WebSocket;
   const conn = {
     authed: options.authed ?? true,
     tenant: { ...tenant, id: tenant.id },
-    caps: new Set(options.cap === false ? [] : ["device_bridge"]),
+    caps: new Set(
+      options.cap === false ? [] : ["device_bridge", ...(options.v2 === false ? [] : ["device_bridge_v2"])],
+    ),
     ws,
     ip: "127.0.0.1",
     deviceId: options.deviceId ?? `phone-${tenant.id}`,
@@ -41,7 +43,7 @@ function input(op: DeviceInvokeInput["op"] = "calendar_events_list"): DeviceInvo
   return { op, params: { start: "2026-10-23T00:00:00Z", end: "2026-10-24T00:00:00Z" }, actor: "chat:c1" };
 }
 
-function harness(rows: Array<{ ws: WebSocket; conn: Conn }>, options: { timeoutMs?: number } = {}) {
+function harness(rows: Array<{ ws: WebSocket; conn: Conn }>, options: { timeoutMs?: number; now?: () => number } = {}) {
   const state = createGatewayState();
   for (const row of rows) state.conns.set(row.ws, row.conn);
   const sent: Array<{ conn: Conn; message: ServerMessage }> = [];
@@ -54,6 +56,7 @@ function harness(rows: Array<{ ws: WebSocket; conn: Conn }>, options: { timeoutM
     audit: (_tenant, record) => audits.push(record),
     reqId: () => `req-${++seq}`,
     timeoutMs: () => options.timeoutMs ?? 30_000,
+    now: options.now,
     securityLog: (message) => security.push(message),
   });
   return { registry, sent, audits, security };
@@ -64,6 +67,17 @@ function ok(reqId: string, op: string = "calendar_events_list"): DeviceResult {
 }
 
 describe("DeviceRegistry", () => {
+  test("P3 新操作只发给声明 v2 的设备，旧设备继续承接 v1 操作", async () => {
+    const tenant = ref("tenant-version");
+    const oldDevice = fakeConn(tenant, { v2: false });
+    const h = harness([oldDevice]);
+    await assert.rejects(h.registry.invoke(tenant, input("calendar_events_list")), /没有可用/);
+    const pending = h.registry.invoke(tenant, input("contacts_search"));
+    assert.equal(h.sent[0]?.conn, oldDevice.conn);
+    h.registry.handleResult(oldDevice.conn, ok("req-1", "contacts_search"));
+    assert.equal((await pending).status, "ok");
+  });
+
   test("只选择同租户、已鉴权、有 cap 且在线的一个设备并单播参数", async () => {
     const tenant = ref("tenant-a");
     const wrongTenant = fakeConn(ref("tenant-b"));
@@ -120,17 +134,25 @@ describe("DeviceRegistry", () => {
     assert.equal((h.audits[0] as { status: string }).status, "error");
   });
 
-  test("超时为同一幂等键保留有限墓碑，迟到结果和传输重试都不会再次写", async () => {
+  test("写超时墓碑保留 24 小时，10 分钟后仍不重执行，过窗口才释放", async () => {
     const tenant = ref("tenant-timeout-idem");
     const selected = fakeConn(tenant);
-    const h = harness([selected], { timeoutMs: 5 });
+    let now = 1_000;
+    const h = harness([selected], { timeoutMs: 5, now: () => now });
     const request = { ...input("reminders_upsert"), idempotencyKey: "call-timeout" };
     const timedOut = assert.rejects(h.registry.invoke(tenant, request), { code: "timeout" });
     await new Promise((resolve) => setTimeout(resolve, 10));
     await timedOut;
     assert.equal(h.registry.handleResult(selected.conn, ok("req-1", "reminders_upsert")), false);
+    now += 11 * 60_000;
     await assert.rejects(h.registry.invoke(tenant, request), { code: "timeout" });
     assert.equal(h.sent.length, 1);
+
+    now += 24 * 60 * 60_000;
+    const afterWindow = h.registry.invoke(tenant, request);
+    assert.equal(h.sent.length, 2);
+    h.registry.handleResult(selected.conn, ok("req-2", "reminders_upsert"));
+    assert.equal((await afterWindow).status, "ok");
   });
 
   test("设备断线拒绝 pending；错误结果正常完成并写审计", async () => {
@@ -252,12 +274,13 @@ describe("设备审计", () => {
       deviceHash: "0123456789abcdef",
       summary: summarizeDeviceParams("contacts_search", sensitive),
       status: "ok",
-      externalId: "contact-1",
+      externalIdHash: hashExternalId("contact-1"),
     });
     const text = readFileSync(assistantPath(tenant, "device-audit.jsonl"), "utf8");
     for (const secret of Object.values(sensitive)) assert.equal(text.includes(secret), false);
     assert.match(text, /"queryLength":/);
-    assert.match(text, /"externalId":"contact-1"/);
+    assert.equal(text.includes("contact-1"), false);
+    assert.match(text, new RegExp(`"externalIdHash":"${hashExternalId("contact-1")}"`));
   });
 });
 
@@ -265,8 +288,12 @@ describe("助理设备工具", () => {
   const deviceNames = [
     "calendar_events_list",
     "calendar_event_upsert",
+    "calendar_event_delete",
     "reminders_list",
     "reminders_upsert",
+    "reminder_complete",
+    "reminder_delete",
+    "mail_draft_open",
     "contacts_search",
   ];
 
@@ -278,7 +305,7 @@ describe("助理设备工具", () => {
     return { ref: ref(`tools-${role}`), role, chatId: "c1", deviceInvoke: invoke };
   }
 
-  test("五个工具只在 chat role 出现", () => {
+  test("设备工具只在 chat role 出现", () => {
     for (const name of deviceNames) assert.equal(assistantToolNames(host("chat")).includes(name), true);
     for (const role of ["schedule", "integrator", "loop"] as const) {
       for (const name of deviceNames) assert.equal(assistantToolNames(host(role)).includes(name), false);
@@ -303,6 +330,31 @@ describe("助理设备工具", () => {
       assert.equal(call.approval?.requiresConfirmation, true);
       assert.ok(call.approval?.summary);
       assert.ok(call.approval?.risk);
+      assert.ok(call.idempotencyKey);
+    }
+  });
+
+  test("删除、完成与邮件草稿也必须屏幕确认，邮件能力只负责打开草稿", async () => {
+    const calls: Parameters<NonNullable<ToolHost["deviceInvoke"]>>[0][] = [];
+    const tools = assistantTools(
+      host("chat", async (request) => {
+        calls.push(request);
+        return { type: "device_result", reqId: "r", op: request.op, status: "ok" };
+      }),
+    );
+    await tools.calendar_event_delete!.execute({ id: "event-1" }, { toolCallId: "delete-event" });
+    await tools.reminder_complete!.execute({ id: "reminder-1", completed: true }, { toolCallId: "complete-reminder" });
+    await tools.reminder_delete!.execute({ id: "reminder-1" }, { toolCallId: "delete-reminder" });
+    await tools.mail_draft_open!.execute(
+      { to: ["user@example.com"], subject: "草稿", body: "只能由用户发送" },
+      { toolCallId: "mail-draft" },
+    );
+    assert.deepEqual(
+      calls.map((call) => call.op),
+      ["calendar_event_delete", "reminder_complete", "reminder_delete", "mail_draft_open"],
+    );
+    for (const call of calls) {
+      assert.equal(call.approval?.requiresConfirmation, true);
       assert.ok(call.idempotencyKey);
     }
   });

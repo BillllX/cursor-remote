@@ -42,6 +42,19 @@ actor AppleEventKitService {
         return identifier
     }
 
+    func deleteEvent(identifier: String) async throws {
+        try await requireAccess(to: .event)
+        guard let event = store.event(withIdentifier: identifier),
+              event.calendar?.allowsContentModifications == true else {
+            throw DeviceRequestError.invalid("找不到要删除的日历事件，或所在日历不可写。")
+        }
+        do {
+            try store.remove(event, span: .thisEvent, commit: true)
+        } catch {
+            throw DeviceRequestError.unavailable("删除日历事件失败：\(error.localizedDescription)")
+        }
+    }
+
     func listReminders(_ request: RemindersListRequest) async throws -> JSONValue {
         try await requireAccess(to: .reminder)
         let predicate = store.predicateForReminders(in: nil)
@@ -85,6 +98,34 @@ actor AppleEventKitService {
             throw DeviceRequestError.unavailable("提醒事项已保存，但系统没有返回标识。")
         }
         return identifier
+    }
+
+    func setReminderCompleted(identifier: String, completed: Bool) async throws {
+        try await requireAccess(to: .reminder)
+        guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder,
+              reminder.calendar.allowsContentModifications else {
+            throw DeviceRequestError.invalid("找不到要修改的提醒事项，或所在列表不可写。")
+        }
+        reminder.isCompleted = completed
+        reminder.completionDate = completed ? Date() : nil
+        do {
+            try store.save(reminder, commit: true)
+        } catch {
+            throw DeviceRequestError.unavailable("修改提醒事项状态失败：\(error.localizedDescription)")
+        }
+    }
+
+    func deleteReminder(identifier: String) async throws {
+        try await requireAccess(to: .reminder)
+        guard let reminder = store.calendarItem(withIdentifier: identifier) as? EKReminder,
+              reminder.calendar.allowsContentModifications else {
+            throw DeviceRequestError.invalid("找不到要删除的提醒事项，或所在列表不可写。")
+        }
+        do {
+            try store.remove(reminder, commit: true)
+        } catch {
+            throw DeviceRequestError.unavailable("删除提醒事项失败：\(error.localizedDescription)")
+        }
     }
 
     private func requireAccess(to entity: EKEntityType) async throws {

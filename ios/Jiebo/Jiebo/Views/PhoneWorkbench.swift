@@ -5,25 +5,42 @@ import SwiftUI
 /// 切换工作区、主题、统计这些表单挂在这里而不是抽屉上——抽屉一关，挂在它身上的 sheet 会跟着消失。
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var drawerOpen = false
     @State private var preferredRunning = false
     @State private var settingsOpen = false
     @State private var chatActions = ChatActionTargets()
 
+    private var activePreviewTab: PreviewTab? {
+        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+    }
+
+    private var previewPanelOpen: Bool {
+        sceneSession != nil ? activePreviewTab != nil : store.previewPanelOpen
+    }
+
+    private func closePreview() {
+        if let sceneSession { sceneSession.dismissPreview() }
+        else { store.collapsePreview() }
+    }
+
     var body: some View {
         @Bindable var store = store
         ZStack(alignment: .leading) {
-            ThreadView(phoneChrome: true, openDrawer: {
+            ThreadView(
+                chrome: .phoneLegacy,
+                chatId: sceneSession?.workbenchChatId,
+                openDrawer: {
                 withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
             })
             .background { WorkbenchShortcuts() }
-            .accessibilityHidden(store.previewPanelOpen || drawerOpen)
+            .accessibilityHidden(previewPanelOpen || drawerOpen)
             if let layer = store.toolLayer {
                 ToolLayerOverlay(layer: layer)
                     .id(layer)
                     .transition(.move(edge: .trailing).combined(with: .opacity))
-                    .accessibilityHidden(store.previewPanelOpen || drawerOpen)
+                    .accessibilityHidden(previewPanelOpen || drawerOpen)
             }
             if drawerOpen {
                 Color.black.opacity(0.28)
@@ -41,14 +58,14 @@ struct PhoneWorkbench: View {
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
                 .transition(.move(edge: .leading))
-                .accessibilityHidden(store.previewPanelOpen)
+                .accessibilityHidden(previewPanelOpen)
                 .accessibilityAddTraits(.isModal)
                 .accessibilityAction(.escape) { closeDrawer() }
             }
-            if store.previewPanelOpen, let tab = store.activePreviewTab {
+            if previewPanelOpen, let tab = activePreviewTab {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
-                    .onTapGesture { store.collapsePreview() }
+                    .onTapGesture { closePreview() }
                     .transition(.opacity)
                     .accessibilityHidden(true)
                 PreviewPanelView(tab: tab)
@@ -60,7 +77,7 @@ struct PhoneWorkbench: View {
         }
         .animation(JieboMotion.panel(reduceMotion), value: store.toolLayer)
         .animation(JieboMotion.panel(reduceMotion), value: drawerOpen)
-        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
+        .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
         .sheet(isPresented: $store.workspaceSheetOpen) {
             WorkspacePickerSheet()
         }
@@ -348,7 +365,6 @@ private struct PhoneDrawer: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .keyboardShortcut("n", modifiers: .command)
         }
         .padding(.leading, 20)
         .padding(.trailing, 16)

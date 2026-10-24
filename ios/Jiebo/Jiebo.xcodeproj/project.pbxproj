@@ -46,6 +46,16 @@
 		A1B2C3D4E5F6071829000331 /* VoiceDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
 		A1B2C3D4E5F6071829000800 /* PhoneRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */; };
+		PADP00201 /* PadRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00101 /* PadRouter.swift */; };
+		PADP00202 /* PadAssistantShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00102 /* PadAssistantShell.swift */; };
+		PADP00203 /* AssistantScenePresenter.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00103 /* AssistantScenePresenter.swift */; };
+		PADP00204 /* PadAssistantExperience.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00104 /* PadAssistantExperience.swift */; };
+		PADP00205 /* PadInspectorState.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00105 /* PadInspectorState.swift */; };
+		PADP20201 /* PadCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP20101 /* PadCommands.swift */; };
+		PADP20202 /* PadSemanticTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP20102 /* PadSemanticTransfer.swift */; };
+		PADP20203 /* PadLayoutMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP20103 /* PadLayoutMetrics.swift */; };
+		PADP20204 /* ImDurableOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP20104 /* ImDurableOutbox.swift */; };
+		PADP20205 /* PadSemanticRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP20105 /* PadSemanticRules.swift */; };
 		A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */; };
 		A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */; };
 		A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */; };
@@ -126,6 +136,10 @@
 		DVC100203 /* AppleContactsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100103 /* AppleContactsService.swift */; };
 		DVC100204 /* DevicePermissionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100104 /* DevicePermissionStore.swift */; };
 		DVC100205 /* DeviceBridgeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100105 /* DeviceBridgeCoordinator.swift */; };
+		P3D000201 /* MailDraftComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = P3D000101 /* MailDraftComposer.swift */; };
+		P3S000201 /* SceneSessionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = P3S000101 /* SceneSessionState.swift */; };
+		P3S000202 /* SceneEditingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = P3S000102 /* SceneEditingPolicy.swift */; };
+		P3I000201 /* CollabRunGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P3I000101 /* CollabRunGraphView.swift */; };
 		DVC100206 /* DeviceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100106 /* DeviceViews.swift */; };
 		A1B2C3D4E5F6071829000D30 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */; };
 		A1B2C3D4E5F6071829000D31 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000107 /* KeychainStore.swift */; };
@@ -204,6 +218,16 @@
 		A1B2C3D4E5F6071829000130 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictation.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRouter.swift; sourceTree = "<group>"; };
+		PADP00101 /* PadRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadRouter.swift; sourceTree = "<group>"; };
+		PADP00102 /* PadAssistantShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadAssistantShell.swift; sourceTree = "<group>"; };
+		PADP00103 /* AssistantScenePresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantScenePresenter.swift; sourceTree = "<group>"; };
+		PADP00104 /* PadAssistantExperience.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadAssistantExperience.swift; sourceTree = "<group>"; };
+		PADP00105 /* PadInspectorState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadInspectorState.swift; sourceTree = "<group>"; };
+		PADP20101 /* PadCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadCommands.swift; sourceTree = "<group>"; };
+		PADP20102 /* PadSemanticTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadSemanticTransfer.swift; sourceTree = "<group>"; };
+		PADP20103 /* PadLayoutMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadLayoutMetrics.swift; sourceTree = "<group>"; };
+		PADP20104 /* ImDurableOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImDurableOutbox.swift; sourceTree = "<group>"; };
+		PADP20105 /* PadSemanticRules.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadSemanticRules.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Phone.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantComponents.swift; sourceTree = "<group>"; };
@@ -291,6 +315,10 @@
 		DVC100103 /* AppleContactsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleContactsService.swift; sourceTree = "<group>"; };
 		DVC100104 /* DevicePermissionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePermissionStore.swift; sourceTree = "<group>"; };
 		DVC100105 /* DeviceBridgeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBridgeCoordinator.swift; sourceTree = "<group>"; };
+		P3D000101 /* MailDraftComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MailDraftComposer.swift; sourceTree = "<group>"; };
+		P3S000101 /* SceneSessionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneSessionState.swift; sourceTree = "<group>"; };
+		P3S000102 /* SceneEditingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneEditingPolicy.swift; sourceTree = "<group>"; };
+		P3I000101 /* CollabRunGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollabRunGraphView.swift; sourceTree = "<group>"; };
 		DVC100106 /* DeviceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -401,6 +429,7 @@
 				DVC100103 /* AppleContactsService.swift */,
 				DVC100104 /* DevicePermissionStore.swift */,
 				DVC100105 /* DeviceBridgeCoordinator.swift */,
+				P3D000101 /* MailDraftComposer.swift */,
 				DVC100106 /* DeviceViews.swift */,
 			);
 			path = Device;
@@ -415,6 +444,15 @@
 				A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */,
 				A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */,
 				A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */,
+				PADP00101 /* PadRouter.swift */,
+				PADP00103 /* AssistantScenePresenter.swift */,
+				PADP00105 /* PadInspectorState.swift */,
+				PADP20101 /* PadCommands.swift */,
+				PADP20102 /* PadSemanticTransfer.swift */,
+				PADP20103 /* PadLayoutMetrics.swift */,
+				PADP20105 /* PadSemanticRules.swift */,
+				P3S000101 /* SceneSessionState.swift */,
+				P3S000102 /* SceneEditingPolicy.swift */,
 				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
 				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
 				A1B2C3D4E5F6071829000714 /* ChatStore+Lifecycle.swift */,
@@ -452,6 +490,8 @@
 				A1B2C3D4E5F6071829000900 /* Phone */,
 				A1B2C3D4E5F6071829000C02 /* IM */,
 				A1B2C3D4E5F6071829000A07 /* HomeShell.swift */,
+				PADP00102 /* PadAssistantShell.swift */,
+				PADP00104 /* PadAssistantExperience.swift */,
 				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
@@ -537,6 +577,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6071829000A03 /* ImModels.swift */,
+				PADP20104 /* ImDurableOutbox.swift */,
 				A1B2C3D4E5F6071829000A04 /* ImCache.swift */,
 				A1B2C3D4E5F6071829000A05 /* ImStore.swift */,
 				A1B2C3D4E5F6071829000A06 /* ImMedia.swift */,
@@ -554,6 +595,7 @@
 				A1B2C3D4E5F6071829000A0A /* ChatComposer.swift */,
 				A1B2C3D4E5F6071829000A0B /* ChatSettingsSheet.swift */,
 				A1B2C3D4E5F6071829000A0F /* ImRichViews.swift */,
+				P3I000101 /* CollabRunGraphView.swift */,
 			);
 			path = IM;
 			sourceTree = "<group>";
@@ -674,6 +716,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D4E5F6071829000800 /* PhoneRouter.swift in Sources */,
+				PADP00201 /* PadRouter.swift in Sources */,
+				PADP00202 /* PadAssistantShell.swift in Sources */,
+				PADP00203 /* AssistantScenePresenter.swift in Sources */,
+				PADP00204 /* PadAssistantExperience.swift in Sources */,
+				PADP00205 /* PadInspectorState.swift in Sources */,
+				PADP20201 /* PadCommands.swift in Sources */,
+				PADP20202 /* PadSemanticTransfer.swift in Sources */,
+				P3S000201 /* SceneSessionState.swift in Sources */,
+				P3S000202 /* SceneEditingPolicy.swift in Sources */,
+				PADP20203 /* PadLayoutMetrics.swift in Sources */,
+				PADP20204 /* ImDurableOutbox.swift in Sources */,
+				PADP20205 /* PadSemanticRules.swift in Sources */,
 				A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */,
 				A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */,
 				A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */,
@@ -717,6 +771,7 @@
 				A1B2C3D4E5F6071829000B07 /* HomeShell.swift in Sources */,
 				A1B2C3D4E5F6071829000B08 /* ChatHome.swift in Sources */,
 				A1B2C3D4E5F6071829000B09 /* ChatThreadView.swift in Sources */,
+				P3I000201 /* CollabRunGraphView.swift in Sources */,
 				A1B2C3D4E5F6071829000B0A /* ChatComposer.swift in Sources */,
 				A1B2C3D4E5F6071829000B0B /* ChatSettingsSheet.swift in Sources */,
 				A1B2C3D4E5F6071829000B0C /* ImVoice.swift in Sources */,
@@ -731,6 +786,7 @@
 				DVC100203 /* AppleContactsService.swift in Sources */,
 				DVC100204 /* DevicePermissionStore.swift in Sources */,
 				DVC100205 /* DeviceBridgeCoordinator.swift in Sources */,
+				P3D000201 /* MailDraftComposer.swift in Sources */,
 				DVC100206 /* DeviceViews.swift in Sources */,
 				A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */,
 				A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */,

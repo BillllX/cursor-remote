@@ -161,10 +161,89 @@ iPhone 从小驳菜单进入「产物中心」，仍在现有小驳导航栈内�
 | `Gateway/Protocol.swift` | `shared/protocol.ts` 的 Swift 镜像；声明帧上限 900KB |
 | `Gateway/Uploader.swift` | HTTP `/upload`；状态太大时网关回 `stored_state_deferred`，改走 HTTP `/state` |
 | `Session/ChatStore+*.swift` | 会话状态，按 Handle、Sync、TurnsLoad、Composer、Assistant 等拆分 |
-| `Views/` | iPhone 以助理为首屏（PhoneShell），iPad 为工作台 |
+| `Views/` | iPhone 保持小驳 / 待处理 / 消息三 Tab；iPad 为小驳 / 工作台 / 消息三域 |
 | `ContractTests/` | 解码金样本的协议契约，以及工具名判定用例 |
 
 新增 Swift 文件要加进 `project.pbxproj` 的 FileReference、BuildFile、group、Sources 四处。
+
+iPad P0 的导航状态由 `Session/PadRouter.swift` 在每个 `HomeShell` 场景内独立持有，不进入 `ChatStore`，也不复用
+`PhoneRouter`。`HomeShell` 只挂载当前域，因此工作台与固定 `assistantChatId` 的小驳输入器不会同时常驻；
+`PadAssistantShell` 把 section、selection、inspector 和委派详情分开，为后续三栏扩展保留稳定边界。推送、Share、
+App Intents 与语音先由 `AssistantScenePresenter` 唯一选出最近激活的前台场景，再映射到该场景的 Router 和可见
+Composer；旧 `homeMode` 和 `padDomain` 只用于首次迁移/新场景默认值，现有窗口不监听其变化。协议和网关不为此
+增加字段。
+
+iPad P1 在这个边界内把今日、待处理、任务、产物、记忆接到现有 `AssistantState` 投影与 Memory Center；老网关的
+今日/任务兼容数据只在 `PadAssistantProjection` 集中派生。`PadSelection` 统一定位时间线、草稿、审批、任务、委派
+和产物，`PadInspectorNavigation` 负责详情与 `PreviewPanelView` 的返回栈。今日页是唯一挂载固定助理 `ThreadView`
+和 `PadActionDock` 的位置；委派 child chat 只读加载，产物预览钉在来源会话和版本，续作直接提交
+`assistantChatId`，都不会选择工作台 `activeId`。`PadAssistantShell` 用 scene-local 预览键与 Inspector 对齐，
+在手势关闭、切 section 或切业务域时只清理当前窗口预览；老网关的 draft、todo、schedule、delegation 均由集中投影兼容。
+P1 仍未新增 Gateway/shared 协议或第二份事实源。
+
+iPad P2 用 `PadAppCommands` + `FocusedValues` 把三域、五栏目、搜索、新建、刷新、历史和关闭操作定向当前场景；
+`PadSemanticTransfer` 的自定义 UTType 只携带实体种类与稳定 ID，落点回到当前投影校验，失效或不匹配的目标不会接收。
+`PadLayoutMode` 依据 size class 和窗口宽度调整侧栏/Inspector，在 Split View 与 Stage Manager 缩放时不迁移 selection，
+今日页仍是唯一 Composer。离线自动重放只扩展已有服务端 `clientId` 去重和 `im_ack` 回执的 IM 发送：待发消息及
+`ImDurableOutboxMetadata` 随租户缓存持久化，重连按批次和指数退避恢复，并区分暂时失败与永久失败。普通 Prompt
+和 `assistant_op` 没有服务端幂等承诺，因此不会伪装进入 durable outbox；拖放提交离线时明确提示重试。P2 同样
+不新增 Gateway/shared 协议。
+
+iPad P3 复用既有设备桥协议扩展日历/提醒读写和系统邮件草稿：网关只向同租户、已鉴权且声明
+`device_bridge` 的单个前台设备投递，P3 新操作另要求 `device_bridge_v2`（旧设备继续承接 v1 操作），读写分别限时
+30/120 秒，成功写结果按幂等键缓存 24 小时；iOS 写入前必须由
+唯一前台 scene 显示确认。设备审计只保存白名单结构摘要，外部 ID 与设备 ID 都只保存哈希。邮件只能打开
+`MFMailComposeViewController`，App 和网关均没有后台发送路径。`web_read` 每次请求及重定向都重验 URL、DNS 和
+公网地址，并固定已验证 IP，限制标准端口、10 秒、1 MB 与文本 MIME，网页正文不进入审计。
+
+Collab 沿用已有 `im_group + im_collab` capability、安全审批与事件投影；iOS 接受 group 会话并只发送
+`collab_sync` 展示运行图，不发送 `collab_op`。Headless SDK 的 `sandboxOptions.enabled` 跟随租户配置，但
+`confinedCwd`、工具白名单、路径/网络/危险命令拦截和审批不随沙箱关闭而放宽。每个 `WindowGroup` 创建独立
+`SceneSessionState`，持有消息目标、工作台会话、预览页签/选择和草稿；共享 Store 只保留账户、连接和规范化数据。
+同一会话的 Composer 由最近激活 scene 的编辑租约独占，设备写确认另由唯一 scene presenter 承载。
+
+### iPad P0–P3 发布交接
+
+#### 功能与兼容矩阵
+
+| 阶段 | iPad 可见能力 | 数据与协议边界 | 旧网关 / 旧客户端行为 | 最小回滚点 |
+|---|---|---|---|---|
+| P0 | 小驳 / 工作台 / 消息三域；推送、Share、App Intents、语音、委派详情不断路 | 只增加 iOS scene-local `PadRouter` 与入口映射，不增加协议 | 旧 `homeMode` 只迁移为新场景默认域；iPhone 三 Tab、Web、Gateway 不变 | 回滚 iOS；服务端没有配套状态 |
+| P1 | 今日、待处理、任务、产物、记忆；统一 Inspector、ActionDock、委派→产物→Preview | 复用 `AssistantState`、任务/记忆/文件投影；不新增事实源 | 缺少新投影字段时由 `PadAssistantProjection` 集中回退或显示明确空态 | 回滚 iOS；无需回滚数据 |
+| P2 | 全键盘/鼠标 Commands、typed 拖放、窗口尺寸适配、持久 IM outbox | outbox 只重放已有 `im_send.clientId` 幂等操作；Prompt / `assistant_op` 不入队 | 旧网关继续按既有 IM ack/dedupe 工作；本地 outbox 元数据按租户惰性创建 | 回滚 iOS；保留的本地 outbox 文件可由新版再次恢复 |
+| P3 | 日历/提醒扩展、系统邮件草稿、受控网页阅读、Collab 只读运行图、多窗口状态拆分 | 新 DeviceOp 为加法协议；新操作要求 `device_bridge_v2`；Collab 复用 `im_group + im_collab` | 旧 iOS 只有 v1 cap，不会收到 P3 op；新 iOS 连旧网关时额外 cap 被忽略，P3 工具/群数据缺席但基础功能可用 | 先回滚 iOS，再按需回滚 Gateway；cap 隔离保证两端可交错版本 |
+
+#### 升级、迁移与回滚
+
+1. 合并前在仓库根运行 `npm test && npm run test:web && npm run build && npm run lint && npm run format:check`，再用
+   `SWIFT_BIN=<Swift 6.0.3 bin> npm run check:ios-protocol`、`npm run lint:swift` 和全量 `swiftc -parse` 验证。
+2. 先升级 shared/Gateway，再发布 iOS。Gateway 对 v1 设备继续提供原有 upsert/联系人能力；只有同时声明
+   `device_bridge_v2` 的连接才接收列表、删除、完成和邮件草稿操作。
+3. 不需要服务端数据迁移或回填：`homeMode` 只在本地首次迁移；scene state 不落服务端；IM outbox、设备审计文件均按需创建；
+   协议解码快照随代码提交，不是运行时数据。
+4. 发布 iOS 后先验证单窗口，再验证 Split View / Stage Manager 双窗口，最后开放设备写入口。写请求升级期间若在途，等待其
+   120 秒边界内完成或超时，不跨版本手工重放同一幂等键。
+5. 回滚时优先下架/回滚 iOS：新版 Gateway 因 capability 门槛不会把 v2 op 发给旧 App。若继续回滚 Gateway，新 App 只会失去
+   `web_read`、v2 设备工具和 Collab 群投影，不影响 iPhone 三 Tab、工作台或普通 IM。不要删除 outbox、审计或助理事实文件；
+   它们不是 schema 迁移，旧版本会忽略，新版恢复后继续使用。
+
+#### Xcode / 真机验收清单
+
+- [ ] 用 iOS 26 SDK 执行
+  `xcodebuild -project ios/Jiebo/Jiebo.xcodeproj -scheme Jiebo -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build`；
+  主 App 与 Share Extension 都成功链接，新 Swift 文件只进入主 App 的条目符合设计。
+- [ ] iPhone：小驳 / 待处理 / 消息三 Tab、推送、分享、语音、委派、预览均与升级前一致。
+- [ ] iPad 全屏、1/2 与 1/3 Split View、Slide Over、Stage Manager compact/regular：域切换与侧栏始终可达，正文不是玻璃表面。
+- [ ] 键盘/鼠标：三域、五栏目、搜索、新建、刷新、关闭 Inspector/Preview 的 discoverability 与实际动作一致，无系统快捷键冲突。
+- [ ] 拖放任务、待处理和产物到合法目标成功；非法目标不高亮并给出中文反馈；跨租户或已失效 payload 不执行。
+- [ ] 断网发送 IM 后强杀并重启，重连仅按稳定 `clientId` 重放一次；rate limit 后按窗口重试，永久错误停止重放。
+- [ ] 两个 iPad 窗口打开同一助理/工作区会话：只有最近激活窗口可编辑；草稿、域、selection、Inspector 和 Preview 不串窗。
+- [ ] 推送、Share、App Intent 和语音只路由到唯一前台 scene；语音启动后屏幕上只有一个可编辑 Composer。
+- [ ] EventKit 读操作在 30 秒内结束；每个写/删/完成操作都显示唯一 iOS 确认，拒绝不落盘，超时幂等键 24 小时内不重执行。
+- [ ] 邮件能力只打开系统草稿；取消或完成系统编辑器后状态清理，App 无后台发送行为。
+- [ ] `web_read` 可读取普通公网文本；私网、本地、NAT64、6to4、ORCHIDv2、混合 DNS、私网重定向、超时、超大和错误 MIME 均拒绝。
+- [ ] Collab 群只显示运行图和刷新；iOS 不出现执行、重试、取消或绕过审批入口；旧网关下显示兼容空态。
+- [ ] VoiceOver、动态字体、中文标签/提示、设备写确认摘要与键盘焦点通过人工检查。
 
 ## 9. 持久化与多租户
 

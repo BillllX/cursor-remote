@@ -52,6 +52,23 @@ struct ReminderDraft: Sendable, Equatable {
     let notes: String?
 }
 
+struct DeviceEntityRequest: Sendable, Equatable {
+    let identifier: String
+}
+
+struct ReminderCompletionRequest: Sendable, Equatable {
+    let identifier: String
+    let completed: Bool
+}
+
+struct MailDraftRequest: Sendable, Equatable {
+    let to: [String]
+    let cc: [String]
+    let bcc: [String]
+    let subject: String
+    let body: String
+}
+
 struct ContactsSearchRequest: Sendable, Equatable {
     let query: String
     let limit: Int
@@ -136,6 +153,44 @@ enum DeviceRequestValidator {
         )
     }
 
+    static func entity(_ params: JSONValue) throws -> DeviceEntityRequest {
+        let row = try object(params)
+        return DeviceEntityRequest(
+            identifier: try requiredText(row, "id", aliases: ["externalId"], maximumLength: 512)
+        )
+    }
+
+    static func reminderCompletion(_ params: JSONValue) throws -> ReminderCompletionRequest {
+        let row = try object(params)
+        let completed: Bool
+        if let raw = row["completed"] {
+            guard let value = raw.bool else { throw DeviceRequestError.invalid("completed 必须是布尔值。") }
+            completed = value
+        } else {
+            completed = true
+        }
+        return ReminderCompletionRequest(
+            identifier: try requiredText(row, "id", aliases: ["externalId"], maximumLength: 512),
+            completed: completed
+        )
+    }
+
+    static func mailDraft(_ params: JSONValue) throws -> MailDraftRequest {
+        let row = try object(params)
+        let draft = MailDraftRequest(
+            to: try addresses(row, "to"),
+            cc: try addresses(row, "cc"),
+            bcc: try addresses(row, "bcc"),
+            subject: try optionalText(row, "subject", maximumLength: 500) ?? "",
+            body: try optionalText(row, "body", maximumLength: 50_000) ?? ""
+        )
+        guard !draft.to.isEmpty || !draft.cc.isEmpty || !draft.bcc.isEmpty ||
+                !draft.subject.isEmpty || !draft.body.isEmpty else {
+            throw DeviceRequestError.invalid("邮件草稿不能全部为空。")
+        }
+        return draft
+    }
+
     static func contactsSearch(_ params: JSONValue) throws -> ContactsSearchRequest {
         let row = try object(params)
         return ContactsSearchRequest(
@@ -210,6 +265,22 @@ enum DeviceRequestValidator {
             throw DeviceRequestError.invalid("limit 必须是 1...\(maximum) 的整数。")
         }
         return Int(number)
+    }
+
+    private static func addresses(_ row: [String: JSONValue], _ key: String) throws -> [String] {
+        guard let raw = row[key] else { return [] }
+        guard let values = raw.array, values.count <= 50 else {
+            throw DeviceRequestError.invalid("\(key) 必须是最多 50 项的邮箱数组。")
+        }
+        return try values.map { value in
+            guard let address = value.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !address.isEmpty, address.count <= 320,
+                  address.contains("@"), !address.contains(where: \.isWhitespace)
+            else {
+                throw DeviceRequestError.invalid("\(key) 含有无效邮箱地址。")
+            }
+            return address
+        }
     }
 
     private static func parseISO8601(_ text: String) -> Date? {

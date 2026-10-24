@@ -64,6 +64,8 @@ final class ImStore {
     var tickets: [String: ImTicket] = [:]
     var blocked: Set<String> = []
     var timelines: [String: [ImLocalMessage]] = [:]
+    /// Collab 运行图是网关规范化服务数据；界面只读，审批和执行仍留在既有安全边界。
+    var collabRuns: [String: [CollabRunSnapshot]] = [:]
     /// false = 前面没有更早的了；nil = 还不知道，按还有处理
     var olderMore: [String: Bool] = [:]
     var loadingOlder: Set<String> = []
@@ -109,6 +111,9 @@ final class ImStore {
     /// 正在跑的是「跳过之后的复查」：复查里再跳过也不再追加，免得消息不断时一直拉
     @ObservationIgnored private var listRechecking = false
     @ObservationIgnored private var sendTimers: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var uploadTasks: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var uploadGenerations: [String: Int] = [:]
+    @ObservationIgnored private var uploadGenerationSeed = 0
     @ObservationIgnored private var readTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var stateSaveTask: Task<Void, Never>?
     @ObservationIgnored private var timelineSaveTasks: [String: Task<Void, Never>] = [:]
@@ -123,6 +128,7 @@ final class ImStore {
     @ObservationIgnored private var readObserver: NSObjectProtocol?
     /// 乐观改了本地、等网关确认的设置：key → 超时任务和撤回动作
     @ObservationIgnored private var pendingConfirms: [String: (task: Task<Void, Never>, rollback: () -> Void)] = [:]
+    @ObservationIgnored private var durableReplayTask: Task<Void, Never>?
 
     init() {}
 
@@ -186,9 +192,10 @@ final class ImStore {
         listPaging = false
         refreshList()
         startTicketWatch()
+        replayDurableOutbox()
     }
 
-    /// 断线：在发的一律算失败，等用户手动重发
+    /// 断线：取消上传与确认计时；在途消息退回可重放状态，重连后仍沿用同一个 clientId。
     func connectionLost() {
         online = false
         listPaging = false
@@ -197,6 +204,9 @@ final class ImStore {
         loadingLatest = []
         ticketTask?.cancel()
         ticketTask = nil
+        durableReplayTask?.cancel()
+        durableReplayTask = nil
+        cancelAllUploadTasks()
         for task in sendTimers.values { task.cancel() }
         sendTimers = [:]
         // 断线前没等到确认的设置算没成；重连后拉列表会把真实状态带回来
@@ -207,6 +217,12 @@ final class ImStore {
                 if next.state == .sending {
                     next.state = .failed
                     next.progress = nil
+                    if let metadata = next.durableOutbox {
+                        next.durableOutbox = ImDurableOutboxPolicy.afterConnectionLoss(
+                            metadata,
+                            now: Self.nowMs
+                        )
+                    }
                 }
                 return next
             }
@@ -301,11 +317,13 @@ final class ImStore {
         ImCache.sweepOutbox(tenant: tenant, keep: pendingOutboxFiles())
         // 缓存比网络晚到：补缺要按缓存再算一次
         if listLoaded, online { catchUp() }
+        if online { replayDurableOutbox() }
     }
 
     private func clearMemory() {
         loadEpoch += 1
         for task in sendTimers.values { task.cancel() }
+        cancelAllUploadTasks()
         for task in readTasks.values { task.cancel() }
         for task in timelineSaveTasks.values { task.cancel() }
         for entry in pendingConfirms.values { entry.task.cancel() }
@@ -316,6 +334,8 @@ final class ImStore {
         readTasks = [:]
         timelineSaveTasks = [:]
         stateSaveTask?.cancel()
+        durableReplayTask?.cancel()
+        durableReplayTask = nil
         ticketTask?.cancel()
         ticketTask = nil
         listPaging = false
@@ -331,6 +351,7 @@ final class ImStore {
         tickets = [:]
         blocked = []
         timelines = [:]
+        collabRuns = [:]
         olderMore = [:]
         loadingOlder = []
         loadingLatest = []
@@ -404,10 +425,12 @@ final class ImStore {
                 }
             }
             if let last = messages.last { bumpLast(convId, last) }
+            if messages.contains(where: { $0.kind == "collab" }) { syncCollab(convId: convId) }
             saveTimelineSoon(convId)
             scheduleRead(convId)
         case .ack(let clientId, let convId, let seq, let at, let rejected):
             sendTimers.removeValue(forKey: clientId)?.cancel()
+            cancelUploadTask(clientId: clientId)
             var items = timelines[convId] ?? []
             guard let index = items.firstIndex(where: { $0.clientId == clientId && $0.from == meId }) else { return }
             var item = items.remove(at: index)
@@ -416,6 +439,7 @@ final class ImStore {
             item.rejected = rejected
             item.state = .sent
             item.progress = nil
+            item.durableOutbox = nil
             timelines[convId] = ImTimeline.merge(items, [item], me: meId)
             var conv = ensureConv(convId)
             if seq >= (conv.last?.seq ?? 0), let message = item.message { conv.last = message }
@@ -438,12 +462,21 @@ final class ImStore {
             saveTimelineSoon(convId)
             saveStateSoon()
             scheduleRead(convId)
+            if message.kind == "collab" { syncCollab(convId: convId) }
         case .update(let update):
             apply(update)
         case .error(let clientId, let code, let text):
             if let clientId {
                 sendTimers.removeValue(forKey: clientId)?.cancel()
-                markFailed(clientId: clientId)
+                cancelUploadTask(clientId: clientId)
+                if code == "rate_limited" {
+                    rateLimitDurableOutbox(clientId: clientId)
+                } else {
+                    failDurableOutbox(
+                        clientId: clientId,
+                        permanent: ImDurableOutboxPolicy.isPermanent(errorCode: code)
+                    )
+                }
             } else {
                 // 不带 clientId 的错误认不出是哪个请求：在途的翻页都放开，允许再拉；没确认的设置撤回
                 loadingOlder = []
@@ -457,7 +490,27 @@ final class ImStore {
             }
             if code == "no_cap" { online = false }
             showToast(text.nilIfEmpty ?? Self.errorText(code))
+        case .collabState(let page):
+            var byId = Dictionary(
+                uniqueKeysWithValues: (collabRuns[page.convId] ?? []).map { ($0.runId, $0) }
+            )
+            for id in page.removedRunIds { byId[id] = nil }
+            for run in page.runs where run.version >= (byId[run.runId]?.version ?? -1) {
+                byId[run.runId] = run
+            }
+            collabRuns[page.convId] = byId.values.sorted {
+                ($0.createdAt ?? 0, $0.runId) > ($1.createdAt ?? 0, $1.runId)
+            }
+            if page.more, let cursor = page.cursor {
+                syncCollab(convId: page.convId, cursor: cursor)
+            }
         }
+    }
+
+    func syncCollab(convId: String, cursor: String? = nil) {
+        guard online, !convId.isEmpty else { return }
+        let known = (collabRuns[convId] ?? []).map { (runId: $0.runId, version: $0.version) }
+        send(.collabSync(convId: convId, known: known, cursor: cursor))
     }
 
     private func apply(_ update: ImUpdate) {
@@ -557,7 +610,11 @@ final class ImStore {
         if let conv = convs[convId] { return conv }
         let row = ImConvRow(
             convId: convId,
+            kind: convId.hasPrefix("grp~") ? "group" : "dm",
             peer: ImConv.peer(of: convId, me: meId) ?? "",
+            title: nil,
+            memberCount: 0,
+            activityAt: 0,
             last: nil,
             unread: 0,
             readSeq: 0,
@@ -846,6 +903,10 @@ final class ImStore {
         guard item.seq == nil, item.state == .failed else { return }
         let peer = ImConv.peer(of: item.convId, me: meId) ?? ""
         guard !peer.isEmpty else { return }
+        cancelUploadTask(clientId: item.clientId)
+        mutatePending(item.clientId, item.convId) {
+            $0.durableOutbox = ImDurableOutboxMetadata(stableID: item.clientId, now: Self.nowMs)
+        }
         if item.kind == "image", let outgoing = item.outgoing, outgoing.blob == nil || outgoing.thumb == nil {
             uploadAndSend(clientId: item.clientId, convId: item.convId, peer: peer)
             return
@@ -862,7 +923,7 @@ final class ImStore {
         saveTimelineSoon(item.convId)
     }
 
-    private func transmit(clientId: String, convId: String, peer: String) {
+    private func transmit(clientId: String, convId: String, peer: String, countAttempt: Bool = true) {
         guard let item = find(clientId, convId) else { return }
         var body = item.body
         if item.kind == "image", let outgoing = item.outgoing, let blob = outgoing.blob, let thumb = outgoing.thumb {
@@ -882,10 +943,16 @@ final class ImStore {
             mutatePending(clientId, convId) { $0.body = body }
             saveTimelineSoon(convId)
         }
-        guard let body, online, let transport, transport.imLinkOpen else {
-            setState(clientId, convId, .failed)
+        guard let body else {
+            failDurableOutbox(clientId: clientId, permanent: true)
             return
         }
+        guard online, let transport, transport.imLinkOpen else {
+            setState(clientId, convId, .failed)
+            scheduleDurableReplay()
+            return
+        }
+        if countAttempt { beginDurableAttempt(clientId: clientId, convId: convId) }
         setState(clientId, convId, .sending)
         transport.imSend(.imSend(clientId: clientId, to: peer, convId: nil, kind: item.kind, body: body, replyTo: item.replyTo))
         armSendTimeout(clientId, convId)
@@ -895,16 +962,24 @@ final class ImStore {
         guard let item = find(clientId, convId), let start = item.outgoing else { return }
         guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
             setState(clientId, convId, .failed)
+            scheduleDurableReplay()
             return
         }
+        beginDurableAttempt(clientId: clientId, convId: convId)
         setState(clientId, convId, .sending)
         setProgress(clientId, convId, 0)
         let tenantAtStart = tenant
+        let generation = beginUploadTask(clientId: clientId)
         let box = ImWeakStore(self)
         let report: @Sendable (Double) -> Void = { fraction in
-            Task { @MainActor in box.value?.setProgress(clientId, convId, fraction) }
+            Task { @MainActor in
+                guard let store = box.value,
+                      store.uploadIsCurrent(clientId: clientId, generation: generation, tenant: tenantAtStart)
+                else { return }
+                store.setProgress(clientId, convId, fraction)
+            }
         }
-        Task { [weak self] in
+        uploadTasks[clientId] = Task { [weak self] in
             var outgoing = start
             do {
                 if outgoing.thumb == nil {
@@ -918,17 +993,25 @@ final class ImStore {
                     )
                 }
             } catch {
-                guard let self, self.tenant == tenantAtStart else { return }
+                guard let self,
+                      !Task.isCancelled,
+                      self.uploadIsCurrent(clientId: clientId, generation: generation, tenant: tenantAtStart)
+                else { return }
                 self.setOutgoing(clientId, convId, outgoing)
-                self.setState(clientId, convId, .failed)
+                self.finishUploadTask(clientId: clientId, generation: generation)
+                self.failDurableOutbox(clientId: clientId, permanent: false)
                 self.showToast((error as? LocalizedError)?.errorDescription ?? "图片没传上去，点红色感叹号重发")
                 return
             }
-            guard let self, self.tenant == tenantAtStart else { return }
+            guard let self,
+                  !Task.isCancelled,
+                  self.uploadIsCurrent(clientId: clientId, generation: generation, tenant: tenantAtStart)
+            else { return }
             self.setOutgoing(clientId, convId, outgoing)
             if let blob = outgoing.blob { ImCache.adopt(tenant: tenantAtStart, file: dir.appendingPathComponent(outgoing.file), blob: blob) }
             if let thumb = outgoing.thumb { ImCache.adopt(tenant: tenantAtStart, file: dir.appendingPathComponent(outgoing.thumbFile), blob: thumb) }
-            self.transmit(clientId: clientId, convId: convId, peer: peer)
+            self.finishUploadTask(clientId: clientId, generation: generation)
+            self.transmit(clientId: clientId, convId: convId, peer: peer, countAttempt: false)
         }
     }
 
@@ -936,32 +1019,54 @@ final class ImStore {
         guard let item = find(clientId, convId), let start = item.upload else { return }
         guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
             setState(clientId, convId, .failed)
+            scheduleDurableReplay()
             return
         }
+        beginDurableAttempt(clientId: clientId, convId: convId)
         setState(clientId, convId, .sending)
         setProgress(clientId, convId, 0)
         let tenantAtStart = tenant
+        let generation = beginUploadTask(clientId: clientId)
         let box = ImWeakStore(self)
-        Task { [weak self] in
+        uploadTasks[clientId] = Task { [weak self] in
             var upload = start
             do {
                 if upload.blob == nil {
                     upload.blob = try await uploader.upload(
                         file: dir.appendingPathComponent(upload.file), kind: upload.uploadKind, mime: upload.mime, token: token,
-                        progress: { value in Task { @MainActor in box.value?.setProgress(clientId, convId, value) } }
+                        progress: { value in
+                            Task { @MainActor in
+                                guard let store = box.value,
+                                      store.uploadIsCurrent(
+                                          clientId: clientId,
+                                          generation: generation,
+                                          tenant: tenantAtStart
+                                      )
+                                else { return }
+                                store.setProgress(clientId, convId, value)
+                            }
+                        }
                     )
                 }
             } catch {
-                guard let self, self.tenant == tenantAtStart else { return }
+                guard let self,
+                      !Task.isCancelled,
+                      self.uploadIsCurrent(clientId: clientId, generation: generation, tenant: tenantAtStart)
+                else { return }
                 self.setUpload(clientId, convId, upload)
-                self.setState(clientId, convId, .failed)
+                self.finishUploadTask(clientId: clientId, generation: generation)
+                self.failDurableOutbox(clientId: clientId, permanent: false)
                 self.showToast((error as? LocalizedError)?.errorDescription ?? "附件没传上去，点红色感叹号重发")
                 return
             }
-            guard let self, self.tenant == tenantAtStart else { return }
+            guard let self,
+                  !Task.isCancelled,
+                  self.uploadIsCurrent(clientId: clientId, generation: generation, tenant: tenantAtStart)
+            else { return }
             self.setUpload(clientId, convId, upload)
             if let blob = upload.blob { ImCache.adopt(tenant: tenantAtStart, file: dir.appendingPathComponent(upload.file), blob: blob) }
-            self.transmit(clientId: clientId, convId: convId, peer: peer)
+            self.finishUploadTask(clientId: clientId, generation: generation)
+            self.transmit(clientId: clientId, convId: convId, peer: peer, countAttempt: false)
         }
     }
 
@@ -972,7 +1077,7 @@ final class ImStore {
             guard let self, !Task.isCancelled else { return }
             self.sendTimers[clientId] = nil
             if self.find(clientId, convId)?.state == .sending {
-                self.setState(clientId, convId, .failed)
+                self.failDurableOutbox(clientId: clientId, permanent: false)
             }
         }
     }
@@ -995,6 +1100,142 @@ final class ImStore {
         if state != .sending { saveTimelineSoon(convId) }
     }
 
+    private func beginDurableAttempt(clientId: String, convId: String) {
+        mutatePending(clientId, convId) { item in
+            let metadata = item.durableOutbox
+                ?? ImDurableOutboxMetadata(stableID: clientId, now: Self.nowMs)
+            item.durableOutbox = ImDurableOutboxPolicy.beginAttempt(metadata, now: Self.nowMs)
+        }
+        saveTimelineSoon(convId)
+    }
+
+    private func failDurableOutbox(clientId: String, permanent: Bool) {
+        for (convId, items) in timelines
+        where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
+            mutatePending(clientId, convId) { item in
+                var metadata = item.durableOutbox
+                    ?? ImDurableOutboxMetadata(stableID: clientId, now: Self.nowMs)
+                if permanent {
+                    metadata.status = .permanentFailure
+                    metadata.nextAttemptAt = 0
+                } else {
+                    metadata = ImDurableOutboxPolicy.afterTransientFailure(
+                        metadata,
+                        now: Self.nowMs
+                    )
+                }
+                item.durableOutbox = metadata
+                item.state = .failed
+                item.progress = nil
+            }
+            saveTimelineSoon(convId)
+        }
+        scheduleDurableReplay()
+    }
+
+    private func rateLimitDurableOutbox(clientId: String) {
+        for (convId, items) in timelines
+        where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
+            mutatePending(clientId, convId) { item in
+                let metadata = item.durableOutbox
+                    ?? ImDurableOutboxMetadata(stableID: clientId, now: Self.nowMs)
+                item.durableOutbox = ImDurableOutboxPolicy.afterRateLimited(
+                    metadata,
+                    now: Self.nowMs
+                )
+                item.state = .failed
+                item.progress = nil
+            }
+            saveTimelineSoon(convId)
+        }
+        scheduleDurableReplay()
+    }
+
+    /// 每次最多发固定数量；后续按最早退避时间再唤醒，避免重连瞬间打满网关。
+    private func replayDurableOutbox() {
+        guard online, transport?.imLinkOpen == true else { return }
+        durableReplayTask?.cancel()
+        durableReplayTask = nil
+        let now = Self.nowMs
+        let candidates = timelines
+            .flatMap { convId, items in items.map { (convId, $0) } }
+            .filter { _, item in
+                guard item.seq == nil, let metadata = item.durableOutbox else { return false }
+                return ImDurableOutboxPolicy.mayReplay(metadata, now: now)
+            }
+            .sorted { $0.1.at < $1.1.at }
+            .prefix(ImDurableOutboxPolicy.replayBatchLimit)
+
+        for (convId, item) in candidates {
+            guard let peer = ImConv.peer(of: convId, me: meId), !peer.isEmpty else {
+                failDurableOutbox(clientId: item.clientId, permanent: true)
+                continue
+            }
+            if item.kind == "image", let outgoing = item.outgoing,
+               outgoing.blob == nil || outgoing.thumb == nil {
+                uploadAndSend(clientId: item.clientId, convId: convId, peer: peer)
+            } else if let upload = item.upload, upload.blob == nil {
+                uploadAndSendAttachment(clientId: item.clientId, convId: convId, peer: peer)
+            } else {
+                transmit(clientId: item.clientId, convId: convId, peer: peer)
+            }
+        }
+        scheduleDurableReplay()
+    }
+
+    private func scheduleDurableReplay() {
+        guard online, transport?.imLinkOpen == true else { return }
+        let now = Self.nowMs
+        let wait = timelines.values
+            .flatMap { $0 }
+            .compactMap { item -> Int64? in
+                guard item.seq == nil, let metadata = item.durableOutbox else { return nil }
+                return ImDurableOutboxPolicy.scheduledDelay(metadata, now: now)
+            }
+            .min()
+        guard let wait else { return }
+        durableReplayTask?.cancel()
+        let tenantAtSchedule = tenant
+        durableReplayTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(wait))
+            guard let self, !Task.isCancelled, self.tenant == tenantAtSchedule else { return }
+            self.replayDurableOutbox()
+        }
+    }
+
+    private func beginUploadTask(clientId: String) -> Int {
+        cancelUploadTask(clientId: clientId)
+        uploadGenerationSeed &+= 1
+        uploadGenerations[clientId] = uploadGenerationSeed
+        return uploadGenerationSeed
+    }
+
+    private func uploadIsCurrent(clientId: String, generation: Int, tenant: String) -> Bool {
+        ImUploadLeasePolicy.acceptsCompletion(
+            expectedGeneration: generation,
+            expectedTenant: tenant,
+            currentGeneration: uploadGenerations[clientId],
+            currentTenant: self.tenant
+        )
+    }
+
+    private func finishUploadTask(clientId: String, generation: Int) {
+        guard uploadGenerations[clientId] == generation else { return }
+        uploadTasks[clientId] = nil
+        uploadGenerations[clientId] = nil
+    }
+
+    private func cancelUploadTask(clientId: String) {
+        uploadTasks.removeValue(forKey: clientId)?.cancel()
+        uploadGenerations[clientId] = nil
+    }
+
+    private func cancelAllUploadTasks() {
+        for task in uploadTasks.values { task.cancel() }
+        uploadTasks = [:]
+        uploadGenerations = [:]
+    }
+
     func setProgress(_ clientId: String, _ convId: String, _ fraction: Double) {
         mutatePending(clientId, convId) { item in
             guard item.state == .sending else { return }
@@ -1010,12 +1251,6 @@ final class ImStore {
     private func setUpload(_ clientId: String, _ convId: String, _ upload: ImOutgoingUpload) {
         mutatePending(clientId, convId) { $0.upload = upload }
         saveTimelineSoon(convId)
-    }
-
-    private func markFailed(clientId: String) {
-        for (convId, items) in timelines where items.contains(where: { $0.seq == nil && $0.clientId == clientId }) {
-            setState(clientId, convId, .failed)
-        }
     }
 
     // MARK: 操作
@@ -1310,6 +1545,23 @@ final class ImStore {
             }
             .map { ImDirectoryRow(user: $0, conv: convs[convId(with: $0.id)]) }
         return (chatted, others)
+    }
+
+    /// 协作群使用既有 IM 会话投影；iOS 只提供运行图读取入口，不开放 collab_op。
+    func groupConversations(query: String) -> [ImConvRow] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return convs.values
+            .filter { row in
+                guard row.kind == "group" else { return false }
+                return needle.isEmpty || (row.title ?? "协作群").localizedCaseInsensitiveContains(needle)
+            }
+            .sorted { lhs, rhs in
+                if lhs.pin != rhs.pin { return lhs.pin }
+                let left = max(lhs.activityAt, lastActivity(lhs))
+                let right = max(rhs.activityAt, lastActivity(rhs))
+                if left != right { return left > right }
+                return lhs.convId < rhs.convId
+            }
     }
 
     func lastActivity(_ conv: ImConvRow?) -> Double {

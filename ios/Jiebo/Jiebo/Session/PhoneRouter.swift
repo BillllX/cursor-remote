@@ -53,6 +53,8 @@ final class PhoneRouter {
     var hubAnchor: String?
     /// 正在看的委派详情。sheet 挂在 PhoneTabShell 上，三个一级空间都能弹
     var delegationDetail: DelegationRef?
+    /// 只由当前前台 scene 接收，再定向交给小驳页唯一可见的 Composer。
+    var pendingVoiceCapture: AssistantCaptureBridge.Capture?
     var bootstrapped = false
 }
 
@@ -102,6 +104,16 @@ extension PhoneRouter {
         dismissKeyboard()
         selectedTab = .inbox
         inboxPath.append(.item(id))
+    }
+
+    func queueVoice(_ capture: AssistantCaptureBridge.Capture) {
+        pendingVoiceCapture = capture
+        popToRoot()
+    }
+
+    func takePendingVoice() -> AssistantCaptureBridge.Capture? {
+        defer { pendingVoiceCapture = nil }
+        return pendingVoiceCapture
     }
 
     /// 收件箱条目 / 推送 / 委派卡等「要打开某个会话」的统一入口。

@@ -3,16 +3,27 @@ import UIKit
 import PhotosUI
 
 /// 聊天主页：列表 → 聊天页，只有两层。手机和 iPad 窄窗用导航栈，iPad 宽窗左右分栏。
-/// 打开哪个会话只看 im.selectedPeer，导航栈的路径和分栏的右边都从它来
+/// 打开的会话保存在当前 WindowGroup 的 SceneSessionState，不会带着其它窗口跳转。
 struct ChatHome: View {
     @Environment(ImStore.self) private var im
     @Environment(ChatStore.self) private var store
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.assistantSceneToken) private var sceneToken
+    @Environment(\.sceneSessionState) private var sceneSession
     @State private var settingsOpen = false
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
 
     private var split: Bool {
         UIDevice.current.userInterfaceIdiom == .pad && sizeClass == .regular
+    }
+
+    private var activePreviewTab: PreviewTab? {
+        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+    }
+
+    private var previewPanelOpen: Bool {
+        sceneSession != nil ? activePreviewTab != nil : store.previewPanelOpen
     }
 
     var body: some View {
@@ -30,15 +41,25 @@ struct ChatHome: View {
         .sheet(isPresented: $settingsOpen) {
             ChatSettingsSheet()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .padSceneSidebarToggleRequested)) { note in
+            guard split,
+                  let delivery = note.object as? PadSceneCommandDelivery,
+                  delivery.sceneToken == sceneToken
+            else { return }
+            columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+        }
         // iPad 两个主页一直同时挂着，聊天层需要自己的预览；iPhone 由 PhoneTabShell 全局承载。
         .overlay {
             ZStack {
                 if UIDevice.current.userInterfaceIdiom == .pad,
-                   store.previewPanelOpen,
-                   let tab = store.activePreviewTab {
+                   previewPanelOpen,
+                   let tab = activePreviewTab {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
-                        .onTapGesture { store.collapsePreview() }
+                        .onTapGesture {
+                            if let sceneSession { sceneSession.dismissPreview() }
+                            else { store.collapsePreview() }
+                        }
                         .transition(.opacity)
                         .accessibilityHidden(true)
                     PreviewPanelView(tab: tab)
@@ -48,26 +69,21 @@ struct ChatHome: View {
                         .zIndex(3)
                 }
             }
-            .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
+            .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
         }
     }
 
     private var path: Binding<[ChatDestination]> {
         Binding(
-            get: { store.chatHomeDestination.map { [$0] } ?? [] },
+            get: { destination.map { [$0] } ?? [] },
             set: { destinations in
                 let next = destinations.last
-                if let next, case .person(let peer) = next {
-                    im.selectedPeer = peer
-                } else {
-                    im.selectedPeer = nil
-                }
                 if case .some(.workspace(_)) = next {
                     // 工作区线程自行维护 viewing。
                 } else {
                     store.leaveWorkspaceThread()
                 }
-                store.chatHomeDestination = next
+                setDestination(next)
             }
         )
     }
@@ -82,11 +98,11 @@ struct ChatHome: View {
     }
 
     private var splitLayout: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             ChatListView(openSettings: { settingsOpen = true })
                 .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 420)
         } detail: {
-            if let destination = store.chatHomeDestination {
+            if let destination {
                 NavigationStack {
                     destinationView(destination)
                 }
@@ -112,17 +128,31 @@ struct ChatHome: View {
         switch destination {
         case .person(let peer):
             ChatThreadView(peer: peer)
+        case .group(let convId):
+            CollabRunGraphView(convId: convId, embedded: true)
         case .assistant:
             if let chatId = store.assistantChatId {
                 ThreadView(chrome: .embedded, chatId: chatId)
-                    .onAppear { store.openAssistantFromChatHome() }
+                    .onAppear { store.prepareAssistantThread() }
             } else {
                 ProgressView("正在加载助理…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { store.openAssistantFromChatHome() }
+                    .onAppear { store.prepareAssistantThread() }
             }
         case .workspace(let path):
             WorkspaceAgentThread(path: path)
+        }
+    }
+
+    private var destination: ChatDestination? {
+        sceneSession?.chatDestination ?? store.chatHomeDestination
+    }
+
+    private func setDestination(_ destination: ChatDestination?) {
+        if let sceneSession {
+            sceneSession.chatDestination = destination
+        } else {
+            store.chatHomeDestination = destination
         }
     }
 }
@@ -132,23 +162,28 @@ struct ChatHome: View {
 struct ChatListView: View {
     @Environment(ImStore.self) private var im
     @Environment(ChatStore.self) private var store
+    @Environment(\.assistantSceneToken) private var sceneToken
+    @Environment(\.sceneSessionState) private var sceneSession
     var openSettings: () -> Void
     @State private var query = ""
+    @State private var searchPresented = false
     @State private var editingWorkspace: WorkspaceAgentItem?
 
     var body: some View {
         let rows = im.directory(query: query)
+        let groups = im.groupConversations(query: query)
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let agents = store.workspaceAgents.filter {
             needle.isEmpty
                 || $0.displayName.lowercased().contains(needle)
                 || $0.directoryName.lowercased().contains(needle)
         }
-        let assistantSelected = store.chatHomeDestination == .assistant
+        let assistantSelected = destination == .assistant
         List {
             Section {
                 Button {
-                    store.openAssistantFromChatHome()
+                    setDestination(.assistant)
+                    store.prepareAssistantThread()
                 } label: {
                     HStack(spacing: 12) {
                         Capsule()
@@ -197,6 +232,13 @@ struct ChatListView: View {
                     }
                 }
             }
+            if !groups.isEmpty {
+                Section("iOS 协作") {
+                    ForEach(groups, id: \.convId) { group in
+                        groupRow(group)
+                    }
+                }
+            }
             if !rows.others.isEmpty {
                 Section {
                     ForEach(rows.others) { row in
@@ -218,11 +260,17 @@ struct ChatListView: View {
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
         .overlay {
-            if rows.chatted.isEmpty, rows.others.isEmpty, agents.isEmpty {
+            if rows.chatted.isEmpty, rows.others.isEmpty, groups.isEmpty, agents.isEmpty {
                 emptyState
             }
         }
-        .searchable(text: $query, prompt: "搜昵称或拼音首字母")
+        .searchable(text: $query, isPresented: $searchPresented, prompt: "搜昵称或拼音首字母")
+        .onReceive(NotificationCenter.default.publisher(for: .padSceneSearchRequested)) { note in
+            guard let delivery = note.object as? PadSceneCommandDelivery,
+                  delivery.sceneToken == sceneToken
+            else { return }
+            searchPresented = true
+        }
         .refreshable { im.refreshList() }
         .navigationTitle("聊天")
         .navigationBarTitleDisplayMode(.inline)
@@ -256,12 +304,45 @@ struct ChatListView: View {
 
     // MARK: 行
 
+    private func groupRow(_ group: ImConvRow) -> some View {
+        let selected = destination == .group(group.convId)
+        return Button {
+            setDestination(.group(group.convId))
+            im.syncCollab(convId: group.convId)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: NavigationIconId.collab.symbol)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(JieboColor.brass)
+                    .frame(width: 48, height: 48)
+                    .background(JieboColor.sidebar)
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .overlay(alignment: .topTrailing) { unreadMark(group).offset(x: 6, y: -6) }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(group.title ?? "协作群")
+                        .font(JieboFont.text(.body, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                    Text(group.memberCount > 0 ? "\(group.memberCount) 位成员 · 只读运行图" : "只读运行图")
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? JieboColor.mist : JieboColor.paper)
+        .accessibilityLabel("\(group.title ?? "协作群")，只读协作运行图")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
     private func conversationRow(_ row: ImDirectoryRow) -> some View {
         let conv = row.conv
-        let selected = im.selectedPeer == row.user.id
+        let selected = destination == .person(row.user.id)
         return Button {
-            im.selectedPeer = row.user.id
-            store.chatHomeDestination = .person(row.user.id)
+            setDestination(.person(row.user.id))
         } label: {
             HStack(spacing: 12) {
                 ImAvatar(user: row.user, size: 48)
@@ -329,8 +410,7 @@ struct ChatListView: View {
 
     private func contactRow(_ row: ImDirectoryRow) -> some View {
         Button {
-            im.selectedPeer = row.user.id
-            store.chatHomeDestination = .person(row.user.id)
+            setDestination(.person(row.user.id))
         } label: {
             HStack(spacing: 12) {
                 ImAvatar(user: row.user, size: 40)
@@ -344,14 +424,15 @@ struct ChatListView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(im.selectedPeer == row.user.id ? JieboColor.mist : JieboColor.paper)
+        .listRowBackground(destination == .person(row.user.id) ? JieboColor.mist : JieboColor.paper)
         .accessibilityLabel(row.user.nickname)
     }
 
     private func workspaceRow(_ item: WorkspaceAgentItem) -> some View {
-        let selected = store.chatHomeDestination == .workspace(item.path)
+        let selected = destination == .workspace(item.path)
         return Button {
-            store.openWorkspaceAgent(item)
+            setDestination(.workspace(item.path))
+            store.requestWorkspaceAgent(item)
         } label: {
             HStack(spacing: 12) {
                 Capsule()
@@ -427,6 +508,18 @@ struct ChatListView: View {
         }
     }
 
+    private var destination: ChatDestination? {
+        sceneSession?.chatDestination ?? store.chatHomeDestination
+    }
+
+    private func setDestination(_ destination: ChatDestination?) {
+        if let sceneSession {
+            sceneSession.chatDestination = destination
+        } else {
+            store.chatHomeDestination = destination
+        }
+    }
+
     @ViewBuilder
     private func unreadMark(_ conv: ImConvRow?) -> some View {
         if let conv, conv.unread > 0 {
@@ -444,7 +537,9 @@ struct ChatListView: View {
     /// 草稿优先（红色「[草稿]」）；再看最后一条（含本机还没发出去的）
     private func previewLine(_ conv: ImConvRow?, peer: ImUser) -> Text {
         guard let conv else { return Text("") }
-        if im.selectedPeer != peer.id, let draft = im.drafts[conv.convId]?.trimmingCharacters(in: .whitespacesAndNewlines), !draft.isEmpty {
+        if destination != .person(peer.id),
+           let draft = im.drafts[conv.convId]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !draft.isEmpty {
             let draftText = draft.replacingOccurrences(of: "\n", with: " ")
             return Text(
                 "\(Text("[草稿] ").foregroundStyle(JieboColor.danger))\(Text(draftText).foregroundStyle(JieboColor.dim))"
@@ -520,6 +615,7 @@ struct ChatListView: View {
 struct WorkspaceAgentThread: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.sceneSessionState) private var sceneSession
     let path: String
 
     private var item: WorkspaceAgentItem? { store.workspaceAgent(path: path) }
@@ -530,27 +626,37 @@ struct WorkspaceAgentThread: View {
                 ThreadView(chrome: .embedded, chatId: chatId)
                     .navigationTitle(item.directoryName)
                     .navigationBarTitleDisplayMode(.inline)
-                    .onAppear { store.enterWorkspaceThread(path: path, chatId: chatId) }
+                    .onAppear { prepare(item, chatId: chatId) }
             } else {
                 ProgressView("正在打开工作区…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .task {
-                        if let item { store.openWorkspaceAgent(item) }
+                        if let item { store.requestWorkspaceAgent(item) }
                     }
             }
         }
         .onChange(of: item?.mainChatId) { _, chatId in
-            if let chatId { store.enterWorkspaceThread(path: path, chatId: chatId) }
+            if let item, let chatId { prepare(item, chatId: chatId) }
         }
         .onChange(of: scenePhase) { _, phase in
             guard let chatId = item?.mainChatId else { return }
             if phase == .active {
-                store.enterWorkspaceThread(path: path, chatId: chatId)
-            } else {
+                if let item { prepare(item, chatId: chatId) }
+            } else if sceneSession == nil {
                 store.send(.workspaceAgentViewing(chatId: nil))
             }
         }
-        .onDisappear { store.leaveWorkspaceThread() }
+        .onDisappear {
+            if sceneSession == nil { store.leaveWorkspaceThread() }
+        }
+    }
+
+    private func prepare(_ item: WorkspaceAgentItem, chatId: String) {
+        if sceneSession != nil {
+            store.prepareWorkspaceThread(item, chatId: chatId)
+        } else {
+            store.enterWorkspaceThread(path: path, chatId: chatId)
+        }
     }
 }
 

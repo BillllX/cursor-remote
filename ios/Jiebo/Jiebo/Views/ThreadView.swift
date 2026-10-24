@@ -22,6 +22,10 @@ struct ThreadView: View {
     @Environment(ChatStore.self) var store
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @Environment(\.dynamicTypeSize) var dynamicTypeSize
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.assistantSceneToken) private var sceneToken
+    @Environment(\.sceneSessionState) private var sceneSession
+    @State private var editingOwnership = SceneEditingOwnership.shared
     var chrome: ThreadChrome = .pad
     /// nil = 工作台 activeId；聊天主页必须显式传助理或工作区 chatId。
     var chatId: String?
@@ -72,7 +76,8 @@ struct ThreadView: View {
         .environment(\.threadChatId, resolvedChatId)
         .background(JieboColor.paper.ignoresSafeArea())
         .toolbar(chrome == .embedded ? .automatic : .hidden, for: .navigationBar)
-        .toolbar(removing: .sidebarToggle)
+        // embedded 位于 PadAssistantShell 的 NavigationSplitView 中，必须保留系统侧栏开关。
+        .modifier(ThreadSidebarToggleRemoval(enabled: chrome != .embedded))
         // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
         .environment(\.openURL, OpenURLAction { url in
             guard url.scheme == "jiebo-file",
@@ -80,6 +85,7 @@ struct ThreadView: View {
                   let path = components.queryItems?.first(where: { $0.name == "path" })?.value
             else { return .systemAction }
             store.openPreview(path, chatId: resolvedChatId)
+            sceneSession?.presentPreview(from: store)
             return .handled
         })
         // P6：预览面板 overlay 上移到 WorkbenchView（RootView）——遮罩盖住侧栏 + detail，
@@ -92,11 +98,32 @@ struct ThreadView: View {
         .sheet(item: exportFileBinding, onDismiss: store.closeExport) { file in
             ActivityView(items: [file.url])
         }
+        .onAppear {
+            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+        }
+        .onDisappear {
+            editingOwnership.release(resource: editingResource, sceneToken: sceneToken)
+        }
+        .onChange(of: resolvedChatId) { oldId, _ in
+            editingOwnership.release(resource: resource(for: oldId), sceneToken: sceneToken)
+            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: phase == .active)
+        }
     }
 
     var resolvedChatId: String { chatId ?? store.activeId }
     var threadChat: ChatSession? { store.chats.first { $0.id == resolvedChatId } }
     var threadBusy: Bool { threadChat?.turns.contains(where: \.running) == true }
+    var editingResource: String { resource(for: resolvedChatId) }
+    var ownsEditing: Bool {
+        editingOwnership.isOwner(resource: editingResource, sceneToken: sceneToken)
+    }
+
+    private func resource(for chatId: String) -> String {
+        chatId == store.assistantChatId ? "assistant-composer" : "chat-composer:\(chatId)"
+    }
     var embeddedUndoTurn: Turn? {
         guard store.canUndo(resolvedChatId),
               let turn = threadChat?.turns.last(where: { !$0.running && !$0.queued }),
@@ -109,7 +136,20 @@ struct ThreadView: View {
     /// 输入框上方的委派待批、ActionDock 和输入框本身。输入框只有这一个
     @ViewBuilder
     var bottomStack: some View {
-        VStack(spacing: 0) {
+        if !ownsEditing {
+            HStack(spacing: 8) {
+                Image(systemName: "rectangle.on.rectangle")
+                Text("这个会话正在另一窗口编辑；切回本窗口即可接管输入。")
+            }
+            .font(JieboFont.text(.footnote, weight: .medium))
+            .foregroundStyle(JieboColor.dim)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(JieboColor.paper)
+            .accessibilityLabel("当前窗口只读，这个会话正在另一窗口编辑")
+        } else {
+          VStack(spacing: 0) {
             // .embedded：委派审批由 ActionDock 接管，这里不再出现同一张确认卡
             let delegated: [AssistantApproval] = chrome == .embedded ? [] : store.assistantApprovals(forParent: resolvedChatId)
             Group {
@@ -135,6 +175,7 @@ struct ThreadView: View {
             )
                 // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
                 .transaction { $0.animation = nil }
+          }
         }
     }
 
@@ -321,6 +362,19 @@ struct ThreadView: View {
         "最近改了哪些文件？",
         "用 Canvas 概括这个仓库",
     ]
+}
+
+private struct ThreadSidebarToggleRemoval: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.toolbar(removing: .sidebarToggle)
+        } else {
+            content
+        }
+    }
 }
 
 /// 输入区放进底部 safe area，整块一起停在键盘上方。

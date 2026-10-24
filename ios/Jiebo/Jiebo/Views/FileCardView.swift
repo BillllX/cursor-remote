@@ -273,6 +273,7 @@ private struct ThumbRequest: ViewModifier {
 /// 卡片共用的长按菜单
 private struct TurnFileMenu: ViewModifier {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     let file: TurnFile
     let chatId: String
     var beforeOpen: (() -> Void)?
@@ -287,6 +288,7 @@ private struct TurnFileMenu: ViewModifier {
                 Button {
                     beforeOpen?()
                     store.openTurnFile(file, chatId: chatId)
+                    sceneSession?.presentPreview(from: store)
                 } label: {
                     Label("打开预览", systemImage: "eye")
                 }
@@ -316,6 +318,7 @@ private struct TurnFileMenu: ViewModifier {
 /// 大卡：上面 16:10 预览，下面文件名和类型（同系统链接预览的版式）
 struct TurnFileLargeCard: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     let file: TurnFile
     let turn: Turn
     let chatId: String
@@ -334,6 +337,7 @@ struct TurnFileLargeCard: View {
         Button {
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
+            sceneSession?.presentPreview(from: store)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 TurnFileThumbnail(state: thumb, kind: file.kind)
@@ -369,6 +373,7 @@ struct TurnFileLargeCard: View {
 /// 画廊里的一张：固定宽度，预览 + 两行文字
 struct TurnFileTile: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @ScaledMetric(relativeTo: .body) private var baseWidth: CGFloat = 248
     private var width: CGFloat { min(baseWidth, 300) }
     let file: TurnFile
@@ -382,6 +387,7 @@ struct TurnFileTile: View {
         Button {
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
+            sceneSession?.presentPreview(from: store)
         } label: {
             VStack(alignment: .leading, spacing: 0) {
                 TurnFileThumbnail(state: thumb, kind: file.kind)
@@ -547,6 +553,7 @@ private struct ThumbSkeleton: View {
 /// 紧凑行：图标 + 文件名 + 增删行数 + chevron
 struct TurnFileRow: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     let file: TurnFile
     let turn: Turn
     let chatId: String
@@ -573,6 +580,7 @@ struct TurnFileRow: View {
         Button {
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
+            sceneSession?.presentPreview(from: store)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: fileGlyph(file.path, isDir: false, open: false))

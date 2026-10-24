@@ -4,6 +4,7 @@ import SwiftUI
 struct FileBrowserSheet: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.sceneSessionState) private var sceneSession
     @State private var filter = ""
 
     let chatId: String
@@ -36,6 +37,7 @@ struct FileBrowserSheet: View {
                         // 眼睛：直接预览（不进草稿）
                         Button {
                             store.openPreview(path, chatId: chatId)
+                            sceneSession?.presentPreview(from: store)
                             dismiss()
                         } label: {
                             Image(systemName: "eye")

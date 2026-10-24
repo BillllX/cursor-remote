@@ -204,7 +204,7 @@ enum ClientCase: String, CaseIterable {
     case uploadFile, listFiles, searchText, revertFile, listCheckpoints, restore, readFile, writeFile, undo, ping
     case syncChat, truncateTurns, toolReview, loadChats, loadChat, loadState, adminStats, loopStart, loopStop
     case assistantGet, assistantOp
-    case imContacts, imList, imHistory, imSend, imRecall, imRead, imSettings, imProfile, imBlock, imPresence
+    case imContacts, imList, imHistory, imSend, imRecall, imRead, imSettings, imProfile, imBlock, imPresence, collabSync
     case deviceResult, devicePermissionReport
 }
 
@@ -262,6 +262,7 @@ func clientCase(of message: ClientMessage) -> ClientCase {
     case .imProfile: return .imProfile
     case .imBlock: return .imBlock
     case .imPresence: return .imPresence
+    case .collabSync: return .collabSync
     case .deviceResult: return .deviceResult
     case .devicePermissionReport: return .devicePermissionReport
     }
@@ -376,6 +377,8 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .imProfile: return .imProfile(nickname: "爱丽丝", avatar: "5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e", notifyPreview: true)
     case .imBlock: return .imBlock(tenantId: "mallory", on: true)
     case .imPresence: return .imPresence(foreground: false)
+    case .collabSync:
+        return .collabSync(convId: conv, known: [(runId: "run-1", version: 3)], cursor: "next-page")
     }
 }
 
@@ -399,6 +402,22 @@ func checkImBodies() -> [String] {
         problems.append("ImConv.peer 解析不对")
     }
     if ImConv.peer(of: conv, me: "carol") != nil { problems.append("ImConv.peer 不含自己时应为 nil") }
+    let group = ImConvRow.from(.object([
+        "convId": .string("grp~00000000-0000-4000-8000-000000000001"),
+        "kind": .string("group"),
+        "title": .string("发布协作"),
+        "memberCount": .number(3),
+        "activityAt": .number(123),
+        "unread": .number(1),
+        "readSeq": .number(0),
+        "maxSeq": .number(1),
+        "pin": .bool(false),
+        "mute": .bool(false),
+        "hideBefore": .number(0),
+    ]))
+    if group?.kind != "group" || group?.peer != "" || group?.title != "发布协作" || group?.memberCount != 3 {
+        problems.append("ImConvRow 必须接受没有 peer 的既有 group 投影")
+    }
     print("即时消息体往返：\(bodies.count) 种，\(problems.count) 条不符")
     return problems
 }
@@ -570,6 +589,32 @@ func checkDeviceRequestValidation() -> [String] {
     }
     rejects("空联系人查询") {
         _ = try DeviceRequestValidator.contactsSearch(.object(["query": .string("  ")]))
+    }
+    do {
+        let draft = try DeviceRequestValidator.mailDraft(.object([
+            "to": .array([.string("user@example.com")]),
+            "subject": .string("评审"),
+            "body": .string("请查看草稿"),
+        ]))
+        if draft.to != ["user@example.com"] || draft.subject != "评审" {
+            problems.append("device validation：邮件草稿解析不符")
+        }
+    } catch {
+        problems.append("device validation：合法邮件草稿被拒绝：\(error)")
+    }
+    rejects("空邮件草稿") {
+        _ = try DeviceRequestValidator.mailDraft(.object([:]))
+    }
+    rejects("非法邮件地址") {
+        _ = try DeviceRequestValidator.mailDraft(.object(["to": .array([.string("not-an-email")])]))
+    }
+    do {
+        let completion = try DeviceRequestValidator.reminderCompletion(.object(["id": .string("rem-1")]))
+        if completion.identifier != "rem-1" || !completion.completed {
+            problems.append("device validation：提醒完成默认值不符")
+        }
+    } catch {
+        problems.append("device validation：提醒完成参数被拒绝：\(error)")
     }
     if DeviceWriteConfirmationPolicy.begin(hasPendingConfirmation: true) != .busy {
         problems.append("device confirmation：已有确认时必须 busy")
@@ -1410,6 +1455,246 @@ func checkPersonalTaskProjection(_ samples: [JSONValue]) -> [String] {
     return problems
 }
 
+func checkAssistantSceneElection() -> [String] {
+    var problems: [String] = []
+    let candidates = [
+        AssistantSceneCandidate(token: "old-active", active: true, order: 1),
+        AssistantSceneCandidate(token: "new-inactive", active: false, order: 3),
+        AssistantSceneCandidate(token: "new-active", active: true, order: 2),
+    ]
+    if AssistantSceneElection.presenter(in: candidates) != "new-active" {
+        problems.append("assistant scene：必须选最近激活的前台场景")
+    }
+    if AssistantSceneElection.presenter(in: Array(candidates.dropFirst(2))) != "new-active" {
+        problems.append("assistant scene：单窗口前台场景不可丢失")
+    }
+    let inactive = candidates.map { AssistantSceneCandidate(token: $0.token, active: false, order: $0.order) }
+    if AssistantSceneElection.presenter(in: inactive) != "new-inactive" {
+        problems.append("assistant scene：无前台场景时必须只退回最近登记场景")
+    }
+    if AssistantSceneElection.presenter(in: []) != nil {
+        problems.append("assistant scene：空场景列表必须返回 nil")
+    }
+    print("Assistant scene 唯一 Presenter：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkSceneEditorElection() -> [String] {
+    var problems: [String] = []
+    let rows = [
+        SceneEditorCandidate(sceneToken: "old", active: true, order: 1),
+        SceneEditorCandidate(sceneToken: "background", active: false, order: 4),
+        SceneEditorCandidate(sceneToken: "front", active: true, order: 3),
+    ]
+    if SceneEditorElection.owner(in: rows) != "front" {
+        problems.append("scene editor：必须只有最近激活的前台场景拥有编辑权")
+    }
+    if SceneEditorElection.owner(in: rows.map {
+        SceneEditorCandidate(sceneToken: $0.sceneToken, active: false, order: $0.order)
+    }) != "background" {
+        problems.append("scene editor：全后台时只能保留最近一个租约")
+    }
+    if SceneEditorElection.owner(in: []) != nil {
+        problems.append("scene editor：空候选必须没有 owner")
+    }
+    print("Scene-local 编辑所有权：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkScenePreviewState() -> [String] {
+    var problems: [String] = []
+    var first = ScenePreviewState()
+    var second = ScenePreviewState()
+    first.open("a")
+    first.open("b")
+    second.open("x")
+    first.dismiss()
+    if first.selected != nil || first.keys != ["a", "b"] {
+        problems.append("scene preview：收起只应清当前选择，保留本窗口页签")
+    }
+    if second.selected != "x" || second.keys != ["x"] {
+        problems.append("scene preview：一个窗口不得改写另一窗口预览")
+    }
+    first.select("a")
+    first.close("a")
+    if first.selected != nil || first.keys != ["b"] {
+        problems.append("scene preview：关闭当前页签必须清理本窗口选择")
+    }
+    for index in 0 ..< 10 { first.open("p\(index)") }
+    if first.keys.count != 8 || first.keys.first != "p2" || first.selected != "p9" {
+        problems.append("scene preview：页签上限与淘汰顺序不符")
+    }
+    print("Scene-local 预览状态：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkPadInspectorNavigation() -> [String] {
+    var problems: [String] = []
+    if PadSelection.assistantChat.hasInspectorDetail || !PadSelection.brief.hasInspectorDetail {
+        problems.append("iPad Inspector：主会话不得拥有详情，业务实体必须拥有详情")
+    }
+    var assistantNavigation = PadInspectorNavigation(selection: .assistantChat)
+    assistantNavigation.openPreview()
+    assistantNavigation.restoreAfterPreview()
+    if assistantNavigation.selection != .assistantChat
+        || assistantNavigation.selection?.hasInspectorDetail == true
+    {
+        problems.append("iPad Inspector：主会话关闭预览后不得变成失效详情")
+    }
+    var navigation = PadInspectorNavigation(selection: .delegation("delegate-1"))
+    navigation.openPreview()
+    if navigation.mode != .preview(returnTo: .delegation("delegate-1")) {
+        problems.append("iPad Inspector：预览必须记录委派详情来处")
+    }
+    navigation.restoreAfterPreview()
+    if navigation.selection != .delegation("delegate-1") || navigation.mode != .detail {
+        problems.append("iPad Inspector：关闭预览必须恢复原委派详情")
+    }
+    navigation.select(.artifact("artifact-1"))
+    navigation.openPreview(returningTo: .task("task-1"))
+    navigation.restoreAfterPreview()
+    if navigation.selection != .task("task-1") {
+        problems.append("iPad Inspector：显式返回目标必须优先于当前 selection")
+    }
+    navigation.restoreAfterPreview()
+    if navigation.selection != .task("task-1") {
+        problems.append("iPad Inspector：非预览状态恢复必须幂等")
+    }
+    print("iPad Inspector 导航状态：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkPadLayoutMetrics() -> [String] {
+    var problems: [String] = []
+    if PadLayoutMode.resolve(width: 1_200, compactSizeClass: true) != .compact {
+        problems.append("iPad layout：compact size class 必须优先")
+    }
+    if PadLayoutMode.resolve(width: 699, compactSizeClass: false) != .compact
+        || PadLayoutMode.resolve(width: 700, compactSizeClass: false) != .regular
+        || PadLayoutMode.resolve(width: 1_100, compactSizeClass: false) != .expanded
+    {
+        problems.append("iPad layout：Stage Manager 宽度边界不符")
+    }
+    if PadLayoutMode.expanded.inspectorWidth.ideal <= PadLayoutMode.regular.inspectorWidth.ideal {
+        problems.append("iPad layout：宽窗口 Inspector 应适度变宽")
+    }
+    print("iPad 尺寸状态：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkPadSemanticDropRules() -> [String] {
+    var problems: [String] = []
+    for kind in PadSemanticKind.allCases where !PadSemanticDropTarget.today.accepts(kind) {
+        problems.append("iPad 拖放：今日必须接收 \(kind.rawValue)")
+    }
+    if !PadSemanticDropTarget.inbox.accepts(.inbox)
+        || !PadSemanticDropTarget.inbox.accepts(.draft)
+        || PadSemanticDropTarget.inbox.accepts(.task)
+        || PadSemanticDropTarget.tasks.accepts(.artifact)
+        || !PadSemanticDropTarget.tasks.accepts(.task)
+        || !PadSemanticDropTarget.artifacts.accepts(.artifact)
+    {
+        problems.append("iPad 拖放：栏目接受矩阵不符")
+    }
+    print("iPad 语义拖放规则：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
+func checkImDurableOutbox() -> [String] {
+    var problems: [String] = []
+    let pending = ImDurableOutboxMetadata(stableID: "client-stable-1", now: 1_000)
+    let inFlight = ImDurableOutboxPolicy.beginAttempt(pending, now: 1_100)
+    if inFlight.status != .inFlight || !inFlight.nextAttemptAt.isFinite
+        || ImDurableOutboxPolicy.mayReplay(inFlight, now: 99_000)
+        || ImDurableOutboxPolicy.scheduledDelay(inFlight, now: 1_100) != nil
+    {
+        problems.append("IM outbox：在途必须是独立有限状态且不可重复调度")
+    }
+    var metadata = ImDurableOutboxPolicy.afterTransientFailure(inFlight, now: 2_000)
+    if metadata.status != .retrying || metadata.nextAttemptAt <= 2_000 {
+        problems.append("IM outbox：暂时失败必须进入有界退避")
+    }
+    metadata.attempts = ImDurableOutboxPolicy.maximumAttempts
+    metadata = ImDurableOutboxPolicy.afterTransientFailure(metadata, now: 3_000)
+    if metadata.status != .permanentFailure || ImDurableOutboxPolicy.mayReplay(metadata, now: 99_000) {
+        problems.append("IM outbox：达到上限后不得继续自动重放")
+    }
+    if !ImDurableOutboxPolicy.isPermanent(errorCode: "bad_body")
+        || !ImDurableOutboxPolicy.isPermanent(errorCode: "not_visible")
+        || ImDurableOutboxPolicy.isPermanent(errorCode: "busy")
+    {
+        problems.append("IM outbox：永久与暂时错误分类不符")
+    }
+    do {
+        let original = ImDurableOutboxMetadata(stableID: "restart-id", attempts: 2, nextAttemptAt: 4_000, status: .retrying)
+        let restored = try JSONDecoder().decode(
+            ImDurableOutboxMetadata.self,
+            from: JSONEncoder().encode(original)
+        )
+        if restored != original { problems.append("IM outbox：进程重启 Codable 恢复不符") }
+    } catch {
+        problems.append("IM outbox：Codable 恢复失败 \(error)")
+    }
+    let disconnected = ImDurableOutboxPolicy.afterConnectionLoss(inFlight, now: 5_000)
+    if disconnected.status != .retrying || disconnected.attempts != pending.attempts
+        || disconnected.nextAttemptAt != 5_000 {
+        problems.append("IM outbox：断线必须撤销在途尝试并立即重排")
+    }
+    let restored = ImDurableOutboxPolicy.restored(inFlight, now: 6_000)
+    if restored.status != .retrying || restored.nextAttemptAt != 6_000 {
+        problems.append("IM outbox：进程退出时的在途项目必须恢复成可重放")
+    }
+    var limitedInput = inFlight
+    limitedInput.attempts = ImDurableOutboxPolicy.maximumAttempts
+    let limited = ImDurableOutboxPolicy.afterRateLimited(limitedInput, now: 7_000)
+    if limited.status != .retrying
+        || limited.attempts != ImDurableOutboxPolicy.maximumAttempts - 1
+        || limited.nextAttemptAt < 7_000 + 60_000
+        || ImDurableOutboxPolicy.mayReplay(limited, now: 7_000 + 59_999)
+        || !ImDurableOutboxPolicy.mayReplay(limited, now: 7_000 + 60_000)
+    {
+        problems.append("IM outbox：rate_limited 不得消耗预算，且必须等待完整 60 秒窗口")
+    }
+    let legacySentinel = ImDurableOutboxMetadata(
+        stableID: "legacy",
+        attempts: 1,
+        nextAttemptAt: .greatestFiniteMagnitude,
+        status: .retrying
+    )
+    if ImDurableOutboxPolicy.scheduledDelay(legacySentinel, now: 0)
+        != Int64(ImDurableOutboxPolicy.maximumScheduleDelay) {
+        problems.append("IM outbox：异常远期时间必须先安全限界再转整数")
+    }
+    if ImDurableOutboxPolicy.replayBatchLimit <= 0 {
+        problems.append("IM outbox：重连重放必须有正的批次上限")
+    }
+    if !ImUploadLeasePolicy.acceptsCompletion(
+        expectedGeneration: 3,
+        expectedTenant: "tenant-a",
+        currentGeneration: 3,
+        currentTenant: "tenant-a"
+    ) || ImUploadLeasePolicy.acceptsCompletion(
+        expectedGeneration: 3,
+        expectedTenant: "tenant-a",
+        currentGeneration: 4,
+        currentTenant: "tenant-a"
+    ) || ImUploadLeasePolicy.acceptsCompletion(
+        expectedGeneration: 3,
+        expectedTenant: "tenant-a",
+        currentGeneration: 3,
+        currentTenant: "tenant-b"
+    ) {
+        problems.append("IM 上传：只有 generation 与 tenant 同时匹配才能接纳异步完成")
+    }
+    var succeeded = ImDurableOutboxMetadata(stableID: "acked", now: 0)
+    succeeded.status = .succeeded
+    if ImDurableOutboxPolicy.mayReplay(succeeded, now: 99_000) {
+        problems.append("IM outbox：已成功项目不得再次重放")
+    }
+    print("IM 持久 outbox 状态：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -1418,7 +1703,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples)
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

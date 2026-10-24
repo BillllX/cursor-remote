@@ -339,7 +339,11 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "workspace_agents", "device_bridge"]
+            // Collab 沿用网关现有双 capability 门槛；iOS P3 只读取状态，不发送 collab_op。
+            caps: [
+                "sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "im_group", "im_collab",
+                "workspace_agents", "device_bridge", "device_bridge_v2",
+            ]
         )
     }
 
@@ -453,6 +457,8 @@ enum ClientMessage {
     case imBlock(tenantId: String, on: Bool)
     /// App 进出前台；没有回包
     case imPresence(foreground: Bool)
+    /// iOS P3 只读同步 Collab 运行图；旧网关会忽略未知能力或返回 im_error，主聊天路径不受影响。
+    case collabSync(convId: String, known: [(runId: String, version: Int)], cursor: String?)
     /// Apple 本地设备桥结果；执行器下一步接入，当前不会伪造成功。
     case deviceResult(reqId: String, op: String, status: String, result: JSONValue?, error: String?, externalId: String?)
     case devicePermissionReport(reqId: String?, grants: [JSONValue])
@@ -704,6 +710,17 @@ enum ClientMessage {
             return .object(["type": .string("im_block"), "tenantId": .string(tenantId), "on": .bool(on)])
         case .imPresence(let foreground):
             return .object(["type": .string("im_presence"), "foreground": .bool(foreground)])
+        case .collabSync(let convId, let known, let cursor):
+            var object: [String: JSONValue] = [
+                "type": .string("collab_sync"),
+                "convId": .string(convId),
+                "known": .array(known.map { .object([
+                    "runId": .string($0.runId),
+                    "version": .number(Double($0.version)),
+                ]) }),
+            ]
+            if let cursor { object["cursor"] = .string(cursor) }
+            return .object(object)
         case .deviceResult(let reqId, let op, let status, let result, let error, let externalId):
             var object: [String: JSONValue] = [
                 "type": .string("device_result"),
@@ -1872,7 +1889,7 @@ enum ServerMessage {
             return .memoryWritten(chatId: object["chatId"]?.string?.nilIfEmpty, entry: entry)
         case "pong":
             return .pong
-        case _ where type.hasPrefix("im_"):
+        case _ where type.hasPrefix("im_") || type == "collab_state":
             guard let event = ImEvent.decode(type: type, object) else { return .ignored(type) }
             return .im(event)
         default:

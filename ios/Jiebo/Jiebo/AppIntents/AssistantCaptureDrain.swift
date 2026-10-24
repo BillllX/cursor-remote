@@ -12,8 +12,8 @@ enum AssistantCaptureDrain {
         let tenant = store.tenantId
         let captures = AssistantCaptureBridge.pending(tenant: tenant)
         guard !captures.isEmpty else { return }
+        // 先让当前设备的壳切到小驳域；iPhone 壳会选择主会话，iPad 固定 chatId、不改工作台 activeId。
         NotificationCenter.default.post(name: .assistantCaptureOpenRequested, object: nil)
-        store.openAssistantChat()
 
         var waited = 0
         while (!store.unlocked || store.assistantChatId == nil), waited < 100, !Task.isCancelled {

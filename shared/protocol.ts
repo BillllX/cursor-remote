@@ -7,8 +7,12 @@ export type JSONValue = null | boolean | number | string | JSONValue[] | { [key:
 export type DeviceOp =
   | "calendar_events_list"
   | "calendar_event_upsert"
+  | "calendar_event_delete"
   | "reminders_list"
   | "reminders_upsert"
+  | "reminder_complete"
+  | "reminder_delete"
+  | "mail_draft_open"
   | "contacts_search"
   | (string & {});
 
@@ -815,6 +819,7 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //   "im_group"      —— 支持群会话；必须和 im_collab 同时声明才会收到任何群数据
 //   "im_collab"     —— 支持协作 Actor/消息；必须和 im_group 同时声明才会收到任何群数据
 //   "device_bridge" —— 可接收本租户的 device_invoke，并回传 device_result / device_permission_report
+//   "device_bridge_v2" —— 在 device_bridge 基础上支持 P3 列表/删除/完成与系统邮件草稿操作
 // slim 行对有内容的会话带 segHashes：第 i 个是 turns[i*100, (i+1)*100) 的 sha1(JSON.stringify(分段))，
 // 客户端据此只重拉变了的分段
 export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[]; deviceId?: string };

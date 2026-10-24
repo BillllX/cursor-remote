@@ -1155,7 +1155,38 @@
 .ignored("im_group_created")
 
 ## server[75] collab_state #1
-.ignored("collab_state")
+.im(.collabState(CollabStatePage(
+  convId: "grp~00000000-0000-4000-8000-000000000001"
+  snapshotSeq: 3
+  runs: [
+    CollabRunSnapshot(
+      runId: "run_1"
+      version: 2
+      status: "running"
+      createdAt: nil
+      wave: nil
+      explanation: nil
+      summary: nil
+      partial: false
+      tasks: [
+        Task(
+          taskId: "task_1"
+          version: 1
+          workspaceId: "wsa_1"
+          title: "未命名任务"
+          status: "queued"
+          attempt: 1
+          summary: nil
+          fileCount: 0
+          needsApproval: false
+        )
+      ]
+    )
+  ]
+  removedRunIds: []
+  more: false
+  cursor: nil
+)))
 
 ## server[76] collab_result #1
 .ignored("collab_result")
@@ -1165,7 +1196,11 @@
   convs: [
     ImConvRow(
       convId: "dm~alice~bob-2"
+      kind: "dm"
       peer: "bob-2"
+      title: nil
+      memberCount: 0
+      activityAt: 0
       last: ImMessage(
         convId: "dm~alice~bob-2"
         seq: 37

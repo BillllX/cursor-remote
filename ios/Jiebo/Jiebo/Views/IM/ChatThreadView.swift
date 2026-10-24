@@ -213,6 +213,7 @@ struct ImBubbleRow: View {
     let quoted: ImLocalMessage?
     var openImage: () -> Void
     var quote: () -> Void
+    @State private var collabOpen = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -228,6 +229,9 @@ struct ImBubbleRow: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+        .sheet(isPresented: $collabOpen) {
+            CollabRunGraphView(convId: message.convId)
+        }
     }
 
     private var content: some View {
@@ -257,17 +261,28 @@ struct ImBubbleRow: View {
                     .accessibilityLabel("正在发送")
             }
         case .failed:
-            Button {
-                im.resend(message)
-            } label: {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: 20))
-                    .foregroundStyle(JieboColor.danger)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Rectangle())
+            VStack(alignment: .trailing, spacing: 2) {
+                if message.durableOutbox?.status == .retrying {
+                    Text("等待重试")
+                        .font(JieboFont.text(.caption2))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                Button {
+                    im.resend(message)
+                } label: {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(JieboColor.danger)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(
+                    message.durableOutbox?.status == .permanentFailure
+                        ? "发送永久失败，点一下重新尝试"
+                        : "发送失败，系统会有界重试，也可点一下立即重发"
+                )
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("发送失败，点一下重发")
         case .sent:
             EmptyView()
         }
@@ -275,7 +290,25 @@ struct ImBubbleRow: View {
 
     @ViewBuilder
     private var bubble: some View {
-        if message.kind == "image" {
+        if message.kind == "collab" {
+            Button {
+                im.syncCollab(convId: message.convId)
+                collabOpen = true
+            } label: {
+                Label("查看协作运行图", systemImage: "point.3.connected.trianglepath.dotted")
+                    .font(JieboFont.text(.callout, weight: .semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(JieboColor.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(JieboColor.line, lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("只读查看任务状态、审批提示与交付文件数量")
+        } else if message.kind == "image" {
             ImMessageImage(message: message)
                 .onTapGesture(perform: openImage)
                 .accessibilityLabel("图片")

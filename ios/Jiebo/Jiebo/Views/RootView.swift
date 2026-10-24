@@ -16,12 +16,13 @@ struct RootView: View {
         .tint(JieboColor.pine)
     }
 }
-
 struct WorkbenchView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.homeActive) private var homeActive
+    @Environment(\.assistantSceneToken) private var sceneToken
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var workbenchWidth: CGFloat = 0
     /// 侧栏实际宽（用户可拖 240–380）
@@ -38,7 +39,24 @@ struct WorkbenchView: View {
         return workbenchWidth - side - previewColumnWidth - 1 >= 400
     }
 
-    private var previewOverlaid: Bool { store.previewPanelOpen && !previewSplit }
+    private var activePreviewTab: PreviewTab? {
+        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+    }
+
+    private var previewPanelOpen: Bool {
+        if sceneSession != nil { return activePreviewTab != nil }
+        return store.previewPanelOpen
+    }
+
+    private var previewOverlaid: Bool { previewPanelOpen && !previewSplit }
+
+    private func closePreview() {
+        if let sceneSession {
+            sceneSession.dismissPreview()
+        } else {
+            store.collapsePreview()
+        }
+    }
 
     var body: some View {
         Group {
@@ -65,6 +83,16 @@ struct WorkbenchView: View {
             }
         }
         #endif
+        .onReceive(NotificationCenter.default.publisher(for: .padSceneSidebarToggleRequested)) { note in
+            guard let delivery = note.object as? PadSceneCommandDelivery,
+                  delivery.sceneToken == sceneToken,
+                  UIDevice.current.userInterfaceIdiom == .pad,
+                  sizeClass == .regular
+            else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        }
     }
 
     @ViewBuilder
@@ -99,8 +127,7 @@ struct WorkbenchView: View {
                     }
             } detail: {
                 ZStack(alignment: .leading) {
-                    ThreadView()
-                        .background { WorkbenchShortcuts() }
+                    ThreadView(chatId: sceneSession?.workbenchChatId ?? store.activeId)
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
                             .id(layer)
@@ -115,7 +142,7 @@ struct WorkbenchView: View {
             .toolbar(removing: .sidebarToggle)
             // 预览盖满时，底下的侧栏和对话不再让 VoiceOver 摸到；分栏时两边都能摸
             .accessibilityHidden(previewOverlaid)
-            if previewSplit, store.previewPanelOpen, let tab = store.activePreviewTab {
+            if previewSplit, previewPanelOpen, let tab = activePreviewTab {
                 Divider().overlay(JieboColor.line)
                 PreviewPanelView(tab: tab, modal: false)
                     .frame(width: previewColumnWidth)
@@ -124,7 +151,7 @@ struct WorkbenchView: View {
                     .transition(.move(edge: .trailing))
             }
         }
-        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen && previewSplit)
+        .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen && previewSplit)
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -137,10 +164,10 @@ struct WorkbenchView: View {
         // 竖屏、窄窗放不下分栏：预览盖住侧栏和对话（与 PhoneWorkbench 同一写法）
         .overlay {
             ZStack {
-                if previewOverlaid, let tab = store.activePreviewTab {
+                if previewOverlaid, let tab = activePreviewTab {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
-                        .onTapGesture { store.collapsePreview() }
+                        .onTapGesture { closePreview() }
                         .transition(.opacity)
                         .accessibilityHidden(true)
                     PreviewPanelView(tab: tab)
@@ -150,7 +177,7 @@ struct WorkbenchView: View {
                         .zIndex(3)
                 }
             }
-            .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
+            .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
         }
         .task {
             #if DEBUG
@@ -198,12 +225,11 @@ struct WorkbenchView: View {
         }
     }
 }
-
 struct CollapsedSidebarRail: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openPadDomain) private var openPadDomain
     var expand: () -> Void
-    @AppStorage(HomeMode.storageKey) private var homeMode: HomeMode = .workbench
     @State private var adminOpen = false
     @State private var themeOpen = false
     @State private var settingsOpen = false
@@ -236,7 +262,7 @@ struct CollapsedSidebarRail: View {
             }
             Spacer()
             railButton(NavigationIconId.workspace.symbol, label: "切换工作区", action: store.openWorkspaceSwitcher)
-            railButton(HomeMode.chat.symbol, label: "切换到聊天") { homeMode = .chat }
+            railButton(HomeMode.chat.symbol, label: "切换到消息") { openPadDomain?(.messages) }
             railButton("paintpalette", label: "主题") { themeOpen = true }
             if store.isAdmin {
                 railButton(NavigationIconId.stats.symbol, label: "查看使用统计") { adminOpen = true }
@@ -336,7 +362,6 @@ struct CollapsedSidebarRail: View {
         .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
-
 struct ToolLayerOverlay: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -504,7 +529,6 @@ struct ToolLayerOverlay: View {
         .padding(16)
     }
 }
-
 struct ContentLayerView: View {
     @Environment(ChatStore.self) private var store
 
@@ -599,7 +623,6 @@ struct ContentLayerView: View {
         }
     }
 }
-
 struct SearchToolView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -718,7 +741,6 @@ struct SearchToolView: View {
         .contentShape(Rectangle())
     }
 }
-
 struct GitToolView: View {
     @Environment(ChatStore.self) private var store
     var onOpen: ((String) -> Void)? = nil
@@ -765,7 +787,6 @@ struct GitToolView: View {
         }
     }
 }
-
 struct TerminalToolView: View {
     @Environment(ChatStore.self) private var store
 
@@ -811,18 +832,5 @@ struct TerminalToolView: View {
                 }
             }
         }
-    }
-}
-
-/// iPad 外接键盘：⌘O 打开文件浏览器。挂在对话区上，侧栏收起时也在
-struct WorkbenchShortcuts: View {
-    @Environment(ChatStore.self) private var store
-
-    var body: some View {
-        Button("打开文件") { store.toggleFileBrowser() }
-            .keyboardShortcut("o", modifiers: .command)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
     }
 }
