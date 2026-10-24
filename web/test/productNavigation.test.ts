@@ -11,13 +11,21 @@ import {
   isAssistantDomainActive,
   statusAriaLabel,
 } from "../lib/productNavigation";
+import { HELLO_CLIENT } from "../lib/chat/connection";
 
 describe("Web 产品信息架构", () => {
-  test("活动栏只有助理与工作区两个一级域", () => {
+  test("活动栏按助理、协作、工作区提供三个一级域", () => {
     assert.deepEqual(
       PRIMARY_NAV.map((item) => item.id),
-      ["assistant", "workspace"],
+      ["assistant", "collab", "workspace"],
     );
+    assert.equal(PRIMARY_NAV.find((item) => item.id === "collab")?.icon, "collab");
+  });
+
+  test("Web hello 同时声明 IM 群聊与协作能力", () => {
+    assert.ok(HELLO_CLIENT.caps?.includes("im"));
+    assert.ok(HELLO_CLIENT.caps?.includes("im_group"));
+    assert.ok(HELLO_CLIENT.caps?.includes("im_collab"));
   });
 
   test("工作区承载会话、文件、搜索、Git、记忆和管理", () => {
@@ -86,5 +94,8 @@ describe("Web 产品信息架构", () => {
     assert.equal(statusAriaLabel("unread", 3), "未读 3");
     assert.equal(statusAriaLabel("attention", 3), "需要处理 3");
     assert.equal(statusAriaLabel("running"), "运行中");
+    assert.equal(statusAriaLabel("publishing"), "正在发布");
+    assert.equal(statusAriaLabel("succeeded"), "已完成");
+    assert.equal(statusAriaLabel("cancelled"), "已取消");
   });
 });

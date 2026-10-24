@@ -34,7 +34,7 @@ export function turnUrl(chatId: string, turnId: string) {
 export const HELLO_CLIENT: HelloClient = {
   name: "cursor-remote-web",
   version: process.env.NEXT_PUBLIC_APP_VERSION ?? "dev",
-  caps: ["sync_chat", "stored_digest", "slim_state", "deferred_turn"],
+  caps: ["sync_chat", "stored_digest", "slim_state", "deferred_turn", "im", "im_group", "im_collab"],
   maxMessageBytes: 8 * 1024 * 1024,
 };
 

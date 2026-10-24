@@ -83,6 +83,9 @@ import { Sidebar } from "./chat/Sidebar";
 import { TerminalOverlay } from "./chat/TerminalOverlay";
 import { Thread } from "./chat/Thread";
 import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
+import { CollabShell } from "./collab/CollabShell";
+import { readCollabRoute, replaceCollabRoute } from "./collab/collabNavigation";
+import { useCollabState } from "./collab/useCollabState";
 
 
 // 服务端正文覆盖本地回合时，保留“还在跑 / 排队 / 待批”的回合（withLiveTurns）；测量开关打开时再保留合成的回合，
@@ -152,6 +155,9 @@ export default function ChatApp() {
   const [threadFindIndex, setThreadFindIndex] = useState(0);
   const [grepOpen, setGrepOpen] = useState(false);
   const [loopOpen, setLoopOpen] = useState(false);
+  const [collabOpen, setCollabOpen] = useState(
+    () => typeof window !== "undefined" && readCollabRoute(window.location.search).active,
+  );
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantInitialView, setAssistantInitialView] = useState<AssistantView>("overview");
   const [assistantMemoryScopeId, setAssistantMemoryScopeId] = useState<string>();
@@ -504,6 +510,16 @@ export default function ChatApp() {
     }
   }, []);
 
+  const onCollabDomainChange = useCallback((active: boolean) => setCollabOpen(active), []);
+  const collab = useCollabState({
+    active: collabOpen,
+    connected,
+    unlocked,
+    send,
+    onDomainChange: onCollabDomainChange,
+  });
+  const handleCollabServer = collab.handleServer;
+
   const rememberRecent = useCallback((path: string) => {
     if (!path.trim() || !isOpenableMention(path)) return;
     setRecentFiles((prev) => pushRecent(prev, path));
@@ -654,6 +670,7 @@ export default function ChatApp() {
 
   const onServer = useCallback(
     (message: ServerMessage) => {
+      handleCollabServer(message);
       const ctx: ChatReduceContext = { activeId: activeIdRef.current, chatRevs: chatRevsRef.current };
       const chatId = serverChatId(message, ctx.activeId);
       const reduceChats = () => applyChats((prev) => applyServerMessage(prev, message, ctx));
@@ -1592,7 +1609,7 @@ export default function ChatApp() {
           break;
       }
     },
-    [applyChats, flushQueue, flushOutbox, patchChat, rememberRecent, send],
+    [applyChats, flushQueue, flushOutbox, handleCollabServer, patchChat, rememberRecent, send],
   );
 
   const onServerRef = useRef(onServer);
@@ -2536,6 +2553,8 @@ export default function ChatApp() {
   }
 
   function prepareAssistantDomain() {
+    setCollabOpen(false);
+    replaceCollabRoute({ active: false });
     setNavOpen(false);
     setWorkspaceMenuOpen(false);
     setGroupMenu(null);
@@ -2625,6 +2644,8 @@ export default function ChatApp() {
   }
 
   function openWorkspaceDomain() {
+    setCollabOpen(false);
+    replaceCollabRoute({ active: false });
     setNavOpen(false);
     setAssistantOpen(false);
     const recent =
@@ -2640,6 +2661,24 @@ export default function ChatApp() {
       setEmptyWorkspacePath(otherMenuWorkspaces[0].path);
     }
     chooseSide("chats");
+  }
+
+  function openCollabDomain() {
+    setNavOpen(false);
+    setAssistantOpen(false);
+    setSearchOpen(false);
+    setPaletteOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setCollabOpen(true);
+    replaceCollabRoute({
+      active: true,
+      convId: collab.state.selectedConvId,
+      runId: collab.state.selectedRunId,
+      taskId: collab.state.selectedTaskId,
+    });
   }
 
   function openWorkspaceMemory() {
@@ -2911,6 +2950,9 @@ export default function ChatApp() {
     setResuming(false);
     setVerifying(false);
     setAuthError("");
+    collab.dispatch({ type: "reset" });
+    setCollabOpen(false);
+    replaceCollabRoute({ active: false });
     resetTenantSession();
     pendingHelloRef.current = null;
     wsRef.current?.close();
@@ -4209,10 +4251,19 @@ export default function ChatApp() {
   const assistantApprovalBadge = assistantState?.approvals.length ?? 0;
   const assistantBadge = assistantInboxBadge + assistantApprovalBadge;
   const assistantActive = !emptyWorkspacePath && Boolean(assistantChatId) && activeId === assistantChatId;
-  const assistantDomainActive = isAssistantDomainActive(
-    assistantActive,
-    assistantOpen,
-    assistantMemorySource,
+  const assistantDomainActive =
+    !collabOpen &&
+    isAssistantDomainActive(assistantActive, assistantOpen, assistantMemorySource);
+  const collabBadge = Object.values(collab.state.rooms).reduce(
+    (total, room) =>
+      total +
+      room.unread +
+      (collab.state.runOrder[room.convId] ?? [])
+        .map((id) => collab.state.runs[id])
+        .filter(Boolean)
+        .flatMap((run) => run.tasks)
+        .filter((task) => task.status === "awaiting").length,
+    0,
   );
   const assistantChatUnread = Boolean(assistantChat?.unread) && !assistantActive;
 
@@ -4271,8 +4322,19 @@ export default function ChatApp() {
         </button>
         <button
           type="button"
-          className={assistantDomainActive ? "" : "on"}
-          aria-pressed={!assistantDomainActive}
+          className={`${collabOpen ? "on" : ""}${collabBadge > 0 ? " live" : ""}`}
+          aria-pressed={collabOpen}
+          aria-label={`协作${collabBadge > 0 ? `，未读或需处理 ${collabBadge}` : ""}`}
+          title="协作"
+          onClick={openCollabDomain}
+        >
+          <IconRail name="collab" />
+          {collabBadge > 0 ? <span className="assistant-attention-badge" aria-hidden="true">{collabBadge}</span> : null}
+        </button>
+        <button
+          type="button"
+          className={!assistantDomainActive && !collabOpen ? "on" : ""}
+          aria-pressed={!assistantDomainActive && !collabOpen}
           aria-label="工作区"
           title="工作区"
           onClick={openWorkspaceDomain}
@@ -4285,6 +4347,8 @@ export default function ChatApp() {
           aria-label="账户与设置"
           title="账户与设置"
           onClick={() => {
+            setCollabOpen(false);
+            replaceCollabRoute({ active: false });
             setAssistantOpen(false);
             chooseSide("chats");
             setSettingsOpen(true);
@@ -4435,6 +4499,34 @@ export default function ChatApp() {
         handleTreeRename={handleTreeRename}
         handleTreeDelete={handleTreeDelete}
       /> : null}
+      {collabOpen ? (
+        <CollabShell
+          state={collab.state}
+          dispatch={collab.dispatch}
+          selectRoom={collab.selectRoom}
+          selectTask={collab.selectTask}
+          updateDraft={collab.updateDraft}
+          sendMessage={collab.sendMessage}
+          operate={collab.operate}
+          createGroup={collab.createGroup}
+          updateGroup={collab.updateGroup}
+          onOpenFile={(file) => {
+            openFile(
+              file.path,
+              undefined,
+              Boolean(file.diffSha),
+              file.diffSha || file.sha,
+              file.sourceChatId,
+            );
+            setCollabOpen(false);
+            replaceCollabRoute({ active: false });
+            setPreviewMax(true);
+          }}
+          onOpenAssistant={openAssistantFromRail}
+          onOpenWorkspace={openWorkspaceDomain}
+        />
+      ) : (
+        <>
       <button
         type="button"
         className="nav-scrim"
@@ -4452,8 +4544,10 @@ export default function ChatApp() {
         workspaceRoot={workspaceRoot}
         assistantName={assistantName}
         assistantDomainActive={assistantDomainActive}
+        collabDomainActive={collabOpen}
         assistantView={assistantOpen && assistantMemorySource === "assistant" ? assistantInitialView : "chat"}
         openAssistantDomain={openAssistantFromRail}
+        openCollabDomain={openCollabDomain}
         openAssistantView={openAssistantView}
         assistantInboxBadge={assistantInboxBadge}
         assistantApprovalBadge={assistantApprovalBadge}
@@ -4701,6 +4795,8 @@ export default function ChatApp() {
               setDraftCaret={setDraftCaret}
             /> : null}
       </main>
+        </>
+      )}
     </div>
   );
 }

@@ -30,11 +30,12 @@ struct ChatHome: View {
         .sheet(isPresented: $settingsOpen) {
             ChatSettingsSheet()
         }
-        // 两个主页一直同时挂着。预览层原来只在 WorkbenchView 里，聊天主页位于其上方时
-        // 卡片虽然已打开页签，画面却被聊天主页挡住；这里给聊天主页挂同一份全屏预览。
+        // iPad 两个主页一直同时挂着，聊天层需要自己的预览；iPhone 由 PhoneTabShell 全局承载。
         .overlay {
             ZStack {
-                if store.previewPanelOpen, let tab = store.activePreviewTab {
+                if UIDevice.current.userInterfaceIdiom == .pad,
+                   store.previewPanelOpen,
+                   let tab = store.activePreviewTab {
                     Color.black.opacity(0.28)
                         .ignoresSafeArea()
                         .onTapGesture { store.collapsePreview() }

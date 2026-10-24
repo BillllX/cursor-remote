@@ -263,6 +263,8 @@ final class ChatStore {
     let client = GatewayClient()
     /// 即时消息借这条连接：im_* 下行转给它，连上/断线/换账号也通知它
     @ObservationIgnored weak var imSink: ImStore?
+    /// P5-A 先把请求交给设备协调器；未安装 hook 时保持待处理，不回假成功。
+    @ObservationIgnored var deviceInvokeHandler: ((DeviceInvoke) -> Void)?
     /// 等 assistant_result 的 assistant_op（按 reqId）：回包、超时或断线时调一次，参数是 ok
     @ObservationIgnored var assistantReplyWaiters: [String: (Bool) -> Void] = [:]
     var started = false

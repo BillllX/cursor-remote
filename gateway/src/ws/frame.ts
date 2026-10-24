@@ -43,6 +43,7 @@ export function shrinkMessage(message: ServerMessage, budget: number): ServerMes
   if (message.type === "im_list") return fitImList(message, budget);
   if (message.type === "workspace_agents") return fitWorkspaceAgents(message, budget);
   if (message.type === "turn_files") return fitTurnFiles(message, budget);
+  if (message.type === "collab_state") return fitCollabState(message, budget);
   if (message.type === "canvas_versions") return fitCanvasVersions(message, budget);
   if (message.type === "history") {
     const overhead = Buffer.byteLength(JSON.stringify({ ...message, turns: [] }));
@@ -140,6 +141,7 @@ type ImHistoryMessage = Extract<ServerMessage, { type: "im_history" }>;
 type WorkspaceAgentsMessage = Extract<ServerMessage, { type: "workspace_agents" }>;
 type TurnFilesMessage = Extract<ServerMessage, { type: "turn_files" }>;
 type CanvasVersionsMessage = Extract<ServerMessage, { type: "canvas_versions" }>;
+type CollabStateMessage = Extract<ServerMessage, { type: "collab_state" }>;
 
 function fitRows<T>(base: object, rows: T[], budget: number): T[] {
   let used = Buffer.byteLength(JSON.stringify(base));
@@ -151,6 +153,27 @@ function fitRows<T>(base: object, rows: T[], budget: number): T[] {
     used += cost;
   }
   return kept;
+}
+
+/** 协作状态按 run 分批；单个超大 run 再按 task 裁剪，并给客户端可继续对账的 cursor。 */
+export function fitCollabState(message: CollabStateMessage, budget: number): CollabStateMessage | null {
+  const base = { ...message, runs: [], more: true, cursor: "" };
+  const runs = fitRows(base, message.runs, budget);
+  if (runs.length === message.runs.length) return message;
+  if (runs.length) {
+    return { ...message, runs, more: true, cursor: runs[runs.length - 1].runId };
+  }
+  const first = message.runs[0];
+  if (!first) return message;
+  const taskBase = { ...first, tasks: [] };
+  const tasks = fitRows({ ...base, runs: [taskBase] }, first.tasks, budget);
+  if (!tasks.length) return null;
+  return {
+    ...message,
+    runs: [{ ...first, tasks }],
+    more: true,
+    cursor: `task@${first.runId}@${tasks[tasks.length - 1].taskId}`,
+  };
 }
 
 /** 文件卡可从 turn 落盘状态补齐；超限时保住帧和前面的交付物，不让连接断开。 */

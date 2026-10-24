@@ -2,7 +2,8 @@
 // （不静默忽略：网页端从不发 im_*，回错误只会让漏声明 cap 的客户端更容易排查）
 import type { ServerMessage } from "../../../../shared/protocol.ts";
 import { ImError } from "../../im/errors.ts";
-import { IM_CAP, imRuntime } from "../../im/runtime.ts";
+import { hasGroupCaps, IM_CAP, imRuntime } from "../../im/runtime.ts";
+import { collabEngine } from "../../collab/runtime.ts";
 import type { ImService } from "../../im/service.ts";
 import { log } from "../../log.ts";
 import { send } from "../send.ts";
@@ -10,6 +11,10 @@ import type { MessageOf, WsCtx } from "./types.ts";
 
 type ImType =
   | "im_contacts"
+  | "im_group_create"
+  | "im_group_update"
+  | "collab_sync"
+  | "collab_op"
   | "im_list"
   | "im_history"
   | "im_send"
@@ -48,22 +53,75 @@ export const onImContacts = (ctx: WsCtx, message: MessageOf<"im_contacts">) =>
   run(ctx, message, (service, me) => service.contacts(me));
 
 export const onImList = (ctx: WsCtx, message: MessageOf<"im_list">) =>
-  run(ctx, message, (service, me) => service.list(me, message));
+  run(ctx, message, (service, me) => service.list(me, message, hasGroupCaps(ctx.conn.caps)));
+
+export const onImGroupCreate = (ctx: WsCtx, message: MessageOf<"im_group_create">) =>
+  run(ctx, message, (service, me) => {
+    if (!hasGroupCaps(ctx.conn.caps)) throw new ImError("no_cap", "这个连接没有声明 im_group + im_collab 能力");
+    return service.createGroup(me, message);
+  });
+
+export const onImGroupUpdate = (ctx: WsCtx, message: MessageOf<"im_group_update">) =>
+  run(ctx, message, (service, me) => {
+    if (!hasGroupCaps(ctx.conn.caps)) throw new ImError("no_cap", "这个连接没有声明 im_group + im_collab 能力");
+    return service.updateGroup(me, message, collabEngine(ctx.tenant).activeWorkspaceIds());
+  });
+
+export const onCollabSync = (ctx: WsCtx, message: MessageOf<"collab_sync">) =>
+  run(ctx, message, async (service, me) => {
+    if (!hasGroupCaps(ctx.conn.caps)) throw new ImError("no_cap", "这个连接没有声明 im_group + im_collab 能力");
+    if (!(await service.canAccessGroup(me, message.convId))) throw new ImError("not_found", "会话不存在");
+    const state = collabEngine(ctx.tenant).state(message.convId);
+    const known = new Map(
+      (Array.isArray(message.known) ? message.known : [])
+        .filter((row) => row && typeof row.runId === "string" && Number.isInteger(row.version))
+        .map((row) => [row.runId, row.version]),
+    );
+    const current = new Set(state.runs.map((row) => row.runId));
+    let candidates = state.runs;
+    if (message.cursor?.startsWith("task@")) {
+      const [, runId, taskId] = message.cursor.split("@");
+      const run = state.runs.find((row) => row.runId === runId);
+      const at = run?.tasks.findIndex((row) => row.taskId === taskId) ?? -1;
+      candidates = run && at >= 0 ? [{ ...run, tasks: run.tasks.slice(at + 1) }] : [];
+    } else if (message.cursor) {
+      const at = state.runs.findIndex((row) => row.runId === message.cursor);
+      candidates = at >= 0 ? state.runs.slice(at + 1) : state.runs;
+    }
+    return {
+      type: "collab_state",
+      convId: message.convId,
+      snapshotSeq: state.snapshotSeq,
+      runs: candidates.filter(
+        (row) => message.cursor?.startsWith("task@") || (known.get(row.runId) ?? -1) < row.version,
+      ),
+      removedRunIds: [...known.keys()].filter((id) => !current.has(id)),
+    };
+  });
+
+export const onCollabOp = (ctx: WsCtx, message: MessageOf<"collab_op">) =>
+  run(ctx, message, async (service, me) => {
+    if (!hasGroupCaps(ctx.conn.caps)) throw new ImError("no_cap", "这个连接没有声明 im_group + im_collab 能力");
+    if (!(await service.canAccessGroup(me, message.convId))) throw new ImError("not_found", "会话不存在");
+    if (typeof message.requestId !== "string" || !message.requestId) throw new ImError("bad_body", "requestId 不合法");
+    const result = await collabEngine(ctx.tenant).operation(message);
+    return { type: "collab_result", requestId: message.requestId, ...result };
+  });
 
 export const onImHistory = (ctx: WsCtx, message: MessageOf<"im_history">) =>
-  run(ctx, message, (service, me) => service.history(me, message));
+  run(ctx, message, (service, me) => service.history(me, message, hasGroupCaps(ctx.conn.caps)));
 
 export const onImSend = (ctx: WsCtx, message: MessageOf<"im_send">) =>
-  run(ctx, message, (service, me, origin) => service.send(me, origin, message));
+  run(ctx, message, (service, me, origin) => service.send(me, origin, message, hasGroupCaps(ctx.conn.caps)));
 
 export const onImRecall = (ctx: WsCtx, message: MessageOf<"im_recall">) =>
-  run(ctx, message, (service, me, origin) => service.recall(me, origin, message));
+  run(ctx, message, (service, me, origin) => service.recall(me, origin, message, hasGroupCaps(ctx.conn.caps)));
 
 export const onImRead = (ctx: WsCtx, message: MessageOf<"im_read">) =>
-  run(ctx, message, (service, me, origin) => service.read(me, origin, message));
+  run(ctx, message, (service, me, origin) => service.read(me, origin, message, hasGroupCaps(ctx.conn.caps)));
 
 export const onImSettings = (ctx: WsCtx, message: MessageOf<"im_settings">) =>
-  run(ctx, message, (service, me, origin) => service.settings(me, origin, message));
+  run(ctx, message, (service, me, origin) => service.settings(me, origin, message, hasGroupCaps(ctx.conn.caps)));
 
 export const onImProfile = (ctx: WsCtx, message: MessageOf<"im_profile">) =>
   run(ctx, message, (service, me, origin) => service.profile(me, origin, message));

@@ -64,6 +64,7 @@ SOURCES=(
   "$APP/Gateway/ImProtocol.swift"
   "$APP/Gateway/JSONValue.swift"
   "$APP/Gateway/ModelCatalog.swift"
+  "$APP/Device/DeviceRequestValidation.swift"
   "$APP/Session/MemoryCenterReducer.swift"
   "$APP/Session/MemoryCenterExtrasReducer.swift"
   "$APP/Session/MemoryCenterLayoutMetrics.swift"

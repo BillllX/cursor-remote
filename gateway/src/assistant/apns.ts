@@ -27,7 +27,7 @@ export type ApnsMessage = {
   delegationId?: string;
   /** 下面这些缺省时就是助理推送原来的行为 */
   /** 发给哪一类订阅：assistant（缺省，跳过 assistant===false）/ im（只发 im===true） */
-  channel?: "assistant" | "im" | "workspace";
+  channel?: "assistant" | "im" | "im_group" | "workspace";
   /** aps.thread-id，缺省 assistant-inbox */
   threadId?: string;
   /** apns-collapse-id，缺省用 itemId 去掉非法字符；都会截到 64 字节 */
@@ -55,7 +55,7 @@ export type BadgeParts = { assistant?: number; im?: number; workspace?: number }
 
 /** 这台设备（按它订阅的类别）该显示的角标；它要的部分一个都没拿到时 undefined */
 export function apnsBadgeFor(
-  sub: Pick<ApnsSubscription, "assistant" | "im" | "workspace">,
+  sub: Pick<ApnsSubscription, "assistant" | "im" | "imGroup" | "workspace">,
   message: Pick<ApnsMessage, "badge" | "badgeParts">,
 ) {
   const parts = message.badgeParts;

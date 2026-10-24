@@ -145,6 +145,13 @@ struct ComposerView: View {
         .onChange(of: focusNonce) { _, _ in
             focused = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .assistantVoiceRequested)) { notification in
+            guard let capture = notification.object as? AssistantCaptureBridge.Capture,
+                  dictation.phase == .idle, store.isAssistantChat(chatId)
+            else { return }
+            toggleVoice()
+            AssistantCaptureBridge.remove(id: capture.id, tenant: capture.tenant)
+        }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
@@ -196,7 +203,7 @@ struct ComposerView: View {
         }
     }
 
-    /// 助理胶囊在 iOS 26+ 仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
+    /// 最低支持 iOS 26：助理胶囊仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
     private var floating: Bool { style == .assistant && JieboGlass.available }
 
     var placeholder: String {

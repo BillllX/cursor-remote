@@ -27,7 +27,7 @@ struct AssistantTodayScreen: View {
     }
 }
 
-// MARK: 委派记录
+// MARK: 任务与计划
 
 struct DelegationListScreen: View {
     @Environment(ChatStore.self) private var store
@@ -35,33 +35,141 @@ struct DelegationListScreen: View {
 
     init() {}
 
-    private var rows: [AssistantDelegation] {
+    private let groups: [(phase: String, title: String)] = [
+        ("needs_me", "需要我"),
+        ("in_progress", "进行中"),
+        ("planned", "计划"),
+        ("completed", "已完成"),
+    ]
+
+    private var rows: [PersonalTask] {
+        store.assistantState?.personalTasks ?? []
+    }
+
+    private var legacyRows: [AssistantDelegation] {
         (store.assistantState?.delegations ?? []).sorted { $0.createdAt > $1.createdAt }
     }
 
     var body: some View {
         List {
-            ForEach(rows) { row in
-                delegationRow(row)
-                    .listRowBackground(JieboColor.white)
+            if store.assistantState?.personalTasks != nil {
+                ForEach(groups, id: \.phase) { group in
+                    let items = rows.filter { normalizedPhase($0.phase) == group.phase }
+                    if !items.isEmpty {
+                        Section(group.title) {
+                            ForEach(items) { task in
+                                taskRow(task)
+                                    .listRowBackground(JieboColor.white)
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 老网关没有投影时仍保留委派入口。
+                Section("委派") {
+                    ForEach(legacyRows) { row in
+                        delegationRow(row)
+                            .listRowBackground(JieboColor.white)
+                    }
+                }
             }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle("委派记录")
+        .navigationTitle("任务与计划")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant() }
         .overlay {
-            if rows.isEmpty {
+            if rows.isEmpty && legacyRows.isEmpty {
                 ContentUnavailableView(
-                    "还没有委派",
-                    systemImage: "paperplane",
-                    description: Text("\(store.assistantName) 把任务交给工作区后，会记在这里。")
+                    "还没有任务",
+                    systemImage: "checklist",
+                    description: Text("待办、日程、委派和后台运行会汇总在这里。")
                 )
             }
         }
         .task { store.requestAssistant() }
+    }
+
+    private func normalizedPhase(_ phase: String) -> String {
+        groups.contains(where: { $0.phase == phase }) ? phase : "planned"
+    }
+
+    private func taskRow(_ task: PersonalTask) -> some View {
+        let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id
+        let opensToday = task.kind == "todo" || task.kind == "schedule"
+        return Button {
+            if let delegationId {
+                router.delegationDetail = DelegationRef(id: delegationId)
+            } else if task.kind == "todo" {
+                router.openHub(anchor: "todos")
+            } else if task.kind == "schedule" {
+                router.openHub(anchor: "schedules")
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: taskIcon(task.kind))
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.ink2)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(task.title.nilIfEmpty ?? "未命名任务")
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(2)
+                    Text(taskSubtitle(task))
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.dim)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if delegationId != nil || opensToday {
+                    Image(systemName: "chevron.right")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(delegationId == nil && !opensToday)
+        .accessibilityLabel("\(task.title)，\(taskStatus(task))")
+    }
+
+    private func taskIcon(_ kind: String) -> String {
+        switch kind {
+        case "todo": return "checkmark.circle"
+        case "schedule": return "calendar"
+        case "delegation": return "paperplane"
+        case "background_run": return "gearshape.2"
+        default: return "square.stack.3d.up"
+        }
+    }
+
+    private func taskStatus(_ task: PersonalTask) -> String {
+        if let attention = task.attention { return attention }
+        switch task.phase {
+        case "needs_me": return "需要处理"
+        case "in_progress": return "进行中"
+        case "planned": return "已计划"
+        case "completed": return "已完成"
+        default: return task.status.nilIfEmpty ?? "未知状态"
+        }
+    }
+
+    private func taskSubtitle(_ task: PersonalTask) -> String {
+        let kind: String
+        switch task.kind {
+        case "todo": kind = "待办"
+        case "schedule": kind = "日程"
+        case "delegation": kind = "委派"
+        case "background_run": kind = "后台运行"
+        default: kind = task.kind
+        }
+        let at = task.updatedAt ?? task.dueAt ?? task.createdAt
+        return "\(kind) · \(taskStatus(task)) · \(assistantRelativeTime(at))"
     }
 
     private func delegationRow(_ row: AssistantDelegation) -> some View {
@@ -134,6 +242,22 @@ struct PhoneSettingsScreen: View {
             }
 
             notificationSection
+
+            Section {
+                NavigationLink(value: PhoneRoute.connections) {
+                    settingsRow(
+                        symbol: "checkmark.shield",
+                        title: "连接与权限",
+                        trailing: nil,
+                        chevron: false
+                    )
+                }
+                .listRowBackground(JieboColor.white)
+            } header: {
+                Text("设备")
+            } footer: {
+                Text("管理 Apple 日历、提醒事项和通讯录权限，并查看脱敏的本机操作记录。")
+            }
 
             Section {
                 settingsRow(

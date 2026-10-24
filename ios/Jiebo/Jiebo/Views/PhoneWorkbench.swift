@@ -68,7 +68,11 @@ struct PhoneWorkbench: View {
             NavigationStack {
                 PhoneSettingsScreen()
                     .navigationDestination(for: PhoneRoute.self) { route in
-                        if route == .memory { AssistantMemoryScreen() }
+                        switch route {
+                        case .memory: AssistantMemoryScreen()
+                        case .connections: DeviceConnectionsScreen()
+                        default: EmptyView()
+                        }
                     }
             }
         }

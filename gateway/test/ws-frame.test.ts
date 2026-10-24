@@ -4,7 +4,14 @@ import type { WebSocket } from "ws";
 import type { HistoryTurn, ServerMessage } from "../../shared/protocol.ts";
 import { gatewayState } from "../src/runtime/state.ts";
 import type { Conn } from "../src/runtime/types.ts";
-import { fitCanvasVersions, fitTurnFiles, fitTurnsFromEnd, frameFor, shrinkMessage } from "../src/ws/frame.ts";
+import {
+  fitCanvasVersions,
+  fitCollabState,
+  fitTurnFiles,
+  fitTurnsFromEnd,
+  frameFor,
+  shrinkMessage,
+} from "../src/ws/frame.ts";
 
 // iOS 在 hello 里声明的单条消息接收上限
 const IOS_LIMIT = 900 * 1024;
@@ -57,6 +64,36 @@ describe("fitTurnsFromEnd：数组边界计入预算", () => {
     assert.equal(turn.clipped, true);
     assert.equal(turn.deferred, undefined);
   });
+});
+
+test("collab_state 超限按 run 分批并返回续页 cursor", () => {
+  const message: Extract<ServerMessage, { type: "collab_state" }> = {
+    type: "collab_state",
+    convId: "grp~one",
+    snapshotSeq: 10,
+    removedRunIds: [],
+    runs: Array.from({ length: 20 }, (_, index) => ({
+      runId: `run-${index}`,
+      version: 1,
+      status: "running",
+      tasks: [
+        {
+          taskId: `task-${index}`,
+          version: 1,
+          workspaceId: "workspace",
+          status: "running",
+          attempt: 1,
+          attempts: [{ attempt: 1, status: "running", startedAt: 1, summary: big(1000) }],
+        },
+      ],
+    })),
+  };
+  const fitted = fitCollabState(message, 8_000);
+  assert.ok(fitted);
+  assert.equal(fitted?.more, true);
+  assert.ok(fitted?.cursor);
+  assert.ok((fitted?.runs.length ?? 0) < message.runs.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(fitted)) <= 8_000);
 });
 
 describe("frameFor：iOS 900KB 上限", () => {

@@ -4,6 +4,7 @@ import { addApproval, APPROVAL_TTL_MS, settleApproval, summarizeArgs } from "../
 import { getDelegation, updateDelegation } from "../assistant/delegations.ts";
 import { postInbox } from "../assistant/inbox.ts";
 import { publishDelegation } from "../assistant/service.ts";
+import { emitCollabSideEvent } from "../collab/sink.ts";
 import { getTenant } from "../tenants.ts";
 import type { Slot } from "./types.ts";
 
@@ -70,6 +71,20 @@ export function noteDelegationApproval(slot: Slot, callId: string, tool: string,
     Date.now(),
     slot.approvalTimeoutMs ?? APPROVAL_TTL_MS,
   );
+  if (record.notifyPolicy === "collab_only" && record.collabTaskId) {
+    void emitCollabSideEvent(tenant, {
+      taskId: record.collabTaskId,
+      type: "approval",
+      payload: {
+        approvalId: approval.id,
+        callId,
+        tool,
+        summary: approval.summary,
+        expiresAt: approval.expiresAt,
+      },
+    });
+    return;
+  }
   postInbox(tenant, {
     kind: "approval",
     title: `委派「${record.title}」要${tool === "shell" ? "跑命令" : "改文件"}，等你批准`,
@@ -97,6 +112,14 @@ function noteDelegationExpired(slot: Slot) {
   if (!tenant || !slot.delegationId) return;
   const record = getDelegation(tenant, slot.delegationId);
   noteDelegationAnswered(slot);
+  if (record?.notifyPolicy === "collab_only" && record.collabTaskId) {
+    void emitCollabSideEvent(tenant, {
+      taskId: record.collabTaskId,
+      type: "approval_expired",
+      payload: { callId: slot.approvalCallId ?? "" },
+    });
+    return;
+  }
   postInbox(tenant, {
     kind: "delegation",
     title: `委派「${record?.title ?? ""}」的审批超时`,

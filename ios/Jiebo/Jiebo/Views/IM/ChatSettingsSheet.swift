@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 
 /// 聊天主页左上角齿轮：主页切换、我的头像和昵称、通知预览、拉黑名单
 struct ChatSettingsSheet: View {
@@ -17,8 +18,10 @@ struct ChatSettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                HomeModeSection { mode in
-                    if mode == .workbench { dismiss() }
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    HomeModeSection { mode in
+                        if mode == .workbench { dismiss() }
+                    }
                 }
 
                 Section {

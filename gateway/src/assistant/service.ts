@@ -1,7 +1,15 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
-import type { AssistantOp, AssistantState, ServerMessage } from "../../../shared/protocol.ts";
+import type {
+  AssistantOp,
+  AssistantState,
+  DeviceApproval,
+  DeviceOp,
+  DeviceResult,
+  JSONValue,
+  ServerMessage,
+} from "../../../shared/protocol.ts";
 import { BACKGROUND_MODEL, modelAvailable, runBackground } from "./background.ts";
 import { dropChatFromIndex, indexTurn, scrubChatIndex } from "./chatIndex.ts";
 import { describeLocal } from "./cron.ts";
@@ -38,6 +46,8 @@ import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaul
 import { assistantDir, estimateTokens, writeJson, type TenantRef } from "./store.ts";
 import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
 import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
+import { buildTaskProjection } from "./taskProjection.ts";
+import { buildArtifactProjection } from "./artifactProjection.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
 import { errText, log } from "../log.ts";
@@ -106,6 +116,16 @@ export type AssistantDeps = {
   appUrl: () => string;
   /** 该租户聊天（IM）未读合计：APNs 角标分量的 IM 部分 */
   imBadge?: (tenantId: string) => Promise<number>;
+  deviceInvoke?: (
+    tenant: AssistantTenant,
+    input: {
+      op: DeviceOp;
+      params: JSONValue;
+      actor: string;
+      idempotencyKey?: string;
+      approval?: DeviceApproval;
+    },
+  ) => Promise<DeviceResult>;
 };
 
 let deps: AssistantDeps | null = null;
@@ -153,6 +173,31 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
     delegationStatus: (id) => delegationStatusText(ref, id),
     workspaces: () => deps?.workspaces(tenant) ?? [],
     workspaceMemory: role === "chat" ? (workspace, query) => readWorkspaceMemory(tenant, workspace, query) : undefined,
+    deviceInvoke:
+      role === "chat" && deps?.deviceInvoke
+        ? async (input) => {
+            try {
+              return await deps!.deviceInvoke!(tenant, {
+                ...input,
+                actor: chatId ? `chat:${chatId}` : "chat",
+              });
+            } catch (err) {
+              const code =
+                err && typeof err === "object" && "code" in err && typeof err.code === "string" ? err.code : "error";
+              if (code === "no_device") {
+                postInbox(ref, {
+                  kind: "info",
+                  title: "Apple 设备未连接",
+                  body: "打开并连接 iPhone 或 iPad 后，再试一次日历、提醒事项或通讯录操作。",
+                  key: `device:no-device:${chatId ?? "assistant"}`,
+                  chatId,
+                });
+                return { status: "no_device", error: "没有在线且已授权的 Apple 设备。" };
+              }
+              return { status: code, error: err instanceof Error ? err.message : "设备操作失败。" };
+            }
+          }
+        : undefined,
   };
 }
 
@@ -259,7 +304,7 @@ export function userRootPreamble(tenant: AssistantTenant) {
   const block = renderMemoryBlock(refOf(tenant));
   return [
     `你是用户的个人助理，名字是「${name}」。这里是${name}的工作区（用户根目录）。`,
-    "你有一组助理工具：memory_*（个人记忆）、work_preference_*（工作偏好）、chat_search（历史会话）、workspace_memory_read（只读查看子工作区的约定和进展）、todo_*（待办）、schedule_*（定时任务和提醒）、inbox_post（收件箱）、delegate（交给子工作区去做）、create_workspace（新建子工作区，需用户确认）。",
+    "你有一组助理工具：memory_*（个人记忆）、work_preference_*（工作偏好）、chat_search（历史会话）、workspace_memory_read（只读查看子工作区的约定和进展）、todo_*（待办）、schedule_*（定时任务和提醒）、calendar_*（Apple 日历）、reminders_*（Apple 提醒事项）、contacts_search（Apple 通讯录）、inbox_post（收件箱）、delegate（交给子工作区去做）、create_workspace（新建子工作区，需用户确认）。Apple 写操作必须等 iOS 屏幕确认，设备未回成功前不得声称完成。",
     "用户亲口定下对所有项目都适用的工作习惯（如“以后都用中文回复”）时用 work_preference_add；只关于某个项目的约定不要记进个人记忆，委派时让子会话自己提议写进工作区记忆。",
     "用户让你在某个项目里干活时，不要自己改文件：用 delegate 交给对应的子工作区，并用 delegation_status 跟进。同一个工作区一次只能有一项委派。",
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
@@ -331,20 +376,39 @@ export function noteChatDeleted(tenant: AssistantTenant, chatId: string) {
 export async function buildState(tenant: AssistantTenant, opts: { memory?: boolean } = {}): Promise<AssistantState> {
   const ref = refOf(tenant);
   const model = await modelAvailable().catch(() => ({ ok: false, reason: "模型目录读取失败" }));
-  const day = describeLocal(Date.now(), DEFAULT_TZ).slice(0, 10);
+  const snapshotAt = Date.now();
+  const day = describeLocal(snapshotAt, DEFAULT_TZ).slice(0, 10);
+  const inbox = listInbox(ref, STATE_INBOX_LIMIT);
+  const todos = listTodos(ref, { includeDone: true });
+  const schedules = listSchedules(ref);
+  const delegations = listDelegations(ref, 20);
+  const approvals = listApprovals(ref);
+  const runs = listRuns(ref, 20);
+  const brief = latestBrief(ref, day);
+  const artifacts = buildArtifactProjection({
+    chats: getTenant(tenant.id)?.disk.chats ?? [],
+    delegations: listDelegations(ref, 200),
+    inbox: listInbox(ref, 300),
+  });
+  const projection = buildTaskProjection(
+    { inbox, todos, schedules, delegations, approvals, runs, brief },
+    { now: snapshotAt, day },
+  );
   const state: AssistantState = {
     name: assistantName(tenant),
     background: { model: BACKGROUND_MODEL, ok: model.ok, reason: model.reason },
     pushKey: vapid().publicKey,
     pushApns: apnsReady(),
-    inbox: listInbox(ref, STATE_INBOX_LIMIT),
-    todos: listTodos(ref, { includeDone: true }),
-    schedules: listSchedules(ref),
-    delegations: listDelegations(ref, 20),
-    approvals: listApprovals(ref),
-    runs: listRuns(ref, 20),
-    brief: latestBrief(ref, day),
+    inbox,
+    todos,
+    schedules,
+    delegations,
+    approvals,
+    runs,
+    brief,
+    artifacts,
     calendar: calendarInfo(ref),
+    ...projection,
   };
   if (opts.memory) {
     const memory = listMemory(ref);
@@ -648,6 +712,7 @@ export async function handleOp(
           environment: args.environment,
           ua: args.ua,
           im: args.im,
+          imGroup: args.imGroup,
           assistant: args.assistant,
           workspace: args.workspace,
         };
@@ -763,7 +828,7 @@ export function startAssistant(next: AssistantDeps) {
     if (!tenant) return;
     deps?.publish(ref.id, { type: "inbox_item", item });
     void publishState(tenant);
-    if (PUSH_KINDS.includes(item.kind)) void pushItem(tenant, item);
+    if (PUSH_KINDS.includes(item.kind) || item.actionPrompt) void pushItem(tenant, item);
   });
   for (const tenant of next.tenants()) {
     const ref = refOf(tenant);

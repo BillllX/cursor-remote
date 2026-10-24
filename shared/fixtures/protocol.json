@@ -16,7 +16,8 @@
         "tool_at",
         "slim_chats",
         "file_changed",
-        "canvas_versions"
+        "canvas_versions",
+        "device_bridge_v1"
       ],
       "hasApiKey": true,
       "loops": [
@@ -39,6 +40,23 @@
       "tenantId": "demo",
       "tenantName": "演示租户",
       "workspaceRoot": "/workspace/demo"
+    },
+    {
+      "type": "device_invoke",
+      "approval": {
+        "requiresConfirmation": true,
+        "risk": "将写入 Apple 日历",
+        "summary": "新建日历事件"
+      },
+      "idempotencyKey": "idem-calendar-01",
+      "op": "calendar_event_upsert",
+      "params": {
+        "end": "2026-10-24T10:00:00+08:00",
+        "start": "2026-10-24T09:00:00+08:00",
+        "title": "项目评审"
+      },
+      "reqId": "dev-req-01",
+      "timeoutMs": 120000
     },
     {
       "type": "workspaces",
@@ -668,6 +686,54 @@
             "tool": "write"
           }
         ],
+        "artifacts": [
+          {
+            "createdAt": 1739000070000,
+            "diffSha": "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+            "id": "artifact:file-1",
+            "kind": "file",
+            "path": "docs/slides.md",
+            "previewKind": "markdown",
+            "provenance": {
+              "delegationId": "d_q7w3",
+              "label": "委派：整理讲稿",
+              "turnId": "t-child-1"
+            },
+            "sha": "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+            "sourceChatId": "c-child-5b10",
+            "sourceTurnId": "t-child-1",
+            "title": "slides.md"
+          },
+          {
+            "createdAt": 1739000080000,
+            "id": "artifact:link-1",
+            "kind": "link",
+            "provenance": {
+              "captureId": "i_link",
+              "inboxId": "i_link",
+              "label": "助理收件箱"
+            },
+            "sourceCitation": {
+              "capturedAt": 1739000080000,
+              "excerpt": "可靠来源摘录",
+              "title": "参考资料",
+              "url": "https://example.com/reference"
+            },
+            "title": "参考资料",
+            "url": "https://example.com/reference"
+          },
+          {
+            "createdAt": 1739000060000,
+            "id": "artifact:capture-1",
+            "kind": "capture",
+            "previewKind": "text",
+            "provenance": {
+              "captureId": "i_location",
+              "inboxId": "i_location"
+            },
+            "title": "位置捕获"
+          }
+        ],
         "background": {
           "model": "composer-2.5",
           "ok": true,
@@ -682,6 +748,23 @@
           "lastFetchAt": 1739000005000,
           "token": "cal-example-token"
         },
+        "dayThread": [
+          {
+            "at": 1739000000000,
+            "body": "在 /workspace/acme 创建 acme",
+            "draftCardId": "draft:ap_1",
+            "id": "event:draft:ap_1",
+            "kind": "draft",
+            "priority": "high",
+            "sources": [
+              {
+                "id": "ap_1",
+                "kind": "approval"
+              }
+            ],
+            "title": "创建工作区"
+          }
+        ],
         "delegations": [
           {
             "childChatId": "c-child-5b10",
@@ -697,9 +780,48 @@
             "workspace": "/workspace/demo/notes"
           }
         ],
+        "draftCards": [
+          {
+            "actions": [
+              {
+                "args": {
+                  "allow": true,
+                  "callId": "call-approve-1",
+                  "chatId": "c-assistant-01"
+                },
+                "label": "允许",
+                "op": "approval_answer"
+              }
+            ],
+            "createdAt": 1739000000000,
+            "expiresAt": 1739086400000,
+            "id": "draft:ap_1",
+            "kind": "approval",
+            "preview": {
+              "details": ["工具：create_workspace"],
+              "kind": "create_workspace",
+              "summary": "在 /workspace/acme 创建 acme",
+              "title": "创建工作区"
+            },
+            "sources": [
+              {
+                "id": "ap_1",
+                "kind": "approval"
+              }
+            ],
+            "status": "waiting_user"
+          }
+        ],
         "inbox": [
           {
+            "actionPrompt": "请继续处理这个捕获",
             "body": "新建工作区 notes · 整理讲稿",
+            "capture": {
+              "intent": "稍后读",
+              "kind": "link",
+              "title": "受控来源",
+              "url": "https://example.com/captured"
+            },
             "chatId": "c-child-5b10",
             "createdAt": 1739000001000,
             "delegationId": "d_q7w3",
@@ -756,6 +878,72 @@
           }
         },
         "name": "阿驳",
+        "personalTasks": [
+          {
+            "actions": [
+              {
+                "args": {
+                  "delegationId": "d_1"
+                },
+                "label": "取消",
+                "op": "delegation_cancel"
+              }
+            ],
+            "attention": "等待你批准",
+            "createdAt": 1739000000000,
+            "detail": "需要执行 npm test",
+            "id": "delegation:d_1",
+            "kind": "delegation",
+            "phase": "needs_me",
+            "priority": "high",
+            "sources": [
+              {
+                "id": "d_1",
+                "kind": "delegation"
+              },
+              {
+                "id": "r_delegate_1",
+                "kind": "run"
+              }
+            ],
+            "status": "waiting_user",
+            "title": "修登录",
+            "updatedAt": 1739000030000
+          },
+          {
+            "actions": [
+              {
+                "args": {
+                  "id": "td_1"
+                },
+                "label": "重新打开",
+                "op": "todo_undo"
+              }
+            ],
+            "createdAt": 1739000000000,
+            "due": "2026-02-11",
+            "id": "todo:td_1",
+            "kind": "todo",
+            "phase": "completed",
+            "priority": "low",
+            "receipt": {
+              "at": 1739086400000,
+              "id": "receipt:todo:td_1",
+              "status": "done",
+              "summary": "已回复报价"
+            },
+            "sources": [
+              {
+                "id": "td_1",
+                "kind": "todo"
+              }
+            ],
+            "status": "done",
+            "title": "周三前回复报价",
+            "updatedAt": 1739086400000
+          }
+        ],
+        "projectionVersion": 1,
         "pushApns": true,
         "pushKey": "BPk3-example-vapid-public-key",
         "runs": [
@@ -785,6 +973,7 @@
             "tz": "Asia/Shanghai"
           }
         ],
+        "snapshotAt": 1739000090000,
         "todos": [
           {
             "chatId": "c-assistant-01",
@@ -1129,7 +1318,14 @@
     {
       "type": "inbox_item",
       "item": {
+        "actionPrompt": "请继续处理这个捕获",
         "body": "新建工作区 notes · 整理讲稿",
+        "capture": {
+          "intent": "稍后读",
+          "kind": "link",
+          "title": "受控来源",
+          "url": "https://example.com/captured"
+        },
         "chatId": "c-child-5b10",
         "createdAt": 1739000001000,
         "delegationId": "d_q7w3",
@@ -1219,6 +1415,69 @@
           "nickname": "carol"
         }
       ]
+    },
+    {
+      "type": "im_group_created",
+      "conv": {
+        "activityAt": 1739000000000,
+        "actors": [
+          {
+            "actorId": "actor:assistant:alice",
+            "displayName": "小驳",
+            "kind": "assistant",
+            "ownerTenantId": "alice"
+          }
+        ],
+        "convId": "grp~00000000-0000-4000-8000-000000000001",
+        "hideBefore": 0,
+        "isDefault": true,
+        "kind": "group",
+        "maxSeq": 0,
+        "memberCount": 1,
+        "mute": false,
+        "pin": false,
+        "readSeq": 0,
+        "ticket": {
+          "exp": 1739007200000,
+          "sig": "c2lnLWltLXNhbXBsZQ"
+        },
+        "title": "协作群",
+        "unread": 0
+      }
+    },
+    {
+      "type": "collab_state",
+      "convId": "grp~00000000-0000-4000-8000-000000000001",
+      "removedRunIds": [],
+      "runs": [
+        {
+          "runId": "run_1",
+          "status": "running",
+          "tasks": [
+            {
+              "attempt": 1,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "startedAt": 1739000000000,
+                  "status": "queued"
+                }
+              ],
+              "status": "queued",
+              "taskId": "task_1",
+              "version": 1,
+              "workspaceId": "wsa_1"
+            }
+          ],
+          "version": 2
+        }
+      ],
+      "snapshotSeq": 3
+    },
+    {
+      "type": "collab_result",
+      "ok": true,
+      "requestId": "collab-op-1"
     },
     {
       "type": "im_list",
@@ -1443,7 +1702,8 @@
           "path": "/workspace/demo/notes",
           "readSeq": 7,
           "status": "awaiting",
-          "unread": 2
+          "unread": 2,
+          "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"
         }
       ]
     },
@@ -1470,6 +1730,27 @@
         "version": "2.3.0"
       },
       "token": "example-token"
+    },
+    {
+      "type": "device_result",
+      "externalId": "event-42",
+      "op": "calendar_event_upsert",
+      "reqId": "dev-req-01",
+      "result": {
+        "id": "event-42"
+      },
+      "status": "ok"
+    },
+    {
+      "type": "device_permission_report",
+      "grants": [
+        {
+          "canRequest": false,
+          "permission": "calendar",
+          "status": "authorized"
+        }
+      ],
+      "reqId": "dev-req-01"
     },
     {
       "type": "set_workspace",
@@ -1889,6 +2170,35 @@
     },
     {
       "type": "im_contacts"
+    },
+    {
+      "type": "im_group_create",
+      "isDefault": true,
+      "title": "协作群"
+    },
+    {
+      "type": "im_group_update",
+      "actorIds": ["actor:assistant:t1"],
+      "archived": false,
+      "convId": "grp~00000000-0000-4000-8000-000000000001",
+      "title": "项目协作群"
+    },
+    {
+      "type": "collab_sync",
+      "convId": "grp~00000000-0000-4000-8000-000000000001",
+      "known": [
+        {
+          "runId": "run_1",
+          "version": 1
+        }
+      ]
+    },
+    {
+      "type": "collab_op",
+      "convId": "grp~00000000-0000-4000-8000-000000000001",
+      "op": "cancel_task",
+      "requestId": "collab-op-1",
+      "taskId": "task_1"
     },
     {
       "type": "im_list",

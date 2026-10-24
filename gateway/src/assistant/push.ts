@@ -87,16 +87,19 @@ export type ApnsSubscription = {
   assistant?: boolean;
   /** 收聊天（IM）推送；缺省 false，新 App 订阅时带 im: true */
   im?: boolean;
+  /** 收协作群推送；旧端没有这个键，因此完全看不到群。 */
+  imGroup?: boolean;
   /** 收工作区 Agent 推送；缺省 false */
   workspace?: boolean;
 };
 
 /** 这条订阅收不收某一类推送（缺省 assistant=true，其他=false） */
 export function apnsWants(
-  sub: Pick<ApnsSubscription, "assistant" | "im" | "workspace">,
-  channel: "assistant" | "im" | "workspace",
+  sub: Pick<ApnsSubscription, "assistant" | "im" | "imGroup" | "workspace">,
+  channel: "assistant" | "im" | "im_group" | "workspace",
 ) {
   if (channel === "im") return sub.im === true;
+  if (channel === "im_group") return sub.im === true && sub.imGroup === true;
   if (channel === "workspace") return sub.workspace === true;
   return sub.assistant !== false;
 }
@@ -165,6 +168,7 @@ export function addApnsSubscription(
     environment?: unknown;
     ua?: unknown;
     im?: unknown;
+    imGroup?: unknown;
     assistant?: unknown;
     workspace?: unknown;
   },
@@ -184,11 +188,13 @@ export function addApnsSubscription(
   const known = file.apns.find((item) => item.token.toLowerCase() === key);
   const apns = file.apns.filter((item) => item.token.toLowerCase() !== key);
   // 每次订阅都声明完整偏好：没带 im / assistant 就按缺省，不沿用旧值
-  const flags: Pick<ApnsSubscription, "im" | "assistant" | "workspace"> = {};
+  const flags: Pick<ApnsSubscription, "im" | "imGroup" | "assistant" | "workspace"> = {};
   const im = optionalFlag(input.im);
+  const imGroup = optionalFlag(input.imGroup);
   const assistant = optionalFlag(input.assistant);
   const workspace = optionalFlag(input.workspace);
   if (im !== undefined) flags.im = im;
+  if (imGroup !== undefined) flags.imGroup = imGroup;
   if (assistant !== undefined) flags.assistant = assistant;
   if (workspace !== undefined) flags.workspace = workspace;
   apns.push({ token: key, bundleId, environment, createdAt: known?.createdAt ?? Date.now(), ua: ua ?? known?.ua, ...flags });

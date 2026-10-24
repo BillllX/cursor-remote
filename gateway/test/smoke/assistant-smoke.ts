@@ -278,8 +278,13 @@ try {
   const t0 = Date.parse("2026-10-01T00:00:00Z");
   schedules.seedDefaults(sref, t0);
   check(schedules.listSchedules(sref).some((s) => s.kind === "brief" && s.cron === "0 9 * * *"), "日程：首次放一条每日简报");
+  check(
+    schedules.listSchedules(sref).some((s) => s.id === "s_evening_wrap" && s.kind === "prompt" && s.cron === "0 21 * * *"),
+    "日程：首次放一条晚间收尾",
+  );
   const remind = schedules.setSchedule(sref, { kind: "remind", cron: "0 9 * * *", tz: "Asia/Shanghai", prompt: "喝水", title: "喝水" }, t0);
   schedules.setSchedule(sref, { id: "s_brief", enabled: false }, t0);
+  schedules.setSchedule(sref, { id: "s_evening_wrap", enabled: false }, t0);
   let execCount = 0;
   const exec = async (r: typeof sref, s: Parameters<typeof jobs.executeSchedule>[1], o: Parameters<typeof jobs.executeSchedule>[2]) => {
     execCount += 1;

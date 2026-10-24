@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 登录后的两个主页：工作台（原来的界面）和聊天（平台用户之间即时消息）
+/// iPad 登录后的两个主页：工作台（原来的界面）和聊天（平台用户之间即时消息）
 enum HomeMode: String, CaseIterable, Identifiable {
     case workbench
     case chat
@@ -37,15 +37,46 @@ extension EnvironmentValues {
     }
 }
 
-/// 两个主页一直都挂着（PhoneShell 不能拆掉重建），不在前面的那层透明、不接触摸、VoiceOver 摸不到；
-/// disabled 让它的键盘快捷键（⌘N、⌘O）也失效
+/// iPhone 直接进入三入口 PhoneTabShell；iPad 的两个主页继续常驻并保留 HomeMode。
 struct HomeShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
+    @Environment(DeviceBridgeCoordinator.self) private var deviceBridge
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(HomeMode.storageKey) private var mode: HomeMode = .workbench
 
     var body: some View {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                PhoneTabShell()
+            } else {
+                padHomes
+            }
+        }
+        // iPhone、iPad 共用唯一确认承载点；只要主页在线就能安全声明 device_bridge。
+        .sheet(item: confirmationBinding) { draft in
+            DeviceWriteConfirmationSheet(draft: draft)
+        }
+        .onAppear {
+            deviceBridge.setConfirmationPresenter(active: true)
+        }
+        .onDisappear {
+            deviceBridge.setConfirmationPresenter(active: false)
+        }
+    }
+
+    private var confirmationBinding: Binding<DeviceWriteConfirmation?> {
+        Binding(
+            get: { deviceBridge.confirmation },
+            set: { value in
+                if value == nil, deviceBridge.confirmation != nil {
+                    deviceBridge.resolveConfirmation(allowed: false)
+                }
+            }
+        )
+    }
+
+    private var padHomes: some View {
         ZStack {
             WorkbenchView()
                 .homeLayer(visible: mode == .workbench, reduceMotion: reduceMotion)
@@ -64,7 +95,7 @@ struct HomeShell: View {
         }
     }
 
-    /// 点通知进来：聊天通知切到聊天主页并打开那个会话；别的切回工作台，交给 PhoneShell 接着处理
+    /// iPad 点通知：聊天通知切到聊天主页；助理通知不订阅，直接丢弃。
     private func dispatchPush() {
         guard let target = PushRouting.shared.pending else { return }
         if target.isIm, let convId = target.convId {
@@ -75,8 +106,6 @@ struct HomeShell: View {
             _ = PushRouting.shared.consume()
             mode = .chat
             openWorkspace(chatId)
-        } else if UIDevice.current.userInterfaceIdiom == .phone {
-            mode = .workbench
         } else {
             // iPad 不订阅助理推送，没有壳会来取，丢掉免得一直挂着
             _ = PushRouting.shared.consume()

@@ -18,6 +18,7 @@ import type { ClientMessage, ImBody, ServerMessage } from "../../shared/protocol
 import type { ApnsMessage } from "../src/assistant/apns.ts";
 import { ImError } from "../src/im/errors.ts";
 import { finishUpload } from "../src/im/http.ts";
+import { assistantActorId, workspaceActorId } from "../src/im/identity.ts";
 import { dmConvId, type ImPeer } from "../src/im/ids.ts";
 import { decodeCursor } from "../src/im/listCursor.ts";
 import { ImService, RATE_LIMIT_PER_MIN, type ImLiveConn } from "../src/im/service.ts";
@@ -58,11 +59,33 @@ function setup() {
       conns: () => conns,
       push: (to, message) => pushes.push({ to, message }),
       assistantBadge: async (id) => assistant.get(id) ?? 0,
+      actors: (ownerTenantId) => [
+        {
+          kind: "assistant",
+          actorId: assistantActorId(ownerTenantId),
+          ownerTenantId,
+          displayName: "小驳",
+        },
+        {
+          kind: "workspace_agent",
+          actorId: workspaceActorId("wsa_test"),
+          ownerTenantId,
+          workspaceId: "wsa_test",
+          displayName: "测试 Agent",
+        },
+      ],
       now: () => clock.now,
     });
-  const connect = (tenantId: string, foreground = true) => {
+  const connect = (tenantId: string, foreground = true, groups = false) => {
     const got: ServerMessage[] = [];
-    const conn = { key: Symbol(tenantId), tenantId, foreground, got, send: (m: ServerMessage) => void got.push(m) };
+    const conn = {
+      key: Symbol(tenantId),
+      tenantId,
+      foreground,
+      groups,
+      got,
+      send: (m: ServerMessage) => void got.push(m),
+    };
     conns.push(conn);
     return conn;
   };
@@ -139,6 +162,197 @@ describe("联系人与可见性", () => {
       "not_visible",
     );
     assert.equal(await code(service.history("carol", { type: "im_history", convId: AB })), "not_found");
+  });
+});
+
+describe("协作群底座", () => {
+  const anchor = (runId: string) => ({
+    schema: "jiebo.collab.v1" as const,
+    event: "task" as const,
+    runId,
+    summary: `任务 ${runId}`,
+  });
+
+  test("空群立即进列表；旧能力端完全看不到；重启后仍能加载单成员群", async () => {
+    const { service, make } = setup();
+    const created = await service.createGroup("alice", { type: "im_group_create", title: "  我的协作群  " });
+    assert.equal(created.conv.kind, "group");
+    assert.equal(created.conv.memberCount, 1);
+    assert.equal(created.conv.maxSeq, 0);
+    assert.equal(created.conv.title, "我的协作群");
+    assert.deepEqual((await service.list("alice")).convs, []);
+    const listed = (await service.list("alice", {}, true)).convs;
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].kind, "group");
+    assert.equal(listed[0].last, undefined);
+    assert.equal(await code(service.history("alice", { type: "im_history", convId: created.conv.convId })), "no_cap");
+    const restarted = make();
+    const afterRestart = await restarted.list("alice", {}, true);
+    assert.deepEqual(
+      afterRestart.convs.map((row) => row.convId),
+      [created.conv.convId],
+    );
+    assert.equal(afterRestart.convs[0].kind, "group");
+  });
+
+  test("群最小发送、历史、已读链路；非成员和旧端无权访问", async () => {
+    const { service, text } = setup();
+    const { conv } = await service.createGroup("alice", { type: "im_group_create", title: "开发组" });
+    const sent = await service.send("alice", null, { ...text("", "开始"), to: undefined, convId: conv.convId }, true);
+    assert.equal(sent.seq, 1);
+    const history = await service.history("alice", { type: "im_history", convId: conv.convId }, true);
+    assert.equal(history.messages[0].author?.kind, "tenant");
+    assert.equal(await service.unread("alice", conv.convId), 0);
+    await service.read("alice", null, { type: "im_read", convId: conv.convId, seq: 1 }, true);
+    assert.equal((await service.list("alice", {}, true)).convs[0].readSeq, 1);
+    assert.equal(await code(service.history("bob", { type: "im_history", convId: conv.convId }, true)), "not_found");
+    assert.equal(
+      await code(service.send("alice", null, { ...text("", "旧端"), to: undefined, convId: conv.convId })),
+      "no_cap",
+    );
+  });
+
+  test("Actor author/from、senderKey 去重和未读统一；旧连接不收群 fanout，Actor 不能由客户端撤回", async () => {
+    const { service, make, connect, conns, pushes } = setup();
+    const modern = connect("alice", true, true);
+    const legacy = connect("alice", true, false);
+    const { conv } = await service.createGroup("alice", { type: "im_group_create", title: "Actor 群" });
+    const assistant = {
+      kind: "assistant" as const,
+      actorId: assistantActorId("alice"),
+      ownerTenantId: "alice",
+    };
+    const workspace = {
+      kind: "workspace_agent" as const,
+      actorId: workspaceActorId("wsa_test"),
+      ownerTenantId: "alice",
+      workspaceId: "wsa_test",
+    };
+    const first = await service.appendActorMessage({
+      convId: conv.convId,
+      author: assistant,
+      clientId: "same-effect",
+      body: anchor("r1"),
+    });
+    const duplicate = await service.appendActorMessage({
+      convId: conv.convId,
+      author: assistant,
+      clientId: "same-effect",
+      body: anchor("ignored"),
+    });
+    const secondActor = await service.appendActorMessage({
+      convId: conv.convId,
+      author: workspace,
+      clientId: "same-effect",
+      body: anchor("r2"),
+    });
+    assert.equal(duplicate.seq, first.seq);
+    assert.equal(secondActor.seq, 2);
+    assert.equal(first.from, assistant.actorId);
+    assert.deepEqual(first.author, assistant);
+    assert.equal(await service.unread("alice", conv.convId), 2);
+    assert.deepEqual(
+      ofType(modern.got, "im_message").map((item) => item.message.seq),
+      [1, 2],
+    );
+    const beforeReplay = modern.got.length;
+    const restarted = make();
+    const replayed = await restarted.appendActorMessage({
+      convId: conv.convId,
+      author: assistant,
+      clientId: "same-effect",
+      body: anchor("ignored-after-crash"),
+    });
+    assert.equal(replayed.seq, first.seq);
+    assert.equal(modern.got.length, beforeReplay, "崩溃重放不得再次 fanout");
+    assert.equal(ofType(legacy.got, "im_message").length, 0);
+    assert.equal(
+      await code(service.recall("alice", null, { type: "im_recall", convId: conv.convId, seq: 1 }, true)),
+      "forbidden",
+    );
+    conns.length = 0;
+    await service.appendActorMessage({
+      convId: conv.convId,
+      author: assistant,
+      clientId: "offline-effect",
+      body: anchor("r3"),
+    });
+    assert.equal(pushes.at(-1)?.message.channel, "im_group");
+    assert.equal(pushes.at(-1)?.message.body, "协作群有新进展");
+  });
+
+  test("默认群使用服务端 stable marker，重命名和重复创建请求都复用同一群", async () => {
+    const { service } = setup();
+    const legacy = await service.createGroup("alice", { type: "im_group_create", title: "小驳协作群" });
+    assert.equal(legacy.conv.isDefault, false);
+    const created = await service.createGroup("alice", {
+      type: "im_group_create",
+      title: "小驳协作群",
+      isDefault: true,
+    });
+    assert.equal(created.conv.convId, legacy.conv.convId);
+    assert.equal(created.conv.isDefault, true);
+    await service.updateGroup(
+      "alice",
+      { type: "im_group_update", convId: created.conv.convId, title: "已重命名" },
+      new Set(),
+    );
+    const repeated = await service.createGroup("alice", {
+      type: "im_group_create",
+      title: "小驳协作群",
+      isDefault: true,
+    });
+    assert.equal(repeated.conv.convId, created.conv.convId);
+    assert.equal(repeated.conv.title, "已重命名");
+    assert.equal(repeated.conv.isDefault, true);
+    assert.equal((await service.list("alice", {}, true)).convs.filter((row) => row.kind === "group").length, 1);
+  });
+
+  test("多标签并发首次创建默认群只产生一个会话", async () => {
+    const { service } = setup();
+    const rows = await Promise.all(
+      Array.from({ length: 12 }, () =>
+        service.createGroup("alice", {
+          type: "im_group_create",
+          title: "小驳协作群",
+          isDefault: true,
+        }),
+      ),
+    );
+    assert.equal(new Set(rows.map((row) => row.conv.convId)).size, 1);
+    const groups = (await service.list("alice", {}, true)).convs.filter((row) => row.kind === "group");
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0]?.isDefault, true);
+  });
+
+  test("群附件下载按真人成员资格校验，Actor mention 必须属于群", async () => {
+    const { service, store, clock, text } = setup();
+    const { conv } = await service.createGroup("alice", { type: "im_group_create", title: "文件群" });
+    await putImage(store, clock.now);
+    await service.send(
+      "alice",
+      null,
+      { ...imageSend("group-image", "", SHA("a"), SHA("b")), to: undefined, convId: conv.convId },
+      true,
+    );
+    assert.equal(await service.canDownload("alice", conv.convId, SHA("a")), "image/png");
+    assert.equal(await service.canDownload("bob", conv.convId, SHA("a")), null);
+    assert.equal(
+      await code(
+        service.send(
+          "alice",
+          null,
+          {
+            ...text("", "@不存在"),
+            to: undefined,
+            convId: conv.convId,
+            mentions: [{ actorId: "actor:workspace:forged" }],
+          },
+          true,
+        ),
+      ),
+      "forbidden",
+    );
   });
 });
 

@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 /** 租户 id 规则同 tenants.ts：小写字母、数字、短横线，不含 "~" */
 const TENANT_ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const DM_RE = /^dm~([a-z0-9][a-z0-9-]{0,31})~([a-z0-9][a-z0-9-]{0,31})$/;
+const GROUP_RE = /^grp~([0-9a-f-]{36})$/;
 
 export function isTenantId(value: unknown): value is string {
   return typeof value === "string" && TENANT_ID_RE.test(value);
@@ -26,6 +27,17 @@ export function parseDmConvId(convId: unknown): [string, string] | null {
   const [, lo, hi] = match;
   if (!(lo < hi)) return null;
   return [lo, hi];
+}
+
+export type ParsedConvId = { kind: "dm"; members: [string, string] } | { kind: "group"; id: string };
+
+/** 唯一的会话号解析入口；业务层不得自行 split 或对群调用 parseDmConvId。 */
+export function parseConvId(convId: unknown): ParsedConvId | null {
+  const pair = parseDmConvId(convId);
+  if (pair) return { kind: "dm", members: pair };
+  if (typeof convId !== "string") return null;
+  const group = GROUP_RE.exec(convId);
+  return group ? { kind: "group", id: group[1] } : null;
 }
 
 export type ImPeer = { id: string; name: string; imHidden?: boolean };

@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 /// 行动区：放在助理线程与输入框之间，随内容自适应高度，无内容时不占位（规格 §4.1.4）。
-/// A. 待批确认卡（最多展开 2 张，其余合并成一行去待处理）
+/// A. 草稿确认卡（新网关）或待批确认卡（旧网关；最多展开 2 张，其余合并成一行去待处理）
 /// B. 进行中的委派（最多 2 条，其余合并成「还有 N 项」）
 /// C. 刚结束的委派（10 分钟内、没点开过也没滑走过的最近一条）
 struct ActionDock: View {
@@ -40,13 +40,20 @@ struct ActionDock: View {
     @ViewBuilder
     private func dock(now: Date) -> some View {
         let approvals = (store.assistantState?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
+        let drafts = uniqueDrafts(store.assistantState?.draftCards ?? [])
+        let usesDrafts = store.assistantState?.draftCards != nil
         let running = store.runningDelegations
         let finished = recentFinished(now: now)
-        if approvals.isEmpty && running.isEmpty && finished == nil {
+        let pendingCount = usesDrafts ? drafts.count : approvals.count
+        if pendingCount == 0 && running.isEmpty && finished == nil {
             EmptyView()
         } else {
             VStack(spacing: 6) {
-                approvalsBlock(approvals)
+                if usesDrafts {
+                    draftsBlock(drafts)
+                } else {
+                    approvalsBlock(approvals)
+                }
                 runningBlock(running, now: now)
                 if let finished {
                     finishedRow(finished)
@@ -57,12 +64,26 @@ struct ActionDock: View {
             .padding(.bottom, 4)
             .animation(
                 JieboMotion.fade(reduceMotion),
-                value: approvals.count * 100 + running.count * 10 + (finished == nil ? 0 : 1)
+                value: pendingCount * 100 + running.count * 10 + (finished == nil ? 0 : 1)
             )
         }
     }
 
     // MARK: A 确认卡
+
+    @ViewBuilder
+    private func draftsBlock(_ drafts: [DraftCard]) -> some View {
+        ForEach(drafts.prefix(approvalLimit)) { draft in
+            DraftActionCard(draft: draft) { delegationId in
+                router.delegationDetail = DelegationRef(id: delegationId)
+            }
+        }
+        if drafts.count > approvalLimit {
+            moreRow("还有 \(drafts.count - approvalLimit) 项待批，去待处理") {
+                router.go(.inbox)
+            }
+        }
+    }
 
     @ViewBuilder
     private func approvalsBlock(_ approvals: [AssistantApproval]) -> some View {
@@ -74,6 +95,17 @@ struct ActionDock: View {
                 router.go(.inbox)
             }
         }
+    }
+
+    /// 同一 approval 只显示最新的一张草稿；没有 approval source 的卡按自身 id 去重。
+    private func uniqueDrafts(_ rows: [DraftCard]) -> [DraftCard] {
+        var seen = Set<String>()
+        return rows
+            .sorted { $0.createdAt > $1.createdAt }
+            .filter { row in
+                let key = row.sources.first(where: { $0.kind == "approval" }).map { "approval:\($0.id)" } ?? "draft:\(row.id)"
+                return seen.insert(key).inserted
+            }
     }
 
     // MARK: B 进行中

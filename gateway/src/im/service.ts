@@ -2,8 +2,13 @@
 // 不认识 WebSocket：在线连接、推送、租户名单都从 deps 注入，测试用假连接即可。
 // 对调用者不可见的消息（他拉黑对方时被拒收的）在所有操作里都等同于不存在：同一个错误码和文案，
 // seq 上限一律用他可见的 maxSeq。
+import { randomUUID } from "node:crypto";
 import type {
+  ActorRef,
   ClientMessage,
+  CollabAnchorBody,
+  ImAuthor,
+  ImBody,
   ImConvRow,
   ImFileBody,
   ImMe,
@@ -15,7 +20,8 @@ import type { ApnsMessage, BadgeParts } from "../assistant/apns.ts";
 import { log } from "../log.ts";
 import { blobsOf, checkBody, isBlobId, type BlobUse } from "./body.ts";
 import { ImError } from "./errors.ts";
-import { dmConvId, imVisible, parseDmConvId, type ImPeer } from "./ids.ts";
+import { assistantActorId, isOwnMessage } from "./identity.ts";
+import { dmConvId, imVisible, parseConvId, type ImPeer } from "./ids.ts";
 import { compareKeys, decodeCursor, encodeCursor, rowKey } from "./listCursor.ts";
 import { imAlertFor, imReadPush, imRecallAlert, RecentPushes } from "./pushRules.ts";
 import {
@@ -24,6 +30,7 @@ import {
   type BlobMeta,
   type Conv,
   type ConvSettings,
+  type GroupConvMeta,
   type ImStore,
   type StoredMessage,
   type UserState,
@@ -46,6 +53,8 @@ export type ImLiveConn = {
   key: unknown;
   tenantId: string;
   foreground: boolean;
+  /** 只有同时声明 im_group + im_collab 才为 true。 */
+  groups?: boolean;
   send: (message: ServerMessage) => void;
 };
 
@@ -60,6 +69,8 @@ export type ImDeps = {
   /** 该租户助理待处理数（未读收件箱 + 待批），和 App 里助理入口的角标同一口径；拿不到时 undefined（角标分量不带） */
   assistantBadge?: (tenantId: string) => Promise<number | undefined>;
   workspaceBadge?: (tenantId: string) => Promise<number | undefined>;
+  /** 第一版群 Actor 由服务端的助理和工作区注册表生成。 */
+  actors?: (ownerTenantId: string) => ActorRef[];
   now?: () => number;
 };
 
@@ -68,6 +79,8 @@ type Out<T extends ServerMessage["type"]> = Extract<ServerMessage, { type: T }>;
 
 const isInt = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
 const thresholdOf = (settings: ConvSettings) => Math.max(settings.readSeq, settings.hideBefore);
+const tenantAuthor = (tenantId: string): ImAuthor => ({ kind: "tenant", tenantId });
+type ResolvedConversation = { convId: string; conv: Conv | null; peer?: ImPeer };
 
 export class ImService {
   private readonly deps: ImDeps;
@@ -102,12 +115,19 @@ export class ImService {
     return peer;
   }
 
-  /** 会话号合法、自己是成员、对方可见 */
-  private target(me: ImPeer, convId: unknown): { convId: string; peer: ImPeer } {
-    const pair = parseDmConvId(convId);
-    if (!pair || !pair.includes(me.id)) throw new ImError("not_found", "会话不存在");
-    const peer = this.visiblePeer(me, pair[0] === me.id ? pair[1] : pair[0]);
-    return { convId: convId as string, peer };
+  /** 所有已存在会话的统一入口：群只校验真人成员资格，绝不推导 peer。 */
+  private async resolveConversation(me: ImPeer, convId: unknown, allowGroups: boolean): Promise<ResolvedConversation> {
+    const parsed = parseConvId(convId);
+    if (!parsed || typeof convId !== "string") throw new ImError("not_found", "会话不存在");
+    if (parsed.kind === "group" && !allowGroups) throw new ImError("no_cap", "这个连接不支持协作群");
+    const conv = await this.store.open(convId);
+    if (parsed.kind === "group") {
+      if (!conv || !conv.meta.members.includes(me.id)) throw new ImError("not_found", "会话不存在");
+      return { convId, conv };
+    }
+    if (!parsed.members.includes(me.id)) throw new ImError("not_found", "会话不存在");
+    const peerId = parsed.members[0] === me.id ? parsed.members[1] : parsed.members[0];
+    return { convId, conv, peer: this.visiblePeer(me, peerId) };
   }
 
   private ticket(tenantId: string, scope: string) {
@@ -128,6 +148,11 @@ export class ImService {
     return { ...this.userView(id), notifyPreview: (await this.store.user(id)).notifyPreview };
   }
 
+  async canAccessGroup(tenantId: string, convId: string) {
+    const conv = await this.store.open(convId);
+    return Boolean(conv?.meta.kind === "group" && conv.meta.members.includes(tenantId));
+  }
+
   /** viewer 看到的样子；被他拉黑拒收的返回 null */
   view(convId: string, row: StoredMessage, viewer: string): ImMessage | null {
     if (row.rejectedFor?.includes(viewer)) return null;
@@ -135,6 +160,7 @@ export class ImService {
       convId,
       seq: row.seq,
       from: row.from,
+      ...(row.author ? { author: row.author } : {}),
       at: row.at,
       kind: row.kind,
       clientId: row.clientId,
@@ -186,13 +212,17 @@ export class ImService {
   }
 
   /** 角标：所有（对方仍可见的）会话未读合计（只读 index） */
-  async badge(viewer: string): Promise<number> {
+  async badge(viewer: string, allowGroups = false): Promise<number> {
     await this.store.ready();
     const me = this.peer(viewer);
     if (!me) return 0;
     const user = await this.store.user(viewer);
     let total = 0;
     for (const conv of await this.store.convsOf(viewer)) {
+      if (conv.meta.kind === "group") {
+        if (allowGroups) total += this.store.unread(conv, viewer, thresholdOf(this.settingsIn(user, conv.meta.convId)));
+        continue;
+      }
       const peerId = conv.meta.members.find((id) => id !== viewer);
       const peer = peerId ? this.peer(peerId) : undefined;
       if (!peer || !imVisible(me, peer)) continue;
@@ -203,14 +233,14 @@ export class ImService {
 
   /** APNs 角标分部：IM 未读合计 + 助理待处理数（哪个分量拿不到就是 undefined）。
    *  设备按自己订阅的类别合计（apnsBadgeFor）：只订阅聊天的 iPad 不算助理待处理，助理变化不会推给它 */
-  async pushBadge(viewer: string): Promise<BadgeParts> {
+  async pushBadge(viewer: string, allowGroups = false): Promise<BadgeParts> {
     const assistant = this.deps.assistantBadge
       ? this.deps.assistantBadge(viewer).catch(() => undefined)
       : Promise.resolve(undefined);
     const workspace = this.deps.workspaceBadge
       ? this.deps.workspaceBadge(viewer).catch(() => undefined)
       : Promise.resolve(undefined);
-    const [im, extra, workspaceUnread] = await Promise.all([this.badge(viewer), assistant, workspace]);
+    const [im, extra, workspaceUnread] = await Promise.all([this.badge(viewer, allowGroups), assistant, workspace]);
     return { im, assistant: extra, ...(workspaceUnread === undefined ? {} : { workspace: workspaceUnread }) };
   }
 
@@ -221,10 +251,15 @@ export class ImService {
   }
 
   /** 发给这些租户的在线 im 连接；except 是发起请求那条连接的 key */
-  private fanout(tenantIds: string[], build: (tenantId: string) => ServerMessage | null, except?: unknown) {
+  private fanout(
+    tenantIds: string[],
+    build: (tenantId: string) => ServerMessage | null,
+    except?: unknown,
+    group = false,
+  ) {
     const built = new Map<string, ServerMessage | null>();
     for (const conn of this.deps.conns()) {
-      if (conn.key === except || !tenantIds.includes(conn.tenantId)) continue;
+      if (conn.key === except || !tenantIds.includes(conn.tenantId) || (group && !conn.groups)) continue;
       if (!built.has(conn.tenantId)) built.set(conn.tenantId, build(conn.tenantId));
       const message = built.get(conn.tenantId);
       if (message) conn.send(message);
@@ -253,7 +288,7 @@ export class ImService {
     };
   }
 
-  async list(meId: string, message: Partial<Msg<"im_list">> = {}): Promise<Out<"im_list">> {
+  async list(meId: string, message: Partial<Msg<"im_list">> = {}, allowGroups = false): Promise<Out<"im_list">> {
     const me = await this.me(meId);
     if (message.limit !== undefined && !(isInt(message.limit) && message.limit >= 1)) {
       throw new ImError("bad_body", "limit 必须是正整数");
@@ -265,17 +300,13 @@ export class ImService {
     const rows: ImConvRow[] = [];
     for (const conv of await this.store.convsOf(me.id)) {
       const { convId } = conv.meta;
-      const peerId = conv.meta.members.find((id) => id !== me.id);
-      const peer = peerId ? this.peer(peerId) : undefined;
-      if (!peer || !imVisible(me, peer)) continue;
       const settings = this.settingsIn(user, convId);
       const maxSeq = this.store.visibleMax(conv, me.id);
-      if (!maxSeq) continue;
+      if (conv.meta.kind !== "group" && !maxSeq) continue;
       const lastRow = maxSeq > settings.hideBefore ? await this.store.get(conv, maxSeq) : null;
       const last = lastRow ? this.view(convId, lastRow, me.id) : null;
-      rows.push({
+      const base = {
         convId,
-        peer: peer.id,
         ...(last ? { last } : {}),
         unread: this.store.unread(conv, me.id, thresholdOf(settings)),
         readSeq: settings.readSeq,
@@ -284,7 +315,25 @@ export class ImService {
         mute: settings.mute,
         hideBefore: settings.hideBefore,
         ticket: this.ticket(me.id, convId),
-      });
+      };
+      if (conv.meta.kind === "group") {
+        if (!allowGroups) continue;
+        rows.push({
+          ...base,
+          kind: "group",
+          title: conv.meta.title,
+          actors: conv.meta.actors,
+          memberCount: conv.meta.members.length,
+          activityAt: last?.at ?? conv.meta.createdAt,
+          archived: conv.meta.archived === true,
+          isDefault: conv.meta.defaultGroup === true,
+        });
+      } else {
+        const peerId = conv.meta.members.find((id) => id !== me.id);
+        const peer = peerId ? this.peer(peerId) : undefined;
+        if (!peer || !imVisible(me, peer)) continue;
+        rows.push({ ...base, kind: "dm", peer: peer.id });
+      }
     }
     rows.sort((a, b) => compareKeys(rowKey(a), rowKey(b)));
     const rest = after ? rows.filter((row) => compareKeys(rowKey(row), after) > 0) : rows;
@@ -299,9 +348,163 @@ export class ImService {
     };
   }
 
-  async history(meId: string, message: Msg<"im_history">): Promise<Out<"im_history">> {
+  async createGroup(meId: string, message: Msg<"im_group_create">): Promise<Out<"im_group_created">> {
     const me = await this.me(meId);
-    const { convId } = this.target(me, message.convId);
+    const title = typeof message.title === "string" ? message.title.replace(/\s+/g, " ").trim() : "";
+    if (!title || Array.from(title).length > 80) throw new ImError("bad_body", "群名要 1–80 个字");
+    if (message.isDefault) {
+      // 所有标签页和同进程 service 实例共用 store 的租户级队列；锁内必须重新查一次。
+      return this.store.serial(`default-group:${me.id}`, () => this.createGroupResolved(me, title, message, true));
+    }
+    return this.createGroupResolved(me, title, message, false);
+  }
+
+  private async createGroupResolved(
+    me: ImPeer,
+    title: string,
+    message: Msg<"im_group_create">,
+    isDefault: boolean,
+  ): Promise<Out<"im_group_created">> {
+    if (isDefault) {
+      const groups = (await this.store.convsOf(me.id)).filter((conv) => conv.meta.kind === "group");
+      let known = groups.find((conv) => conv.meta.kind === "group" && conv.meta.defaultGroup);
+      // v1 迁移：只在显式请求默认群且尚无 marker 时认领旧版默认标题一次。
+      known ??= groups.find((conv) => conv.meta.kind === "group" && conv.meta.title === "小驳协作群");
+      if (known?.meta.kind === "group") {
+        if (!known.meta.defaultGroup) {
+          known = await this.store.serial(known.meta.convId, () =>
+            this.store.updateGroup(known!.meta.convId, me.id, { defaultGroup: true }),
+          );
+        }
+        const meta = known.meta as GroupConvMeta;
+        const settings = this.settingsIn(await this.store.user(me.id), meta.convId);
+        return {
+          type: "im_group_created",
+          conv: {
+            kind: "group",
+            convId: meta.convId,
+            title: meta.title,
+            actors: meta.actors,
+            memberCount: meta.members.length,
+            activityAt: meta.createdAt,
+            archived: meta.archived === true,
+            isDefault: true,
+            unread: this.store.unread(known, me.id, thresholdOf(settings)),
+            readSeq: settings.readSeq,
+            maxSeq: this.store.visibleMax(known, me.id),
+            pin: settings.pin,
+            mute: settings.mute,
+            hideBefore: settings.hideBefore,
+            ticket: this.ticket(me.id, meta.convId),
+          },
+        };
+      }
+    }
+    const convId = `grp~${randomUUID()}`;
+    const registered = this.deps.actors?.(me.id) ?? [];
+    const assistantId = assistantActorId(me.id);
+    const available = registered.some((actor) => actor.actorId === assistantId)
+      ? registered
+      : [
+          { kind: "assistant" as const, actorId: assistantId, ownerTenantId: me.id, displayName: "小驳" },
+          ...registered,
+        ];
+    const requested = Array.isArray(message.actorIds) ? new Set([...message.actorIds, assistantId]) : null;
+    const actors = requested ? available.filter((actor) => requested.has(actor.actorId)) : available;
+    if (requested && actors.length !== requested.size) throw new ImError("bad_body", "包含无权访问的 Agent");
+    const conv = await this.store.serial(convId, () =>
+      this.store.createGroup(convId, me.id, title, actors, this.now(), isDefault),
+    );
+    const settings = this.settingsIn(await this.store.user(me.id), convId);
+    return {
+      type: "im_group_created",
+      conv: {
+        kind: "group",
+        convId,
+        title,
+        actors: conv.meta.kind === "group" ? conv.meta.actors : [],
+        memberCount: conv.meta.members.length,
+        activityAt: conv.meta.createdAt,
+        archived: false,
+        isDefault,
+        unread: 0,
+        readSeq: settings.readSeq,
+        maxSeq: 0,
+        pin: settings.pin,
+        mute: settings.mute,
+        hideBefore: settings.hideBefore,
+        ticket: this.ticket(me.id, convId),
+      },
+    };
+  }
+
+  async updateGroup(
+    meId: string,
+    message: Msg<"im_group_update">,
+    activeWorkspaceIds: Set<string>,
+  ): Promise<Out<"im_group_created">> {
+    const me = await this.me(meId);
+    const resolved = await this.resolveConversation(me, message.convId, true);
+    if (!resolved.conv || resolved.conv.meta.kind !== "group") throw new ImError("not_found", "群不存在");
+    const current = resolved.conv.meta;
+    const title = message.title === undefined ? undefined : message.title.replace(/\s+/g, " ").trim();
+    if (title !== undefined && (!title || Array.from(title).length > 80)) {
+      throw new ImError("bad_body", "群名要 1–80 个字");
+    }
+    let actors: ActorRef[] | undefined;
+    if (message.actorIds !== undefined) {
+      const requested = new Set([...message.actorIds, assistantActorId(me.id)]);
+      const registered = this.deps.actors?.(me.id) ?? [];
+      const available = registered.some((actor) => actor.actorId === assistantActorId(me.id))
+        ? registered
+        : [
+            {
+              kind: "assistant" as const,
+              actorId: assistantActorId(me.id),
+              ownerTenantId: me.id,
+              displayName: "小驳",
+            },
+            ...registered,
+          ];
+      actors = available.filter((actor) => requested.has(actor.actorId));
+      if (actors.length !== requested.size) throw new ImError("bad_body", "包含无权访问的 Agent");
+      const retained = new Set(actors.map((actor) => actor.actorId));
+      const removingBusy = current.actors.some(
+        (actor) =>
+          actor.kind === "workspace_agent" && !retained.has(actor.actorId) && activeWorkspaceIds.has(actor.workspaceId),
+      );
+      if (removingBusy) throw new ImError("forbidden", "运行中的 Agent 不能移出协作群");
+    }
+    const conv = await this.store.serial(message.convId, () =>
+      this.store.updateGroup(message.convId, me.id, { title, actors, archived: message.archived }),
+    );
+    const settings = this.settingsIn(await this.store.user(me.id), message.convId);
+    const meta = conv.meta as GroupConvMeta;
+    return {
+      type: "im_group_created",
+      conv: {
+        kind: "group",
+        convId: meta.convId,
+        title: meta.title,
+        actors: meta.actors,
+        memberCount: meta.members.length,
+        activityAt: meta.createdAt,
+        archived: meta.archived === true,
+        isDefault: meta.defaultGroup === true,
+        unread: this.store.unread(conv, me.id, thresholdOf(settings)),
+        readSeq: settings.readSeq,
+        maxSeq: this.store.visibleMax(conv, me.id),
+        pin: settings.pin,
+        mute: settings.mute,
+        hideBefore: settings.hideBefore,
+        ticket: this.ticket(me.id, meta.convId),
+      },
+    };
+  }
+
+  async history(meId: string, message: Msg<"im_history">, allowGroups = false): Promise<Out<"im_history">> {
+    const me = await this.me(meId);
+    const { conv, convId } = await this.resolveConversation(me, message.convId, allowGroups);
     for (const key of ["before", "after", "limit"] as const) {
       const value = message[key];
       if (value !== undefined && value !== null && !(isInt(value) && value >= 0)) {
@@ -309,7 +512,6 @@ export class ImService {
       }
     }
     const limit = Math.min(HISTORY_MAX, Math.max(1, message.limit || HISTORY_DEFAULT));
-    const conv = await this.store.open(convId);
     const floor = this.settingsIn(await this.store.user(me.id), convId).hideBefore;
     const before = isInt(message.before) ? message.before : undefined;
     const after = isInt(message.after) ? message.after : undefined;
@@ -375,18 +577,24 @@ export class ImService {
    * 只看这个会话的引用，从新到旧，找到一条就停。返回那条引用的用途
    */
   private async usableIn(viewer: ImPeer, sha: string, convId: string): Promise<BlobKind | null> {
-    const pair = parseDmConvId(convId);
-    if (!pair || !pair.includes(viewer.id)) return null;
-    const peer = this.peer(pair[0] === viewer.id ? pair[1] : pair[0]);
-    if (!peer || !imVisible(viewer, peer)) return null;
     const conv = await this.store.open(convId);
-    if (!conv) return null;
+    if (!conv || !conv.meta.members.includes(viewer.id)) return null;
+    if (conv.meta.kind !== "group") {
+      const peerId = conv.meta.members[0] === viewer.id ? conv.meta.members[1] : conv.meta.members[0];
+      const peer = this.peer(peerId);
+      if (!peer || !imVisible(viewer, peer)) return null;
+    }
     const refs = await this.store.refsIn(sha, convId);
     for (let i = refs.length - 1; i >= 0; i -= 1) {
       const ref = refs[i];
       const row = await this.visibleRow(conv, viewer.id, ref.seq);
       if (!row || row.recalledAt !== undefined) continue;
-      if (blobsOf(row.kind, row.body).some((use) => use.sha === sha && use.kind === ref.kind)) return ref.kind;
+      if (
+        row.kind !== "collab" &&
+        row.body &&
+        blobsOf(row.kind, row.body as ImBody).some((use) => use.sha === sha && use.kind === ref.kind)
+      )
+        return ref.kind;
     }
     return null;
   }
@@ -402,7 +610,8 @@ export class ImService {
       let usable = Boolean(meta && meta.uploaders.includes(me.id));
       if (meta && !usable) {
         for (const convId of await this.store.refConvs(use.sha)) {
-          if (!parseDmConvId(convId)?.includes(me.id)) continue;
+          const conv = await this.store.open(convId);
+          if (!conv?.meta.members.includes(me.id)) continue;
           if (await this.usableIn(me, use.sha, convId)) {
             usable = true;
             break;
@@ -418,11 +627,14 @@ export class ImService {
   }
 
   /** 去重命中或刚提交：补做幂等的副作用（附件引用、投递）。客户端按 convId+seq 去重，重复投递无害 */
-  private async settle(convId: string, peer: string, row: StoredMessage, origin: unknown) {
-    for (const use of blobsOf(row.kind, row.body)) {
+  private async settle(conv: Conv, row: StoredMessage, origin: unknown) {
+    const { convId } = conv.meta;
+    for (const use of row.kind === "collab" || !row.body ? [] : blobsOf(row.kind, row.body as ImBody)) {
       await this.store.addBlobRef(use.sha, { convId, seq: row.seq, kind: use.kind });
     }
-    const audience = row.rejectedFor?.length ? [row.from] : [row.from, peer];
+    const audience = row.rejectedFor?.length
+      ? conv.meta.members.filter((member) => !row.rejectedFor?.includes(member))
+      : conv.meta.members;
     const unread = await this.unreadOf(audience, convId);
     this.fanout(
       audience,
@@ -438,6 +650,7 @@ export class ImService {
           : null;
       },
       origin,
+      conv.meta.kind === "group",
     );
   }
 
@@ -450,27 +663,46 @@ export class ImService {
    *   4. 追加消息行 —— 提交点。meta.maxSeq / index 写失败也能从 jsonl 修复，去重表已在内存里登记
    *   5. 投递、推送（失败不影响已提交）
    */
-  async send(meId: string, origin: unknown, message: Msg<"im_send">): Promise<Out<"im_ack">> {
+  async send(meId: string, origin: unknown, message: Msg<"im_send">, allowGroups = false): Promise<Out<"im_ack">> {
     const me = await this.me(meId);
     if (typeof message.clientId !== "string" || !CLIENT_ID_RE.test(message.clientId)) {
       throw new ImError("bad_body", "clientId 不合法（1–64 位字母数字或 _.:-）");
     }
-    let target: { convId: string; peer: ImPeer };
+    let convId: string;
+    let peer: ImPeer | undefined;
+    let existing: Conv | null = null;
     if (message.to !== undefined && message.to !== null) {
-      const peer = this.visiblePeer(me, message.to);
-      target = { convId: dmConvId(me.id, peer.id), peer };
-      if (message.convId !== undefined && message.convId !== null && message.convId !== target.convId) {
+      peer = this.visiblePeer(me, message.to);
+      convId = dmConvId(me.id, peer.id);
+      if (message.convId !== undefined && message.convId !== null && message.convId !== convId) {
         throw new ImError("bad_body", "to 和 convId 对不上");
       }
     } else {
-      target = this.target(me, message.convId);
+      const resolved = await this.resolveConversation(me, message.convId, allowGroups);
+      convId = resolved.convId;
+      existing = resolved.conv;
+      peer = resolved.peer;
     }
-    const { convId, peer } = target;
+    if (!peer && !existing) throw new ImError("not_found", "会话不存在");
+    if (message.mentions?.length && existing?.meta.kind !== "group")
+      throw new ImError("bad_body", "mentions 只能用于群消息");
+    const mentions = message.mentions ?? [];
+    if (
+      existing?.meta.kind === "group" &&
+      mentions.some(
+        (mention) =>
+          !mention ||
+          typeof mention.actorId !== "string" ||
+          !(existing as Conv & { meta: GroupConvMeta }).meta.actors.some((actor) => actor.actorId === mention.actorId),
+      )
+    )
+      throw new ImError("forbidden", "mention 的 Actor 不属于这个群");
     const clientId = message.clientId;
-    const existing = await this.store.open(convId);
-    const early = existing ? this.store.byClientId(existing, me.id, clientId) : null;
+    existing ??= await this.store.open(convId);
+    const author = tenantAuthor(me.id);
+    const early = existing ? this.store.byClientId(existing, author, clientId) : null;
     if (early) {
-      await this.settle(convId, peer.id, early, origin);
+      await this.settle(existing as Conv, early, origin);
       return this.ack(convId, early);
     }
 
@@ -482,7 +714,7 @@ export class ImService {
     try {
       row = await this.store.serial(convId, async () => {
         const opened = await this.store.open(convId);
-        const dup = opened ? await this.store.findClient(opened, me.id, clientId) : null;
+        const dup = opened ? await this.store.findClient(opened, author, clientId) : null;
         if (dup) return dup;
         if (message.replyTo !== undefined && message.replyTo !== null) {
           if (!(await this.visibleRow(opened, me.id, message.replyTo))) {
@@ -495,9 +727,9 @@ export class ImService {
           body.size = metas[0].size;
           body.mime = metas[0].kinds.file ?? body.mime;
         }
-        const rejected = (await this.store.user(peer.id)).blocked.includes(me.id);
+        const rejected = peer ? (await this.store.user(peer.id)).blocked.includes(me.id) : false;
         // 校验都过了才建会话：失败的请求不留下空会话
-        const conv = opened ?? (await this.store.ensure(convId, [me.id, peer.id], now));
+        const conv = opened ?? (await this.store.ensure(convId, [me.id, (peer as ImPeer).id], now));
         const seq = this.store.nextSeq(conv);
         try {
           for (const use of checked.blobs) {
@@ -505,12 +737,21 @@ export class ImService {
           }
           const stored = await this.store.append(conv, {
             from: me.id,
+            author,
             at: now,
             kind: checked.kind,
             body: checked.body,
             ...(isInt(message.replyTo) ? { replyTo: message.replyTo } : {}),
             clientId,
-            ...(rejected ? { rejectedFor: [peer.id] } : {}),
+            ...(mentions.length
+              ? {
+                  trigger: {
+                    eventKey: `mention:${convId}:${seq}`,
+                    mentions: mentions.map(({ actorId }) => ({ actorId })),
+                  },
+                }
+              : {}),
+            ...(rejected ? { rejectedFor: [(peer as ImPeer).id] } : {}),
           });
           fresh = true;
           return stored;
@@ -526,44 +767,107 @@ export class ImService {
     }
     if (!fresh) {
       this.release(me.id, now);
-      await this.settle(convId, peer.id, row, origin);
+      await this.settle((await this.store.open(convId)) as Conv, row, origin);
       return this.ack(convId, row);
     }
     log.info("im send", convId, row.seq, row.kind, row.rejectedFor ? "rejected" : "");
-    await this.settle(convId, peer.id, row, origin);
-    if (!row.rejectedFor) await this.maybePush(convId, peer.id, row);
+    const conv = (await this.store.open(convId)) as Conv;
+    await this.settle(conv, row, origin);
+    if (!row.rejectedFor) {
+      for (const recipient of conv.meta.members) {
+        if (!isOwnMessage(row.author ?? tenantAuthor(row.from), recipient)) {
+          await this.maybePush(conv, recipient, row);
+        }
+      }
+    }
     return this.ack(convId, row);
   }
 
-  private async maybePush(convId: string, recipient: string, row: StoredMessage) {
+  private async maybePush(conv: Conv, recipient: string, row: StoredMessage) {
+    const { convId } = conv.meta;
     if (this.foregroundOnline(recipient)) return;
     const user = await this.store.user(recipient);
     if (this.settingsIn(user, convId).mute) return;
+    const author = row.author ?? tenantAuthor(row.from);
+    const actor = conv.meta.kind === "group" ? conv.meta.actors.find((item) => item.actorId === row.from) : undefined;
     const alert = imAlertFor({
       convId,
       message: row,
-      senderNickname: this.nickname(row.from),
-      notifyPreview: user.notifyPreview,
+      senderNickname: author.kind === "tenant" ? this.nickname(author.tenantId) : (actor?.displayName ?? "协作群"),
+      notifyPreview: conv.meta.kind === "group" ? false : user.notifyPreview,
       convUnread: await this.unread(recipient, convId),
-      badgeParts: await this.pushBadge(recipient),
+      badgeParts: await this.pushBadge(recipient, conv.meta.kind === "group"),
       foregroundOnline: false,
       muted: false,
       rejected: false,
     });
     if (!alert) return;
+    if (conv.meta.kind === "group") {
+      alert.channel = "im_group";
+      alert.body = "协作群有新进展";
+    }
     this.deps.push(recipient, alert);
     this.pushed.mark(recipient, convId, row.seq, this.now());
   }
 
-  async recall(meId: string, origin: unknown, message: Msg<"im_recall">): Promise<Out<"im_update">> {
+  /** D1 内部入口：Actor 只能向自己登记所在的群追加协作锚点，不暴露为 WS/HTTP 操作。 */
+  async appendActorMessage(input: {
+    convId: string;
+    author: Exclude<ImAuthor, { kind: "tenant" }>;
+    clientId: string;
+    body: CollabAnchorBody;
+  }): Promise<StoredMessage> {
+    if (!CLIENT_ID_RE.test(input.clientId)) throw new ImError("bad_body", "clientId 不合法");
+    const conv = await this.store.open(input.convId);
+    if (!conv || conv.meta.kind !== "group") throw new ImError("not_found", "群不存在");
+    const registered = conv.meta.actors.find((actor) => actor.actorId === input.author.actorId);
+    if (
+      !registered ||
+      registered.kind !== input.author.kind ||
+      registered.ownerTenantId !== input.author.ownerTenantId ||
+      (registered.kind === "workspace_agent" &&
+        input.author.kind === "workspace_agent" &&
+        registered.workspaceId !== input.author.workspaceId)
+    )
+      throw new ImError("forbidden", "Actor 不属于这个群");
+    const outcome = await this.store.serial(input.convId, async () => {
+      const duplicate = await this.store.findClient(conv, input.author, input.clientId);
+      if (duplicate) return { row: duplicate, inserted: false };
+      return {
+        row: await this.store.append(conv, {
+          from: input.author.actorId,
+          author: input.author,
+          at: this.now(),
+          kind: "collab",
+          body: input.body,
+          clientId: input.clientId,
+        }),
+        inserted: true,
+      };
+    });
+    if (outcome.inserted) {
+      await this.settle(conv, outcome.row, null);
+      for (const recipient of conv.meta.members) await this.maybePush(conv, recipient, outcome.row);
+    }
+    return outcome.row;
+  }
+
+  async recall(
+    meId: string,
+    origin: unknown,
+    message: Msg<"im_recall">,
+    allowGroups = false,
+  ): Promise<Out<"im_update">> {
     const me = await this.me(meId);
-    const { convId, peer } = this.target(me, message.convId);
+    const { conv, peer } = await this.resolveConversation(me, message.convId, allowGroups);
+    const convId = message.convId;
+    if (!conv) throw new ImError("not_found", NO_MESSAGE);
     const now = this.now();
     const { update, row, changed } = await this.store.serial(convId, async () => {
-      const conv = await this.store.open(convId);
       const row = await this.visibleRow(conv, me.id, message.seq);
-      if (!conv || !row) throw new ImError("not_found", NO_MESSAGE);
-      if (row.from !== me.id) throw new ImError("forbidden", "只能撤回自己发的消息");
+      if (!row) throw new ImError("not_found", NO_MESSAGE);
+      const author = row.author ?? tenantAuthor(row.from);
+      if (author.kind !== "tenant" || author.tenantId !== me.id) throw new ImError("forbidden", "只能撤回自己发的消息");
       const update: Out<"im_update"> = { type: "im_update", what: "recall", convId, seq: row.seq };
       if (row.recalledAt !== undefined) return { update, row, changed: false };
       if (now - row.at > RECALL_WINDOW_MS) throw new ImError("recall_expired", "超过 2 分钟，不能撤回了");
@@ -571,26 +875,30 @@ export class ImService {
       return { update, row, changed: true };
     });
     if (!changed) return { ...update, unread: await this.unread(me.id, convId) };
-    const peerSees = !row.rejectedFor?.includes(peer.id);
-    const audience = peerSees ? [me.id, peer.id] : [me.id];
+    const peerSees = peer ? !row.rejectedFor?.includes(peer.id) : false;
+    const audience = conv.meta.members.filter((member) => !row.rejectedFor?.includes(member));
     // 撤回的那条不再算未读：每个人带自己的未读
     const unread = await this.unreadOf(audience, convId);
-    this.fanout(audience, (tenantId) => ({ ...update, unread: unread.get(tenantId) ?? 0 }), origin);
+    this.fanout(
+      audience,
+      (tenantId) => ({ ...update, unread: unread.get(tenantId) ?? 0 }),
+      origin,
+      conv.meta.kind === "group",
+    );
     // 只替换确实推过的通知（同一个 collapse-id）；没推过的（当时在前台、免打扰）不发，网关重启后忘掉的也不发
-    if (peerSees && this.pushed.take(peer.id, convId, row.seq, now)) {
+    if (peer && peerSees && this.pushed.take(peer.id, convId, row.seq, now)) {
       this.deps.push(peer.id, imRecallAlert(convId, row.seq, this.nickname(me.id), await this.pushBadge(peer.id)));
     }
     return { ...update, unread: unread.get(me.id) ?? 0 };
   }
 
   /** readSeq 推到 min(seq, 自己可见的 maxSeq)；没前进就什么都不做 */
-  async read(meId: string, origin: unknown, message: Msg<"im_read">): Promise<null> {
+  async read(meId: string, origin: unknown, message: Msg<"im_read">, allowGroups = false): Promise<null> {
     const me = await this.me(meId);
-    const { convId } = this.target(me, message.convId);
+    const { conv, convId } = await this.resolveConversation(me, message.convId, allowGroups);
     if (!isInt(message.seq) || message.seq < 0) throw new ImError("bad_body", "seq 必须是非负整数");
     const user = await this.store.user(me.id);
     const moved = await this.store.serial(convId, async () => {
-      const conv = await this.store.open(convId);
       if (!conv) return null;
       const target = Math.min(message.seq, this.store.visibleMax(conv, me.id));
       const settings = this.ensureSettings(user, convId);
@@ -601,17 +909,28 @@ export class ImService {
     if (moved === null) return null;
     // 未读由 readSeq 现算；落盘后才裁内存窗口、同步给其他设备
     await this.persistUser(me.id);
-    const conv = await this.store.open(convId);
     if (conv) this.store.trimUnread(conv, me.id, thresholdOf(this.settingsIn(user, convId)));
     const unread = await this.unread(me.id, convId);
-    this.fanout([me.id], () => ({ type: "im_update", what: "read", convId, seq: moved, unread }), origin);
-    this.deps.push(me.id, imReadPush(convId, await this.pushBadge(me.id)));
+    this.fanout(
+      [me.id],
+      () => ({ type: "im_update", what: "read", convId, seq: moved, unread }),
+      origin,
+      conv?.meta.kind === "group",
+    );
+    const readPush = imReadPush(convId, await this.pushBadge(me.id, conv?.meta.kind === "group"));
+    if (conv?.meta.kind === "group") readPush.channel = "im_group";
+    this.deps.push(me.id, readPush);
     return null;
   }
 
-  async settings(meId: string, origin: unknown, message: Msg<"im_settings">): Promise<Out<"im_update">> {
+  async settings(
+    meId: string,
+    origin: unknown,
+    message: Msg<"im_settings">,
+    allowGroups = false,
+  ): Promise<Out<"im_update">> {
     const me = await this.me(meId);
-    const { convId } = this.target(me, message.convId);
+    const { conv, convId } = await this.resolveConversation(me, message.convId, allowGroups);
     for (const key of ["pin", "mute"] as const) {
       if (message[key] !== undefined && typeof message[key] !== "boolean") {
         throw new ImError("bad_body", `${key} 必须是布尔值`);
@@ -627,7 +946,6 @@ export class ImService {
       if (typeof message.mute === "boolean") settings.mute = message.mute;
       let readMoved = false;
       if (isInt(message.hideBefore)) {
-        const conv = await this.store.open(convId);
         const visibleMax = conv ? this.store.visibleMax(conv, me.id) : 0;
         settings.hideBefore = Math.max(settings.hideBefore, Math.min(message.hideBefore, visibleMax));
         if (settings.readSeq < settings.hideBefore) {
@@ -647,8 +965,12 @@ export class ImService {
       hideBefore: settings.hideBefore,
       unread: await this.unread(me.id, convId),
     };
-    this.fanout([me.id], () => update, origin);
-    if (readMoved) this.deps.push(me.id, imReadPush(convId, await this.pushBadge(me.id)));
+    this.fanout([me.id], () => update, origin, conv?.meta.kind === "group");
+    if (readMoved) {
+      const readPush = imReadPush(convId, await this.pushBadge(me.id, conv?.meta.kind === "group"));
+      if (conv?.meta.kind === "group") readPush.channel = "im_group";
+      this.deps.push(me.id, readPush);
+    }
     return update;
   }
 

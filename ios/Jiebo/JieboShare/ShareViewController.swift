@@ -27,53 +27,119 @@ final class ShareViewController: UIViewController {
 }
 
 private struct ShareRoot: View {
+    private enum Destination: String, CaseIterable, Identifiable {
+        case assistant = "小驳"
+        case chat = "聊天"
+        var id: String { rawValue }
+    }
+
     let items: [NSExtensionItem]
     var complete: () -> Void
     var cancel: () -> Void
     @State private var snapshot = ImShareBridge.load()
+    @State private var destination: Destination = .assistant
     @State private var selected = Set<String>()
+    @State private var intent = AssistantCaptureBridge.Action.summarize
     @State private var note = ""
+    @State private var payloads: [SharePayload] = []
+    @State private var loading = true
     @State private var sending = false
     @State private var error = ""
     @State private var notice = ""
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let snapshot, !snapshot.people.isEmpty {
-                    List(snapshot.people) { person in
-                        Button {
-                            if !selected.insert(person.id).inserted { selected.remove(person.id) }
-                        } label: {
-                            HStack {
-                                Image(systemName: selected.contains(person.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selected.contains(person.id) ? .green : .secondary)
-                                VStack(alignment: .leading) {
-                                    Text(person.nickname).foregroundStyle(.primary)
-                                    if person.recentAt > 0 { Text("最近聊天").font(.caption).foregroundStyle(.secondary) }
+            VStack(spacing: 12) {
+                Picker("发送目标", selection: $destination) {
+                    ForEach(Destination.allCases) { value in
+                        Text(value.rawValue).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+
+                if loading {
+                    ProgressView("正在读取分享内容")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if destination == .assistant {
+                    Form {
+                        Section("内容预览") {
+                            if payloads.isEmpty {
+                                Text("没有可识别的分享内容").foregroundStyle(.secondary)
+                            } else {
+                                ForEach(Array(payloads.enumerated()), id: \.offset) { _, payload in
+                                    Label(payload.preview, systemImage: payload.symbol)
                                 }
                             }
                         }
+                        Section("请小驳") {
+                            Picker("意图", selection: $intent) {
+                                ForEach([
+                                    AssistantCaptureBridge.Action.summarize,
+                                    .remember, .createTask, .readLater, .custom,
+                                ], id: \.self) { action in
+                                    Text(action.title).tag(action)
+                                }
+                            }
+                            TextField("备注（可选）", text: $note, axis: .vertical)
+                                .lineLimit(1 ... 4)
+                        }
                     }
+                    .scrollContentBackground(.hidden)
                 } else {
-                    ContentUnavailableView("请先打开接驳", systemImage: "message", description: Text("主 App 打开后会同步联系人和登录状态"))
+                    Group {
+                        if let snapshot, !snapshot.people.isEmpty {
+                            List(snapshot.people) { person in
+                                Button {
+                                    if !selected.insert(person.id).inserted { selected.remove(person.id) }
+                                } label: {
+                                    HStack {
+                                        Image(systemName: selected.contains(person.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(selected.contains(person.id) ? .tint : .secondary)
+                                        VStack(alignment: .leading) {
+                                            Text(person.nickname).foregroundStyle(.primary)
+                                            if person.recentAt > 0 {
+                                                Text("最近聊天").font(.caption).foregroundStyle(.secondary)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            ContentUnavailableView(
+                                "请先打开接驳",
+                                systemImage: "message",
+                                description: Text("主 App 打开后会同步联系人和登录状态")
+                            )
+                        }
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
-                    TextField("留言（可选）", text: $note, axis: .vertical).lineLimit(1 ... 3)
-                        .textFieldStyle(.roundedBorder)
+                    if destination == .chat {
+                        TextField("留言（可选）", text: $note, axis: .vertical).lineLimit(1 ... 3)
+                            .textFieldStyle(.roundedBorder)
+                    }
                     if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-                    if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.green) }
-                }.padding().background(.bar)
+                    if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.secondary) }
+                }
+                .padding()
+                .background(.ultraThinMaterial)
             }
-            .navigationTitle("发送到聊天")
+            .navigationTitle("分享给接驳")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消", action: cancel) }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        ShareLoader.removePayloadFiles(payloads)
+                        cancel()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(sending ? "发送中…" : "发送") { send() }
-                        .disabled(selected.isEmpty || sending || snapshot == nil)
+                        .buttonStyle(.glassProminent)
+                        .disabled(!canSend)
                 }
             }
         }
@@ -83,10 +149,27 @@ private struct ShareRoot: View {
                 ImShareBackgroundQueue.shared.discardFailed()
             }
         }
+        .task {
+            guard loading else { return }
+            do {
+                payloads = try await ShareLoader.load(items)
+            } catch {
+                self.error = error.localizedDescription
+            }
+            loading = false
+        }
+    }
+
+    private var canSend: Bool {
+        guard !sending, !loading, snapshot != nil else { return false }
+        if destination == .chat { return !selected.isEmpty }
+        return !payloads.isEmpty
+            && snapshot?.assistantIngestURL != nil
+            && snapshot?.assistantUploadURL != nil
     }
 
     private func send() {
-        guard let snapshot, KeychainStore.token() != nil, !selected.isEmpty else {
+        guard let snapshot, KeychainStore.token() != nil else {
             error = "登录状态已失效，请先打开主 App"
             return
         }
@@ -94,24 +177,33 @@ private struct ShareRoot: View {
         error = ""
         notice = ""
         Task {
-            var payloads: [SharePayload] = []
             let sessionIdentifier = ImShareBackgroundQueue.makeSessionIdentifier()
             var enqueued = false
             do {
-                payloads = try await ShareLoader.load(items)
                 guard !payloads.isEmpty || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     throw ShareError.message("没有可发送的内容")
                 }
                 var order = 0
-                for peer in selected.sorted() {
+                if destination == .assistant {
                     for payload in payloads {
-                        try ShareSender.enqueue(
-                            payload, to: peer, snapshot: snapshot,
+                        try ShareSender.enqueueAssistant(
+                            payload, intent: intent, note: note, snapshot: snapshot,
                             sessionIdentifier: sessionIdentifier, order: order
                         )
                         order += 1
                         enqueued = true
                     }
+                } else {
+                    guard !selected.isEmpty else { throw ShareError.message("请选择聊天联系人") }
+                    for peer in selected.sorted() {
+                        for payload in payloads {
+                            try ShareSender.enqueue(
+                                payload, to: peer, snapshot: snapshot,
+                                sessionIdentifier: sessionIdentifier, order: order
+                            )
+                            order += 1
+                            enqueued = true
+                        }
                     let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty {
                         try ShareSender.enqueue(
@@ -120,6 +212,7 @@ private struct ShareRoot: View {
                         )
                         order += 1
                         enqueued = true
+                    }
                     }
                 }
                 try await activateBatch(sessionIdentifier)
@@ -155,6 +248,26 @@ private enum SharePayload {
     case link(URL, title: String?, icon: URL?)
     case location(lat: Double, lng: Double, name: String)
     case text(String)
+
+    var preview: String {
+        switch self {
+        case .image: return "图片"
+        case .file(_, let name, _): return name
+        case .link(let url, let title, _): return title?.nonEmpty ?? url.absoluteString
+        case .location(_, _, let name): return name
+        case .text(let text): return String(text.prefix(160))
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .image: return "photo"
+        case .file: return "doc"
+        case .link: return "link"
+        case .location: return "mappin.and.ellipse"
+        case .text: return "text.quote"
+        }
+    }
 }
 
 private enum ShareLoader {
@@ -456,6 +569,55 @@ private enum ShareLoader {
 }
 
 private enum ShareSender {
+    static func enqueueAssistant(
+        _ payload: SharePayload, intent: AssistantCaptureBridge.Action, note: String,
+        snapshot: ImShareBridge.Snapshot, sessionIdentifier: String, order: Int
+    ) throws {
+        let clientId = "assistant-share-\(Int64(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(8))"
+        var common: [String: Any] = ["clientId": clientId, "intent": intent.title]
+        let note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !note.isEmpty { common["note"] = note }
+        switch payload {
+        case .text(let text):
+            common["kind"] = "text"
+            common["text"] = text
+            try ImShareBackgroundQueue.shared.enqueueAssistantJSON(
+                common, snapshot: snapshot, sessionIdentifier: sessionIdentifier, order: order
+            )
+        case .link(let url, let title, _):
+            common["kind"] = "link"
+            common["url"] = url.absoluteString
+            if let title { common["title"] = title }
+            try ImShareBackgroundQueue.shared.enqueueAssistantJSON(
+                common, snapshot: snapshot, sessionIdentifier: sessionIdentifier, order: order
+            )
+        case .location(let lat, let lng, let name):
+            common["kind"] = "location"
+            common["lat"] = lat
+            common["lng"] = lng
+            common["name"] = name
+            try ImShareBackgroundQueue.shared.enqueueAssistantJSON(
+                common, snapshot: snapshot, sessionIdentifier: sessionIdentifier, order: order
+            )
+        case .image(let file, let mime, _, _):
+            common["kind"] = "image"
+            common["filename"] = "分享图片.jpg"
+            common["mime"] = mime
+            try ImShareBackgroundQueue.shared.enqueueAssistantUpload(
+                file, mime: mime, metadata: common, snapshot: snapshot,
+                sessionIdentifier: sessionIdentifier, order: order
+            )
+        case .file(let file, let name, let mime):
+            common["kind"] = "file"
+            common["filename"] = name
+            common["mime"] = mime
+            try ImShareBackgroundQueue.shared.enqueueAssistantUpload(
+                file, mime: mime, metadata: common, snapshot: snapshot,
+                sessionIdentifier: sessionIdentifier, order: order
+            )
+        }
+    }
+
     static func enqueue(
         _ payload: SharePayload, to peer: String, snapshot: ImShareBridge.Snapshot,
         sessionIdentifier: String, order: Int

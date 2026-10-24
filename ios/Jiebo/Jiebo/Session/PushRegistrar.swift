@@ -56,7 +56,7 @@ final class WorkspaceViewingBeacon: @unchecked Sendable {
     }
 }
 
-/// 点击通知后待消费的路由目标。壳（PhoneShell）等 bootstrapped 后 `consume()` 取走
+/// 点击通知后待消费的路由目标。iPhone 由 PhoneTabShell 统一 `consume()`。
 @MainActor
 @Observable
 final class PushRouting {

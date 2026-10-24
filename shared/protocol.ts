@@ -1,5 +1,59 @@
 export type AgentMode = "agent" | "plan" | "ask";
 
+/** 跨端设备桥只传 JSON，避免原生对象或二进制意外进入 WS。 */
+export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
+
+/** 已知操作用于类型提示，同时允许以后增加新操作而不打破旧客户端。 */
+export type DeviceOp =
+  | "calendar_events_list"
+  | "calendar_event_upsert"
+  | "reminders_list"
+  | "reminders_upsert"
+  | "contacts_search"
+  | (string & {});
+
+/** 状态同样采用可扩展字符串语义；旧端遇到未知值应按失败处理。 */
+export type DeviceStatus = "ok" | "error" | "denied" | "cancelled" | "busy" | "unavailable" | (string & {});
+
+export type DevicePermissionGrant = {
+  permission: string;
+  status: string;
+  canRequest?: boolean;
+  updatedAt?: string;
+};
+
+export type DeviceApproval = {
+  summary: string;
+  risk: string;
+  requiresConfirmation: boolean;
+};
+
+export type DeviceInvoke = {
+  type: "device_invoke";
+  reqId: string;
+  op: DeviceOp;
+  params: JSONValue;
+  timeoutMs: number;
+  idempotencyKey?: string;
+  approval?: DeviceApproval;
+};
+
+export type DeviceResult = {
+  type: "device_result";
+  reqId: string;
+  op: DeviceOp;
+  status: DeviceStatus;
+  result?: JSONValue;
+  error?: string;
+  externalId?: string;
+};
+
+export type DevicePermissionReport = {
+  type: "device_permission_report";
+  reqId?: string;
+  grants: DevicePermissionGrant[];
+};
+
 /** USER 根目录 AGENTS.md 没设名字或不合法时，助理叫这个。iOS 有同名常量 */
 export const DEFAULT_ASSISTANT_NAME = "小驳";
 
@@ -10,9 +64,21 @@ export type AssistantInboxItem = {
   body: string;
   createdAt: number;
   read: boolean;
+  actionPrompt?: string;
   chatId?: string;
   scheduleId?: string;
   delegationId?: string;
+  /** Share Assistant 已校验并持久化的结构化来源；产物投影不得从 body/actionPrompt 猜链接。 */
+  capture?: {
+    kind: "text" | "link" | "location" | "file";
+    title?: string;
+    url?: string;
+    path?: string;
+    sha?: string;
+    mime?: string;
+    size?: number;
+    intent?: string;
+  };
 };
 
 export type AssistantMemoryEntry = {
@@ -468,6 +534,113 @@ export type AssistantApproval = {
   expiresAt: number;
 };
 
+/** 个人任务是现有事实源的只读投影；kind/phase 新值按向后兼容方式追加。 */
+export type PersonalTaskKind = "todo" | "schedule" | "delegation" | "background_run";
+export type PersonalTaskPhase = "needs_me" | "in_progress" | "planned" | "completed";
+export type PersonalTaskPriority = "high" | "normal" | "low";
+
+export type TaskSourceRef = {
+  kind: string;
+  id: string;
+};
+
+export type TaskReceipt = {
+  id: string;
+  status: string;
+  at: number;
+  summary?: string;
+};
+
+export type PersonalTaskAction = {
+  label: string;
+  op: AssistantOp;
+  args: Record<string, unknown>;
+};
+
+export type PersonalTask = {
+  id: string;
+  kind: PersonalTaskKind;
+  title: string;
+  phase: PersonalTaskPhase;
+  /** 保留底层事实源状态，客户端遇到新值仍可展示。 */
+  status: string;
+  priority: PersonalTaskPriority;
+  attention?: string;
+  detail?: string;
+  due?: string;
+  dueAt?: number;
+  createdAt: number;
+  updatedAt?: number;
+  sources: TaskSourceRef[];
+  receipt?: TaskReceipt;
+  /** 只描述现有 assistant_op，不引入投影专用写接口。 */
+  actions?: PersonalTaskAction[];
+};
+
+export type DraftPreview = {
+  kind: string;
+  title: string;
+  summary: string;
+  details?: string[];
+};
+
+export type DraftCard = {
+  id: string;
+  kind: "approval";
+  status: "waiting_user";
+  createdAt: number;
+  expiresAt: number;
+  preview: DraftPreview;
+  sources: TaskSourceRef[];
+  actions: PersonalTaskAction[];
+};
+
+export type DayThreadEvent = {
+  id: string;
+  kind: "brief" | "inbox" | "draft" | "receipt";
+  title: string;
+  body?: string;
+  at: number;
+  priority: PersonalTaskPriority;
+  taskId?: string;
+  draftCardId?: string;
+  sources: TaskSourceRef[];
+  receipt?: TaskReceipt;
+};
+
+export type ArtifactProvenance = {
+  turnId?: string;
+  delegationId?: string;
+  collabTaskId?: string;
+  inboxId?: string;
+  captureId?: string;
+  label?: string;
+};
+
+export type ArtifactSourceCitation = {
+  url?: string;
+  title?: string;
+  capturedAt?: number;
+  excerpt?: string;
+};
+
+/** 从既有 turn.files、委派与助理收件箱派生的只读投影，不是新的事实源。 */
+export type Artifact = {
+  id: string;
+  title: string;
+  kind: "file" | "link" | "capture";
+  previewKind?: PreviewKind;
+  createdAt: number;
+  path?: string;
+  url?: string;
+  sha?: string;
+  diffSha?: string;
+  sourceChatId?: string;
+  sourceTurnId?: string;
+  provenance?: ArtifactProvenance;
+  sourceCitation?: ArtifactSourceCitation;
+};
+
 export type AssistantState = {
   name: string;
   background: { model: string; ok: boolean; reason?: string };
@@ -507,6 +680,14 @@ export type AssistantState = {
   approvals: AssistantApproval[];
   runs: Array<{ runId: string; origin: string; label: string; status: string; startedAt: number; endedAt?: number; summary?: string; error?: string }>;
   brief?: { day: string; text: string } | null;
+  /** P4 统一只读投影；旧网关不带，客户端必须回落到原字段。 */
+  personalTasks?: PersonalTask[];
+  draftCards?: DraftCard[];
+  dayThread?: DayThreadEvent[];
+  /** P7 只读产物投影；旧网关不带。 */
+  artifacts?: Artifact[];
+  projectionVersion?: number;
+  snapshotAt?: number;
   memory?: {
     rev: number;
     core: { rev: number; fields: Record<string, string> };
@@ -631,15 +812,32 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //   "slim_chats"    —— stored_chat 也只给元数据（同 slim_state 的行），内容走 load_chat 分页
 //   "deferred_turn" —— 超大单回合先收轻量占位，再用 GET /state/turn 按需取完整正文
 //   "im"            —— 收发平台用户之间的即时消息（im_*，见 docs/im.md）；连接默认在前台，im_presence 切换
+//   "im_group"      —— 支持群会话；必须和 im_collab 同时声明才会收到任何群数据
+//   "im_collab"     —— 支持协作 Actor/消息；必须和 im_group 同时声明才会收到任何群数据
+//   "device_bridge" —— 可接收本租户的 device_invoke，并回传 device_result / device_permission_report
 // slim 行对有内容的会话带 segHashes：第 i 个是 turns[i*100, (i+1)*100) 的 sha1(JSON.stringify(分段))，
 // 客户端据此只重拉变了的分段
-export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[] };
+export type HelloClient = { name: string; version: string; maxMessageBytes?: number; caps?: string[]; deviceId?: string };
 
 // ── 平台用户之间的即时消息（IM，见 docs/im.md）。只有 hello caps 含 "im" 的连接才处理 / 收到 im_* ──
 
-/** 会话号。单聊 = `dm~<较小租户 id>~<较大租户 id>`（按字符串排序；租户 id 不含 "~"） */
+/** 会话号。单聊 = dm~...；群聊 = grp~<随机 id> */
 export type ImConvId = string;
 export type ImKind = "text" | "image" | "voice" | "file" | "link" | "location";
+export type ImAuthor =
+  | { kind: "tenant"; tenantId: string }
+  | { kind: "assistant"; actorId: string; ownerTenantId: string }
+  | { kind: "workspace_agent"; actorId: string; ownerTenantId: string; workspaceId: string };
+export type ActorRef =
+  | { kind: "assistant"; actorId: string; ownerTenantId: string; displayName: string }
+  | {
+      kind: "workspace_agent";
+      actorId: string;
+      ownerTenantId: string;
+      workspaceId: string;
+      displayName: string;
+      avatarBlob?: string;
+    };
 export type ImTextBody = { text: string };
 /** blob / thumb 是 POST /upload/im 返回的 blob（sha256 hex）；original=发的是原图 */
 export type ImImageBody = { blob: string; thumb: string; w: number; h: number; original: boolean };
@@ -652,18 +850,103 @@ export type ImLinkBody = { url: string; title?: string; desc?: string; icon?: st
 /** WGS-84 */
 export type ImLocationBody = { lat: number; lng: number; name: string; address: string };
 export type ImBody = ImTextBody | ImImageBody | ImVoiceBody | ImFileBody | ImLinkBody | ImLocationBody;
+export type CollabAnchorBody = {
+  schema: "jiebo.collab.v1";
+  event: "plan" | "task" | "result" | "summary";
+  runId: string;
+  taskId?: string;
+  wave?: number;
+  summary: string;
+  files?: TurnFile[];
+};
+export type ApprovalRef = {
+  id: string;
+  callId?: string;
+  fingerprint?: string;
+  summary: string;
+  tool: string;
+  expiresAt: number;
+};
+export type CollabError = {
+  code: "cancelled" | "approval_expired" | "sdk_error" | "workspace_missing" | "publish_failed" | "unknown";
+  message: string;
+  action?: string;
+  retryable: boolean;
+};
+export type CollabTaskAttempt = {
+  attempt: number;
+  status: CollabTaskStatus;
+  startedAt: number;
+  endedAt?: number;
+  childChatId?: string;
+  sourceTurnId?: string;
+  summary?: string;
+  files?: TurnFile[];
+  approval?: ApprovalRef;
+  error?: CollabError;
+};
+export type CollabRunStatus =
+  | "planning"
+  | "running"
+  | "needs_user"
+  | "aggregating"
+  | "publishing"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type CollabTaskStatus =
+  | "pending"
+  | "queued"
+  | "running"
+  | "awaiting"
+  | "blocked"
+  | "publishing"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+export type CollabRunState = {
+  runId: string;
+  version: number;
+  status: CollabRunStatus;
+  /** 用于跨 snapshot/事件重放后稳定判断当前 Run；旧客户端缓存可缺省。 */
+  createdAt?: number;
+  wave?: number;
+  explanation?: string;
+  summary?: string;
+  partial?: boolean;
+  tasks: Array<{
+    taskId: string;
+    version: number;
+    workspaceId: string;
+    title?: string;
+    wave?: number;
+    dependsOn?: string[];
+    acceptance?: string[];
+    required?: boolean;
+    suggestedNextActors?: string[];
+    status: CollabTaskStatus;
+    attempt: number;
+    attempts: CollabTaskAttempt[];
+    summary?: string;
+    files?: TurnFile[];
+    approval?: ApprovalRef;
+    error?: CollabError;
+  }>;
+};
 
 export type ImMessage = {
   convId: ImConvId;
   /** 会话内从 1 递增 */
   seq: number;
-  /** 发件人租户 id */
+  /** 兼容发送者 id：真人为 tenantId，Actor 为 actorId */
   from: string;
+  /** 旧 DM 可缺省；群消息始终携带。 */
+  author?: ImAuthor;
   /** 网关落盘时间（毫秒） */
   at: number;
-  kind: ImKind;
+  kind: ImKind | "collab";
   /** 撤回后没有 body */
-  body?: ImBody;
+  body?: ImBody | CollabAnchorBody;
   /** 回复的同会话 seq */
   replyTo?: number;
   recalled?: true;
@@ -675,6 +958,7 @@ export type ImMessage = {
 /** 下载票据，签名绑定（租户, scope, exp）；scope 是会话号或 "avatars"，2 小时有效 */
 export type ImTicket = { exp: number; sig: string };
 export type WorkspaceAgentRow = {
+  workspaceId: string;
   path: string;
   directoryName: string;
   displayName: string;
@@ -689,9 +973,8 @@ export type WorkspaceAgentRow = {
 };
 export type ImUser = { id: string; nickname: string; avatar?: string };
 export type ImMe = ImUser & { notifyPreview: boolean };
-export type ImConvRow = {
+type ImConvRowBase = {
   convId: ImConvId;
-  peer: string;
   /** 自己可见的最后一条；缺省 = 没有可见消息（比如清空过），客户端可不显示这一行 */
   last?: ImMessage;
   /** 最多 1000（封顶），客户端等于 1000 时显示「999+」 */
@@ -705,6 +988,18 @@ export type ImConvRow = {
   hideBefore: number;
   ticket: ImTicket;
 };
+export type ImConvRow =
+  | (ImConvRowBase & { kind?: "dm"; peer: string })
+  | (ImConvRowBase & {
+      kind: "group";
+      peer?: never;
+      title: string;
+      actors: ActorRef[];
+      memberCount: number;
+      activityAt: number;
+      archived?: boolean;
+      isDefault?: boolean;
+    });
 export type ImErrorCode =
   | "no_cap"
   | "not_visible"
@@ -833,6 +1128,32 @@ export type ClientMessage =
   | AssistantOpClientMessage
   // IM（需 caps 含 "im"，否则回 im_error code=no_cap）
   | { type: "im_contacts" }
+  /** members 固定为当前真人；actors 不得越出租户注册表。默认群由客户端请求全部 actors。 */
+  | { type: "im_group_create"; title: string; actorIds?: string[]; isDefault?: boolean }
+  | {
+      type: "im_group_update";
+      convId: ImConvId;
+      title?: string;
+      actorIds?: string[];
+      archived?: boolean;
+    }
+  /** D4 才接入状态存储；D1 先冻结兼容消息形状。 */
+  | {
+      type: "collab_sync";
+      convId: ImConvId;
+      known: Array<{ runId: string; version: number }>;
+      /** collab_state 因接收帧上限分批时回传。 */
+      cursor?: string;
+    }
+  | {
+      type: "collab_op";
+      convId: ImConvId;
+      requestId: string;
+      op: "cancel_run" | "cancel_task" | "retry_task" | "retry_publish" | "answer_approval";
+      runId?: string;
+      taskId?: string;
+      allow?: boolean;
+    }
   /**
    * 会话列表分页：置顶在前，再按最后一条可见消息时间倒序。limit 默认 50，最大 100；
    * cursor 原样回传上一页回包里的 cursor，取排在它后面的会话
@@ -849,6 +1170,8 @@ export type ClientMessage =
       kind: ImKind;
       body: ImBody;
       replyTo?: number;
+      /** 仅群可用；只接受属于该群 actors 的 actorId。 */
+      mentions?: Array<{ actorId: string }>;
     }
   | { type: "im_recall"; convId: ImConvId; seq: number }
   | { type: "im_read"; convId: ImConvId; seq: number }
@@ -858,7 +1181,9 @@ export type ClientMessage =
   | { type: "im_profile"; nickname?: string; avatar?: string | null; notifyPreview?: boolean }
   | { type: "im_block"; tenantId: string; on: boolean }
   /** App 进出前台；没有回包 */
-  | { type: "im_presence"; foreground: boolean };
+  | { type: "im_presence"; foreground: boolean }
+  | DeviceResult
+  | DevicePermissionReport;
 
 export type PreviewKind =
   | "text"
@@ -989,7 +1314,7 @@ export type ServerMessage =
       /**
        * 网关能力集。已知值："turn_files"、"read_sha"（read_file 带 sha）、"read_req_id"（file_content 回显 reqId）、
        * "seg_hashes"（slim 行带 segHashes）、"tool_at"（工具带 at）、"slim_chats"（认 slim_chats cap）、
-       * "im"（支持 im_* 即时消息）、"file_changed"、"canvas_versions"
+       * "im"（支持 im_* 即时消息）、"file_changed"、"canvas_versions"、"device_bridge_v1"
        */
       features?: string[];
     }
@@ -1194,6 +1519,17 @@ export type ServerMessage =
   | { type: "pong" }
   // IM 下行（只发给 caps 含 "im" 的连接）
   | { type: "im_contacts"; me: ImMe; users: ImUser[]; avatarTicket: ImTicket }
+  | { type: "im_group_created"; conv: Extract<ImConvRow, { kind: "group" }> }
+  | {
+      type: "collab_state";
+      convId: ImConvId;
+      snapshotSeq: number;
+      runs: CollabRunState[];
+      removedRunIds: string[];
+      more?: boolean;
+      cursor?: string;
+    }
+  | { type: "collab_result"; requestId: string; ok: boolean; error?: string }
   /**
    * more=true 时还有下一页，带上 cursor 再请求一次。超过单条上限时网关从末尾丢行并置 more / cursor。
    * 翻页期间被新消息顶到前面的会话不会在后面的页里重复出现，靠 im_message 更新
@@ -1242,7 +1578,8 @@ export type ServerMessage =
       blocked?: string[];
       unread?: number;
     }
-  | { type: "im_error"; clientId?: string; code: ImErrorCode; message: string };
+  | { type: "im_error"; clientId?: string; code: ImErrorCode; message: string }
+  | DeviceInvoke;
 
 /** 当前 CURSOR_API_KEY 的官方账单，口径与 Cursor CLI `/usage` 相同。
  *  套餐内三项是已用百分比；spendCents / limitCents 是美分。Enterprise 通常没有百分比，

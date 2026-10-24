@@ -2,11 +2,12 @@ import Foundation
 
 /// 与 Web `NavigationIconId` 对齐的跨端导航语义。视图使用语义 ID，不直接选择同义图标。
 enum NavigationIconId: String, CaseIterable {
-    case assistant, workspace, account, overview, chats, files, search, git, memory, terminal, loop, stats
+    case assistant, collab, workspace, account, overview, chats, files, search, git, memory, terminal, loop, stats
 
     var symbol: String {
         switch self {
         case .assistant: return "sparkles"
+        case .collab: return "person.3"
         case .workspace: return "rectangle.3.group"
         case .account: return "person.crop.circle"
         case .overview: return "square.grid.2x2"
@@ -24,6 +25,7 @@ enum NavigationIconId: String, CaseIterable {
     var label: String {
         switch self {
         case .assistant: return "助理"
+        case .collab: return "协作"
         case .workspace: return "工作区"
         case .account: return "账户"
         case .overview: return "概览"
@@ -46,13 +48,16 @@ enum NavigationIconId: String, CaseIterable {
 
 /// 与 Web `STATUS_LEGEND` 对齐的状态图例；颜色只能辅助，不能代替此文案。
 enum StatusLegendId: String, CaseIterable {
-    case normal, running, attention, error, disabled, unread
+    case normal, running, attention, publishing, succeeded, cancelled, error, disabled, unread
 
     var symbol: String {
         switch self {
         case .normal: return "checkmark.circle"
         case .running: return "play.circle"
         case .attention: return "exclamationmark.triangle"
+        case .publishing: return "arrow.up.circle"
+        case .succeeded: return "checkmark.circle"
+        case .cancelled: return "minus.circle"
         case .error: return "exclamationmark.circle"
         case .disabled: return "circle.slash"
         case .unread: return "circle.fill"
@@ -64,6 +69,9 @@ enum StatusLegendId: String, CaseIterable {
         case .normal: return "正常"
         case .running: return "运行中"
         case .attention: return "需要处理"
+        case .publishing: return "正在发布"
+        case .succeeded: return "已完成"
+        case .cancelled: return "已取消"
         case .error: return "错误"
         case .disabled: return "未启用"
         case .unread: return "未读"

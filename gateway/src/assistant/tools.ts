@@ -1,7 +1,9 @@
-import type { SDKCustomTool, SDKJsonValue } from "@cursor/sdk";
+import type { SDKCustomTool, SDKCustomToolContext, SDKJsonValue } from "@cursor/sdk";
+import { createHash, randomUUID } from "node:crypto";
+import type { DeviceApproval, DeviceOp, DeviceResult, JSONValue } from "../../../shared/protocol.ts";
 import type { ToolSpec } from "../native/types.ts";
 import { searchChats } from "./chatIndex.ts";
-import { postInbox } from "./inbox.ts";
+import { listInbox, postInbox } from "./inbox.ts";
 import {
   addWorkPreference,
   forgetMemory,
@@ -20,6 +22,7 @@ import {
 import { listSchedules, removeSchedule, setSchedule, type ScheduleKind } from "./schedules.ts";
 import { addTodo, listTodos, setTodoDone, updateTodo } from "./todos.ts";
 import type { TenantRef } from "./store.ts";
+import { readSnapshotFile } from "../turnFiles.ts";
 
 /** 谁在用这组工具：决定能拿到哪些 */
 export type ToolRole = "chat" | "schedule" | "integrator" | "loop";
@@ -37,6 +40,13 @@ export type ToolHost = {
   workspaces?: () => string[];
   /** 只读查看某个子工作区的规则、工作区记忆和线程摘要 */
   workspaceMemory?: (workspace: string, query: string) => unknown;
+  /** 只在前台个人助理注入；写操作仍由设备端显示确认页。 */
+  deviceInvoke?: (input: {
+    op: DeviceOp;
+    params: JSONValue;
+    idempotencyKey?: string;
+    approval?: DeviceApproval;
+  }) => Promise<DeviceResult | { status: string; error: string }>;
 };
 
 /** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
@@ -51,13 +61,20 @@ type Args = Record<string, SDKJsonValue>;
 const str = (value: SDKJsonValue | undefined) => (typeof value === "string" ? value : "");
 const reply = (value: unknown) => JSON.stringify(value);
 
-function tool(description: string, properties: Record<string, SDKJsonValue>, required: string[], execute: (args: Args) => unknown): SDKCustomTool {
+function tool(
+  description: string,
+  properties: Record<string, SDKJsonValue>,
+  required: string[],
+  execute: (args: Args, invocationId: string) => unknown,
+): SDKCustomTool {
   return {
     description,
     inputSchema: { type: "object", properties, required, additionalProperties: false },
-    execute: async (args) => {
+    execute: async (args, context: SDKCustomToolContext) => {
       try {
-        const out = await execute(args ?? {});
+        // SDK 会给真实 toolCallId；自研循环也会在 toolSpecs 中穿透 callId。
+        const invocationId = context.toolCallId || `internal-${randomUUID()}`;
+        const out = await execute(args ?? {}, invocationId);
         return typeof out === "string" ? out : reply(out);
       } catch (err) {
         return { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true };
@@ -67,6 +84,16 @@ function tool(description: string, properties: Record<string, SDKJsonValue>, req
 }
 
 const S = (description: string): SDKJsonValue => ({ type: "string", description });
+
+function deviceParams(args: Args): Record<string, JSONValue> {
+  return { ...args } as Record<string, JSONValue>;
+}
+
+function deviceIdempotencyKey(host: ToolHost, op: DeviceOp, invocationId: string) {
+  return createHash("sha256")
+    .update(`${host.chatId ?? "chat"}\0${op}\0${invocationId}`)
+    .digest("hex");
+}
 
 export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
   const { ref, role } = host;
@@ -150,6 +177,90 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
   }
 
   if (role === "chat") {
+    out.capture_file_read = tool(
+      "读取 Share Assistant 保存的租户受控文件快照。只接受收件箱给出的 path 和 sha；它不是工作区路径。",
+      { path: S("收件箱安全文件快照中的相对展示路径"), sha: S("收件箱安全文件快照中的 sha256") },
+      ["path", "sha"],
+      (args) => {
+        const path = str(args.path);
+        const sha = str(args.sha);
+        const authorized = listInbox(ref, 300).some(
+          (item) => item.capture?.kind === "file" && item.capture.path === path && item.capture.sha === sha,
+        );
+        return authorized ? readSnapshotFile(ref.stateDir, path, sha) : { error: "文件快照不存在或不属于当前租户。" };
+      },
+    );
+    if (host.deviceInvoke) {
+      out.calendar_events_list = tool(
+        "读取 Apple 日历事件。只返回完成请求所需的结构化结果。",
+        { start: S("ISO 起始时间"), end: S("ISO 结束时间"), limit: { type: "number" } },
+        ["start", "end"],
+        (args) => host.deviceInvoke!({ op: "calendar_events_list", params: deviceParams(args) }),
+      );
+      out.calendar_event_upsert = tool(
+        "在 Apple 日历新建或修改事件。调用后必须由用户在 iOS 屏幕确认，不能声称已静默写入。",
+        {
+          id: S("可选，修改时填外部事件 id"),
+          title: S("标题"),
+          start: S("ISO 起始时间"),
+          end: S("ISO 结束时间"),
+          timeZone: S("可选，IANA 时区"),
+          calendarId: S("可选，目标日历 id"),
+          location: S("可选，地点"),
+          notes: S("可选，备注；不会进入网关审计"),
+        },
+        ["title", "start", "end"],
+        (args, invocationId) => {
+          const approval = {
+            summary: `新建或修改日历事件（${str(args.start)}）`,
+            risk: "将写入 Apple 日历",
+            requiresConfirmation: true,
+          };
+          return host.deviceInvoke!({
+            op: "calendar_event_upsert",
+            params: deviceParams(args),
+            idempotencyKey: deviceIdempotencyKey(host, "calendar_event_upsert", invocationId),
+            approval,
+          });
+        },
+      );
+      out.reminders_list = tool(
+        "读取 Apple 提醒事项。",
+        { completed: { type: "boolean" }, limit: { type: "number" } },
+        [],
+        (args) => host.deviceInvoke!({ op: "reminders_list", params: deviceParams(args) }),
+      );
+      out.reminders_upsert = tool(
+        "在 Apple 提醒事项中新建或修改条目。调用后必须由用户在 iOS 屏幕确认。",
+        {
+          id: S("可选，修改时填外部提醒 id"),
+          title: S("标题"),
+          due: S("可选，ISO 到期时间"),
+          calendarId: S("可选，目标列表 id"),
+          notes: S("可选，备注；不会进入网关审计"),
+        },
+        ["title"],
+        (args, invocationId) => {
+          const approval = {
+            summary: `新建或修改提醒事项${str(args.due) ? `（${str(args.due)}）` : ""}`,
+            risk: "将写入 Apple 提醒事项",
+            requiresConfirmation: true,
+          };
+          return host.deviceInvoke!({
+            op: "reminders_upsert",
+            params: deviceParams(args),
+            idempotencyKey: deviceIdempotencyKey(host, "reminders_upsert", invocationId),
+            approval,
+          });
+        },
+      );
+      out.contacts_search = tool(
+        "在 Apple 通讯录中搜索联系人。仅在回答当前请求确有必要时使用。",
+        { query: S("姓名或关键词"), limit: { type: "number" } },
+        ["query"],
+        (args) => host.deviceInvoke!({ op: "contacts_search", params: deviceParams(args) }),
+      );
+    }
     out.memory_forget = tool(
       "删除一条记忆。只有用户在这次对话里明确要求忘掉、并且你已经复述给用户确认过之后才调用，confirmed 填 true。",
       { id: S("记忆 id"), confirmed: { type: "boolean" } },
@@ -441,8 +552,8 @@ export function toolSpecs(defs: Record<string, SDKCustomTool>): ToolSpec[] {
     description: def.description || name,
     parameters: (def.inputSchema ?? { type: "object", properties: {} }) as ToolSpec["parameters"],
     category: "network" as const,
-    run: async (args) => {
-      const raw = await def.execute((args ?? {}) as Args, {} as never);
+    run: async (args, ctx) => {
+      const raw = await def.execute((args ?? {}) as Args, { toolCallId: ctx.callId });
       if (typeof raw === "string") return { ok: true, content: raw };
       if (raw && typeof raw === "object" && "isError" in raw && raw.isError) {
         const text =

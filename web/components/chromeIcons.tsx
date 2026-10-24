@@ -126,6 +126,7 @@ export function IconRail({
 // [填充底色, 线稿]，16 格，线宽 1.4。
 export type NavigationIconId =
   | "assistant"
+  | "collab"
   | "workspace"
   | "account"
   | "overview"
@@ -139,6 +140,10 @@ export type NavigationIconId =
   | "stats";
 
 const RAIL: Record<NavigationIconId, [string, string]> = {
+  collab: [
+    "M3.2 3.2h6.4a1.3 1.3 0 0 1 1.3 1.3v3.3a1.3 1.3 0 0 1-1.3 1.3H6.2l-2.1 1.6V9.1h-.9a1.3 1.3 0 0 1-1.3-1.3V4.5a1.3 1.3 0 0 1 1.3-1.3Z",
+    "M3.2 3.2h6.4a1.3 1.3 0 0 1 1.3 1.3v3.3a1.3 1.3 0 0 1-1.3 1.3H6.2l-2.1 1.6V9.1h-.9a1.3 1.3 0 0 1-1.3-1.3V4.5a1.3 1.3 0 0 1 1.3-1.3ZM11 6.2h1.8a1.3 1.3 0 0 1 1.3 1.3v3.1a1.3 1.3 0 0 1-1.3 1.3h-.7v1.4l-1.9-1.4H8.7",
+  ],
   workspace: [
     "M2.5 4.8h11v7.4a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1Z",
     "M2.5 4.8h4l1.2-1.6h4.8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1ZM5.4 7.4h2.1v2.1H5.4zm3.2 0h2.1v2.1H8.6z",

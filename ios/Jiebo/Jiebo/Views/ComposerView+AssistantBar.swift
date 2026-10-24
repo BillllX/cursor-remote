@@ -189,24 +189,14 @@ extension ComposerView {
     }
 }
 
-/// iPhone 助理输入胶囊的底：iOS 26+ 是浮在内容上的 Liquid Glass（聚焦时描一圈强调色），更早的系统保留原来的实底 + 阴影
+/// iPhone 助理输入胶囊的底：最低支持 iOS 26，直接使用可交互 Liquid Glass（聚焦时描一圈强调色）。
 private struct CapsuleSurface: ViewModifier {
     var focused: Bool
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
-        if #available(iOS 26.0, *) {
-            content
-                .glassEffect(.regular.interactive(), in: shape)
-                .overlay(shape.stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
-        } else {
-            content.background {
-                shape
-                    .fill(JieboColor.composer)
-                    .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
-                    .shadow(color: JieboColor.ink.opacity(focused ? 0.14 : 0.08), radius: focused ? 12 : 8, y: 4)
-                    .overlay(shape.stroke(focused ? JieboColor.pine.opacity(0.4) : JieboColor.line, lineWidth: 1))
-            }
-        }
+        content
+            .glassEffect(.regular.interactive(), in: shape)
+            .overlay(shape.stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
     }
 }

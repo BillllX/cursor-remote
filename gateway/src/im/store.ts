@@ -20,10 +20,11 @@ import { createHash, randomBytes } from "node:crypto";
 import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import { resolve } from "node:path";
-import type { ImBody, ImKind } from "../../../shared/protocol.ts";
+import type { ActorRef, CollabAnchorBody, ImAuthor, ImBody, ImKind } from "../../../shared/protocol.ts";
 import { atomicWriteFile, atomicWriteFileSync } from "../fsAtomic.ts";
 import { log } from "../log.ts";
-import { parseDmConvId } from "./ids.ts";
+import { isOwnMessage, senderKey } from "./identity.ts";
+import { isTenantId, parseConvId } from "./ids.ts";
 
 export const SEGMENT_SIZE = 1000;
 /** 每个会话在内存里记最近这么多个 clientId → 消息，用于重发去重；冷启动扫 jsonl 时一并重建 */
@@ -45,11 +46,13 @@ const STALE_UPLOAD_MS = 60 * 60_000;
 export type StoredMessage = {
   seq: number;
   from: string;
+  author?: ImAuthor;
   at: number;
-  kind: ImKind;
-  body: ImBody;
+  kind: ImKind | "collab";
+  body?: ImBody | CollabAnchorBody;
   replyTo?: number;
   clientId: string;
+  trigger?: { eventKey: string; mentions: Array<{ actorId: string }> };
   /** 被这些成员拉黑时写入：他们的任何接口都不返回这条，也不计未读 */
   rejectedFor?: string[];
   /** 读时由 recall 记录合并上来，不在原行里 */
@@ -59,9 +62,7 @@ export type StoredMessage = {
 type RecallOp = { op: "recall"; seq: number; at: number };
 
 /** meta.json：只放有界的摘要 */
-export type ConvMeta = {
-  convId: string;
-  members: string[];
+type ConvMetaBase = {
   maxSeq: number;
   createdAt: number;
   /** 每个成员可见的最大 seq */
@@ -69,6 +70,23 @@ export type ConvMeta = {
   /** 每个成员收到的（别人发的、对他可见的）最大 seq，上界：不超过已读线的成员打开会话时不用往前扫 */
   lastIncoming: Record<string, number>;
 };
+export type DmConvMeta = ConvMetaBase & {
+  kind?: "dm";
+  convId: string;
+  members: [string, string];
+};
+export type GroupConvMeta = ConvMetaBase & {
+  kind: "group";
+  version: 1;
+  convId: string;
+  title: string;
+  /** 群成员只有可登录的真人租户；Actor 永不进入 fanout 成员表。 */
+  members: string[];
+  actors: ActorRef[];
+  archived?: boolean;
+  defaultGroup?: boolean;
+};
+export type ConvMeta = DmConvMeta | GroupConvMeta;
 
 /**
  * 一个成员的未读窗口：incoming 覆盖 [coveredFrom, ∞) 里所有算未读的 seq。
@@ -272,7 +290,9 @@ async function readJson<T>(file: string): Promise<T | null> {
 
 const segName = (index: number) => `${String(index).padStart(5, "0")}.jsonl`;
 const segIndex = (seq: number) => Math.floor((seq - 1) / SEGMENT_SIZE);
-const clientKey = (from: string, clientId: string) => `${from}\u0000${clientId}`;
+const authorOf = (row: Pick<StoredMessage, "from" | "author">): ImAuthor =>
+  row.author ?? { kind: "tenant", tenantId: row.from };
+const clientKey = (author: ImAuthor, clientId: string) => `${senderKey(author)}\u0000${clientId}`;
 const yieldLoop = () => new Promise<void>((done) => setImmediate(done));
 
 /** 第一个 > value 的下标 */
@@ -318,7 +338,11 @@ export function emptySettings(): ConvSettings {
   return { readSeq: 0, pin: false, mute: false, hideBefore: 0 };
 }
 
-function normalizeMeta(convId: string, raw: Partial<ConvMeta> | null, fallbackMembers: string[]): ConvMeta {
+function normalizeDmMeta(
+  convId: string,
+  raw: Partial<DmConvMeta> | null,
+  fallbackMembers: [string, string],
+): DmConvMeta {
   const members = Array.isArray(raw?.members)
     ? raw.members.filter((item): item is string => typeof item === "string")
     : fallbackMembers;
@@ -331,7 +355,63 @@ function normalizeMeta(convId: string, raw: Partial<ConvMeta> | null, fallbackMe
     // 旧版 meta 没有这个字段：拿 maxSeq 当上界（打开时扫到的会把它收紧）
     lastIncoming[member] = typeof known === "number" ? known : maxSeq;
   }
-  return { convId, members, maxSeq, createdAt: Number(raw?.createdAt) || 0, visibleMax, lastIncoming };
+  return {
+    convId,
+    members: members.length === 2 ? [members[0], members[1]] : fallbackMembers,
+    maxSeq,
+    createdAt: Number(raw?.createdAt) || 0,
+    visibleMax,
+    lastIncoming,
+  };
+}
+
+function normalizeGroupMeta(convId: string, raw: Partial<GroupConvMeta> | null): GroupConvMeta | null {
+  if (
+    raw?.kind !== "group" ||
+    raw.version !== 1 ||
+    typeof raw.title !== "string" ||
+    !raw.title.trim() ||
+    !Array.isArray(raw.members) ||
+    !raw.members.every(isTenantId) ||
+    !Array.isArray(raw.actors)
+  )
+    return null;
+  const members = [...new Set(raw.members)];
+  const actors = raw.actors.filter((actor): actor is ActorRef =>
+    Boolean(
+      actor &&
+      (actor.kind === "assistant" || actor.kind === "workspace_agent") &&
+      typeof actor.actorId === "string" &&
+      typeof actor.ownerTenantId === "string" &&
+      members.includes(actor.ownerTenantId) &&
+      typeof actor.displayName === "string" &&
+      (actor.kind !== "workspace_agent" || typeof actor.workspaceId === "string"),
+    ),
+  );
+  if (actors.length !== raw.actors.length || new Set(actors.map((actor) => actor.actorId)).size !== actors.length)
+    return null;
+  const maxSeq = Number(raw.maxSeq) || 0;
+  const visibleMax: Record<string, number> = {};
+  const lastIncoming: Record<string, number> = {};
+  for (const member of members) {
+    visibleMax[member] = Number(raw.visibleMax?.[member]) || 0;
+    const known = raw.lastIncoming?.[member];
+    lastIncoming[member] = typeof known === "number" ? known : maxSeq;
+  }
+  return {
+    kind: "group",
+    version: 1,
+    convId,
+    title: raw.title.trim(),
+    members,
+    actors,
+    archived: raw.archived === true,
+    defaultGroup: raw.defaultGroup === true,
+    maxSeq,
+    createdAt: Number(raw.createdAt) || 0,
+    visibleMax,
+    lastIncoming,
+  };
 }
 
 function summarize(members: string[], rows: Rows): SegSummary {
@@ -346,10 +426,30 @@ function summarize(members: string[], rows: Rows): SegSummary {
     for (const member of members) {
       if (row.rejectedFor?.includes(member)) continue;
       visible[member] += 1;
-      if (row.from !== member) incoming[member] += 1;
+      if (!isOwnMessage(authorOf(row), member)) incoming[member] += 1;
     }
   }
   return { visible, incoming };
+}
+
+function validAuthor(meta: ConvMeta, row: Pick<StoredMessage, "from" | "author">): boolean {
+  if (meta.kind !== "group") {
+    const author = row.author ?? { kind: "tenant" as const, tenantId: row.from };
+    return author.kind === "tenant" && author.tenantId === row.from && meta.members.includes(author.tenantId);
+  }
+  if (!row.author) return false;
+  if (row.author.kind === "tenant")
+    return row.from === row.author.tenantId && meta.members.includes(row.author.tenantId);
+  const author = row.author;
+  const actor = meta.actors.find((item) => item.actorId === author.actorId);
+  return Boolean(
+    actor &&
+    row.from === author.actorId &&
+    actor.kind === author.kind &&
+    actor.ownerTenantId === author.ownerTenantId &&
+    (actor.kind !== "workspace_agent" ||
+      (author.kind === "workspace_agent" && actor.workspaceId === author.workspaceId)),
+  );
 }
 
 /** 摘要文件内容合法：成员集合完全一致，计数是 0..SEGMENT_SIZE 的整数，incoming 不超过 visible */
@@ -463,11 +563,17 @@ export class ImStore {
     const names = await readdir(this.convRoot).catch(() => [] as string[]);
     await Promise.all(
       names.map(async (name) => {
-        const pair = parseDmConvId(name);
-        if (!pair) return;
+        const parsed = parseConvId(name);
+        if (!parsed) return;
         const raw = await readJson<Partial<ConvMeta>>(resolve(this.convRoot, name, "meta.json"));
-        // meta.json 丢了也认：成员从会话号解析，maxSeq 等打开时从分段重建
-        this.metas.set(name, normalizeMeta(name, raw, [...pair]));
+        if (parsed.kind === "dm") {
+          // DM 的 meta 丢了也能从会话号修复；群没有可推导的成员，必须有合法 meta。
+          this.metas.set(name, normalizeDmMeta(name, raw as Partial<DmConvMeta>, parsed.members));
+          return;
+        }
+        const group = normalizeGroupMeta(name, raw as Partial<GroupConvMeta>);
+        if (group) this.metas.set(name, group);
+        else log.warn("im 群 meta 不合法，已隔离", name);
       }),
     );
     this.profiles = (await readJson<Record<string, Profile>>(resolve(this.root, "im", "profiles.json"))) ?? {};
@@ -530,6 +636,30 @@ export class ImStore {
     return out.filter((conv): conv is Conv => conv !== null);
   }
 
+  /** Collab Trigger Scanner 的只读入口；按群内 seq 顺序补扫，不从 convId 推导成员。 */
+  async groupRowsAfter(
+    tenantId: string,
+    convId: string,
+    after: number,
+    limit = 100,
+  ): Promise<{ rows: StoredMessage[]; maxSeq: number }> {
+    const conv = await this.open(convId);
+    if (!conv || conv.meta.kind !== "group" || !conv.meta.members.includes(tenantId)) {
+      return { rows: [], maxSeq: 0 };
+    }
+    const page = await this.visibleRange(conv, tenantId, after + 1, conv.meta.maxSeq, limit, false);
+    return { rows: page.rows, maxSeq: conv.meta.maxSeq };
+  }
+
+  /** 启动恢复时列出当前真人参与的群，Scanner cursor 按 convId 各自推进。 */
+  async groupConvIdsOf(tenantId: string): Promise<string[]> {
+    await this.ready();
+    return [...this.metas.values()]
+      .filter((meta): meta is GroupConvMeta => meta.kind === "group" && meta.members.includes(tenantId))
+      .map((meta) => meta.convId)
+      .sort();
+  }
+
   /** 同一会话并发打开共享一个 Promise；不同会话的重建整个 store 同时最多 OPEN_CONCURRENCY 个 */
   async open(convId: string): Promise<Conv | null> {
     await this.ready();
@@ -565,10 +695,63 @@ export class ImStore {
     const known = await this.open(convId);
     if (known) return known;
     await mkdir(resolve(this.convRoot, convId), { recursive: true });
-    const meta = normalizeMeta(convId, { members: [...members].sort(), maxSeq: 0, createdAt: now }, []);
+    const sorted = [...members].sort();
+    if (sorted.length !== 2) throw new Error("DM 必须恰好有两个成员");
+    const meta = normalizeDmMeta(convId, { members: [sorted[0], sorted[1]], maxSeq: 0, createdAt: now }, [
+      sorted[0],
+      sorted[1],
+    ]);
     this.metas.set(convId, meta);
     const conv = await this.open(convId);
     if (!conv) throw new Error(`im 会话建不出来：${convId}`);
+    await conv.metaWriter.save();
+    return conv;
+  }
+
+  /** 新建空群并立即持久化；空群是产品实体，不能按空 DM 清理。调用方要在 serial(convId) 里。 */
+  async createGroup(
+    convId: string,
+    ownerTenantId: string,
+    title: string,
+    actors: ActorRef[],
+    now: number,
+    defaultGroup = false,
+  ): Promise<Conv> {
+    if (await this.open(convId)) throw new Error(`im 群已存在：${convId}`);
+    await mkdir(resolve(this.convRoot, convId), { recursive: true });
+    const meta: GroupConvMeta = {
+      kind: "group",
+      version: 1,
+      convId,
+      title,
+      members: [ownerTenantId],
+      actors,
+      defaultGroup,
+      maxSeq: 0,
+      createdAt: now,
+      visibleMax: { [ownerTenantId]: 0 },
+      lastIncoming: { [ownerTenantId]: 0 },
+    };
+    this.metas.set(convId, meta);
+    const conv = await this.open(convId);
+    if (!conv) throw new Error(`im 群建不出来：${convId}`);
+    await conv.metaWriter.save();
+    return conv;
+  }
+
+  async updateGroup(
+    convId: string,
+    ownerTenantId: string,
+    patch: { title?: string; actors?: ActorRef[]; archived?: boolean; defaultGroup?: boolean },
+  ): Promise<Conv> {
+    const conv = await this.open(convId);
+    if (!conv || conv.meta.kind !== "group" || !conv.meta.members.includes(ownerTenantId)) {
+      throw new Error("群不存在");
+    }
+    if (patch.title !== undefined) conv.meta.title = patch.title;
+    if (patch.actors !== undefined) conv.meta.actors = patch.actors;
+    if (patch.archived !== undefined) conv.meta.archived = patch.archived;
+    if (patch.defaultGroup !== undefined) conv.meta.defaultGroup = patch.defaultGroup;
     await conv.metaWriter.save();
     return conv;
   }
@@ -578,7 +761,7 @@ export class ImStore {
    * 删之前重读第一段：追加其实写完了只是报错的话，那几行按已提交接上（修 maxSeq、进去重表），不删
    */
   async dropIfEmpty(conv: Conv) {
-    if (conv.meta.maxSeq > 0) return;
+    if (conv.meta.maxSeq > 0 || conv.meta.kind === "group") return;
     const { convId } = conv.meta;
     const rows = await this.readRows(conv, 0);
     if (rows.some(Boolean)) {
@@ -652,7 +835,7 @@ export class ImStore {
             seenVisible.add(member);
             meta.visibleMax[member] = row.seq;
           }
-          if (row.from !== member && !seenIncoming.has(member)) {
+          if (!isOwnMessage(authorOf(row), member) && !seenIncoming.has(member)) {
             seenIncoming.add(member);
             meta.lastIncoming[member] = row.seq;
           }
@@ -719,7 +902,8 @@ export class ImStore {
           coveredFrom = floor + 1;
           break scan;
         }
-        if (row.rejectedFor?.includes(member) || row.from === member || row.recalledAt !== undefined) continue;
+        if (row.rejectedFor?.includes(member) || isOwnMessage(authorOf(row), member) || row.recalledAt !== undefined)
+          continue;
         if (list.length >= UNREAD_CAP) {
           // 找到第 UNREAD_CAP + 1 条才算封顶；窗口仍从收到的第 UNREAD_CAP 条开始
           capped = true;
@@ -736,7 +920,12 @@ export class ImStore {
   private async readRows(conv: Conv, index: number): Promise<Rows> {
     this.segmentReads += 1;
     try {
-      return parseSegment(await readFile(resolve(conv.dir, segName(index)), "utf8"), index);
+      const rows = parseSegment(await readFile(resolve(conv.dir, segName(index)), "utf8"), index);
+      for (let slot = 0; slot < rows.length; slot += 1) {
+        const row = rows[slot];
+        if (row && !validAuthor(conv.meta, row)) rows[slot] = undefined;
+      }
+      return rows;
     } catch (err) {
       if ((err as { code?: string }).code !== "ENOENT") {
         log.warn("im 分段读取失败", conv.meta.convId, index, errText(err));
@@ -751,7 +940,7 @@ export class ImStore {
     for (const member of conv.meta.members) {
       if (row.rejectedFor?.includes(member)) continue;
       conv.meta.visibleMax[member] = row.seq;
-      if (row.from === member || row.recalledAt !== undefined) continue;
+      if (isOwnMessage(authorOf(row), member) || row.recalledAt !== undefined) continue;
       conv.meta.lastIncoming[member] = row.seq;
       let window = conv.unread.get(member);
       if (!window) {
@@ -800,7 +989,7 @@ export class ImStore {
   }
 
   private remember(conv: Conv, row: StoredMessage) {
-    const key = clientKey(row.from, row.clientId);
+    const key = clientKey(authorOf(row), row.clientId);
     conv.clients.delete(key);
     conv.clients.set(key, row);
     while (conv.clients.size > CLIENT_IDS_PER_CONV) {
@@ -809,13 +998,13 @@ export class ImStore {
   }
 
   /** 同一发件人的 clientId 已经写过：返回那一条（只查内存） */
-  byClientId(conv: Conv, from: string, clientId: string): StoredMessage | null {
-    return conv.clients.get(clientKey(from, clientId)) ?? null;
+  byClientId(conv: Conv, author: ImAuthor, clientId: string): StoredMessage | null {
+    return conv.clients.get(clientKey(author, clientId)) ?? null;
   }
 
   /** 同上，但内存里不够最近 CLIENT_IDS_PER_CONV 条时先往前补（每个会话最多补一次）。要在 serial(convId) 里 */
-  async findClient(conv: Conv, from: string, clientId: string): Promise<StoredMessage | null> {
-    const hit = this.byClientId(conv, from, clientId);
+  async findClient(conv: Conv, author: ImAuthor, clientId: string): Promise<StoredMessage | null> {
+    const hit = this.byClientId(conv, author, clientId);
     if (hit) return hit;
     const target = Math.max(1, conv.meta.maxSeq - CLIENT_IDS_PER_CONV + 1);
     if (conv.clientsFrom <= target) return null;
@@ -832,7 +1021,7 @@ export class ImStore {
     conv.clients = new Map();
     conv.clientsFrom = target;
     for (const row of [...older, ...newer]) this.remember(conv, row);
-    return this.byClientId(conv, from, clientId);
+    return this.byClientId(conv, author, clientId);
   }
 
   /** 下一条会拿到的 seq。调用方要在 serial(convId) 里，且接着就 append */
@@ -845,6 +1034,7 @@ export class ImStore {
    * 消息行写进 jsonl 就是提交点：之后内存索引、去重表立即更新；meta 摘要合并写、不等（可从 jsonl 重建）
    */
   async append(conv: Conv, row: Omit<StoredMessage, "seq" | "recalledAt">): Promise<StoredMessage> {
+    if (!validAuthor(conv.meta, row)) throw new Error("im 消息 author 不属于会话");
     const seq = conv.meta.maxSeq + 1;
     const index = segIndex(seq);
     const slot = seq - index * SEGMENT_SIZE - 1;
@@ -893,7 +1083,7 @@ export class ImStore {
       throw err;
     }
     row.recalledAt = at;
-    const remembered = conv.clients.get(clientKey(row.from, row.clientId));
+    const remembered = conv.clients.get(clientKey(authorOf(row), row.clientId));
     if (remembered?.seq === row.seq) remembered.recalledAt = at;
     for (const [member, window] of conv.unread) {
       const slot = upperBound(window.incoming, row.seq) - 1;
@@ -937,7 +1127,8 @@ export class ImStore {
           coveredFrom = floor + 1;
           break scan;
         }
-        if (row.rejectedFor?.includes(member) || row.from === member || row.recalledAt !== undefined) continue;
+        if (row.rejectedFor?.includes(member) || isOwnMessage(authorOf(row), member) || row.recalledAt !== undefined)
+          continue;
         if (window.incoming.length + older.length >= UNREAD_CAP) {
           capped = true;
           coveredFrom = older.length ? older[older.length - 1] : window.coveredFrom;

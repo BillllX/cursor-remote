@@ -404,7 +404,118 @@ struct CalendarInviteCard: View {
     }
 }
 
-// MARK: 待批确认卡
+// MARK: 草稿 / 待批确认卡
+
+/// 新投影里的实体草稿卡：展示允许后将执行的最终内容，而不是底层工具参数。
+/// approval 仍是写操作的事实源；投影比审批刷新慢时卡片保留，但操作会禁用。
+struct DraftActionCard: View {
+    @Environment(ChatStore.self) private var store
+    let draft: DraftCard
+    let onOpenDelegation: ((String) -> Void)?
+
+    init(draft: DraftCard, onOpenDelegation: ((String) -> Void)? = nil) {
+        self.draft = draft
+        self.onOpenDelegation = onOpenDelegation
+    }
+
+    private var approvalId: String? {
+        draft.sources.first(where: { $0.kind == "approval" })?.id
+    }
+
+    private var approval: AssistantApproval? {
+        guard let approvalId else { return nil }
+        return store.assistantState?.approvals.first(where: { $0.id == approvalId })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: icon)
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.pine)
+                    .accessibilityHidden(true)
+                Text(draft.preview.title.nilIfEmpty ?? "待确认操作")
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !draft.preview.summary.isEmpty {
+                Text(draft.preview.summary)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            if !draft.preview.details.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(draft.preview.details.enumerated()), id: \.offset) { _, detail in
+                        Text(detail)
+                            .font(JieboFont.monoText(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if approval == nil {
+                Text("已处理或过期")
+                    .font(JieboFont.text(.caption2, weight: .medium))
+                    .foregroundStyle(JieboColor.dim)
+            }
+            buttons
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(JieboColor.white)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                .stroke(JieboColor.line, lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var icon: String {
+        switch draft.preview.kind {
+        case "shell": return "terminal"
+        case "edit": return "doc.badge.gearshape"
+        case "create_workspace": return "folder.badge.plus"
+        case "workspace_memory", "work_preferences": return "brain"
+        default: return "checkmark.seal"
+        }
+    }
+
+    private var buttons: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                if let delegationId = approval?.delegationId, let onOpenDelegation {
+                    ActionButton(title: "看委派", kind: .outline) { onOpenDelegation(delegationId) }
+                }
+                Spacer(minLength: 0)
+                ActionButton(title: "拒绝", kind: .secondary) { answer(false) }
+                    .disabled(approval == nil)
+                ActionButton(title: "允许", kind: .primary) { answer(true) }
+                    .disabled(approval == nil)
+            }
+            VStack(spacing: 0) {
+                ActionButton(title: "允许", kind: .primary, fullWidth: true) { answer(true) }
+                    .disabled(approval == nil)
+                ActionButton(title: "拒绝", kind: .secondary, fullWidth: true) { answer(false) }
+                    .disabled(approval == nil)
+                if let delegationId = approval?.delegationId, let onOpenDelegation {
+                    ActionButton(title: "看委派", kind: .outline, fullWidth: true) {
+                        onOpenDelegation(delegationId)
+                    }
+                }
+            }
+        }
+    }
+
+    private func answer(_ allow: Bool) {
+        guard let approval else { return }
+        JieboHaptic.notification(allow ? .success : .warning)
+        store.answerAssistantApproval(approval, allow: allow)
+    }
+}
 
 /// 待批卡。行动区、待处理页、iPad 助理面板共用。按 approval.tool 区分文案：
 /// create_workspace →「新建工作区」+ 名字与原因（拒绝 / 同意）；workspace_memory / work_preferences →「记进…」+ 目标与条目（拒绝 / 记下）；

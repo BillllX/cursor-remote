@@ -1,14 +1,14 @@
 import SwiftUI
 import UIKit
 
-/// iPhone 的「纯个人助理」壳（docs/iphone-assistant-first.md §4.0）。
-/// 根页永远是 AssistantHome（唯一的 ComposerView 在它里面）；菜单抽屉、预览层、今日面板、委派详情都叠在它上面。
-/// 打开时置 `store.assistantOnly = true`：activeId 只会是助理会话，工作区会话没有任何入口。
+/// iPhone 的「小驳」空间（docs/iphone-assistant-first.md §4.0）。
+/// 根页永远是 AssistantHome（唯一的 ComposerView 在它里面）；这里只承载菜单抽屉和今日面板。
+/// PhoneRouter 由外层 PhoneTabShell 唯一持有，避免和待处理空间共用导航栈。
 struct PhoneShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
+    @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var router = PhoneRouter()
     /// 今日面板顶部下拉的位移（抓手和标题行跟手）
     @State private var hubDrag: CGFloat = 0
 
@@ -21,44 +21,17 @@ struct PhoneShell: View {
                         destination(route)
                     }
             }
-            // 预览、今日面板、菜单盖在上面时，底下的对话不再让 VoiceOver 摸到
-            .accessibilityHidden(store.previewPanelOpen || router.hubOpen || router.menuOpen)
+            // 今日面板、菜单盖在上面时，底下的对话不再让 VoiceOver 摸到
+            .accessibilityHidden(router.hubOpen || router.menuOpen)
             MenuDrawer()
                 .zIndex(2)
-                .accessibilityHidden(store.previewPanelOpen || router.hubOpen)
-            if store.previewPanelOpen, let tab = store.activePreviewTab {
-                // 遮罩只在左缘右滑关闭时露出来（预览本身是全屏的）
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .onTapGesture { store.collapsePreview() }
-                    .transition(.opacity)
-                    .zIndex(3)
-                    .accessibilityHidden(true)
-                PreviewPanelView(tab: tab)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(JieboColor.white)
-                    .transition(.move(edge: .trailing))
-                    .zIndex(3)
-            }
+                .accessibilityHidden(router.hubOpen)
             if router.hubOpen {
                 todayPanel
                     .zIndex(4)
             }
         }
-        .environment(router)
-        .environment(\.openDelegation, { [router = self.router] id in
-            router.delegationDetail = DelegationRef(id: id)
-        })
-        .animation(JieboMotion.panel(reduceMotion), value: store.previewPanelOpen)
         .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
-        .sheet(item: $router.delegationDetail) { ref in
-            DelegationDetailSheet(delegationId: ref.id)
-        }
-        .onAppear { store.assistantOnly = true }
-        .onDisappear { store.assistantOnly = false }
-        .onChange(of: PushRouting.shared.pending) { _, _ in
-            Task { @MainActor in await consumePendingPush() }
-        }
         .task { await bootstrap() }
     }
 
@@ -108,16 +81,18 @@ struct PhoneShell: View {
         switch route {
         case .inbox:
             InboxHome()
-        case .inboxItem(let id):
-            InboxDetailView(itemId: id)
         case .todayManage:
             AssistantTodayScreen()
         case .delegations:
             DelegationListScreen()
+        case .artifacts:
+            ArtifactCenterView()
         case .settings:
             PhoneSettingsScreen()
         case .memory:
             AssistantMemoryScreen()
+        case .connections:
+            DeviceConnectionsScreen()
         }
     }
 
@@ -126,7 +101,7 @@ struct PhoneShell: View {
     /// 等 unlocked（自动登录时可能要等网络）→ 再等助理会话 id 到手（最多 8 秒）→ 选中助理会话 → bootstrapped
     @MainActor
     private func bootstrap() async {
-        store.assistantOnly = true
+        store.assistantOnly = router.selectedTab != .messages
         while !store.unlocked, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(100))
         }
@@ -136,9 +111,11 @@ struct PhoneShell: View {
             waited += 1
         }
         guard !Task.isCancelled else { return }
-        store.assistantOnly = true
-        // 旧网关没有助理会话：openAssistantChat 只记下意图，助理页显示降级说明
-        store.openAssistantChat()
+        store.assistantOnly = router.selectedTab != .messages
+        if router.selectedTab != .messages {
+            // 旧网关没有助理会话：openAssistantChat 只记下意图，助理页显示降级说明
+            store.openAssistantChat()
+        }
         if store.assistantChatId != nil {
             PushRegistrar.shared.start(store: store, im: im) // 幂等
         }
@@ -146,45 +123,12 @@ struct PhoneShell: View {
         #if DEBUG
         applyDebugArguments()
         #endif
-        // 冷启动点通知进来时，pending 可能早于 bootstrapped 就有了
-        await consumePendingPush()
-    }
-
-    // MARK: 通知点击路由（§7.1.5）
-
-    /// 聊天通知（kind=im）归主页层分发（HomeShell），这里不碰
-    @MainActor
-    private func consumePendingPush() async {
-        guard router.bootstrapped, PushRouting.shared.pending.map({ !$0.isIm }) == true else { return }
-        // 冷启动时助理状态可能还没到：多等几秒，免得委派 / 收件箱条目找不到
-        if store.assistantState == nil {
-            store.requestAssistant()
-            var waited = 0
-            while store.assistantState == nil, waited < 30, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(100))
-                waited += 1
-            }
-        }
-        guard PushRouting.shared.pending?.isIm != true, let target = PushRouting.shared.consume() else { return }
-        if let itemId = target.itemId,
-           let item = store.assistantState?.inbox.first(where: { $0.id == itemId }) {
-            store.markInboxRead(item)
-        }
-        if target.kind == "approval" {
-            router.go(.inbox)
-            return
-        }
-        if target.delegationId != nil || target.chatId != nil {
-            router.open(chatId: target.chatId, delegationId: target.delegationId, store: store)
-            return
-        }
-        router.go(.inbox)
     }
 
     // MARK: DEBUG 启动参数（§8 P5）
 
     #if DEBUG
-    /// --phone-route=root|inbox|today|delegations|settings|memory
+    /// --phone-route=root|inbox|today|delegations|artifacts|settings|memory
     /// --phone-menu=open
     /// --phone-delegation=<id>
     @MainActor
@@ -196,9 +140,10 @@ struct PhoneShell: View {
         }
         if let route = value(of: "--phone-route=") {
             switch route {
-            case "inbox": router.path = [.inbox]
+            case "inbox": router.go(.inbox)
             case "today": router.path = [.todayManage]
             case "delegations": router.path = [.delegations]
+            case "artifacts": router.path = [.artifacts]
             case "settings": router.path = [.settings]
             case "memory": router.path = [.settings, .memory]
             default: router.path = []

@@ -40,9 +40,10 @@ export type ScheduleExecutor = (
   occurrence: Occurrence,
 ) => Promise<{ ok: boolean; inboxItemId?: string; error?: string }>;
 
-type SchedulesFile = { schedules: Schedule[]; seeded?: boolean };
+type SchedulesFile = { schedules: Schedule[]; seeded?: boolean; defaultsVersion?: number };
 
 export const DEFAULT_TZ = "Asia/Shanghai";
+export const SCHEDULE_DEFAULTS_VERSION = 2;
 /** 超过这个时长才算漏跑 */
 export const MISFIRE_GRACE_MS = 5 * 60_000;
 export const MAX_FAILS = 3;
@@ -67,12 +68,16 @@ export function listOccurrences(ref: TenantRef, limit = 50) {
   return readJsonl<Occurrence>(occFile(ref)).slice(-limit).reverse();
 }
 
-/** 第一次用助理时放一条每日简报（早上 9 点），你可以在今日页暂停或改时间 */
+/**
+ * 放入早晚两个主动锚点，并按 defaultsVersion 给已种过默认值的老用户做幂等升级。
+ * 版本写入后即使用户删除默认任务也不会自动重建，避免覆盖用户选择。
+ */
 export function seedDefaults(ref: TenantRef, now = Date.now()) {
   const data = read(ref);
-  if (data.seeded) return false;
+  const previousVersion = data.defaultsVersion ?? (data.seeded ? 1 : 0);
+  if (previousVersion >= SCHEDULE_DEFAULTS_VERSION) return false;
   data.seeded = true;
-  if (!data.schedules.some((item) => item.kind === "brief")) {
+  if (previousVersion < 1 && !data.schedules.some((item) => item.kind === "brief")) {
     data.schedules.push({
       id: "s_brief",
       title: "每日简报",
@@ -87,6 +92,29 @@ export function seedDefaults(ref: TenantRef, now = Date.now()) {
       createdAt: now,
     });
   }
+  if (
+    previousVersion < 2 &&
+    !data.schedules.some(
+      (item) =>
+        item.id === "s_evening_wrap" ||
+        (item.kind === "prompt" && item.cron === "0 21 * * *" && item.title === "晚间收尾"),
+    )
+  ) {
+    data.schedules.push({
+      id: "s_evening_wrap",
+      title: "晚间收尾",
+      kind: "prompt",
+      cron: "0 21 * * *",
+      tz: DEFAULT_TZ,
+      prompt: "晚间收尾，只输出最多三条：今天完成、需顺延、明天第一件事。",
+      enabled: true,
+      misfire: "runOnce",
+      nextAt: nextRun("0 21 * * *", DEFAULT_TZ, now),
+      failCount: 0,
+      createdAt: now,
+    });
+  }
+  data.defaultsVersion = SCHEDULE_DEFAULTS_VERSION;
   writeJson(file(ref), data);
   return true;
 }

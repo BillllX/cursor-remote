@@ -19,6 +19,8 @@ enum ImShareBridge {
         var tenant: String
         var sendURL: String
         var uploadSendURL: String
+        var assistantIngestURL: String?
+        var assistantUploadURL: String?
         var people: [Person]
     }
 
@@ -81,6 +83,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         var uploadKind: String?
         var mime: String
         var message: String?
+        var metadataHeader: String?
         var bodyFile: String
         var state: State
         var attempts: Int
@@ -147,7 +150,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         else { throw QueueError.invalidMessage }
         return try enqueue(
             mode: .json, endpoint: snapshot.sendURL, uploadKind: nil,
-            mime: "application/json", message: nil,
+            mime: "application/json", message: nil, metadataHeader: nil,
             bodyData: try JSONSerialization.data(withJSONObject: message), sourceFile: nil,
             tenant: snapshot.tenant, clientId: clientId,
             sessionIdentifier: sessionIdentifier, order: order
@@ -169,7 +172,47 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             .replacingOccurrences(of: "=", with: "")
         return try enqueue(
             mode: .upload, endpoint: snapshot.uploadSendURL, uploadKind: uploadKind,
-            mime: mime, message: encoded, bodyData: nil, sourceFile: file,
+            mime: mime, message: encoded, metadataHeader: "X-Jiebo-IM", bodyData: nil, sourceFile: file,
+            tenant: snapshot.tenant, clientId: clientId,
+            sessionIdentifier: sessionIdentifier, order: order
+        )
+    }
+
+    @discardableResult
+    func enqueueAssistantJSON(
+        _ capture: [String: Any], snapshot: ImShareBridge.Snapshot,
+        sessionIdentifier: String, order: Int
+    ) throws -> String {
+        guard let endpoint = snapshot.assistantIngestURL,
+              JSONSerialization.isValidJSONObject(capture),
+              let clientId = capture["clientId"] as? String
+        else { throw QueueError.invalidMessage }
+        return try enqueue(
+            mode: .json, endpoint: endpoint, uploadKind: nil,
+            mime: "application/json", message: nil, metadataHeader: nil,
+            bodyData: try JSONSerialization.data(withJSONObject: capture), sourceFile: nil,
+            tenant: snapshot.tenant, clientId: clientId,
+            sessionIdentifier: sessionIdentifier, order: order
+        )
+    }
+
+    @discardableResult
+    func enqueueAssistantUpload(
+        _ file: URL, mime: String, metadata: [String: Any],
+        snapshot: ImShareBridge.Snapshot, sessionIdentifier: String, order: Int
+    ) throws -> String {
+        guard let endpoint = snapshot.assistantUploadURL,
+              JSONSerialization.isValidJSONObject(metadata),
+              let clientId = metadata["clientId"] as? String
+        else { throw QueueError.invalidMessage }
+        let encoded = try JSONSerialization.data(withJSONObject: metadata).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return try enqueue(
+            mode: .upload, endpoint: endpoint, uploadKind: nil,
+            mime: mime, message: encoded, metadataHeader: "X-Jiebo-Assistant",
+            bodyData: nil, sourceFile: file,
             tenant: snapshot.tenant, clientId: clientId,
             sessionIdentifier: sessionIdentifier, order: order
         )
@@ -283,7 +326,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
 
     private func enqueue(
         mode: Mode, endpoint: String, uploadKind: String?, mime: String,
-        message: String?, bodyData: Data?, sourceFile: URL?,
+        message: String?, metadataHeader: String?, bodyData: Data?, sourceFile: URL?,
         tenant: String, clientId: String, sessionIdentifier: String, order: Int
     ) throws -> String {
         guard Self.isValidSessionIdentifier(sessionIdentifier),
@@ -304,7 +347,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         let job = Job(
             id: id, order: Double(order), sessionIdentifier: sessionIdentifier,
             tenant: tenant, clientId: clientId, mode: mode, endpoint: endpoint,
-            uploadKind: uploadKind, mime: mime, message: message, bodyFile: relative,
+            uploadKind: uploadKind, mime: mime, message: message, metadataHeader: metadataHeader, bodyFile: relative,
             state: .queued, attempts: 0, lastError: nil, runningAt: nil, taskToken: nil
         )
         do {
@@ -502,10 +545,12 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
                 fail(candidate.id, token: nil, reason: "发送地址无效", retry: false)
                 return false
             }
-            parts.queryItems = [
-                URLQueryItem(name: "kind", value: candidate.uploadKind),
-                URLQueryItem(name: "mime", value: candidate.mime),
-            ]
+            if let uploadKind = candidate.uploadKind {
+                parts.queryItems = [
+                    URLQueryItem(name: "kind", value: uploadKind),
+                    URLQueryItem(name: "mime", value: candidate.mime),
+                ]
+            }
             guard let value = parts.url?.absoluteString else {
                 fail(candidate.id, token: nil, reason: "发送地址无效", retry: false)
                 return false
@@ -520,7 +565,9 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         request.httpMethod = "POST"
         request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         request.setValue(candidate.mime, forHTTPHeaderField: "Content-Type")
-        if let message = candidate.message { request.setValue(message, forHTTPHeaderField: "X-Jiebo-IM") }
+        if let message = candidate.message {
+            request.setValue(message, forHTTPHeaderField: candidate.metadataHeader ?? "X-Jiebo-IM")
+        }
         let attemptToken = UUID().uuidString.lowercased()
         let started = (try? withJobsLock { () -> Bool in
             guard var job = try readJobLocked(candidate.id),

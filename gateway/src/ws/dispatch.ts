@@ -22,8 +22,12 @@ import {
 } from "./handlers/files.ts";
 import { onHello } from "./handlers/hello.ts";
 import {
+  onCollabOp,
+  onCollabSync,
   onImBlock,
   onImContacts,
+  onImGroupCreate,
+  onImGroupUpdate,
   onImHistory,
   onImList,
   onImPresence,
@@ -69,6 +73,7 @@ import {
   onWorkspaceAgentViewing,
 } from "./handlers/workspaceAgents.ts";
 import type { Handler, HandlerTable, WsConnCtx } from "./handlers/types.ts";
+import { onDevicePermissionReport, onDeviceResult } from "../device/handler.ts";
 
 /** 鉴权之后的“消息类型 → 处理函数”注册表 */
 export const handlers: HandlerTable = {
@@ -119,6 +124,8 @@ export const handlers: HandlerTable = {
   restore: onUndoOrRestore,
   prompt: onPrompt,
   im_contacts: onImContacts,
+  im_group_create: onImGroupCreate,
+  im_group_update: onImGroupUpdate,
   im_list: onImList,
   im_history: onImHistory,
   im_send: onImSend,
@@ -128,6 +135,10 @@ export const handlers: HandlerTable = {
   im_profile: onImProfile,
   im_block: onImBlock,
   im_presence: onImPresence,
+  collab_sync: onCollabSync,
+  collab_op: onCollabOp,
+  device_result: onDeviceResult,
+  device_permission_report: onDevicePermissionReport,
 };
 
 export async function handleMessage(ctx: WsConnCtx, data: RawData, table: HandlerTable = handlers) {

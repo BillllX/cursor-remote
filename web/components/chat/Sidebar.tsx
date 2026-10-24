@@ -21,8 +21,10 @@ type SidebarProps = {
   workspaceRoot: string;
   assistantName: string;
   assistantDomainActive: boolean;
+  collabDomainActive: boolean;
   assistantView: AssistantSidebarView;
   openAssistantDomain: () => void;
+  openCollabDomain: () => void;
   openAssistantView: (view: Exclude<AssistantSidebarView, "chat">) => void;
   assistantInboxBadge: number;
   assistantApprovalBadge: number;
@@ -105,8 +107,10 @@ export function Sidebar({
   workspaceRoot,
   assistantName,
   assistantDomainActive,
+  collabDomainActive,
   assistantView,
   openAssistantDomain,
+  openCollabDomain,
   openAssistantView,
   assistantInboxBadge,
   assistantApprovalBadge,
@@ -176,8 +180,18 @@ export function Sidebar({
         </button>
         <button
           type="button"
-          className={assistantDomainActive ? "" : "on"}
-          aria-pressed={!assistantDomainActive}
+          className={collabDomainActive ? "on" : ""}
+          aria-pressed={collabDomainActive}
+          aria-label="协作"
+          onClick={openCollabDomain}
+        >
+          <IconRail name="collab" size={14} />
+          协作
+        </button>
+        <button
+          type="button"
+          className={!assistantDomainActive && !collabDomainActive ? "on" : ""}
+          aria-pressed={!assistantDomainActive && !collabDomainActive}
           aria-label="工作区"
           onClick={openWorkspaceDomain}
         >

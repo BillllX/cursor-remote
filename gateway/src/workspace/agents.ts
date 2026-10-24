@@ -17,6 +17,8 @@ import { reply } from "../ws/frame.ts";
 export const WORKSPACE_AVATARS_SCOPE = "workspace-avatars";
 
 export type WorkspaceAgentItem = {
+  /** 工作区改名后仍不变；Actor、任务和历史卡片只引用这个 id。 */
+  workspaceId: string;
   path: string;
   mainChatId?: string;
   displayName?: string;
@@ -29,7 +31,7 @@ export type WorkspaceAgentItem = {
   lastAttentionTurnId?: string;
 };
 
-type WorkspaceAgentFile = { version: 1; items: Record<string, WorkspaceAgentItem> };
+export type WorkspaceAgentFile = { version: 2; items: Record<string, WorkspaceAgentItem> };
 
 function mappingFile(tenant: Tenant) {
   return resolve(tenant.stateDir, "workspace-agent-chats.json");
@@ -37,13 +39,23 @@ function mappingFile(tenant: Tenant) {
 
 export function readWorkspaceAgentFile(tenant: Tenant): WorkspaceAgentFile {
   try {
-    const parsed = JSON.parse(readFileSync(mappingFile(tenant), "utf8")) as Partial<WorkspaceAgentFile>;
+    const parsed = JSON.parse(readFileSync(mappingFile(tenant), "utf8")) as {
+      version?: unknown;
+      items?: Record<string, Partial<WorkspaceAgentItem>>;
+    };
     const items: Record<string, WorkspaceAgentItem> = {};
+    let migrated = parsed.version !== 2;
     if (parsed.items && typeof parsed.items === "object") {
       for (const [key, raw] of Object.entries(parsed.items)) {
         if (!validWorkspaceKey(key) || !raw || typeof raw !== "object") continue;
         const row = raw as Partial<WorkspaceAgentItem>;
+        const workspaceId =
+          typeof row.workspaceId === "string" && /^wsa_[0-9a-f-]{36}$/.test(row.workspaceId)
+            ? row.workspaceId
+            : `wsa_${crypto.randomUUID()}`;
+        if (workspaceId !== row.workspaceId) migrated = true;
         items[key] = {
+          workspaceId,
           path: resolve(tenant.workspaceRoot, key),
           ...(typeof row.mainChatId === "string" && row.mainChatId ? { mainChatId: row.mainChatId } : {}),
           ...(typeof row.displayName === "string" && row.displayName.trim()
@@ -62,10 +74,31 @@ export function readWorkspaceAgentFile(tenant: Tenant): WorkspaceAgentFile {
         };
       }
     }
-    return { version: 1, items };
+    const file: WorkspaceAgentFile = { version: 2, items };
+    for (const { key, path } of workspaceAgentDirectories(tenant)) {
+      if (file.items[key]) continue;
+      file.items[key] = newWorkspaceAgentItem(path);
+      migrated = true;
+    }
+    if (migrated) writeWorkspaceAgentFile(tenant, file);
+    return file;
   } catch {
-    return { version: 1, items: {} };
+    const file: WorkspaceAgentFile = { version: 2, items: {} };
+    for (const { key, path } of workspaceAgentDirectories(tenant)) file.items[key] = newWorkspaceAgentItem(path);
+    if (Object.keys(file.items).length) writeWorkspaceAgentFile(tenant, file);
+    return file;
   }
+}
+
+function newWorkspaceAgentItem(path: string): WorkspaceAgentItem {
+  return {
+    workspaceId: `wsa_${crypto.randomUUID()}`,
+    path,
+    lastReadSeq: 0,
+    unread: 0,
+    lastActivityAt: 0,
+    lastFinishedSeq: 0,
+  };
 }
 
 function nonnegative(value: unknown) {
@@ -158,6 +191,7 @@ export function openWorkspaceAgent(
   const mainChatId = chatId || createMainChat(tenant, directory.path);
   file.items[key] = {
     ...previous,
+    workspaceId: previous?.workspaceId ?? `wsa_${crypto.randomUUID()}`,
     path: directory.path,
     mainChatId,
     lastReadSeq: previous?.lastReadSeq ?? 0,
@@ -195,6 +229,16 @@ export function workspaceAgentByChat(tenant: Tenant, chatId: string) {
   const file = readWorkspaceAgentFile(tenant);
   const found = Object.entries(file.items).find(([, item]) => item.mainChatId === chatId);
   return found ? { file, key: found[0], item: found[1] } : null;
+}
+
+/** 调度时才把稳定 workspaceId 解析成当前目录 key/path，工作区改名不让排队任务失效。 */
+export function workspaceAgentById(tenant: Tenant, workspaceId: string) {
+  const file = readWorkspaceAgentFile(tenant);
+  const found = Object.entries(file.items).find(([, item]) => item.workspaceId === workspaceId);
+  if (!found) return null;
+  const [key, item] = found;
+  const directory = workspaceAgentDirectories(tenant).find((row) => row.key === key);
+  return directory ? { file, key, path: directory.path, item } : null;
 }
 
 export function forgetWorkspaceAgentChat(tenant: Tenant, chatId: string) {
@@ -243,6 +287,7 @@ export function updateWorkspaceAgentProfile(
   const file = readWorkspaceAgentFile(tenant);
   const previous = file.items[key];
   const item: WorkspaceAgentItem = previous ?? {
+    workspaceId: `wsa_${crypto.randomUUID()}`,
     path: resolve(tenant.workspaceRoot, key),
     lastReadSeq: 0,
     unread: 0,
@@ -334,6 +379,13 @@ export function workspaceAgentPage(
   // 同一个同步调用里先取三份快照，再 join；改名不会在中间插入。
   const directories = workspaceAgentDirectories(tenant);
   const file = readWorkspaceAgentFile(tenant);
+  let registered = false;
+  for (const { key, path } of directories) {
+    if (file.items[key]) continue;
+    file.items[key] = newWorkspaceAgentItem(path);
+    registered = true;
+  }
+  if (registered) writeWorkspaceAgentFile(tenant, file);
   const live = new Map(liveSlotsOf(tenant));
   const start = cursor ? directories.findIndex((item) => item.key > cursor) : 0;
   const page = start < 0 ? [] : directories.slice(start, start + WORKSPACE_AGENT_PAGE_SIZE);
@@ -352,6 +404,7 @@ export function workspaceAgentPage(
             : "idle"
       : "idle";
     return {
+      workspaceId: item.workspaceId,
       path,
       directoryName: key,
       displayName: item?.displayName || key,

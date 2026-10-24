@@ -116,6 +116,8 @@ export type Conn = {
   maxMessageBytes: number;
   /** hello.client.caps：客户端能力集（"sync_chat" / "stored_digest"） */
   caps: Set<string>;
+  /** 客户端自报的稳定设备标识；只用于哈希后审计，绝不原文落盘。 */
+  deviceId?: string;
   /** caps 含 "im" 时 hello 置 true；im_presence 切换。前台连接在线时聊天不发 APNs */
   imForeground?: boolean;
   /** 当前正在看的工作区 Agent 主会话；离开、后台或断线时为空 */

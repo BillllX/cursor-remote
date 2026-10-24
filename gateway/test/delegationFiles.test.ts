@@ -97,4 +97,33 @@ describe("委派子文件回填父 turn", () => {
     assert.equal(t.disk.rev, rev);
     saveDiskNow(t);
   });
+
+  test("collab_only 不回填父 turn，普通委派仍保持原行为", () => {
+    const t = tenant();
+    t.disk.chats = [
+      {
+        id: "parent",
+        title: "父会话",
+        cwd: t.workspaceRoot,
+        turns: [{ id: "parent-turn", user: "委派", assistant: "处理中", files: [] }],
+      },
+    ];
+    const collab = createDelegation(t, {
+      parentChatId: "parent",
+      parentTurnId: "parent-turn",
+      childChatId: "collab-child",
+      workspace: "demo",
+      title: "协作任务",
+      task: "生成结果",
+      mode: "foreground",
+      notifyPolicy: "collab_only",
+      collabTaskId: "task-1",
+    });
+    assert.equal(
+      attachDelegatedFiles(t, { chatId: "collab-child", delegationId: collab.id } as Slot, "collab-turn", childFiles),
+      null,
+    );
+    const parentTurn = (t.disk.chats[0] as { turns: Array<{ files?: TurnFile[] }> }).turns[0];
+    assert.deepEqual(parentTurn.files, []);
+  });
 });

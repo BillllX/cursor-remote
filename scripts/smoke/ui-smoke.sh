@@ -15,6 +15,7 @@ LLM_PORT="${UI_FAKE_LLM_PORT:-18332}"
 BASE_PATH="${UI_BASE_PATH:-/cursor-remote}"
 SHOTS="${UI_SHOTS:-/tmp/cursor-remote-ui-shots/$(date +%Y%m%d-%H%M%S)}"
 WORKSPACE=ui-proj
+WORKSPACE_SECOND=ui-proj-alt
 
 [ -d "$UI_KIT/node_modules/playwright" ] || { echo "UI_KIT 下没有 node_modules/playwright：$UI_KIT"; exit 2; }
 [ -d "$UI_KIT/browsers" ] && export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$UI_KIT/browsers}"
@@ -57,8 +58,9 @@ cat >"$TMP/tenants.json" <<EOF
   ]
 }
 EOF
-mkdir -p "$TMP/state/tenants/ui-user/workspace/$WORKSPACE"
+mkdir -p "$TMP/state/tenants/ui-user/workspace/$WORKSPACE" "$TMP/state/tenants/ui-user/workspace/$WORKSPACE_SECOND"
 printf '# 界面冒烟工作区\n' >"$TMP/state/tenants/ui-user/workspace/$WORKSPACE/README.md"
+printf '# 界面冒烟第二工作区\n' >"$TMP/state/tenants/ui-user/workspace/$WORKSPACE_SECOND/README.md"
 cat >"$TMP/state/providers.json" <<EOF
 {
   "providers": [
@@ -73,6 +75,7 @@ PIDS+=($!)
 (cd "$ROOT/gateway" && exec "${CLEAN[@]}" \
   CURSOR_REMOTE_STATE_DIR="$TMP/state" \
   CURSOR_REMOTE_TENANTS_FILE="$TMP/tenants.json" \
+  CURSOR_API_KEY="ui-smoke-collab-fixture" \
   CURSOR_REMOTE_MEDIA_SECRET="ui-media-secret" \
   GATEWAY_PROXY_WEB=0 \
   GATEWAY_HOST=127.0.0.1 \
@@ -115,7 +118,7 @@ wait_http 网页 "http://127.0.0.1:$WEB_PORT$BASE_PATH/"
 mkdir -p "$SHOTS"
 status=0
 UI_URL="http://127.0.0.1:$WEB_PORT$BASE_PATH/" UI_USER_TOKEN="$USER_TOKEN" UI_ADMIN_TOKEN="$ADMIN_TOKEN" \
-  UI_SHOTS="$SHOTS" UI_WORKSPACE="$WORKSPACE" UI_KIT="$UI_KIT" \
+  UI_SHOTS="$SHOTS" UI_WORKSPACE="$WORKSPACE" UI_WORKSPACE_SECOND="$WORKSPACE_SECOND" UI_KIT="$UI_KIT" \
   node "$ROOT/scripts/smoke/ui-smoke.mjs" || status=$?
 
 if [ "$status" -ne 0 ]; then logs; fi

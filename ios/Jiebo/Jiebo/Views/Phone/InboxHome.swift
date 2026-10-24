@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 待处理页（规格 §4.2）：待批 + 收件箱。从 ☰ 菜单 `router.go(.inbox)` push 进来。
+/// 待处理一级空间（规格 §4.2）：待批 + 收件箱，使用独立的 inboxPath。
 /// 绝不调用 store.openAssistantInboxItem / select：收件箱条目指向的会话可能是工作区子会话，
 /// 一律走 router.open（委派 → 详情 sheet，助理 → 回助理页，其它 → 只提示）。
 struct InboxHome: View {
@@ -15,22 +15,55 @@ struct InboxHome: View {
         (state?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
     }
 
+    private var drafts: [DraftCard] {
+        var seen = Set<String>()
+        return (state?.draftCards ?? [])
+            .sorted { $0.createdAt > $1.createdAt }
+            .filter { row in
+                let key = row.sources.first(where: { $0.kind == "approval" }).map { "approval:\($0.id)" } ?? "draft:\(row.id)"
+                return seen.insert(key).inserted
+            }
+    }
+
+    private var usesDrafts: Bool { state?.draftCards != nil }
+    private var pendingCount: Int { usesDrafts ? drafts.count : approvals.count }
+
     private var items: [AssistantInboxItem] {
-        (state?.inbox ?? []).sorted { $0.createdAt > $1.createdAt }
+        (state?.inbox ?? [])
+            .filter { item in
+                guard item.kind == "approval" else { return true }
+                // 审批已有实体卡时，不再把同一条 approval inbox 通知重复列在下方。
+                return !approvals.contains { approval in
+                    (item.delegationId != nil && item.delegationId == approval.delegationId)
+                        || (item.chatId != nil && item.chatId == approval.chatId)
+                }
+            }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     var body: some View {
         List {
-            if !approvals.isEmpty {
+            if pendingCount > 0 {
                 Section {
-                    ForEach(approvals) { approval in
-                        ApprovalCard(approval: approval, onOpenDelegation: openDelegationAction(for: approval))
+                    if usesDrafts {
+                        ForEach(drafts) { draft in
+                            DraftActionCard(draft: draft) { delegationId in
+                                router.delegationDetail = DelegationRef(id: delegationId)
+                            }
                             .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
                             .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
+                        }
+                    } else {
+                        ForEach(approvals) { approval in
+                            ApprovalCard(approval: approval, onOpenDelegation: openDelegationAction(for: approval))
+                                .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                                .listRowBackground(Color.clear)
+                                .listRowSeparator(.hidden)
+                        }
                     }
                 } header: {
-                    Text("待批 (\(approvals.count))")
+                    Text("待批 (\(pendingCount))")
                 }
             }
             if !items.isEmpty {
@@ -57,7 +90,7 @@ struct InboxHome: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant() }
         .overlay {
-            if approvals.isEmpty && items.isEmpty {
+            if pendingCount == 0 && items.isEmpty {
                 if state == nil {
                     AssistantMutedText("正在加载…")
                 } else {
@@ -160,7 +193,7 @@ struct InboxHome: View {
         if item.delegationId != nil || item.chatId != nil {
             router.open(chatId: item.chatId, delegationId: item.delegationId, store: store)
         } else {
-            router.path.append(.inboxItem(item.id))
+            router.openInboxItem(item.id)
         }
     }
 }
@@ -170,6 +203,7 @@ struct InboxDetailView: View {
     let itemId: String
 
     @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var router
 
     init(itemId: String) {
         self.itemId = itemId
@@ -196,6 +230,14 @@ struct InboxDetailView: View {
                             .foregroundStyle(JieboColor.ink)
                             .textSelection(.enabled)
                             .padding(.top, 6)
+                    }
+                    if row.actionPrompt != nil {
+                        Button("交给小驳处理") {
+                            store.openAssistantInboxItem(row)
+                            router.popToRoot()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.top, 8)
                     }
                 }
                 .padding(16)

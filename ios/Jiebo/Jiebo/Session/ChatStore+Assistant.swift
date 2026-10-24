@@ -74,6 +74,50 @@ extension ChatStore {
             toolLayer = nil
             openAssistantChat()
         }
+        if let prompt = item.actionPrompt, let assistantChatId {
+            submit(chatId: assistantChatId, text: prompt)
+        }
+    }
+
+    /// 产物中心统一续作入口：始终定向助理主会话，并保留用户正在输入的草稿。
+    @discardableResult
+    func continueArtifact(_ artifact: Artifact) -> Bool {
+        guard connected, unlocked else {
+            flash("尚未连接服务器，暂时不能继续加工")
+            return false
+        }
+        guard let assistantChatId,
+              chats.contains(where: { $0.id == assistantChatId })
+        else {
+            pendingAssistantOpen = true
+            flash("小驳主会话还在同步，请稍后再试")
+            return false
+        }
+        let source = artifact.provenance?.label ?? {
+            if let turn = artifact.sourceTurnId { return "会话回合 \(turn)" }
+            if let inbox = artifact.provenance?.inboxId { return "助理收件箱 \(inbox)" }
+            return "产物中心"
+        }()
+        let target: String
+        if let path = artifact.path {
+            target = "工作区相对路径：\(path)"
+        } else if let url = artifact.safeURL?.absoluteString {
+            target = "来源 URL：\(url)"
+        } else {
+            target = "捕获记录：\(artifact.title)（ID：\(artifact.provenance?.captureId ?? artifact.id)）"
+        }
+        let prompt = """
+        请继续加工这个产物，并先确认你理解它的来源。
+        产物：\(artifact.title)
+        来源：\(source)
+        \(target)
+        """
+        let savedDraft = draft(for: assistantChatId)
+        openAssistantChat()
+        submit(chatId: assistantChatId, text: prompt)
+        saveDraft(savedDraft, forChat: assistantChatId)
+        flash("已交给小驳继续处理")
+        return true
     }
 
     func isAssistantChat(_ id: String?) -> Bool {

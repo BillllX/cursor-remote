@@ -9,6 +9,7 @@ import { gatewayState } from "../runtime/state.ts";
 import type { Conn } from "../runtime/types.ts";
 import { defaultModel } from "../runtime/env.ts";
 import { handleMessage } from "./dispatch.ts";
+import { deviceRegistry } from "../device/registry.ts";
 
 export function onConnection(ws: WebSocket, req: IncomingMessage) {
   const conn: Conn = {
@@ -34,6 +35,7 @@ export function onConnection(ws: WebSocket, req: IncomingMessage) {
   ws.on("message", (data) => handleMessage({ ws, conn, state }, data));
 
   ws.on("close", () => {
+    deviceRegistry.close(conn);
     if (conn.authed) persistConn(conn);
     for (const slot of conn.slots.values()) {
       if (slot.owner === ws) slot.owner = null;

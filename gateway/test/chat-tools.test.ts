@@ -114,6 +114,8 @@ describe("toolEscapesWorkspace", () => {
   test("路径参数在工作区外算越界，工作区内不算", () => {
     assert.equal(toolEscapesWorkspace(cwd, "Write", { path: "../other/a.ts" }), true);
     assert.equal(toolEscapesWorkspace(cwd, "Write", { path: "src/a.ts" }), false);
+    assert.equal(toolEscapesWorkspace(cwd, "Read", { path: "." }), false);
+    assert.equal(toolEscapesWorkspace(cwd, "Read", { path: "/work/space" }), false);
   });
   test("shell 的 working_directory 是根本身不算越界，跑到外面算", () => {
     assert.equal(toolEscapesWorkspace(cwd, "Shell", { command: "ls", working_directory: "." }), false);

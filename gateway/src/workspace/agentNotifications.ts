@@ -1,5 +1,6 @@
 // 工作区主会话的“需要注意”事件：每轮只计一次未读，审批优先占用这一轮的序号。
 import { sendApns } from "../assistant/apns.ts";
+import { getDelegation } from "../assistant/delegations.ts";
 import { pushBadge } from "../assistant/service.ts";
 import { slotLog } from "../log.ts";
 import type { Slot } from "../runtime/types.ts";
@@ -9,6 +10,7 @@ import { noteWorkspaceAgentAttention } from "./agents.ts";
 export function notifyWorkspaceAgentAttention(slot: Slot, kind: "approval" | "completed" | "failed") {
   const tenant = getTenant(slot.tenantId);
   if (!tenant) return;
+  if (slot.delegationId && getDelegation(tenant, slot.delegationId)?.notifyPolicy === "collab_only") return;
   const turnId = slot.transcript?.turnId || "";
   const noted = noteWorkspaceAgentAttention(tenant, slot.chatId, turnId, kind);
   if (!noted || noted.watched || !noted.firstForTurn) return;

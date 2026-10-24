@@ -367,5 +367,7 @@ describe("推送规则", () => {
     assert.equal(apnsWants(sub, "im"), false);
     assert.equal(apnsWants({ ...sub, im: true, assistant: false }, "assistant"), false);
     assert.equal(apnsWants({ ...sub, im: true, assistant: false }, "im"), true);
+    assert.equal(apnsWants({ ...sub, im: true }, "im_group"), false);
+    assert.equal(apnsWants({ ...sub, im: true, imGroup: true }, "im_group"), true);
   });
 });

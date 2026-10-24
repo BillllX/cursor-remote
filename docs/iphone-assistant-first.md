@@ -1,8 +1,12 @@
 # 接驳 iPhone 改版：纯个人助理
 
+> **P2 架构更新（2026-10）：iPhone 现以 iOS 26 原生 TabView 提供「小驳 / 待处理 / 消息」三个一级入口。本文下方“无 Tab / 单主页 / 待处理只从菜单进入”等描述属于上一阶段规格；实现与后续修改一律以三入口架构为准。小驳仍是唯一助理 Composer，待处理不挂 Composer，消息使用独立 IM ChatComposer；iPad 双主页与 HomeMode 不变。**
+>
+> **P7 补充：小驳菜单新增「产物中心」，作为小驳导航栈中的页面，不增加第四个主 Tab。数据来自网关 `AssistantState.artifacts` 只读投影；文件复用现有预览/分享，安全链接可打开，三类产物都可固定交给助理主会话继续加工，且不会提交或覆盖用户原草稿。事实源、隐私裁剪和去重规则见 [architecture.md](./architecture.md#产物投影)。**
+>
 > 交给 Mac 上的 Agent 执行的实现规格。本文写于没有 Xcode 的环境，所有代码引用都基于当前仓库源码阅读，**行号仅供定位，以实际文件为准**。
 >
-> 工程：`ios/Jiebo/Jiebo.xcodeproj`，Target `Jiebo`，iOS 17.0，Swift 5，Observation（`@Observable`）。
+> 工程：`ios/Jiebo/Jiebo.xcodeproj`，Target `Jiebo` 与 `JieboShare` 均为 iOS 26.0，Swift 5，Observation（`@Observable`）。当前发布交接与验收清单见 [ios-assistant-26-release-handoff.md](./ios-assistant-26-release-handoff.md)。
 > 工程**不是** Xcode 16 的文件夹同步组（pbxproj 里没有 `PBXFileSystemSynchronizedRootGroup`），**每新增一个 .swift 文件都必须加进 `project.pbxproj`**（PBXFileReference + PBXBuildFile + 所属 PBXGroup + Sources 阶段），否则编译不到。最稳的做法是用 Xcode 打开工程，把新文件拖进对应分组。
 >
 > 本版取代此前「四个 Tab、工作 tab、会话页」以及「三个 Tab」的方案。方向已定：**iPhone 是一个纯粹的个人助理 App，不进工作区，没有底栏。**

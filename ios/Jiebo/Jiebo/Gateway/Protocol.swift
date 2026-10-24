@@ -112,6 +112,108 @@ struct TurnFile: Sendable, Hashable, Identifiable {
     }
 }
 
+struct ArtifactProvenance: Sendable, Hashable {
+    var turnId: String?
+    var delegationId: String?
+    var collabTaskId: String?
+    var inboxId: String?
+    var captureId: String?
+    var label: String?
+
+    static func from(_ json: JSONValue?) -> ArtifactProvenance? {
+        guard let row = json?.object else { return nil }
+        return ArtifactProvenance(
+            turnId: row["turnId"]?.string?.nilIfEmpty,
+            delegationId: row["delegationId"]?.string?.nilIfEmpty,
+            collabTaskId: row["collabTaskId"]?.string?.nilIfEmpty,
+            inboxId: row["inboxId"]?.string?.nilIfEmpty,
+            captureId: row["captureId"]?.string?.nilIfEmpty,
+            label: row["label"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct ArtifactSourceCitation: Sendable, Hashable {
+    var url: String?
+    var title: String?
+    var capturedAt: Double?
+    var excerpt: String?
+
+    static func from(_ json: JSONValue?) -> ArtifactSourceCitation? {
+        guard let row = json?.object else { return nil }
+        return ArtifactSourceCitation(
+            url: row["url"]?.string?.nilIfEmpty,
+            title: row["title"]?.string?.nilIfEmpty,
+            capturedAt: row["capturedAt"]?.number,
+            excerpt: row["excerpt"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+private func artifactPreviewKind(of path: String) -> PreviewKind {
+    previewKind(of: path)
+}
+
+/// 由网关从既有事实源派生的只读产物；未知 kind 保留为字符串以兼容新网关。
+struct Artifact: Sendable, Hashable, Identifiable {
+    var id: String
+    var title: String
+    var kind: String
+    var previewKind: PreviewKind?
+    var createdAt: Double
+    var path: String?
+    var url: String?
+    var sha: String?
+    var diffSha: String?
+    var sourceChatId: String?
+    var sourceTurnId: String?
+    var provenance: ArtifactProvenance?
+    var sourceCitation: ArtifactSourceCitation?
+
+    static func from(_ json: JSONValue) -> Artifact? {
+        guard let row = json.object,
+              let id = row["id"]?.string?.nilIfEmpty,
+              let title = row["title"]?.string?.nilIfEmpty
+        else { return nil }
+        return Artifact(
+            id: id,
+            title: title,
+            kind: row["kind"]?.string ?? "capture",
+            previewKind: row["previewKind"]?.string.flatMap(PreviewKind.init(rawValue:)),
+            createdAt: row["createdAt"]?.number ?? 0,
+            path: row["path"]?.string?.nilIfEmpty,
+            url: row["url"]?.string?.nilIfEmpty,
+            sha: row["sha"]?.string?.nilIfEmpty,
+            diffSha: row["diffSha"]?.string?.nilIfEmpty,
+            sourceChatId: row["sourceChatId"]?.string?.nilIfEmpty,
+            sourceTurnId: row["sourceTurnId"]?.string?.nilIfEmpty,
+            provenance: ArtifactProvenance.from(row["provenance"]),
+            sourceCitation: ArtifactSourceCitation.from(row["sourceCitation"])
+        )
+    }
+
+    var safeURL: URL? {
+        guard let url, let parsed = URL(string: url),
+              parsed.scheme == "https" || parsed.scheme == "http",
+              parsed.user == nil, parsed.password == nil
+        else { return nil }
+        return parsed
+    }
+
+    var turnFile: TurnFile? {
+        guard kind == "file", let path else { return nil }
+        return TurnFile(
+            path: path,
+            kind: previewKind ?? artifactPreviewKind(of: path),
+            op: "modified",
+            sha: sha,
+            diffSha: diffSha,
+            sourceChatId: sourceChatId,
+            sourceTurnId: sourceTurnId
+        )
+    }
+}
+
 /// 当前 API Key 的官方账单，口径与 Cursor CLI `/usage` 相同。金额单位是美分。
 struct CursorOnDemand: Sendable, Hashable {
     var kind: String
@@ -237,7 +339,7 @@ struct ClientInfo: Sendable, Equatable {
             name: "jiebo-ios",
             version: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
             maxMessageBytes: limit,
-            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "workspace_agents"]
+            caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "workspace_agents", "device_bridge"]
         )
     }
 
@@ -247,6 +349,21 @@ struct ClientInfo: Sendable, Equatable {
         object["caps"] = .array(caps.map { .string($0) })
         return .object(object)
     }
+}
+
+struct DeviceApproval: Sendable, Hashable {
+    var summary: String
+    var risk: String
+    var requiresConfirmation: Bool
+}
+
+struct DeviceInvoke: Sendable, Hashable {
+    var reqId: String
+    var op: String
+    var params: JSONValue
+    var timeoutMs: Int
+    var idempotencyKey: String?
+    var approval: DeviceApproval?
 }
 
 enum ClientMessage {
@@ -336,6 +453,9 @@ enum ClientMessage {
     case imBlock(tenantId: String, on: Bool)
     /// App 进出前台；没有回包
     case imPresence(foreground: Bool)
+    /// Apple 本地设备桥结果；执行器下一步接入，当前不会伪造成功。
+    case deviceResult(reqId: String, op: String, status: String, result: JSONValue?, error: String?, externalId: String?)
+    case devicePermissionReport(reqId: String?, grants: [JSONValue])
 
     func json() -> JSONValue {
         switch self {
@@ -584,6 +704,24 @@ enum ClientMessage {
             return .object(["type": .string("im_block"), "tenantId": .string(tenantId), "on": .bool(on)])
         case .imPresence(let foreground):
             return .object(["type": .string("im_presence"), "foreground": .bool(foreground)])
+        case .deviceResult(let reqId, let op, let status, let result, let error, let externalId):
+            var object: [String: JSONValue] = [
+                "type": .string("device_result"),
+                "reqId": .string(reqId),
+                "op": .string(op),
+                "status": .string(status),
+            ]
+            if let result { object["result"] = result }
+            if let error { object["error"] = .string(error) }
+            if let externalId { object["externalId"] = .string(externalId) }
+            return .object(object)
+        case .devicePermissionReport(let reqId, let grants):
+            var object: [String: JSONValue] = [
+                "type": .string("device_permission_report"),
+                "grants": .array(grants),
+            ]
+            if let reqId { object["reqId"] = .string(reqId) }
+            return .object(object)
         }
     }
 }
@@ -652,9 +790,11 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var body: String
     var createdAt: Double
     var read: Bool
+    var actionPrompt: String?
     var chatId: String?
     var scheduleId: String?
     var delegationId: String?
+    var capture: AssistantCaptureSource?
 
     static func from(_ json: JSONValue) -> AssistantInboxItem? {
         guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
@@ -665,9 +805,36 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
             body: row["body"]?.string ?? "",
             createdAt: row["createdAt"]?.number ?? 0,
             read: row["read"]?.bool ?? false,
+            actionPrompt: row["actionPrompt"]?.string?.nilIfEmpty,
             chatId: row["chatId"]?.string?.nilIfEmpty,
             scheduleId: row["scheduleId"]?.string?.nilIfEmpty,
-            delegationId: row["delegationId"]?.string?.nilIfEmpty
+            delegationId: row["delegationId"]?.string?.nilIfEmpty,
+            capture: AssistantCaptureSource.from(row["capture"])
+        )
+    }
+}
+
+struct AssistantCaptureSource: Sendable, Hashable {
+    var kind: String
+    var title: String?
+    var url: String?
+    var path: String?
+    var sha: String?
+    var mime: String?
+    var size: Int?
+    var intent: String?
+
+    static func from(_ json: JSONValue?) -> AssistantCaptureSource? {
+        guard let row = json?.object, let kind = row["kind"]?.string?.nilIfEmpty else { return nil }
+        return AssistantCaptureSource(
+            kind: kind,
+            title: row["title"]?.string?.nilIfEmpty,
+            url: row["url"]?.string?.nilIfEmpty,
+            path: row["path"]?.string?.nilIfEmpty,
+            sha: row["sha"]?.string?.nilIfEmpty,
+            mime: row["mime"]?.string?.nilIfEmpty,
+            size: row["size"]?.int,
+            intent: row["intent"]?.string?.nilIfEmpty
         )
     }
 }
@@ -896,6 +1063,199 @@ struct AssistantBrief: Sendable, Hashable {
     var text: String
 }
 
+/// 投影枚举故意保留 String：网关追加 kind/phase/status 时，旧 App 仍能解码整条状态。
+typealias PersonalTaskKind = String
+typealias PersonalTaskPhase = String
+
+struct TaskSourceRef: Codable, Sendable, Hashable {
+    var kind: String
+    var id: String
+
+    static func from(_ json: JSONValue) -> TaskSourceRef? {
+        guard let row = json.object,
+              let kind = row["kind"]?.string,
+              let id = row["id"]?.string,
+              !kind.isEmpty,
+              !id.isEmpty
+        else { return nil }
+        return TaskSourceRef(kind: kind, id: id)
+    }
+}
+
+struct TaskReceipt: Codable, Sendable, Hashable {
+    var id: String
+    var status: String
+    var at: Double
+    var summary: String?
+
+    static func from(_ json: JSONValue) -> TaskReceipt? {
+        guard let row = json.object,
+              let id = row["id"]?.string,
+              let status = row["status"]?.string,
+              !id.isEmpty,
+              !status.isEmpty
+        else { return nil }
+        return TaskReceipt(
+            id: id,
+            status: status,
+            at: row["at"]?.number ?? 0,
+            summary: row["summary"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct PersonalTaskAction: Codable, Sendable, Hashable {
+    var label: String
+    var op: String
+    var id: String?
+    var delegationId: String?
+    var chatId: String?
+    var callId: String?
+    var allow: Bool?
+    var enabled: Bool?
+
+    static func from(_ json: JSONValue) -> PersonalTaskAction? {
+        guard let row = json.object,
+              let label = row["label"]?.string,
+              let op = row["op"]?.string,
+              !op.isEmpty
+        else { return nil }
+        let args = row["args"]?.object
+        return PersonalTaskAction(
+            label: label,
+            op: op,
+            id: args?["id"]?.string?.nilIfEmpty,
+            delegationId: args?["delegationId"]?.string?.nilIfEmpty,
+            chatId: args?["chatId"]?.string?.nilIfEmpty,
+            callId: args?["callId"]?.string?.nilIfEmpty,
+            allow: args?["allow"]?.bool,
+            enabled: args?["enabled"]?.bool
+        )
+    }
+}
+
+struct PersonalTask: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var kind: PersonalTaskKind
+    var title: String
+    var phase: PersonalTaskPhase
+    var status: String
+    var priority: String
+    var attention: String?
+    var detail: String?
+    var due: String?
+    var dueAt: Double?
+    var createdAt: Double
+    var updatedAt: Double?
+    var sources: [TaskSourceRef]
+    var receipt: TaskReceipt?
+    var actions: [PersonalTaskAction]
+
+    static func from(_ json: JSONValue) -> PersonalTask? {
+        guard let row = json.object,
+              let id = row["id"]?.string,
+              let kind = row["kind"]?.string,
+              let phase = row["phase"]?.string,
+              !id.isEmpty
+        else { return nil }
+        return PersonalTask(
+            id: id,
+            kind: kind,
+            title: row["title"]?.string ?? "",
+            phase: phase,
+            status: row["status"]?.string ?? "",
+            priority: row["priority"]?.string ?? "normal",
+            attention: row["attention"]?.string?.nilIfEmpty,
+            detail: row["detail"]?.string?.nilIfEmpty,
+            due: row["due"]?.string?.nilIfEmpty,
+            dueAt: row["dueAt"]?.number,
+            createdAt: row["createdAt"]?.number ?? 0,
+            updatedAt: row["updatedAt"]?.number,
+            sources: row["sources"]?.array?.compactMap(TaskSourceRef.from) ?? [],
+            receipt: row["receipt"].flatMap(TaskReceipt.from),
+            actions: row["actions"]?.array?.compactMap(PersonalTaskAction.from) ?? []
+        )
+    }
+}
+
+struct DraftPreview: Codable, Sendable, Hashable {
+    var kind: String
+    var title: String
+    var summary: String
+    var details: [String]
+
+    static func from(_ json: JSONValue) -> DraftPreview? {
+        guard let row = json.object else { return nil }
+        return DraftPreview(
+            kind: row["kind"]?.string ?? "",
+            title: row["title"]?.string ?? "",
+            summary: row["summary"]?.string ?? "",
+            details: row["details"]?.array?.compactMap(\.string) ?? []
+        )
+    }
+}
+
+struct DraftCard: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var kind: String
+    var status: String
+    var createdAt: Double
+    var expiresAt: Double
+    var preview: DraftPreview
+    var sources: [TaskSourceRef]
+    var actions: [PersonalTaskAction]
+
+    static func from(_ json: JSONValue) -> DraftCard? {
+        guard let row = json.object,
+              let id = row["id"]?.string,
+              let preview = row["preview"].flatMap(DraftPreview.from),
+              !id.isEmpty
+        else { return nil }
+        return DraftCard(
+            id: id,
+            kind: row["kind"]?.string ?? "approval",
+            status: row["status"]?.string ?? "waiting_user",
+            createdAt: row["createdAt"]?.number ?? 0,
+            expiresAt: row["expiresAt"]?.number ?? 0,
+            preview: preview,
+            sources: row["sources"]?.array?.compactMap(TaskSourceRef.from) ?? [],
+            actions: row["actions"]?.array?.compactMap(PersonalTaskAction.from) ?? []
+        )
+    }
+}
+
+struct DayThreadEvent: Codable, Sendable, Hashable, Identifiable {
+    var id: String
+    var kind: String
+    var title: String
+    var body: String?
+    var at: Double
+    var priority: String
+    var taskId: String?
+    var draftCardId: String?
+    var sources: [TaskSourceRef]
+    var receipt: TaskReceipt?
+
+    static func from(_ json: JSONValue) -> DayThreadEvent? {
+        guard let row = json.object,
+              let id = row["id"]?.string,
+              !id.isEmpty
+        else { return nil }
+        return DayThreadEvent(
+            id: id,
+            kind: row["kind"]?.string ?? "",
+            title: row["title"]?.string ?? "",
+            body: row["body"]?.string?.nilIfEmpty,
+            at: row["at"]?.number ?? 0,
+            priority: row["priority"]?.string ?? "normal",
+            taskId: row["taskId"]?.string?.nilIfEmpty,
+            draftCardId: row["draftCardId"]?.string?.nilIfEmpty,
+            sources: row["sources"]?.array?.compactMap(TaskSourceRef.from) ?? [],
+            receipt: row["receipt"].flatMap(TaskReceipt.from)
+        )
+    }
+}
+
 struct AssistantMemory: Sendable, Hashable {
     /// 网关 CORE_FIELDS 的顺序；fields 里多出来的键排在后面
     static let coreFieldKeys = ["关于我", "偏好", "近况", "人物", "工作偏好"]
@@ -944,6 +1304,14 @@ struct AssistantState: Sendable, Hashable {
     var approvals: [AssistantApproval]
     var runs: [AssistantRun]
     var brief: AssistantBrief?
+    /// P4 统一只读投影；老网关不带时为 nil，界面回落到 delegations。
+    var personalTasks: [PersonalTask]?
+    var draftCards: [DraftCard]?
+    var dayThread: [DayThreadEvent]?
+    /// P7 只读产物投影；老网关不带时为 nil。
+    var artifacts: [Artifact]?
+    var projectionVersion: Int?
+    var snapshotAt: Double?
     /// 只有发过 assistant_get(memory: true) 的连接才带
     var memory: AssistantMemory?
     /// 老网关不带
@@ -974,6 +1342,12 @@ struct AssistantState: Sendable, Hashable {
             approvals: row["approvals"]?.array?.compactMap(AssistantApproval.from) ?? [],
             runs: row["runs"]?.array?.compactMap(AssistantRun.from) ?? [],
             brief: brief,
+            personalTasks: row["personalTasks"]?.array?.compactMap(PersonalTask.from),
+            draftCards: row["draftCards"]?.array?.compactMap(DraftCard.from),
+            dayThread: row["dayThread"]?.array?.compactMap(DayThreadEvent.from),
+            artifacts: row["artifacts"]?.array?.compactMap(Artifact.from),
+            projectionVersion: row["projectionVersion"]?.int,
+            snapshotAt: row["snapshotAt"]?.number,
             memory: row["memory"].flatMap(AssistantMemory.from),
             calendar: row["calendar"].flatMap(AssistantCalendar.from)
         )
@@ -1104,6 +1478,8 @@ enum ServerMessage {
     /// 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带
     case delegationState(delegation: AssistantDelegation, approval: AssistantApproval?)
     case memoryWritten(chatId: String?, entry: AssistantMemoryEntry)
+    /// 交给本地 coordinator；本层只解码，不执行 EventKit，也不自动回成功。
+    case deviceInvoke(DeviceInvoke)
     /// 即时消息的全部下行（im_contacts / im_list / im_history / im_ack / im_message / im_update / im_error）
     case im(ImEvent)
     case pong
@@ -1156,6 +1532,25 @@ enum ServerMessage {
         }
         let chatId = object["chatId"]?.string ?? ""
         switch type {
+        case "device_invoke":
+            let approval: DeviceApproval?
+            if let row = object["approval"]?.object {
+                approval = DeviceApproval(
+                    summary: row["summary"]?.string ?? "",
+                    risk: row["risk"]?.string ?? "",
+                    requiresConfirmation: row["requiresConfirmation"]?.bool ?? false
+                )
+            } else {
+                approval = nil
+            }
+            return .deviceInvoke(DeviceInvoke(
+                reqId: object["reqId"]?.string ?? "",
+                op: object["op"]?.string ?? "",
+                params: object["params"] ?? .object([:]),
+                timeoutMs: object["timeoutMs"]?.int ?? 0,
+                idempotencyKey: object["idempotencyKey"]?.string,
+                approval: approval
+            ))
         case "ready":
             return .ready(
                 cwd: object["cwd"]?.string ?? "",

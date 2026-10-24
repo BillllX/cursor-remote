@@ -400,11 +400,8 @@ enum JieboHaptic {
 }
 
 enum JieboGlass {
-    /// 系统有 Liquid Glass（iOS 26+）
-    static let available: Bool = {
-        if #available(iOS 26.0, *) { return true }
-        return false
-    }()
+    /// 最低支持 iOS 26，保留该调用方 API 仅用于减小迁移改动。
+    static let available = true
 }
 
 struct PressScaleButtonStyle: ButtonStyle {
@@ -426,15 +423,10 @@ extension View {
         frame(minWidth: size, minHeight: size).contentShape(Rectangle())
     }
 
-    /// 浮在内容上的控件层（输入胶囊、回到底部、浮动提示）：iOS 26+ 用 Liquid Glass，更早的系统退回材质。
+    /// 浮在内容上的控件层（输入胶囊、回到底部、浮动提示）直接使用 iOS 26 Liquid Glass。
     /// 内容层（消息、卡片）不要套它。
-    @ViewBuilder
     func jieboGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
-        if #available(iOS 26.0, *) {
-            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
-        } else {
-            background(.regularMaterial, in: shape)
-        }
+        glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
     }
 }
 

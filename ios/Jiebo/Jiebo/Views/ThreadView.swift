@@ -338,18 +338,14 @@ private struct EmbeddedComposerInset<Bar: View>: ViewModifier {
     }
 }
 
-/// iOS 26+：内容挂一条底部 safeAreaBar（系统给滚动边缘做柔化）；其它情况原样返回，由调用方把底栏排在 VStack 里
+/// 最低支持 iOS 26：启用时挂底部 safeAreaBar，由系统柔化滚动边缘；关闭时保持原内容。
 private struct FloatingBottomBar<Bar: View>: ViewModifier {
     var enabled: Bool
     @ViewBuilder var bar: () -> Bar
 
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            if enabled {
-                content.safeAreaBar(edge: .bottom) { bar() }
-            } else {
-                content
-            }
+        if enabled {
+            content.safeAreaBar(edge: .bottom) { bar() }
         } else {
             content
         }

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// ☰ 和抽屉里「待处理」行共用的数字角标（> 99 显示 99+）
+/// ☰ 等助理入口使用的数字角标（> 99 显示 99+）
 struct PendingBadge: View {
     var count: Int
 
@@ -17,15 +17,14 @@ struct PendingBadge: View {
     }
 }
 
-/// 左侧菜单抽屉（docs/iphone-assistant-first.md §4.0.1 / §4.3）。
+/// 小驳空间的左侧菜单抽屉（docs/iphone-assistant-first.md §4.0.1 / §4.3）。
 /// 一直挂在 PhoneShell 的 ZStack 里：关着的时候不拦触摸，只在「路由栈为空且没有键盘」时留一条 16pt 的左缘热区，
 /// 从左缘向右拖就打开；push 页上这条热区撤掉，左缘右滑归系统的返回手势。
 struct MenuDrawer: View {
     @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// VoiceOver 焦点：0 是首项「待处理」。nil 时没有行被选中
+    /// VoiceOver 焦点：0 是首项「今日」。nil 时没有行被选中
     @AccessibilityFocusState private var focusedRow: Int?
     @State private var keyboardUp = false
     private var edgeOpenEnabled: Bool {
@@ -122,25 +121,19 @@ struct MenuDrawer: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     sectionTitle("助理")
-                    menuRow(
-                        store.assistantBadgeCount > 0 ? "tray.full" : "tray",
-                        "需要处理",
-                        badge: store.assistantBadgeCount,
-                        tag: 0
-                    ) {
-                        router.go(.inbox)
-                    }
                     // 和导航栏「今日」是同一个面板，不再另开一个全屏页
-                    menuRow("sun.max", "今日", tag: 1) {
+                    menuRow("sun.max", "今日", tag: 0) {
                         router.openHub()
                     }
-                    menuRow("paperplane", "委派记录", tag: 2) {
+                    menuRow("checklist", "任务与计划", tag: 1) {
                         router.go(.delegations)
+                    }
+                    menuRow("square.stack.3d.up", "产物中心", tag: 2) {
+                        router.go(.artifacts)
                     }
                     divider
                         .padding(.vertical, 8)
-                    // 聊天未读挂在这里：主页切换在设置页最上面
-                    menuRow(NavigationIconId.account.symbol, "设置", chatUnread: im.totalUnread, tag: 3) {
+                    menuRow(NavigationIconId.account.symbol, "设置", tag: 3) {
                         router.go(.settings)
                     }
                 }
@@ -195,42 +188,23 @@ struct MenuDrawer: View {
     private func menuRow(
         _ symbol: String,
         _ title: String,
-        badge: Int = 0,
-        chatUnread: Int = 0,
-        destructive: Bool = false,
         tag: Int,
         action: @escaping () -> Void
     ) -> some View {
-        let label: String
-        if badge > 0 {
-            label = "\(title)，\(badge) 项"
-        } else if chatUnread > 0 {
-            label = "\(title)，聊天有 \(chatUnread) 条未读"
-        } else {
-            label = title
-        }
         return Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: symbol)
                     .font(JieboFont.text(.callout, weight: .medium))
-                    .foregroundStyle(destructive ? JieboColor.danger : JieboColor.ink2)
+                    .foregroundStyle(JieboColor.ink2)
                     .frame(width: 24)
                 Text(title)
                     .font(JieboFont.text(.callout, weight: .medium))
-                    .foregroundStyle(destructive ? JieboColor.danger : JieboColor.ink)
+                    .foregroundStyle(JieboColor.ink)
                 Spacer(minLength: 8)
-                if badge > 0 {
-                    PendingBadge(count: badge)
-                }
-                if chatUnread > 0 {
-                    ImUnreadBadge(count: chatUnread)
-                }
-                if !destructive {
-                    Image(systemName: "chevron.right")
-                        .font(JieboFont.text(.caption, weight: .semibold))
-                        .foregroundStyle(JieboColor.dim)
-                        .accessibilityHidden(true)
-                }
+                Image(systemName: "chevron.right")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
@@ -238,7 +212,7 @@ struct MenuDrawer: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(label)
+        .accessibilityLabel(title)
         .accessibilityFocused($focusedRow, equals: tag)
     }
 

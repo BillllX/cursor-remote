@@ -85,6 +85,7 @@ async function main() {
   const ADMIN_TOKEN = env("UI_ADMIN_TOKEN");
   const SHOTS = env("UI_SHOTS");
   const WORKSPACE = env("UI_WORKSPACE");
+  const WORKSPACE_SECOND = env("UI_WORKSPACE_SECOND");
   const FAKE_MODEL = process.env.UI_FAKE_MODEL || "fake:m1";
   mkdirSync(SHOTS, { recursive: true });
 
@@ -103,6 +104,7 @@ async function main() {
   const results = [];
   const problems = [];
   let current = "启动";
+  let expectedDialogAnswer;
   // 允许名单：只放确认与产品无关、且无法在页面侧避免的噪音
   const ALLOWED_CONSOLE = [];
   page.on("pageerror", (error) => problems.push({ step: current, kind: "pageerror", text: error.message }));
@@ -113,6 +115,12 @@ async function main() {
     problems.push({ step: current, kind: "console.error", text });
   });
   page.on("dialog", (dialog) => {
+    if (expectedDialogAnswer !== undefined) {
+      const answer = expectedDialogAnswer;
+      expectedDialogAnswer = undefined;
+      void dialog.accept(answer);
+      return;
+    }
     problems.push({ step: current, kind: "dialog", text: `${dialog.type()}: ${dialog.message()}` });
     void dialog.accept();
   });
@@ -683,6 +691,217 @@ async function main() {
     return "刷新后仍已删除";
   });
 
+  // h. Agent 协作群：独立覆盖入口、默认群、成员管理、直接派工、多 Agent 波次和深链恢复
+  const collabList = page.getByRole("complementary", { name: "协作群列表" });
+  const collabDetails = page.getByRole("complementary", { name: "当前协作详情" });
+  const collabComposer = page.getByRole("textbox", { name: "协作消息" });
+  const projectRoom = `UI项目群 ${nonce}`;
+  const projectRoomRenamed = `UI项目群改名 ${nonce}`;
+  const roomButton = (title) => collabList.getByRole("button").filter({ hasText: title });
+  const expectCollabMain = async () => {
+    await loginGate.waitFor({ state: "detached" });
+    await collabList.waitFor({ state: "visible", timeout: 20_000 });
+  };
+  const openMembers = async () => {
+    const detailsButton = page.getByRole("button", { name: "协作详情", exact: true });
+    if (await detailsButton.isVisible().catch(() => false)) await detailsButton.click();
+    await collabDetails.waitFor({ state: "visible" });
+    const tab = collabDetails.getByRole("tab", { name: "成员", exact: true });
+    await tab.waitFor({ state: "visible" });
+    await tab.click();
+  };
+
+  await step(
+    "h1",
+    "协作入口登录后可见且可切换",
+    async () => {
+      const entry = activity.getByRole("button", { name: "协作", exact: true });
+      await entry.waitFor({ state: "visible" });
+      await entry.click();
+      await collabList.waitFor({ state: "visible", timeout: 15_000 });
+      await activity.getByRole("button", { name: "工作区", exact: true }).click();
+      await collabList.waitFor({ state: "hidden" });
+      await entry.click();
+      await collabList.waitFor({ state: "visible" });
+    },
+    { critical: true, shot: true },
+  );
+  await step("h2", "默认小驳协作群只创建一份", async () => {
+    const defaults = collabList.getByRole("button").filter({ hasText: "小驳协作群" });
+    await defaults.first().waitFor({ state: "visible", timeout: 15_000 });
+    await page.waitForTimeout(1_500);
+    const count = await defaults.count();
+    if (count !== 1) throw new Error(`默认群有 ${count} 份`);
+  });
+  await step("h3", "群列表、成员与默认 @小驳 Composer", async () => {
+    await roomButton("小驳协作群").click();
+    await openMembers();
+    for (const name of ["小驳", WORKSPACE, WORKSPACE_SECOND]) {
+      await collabDetails.getByText(name, { exact: true }).waitFor({ state: "visible" });
+    }
+    await page.getByRole("button", { name: "移除 @小驳", exact: true }).waitFor({ state: "visible" });
+    await collabComposer.waitFor({ state: "visible" });
+  });
+  await step(
+    "h4",
+    "创建项目群、改名、增删 workspace actor 并刷新保留",
+    async () => {
+      const phase = async (name, run) => {
+        try {
+          return await run();
+        } catch (error) {
+          throw new Error(`${name}：${error?.message || error}`);
+        }
+      };
+      expectedDialogAnswer = projectRoom;
+      await phase("创建群", () => collabList.getByRole("button", { name: "创建项目协作群" }).click());
+      await phase("选择新群", async () => {
+        await roomButton(projectRoom).waitFor({ state: "visible", timeout: 15_000 });
+        await roomButton(projectRoom).click();
+      });
+      await phase("打开成员", openMembers);
+      await phase("添加第一工作区", () =>
+        collabDetails.getByRole("button", { name: `＋ 添加 ${WORKSPACE}`, exact: true }).click(),
+      );
+      await phase("添加第二工作区", () =>
+        collabDetails.getByRole("button", { name: `＋ 添加 ${WORKSPACE_SECOND}`, exact: true }).click(),
+      );
+      await phase("移除第二工作区", async () => {
+        const name = collabDetails.getByText(WORKSPACE_SECOND, { exact: true });
+        await name.waitFor({ state: "visible" });
+        await name.locator("xpath=ancestor::div[button][1]").getByRole("button", { name: "移除", exact: true }).click();
+      });
+      await phase("重新添加第二工作区", () =>
+        collabDetails.getByRole("button", { name: `＋ 添加 ${WORKSPACE_SECOND}`, exact: true }).click(),
+      );
+      expectedDialogAnswer = projectRoomRenamed;
+      await phase("改名", () => collabDetails.getByRole("button", { name: "改名", exact: true }).click());
+      await phase("等待新群名", () => roomButton(projectRoomRenamed).waitFor({ state: "visible" }));
+      await phase("刷新恢复", async () => {
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expectCollabMain();
+        await roomButton(projectRoomRenamed).waitFor({ state: "visible" });
+        await openMembers();
+      });
+      await phase("核对成员", async () => {
+        for (const name of ["小驳", WORKSPACE, WORKSPACE_SECOND]) {
+          await collabDetails.getByText(name, { exact: true }).waitFor({ state: "visible" });
+        }
+      });
+    },
+    { critical: true, shot: true },
+  );
+  await step(
+    "h5",
+    "直接 @workspace Agent 经完整状态到 ResultCard",
+    async () => {
+      const phase = async (name, run) => {
+        try {
+          return await run();
+        } catch (error) {
+          throw new Error(`${name}：${error?.message || error}`);
+        }
+      };
+      await phase("改为直接派工", async () => {
+        await page.getByRole("button", { name: "移除 @小驳", exact: true }).click();
+        await page.getByRole("button", { name: "+ @Agent", exact: true }).click();
+        await page.locator("select").selectOption({ label: `工作区：${WORKSPACE}` });
+      });
+      await page.evaluate(() => {
+        const seen = [];
+        const scan = () => {
+          for (const node of globalThis.document.querySelectorAll('article[role="button"] span[data-tone]')) {
+            const value = node.textContent?.trim();
+            if (value && !seen.includes(value)) seen.push(value);
+          }
+        };
+        globalThis.__collabSmokeStatuses = seen;
+        new globalThis.MutationObserver(scan).observe(globalThis.document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+        scan();
+      });
+      await phase("发送任务", async () => {
+        await collabComposer.fill(`直接派工 ${nonce}`);
+        await page.getByRole("button", { name: "发送协作消息" }).click();
+      });
+      await phase("等待 ResultCard", () =>
+        page.getByText("Agent 结果", { exact: true }).waitFor({ state: "visible", timeout: 60_000 }),
+      );
+      await phase("等待 TaskCard 成功", () =>
+        page
+          .locator('article[role="button"]')
+          .filter({ hasText: "已完成" })
+          .last()
+          .waitFor({ state: "visible", timeout: 15_000 }),
+      );
+      const seen = await page.evaluate(() => globalThis.__collabSmokeStatuses || []);
+      for (const status of ["排队中", "运行中", "结果发送中", "已完成"]) {
+        if (!seen.includes(status)) throw new Error(`TaskCard 未观察到「${status}」；实际 ${seen.join("、")}`);
+      }
+      return seen.join(" → ");
+    },
+    { critical: true, shot: true },
+  );
+  await step(
+    "h6",
+    "@小驳展示多 Agent 计划、波次与 summary",
+    async () => {
+      await page.getByRole("button", { name: `移除 @${WORKSPACE}`, exact: true }).click();
+      await page.getByRole("button", { name: "+ @Agent", exact: true }).click();
+      await page.locator("select").selectOption({ label: "协调：小驳" });
+      await collabComposer.fill(`多 Agent 两波协作 ${nonce}`);
+      await page.getByRole("button", { name: "发送协作消息" }).click();
+      await page.getByText("小驳的执行计划", { exact: true }).first().waitFor({ state: "visible", timeout: 20_000 });
+      await page.getByText("Wave 1 · 可并行", { exact: true }).waitFor({ state: "visible", timeout: 20_000 });
+      await page.getByText("Wave 2 · 可并行", { exact: true }).waitFor({ state: "visible", timeout: 40_000 });
+      await page.getByText("小驳汇总", { exact: true }).waitFor({ state: "visible", timeout: 40_000 });
+      await page
+        .getByText("UI smoke：多 Agent 两波任务均已完成。", { exact: true })
+        .first()
+        .waitFor({ state: "visible" });
+    },
+    { critical: true, shot: true },
+  );
+  await step("h7", "URL 深链刷新恢复 conv/run/task", async () => {
+    const phase = async (name, run) => {
+      try {
+        return await run();
+      } catch (error) {
+        throw new Error(`${name}：${error?.message || error}`);
+      }
+    };
+    const closeDetails = collabDetails.getByRole("button", { name: "关闭协作详情", exact: true });
+    await phase("关闭已有详情栏", async () => {
+      if (await closeDetails.isVisible().catch(() => false)) await closeDetails.evaluate((node) => node.click());
+    });
+    const completed = page.locator('article[role="button"]').filter({ hasText: "已完成" }).last();
+    await phase("打开已完成任务", () => completed.click());
+    await phase("等待任务详情栏", () => collabDetails.waitFor({ state: "visible" }));
+    const before = new URL(page.url());
+    for (const key of ["conv", "run", "task"]) {
+      if (!before.searchParams.get(key)) throw new Error(`深链缺少 ${key}`);
+    }
+    await phase("按深链刷新", () => page.reload({ waitUntil: "domcontentloaded" }));
+    await phase("等待协作主界面", expectCollabMain);
+    await phase("等待恢复详情栏", () => collabDetails.waitFor({ state: "visible", timeout: 20_000 }));
+    await phase("等待恢复任务详情", () =>
+      collabDetails.getByText("任务详情", { exact: true }).waitFor({ state: "visible" }),
+    );
+    const after = new URL(page.url());
+    for (const key of ["conv", "run", "task"]) {
+      if (after.searchParams.get(key) !== before.searchParams.get(key)) throw new Error(`刷新后 ${key} 未恢复`);
+    }
+    await phase("返回助理域", () =>
+      page
+        .locator('nav[aria-label="一级导航"] button')
+        .filter({ hasText: "助理" })
+        .evaluate((node) => node.click()),
+    );
+  });
+
   // f. 退出登录 → 管理员登录 → 使用统计
   await step(
     "f1",
@@ -721,6 +940,15 @@ async function main() {
     },
     {},
   );
+
+  current = "h8";
+  results.push({
+    id: "h8",
+    name: "协作场景无 pageerror / console.error",
+    status: problems.length ? "失败" : "通过",
+    ms: 0,
+    detail: problems.length ? `${problems.length} 条` : "",
+  });
 
   // g. 全程页面异常
   current = "g";

@@ -50,6 +50,8 @@
 		A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */; };
 		A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */; };
 		A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000704 /* PhoneShell.swift */; };
+		A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */; };
+		P7000201 /* ArtifactCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P7000101 /* ArtifactCenterView.swift */; };
 		A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */; };
 		A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000706 /* AssistantHome.swift */; };
 		A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000707 /* TodayStrip.swift */; };
@@ -119,9 +121,19 @@
 		A1B2C3D4E5F6071829000B0D /* ImRichMedia.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0D /* ImRichMedia.swift */; };
 		A1B2C3D4E5F6071829000B0E /* ImShareBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0E /* ImShareBridge.swift */; };
 		A1B2C3D4E5F6071829000B0F /* ImRichViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0F /* ImRichViews.swift */; };
+		DVC100201 /* DeviceRequestValidation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100101 /* DeviceRequestValidation.swift */; };
+		DVC100202 /* AppleEventKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100102 /* AppleEventKitService.swift */; };
+		DVC100203 /* AppleContactsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100103 /* AppleContactsService.swift */; };
+		DVC100204 /* DevicePermissionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100104 /* DevicePermissionStore.swift */; };
+		DVC100205 /* DeviceBridgeCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100105 /* DeviceBridgeCoordinator.swift */; };
+		DVC100206 /* DeviceViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = DVC100106 /* DeviceViews.swift */; };
 		A1B2C3D4E5F6071829000D30 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */; };
 		A1B2C3D4E5F6071829000D31 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000107 /* KeychainStore.swift */; };
 		A1B2C3D4E5F6071829000D32 /* ImShareBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0E /* ImShareBridge.swift */; };
+		P6000201 /* AssistantCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000101 /* AssistantCaptureBridge.swift */; };
+		P6000202 /* AssistantCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000101 /* AssistantCaptureBridge.swift */; };
+		P6000203 /* JieboAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000102 /* JieboAppIntents.swift */; };
+		P6000204 /* AssistantCaptureDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000103 /* AssistantCaptureDrain.swift */; };
 		A1B2C3D4E5F6071829000D15 /* JieboShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000017 /* JieboShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -196,6 +208,8 @@
 		A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantComponents.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000704 /* PhoneShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneShell.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTabShell.swift; sourceTree = "<group>"; };
+		P7000101 /* ArtifactCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactCenterView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuDrawer.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000706 /* AssistantHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantHome.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000707 /* TodayStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayStrip.swift; sourceTree = "<group>"; };
@@ -269,6 +283,15 @@
 		A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A11 /* JieboShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = JieboShare.entitlements; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A13 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		P6000101 /* AssistantCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCaptureBridge.swift; sourceTree = "<group>"; };
+		P6000102 /* JieboAppIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboAppIntents.swift; sourceTree = "<group>"; };
+		P6000103 /* AssistantCaptureDrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantCaptureDrain.swift; sourceTree = "<group>"; };
+		DVC100101 /* DeviceRequestValidation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceRequestValidation.swift; sourceTree = "<group>"; };
+		DVC100102 /* AppleEventKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleEventKitService.swift; sourceTree = "<group>"; };
+		DVC100103 /* AppleContactsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleContactsService.swift; sourceTree = "<group>"; };
+		DVC100104 /* DevicePermissionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePermissionStore.swift; sourceTree = "<group>"; };
+		DVC100105 /* DeviceBridgeCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBridgeCoordinator.swift; sourceTree = "<group>"; };
+		DVC100106 /* DeviceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -311,11 +334,13 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D4E5F6071829000901 /* App */,
+				P6000110 /* AppIntents */,
 				A1B2C3D4E5F6071829000750 /* Jiebo.entitlements */,
 				A1B2C3D4E5F6071829000100 /* JieboApp.swift */,
 				A1B2C3D4E5F6071829000006 /* Theme */,
 				A1B2C3D4E5F6071829000007 /* Gateway */,
 				A1B2C3D4E5F6071829000008 /* Auth */,
+				DVC100110 /* Device */,
 				A1B2C3D4E5F6071829000009 /* Session */,
 				A1B2C3D4E5F6071829000010 /* Views */,
 				A1B2C3D4E5F6071829000015 /* Assets.xcassets */,
@@ -354,8 +379,31 @@
 			children = (
 				A1B2C3D4E5F6071829000107 /* KeychainStore.swift */,
 				A1B2C3D4E5F6071829000A0E /* ImShareBridge.swift */,
+				P6000101 /* AssistantCaptureBridge.swift */,
 			);
 			path = Auth;
+			sourceTree = "<group>";
+		};
+		P6000110 /* AppIntents */ = {
+			isa = PBXGroup;
+			children = (
+				P6000102 /* JieboAppIntents.swift */,
+				P6000103 /* AssistantCaptureDrain.swift */,
+			);
+			path = AppIntents;
+			sourceTree = "<group>";
+		};
+		DVC100110 /* Device */ = {
+			isa = PBXGroup;
+			children = (
+				DVC100101 /* DeviceRequestValidation.swift */,
+				DVC100102 /* AppleEventKitService.swift */,
+				DVC100103 /* AppleContactsService.swift */,
+				DVC100104 /* DevicePermissionStore.swift */,
+				DVC100105 /* DeviceBridgeCoordinator.swift */,
+				DVC100106 /* DeviceViews.swift */,
+			);
+			path = Device;
 			sourceTree = "<group>";
 		};
 		A1B2C3D4E5F6071829000009 /* Session */ = {
@@ -462,7 +510,9 @@
 		A1B2C3D4E5F6071829000900 /* Phone */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */,
 				A1B2C3D4E5F6071829000704 /* PhoneShell.swift */,
+				P7000101 /* ArtifactCenterView.swift */,
 				A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */,
 				A1B2C3D4E5F6071829000706 /* AssistantHome.swift */,
 				A1B2C3D4E5F6071829000707 /* TodayStrip.swift */,
@@ -628,6 +678,8 @@
 				A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */,
 				A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */,
 				A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */,
+				A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */,
+				P7000201 /* ArtifactCenterView.swift in Sources */,
 				A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */,
 				A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */,
 				A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */,
@@ -670,7 +722,16 @@
 				A1B2C3D4E5F6071829000B0C /* ImVoice.swift in Sources */,
 				A1B2C3D4E5F6071829000B0D /* ImRichMedia.swift in Sources */,
 				A1B2C3D4E5F6071829000B0E /* ImShareBridge.swift in Sources */,
+				P6000201 /* AssistantCaptureBridge.swift in Sources */,
+				P6000203 /* JieboAppIntents.swift in Sources */,
+				P6000204 /* AssistantCaptureDrain.swift in Sources */,
 				A1B2C3D4E5F6071829000B0F /* ImRichViews.swift in Sources */,
+				DVC100201 /* DeviceRequestValidation.swift in Sources */,
+				DVC100202 /* AppleEventKitService.swift in Sources */,
+				DVC100203 /* AppleContactsService.swift in Sources */,
+				DVC100204 /* DevicePermissionStore.swift in Sources */,
+				DVC100205 /* DeviceBridgeCoordinator.swift in Sources */,
+				DVC100206 /* DeviceViews.swift in Sources */,
 				A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */,
 				A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */,
 				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
@@ -744,6 +805,7 @@
 				A1B2C3D4E5F6071829000D30 /* ShareViewController.swift in Sources */,
 				A1B2C3D4E5F6071829000D31 /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F6071829000D32 /* ImShareBridge.swift in Sources */,
+				P6000202 /* AssistantCaptureBridge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -806,7 +868,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -858,7 +920,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -881,16 +943,19 @@
 				INFOPLIST_FILE = Jiebo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "按你的请求读取日程，并在你确认后新建或修改 Apple 日历事件";
 				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
+				INFOPLIST_KEY_NSContactsUsageDescription = "仅在你要求时搜索匹配的联系人姓名、电话和邮箱";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "发送当前位置或在附近搜索地点";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "在聊天里按住说话发送语音，或把说话内容转成文字";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "按你的请求读取提醒事项，并在你确认后新建或修改条目";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -923,16 +988,19 @@
 				INFOPLIST_FILE = Jiebo/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "接驳";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "按你的请求读取日程，并在你确认后新建或修改 Apple 日历事件";
 				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
+				INFOPLIST_KEY_NSContactsUsageDescription = "仅在你要求时搜索匹配的联系人姓名、电话和邮箱";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "发送当前位置或在附近搜索地点";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "在聊天里按住说话发送语音，或把说话内容转成文字";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "按你的请求读取提醒事项，并在你确认后新建或修改条目";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -961,7 +1029,7 @@
 				DEVELOPMENT_TEAM = 8M43BMB6J8;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JieboShare/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad.share;
@@ -983,7 +1051,7 @@
 				DEVELOPMENT_TEAM = 8M43BMB6J8;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = JieboShare/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad.share;

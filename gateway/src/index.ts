@@ -17,6 +17,7 @@ import {
 import { bindLoops } from "./loops.ts";
 import { bindBackground } from "./assistant/background.ts";
 import { startAssistant, calendarFeed } from "./assistant/service.ts";
+import { handleAssistantFileIngest, handleAssistantIngest } from "./assistant/captureHttp.ts";
 import { createPublishController } from "./publish.ts";
 import { gatewayEnv, loadDotEnv } from "./config.ts";
 import { log } from "./log.ts";
@@ -29,9 +30,14 @@ import { listModels } from "./chat/models.ts";
 import { healthPayload } from "./http/health.ts";
 import { handleImMedia, handleImSend, handleImUpload, handleImUploadAndSend } from "./im/http.ts";
 import { imRuntime } from "./im/runtime.ts";
+import { bindHeadlessRunHost } from "./collab/headless.ts";
+import { bindCollabCoordinator } from "./collab/coordinator.ts";
+import { startCollabRuntime } from "./collab/runtime.ts";
+import { uiSmokeCollabPrompt } from "./collab/uiSmokeFixture.ts";
 import { proxyUpgrade, proxyWeb } from "./http/proxy.ts";
 import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
+import { deviceRegistry } from "./device/registry.ts";
 
 loadDotEnv([resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]);
 
@@ -170,6 +176,22 @@ const httpServer = createServer((req, res) => {
     });
     return;
   }
+  if (url.pathname === "/upload/assistant/ingest") {
+    void handleAssistantIngest(req, res).catch((err) => {
+      log.error("assistant ingest", err instanceof Error ? err.message : err);
+      if (!res.headersSent)
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "保存失败" }));
+    });
+    return;
+  }
+  if (url.pathname === "/upload/assistant/ingest-file") {
+    void handleAssistantFileIngest(req, res).catch((err) => {
+      log.error("assistant file ingest", err instanceof Error ? err.message : err);
+      if (!res.headersSent)
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "保存失败" }));
+    });
+    return;
+  }
   if (url.pathname === "/upload/im/send") {
     void handleImUploadAndSend(req, res, url).catch((err) => {
       log.error("im upload-and-send", err instanceof Error ? err.message : err);
@@ -245,6 +267,17 @@ bindBackground({
   sandbox: (tenantId) => sandboxEnabledForTenant(getTenant(tenantId)),
 });
 
+const uiSmokeCollabFixture = gatewayEnv.cursorApiKey() === "ui-smoke-collab-fixture";
+bindHeadlessRunHost(
+  uiSmokeCollabFixture
+    ? { apiKey: () => "ui-smoke-collab-fixture", prompt: uiSmokeCollabPrompt }
+    : { apiKey: () => gatewayEnv.cursorApiKey(), create: (options) => Agent.create(options) },
+);
+bindCollabCoordinator({
+  apiKey: () => (uiSmokeCollabFixture ? "ui-smoke-collab-fixture" : gatewayEnv.cursorApiKey()),
+  prompt: uiSmokeCollabFixture ? uiSmokeCollabPrompt : (message, options) => Agent.prompt(message, options),
+});
+
 startAssistant({
   tenants: () => allTenants(),
   publish: publishLoop,
@@ -257,7 +290,10 @@ startAssistant({
   },
   appUrl: () => "./",
   imBadge: (tenantId) => imRuntime().service.badge(tenantId),
+  deviceInvoke: (tenant, input) => deviceRegistry.invoke(tenant, input),
 });
+
+startCollabRuntime();
 
 httpServer.listen(PORT, gatewayHost(), () => {
   publish.boot();

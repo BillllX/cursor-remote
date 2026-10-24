@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -104,13 +104,44 @@ describe("工作区 Agent 映射生命周期", () => {
     const t = tenant();
     const from = workspace(t, "before");
     const opened = openWorkspaceAgent(t, from)!;
+    const workspaceId = readWorkspaceAgentFile(t).items.before.workspaceId;
     const sock = fakeSocket();
     const conn = { cwd: t.workspaceRoot } as never;
     await renameWorkspace(sock.ws, t, conn, from, "after");
     const mapped = readWorkspaceAgentFile(t).items.after;
     assert.equal(mapped.mainChatId, opened.chatId);
+    assert.equal(mapped.workspaceId, workspaceId);
     const chat = t.disk.chats.find((row) => (row as { id?: string }).id === opened.chatId) as { cwd?: string };
     assert.equal(chat.cwd, join(t.workspaceRoot, "after"));
+  });
+
+  test("v1 注册表首次读取原子迁移到 v2，并为现有目录生成稳定 workspaceId", () => {
+    const t = tenant();
+    const path = workspace(t, "legacy");
+    writeFileSync(
+      join(t.stateDir, "workspace-agent-chats.json"),
+      JSON.stringify({
+        version: 1,
+        items: {
+          legacy: {
+            path,
+            displayName: "旧 Agent",
+            lastReadSeq: 1,
+            unread: 2,
+            lastActivityAt: 3,
+            lastFinishedSeq: 4,
+          },
+        },
+      }),
+    );
+    const first = readWorkspaceAgentFile(t);
+    const second = readWorkspaceAgentFile(t);
+    assert.equal(first.version, 2);
+    assert.match(first.items.legacy.workspaceId, /^wsa_[0-9a-f-]{36}$/);
+    assert.equal(second.items.legacy.workspaceId, first.items.legacy.workspaceId);
+    const disk = JSON.parse(readFileSync(join(t.stateDir, "workspace-agent-chats.json"), "utf8"));
+    assert.equal(disk.version, 2);
+    assert.equal(disk.items.legacy.workspaceId, first.items.legacy.workspaceId);
   });
 
   test("删除空主会话时目录、映射和会话墓碑一起清理", () => {
@@ -228,6 +259,7 @@ describe("工作区 Agent 未读、头像与分页", () => {
 
   test("frame 裁剪后 more/cursor 可继续", () => {
     const row = (name: string): WorkspaceAgentRow => ({
+      workspaceId: `wsa_00000000-0000-4000-8000-${name.padEnd(12, "0")}`,
       path: `/workspace/${name}/${"x".repeat(300)}`,
       directoryName: name,
       displayName: name,

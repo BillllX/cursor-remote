@@ -45,10 +45,25 @@
     "slim_chats"
     "file_changed"
     "canvas_versions"
+    "device_bridge_v1"
   ]
 )
 
-## server[1] workspaces #1
+## server[1] device_invoke #1
+.deviceInvoke(DeviceInvoke(
+  reqId: "dev-req-01"
+  op: "calendar_event_upsert"
+  params: JSON {"end": "2026-10-24T10:00:00+08:00", "start": "2026-10-24T09:00:00+08:00", "title": "项目评审"}
+  timeoutMs: 120000
+  idempotencyKey: "idem-calendar-01"
+  approval: DeviceApproval(
+    summary: "新建日历事件"
+    risk: "将写入 Apple 日历"
+    requiresConfirmation: true
+  )
+))
+
+## server[2] workspaces #1
 .workspaces(
   root: "/workspace/demo"
   items: [
@@ -65,53 +80,53 @@
   ]
 )
 
-## server[2] workspace_created #1
+## server[3] workspace_created #1
 .workspaceCreated(
   path: "/workspace/demo/slides"
   name: "slides"
 )
 
-## server[3] workspace_renamed #1
+## server[4] workspace_renamed #1
 .workspaceRenamed(
   from: "/workspace/demo/slides"
   path: "/workspace/demo/talks"
   name: "talks"
 )
 
-## server[4] workspace_removed #1
+## server[5] workspace_removed #1
 .workspaceRemoved(
   path: "/workspace/demo/old"
   name: "old"
   mode: "deleted"
 )
 
-## server[5] session #1
+## server[6] session #1
 .session(
   chatId: "c-7f3a9e21"
   agentId: "agent-4d2c8b6a-0e1f"
   cwd: "/workspace/demo/notes"
 )
 
-## server[6] run_meta #1
+## server[7] run_meta #1
 .runMeta(
   chatId: "c-7f3a9e21"
   model: "claude-4.6-sonnet"
   mode: .plan
 )
 
-## server[7] text-delta #1
+## server[8] text-delta #1
 .textDelta(
   chatId: "c-7f3a9e21"
   text: "已修好：路由守卫漏了 await。"
 )
 
-## server[8] thinking-delta #1
+## server[9] thinking-delta #1
 .thinkingDelta(
   chatId: "c-7f3a9e21"
   text: "先看路由守卫"
 )
 
-## server[9] tool-started #1
+## server[10] tool-started #1
 .toolStarted(
   chatId: "c-7f3a9e21"
   callId: "call-r1"
@@ -123,7 +138,7 @@
   at: 6
 )
 
-## server[10] tool-completed #1
+## server[11] tool-completed #1
 .toolCompleted(
   chatId: "c-7f3a9e21"
   callId: "call-r1"
@@ -135,39 +150,39 @@
   model: "composer-2.5"
 )
 
-## server[11] task #1
+## server[12] task #1
 .task(
   chatId: "c-7f3a9e21"
   text: "检查路由守卫"
 )
 
-## server[12] status #1
+## server[13] status #1
 .status(
   chatId: "c-7f3a9e21"
   status: "QUEUED"
   message: "同时跑的任务已满，排队中"
 )
 
-## server[13] status #2
+## server[14] status #2
 .status(
   chatId: nil
   status: "IDLE"
   message: nil
 )
 
-## server[14] error #1
+## server[15] error #1
 .error(
   chatId: "c-7f3a9e21"
   message: "模型暂时不可用，请稍后重试"
 )
 
-## server[15] error #2
+## server[16] error #2
 .error(
   chatId: nil
   message: "未登录"
 )
 
-## server[16] approval #1
+## server[17] approval #1
 .approval(
   chatId: "c-7f3a9e21"
   callId: "call-w1"
@@ -175,17 +190,17 @@
   args: JSON {"contents": "# 讲稿", "path": "slides.md"}
 )
 
-## server[17] done #1
+## server[18] done #1
 .done(
   chatId: "c-7f3a9e21"
   status: "error"
   durationMs: 12345
 )
 
-## server[18] policy #1
+## server[19] policy #1
 .ignored("policy")
 
-## server[19] files #1
+## server[20] files #1
 .files(
   query: "login"
   paths: [
@@ -201,7 +216,7 @@
   ]
 )
 
-## server[20] search_hits #1
+## server[21] search_hits #1
 .searchHits(
   query: "await guard"
   hits: [
@@ -215,7 +230,7 @@
   truncated: true
 )
 
-## server[21] file_content #1
+## server[22] file_content #1
 .fileContent(
   path: "src/login.ts"
   chatId: "c-7f3a9e21"
@@ -235,7 +250,7 @@
   sha: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
 )
 
-## server[22] turn_files #1
+## server[23] turn_files #1
 .turnFiles(
   chatId: "c-7f3a9e21"
   turnId: "t-1739000000000-k2"
@@ -267,29 +282,29 @@
   ]
 )
 
-## server[23] file_changed #1
+## server[24] file_changed #1
 .fileChanged(
   chatId: "c-7f3a9e21"
   path: "canvases/dashboard.canvas.tsx"
 )
 
-## server[24] canvas_versions #1
+## server[25] canvas_versions #1
 .ignored("canvas_versions")
 
-## server[25] canvas_published #1
+## server[26] canvas_published #1
 .ignored("canvas_published")
 
-## server[26] canvas_restored #1
+## server[27] canvas_restored #1
 .ignored("canvas_restored")
 
-## server[27] file_written #1
+## server[28] file_written #1
 .fileWritten(
   path: "notes/todo.md"
   chatId: "c-7f3a9e21"
   error: "磁盘已满"
 )
 
-## server[28] file_uploaded #1
+## server[29] file_uploaded #1
 .fileUploaded(
   path: ".cursor-remote/uploads/截图.png"
   chatId: "c-7f3a9e21"
@@ -299,10 +314,10 @@
   id: "up-3"
 )
 
-## server[29] fs_done #1
+## server[30] fs_done #1
 .ignored("fs_done")
 
-## server[30] stored_state #1
+## server[31] stored_state #1
 .storedState(
   chats: [
     JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
@@ -317,12 +332,12 @@
   ]
 )
 
-## server[31] stored_state_deferred #1
+## server[32] stored_state_deferred #1
 .storedStateDeferred(
   rev: 41
 )
 
-## server[32] sync_ack #1
+## server[33] sync_ack #1
 .syncAck(
   rev: 42
   chatRevs: [
@@ -332,7 +347,7 @@
   truncated: true
 )
 
-## server[33] sync_ack #2
+## server[34] sync_ack #2
 .syncAck(
   rev: 43
   chatRevs: [
@@ -342,7 +357,7 @@
   truncated: false
 )
 
-## server[34] stored_digest #1
+## server[35] stored_digest #1
 .storedDigest(
   rev: 44
   deletedIds: [
@@ -354,7 +369,7 @@
   rejected: false
 )
 
-## server[35] stored_digest #2
+## server[36] stored_digest #2
 .storedDigest(
   rev: 45
   deletedIds: []
@@ -364,13 +379,13 @@
   rejected: true
 )
 
-## server[36] stored_chat #1
+## server[37] stored_chat #1
 .storedChat(
   chat: JSON {"cwd": "/workspace/demo/notes", "id": "c-7f3a9e21", "mode": "agent", "model": "composer-2.5", "preview": "已修好：路由守卫漏了 await。", "segHashes": ["5d41402abc4b2a76b9719d911017c592aaaaaaaa"], "title": "修登录", "updatedAt": 1739000009000}
   rev: 44
 )
 
-## server[37] chat_turns #1
+## server[38] chat_turns #1
 .chatTurns(
   chatId: "c-7f3a9e21"
   turns: [
@@ -381,19 +396,19 @@
   nonce: 3
 )
 
-## server[38] auth #1
+## server[39] auth #1
 .auth(
   ok: true
   message: "已登录"
 )
 
-## server[39] auth #2
+## server[40] auth #2
 .auth(
   ok: false
   message: "口令无效"
 )
 
-## server[40] tool-output #1
+## server[41] tool-output #1
 .toolOutput(
   chatId: "c-7f3a9e21"
   callId: "call-sh1"
@@ -403,7 +418,7 @@
   stderr: nil
 )
 
-## server[41] tool-output #2
+## server[42] tool-output #2
 .toolOutput(
   chatId: "c-7f3a9e21"
   callId: "call-sh1"
@@ -413,7 +428,7 @@
   stderr: "1 warning\n"
 )
 
-## server[42] history #1
+## server[43] history #1
 .history(
   chatId: "c-7f3a9e21"
   turns: [
@@ -421,7 +436,7 @@
   ]
 )
 
-## server[43] run_snapshot #1
+## server[44] run_snapshot #1
 .runSnapshot(
   chatId: "c-7f3a9e21"
   turnId: "t-1739000000000-k2"
@@ -444,7 +459,7 @@
   clipped: true
 )
 
-## server[44] undone #1
+## server[45] undone #1
 .undone(
   chatId: "c-7f3a9e21"
   paths: [
@@ -453,7 +468,7 @@
   error: "部分文件已被改动"
 )
 
-## server[45] checkpoints #1
+## server[46] checkpoints #1
 .checkpoints(
   chatId: "c-7f3a9e21"
   items: [
@@ -465,7 +480,7 @@
   ]
 )
 
-## server[46] restored #1
+## server[47] restored #1
 .restored(
   chatId: "c-7f3a9e21"
   checkpointId: "cp-2"
@@ -474,13 +489,13 @@
   silent: true
 )
 
-## server[47] chat_title #1
+## server[48] chat_title #1
 .chatTitle(
   chatId: "c-7f3a9e21"
   title: "修登录白屏"
 )
 
-## server[48] admin_stats #1
+## server[49] admin_stats #1
 .adminStats(
   tenants: [
     AdminTenantStats(
@@ -528,7 +543,7 @@
   )
 )
 
-## server[49] loop_state #1
+## server[50] loop_state #1
 .loopState(
   chatId: "c-7f3a9e21"
   status: "running"
@@ -540,7 +555,7 @@
   nextAt: 1739007200000
 )
 
-## server[50] loop_tick #1
+## server[51] loop_tick #1
 .loopTick(
   chatId: "c-7f3a9e21"
   tick: 3
@@ -548,7 +563,7 @@
   summary: "上一轮还没跑完，跳过"
 )
 
-## server[51] assistant_state #1
+## server[52] assistant_state #1
 .assistantState(AssistantState(
   name: "阿驳"
   background: AssistantBackground(
@@ -566,9 +581,20 @@
       body: "新建工作区 notes · 整理讲稿"
       createdAt: 1739000001000
       read: true
+      actionPrompt: "请继续处理这个捕获"
       chatId: "c-child-5b10"
       scheduleId: "s_morning"
       delegationId: "d_q7w3"
+      capture: AssistantCaptureSource(
+        kind: "link"
+        title: "受控来源"
+        url: "https://example.com/captured"
+        path: nil
+        sha: nil
+        mime: nil
+        size: nil
+        intent: "稍后读"
+      )
     )
   ]
   todos: [
@@ -642,6 +668,212 @@
     day: "2026-02-08"
     text: "今天有两个会，一项待办到期。"
   )
+  personalTasks: [
+    PersonalTask(
+      id: "delegation:d_1"
+      kind: "delegation"
+      title: "修登录"
+      phase: "needs_me"
+      status: "waiting_user"
+      priority: "high"
+      attention: "等待你批准"
+      detail: "需要执行 npm test"
+      due: nil
+      dueAt: nil
+      createdAt: 1739000000000
+      updatedAt: 1739000030000
+      sources: [
+        TaskSourceRef(
+          kind: "delegation"
+          id: "d_1"
+        )
+        TaskSourceRef(
+          kind: "run"
+          id: "r_delegate_1"
+        )
+      ]
+      receipt: nil
+      actions: [
+        PersonalTaskAction(
+          label: "取消"
+          op: "delegation_cancel"
+          id: nil
+          delegationId: "d_1"
+          chatId: nil
+          callId: nil
+          allow: nil
+          enabled: nil
+        )
+      ]
+    )
+    PersonalTask(
+      id: "todo:td_1"
+      kind: "todo"
+      title: "周三前回复报价"
+      phase: "completed"
+      status: "done"
+      priority: "low"
+      attention: nil
+      detail: nil
+      due: "2026-02-11"
+      dueAt: nil
+      createdAt: 1739000000000
+      updatedAt: 1739086400000
+      sources: [
+        TaskSourceRef(
+          kind: "todo"
+          id: "td_1"
+        )
+      ]
+      receipt: TaskReceipt(
+        id: "receipt:todo:td_1"
+        status: "done"
+        at: 1739086400000
+        summary: "已回复报价"
+      )
+      actions: [
+        PersonalTaskAction(
+          label: "重新打开"
+          op: "todo_undo"
+          id: "td_1"
+          delegationId: nil
+          chatId: nil
+          callId: nil
+          allow: nil
+          enabled: nil
+        )
+      ]
+    )
+  ]
+  draftCards: [
+    DraftCard(
+      id: "draft:ap_1"
+      kind: "approval"
+      status: "waiting_user"
+      createdAt: 1739000000000
+      expiresAt: 1739086400000
+      preview: DraftPreview(
+        kind: "create_workspace"
+        title: "创建工作区"
+        summary: "在 /workspace/acme 创建 acme"
+        details: [
+          "工具：create_workspace"
+        ]
+      )
+      sources: [
+        TaskSourceRef(
+          kind: "approval"
+          id: "ap_1"
+        )
+      ]
+      actions: [
+        PersonalTaskAction(
+          label: "允许"
+          op: "approval_answer"
+          id: nil
+          delegationId: nil
+          chatId: "c-assistant-01"
+          callId: "call-approve-1"
+          allow: true
+          enabled: nil
+        )
+      ]
+    )
+  ]
+  dayThread: [
+    DayThreadEvent(
+      id: "event:draft:ap_1"
+      kind: "draft"
+      title: "创建工作区"
+      body: "在 /workspace/acme 创建 acme"
+      at: 1739000000000
+      priority: "high"
+      taskId: nil
+      draftCardId: "draft:ap_1"
+      sources: [
+        TaskSourceRef(
+          kind: "approval"
+          id: "ap_1"
+        )
+      ]
+      receipt: nil
+    )
+  ]
+  artifacts: [
+    Artifact(
+      id: "artifact:file-1"
+      title: "slides.md"
+      kind: "file"
+      previewKind: .markdown
+      createdAt: 1739000070000
+      path: "docs/slides.md"
+      url: nil
+      sha: "3b8f0c6a1d2e4f5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+      diffSha: "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b"
+      sourceChatId: "c-child-5b10"
+      sourceTurnId: "t-child-1"
+      provenance: ArtifactProvenance(
+        turnId: "t-child-1"
+        delegationId: "d_q7w3"
+        collabTaskId: nil
+        inboxId: nil
+        captureId: nil
+        label: "委派：整理讲稿"
+      )
+      sourceCitation: nil
+    )
+    Artifact(
+      id: "artifact:link-1"
+      title: "参考资料"
+      kind: "link"
+      previewKind: nil
+      createdAt: 1739000080000
+      path: nil
+      url: "https://example.com/reference"
+      sha: nil
+      diffSha: nil
+      sourceChatId: nil
+      sourceTurnId: nil
+      provenance: ArtifactProvenance(
+        turnId: nil
+        delegationId: nil
+        collabTaskId: nil
+        inboxId: "i_link"
+        captureId: "i_link"
+        label: "助理收件箱"
+      )
+      sourceCitation: ArtifactSourceCitation(
+        url: "https://example.com/reference"
+        title: "参考资料"
+        capturedAt: 1739000080000
+        excerpt: "可靠来源摘录"
+      )
+    )
+    Artifact(
+      id: "artifact:capture-1"
+      title: "位置捕获"
+      kind: "capture"
+      previewKind: .text
+      createdAt: 1739000060000
+      path: nil
+      url: nil
+      sha: nil
+      diffSha: nil
+      sourceChatId: nil
+      sourceTurnId: nil
+      provenance: ArtifactProvenance(
+        turnId: nil
+        delegationId: nil
+        collabTaskId: nil
+        inboxId: "i_location"
+        captureId: "i_location"
+        label: nil
+      )
+      sourceCitation: nil
+    )
+  ]
+  projectionVersion: 1
+  snapshotAt: 1739000090000
   memory: AssistantMemory(
     rev: 12
     coreRev: 3
@@ -676,7 +908,7 @@
   )
 ))
 
-## server[52] assistant_result #1
+## server[53] assistant_result #1
 .assistantResult(
   reqId: "rq-todo-1"
   op: "todo_add"
@@ -685,7 +917,7 @@
   data: JSON {"id": "td_2"}
 )
 
-## server[53] assistant_result #2
+## server[54] assistant_result #2
 .assistantResult(
   reqId: "rq-mc-get-1"
   op: "memory_center_get"
@@ -694,7 +926,7 @@
   data: JSON {"mode": "overview", "overview": {"personal": {"coreBudget": 1200, "coreFieldLines": 2, "coreTokens": 88, "invalidEntries": 1, "paused": false, "validEntries": 3, "workPreferenceBudget": 200, "workPreferenceLines": 2}, "scopes": [{"cold": 0, "done": 1, "error": null, "expired": 0, "health": null, "hot": 3, "id": "personal", "injectionSelected": 0, "injectionSkipped": 0, "kind": "personal", "label": "关于我", "layer": "L0", "memoryCount": 4, "missingRefs": 0, "parentId": null, "pendingCount": 0, "pinned": 0, "ruleFileCount": 0, "tokenBudget": 1200}, {"cold": 2, "done": 1, "error": null, "expired": 1, "health": null, "hot": 8, "id": "notes", "injectionSelected": 6, "injectionSkipped": 4, "kind": "workspace_memory", "label": "notes", "layer": "L2", "memoryCount": 12, "missingRefs": 0, "parentId": null, "pendingCount": 1, "pinned": 1, "ruleFileCount": 2, "tokenBudget": 600}]}}
 )
 
-## server[54] assistant_result #3
+## server[55] assistant_result #3
 .assistantResult(
   reqId: "rq-mc-search-1"
   op: "memory_center_search"
@@ -703,7 +935,7 @@
   data: JSON {"hits": [{"effectiveState": "hot", "id": "m_x1y2z3", "kind": "personal", "layer": "L0", "missingRefs": [], "pinned": true, "reasons": ["text"], "refs": [], "scopeId": "personal", "score": 4.2, "section": "工作偏好", "state": "hot", "text": "代码评审意见用中文写"}], "truncated": false}
 )
 
-## server[55] assistant_result #4
+## server[56] assistant_result #4
 .assistantResult(
   reqId: "rq-mc-activity-1"
   op: "memory_center_activity"
@@ -712,7 +944,7 @@
   data: JSON {"degraded": false, "entries": [{"action": "update", "actor": "user", "after": {"id": "wm_sample", "pinned": false, "revision": "def456", "section": "约定", "state": "hot", "text": "新文案"}, "at": "2026-02-10T12:00:00.000Z", "auditId": "aud_sample1", "before": {"id": "wm_sample", "pinned": false, "revision": "abc123", "section": "约定", "state": "hot", "text": "旧文案"}, "canRestore": true, "itemId": "wm_sample", "scope": "notes"}], "nextCursor": "cursor-sample", "truncated": false}
 )
 
-## server[56] assistant_result #5
+## server[57] assistant_result #5
 .assistantResult(
   reqId: "rq-mc-restore-fail"
   op: "memory_center_restore"
@@ -721,7 +953,7 @@
   data: JSON {"code": "conflict"}
 )
 
-## server[57] assistant_result #6
+## server[58] assistant_result #6
 .assistantResult(
   reqId: "rq-mc-suggestions-1"
   op: "memory_center_suggestions_get"
@@ -730,7 +962,7 @@
   data: JSON {"entries": [{"id": "sug_missing1", "itemIds": ["wm_x"], "kind": "missing_ref", "proposedAction": {"kind": "mark_handled"}, "reason": "文件不在", "revisions": ["rev1"], "risk": "low", "scope": "notes", "summary": "引用缺失"}], "generatedAt": "2026-02-10T08:00:00.000Z", "lastRunAt": "2026-02-10T08:00:00.000Z"}
 )
 
-## server[58] assistant_result #7
+## server[59] assistant_result #7
 .assistantResult(
   reqId: "rq-mc-sug-answer"
   op: "memory_center_suggestion_answer"
@@ -739,7 +971,7 @@
   data: JSON {"id": "sug_missing1", "status": "dismissed"}
 )
 
-## server[59] assistant_result #8
+## server[60] assistant_result #8
 .assistantResult(
   reqId: "rq-mc-mutate-ok"
   op: "memory_center_mutate"
@@ -748,7 +980,7 @@
   data: JSON {"action": "set_state", "detail": {"diagnostics": null, "items": [], "rules": [], "scope": {"cold": 0, "done": 0, "expired": 0, "hot": 1, "id": "notes", "injectionSelected": 1, "injectionSkipped": 0, "kind": "workspace_memory", "label": "notes", "layer": "L2", "memoryCount": 1, "missingRefs": 0, "parentId": null, "pendingCount": 0, "pinned": 0, "ruleFileCount": 0, "tokenBudget": 600}}, "scope": "notes"}
 )
 
-## server[60] assistant_result #9
+## server[61] assistant_result #9
 .assistantResult(
   reqId: "rq-mc-export-1"
   op: "memory_center_export"
@@ -757,7 +989,7 @@
   data: JSON {"bytes": 1024, "relativePath": ".jiebo/memory-export/memory-center-sample.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "summary": {"personalEntries": 2, "rulesInventory": 0, "scopes": ["personal", "notes"], "workspaceScopes": 1}}
 )
 
-## server[61] assistant_result #10
+## server[62] assistant_result #10
 .assistantResult(
   reqId: "rq-mc-import-preview"
   op: "memory_center_import_preview"
@@ -766,7 +998,7 @@
   data: JSON {"changes": [], "expiresAt": "2026-10-18T13:00:00.000Z", "planId": "mcplan_sample1", "snapshotSummary": {"bytes": 512, "checksum": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "exportedAt": "2026-10-18T12:00:00.000Z", "personalEntryCount": 0, "rulesCount": 0, "schemaVersion": 1, "scopeCount": 1}, "warnings": [{"code": "rules_changed", "message": "规则只读。"}]}
 )
 
-## server[62] assistant_result #11
+## server[63] assistant_result #11
 .assistantResult(
   reqId: "rq-mc-import-apply"
   op: "memory_center_import_apply"
@@ -775,7 +1007,7 @@
   data: JSON {"canRollback": true, "importId": "mcimp_sample1", "summary": {"applied": 1, "conflictsResolved": 0, "skipped": 0}}
 )
 
-## server[63] assistant_result #12
+## server[64] assistant_result #12
 .assistantResult(
   reqId: "rq-mc-import-rollback"
   op: "memory_center_import_rollback"
@@ -784,7 +1016,7 @@
   data: JSON {"importId": "mcimp_sample1", "status": "rolled_back"}
 )
 
-## server[64] assistant_result #13
+## server[65] assistant_result #13
 .assistantResult(
   reqId: "rq-mc-export-fail"
   op: "memory_center_export"
@@ -793,7 +1025,7 @@
   data: JSON {"code": "invalid_scope"}
 )
 
-## server[65] assistant_result #14
+## server[66] assistant_result #14
 .assistantResult(
   reqId: "rq-mc-import-preview-fail"
   op: "memory_center_import_preview"
@@ -802,7 +1034,7 @@
   data: JSON {"code": "invalid_path"}
 )
 
-## server[66] assistant_result #15
+## server[67] assistant_result #15
 .assistantResult(
   reqId: "rq-mc-import-apply-fail"
   op: "memory_center_import_apply"
@@ -811,7 +1043,7 @@
   data: JSON {"code": "plan_not_found"}
 )
 
-## server[67] assistant_result #16
+## server[68] assistant_result #16
 .assistantResult(
   reqId: "rq-mc-import-rollback-fail"
   op: "memory_center_import_rollback"
@@ -820,7 +1052,7 @@
   data: JSON {"code": "not_found"}
 )
 
-## server[68] inbox_item #1
+## server[69] inbox_item #1
 .inboxItem(AssistantInboxItem(
   id: "i_k8f2m1"
   kind: "approval"
@@ -828,12 +1060,23 @@
   body: "新建工作区 notes · 整理讲稿"
   createdAt: 1739000001000
   read: true
+  actionPrompt: "请继续处理这个捕获"
   chatId: "c-child-5b10"
   scheduleId: "s_morning"
   delegationId: "d_q7w3"
+  capture: AssistantCaptureSource(
+    kind: "link"
+    title: "受控来源"
+    url: "https://example.com/captured"
+    path: nil
+    sha: nil
+    mime: nil
+    size: nil
+    intent: "稍后读"
+  )
 ))
 
-## server[69] delegation_state #1
+## server[70] delegation_state #1
 .delegationState(
   delegation: AssistantDelegation(
     id: "d_q7w3"
@@ -860,7 +1103,7 @@
   )
 )
 
-## server[70] memory_written #1
+## server[71] memory_written #1
 .memoryWritten(
   chatId: "c-assistant-01"
   entry: AssistantMemoryEntry(
@@ -879,10 +1122,10 @@
   )
 )
 
-## server[71] pong #1
+## server[72] pong #1
 .pong
 
-## server[72] im_contacts #1
+## server[73] im_contacts #1
 .im(.contacts(
   me: ImMe(
     id: "alice"
@@ -908,7 +1151,16 @@
   )
 ))
 
-## server[73] im_list #1
+## server[74] im_group_created #1
+.ignored("im_group_created")
+
+## server[75] collab_state #1
+.ignored("collab_state")
+
+## server[76] collab_result #1
+.ignored("collab_result")
+
+## server[77] im_list #1
 .im(.list(
   convs: [
     ImConvRow(
@@ -951,7 +1203,7 @@
   cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ"
 ))
 
-## server[74] im_history #1
+## server[78] im_history #1
 .im(.history(
   convId: "dm~alice~bob-2"
   messages: [
@@ -1078,7 +1330,7 @@
   after: 10
 ))
 
-## server[75] im_ack #1
+## server[79] im_ack #1
 .im(.ack(
   clientId: "c-ios-1739000000000-1"
   convId: "dm~alice~bob-2"
@@ -1087,7 +1339,7 @@
   rejected: true
 ))
 
-## server[76] im_message #1
+## server[80] im_message #1
 .im(.message(
   .0: ImMessage(
     convId: "dm~alice~bob-2"
@@ -1108,7 +1360,7 @@
   unread: 2
 ))
 
-## server[77] im_update #1
+## server[81] im_update #1
 .im(.update(ImUpdate(
   what: "settings"
   convId: "dm~alice~bob-2"
@@ -1137,14 +1389,14 @@
   unread: 1
 )))
 
-## server[78] im_error #1
+## server[82] im_error #1
 .im(.error(
   clientId: "c-ios-1739000000000-1"
   code: "rate_limited"
   message: "发得太快了，稍等一会儿再发"
 ))
 
-## server[79] workspace_agents #1
+## server[83] workspace_agents #1
 .workspaceAgents(
   items: [
     WorkspaceAgentItem(
@@ -1170,13 +1422,13 @@
   cursor: "notes"
 )
 
-## server[80] workspace_agent_opened #1
+## server[84] workspace_agent_opened #1
 .workspaceAgentOpened(
   path: "/workspace/demo/notes"
   chatId: "c-7f3a9e21"
 )
 
-## server[81] workspace_agent_update #1
+## server[85] workspace_agent_update #1
 .workspaceAgentUpdate(
   chatId: "c-7f3a9e21"
   unread: 0

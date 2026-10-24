@@ -374,4 +374,6 @@ extension GatewayConfig {
     /// 放在 /upload 前缀下，沿用线上已经开放给网关的反向代理路径。
     static var imHTTPSendURL: URL? { resolveHTTP("/upload/im/send-json") }
     static var imHTTPUploadAndSendURL: URL? { resolveHTTP("/upload/im/send") }
+    static var assistantIngestURL: URL? { resolveHTTP("/upload/assistant/ingest") }
+    static var assistantUploadURL: URL? { resolveHTTP("/upload/assistant/ingest-file") }
 }

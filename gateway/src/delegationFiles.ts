@@ -54,6 +54,7 @@ export function attachDelegatedFiles(
 ): { chatId: string; turnId: string; files: TurnFile[] } | null {
   if (!files.length || !childSlot.delegationId || !childTurnId) return null;
   const delegation = getDelegation(tenant, childSlot.delegationId);
+  if (delegation?.notifyPolicy === "collab_only") return null;
   const chatId = delegation?.parentChatId || "";
   const turnId = delegation?.parentTurnId || "";
   if (!chatId || !turnId) return null;

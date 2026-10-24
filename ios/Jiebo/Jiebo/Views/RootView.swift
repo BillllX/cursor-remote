@@ -43,8 +43,7 @@ struct WorkbenchView: View {
     var body: some View {
         Group {
             if UIDevice.current.userInterfaceIdiom == .phone {
-                // iPhone：纯个人助理（见 docs/iphone-assistant-first.md）
-                PhoneShell()
+                PhoneTabShell()
             } else if sizeClass == .compact {
                 PhoneWorkbench() // iPad 窄窗保持原样
             } else {
@@ -258,7 +257,11 @@ struct CollapsedSidebarRail: View {
             NavigationStack {
                 PhoneSettingsScreen()
                     .navigationDestination(for: PhoneRoute.self) { route in
-                        if route == .memory { AssistantMemoryScreen() }
+                        switch route {
+                        case .memory: AssistantMemoryScreen()
+                        case .connections: DeviceConnectionsScreen()
+                        default: EmptyView()
+                        }
                     }
             }
         }

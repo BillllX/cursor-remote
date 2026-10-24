@@ -102,6 +102,12 @@ npm workspaces，三端共用 `shared/`。
 | `chat/` | 回合编排：runner、agent、prompt、finish、history、title、review、models，以及工具拦截 tools / shellWrites |
 | `native/` | 自研 Agent：loop、adapters（openai / anthropic / xml）、tools（fs / shell / task）、mcp、上下文压缩、路径围栏 confine |
 | `assistant/` | 个人助理：收件箱、委派子会话、个人记忆、工作区记忆（`.jiebo/memory.md`）、日程待办、cron、后台作业、APNs 与 Web Push |
+
+### 产物投影
+
+`assistant_get` 的 `AssistantState.artifacts` 是只读派生数据，不是新的事实源：`assistant/artifactProjection.ts` 每次从当前租户既有会话的 `turn.files`、委派记录和 Share Assistant 收件箱的结构化 `capture` 字段构建，按时间和稳定 ID确定排序，最多返回 200 条；不写 `artifacts.json` 一类索引。委派文件以 `sourceChatId + sourceTurnId + path + sha/diffSha` 去重，文件只暴露工作区相对路径，绝对路径和越界路径直接丢弃；链接只接受捕获入口已校验并持久化的 HTTP(S) URL，不从收件箱正文或 actionPrompt 反解析，也不投影聊天正文、令牌或委派任务正文。
+
+iPhone 从小驳菜单进入「产物中心」，仍在现有小驳导航栈内，不增加主 Tab。文件复用 `openTurnFile` / `PreviewPanelView`，链接走系统 `Link`；「让小驳继续处理」会带相对路径或安全 URL 和来源标签，固定提交到助理主会话，并在提交后恢复用户原草稿，避免串到工作区会话。
 | `bindings/` | 把 Loop 和委派接到宿主运行时 |
 | `runtime/` | `GatewayState`：连接、槽位、取消、审批等待、环境缓存 |
 | `sync/` | `storedState.ts`（状态摘要与下发）、`transcript.ts`（运行中落盘） |

@@ -12,6 +12,11 @@ export type Delegation = {
   title: string;
   task: string;
   mode: "foreground" | "background";
+  /** 协作任务只投 Collab Event，不得进入助理 Inbox/APNs 或父回合附件。 */
+  notifyPolicy?: "default" | "collab_only";
+  workspaceId?: string;
+  workspaceKeyAtDispatch?: string;
+  collabTaskId?: string;
   status: DelegationStatus;
   createdAt: number;
   endedAt?: number;
@@ -40,6 +45,26 @@ export function createDelegation(ref: TenantRef, input: Omit<Delegation, "id" | 
   return item;
 }
 
+/** 确定性 id 的委派按 id/childChatId upsert，effect 重放不会重复创建。 */
+export function createDelegationRecord(
+  ref: TenantRef,
+  input: Omit<Delegation, "status" | "createdAt">,
+) {
+  const data = readJson<DelegationsFile>(file(ref), { items: [] });
+  const known = data.items.find((item) => item.id === input.id || item.childChatId === input.childChatId);
+  if (known) return known;
+  const item: Delegation = {
+    ...input,
+    title: clip(input.title, 40),
+    task: clip(input.task, 8000),
+    status: "running",
+    createdAt: Date.now(),
+  };
+  data.items = [...data.items, item].slice(-200);
+  writeJson(file(ref), data);
+  return item;
+}
+
 export function updateDelegation(ref: TenantRef, id: string, patch: Partial<Pick<Delegation, "status" | "result" | "endedAt">>) {
   const data = readJson<DelegationsFile>(file(ref), { items: [] });
   const item = data.items.find((row) => row.id === id);
@@ -60,7 +85,11 @@ export function activeDelegationFor(ref: TenantRef, workspace: string) {
 /** 网关重启：在跑的委派记为失败（运行已丢），由调用方发收件箱 */
 export function recoverDelegations(ref: TenantRef) {
   const data = readJson<DelegationsFile>(file(ref), { items: [] });
-  const stale = data.items.filter((item) => item.status === "running" || item.status === "awaiting");
+  // collab_only 由 Collab Engine 按 publishing/effect 状态恢复，不能在这里误判并写助理旁路。
+  const stale = data.items.filter(
+    (item) =>
+      item.notifyPolicy !== "collab_only" && (item.status === "running" || item.status === "awaiting"),
+  );
   for (const item of stale) {
     item.status = "failed";
     item.endedAt = Date.now();

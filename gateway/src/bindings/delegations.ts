@@ -160,13 +160,14 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
 
   const finish = (ok: boolean, text: string) => {
     settleApproval(tenant, childChatId);
-    flushWorkspaceProposals(tenant, childChatId);
+    if (record.notifyPolicy !== "collab_only") flushWorkspaceProposals(tenant, childChatId);
     const done = updateDelegation(tenant, record.id, {
       status: ok ? "done" : "failed",
       result: text,
       endedAt: Date.now(),
     });
     if (done) publishDelegation(tenant, done);
+    if (record.notifyPolicy === "collab_only") return;
     postInbox(tenant, {
       kind: "delegation",
       title: `委派${ok ? "完成" : "失败"}：${title}`,

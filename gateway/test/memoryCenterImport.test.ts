@@ -1,13 +1,20 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, describe, test } from "node:test";
 import { saveMemory } from "../src/assistant/memory.ts";
-import { buildMemoryCenterSnapshotV1, finalizeSnapshotChecksums, memoryCenterExport } from "../src/assistant/memoryCenterExport.ts";
+import {
+  buildMemoryCenterSnapshotV1,
+  finalizeSnapshotChecksums,
+  memoryCenterExport,
+} from "../src/assistant/memoryCenterExport.ts";
 import { setMemoryCenterExportScopeReaderForTest } from "../src/assistant/memoryCenterExportScopeReader.ts";
 import * as scopedRead from "../src/assistant/scopedRead.ts";
-import { memoryCenterImportPreview, buildImportPreviewFromSnapshot } from "../src/assistant/memoryCenterImportPreview.ts";
+import {
+  memoryCenterImportPreview,
+  buildImportPreviewFromSnapshot,
+} from "../src/assistant/memoryCenterImportPreview.ts";
 import { memoryCenterImportApply } from "../src/assistant/memoryCenterImportApply.ts";
 import { memoryCenterImportRollback } from "../src/assistant/memoryCenterImportRollback.ts";
 import { stableSnapshotStringify, validateMemoryCenterSnapshotV1 } from "../../shared/memoryCenterSnapshot.ts";
@@ -29,10 +36,7 @@ describe("memory center import/export", () => {
     const base = join(root, "exp");
     const ws = join(base, "notes");
     mkdirSync(join(ws, ".jiebo"), { recursive: true });
-    writeFileSync(
-      join(ws, ".jiebo/memory.md"),
-      "## 约定\n- hello <!-- id=wm_test1 -->\n",
-    );
+    writeFileSync(join(ws, ".jiebo/memory.md"), "## 约定\n- hello <!-- id=wm_test1 -->\n");
     const t = tenant("exp", base);
     saveMemory(t, { topic: "测试", text: "导出条目", basis: "user_said" }, "page");
     setMemoryCenterExportScopeReaderForTest(scopedRead.readFileAtScope);
@@ -142,7 +146,6 @@ describe("memory center import/export", () => {
     const link = join(base, ".jiebo", "memory-export");
     mkdirSync(join(base, ".jiebo"), { recursive: true });
     try {
-      const { symlinkSync } = require("node:fs");
       symlinkSync(realExport, link);
     } catch {
       return;

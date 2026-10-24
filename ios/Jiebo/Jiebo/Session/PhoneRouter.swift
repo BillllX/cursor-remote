@@ -4,11 +4,22 @@ import UIKit
 /// 从助理页 push 出去的页面
 enum PhoneRoute: Hashable {
     case inbox
-    case inboxItem(String)      // AssistantInboxItem.id
     case todayManage
     case delegations
+    case artifacts
     case settings
     case memory                 // 只从设置页 push 进来，不直接挂在菜单上
+    case connections            // 只从设置页进入
+}
+
+enum PhoneTab: Hashable {
+    case assistant
+    case inbox
+    case messages
+}
+
+enum InboxRoute: Hashable {
+    case item(String)           // AssistantInboxItem.id
 }
 
 struct DelegationRef: Identifiable, Hashable {
@@ -28,16 +39,19 @@ extension EnvironmentValues {
     }
 }
 
-/// iPhone 纯助理壳的路由状态。只在 PhoneShell 里创建并 `.environment(router)` 下发，不放进 ChatStore。
+/// iPhone 三个一级空间的路由状态。只在 PhoneTabShell 创建并下发，不放进 ChatStore。
 @Observable
 @MainActor
 final class PhoneRouter {
+    var selectedTab: PhoneTab = .assistant
+    /// 小驳空间的导航栈；待处理使用独立的 inboxPath。
     var path: [PhoneRoute] = []
+    var inboxPath: [InboxRoute] = []
     var menuOpen = false
     var hubOpen = false
     /// 打开今日面板后滚到的锚点："todos" / "schedules"，nil 不滚
     var hubAnchor: String?
-    /// 正在看的委派详情。sheet 挂在 PhoneShell 上，在任何 push 页上都能弹
+    /// 正在看的委派详情。sheet 挂在 PhoneTabShell 上，三个一级空间都能弹
     var delegationDetail: DelegationRef?
     var bootstrapped = false
 }
@@ -47,11 +61,17 @@ extension PhoneRouter {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// 菜单里的条目（含「待处理」）：先收菜单和键盘，再 push（替换整个栈，不叠层）
+    /// 待处理切一级 tab；其它页面回到小驳空间后 push（替换整个栈，不叠层）。
     func go(_ route: PhoneRoute) {
         dismissKeyboard()
         menuOpen = false
         hubOpen = false
+        if route == .inbox {
+            inboxPath = []
+            selectedTab = .inbox
+            return
+        }
+        selectedTab = .assistant
         path = [route]
     }
 
@@ -73,8 +93,15 @@ extension PhoneRouter {
     }
 
     func popToRoot() {
+        selectedTab = .assistant
         path = []
         menuOpen = false
+    }
+
+    func openInboxItem(_ id: String) {
+        dismissKeyboard()
+        selectedTab = .inbox
+        inboxPath.append(.item(id))
     }
 
     /// 收件箱条目 / 推送 / 委派卡等「要打开某个会话」的统一入口。

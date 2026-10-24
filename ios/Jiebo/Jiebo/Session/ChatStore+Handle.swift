@@ -820,6 +820,8 @@ extension ChatStore {
                 assistantState?.memory?.entries.insert(entry, at: 0)
             }
             flash("\(assistantName) 记住了：\(entry.topic.nilIfEmpty ?? String(entry.text.prefix(24)))")
+        case .deviceInvoke(let invoke):
+            deviceInvokeHandler?(invoke)
         case .im(let event):
             imSink?.handle(event)
         case .pong, .ignored:

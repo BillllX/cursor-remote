@@ -1407,7 +1407,14 @@ final class ImStore {
             if $0.recentAt != $1.recentAt { return $0.recentAt > $1.recentAt }
             return $0.nickname.localizedStandardCompare($1.nickname) == .orderedAscending
         }
-        ImShareBridge.save(.init(tenant: tenant, sendURL: send, uploadSendURL: upload, people: people))
+        ImShareBridge.save(.init(
+            tenant: tenant,
+            sendURL: send,
+            uploadSendURL: upload,
+            assistantIngestURL: GatewayConfig.assistantIngestURL?.absoluteString,
+            assistantUploadURL: GatewayConfig.assistantUploadURL?.absoluteString,
+            people: people
+        ))
     }
 
     private func saveTimelineSoon(_ convId: String) {

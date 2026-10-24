@@ -2,8 +2,8 @@
 // 游标是排序键的 base64url(JSON)，表示「排在这一行之后」；对客户端不透明，原样回传即可
 export type ListKey = { pin: boolean; at: number; convId: string };
 
-export function rowKey(row: { pin: boolean; convId: string; last?: { at: number } }): ListKey {
-  return { pin: row.pin, at: row.last?.at ?? 0, convId: row.convId };
+export function rowKey(row: { pin: boolean; convId: string; last?: { at: number }; activityAt?: number }): ListKey {
+  return { pin: row.pin, at: row.last?.at ?? row.activityAt ?? 0, convId: row.convId };
 }
 
 export function compareKeys(a: ListKey, b: ListKey): number {

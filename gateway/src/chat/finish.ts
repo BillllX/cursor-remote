@@ -1,8 +1,10 @@
 // 一轮运行收尾：关闭未结束的工具、本轮文件改动、索引用户消息、工作区轮次记录
 import type { WebSocket } from "ws";
 import type { TurnFile } from "../../../shared/protocol.ts";
+import { getDelegation } from "../assistant/delegations.ts";
 import { noteUserTurn, noteWorkspaceTurnEnd } from "../assistant/service.ts";
 import { attachDelegatedFiles, mergeTurnFiles } from "../delegationFiles.ts";
+import { emitCollabSideEvent } from "../collab/sink.ts";
 import { broadcastFileChanged, broadcastTurnFiles } from "../fileEvents.ts";
 import { slotLog } from "../log.ts";
 import { assistantCwd, chatIdOf, isAssistantChat } from "../runtime/chats.ts";
@@ -151,6 +153,18 @@ function noteWorkspaceTurn(slot: Slot) {
   const tenant = getTenant(slot.tenantId);
   const transcript = slot.transcript;
   if (!tenant || !transcript || isAssistantChat(tenant, slot.chatId)) return;
+  const delegation = slot.delegationId ? getDelegation(tenant, slot.delegationId) : undefined;
+  if (delegation?.notifyPolicy === "collab_only" && delegation.collabTaskId) {
+    void emitCollabSideEvent(tenant, {
+      taskId: delegation.collabTaskId,
+      type: "memory_proposal",
+      payload: {
+        proposalKey: `turn:${transcript.turnId}`,
+        summary: transcript.assistant.slice(0, 1000),
+      },
+    });
+    return;
+  }
   const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as { title?: unknown } | undefined;
   try {
     noteWorkspaceTurnEnd(tenant, {

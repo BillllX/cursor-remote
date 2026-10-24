@@ -206,7 +206,8 @@ export function isMutatingTool(name: string, args: unknown): boolean {
 
 export function toolEscapesWorkspace(cwd: string, name: string, args: unknown): boolean {
   const raw = pathFromTool(args);
-  if (raw && !workspacePath(cwd, raw)) return true;
+  // workspacePath 用 null 同时表示“工作区根本身”和“越界”，根路径必须单独放行。
+  if (raw && resolve(cwd, raw) !== resolve(cwd) && !workspacePath(cwd, raw)) return true;
   if (!/(shell|bash|terminal|command)/i.test(name)) return false;
   const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
   const working = typeof record.working_directory === "string" ? record.working_directory : "";

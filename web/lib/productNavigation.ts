@@ -1,6 +1,7 @@
 /** Web 产品导航与状态的唯一语义表；组件只消费稳定 ID，不自行发明同义图标。 */
 export const PRIMARY_NAV = [
   { id: "assistant", label: "助理", icon: "assistant" },
+  { id: "collab", label: "协作", icon: "collab" },
   { id: "workspace", label: "工作区", icon: "workspace" },
 ] as const;
 
@@ -41,6 +42,9 @@ export const STATUS_LEGEND = {
   normal: { label: "正常", symbol: "✓" },
   running: { label: "运行中", symbol: "◉" },
   attention: { label: "需要处理", symbol: "△" },
+  publishing: { label: "正在发布", symbol: "↥" },
+  succeeded: { label: "已完成", symbol: "✓" },
+  cancelled: { label: "已取消", symbol: "−" },
   error: { label: "错误", symbol: "!" },
   disabled: { label: "未启用", symbol: "○" },
   unread: { label: "未读", symbol: "●" },

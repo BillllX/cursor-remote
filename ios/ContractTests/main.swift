@@ -205,6 +205,7 @@ enum ClientCase: String, CaseIterable {
     case syncChat, truncateTurns, toolReview, loadChats, loadChat, loadState, adminStats, loopStart, loopStop
     case assistantGet, assistantOp
     case imContacts, imList, imHistory, imSend, imRecall, imRead, imSettings, imProfile, imBlock, imPresence
+    case deviceResult, devicePermissionReport
 }
 
 func clientCase(of message: ClientMessage) -> ClientCase {
@@ -261,6 +262,8 @@ func clientCase(of message: ClientMessage) -> ClientCase {
     case .imProfile: return .imProfile
     case .imBlock: return .imBlock
     case .imPresence: return .imPresence
+    case .deviceResult: return .deviceResult
+    case .devicePermissionReport: return .devicePermissionReport
     }
 }
 
@@ -280,6 +283,20 @@ let slimChat: JSONValue = .object([
 func sample(_ which: ClientCase) -> ClientMessage {
     switch which {
     case .hello: return .hello(token: "example-token")
+    case .deviceResult:
+        return .deviceResult(
+            reqId: "dev-req-01",
+            op: "calendar_event_upsert",
+            status: "ok",
+            result: .object(["id": .string("event-42")]),
+            error: nil,
+            externalId: "event-42"
+        )
+    case .devicePermissionReport:
+        return .devicePermissionReport(
+            reqId: "dev-req-01",
+            grants: [.object(["permission": .string("calendar"), "status": .string("authorized"), "canRequest": .bool(false)])]
+        )
     case .setWorkspace: return .setWorkspace(cwd: "/workspace/demo/notes", chatId: chat, create: true)
     case .listWorkspaces: return .listWorkspaces
     case .createWorkspace: return .createWorkspace(name: "slides")
@@ -497,13 +514,83 @@ func checkJSONValue() -> [String] {
     return problems
 }
 
+func checkDeviceRequestValidation() -> [String] {
+    var problems: [String] = []
+    func rejects(_ label: String, _ body: () throws -> Void) {
+        do {
+            try body()
+            problems.append("device validation：\(label) 应拒绝")
+        } catch {}
+    }
+
+    let valid: JSONValue = .object([
+        "start": .string("2026-10-23T12:00:00.123Z"),
+        "end": .string("2027-01-21T12:00:00.123Z"),
+        "limit": .number(50),
+    ])
+    do {
+        let parsed = try DeviceRequestValidator.calendarList(valid)
+        if parsed.limit != 50 || parsed.end.timeIntervalSince(parsed.start) != DeviceRequestValidator.maximumRange {
+            problems.append("device validation：合法 90 天范围或 limit 解析不符")
+        }
+    } catch {
+        problems.append("device validation：合法 ISO 日期被拒绝：\(error)")
+    }
+    rejects("坏日期") {
+        _ = try DeviceRequestValidator.calendarList(.object([
+            "start": .string("2026/10/23"),
+            "end": .string("2026-10-24T12:00:00Z"),
+        ]))
+    }
+    rejects("超过 90 天") {
+        _ = try DeviceRequestValidator.calendarList(.object([
+            "start": .string("2026-01-01T00:00:00Z"),
+            "end": .string("2026-04-02T00:00:01Z"),
+        ]))
+    }
+    rejects("倒置日期") {
+        _ = try DeviceRequestValidator.calendarEvent(.object([
+            "title": .string("评审"),
+            "start": .string("2026-10-24T10:00:00Z"),
+            "end": .string("2026-10-24T09:00:00Z"),
+        ]))
+    }
+    rejects("日历 limit 超限") {
+        _ = try DeviceRequestValidator.calendarList(.object([
+            "start": .string("2026-10-23T12:00:00Z"),
+            "end": .string("2026-10-24T12:00:00Z"),
+            "limit": .number(51),
+        ]))
+    }
+    rejects("联系人 limit 超限") {
+        _ = try DeviceRequestValidator.contactsSearch(.object([
+            "query": .string("张"),
+            "limit": .number(21),
+        ]))
+    }
+    rejects("空联系人查询") {
+        _ = try DeviceRequestValidator.contactsSearch(.object(["query": .string("  ")]))
+    }
+    if DeviceWriteConfirmationPolicy.begin(hasPendingConfirmation: true) != .busy {
+        problems.append("device confirmation：已有确认时必须 busy")
+    }
+    if DeviceWriteConfirmationPolicy.outcome(allowed: false) != .denied {
+        problems.append("device confirmation：拒绝必须映射为 denied")
+    }
+    print("设备桥参数与确认策略：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 func checkProductNavigation() -> [String] {
     var problems: [String] = []
     let navigationKeys = [
-        "assistant", "workspace", "account", "overview", "chats", "files",
+        "assistant", "collab", "workspace", "account", "overview", "chats", "files",
         "search", "git", "memory", "terminal", "loop", "stats",
     ]
-    let statusKeys = ["normal", "running", "attention", "error", "disabled", "unread"]
+    let statusKeys = [
+        "normal", "running", "attention", "publishing", "succeeded", "cancelled",
+        "error", "disabled", "unread",
+    ]
     if NavigationIconId.allCases.map(\.rawValue) != navigationKeys {
         problems.append("product navigation：NavigationIconId 键或顺序不符")
     }
@@ -517,7 +604,7 @@ func checkProductNavigation() -> [String] {
         problems.append("product navigation：状态项缺 SF Symbol 或文案")
     }
     if StatusLegendId.unread.accessibilityLabel(count: 3) != "未读 3"
-        || StatusLegendId.running.accessibilityLabel(count: 3) != "运行中"
+        || StatusLegendId.running.accessibilityLabel(count: 3) != "运行中 3"
     {
         problems.append("product navigation：状态 accessibilityLabel(count:) 不符")
     }
@@ -1274,6 +1361,55 @@ func checkMemoryCenterServerFixtures(_ samples: [JSONValue]) -> [String] {
     return problems
 }
 
+func checkPersonalTaskProjection(_ samples: [JSONValue]) -> [String] {
+    var problems: [String] = []
+    guard let fixture = samples.first(where: { $0["type"]?.string == "assistant_state" }),
+          let state = fixture["state"].flatMap(AssistantState.from)
+    else { return ["personal task：assistant_state fixture 无法解码"] }
+
+    if state.projectionVersion != 1 || state.snapshotAt == nil {
+        problems.append("personal task：projectionVersion/snapshotAt 不符")
+    }
+    if state.personalTasks?.count != 2 || state.draftCards?.count != 1 || state.dayThread?.count != 1 {
+        problems.append("personal task：任务、草稿或 dayThread 数量不符")
+    }
+    if state.artifacts?.count != 3 {
+        problems.append("artifact：file/link/capture 数量不符")
+    } else {
+        let file = state.artifacts?.first(where: { $0.kind == "file" })
+        let link = state.artifacts?.first(where: { $0.kind == "link" })
+        if file?.path != "docs/slides.md" || file?.provenance?.delegationId != "d_q7w3" {
+            problems.append("artifact：文件路径或委派来源解码不符")
+        }
+        if link?.safeURL?.scheme != "https" || link?.sourceCitation?.excerpt != "可靠来源摘录" {
+            problems.append("artifact：安全 URL 或来源引用解码不符")
+        }
+    }
+    let futureJSON: JSONValue = .object([
+        "id": .string("future:1"),
+        "kind": .string("future_task_kind"),
+        "title": .string("未来任务"),
+        "phase": .string("future_phase"),
+        "status": .string("future_status"),
+        "priority": .string("normal"),
+        "createdAt": .number(1),
+        "sources": .array([]),
+    ])
+    let future = PersonalTask.from(futureJSON)
+    if future?.kind != "future_task_kind" || future?.phase != "future_phase" {
+        problems.append("personal task：未知 kind/phase 没有按 String 保留")
+    }
+    let draft = state.draftCards?.first
+    if draft?.preview.kind != "create_workspace" || draft?.preview.summary != "在 /workspace/acme 创建 acme" {
+        problems.append("personal task：approval draft preview 解码不符")
+    }
+    if draft?.actions.first?.op != "approval_answer" || draft?.actions.first?.allow != true {
+        problems.append("personal task：approval draft action 解码不符")
+    }
+    print("Personal task projection fixture：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -1282,7 +1418,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples)
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples)
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

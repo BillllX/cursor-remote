@@ -26,6 +26,7 @@ import { workspaceAgentsMessage } from "../../workspace/agents.ts";
 import { send } from "../send.ts";
 import { cachedModels, listModels } from "../../chat/models.ts";
 import type { MessageOf, WsConnCtx } from "./types.ts";
+import { deviceRegistry } from "../../device/registry.ts";
 
 export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hello">) {
   if (loginBlocked(conn.ip, state.loginHits)) {
@@ -47,7 +48,10 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
     return;
   }
   noteLoginOk(conn.ip, state.loginHits);
-  if (conn.authed) detachConn(conn);
+  if (conn.authed) {
+    deviceRegistry.close(conn);
+    detachConn(conn);
+  }
   // 客户端声明的单条消息接收上限（iOS URLSessionWebSocketTask 约 1MiB）；0 = 不限
   const declared = Number(message.client?.maxMessageBytes) || 0;
   conn.maxMessageBytes = declared > 0 ? Math.min(declared, 8 * 1024 * 1024) : 0;
@@ -56,6 +60,10 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       ? message.client.caps.filter((item): item is string => typeof item === "string")
       : [],
   );
+  conn.deviceId =
+    typeof message.client?.deviceId === "string" && message.client.deviceId.length <= 256
+      ? message.client.deviceId
+      : undefined;
   conn.imForeground = conn.caps.has("im") ? true : undefined;
   bindTenant(conn, tenant);
   usageRec(tenant.id); // P9：建行 + touch lastActiveAt（登录即活动）
@@ -89,10 +97,13 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
         "tool_at",
         "slim_chats",
         "im",
+        "im_group",
+        "im_collab",
         "workspace_agents",
         "workspace_agent_viewing",
         "file_changed",
         "canvas_versions",
+        "device_bridge_v1",
       ],
     });
   };

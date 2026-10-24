@@ -78,6 +78,8 @@ export function imPreviewText(message: Pick<StoredMessage, "kind" | "body">): st
       const body = message.body as ImLocationBody;
       return `[位置] ${body.name || body.address}`;
     }
+    case "collab":
+      return "协作群有新进展";
   }
 }
 

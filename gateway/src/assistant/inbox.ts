@@ -12,10 +12,24 @@ export type InboxItem = {
   read: boolean;
   /** 幂等键：同一个键只写一次（例如调度的单次运行 id） */
   key?: string;
+  /** 点开条目后交给助理的真实输入；只用于尚未处理的外部捕获。 */
+  actionPrompt?: string;
   chatId?: string;
   runId?: string;
   scheduleId?: string;
   delegationId?: string;
+  /** 捕获入口已校验的结构化字段；投影只能读这里，不能从正文反解析 URL。 */
+  capture?: {
+    kind: "text" | "link" | "location" | "file";
+    title?: string;
+    url?: string;
+    path?: string;
+    /** 租户 artifacts/ 中的受控快照；path 只是展示文件名，不是工作区落点。 */
+    sha?: string;
+    mime?: string;
+    size?: number;
+    intent?: string;
+  };
 };
 
 type InboxFile = { items: InboxItem[] };
@@ -38,6 +52,10 @@ function file(ref: TenantRef) {
 
 export function listInbox(ref: TenantRef, limit = 100): InboxItem[] {
   return readJson<InboxFile>(file(ref), { items: [] }).items.slice(-limit).reverse();
+}
+
+export function inboxByKey(ref: TenantRef, key: string): InboxItem | undefined {
+  return readJson<InboxFile>(file(ref), { items: [] }).items.find((item) => item.key === key);
 }
 
 export function postInbox(

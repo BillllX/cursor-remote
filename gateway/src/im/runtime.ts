@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { sendApns } from "../assistant/apns.ts";
 import { assistantBadgeCached } from "../assistant/badge.ts";
+import { assistantName } from "../assistant/service.ts";
 import { log } from "../log.ts";
 import { gatewayState } from "../runtime/state.ts";
 import { allTenants, getTenant, mediaSecret, stateDir } from "../tenants.ts";
@@ -10,8 +11,13 @@ import { reply } from "../ws/frame.ts";
 import { ImService, type ImLiveConn } from "./service.ts";
 import { ImStore } from "./store.ts";
 import { workspaceUnread } from "../workspace/agents.ts";
+import { readWorkspaceAgentFile } from "../workspace/agents.ts";
+import { assistantActorId, workspaceActorId } from "./identity.ts";
 
 export const IM_CAP = "im";
+export const IM_GROUP_CAP = "im_group";
+export const IM_COLLAB_CAP = "im_collab";
+export const hasGroupCaps = (caps: ReadonlySet<string>) => caps.has(IM_GROUP_CAP) && caps.has(IM_COLLAB_CAP);
 
 let instance: { service: ImService; store: ImStore } | null = null;
 
@@ -22,6 +28,7 @@ function* liveConns(): Generator<ImLiveConn> {
       key: ws,
       tenantId: conn.tenant.id,
       foreground: conn.imForeground !== false,
+      groups: hasGroupCaps(conn.caps),
       send: (message) => reply(ws, message),
     };
   }
@@ -51,6 +58,27 @@ export function imRuntime() {
     workspaceBadge: async (tenantId) => {
       const tenant = getTenant(tenantId);
       return tenant ? workspaceUnread(tenant) : 0;
+    },
+    actors: (tenantId) => {
+      const tenant = getTenant(tenantId);
+      if (!tenant) return [];
+      const file = readWorkspaceAgentFile(tenant);
+      return [
+        {
+          kind: "assistant" as const,
+          actorId: assistantActorId(tenantId),
+          ownerTenantId: tenantId,
+          displayName: assistantName(tenant),
+        },
+        ...Object.values(file.items).map((item) => ({
+          kind: "workspace_agent" as const,
+          actorId: workspaceActorId(item.workspaceId),
+          ownerTenantId: tenantId,
+          workspaceId: item.workspaceId,
+          displayName: item.displayName || item.path.split("/").at(-1) || "Workspace Agent",
+          ...(item.avatarBlob ? { avatarBlob: item.avatarBlob } : {}),
+        })),
+      ];
     },
   });
   instance = { service, store };
