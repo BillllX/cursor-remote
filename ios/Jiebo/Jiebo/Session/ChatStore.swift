@@ -391,6 +391,8 @@ final class ChatStore {
         var fallback = false
         /// 段哈希判出的第一个变动位置：acc 至少要覆盖到这里（from <= minFrom）才能接缝
         var minFrom: Int?
+        /// 基线只是首屏尾段：同 id 以服务端正文为准，不要用尾段盖掉服务端终态
+        var displayBase = false
     }
     var bodyRefreshes: [String: BodyRefresh] = [:]
     /// 正在读本机正文缓存的会话（读完前不重复读、不发分页）
@@ -399,6 +401,9 @@ final class ChatStore {
     var cacheCheckedIds = Set<String>()
     /// 冷启动从 list.json 画出来的会话行：只读，不标脏、不上传；首个 stored_state 到达时以服务端为准整份替换
     var cachedOnlyIds = Set<String>()
+    /// 屏幕上的正文来自首屏尾段，还不是某个服务端版本的全文。不写 bodyRevs，也不上传
+    var displayOnlyIds = Set<String>()
+    var tailTasks: [String: Task<Void, Never>] = [:]
     /// stored_digest 发了 load_state、还在等回包：回包的 stored_state 不受 rev 早退，对账完之前先不推
     var stateReloadPending = false
     var bodyCacheTasks: [String: Task<Void, Never>] = [:]

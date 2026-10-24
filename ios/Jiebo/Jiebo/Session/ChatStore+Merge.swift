@@ -318,6 +318,7 @@ extension ChatStore {
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
         if bodySegs[id] != nil, turnsChanged { bodySegs[id] = nil }
         if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }
+        if turnsChanged { scheduleDisplayTail(id) }
         // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
         if id != "boot", !cachedOnlyIds.contains(id) { dirtyChatIds.insert(id) }
         scheduleSync()

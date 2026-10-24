@@ -3,6 +3,8 @@ import Foundation
 /// 会话正文与列表的本机缓存，目录 Caches/JieboCache/<租户>/：
 /// - bodies/<会话>/manifest.json + seg-<i>.json：正文按每段 100 轮切开，追加回合只重写变了的段
 /// - list.json：最近一次服务端状态的会话元数据（不含 turns），冷启动先画侧栏用
+/// 首屏尾段另放 Application Support/JieboChat/<租户>/tails/（系统不会当缓存清掉，已排除备份）：
+/// 只存最近 40 轮已结束的回合，用来先把界面画出来。它不是权威正文，不能当补齐基线，也不能上传。
 /// 读写全部排在同一条后台串行队列上：先排先做，删除不会被更早排队的写入复活。失败一律静默，退回纯网络。
 enum ChatCache {
     /// 本机缓存的会话列表。只读展示：不能标脏、不能上传，服务端状态到达后整份替换
@@ -80,6 +82,96 @@ enum ChatCache {
         queue.async {
             guard let dir = bodyDir(tenant, chatId) else { return }
             try? FileManager.default.removeItem(at: dir)
+            removeTailFile(tenant: tenant, chatId: chatId)
+        }
+    }
+
+    // MARK: 首屏尾段
+
+    static let tailLimit = 40
+    private static let tailFileLimit = 80
+
+    static func loadTail(tenant: String, chatId: String) async -> [Turn]? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readTail(tenant: tenant, chatId: chatId))
+            }
+        }
+    }
+
+    /// turns 是已经去掉正在生成的回合之后的 Turn.json()。调用方保证最多 tailLimit 条
+    static func saveTail(tenant: String, chatId: String, turns: [JSONValue]) {
+        queue.async {
+            writeTail(tenant: tenant, chatId: chatId, rows: turns)
+        }
+    }
+
+    private static func readTail(tenant: String, chatId: String) -> [Turn]? {
+        guard let file = tailFile(tenant, chatId),
+              let data = try? Data(contentsOf: file),
+              let object = (try? JSONValue.parse(data))?.object,
+              object["v"]?.int == 1,
+              object["chatId"]?.string == chatId,
+              let rows = object["turns"]?.array
+        else { return nil }
+        let turns = rows.compactMap(Turn.from)
+        guard !turns.isEmpty, !Turn.hasDuplicateIds(turns) else {
+            try? FileManager.default.removeItem(at: file)
+            return nil
+        }
+        return turns
+    }
+
+    private static func writeTail(tenant: String, chatId: String, rows: [JSONValue]) {
+        guard let file = tailFile(tenant, chatId) else { return }
+        let dir = file.deletingLastPathComponent()
+        let fm = FileManager.default
+        if rows.isEmpty {
+            try? fm.removeItem(at: file)
+            return
+        }
+        let kept = Array(rows.suffix(tailLimit))
+        let object: JSONValue = .object([
+            "v": .number(1),
+            "chatId": .string(chatId),
+            "turns": .array(kept),
+        ])
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            var root = dir.deletingLastPathComponent()
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? root.setResourceValues(values)
+            try encode(object).write(to: file, options: .atomic)
+            var written = file
+            var fileValues = URLResourceValues()
+            fileValues.isExcludedFromBackup = true
+            try? written.setResourceValues(fileValues)
+            pruneTails(dir, keep: file)
+        } catch {
+            try? fm.removeItem(at: file)
+        }
+    }
+
+    private static func removeTailFile(tenant: String, chatId: String) {
+        guard let file = tailFile(tenant, chatId) else { return }
+        try? FileManager.default.removeItem(at: file)
+    }
+
+    /// 尾段只为打开过的会话服务。超过上限按修改时间删最旧的，刚写的这份留下
+    private static func pruneTails(_ dir: URL, keep: URL) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let extras = files.filter { $0.lastPathComponent.hasSuffix(".json") && $0.path != keep.path }
+        guard files.count > tailFileLimit else { return }
+        let sorted = extras.sorted { lhs, rhs in
+            let left = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let right = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return left < right
+        }
+        let overflow = files.count - tailFileLimit
+        for file in sorted.prefix(overflow) {
+            try? fm.removeItem(at: file)
         }
     }
 
@@ -119,6 +211,9 @@ enum ChatCache {
         queue.async {
             guard let dir = tenantDir(tenant) else { return }
             try? FileManager.default.removeItem(at: dir)
+            if let tails = tailDir(tenant) {
+                try? FileManager.default.removeItem(at: tails)
+            }
         }
     }
 
@@ -127,6 +222,9 @@ enum ChatCache {
         queue.async {
             guard let root else { return }
             try? FileManager.default.removeItem(at: root)
+            if let tails = tailRoot {
+                try? FileManager.default.removeItem(at: tails)
+            }
         }
     }
 
@@ -147,6 +245,23 @@ enum ChatCache {
         return tenantDir(tenant)?
             .appendingPathComponent("bodies", isDirectory: true)
             .appendingPathComponent(safeName(chatId), isDirectory: true)
+    }
+
+    /// 不放在 Caches 里：系统清缓存时首屏还要能画出来
+    private static var tailRoot: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("JieboChat", isDirectory: true)
+    }
+
+    private static func tailDir(_ tenant: String) -> URL? {
+        guard !tenant.isEmpty else { return nil }
+        return tailRoot?.appendingPathComponent(safeName(tenant), isDirectory: true)
+            .appendingPathComponent("tails", isDirectory: true)
+    }
+
+    private static func tailFile(_ tenant: String, _ chatId: String) -> URL? {
+        guard !chatId.isEmpty else { return nil }
+        return tailDir(tenant)?.appendingPathComponent(safeName(chatId) + ".json")
     }
 
     /// id 做目录名：只留字母数字和 -_，其余换成 _；改动过或太长的补一段原文哈希防撞名

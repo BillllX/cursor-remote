@@ -258,6 +258,9 @@ extension ChatStore {
         cacheReadingIds = []
         cacheCheckedIds = []
         cachedOnlyIds = []
+        displayOnlyIds = []
+        for task in tailTasks.values { task.cancel() }
+        tailTasks = [:]
         stateReloadPending = false
         pendingHistory = [:]
         pendingSnapshots = [:]

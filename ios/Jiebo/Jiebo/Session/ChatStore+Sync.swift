@@ -159,7 +159,10 @@ extension ChatStore {
                 continue
             }
             guard !chats[index].turnsComplete else { continue }
-            if chats[index].turns.isEmpty, bodyRevs[id] != nil { chats[index].turns = cached.turns }
+            // 尾段没有 bodyRevs，但也要挂回来，否则一连上服务器当前会话会先空掉
+            if chats[index].turns.isEmpty, bodyRevs[id] != nil || displayOnlyIds.contains(id) {
+                chats[index].turns = cached.turns
+            }
             if chats[index].draft.isEmpty { chats[index].draft = cached.draft }
         }
         // 合并结果与服务端不一致的（本地优先胜出的/本地独有的）标脏，随后 sync_chat 增量重推。

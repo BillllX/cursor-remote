@@ -23,15 +23,24 @@ enum ImCache {
 
     // MARK: 读
 
-    static func load(tenant: String) async -> Snapshot? {
+    /// 只读列表和资料。时间线另读，避免会话列表等所有聊天记录解析完才出现
+    static func loadState(tenant: String) async -> Snapshot? {
         await withCheckedContinuation { (continuation: CheckedContinuation<Snapshot?, Never>) in
             queue.async {
-                continuation.resume(returning: read(tenant: tenant))
+                continuation.resume(returning: readState(tenant: tenant))
             }
         }
     }
 
-    private static func read(tenant: String) -> Snapshot? {
+    static func loadTimelines(tenant: String) async -> [String: [ImLocalMessage]] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readTimelines(tenant: tenant))
+            }
+        }
+    }
+
+    private static func readState(tenant: String) -> Snapshot? {
         guard let dir = tenantDir(tenant),
               let data = try? Data(contentsOf: dir.appendingPathComponent("state.json")),
               let state = try? JSONValue.parse(data).object
@@ -53,17 +62,23 @@ enum ImCache {
         for (convId, value) in state["voiceText"]?.object ?? [:] {
             snapshot.voiceText[convId] = value.object?.compactMapValues(\.string) ?? [:]
         }
+        return snapshot
+    }
+
+    private static func readTimelines(tenant: String) -> [String: [ImLocalMessage]] {
+        guard let dir = tenantDir(tenant) else { return [:] }
         let convDir = dir.appendingPathComponent("conv", isDirectory: true)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: convDir.path)) ?? []
+        var timelines: [String: [ImLocalMessage]] = [:]
         for name in names where name.hasSuffix(".json") {
             guard let data = try? Data(contentsOf: convDir.appendingPathComponent(name)),
                   let row = try? JSONValue.parse(data).object,
                   let convId = row["convId"]?.string, !convId.isEmpty
             else { continue }
             let items = row["messages"]?.array?.compactMap { ImLocalMessage.from($0) } ?? []
-            if !items.isEmpty { snapshot.timelines[convId] = items }
+            if !items.isEmpty { timelines[convId] = items }
         }
-        return snapshot
+        return timelines
     }
 
     // MARK: 写

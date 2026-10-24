@@ -28,6 +28,8 @@ final class GatewayClient {
     private var session: URLSession?
     private var task: URLSessionWebSocketTask?
     private var delegate: SocketDelegate?
+    /// 解码和套接字回调不走主线程。收包顺序由这只盒子串起来，再一次性交给主线程
+    private let pump = SocketPump()
     private var pingTimer: Timer?
     private var retryTimer: Timer?
     private var generation = 0
@@ -52,6 +54,7 @@ final class GatewayClient {
         pingTimer?.invalidate()
         probeTimer?.invalidate()
         generation += 1
+        pump.gate.set(generation)
         didAnnounceOpen = false
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -132,6 +135,7 @@ final class GatewayClient {
         pingTimer?.invalidate()
         probeTimer?.invalidate()
         generation += 1
+        pump.gate.set(generation)
         didAnnounceOpen = false
         let current = generation
         task?.cancel(with: .goingAway, reason: nil)
@@ -150,7 +154,7 @@ final class GatewayClient {
         }
         self.delegate = delegate
 
-        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: .main)
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: pump.callbacks)
         self.session = session
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
@@ -158,7 +162,30 @@ final class GatewayClient {
         socket.maximumMessageSize = Self.receiveLimit
         task = socket
         socket.resume()
-        listen(socket, generation: current)
+        pump.start(socket: socket, generation: current) { [weak self] in
+            Task { @MainActor in self?.drain() }
+        } onFail: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.generation == current else { return }
+                self.handleClose(generation: current)
+            }
+        }
+    }
+
+    /// 把已经解码好的包按到达顺序应用到界面上。解码本身在套接字队列上完成
+    private func drain() {
+        while true {
+            let batch = pump.inbox.take()
+            if batch.isEmpty { return }
+            for item in batch {
+                guard item.generation == generation, task != nil else { continue }
+                lastInbound = Date()
+                if !didAnnounceOpen {
+                    handleOpen(generation: item.generation)
+                }
+                onMessage?(item.message)
+            }
+        }
     }
 
     private func handleOpen(generation: Int) {
@@ -167,37 +194,6 @@ final class GatewayClient {
         lastInbound = Date()
         startPing()
         onOpen?()
-    }
-
-    private func listen(_ socket: URLSessionWebSocketTask, generation: Int) {
-        socket.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.generation == generation, self.task === socket else { return }
-                switch result {
-                case .success(let message):
-                    self.lastInbound = Date()
-                    if !self.didAnnounceOpen {
-                        self.handleOpen(generation: generation)
-                    }
-                    let data: Data
-                    switch message {
-                    case .data(let value):
-                        data = value
-                    case .string(let value):
-                        data = Data(value.utf8)
-                    @unknown default:
-                        self.listen(socket, generation: generation)
-                        return
-                    }
-                    if let decoded = try? ServerMessage.decode(from: data) {
-                        self.onMessage?(decoded)
-                    }
-                    self.listen(socket, generation: generation)
-                case .failure:
-                    self.handleClose(generation: generation)
-                }
-            }
-        }
     }
 
     private func handleClose(generation: Int) {
@@ -269,6 +265,123 @@ private final class SocketDelegate: NSObject, URLSessionWebSocketDelegate, @unch
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         if error != nil {
             onClose?()
+        }
+    }
+}
+
+/// 套接字回调和解码都在这条串行队列上。主线程只拿走已经解码好的消息
+private final class SocketPump: @unchecked Sendable {
+    /// 串行：解码按到达顺序入队，不占主线程
+    let callbacks: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "ai.jiebo.gateway-socket"
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    let gate = SocketGate()
+    let inbox = MessageInbox()
+
+    func start(
+        socket: URLSessionWebSocketTask,
+        generation: Int,
+        onWake: @escaping @Sendable () -> Void,
+        onFail: @escaping @Sendable () -> Void
+    ) {
+        receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+    }
+
+    private func receive(
+        socket: URLSessionWebSocketTask,
+        generation: Int,
+        onWake: @escaping @Sendable () -> Void,
+        onFail: @escaping @Sendable () -> Void
+    ) {
+        socket.receive { [weak self] result in
+            guard let self, self.gate.current() == generation else { return }
+            switch result {
+            case .failure:
+                onFail()
+            case .success(let message):
+                let data: Data
+                switch message {
+                case .data(let value):
+                    data = value
+                case .string(let value):
+                    data = Data(value.utf8)
+                @unknown default:
+                    self.receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+                    return
+                }
+                if let decoded = try? ServerMessage.decode(from: data),
+                   self.inbox.push(generation: generation, message: decoded) {
+                    onWake()
+                }
+                self.receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+            }
+        }
+    }
+}
+
+private final class SocketGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation = 0
+
+    func set(_ value: Int) {
+        lock.lock()
+        generation = value
+        lock.unlock()
+    }
+
+    func current() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return generation
+    }
+}
+
+private struct PumpedMessage {
+    var generation: Int
+    var message: ServerMessage
+}
+
+private final class MessageInbox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var items: [PumpedMessage] = []
+    private var scheduled = false
+
+    /// 连续的正文/思考增量合成一条，少占主线程。返回 true 表示主线程还没人来取
+    func push(generation: Int, message: ServerMessage) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let index = items.indices.last,
+           items[index].generation == generation,
+           let merged = Self.merge(items[index].message, message) {
+            items[index].message = merged
+        } else {
+            items.append(PumpedMessage(generation: generation, message: message))
+        }
+        let wake = !scheduled
+        scheduled = true
+        return wake
+    }
+
+    func take() -> [PumpedMessage] {
+        lock.lock()
+        defer { lock.unlock() }
+        let batch = items
+        items.removeAll()
+        if batch.isEmpty { scheduled = false }
+        return batch
+    }
+
+    private static func merge(_ old: ServerMessage, _ new: ServerMessage) -> ServerMessage? {
+        switch (old, new) {
+        case (.textDelta(let id, let left), .textDelta(let next, let right)) where id == next:
+            return .textDelta(chatId: id, text: left + right)
+        case (.thinkingDelta(let id, let left), .thinkingDelta(let next, let right)) where id == next:
+            return .thinkingDelta(chatId: id, text: left + right)
+        default:
+            return nil
         }
     }
 }

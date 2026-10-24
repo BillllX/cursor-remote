@@ -81,6 +81,9 @@ final class ImStore {
     var voiceText: [String: [Int: String]] = [:]
     var listLoaded = false
     var contactsLoaded = false
+    /// 本机 conv 文件已经并进 timelines。在这之前不能 catchUp，也不能把半截时间线写回磁盘
+    private var timelinesReady = false
+    private var deferredTimelineSaves = Set<String>()
 
     // MARK: 界面状态
 
@@ -278,10 +281,19 @@ final class ImStore {
         guard !next.isEmpty else { return }
         loadEpoch += 1
         let epoch = loadEpoch
+        timelinesReady = false
         Task { [weak self] in
-            let snapshot = await ImCache.load(tenant: next)
-            guard let self, self.loadEpoch == epoch, self.tenant == next, let snapshot else { return }
-            self.apply(snapshot)
+            let snapshot = await ImCache.loadState(tenant: next)
+            guard let self, self.loadEpoch == epoch, self.tenant == next else { return }
+            if let snapshot { self.apply(snapshot) }
+            let timelines = await ImCache.loadTimelines(tenant: next)
+            guard self.loadEpoch == epoch, self.tenant == next else { return }
+            self.applyTimelines(timelines)
+            self.timelinesReady = true
+            let pending = self.deferredTimelineSaves
+            self.deferredTimelineSaves = []
+            for convId in pending { self.saveTimelineSoon(convId) }
+            if self.listLoaded, self.online { self.catchUp() }
         }
     }
 
@@ -309,15 +321,17 @@ final class ImStore {
             }
         }
         for convId in Array(hidden.keys) { pruneHidden(convId) }
-        for (convId, items) in snapshot.timelines {
+        // 没发出去的图还要用 outbox 里的文件；其余（删掉的待发消息、旧版本留下的）清掉
+        ImCache.sweepOutbox(tenant: tenant, keep: pendingOutboxFiles())
+        if online { replayDurableOutbox() }
+    }
+
+    /// 磁盘时间线后到：和这段时间已经进内存的消息合并。合并前不能落盘，否则会把还没读到的记录覆盖掉
+    private func applyTimelines(_ cached: [String: [ImLocalMessage]]) {
+        for (convId, items) in cached {
             let merged = ImTimeline.merge(items, timelines[convId] ?? [], me: meId)
             timelines[convId] = merged.filter { ($0.seq ?? Int.max) > hideBefore(convId) }
         }
-        // 没发出去的图还要用 outbox 里的文件；其余（删掉的待发消息、旧版本留下的）清掉
-        ImCache.sweepOutbox(tenant: tenant, keep: pendingOutboxFiles())
-        // 缓存比网络晚到：补缺要按缓存再算一次
-        if listLoaded, online { catchUp() }
-        if online { replayDurableOutbox() }
     }
 
     private func clearMemory() {
@@ -362,6 +376,8 @@ final class ImStore {
         voiceText = [:]
         listLoaded = false
         contactsLoaded = false
+        timelinesReady = false
+        deferredTimelineSaves = []
         selectedPeer = nil
         visibleConvId = nil
     }
@@ -682,8 +698,10 @@ final class ImStore {
         return names
     }
 
-    /// 列表拉全后：有缓存的会话按本地最大 seq 往后补；落后太多就丢掉本地，打开时重拉最新一页
+    /// 列表拉全后：有缓存的会话按本地最大 seq 往后补；落后太多就丢掉本地，打开时重拉最新一页。
+    /// 时间线还在读磁盘时不能跑：local seq 会是 0，接着把还没读进来的记录从磁盘删掉
     private func catchUp() {
+        guard timelinesReady else { return }
         for (convId, items) in timelines {
             guard let conv = convs[convId] else { continue }
             let local = ImTimeline.maxSeq(items)
@@ -1670,12 +1688,20 @@ final class ImStore {
     }
 
     private func saveTimelineSoon(_ convId: String) {
+        guard timelinesReady else {
+            deferredTimelineSaves.insert(convId)
+            return
+        }
         timelineSaveTasks[convId]?.cancel()
         timelineSaveTasks[convId] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             guard let self, !Task.isCancelled else { return }
             self.timelineSaveTasks[convId] = nil
             guard !self.tenant.isEmpty else { return }
+            guard self.timelinesReady else {
+                self.deferredTimelineSaves.insert(convId)
+                return
+            }
             ImCache.saveTimeline(tenant: self.tenant, convId: convId, items: self.timelines[convId] ?? [])
         }
     }
