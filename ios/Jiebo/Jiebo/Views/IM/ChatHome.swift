@@ -445,8 +445,10 @@ struct ChatListView: View {
     private func previewLine(_ conv: ImConvRow?, peer: ImUser) -> Text {
         guard let conv else { return Text("") }
         if im.selectedPeer != peer.id, let draft = im.drafts[conv.convId]?.trimmingCharacters(in: .whitespacesAndNewlines), !draft.isEmpty {
-            return Text("[草稿] ").foregroundStyle(JieboColor.danger)
-                + Text(draft.replacingOccurrences(of: "\n", with: " ")).foregroundStyle(JieboColor.dim)
+            let draftText = draft.replacingOccurrences(of: "\n", with: " ")
+            return Text(
+                "\(Text("[草稿] ").foregroundStyle(JieboColor.danger))\(Text(draftText).foregroundStyle(JieboColor.dim))"
+            )
         }
         let pending = im.timelines[conv.convId]?.last(where: { $0.seq == nil })
         let latest: ImLocalMessage?
@@ -464,7 +466,9 @@ struct ChatListView: View {
         if latest.kind == "image", latest.body == nil { text = "[图片]" }
         if conv.mute, conv.unread > 1 { text = "[\(ImFormat.badge(conv.unread))条] " + text }
         if latest.state == .failed {
-            return Text("[发送失败] ").foregroundStyle(JieboColor.danger) + Text(text).foregroundStyle(JieboColor.dim)
+            return Text(
+                "\(Text("[发送失败] ").foregroundStyle(JieboColor.danger))\(Text(text).foregroundStyle(JieboColor.dim))"
+            )
         }
         return Text(text).foregroundStyle(JieboColor.dim)
     }

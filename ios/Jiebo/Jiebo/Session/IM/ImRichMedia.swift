@@ -187,19 +187,36 @@ enum ImPlaceSearch {
         }
         guard let response = try? await MKLocalSearch(request: request).start() else { return [] }
         return response.mapItems.prefix(20).map { item in
-            let mark = item.placemark
-            let address = [mark.locality, mark.subLocality, mark.thoroughfare, mark.subThoroughfare]
-                .compactMap { $0 }.joined()
-            return ImPlace(coordinate: mark.coordinate, name: item.name ?? "位置", address: address)
+            ImPlace(
+                coordinate: item.location.coordinate,
+                name: item.name ?? "位置",
+                address: addressLine(for: item)
+            )
         }
     }
 
     static func current(_ coordinate: CLLocationCoordinate2D) async -> ImPlace {
         let location = CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        let mark = try? await CLGeocoder().reverseGeocodeLocation(location).first
-        let address = [mark?.locality, mark?.subLocality, mark?.thoroughfare, mark?.subThoroughfare]
-            .compactMap { $0 }.joined()
-        return ImPlace(coordinate: coordinate, name: mark?.name ?? "当前位置", address: address)
+        let item = await reverseItem(at: location)
+        return ImPlace(
+            coordinate: coordinate,
+            name: item?.name ?? "当前位置",
+            address: item.map { addressLine(for: $0) } ?? ""
+        )
+    }
+
+    private static func reverseItem(at location: CLLocation) async -> MKMapItem? {
+        guard let request = MKReverseGeocodingRequest(location: location) else { return nil }
+        return (try? await request.mapItems)?.first
+    }
+
+    private static func addressLine(for item: MKMapItem) -> String {
+        if let line = item.addressRepresentations?.fullAddress(includingRegion: false, singleLine: true),
+           !line.isEmpty
+        {
+            return line
+        }
+        return item.address?.fullAddress ?? ""
     }
 }
 

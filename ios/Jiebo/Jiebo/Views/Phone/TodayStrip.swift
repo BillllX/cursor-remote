@@ -7,6 +7,8 @@ struct TodayStrip: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("jiebo.todayThreadExpanded") private var expanded = false
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -30,35 +32,52 @@ struct TodayStrip: View {
 
     private func summaryCard(events: [DayThreadEvent]) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(greeting)
-                        .font(JieboFont.text(.headline, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink)
-                    Text(Self.dayFormatter.string(from: Date()))
-                        .font(JieboFont.text(.caption))
-                        .foregroundStyle(JieboColor.dim)
+            Button {
+                JieboHaptic.selection()
+                withAnimation(JieboMotion.snappy(reduceMotion)) { expanded.toggle() }
+            } label: {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(greeting)
+                            .font(JieboFont.text(.headline, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                        Text(Self.dayFormatter.string(from: Date()))
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    Spacer(minLength: 8)
+                    HStack(spacing: 4) {
+                        Text(events.isEmpty ? "今日脉络" : "今日脉络 · \(events.count)")
+                            .font(JieboFont.text(.caption2, weight: .semibold))
+                            .tracking(0.7)
+                        Image(systemName: "chevron.down")
+                            .font(JieboFont.text(.caption2, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                    .foregroundStyle(JieboColor.dim)
                 }
-                Spacer(minLength: 8)
-                Text("今日脉络")
-                    .font(JieboFont.text(.caption2, weight: .semibold))
-                    .tracking(0.7)
-                    .foregroundStyle(JieboColor.dim)
-                    .accessibilityHidden(true)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .buttonStyle(.plain)
+            .accessibilityLabel("今日脉络")
+            .accessibilityValue(expanded ? "已展开" : "已收起")
+            .accessibilityHint(expanded ? "轻点两下收起" : "轻点两下展开")
 
-            if events.isEmpty {
-                Text("今天还没有需要关注的新动态")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.dim)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
-            } else {
-                ForEach(events) { event in
-                    Divider().overlay(JieboColor.line)
-                    eventRow(event)
+            if expanded {
+                if events.isEmpty {
+                    Text("今天还没有需要关注的新动态")
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 12)
+                } else {
+                    ForEach(events) { event in
+                        Divider().overlay(JieboColor.line)
+                        eventRow(event)
+                    }
                 }
             }
         }

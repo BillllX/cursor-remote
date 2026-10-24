@@ -24,12 +24,14 @@ struct AssistantHome: View {
             ToolbarItem(placement: .topBarLeading) {
                 menuButton
             }
+            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .principal) {
                 titleView
             }
             ToolbarItem(placement: .topBarTrailing) {
                 todayButton
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .task { store.requestAssistant() }
         .onChange(of: scenePhase) { _, phase in
@@ -48,17 +50,16 @@ struct AssistantHome: View {
             router.openMenu()
         } label: {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
-                .frame(width: 36, height: 36)
-                .background(JieboColor.mist)
-                .clipShape(Circle())
-                .hitTarget()
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
                         PendingBadge(count: badge)
+                            .offset(x: 10, y: -8)
                     }
                 }
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(
@@ -108,12 +109,10 @@ struct AssistantHome: View {
             router.openHub()
         } label: {
             Image(systemName: NavigationIconId.assistant.symbol)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
-                .frame(width: 36, height: 36)
-                .background(router.hubOpen ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
-                .clipShape(Circle())
-                .hitTarget()
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel("今日")

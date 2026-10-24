@@ -27,7 +27,7 @@ final class DeviceBridgeCoordinator {
     @ObservationIgnored private var hasConfirmationPresenter = false
 
     func install(on store: ChatStore) {
-        store.deviceInvokeHandler = { [weak self] invoke in
+        store.deviceInvokeHandler = { [weak self, weak store] invoke in
             Task { @MainActor [weak self, weak store] in
                 guard let self, let store else { return }
                 await self.process(invoke, store: store)

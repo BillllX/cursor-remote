@@ -161,7 +161,7 @@ actor AppleEventKitService {
     }
 
     private static func eventJSON(_ event: EKEvent) -> JSONValue {
-        var row: [String: JSONValue] = [
+        let row: [String: JSONValue] = [
             "id": .string(event.eventIdentifier ?? ""),
             "title": .string(event.title ?? ""),
             "start": .string(iso(event.startDate)),

@@ -95,7 +95,7 @@ private struct ShareRoot: View {
                                 } label: {
                                     HStack {
                                         Image(systemName: selected.contains(person.id) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundStyle(selected.contains(person.id) ? .tint : .secondary)
+                                            .foregroundStyle(selected.contains(person.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
                                         VStack(alignment: .leading) {
                                             Text(person.nickname).foregroundStyle(.primary)
                                             if person.recentAt > 0 {

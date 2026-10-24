@@ -104,10 +104,10 @@ struct TodoReceiptRow: View {
                 .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(removed ? JieboColor.dim : JieboColor.ok)
                 .accessibilityHidden(true)
-            (Text("\(head)：").foregroundStyle(JieboColor.ink2)
-                + Text([TodoDue.label(receipt.due), receipt.text].compactMap { $0 }.joined(separator: " "))
-                .foregroundStyle(removed ? JieboColor.dim : JieboColor.ink)
-                .strikethrough(removed || done))
+            let detail = [TodoDue.label(receipt.due), receipt.text].compactMap { $0 }.joined(separator: " ")
+            Text(
+                "\(Text("\(head)：").foregroundStyle(JieboColor.ink2))\(Text(detail).foregroundStyle(removed ? JieboColor.dim : JieboColor.ink).strikethrough(removed || done))"
+            )
                 .font(JieboFont.text(.footnote))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
