@@ -413,7 +413,7 @@ private struct PadDomainSwitcher: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(badge > 0 ? "\(domain.title)，\(badge) 项未读或待处理" : domain.title)
-        .accessibilityHint("切换到\(domain.title)，快捷键 Command \(shortcut)")
+        .accessibilityHint(Text(verbatim: "切换到\(domain.title)，快捷键 Command \(shortcut)"))
         .accessibilityAddTraits(router.domain == domain ? .isSelected : [])
     }
 }
