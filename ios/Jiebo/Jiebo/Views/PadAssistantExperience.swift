@@ -701,14 +701,24 @@ struct PadUnifiedInspector: View {
                 if let tab = sceneSession?.previewTab(in: store) {
                     PreviewPanelView(tab: tab, modal: false)
                 } else {
-                    ContentUnavailableView(
-                        "正在打开预览…",
-                        systemImage: "doc.text.magnifyingglass",
-                        description: Text("如果文件无法内嵌预览，将使用系统文件预览。")
-                    )
-                    .task {
-                        await Task.yield()
-                        if sceneSession?.previewKey == nil { router.restoreAfterPreview() }
+                    NavigationStack {
+                        ContentUnavailableView(
+                            "正在打开预览…",
+                            systemImage: "doc.text.magnifyingglass",
+                            description: Text("如果文件无法内嵌预览，将使用系统文件预览。")
+                        )
+                        .navigationTitle("预览")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("关闭") { closePreview() }
+                                    .accessibilityLabel("关闭预览")
+                            }
+                        }
+                        .task {
+                            await Task.yield()
+                            if sceneSession?.previewKey == nil { router.restoreAfterPreview() }
+                        }
                     }
                 }
             case .detail:
@@ -731,6 +741,12 @@ struct PadUnifiedInspector: View {
             }
         }
         .phoneNotice()
+    }
+
+    private func closePreview() {
+        if let sceneSession { sceneSession.dismissPreview() }
+        else { store.collapsePreview() }
+        router.dismissInspector()
     }
 }
 

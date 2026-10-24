@@ -26,6 +26,13 @@ const policy = read("ios/Jiebo/Jiebo/Session/SceneEditingPolicy.swift");
 const thread = read("ios/Jiebo/Jiebo/Views/ThreadView.swift");
 const composer = read("ios/Jiebo/Jiebo/Views/ComposerView.swift");
 const project = read("ios/Jiebo/Jiebo.xcodeproj/project.pbxproj");
+const previewHosts = [
+  chatHome,
+  read("ios/Jiebo/Jiebo/Views/FileBrowserCover.swift"),
+  read("ios/Jiebo/Jiebo/Views/Phone/PhoneTabShell.swift"),
+  read("ios/Jiebo/Jiebo/Views/PhoneWorkbench.swift"),
+  read("ios/Jiebo/Jiebo/Views/RootView.swift"),
+];
 
 for (const op of ["calendar_event_delete", "reminder_complete", "reminder_delete", "mail_draft_open"]) {
   requireSource(shared, `"${op}"`, `设备协议 ${op}`);
@@ -126,6 +133,9 @@ for (const needle of ["chatDestination", "workbenchChatId", "previewKey", "previ
 }
 requireSource(preview, "sceneSession?.previewTabs", "预览页签按 scene 隔离");
 requireSource(preview, "sceneSession.dismissPreview()", "预览关闭按 scene 隔离");
+if (previewHosts.some((source) => source.includes("sceneSession?.previewTab(in: store) ?? store.activePreviewTab"))) {
+  throw new Error("Scene 预览关闭后不得回退到共享活动页签");
+}
 if (preview.includes("ForEach(store.previewTabs)")) {
   throw new Error("预览页签不得直接展示其它 scene 的共享选择");
 }

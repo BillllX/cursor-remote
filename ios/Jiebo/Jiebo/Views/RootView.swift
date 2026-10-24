@@ -40,7 +40,8 @@ struct WorkbenchView: View {
     }
 
     private var activePreviewTab: PreviewTab? {
-        sceneSession?.previewTab(in: store) ?? store.activePreviewTab
+        if let sceneSession { return sceneSession.previewTab(in: store) }
+        return store.activePreviewTab
     }
 
     private var previewPanelOpen: Bool {
