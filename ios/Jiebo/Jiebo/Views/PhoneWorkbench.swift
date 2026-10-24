@@ -462,3 +462,16 @@ private struct PhoneDrawer: View {
         }
     }
 }
+
+/// iPad 外接键盘：⌘O 打开文件浏览器。挂在对话区上，侧栏收起时也在。
+struct WorkbenchShortcuts: View {
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        Button("打开文件") { store.toggleFileBrowser() }
+            .keyboardShortcut("o", modifiers: .command)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+}

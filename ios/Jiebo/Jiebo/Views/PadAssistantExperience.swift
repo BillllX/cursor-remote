@@ -129,7 +129,7 @@ private struct PadEntitySummary: View {
             }
         }
         .padding(10)
-        .frame(width: 230, minHeight: 72, alignment: .leading)
+        .frame(minWidth: 230, maxWidth: 230, minHeight: 72, alignment: .leading)
         .background(JieboColor.white)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay {
@@ -510,7 +510,7 @@ struct PadArtifactExperience: View {
 
     private var artifacts: [Artifact] {
         let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        projection.artifacts
+        return projection.artifacts
             .filter { kind == .all || $0.kind == kind.rawValue }
             .filter {
                 needle.isEmpty
@@ -1041,6 +1041,7 @@ private struct PadDelegationDetail: View {
     let artifacts: [Artifact]
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
+    @Environment(\.sceneSessionState) private var sceneSession
 
     private var delegation: AssistantDelegation? {
         store.assistantState?.delegations.first { $0.id == delegationId }

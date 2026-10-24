@@ -30,6 +30,8 @@ final class VoiceDictation {
     private var abandoned = false
     /// 录音前的音频会话配置，结束后还原，避免预览视频没声音
     private var savedSession: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
+    /// 激活和停用串行排队，避免上一次还没停完就再次改会话
+    private var sessionChain: Task<Void, Never>?
 
     var active: Bool { phase != .idle }
 
@@ -65,10 +67,11 @@ final class VoiceDictation {
         }
 
         do {
-            let session = AVAudioSession.sharedInstance()
-            savedSession = (session.category, session.mode, session.categoryOptions)
-            try session.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
+            try await beginRecordSession()
+            if abandoned {
+                teardown()
+                return nil
+            }
 
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
@@ -173,15 +176,76 @@ final class VoiceDictation {
         phase = .idle
         guard let saved = savedSession else { return }
         savedSession = nil
-        let session = AVAudioSession.sharedInstance()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
-        try? session.setCategory(saved.category, mode: saved.mode, options: saved.options)
+        let previous = sessionChain
+        let next = Task { @MainActor in
+            await previous?.value
+            let session = AVAudioSession.sharedInstance()
+            await deactivateAudioSession(session)
+            try? session.setCategory(saved.category, mode: saved.mode, options: saved.options)
+        }
+        sessionChain = next
+    }
+
+    /// 先排到上一次停用之后，再改成录音并异步激活。激活本身会阻塞，不能留在主线程同步调用。
+    private func beginRecordSession() async throws {
+        let previous = sessionChain
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let next = Task { @MainActor in
+                await previous?.value
+                do {
+                    let session = AVAudioSession.sharedInstance()
+                    savedSession = (session.category, session.mode, session.categoryOptions)
+                    try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try await activateAudioSession(session)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            sessionChain = Task { _ = await next.value }
+        }
     }
 
     private static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
+    }
+}
+
+private struct AudioSessionActivationError: LocalizedError {
+    var errorDescription: String? { "系统没有打开录音" }
+}
+
+/// 异步激活。同步 setActive 在主线程上会卡住界面；iOS 27 之前没有异步接口。
+private func activateAudioSession(_ session: AVAudioSession) async throws {
+    if #available(iOS 27.0, *) {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            session.activate(options: []) { activated, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if activated {
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: AudioSessionActivationError())
+                }
+            }
+        }
+    } else {
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// 异步停用。类别要等停用完成后再改，否则主线程会在会话仍活跃时卡住。
+private func deactivateAudioSession(_ session: AVAudioSession) async {
+    if #available(iOS 27.0, *) {
+        await withCheckedContinuation { continuation in
+            session.deactivate(options: .notifyOthersOnDeactivation) { _, _ in
+                continuation.resume()
+            }
+        }
+    } else {
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
     }
 }
 
