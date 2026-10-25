@@ -285,6 +285,7 @@ export function applyServerMessage(chats: Chat[], message: ServerMessage, ctx: C
         pendingTool: { callId: message.callId, name: message.name, args: message.args },
       }));
     case "error":
+      if (message.reqId) return chats;
       return patchOpenTurnIn(chats, chatId, (turn) =>
         settleTurn(
           {
@@ -375,6 +376,8 @@ export function applyLoopMessage(loops: Record<string, LoopRow>, message: Server
 
 export function applyAssistantMessage(state: AssistantState | null, message: ServerMessage): AssistantState | null {
   switch (message.type) {
+    case "assistant_not_modified":
+      return state && state.revision !== message.revision ? { ...state, revision: message.revision } : state;
     case "inbox_item": {
       if (!state) return state;
       const inbox = [message.item, ...state.inbox.filter((row) => row.id !== message.item.id)];

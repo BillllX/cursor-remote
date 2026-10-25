@@ -24,6 +24,7 @@ extension ChatStore {
     func start() {
         guard !started else { return }
         started = true
+        AppLaunchMetrics.event("app_start")
         if let saved = KeychainStore.token()?.trimmingCharacters(in: .whitespacesAndNewlines), !saved.isEmpty {
             tokenDraft = saved
             resumingLogin = true
@@ -68,6 +69,7 @@ extension ChatStore {
         lastModel = UserDefaults.standard.string(forKey: ModelCatalog.lastModelKey) ?? ""
         tenantId = UserDefaults.standard.string(forKey: tenantKey) ?? ""
         assistantChatId = assistantChatKey.flatMap { UserDefaults.standard.string(forKey: $0) }
+        beginBootstrapLoad(for: tenantId)
         loadCachedList()
         wireClient()
         client.connect(url: GatewayConfig.url)
@@ -101,6 +103,7 @@ extension ChatStore {
         tenantName = ""
         resetTenantSession()
         ChatCache.clearAll() // 退出登录：本机缓存的正文和列表全部清掉
+        AppBootstrapCache.removeAll()
         imSink?.logout()
         ImImageCache.shared.removeAll()
         client.disconnect()
@@ -110,12 +113,15 @@ extension ChatStore {
     func appBecameActive() {
         guard started else { return }
         client.probe()
+        requestAssistant(force: true)
     }
 
     func wireClient() {
         client.onOpen = { [weak self] in
             guard let self else { return }
             self.connected = true
+            self.gatewayReady = false
+            AppLaunchMetrics.event("ws_open")
             self.clearOfflineTimer()
             if self.authError.hasPrefix("还没连上") { self.authError = "" }
             // tokenDraft 是当前凭据（login 写入）；Keychain 只是持久化兜底
@@ -135,6 +141,19 @@ extension ChatStore {
             // 连接断开前已经收到的增量必须先落进 turn；否则取消 50ms flush Task 会丢最后一小段。
             self.flushAllStreamDeltas()
             self.connected = false
+            self.gatewayReady = false
+            self.assistantNetworkConfirmed = false
+            self.assistantTaggedResponsesSeen = false
+            self.assistantSyncFailed()
+            self.assistantSyncGate.resetConnection()
+            self.workspacesSyncInFlight = false
+            self.workspacesInFlightGeneration = nil
+            self.workspacesForcePending = false
+            self.fileIndexInFlight = [:]
+            self.fileIndexRequestIds = [:]
+            self.fileIndexForcePending = []
+            for task in self.fileIndexTimeoutTasks.values { task.cancel() }
+            self.fileIndexTimeoutTasks = [:]
             self.memoryCenterOnDisconnect()
             self.armOfflineTimer()
             self.failAssistantReplyWaiters()
@@ -208,6 +227,10 @@ extension ChatStore {
         cwd = ""
         workspaceRoot = ""
         workspaces = []
+        workspacesSyncInFlight = false
+        workspacesInFlightGeneration = nil
+        workspacesForcePending = false
+        workspacesSyncGeneration &+= 1
         workspaceAgents = []
         workspaceAgentsLoaded = false
         workspaceAgentsPendingCursor = nil
@@ -215,6 +238,12 @@ extension ChatStore {
         pendingWorkspacePath = nil
         pendingTurnFiles.removeAll()
         fileIndexRequestChatId = nil
+        fileIndexInFlight = [:]
+        fileIndexRequestIds = [:]
+        fileIndexForcePending = []
+        for task in fileIndexTimeoutTasks.values { task.cancel() }
+        fileIndexTimeoutTasks = [:]
+        fileIndexSyncGeneration = [:]
         mentionRequestChatId = nil
         searchRequestChatId = nil
         chatHomeThreadChatId = nil
@@ -225,6 +254,7 @@ extension ChatStore {
         inflightBases = [:]
         truncateBases = [:]
         appliedStore = false
+        gatewayReady = false
         didRestoreLastActive = false // P9：换租户后重新允许恢复（新租户有自己的 lastChatKey）
         chatRevs = [:]
         dirtyChatIds = []
@@ -240,8 +270,7 @@ extension ChatStore {
         loadTimeoutStreak = [:]
         loadEpochs = [:]
         localTurnsPendingSync = []
-        // 本机缓存：换账号清掉旧租户的（登出时 tenantId 已清空，由 logout 整体清），在途读写作废
-        if !tenantId.isEmpty { ChatCache.clear(tenant: tenantId) }
+        // 本机缓存按租户保留；代际递增使旧租户在途读取无法提交到新租户。
         imSink?.resetTenant()
         ThumbnailStore.shared.reset(tenant: tenantId)
         cacheEpoch += 1
@@ -276,6 +305,14 @@ extension ChatStore {
         queuedChatIds = []
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
         assistantState = nil
+        assistantMemoryRevision = nil
+        assistantNetworkConfirmed = false
+        assistantTaggedResponsesSeen = false
+        assistantMemoryDesired = false
+        assistantInFlightGeneration = nil
+        assistantInFlightReqId = nil
+        assistantSyncFailed()
+        assistantSyncGate.resetConnection()
         assistantChatId = nil
         pendingAssistantOpen = false
         loops = [:]
@@ -314,6 +351,13 @@ extension ChatStore {
         exportLoading = false
         expiredUploadIds = []
         stateFetchTask?.cancel()
+        bootstrapLoadTask?.cancel()
+        bootstrapSnapshot = nil
+        bootstrapLoadCompleted = false
+        bootstrapAssistantDirty = false
+        bootstrapWorkspacesDirty = false
+        bootstrapFileIndexesDirty = false
+        bootstrapFileIndexTombstones = []
         let orphans = pendingUploads
         pendingUploads = [:]
         for (_, pending) in orphans {

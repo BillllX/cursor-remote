@@ -646,6 +646,8 @@ export type Artifact = {
 };
 
 export type AssistantState = {
+  /** 助理投影的持久单调版本；旧网关可能不提供。 */
+  revision?: number;
   name: string;
   background: { model: string; ok: boolean; reason?: string };
   pushKey?: string;
@@ -1065,7 +1067,7 @@ export type ClientMessage =
   | { type: "new_session"; chatId: string; cwd?: string }
   | { type: "delete_session"; chatId: string }
   | { type: "resume_session"; chatId: string; agentId: string }
-  | { type: "list_files"; query?: string; chatId?: string; mention?: boolean }
+  | { type: "list_files"; query?: string; chatId?: string; mention?: boolean; reqId?: string }
   | { type: "search_text"; query: string; chatId?: string }
   // sha：读这一轮结束时的快照（TurnFile.sha），不读工作区；diff: true 时 sha 指 TurnFile.diffSha。
   // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
@@ -1129,7 +1131,7 @@ export type ClientMessage =
     }
   | { type: "loop_stop"; chatId: string }
   // 个人助理（今日页、记忆页、推送）。memory: true 时一并下发记忆全量
-  | { type: "assistant_get"; memory?: boolean }
+  | { type: "assistant_get"; memory?: boolean; knownRevision?: number; reqId?: string; generation?: number }
   | AssistantOpClientMessage
   // IM（需 caps 含 "im"，否则回 im_error code=no_cap）
   | { type: "im_contacts" }
@@ -1368,7 +1370,7 @@ export type ServerMessage =
     } & ToolMeta)
   | { type: "task"; chatId: string; text: string }
   | { type: "status"; chatId?: string; status: string; message?: string }
-  | { type: "error"; chatId?: string; message: string }
+  | { type: "error"; chatId?: string; message: string; reqId?: string }
   | ({
       type: "approval";
       chatId: string;
@@ -1389,7 +1391,18 @@ export type ServerMessage =
       dialect?: boolean;
     }
   | { type: "policy"; policy: PolicyId; chatId?: string }
-  | { type: "files"; query: string; paths: string[]; status?: Record<string, string>; mention?: boolean; truncated?: boolean; chatId?: string }
+  | {
+      type: "files";
+      query: string;
+      paths: string[];
+      status?: Record<string, string>;
+      mention?: boolean;
+      truncated?: boolean;
+      chatId?: string;
+      reqId?: string;
+      /** list_files 请求级失败（如排队满）；不占用 Agent 回合 error 语义 */
+      error?: string;
+    }
   | { type: "search_hits"; query: string; hits: SearchHit[]; chatId?: string; truncated?: boolean }
   | {
       type: "file_content";
@@ -1515,7 +1528,8 @@ export type ServerMessage =
   | { type: "admin_stats"; serverTime: number; tenants: AdminTenantStats[]; cursor?: CursorBill }
   | ({ type: "loop_state" } & LoopState)
   | ({ type: "loop_tick" } & LoopTick)
-  | { type: "assistant_state"; state: AssistantState }
+  | { type: "assistant_state"; state: AssistantState; reqId?: string; generation?: number }
+  | { type: "assistant_not_modified"; revision: number; reqId?: string; generation?: number }
   | AssistantResultMessage
   | { type: "inbox_item"; item: AssistantInboxItem }
   /** 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带 */

@@ -22,8 +22,131 @@ extension ChatStore {
         }
     }
 
-    func requestAssistant(memory: Bool = false) {
-        send(.assistantGet(memory: memory))
+    func requestAssistant(memory: Bool? = nil, force: Bool = false) {
+        if let memory { assistantMemoryDesired = memory }
+        let desiredMemory = memory ?? assistantMemoryDesired
+        guard connected, unlocked, gatewayReady else { return }
+        guard assistantSyncGate.begin(memory: desiredMemory, force: force) else { return }
+        // A revision learned from a non-memory projection cannot prove the memory payload is cached.
+        let memoryIsCurrent = assistantState?.memory != nil
+            && assistantMemoryRevision == assistantState?.revision
+        let knownRevision = desiredMemory && !memoryIsCurrent ? nil : assistantState?.revision
+        assistantRequestGeneration &+= 1
+        let generation = assistantRequestGeneration
+        let reqId = UUID().uuidString
+        assistantInFlightGeneration = generation
+        assistantInFlightReqId = reqId
+        send(.assistantGet(memory: desiredMemory, knownRevision: knownRevision, reqId: reqId, generation: generation))
+        assistantSyncTimeoutTask?.cancel()
+        assistantSyncTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, !Task.isCancelled,
+                  self.assistantSyncGate.inFlight,
+                  self.assistantInFlightGeneration == generation
+            else { return }
+            self.assistantSyncFailed(timedOut: true)
+        }
+    }
+
+    func receiveAssistantState(_ incoming: AssistantState, reqId: String?, generation: Int?) {
+        let solicited = assistantResponseIsCurrent(reqId: reqId, generation: generation)
+        if reqId != nil || generation != nil {
+            guard solicited else { return }
+            assistantTaggedResponsesSeen = true
+        }
+        if solicited,
+           let currentRevision = assistantState?.revision,
+           let incomingRevision = incoming.revision,
+           incomingRevision < currentRevision {
+            // 服务端恢复了旧备份或重建了 revision 代际：丢弃本地条件令牌后接受权威全量。
+            clearCachedAssistant()
+            assistantState = nil
+            assistantMemoryRevision = nil
+        }
+        let carriesMemory = incoming.memory != nil
+        switch AssistantStateReconcile.resolve(current: assistantState, incoming: incoming) {
+        case .ignored:
+            return
+        case .apply(let next):
+            assistantState = next
+            if carriesMemory { assistantMemoryRevision = next.revision }
+            assistantName = next.name
+            assistantStateRevision &+= 1
+            assistantNetworkConfirmed = true
+            updateCachedAssistant(next, memoryRevision: assistantMemoryRevision)
+            AppLaunchMetrics.event("assistant_apply")
+        }
+
+        // A normal broadcast can advance the non-memory projection while a memory request is
+        // outstanding. Only a memory-bearing state (or not_modified/failure) settles that request.
+        guard solicited,
+              assistantSyncGate.shouldSettleState(carriesMemory: carriesMemory, accepted: true)
+        else { return }
+        finishAssistantSync()
+    }
+
+    private func finishAssistantSync() {
+        let wasInFlight = assistantSyncGate.inFlight
+        assistantSyncTimeoutTask?.cancel()
+        assistantSyncTimeoutTask = nil
+        let followup = assistantSyncGate.complete()
+        assistantInFlightGeneration = nil
+        assistantInFlightReqId = nil
+        if wasInFlight { noteConditionalSyncComplete() }
+        if let followup { requestAssistant(memory: followup.memory, force: followup.force) }
+    }
+
+    func assistantSyncNotModified(revision: Int, reqId: String?, generation: Int?) {
+        guard assistantResponseIsCurrent(reqId: reqId, generation: generation) else { return }
+        if reqId != nil || generation != nil { assistantTaggedResponsesSeen = true }
+        if let current = assistantState?.revision, revision < current {
+            clearCachedAssistant()
+            assistantState = nil
+            assistantMemoryRevision = nil
+            _ = assistantSyncGate.fail()
+            assistantInFlightGeneration = nil
+            assistantInFlightReqId = nil
+            requestAssistant(force: true)
+            return
+        }
+        if var state = assistantState,
+           state.revision.map({ revision >= $0 }) ?? true,
+           state.revision != revision {
+            state.revision = revision
+            if var object = state.rawJSON.object {
+                object["revision"] = .number(Double(revision))
+                state.rawJSON = .object(object)
+            }
+            assistantState = state
+            updateCachedAssistant(state, memoryRevision: assistantMemoryRevision)
+        }
+        assistantNetworkConfirmed = true
+        assistantStateRevision &+= 1
+        finishAssistantSync()
+    }
+
+    private func assistantResponseIsCurrent(reqId: String?, generation: Int?) -> Bool {
+        if reqId == nil, generation == nil {
+            // 旧网关不回显请求标识；见过新协议回包后，无标识消息只按广播处理。
+            return assistantSyncGate.inFlight && !assistantTaggedResponsesSeen
+        }
+        return reqId == assistantInFlightReqId && generation == assistantInFlightGeneration
+    }
+
+    func assistantSyncFailed(timedOut: Bool = false) {
+        let wasInFlight = assistantSyncGate.inFlight
+        assistantSyncTimeoutTask?.cancel()
+        assistantSyncTimeoutTask = nil
+        let followup = assistantSyncGate.fail()
+        assistantInFlightGeneration = nil
+        assistantInFlightReqId = nil
+        if wasInFlight {
+            if timedOut { AppLaunchMetrics.event("assistant_sync_timeout") }
+            AppLaunchMetrics.event("conditional_sync_failed")
+        }
+        if let followup {
+            requestAssistant(memory: followup.memory, force: followup.force)
+        }
     }
 
     func assistantOp(_ op: String, args: [String: JSONValue] = [:]) {

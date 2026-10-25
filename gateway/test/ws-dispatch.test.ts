@@ -152,6 +152,28 @@ describe("handleMessage 错误处理同原 catch", () => {
     assert.equal(sent.length, 1);
     assert.deepEqual(sent[0], { type: "error", message: "gateway 出错了" });
   });
+
+  test("tagged 请求失败时 error 回显 reqId，客户端可精确结清", async () => {
+    const { ctx, sent } = fake(true);
+    await handleMessage(ctx, raw({ type: "list_files", chatId: "c1", query: "", reqId: "rq-files-1" }), {
+      list_files: () => {
+        throw new Error("列文件失败");
+      },
+    });
+    assert.deepEqual(sent, [
+      {
+        type: "files",
+        chatId: "c1",
+        query: "",
+        mention: false,
+        reqId: "rq-files-1",
+        paths: [],
+        status: {},
+        truncated: false,
+        error: "列文件失败",
+      },
+    ]);
+  });
 });
 
 describe("ClientMessage 覆盖", () => {

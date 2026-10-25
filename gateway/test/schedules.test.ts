@@ -3,8 +3,17 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { SCHEDULE_DEFAULTS_VERSION, listSchedules, seedDefaults, type Schedule } from "../src/assistant/schedules.ts";
-import { assistantPath, writeJson, type TenantRef } from "../src/assistant/store.ts";
+import {
+  SCHEDULE_DEFAULTS_VERSION,
+  listOccurrences,
+  listSchedules,
+  recoverSchedules,
+  seedDefaults,
+  tickSchedules,
+  type Schedule,
+} from "../src/assistant/schedules.ts";
+import { assistantPath, writeJson, writeJsonl, type TenantRef } from "../src/assistant/store.ts";
+import { bumpAssistantRevision, readAssistantRevision } from "../src/assistant/revision.ts";
 
 const root = mkdtempSync(join(tmpdir(), "cr-schedules-"));
 const now = Date.parse("2026-10-23T12:00:00+08:00");
@@ -109,5 +118,119 @@ describe("schedule defaults migration", () => {
       listSchedules(tenant).some((row) => row.title === "晚间收尾"),
       false,
     );
+  });
+});
+
+describe("schedule projection revision", () => {
+  function dueSchedule(id: string, at: number, patch: Partial<Schedule> = {}): Schedule {
+    return {
+      id,
+      title: id,
+      kind: "prompt",
+      cron: "* * * * *",
+      tz: "Asia/Shanghai",
+      prompt: "执行",
+      enabled: true,
+      misfire: "runOnce",
+      nextAt: at,
+      failCount: 0,
+      createdAt: at - 1000,
+      ...patch,
+    };
+  }
+
+  test("nextAt、running、done 都通过变更回调推进 revision", async () => {
+    const tenant = ref("tick-done");
+    const at = Date.parse("2026-10-25T10:00:00+08:00");
+    writeJson(assistantPath(tenant, "schedules.json"), {
+      schedules: [dueSchedule("done", at)],
+    });
+    const initial = readAssistantRevision(tenant);
+    let finish!: (value: { ok: boolean }) => void;
+    const execution = new Promise<{ ok: boolean }>((resolve) => {
+      finish = resolve;
+    });
+
+    const started = tickSchedules(
+      tenant,
+      async () => execution,
+      at,
+      () => bumpAssistantRevision(tenant),
+    );
+    assert.equal(readAssistantRevision(tenant), initial + 1);
+    assert.equal(listSchedules(tenant)[0].lastStatus, "running");
+    assert.ok((listSchedules(tenant)[0].nextAt ?? 0) > at);
+
+    finish({ ok: true });
+    await Promise.all(started);
+    assert.equal(readAssistantRevision(tenant), initial + 2);
+    assert.equal(listSchedules(tenant)[0].lastStatus, "done");
+    assert.equal(listSchedules(tenant)[0].failCount, 0);
+  });
+
+  test("skipped 与 failed/failCount 也分别推进 revision", async () => {
+    const at = Date.parse("2026-10-25T10:00:00+08:00");
+    const skipped = ref("tick-skipped");
+    writeJson(assistantPath(skipped, "schedules.json"), {
+      schedules: [
+        dueSchedule("skipped", at - 10 * 60_000, {
+          misfire: "skip",
+        }),
+      ],
+    });
+    const skippedInitial = readAssistantRevision(skipped);
+    assert.equal(
+      tickSchedules(
+        skipped,
+        async () => ({ ok: true }),
+        at,
+        () => bumpAssistantRevision(skipped),
+      ).length,
+      0,
+    );
+    assert.equal(readAssistantRevision(skipped), skippedInitial + 1);
+    assert.equal(listSchedules(skipped)[0].lastStatus, "skipped");
+
+    const failed = ref("tick-failed");
+    writeJson(assistantPath(failed, "schedules.json"), {
+      schedules: [dueSchedule("failed", at)],
+    });
+    const failedInitial = readAssistantRevision(failed);
+    await Promise.all(
+      tickSchedules(
+        failed,
+        async () => ({ ok: false, error: "boom" }),
+        at,
+        () => bumpAssistantRevision(failed),
+      ),
+    );
+    assert.equal(readAssistantRevision(failed), failedInitial + 2);
+    assert.equal(listSchedules(failed)[0].lastStatus, "failed");
+    assert.equal(listSchedules(failed)[0].failCount, 1);
+  });
+
+  test("recoverSchedules 中断 running occurrence 时推进 revision", () => {
+    const tenant = ref("recover");
+    const at = Date.parse("2026-10-25T10:00:00+08:00");
+    writeJson(assistantPath(tenant, "schedules.json"), {
+      schedules: [dueSchedule("recover", at, { lastStatus: "running" })],
+    });
+    writeJsonl(assistantPath(tenant, "occurrences.jsonl"), [
+      {
+        occurrenceId: "recover@2026-10-25 10:00",
+        scheduleId: "recover",
+        plannedAt: at,
+        state: "running",
+        startedAt: at,
+      },
+    ]);
+    const initial = readAssistantRevision(tenant);
+    assert.equal(
+      recoverSchedules(tenant, () => bumpAssistantRevision(tenant)),
+      1,
+    );
+    assert.equal(readAssistantRevision(tenant), initial + 1);
+    assert.equal(listSchedules(tenant)[0].lastStatus, "interrupted");
+    assert.equal(listOccurrences(tenant)[0].state, "interrupted");
   });
 });

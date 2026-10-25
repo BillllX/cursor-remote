@@ -139,7 +139,7 @@ final class PushRegistrar {
         }
         requestAuthorizationIfNeeded()
         // 壳尚未挂载或正在其它域时也要补取 assistant_state（最多 30 秒一次），订阅上报靠它。
-        if store.connected, store.assistantState == nil,
+        if store.connected, !store.assistantNetworkConfirmed,
            lastAssistantRequest.map({ Date().timeIntervalSince($0) > 30 }) ?? true {
             lastAssistantRequest = Date()
             store.requestAssistant()
@@ -152,7 +152,7 @@ final class PushRegistrar {
         let imLoaded = im?.listLoaded == true
         if Self.assistantNotificationsEnabled {
             if imLoaded {
-                guard store.assistantState != nil else { return }
+                guard store.assistantNetworkConfirmed else { return }
                 applyBadge((im?.totalUnread ?? 0) + store.assistantBadgeCount + store.workspaceUnreadCount)
             }
         } else {
@@ -213,7 +213,8 @@ final class PushRegistrar {
     }
 
     private func reportIfPossible(store: ChatStore) {
-        guard store.connected, store.assistantState != nil, let token = deviceToken else { return }
+        // 订阅注册只依赖鉴权完成，不依赖 assistant_state；首次安装和弱网冷启动也能及时上报。
+        guard store.connected, store.gatewayReady, let token = deviceToken else { return }
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return }
         let environment = Self.environment
         let assistant = Self.assistantNotificationsEnabled

@@ -92,6 +92,7 @@ enum ChatDestination: Hashable {
 @MainActor
 final class ChatStore {
     var connected = false
+    @ObservationIgnored var gatewayReady = false
     /// 连不上已超过 offlineGrace：客户端仍在后台重连，界面从「连接中」改报「已断开」
     var linkOffline = false
     var offlineTask: Task<Void, Never>?
@@ -114,8 +115,19 @@ final class ChatStore {
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
     var assistantState: AssistantState?
-    /// 每次收到完整 assistant_state 都推进；用于区分缓存状态与 requestAssistant 后的新响应。
+    /// Revision at which the retained memory projection was actually fetched.
+    @ObservationIgnored var assistantMemoryRevision: Int?
+    /// 只由网络确认推进；缓存水合不伪装成网关响应。
     var assistantStateRevision: UInt64 = 0
+    @ObservationIgnored var assistantNetworkConfirmed = false
+    @ObservationIgnored var assistantRequestGeneration = 0
+    @ObservationIgnored var assistantInFlightGeneration: Int?
+    @ObservationIgnored var assistantInFlightReqId: String?
+    @ObservationIgnored var assistantTaggedResponsesSeen = false
+    /// 当前 UI 最后声明的记忆投影订阅意图；不能从缓存里是否仍有 memory 反推。
+    @ObservationIgnored var assistantMemoryDesired = false
+    @ObservationIgnored var assistantSyncGate = AssistantSyncGate()
+    @ObservationIgnored var assistantSyncTimeoutTask: Task<Void, Never>?
     /// 统一记忆中心只读数据（overview / scope detail / search）
     var memoryCenterData = MemoryCenterDataState.initial
     @ObservationIgnored var memoryCenterActiveCount = 0
@@ -141,6 +153,10 @@ final class ChatStore {
     /// turn_files 可能早于非 owner 的 snapshot/history；按会话和回合暂存，回合出现时再合并。
     var pendingTurnFiles = DeferredTurnFiles()
     var workspaces: [WorkspaceItem] = []
+    @ObservationIgnored var workspacesSyncInFlight = false
+    @ObservationIgnored var workspacesSyncGeneration = 0
+    @ObservationIgnored var workspacesInFlightGeneration: Int?
+    @ObservationIgnored var workspacesForcePending = false
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
     var fileBrowserOpen = false
@@ -226,6 +242,11 @@ final class ChatStore {
     /// 当前会话工作区的文件索引（list_files query:"" 的全量结果）
     var fileIndex: [String] = []
     var fileIndexRequestChatId: String?
+    @ObservationIgnored var fileIndexSyncGeneration: [String: Int] = [:]
+    @ObservationIgnored var fileIndexInFlight: [String: Int] = [:]
+    @ObservationIgnored var fileIndexRequestIds: [String: String] = [:]
+    @ObservationIgnored var fileIndexForcePending = Set<String>()
+    @ObservationIgnored var fileIndexTimeoutTasks: [String: Task<Void, Never>] = [:]
     var treeTruncated = false
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
@@ -410,6 +431,17 @@ final class ChatStore {
     var listCacheTask: Task<Void, Never>?
     /// 本机缓存读取代际：resetTenantSession 递增，之前发起的读取回来直接丢（同租户登出再登录也不串）
     var cacheEpoch = 0
+    @ObservationIgnored var bootstrapSnapshot: AppBootstrapSnapshot?
+    @ObservationIgnored var bootstrapLoadTask: Task<Void, Never>?
+    @ObservationIgnored var bootstrapLoadCompleted = false
+    @ObservationIgnored var bootstrapAssistantDirty = false
+    @ObservationIgnored var bootstrapWorkspacesDirty = false
+    @ObservationIgnored var bootstrapFileIndexesDirty = false
+    /// bootstrap 尚未读完时删除会话也要留下墓碑，防止磁盘索引在合并时复活。
+    @ObservationIgnored var bootstrapFileIndexTombstones = Set<String>()
+    @ObservationIgnored var launchSawReady = false
+    @ObservationIgnored var launchSawConditionalSync = false
+    @ObservationIgnored var launchStableReported = false
 
     var syncTask: Task<Void, Never>?
     var verifyTask: Task<Void, Never>?

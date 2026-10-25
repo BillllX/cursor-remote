@@ -114,6 +114,7 @@ const approval: AssistantApproval = {
 };
 
 const assistantState: AssistantState = {
+  revision: 12,
   name: "阿驳",
   background: { model: "composer-2.5", ok: true, reason: "夜间整理已排队" },
   pushKey: "BPk3-example-vapid-public-key",
@@ -525,6 +526,16 @@ export const serverSamples: ServerMessage[] = [
     chatId: CHAT,
   },
   {
+    type: "files",
+    query: "",
+    paths: [],
+    status: {},
+    truncated: false,
+    chatId: CHAT,
+    reqId: "rq-files-1",
+    error: "服务器正忙，请稍后再试",
+  },
+  {
     type: "search_hits",
     query: "await guard",
     hits: [{ path: "src/router.ts", line: 42, text: "  await guard(to);" }],
@@ -703,6 +714,7 @@ export const serverSamples: ServerMessage[] = [
   },
   { type: "loop_tick", chatId: CHAT, tick: 3, status: "skipped", summary: "上一轮还没跑完，跳过" },
   { type: "assistant_state", state: assistantState },
+  { type: "assistant_not_modified", revision: 12 },
   {
     type: "assistant_result",
     reqId: "rq-todo-1",
@@ -1245,7 +1257,7 @@ export const clientSamples: ClientMessage[] = [
     mode: "ask",
   },
   { type: "loop_stop", chatId: CHAT },
-  { type: "assistant_get", memory: true },
+  { type: "assistant_get", memory: true, knownRevision: 12 },
   { type: "assistant_op", op: "todo_add", args: { text: "周三前回复报价", due: "2026-02-11" }, reqId: "rq-todo-1" },
   { type: "assistant_op", op: "memory_center_get", reqId: "rq-mc-overview" },
   { type: "assistant_op", op: "memory_center_get", args: { scope: "personal" }, reqId: "rq-mc-detail" },

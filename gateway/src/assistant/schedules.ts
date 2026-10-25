@@ -183,10 +183,14 @@ export function removeSchedule(ref: TenantRef, id: string) {
 function patchSchedule(ref: TenantRef, id: string, patch: Partial<Schedule>) {
   const data = read(ref);
   const row = data.schedules.find((item) => item.id === id);
-  if (!row) return;
+  if (!row) return false;
+  const changed = Object.entries(patch).some(
+    ([key, value]) => row[key as keyof Schedule] !== value,
+  );
+  if (!changed) return false;
   Object.assign(row, patch);
   writeJson(file(ref), data);
-  return row;
+  return true;
 }
 
 function upsertOccurrence(ref: TenantRef, occ: Occurrence) {
@@ -198,7 +202,7 @@ function upsertOccurrence(ref: TenantRef, occ: Occurrence) {
 }
 
 /** 网关启动：上次还在跑的记为中断，进收件箱，不自动重跑 */
-export function recoverSchedules(ref: TenantRef) {
+export function recoverSchedules(ref: TenantRef, onChanged?: () => void) {
   const rows = readJsonl<Occurrence>(occFile(ref));
   const stale = rows.filter((row) => row.state === "running");
   if (!stale.length) return 0;
@@ -209,9 +213,12 @@ export function recoverSchedules(ref: TenantRef) {
   }
   writeJsonl(occFile(ref), rows);
   const schedules = listSchedules(ref);
+  let projectedChanged = false;
   for (const row of stale) {
     const schedule = schedules.find((item) => item.id === row.scheduleId);
-    patchSchedule(ref, row.scheduleId, { lastStatus: "interrupted" });
+    projectedChanged =
+      patchSchedule(ref, row.scheduleId, { lastStatus: "interrupted" }) ||
+      projectedChanged;
     postInbox(ref, {
       kind: "run",
       title: `日程被中断：${schedule?.title ?? row.scheduleId}`,
@@ -220,6 +227,7 @@ export function recoverSchedules(ref: TenantRef) {
       scheduleId: row.scheduleId,
     });
   }
+  if (projectedChanged) onChanged?.();
   return stale.length;
 }
 
@@ -230,7 +238,12 @@ const inFlight = new Set<string>();
  * 上一次还在跑时本次记 skipped；单次运行 id 按本地时刻去重，夏令时重复的时刻只跑一次。
  * 返回本次启动的运行，测试里可以 await。
  */
-export function tickSchedules(ref: TenantRef, exec: ScheduleExecutor, now = Date.now()): Promise<void>[] {
+export function tickSchedules(
+  ref: TenantRef,
+  exec: ScheduleExecutor,
+  now = Date.now(),
+  onChanged?: () => void,
+): Promise<void>[] {
   const started: Promise<void>[] = [];
   for (const schedule of listSchedules(ref)) {
     if (!schedule.enabled || schedule.nextAt === null || schedule.nextAt > now) continue;
@@ -241,14 +254,18 @@ export function tickSchedules(ref: TenantRef, exec: ScheduleExecutor, now = Date
       planned = next;
     }
     const after = nextRun(schedule.cron, schedule.tz, now);
-    patchSchedule(ref, schedule.id, { nextAt: after });
+    let projectedChanged = patchSchedule(ref, schedule.id, { nextAt: after });
     const occurrenceId = `${schedule.id}@${describeLocal(planned, schedule.tz)}`;
     const late = now - planned > MISFIRE_GRACE_MS || planned !== schedule.nextAt;
     const known = readJsonl<Occurrence>(occFile(ref)).find((row) => row.occurrenceId === occurrenceId);
-    if (known) continue;
+    if (known) {
+      if (projectedChanged) onChanged?.();
+      continue;
+    }
     const skip = (reason: string) => {
       upsertOccurrence(ref, { occurrenceId, scheduleId: schedule.id, plannedAt: planned, state: "skipped", error: reason, endedAt: now });
-      patchSchedule(ref, schedule.id, { lastStatus: "skipped" });
+      projectedChanged = patchSchedule(ref, schedule.id, { lastStatus: "skipped" }) || projectedChanged;
+      if (projectedChanged) onChanged?.();
     };
     if (late && schedule.misfire === "skip") {
       skip("错过了计划时间，按设置跳过");
@@ -260,7 +277,10 @@ export function tickSchedules(ref: TenantRef, exec: ScheduleExecutor, now = Date
     }
     const occ: Occurrence = { occurrenceId, scheduleId: schedule.id, plannedAt: planned, state: "running", startedAt: now };
     upsertOccurrence(ref, occ);
-    patchSchedule(ref, schedule.id, { lastStartedAt: now, lastStatus: "running" });
+    projectedChanged =
+      patchSchedule(ref, schedule.id, { lastStartedAt: now, lastStatus: "running" }) ||
+      projectedChanged;
+    if (projectedChanged) onChanged?.();
     inFlight.add(schedule.id);
     started.push(
       (async () => {
@@ -283,12 +303,13 @@ export function tickSchedules(ref: TenantRef, exec: ScheduleExecutor, now = Date
         const current = listSchedules(ref).find((item) => item.id === schedule.id);
         const failCount = result.ok ? 0 : (current?.failCount ?? 0) + 1;
         const pause = failCount >= MAX_FAILS;
-        patchSchedule(ref, schedule.id, {
+        const changed = patchSchedule(ref, schedule.id, {
           lastStatus: done.state,
           lastCompletedAt: result.ok ? Date.now() : current?.lastCompletedAt,
           failCount,
           ...(pause ? { enabled: false, pausedReason: `连续 ${MAX_FAILS} 次失败，已暂停` } : {}),
         });
+        if (changed) onChanged?.();
         if (pause) {
           postInbox(ref, {
             kind: "run",

@@ -5,7 +5,7 @@ import { hasAuth, resolveTenant } from "../../tenants.ts";
 import { usageRec } from "../../usage.ts";
 import { externalModelIds } from "../../providers.ts";
 import { loopsForTenant } from "../../loops.ts";
-import { assistantName, onTenantHello } from "../../assistant/service.ts";
+import { assistantName, closeMemoryWatcher, onTenantHello } from "../../assistant/service.ts";
 import { gatewayEnv } from "../../config.ts";
 import { log } from "../../log.ts";
 import { loginBlocked, noteLoginFail, noteLoginOk } from "../../auth/login.ts";
@@ -29,6 +29,8 @@ import type { MessageOf, WsConnCtx } from "./types.ts";
 import { deviceRegistry } from "../../device/registry.ts";
 
 export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hello">) {
+  // 同一 socket 可以再次 hello；无论新鉴权是否成功，都先摘掉所有旧租户 memory 订阅。
+  closeMemoryWatcher(ws);
   if (loginBlocked(conn.ip, state.loginHits)) {
     send(ws, { type: "auth", ok: false, message: "试太多次了，过几分钟再试。" });
     return;

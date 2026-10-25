@@ -12,6 +12,7 @@ const captureDrain = read("ios/Jiebo/Jiebo/AppIntents/AssistantCaptureDrain.swif
 const composer = read("ios/Jiebo/Jiebo/Views/ComposerView.swift");
 const chatStore = read("ios/Jiebo/Jiebo/Session/ChatStore.swift");
 const handle = read("ios/Jiebo/Jiebo/Session/ChatStore+Handle.swift");
+const assistantStore = read("ios/Jiebo/Jiebo/Session/ChatStore+Assistant.swift");
 const presenter = read("ios/Jiebo/Jiebo/Session/AssistantScenePresenter.swift");
 const project = read("ios/Jiebo/Jiebo.xcodeproj/project.pbxproj");
 
@@ -56,7 +57,7 @@ requireSource(home, "let baselineRevision = store.assistantStateRevision", "推�
 requireSource(home, "for _ in 0..<maximumAttempts", "推送有界重试");
 requireSource(home, "store.assistantStateRevision > baselineRevision", "推送明确新响应");
 requireSource(chatStore, "var assistantStateRevision: UInt64", "助理状态响应版本");
-requireSource(handle, "assistantStateRevision &+= 1", "助理状态响应推进");
+requireSource(handle + assistantStore, "assistantStateRevision &+= 1", "助理状态响应推进");
 
 // iPhone 分支保持原入口；iPad 不得设置 assistantOnly=true 或复用 PhoneRouter。
 requireSource(

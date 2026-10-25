@@ -725,9 +725,18 @@ describe("WS 处理函数：覆盖、断线取消、排队满回错误", () => {
       assert.equal(err.type, "error");
       assert.match(err.message, /服务器正忙/);
       assert.equal(err.chatId, undefined);
-      // list_files 同样
-      await handlers.list_files!(other, { type: "list_files", query: "" });
-      assert.equal((other.sent[1] as { type: string }).type, "error");
+      // list_files 排队满：走 files.error，不占用 Agent 回合 error
+      await handlers.list_files!(other, {
+        type: "list_files",
+        query: "",
+        chatId: "c1",
+        reqId: "rq-files-busy",
+      });
+      const filesBusy = other.sent[1] as { type: string; error?: string; reqId?: string; chatId?: string };
+      assert.equal(filesBusy.type, "files");
+      assert.match(filesBusy.error || "", /服务器正忙/);
+      assert.equal(filesBusy.reqId, "rq-files-busy");
+      assert.equal(filesBusy.chatId, "c1");
       // read_file（diff）：错误放进文件自带的 error 字段，按 reqId 回给预览
       await handlers.read_file!(other, { type: "read_file", path: "a.ts", diff: true, reqId: "r1" });
       const reply = other.sent[2] as { type: string; error?: string; reqId?: string };

@@ -581,9 +581,13 @@ function rankWorkspaceFiles(paths: string[], status: Record<string, string>, que
 
 export function filesMessage(
   conn: Conn | undefined,
-  base: { chatId?: string; query: string; mention?: boolean },
+  base: { chatId?: string; query: string; mention?: boolean; reqId?: string },
   listed: WorkspaceFiles,
+  error?: string,
 ): ServerMessage {
+  if (error) {
+    return { type: "files", ...base, paths: [], status: {}, truncated: false, error };
+  }
   const overhead = Buffer.byteLength(JSON.stringify({ type: "files", ...base, truncated: true }));
   const fitted = fitWorkspaceFiles(listed, conn?.maxMessageBytes ?? 0, overhead);
   return { type: "files", ...base, paths: fitted.paths, status: fitted.status, truncated: fitted.truncated };

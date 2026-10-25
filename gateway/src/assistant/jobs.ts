@@ -105,7 +105,13 @@ export async function runIntegrator(ref: TenantRef, runner: JobRunner, now = Dat
 }
 
 /** 每天本地 4 点后跑一次：过期标失效，再让助理把相对时间和过去的行程改写成具体日期或过去式，重写“近况” */
-export async function runMaintenance(ref: TenantRef, runner: JobRunner, now = Date.now(), tz = DEFAULT_TZ) {
+export async function runMaintenance(
+  ref: TenantRef,
+  runner: JobRunner,
+  now = Date.now(),
+  tz = DEFAULT_TZ,
+  onChanged?: () => void,
+) {
   const local = localParts(now, tz);
   const day = describeLocal(now, tz).slice(0, 10);
   const state = readIntegrator(ref);
@@ -113,6 +119,7 @@ export async function runMaintenance(ref: TenantRef, runner: JobRunner, now = Da
   state.lastMaintenance = day;
   writeJson(stateFile(ref), state);
   const expired = expireMemory(ref);
+  if (expired) onChanged?.();
   const entries = listMemory(ref).entries.filter((entry) => !entry.invalidAt);
   const timed = entries.filter((entry) => entry.kind === "事件" || /(明天|后天|下周|下个月|今天|这周|本周|昨天|上周)/.test(entry.text));
   let llm: BackgroundResult | null = null;

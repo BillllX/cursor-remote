@@ -6,7 +6,6 @@ import UIKit
 struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,13 +31,6 @@ struct AssistantHome: View {
                 todayButton
             }
             .sharedBackgroundVisibility(.hidden)
-        }
-        .task { store.requestAssistant() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { store.requestAssistant() }
-        }
-        .onChange(of: store.connected) { _, connected in
-            if connected { store.requestAssistant() }
         }
     }
 

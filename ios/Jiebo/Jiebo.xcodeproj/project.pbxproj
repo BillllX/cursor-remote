@@ -32,6 +32,9 @@
 		A1B2C3D4E5F6071829000320 /* Preview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000120 /* Preview.swift */; };
 		A1B2C3D4E5F6071829000390 /* FileCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000190 /* FileCardView.swift */; };
 		A1B2C3D4E5F6071829000391 /* ChatCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000191 /* ChatCache.swift */; };
+		BOOTC003 /* AppBootstrapCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = BOOTC001 /* AppBootstrapCache.swift */; };
+		BOOTC004 /* ChatStore+Bootstrap.swift in Sources */ = {isa = PBXBuildFile; fileRef = BOOTC002 /* ChatStore+Bootstrap.swift */; };
+		BOOTC006 /* AppLaunchMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = BOOTC005 /* AppLaunchMetrics.swift */; };
 		A1B2C3D4E5F6071829000392 /* ThumbnailStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000192 /* ThumbnailStore.swift */; };
 		A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000121 /* PreviewPanelView.swift */; };
 		A1B2C3D4E5F6071829000322 /* MediaPreviewViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000122 /* MediaPreviewViews.swift */; };
@@ -206,6 +209,9 @@
 		A1B2C3D4E5F6071829000120 /* Preview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preview.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000190 /* FileCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileCardView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000191 /* ChatCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatCache.swift; sourceTree = "<group>"; };
+		BOOTC001 /* AppBootstrapCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBootstrapCache.swift; sourceTree = "<group>"; };
+		BOOTC002 /* ChatStore+Bootstrap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Bootstrap.swift"; sourceTree = "<group>"; };
+		BOOTC005 /* AppLaunchMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLaunchMetrics.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000192 /* ThumbnailStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThumbnailStore.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000121 /* PreviewPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPanelView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000122 /* MediaPreviewViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaPreviewViews.swift; sourceTree = "<group>"; };
@@ -478,6 +484,9 @@
 				A1B2C3D4E5F6071829000117 /* Crew.swift */,
 				A1B2C3D4E5F6071829000120 /* Preview.swift */,
 				A1B2C3D4E5F6071829000191 /* ChatCache.swift */,
+				BOOTC001 /* AppBootstrapCache.swift */,
+				BOOTC002 /* ChatStore+Bootstrap.swift */,
+				BOOTC005 /* AppLaunchMetrics.swift */,
 				A1B2C3D4E5F6071829000192 /* ThumbnailStore.swift */,
 				A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */,
 				A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */,
@@ -843,6 +852,9 @@
 				A1B2C3D4E5F6071829000320 /* Preview.swift in Sources */,
 				A1B2C3D4E5F6071829000390 /* FileCardView.swift in Sources */,
 				A1B2C3D4E5F6071829000391 /* ChatCache.swift in Sources */,
+				BOOTC003 /* AppBootstrapCache.swift in Sources */,
+				BOOTC004 /* ChatStore+Bootstrap.swift in Sources */,
+				BOOTC006 /* AppLaunchMetrics.swift in Sources */,
 				A1B2C3D4E5F6071829000392 /* ThumbnailStore.swift in Sources */,
 				A1B2C3D4E5F6071829000323 /* HtmlRewrite.swift in Sources */,
 				A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */,

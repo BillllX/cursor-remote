@@ -173,6 +173,7 @@ export default function ChatApp() {
   // 自动选中（非用户点选）的会话；助理会话就绪后可被它替换
   const autoPickedIdRef = useRef("");
   const [assistantState, setAssistantState] = useState<AssistantState | null>(null);
+  const assistantStateRef = useRef<AssistantState | null>(null);
   const [lastAssistantResult, setLastAssistantResult] = useState<AssistantResultMessage | null>(null);
   const [assistantResultTick, setAssistantResultTick] = useState(0);
   const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
@@ -743,7 +744,7 @@ export default function ChatApp() {
             setAssistantName(message.assistantName?.trim() || DEFAULT_ASSISTANT_NAME);
             assistantChatIdRef.current = message.assistantChatId || "";
             setAssistantChatId(message.assistantChatId || "");
-            send({ type: "assistant_get" });
+            send({ type: "assistant_get", knownRevision: assistantStateRef.current?.revision });
             if (inboxDeepLinkRef.current) {
               chooseSide("assistant");
             }
@@ -1014,6 +1015,10 @@ export default function ChatApp() {
           break;
         case "files":
           if (message.chatId && message.chatId !== activeIdRef.current) break;
+          if (message.error) {
+            setError(message.error);
+            break;
+          }
           if (message.mention) {
             if (mentionQueryRef.current == null || message.query !== mentionQueryRef.current) break;
             setFileHits(
@@ -1047,8 +1052,16 @@ export default function ChatApp() {
           setLoops((prev) => applyLoopMessage(prev, message));
           break;
         case "assistant_state":
+          assistantStateRef.current = message.state;
           setAssistantState(message.state);
           if (message.state.name?.trim()) setAssistantName(message.state.name.trim());
+          break;
+        case "assistant_not_modified":
+          setAssistantState((prev) => {
+            const next = applyAssistantMessage(prev, message);
+            assistantStateRef.current = next;
+            return next;
+          });
           break;
         case "inbox_item":
         case "delegation_state":
@@ -1204,6 +1217,10 @@ export default function ChatApp() {
           reduceChats();
           break;
         case "error":
+          if (message.reqId) {
+            setError(message.message);
+            break;
+          }
           setError(message.message);
           reduceChats();
           break;

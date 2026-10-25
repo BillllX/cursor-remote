@@ -218,6 +218,13 @@ describe("applyServerMessage", () => {
     assert.equal(applyServerMessage(idle, msg, ctx), idle);
   });
 
+  test("error 带 reqId：只结清请求，不当作 Agent 回合终态", () => {
+    const msg = { ...sample("error", (item) => Boolean(item.chatId)), reqId: "rq-files-1" };
+    const running = runningChats({ tools: [tool()] });
+    assert.equal(applyServerMessage(running, msg, ctx), running);
+    assert.equal(lastTurn(running).running, true);
+  });
+
   test("done：收尾并记时长；重复的 done 不再改状态", () => {
     const msg = { ...sample("done"), status: "finished" };
     const once = applyServerMessage(runningChats({ tools: [tool()] }), msg, ctx);
@@ -561,6 +568,16 @@ describe("applyAssistantMessage", () => {
 
   test("其它消息返回同一引用", () => {
     const state = base();
+    assert.equal(applyAssistantMessage(state, sample("assistant_not_modified")), state);
     assert.equal(applyAssistantMessage(state, sample("pong")), state);
+  });
+
+  test("assistant_not_modified 会采用网关确认的 revision", () => {
+    const state = { ...base(), revision: 4 };
+    const next = applyAssistantMessage(state, {
+      type: "assistant_not_modified",
+      revision: 5,
+    });
+    assert.equal(next?.revision, 5);
   });
 });

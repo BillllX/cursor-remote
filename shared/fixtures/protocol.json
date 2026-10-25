@@ -208,6 +208,16 @@
       "truncated": true
     },
     {
+      "type": "files",
+      "chatId": "c-7f3a9e21",
+      "error": "服务器正忙，请稍后再试",
+      "paths": [],
+      "query": "",
+      "reqId": "rq-files-1",
+      "status": {},
+      "truncated": false
+    },
+    {
       "type": "search_hits",
       "chatId": "c-7f3a9e21",
       "hits": [
@@ -946,6 +956,7 @@
         "projectionVersion": 1,
         "pushApns": true,
         "pushKey": "BPk3-example-vapid-public-key",
+        "revision": 12,
         "runs": [
           {
             "endedAt": 1739000030000,
@@ -988,6 +999,10 @@
           }
         ]
       }
+    },
+    {
+      "type": "assistant_not_modified",
+      "revision": 12
     },
     {
       "type": "assistant_result",
@@ -2040,6 +2055,7 @@
     },
     {
       "type": "assistant_get",
+      "knownRevision": 12,
       "memory": true
     },
     {

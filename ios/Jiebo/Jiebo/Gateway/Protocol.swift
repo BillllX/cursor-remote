@@ -409,7 +409,7 @@ enum ClientMessage {
     case approvalReply(chatId: String, callId: String, allow: Bool)
     case setPolicy(policy: String, chatId: String?)
     case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
-    case listFiles(query: String?, chatId: String?, mention: Bool?)
+    case listFiles(query: String?, chatId: String?, mention: Bool?, reqId: String?)
     case searchText(query: String, chatId: String?)
     case revertFile(chatId: String, path: String)
     case listCheckpoints(chatId: String)
@@ -439,7 +439,7 @@ enum ClientMessage {
     case loopStart(chatId: String, goal: String, intervalSec: Int, maxTicks: Int?, model: String?, mode: AgentMode?)
     case loopStop(chatId: String)
     /// 个人助理：拉今日页状态。memory=true 时一并下发记忆全量，之后的推送也带记忆
-    case assistantGet(memory: Bool)
+    case assistantGet(memory: Bool, knownRevision: Int?, reqId: String?, generation: Int?)
     /// 个人助理操作（inbox_read / todo_add / memory_* / approval_answer …），args 由网关逐项校验
     case assistantOp(op: String, args: [String: JSONValue], reqId: String?)
     // 即时消息（见 docs/im.md）。只有 hello caps 含 "im" 的连接网关才处理
@@ -574,11 +574,12 @@ enum ClientMessage {
             if let mimeType { object["mimeType"] = .string(mimeType) }
             if let id { object["id"] = .string(id) }
             return .object(object)
-        case .listFiles(let query, let chatId, let mention):
+        case .listFiles(let query, let chatId, let mention, let reqId):
             var object: [String: JSONValue] = ["type": .string("list_files")]
             if let query { object["query"] = .string(query) }
             if let chatId { object["chatId"] = .string(chatId) }
             if let mention { object["mention"] = .bool(mention) }
+            if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
             return .object(object)
         case .searchText(let query, let chatId):
             var object: [String: JSONValue] = ["type": .string("search_text"), "query": .string(query)]
@@ -657,9 +658,12 @@ enum ClientMessage {
             return .object(object)
         case .loopStop(let chatId):
             return .object(["type": .string("loop_stop"), "chatId": .string(chatId)])
-        case .assistantGet(let memory):
+        case .assistantGet(let memory, let knownRevision, let reqId, let generation):
             var object: [String: JSONValue] = ["type": .string("assistant_get")]
             if memory { object["memory"] = .bool(true) }
+            if let knownRevision, knownRevision > 0 { object["knownRevision"] = .number(Double(knownRevision)) }
+            if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
+            if let generation, generation > 0 { object["generation"] = .number(Double(generation)) }
             return .object(object)
         case .assistantOp(let op, let args, let reqId):
             var object: [String: JSONValue] = ["type": .string("assistant_op"), "op": .string(op)]
@@ -1309,6 +1313,8 @@ struct AssistantMemory: Sendable, Hashable {
 }
 
 struct AssistantState: Sendable, Hashable {
+    /// Opaque conditional-fetch revision. Old gateways omit it.
+    var revision: Int?
     var name: String
     var background: AssistantBackground
     var pushKey: String?
@@ -1333,6 +1339,8 @@ struct AssistantState: Sendable, Hashable {
     var memory: AssistantMemory?
     /// 老网关不带
     var calendar: AssistantCalendar?
+    /// Original wire projection, retained for lossless background persistence.
+    var rawJSON: JSONValue
 
     var unreadInbox: Int { inbox.filter { !$0.read }.count }
 
@@ -1343,7 +1351,20 @@ struct AssistantState: Sendable, Hashable {
             guard let text = item["text"]?.string else { return nil }
             return AssistantBrief(day: item["day"]?.string ?? "", text: text)
         }
+        let revision: Int?
+        if let value = row["revision"], value != .null {
+            guard let number = value.number,
+                  number.isFinite,
+                  number > 0,
+                  number == number.rounded(),
+                  number <= Double(Int.max)
+            else { return nil }
+            revision = Int(number)
+        } else {
+            revision = nil
+        }
         return AssistantState(
+            revision: revision,
             name: row["name"]?.string?.nilIfEmpty ?? AssistantDefaults.name,
             background: AssistantBackground(
                 model: background?["model"]?.string ?? "",
@@ -1366,7 +1387,8 @@ struct AssistantState: Sendable, Hashable {
             projectionVersion: row["projectionVersion"]?.int,
             snapshotAt: row["snapshotAt"]?.number,
             memory: row["memory"].flatMap(AssistantMemory.from),
-            calendar: row["calendar"].flatMap(AssistantCalendar.from)
+            calendar: row["calendar"].flatMap(AssistantCalendar.from),
+            rawJSON: json
         )
     }
 }
@@ -1409,7 +1431,7 @@ enum ServerMessage {
     case toolOutput(chatId: String, callId: String, stream: String?, chunk: String?, stdout: String?, stderr: String?)
     case task(chatId: String, text: String)
     case status(chatId: String?, status: String, message: String?)
-    case error(chatId: String?, message: String)
+    case error(chatId: String?, message: String, reqId: String?)
     case approval(chatId: String, callId: String, name: String, args: JSONValue?)
     case done(chatId: String, status: String, durationMs: Double?)
     /// chatRevs 为 nil 表示网关是旧版（不支持 P4 增量），客户端应回落全量 sync_state
@@ -1461,7 +1483,16 @@ enum ServerMessage {
     case loopTick(chatId: String, tick: Int, status: String, summary: String)
     case fileUploaded(path: String, chatId: String?, name: String?, error: String?, size: Double?, id: String?)
     case fileWritten(path: String, chatId: String?, error: String?)
-    case files(query: String, paths: [String], mention: Bool, truncated: Bool, chatId: String?, status: [String: String])
+    case files(
+        query: String,
+        paths: [String],
+        mention: Bool,
+        truncated: Bool,
+        chatId: String?,
+        status: [String: String],
+        reqId: String?,
+        error: String?
+    )
     case searchHits(query: String, hits: [SearchHit], chatId: String?, truncated: Bool)
     /// P5：read_file 的应答。文本内联 content；图片/PDF 等给 url+media 票据走 HTTP /media；
     /// headUrl 是图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）
@@ -1489,7 +1520,9 @@ enum ServerMessage {
     case checkpoints(chatId: String, items: [CheckpointInfo])
     case restored(chatId: String, checkpointId: String?, label: String?, error: String?, silent: Bool)
     /// 个人助理全量状态（替换本地）
-    case assistantState(AssistantState)
+    case assistantState(AssistantState, reqId: String?, generation: Int?)
+    /// 条件拉取命中；旧网关不会发送。
+    case assistantNotModified(revision: Int, reqId: String?, generation: Int?)
     case assistantResult(reqId: String?, op: String, ok: Bool, error: String?, data: JSONValue?)
     case inboxItem(AssistantInboxItem)
     /// 委派开始、待批、继续、完成、失败时下发；approval 只在待批时带
@@ -1519,11 +1552,11 @@ enum ServerMessage {
              .chatTitle(let chatId, _),
              .workspaceAgentUpdate(let chatId, _, _, _):
             return chatId
-        case .status(let chatId, _, _), .error(let chatId, _):
+        case .status(let chatId, _, _), .error(let chatId, _, _):
             return chatId
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
-        case .files(_, _, _, _, let chatId, _):
+        case .files(_, _, _, _, let chatId, _, _, _):
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _, _, _):
             return chatId
@@ -1692,7 +1725,11 @@ enum ServerMessage {
         case "status":
             return .status(chatId: object["chatId"]?.string, status: object["status"]?.string ?? "", message: object["message"]?.string)
         case "error":
-            return .error(chatId: object["chatId"]?.string, message: object["message"]?.string ?? "")
+            return .error(
+                chatId: object["chatId"]?.string,
+                message: object["message"]?.string ?? "",
+                reqId: object["reqId"]?.string
+            )
         case "approval":
             return .approval(chatId: chatId, callId: object["callId"]?.string ?? "", name: object["name"]?.string ?? "", args: object["args"])
         case "done":
@@ -1788,7 +1825,9 @@ enum ServerMessage {
                 mention: object["mention"]?.bool ?? false,
                 truncated: object["truncated"]?.bool ?? false,
                 chatId: object["chatId"]?.string,
-                status: gitLetters(object["status"])
+                status: gitLetters(object["status"]),
+                reqId: object["reqId"]?.string,
+                error: object["error"]?.string
             )
         case "search_hits":
             return .searchHits(
@@ -1869,7 +1908,23 @@ enum ServerMessage {
             )
         case "assistant_state":
             guard let state = object["state"].flatMap(AssistantState.from) else { return .ignored(type) }
-            return .assistantState(state)
+            return .assistantState(
+                state,
+                reqId: object["reqId"]?.string,
+                generation: object["generation"]?.int
+            )
+        case "assistant_not_modified":
+            guard let number = object["revision"]?.number,
+                  number.isFinite,
+                  number > 0,
+                  number == number.rounded(),
+                  number <= Double(Int.max)
+            else { return .ignored(type) }
+            return .assistantNotModified(
+                revision: Int(number),
+                reqId: object["reqId"]?.string,
+                generation: object["generation"]?.int
+            )
         case "assistant_result":
             return .assistantResult(
                 reqId: object["reqId"]?.string,

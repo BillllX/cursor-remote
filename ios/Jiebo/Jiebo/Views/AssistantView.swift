@@ -39,7 +39,10 @@ struct AssistantView: View {
         .background(JieboColor.paper)
         .task { store.requestAssistant(memory: tab == .memory) }
         .onChange(of: tab) { _, next in
-            if next == .memory { store.requestAssistant(memory: true) }
+            store.requestAssistant(memory: next == .memory, force: true)
+        }
+        .onDisappear {
+            if tab == .memory { store.requestAssistant(memory: false, force: true) }
         }
     }
 

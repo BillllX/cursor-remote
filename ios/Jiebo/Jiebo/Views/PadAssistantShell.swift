@@ -79,8 +79,13 @@ struct PadAssistantShell: View {
         }
         .onChange(of: router.assistantSection) { _, section in
             sceneSession?.dismissPreview()
-            store.requestAssistant(memory: section == .memory)
+            store.requestAssistant(memory: section == .memory, force: true)
             showDetailIfCompact()
+        }
+        .onDisappear {
+            if router.assistantSection == .memory {
+                store.requestAssistant(memory: false, force: true)
+            }
         }
         .onChange(of: sizeClass) { _, next in
             updateLayout(width: containerWidth)

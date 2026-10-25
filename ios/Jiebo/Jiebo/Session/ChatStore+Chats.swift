@@ -14,7 +14,7 @@ extension ChatStore {
     }
 
     func openWorkspaceSwitcher() {
-        send(.listWorkspaces)
+        requestWorkspaces(force: true)
         creatingWorkspace = false
         newWorkspaceName = ""
         workspaceSheetOpen = true
@@ -22,7 +22,34 @@ extension ChatStore {
 
     /// 只刷新工作区列表，给侧栏「新对话」菜单用，不打开另一张表。
     func refreshWorkspaces() {
+        requestWorkspaces(force: true)
+    }
+
+    func requestWorkspaces(force: Bool = false) {
+        guard connected, unlocked, gatewayReady else { return }
+        if workspacesSyncInFlight {
+            if force { workspacesForcePending = true }
+            return
+        }
+        workspacesSyncGeneration &+= 1
+        workspacesSyncInFlight = true
+        workspacesInFlightGeneration = workspacesSyncGeneration
         send(.listWorkspaces)
+    }
+
+    func receiveWorkspaces(root: String, items: [WorkspaceItem]) {
+        workspaces = items
+        if workspaceRoot.isEmpty, let first = items.first { workspaceRoot = first.path }
+        updateCachedWorkspaces(root: root, items: items)
+        if workspacesSyncInFlight,
+           workspacesInFlightGeneration == workspacesSyncGeneration {
+            // A response or a newer broadcast both satisfy the one outstanding refresh.
+            let forceAgain = workspacesForcePending
+            workspacesSyncInFlight = false
+            workspacesInFlightGeneration = nil
+            workspacesForcePending = false
+            if forceAgain { requestWorkspaces(force: true) }
+        }
     }
 
     /// 切到这个工作区：有会话就打开最近的一条，没有就新建。
@@ -278,6 +305,13 @@ extension ChatStore {
         dropChatState(id) // 在途分页随删除终止（迟到页由 .chatTurns 校验丢弃）
         forgetBodyCache(id)
         cachedOnlyIds.remove(id)
+        removeCachedFileIndex(chatId: id)
+        fileIndexInFlight.removeValue(forKey: id)
+        fileIndexSyncGeneration.removeValue(forKey: id)
+        fileIndexRequestIds.removeValue(forKey: id)
+        fileIndexForcePending.remove(id)
+        fileIndexTimeoutTasks.removeValue(forKey: id)?.cancel()
+        if fileIndexRequestChatId == id { fileIndexRequestChatId = nil }
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
             let place = cwd.nilIfEmpty ?? workspaceRoot

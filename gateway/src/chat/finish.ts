@@ -17,6 +17,7 @@ import { checkpointGit, workspacePrefix } from "../workspace/checkpoints.ts";
 import { listWorkspaceFiles, readWorkspaceDiff } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 import { notifyWorkspaceAgentAttention } from "../workspace/agentNotifications.ts";
+import { publishState as publishAssistantState } from "../assistant/service.ts";
 
 function closeOpenTools(ws: WebSocket, slot: Slot, runStatus: string) {
   if (!slot.openTools) slot.openTools = new Map();
@@ -64,6 +65,10 @@ export function finishRun(ws: WebSocket, slot: Slot, status: string, durationMs?
   const turnId = slot.transcript?.turnId || "";
   flushTranscript(slot, !approval);
   emitOwnerRunSnapshot(ws, slot);
+  if (!approval) {
+    const tenant = getTenant(slot.tenantId);
+    if (tenant) void publishAssistantState(tenant);
+  }
   if (!approval) indexUserTurn(slot);
   if (!approval) noteWorkspaceTurn(slot);
   if (files.length && turnId) {

@@ -273,6 +273,9 @@ struct MemoryCenterLifecycleModifier: ViewModifier {
             }
             .onDisappear {
                 store.memoryCenterSetActive(false)
+                if !store.memoryCenterActive {
+                    store.requestAssistant(memory: false, force: true)
+                }
                 store.memoryCenterResetIfInactive()
             }
             .onChange(of: navId) { _, next in

@@ -5,6 +5,7 @@ import { CursorAgentError } from "@cursor/sdk";
 import { parseClient } from "./parse.ts";
 import { send } from "./send.ts";
 import { finishRun } from "../chat/finish.ts";
+import { filesMessage } from "../workspace/files.ts";
 import { onAdminStats } from "./handlers/admin.ts";
 import { onAssistantGet, onAssistantOp } from "./handlers/assistant.ts";
 import { onListCheckpoints, onRevertFile, onRevertHunk, onUndoOrRestore } from "./handlers/checkpoints.ts";
@@ -169,7 +170,25 @@ export async function handleMessage(ctx: WsConnCtx, data: RawData, table: Handle
     const messageText =
       err instanceof CursorAgentError ? err.message : err instanceof Error ? err.message : "gateway 出错了";
     const chatId = "chatId" in message && message.chatId ? message.chatId : undefined;
-    send(ws, { type: "error", chatId, message: messageText });
+    const reqId = "reqId" in message && typeof message.reqId === "string" ? message.reqId : undefined;
+    if (message.type === "list_files") {
+      send(
+        ws,
+        filesMessage(
+          conn,
+          {
+            chatId,
+            query: message.query ?? "",
+            mention: Boolean(message.mention),
+            reqId,
+          },
+          { paths: [], status: {}, truncated: false },
+          messageText,
+        ),
+      );
+      return;
+    }
+    send(ws, { type: "error", chatId, reqId, message: messageText });
     if (chatId) {
       const slot = conn.slots.get(chatId);
       if (slot && !slot.finished) finishRun(ws, slot, "error");

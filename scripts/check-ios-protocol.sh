@@ -26,6 +26,81 @@ if (!silentBody.includes("workspace_memory_search") || silentBody.includes("work
 console.log("iOS silent tool chrome 源码契约：通过");
 NODE
 node scripts/check-ios-navigation-contract.mjs
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+const read = (path) => readFileSync(path, "utf8");
+const home = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");
+const lifecycle = read("ios/Jiebo/Jiebo/Session/ChatStore+Lifecycle.swift");
+const assistant = read("ios/Jiebo/Jiebo/Session/ChatStore+Assistant.swift");
+const handle = read("ios/Jiebo/Jiebo/Session/ChatStore+Handle.swift");
+const cache = read("ios/Jiebo/Jiebo/Session/AppBootstrapCache.swift");
+const chats = read("ios/Jiebo/Jiebo/Session/ChatStore+Chats.swift");
+const composerStore = read("ios/Jiebo/Jiebo/Session/ChatStore+Composer.swift");
+const agentsStore = read("ios/Jiebo/Jiebo/Session/ChatStore+WorkspaceAgents.swift");
+const protocol = read("ios/Jiebo/Jiebo/Gateway/Protocol.swift");
+if (home.includes(".task { store.requestAssistant() }") || home.includes("store.connected)")) {
+  throw new Error("AssistantHome 不得重复触发 assistant_get");
+}
+for (const needle of [
+  "AssistantSyncGate",
+  "AssistantStateReconcile.resolve",
+  "shouldSettleState(carriesMemory:",
+  "desiredMemory && !memoryIsCurrent ? nil : assistantState?.revision",
+  "assistantSyncNotModified(revision: revision, reqId: reqId, generation: generation)",
+  "assistantInFlightGeneration",
+  "assistantSyncFailed()",
+]) {
+  if (!(assistant + lifecycle + handle + cache).includes(needle)) throw new Error(`assistant single-flight 源码契约缺少 ${needle}`);
+}
+for (const [source, receive, persist, flight] of [
+  [chats, "func receiveWorkspaces", "updateCachedWorkspaces", "workspacesSyncInFlight"],
+  [composerStore, "func receiveFileIndex", "updateCachedFileIndex", "fileIndexInFlight"],
+]) {
+  const start = source.indexOf(receive);
+  const body = source.slice(start, start + 1200);
+  if (start < 0 || body.indexOf(persist) < 0 || body.indexOf(persist) > body.indexOf(flight)) {
+    throw new Error(`${receive} 必须先应用/缓存广播，再按 in-flight 结清`);
+  }
+}
+if (assistant.match(/func assistantSyncFailed[\s\S]*?assistantState\s*=\s*nil/)) {
+  throw new Error("assistant 请求失败不得清空旧状态");
+}
+for (const needle of ["static let schema = 2", "case .corrupt:", "case .incompatible:", "fileIndexes", "Task.detached"]) {
+  if (!(cache + read("ios/Jiebo/Jiebo/Session/ChatStore+Bootstrap.swift")).includes(needle)) {
+    throw new Error(`bootstrap cache 源码契约缺少 ${needle}`);
+  }
+}
+for (const needle of [
+  "pendingMemory",
+  "assistantMemoryDesired",
+  "FileIndexResponsePolicy.shouldSettle",
+  "fileIndexTimeoutTasks",
+  "bootstrapFileIndexTombstones",
+  'AppLaunchMetrics.event("cache_corrupt")',
+  'AppLaunchMetrics.event("assistant_sync_timeout")',
+  'AppLaunchMetrics.event("conditional_sync_failed")',
+]) {
+  if (!(assistant + lifecycle + handle + cache + composerStore + read("ios/Jiebo/Jiebo/Session/ChatStore+Bootstrap.swift")).includes(needle)) {
+    throw new Error(`恢复与失败指标源码契约缺少 ${needle}`);
+  }
+}
+if (!protocol.includes('case "assistant_not_modified"') || !protocol.includes('object["knownRevision"]')) {
+  throw new Error("assistant 条件协议未完整实现");
+}
+const readyBody = handle.slice(handle.indexOf("case .ready"), handle.indexOf("case .auth"));
+if (readyBody.includes("requestWorkspaces()") || readyBody.includes("requestWorkspaceAgents()")) {
+  throw new Error("ready 不得重复请求 hello 已主动推送的 workspaces/workspace_agents");
+}
+if (!readyBody.includes('activeId != "boot"')
+    || !readyBody.includes("chats.contains(where:")
+    || !readyBody.includes("requestFileIndex(chatId: activeId)")) {
+  throw new Error("ready 只能为稳定的现存 active 会话请求 fileIndex");
+}
+for (const source of [chats, composerStore, agentsStore, assistant]) {
+  if (!source.includes("gatewayReady")) throw new Error("重连 ready 前不得发送业务同步请求");
+}
+console.log("iOS bootstrap/single-flight 源码契约：通过");
+NODE
 node scripts/check-ios-ipad-p0.mjs
 node scripts/check-ios-ipad-p1.mjs
 node scripts/check-ios-ipad-p2.mjs
@@ -73,6 +148,7 @@ SOURCES=(
   "$APP/Session/MemoryCenterExtrasReducer.swift"
   "$APP/Session/MemoryCenterLayoutMetrics.swift"
   "$APP/Session/AssistantScenePresenter.swift"
+  "$APP/Session/AppBootstrapCache.swift"
   "$APP/Session/SceneEditingPolicy.swift"
   "$APP/Session/PadInspectorState.swift"
   "$APP/Session/PadLayoutMetrics.swift"

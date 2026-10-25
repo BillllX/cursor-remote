@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
 import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
@@ -89,6 +89,8 @@ export default function AssistantPanel({
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [todoDraft, setTodoDraft] = useState("");
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const unread = useMemo(() => state?.inbox.filter((item) => !item.read).length ?? 0, [state?.inbox]);
 
@@ -98,7 +100,20 @@ export default function AssistantPanel({
 
   useEffect(() => {
     if (!open) return;
-    send({ type: "assistant_get", memory: memoryLoaded });
+    const current = stateRef.current;
+    const memoryIsCurrent = Boolean(current?.memory);
+    send({
+      type: "assistant_get",
+      memory: memoryLoaded,
+      knownRevision: memoryLoaded && !memoryIsCurrent ? undefined : current?.revision,
+    });
+  }, [open, memoryLoaded, send]);
+
+  useEffect(() => {
+    if (!open || !memoryLoaded) return;
+    return () => {
+      send({ type: "assistant_get", memory: false });
+    };
   }, [open, memoryLoaded, send]);
 
   useEffect(() => {

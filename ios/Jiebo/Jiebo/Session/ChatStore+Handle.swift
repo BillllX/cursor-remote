@@ -48,15 +48,20 @@ extension ChatStore {
 
         switch message {
         case .ready(let nextCwd, let hasKey, let serverModel, let serverModels, _, let running, let queued, let root, let readyTenantId, let readyTenantName, let admin, let readyLoops, let readyAssistantName, let readyAssistantChatId, let readyFeatures):
+            var changedTenant = false
             if let nextTenant = readyTenantId?.nilIfEmpty {
                 if !tenantId.isEmpty, tenantId != nextTenant {
                     resetTenantSession()
                 }
                 if tenantId != nextTenant {
+                    changedTenant = true
                     tenantId = nextTenant
                     UserDefaults.standard.set(nextTenant, forKey: tenantKey)
                 }
             }
+            if changedTenant { beginBootstrapLoad(for: tenantId) }
+            launchSawReady = true
+            AppLaunchMetrics.event("ready")
             isAdmin = admin // P9：管理员才显示统计入口（须在 resetTenantSession 之后，否则被其清回 false）
             gatewayFeatures = Set(readyFeatures) // 每次 ready 整体覆盖：换账号或连到旧网关都不留上一次的能力
             if !admin { cursorBill = nil }
@@ -65,6 +70,7 @@ extension ChatStore {
             }
             let reconnected = unlocked
             unlocked = true
+            gatewayReady = true
             verifying = false
             verifyTask?.cancel()
             authError = ""
@@ -119,10 +125,10 @@ extension ChatStore {
                 send(.setModel(model: nextModel, chatId: current.id))
             }
             client.flushOutbox()
-            send(.listWorkspaces)
-            requestWorkspaceAgents()
-            requestFileIndex()
-            requestAssistant(memory: assistantState?.memory != nil)
+            if activeId != "boot", chats.contains(where: { $0.id == activeId }) {
+                requestFileIndex(chatId: activeId)
+            }
+            requestAssistant(memory: assistantMemoryDesired)
             fulfillPendingAssistantOpen()
             imSink?.connectionReady(features: gatewayFeatures)
         case .auth(let ok, let messageText):
@@ -255,14 +261,14 @@ extension ChatStore {
             }
             if pendingChatLoads.isEmpty { scheduleSync() } // 对账完毕，把本地脏的推上去
             fulfillPendingAssistantOpen()
-        case .workspaces(_, let items):
-            workspaces = items
-            if workspaceRoot.isEmpty, let first = items.first { workspaceRoot = first.path }
+        case .workspaces(let root, let items):
+            receiveWorkspaces(root: root, items: items)
         case .workspaceCreated(let path, let name):
             if !workspaces.contains(where: { $0.path == path }) {
                 let index = workspaces.firstIndex(where: { !$0.user }) ?? workspaces.count
                 workspaces.insert(WorkspaceItem(path: path, name: name), at: index)
             }
+            updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
             startChat(in: path)
         case .workspaceRenamed(let from, let newPath, let name):
             // 网关已把会话的目录改到新路径；本地照改（不标脏，不用再传回去），再对账拿新的版本号
@@ -279,9 +285,16 @@ extension ChatStore {
                 if moved != chats[index].cwd { chats[index].cwd = moved }
             }
             cwd = moveCwd(cwd) ?? cwd
+            if let index = workspaces.firstIndex(where: { normPath($0.path) == fromKey }) {
+                workspaces[index].path = newPath
+                workspaces[index].name = name
+                updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
+            }
             flash("已改名为「\(name)」")
             requestStateReload()
-        case .workspaceRemoved(_, let name, let mode):
+        case .workspaceRemoved(let path, let name, let mode):
+            workspaces.removeAll { normPath($0.path) == normPath(path) }
+            updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
             flash(mode == "deleted" ? "已删除工作区「\(name)」" : "「\(name)」里有文件，已从列表隐藏（文件没动）")
         case .workspaceAgents(let items, let ticket, let reset, let more, let after, let cursor):
             if reset {
@@ -431,7 +444,12 @@ extension ChatStore {
                 settlePendingSnapshot(target, status: settled)
                 patchOpen(target) { $0.settled(status: settled) }
             }
-        case .error(let id, let text):
+        case .error(let id, let text, let reqId):
+            if let reqId {
+                // 带 reqId 的 error 只服务请求级结清（旧网关 list_files）；不得当作 Agent 回合终态。
+                settleFileIndexFailure(chatId: id, reqId: reqId)
+                break
+            }
             bannerError = friendlyError(text)
             if toolLayer == .loop, text.contains("Loop") {
                 loopError = friendlyError(text)
@@ -702,7 +720,7 @@ extension ChatStore {
             if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let paths, let mention, let truncated, let filesChatId, let status):
+        case .files(let query, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError):
             // 工作台和聊天主页各有明确线程；只接收其中一个正在显示的请求。
             let responseChatId = filesChatId?.nilIfEmpty ?? activeId
             if mention {
@@ -718,10 +736,21 @@ extension ChatStore {
                 }
                 mentionSuggestions = ChatStore.rankMentions(merged, query: query)
             } else {
-                guard responseChatId == fileIndexRequestChatId else { break }
-                fileIndex = paths
-                treeTruncated = truncated
-                if query.isEmpty { gitStatus = status }
+                guard query.isEmpty else { break }
+                if let filesError, !filesError.isEmpty {
+                    if let reqId {
+                        settleFileIndexFailure(chatId: responseChatId, reqId: reqId)
+                    }
+                    flash(friendlyError(filesError))
+                    break
+                }
+                receiveFileIndex(
+                    chatId: responseChatId,
+                    paths: paths,
+                    truncated: truncated,
+                    status: status,
+                    reqId: reqId
+                )
             }
         case .searchHits(let query, let hits, let hitsChatId, let truncated):
             let responseChatId = hitsChatId?.nilIfEmpty ?? activeId
@@ -779,12 +808,10 @@ extension ChatStore {
                 }
             }
             requestFileIndex(chatId: chatId)
-        case .assistantState(let state):
-            var next = state
-            // 别的连接触发的推送可能不带记忆：记忆页已加载过就留着旧的，等下一次带记忆的推送覆盖
-            if next.memory == nil { next.memory = assistantState?.memory }
-            assistantState = next
-            assistantStateRevision &+= 1
+        case .assistantState(let state, let reqId, let generation):
+            receiveAssistantState(state, reqId: reqId, generation: generation)
+        case .assistantNotModified(let revision, let reqId, let generation):
+            assistantSyncNotModified(revision: revision, reqId: reqId, generation: generation)
         case .assistantResult(let reqId, let op, let ok, let error, let data):
             if memoryCenterHandleExtrasResult(reqId: reqId, op: op, ok: ok, error: error, data: data) {
                 break

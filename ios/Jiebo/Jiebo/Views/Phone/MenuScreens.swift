@@ -22,7 +22,7 @@ struct AssistantTodayScreen: View {
         .background(JieboColor.paper)
         .navigationTitle("待办与日程")
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
         .task { store.requestAssistant() }
     }
 }
@@ -79,7 +79,7 @@ struct DelegationListScreen: View {
         .background(JieboColor.paper)
         .navigationTitle("任务与计划")
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
         .overlay {
             if rows.isEmpty && legacyRows.isEmpty {
                 ContentUnavailableView(

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
+import type { WebSocket } from "ws";
 import type {
   AssistantOp,
   AssistantState,
@@ -51,6 +52,7 @@ import { buildArtifactProjection } from "./artifactProjection.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
 import { assistantNameFor } from "./name.ts";
 import { errText, log } from "../log.ts";
+import { send } from "../ws/send.ts";
 import { workspaceUnread } from "../workspace/agents.ts";
 import { getTenant } from "../tenants.ts";
 import { migrateMemory } from "./migrate.ts";
@@ -81,6 +83,8 @@ import { memoryCenterImportApply } from "./memoryCenterImportApply.ts";
 import { memoryCenterImportRollback } from "./memoryCenterImportRollback.ts";
 import { recoverPendingMemoryCenterImports } from "./memoryCenterImportRecover.ts";
 import { sweepExpiredPlans } from "./memoryCenterImportPlanStore.ts";
+import { bumpAssistantRevision, readAssistantRevision } from "./revision.ts";
+import { refreshAssistantProjectionCondition } from "./projectionCondition.ts";
 import {
   memoryCenterSuggestionAnswer,
   memoryCenterSuggestionsGet,
@@ -366,14 +370,21 @@ export function noteUserTurn(tenant: AssistantTenant, row: { chatId: string; tur
 
 export function noteChatDeleted(tenant: AssistantTenant, chatId: string) {
   const ref = refOf(tenant);
-  if (!existsSync(assistantDir(ref))) return;
-  dropChatFromIndex(ref, chatId);
-  dropWorkspaceThread(ref, chatId);
-  cancelFlush(ref, chatId);
-  markChatDeleted(ref, chatId);
+  if (existsSync(assistantDir(ref))) {
+    dropChatFromIndex(ref, chatId);
+    dropWorkspaceThread(ref, chatId);
+    cancelFlush(ref, chatId);
+    markChatDeleted(ref, chatId);
+  }
+  // artifacts 直接来自 tenant.disk.chats；tombstone 已先移除会话，所以即使 assistant
+  // 目录尚不存在也必须推进投影版本。
+  void publishState(tenant);
 }
 
-export async function buildState(tenant: AssistantTenant, opts: { memory?: boolean } = {}): Promise<AssistantState> {
+export async function buildState(
+  tenant: AssistantTenant,
+  opts: { memory?: boolean; revision?: number } = {},
+): Promise<AssistantState> {
   const ref = refOf(tenant);
   const model = await modelAvailable().catch(() => ({ ok: false, reason: "模型目录读取失败" }));
   const snapshotAt = Date.now();
@@ -395,6 +406,7 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
     { now: snapshotAt, day },
   );
   const state: AssistantState = {
+    revision: opts.revision ?? readAssistantRevision(ref),
     name: assistantName(tenant),
     background: { model: BACKGROUND_MODEL, ok: model.ok, reason: model.reason },
     pushKey: vapid().publicKey,
@@ -426,7 +438,33 @@ export async function buildState(tenant: AssistantTenant, opts: { memory?: boole
   return state;
 }
 
-const memoryWatchers = new Set<string>();
+type MemoryWatcher = {
+  ws: WebSocket;
+  binding: { authed: boolean; tenant: { id: string } | null; ws: WebSocket };
+};
+
+const memoryWatchers = new Map<string, Set<MemoryWatcher>>();
+const publishQueues = new Map<string, Promise<void>>();
+
+/** 直推前必须重新检查连接的实时鉴权和租户绑定，不能只信订阅时传入的 tenantId。 */
+export function memoryWatcherBound(tenantId: string, watcher: MemoryWatcher): boolean {
+  return (
+    watcher.binding.ws === watcher.ws &&
+    watcher.binding.authed &&
+    watcher.binding.tenant?.id === tenantId
+  );
+}
+
+/** 直推 memory 前：仍在订阅集合且租户绑定有效。 */
+function memoryWatcherReceivesMemory(tenantId: string, watcher: MemoryWatcher): boolean {
+  const watchers = memoryWatchers.get(tenantId);
+  return Boolean(watchers?.has(watcher) && memoryWatcherBound(tenantId, watcher));
+}
+
+/** 时间条件变化也属于投影变化；返回 true 时调用方应发布新 revision。 */
+export function refreshProjectionCondition(tenant: AssistantTenant, now = Date.now()): boolean {
+  return refreshAssistantProjectionCondition(refOf(tenant), now);
+}
 
 /** 日历来拉订阅：口令对上就返回 .ics。第一次被拉时推一次状态，App 立刻显示「已订阅」 */
 export function calendarFeed(tenants: AssistantTenant[], token: string): string | null {
@@ -438,10 +476,60 @@ export function calendarFeed(tenants: AssistantTenant[], token: string): string 
   return buildIcs(ref, assistantName(tenant));
 }
 
-export async function publishState(tenant: AssistantTenant) {
-  if (!deps) return;
-  const state = await buildState(tenant, { memory: memoryWatchers.has(tenant.id) });
-  deps.publish(tenant.id, { type: "assistant_state", state });
+export function publishState(tenant: AssistantTenant): Promise<void> {
+  /*
+   * publishState 的调用本身就是投影可见性边界：调用方已完成事实写入，
+   * 所以必须在返回 Promise 前同步持久 bump。构建/推送仍按租户排队，
+   * 每个排队项携带自己已分配的 revision，保证并发调用严格按序发出。
+   */
+  const ref = refOf(tenant);
+  refreshAssistantProjectionCondition(ref);
+  const revision = bumpAssistantRevision(ref);
+  if (!deps) return Promise.resolve();
+  const previous = publishQueues.get(tenant.id) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    const watchers = memoryWatchers.get(tenant.id);
+    const validWatchers = watchers
+      ? [...watchers].filter((watcher) => {
+          if (memoryWatcherBound(tenant.id, watcher)) return true;
+          watchers.delete(watcher);
+          return false;
+        })
+      : [];
+    if (watchers?.size === 0) memoryWatchers.delete(tenant.id);
+    const state = await buildState(tenant, { memory: validWatchers.length > 0, revision });
+    if (state.memory && validWatchers.length) {
+      const { memory: _memory, ...withoutMemory } = state;
+      deps?.publish(tenant.id, { type: "assistant_state", state: withoutMemory });
+      for (const watcher of validWatchers) {
+        if (memoryWatcherReceivesMemory(tenant.id, watcher)) {
+          send(watcher.ws, { type: "assistant_state", state });
+        } else {
+          watchers?.delete(watcher);
+        }
+      }
+    } else {
+      deps?.publish(tenant.id, { type: "assistant_state", state });
+    }
+  });
+  const tracked = next.finally(() => {
+    if (publishQueues.get(tenant.id) === tracked) publishQueues.delete(tenant.id);
+  });
+  publishQueues.set(tenant.id, tracked);
+  return tracked;
+}
+
+export function assistantPublishPending(tenantId: string): boolean {
+  return publishQueues.has(tenantId);
+}
+
+/** 等到调用时及等待期间追加的同租户发布全部完成。 */
+export async function waitForAssistantPublishes(tenantId: string): Promise<void> {
+  while (true) {
+    const pending = publishQueues.get(tenantId);
+    if (!pending) return;
+    await pending.catch(() => undefined);
+  }
 }
 
 /** 委派状态变化：先发单条 delegation_state，再推整份状态让列表和角标对齐 */
@@ -450,13 +538,41 @@ export function publishDelegation(tenant: AssistantTenant, delegation: Delegatio
   void publishState(tenant);
 }
 
-/** 客户端打开过记忆页后，状态推送带上记忆全量 */
-export function watchMemory(tenantId: string, on: boolean) {
-  if (on) memoryWatchers.add(tenantId);
+/** 只在仍有连接订阅记忆时，租户广播才携带记忆全量。 */
+export function watchMemory(
+  tenantId: string,
+  ws: WebSocket,
+  on: boolean,
+  binding?: MemoryWatcher["binding"],
+) {
+  const current = memoryWatchers.get(tenantId);
+  if (on) {
+    closeMemoryWatcher(ws);
+    if (!binding) return;
+    const watchers = current ?? new Set<MemoryWatcher>();
+    watchers.add({ ws, binding });
+    memoryWatchers.set(tenantId, watchers);
+    return;
+  }
+  if (current) {
+    for (const watcher of current) {
+      if (watcher.ws === ws) current.delete(watcher);
+    }
+  }
+  if (current?.size === 0) memoryWatchers.delete(tenantId);
+}
+
+export function closeMemoryWatcher(ws: WebSocket) {
+  for (const [tenantId, watchers] of memoryWatchers) {
+    for (const watcher of watchers) {
+      if (watcher.ws === ws) watchers.delete(watcher);
+    }
+    if (watchers.size === 0) memoryWatchers.delete(tenantId);
+  }
 }
 
 export function onTenantHello(tenant: AssistantTenant) {
-  seedDefaults(refOf(tenant));
+  if (seedDefaults(refOf(tenant))) void publishState(tenant);
   runMigration(tenant);
 }
 
@@ -793,7 +909,9 @@ async function slowTick(tenant: AssistantTenant) {
   } catch (err) {
     log.error("expire memory cards", err);
   }
-  await runMaintenance(ref, runner).catch((err) => log.error("maintenance", err));
+  await runMaintenance(ref, runner, Date.now(), DEFAULT_TZ, () => void publishState(tenant)).catch(
+    (err) => log.error("maintenance", err),
+  );
   await runEpisodes(ref, runner).catch((err) => log.error("episodes", err));
   await runIntegrator(ref, runner).catch((err) => log.error("integrator", err));
   try {
@@ -812,11 +930,17 @@ function tick() {
   for (const tenant of deps.tenants()) {
     const ref = refOf(tenant);
     if (!existsSync(assistantDir(ref))) continue;
+    if (refreshProjectionCondition(tenant, now)) void publishState(tenant);
     for (const todo of takeDueReminders(ref, now)) {
       postInbox(ref, { kind: "reminder", title: todo.text, body: `待办到点了${todo.due ? `（${todo.due}）` : ""}。`, key: `todo:${todo.id}` });
     }
     const runner = runnerFor(tenant);
-    tickSchedules(ref, (r, schedule, occ) => executeSchedule(r, schedule, occ, runner), now);
+    tickSchedules(
+      ref,
+      (r, schedule, occ) => executeSchedule(r, schedule, occ, runner),
+      now,
+      () => void publishState(tenant),
+    );
     if (slow) void slowTick(tenant);
   }
 }
@@ -834,7 +958,7 @@ export function startAssistant(next: AssistantDeps) {
     const ref = refOf(tenant);
     if (!existsSync(assistantDir(ref))) continue;
     recoverRuns(ref);
-    recoverSchedules(ref);
+    recoverSchedules(ref, () => void publishState(tenant));
     // 挂起审批跟着运行一起丢了；对应的委派下面会记为中断并进收件箱
     recoverApprovals(ref);
     runMigration(tenant);
@@ -872,4 +996,6 @@ export function startAssistant(next: AssistantDeps) {
 export function stopAssistant() {
   if (timer) clearInterval(timer);
   timer = null;
+  memoryWatchers.clear();
+  publishQueues.clear();
 }

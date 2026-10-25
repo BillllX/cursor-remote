@@ -2,6 +2,7 @@ import Foundation
 
 extension ChatStore {
     func requestWorkspaceAgents(reset: Bool = true) {
+        guard connected, unlocked, gatewayReady else { return }
         if reset {
             workspaceAgentsLoaded = false
             workspaceAgentsPendingCursor = nil

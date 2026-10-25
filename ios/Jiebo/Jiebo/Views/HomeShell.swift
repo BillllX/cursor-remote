@@ -291,14 +291,14 @@ struct HomeShell: View {
     @MainActor
     private func resolveAssistantPush(_ target: PushTarget) async {
         guard target.delegationId != nil || target.itemId != nil else {
-            store.requestAssistant()
+            store.requestAssistant(force: true)
             return
         }
 
         let baselineRevision = store.assistantStateRevision
         let maximumAttempts = 16
+        store.requestAssistant(force: true)
         for _ in 0..<maximumAttempts {
-            store.requestAssistant()
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
 

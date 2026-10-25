@@ -88,7 +88,7 @@ struct InboxHome: View {
         .background(JieboColor.paper)
         .navigationTitle("待处理")
         .navigationBarTitleDisplayMode(.inline)
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
         .overlay {
             if pendingCount == 0 && items.isEmpty {
                 if state == nil {

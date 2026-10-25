@@ -111,9 +111,10 @@ func render(_ value: Any, _ indent: String) -> String {
 }
 
 func renderFields(_ mirror: Mirror, _ indent: String) -> String {
-    if mirror.children.isEmpty { return "()" }
+    let children = mirror.children.filter { $0.label != "rawJSON" }
+    if children.isEmpty { return "()" }
     let inner = indent + "  "
-    let rows = mirror.children.map { "\(inner)\($0.label ?? "_"): \(render($0.value, inner))" }
+    let rows = children.map { "\(inner)\($0.label ?? "_"): \(render($0.value, inner))" }
     return "(\n" + rows.joined(separator: "\n") + "\n\(indent))"
 }
 
@@ -336,7 +337,7 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .setPolicy: return .setPolicy(policy: "plane", chatId: chat)
     case .uploadFile:
         return .uploadFile(chatId: chat, name: "截图.png", data: "iVBORw0KGgo=", mimeType: "image/png", id: "up-3")
-    case .listFiles: return .listFiles(query: "login", chatId: chat, mention: true)
+    case .listFiles: return .listFiles(query: "login", chatId: chat, mention: true, reqId: "rq-files-1")
     case .searchText: return .searchText(query: "await guard", chatId: chat)
     case .revertFile: return .revertFile(chatId: chat, path: "src/login.ts")
     case .listCheckpoints: return .listCheckpoints(chatId: chat)
@@ -356,7 +357,7 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .loopStart:
         return .loopStart(chatId: chat, goal: "每小时检查一次构建", intervalSec: 3600, maxTicks: 24, model: "composer-2.5", mode: .ask)
     case .loopStop: return .loopStop(chatId: chat)
-    case .assistantGet: return .assistantGet(memory: true)
+    case .assistantGet: return .assistantGet(memory: true, knownRevision: 17, reqId: "rq-assistant-1", generation: 3)
     case .assistantOp:
         return .assistantOp(op: "todo_add", args: ["text": .string("周三前回复报价"), "due": .string("2026-02-11")], reqId: "rq-todo-1")
     case .imContacts: return .imContacts
@@ -1455,6 +1456,220 @@ func checkPersonalTaskProjection(_ samples: [JSONValue]) -> [String] {
     return problems
 }
 
+func checkBootstrapCacheAndAssistantSync() -> [String] {
+    var problems: [String] = []
+    let assistant: JSONValue = .object([
+        "revision": .number(17),
+        "name": .string("缓存助理"),
+        "background": .object(["model": .string("m"), "ok": .bool(true)]),
+    ])
+    let snapshot = AppBootstrapSnapshot(
+        assistant: assistant,
+        assistantMemoryRevision: nil,
+        workspacesRoot: "/tenant-a",
+        workspaces: [.init(path: "/tenant-a/project", name: "project", user: true)],
+        fileIndexes: [
+            "chat-a": .init(paths: ["README.md"], truncated: false, status: ["README.md": "M"]),
+        ]
+    )
+    guard let data = AppBootstrapCache.encode(snapshot) else {
+        return ["bootstrap cache：编码失败"]
+    }
+    switch AppBootstrapCache.decode(data) {
+    case .hit(let decoded, let cachedAssistant):
+        if decoded != snapshot || cachedAssistant?.revision != 17 {
+            problems.append("bootstrap cache：命中内容或 assistant revision 不符")
+        }
+    default:
+        problems.append("bootstrap cache：有效缓存未命中")
+    }
+    var memorySnapshot = snapshot
+    var memoryAssistant = assistant.object ?? [:]
+    memoryAssistant["memory"] = .object(["rev": .number(3), "entries": .array([])])
+    memorySnapshot.assistant = .object(memoryAssistant)
+    memorySnapshot.assistantMemoryRevision = 17
+    if let memoryData = AppBootstrapCache.encode(memorySnapshot),
+       case .hit(let decodedMemory, _) = AppBootstrapCache.decode(memoryData) {
+        if decodedMemory.assistantMemoryRevision != 17 {
+            problems.append("bootstrap cache：memory revision 未持久化")
+        }
+    } else {
+        problems.append("bootstrap cache：memory revision 快照无法解码")
+    }
+    var changedAssistant = assistant.object ?? [:]
+    changedAssistant["revision"] = .number(18)
+    if AssistantState.from(.object(changedAssistant))?.revision == AssistantState.from(assistant)?.revision {
+        problems.append("assistant revision：变化未被解析")
+    }
+    var currentRow = assistant.object ?? [:]
+    currentRow["revision"] = .number(20)
+    currentRow["name"] = .string("当前")
+    let current = AssistantState.from(.object(currentRow))
+    var staleRow = currentRow
+    staleRow["revision"] = .number(19)
+    staleRow["name"] = .string("迟到")
+    if let current, let stale = AssistantState.from(.object(staleRow)) {
+        if case .apply = AssistantStateReconcile.resolve(current: current, incoming: stale) {
+            problems.append("assistant revision：低 revision 覆盖了当前状态")
+        }
+        var memoryRow = currentRow
+        memoryRow["memory"] = .object(["rev": .number(3), "entries": .array([])])
+        if let sameWithMemory = AssistantState.from(.object(memoryRow)) {
+            switch AssistantStateReconcile.resolve(current: current, incoming: sameWithMemory) {
+            case .apply(let merged) where merged.name == "当前" && merged.memory?.rev == 3:
+                break
+            default:
+                problems.append("assistant revision：同 revision memory 未合并升级")
+            }
+        }
+    } else {
+        problems.append("assistant revision：测试状态无法解码")
+    }
+    if case .corrupt = AppBootstrapCache.decode(Data("{broken".utf8)) {} else {
+        problems.append("bootstrap cache：损坏缓存未判废")
+    }
+    let future = try? JSONValue.object([
+        "v": .number(999),
+        "workspaces": .array([]),
+        "fileIndexes": .object([:]),
+    ]).data()
+    if let future {
+        if case .incompatible = AppBootstrapCache.decode(future) {} else {
+            problems.append("bootstrap cache：不兼容 schema 未忽略")
+        }
+    }
+    let oldSchema = try? JSONValue.object([
+        "v": .number(1),
+        "workspaces": .array([]),
+        "fileIndexes": .object([:]),
+    ]).data()
+    if let oldSchema {
+        if case .incompatible = AppBootstrapCache.decode(oldSchema) {} else {
+            problems.append("bootstrap cache：旧 schema 未作废")
+        }
+    }
+    let tenantB = AppBootstrapSnapshot(
+        assistant: nil,
+        assistantMemoryRevision: nil,
+        workspacesRoot: "/tenant-b",
+        workspaces: [],
+        fileIndexes: [:]
+    )
+    if let dataB = AppBootstrapCache.encode(tenantB),
+       case .hit(let decodedB, _) = AppBootstrapCache.decode(dataB),
+       decodedB.workspacesRoot == snapshot.workspacesRoot {
+        problems.append("bootstrap cache：租户快照发生串用")
+    }
+    if AppBootstrapCache.tenantStorageKey("tenant-a") == AppBootstrapCache.tenantStorageKey("tenant-b")
+        || AppBootstrapCache.tenantStorageKey("") != nil
+    {
+        problems.append("bootstrap cache：租户存储键未隔离")
+    }
+    if let decoded = try? ServerMessage.decode(
+        from: Data(#"{"type":"assistant_not_modified","revision":17}"#.utf8)
+    ), case .assistantNotModified(let revision, let reqId, let generation) = decoded {
+        if revision != 17 || reqId != nil || generation != nil {
+            problems.append("assistant not_modified：字段不符")
+        }
+    } else {
+        problems.append("assistant not_modified：无法解码")
+    }
+    for invalid in ["0", "-1", "1.5", #""17""#] {
+        let data = Data(#"{"type":"assistant_not_modified","revision":\#(invalid)}"#.utf8)
+        if let decoded = try? ServerMessage.decode(from: data), case .assistantNotModified = decoded {
+            problems.append("assistant not_modified：接受了非 JSON 正整数 \(invalid)")
+        }
+    }
+    if let decoded = try? ServerMessage.decode(from: Data(
+        #"{"type":"assistant_not_modified","revision":18,"reqId":"rq-assistant-1","generation":3}"#.utf8
+    )), case .assistantNotModified(let revision, let reqId, let generation) = decoded {
+        if revision != 18 || reqId != "rq-assistant-1" || generation != 3 {
+            problems.append("assistant not_modified：请求标识没有原样解码")
+        }
+    } else {
+        problems.append("assistant not_modified：带请求标识时无法解码")
+    }
+    let request = ClientMessage.assistantGet(
+        memory: true,
+        knownRevision: 17,
+        reqId: "rq-assistant-1",
+        generation: 3
+    ).json()
+    if request["memory"]?.bool != true || request["knownRevision"]?.int != 17
+        || request["reqId"]?.string != "rq-assistant-1" || request["generation"]?.int != 3 {
+        problems.append("assistant_get：条件与请求标识编码不符")
+    }
+    if let decoded = try? ServerMessage.decode(from: Data(
+        #"{"type":"files","chatId":"chat-a","query":"","paths":[],"error":"服务器正忙","reqId":"rq-files-1"}"#.utf8
+    )), case .files(_, _, _, _, let chatId, _, let reqId, let filesError) = decoded {
+        if chatId != "chat-a" || reqId != "rq-files-1" || filesError != "服务器正忙" {
+            problems.append("list_files files.error：请求标识或错误文案没有原样解码")
+        }
+    } else {
+        problems.append("list_files files.error：无法关联 tagged 请求")
+    }
+
+    var gate = AssistantSyncGate()
+    if !gate.begin(memory: false) || gate.begin(memory: false) {
+        problems.append("assistant single-flight：重复 ready 发出了第二次请求")
+    }
+    if gate.begin(memory: true) || gate.complete()?.memory != true || gate.begin(memory: false) || !gate.begin(memory: true) {
+        problems.append("assistant single-flight：memory 升级没有串行补拉")
+    }
+    _ = gate.fail()
+    if !gate.begin(memory: true) {
+        problems.append("assistant single-flight：失败后没有释放在途")
+    }
+    _ = gate.complete()
+    if gate.begin(memory: false) || !gate.begin(memory: false, force: true) {
+        problems.append("assistant single-flight：重复 ready/前台 force 语义不符")
+    }
+    gate.resetConnection()
+    if !gate.begin(memory: false) || gate.begin(memory: false, force: true)
+        || gate.complete() != .init(memory: false, force: true) {
+        problems.append("assistant single-flight：在途期间 force 没有排队补拉")
+    }
+    gate.resetConnection()
+    if !gate.begin(memory: true)
+        || gate.shouldSettleState(carriesMemory: false, accepted: true)
+        || !gate.shouldSettleState(carriesMemory: true, accepted: true)
+    {
+        problems.append("assistant single-flight：普通广播错误结清了 memory 请求")
+    }
+    gate.resetConnection()
+    if !gate.begin(memory: true)
+        || gate.begin(memory: false, force: true)
+        || gate.complete() != .init(memory: false, force: true) {
+        problems.append("assistant single-flight：页面退出没有保留最后的退订意图")
+    }
+    gate.resetConnection()
+    if !gate.begin(memory: true)
+        || gate.begin(memory: false, force: true)
+        || gate.fail() != .init(memory: false, force: true) {
+        problems.append("assistant single-flight：失败时丢失了 force/退订 pending")
+    }
+    if FileIndexResponsePolicy.shouldSettle(expectedReqId: "rq-files-1", responseReqId: nil)
+        || FileIndexResponsePolicy.shouldSettle(expectedReqId: "rq-files-1", responseReqId: "other")
+        || !FileIndexResponsePolicy.shouldSettle(expectedReqId: "rq-files-1", responseReqId: "rq-files-1") {
+        problems.append("file index single-flight：广播或错配响应错误结清 tagged 请求")
+    }
+    let cachedIndex = AppBootstrapSnapshot.FileIndex(
+        paths: ["stale.txt"],
+        truncated: false,
+        status: [:]
+    )
+    let mergedIndexes = AppBootstrapSnapshot.mergeFileIndexes(
+        disk: ["deleted-chat": cachedIndex],
+        pending: [:],
+        tombstones: ["deleted-chat"]
+    )
+    if mergedIndexes["deleted-chat"] != nil {
+        problems.append("bootstrap cache：删除墓碑未阻止文件索引复活")
+    }
+    print("Bootstrap cache / assistant sync：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 func checkAssistantSceneElection() -> [String] {
     var problems: [String] = []
     let candidates = [
@@ -1703,7 +1918,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

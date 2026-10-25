@@ -226,15 +226,33 @@ export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_
       ws,
       filesMessage(
         conn,
-        { chatId: message.chatId, query: message.query || "", mention: Boolean(message.mention) },
+        {
+          chatId: message.chatId,
+          query: message.query || "",
+          mention: Boolean(message.mention),
+          reqId: message.reqId,
+        },
         listed,
       ),
     );
   } catch (err) {
     if (isAbortError(err)) return;
-    // 不带 chatId：只在顶部提示，不影响某个会话的运行状态
-    if (err instanceof HeavyBusyError) send(ws, { type: "error", message: err.message });
-    else throw err;
+    if (err instanceof HeavyBusyError) {
+      send(
+        ws,
+        filesMessage(
+          conn,
+          {
+            chatId: message.chatId,
+            query: message.query || "",
+            mention: Boolean(message.mention),
+            reqId: message.reqId,
+          },
+          { paths: [], status: {}, truncated: false },
+          err.message,
+        ),
+      );
+    } else throw err;
   } finally {
     end();
   }

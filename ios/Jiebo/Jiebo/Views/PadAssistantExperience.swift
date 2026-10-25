@@ -312,7 +312,7 @@ struct PadInboxExperience: View {
                 )
             }
         }
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
     }
 }
 
@@ -483,7 +483,7 @@ struct PadTaskExperience: View {
                 )
             }
         }
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
     }
 }
 
@@ -616,7 +616,7 @@ struct PadArtifactExperience: View {
                 )
             }
         }
-        .refreshable { store.requestAssistant() }
+        .refreshable { store.requestAssistant(force: true) }
     }
 }
 

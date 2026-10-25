@@ -43,7 +43,7 @@ extension ChatStore {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             self?.mentionRequestChatId = targetId
-            self?.send(.listFiles(query: queryString, chatId: targetId, mention: true))
+            self?.send(.listFiles(query: queryString, chatId: targetId, mention: true, reqId: UUID().uuidString))
         }
     }
 
@@ -87,11 +87,72 @@ extension ChatStore {
     }
 
     /// 拉当前会话工作区的文件索引（@补全的本地底数据 + 文件清单 sheet）
-    func requestFileIndex(chatId: String? = nil) {
-        guard unlocked else { return }
+    func requestFileIndex(chatId: String? = nil, force: Bool = false) {
         let targetId = chatId ?? activeId
+        applyCachedFileIndexIfAvailable(chatId: targetId)
+        guard connected, unlocked, gatewayReady else { return }
+        if fileIndexInFlight[targetId] != nil {
+            if force { fileIndexForcePending.insert(targetId) }
+            return
+        }
+        let generation = (fileIndexSyncGeneration[targetId] ?? 0) &+ 1
+        fileIndexSyncGeneration[targetId] = generation
+        fileIndexInFlight[targetId] = generation
+        let reqId = UUID().uuidString
+        fileIndexRequestIds[targetId] = reqId
         fileIndexRequestChatId = targetId
-        send(.listFiles(query: "", chatId: targetId, mention: nil))
+        send(.listFiles(query: "", chatId: targetId, mention: nil, reqId: reqId))
+        fileIndexTimeoutTasks[targetId]?.cancel()
+        fileIndexTimeoutTasks[targetId] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, !Task.isCancelled,
+                  self.fileIndexInFlight[targetId] == generation,
+                  self.fileIndexRequestIds[targetId] == reqId
+            else { return }
+            self.settleFileIndexFailure(chatId: targetId, reqId: reqId)
+        }
+    }
+
+    func receiveFileIndex(
+        chatId: String,
+        paths: [String],
+        truncated: Bool,
+        status: [String: String],
+        reqId: String?
+    ) {
+        if let reqId, reqId != fileIndexRequestIds[chatId] { return }
+        guard !deletedIds.contains(chatId) else { return }
+        updateCachedFileIndex(chatId: chatId, paths: paths, truncated: truncated, status: status)
+        if chatId == activeId || chatId == chatHomeThreadChatId {
+            fileIndexRequestChatId = chatId
+            fileIndex = paths
+            treeTruncated = truncated
+            gitStatus = status
+        }
+        if let generation = fileIndexInFlight[chatId],
+           generation == fileIndexSyncGeneration[chatId],
+           FileIndexResponsePolicy.shouldSettle(
+               expectedReqId: fileIndexRequestIds[chatId],
+               responseReqId: reqId
+           ) {
+            settleFileIndexRequest(chatId: chatId)
+        }
+    }
+
+    func settleFileIndexFailure(chatId: String?, reqId: String) {
+        guard let chatId,
+              fileIndexRequestIds[chatId] == reqId,
+              fileIndexInFlight[chatId] == fileIndexSyncGeneration[chatId]
+        else { return }
+        settleFileIndexRequest(chatId: chatId)
+    }
+
+    private func settleFileIndexRequest(chatId: String) {
+        fileIndexTimeoutTasks.removeValue(forKey: chatId)?.cancel()
+        let forceAgain = fileIndexForcePending.remove(chatId) != nil
+        fileIndexInFlight.removeValue(forKey: chatId)
+        fileIndexRequestIds.removeValue(forKey: chatId)
+        if forceAgain { requestFileIndex(chatId: chatId, force: true) }
     }
 
     /// 文件清单 sheet 用：把 @path 追加到当前会话草稿（带去重）
