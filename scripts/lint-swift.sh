@@ -26,21 +26,33 @@ else
 fi
 
 files=()
+test_entries=()
 while IFS= read -r -d '' file; do
-  files+=("$file")
+  if [[ "$file" == */*Tests/main.swift ]]; then
+    test_entries+=("$file")
+  else
+    files+=("$file")
+  fi
 done < <(find ios -name '*.swift' -not -path '*/build/*' -not -path '*/DerivedData/*' -print0 | sort -z)
 
-if [[ ${#files[@]} -eq 0 ]]; then
+if [[ ${#files[@]} -eq 0 && ${#test_entries[@]} -eq 0 ]]; then
   echo "ios/ 下没有 .swift 文件"
   exit 0
 fi
 
-echo "swiftc -parse：${#files[@]} 个文件（$("$SWIFTC" --version 2>/dev/null | head -n 1)）"
-# 一次传全部文件，比逐个起进程快得多
-if ! "$SWIFTC" -parse -swift-version 5 -enable-bare-slash-regex "${files[@]}"; then
+total=$((${#files[@]} + ${#test_entries[@]}))
+echo "swiftc -parse：${total} 个文件（$("$SWIFTC" --version 2>/dev/null | head -n 1)）"
+# 产品源码合并解析；每个测试入口单独解析，避免多个 main.swift 文件名冲突。
+if [[ ${#files[@]} -gt 0 ]] && ! "$SWIFTC" -parse -swift-version 5 -enable-bare-slash-regex "${files[@]}"; then
   echo "swiftc -parse 失败" >&2
   exit 1
 fi
+for entry in "${test_entries[@]}"; do
+  if ! "$SWIFTC" -parse -swift-version 5 -enable-bare-slash-regex "$entry"; then
+    echo "swiftc -parse 失败：$entry" >&2
+    exit 1
+  fi
+done
 echo "swiftc -parse 通过 ✅"
 
 if [[ -z "${SWIFT_FORMAT:-}" || ! -x "$SWIFT_FORMAT" ]]; then

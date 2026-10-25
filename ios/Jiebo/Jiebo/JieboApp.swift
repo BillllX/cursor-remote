@@ -40,6 +40,7 @@ private struct JieboSceneRoot: View {
                 store.imSink = im
                 deviceBridge.install(on: store)
                 store.start()
+                WidgetSnapshotBridge.shared.attach(store)
                 im.start()
                 PushRegistrar.shared.start(store: store, im: im)
                 updateActivity(scenePhase)
@@ -55,12 +56,16 @@ private struct JieboSceneRoot: View {
             .onChange(of: store.unlocked) { _, unlocked in
                 if unlocked { deviceBridge.permissionStore.refresh(forceReport: true) }
             }
+            .onOpenURL { url in
+                WidgetDeepLinkRouting.shared.open(url, sceneToken: scene.token)
+            }
     }
 
     private func updateActivity(_ phase: ScenePhase) {
         let active = phase == .active
         let anyActive = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
         im.setAppActive(anyActive)
+        WidgetSnapshotBridge.shared.refresh(from: store)
         guard active else { return }
         store.appBecameActive()
         deviceBridge.permissionStore.refresh(forceReport: store.unlocked)

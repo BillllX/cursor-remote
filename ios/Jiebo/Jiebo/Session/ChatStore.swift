@@ -91,13 +91,19 @@ enum ChatDestination: Hashable {
 @Observable
 @MainActor
 final class ChatStore {
-    var connected = false
+    var connected = false {
+        didSet { refreshWidgetSnapshotIfNeeded() }
+    }
     @ObservationIgnored var gatewayReady = false
     /// 连不上已超过 offlineGrace：客户端仍在后台重连，界面从「连接中」改报「已断开」
-    var linkOffline = false
+    var linkOffline = false {
+        didSet { refreshWidgetSnapshotIfNeeded() }
+    }
     var offlineTask: Task<Void, Never>?
     static let offlineGrace: Duration = .seconds(10)
-    var unlocked = false
+    var unlocked = false {
+        didSet { refreshWidgetSnapshotIfNeeded() }
+    }
     /// 钥匙串里有上次登录的令牌：先进主界面、后台用它自动登录；网关拒绝或退出登录才回登录页
     var resumingLogin = false
     var verifying = false
@@ -114,12 +120,16 @@ final class ChatStore {
     var workspaceRoot = ""
     var assistantName = AssistantDefaults.name
     /// 个人助理今日页/收件箱/记忆。ready 后拉一次，之后靠网关推送
-    var assistantState: AssistantState?
+    var assistantState: AssistantState? {
+        didSet { refreshWidgetSnapshotIfNeeded() }
+    }
     /// Revision at which the retained memory projection was actually fetched.
     @ObservationIgnored var assistantMemoryRevision: Int?
     /// 只由网络确认推进；缓存水合不伪装成网关响应。
     var assistantStateRevision: UInt64 = 0
-    @ObservationIgnored var assistantNetworkConfirmed = false
+    @ObservationIgnored var assistantNetworkConfirmed = false {
+        didSet { refreshWidgetSnapshotIfNeeded() }
+    }
     @ObservationIgnored var assistantRequestGeneration = 0
     @ObservationIgnored var assistantInFlightGeneration: Int?
     @ObservationIgnored var assistantInFlightReqId: String?
@@ -543,5 +553,10 @@ final class ChatStore {
         case success([String: JSONValue])
         case retryable
         case fatal
+    }
+
+    private func refreshWidgetSnapshotIfNeeded() {
+        guard started else { return }
+        WidgetSnapshotBridge.shared.refresh(from: self)
     }
 }

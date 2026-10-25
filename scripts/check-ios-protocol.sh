@@ -26,6 +26,7 @@ if (!silentBody.includes("workspace_memory_search") || silentBody.includes("work
 console.log("iOS silent tool chrome 源码契约：通过");
 NODE
 node scripts/check-ios-navigation-contract.mjs
+node scripts/check-ios-widget-contract.mjs
 node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const read = (path) => readFileSync(path, "utf8");
@@ -185,6 +186,13 @@ BUILD=""
 trap 'rm -rf "$WORK" ${BUILD:+"$BUILD"}' EXIT
 
 echo "Swift：$(head -n 1 <<<"$version_full")"
+
+echo "编译并运行 Widget Swift 契约…"
+"$SWIFTC" -Onone -swift-version 5 \
+  ios/Jiebo/WidgetShared/WidgetSnapshot.swift \
+  ios/WidgetContractTests/main.swift \
+  -o "$WORK/widget-contract"
+"$WORK/widget-contract"
 
 # 记忆中心 SwiftUI / 会话桥接：契约库不含 Views，单独 swiftc -parse 防语法回归
 PARSE_UI=()

@@ -135,6 +135,7 @@ struct HomeShell: View {
             AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             bootstrapPadRouter()
             dispatchPush()
+            dispatchWidgetDeepLink()
         }
         .onDisappear {
             AssistantScenePresenter.shared.unregister(token: sceneToken)
@@ -149,10 +150,16 @@ struct HomeShell: View {
         }
         .onChange(of: scenePhase) { _, phase in
             AssistantScenePresenter.shared.update(token: sceneToken, active: phase == .active)
-            if phase == .active { dispatchPush() }
+            if phase == .active {
+                dispatchPush()
+                dispatchWidgetDeepLink()
+            }
         }
         .onChange(of: PushRouting.shared.pending) { _, _ in
             dispatchPush()
+        }
+        .onChange(of: WidgetDeepLinkRouting.shared.pending) { _, _ in
+            dispatchWidgetDeepLink()
         }
         .onReceive(NotificationCenter.default.publisher(for: .assistantCaptureOpenRequested)) { _ in
             guard AssistantScenePresenter.shared.isPresenter(token: sceneToken) else { return }
@@ -260,6 +267,32 @@ struct HomeShell: View {
         // iPad 不启用 iPhone 的 activeId 限制；小驳始终显式绑定 assistantChatId。
         store.assistantOnly = false
         im.setHomeVisible(migrated == .messages)
+    }
+
+    private func dispatchWidgetDeepLink() {
+        guard padRouter.bootstrapped,
+              let route = WidgetDeepLinkRouting.shared.consume(for: sceneToken)
+        else { return }
+        switch route {
+        case .today:
+            padRouter.openAssistant()
+        case .inbox:
+            padRouter.openAssistant(section: .inbox, selection: nil)
+        case .todo(let id):
+            guard store.assistantState != nil else {
+                store.requestAssistant()
+                padRouter.openAssistant(section: .tasks, selection: nil)
+                return
+            }
+            let tasks = PadAssistantProjection(state: store.assistantState).personalTasks
+            guard let taskID = tasks.first(where: {
+                $0.id == id || $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.id == id })
+            })?.id else {
+                padRouter.openAssistant(section: .tasks, selection: nil)
+                return
+            }
+            padRouter.openAssistant(section: .tasks, selection: .task(taskID))
+        }
     }
 
     /// iPad 点通知：先映射业务域，再在助理状态刷新后定位实体；不再消费后丢弃。

@@ -153,6 +153,12 @@
 		P6000203 /* JieboAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000102 /* JieboAppIntents.swift */; };
 		P6000204 /* AssistantCaptureDrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000103 /* AssistantCaptureDrain.swift */; };
 		A1B2C3D4E5F6071829000D15 /* JieboShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000017 /* JieboShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		WIDG0201 /* JieboWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0101 /* JieboWidget.swift */; };
+		WIDG0202 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0102 /* WidgetSnapshot.swift */; };
+		WIDG0203 /* WidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0102 /* WidgetSnapshot.swift */; };
+		WIDG0204 /* WidgetSnapshotBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0103 /* WidgetSnapshotBridge.swift */; };
+		WIDG0205 /* WidgetDeepLinkRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0104 /* WidgetDeepLinkRouting.swift */; };
+		WIDG0D15 /* JieboWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = WIDG0018 /* JieboWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -162,6 +168,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = A1B2C3D4E5F6071829000D01;
 			remoteInfo = JieboShare;
+		};
+		WIDG0D16 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1B2C3D4E5F6071829000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = WIDG0D01;
+			remoteInfo = JieboWidget;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -173,6 +186,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				A1B2C3D4E5F6071829000D15 /* JieboShare.appex in Embed App Extensions */,
+				WIDG0D15 /* JieboWidget.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -184,6 +198,13 @@
 		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000017 /* JieboShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = JieboShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		WIDG0018 /* JieboWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = JieboWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		WIDG0101 /* JieboWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboWidget.swift; sourceTree = "<group>"; };
+		WIDG0102 /* WidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshot.swift; sourceTree = "<group>"; };
+		WIDG0103 /* WidgetSnapshotBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotBridge.swift; sourceTree = "<group>"; };
+		WIDG0104 /* WidgetDeepLinkRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDeepLinkRouting.swift; sourceTree = "<group>"; };
+		WIDG0105 /* JieboWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = JieboWidget.entitlements; sourceTree = "<group>"; };
+		WIDG0106 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000100 /* JieboApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboApp.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000101 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000102 /* JieboMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JieboMark.swift; sourceTree = "<group>"; };
@@ -345,6 +366,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		WIDG0D13 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -353,6 +381,8 @@
 			children = (
 				A1B2C3D4E5F6071829000005 /* Jiebo */,
 				A1B2C3D4E5F6071829000D05 /* JieboShare */,
+				WIDG0D05 /* JieboWidget */,
+				WIDG0D06 /* WidgetShared */,
 				A1B2C3D4E5F6071829000004 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -362,6 +392,7 @@
 			children = (
 				A1B2C3D4E5F6071829000014 /* Jiebo.app */,
 				A1B2C3D4E5F6071829000017 /* JieboShare.appex */,
+				WIDG0018 /* JieboWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -450,6 +481,8 @@
 				A1B2C3D4E5F6071829000A02 /* ChatStore+Im.swift */,
 				A1B2C3D4E5F6071829000A12 /* ChatStore+WorkspaceAgents.swift */,
 				A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */,
+				WIDG0103 /* WidgetSnapshotBridge.swift */,
+				WIDG0104 /* WidgetDeepLinkRouting.swift */,
 				A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */,
 				A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */,
 				PADP00101 /* PadRouter.swift */,
@@ -622,6 +655,24 @@
 			path = JieboShare;
 			sourceTree = "<group>";
 		};
+		WIDG0D05 /* JieboWidget */ = {
+			isa = PBXGroup;
+			children = (
+				WIDG0101 /* JieboWidget.swift */,
+				WIDG0105 /* JieboWidget.entitlements */,
+				WIDG0106 /* Info.plist */,
+			);
+			path = JieboWidget;
+			sourceTree = "<group>";
+		};
+		WIDG0D06 /* WidgetShared */ = {
+			isa = PBXGroup;
+			children = (
+				WIDG0102 /* WidgetSnapshot.swift */,
+			);
+			path = WidgetShared;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -638,6 +689,7 @@
 			);
 			dependencies = (
 				A1B2C3D4E5F6071829000D17 /* PBXTargetDependency */,
+				WIDG0D17 /* PBXTargetDependency */,
 			);
 			name = Jiebo;
 			productName = Jiebo;
@@ -661,6 +713,23 @@
 			productReference = A1B2C3D4E5F6071829000017 /* JieboShare.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		WIDG0D01 /* JieboWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = WIDG0D25 /* Build configuration list for PBXNativeTarget "JieboWidget" */;
+			buildPhases = (
+				WIDG0D11 /* Sources */,
+				WIDG0D13 /* Frameworks */,
+				WIDG0D12 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = JieboWidget;
+			productName = JieboWidget;
+			productReference = WIDG0018 /* JieboWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -682,6 +751,9 @@
 					A1B2C3D4E5F6071829000D01 = {
 						CreatedOnToolsVersion = 15.0;
 					};
+					WIDG0D01 = {
+						CreatedOnToolsVersion = 15.0;
+					};
 				};
 			};
 			buildConfigurationList = A1B2C3D4E5F6071829000024 /* Build configuration list for PBXProject "Jiebo" */;
@@ -700,6 +772,7 @@
 			targets = (
 				A1B2C3D4E5F6071829000002 /* Jiebo */,
 				A1B2C3D4E5F6071829000D01 /* JieboShare */,
+				WIDG0D01 /* JieboWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -714,6 +787,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A1B2C3D4E5F6071829000D12 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		WIDG0D12 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -756,6 +836,9 @@
 				A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */,
 				A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */,
 				A1B2C3D4E5F6071829000813 /* AppDelegate.swift in Sources */,
+				WIDG0203 /* WidgetSnapshot.swift in Sources */,
+				WIDG0204 /* WidgetSnapshotBridge.swift in Sources */,
+				WIDG0205 /* WidgetDeepLinkRouting.swift in Sources */,
 				A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */,
 				A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */,
 				A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */,
@@ -881,6 +964,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		WIDG0D11 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				WIDG0201 /* JieboWidget.swift in Sources */,
+				WIDG0202 /* WidgetSnapshot.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -888,6 +980,11 @@
 			isa = PBXTargetDependency;
 			target = A1B2C3D4E5F6071829000D01 /* JieboShare */;
 			targetProxy = A1B2C3D4E5F6071829000D16 /* PBXContainerItemProxy */;
+		};
+		WIDG0D17 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = WIDG0D01 /* JieboWidget */;
+			targetProxy = WIDG0D16 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1135,6 +1232,50 @@
 			};
 			name = Release;
 		};
+		WIDG0D22 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = JieboWidget/JieboWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8M43BMB6J8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JieboWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad.widget;
+				PRODUCT_NAME = JieboWidget;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		WIDG0D23 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = JieboWidget/JieboWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8M43BMB6J8;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = JieboWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../../Frameworks");
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.jiebo.ipad.widget;
+				PRODUCT_NAME = JieboWidget;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1161,6 +1302,15 @@
 			buildConfigurations = (
 				A1B2C3D4E5F6071829000D22 /* Debug */,
 				A1B2C3D4E5F6071829000D23 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		WIDG0D25 /* Build configuration list for PBXNativeTarget "JieboWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				WIDG0D22 /* Debug */,
+				WIDG0D23 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

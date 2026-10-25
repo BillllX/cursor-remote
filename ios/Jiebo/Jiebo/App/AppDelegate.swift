@@ -66,6 +66,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        // 静默唤醒时先把当前最小状态落盘；无内容变化时 bridge 会自动去重。
+        Task { @MainActor in
+            WidgetSnapshotBridge.shared.refreshAttachedStore()
+        }
         guard let target = PushTarget(userInfo: userInfo) else {
             completionHandler(.noData)
             return

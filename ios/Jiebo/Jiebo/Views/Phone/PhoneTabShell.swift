@@ -79,22 +79,32 @@ struct PhoneTabShell: View {
             AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             synchronizeSelectedTab()
             dispatchPush()
+            dispatchWidgetDeepLink()
         }
         .onDisappear {
             AssistantScenePresenter.shared.unregister(token: sceneToken)
         }
         .onChange(of: scenePhase) { _, phase in
             AssistantScenePresenter.shared.update(token: sceneToken, active: phase == .active)
-            if phase == .active { dispatchPush() }
+            if phase == .active {
+                dispatchPush()
+                dispatchWidgetDeepLink()
+            }
         }
         .onChange(of: router.selectedTab) { _, _ in
             synchronizeSelectedTab()
         }
         .onChange(of: router.bootstrapped) { _, ready in
-            if ready { dispatchPush() }
+            if ready {
+                dispatchPush()
+                dispatchWidgetDeepLink()
+            }
         }
         .onChange(of: PushRouting.shared.pending) { _, _ in
             dispatchPush()
+        }
+        .onChange(of: WidgetDeepLinkRouting.shared.pending) { _, _ in
+            dispatchWidgetDeepLink()
         }
         .onReceive(NotificationCenter.default.publisher(for: .assistantCaptureOpenRequested)) { _ in
             guard AssistantScenePresenter.shared.isPresenter(token: sceneToken) else { return }
@@ -122,6 +132,21 @@ struct PhoneTabShell: View {
         im.setHomeVisible(messages)
         if !messages, router.bootstrapped {
             store.openAssistantChat()
+        }
+    }
+
+    private func dispatchWidgetDeepLink() {
+        guard router.bootstrapped,
+              let route = WidgetDeepLinkRouting.shared.consume(for: sceneToken)
+        else { return }
+        switch route {
+        case .today:
+            router.popToRoot()
+            store.openAssistantChat()
+        case .inbox:
+            router.go(.inbox)
+        case .todo:
+            router.openHub(anchor: "todos")
         }
     }
 
