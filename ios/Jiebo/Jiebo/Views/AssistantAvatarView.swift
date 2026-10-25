@@ -159,23 +159,31 @@ struct AssistantAvatarView: View {
         }
     }
 
+    /// 位移、缩放和倾斜在原幅度上再放大 75%，小尺寸导航栏里才看得出在动
+    private let motionGain: CGFloat = 1.75
+
     private var motionScale: CGSize {
         guard motionActive else { return CGSize(width: 1, height: 1) }
+        let raw: CGSize
         switch displayedPhase {
-        case .idle: return CGSize(width: 1.008, height: 1.014)
-        case .listening: return CGSize(width: 1.012, height: 1.018)
-        case .thinking: return CGSize(width: 1.005, height: 1.008)
-        case .executing: return CGSize(width: 1.016, height: 0.992)
-        case .approval: return CGSize(width: 1, height: 1)
-        case .success: return CGSize(width: 1.025, height: 1.025)
-        case .failure: return CGSize(width: 1, height: 0.99)
-        case .offline: return CGSize(width: 1.006, height: 0.988)
+        case .idle: raw = CGSize(width: 1.008, height: 1.014)
+        case .listening: raw = CGSize(width: 1.012, height: 1.018)
+        case .thinking: raw = CGSize(width: 1.005, height: 1.008)
+        case .executing: raw = CGSize(width: 1.016, height: 0.992)
+        case .success: raw = CGSize(width: 1.025, height: 1.025)
+        case .failure: raw = CGSize(width: 1, height: 0.99)
+        case .offline: raw = CGSize(width: 1.006, height: 0.988)
+        case .approval: raw = CGSize(width: 1, height: 1)
         }
+        return CGSize(
+            width: 1 + (raw.width - 1) * motionGain,
+            height: 1 + (raw.height - 1) * motionGain
+        )
     }
 
     private var motionOffset: CGSize {
         guard motionActive else { return .zero }
-        let distance = max(1, size * 0.035)
+        let distance = max(1, size * 0.035) * motionGain
         switch displayedPhase {
         case .idle: return CGSize(width: 0, height: -distance * 0.45)
         case .listening: return CGSize(width: 0, height: -distance)
@@ -191,10 +199,10 @@ struct AssistantAvatarView: View {
     private var motionRotation: Angle {
         guard motionActive else { return .zero }
         switch displayedPhase {
-        case .listening: return .degrees(-1.2)
-        case .thinking: return .degrees(1)
-        case .approval: return .degrees(-0.8)
-        case .failure: return .degrees(-0.5)
+        case .listening: return .degrees(-1.2 * Double(motionGain))
+        case .thinking: return .degrees(Double(motionGain))
+        case .approval: return .degrees(-0.8 * Double(motionGain))
+        case .failure: return .degrees(-0.5 * Double(motionGain))
         default: return .zero
         }
     }

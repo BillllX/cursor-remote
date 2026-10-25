@@ -12,6 +12,7 @@ const menuScreensPath = "ios/Jiebo/Jiebo/Views/Phone/MenuScreens.swift";
 const chatHomePath = "ios/Jiebo/Jiebo/Views/IM/ChatHome.swift";
 const memoryViewsPath = "ios/Jiebo/Jiebo/Views/MemoryCenter/MemoryCenterViews.swift";
 const adminStatsPath = "ios/Jiebo/Jiebo/Views/AdminStatsView.swift";
+const homePath = "ios/Jiebo/Jiebo/Views/HomeShell.swift";
 const sidebarPath = "ios/Jiebo/Jiebo/Views/SidebarView.swift";
 const phoneWorkbenchPath = "ios/Jiebo/Jiebo/Views/PhoneWorkbench.swift";
 const swift = readFileSync(swiftPath, "utf8");
@@ -26,6 +27,7 @@ const menuScreens = readFileSync(menuScreensPath, "utf8");
 const chatHome = readFileSync(chatHomePath, "utf8");
 const memoryViews = readFileSync(memoryViewsPath, "utf8");
 const adminStats = readFileSync(adminStatsPath, "utf8");
+const home = readFileSync(homePath, "utf8");
 const sidebar = readFileSync(sidebarPath, "utf8");
 const phoneWorkbench = readFileSync(phoneWorkbenchPath, "utf8");
 
@@ -125,7 +127,7 @@ for (const [source, needle, title] of [
   [memoryViews, "NavigationIconId.account.symbol", "记忆中心个人/设置入口"],
   [adminStats, "NavigationIconId.stats.symbol", "统计空态"],
   [rootView, "StatusLegendId.running", "RootView 运行状态"],
-  [rootView, "StatusLegendId.attention", "RootView 待处理状态"],
+  [home, "StatusLegendId.attention", "iPad 域切换待处理状态"],
   [assistantEntry, "StatusLegendId.unread", "助理会话独立未读状态"],
   [sidebar, 'row.status == "armed" || row.status == "running"', "iPad Loop 活动状态"],
   [phoneWorkbench, 'row.status == "armed" || row.status == "running"', "窄屏 Loop 活动状态"],

@@ -62,35 +62,19 @@ struct AssistantHome: View {
     }
 
     private var titleView: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 7) {
-                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
-                titleCopy
+        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 56)
+            .overlay(alignment: .bottomTrailing) {
+                LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
+                    .offset(x: 1, y: 7)
             }
-            titleCopy
-        }
-        .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(titleAccessibility)
     }
 
-    private var titleCopy: some View {
-        VStack(spacing: 1) {
-            Text(store.assistantName)
-                .font(JieboFont.display(17))
-                .tracking(0.34)
-                .foregroundStyle(JieboColor.ink)
-                .lineLimit(1)
-            HStack(spacing: 5) {
-                LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
-                if let subtitleText {
-                    Text(subtitleText)
-                        .font(JieboFont.text(.caption2, weight: .medium))
-                        .tracking(0.3)
-                        .foregroundStyle(store.hasApiKey ? JieboColor.dim : JieboColor.danger)
-                        .lineLimit(1)
-                }
-            }
-            .frame(minHeight: 12)
-        }
+    private var titleAccessibility: String {
+        var parts = [store.assistantName, store.assistantAvatarPhase.accessibilityLabel]
+        if let subtitleText { parts.append(subtitleText) }
+        return parts.joined(separator: "，")
     }
 
     /// 连接状态由圆点表达；文字与形象使用同一客户端状态映射。

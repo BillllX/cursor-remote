@@ -12,6 +12,8 @@ struct PreviewPanelView: View {
     let tab: PreviewTab
     /// 盖满时是模态；iPad 横屏分栏时和对话并排，读屏两边都要能摸到
     var modal = true
+    /// 宿主还能把这一栏铺满。窄屏预览本身已经占满，不再给这个按钮。
+    var canFullscreen = false
     /// 窄屏左缘右滑关闭时的位移
     @State private var dragX: CGFloat = 0
 
@@ -51,7 +53,7 @@ struct PreviewPanelView: View {
             }
         }
         .accessibilityAddTraits(modal ? .isModal : [])
-        .accessibilityAction(.escape) { closePreview() }
+        .accessibilityAction(.escape) { escapePreview() }
         .background { keyboardShortcuts }
     }
 
@@ -83,9 +85,24 @@ struct PreviewPanelView: View {
         sceneSession?.previewTabs(in: store) ?? store.previewTabs
     }
 
+    private var fullscreen: Bool { sceneSession?.previewFullscreen == true }
+
     private func closePreview() {
         if let sceneSession { sceneSession.dismissPreview() }
         else { store.collapsePreview() }
+    }
+
+    private func toggleFullscreen() {
+        sceneSession?.setPreviewFullscreen(!fullscreen)
+    }
+
+    /// 全屏时先退回并排，再按一次才收起预览。
+    private func escapePreview() {
+        if canFullscreen, fullscreen {
+            sceneSession?.setPreviewFullscreen(false)
+        } else {
+            closePreview()
+        }
     }
 
     private func selectPreview(_ path: String) {
@@ -218,6 +235,16 @@ struct PreviewPanelView: View {
             if tab.readSha != nil {
                 Button { store.showCurrentVersion(tab.path) } label: {
                     Label("看当前版本", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            if canFullscreen {
+                Button(action: toggleFullscreen) {
+                    Label(
+                        fullscreen ? "退出全屏" : "全屏预览",
+                        systemImage: fullscreen
+                            ? "arrow.down.right.and.arrow.up.left"
+                            : "arrow.up.left.and.arrow.down.right"
+                    )
                 }
             }
             Section {
@@ -422,6 +449,9 @@ struct PreviewPanelView: View {
             .hoverEffect(.highlight)
             .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
             .accessibilityLabel("分享 \(tab.filename)")
+            if canFullscreen {
+                PreviewFullscreenToggle(fullscreen: fullscreen, action: toggleFullscreen)
+            }
             if tab.content != nil {
                 Button {
                     UIPasteboard.general.string = tab.content
@@ -483,6 +513,35 @@ struct PreviewPanelView: View {
         let base = tab.cwd ?? store.cwd
         if base.isEmpty { return tab.path }
         return base.hasSuffix("/") ? base + tab.path : "\(base)/\(tab.path)"
+    }
+}
+
+extension PreviewPanelView {
+    func fullscreenEnabled(_ enabled: Bool) -> Self {
+        var copy = self
+        copy.canFullscreen = enabled
+        return copy
+    }
+}
+
+struct PreviewFullscreenToggle: View {
+    var fullscreen: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(fullscreen ? JieboColor.ink : JieboColor.ink2)
+                .frame(width: 30, height: 30)
+                .background(fullscreen ? JieboColor.ink.opacity(0.06) : JieboColor.mist)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(fullscreen ? JieboColor.ink.opacity(0.16) : Color.clear, lineWidth: 1))
+                .hitTarget()
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(fullscreen ? "退出全屏" : "全屏预览")
     }
 }
 

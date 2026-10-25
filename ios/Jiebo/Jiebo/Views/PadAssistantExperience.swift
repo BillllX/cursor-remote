@@ -35,15 +35,13 @@ struct PadTodayExperience: View {
         .background(JieboColor.paper)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                HStack(spacing: 7) {
-                    AssistantAvatarView(phase: store.assistantAvatarPhase, size: 34)
-                    Text(store.assistantName)
-                        .font(JieboFont.display(17))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(store.assistantName)，\(store.assistantAvatarPhase.accessibilityLabel)")
+                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 59.5)
+                    .overlay(alignment: .bottomTrailing) {
+                        LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
+                            .offset(x: 1, y: 7)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(store.assistantName)，\(store.assistantAvatarPhase.accessibilityLabel)，\(store.linkState.title)")
             }
         }
         .dropDestination(for: PadSemanticTransfer.self, action: { items, _ in
@@ -706,13 +704,17 @@ struct PadUnifiedInspector: View {
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         Group {
             switch router.inspectorMode {
             case .preview:
-                if let tab = sceneSession?.previewTab(in: store) {
+                if sceneSession?.previewFullscreen == true {
+                    Color.clear.accessibilityHidden(true)
+                } else if let tab = sceneSession?.previewTab(in: store) {
                     PreviewPanelView(tab: tab, modal: false)
+                        .fullscreenEnabled(sizeClass != .compact)
                 } else {
                     NavigationStack {
                         ContentUnavailableView(

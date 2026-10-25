@@ -34,10 +34,11 @@ for (const needle of [
   requireSource(avatar, needle, "助理状态与动画契约");
 }
 
-requireSource(phone, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)", "iPhone 导航栏形象");
-requireSource(phone, "ViewThatFits(in: .horizontal)", "iPhone 紧凑标题降级");
+requireSource(phone, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 56)", "iPhone 导航栏形象");
+requireSource(phone, "LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)", "iPhone 状态点在形象下方");
 requireSource(emptyState, "AssistantAvatarView(", "助理空状态形象");
-requireSource(pad, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 34)", "iPad 今日标题形象");
+requireSource(pad, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 59.5)", "iPad 今日标题形象");
+requireSource(avatar, "private let motionGain: CGFloat = 1.75", "助理动作幅度");
 
 const fileRef = "AVA000101 /* AssistantAvatarView.swift */";
 const buildRef = "AVA000201 /* AssistantAvatarView.swift in Sources */";

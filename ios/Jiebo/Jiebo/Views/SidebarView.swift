@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// iPad 常驻侧栏，层次和手机抽屉一致：助理 → 当前工作区（切换、工具、这个工作区的对话）→ 底部设置。
-/// 多出来的只有收起按钮；点对话不收起侧栏。
+/// iPad 工作台侧栏只放工作区：当前工作区（切换、工具、这个工作区的对话）→ 底部设置。
+/// 小驳是独立的域，不从工作台进入。多出来的只有收起按钮；点对话不收起侧栏。
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -17,15 +17,6 @@ struct SidebarView: View {
         @Bindable var store = store
         VStack(alignment: .leading, spacing: 0) {
             brandBar
-
-            AssistantEntryRow(action: store.openAssistantEntry)
-                .padding(.horizontal, 12)
-
-            Rectangle()
-                .fill(JieboColor.line)
-                .frame(height: 1)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
 
             workspaceCard
                 .padding(.horizontal, 12)

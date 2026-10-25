@@ -13,6 +13,7 @@ final class SceneSessionState {
     private var preview = ScenePreviewState()
     var previewKey: String? { preview.selected }
     var previewKeys: [String] { preview.keys }
+    var previewFullscreen: Bool { preview.fullscreen }
     private var drafts: [String: String] = [:]
 
     func draft(for chatId: String, fallback: @autoclosure () -> String) -> String {
@@ -37,6 +38,10 @@ final class SceneSessionState {
 
     func dismissPreview() {
         preview.dismiss()
+    }
+
+    func setPreviewFullscreen(_ on: Bool) {
+        preview.setFullscreen(on)
     }
 
     func previewTab(in store: ChatStore) -> PreviewTab? {

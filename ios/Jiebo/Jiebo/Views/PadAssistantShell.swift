@@ -128,6 +128,13 @@ struct PadAssistantShell: View {
                     max: router.layoutMode.inspectorWidth.maximum
                 )
         }
+        .overlay {
+            if sceneSession?.previewFullscreen == true, let tab = sceneSession?.previewTab(in: store) {
+                PreviewPanelView(tab: tab, modal: true, canFullscreen: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(JieboColor.white.ignoresSafeArea())
+            }
+        }
         // 非“今日”页没有 ThreadView，由域壳承接系统预览/分享；今日仍由唯一 ThreadView 承接，避免双重 present。
         .sheet(item: detachedPreviewFile, onDismiss: store.closePreview) { file in
             QuickLookView(file: file, onClose: { store.dismissPreviewFile() })

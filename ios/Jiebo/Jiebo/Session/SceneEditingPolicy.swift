@@ -20,6 +20,8 @@ enum SceneEditorElection {
 struct ScenePreviewState: Equatable {
     private(set) var keys: [String] = []
     private(set) var selected: String?
+    /// 当前窗口把预览铺满所在区域。没有选中页签时保持关闭。
+    private(set) var fullscreen = false
 
     mutating func open(_ key: String, limit: Int = 8) {
         guard !key.isEmpty else { return }
@@ -35,10 +37,18 @@ struct ScenePreviewState: Equatable {
 
     mutating func dismiss() {
         selected = nil
+        fullscreen = false
     }
 
     mutating func close(_ key: String) {
         keys.removeAll { $0 == key }
-        if selected == key { selected = nil }
+        if selected == key {
+            selected = nil
+            fullscreen = false
+        }
+    }
+
+    mutating func setFullscreen(_ on: Bool) {
+        fullscreen = on && selected != nil
     }
 }

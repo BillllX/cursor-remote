@@ -20,6 +20,7 @@ struct FileBrowserCover: View {
     @Environment(\.sceneSessionState) private var sceneSession
     @FocusState private var searchFocused: Bool
     @State private var filter = ""
+    @State private var browserFullscreen = false
 
     private var activePreviewTab: PreviewTab? {
         if let sceneSession { return sceneSession.previewTab(in: store) }
@@ -40,11 +41,14 @@ struct FileBrowserCover: View {
             Group {
                 if sizeClass != .compact {
                     HStack(spacing: 0) {
-                        treeColumn
-                            .frame(width: 340)
-                        Divider().overlay(JieboColor.line)
+                        if activePreviewTab == nil || !browserFullscreen {
+                            treeColumn
+                                .frame(width: 340)
+                            Divider().overlay(JieboColor.line)
+                        }
                         rightPane
                     }
+                    .animation(JieboMotion.panel(reduceMotion), value: browserFullscreen)
                 } else if activePreviewTab != nil {
                     VStack(spacing: 0) {
                         HStack {
@@ -252,6 +256,11 @@ struct FileBrowserCover: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
+                    if sizeClass != .compact {
+                        PreviewFullscreenToggle(fullscreen: browserFullscreen) {
+                            browserFullscreen.toggle()
+                        }
+                    }
                     // P10：导出（与预览面板头部同款；图片多一个「存相册」）
                     if tab.kind == .image, !tab.diff {
                         Button {

@@ -108,20 +108,22 @@ struct HomeShell: View {
 
     private var padHomes: some View {
         @Bindable var router = padRouter
-        return Group {
-            switch router.domain {
-            case .assistant:
-                PadAssistantShell()
-            case .workbench:
-                WorkbenchView()
-                    .environment(\.homeActive, true)
-            case .messages:
-                ChatHome()
-                    .environment(\.homeActive, true)
+        return VStack(spacing: 0) {
+            Group {
+                switch router.domain {
+                case .assistant:
+                    PadAssistantShell()
+                case .workbench:
+                    WorkbenchView()
+                        .environment(\.homeActive, true)
+                case .messages:
+                    ChatHome()
+                        .environment(\.homeActive, true)
+                }
             }
-        }
-        // 当前域才挂载：工作台、聊天和小驳不会同时留下多个可编辑 Composer。
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // 当前域才挂载：工作台、聊天和小驳各留一个 Composer。
+            // 底栏单独占一行，输入区和侧栏底部留在它上方。
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             PadDomainSwitcher()
         }
         .environment(router)
@@ -221,7 +223,9 @@ struct HomeShell: View {
                 }
             },
             closeOverlay: {
-                if sceneSession?.previewKey != nil {
+                if sceneSession?.previewFullscreen == true {
+                    sceneSession?.setPreviewFullscreen(false)
+                } else if sceneSession?.previewKey != nil {
                     sceneSession?.dismissPreview()
                 } else if padRouter.inspectorPresented {
                     padRouter.dismissInspector()
@@ -382,9 +386,12 @@ private struct PadDomainSwitcher: View {
         .padding(4)
         .jieboGlass(in: Capsule(), interactive: true)
         .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity)
-        .background(JieboColor.paper.opacity(0.94))
+        .background(JieboColor.paper)
+        .overlay(alignment: .top) {
+            Rectangle().fill(JieboColor.line).frame(height: 1)
+        }
     }
 
     private func domainButton(_ domain: PadDomain, badge: Int, shortcut: Character) -> some View {
@@ -412,9 +419,17 @@ private struct PadDomainSwitcher: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(badge > 0 ? "\(domain.title)，\(badge) 项未读或待处理" : domain.title)
+        .accessibilityLabel(domainAccessibilityLabel(domain, badge: badge))
         .accessibilityHint(Text(verbatim: "切换到\(domain.title)，快捷键 Command \(shortcut)"))
         .accessibilityAddTraits(router.domain == domain ? .isSelected : [])
+    }
+
+    private func domainAccessibilityLabel(_ domain: PadDomain, badge: Int) -> String {
+        guard badge > 0 else { return domain.title }
+        let status = domain == .assistant
+            ? StatusLegendId.attention.accessibilityLabel(count: badge)
+            : StatusLegendId.unread.accessibilityLabel(count: badge)
+        return "\(domain.title)，\(status)"
     }
 }
 

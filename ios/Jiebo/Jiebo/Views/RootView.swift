@@ -49,6 +49,8 @@ struct WorkbenchView: View {
         return store.previewPanelOpen
     }
 
+    private var previewFullscreen: Bool { sceneSession?.previewFullscreen == true }
+
     private var previewOverlaid: Bool { previewPanelOpen && !previewSplit }
 
     private func closePreview() {
@@ -99,6 +101,7 @@ struct WorkbenchView: View {
     @ViewBuilder
     private var padWorkbench: some View {
         @Bindable var store = store
+        ZStack(alignment: .trailing) {
         HStack(spacing: 0) {
             // 图标栏一直挂着，只改宽度。收起时不必等分栏动画结束再创建，图标就不会晚一拍才出现。
             CollapsedSidebarRail(expand: {
@@ -142,17 +145,29 @@ struct WorkbenchView: View {
             // 系统会在分栏顶上再放一个侧栏开关，和侧栏里、收起后图标栏里的是同一个动作
             .toolbar(removing: .sidebarToggle)
             // 预览盖满时，底下的侧栏和对话不再让 VoiceOver 摸到；分栏时两边都能摸
-            .accessibilityHidden(previewOverlaid)
-            if previewSplit, previewPanelOpen, let tab = activePreviewTab {
-                Divider().overlay(JieboColor.line)
-                PreviewPanelView(tab: tab, modal: false)
+            .accessibilityHidden(previewOverlaid || previewFullscreen)
+            if previewSplit, previewPanelOpen, !previewFullscreen {
+                Color.clear
                     .frame(width: previewColumnWidth)
                     .frame(maxHeight: .infinity)
-                    .background(JieboColor.white)
-                    .transition(.move(edge: .trailing))
+                    .accessibilityHidden(true)
             }
         }
+        .allowsHitTesting(!previewFullscreen)
+        if previewSplit, previewPanelOpen, let tab = activePreviewTab {
+            PreviewPanelView(tab: tab, modal: previewFullscreen, canFullscreen: true)
+                .frame(maxWidth: previewFullscreen ? .infinity : previewColumnWidth, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .transition(.move(edge: .trailing))
+        }
+        }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen && previewSplit)
+        .animation(JieboMotion.panel(reduceMotion), value: previewFullscreen)
+        .onChange(of: previewSplit) { _, split in
+            if !split, previewFullscreen, !store.fileBrowserOpen {
+                sceneSession?.setPreviewFullscreen(false)
+            }
+        }
         .background {
             GeometryReader { geo in
                 Color.clear
@@ -238,19 +253,6 @@ struct CollapsedSidebarRail: View {
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
-            railButton(
-                NavigationIconId.assistant.symbol,
-                label: assistantAccessibilityLabel,
-                badge: store.assistantBadgeCount,
-                marked: store.assistantRunning,
-                on: store.assistantChatActive || store.toolLayer == .assistant,
-                tint: JieboColor.pine,
-                action: store.toggleAssistantRail
-            )
-            Rectangle()
-                .fill(JieboColor.line)
-                .frame(width: 24, height: 1)
-                .padding(.vertical, 4)
             ForEach(ToolLayer.workTools) { layer in
                 railButton(
                     layer.symbol,
@@ -300,15 +302,6 @@ struct CollapsedSidebarRail: View {
     private var loopLive: Bool {
         guard let row = store.loops[store.activeId] else { return false }
         return row.status == "armed" || row.status == "running"
-    }
-
-    private var assistantAccessibilityLabel: String {
-        var parts = [store.assistantName]
-        if store.assistantBadgeCount > 0 {
-            parts.append(StatusLegendId.attention.accessibilityLabel(count: store.assistantBadgeCount))
-        }
-        if store.assistantRunning { parts.append(StatusLegendId.running.label) }
-        return parts.joined(separator: "，")
     }
 
     private func marked(_ layer: ToolLayer) -> Bool {

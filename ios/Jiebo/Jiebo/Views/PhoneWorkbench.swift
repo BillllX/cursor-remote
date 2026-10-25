@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// iPad 窄窗（compact）：打开就是当前对话。iPhone 不再进入这里，改走 PhoneShell（纯个人助理）。
-/// 抽屉分三层：助理（全局，不属于任何工作区）→ 当前工作区（切换、工具、对话）→ 底部设置菜单。
+/// 抽屉只放工作区：当前工作区（切换、工具、对话）→ 底部设置菜单。小驳走底部自己的域。
 /// 切换工作区、主题、统计这些表单挂在这里而不是抽屉上——抽屉一关，挂在它身上的 sheet 会跟着消失。
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
@@ -143,18 +143,6 @@ private struct PhoneDrawer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             brandBar
-
-            AssistantEntryRow {
-                store.openAssistantEntry()
-                close()
-            }
-            .padding(.horizontal, 12)
-
-            Rectangle()
-                .fill(JieboColor.line)
-                .frame(height: 1)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
 
             workspaceCard
                 .padding(.horizontal, 12)

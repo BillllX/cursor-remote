@@ -1722,18 +1722,32 @@ func checkScenePreviewState() -> [String] {
     var second = ScenePreviewState()
     first.open("a")
     first.open("b")
+    first.setFullscreen(true)
+    if !first.fullscreen || first.selected != "b" {
+        problems.append("scene preview：当前页签可以进入全屏")
+    }
+    first.select("a")
+    if !first.fullscreen || first.selected != "a" {
+        problems.append("scene preview：切换页签时保持全屏")
+    }
     second.open("x")
     first.dismiss()
-    if first.selected != nil || first.keys != ["a", "b"] {
-        problems.append("scene preview：收起只应清当前选择，保留本窗口页签")
+    if first.selected != nil || first.keys != ["a", "b"] || first.fullscreen {
+        problems.append("scene preview：收起只应清当前选择并退出全屏，保留本窗口页签")
     }
-    if second.selected != "x" || second.keys != ["x"] {
+    if second.selected != "x" || second.keys != ["x"] || second.fullscreen {
         problems.append("scene preview：一个窗口不得改写另一窗口预览")
     }
     first.select("a")
+    first.setFullscreen(true)
     first.close("a")
-    if first.selected != nil || first.keys != ["b"] {
-        problems.append("scene preview：关闭当前页签必须清理本窗口选择")
+    if first.selected != nil || first.keys != ["b"] || first.fullscreen {
+        problems.append("scene preview：关闭当前页签必须清理本窗口选择并退出全屏")
+    }
+    var empty = ScenePreviewState()
+    empty.setFullscreen(true)
+    if empty.fullscreen {
+        problems.append("scene preview：没有当前页签时不能进入全屏")
     }
     for index in 0 ..< 10 { first.open("p\(index)") }
     if first.keys.count != 8 || first.keys.first != "p2" || first.selected != "p9" {
