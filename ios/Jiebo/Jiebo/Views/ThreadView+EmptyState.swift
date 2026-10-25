@@ -47,6 +47,11 @@ extension ThreadView {
     var assistantEmptyState: some View {
         VStack(spacing: 14) {
             Spacer(minLength: 32)
+            AssistantAvatarView(
+                phase: store.assistantAvatarPhase,
+                size: dynamicTypeSize >= .xxLarge ? 88 : 112
+            )
+            .padding(.bottom, 2)
             Text(assistantGreeting)
                 .font(JieboFont.display(32))
                 .tracking(0.64)

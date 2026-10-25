@@ -59,6 +59,7 @@
 		A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */; };
 		A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */; };
 		A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */; };
+		AVA000201 /* AssistantAvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AVA000101 /* AssistantAvatarView.swift */; };
 		A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000704 /* PhoneShell.swift */; };
 		A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */; };
 		P7000201 /* ArtifactCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P7000101 /* ArtifactCenterView.swift */; };
@@ -231,6 +232,7 @@
 		A1B2C3D4E5F6071829000701 /* ChatStore+Phone.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ChatStore+Phone.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000702 /* PushRegistrar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushRegistrar.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantComponents.swift; sourceTree = "<group>"; };
+		AVA000101 /* AssistantAvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantAvatarView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000704 /* PhoneShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneShell.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTabShell.swift; sourceTree = "<group>"; };
 		P7000101 /* ArtifactCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactCenterView.swift; sourceTree = "<group>"; };
@@ -493,6 +495,7 @@
 				PADP00102 /* PadAssistantShell.swift */,
 				PADP00104 /* PadAssistantExperience.swift */,
 				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
+				AVA000101 /* AssistantAvatarView.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
@@ -731,6 +734,7 @@
 				A1B2C3D4E5F6071829000801 /* ChatStore+Phone.swift in Sources */,
 				A1B2C3D4E5F6071829000802 /* PushRegistrar.swift in Sources */,
 				A1B2C3D4E5F6071829000803 /* AssistantComponents.swift in Sources */,
+				AVA000201 /* AssistantAvatarView.swift in Sources */,
 				A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */,
 				A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */,
 				P7000201 /* ArtifactCenterView.swift in Sources */,

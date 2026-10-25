@@ -70,6 +70,17 @@ struct AssistantHome: View {
     }
 
     private var titleView: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 7) {
+                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                titleCopy
+            }
+            titleCopy
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var titleCopy: some View {
         VStack(spacing: 1) {
             Text(store.assistantName)
                 .font(JieboFont.display(17))
@@ -88,14 +99,20 @@ struct AssistantHome: View {
             }
             .frame(minHeight: 12)
         }
-        .accessibilityElement(children: .combine)
     }
 
-    /// 连接状态由圆点表达；只有连上之后还有话要说才出字。优先级：没配 API Key > 助理在跑 > 后台状态
+    /// 连接状态由圆点表达；文字与形象使用同一客户端状态映射。
     private var subtitleText: String? {
         if store.connected {
             if !store.hasApiKey { return "服务器还没配 API Key" }
-            if store.assistantRunning { return "正在回复" }
+            switch store.assistantAvatarPhase {
+            case .approval: return "等待你的确认"
+            case .executing: return "正在执行"
+            case .thinking: return "正在思考"
+            case .listening: return "正在接收输入"
+            case .failure: return "执行没有完成"
+            case .idle, .success, .offline: break
+            }
             if let background = store.assistantState?.background, !background.ok {
                 return background.reason?.nilIfEmpty ?? "后台模型未就绪"
             }

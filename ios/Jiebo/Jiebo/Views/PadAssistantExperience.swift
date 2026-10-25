@@ -33,6 +33,19 @@ struct PadTodayExperience: View {
             }
         }
         .background(JieboColor.paper)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 7) {
+                    AssistantAvatarView(phase: store.assistantAvatarPhase, size: 34)
+                    Text(store.assistantName)
+                        .font(JieboFont.display(17))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(store.assistantName)，\(store.assistantAvatarPhase.accessibilityLabel)")
+            }
+        }
         .dropDestination(for: PadSemanticTransfer.self, action: { items, _ in
             defer { router.activeSemanticDragKind = nil }
             guard items.count == 1, let transfer = items.first else {
