@@ -65,7 +65,7 @@ for (const forbidden of [
 }
 
 for (const needle of [
-  ".supportedFamilies([.systemSmall, .systemMedium])",
+  ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])",
   '.widgetURL(URL(string: "jiebo://assistant/today"))',
   "Link(destination: highlightURL)",
   "let refreshAt = max(",
