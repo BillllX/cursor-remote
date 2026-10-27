@@ -253,7 +253,7 @@ extension ChatStore {
         }
     }
 
-    private func rememberTail(_ chatId: String) {
+    func rememberTail(_ chatId: String) {
         guard chatId != "boot", !tenantId.isEmpty,
               let chat = chats.first(where: { $0.id == chatId })
         else { return }
