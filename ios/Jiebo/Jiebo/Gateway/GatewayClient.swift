@@ -5,6 +5,8 @@ final class GatewayClient {
     var onOpen: (() -> Void)?
     var onMessage: ((ServerMessage) -> Void)?
     var onClose: (() -> Void)?
+    /// 连接仍可用、仅费用属性从受限恢复正常；主 actor 上同步通知各 Store 恢复延后任务。
+    var onBackgroundTrafficRestored: (() -> Void)?
     /// outbox 拒收时的回调（原因文案，给 banner）
     var onDrop: ((String) -> Void)?
 
@@ -32,7 +34,10 @@ final class GatewayClient {
     private let pump = SocketPump()
     private var pingTimer: Timer?
     private var retryTimer: Timer?
+    private var stableTimer: Timer?
+    private var pathRestoreTask: Task<Void, Never>?
     private var generation = 0
+    private var failureCount = 0
     private var closedByUser = false
     private var outbox: [Queued] = []
     private var url: URL = GatewayConfig.production
@@ -40,11 +45,18 @@ final class GatewayClient {
     /// 最近一次收到任何消息（含 pong）的时间
     private var lastInbound = Date()
     private var probeTimer: Timer?
+    private let trafficMeter = GatewayTrafficMeter()
+    private(set) var networkCost = GatewayNetworkCost.unavailable
+    #if canImport(Network)
+    private let pathObserver = GatewayPathObserver()
+    private var pathObserverStarted = false
+    #endif
 
     func connect(url: URL) {
         self.url = url
         closedByUser = false
-        open()
+        startPathObserverIfNeeded()
+        requestOpen(immediately: true)
     }
 
     func disconnect() {
@@ -53,6 +65,8 @@ final class GatewayClient {
         retryTimer?.invalidate()
         pingTimer?.invalidate()
         probeTimer?.invalidate()
+        stableTimer?.invalidate()
+        pathRestoreTask?.cancel()
         generation += 1
         pump.gate.set(generation)
         didAnnounceOpen = false
@@ -67,14 +81,16 @@ final class GatewayClient {
     }
 
     var isOpen: Bool { didAnnounceOpen && task?.state == .running }
+    var trafficSnapshot: GatewayTrafficAccumulator { trafficMeter.snapshot() }
 
     /// 回到前台或请求迟迟没回包时调用：断着就立刻重连，不等退避计时；
     /// 看起来连着就发一个 ping，probeWait 内没有任何回音再重连
     func probe() {
-        guard !closedByUser else { return }
+        guard !closedByUser, networkCost.reachable else { return }
         // 没有 task，或 task 已结束却没等到关闭回调：立刻重开（open 会顺手取消待触发的重连计时）
         guard let task, task.state == .running else {
-            open()
+            if self.task != nil { handleClose(generation: generation) }
+            requestOpen(immediately: true)
             return
         }
         // 还在握手：交给请求自身的 30 秒超时
@@ -130,7 +146,15 @@ final class GatewayClient {
         }
     }
 
+    /// 所有 retry / probe / path 回调最终都走这里；主 actor + task 守卫保证同一时刻只有一次 open。
+    private func requestOpen(immediately: Bool) {
+        guard !closedByUser, networkCost.reachable, task == nil else { return }
+        if immediately { retryTimer?.invalidate() }
+        open()
+    }
+
     private func open() {
+        guard !closedByUser, networkCost.reachable, task == nil else { return }
         retryTimer?.invalidate()
         pingTimer?.invalidate()
         probeTimer?.invalidate()
@@ -138,9 +162,6 @@ final class GatewayClient {
         pump.gate.set(generation)
         didAnnounceOpen = false
         let current = generation
-        task?.cancel(with: .goingAway, reason: nil)
-        session?.invalidateAndCancel()
-
         let delegate = SocketDelegate()
         delegate.onOpen = { [weak self] in
             Task { @MainActor in
@@ -162,7 +183,7 @@ final class GatewayClient {
         socket.maximumMessageSize = Self.receiveLimit
         task = socket
         socket.resume()
-        pump.start(socket: socket, generation: current) { [weak self] in
+        pump.start(socket: socket, generation: current, trafficMeter: trafficMeter) { [weak self] in
             Task { @MainActor in self?.drain() }
         } onFail: { [weak self] in
             Task { @MainActor in
@@ -193,23 +214,79 @@ final class GatewayClient {
         didAnnounceOpen = true
         lastInbound = Date()
         startPing()
+        stableTimer?.invalidate()
+        stableTimer = Timer.scheduledTimer(withTimeInterval: GatewayRetryPolicy.stableResetAfter, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.generation == generation, self.isOpen else { return }
+                self.failureCount = 0
+            }
+        }
         onOpen?()
     }
 
-    private func handleClose(generation: Int) {
+    private func handleClose(generation: Int, countFailure: Bool = true) {
         // task 置空即已处理过：主动拆连接后 didClose、didCompleteWithError 还会各来一次
         guard self.generation == generation, task != nil else { return }
         pingTimer?.invalidate()
         probeTimer?.invalidate()
+        stableTimer?.invalidate()
         task = nil
+        session?.invalidateAndCancel()
+        session = nil
+        delegate = nil
         didAnnounceOpen = false
         onClose?()
-        guard !closedByUser else { return }
+        guard !closedByUser, networkCost.reachable else { return }
+        if countFailure { failureCount += 1 }
         retryTimer?.invalidate()
-        retryTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+        let delay = GatewayRetryPolicy.delay(failureCount: failureCount, random: Double.random(in: 0 ... 1))
+        retryTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.open()
+                self?.requestOpen(immediately: false)
             }
+        }
+    }
+
+    private func startPathObserverIfNeeded() {
+        #if canImport(Network)
+        guard !pathObserverStarted else { return }
+        pathObserverStarted = true
+        pathObserver.onChange = { [weak self] cost in
+            Task { @MainActor in self?.pathChanged(cost) }
+        }
+        pathObserver.start()
+        #else
+        networkCost = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: false)
+        MobileDataRuntime.networkCost = networkCost
+        #endif
+    }
+
+    private func pathChanged(_ next: GatewayNetworkCost) {
+        let transition = GatewayPathTransition.classify(from: networkCost, to: next)
+        networkCost = next
+        MobileDataRuntime.networkCost = next
+        if transition == .backgroundTrafficRestored {
+            // 费用变化不拆 WebSocket；先发布新属性，再恢复业务队列，避免回调看到旧闸门。
+            onBackgroundTrafficRestored?()
+        }
+        guard next.reachable else {
+            pathRestoreTask?.cancel()
+            retryTimer?.invalidate()
+            probeTimer?.invalidate()
+            stableTimer?.invalidate()
+            if task != nil {
+                task?.cancel(with: .goingAway, reason: nil)
+                handleClose(generation: generation, countFailure: false)
+            }
+            return
+        }
+        guard transition == .reachabilityRestored else { return }
+        pathRestoreTask?.cancel()
+        // 切网时 path 可能短时间抖动；稳定 350ms 后立即给一次机会，不等待旧退避。
+        pathRestoreTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled, self.networkCost.reachable else { return }
+            self.requestOpen(immediately: true)
         }
     }
 
@@ -237,6 +314,7 @@ final class GatewayClient {
 
     private func transmit(_ data: Data, on socket: URLSessionWebSocketTask) {
         guard let text = String(data: data, encoding: .utf8) else { return }
+        trafficMeter.record(direction: .outbound, data: data)
         socket.send(.string(text)) { [weak self] error in
             if error != nil {
                 Task { @MainActor in
@@ -284,15 +362,23 @@ private final class SocketPump: @unchecked Sendable {
     func start(
         socket: URLSessionWebSocketTask,
         generation: Int,
+        trafficMeter: GatewayTrafficMeter,
         onWake: @escaping @Sendable () -> Void,
         onFail: @escaping @Sendable () -> Void
     ) {
-        receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+        receive(
+            socket: socket,
+            generation: generation,
+            trafficMeter: trafficMeter,
+            onWake: onWake,
+            onFail: onFail
+        )
     }
 
     private func receive(
         socket: URLSessionWebSocketTask,
         generation: Int,
+        trafficMeter: GatewayTrafficMeter,
         onWake: @escaping @Sendable () -> Void,
         onFail: @escaping @Sendable () -> Void
     ) {
@@ -309,14 +395,27 @@ private final class SocketPump: @unchecked Sendable {
                 case .string(let value):
                     data = Data(value.utf8)
                 @unknown default:
-                    self.receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+                    self.receive(
+                        socket: socket,
+                        generation: generation,
+                        trafficMeter: trafficMeter,
+                        onWake: onWake,
+                        onFail: onFail
+                    )
                     return
                 }
+                trafficMeter.record(direction: .inbound, data: data)
                 if let decoded = try? ServerMessage.decode(from: data),
                    self.inbox.push(generation: generation, message: decoded) {
                     onWake()
                 }
-                self.receive(socket: socket, generation: generation, onWake: onWake, onFail: onFail)
+                self.receive(
+                    socket: socket,
+                    generation: generation,
+                    trafficMeter: trafficMeter,
+                    onWake: onWake,
+                    onFail: onFail
+                )
             }
         }
     }

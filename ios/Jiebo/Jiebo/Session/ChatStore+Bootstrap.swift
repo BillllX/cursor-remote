@@ -66,6 +66,7 @@ extension ChatStore {
     func applyCachedFileIndexIfAvailable(chatId: String) {
         guard chatId == activeId || chatId == chatHomeThreadChatId else { return }
         guard let cached = bootstrapSnapshot?.fileIndexes[chatId] else { return }
+        fileIndexRequestChatId = chatId
         fileIndex = cached.paths
         treeTruncated = cached.truncated
         gitStatus = cached.status

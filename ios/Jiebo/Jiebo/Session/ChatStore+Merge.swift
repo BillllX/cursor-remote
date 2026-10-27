@@ -231,6 +231,7 @@ extension ChatStore {
         clearLoadTimeout(id)
         loadingChatIds.remove(id)
         loadedPageTurnCounts[id] = nil
+        loadPageCounts[id] = nil
         pendingHistory[id] = nil
         localTurnsPendingSync.remove(id)
         // 增量补齐随之作废；bodyRevs 不动——降级场景还要拿基线和它的版本接着补
@@ -238,6 +239,7 @@ extension ChatStore {
         refreshingChatIds.remove(id)
         loadStartRevs[id] = nil
         loadStartSegs[id] = nil
+        partialHistories[id] = nil
     }
 
     /// 本地优先门闩：显式脏 + 加载期间发过消息（Grok R2 M1——后者 turns 未齐时 sync 不带正文，

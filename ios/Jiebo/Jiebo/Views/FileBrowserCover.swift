@@ -130,7 +130,7 @@ struct FileBrowserCover: View {
                 }
             }
         }
-        .onAppear { store.requestFileIndex() } // 打开时刷新（web 只在空时才拉；这里每次拉，更新鲜，成本一次 list_files）
+        .onAppear { store.requestFileIndex(userInitiated: true) }
         // Quick Look 挂在 cover 自己身上——ThreadView 的 sheet 在 cover 背后，弹不出来
         // （ThreadView 侧已用绑定守卫在 cover 期间不抢 present，故这里无需 onDisappear 兜底清理——
         //   无条件清理反而会误杀进 cover 前已开的 QL，Grok R2 MINOR）

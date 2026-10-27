@@ -614,6 +614,7 @@ export const serverSamples: ServerMessage[] = [
     hasMore: true,
     total: 230,
     nonce: 3,
+    chatRev: 44,
   },
   { type: "auth", ok: true, message: "已登录" },
   { type: "auth", ok: false, message: "口令无效" },
@@ -1150,7 +1151,7 @@ export const clientSamples: ClientMessage[] = [
       name: "jiebo-web",
       version: "2.3.0",
       maxMessageBytes: 900000,
-      caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats"],
+      caps: ["sync_chat", "stored_digest", "slim_state", "slim_chats", "mobile_compact_v1"],
     },
   },
   {

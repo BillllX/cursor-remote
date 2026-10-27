@@ -146,6 +146,11 @@ async function main() {
   step(p1.turns.length === 40 && p1.from === TURNS + 1 - 40 && p1.hasMore === true && p1.total === TURNS + 1,
     "load_chat 末页 40 条", `from=${p1.from} hasMore=${p1.hasMore} total=${p1.total}`);
   step(p1.nonce === 7, "chat_turns 回显 nonce（分页代际校验）", `nonce=${p1.nonce}`);
+  step(
+    typeof p1.chatRev === "number" && p1.chatRev === ackSeed.chatRevs?.[chatId],
+    "chat_turns 游标绑定 chatRev",
+    `page=${p1.chatRev} seed=${ackSeed.chatRevs?.[chatId]}`,
+  );
   // 巨 turn 是最后一条（turns[95]）：应被 clip 且体积远小于原文
   const big = p1.turns.find((t) => t && t.id === "big");
   step(!!big && big.clipped === true && String(big.user || "").length < BIG.length / 4,
@@ -159,6 +164,41 @@ async function main() {
   slim2.send({ type: "load_chat", chatId, from: p2.from });
   const p3 = await slim2.waitFor((m) => m.type === "chat_turns" && m.chatId === chatId && m.from < p2.from, "page3");
   step(p3.from === 0 && p3.hasMore === false, "load_chat 到底 hasMore=false", `from=${p3.from} n=${p3.turns.length}`);
+  step(p2.chatRev === p1.chatRev && p3.chatRev === p1.chatRev, "同一分页链 chatRev 保持一致");
+
+  // 2a. deferred_turn 客户端拿占位，再用 Bearer HTTP 按 id 水合完整正文。
+  const deferred = client(
+    "slim-deferred",
+    ["sync_chat", "stored_digest", "slim_state", "deferred_turn"],
+    1_048_576,
+  );
+  await deferred.hello();
+  deferred.send({ type: "load_chat", chatId });
+  const deferredPage = await deferred.waitFor(
+    (m) => m.type === "chat_turns" && m.chatId === chatId,
+    "deferred page",
+  );
+  const placeholder = deferredPage.turns.find((turn) => turn?.id === "big");
+  step(
+    placeholder?.deferred === true && placeholder?.bodyBytes > 800_000,
+    "deferred_turn 收到带 bodyBytes 的占位",
+  );
+  const turnURL = new URL(WS_URL);
+  turnURL.protocol = turnURL.protocol === "wss:" ? "https:" : "http:";
+  turnURL.pathname = "/state/turn";
+  turnURL.search = new URLSearchParams({ chatId, turnId: "big" }).toString();
+  const hydratedResponse = await fetch(turnURL, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  const hydrated = await hydratedResponse.json();
+  step(
+    hydratedResponse.ok &&
+      hydrated.chatId === chatId &&
+      hydrated.turnId === "big" &&
+      hydrated.chatRev === deferredPage.chatRev &&
+      hydrated.turn?.id === "big" &&
+      hydrated.turn?.user === BIG,
+    "/state/turn 按相同 chatRev 水合完整回合",
+  );
+  deferred.ws.close();
 
   // 2b. from 边界（Grok 评审 MINOR4 盲区）：0/负数 → 空页 hasMore=false；超 total → 夹到末页
   slim2.send({ type: "load_chat", chatId, from: 0 });

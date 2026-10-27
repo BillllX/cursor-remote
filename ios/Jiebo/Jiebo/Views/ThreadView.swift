@@ -40,6 +40,8 @@ struct ThreadView: View {
     static let renderedTurnStep = 12
     @State var renderedTurnLimitByChat: [String: Int] = [:]
     @State var loadingEarlierBatch = false
+    /// 网络 prepend 前最上方回合；新页到达后原位复锚，避免列表跳动。
+    @State var earlierNetworkAnchorId: String?
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
     init(chrome: ThreadChrome = .pad, chatId: String? = nil, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {

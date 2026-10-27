@@ -218,6 +218,7 @@ struct PhoneSettingsScreen: View {
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
     @State private var logoutConfirm = false
+    @State private var mobileDataMode = MobileDataMode.load()
 
     init() {}
 
@@ -255,6 +256,20 @@ struct PhoneSettingsScreen: View {
             }
 
             notificationSection
+
+            Section {
+                Picker("移动数据", selection: $mobileDataMode) {
+                    ForEach(MobileDataMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(JieboColor.white)
+            } header: {
+                Text("移动数据")
+            } footer: {
+                Text("仅在蜂窝网络、个人热点或系统低数据模式下生效；Wi‑Fi 保持完整体验。省流量会等待你点按后再加载正文图片和文件预览。")
+            }
 
             Section {
                 NavigationLink(value: PhoneRoute.connections) {
@@ -355,6 +370,7 @@ struct PhoneSettingsScreen: View {
             Text("退出后需要重新输入访问码才能连回来。")
         }
         .onAppear { iconChoice = AppIconChoice.current }
+        .onChange(of: mobileDataMode) { _, mode in mode.save() }
         .task { await refreshNotifyStatus() }
         .onChange(of: scenePhase) { _, phase in
             // 从系统设置回来时刷新

@@ -131,6 +131,8 @@ extension ChatStore {
             requestAssistant(memory: assistantMemoryDesired)
             fulfillPendingAssistantOpen()
             imSink?.connectionReady(features: gatewayFeatures)
+            // 受限路径经“断网→普通 Wi‑Fi”恢复时费用边沿发生在 socket 重开前；ready 后统一补一次。
+            resumeTrafficDeferredWork()
         case .auth(let ok, let messageText):
             if !ok {
                 unlocked = false
@@ -292,6 +294,7 @@ extension ChatStore {
             }
             flash("已改名为「\(name)」")
             requestStateReload()
+            requestFileIndex(chatId: activeId)
         case .workspaceRemoved(let path, let name, let mode):
             workspaces.removeAll { normPath($0.path) == normPath(path) }
             updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
@@ -397,15 +400,12 @@ extension ChatStore {
                 return next
             }
             // 改动只进文件卡片，不再自动开预览页签
-            if id == activeId, status == "completed",
-               ToolKind.from(name: name, args: toolArgs).isMutating
+            if status == "completed",
+               ToolKind.from(name: name, args: toolArgs).isMutating,
+               id == activeId || id == chatHomeThreadChatId
             {
-                // P7：mutating 工具完成后重拉文件索引——git 徽章/文件树不 stale。
-                // 新 gateway 在 mutating tool 完成时已 pushWorkspace 主动推 files，这里是兜底旧网关
-                //（对齐网页 tool-completed 后重发 list_files；此前只在 select/ready/undone 拉取）
-                if id == activeId || id == chatHomeThreadChatId {
-                    requestFileIndex(chatId: id)
-                }
+                // compact 网关会主动广播 files；短暂等待广播，只有旧网关超时才补拉。
+                scheduleFileIndexFallback(chatId: id)
             }
         case .toolOutput(let id, let callId, let stream, let chunk, let stdout, let stderr):
             if awaitSnapshot.contains(id) || snapshotHold.contains(id) { break }
@@ -536,7 +536,7 @@ extension ChatStore {
                 break
             }
             applyHistory(chatId: id, incoming: incoming)
-        case .chatTurns(let chatId, let rows, let from, let hasMore, let nonce):
+        case .chatTurns(let chatId, let rows, let from, let hasMore, let nonce, let pageRev):
             // 代际校验必须在成员资格之前（Kimi R2 M1）：deferred 降级/断线重启后旧链迟到页
             // 与重注册的新链都能过成员资格守卫；nonce 不匹配即旧代际，丢弃且不动当前加载状态。
             // 无 nonce（不回显的旧实现）按兼容放行——旧网关本就不支持 load_chat，不会到此
@@ -549,6 +549,29 @@ extension ChatStore {
                 bodyRefreshes[chatId] = nil
                 refreshingChatIds.remove(chatId)
                 break
+            }
+            // from 是位置游标，必须绑定 chatRev。旧网关没有该字段时保持兼容，但只允许自动拉全量。
+            if let pageRev {
+                let action = ChatPageRevisionPolicy.action(
+                    authoritativeRev: chatRevs[chatId],
+                    loadStartRev: loadStartRevs[chatId],
+                    pageRev: pageRev
+                )
+                if action != .accept {
+                    abortTurnsLoad(chatId)
+                    partialHistories[chatId] = nil
+                    displayOnlyIds.insert(chatId)
+                    // 迟到页永远不能回滚权威 chatRev；有权威版本就按它换代重启，否则先等 stored_state。
+                    if action == .restartAtAuthoritativeRevision {
+                        ensureTurnsLoaded(chatId)
+                    } else {
+                        requestStateReload()
+                    }
+                    break
+                }
+                loadStartRevs[chatId] = pageRev
+            } else {
+                partialHistories[chatId] = nil
             }
             // 增量补齐：页攒在 bodyRefreshes 里，不并进显示中的基线（同样不走 patch）
             if bodyRefreshes[chatId] != nil {
@@ -570,18 +593,54 @@ extension ChatStore {
             let fresh = page.filter { !existing.contains($0.id) }
             chats[index].turns = fresh + chats[index].turns
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
+            loadPageCounts[chatId] = (loadPageCounts[chatId] ?? 0) + 1
             // turn_files 可早于其所在分页；每页落入内存后立即尝试合并，不能只等最后一页。
             mergePendingTurnFiles(chatId: chatId)
             if hasMore {
-                sendLoadChat(chatId, from: from) // 继续向前翻 turns[..<from]
+                let loadedPages = loadPageCounts[chatId] ?? 1
+                if client.networkCost.shouldReduceBackgroundTraffic, let pageRev, loadedPages >= 2 {
+                    // 已确认尾页停在独立 partial 状态：不标完整、不写权威 body，也不会被 sync_state 回推。
+                    partialHistories[chatId] = PartialHistory(nextFrom: from, chatRev: pageRev, loadedPages: loadedPages)
+                    clearLoadTimeout(chatId)
+                    loadingChatIds.remove(chatId)
+                    loadedPageTurnCounts[chatId] = nil
+                    loadPageCounts[chatId] = nil
+                    loadStartRevs[chatId] = nil
+                    loadStartSegs[chatId] = nil
+                    chats[index].turnsComplete = false
+                    displayOnlyIds.remove(chatId)
+                    rememberTail(chatId)
+                } else {
+                    if let partial = partialHistories[chatId] {
+                        partialHistories[chatId] = PartialHistory(
+                            nextFrom: from,
+                            chatRev: partial.chatRev,
+                            loadedPages: loadedPages
+                        )
+                    }
+                    sendLoadChat(chatId, from: from) // 继续向前翻 turns[..<from]
+                }
             } else {
                 clearLoadTimeout(chatId)
                 loadTimeoutStreak[chatId] = nil
-                chats[index].turnsComplete = true
+                let deferred = chats[index].turns.contains(where: \.deferred)
+                chats[index].turnsComplete = !deferred
+                if deferred, let pageRev {
+                    partialHistories[chatId] = PartialHistory(
+                        nextFrom: 0,
+                        chatRev: pageRev,
+                        loadedPages: loadPageCounts[chatId] ?? 1
+                    )
+                } else {
+                    partialHistories[chatId] = nil
+                }
+                displayOnlyIds.remove(chatId)
                 loadingChatIds.remove(chatId)
                 loadedPageTurnCounts[chatId] = nil
+                loadPageCounts[chatId] = nil
                 chats[index].serverPreview = nil // 正文齐了，侧栏预览回到本地计算（GLM 评审 m4）
-                completeTurnsLoad(chatId) // 回推加载期间的新 turn、补暂存的 history/快照、写本机缓存
+                completeTurnsLoad(chatId, authoritative: !deferred)
+                if deferred { rememberTail(chatId) }
             }
         case .chatTitle(let id, let title):
             let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -775,7 +834,7 @@ extension ChatStore {
             if !silent { settleRestore(chatId: chatId, paths: [], error: error?.nilIfEmpty, restoredCheckpoint: true) }
             guard chatId == activeId || chatId == chatHomeThreadChatId else { break }
             if silent {
-                requestFileIndex(chatId: chatId)
+                scheduleFileIndexFallback(chatId: chatId)
                 break
             }
             if let error, !error.isEmpty {
@@ -783,7 +842,7 @@ extension ChatStore {
             } else {
                 notice = "已还原检查点 \(label?.nilIfEmpty ?? "")"
             }
-            requestFileIndex(chatId: chatId)
+            scheduleFileIndexFallback(chatId: chatId)
             if chatId == activeId { reloadPreviewTabs() }
         case .turnFiles(let filesChatId, let turnId, let files):
             // 网关落盘时已经写进 turn.files：这里只同步到本机，不标脏、不回传
@@ -791,7 +850,9 @@ extension ChatStore {
         case .fileChanged(let changedChatId, let path):
             ThumbnailStore.shared.invalidateCurrent(chatId: changedChatId, path: path, store: self)
             reloadPreview(path: path, chatId: changedChatId)
-            if changedChatId == activeId { requestFileIndex(chatId: changedChatId) }
+            if changedChatId == activeId || changedChatId == chatHomeThreadChatId {
+                scheduleFileIndexFallback(chatId: changedChatId)
+            }
         case .undone(_, let paths, let error):
             settleRestore(chatId: chatId, paths: paths, error: error?.nilIfEmpty)
             // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
@@ -807,7 +868,7 @@ extension ChatStore {
                     suppressContentDiscard = was
                 }
             }
-            requestFileIndex(chatId: chatId)
+            scheduleFileIndexFallback(chatId: chatId)
         case .assistantState(let state, let reqId, let generation):
             receiveAssistantState(state, reqId: reqId, generation: generation)
         case .assistantNotModified(let revision, let reqId, let generation):

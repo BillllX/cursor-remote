@@ -194,6 +194,12 @@ extension ChatStore {
         // 已加载会话的 turns 已陈旧：标记待补齐（脏会话本地优先跳过；壳本来就未完成无需处理）。
         // 旧正文留作基线继续显示，当前会话随后由 ensureTurnsLoaded 增量补齐，其他会话打开时再补。
         // 网关只在内容真变时才前进 chatRevs，纯元数据/未读类本地脏不会误触发。
+        let stalePartialIds = partialHistories.compactMap { id, partial in
+            partial.chatRev != chatRevs[id] && !hasLocalPriority(id) ? id : nil
+        }
+        for id in stalePartialIds {
+            markNeedsRefresh(id, rev: nil)
+        }
         for chat in chats where chat.id != "boot" && chat.turnsComplete && !hasLocalPriority(chat.id) {
             guard let row = rowsById[chat.id], row.object?["turns"] == nil else { continue } // 只看 slim 行
             guard let oldRev = bodyRevs[chat.id] ?? oldRevs[chat.id], let newRev = chatRevs[chat.id], newRev != oldRev else { continue }

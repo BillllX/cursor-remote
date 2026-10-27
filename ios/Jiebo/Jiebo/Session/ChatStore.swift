@@ -138,6 +138,8 @@ final class ChatStore {
     @ObservationIgnored var assistantMemoryDesired = false
     @ObservationIgnored var assistantSyncGate = AssistantSyncGate()
     @ObservationIgnored var assistantSyncTimeoutTask: Task<Void, Never>?
+    /// 自动回前台刷新只看成功响应时间；请求发出或失败不会制造“新鲜”假象。
+    @ObservationIgnored var assistantLastSuccessAt = Date.distantPast
     /// 统一记忆中心只读数据（overview / scope detail / search）
     var memoryCenterData = MemoryCenterDataState.initial
     @ObservationIgnored var memoryCenterActiveCount = 0
@@ -245,6 +247,11 @@ final class ChatStore {
     var tenantName = ""
     var pendingImages: [PendingImage] = []
     var uploads: [UploadItem] = []
+    var uploadConfirmation: UploadConfirmation?
+    @ObservationIgnored var uploadConfirmationQueue: [UploadConfirmation] = []
+    @ObservationIgnored var uploadConfirmationContinuations: [String: CheckedContinuation<Bool, Never>] = [:]
+    /// reset 后旧的“展示下一条”Task 不得把已清空的确认重新挂回界面。
+    @ObservationIgnored var uploadConfirmationGeneration = 0
     /// 待发图片按会话隔离（对齐网页端 per-chat 的 draftImages），切会话时换出/换回
     var imagesByChat: [String: [PendingImage]] = [:]
 
@@ -257,6 +264,10 @@ final class ChatStore {
     @ObservationIgnored var fileIndexRequestIds: [String: String] = [:]
     @ObservationIgnored var fileIndexForcePending = Set<String>()
     @ObservationIgnored var fileIndexTimeoutTasks: [String: Task<Void, Never>] = [:]
+    /// 成功请求与无 reqId 广播分别记时：前者做 60 秒新鲜度，后者还用于取消变化事件的 fallback。
+    @ObservationIgnored var fileIndexUpdatedAt: [String: Date] = [:]
+    @ObservationIgnored var fileIndexBroadcastAt: [String: Date] = [:]
+    @ObservationIgnored var fileIndexFallbackTasks: [String: Task<Void, Never>] = [:]
     var treeTruncated = false
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
@@ -383,6 +394,8 @@ final class ChatStore {
     var turnRenderRevisions: [String: UInt64] = [:]
     /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
     var loadedPageTurnCounts: [String: Int] = [:]
+    /// 当前链已确认的页数；与 turn 数分开，受限网络据此在首两页后暂停。
+    var loadPageCounts: [String: Int] = [:]
     /// P8 slim：每会话分页代际（单调递增，会话内不复用）。load_chat 携带、chat_turns 回显，
     /// 降级/重启分页后旧链迟到页凭 nonce 不匹配丢弃——成员资格守卫挡不住同步重注册（Kimi R2 M1）
     var loadEpochs: [String: Int] = [:]
@@ -391,6 +404,17 @@ final class ChatStore {
     /// 连续超时次数，超过上限就停下等重连，不无限重发
     var loadTimeoutStreak: [String: Int] = [:]
     static let loadPageTimeout: Duration = .seconds(25)
+    /// 受限网络只自动取尾部两页；游标与 chatRev 绑定，版本变化即作废。
+    struct PartialHistory: Equatable {
+        var nextFrom: Int
+        var chatRev: Int
+        var loadedPages: Int
+    }
+    var partialHistories: [String: PartialHistory] = [:]
+    /// deferred 单回合 HTTP 水合；集合供 UI，Task 字典用于取消和并发上限。
+    var hydratingTurnIds = Set<String>()
+    @ObservationIgnored var turnHydrationTasks: [String: Task<Void, Never>] = [:]
+    static let turnHydrationLimit = 2
     /// P8 slim：turns 未加载完就发了消息的会话——加载完成后必须补一次全量 sync，
     /// 否则加载期间的 sync（无 turns 键）会把 dirty 清掉，新 turn 永不落盘（Grok 评审 M2）
     var localTurnsPendingSync = Set<String>()

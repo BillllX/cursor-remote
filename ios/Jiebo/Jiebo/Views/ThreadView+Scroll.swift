@@ -67,6 +67,31 @@ extension ThreadView {
                             }
                         }
                     }
+                    if hiddenCount == 0,
+                       let partial = store.partialHistories[resolvedChatId],
+                       partial.nextFrom > 0
+                    {
+                        Button {
+                            loadNetworkEarlier(proxy: proxy, allTurns: allTurns)
+                        } label: {
+                            Text(store.loadingChatIds.contains(resolvedChatId) ? "正在加载更早内容…" : "加载更早内容")
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.loadingChatIds.contains(resolvedChatId))
+                        .background {
+                            GeometryReader { marker in
+                                Color.clear
+                                    .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
+                                        guard minY >= -12, minY < viewportHeight - 48, !stickToBottom else { return }
+                                        loadNetworkEarlier(proxy: proxy, allTurns: allTurns)
+                                    }
+                            }
+                        }
+                    }
                     ForEach(Array(turns.enumerated()), id: \.element.id) { index, turn in
                         if let gap = timeSeparator(before: turn, previous: index > 0 ? turns[index - 1] : nil) {
                             Text(gap)
@@ -168,8 +193,15 @@ extension ThreadView {
                 releaseFollow()
             })
             .onChange(of: threadChat?.turns.count) { _, _ in
+                if let anchor = earlierNetworkAnchorId {
+                    restoreEarlierNetworkAnchor(anchor, proxy: proxy)
+                    return
+                }
                 guard let id = threadChat?.turns.last?.id else { return }
                 pinToTurn(id, proxy: proxy, height: viewportHeight)
+            }
+            .onChange(of: store.loadingChatIds.contains(resolvedChatId)) { _, loading in
+                if !loading, earlierNetworkAnchorId != nil { earlierNetworkAnchorId = nil }
             }
             .onChange(of: liveTail) { _, _ in
                 guard pinExceeded, stickToBottom else { return }
@@ -432,6 +464,30 @@ extension ThreadView {
                 }
             }
             scrollingProgrammatically = false
+        }
+    }
+
+    func loadNetworkEarlier(proxy: ScrollViewProxy, allTurns: [Turn]) {
+        guard earlierNetworkAnchorId == nil,
+              !store.loadingChatIds.contains(resolvedChatId),
+              let anchor = allTurns.first?.id
+        else { return }
+        earlierNetworkAnchorId = anchor
+        store.loadPreviousHistory(resolvedChatId)
+        if !store.loadingChatIds.contains(resolvedChatId) { earlierNetworkAnchorId = nil }
+    }
+
+    func restoreEarlierNetworkAnchor(_ anchor: String, proxy: ScrollViewProxy) {
+        cancelStreamScroll()
+        followTask?.cancel()
+        followTask = Task { @MainActor in
+            defer { earlierNetworkAnchorId = nil; scrollingProgrammatically = false }
+            scrollingProgrammatically = true
+            for delay in [0, 48, 120] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard !Task.isCancelled else { return }
+                scrollWithoutAnimation(proxy, id: anchor, anchor: .top)
+            }
         }
     }
 }

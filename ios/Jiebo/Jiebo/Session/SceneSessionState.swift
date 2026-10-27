@@ -113,18 +113,16 @@ final class SceneEditingOwnership {
 @MainActor
 final class SceneActivityRegistry {
     static let shared = SceneActivityRegistry()
-    private var active: Set<String> = []
+    private var policy = SceneActivityPolicy()
     private init() {}
 
     @discardableResult
-    func update(token: String, isActive: Bool) -> Bool {
-        if isActive { active.insert(token) } else { active.remove(token) }
-        return !active.isEmpty
+    func update(token: String, isActive: Bool) -> SceneActivityChange {
+        policy.update(token: token, isActive: isActive)
     }
 
     @discardableResult
-    func remove(token: String) -> Bool {
-        active.remove(token)
-        return !active.isEmpty
+    func remove(token: String) -> SceneActivityChange {
+        policy.remove(token: token)
     }
 }

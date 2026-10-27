@@ -429,6 +429,7 @@ struct ImMessageImage: View {
     @Environment(\.displayScale) private var displayScale
     let message: ImLocalMessage
     @State private var image: UIImage?
+    @State private var delayed = false
 
     private static let maxEdge: CGFloat = 200
     private static let minEdge: CGFloat = 80
@@ -442,9 +443,19 @@ struct ImMessageImage: View {
                     .scaledToFill()
             } else {
                 JieboColor.well
-                Image(systemName: "photo")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(JieboColor.dim)
+                if delayed {
+                    VStack(spacing: 5) {
+                        Text("图片已省流量")
+                        Text("点按加载")
+                            .fontWeight(.semibold)
+                    }
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.ink2)
+                } else {
+                    Image(systemName: "photo")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(JieboColor.dim)
+                }
             }
             if message.state == .sending {
                 Color.black.opacity(0.32)
@@ -459,6 +470,10 @@ struct ImMessageImage: View {
                 .stroke(JieboColor.line, lineWidth: 1)
         }
         .task(id: loadKey) { await load() }
+        .onTapGesture {
+            guard delayed else { return }
+            Task { await load(userInitiated: true) }
+        }
     }
 
     private var pixelSize: (w: Int, h: Int) {
@@ -486,7 +501,8 @@ struct ImMessageImage: View {
     }
 
     @MainActor
-    private func load() async {
+    private func load(userInitiated: Bool = false) async {
+        delayed = false
         let pixel = Int(Self.maxEdge * displayScale)
         if let outgoing = message.outgoing, let dir = ImCache.outboxDir(tenant: im.tenant) {
             let file = dir.appendingPathComponent(outgoing.thumbFile)
@@ -502,8 +518,19 @@ struct ImMessageImage: View {
             return
         }
         image = await ImImageCache.shared.image(
-            blob: thumb, tenant: im.tenant, remote: im.mediaURL(convId: message.convId, blob: thumb), maxPixel: pixel
+            blob: thumb,
+            tenant: im.tenant,
+            remote: im.mediaURL(convId: message.convId, blob: thumb),
+            maxPixel: pixel,
+            userInitiated: userInitiated
         )
+        if image == nil, !userInitiated {
+            delayed = !MobileMediaPolicy.allowsAutomaticDownload(
+                mode: MobileDataRuntime.mode,
+                cost: MobileDataRuntime.networkCost,
+                kind: .imBodyImage
+            )
+        }
     }
 }
 

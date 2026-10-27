@@ -13,6 +13,7 @@ extension ChatStore {
 
     func canUndo(_ chatId: String) -> Bool {
         guard !isBusy(chatId), let chat = chatSession(chatId) else { return false }
+        guard chat.turnsComplete, !chat.turns.contains(where: \.deferred) else { return false }
         return chat.turns.contains { !$0.running && !$0.queued }
     }
 

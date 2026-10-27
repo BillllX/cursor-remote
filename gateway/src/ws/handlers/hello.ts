@@ -104,6 +104,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
         "workspace_agents",
         "workspace_agent_viewing",
         "file_changed",
+        "mobile_compact_v1",
         "canvas_versions",
         "device_bridge_v1",
       ],

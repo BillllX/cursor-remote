@@ -47,8 +47,8 @@ private struct JieboSceneRoot: View {
                 Task { await AssistantCaptureDrain.run(store: store) }
             }
             .onDisappear {
-                let anyActive = SceneActivityRegistry.shared.remove(token: scene.token)
-                im.setAppActive(anyActive)
+                let change = SceneActivityRegistry.shared.remove(token: scene.token)
+                im.setAppActive(change.anyActive)
             }
             .onChange(of: scenePhase) { _, phase in
                 updateActivity(phase)
@@ -63,12 +63,13 @@ private struct JieboSceneRoot: View {
 
     private func updateActivity(_ phase: ScenePhase) {
         let active = phase == .active
-        let anyActive = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
-        im.setAppActive(anyActive)
+        let change = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
+        im.setAppActive(change.anyActive)
         WidgetSnapshotBridge.shared.refresh(from: store)
-        guard active else { return }
+        guard change.becameActive else { return }
         store.appBecameActive()
-        deviceBridge.permissionStore.refresh(forceReport: store.unlocked)
+        // 普通回前台只重读本机权限；登录解锁的 onChange 仍会强制上报。
+        deviceBridge.permissionStore.refresh(forceReport: false)
         Task { await AssistantCaptureDrain.run(store: store) }
     }
 }

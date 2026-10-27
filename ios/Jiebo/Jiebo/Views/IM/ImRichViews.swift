@@ -189,7 +189,10 @@ struct ImFileBubble: View {
             var file: URL?
             if let blob = details.blob {
                 file = await ImAttachmentCache.file(
-                    blob: blob, tenant: im.tenant, remote: im.mediaURL(convId: message.convId, blob: blob)
+                    blob: blob,
+                    tenant: im.tenant,
+                    remote: im.mediaURL(convId: message.convId, blob: blob),
+                    userInitiated: true
                 )
             } else if let upload = message.upload, let dir = ImCache.outboxDir(tenant: im.tenant) {
                 let local = dir.appendingPathComponent(upload.file)

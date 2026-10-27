@@ -161,6 +161,21 @@ enum FileIndexResponsePolicy {
     }
 }
 
+enum FileIndexFreshnessPolicy {
+    static let window: TimeInterval = 60
+
+    /// 只有完整且非空的索引才能抑制自动重拉；截断或空清单仍允许再次对账。
+    static func isFresh(
+        paths: [String],
+        truncated: Bool,
+        lastUpdatedAt: Date?,
+        now: Date = Date()
+    ) -> Bool {
+        guard !paths.isEmpty, !truncated, let lastUpdatedAt else { return false }
+        return now.timeIntervalSince(lastUpdatedAt) < window
+    }
+}
+
 enum AppBootstrapCache {
     private static let queue = DispatchQueue(label: "ai.jiebo.bootstrap-cache", qos: .utility)
 

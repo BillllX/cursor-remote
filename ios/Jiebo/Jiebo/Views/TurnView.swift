@@ -57,6 +57,7 @@ struct TurnView: View, Equatable {
 
     /// 所有 chrome（含 iPad）都隐藏沉默工具；propose 不属于 silent，仍正常显示
     private var visibleTools: [ToolCall] {
+        guard !turn.deferred else { return [] }
         let tools = ToolCall.uniqued(turn.tools)
         return tools.filter { !AssistantToolText.isSilent($0) }
     }
@@ -122,8 +123,10 @@ struct TurnView: View, Equatable {
                             if let meta = turnMeta {
                                 Section(meta) {}
                             }
-                            Button { store.editTurn(turn.id, chatId: chatId) } label: { Label("编辑", systemImage: "pencil") }
-                            Button { store.retryTurn(turn.id, chatId: chatId) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                            if !turn.deferred {
+                                Button { store.editTurn(turn.id, chatId: chatId) } label: { Label("编辑", systemImage: "pencil") }
+                                Button { store.retryTurn(turn.id, chatId: chatId) } label: { Label("重试", systemImage: "arrow.clockwise") }
+                            }
                             Button { copy(turn.user) } label: { Label("复制", systemImage: "doc.on.doc") }
                         }
                         .fullScreenCover(item: $viewerItem) { item in
@@ -141,7 +144,7 @@ struct TurnView: View, Equatable {
                                     .hitTarget()
                                     .accessibilityLabel("去掉这条排队消息")
                             }
-                        } else if userFailed {
+                        } else if userFailed, !turn.deferred {
                             Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
                                 .font(JieboFont.text(.caption, weight: .semibold))
                                 .foregroundStyle(JieboColor.danger)
@@ -151,7 +154,10 @@ struct TurnView: View, Equatable {
                     }
                 }
             }
-            if !turn.thinking.isEmpty {
+            if turn.deferred {
+                deferredCard
+            }
+            if !turn.deferred, !turn.thinking.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     Button {
                         withAnimation(JieboMotion.snappy(reduceMotion)) {
@@ -218,7 +224,7 @@ struct TurnView: View, Equatable {
                     ToolCardView(tool: tool, showBorder: false)
                 }
             }
-            if !turn.assistant.isEmpty {
+            if !turn.deferred, !turn.assistant.isEmpty {
                 HStack(alignment: .top, spacing: embedded ? 0 : 12) {
                     if !embedded { BotAvatar() }
                     VStack(alignment: .leading, spacing: 6) {
@@ -277,7 +283,7 @@ struct TurnView: View, Equatable {
                     TodoEditSheet(todo: todo)
                 }
             }
-            if let error = turn.error, !error.isEmpty, !turn.running {
+            if !turn.deferred, let error = turn.error, !error.isEmpty, !turn.running {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.circle.fill")
                         .font(JieboFont.text(.subheadline))
@@ -301,11 +307,11 @@ struct TurnView: View, Equatable {
                 .accessibilityElement(children: .contain)
             }
             // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
-            if !turn.cardFiles.isEmpty {
+            if !turn.deferred, !turn.cardFiles.isEmpty {
                 TurnFileCards(turn: turn, chatId: chatId)
                     .padding(.leading, embedded ? 0 : 40)
             }
-            if turn.needsFileReview, reviewMark == nil {
+            if !turn.deferred, turn.needsFileReview, reviewMark == nil {
                 TurnReviewBar(turn: turn)
                     .padding(.leading, embedded ? 0 : 40)
             }
@@ -336,6 +342,34 @@ struct TurnView: View, Equatable {
                     .padding(.leading, embedded ? 0 : 40)
             }
         }
+    }
+
+    private var deferredCard: some View {
+        let loading = store.isHydratingTurn(turn.id, chatId: chatId)
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("这条回复较大，完整内容尚未下载")
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .foregroundStyle(JieboColor.ink)
+            if let bytes = turn.bodyBytes {
+                Text(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+            }
+            Button(loading ? "取消加载" : "加载完整内容") {
+                if loading {
+                    store.cancelTurnHydration(chatId: chatId, turnId: turn.id)
+                } else {
+                    store.hydrateTurn(chatId: chatId, turnId: turn.id)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(JieboColor.pine)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(JieboColor.userBubble.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
+        .padding(.leading, embedded ? 0 : 40)
     }
 
     /// 最后一轮的复制 / 重试 / 分享：只放图标（系统同款），每个 44pt 热区；更早的轮次走长按菜单

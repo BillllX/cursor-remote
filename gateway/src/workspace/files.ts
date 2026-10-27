@@ -53,7 +53,8 @@ type PendingPush = { chatId: string; paths: string[]; started: boolean; done: Pr
 const pushState = new WeakMap<WebSocket, { tail: Promise<void>; queued: PendingPush[] }>();
 
 /**
- * 把文件清单与指定文件的内容 / diff 推给客户端。读盘和 git 都是异步的（不再卡事件循环），
+ * 把文件清单与指定文件的内容 / diff 推给客户端。mobile_compact_v1 只收清单，正文按需读取。
+ * 读盘和 git 都是异步的（不再卡事件循环），
  * 返回的 Promise 永不 reject。
  * 顺序：同一连接的推送严格按调用顺序执行；单次推送内仍是 files → (file → diff) × N，与同步版一致。
  * 合并：同一会话还有一条没开始执行的推送排着队时，把新的路径并进去而不是再排一条，
@@ -113,6 +114,8 @@ async function runPush(ws: WebSocket, slot: Slot, conn: Conn, cwd: string, tenan
   try {
     const listed = await listWorkspaceFilesForClientAsync(cwd, "", { signal });
     send(ws, filesMessage(conn, { chatId: slot.chatId, query: "" }, listed));
+    // 移动端 compact 仍靠 files 刷新树和 git 状态；文件正文、diff 只在用户打开时 read_file。
+    if (conn.caps.has("mobile_compact_v1")) return;
     const unique = [...new Set(paths.filter(Boolean))];
     for (const path of unique) {
       const file = await readWorkspaceFileAsync(cwd, path, { signal });

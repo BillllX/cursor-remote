@@ -105,14 +105,30 @@ final class ImImageCache {
     }
 
     /// 网关上的附件：先看内存，再看磁盘，最后用票据地址下载。remote 为 nil（票据过期在换）时只查本地
-    func image(blob: String, tenant: String, remote: URL?, maxPixel: Int) async -> UIImage? {
+    func image(
+        blob: String,
+        tenant: String,
+        remote: URL?,
+        maxPixel: Int,
+        kind: MobileMediaKind = .imBodyImage,
+        userInitiated: Bool = false
+    ) async -> UIImage? {
         guard ImCache.isBlob(blob), let dir = ImCache.mediaDir(tenant: tenant) else { return nil }
         let file = dir.appendingPathComponent(blob)
+        let allowsNetwork = userInitiated || MobileMediaPolicy.allowsAutomaticDownload(
+            mode: MobileDataRuntime.mode,
+            cost: MobileDataRuntime.networkCost,
+            kind: kind
+        )
+        if userInitiated {
+            let cacheKey = "\(blob)@\(maxPixel)"
+            inflight.removeValue(forKey: cacheKey)?.cancel()
+        }
         return await load(key: blob, maxPixel: maxPixel) {
             if FileManager.default.fileExists(atPath: file.path) {
                 ImCache.noteUse(file)
             } else {
-                guard let remote, await Self.download(remote, to: file) else { return nil }
+                guard allowsNetwork, let remote, await Self.download(remote, to: file) else { return nil }
             }
             return ImImageDecode.image(at: file, maxPixel: maxPixel)
         }
@@ -264,7 +280,12 @@ enum ImImagePrep {
 
     /// 把选中的图（磁盘上的文件）处理好写进 outbox：非原图长边 1280 JPEG 0.8；原图按文件原样复制（HEIC 也行）；
     /// 缩略图长边 400 JPEG。全程从文件按目标尺寸解码，不把原始字节或整张大图读进内存。很重，放后台线程调
-    static func prepare(file: URL, original wantsOriginal: Bool, tenant: String) -> ImOutgoingImage? {
+    static func prepare(
+        file: URL,
+        original wantsOriginal: Bool,
+        tenant: String,
+        profile: MobileUploadProfile = MobileUploadProfile(maxPixel: imageMaxEdge, jpegQuality: Double(quality))
+    ) -> ImOutgoingImage? {
         guard let dir = ImCache.outboxDir(tenant: tenant),
               let source = CGImageSourceCreateWithURL(file as CFURL, nil),
               let thumbImage = ImImageDecode.cgImage(source, maxPixel: thumbMaxEdge),
@@ -293,8 +314,8 @@ enum ImImagePrep {
             let size = ImImageDecode.orientedSize(source)
             return ImOutgoingImage(file: name, thumbFile: thumbFile, mime: mime, w: size.w, h: size.h, original: true, blob: nil, thumb: nil)
         }
-        guard let main = ImImageDecode.cgImage(source, maxPixel: imageMaxEdge),
-              let jpeg = ImImageDecode.jpeg(main, quality: quality)
+        guard let main = ImImageDecode.cgImage(source, maxPixel: profile.maxPixel),
+              let jpeg = ImImageDecode.jpeg(main, quality: CGFloat(profile.jpegQuality))
         else {
             try? manager.removeItem(at: thumbURL)
             return nil
@@ -445,13 +466,19 @@ enum ImPhotoSaver {
 
 enum ImAttachmentCache {
     /// 语音、文件和链接图标共用 media/<blob>；下载写临时文件后原子搬入。
-    static func file(blob: String, tenant: String, remote: URL?) async -> URL? {
+    @MainActor
+    static func file(blob: String, tenant: String, remote: URL?, userInitiated: Bool = false) async -> URL? {
         guard ImCache.isBlob(blob), let dir = ImCache.mediaDir(tenant: tenant) else { return nil }
         let target = dir.appendingPathComponent(blob)
         if FileManager.default.fileExists(atPath: target.path) {
             ImCache.noteUse(target)
             return target
         }
+        guard userInitiated || MobileMediaPolicy.allowsAutomaticDownload(
+            mode: MobileDataRuntime.mode,
+            cost: MobileDataRuntime.networkCost,
+            kind: .attachment
+        ) else { return nil }
         guard let remote else { return nil }
         do {
             let (temp, response) = try await URLSession.shared.download(from: remote)

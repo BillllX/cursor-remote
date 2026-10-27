@@ -56,7 +56,7 @@ extension ChatStore {
         }
         fileBrowserPane = pane
         fileBrowserOpen = true
-        requestFileIndex()
+        requestFileIndex(userInitiated: true)
     }
 
     /// 文件名走本地索引，内容走 search_text。空查询不发请求。
@@ -213,7 +213,7 @@ extension ChatStore {
                 closeContentLayer()
                 fileBrowserPane = pane
                 fileBrowserOpen = true
-                requestFileIndex()
+                requestFileIndex(userInitiated: true)
                 break
             }
             if toolLayer == .loop, layer != .loop { loopError = "" }
@@ -223,7 +223,7 @@ extension ChatStore {
             toolLayer = nil
             closeContentLayer()
             fileBrowserOpen = true
-            requestFileIndex()
+            requestFileIndex(userInitiated: true)
         case .openFile(let path):
             openContentFile(path)
         case .openDiff(let path):

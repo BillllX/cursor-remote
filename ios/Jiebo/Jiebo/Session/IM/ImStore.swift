@@ -13,6 +13,8 @@ protocol ImTransport: AnyObject {
     var imToken: String { get }
     /// 已登录且连接就绪：这时发出的 im_send 才真的出了门（断线时不进发件箱）
     var imLinkOpen: Bool { get }
+    /// 蜂窝 / Low Data Mode 只延后非可见会话补齐，不影响实时消息和当前会话。
+    var imNetworkCost: GatewayNetworkCost { get }
     func imSend(_ message: ClientMessage)
 }
 
@@ -122,7 +124,10 @@ final class ImStore {
     @ObservationIgnored private var timelineSaveTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var ticketTask: Task<Void, Never>?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
-    @ObservationIgnored private var lastRefreshAt = Date.distantPast
+    @ObservationIgnored private var lastListSuccessAt = Date.distantPast
+    @ObservationIgnored private var lastTicketRequestAt = Date.distantPast
+    @ObservationIgnored private var deferredCatchUp: Set<String> = []
+    @ObservationIgnored private var lifecycleRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var sentPresence: Bool?
     @ObservationIgnored private var loadEpoch = 0
     @ObservationIgnored private var pinyinCache: [String: ImPinyin] = [:]
@@ -193,7 +198,7 @@ final class ImStore {
         if !appActive { sendPresence(false) }
         send(.imContacts)
         listPaging = false
-        refreshList()
+        refreshList(respectingFreshness: true)
         startTicketWatch()
         replayDurableOutbox()
     }
@@ -207,6 +212,8 @@ final class ImStore {
         loadingLatest = []
         ticketTask?.cancel()
         ticketTask = nil
+        lifecycleRefreshTask?.cancel()
+        lifecycleRefreshTask = nil
         durableReplayTask?.cancel()
         durableReplayTask = nil
         cancelAllUploadTasks()
@@ -230,6 +237,15 @@ final class ImStore {
                 return next
             }
             saveTimelineSoon(convId)
+        }
+    }
+
+    /// 蜂窝、Low Data 或热点恢复普通 Wi‑Fi：只续跑明确延后的会话，不重拉列表、不扫描全局。
+    func backgroundTrafficRestored() {
+        guard online, transport?.imNetworkCost.shouldReduceBackgroundTraffic == false else { return }
+        let pending = deferredCatchUp
+        for convId in pending {
+            catchUp(convId: convId)
         }
     }
 
@@ -262,9 +278,12 @@ final class ImStore {
         if active {
             // 在后台时别的设备可能读过、对方可能撤回过：每次回前台都对一次列表
             listStale = true
-            refreshList()
+            refreshList(respectingFreshness: true)
             scheduleRead(visibleConvId)
             refreshTicketsIfNeeded()
+        } else {
+            lifecycleRefreshTask?.cancel()
+            lifecycleRefreshTask = nil
         }
     }
 
@@ -352,6 +371,8 @@ final class ImStore {
         durableReplayTask = nil
         ticketTask?.cancel()
         ticketTask = nil
+        lifecycleRefreshTask?.cancel()
+        lifecycleRefreshTask = nil
         listPaging = false
         listSeen = []
         listTouched = []
@@ -378,6 +399,9 @@ final class ImStore {
         contactsLoaded = false
         timelinesReady = false
         deferredTimelineSaves = []
+        deferredCatchUp = []
+        lastListSuccessAt = .distantPast
+        lastTicketRequestAt = .distantPast
         selectedPeer = nil
         visibleConvId = nil
     }
@@ -414,6 +438,7 @@ final class ImStore {
             listSeen = []
             listTouched = []
             listLoaded = true
+            lastListSuccessAt = Date()
             catchUp()
             scheduleRead(visibleConvId)
             saveStateSoon()
@@ -422,7 +447,11 @@ final class ImStore {
             liveSinceListRequest = []
             listSkipped = false
             listRechecking = recheck
-            if recheck || listStale { refreshList() }
+            if recheck {
+                refreshList()
+            } else if listStale {
+                refreshList(respectingFreshness: true)
+            }
         case .history(let convId, let messages, let more, let ticket, let before, let after):
             if let ticket { tickets[convId] = ticket }
             let floor = hideBefore(convId)
@@ -706,36 +735,82 @@ final class ImStore {
             guard let conv = convs[convId] else { continue }
             let local = ImTimeline.maxSeq(items)
             guard conv.maxSeq > local else { continue }
-            if local == 0 || conv.maxSeq - local > ImTimeline.cacheLimit {
-                timelines[convId] = items.filter { $0.seq == nil }
-                olderMore[convId] = nil
-                saveTimelineSoon(convId)
-                if convId == visibleConvId { requestLatest(convId) }
-            } else {
-                send(.imHistory(convId: convId, before: nil, after: local, limit: 50))
+            if transport?.imNetworkCost.shouldReduceBackgroundTraffic == true, convId != visibleConvId {
+                deferredCatchUp.insert(convId)
+                continue
             }
+            catchUp(convId: convId, items: items, conv: conv, local: local)
         }
         if let open = visibleConvId, timelines[open]?.contains(where: { $0.seq != nil }) != true {
             requestLatest(open)
         }
     }
 
+    /// 受限路径下进入会话时再补该会话；未读、撤回和已读权威值仍由列表/实时事件照常对账。
+    private func catchUp(convId: String) {
+        guard timelinesReady, let conv = convs[convId] else { return }
+        let items = timelines[convId] ?? []
+        let local = ImTimeline.maxSeq(items)
+        guard conv.maxSeq > local else {
+            deferredCatchUp.remove(convId)
+            return
+        }
+        deferredCatchUp.remove(convId)
+        catchUp(convId: convId, items: items, conv: conv, local: local)
+    }
+
+    private func catchUp(convId: String, items: [ImLocalMessage], conv: ImConvRow, local: Int) {
+        if local == 0 || conv.maxSeq - local > ImTimeline.cacheLimit {
+            timelines[convId] = items.filter { $0.seq == nil }
+            olderMore[convId] = nil
+            saveTimelineSoon(convId)
+            if convId == visibleConvId { requestLatest(convId) }
+        } else {
+            send(.imHistory(convId: convId, before: nil, after: local, limit: 50))
+        }
+    }
+
     // MARK: 拉
 
-    func refreshList() {
+    func refreshList(respectingFreshness: Bool = false) {
         guard online, !listPaging else { return }
+        if respectingFreshness,
+           !RefreshFreshnessPolicy.shouldRefresh(
+               lastSuccess: lastListSuccessAt,
+               now: Date(),
+               window: RefreshFreshnessPolicy.imLifecycleWindow
+           ) {
+            listStale = true
+            scheduleLifecycleRefresh()
+            return
+        }
+        lifecycleRefreshTask?.cancel()
+        lifecycleRefreshTask = nil
         listStale = false
         listPaging = true
         listSeen = []
         listTouched = []
         liveSinceListRequest = []
-        lastRefreshAt = Date()
         send(.imList(cursor: nil, limit: 100))
+    }
+
+    private func scheduleLifecycleRefresh() {
+        guard lifecycleRefreshTask == nil else { return }
+        let elapsed = Date().timeIntervalSince(lastListSuccessAt)
+        let wait = max(RefreshFreshnessPolicy.imLifecycleWindow - elapsed, 0)
+        lifecycleRefreshTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, !Task.isCancelled else { return }
+            self.lifecycleRefreshTask = nil
+            guard self.appActive else { return }
+            self.refreshList(respectingFreshness: true)
+        }
     }
 
     /// 聊天页出现：没有任何消息就拉最新一页
     func open(convId: String) {
         visibleConvId = convId
+        catchUp(convId: convId)
         if timelines[convId]?.contains(where: { $0.seq != nil }) != true, convs[convId] != nil {
             requestLatest(convId)
         } else if convs[convId] == nil {
@@ -1505,11 +1580,12 @@ final class ImStore {
 
     /// 票据快过期（或已过期）：重新拉联系人和列表换票。一分钟内最多一次
     func refreshTicketsIfNeeded(force: Bool = false) {
-        guard online, Date().timeIntervalSince(lastRefreshAt) > 60 else { return }
+        guard online, Date().timeIntervalSince(lastTicketRequestAt) > 60 else { return }
         let deadline = Self.nowMs + Self.ticketMargin
         let soonest = (Array(tickets.values) + [avatarTicket].compactMap { $0 }).map(\.exp).min() ?? .infinity
         guard force || soonest < deadline else { return }
-        lastRefreshAt = Date()
+        // 票据请求没有独立 ack，单独按发出时间限流；列表新鲜度只在完整 im_list 成功后更新。
+        lastTicketRequestAt = Date()
         send(.imContacts)
         refreshList()
     }

@@ -121,6 +121,11 @@ private struct ShareRoot: View {
                         TextField("留言（可选）", text: $note, axis: .vertical).lineLimit(1 ... 3)
                             .textFieldStyle(.roundedBorder)
                     }
+                    if !loading, pendingBytes > 0 {
+                        Text("待发送约 \(Self.byteText(pendingBytes))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
                     if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.secondary) }
                 }
@@ -166,6 +171,15 @@ private struct ShareRoot: View {
         return !payloads.isEmpty
             && snapshot?.assistantIngestURL != nil
             && snapshot?.assistantUploadURL != nil
+    }
+
+    private var pendingBytes: Int64 {
+        payloads.reduce(0) { $0 + $1.byteSize } + Int64(note.utf8.count)
+    }
+
+    private static func byteText(_ bytes: Int64) -> String {
+        let mb = Double(bytes) / 1024 / 1024
+        return mb >= 0.1 ? String(format: "%.1f MB", mb) : "\(max(1, bytes / 1024)) KB"
     }
 
     private func send() {
@@ -266,6 +280,19 @@ private enum SharePayload {
         case .link: return "link"
         case .location: return "mappin.and.ellipse"
         case .text: return "text.quote"
+        }
+    }
+
+    var byteSize: Int64 {
+        switch self {
+        case .image(let file, _, _, _), .file(let file, _, _):
+            return Int64((try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        case .link(let url, let title, _):
+            return Int64(url.absoluteString.utf8.count + (title?.utf8.count ?? 0))
+        case .location(_, _, let name):
+            return Int64(name.utf8.count + 64)
+        case .text(let text):
+            return Int64(text.utf8.count)
         }
     }
 }

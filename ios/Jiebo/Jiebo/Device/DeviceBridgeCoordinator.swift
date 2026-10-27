@@ -40,7 +40,8 @@ final class DeviceBridgeCoordinator {
         permissionStore.reportHandler = { [weak store] reqId, grants in
             store?.send(.devicePermissionReport(reqId: reqId, grants: grants))
         }
-        permissionStore.refresh(forceReport: true)
+        // Scene 安装/回前台不重复强制上报；登录解锁由 JieboSceneRoot 的 unlocked 边沿强制一次。
+        permissionStore.refresh(forceReport: false)
     }
 
     func setConfirmationPresenter(token: String, active: Bool) {

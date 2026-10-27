@@ -126,6 +126,21 @@ struct ComposerView: View {
         .padding(.bottom, floating ? 8 : 16)
         // 浮动玻璃底栏：不铺实底，让消息从胶囊下面透过去
         .background(floating ? Color.clear : JieboColor.paper)
+        .confirmationDialog(
+            "确认上传大文件？",
+            isPresented: Binding(
+                get: { store.uploadConfirmation != nil },
+                set: { if !$0 { store.resolveUploadConfirmation(false) } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("上传") { store.resolveUploadConfirmation(true) }
+            Button("取消", role: .cancel) { store.resolveUploadConfirmation(false) }
+        } message: {
+            if let confirmation = store.uploadConfirmation {
+                Text("\(confirmation.name) 压缩后的实际待传大小为 \(ChatStore.megabytes(confirmation.bytes))。")
+            }
+        }
         .onAppear {
             text = sceneDraft(for: chatId)
             store.refreshCheckpoints(chatId: chatId)
@@ -165,14 +180,18 @@ struct ComposerView: View {
             photoItems = []
             let targetChatId = chatId
             Task {
+                let uploadProfile = MobileMediaPolicy.workbenchUpload(
+                    mode: MobileDataRuntime.mode,
+                    cost: MobileDataRuntime.networkCost
+                )
                 var prepared: [PendingImage] = []
                 var failed = 0
                 for item in items {
                     guard let data = try? await item.loadTransferable(type: Data.self) else { failed += 1; continue }
                     let mime = item.supportedContentTypes.first?.preferredMIMEType
                     // 压缩 + base64 预计算放后台线程（单张 100-300ms，避免卡主 actor）
-                    let image = await Task.detached(priority: .userInitiated) {
-                        ImagePrep.prepare(data, mimeType: mime)
+                    let image = await Task.detached(priority: .userInitiated) { [uploadProfile] in
+                        ImagePrep.prepare(data, mimeType: mime, profile: uploadProfile)
                     }.value
                     if let image {
                         prepared.append(image)

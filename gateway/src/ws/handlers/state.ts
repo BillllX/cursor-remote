@@ -377,6 +377,8 @@ export function onLoadChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"load
   const page: unknown[] = [];
   let from = to;
   const canDefer = conn.caps.has("deferred_turn");
+  // 游标只对当前 chatRev 有效；客户端用它判断已确认尾页能否安全续拉。
+  const chatRev = tenant.disk.chatRevs[id];
   const live = runningChatIds(tenant).includes(id);
   const settle = (turns: unknown[]) =>
     live ? turns : (settlePersistedChats([{ turns }])[0] as { turns: unknown[] }).turns;
@@ -390,6 +392,7 @@ export function onLoadChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"load
         hasMore: nextFrom > 0,
         total: all.length,
         nonce,
+        chatRev,
       }),
     );
   let turnBytes = 0;
@@ -419,5 +422,14 @@ export function onLoadChat({ ws, conn, tenant }: WsCtx, message: MessageOf<"load
   // 与 stored_state 同口径的 settle：非 live 会话的磁盘 running 残留（崩溃遗留）
   // 不能原样下发，否则 iOS 上永远转圈（Kimi 设计评审 MINOR6）
   const settledPage = settle(page);
-  send(ws, { type: "chat_turns", chatId: id, turns: settledPage, from, hasMore: from > 0, total: all.length, nonce });
+  send(ws, {
+    type: "chat_turns",
+    chatId: id,
+    turns: settledPage,
+    from,
+    hasMore: from > 0,
+    total: all.length,
+    nonce,
+    chatRev,
+  });
 }

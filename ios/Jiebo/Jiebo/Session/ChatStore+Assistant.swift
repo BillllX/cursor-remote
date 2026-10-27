@@ -22,10 +22,18 @@ extension ChatStore {
         }
     }
 
-    func requestAssistant(memory: Bool? = nil, force: Bool = false) {
+    func requestAssistant(memory: Bool? = nil, force: Bool = false, freshnessWindow: TimeInterval? = nil) {
         if let memory { assistantMemoryDesired = memory }
         let desiredMemory = memory ?? assistantMemoryDesired
         guard connected, unlocked, gatewayReady else { return }
+        if let freshnessWindow,
+           !RefreshFreshnessPolicy.shouldRefresh(
+               lastSuccess: assistantLastSuccessAt,
+               now: Date(),
+               window: freshnessWindow
+           ) {
+            return
+        }
         guard assistantSyncGate.begin(memory: desiredMemory, force: force) else { return }
         // A revision learned from a non-memory projection cannot prove the memory payload is cached.
         let memoryIsCurrent = assistantState?.memory != nil
@@ -73,6 +81,7 @@ extension ChatStore {
             assistantName = next.name
             assistantStateRevision &+= 1
             assistantNetworkConfirmed = true
+            assistantLastSuccessAt = Date()
             updateCachedAssistant(next, memoryRevision: assistantMemoryRevision)
             AppLaunchMetrics.event("assistant_apply")
         }
@@ -121,6 +130,7 @@ extension ChatStore {
             updateCachedAssistant(state, memoryRevision: assistantMemoryRevision)
         }
         assistantNetworkConfirmed = true
+        assistantLastSuccessAt = Date()
         assistantStateRevision &+= 1
         finishAssistantSync()
     }

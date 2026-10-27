@@ -12,7 +12,7 @@ extension ChatStore {
         }
         guard let chat = chatSession(targetId), let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
         // 显示的是旧正文（还在补齐）：截断不会随 sync_chat 上去，补齐完成又被服务端盖回
-        guard chat.turnsComplete else {
+        guard canMutateLoadedTurn(turnId, chat: chat) else {
             flash("正文还在同步，稍后再编辑")
             return
         }
@@ -44,7 +44,7 @@ extension ChatStore {
             return
         }
         guard let chat = chatSession(targetId), let index = chat.turns.firstIndex(where: { $0.id == turnId }) else { return }
-        guard chat.turnsComplete else {
+        guard canMutateLoadedTurn(turnId, chat: chat) else {
             flash("正文还在同步，稍后再重试")
             return
         }
@@ -94,13 +94,28 @@ extension ChatStore {
         send(.truncateTurns(chatId: chatId, turnId: turnId, rev: stateRev))
     }
 
+    /// 完整正文可照旧操作；partial 只允许版本仍确认、当前不在补页且目标不是 deferred 的尾页回合。
+    private func canMutateLoadedTurn(_ turnId: String, chat: ChatSession) -> Bool {
+        guard let turn = chat.turns.first(where: { $0.id == turnId }), !turn.deferred else { return false }
+        if chat.turnsComplete { return true }
+        guard let partial = partialHistories[chat.id],
+              partial.chatRev == chatRevs[chat.id],
+              !loadingChatIds.contains(chat.id),
+              !refreshingChatIds.contains(chat.id)
+        else { return false }
+        return true
+    }
+
     func applyPlan(_ turnId: String, chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
         guard client.isOpen, !isBusy(targetId) else {
             if isBusy(targetId) { flash("等当前这条跑完再执行") }
             return
         }
-        guard let chat = chatSession(targetId), let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId),
+              let turn = chat.turns.first(where: { $0.id == turnId }),
+              !turn.deferred
+        else { return }
         guard !cachedOnlyIds.contains(chat.id) else {
             flash("正在同步会话，稍后再执行")
             return
@@ -245,7 +260,7 @@ extension ChatStore {
     static func externalHistory(model: String?, turns: [Turn]) -> [HistoryItem]? {
         guard let model, model.contains(":") else { return nil }
         var items: [HistoryItem] = []
-        for t in turns where !t.queued && t.error == nil {
+        for t in turns where !t.queued && t.error == nil && !t.deferred {
             let user = t.user.trimmingCharacters(in: .whitespacesAndNewlines)
             let assistant = t.assistant.trimmingCharacters(in: .whitespacesAndNewlines)
             if !user.isEmpty { items.append(HistoryItem(role: "user", text: String(user.prefix(3000)))) }

@@ -87,12 +87,25 @@ extension ChatStore {
     }
 
     /// 拉当前会话工作区的文件索引（@补全的本地底数据 + 文件清单 sheet）
-    func requestFileIndex(chatId: String? = nil, force: Bool = false) {
+    func requestFileIndex(chatId: String? = nil, force: Bool = false, userInitiated: Bool = false) {
         let targetId = chatId ?? activeId
         applyCachedFileIndexIfAvailable(chatId: targetId)
+        // iPhone 助理壳不为生命周期事件下载完整工作区；@ 查询和文件入口显式传 userInitiated。
+        if assistantOnly, !userInitiated { return }
         guard connected, unlocked, gatewayReady else { return }
         if fileIndexInFlight[targetId] != nil {
             if force { fileIndexForcePending.insert(targetId) }
+            return
+        }
+        let cached = bootstrapSnapshot?.fileIndexes[targetId]
+        let visible = fileIndexRequestChatId == targetId
+        let paths = cached?.paths ?? (visible ? fileIndex : [])
+        let truncated = cached?.truncated ?? (visible ? treeTruncated : false)
+        if !force, FileIndexFreshnessPolicy.isFresh(
+            paths: paths,
+            truncated: truncated,
+            lastUpdatedAt: fileIndexUpdatedAt[targetId]
+        ) {
             return
         }
         let generation = (fileIndexSyncGeneration[targetId] ?? 0) &+ 1
@@ -122,6 +135,12 @@ extension ChatStore {
     ) {
         if let reqId, reqId != fileIndexRequestIds[chatId] { return }
         guard !deletedIds.contains(chatId) else { return }
+        let now = Date()
+        fileIndexUpdatedAt[chatId] = now
+        if reqId == nil {
+            fileIndexBroadcastAt[chatId] = now
+            fileIndexFallbackTasks.removeValue(forKey: chatId)?.cancel()
+        }
         updateCachedFileIndex(chatId: chatId, paths: paths, truncated: truncated, status: status)
         if chatId == activeId || chatId == chatHomeThreadChatId {
             fileIndexRequestChatId = chatId
@@ -153,6 +172,22 @@ extension ChatStore {
         fileIndexInFlight.removeValue(forKey: chatId)
         fileIndexRequestIds.removeValue(forKey: chatId)
         if forceAgain { requestFileIndex(chatId: chatId, force: true) }
+    }
+
+    /// 工具/文件变化后先等 compact 网关主动发无 reqId 的 files；旧网关超时才补 list_files。
+    func scheduleFileIndexFallback(chatId: String) {
+        guard !assistantOnly else { return }
+        if let broadcastAt = fileIndexBroadcastAt[chatId],
+           Date().timeIntervalSince(broadcastAt) < 1 {
+            return
+        }
+        fileIndexFallbackTasks.removeValue(forKey: chatId)?.cancel()
+        fileIndexFallbackTasks[chatId] = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard let self, !Task.isCancelled else { return }
+            self.fileIndexFallbackTasks.removeValue(forKey: chatId)
+            self.requestFileIndex(chatId: chatId, force: true)
+        }
     }
 
     /// 文件清单 sheet 用：把 @path 追加到当前会话草稿（带去重）
@@ -228,6 +263,8 @@ extension ChatStore {
 
     func uploadAttachment(item: UploadItem, source: URL, chatId: String) async {
         let tenantAtStart = tenantId
+        // 凭据与上传租约同时快照；等待用户确认期间即使切账号，也不能改用新租户 token。
+        let tokenAtStart = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             // 重 I/O（安全作用域 + 复制 iCloud 文件）放后台线程，避免卡主 actor
             let (temp, originalSize) = try await Task.detached(priority: .userInitiated) { () throws -> (URL, Int) in
@@ -251,8 +288,12 @@ extension ChatStore {
             var size = originalSize
             if MediaShrink.canShrink(name: name) {
                 setUploadCompressing(item.id, true)
-                let shrunk = await Task.detached(priority: .userInitiated) { [name] in
-                    await MediaShrink.shrinkUpload(temp, name: name, size: originalSize)
+                let profile = MobileMediaPolicy.workbenchUpload(
+                    mode: MobileDataRuntime.mode,
+                    cost: MobileDataRuntime.networkCost
+                )
+                let shrunk = await Task.detached(priority: .userInitiated) { [name, profile] in
+                    await MediaShrink.shrinkUpload(temp, name: name, size: originalSize, imageProfile: profile)
                 }.value
                 setUploadCompressing(item.id, false)
                 if let shrunk {
@@ -263,18 +304,27 @@ extension ChatStore {
             }
             defer { if file != temp { try? FileManager.default.removeItem(at: file) } }
             guard size <= maxUploadBytes else { throw UploadError.tooLarge }
+            if size > MobileMediaPolicy.largeShareRetryBudget {
+                let approved = await confirmUpload(itemId: item.id, name: name, bytes: size)
+                guard approved else {
+                    uploads.removeAll { $0.id == item.id }
+                    return
+                }
+            }
 
-            let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 批准只是 UI 结果；真正产生网络副作用前重新核对租户、会话和待上传项。
+            guard uploadLeaseIsCurrent(itemId: item.id, chatId: chatId, tenant: tenantAtStart) else { return }
             var path: String?
             var httpError: Error?
-            if !token.isEmpty {
+            if !tokenAtStart.isEmpty {
                 do {
-                    path = try await Uploader.upload(chatId: chatId, name: name, file: file, token: token).path
+                    path = try await Uploader.upload(chatId: chatId, name: name, file: file, token: tokenAtStart).path
                 } catch {
                     httpError = error
                 }
             }
             if path == nil {
+                guard uploadLeaseIsCurrent(itemId: item.id, chatId: chatId, tenant: tenantAtStart) else { return }
                 // WS 兜底：≤8MB 才走（实测 >32MB 的 WS 帧会被传输层直接掐断）
                 guard client.isOpen else { throw httpError ?? UploadError.notConnected }
                 guard size <= 8 * 1024 * 1024 else { throw httpError ?? UploadError.tooLarge }
@@ -309,6 +359,66 @@ extension ChatStore {
     func setUploadCompressing(_ id: String, _ value: Bool) {
         guard let index = uploads.firstIndex(where: { $0.id == id }) else { return }
         uploads[index].compressing = value
+    }
+
+    func confirmUpload(itemId: String, name: String, bytes: Int) async -> Bool {
+        await withCheckedContinuation { continuation in
+            // 同一上传项重复进入确认时，旧等待者先按拒绝结清，避免 continuation 被覆盖泄漏。
+            uploadConfirmationContinuations.removeValue(forKey: itemId)?.resume(returning: false)
+            uploadConfirmationContinuations[itemId] = continuation
+            let confirmation = UploadConfirmation(id: itemId, name: name, bytes: bytes)
+            if uploadConfirmation == nil {
+                uploadConfirmation = confirmation
+            } else {
+                uploadConfirmationQueue.append(confirmation)
+            }
+        }
+    }
+
+    func cancelUploadConfirmations() {
+        uploadConfirmationGeneration &+= 1
+        let ids = UploadConfirmationLeasePolicy.idsToReject(
+            activeId: uploadConfirmation?.id,
+            queuedIds: uploadConfirmationQueue.map(\.id),
+            continuationIds: Set(uploadConfirmationContinuations.keys)
+        )
+        uploadConfirmation = nil
+        uploadConfirmationQueue = []
+        let continuations = uploadConfirmationContinuations
+        uploadConfirmationContinuations = [:]
+        for id in ids {
+            continuations[id]?.resume(returning: false)
+        }
+    }
+
+    private func uploadLeaseIsCurrent(itemId: String, chatId: String, tenant: String) -> Bool {
+        UploadConfirmationLeasePolicy.acceptsUpload(
+            expectedTenant: tenant,
+            expectedChatId: chatId,
+            itemId: itemId,
+            currentTenant: tenantId,
+            currentChatIds: Set(chats.lazy.map(\.id)).subtracting(deletedIds),
+            currentUploadIds: Set(uploads.lazy.map(\.id))
+        )
+    }
+
+    func resolveUploadConfirmation(_ approved: Bool) {
+        guard let confirmation = uploadConfirmation else { return }
+        let next = uploadConfirmationQueue.isEmpty ? nil : uploadConfirmationQueue.removeFirst()
+        uploadConfirmation = nil
+        uploadConfirmationContinuations.removeValue(forKey: confirmation.id)?.resume(returning: approved)
+        if let next {
+            let generation = uploadConfirmationGeneration
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self,
+                      self.uploadConfirmationGeneration == generation,
+                      self.uploadConfirmation == nil,
+                      self.uploadConfirmationContinuations[next.id] != nil
+                else { return }
+                self.uploadConfirmation = next
+            }
+        }
     }
 
     static func megabytes(_ bytes: Int) -> String {

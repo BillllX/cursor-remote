@@ -15,6 +15,7 @@
 		A1B2C3D4E5F6071829000304 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000104 /* Protocol.swift */; };
 		A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */; };
 		A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000106 /* GatewayClient.swift */; };
+		NETP00201 /* GatewayPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = NETP00101 /* GatewayPolicies.swift */; };
 		A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000107 /* KeychainStore.swift */; };
 		A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000108 /* ChatModels.swift */; };
 		A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000109 /* ChatStore.swift */; };
@@ -214,6 +215,7 @@
 		A1B2C3D4E5F6071829000104 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000106 /* GatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayClient.swift; sourceTree = "<group>"; };
+		NETP00101 /* GatewayPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatewayPolicies.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000107 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000108 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000109 /* ChatStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatStore.swift; sourceTree = "<group>"; };
@@ -438,6 +440,7 @@
 				A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */,
 				A1B2C3D4E5F6071829000105 /* ModelCatalog.swift */,
 				A1B2C3D4E5F6071829000106 /* GatewayClient.swift */,
+				NETP00101 /* GatewayPolicies.swift */,
 				A1B2C3D4E5F6071829000116 /* Uploader.swift */,
 			);
 			path = Gateway;
@@ -889,6 +892,7 @@
 				DVC100206 /* DeviceViews.swift in Sources */,
 				A1B2C3D4E5F6071829000305 /* ModelCatalog.swift in Sources */,
 				A1B2C3D4E5F6071829000306 /* GatewayClient.swift in Sources */,
+				NETP00201 /* GatewayPolicies.swift in Sources */,
 				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */,
 				A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */,

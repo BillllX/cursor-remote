@@ -297,7 +297,10 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         }
         guard case .voice(let blob, _, _)? = item.body else { return nil }
         return await ImAttachmentCache.file(
-            blob: blob, tenant: store.tenant, remote: store.mediaURL(convId: item.convId, blob: blob)
+            blob: blob,
+            tenant: store.tenant,
+            remote: store.mediaURL(convId: item.convId, blob: blob),
+            userInitiated: true
         )
     }
 }

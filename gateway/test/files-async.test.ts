@@ -780,6 +780,7 @@ describe("pushWorkspace：顺序、合并、断线", () => {
       tenant: getTenant("default")!,
       cwd: dir,
       slots: new Map(),
+      caps: new Set<string>(),
       maxMessageBytes: 0,
     } as unknown as Conn;
     const slot = { chatId: "c1", tenantId: "default", cwd: dir } as unknown as Slot;
@@ -795,6 +796,23 @@ describe("pushWorkspace：顺序、合并、断线", () => {
     const { ws, conn, slot, sent } = pushCtx(dir);
     await pushWorkspace(ws, slot, conn, ["a.txt", "b.txt", "a.txt", ""]);
     assert.deepEqual(shape(sent), ["files", "file:a.txt", "diff:a.txt", "file:b.txt", "diff:b.txt"]);
+  });
+
+  test("mobile compact 只推 files 索引，legacy 仍推正文与 diff", async () => {
+    const dir = gitRepo("push-compact");
+    writeFileSync(join(dir, "a.txt"), "a");
+    const compact = pushCtx(dir);
+    compact.conn.caps.add("mobile_compact_v1");
+    await pushWorkspace(compact.ws, compact.slot, compact.conn, ["a.txt"]);
+    assert.deepEqual(shape(compact.sent), ["files"]);
+    assert.equal(
+      compact.sent.some((message) => message.type === "file_content"),
+      false,
+    );
+
+    const legacy = pushCtx(dir);
+    await pushWorkspace(legacy.ws, legacy.slot, legacy.conn, ["a.txt"]);
+    assert.deepEqual(shape(legacy.sent), ["files", "file:a.txt", "diff:a.txt"]);
   });
 
   test("连续调用：排队中的合并成一次，路径取并集；执行后再来的另起一次", async () => {

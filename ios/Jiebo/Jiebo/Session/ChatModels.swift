@@ -165,6 +165,12 @@ struct UploadItem: Identifiable, Hashable {
     var compressing = false
 }
 
+struct UploadConfirmation: Identifiable, Hashable {
+    var id: String
+    var name: String
+    var bytes: Int
+}
+
 struct Turn: Identifiable, Hashable {
     var id: String
     var user: String
@@ -190,6 +196,10 @@ struct Turn: Identifiable, Hashable {
     var filesSource: TurnFilesSource = .none
     /// 网页端写入、iOS 还不认识的字段原样保留，sync_state 回写时不丢
     var extra: [String: JSONValue] = [:]
+
+    /// 网关为超大单回合下发的非权威占位；必须先从 /state/turn 水合，不能编辑或回推。
+    var deferred: Bool { extra["deferred"]?.bool == true }
+    var bodyBytes: Int? { extra["bodyBytes"]?.int }
 
     static let knownKeys: Set<String> = [
         "id", "user", "assistant", "thinking", "tools", "task", "error",
@@ -630,7 +640,7 @@ struct ChatSession: Identifiable, Hashable {
         object["title"] = .string(title)
         // P8 slim：turns 未完整加载时不写 turns 键——网关按「键缺失=保留服务端 turns」处理，
         // 避免把部分页当全量回推砍掉服务端尾部（键缺失≠清空，空数组才是清空）
-        if turnsComplete {
+        if turnsComplete, !turns.contains(where: \.deferred) {
             object["turns"] = .array(turns.map { $0.json() })
         }
         // 草稿只留在本机：不上传，免得每次草稿变化都推进网关的会话版本号、让其他设备重拉

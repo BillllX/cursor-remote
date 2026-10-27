@@ -93,17 +93,23 @@ enum ImagePrep {
 
     /// 网关 sanitizeImages 只收 png/jpeg/gif/webp；一律缩到 MediaShrink.imageMaxEdge 转 jpeg，
     /// 原图本来就更小且格式能直传时发原图
-    static func prepare(_ data: Data, mimeType: String?) -> PendingImage? {
+    static func prepare(
+        _ data: Data,
+        mimeType: String?,
+        profile: MobileUploadProfile = MobileUploadProfile(maxPixel: MediaShrink.imageMaxEdge, jpegQuality: Double(MediaShrink.jpegQuality))
+    ) -> PendingImage? {
         let mime = mimeType?.lowercased() ?? ""
         let passthrough = ["image/png", "image/jpeg", "image/gif", "image/webp"].contains(mime)
+        let preserveExistingQuality = profile.maxPixel >= MediaShrink.imageMaxEdge
+            && profile.jpegQuality >= Double(MediaShrink.jpegQuality)
         let original = { PendingImage(data: data, mimeType: mime, base64: data.base64EncodedString()) }
         // GIF 可能是动图，转 jpeg 只剩第一帧
         if mime == "image/gif", data.count <= perImageLimit { return original() }
-        var edge = MediaShrink.imageMaxEdge
-        var quality = MediaShrink.jpegQuality
+        var edge = profile.maxPixel
+        var quality = CGFloat(profile.jpegQuality)
         while edge >= 512, let out = MediaShrink.jpeg(from: data, maxEdge: edge, quality: quality, keepAlpha: false) {
             if out.count <= perImageLimit {
-                if passthrough, data.count <= out.count { return original() }
+                if preserveExistingQuality, passthrough, data.count <= out.count { return original() }
                 return PendingImage(data: out, mimeType: "image/jpeg", base64: out.base64EncodedString())
             }
             edge = edge * 3 / 4
@@ -147,7 +153,12 @@ enum MediaShrink {
     }
 
     /// 压不了、压完不划算或出错都返回 nil，调用方照传原件
-    static func shrinkUpload(_ file: URL, name: String, size: Int) async -> Outcome? {
+    static func shrinkUpload(
+        _ file: URL,
+        name: String,
+        size: Int,
+        imageProfile: MobileUploadProfile = MobileUploadProfile(maxPixel: imageMaxEdge, jpegQuality: Double(jpegQuality))
+    ) async -> Outcome? {
         let base = (name as NSString).deletingPathExtension
         let output = FileManager.default.temporaryDirectory
             .appendingPathComponent("jiebo-shrink-\(UUID().uuidString.lowercased())")
@@ -156,7 +167,12 @@ enum MediaShrink {
             guard size >= minImageBytes,
                   let source = CGImageSourceCreateWithURL(file as CFURL, nil),
                   // 带透明的图多半是素材/图标，转 jpeg 会坏，保留原件
-                  let data = jpeg(from: source, maxEdge: imageMaxEdge, quality: jpegQuality, keepAlpha: true),
+                  let data = jpeg(
+                      from: source,
+                      maxEdge: imageProfile.maxPixel,
+                      quality: CGFloat(imageProfile.jpegQuality),
+                      keepAlpha: true
+                  ),
                   Double(data.count) < Double(size) * keepRatio else { return nil }
             let url = output.appendingPathExtension("jpg")
             guard (try? data.write(to: url)) != nil else { return nil }

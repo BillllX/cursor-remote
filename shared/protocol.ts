@@ -817,6 +817,10 @@ export type CheckpointInfo = { id: string; label: string; createdAt: number };
 //                     网页 v2 起不再上传正文：图片随网关转录落盘，截断走 truncate_turns
 //   "slim_chats"    —— stored_chat 也只给元数据（同 slim_state 的行），内容走 load_chat 分页
 //   "deferred_turn" —— 超大单回合先收轻量占位，再用 GET /state/turn 按需取完整正文
+//   "mobile_compact_v1" —— 移动端只接受轻量工作区/后台变化：pushWorkspace 仍广播 files 索引，
+//                         但不主动附带每个改动文件的 file_content 正文与 diff，正文一律按需 read_file。
+//                         聊天摘要与跨设备对账继续复用 slim_state + slim_chats + stored_digest，
+//                         不另造一套完整聊天同步协议
 //   "im"            —— 收发平台用户之间的即时消息（im_*，见 docs/im.md）；连接默认在前台，im_presence 切换
 //   "im_group"      —— 支持群会话；必须和 im_collab 同时声明才会收到任何群数据
 //   "im_collab"     —— 支持协作 Actor/消息；必须和 im_group 同时声明才会收到任何群数据
@@ -1483,7 +1487,17 @@ export type ServerMessage =
   | { type: "stored_chat"; chat: unknown; rev?: number }
   // load_chat 的应答（P8）：turns[from..] 一页；hasMore=前面还有；单条超预算的 turn 带 clipped 标记；
   // nonce 回显请求的 nonce（客户端分页代际校验，见 load_chat）
-  | { type: "chat_turns"; chatId: string; turns: unknown[]; from: number; hasMore: boolean; total: number; nonce?: number }
+  | {
+      type: "chat_turns";
+      chatId: string;
+      turns: unknown[];
+      from: number;
+      hasMore: boolean;
+      total: number;
+      nonce?: number;
+      /** 这一页所依据的会话版本；旧网关可能缺省 */
+      chatRev?: number;
+    }
   | { type: "auth"; ok: boolean; message?: string }
   | {
       type: "tool-output";

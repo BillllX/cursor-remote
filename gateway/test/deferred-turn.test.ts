@@ -41,7 +41,12 @@ function loadPage(
   onLoadChat({ ws, conn, tenant, state: gatewayState }, { type: "load_chat", chatId: "chat-1" });
   return {
     frame,
-    message: JSON.parse(frame) as { turns: Array<Record<string, unknown>>; from: number; hasMore: boolean },
+    message: JSON.parse(frame) as {
+      turns: Array<Record<string, unknown>>;
+      from: number;
+      hasMore: boolean;
+      chatRev?: number;
+    },
   };
 }
 
@@ -52,6 +57,7 @@ describe("超大回合分页", () => {
     assert.equal(message.turns.length, 1);
     assert.equal(message.turns[0].id, "turn-1");
     assert.equal(message.turns[0].deferred, true);
+    assert.equal(message.chatRev, 7);
     assert.equal(message.turns[0].clipped, true);
     assert.equal(
       message.turns[0].bodyBytes,

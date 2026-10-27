@@ -91,7 +91,14 @@ enum ChatCache {
     static let tailLimit = 40
     private static let tailFileLimit = 80
 
-    static func loadTail(tenant: String, chatId: String) async -> [Turn]? {
+    struct Tail {
+        var turns: [Turn]
+        /// nil 表示旧版纯展示尾段；两者同时存在才是可安全续页的确认游标。
+        var chatRev: Int?
+        var nextFrom: Int?
+    }
+
+    static func loadTail(tenant: String, chatId: String) async -> Tail? {
         await withCheckedContinuation { continuation in
             queue.async {
                 continuation.resume(returning: readTail(tenant: tenant, chatId: chatId))
@@ -100,17 +107,23 @@ enum ChatCache {
     }
 
     /// turns 是已经去掉正在生成的回合之后的 Turn.json()。调用方保证最多 tailLimit 条
-    static func saveTail(tenant: String, chatId: String, turns: [JSONValue]) {
+    static func saveTail(
+        tenant: String,
+        chatId: String,
+        turns: [JSONValue],
+        chatRev: Int? = nil,
+        nextFrom: Int? = nil
+    ) {
         queue.async {
-            writeTail(tenant: tenant, chatId: chatId, rows: turns)
+            writeTail(tenant: tenant, chatId: chatId, rows: turns, chatRev: chatRev, nextFrom: nextFrom)
         }
     }
 
-    private static func readTail(tenant: String, chatId: String) -> [Turn]? {
+    private static func readTail(tenant: String, chatId: String) -> Tail? {
         guard let file = tailFile(tenant, chatId),
               let data = try? Data(contentsOf: file),
               let object = (try? JSONValue.parse(data))?.object,
-              object["v"]?.int == 1,
+              let version = object["v"]?.int, version == 1 || version == 2,
               object["chatId"]?.string == chatId,
               let rows = object["turns"]?.array
         else { return nil }
@@ -119,10 +132,20 @@ enum ChatCache {
             try? FileManager.default.removeItem(at: file)
             return nil
         }
-        return turns
+        return Tail(
+            turns: turns,
+            chatRev: version >= 2 ? object["chatRev"]?.int : nil,
+            nextFrom: version >= 2 ? object["nextFrom"]?.int : nil
+        )
     }
 
-    private static func writeTail(tenant: String, chatId: String, rows: [JSONValue]) {
+    private static func writeTail(
+        tenant: String,
+        chatId: String,
+        rows: [JSONValue],
+        chatRev: Int?,
+        nextFrom: Int?
+    ) {
         guard let file = tailFile(tenant, chatId) else { return }
         let dir = file.deletingLastPathComponent()
         let fm = FileManager.default
@@ -131,11 +154,16 @@ enum ChatCache {
             return
         }
         let kept = Array(rows.suffix(tailLimit))
-        let object: JSONValue = .object([
-            "v": .number(1),
+        var fields: [String: JSONValue] = [
+            "v": .number(2),
             "chatId": .string(chatId),
             "turns": .array(kept),
-        ])
+        ]
+        if let chatRev, let nextFrom {
+            fields["chatRev"] = .number(Double(chatRev))
+            fields["nextFrom"] = .number(Double(nextFrom))
+        }
+        let object: JSONValue = .object(fields)
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             var root = dir.deletingLastPathComponent()

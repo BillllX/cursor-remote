@@ -113,7 +113,8 @@ extension ChatStore {
     func appBecameActive() {
         guard started else { return }
         client.probe()
-        requestAssistant(force: true)
+        // 保留 force + knownRevision 的条件请求语义，只合并短时间内重复的 Scene/重连触发。
+        requestAssistant(force: true, freshnessWindow: RefreshFreshnessPolicy.assistantForegroundWindow)
     }
 
     func wireClient() {
@@ -136,6 +137,11 @@ extension ChatStore {
         client.onDrop = { [weak self] reason in
             self?.bannerError = reason
         }
+        client.onBackgroundTrafficRestored = { [weak self] in
+            guard let self else { return }
+            // 此回调只发生在现有连接仍可用时，不与 onOpen 重复启动整套同步。
+            self.resumeTrafficDeferredWork()
+        }
         client.onClose = { [weak self] in
             guard let self else { return }
             // 连接断开前已经收到的增量必须先落进 turn；否则取消 50ms flush Task 会丢最后一小段。
@@ -154,6 +160,8 @@ extension ChatStore {
             self.fileIndexForcePending = []
             for task in self.fileIndexTimeoutTasks.values { task.cancel() }
             self.fileIndexTimeoutTasks = [:]
+            for task in self.fileIndexFallbackTasks.values { task.cancel() }
+            self.fileIndexFallbackTasks = [:]
             self.memoryCenterOnDisconnect()
             self.armOfflineTimer()
             self.failAssistantReplyWaiters()
@@ -171,6 +179,7 @@ extension ChatStore {
             }
             self.loadingChatIds = []
             self.loadedPageTurnCounts = [:]
+            self.loadPageCounts = [:]
             for task in self.loadTimeouts.values { task.cancel() }
             self.loadTimeouts = [:]
             // 断线已经换了恢复路径（重连后 stored_state 重启分页），超时计数从头算
@@ -186,6 +195,10 @@ extension ChatStore {
             self.heldDeltas = [:]
             self.pendingSnapshots = [:]
             self.pendingSnapshotBacklog = [:]
+            let stalePartialIds = self.partialHistories.compactMap { id, partial in
+                self.chatRevs[id] != partial.chatRev ? id : nil
+            }
+            for id in stalePartialIds { self.partialHistories[id] = nil }
             if !self.unlocked {
                 self.verifying = false
             } else {
@@ -216,6 +229,8 @@ extension ChatStore {
     }
 
     func resetTenantSession() {
+        // 必须先恢复所有等待中的 continuation；否则旧租户 Task 会永远悬挂，之后还可能读取新凭据。
+        cancelUploadConfirmations()
         syncTask?.cancel()
         stallTask?.cancel()
         // 换租户/退出登录不能把旧账号尚未 flush 的增量带进新会话。
@@ -243,6 +258,10 @@ extension ChatStore {
         fileIndexForcePending = []
         for task in fileIndexTimeoutTasks.values { task.cancel() }
         fileIndexTimeoutTasks = [:]
+        for task in fileIndexFallbackTasks.values { task.cancel() }
+        fileIndexFallbackTasks = [:]
+        fileIndexUpdatedAt = [:]
+        fileIndexBroadcastAt = [:]
         fileIndexSyncGeneration = [:]
         mentionRequestChatId = nil
         searchRequestChatId = nil
@@ -265,10 +284,15 @@ extension ChatStore {
         deletedIds.removeAll()
         loadingChatIds = []
         loadedPageTurnCounts = [:]
+        loadPageCounts = [:]
         for task in loadTimeouts.values { task.cancel() }
         loadTimeouts = [:]
         loadTimeoutStreak = [:]
         loadEpochs = [:]
+        partialHistories = [:]
+        for task in turnHydrationTasks.values { task.cancel() }
+        turnHydrationTasks = [:]
+        hydratingTurnIds = []
         localTurnsPendingSync = []
         // 本机缓存按租户保留；代际递增使旧租户在途读取无法提交到新租户。
         imSink?.resetTenant()
@@ -313,6 +337,7 @@ extension ChatStore {
         assistantInFlightReqId = nil
         assistantSyncFailed()
         assistantSyncGate.resetConnection()
+        assistantLastSuccessAt = .distantPast
         assistantChatId = nil
         pendingAssistantOpen = false
         loops = [:]
@@ -364,6 +389,16 @@ extension ChatStore {
             pending.resume(throwing: UploadError.notConnected)
         }
         memoryCenterResetTenant()
+    }
+
+    func resumeTrafficDeferredWork() {
+        guard unlocked, !client.networkCost.shouldReduceBackgroundTraffic else { return }
+        for id in Set([activeId, chatHomeThreadChatId].compactMap { $0 }) {
+            guard partialHistories[id] != nil else { continue }
+            ensureTurnsLoaded(id)
+        }
+        imSink?.backgroundTrafficRestored()
+        ThumbnailStore.shared.backgroundTrafficRestored()
     }
 
     func rememberModel(_ id: String) {

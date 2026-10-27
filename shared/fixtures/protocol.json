@@ -409,6 +409,7 @@
     {
       "type": "chat_turns",
       "chatId": "c-7f3a9e21",
+      "chatRev": 44,
       "from": 100,
       "hasMore": true,
       "nonce": 3,
@@ -1739,7 +1740,7 @@
     {
       "type": "hello",
       "client": {
-        "caps": ["sync_chat", "stored_digest", "slim_state", "slim_chats"],
+        "caps": ["sync_chat", "stored_digest", "slim_state", "slim_chats", "mobile_compact_v1"],
         "maxMessageBytes": 900000,
         "name": "jiebo-web",
         "version": "2.3.0"

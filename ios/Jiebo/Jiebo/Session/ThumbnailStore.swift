@@ -11,6 +11,7 @@ import WebKit
 /// 文件大卡的缩略图状态。none/failed 都显示原来的图标占位
 enum ThumbState: Equatable {
     case none
+    case delayed
     case loading
     case image(UIImage)
     /// markdown：前几行非空文本
@@ -37,6 +38,7 @@ final class ThumbnailStore {
         var path: String
         var chatId: String
         var tenant: String
+        var bytes: Int?
         var sha: String?
         /// 有 sha 的快照内容不变，才落盘
         var persist: Bool { sha != nil }
@@ -52,6 +54,8 @@ final class ThumbnailStore {
     @ObservationIgnored private var pending: [String: Pending] = [:]
     /// 还没发出的请求（从尾部取）
     @ObservationIgnored private var waiting: [Pending] = []
+    /// 费用策略延后的可见卡片；卡片消失会从这里撤销，恢复时只处理这批已持有 job。
+    @ObservationIgnored private var delayed: [String: Pending] = [:]
     /// 每个键已经失败的次数
     @ObservationIgnored private var failures: [String: Int] = [:]
     /// 回包已到、在等下载/解码名额的个数（也占在途名额，免得回包堆积）
@@ -85,7 +89,7 @@ final class ThumbnailStore {
         return states[cacheKey(for: file, chatId: chatId, store: store).key] ?? ThumbState.none
     }
 
-    func request(file: TurnFile, chatId: String, store: ChatStore) {
+    func request(file: TurnFile, chatId: String, store: ChatStore, userInitiated: Bool = false) {
         let sourceChatId = file.sourceChatId ?? chatId
         guard Self.renderable(file.kind),
               store.connected,
@@ -101,11 +105,19 @@ final class ThumbnailStore {
             return
         }
         attempted.insert(key)
-        let job = Pending(key: key, kind: file.kind, path: file.path, chatId: sourceChatId, tenant: store.tenantId, sha: sha)
+        let job = Pending(
+            key: key,
+            kind: file.kind,
+            path: file.path,
+            chatId: sourceChatId,
+            tenant: store.tenantId,
+            bytes: file.size.map { Int($0) },
+            sha: sha
+        )
         // 读盘期间也算 loading：骨架要 0.3 秒后才淡入，命中缓存时看不到它
         states[key] = .loading
         guard job.persist else {
-            enqueue(job)
+            scheduleNetwork(job, userInitiated: userInitiated)
             return
         }
         let epochAtStart = epoch
@@ -119,9 +131,17 @@ final class ThumbnailStore {
             if let cached {
                 self.commit(cached, for: job.key)
             } else {
-                self.enqueue(job)
+                self.scheduleNetwork(job, userInitiated: userInitiated)
             }
         }
+    }
+
+    /// 用户点按延迟占位后，仅放行这一次，不改变持久策略。
+    func loadOnce(file: TurnFile, chatId: String, store: ChatStore) {
+        let key = cacheKey(for: file, chatId: chatId, store: store).key
+        guard states[key] == .delayed else { return }
+        forget(key)
+        request(file: file, chatId: chatId, store: store, userInitiated: true)
     }
 
     /// 用户手动重试（长按菜单「重新生成预览」）：清掉失败记录重新来
@@ -139,6 +159,8 @@ final class ThumbnailStore {
             forget(key)
         } else if let index = waiting.firstIndex(where: { $0.key == key }) {
             waiting.remove(at: index)
+            forget(key)
+        } else if delayed.removeValue(forKey: key) != nil {
             forget(key)
         }
     }
@@ -210,6 +232,7 @@ final class ThumbnailStore {
         states = [:]
         pending = [:]
         waiting = []
+        delayed = [:]
         diskLoading = [:]
         attempted = []
         failures = [:]
@@ -230,6 +253,7 @@ final class ThumbnailStore {
     }
 
     private func enqueue(_ job: Pending) {
+        delayed[job.key] = nil
         waiting.removeAll { $0.key == job.key }
         waiting.append(job)
         while waiting.count > Self.maxWaiting {
@@ -237,6 +261,54 @@ final class ThumbnailStore {
             states[waiting.removeFirst().key] = .failed
         }
         pump()
+    }
+
+    private func scheduleNetwork(_ job: Pending, userInitiated: Bool) {
+        let allowed = userInitiated || MobileMediaPolicy.allowsAutomaticDownload(
+            mode: MobileDataRuntime.mode,
+            cost: MobileDataRuntime.networkCost,
+            kind: .fileThumbnail(kind: job.kind.rawValue),
+            bytes: job.bytes
+        )
+        guard allowed else {
+            states[job.key] = .delayed
+            delayed[job.key] = job
+            return
+        }
+        enqueue(job)
+    }
+
+    /// 路径费用恢复后让仍可见的延后 job 再走一次“磁盘缓存优先、未命中才联网”。
+    func backgroundTrafficRestored() {
+        guard let store = chatStore,
+              store.connected,
+              !store.client.networkCost.shouldReduceBackgroundTraffic
+        else { return }
+        let jobs = delayed.values.filter {
+            $0.tenant == store.tenantId && attempted.contains($0.key) && states[$0.key] == .delayed
+        }
+        for job in jobs {
+            delayed[job.key] = nil
+            guard job.persist else {
+                scheduleNetwork(job, userInitiated: false)
+                continue
+            }
+            let epochAtStart = epoch
+            let token = UUID()
+            diskLoading[job.key] = token
+            states[job.key] = .loading
+            Task {
+                let cached = await ThumbDisk.load(tenant: job.tenant, key: job.key)
+                guard self.epoch == epochAtStart, self.diskLoading[job.key] == token,
+                      self.attempted.contains(job.key) else { return }
+                self.diskLoading[job.key] = nil
+                if let cached {
+                    self.commit(cached, for: job.key)
+                } else {
+                    self.scheduleNetwork(job, userInitiated: false)
+                }
+            }
+        }
     }
 
     private func pump() {
@@ -266,6 +338,7 @@ final class ThumbnailStore {
 
     private func forget(_ key: String) {
         states[key] = nil
+        delayed[key] = nil
         attempted.remove(key)
         failures[key] = nil
         order.removeAll { $0 == key }

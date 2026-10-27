@@ -310,6 +310,9 @@ extension ChatStore {
         fileIndexSyncGeneration.removeValue(forKey: id)
         fileIndexRequestIds.removeValue(forKey: id)
         fileIndexForcePending.remove(id)
+        fileIndexUpdatedAt.removeValue(forKey: id)
+        fileIndexBroadcastAt.removeValue(forKey: id)
+        fileIndexFallbackTasks.removeValue(forKey: id)?.cancel()
         fileIndexTimeoutTasks.removeValue(forKey: id)?.cancel()
         if fileIndexRequestChatId == id { fileIndexRequestChatId = nil }
         var rest = chats.filter { $0.id != id }

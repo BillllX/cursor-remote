@@ -130,7 +130,7 @@ elif [[ "${REQUIRE_SWIFT:-}" == "1" ]]; then
   echo "REQUIRE_SWIFT=1 但没找到 swiftc（未设 SWIFT_BIN，PATH 里也没有）" >&2
   exit 1
 else
-  echo "没找到 Swift 工具链（未设 SWIFT_BIN，PATH 里也没有 swiftc），跳过 iOS 协议契约检查。"
+  echo "没找到 Swift 工具链（未设 SWIFT_BIN，PATH 里也没有 swiftc）：已跳过 Swift 纯逻辑/协议契约测试；Xcode 编译也未验证。"
   exit 0
 fi
 
@@ -144,6 +144,7 @@ SOURCES=(
   "$APP/Gateway/ImProtocol.swift"
   "$APP/Gateway/JSONValue.swift"
   "$APP/Gateway/ModelCatalog.swift"
+  "$APP/Gateway/GatewayPolicies.swift"
   "$APP/Device/DeviceRequestValidation.swift"
   "$APP/Session/MemoryCenterReducer.swift"
   "$APP/Session/MemoryCenterExtrasReducer.swift"

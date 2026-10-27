@@ -67,7 +67,7 @@ struct FileBrowserSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
-            .onAppear { store.requestFileIndex(chatId: chatId) }
+            .onAppear { store.requestFileIndex(chatId: chatId, userInitiated: true) }
         }
         .presentationDetents([.medium, .large])
     }

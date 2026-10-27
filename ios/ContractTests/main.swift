@@ -1924,6 +1924,197 @@ func checkImDurableOutbox() -> [String] {
     return problems
 }
 
+func checkTrafficOptimizationPolicies() -> [String] {
+    var problems: [String] = []
+    if !ClientInfo.current.caps.contains("mobile_compact_v1") {
+        problems.append("流量 compact：iOS hello 未声明 mobile_compact_v1")
+    }
+    if !ClientInfo.current.caps.contains("deferred_turn") {
+        problems.append("流量历史：iOS hello 未声明 deferred_turn")
+    }
+    let deferredJSON: JSONValue = .object([
+        "id": .string("turn-large"),
+        "user": .string("问题预览"),
+        "assistant": .string("回答预览"),
+        "clipped": .bool(true),
+        "deferred": .bool(true),
+        "bodyBytes": .number(800_000),
+    ])
+    if let deferred = Turn.from(deferredJSON) {
+        if !deferred.deferred || deferred.bodyBytes != 800_000 {
+            problems.append("流量历史：Turn 没有明确识别 deferred/bodyBytes")
+        }
+        var chat = ChatSession.blank(id: "chat-deferred")
+        chat.turns = [deferred]
+        chat.turnsComplete = true
+        if chat.json()["turns"] != nil {
+            problems.append("流量历史：deferred 占位不得作为权威 turns 回推")
+        }
+    } else {
+        problems.append("流量历史：deferred Turn 解析失败")
+    }
+    let legacyPage = Data(#"{"type":"chat_turns","chatId":"legacy","turns":[],"from":0,"hasMore":false}"#.utf8)
+    if let decoded = try? ServerMessage.decode(from: legacyPage) {
+        if case .chatTurns(let id, _, _, _, _, let chatRev) = decoded {
+            if id != "legacy" || chatRev != nil {
+                problems.append("流量历史：旧网关 chat_turns 缺省 chatRev 解码不兼容")
+            }
+        } else {
+            problems.append("流量历史：旧网关 chat_turns 未解码")
+        }
+    } else {
+        problems.append("流量历史：旧网关 chat_turns 解码抛错")
+    }
+    let freshNow = Date(timeIntervalSince1970: 1_000)
+    if !FileIndexFreshnessPolicy.isFresh(
+        paths: ["a.txt"],
+        truncated: false,
+        lastUpdatedAt: freshNow.addingTimeInterval(-59),
+        now: freshNow
+    ) || FileIndexFreshnessPolicy.isFresh(
+        paths: ["a.txt"],
+        truncated: false,
+        lastUpdatedAt: freshNow.addingTimeInterval(-60),
+        now: freshNow
+    ) || FileIndexFreshnessPolicy.isFresh(
+        paths: [],
+        truncated: false,
+        lastUpdatedAt: freshNow,
+        now: freshNow
+    ) || FileIndexFreshnessPolicy.isFresh(
+        paths: ["a.txt"],
+        truncated: true,
+        lastUpdatedAt: freshNow,
+        now: freshNow
+    ) {
+        problems.append("流量 compact：文件索引 60 秒新鲜度边界不符")
+    }
+    let ceilings = (1 ... 8).map { GatewayRetryPolicy.ceiling(failureCount: $0) }
+    if ceilings != [1, 2, 4, 8, 16, 32, 60, 60] {
+        problems.append("流量 P0：指数退避封顶序列不符 \(ceilings)")
+    }
+    if GatewayRetryPolicy.delay(failureCount: 4, random: 0) != 0
+        || GatewayRetryPolicy.delay(failureCount: 4, random: 0.5) != 4
+        || GatewayRetryPolicy.delay(failureCount: 99, random: 1) != 60
+    {
+        problems.append("流量 P0：full-jitter 边界或注入随机数不符")
+    }
+
+    var scenes = SceneActivityPolicy()
+    let first = scenes.update(token: "a", isActive: true)
+    let duplicate = scenes.update(token: "a", isActive: true)
+    let second = scenes.update(token: "b", isActive: true)
+    let oneLeft = scenes.remove(token: "a")
+    let noneLeft = scenes.remove(token: "b")
+    if !first.becameActive || duplicate.becameActive || second.becameActive
+        || !oneLeft.anyActive || noneLeft.anyActive {
+        problems.append("流量 P0：多 Scene 前台 0→1 边沿不符")
+    }
+
+    let now = Date(timeIntervalSince1970: 100)
+    if RefreshFreshnessPolicy.shouldRefresh(lastSuccess: now.addingTimeInterval(-19), now: now, window: 20)
+        || !RefreshFreshnessPolicy.shouldRefresh(lastSuccess: now.addingTimeInterval(-20), now: now, window: 20)
+    {
+        problems.append("流量 P0：成功刷新新鲜度边界不符")
+    }
+
+    let wifi = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: false)
+    let cellular = GatewayNetworkCost(reachable: true, isExpensive: true, isConstrained: false)
+    let lowData = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: true)
+    if !MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .dataSaver, cost: wifi, kind: .imBodyImage
+    ) || MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .dataSaver, cost: cellular, kind: .imBodyImage
+    ) || !MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .dataSaver, cost: lowData, kind: .avatar, bytes: 100_000
+    ) {
+        problems.append("移动数据策略：Wi‑Fi、正文图片或小头像边界不符")
+    }
+    if MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .standard, cost: cellular, kind: .fileThumbnail(kind: "pdf"), bytes: 10_000
+    ) || MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .standard, cost: cellular, kind: .fileThumbnail(kind: "image"), bytes: nil
+    ) || !MobileMediaPolicy.allowsAutomaticDownload(
+        mode: .unrestricted, cost: lowData, kind: .fileThumbnail(kind: "video"), bytes: nil
+    ) {
+        problems.append("移动数据策略：标准缩略图预算或不限制模式不符")
+    }
+    if MobileMediaPolicy.workbenchUpload(mode: .dataSaver, cost: cellular)
+        != MobileUploadProfile(maxPixel: 1280, jpegQuality: 0.65)
+        || MobileMediaPolicy.workbenchUpload(mode: .standard, cost: cellular)
+        != MobileUploadProfile(maxPixel: 1600, jpegQuality: 0.72)
+        || MobileMediaPolicy.imUpload(mode: .dataSaver, cost: lowData).jpegQuality != 0.65
+    {
+        problems.append("移动数据策略：上传压缩档位不符")
+    }
+    if GatewayPathTransition.classify(from: cellular, to: wifi) != .backgroundTrafficRestored
+        || GatewayPathTransition.classify(from: lowData, to: wifi) != .backgroundTrafficRestored
+        || GatewayPathTransition.classify(from: wifi, to: cellular) != .unchanged
+        || GatewayPathTransition.classify(from: .unavailable, to: wifi) != .reachabilityRestored
+    {
+        problems.append("流量 P0：路径费用恢复与可达性恢复必须是独立边沿")
+    }
+    if !UploadConfirmationLeasePolicy.acceptsUpload(
+        expectedTenant: "tenant-a",
+        expectedChatId: "chat-a",
+        itemId: "upload-a",
+        currentTenant: "tenant-a",
+        currentChatIds: ["chat-a"],
+        currentUploadIds: ["upload-a"]
+    ) || UploadConfirmationLeasePolicy.acceptsUpload(
+        expectedTenant: "tenant-a",
+        expectedChatId: "chat-a",
+        itemId: "upload-a",
+        currentTenant: "tenant-b",
+        currentChatIds: ["chat-a"],
+        currentUploadIds: ["upload-a"]
+    ) || UploadConfirmationLeasePolicy.idsToReject(
+        activeId: "active",
+        queuedIds: ["queued"],
+        continuationIds: ["orphan"]
+    ) != Set(["active", "queued", "orphan"]) {
+        problems.append("大文件确认：租约校验或重置拒绝集合不符")
+    }
+    if ChatPageRevisionPolicy.action(authoritativeRev: 9, loadStartRev: 9, pageRev: 8)
+        != .restartAtAuthoritativeRevision
+        || ChatPageRevisionPolicy.action(authoritativeRev: nil, loadStartRev: 9, pageRev: 8)
+        != .awaitStoredState
+        || ChatPageRevisionPolicy.action(authoritativeRev: 9, loadStartRev: 9, pageRev: 9) != .accept
+    {
+        problems.append("历史分页：revision mismatch 决策不得接纳或回滚权威版本")
+    }
+    let policyDefaults = UserDefaults(suiteName: "ai.jiebo.contract.mobile-data")!
+    policyDefaults.removePersistentDomain(forName: "ai.jiebo.contract.mobile-data")
+    if MobileDataMode.load(defaults: policyDefaults) != .standard {
+        problems.append("移动数据策略：缺省值不是标准")
+    }
+    MobileDataMode.dataSaver.save(defaults: policyDefaults)
+    if MobileDataMode.load(defaults: policyDefaults) != .dataSaver {
+        problems.append("移动数据策略：持久化往返失败")
+    }
+    policyDefaults.removePersistentDomain(forName: "ai.jiebo.contract.mobile-data")
+
+    let outbound = Data(#"{"type":"ping","text":"不应记录正文"}"#.utf8)
+    let inbound = Data(#"{"type":"ready"}"#.utf8)
+    let nestedType = Data(#"{"body":{"type":"fake"},"type":"im_send"}"#.utf8)
+    if GatewayWireType.extract(from: nestedType) != "im_send" {
+        problems.append("流量 P0：计量必须读取顶层消息类型")
+    }
+    var traffic = GatewayTrafficAccumulator()
+    traffic.record(direction: .outbound, type: GatewayWireType.extract(from: outbound), utf8Bytes: outbound.count)
+    traffic.record(direction: .outbound, type: GatewayWireType.extract(from: outbound), utf8Bytes: outbound.count)
+    traffic.record(direction: .inbound, type: GatewayWireType.extract(from: inbound), utf8Bytes: inbound.count)
+    if traffic.counts[GatewayTrafficKey(direction: .outbound, type: "ping")]
+        != GatewayTrafficCount(bytes: outbound.count * 2, messages: 2)
+        || traffic.counts[GatewayTrafficKey(direction: .inbound, type: "ready")]
+        != GatewayTrafficCount(bytes: inbound.count, messages: 1)
+    {
+        problems.append("流量 P0：WS 类型字节/次数累计不符")
+    }
+    print("iOS 流量 P0 纯策略：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -1932,7 +2123,7 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox()
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies()
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

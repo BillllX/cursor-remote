@@ -19,6 +19,18 @@ extension ChatStore {
         }
         // 冷启动缓存列表里的会话：服务端还没确认，只显示本机缓存，不发请求
         guard !cachedOnlyIds.contains(chatId) else { return }
+        if let partial = partialHistories[chatId] {
+            guard partial.chatRev == chatRevs[chatId] else {
+                partialHistories[chatId] = nil
+                displayOnlyIds.insert(chatId)
+                return ensureTurnsLoaded(chatId)
+            }
+            displayOnlyIds.remove(chatId)
+            // 蜂窝/低数据模式停在已确认尾页；Wi‑Fi 恢复当前自动补齐行为。
+            if client.networkCost.shouldReduceBackgroundTraffic { return }
+            loadPreviousHistory(chatId)
+            return
+        }
         // 屏幕上只有首屏尾段：不要拿它接缝，也不要让分页去重把它当成权威正文
         if displayOnlyIds.contains(chatId) {
             guard unlocked else { return }
@@ -28,6 +40,7 @@ extension ChatStore {
             bodyRefreshes[chatId] = refresh
             refreshingChatIds.insert(chatId)
             loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1
+            loadPageCounts[chatId] = 0
             loadingChatIds.insert(chatId)
             loadStartRevs[chatId] = chatRevs[chatId]
             loadStartSegs[chatId] = currentServerSegs(chatId)
@@ -58,6 +71,7 @@ extension ChatStore {
         // 没登录时 send 会被丢掉，loadingChatIds 却留着，之后就再也不会重启分页
         guard unlocked else { return }
         loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1 // 新分页链起新代际
+        loadPageCounts[chatId] = 0
         loadingChatIds.insert(chatId)
         loadStartRevs[chatId] = chatRevs[chatId]
         loadStartSegs[chatId] = currentServerSegs(chatId)
@@ -117,6 +131,7 @@ extension ChatStore {
         }
         loadingChatIds.remove(id)
         loadedPageTurnCounts[id] = nil
+        loadPageCounts[id] = nil
         bodyRefreshes[id] = nil
         refreshingChatIds.remove(id)
         loadStartRevs[id] = nil
@@ -167,7 +182,7 @@ extension ChatStore {
             guard let self else { return }
             if self.canPaintTail(chatId, epoch: epoch, tenant: tenant),
                let tail = await ChatCache.loadTail(tenant: tenant, chatId: chatId) {
-                self.paintTail(chatId, turns: tail, epoch: epoch, tenant: tenant)
+                self.paintTail(chatId, tail: tail, epoch: epoch, tenant: tenant)
             }
             let body = await ChatCache.loadBody(tenant: tenant, chatId: chatId)
             guard self.cacheEpoch == epoch, self.tenantId == tenant else { return }
@@ -189,13 +204,19 @@ extension ChatStore {
         return chats[index].turns.isEmpty && !chats[index].turnsComplete
     }
 
-    private func paintTail(_ chatId: String, turns: [Turn], epoch: Int, tenant: String) {
+    private func paintTail(_ chatId: String, tail: ChatCache.Tail, epoch: Int, tenant: String) {
         guard canPaintTail(chatId, epoch: epoch, tenant: tenant),
               let index = chats.firstIndex(where: { $0.id == chatId })
         else { return }
-        chats[index].turns = turns
+        chats[index].turns = tail.turns
         chats[index].turnsComplete = false
         displayOnlyIds.insert(chatId)
+        if let rev = tail.chatRev, let nextFrom = tail.nextFrom,
+           nextFrom >= 0, rev == chatRevs[chatId], !cachedOnlyIds.contains(chatId)
+        {
+            partialHistories[chatId] = PartialHistory(nextFrom: nextFrom, chatRev: rev, loadedPages: 2)
+            displayOnlyIds.remove(chatId)
+        }
     }
 
     /// 权威正文到了：接上读缓存期间新出现的回合。只有多出来的都是正在生成的，才把它当成版本基线
@@ -214,6 +235,7 @@ extension ChatStore {
             bodyRevs[chatId] = body.rev
             bodySegs[chatId] = body.serverSegs.map { SegHashes(rev: body.rev, hashes: $0) }
             displayOnlyIds.remove(chatId)
+            partialHistories[chatId] = nil
         }
         rememberTail(chatId)
     }
@@ -238,13 +260,48 @@ extension ChatStore {
         let settled = chat.turns.filter { !ChatStore.isLiveTurn($0) }
         let tail = Array(settled.suffix(ChatCache.tailLimit))
         guard !tail.isEmpty else { return }
-        ChatCache.saveTail(tenant: tenantId, chatId: chatId, turns: tail.map { $0.json() })
+        let partial = partialHistories[chatId]
+        // 全部分页已到头但含 deferred 时，磁盘只留最后 40 轮；下次启动游标要回到这段尾页之前。
+        let cachedNextFrom = partial.map {
+            $0.nextFrom == 0 ? max(0, settled.count - tail.count) : $0.nextFrom
+        }
+        ChatCache.saveTail(
+            tenant: tenantId,
+            chatId: chatId,
+            turns: tail.map { $0.json() },
+            chatRev: partial?.chatRev,
+            nextFrom: cachedNextFrom
+        )
+    }
+
+    /// 用户抵达已加载顶部后续取一页。只有服务端版本仍与游标绑定时才续拉。
+    func loadPreviousHistory(_ chatId: String) {
+        guard !loadingChatIds.contains(chatId),
+              !refreshingChatIds.contains(chatId),
+              let partial = partialHistories[chatId],
+              partial.nextFrom > 0,
+              partial.chatRev == chatRevs[chatId],
+              unlocked
+        else { return }
+        loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1
+        loadStartRevs[chatId] = partial.chatRev
+        loadStartSegs[chatId] = currentServerSegs(chatId)
+        loadedPageTurnCounts[chatId] = 0
+        loadPageCounts[chatId] = partial.loadedPages
+        loadingChatIds.insert(chatId)
+        sendLoadChat(chatId, from: partial.nextFrom)
     }
 
     /// 正文版本落后：保留旧正文作补齐基线，标成未完整（json() 不再带 turns，旧正文不会回推）。
     /// rev 是调用方知道的旧版本，只给「完整但还没记版本」的正文兜底；基线版本未知就退回老做法清空重拉
     func markNeedsRefresh(_ id: String, rev: Int?) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
+        if let partial = partialHistories[id], partial.chatRev != chatRevs[id] {
+            partialHistories[id] = nil
+            bodyRevs[id] = nil
+            bodySegs[id] = nil
+            displayOnlyIds.insert(id)
+        }
         if chats[index].turnsComplete, bodyRevs[id] == nil, let rev { bodyRevs[id] = rev }
         // 首屏尾段没有版本号。清掉的话，补齐完成前界面会空
         if bodyRevs[id] == nil, !displayOnlyIds.contains(id) { chats[index].turns = [] }
@@ -306,6 +363,7 @@ extension ChatStore {
         refreshingChatIds.remove(chatId)
         loadingChatIds.remove(chatId)
         loadedPageTurnCounts[chatId] = nil
+        loadPageCounts[chatId] = nil
         guard let index = chats.firstIndex(where: { $0.id == chatId }) else { return }
         let baseIds = Set((refresh?.base ?? []).map(\.id))
         let displayBase = refresh?.displayBase == true
@@ -323,6 +381,9 @@ extension ChatStore {
                     result[offset] = result[offset].mergingFiles(from: turn)
                 } else if live {
                     result[offset] = turn
+                } else if result[offset].deferred {
+                    // deferred 是服务端当前版本的占位；只能补本机 files，不能用旧正文把占位“水合”掉。
+                    result[offset] = result[offset].mergingFiles(from: turn)
                 } else {
                     // turn_files 可能已合进本机，而 load_chat 页还是落盘前的副本；不能在补齐收尾时丢掉。
                     result[offset] = turn.mergingFiles(from: result[offset])
@@ -334,9 +395,14 @@ extension ChatStore {
         if displayBase { displayOnlyIds.remove(chatId) }
         chats[index].turns = result
         mergePendingTurnFiles(chatId: chatId)
-        chats[index].turnsComplete = true
+        let deferred = result.contains(where: \.deferred)
+        chats[index].turnsComplete = !deferred
+        if deferred, let rev = loadStartRevs[chatId] ?? chatRevs[chatId] {
+            partialHistories[chatId] = PartialHistory(nextFrom: 0, chatRev: rev, loadedPages: 1)
+        }
         chats[index].serverPreview = nil
-        completeTurnsLoad(chatId)
+        completeTurnsLoad(chatId, authoritative: !deferred)
+        if deferred { rememberTail(chatId) }
     }
 
     /// 同一轮累计快照直接替换；跨到下一轮时把前一轮终态留在待应用队列。
@@ -385,13 +451,17 @@ extension ChatStore {
     }
 
     /// 正文齐了（全量分页、增量补齐、基线版本一致）之后的公共收尾。调用前已置 turnsComplete = true
-    func completeTurnsLoad(_ chatId: String) {
+    func completeTurnsLoad(_ chatId: String, authoritative: Bool = true) {
         // 基线版本相同、空会话等不经过并页路径，也必须消费先到的 turn_files。
         mergePendingTurnFiles(chatId: chatId)
         let startSegs = loadStartSegs.removeValue(forKey: chatId)
-        if let rev = loadStartRevs.removeValue(forKey: chatId) ?? chatRevs[chatId] {
+        if authoritative, let rev = loadStartRevs.removeValue(forKey: chatId) ?? chatRevs[chatId] {
             bodyRevs[chatId] = rev
             bodySegs[chatId] = [startSegs, serverSegs[chatId], bodySegs[chatId]].compactMap { $0 }.first { $0.rev == rev }
+        } else {
+            loadStartRevs[chatId] = nil
+            bodyRevs[chatId] = nil
+            bodySegs[chatId] = nil
         }
         // 加载期间发过消息：补齐时已按 keepLocal 留下本地新回合（正文由网关转录落盘，不靠回推），解除本地优先
         localTurnsPendingSync.remove(chatId)
@@ -507,6 +577,7 @@ extension ChatStore {
         bodyCacheTasks.removeValue(forKey: chatId)?.cancel()
         tailTasks.removeValue(forKey: chatId)?.cancel()
         displayOnlyIds.remove(chatId)
+        partialHistories[chatId] = nil
         bodyRevs[chatId] = nil
         bodySegs[chatId] = nil
         guard chatId != "boot", !tenantId.isEmpty else { return }
@@ -578,9 +649,13 @@ extension ChatStore {
                 return
             }
             if let tail, !self.deletedIds.contains(targetId) {
-                chat.turns = tail
+                chat.turns = tail.turns
                 chat.turnsComplete = false
                 self.displayOnlyIds.insert(targetId)
+                if let rev = tail.chatRev, let nextFrom = tail.nextFrom, nextFrom >= 0 {
+                    // 先记缓存声明的版本；stored_state 到达后 ensureTurnsLoaded 会校验，不匹配就作废重拉。
+                    self.partialHistories[targetId] = PartialHistory(nextFrom: nextFrom, chatRev: rev, loadedPages: 2)
+                }
             }
             var merged = rows
             if let index = merged.firstIndex(where: { $0.id == targetId }) { merged[index] = chat }
@@ -613,5 +688,111 @@ extension ChatStore {
     /// 这时既不是空会话，也不该亮「正在加载」，对话区留白，超过一小会儿才转圈
     var coldStartPlaceholder: Bool {
         assistantOnly && activeId == "boot" && !appliedStore && assistantChatId != nil
+    }
+
+    func isHydratingTurn(_ turnId: String, chatId: String) -> Bool {
+        hydratingTurnIds.contains("\(chatId)\u{0}\(turnId)")
+    }
+
+    func cancelTurnHydration(chatId: String, turnId: String) {
+        turnHydrationTasks["\(chatId)\u{0}\(turnId)"]?.cancel()
+    }
+
+    /// deferred 占位按 id 原位水合。请求前后的 chatRev、响应 id 任一不一致都拒绝提交。
+    func hydrateTurn(chatId: String, turnId: String) {
+        let key = "\(chatId)\u{0}\(turnId)"
+        guard turnHydrationTasks[key] == nil,
+              turnHydrationTasks.count < ChatStore.turnHydrationLimit,
+              let requestedRev = chatRevs[chatId],
+              let chat = chats.first(where: { $0.id == chatId }),
+              chat.turns.contains(where: { $0.id == turnId && $0.deferred }),
+              let token = KeychainStore.token()?.nilIfEmpty
+        else {
+            if turnHydrationTasks.count >= ChatStore.turnHydrationLimit {
+                flash("同时最多加载两条完整内容")
+            }
+            return
+        }
+        let epoch = cacheEpoch
+        hydratingTurnIds.insert(key)
+        turnHydrationTasks[key] = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.cacheEpoch == epoch {
+                    self.turnHydrationTasks[key] = nil
+                    self.hydratingTurnIds.remove(key)
+                }
+            }
+            do {
+                let payload = try await ChatStore.fetchTurn(
+                    token: token,
+                    chatId: chatId,
+                    turnId: turnId
+                )
+                try Task.checkCancellation()
+                guard self.cacheEpoch == epoch,
+                      payload.chatId == chatId,
+                      payload.turnId == turnId,
+                      payload.chatRev == requestedRev,
+                      self.chatRevs[chatId] == requestedRev,
+                      var full = Turn.from(payload.turn),
+                      full.id == turnId,
+                      !full.deferred,
+                      let index = self.chats.firstIndex(where: { $0.id == chatId }),
+                      let turnIndex = self.chats[index].turns.firstIndex(where: { $0.id == turnId }),
+                      self.chats[index].turns[turnIndex].deferred
+                else { throw TurnHydrationError.stale }
+                let placeholder = self.chats[index].turns[turnIndex]
+                full.extra["deferred"] = nil
+                full.extra["clipped"] = nil
+                full.extra["bodyBytes"] = nil
+                self.chats[index].turns[turnIndex] = full.mergingFiles(from: placeholder)
+                self.mergePendingTurnFiles(chatId: chatId)
+                if self.partialHistories[chatId]?.nextFrom == 0,
+                   !self.chats[index].turns.contains(where: \.deferred)
+                {
+                    self.partialHistories[chatId] = nil
+                    self.chats[index].turnsComplete = true
+                    self.bodyRevs[chatId] = requestedRev
+                    self.bodySegs[chatId] = self.serverSegs[chatId].flatMap {
+                        $0.rev == requestedRev ? $0 : nil
+                    }
+                }
+                self.rememberTail(chatId)
+                self.scheduleBodyCache(chatId)
+            } catch is CancellationError {
+                return
+            } catch let error as URLError where error.code == .cancelled {
+                return
+            } catch TurnHydrationError.stale {
+                self.bannerError = "这条内容已更新，请刷新会话后再加载。"
+            } catch {
+                self.bannerError = "完整内容加载失败，请稍后重试。"
+            }
+        }
+    }
+
+    struct TurnFetchPayload {
+        var chatId: String
+        var turnId: String
+        var chatRev: Int
+        var turn: JSONValue
+    }
+
+    enum TurnHydrationError: Error { case badResponse, stale }
+
+    nonisolated static func fetchTurn(token: String, chatId: String, turnId: String) async throws -> TurnFetchPayload {
+        var request = URLRequest(url: GatewayConfig.stateTurnURL(chatId: chatId, turnId: turnId))
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let object = try JSONValue.parse(data).object,
+              let responseChatId = object["chatId"]?.string,
+              let responseTurnId = object["turnId"]?.string,
+              let chatRev = object["chatRev"]?.int,
+              let turn = object["turn"]
+        else { throw TurnHydrationError.badResponse }
+        return TurnFetchPayload(chatId: responseChatId, turnId: responseTurnId, chatRev: chatRev, turn: turn)
     }
 }

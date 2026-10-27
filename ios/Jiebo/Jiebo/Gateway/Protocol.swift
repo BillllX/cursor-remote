@@ -324,7 +324,9 @@ struct ClientInfo: Sendable, Equatable {
     var maxMessageBytes: Int?
     /// 能力集：sync_chat（增量上传）+ stored_digest（分叉时目录对账）+ slim_state（P8 懒加载：
     /// stored_state/stored_chat 只给元数据，内容走 load_chat 分页；sync_chat 可不写 turns 键）
-    /// + slim_chats（load_chats 也只回元数据壳）+ im（收发平台用户之间的即时消息）
+    /// + slim_chats（load_chats 也只回元数据壳）+ deferred_turn（超大回合按需水合）
+    /// + mobile_compact_v1（工作区变化只收索引，正文按需）
+    /// + im（收发平台用户之间的即时消息）
     var caps: [String]
 
     static var current: ClientInfo {
@@ -342,7 +344,7 @@ struct ClientInfo: Sendable, Equatable {
             // Collab 沿用网关现有双 capability 门槛；iOS P3 只读取状态，不发送 collab_op。
             caps: [
                 "sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "im_group", "im_collab",
-                "workspace_agents", "device_bridge", "device_bridge_v2",
+                "workspace_agents", "device_bridge", "device_bridge_v2", "mobile_compact_v1", "deferred_turn",
             ]
         )
     }
@@ -1447,7 +1449,7 @@ enum ServerMessage {
     /// P4c：load_chats 的应答（单个会话全量——slim 客户端也是全量：digest 对账是跨设备 turns 更新唯一通道）
     case storedChat(chat: JSONValue, rev: Int?)
     /// P8 slim：load_chat 的应答（turns[from..] 一页；hasMore=前面还有；nonce 回显请求代际）
-    case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool, nonce: Int?)
+    case chatTurns(chatId: String, turns: [JSONValue], from: Int, hasMore: Bool, nonce: Int?, chatRev: Int?)
     case auth(ok: Bool, message: String?)
     case history(chatId: String, turns: [JSONValue])
     case runSnapshot(
@@ -1568,7 +1570,7 @@ enum ServerMessage {
              .checkpoints(let chatId, _),
              .restored(let chatId, _, _, _, _):
             return chatId
-        case .chatTurns(let chatId, _, _, _, _):
+        case .chatTurns(let chatId, _, _, _, _, _):
             return chatId
         default:
             return nil
@@ -1767,7 +1769,8 @@ enum ServerMessage {
                 turns: object["turns"]?.array ?? [],
                 from: object["from"]?.int ?? 0,
                 hasMore: object["hasMore"]?.bool ?? false,
-                nonce: object["nonce"]?.int
+                nonce: object["nonce"]?.int,
+                chatRev: object["chatRev"]?.int
             )
         case "auth":
             return .auth(ok: object["ok"]?.bool ?? false, message: object["message"]?.string)
@@ -1990,6 +1993,15 @@ enum GatewayConfig {
     static var stateURL: URL {
         var url = derive(path: "/state")
         url.append(queryItems: [URLQueryItem(name: "slim", value: "1")])
+        return url
+    }
+
+    static func stateTurnURL(chatId: String, turnId: String) -> URL {
+        var url = derive(path: "/state/turn")
+        url.append(queryItems: [
+            URLQueryItem(name: "chatId", value: chatId),
+            URLQueryItem(name: "turnId", value: turnId),
+        ])
         return url
     }
 

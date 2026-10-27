@@ -45,6 +45,14 @@ struct ImPickedImages: Identifiable {
     var files: [URL]
 }
 
+private struct ImLargeImageBatch {
+    var images: [ImOutgoingImage]
+    var bytes: Int64
+    var tenant: String
+    var convId: String
+    var peer: String
+}
+
 extension ImPickTemp {
     /// 相册里选中的一张落成临时文件：优先让系统直接给文件；不行再取字节写成文件（字节写完就释放）
     @MainActor
@@ -81,6 +89,7 @@ struct ChatComposer: View {
     @State private var voiceAutoFinished = false
     @State private var fileOpen = false
     @State private var locationOpen = false
+    @State private var largeImageBatch: ImLargeImageBatch?
     static let maxPhotos = 9
 
     private var canSend: Bool {
@@ -136,6 +145,21 @@ struct ChatComposer: View {
         .overlay(alignment: .top) {
             Rectangle().fill(JieboColor.line).frame(height: 1)
         }
+        .confirmationDialog(
+            "确认发送原图？",
+            isPresented: Binding(
+                get: { largeImageBatch != nil },
+                set: { if !$0, largeImageBatch != nil { cancelLargeImageBatch() } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("发送") { approveLargeImageBatch() }
+            Button("取消", role: .cancel) { cancelLargeImageBatch() }
+        } message: {
+            if let batch = largeImageBatch {
+                Text("本机处理后的实际待传大小为 \(ChatStore.megabytes(Int(batch.bytes)))。")
+            }
+        }
         .onAppear {
             guard !loadedDraft else { return }
             loadedDraft = true
@@ -145,6 +169,7 @@ struct ChatComposer: View {
             im.setDraft(value, convId: convId)
         }
         .onDisappear {
+            cancelLargeImageBatch()
             recorder.cancel()
             voiceStarted = false
             voiceBeganAt = nil
@@ -398,11 +423,17 @@ struct ChatComposer: View {
         let tenant = im.tenant
         let peer = peer
         Task { @MainActor in
+            let uploadProfile = MobileMediaPolicy.imUpload(
+                mode: MobileDataRuntime.mode,
+                cost: MobileDataRuntime.networkCost
+            )
             var prepared: [ImOutgoingImage] = []
             var failed = 0
             for file in files {
-                let outgoing = await Task.detached(priority: .userInitiated) { () -> ImOutgoingImage? in
-                    let result = ImImagePrep.prepare(file: file, original: original, tenant: tenant)
+                let outgoing = await Task.detached(priority: .userInitiated) { [uploadProfile] () -> ImOutgoingImage? in
+                    let result = ImImagePrep.prepare(
+                        file: file, original: original, tenant: tenant, profile: uploadProfile
+                    )
                     ImPickTemp.remove([file])
                     return result
                 }.value
@@ -412,12 +443,59 @@ struct ChatComposer: View {
                     failed += 1
                 }
             }
-            guard tenant == im.tenant else { return }
+            guard tenant == im.tenant else {
+                removeLargeImageBatchFiles(
+                    ImLargeImageBatch(images: prepared, bytes: 0, tenant: tenant, convId: convId, peer: peer)
+                )
+                return
+            }
             if !prepared.isEmpty {
-                im.sendImages(prepared, to: peer)
-                onSent()
+                let sizes = prepared.map { outgoing -> Int64 in
+                    guard let dir = ImCache.outboxDir(tenant: tenant) else { return 0 }
+                    return ImPickTemp.size(dir.appendingPathComponent(outgoing.file))
+                }
+                if sizes.contains(where: { $0 > Int64(MobileMediaPolicy.largeShareRetryBudget) }) {
+                    largeImageBatch = ImLargeImageBatch(
+                        images: prepared,
+                        bytes: sizes.reduce(0, +),
+                        tenant: tenant,
+                        convId: convId,
+                        peer: peer
+                    )
+                } else {
+                    im.sendImages(prepared, to: peer)
+                    onSent()
+                }
             }
             if failed > 0 { im.showToast("\(failed) 张图片处理不了，换一张试试") }
+        }
+    }
+
+    private func approveLargeImageBatch() {
+        guard let batch = largeImageBatch else { return }
+        largeImageBatch = nil
+        // Dialog 可能跨过导航或切租户；产生上传副作用前再次核对原租约。
+        guard im.tenant == batch.tenant, convId == batch.convId, peer == batch.peer else {
+            removeLargeImageBatchFiles(batch)
+            return
+        }
+        im.sendImages(batch.images, to: batch.peer)
+        onSent()
+    }
+
+    private func cancelLargeImageBatch() {
+        guard let batch = largeImageBatch else { return }
+        largeImageBatch = nil
+        removeLargeImageBatchFiles(batch)
+    }
+
+    private func removeLargeImageBatchFiles(_ batch: ImLargeImageBatch) {
+        guard let dir = ImCache.outboxDir(tenant: batch.tenant) else { return }
+        for image in batch.images {
+            ImPickTemp.remove([
+                dir.appendingPathComponent(image.file),
+                dir.appendingPathComponent(image.thumbFile),
+            ])
         }
     }
 }

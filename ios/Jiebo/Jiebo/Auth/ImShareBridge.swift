@@ -373,6 +373,9 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         config.sharedContainerIdentifier = ImShareBridge.appGroup
         config.sessionSendsLaunchEvents = true
         config.waitsForConnectivity = true
+        // 用户点“发送”的首轮允许蜂窝/低数据路径；大媒体失败后的自动重试另行收紧。
+        config.allowsExpensiveNetworkAccess = true
+        config.allowsConstrainedNetworkAccess = true
         config.httpMaximumConnectionsPerHost = 1
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
@@ -567,6 +570,11 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         request.setValue(candidate.mime, forHTTPHeaderField: "Content-Type")
         if let message = candidate.message {
             request.setValue(message, forHTTPHeaderField: candidate.metadataHeader ?? "X-Jiebo-IM")
+        }
+        let bodyBytes = (try? body.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        if candidate.attempts > 0, bodyBytes > 5 * 1024 * 1024 {
+            // 首轮是用户主动分享；大媒体重试不在 Low Data Mode 下反复唤醒后台会话。
+            request.allowsConstrainedNetworkAccess = false
         }
         let attemptToken = UUID().uuidString.lowercased()
         let started = (try? withJobsLock { () -> Bool in

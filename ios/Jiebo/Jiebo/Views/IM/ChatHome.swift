@@ -689,7 +689,9 @@ struct WorkspaceAgentAvatar: View {
             }
             let pixel = Int(size * displayScale)
             let url = GatewayConfig.imMediaURL(scope: "workspace-avatars", blob: blob, ticket: ticket)
-            image = await ImImageCache.shared.image(blob: blob, tenant: im.tenant, remote: url, maxPixel: pixel)
+            image = await ImImageCache.shared.image(
+                blob: blob, tenant: im.tenant, remote: url, maxPixel: pixel, kind: .avatar
+            )
         }
         .accessibilityHidden(true)
     }
@@ -817,7 +819,9 @@ struct ImAvatar: View {
             image = hit
             return
         }
-        image = await ImImageCache.shared.image(blob: blob, tenant: im.tenant, remote: im.avatarURL(blob), maxPixel: pixel)
+        image = await ImImageCache.shared.image(
+            blob: blob, tenant: im.tenant, remote: im.avatarURL(blob), maxPixel: pixel, kind: .avatar
+        )
     }
 }
 

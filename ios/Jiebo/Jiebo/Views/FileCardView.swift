@@ -335,6 +335,7 @@ struct TurnFileLargeCard: View {
         let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
         let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
         Button {
+            ThumbnailStore.shared.loadOnce(file: file, chatId: chatId, store: store)
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
             sceneSession?.presentPreview(from: store)
@@ -385,6 +386,7 @@ struct TurnFileTile: View {
         let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
         let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
         Button {
+            ThumbnailStore.shared.loadOnce(file: file, chatId: chatId, store: store)
             beforeOpen?()
             store.openTurnFile(file, chatId: chatId)
             sceneSession?.presentPreview(from: store)
@@ -422,7 +424,9 @@ struct TurnFileTile: View {
 private enum TurnFileSpoken {
     static func value(file: TurnFile, state: TurnFileState, thumb: ThumbState) -> String {
         let base = state.label ?? TurnFileStyle.caption(file)
-        return thumb == .loading ? "\(base)，正在生成预览" : base
+        if thumb == .loading { return "\(base)，正在生成预览" }
+        if thumb == .delayed { return "\(base)，已暂停自动加载，点按加载" }
+        return base
     }
 }
 
@@ -491,6 +495,8 @@ private struct TurnFileThumbnail: View {
             case .loading:
                 placeholder(note: nil)
                 ThumbSkeleton()
+            case .delayed:
+                placeholder(note: "点按加载")
             case .failed:
                 placeholder(note: "暂时无法生成预览")
             case .none:
