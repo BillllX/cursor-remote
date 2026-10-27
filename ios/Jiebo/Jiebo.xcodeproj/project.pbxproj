@@ -102,6 +102,7 @@
 		A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */; };
 		A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */; };
 		A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */; };
+		ICON000201 /* AppIconPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = ICON000101 /* AppIconPicker.swift */; };
 		A1B2C3D4E5F6071829000841 /* ChatRowActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */; };
 		A1B2C3D4E5F6071829000842 /* ComposerView+Strips.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */; };
 		A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */; };
@@ -300,6 +301,7 @@
 		A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantEntryRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkStatusDot.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeSettingsSheet.swift; sourceTree = "<group>"; };
+		ICON000101 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatRowActions.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Strips.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Voice.swift"; sourceTree = "<group>"; };
@@ -547,6 +549,7 @@
 				A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */,
 				A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */,
 				A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */,
+				ICON000101 /* AppIconPicker.swift */,
 				A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */,
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
 				A1B2C3D4E5F6071829000727 /* ThreadView+Header.swift */,
@@ -911,6 +914,7 @@
 				A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */,
 				A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */,
 				A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */,
+				ICON000201 /* AppIconPicker.swift in Sources */,
 				A1B2C3D4E5F6071829000841 /* ChatRowActions.swift in Sources */,
 				A1B2C3D4E5F6071829000313 /* ThreadView.swift in Sources */,
 				A1B2C3D4E5F6071829000827 /* ThreadView+Header.swift in Sources */,
@@ -1101,8 +1105,10 @@
 		A1B2C3D4E5F6071829000022 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconPorcelain AppIconPlush AppIconEnamel AppIconJelly AppIconWood AppIconInk AppIconHelmet";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Jiebo/Jiebo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -1146,8 +1152,10 @@
 		A1B2C3D4E5F6071829000023 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIconPorcelain AppIconPlush AppIconEnamel AppIconJelly AppIconWood AppIconInk AppIconHelmet";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_ENTITLEMENTS = Jiebo/Jiebo.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

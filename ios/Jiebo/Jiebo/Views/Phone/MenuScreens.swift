@@ -214,6 +214,7 @@ struct PhoneSettingsScreen: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @State private var themeOpen = false
+    @State private var iconChoice = AppIconChoice.current
     @State private var adminStatsOpen = false
     @State private var notifyStatus: UNAuthorizationStatus?
     @State private var logoutConfirm = false
@@ -236,6 +237,18 @@ struct PhoneSettingsScreen: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .listRowBackground(JieboColor.white)
+
+                NavigationLink {
+                    AppIconPickerScreen(selection: $iconChoice)
+                } label: {
+                    settingsRow(
+                        symbol: "app",
+                        title: "主屏幕图标 · \(iconChoice.title)",
+                        trailing: nil,
+                        chevron: false
+                    )
+                }
                 .listRowBackground(JieboColor.white)
             } header: {
                 Text("外观")
@@ -341,6 +354,7 @@ struct PhoneSettingsScreen: View {
         } message: {
             Text("退出后需要重新输入访问码才能连回来。")
         }
+        .onAppear { iconChoice = AppIconChoice.current }
         .task { await refreshNotifyStatus() }
         .onChange(of: scenePhase) { _, phase in
             // 从系统设置回来时刷新
