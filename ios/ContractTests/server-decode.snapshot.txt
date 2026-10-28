@@ -410,6 +410,7 @@
   from: 100
   hasMore: true
   nonce: 3
+  chatRev: 44
 )
 
 ## server[40] auth #1

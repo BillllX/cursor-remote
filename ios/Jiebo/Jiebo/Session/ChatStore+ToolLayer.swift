@@ -283,7 +283,7 @@ extension ChatStore {
             do {
                 var request = URLRequest(url: url)
                 request.timeoutInterval = 60
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let (data, response) = try await AppTrafficHTTP.data(for: request, category: "工具文件下载")
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 guard (200 ..< 300).contains(code), let text = String(data: data, encoding: .utf8) else {
                     throw PreviewError.http(code)

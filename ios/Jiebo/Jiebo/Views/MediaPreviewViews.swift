@@ -1,10 +1,51 @@
 import AVKit
+import CryptoKit
 import PDFKit
 import SwiftUI
 import WebKit
 
 // P5c 富媒体预览：图片（含 diff 双图对照）/ SVG / HTML 沙箱 / PDF / 音频 / 视频。
 // 全部经 /media 票据 URL 加载（file_content 的 url 字段已带 exp/sig 查询）。
+
+/// 远程预览统一先计量下载到磁盘；同一票据 URL 的并发请求共用一个 task，播放器/WebView 只读本地文件。
+private actor PreviewMediaCache {
+    static let shared = PreviewMediaCache()
+    private var inflight: [String: Task<URL, Error>] = [:]
+
+    func file(for url: URL, category: String) async throws -> URL {
+        let key = SHA256.hash(data: Data(url.absoluteString.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("jiebo-measured-media", isDirectory: true)
+        let target = directory.appendingPathComponent(key)
+        if FileManager.default.fileExists(atPath: target.path) { return target }
+        if let task = inflight[key] { return try await task.value }
+
+        let task = Task<URL, Error> {
+            let (temporary, response) = try await AppTrafficHTTP.download(from: url, category: category)
+            guard (response as? HTTPURLResponse).map({ (200 ..< 300).contains($0.statusCode) }) != false else {
+                try? FileManager.default.removeItem(at: temporary)
+                throw URLError(.badServerResponse)
+            }
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: target.path) {
+                try? FileManager.default.removeItem(at: temporary)
+                return target
+            }
+            try FileManager.default.moveItem(at: temporary, to: target)
+            return target
+        }
+        inflight[key] = task
+        defer { inflight[key] = nil }
+        return try await task.value
+    }
+
+    func data(for url: URL, category: String) async throws -> Data {
+        let local = try await file(for: url, category: category)
+        return try Data(contentsOf: local, options: .mappedIfSafe)
+    }
+}
 
 // MARK: - 图片（单图 / diff 双图对照）
 
@@ -133,12 +174,12 @@ private struct SingleImageView: View {
         }
         .background(JieboColor.paper)
         .task(id: url) {
-            // 预取原始像素尺寸（AsyncImage 拿不到）；URLSession 缓存让二次请求走本地。
+            // 预取原始像素尺寸；RemoteImage 与这里共用计量磁盘缓存，不会二次下载。
             // url 变了必须重取（不设 natural==nil 守卫），否则下一张图沿用旧尺寸基准
             natural = nil
             naturalFailed = false
             guard let url else { naturalFailed = true; return }
-            if let (data, _) = try? await URLSession.shared.data(from: url),
+            if let data = try? await PreviewMediaCache.shared.data(for: url, category: "图片预览下载"),
                let image = UIImage(data: data)
             {
                 guard !Task.isCancelled else { return }
@@ -201,50 +242,58 @@ private struct SingleImageView: View {
 struct RemoteImage: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
+    @State private var image: UIImage?
+    @State private var failed = false
 
     var body: some View {
-        if let url {
-            AsyncImage(url: url, transaction: Transaction(animation: JieboMotion.standard(reduceMotion))) { phase in
-                switch phase {
-                case .empty:
-                    ProgressView().controlSize(.regular).tint(JieboColor.dim)
-                        .frame(maxWidth: .infinity, minHeight: 120)
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                        .transition(.opacity)
-                case .failure:
-                    Label("图片加载失败", systemImage: "exclamationmark.triangle")
-                        .font(JieboFont.ui(12))
-                        .foregroundStyle(JieboColor.danger)
-                        .frame(maxWidth: .infinity, minHeight: 120)
-                @unknown default:
-                    EmptyView()
-                }
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .transition(.opacity)
+            } else if failed {
+                Label("图片加载失败", systemImage: "exclamationmark.triangle")
+                    .font(JieboFont.ui(12))
+                    .foregroundStyle(JieboColor.danger)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else if url != nil {
+                ProgressView().controlSize(.regular).tint(JieboColor.dim)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+            } else {
+                Text("缺少媒体地址")
+                    .font(JieboFont.ui(12))
+                    .foregroundStyle(JieboColor.dim)
             }
-        } else {
-            Text("缺少媒体地址")
-                .font(JieboFont.ui(12))
-                .foregroundStyle(JieboColor.dim)
+        }
+        .animation(JieboMotion.standard(reduceMotion), value: image != nil)
+        .task(id: url) {
+            image = nil
+            failed = false
+            guard let url else { return }
+            do {
+                let data = try await PreviewMediaCache.shared.data(for: url, category: "图片预览下载")
+                try Task.checkCancellation()
+                guard let loaded = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
+                image = loaded
+            } catch is CancellationError {
+                return
+            } catch {
+                failed = true
+            }
         }
     }
 }
 
 // MARK: - SVG（WKWebView 渲染；diff 双图对照）
 
-/// SwiftUI Image/AsyncImage 不支持 SVG；但 WKWebView 直接加载票据 URL 会让 SVG 内嵌 script
-/// 以 gateway origin 执行（网页用 <img> 渲染就是为了不执行脚本）——所以包一层 <img> HTML：
-/// <img> 语境下 SVG 脚本不运行，与网页对齐。diff 时上下双视图对照。
+/// SwiftUI Image 不支持 SVG；先计量下载，再用 data URL 放入 <img>，WKWebView 不再二次访问远端。
 struct SVGFileView: View {
     let url: URL?
     let headUrl: URL?
     let diff: Bool
     /// 头部元信息（mime · size，对齐网页 figcaption）
     var caption: String? = nil
-    /// 渲染进程崩溃/加载失败的自愈计数：换 key 触发重载（SVG 无错误占位，白屏不如重试）
-    @State private var reloadNonce = 0
-
     var body: some View {
         if diff, let headUrl {
             VStack(spacing: 0) {
@@ -262,9 +311,7 @@ struct SVGFileView: View {
             .background(JieboColor.paper)
         } else {
             VStack(spacing: 0) {
-                SandboxWebView(html: Self.imgDocument(url, nonce: reloadNonce), onFail: { _ in
-                    if reloadNonce < 3 { reloadNonce += 1 } // 持续失败（如网关断）不无限重试
-                })
+                MeasuredSVGImage(url: url)
                 if let caption {
                     Text(caption)
                         .font(JieboFont.ui(11))
@@ -284,18 +331,55 @@ struct SVGFileView: View {
                 .foregroundStyle(tint)
                 .padding(.leading, 14)
                 .padding(.top, 10)
-            SandboxWebView(html: Self.imgDocument(url, nonce: reloadNonce), onFail: { _ in
-                if reloadNonce < 3 { reloadNonce += 1 }
-            })
+            MeasuredSVGImage(url: url)
+        }
+    }
+}
+
+private struct MeasuredSVGImage: View {
+    let url: URL?
+    @State private var html: String?
+    @State private var failed = false
+    @State private var renderRetry = 0
+
+    var body: some View {
+        Group {
+            if failed {
+                Label("SVG 加载失败", systemImage: "exclamationmark.triangle")
+                    .font(JieboFont.ui(12))
+                    .foregroundStyle(JieboColor.danger)
+            } else if let html {
+                SandboxWebView(
+                    html: renderRetry == 0 ? html : html + "<!-- retry \(renderRetry) -->",
+                    onFail: { _ in
+                        if renderRetry < 3 { renderRetry += 1 } else { failed = true }
+                    }
+                )
+            } else {
+                ProgressView().controlSize(.regular).tint(JieboColor.dim)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: url) {
+            html = nil
+            failed = false
+            renderRetry = 0
+            guard let url else { failed = true; return }
+            do {
+                let data = try await PreviewMediaCache.shared.data(for: url, category: "SVG 预览下载")
+                try Task.checkCancellation()
+                html = Self.imgDocument(data)
+            } catch is CancellationError {
+                return
+            } catch {
+                failed = true
+            }
         }
     }
 
-    /// 居中自适应的 <img> 包装页（src 是绝对票据 URL，不执行 SVG 内嵌脚本）
-    private static func imgDocument(_ url: URL?, nonce: Int = 0) -> String {
-        guard let url else { return "<!doctype html><html><body></body></html>" }
-        let src = url.absoluteString
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+    /// data URL 只来自本地已下载字节；SVG 脚本处于 img 语境，不会执行。
+    private static func imgDocument(_ data: Data) -> String {
+        let src = "data:image/svg+xml;base64,\(data.base64EncodedString())"
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -303,7 +387,7 @@ struct SVGFileView: View {
         @media (prefers-color-scheme: dark){html,body{background:#141512}}
         body{display:flex;align-items:center;justify-content:center}
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
-        <body><img src="\(src)"></body><!-- \(nonce) --></html>
+        <body><img src="\(src)"></body></html>
         """
     }
 }
@@ -541,35 +625,19 @@ private struct PDFContent: View {
             failed = false
             let result = await Self.load(url: url)
             guard !Task.isCancelled else { return }
-            // 换掉旧临时文件
-            if let old = tempFile { try? FileManager.default.removeItem(at: old) }
             tempFile = result?.1
             document = result?.0
             failed = result == nil
         }
-        .onDisappear {
-            if let tempFile { try? FileManager.default.removeItem(at: tempFile) }
-        }
     }
 
-    /// 下载到 caches 再交给 PDFDocument（memory-map，不整包进内存）；超 32MB 拒载
+    /// 复用统一计量缓存并交给 PDFDocument（memory-map，不整包进内存）；超 32MB 拒载。
     private static func load(url: URL) async -> (PDFDocument, URL)? {
         do {
-            let (temp, _) = try await URLSession.shared.download(from: url)
-            let size = (try? FileManager.default.attributesOfItem(atPath: temp.path)[.size] as? NSNumber)?.int64Value ?? 0
-            guard size > 0, size <= 32 * 1024 * 1024 else {
-                try? FileManager.default.removeItem(at: temp)
-                return nil
-            }
-            let dest = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("jiebo-pdf-\(UUID().uuidString).pdf")
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: temp, to: dest)
-            guard let doc = PDFDocument(url: dest) else {
-                try? FileManager.default.removeItem(at: dest)
-                return nil
-            }
-            return (doc, dest)
+            let local = try await PreviewMediaCache.shared.file(for: url, category: "PDF 预览下载")
+            let size = (try? local.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard size > 0, size <= 32 * 1024 * 1024, let doc = PDFDocument(url: local) else { return nil }
+            return (doc, local)
         } catch {
             return nil
         }
@@ -604,7 +672,7 @@ struct AudioFileView: View {
             Image(systemName: "waveform")
                 .font(.system(size: 34))
                 .foregroundStyle(JieboColor.dim)
-            AudioPlayerRepresentable(url: url)
+            MeasuredMediaPlayer(remoteURL: url, category: "音频预览下载")
                 .frame(height: 120)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, 24)
@@ -619,22 +687,51 @@ struct AudioFileView: View {
     }
 }
 
-private struct AudioPlayerRepresentable: UIViewControllerRepresentable {
-    let url: URL?
+/// 音视频先复用计量磁盘缓存再交给 AVPlayer，避免 AVFoundation 自行联网而拿不到 task metrics。
+private struct MeasuredMediaPlayer: View {
+    let remoteURL: URL?
+    let category: String
+    @State private var localURL: URL?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let localURL {
+                LocalMediaPlayer(url: localURL)
+            } else if failed {
+                Label("媒体加载失败", systemImage: "exclamationmark.triangle")
+                    .font(JieboFont.ui(12))
+                    .foregroundStyle(JieboColor.danger)
+            } else {
+                ProgressView().controlSize(.regular).tint(JieboColor.dim)
+            }
+        }
+        .task(id: remoteURL) {
+            localURL = nil
+            failed = false
+            guard let remoteURL else { failed = true; return }
+            do {
+                localURL = try await PreviewMediaCache.shared.file(for: remoteURL, category: category)
+            } catch is CancellationError {
+                return
+            } catch {
+                failed = true
+            }
+        }
+    }
+}
+
+private struct LocalMediaPlayer: UIViewControllerRepresentable {
+    let url: URL
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.videoGravity = .resizeAspect
-        if let url { controller.player = AVPlayer(url: url) }
+        controller.player = AVPlayer(url: url)
         return controller
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        guard let url else {
-            controller.player?.pause()
-            controller.player = nil
-            return
-        }
         if (controller.player?.currentItem?.asset as? AVURLAsset)?.url != url {
             controller.player = AVPlayer(url: url)
         }
@@ -649,28 +746,10 @@ private struct AudioPlayerRepresentable: UIViewControllerRepresentable {
 
 // MARK: - 视频
 
-struct VideoFileView: UIViewControllerRepresentable {
+struct VideoFileView: View {
     let url: URL?
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        if let url { controller.player = AVPlayer(url: url) }
-        return controller
-    }
-
-    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
-        guard let url else {
-            controller.player?.pause()
-            controller.player = nil
-            return
-        }
-        if (controller.player?.currentItem?.asset as? AVURLAsset)?.url != url {
-            controller.player = AVPlayer(url: url)
-        }
-    }
-
-    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: ()) {
-        controller.player?.pause()
-        controller.player = nil
+    var body: some View {
+        MeasuredMediaPlayer(remoteURL: url, category: "视频预览下载")
     }
 }

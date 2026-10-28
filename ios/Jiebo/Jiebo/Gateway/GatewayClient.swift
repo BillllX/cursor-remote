@@ -81,7 +81,6 @@ final class GatewayClient {
     }
 
     var isOpen: Bool { didAnnounceOpen && task?.state == .running }
-    var trafficSnapshot: GatewayTrafficAccumulator { trafficMeter.snapshot() }
 
     /// 回到前台或请求迟迟没回包时调用：断着就立刻重连，不等退避计时；
     /// 看起来连着就发一个 ping，probeWait 内没有任何回音再重连
@@ -256,8 +255,14 @@ final class GatewayClient {
         }
         pathObserver.start()
         #else
-        networkCost = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: false)
+        networkCost = GatewayNetworkCost(
+            reachable: true,
+            isExpensive: false,
+            isConstrained: false,
+            transport: .other
+        )
         MobileDataRuntime.networkCost = networkCost
+        AppTrafficMeter.shared.setTransport(.other)
         #endif
     }
 
@@ -265,6 +270,7 @@ final class GatewayClient {
         let transition = GatewayPathTransition.classify(from: networkCost, to: next)
         networkCost = next
         MobileDataRuntime.networkCost = next
+        AppTrafficMeter.shared.setTransport(next.transport)
         if transition == .backgroundTrafficRestored {
             // 费用变化不拆 WebSocket；先发布新属性，再恢复业务队列，避免回调看到旧闸门。
             onBackgroundTrafficRestored?()
@@ -314,9 +320,11 @@ final class GatewayClient {
 
     private func transmit(_ data: Data, on socket: URLSessionWebSocketTask) {
         guard let text = String(data: data, encoding: .utf8) else { return }
-        trafficMeter.record(direction: .outbound, data: data)
         socket.send(.string(text)) { [weak self] error in
-            if error != nil {
+            if error == nil {
+                // send completion 成功才代表 URLSession 已接收该帧，失败帧不计入上传。
+                self?.trafficMeter.record(direction: .outbound, data: data)
+            } else {
                 Task { @MainActor in
                     guard let self else { return }
                     // 旧 socket 的异步发送错误不该拆当前连接（重连后迟到的失败回调）

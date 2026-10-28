@@ -28,6 +28,57 @@ NODE
 node scripts/check-ios-navigation-contract.mjs
 node scripts/check-ios-widget-contract.mjs
 node --input-type=module <<'NODE'
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+const root = "ios/Jiebo/Jiebo";
+const policies = readFileSync(`${root}/Gateway/GatewayPolicies.swift`, "utf8");
+const settings = readFileSync(`${root}/Views/Phone/MenuScreens.swift`, "utf8");
+for (const needle of [
+  "usesInterfaceType(.wifi)",
+  "usesInterfaceType(.cellular)",
+  "usesInterfaceType(.wiredEthernet)",
+  "AppTrafficBucket",
+  "AppTrafficEpochPolicy.needsSwitch",
+  "bucket-",
+  "AppTrafficHTTP",
+  "guard pendingWrite == nil else { return }",
+  "task.countOfBytesSent",
+  "task.countOfBytesReceived",
+  "didFinishCollecting metrics",
+  "NSFileCoordinator",
+]) {
+  if (!policies.includes(needle)) throw new Error(`iOS 流量统计契约缺少 ${needle}`);
+}
+for (const needle of [
+  "移动数据",
+  "Wi‑Fi",
+  "有线与其他网络",
+  "清零统计",
+  "不含 TLS、IP、DNS、APNs",
+  ".onAppear { refreshSnapshot() }",
+  "Task.sleep(for: .seconds(2))",
+]) {
+  if (!settings.includes(needle)) throw new Error(`iOS 流量统计 UI 缺少 ${needle}`);
+}
+const swiftFiles = [];
+const walk = (dir) => {
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    if (statSync(path).isDirectory()) walk(path);
+    else if (name.endsWith(".swift")) swiftFiles.push(path);
+  }
+};
+walk(root);
+for (const path of swiftFiles) {
+  if (path.endsWith("GatewayPolicies.swift")) continue;
+  const source = readFileSync(path, "utf8");
+  if (/URLSession\.shared\.(data|download|upload)\s*\(/.test(source)) {
+    throw new Error(`URLSession payload 必须统一经 AppTrafficHTTP 计量：${path}`);
+  }
+}
+console.log("iOS App 流量统计源码契约：通过");
+NODE
+node --input-type=module <<'NODE'
 import { readFileSync } from "node:fs";
 const read = (path) => readFileSync(path, "utf8");
 const home = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");

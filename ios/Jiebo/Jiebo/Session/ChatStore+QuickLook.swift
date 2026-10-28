@@ -49,7 +49,7 @@ extension ChatStore {
         var request = URLRequest(url: GatewayConfig.mediaURL(path: path, chatId: chatId, rev: rev))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 60
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await AppTrafficHTTP.data(for: request, category: "工作台媒体下载")
         try Task.checkCancellation()
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(code) else { throw PreviewError.http(code) }

@@ -5,11 +5,29 @@ import UIKit
 import UniformTypeIdentifiers
 
 final class ShareViewController: UIViewController {
+    private var trafficLifecycleObservers: [NSObjectProtocol] = []
+
     override func viewDidLoad() {
         super.viewDidLoad()
+        // 分享扩展没有 UIApplicationDelegate；宿主退到后台或收起扩展时主动落盘，
+        // 避免系统随即冻结进程而丢掉固定节流窗口内的最后一批计数。
+        for name in [
+            "NSExtensionHostWillResignActiveNotification",
+            "NSExtensionHostDidEnterBackgroundNotification",
+        ] {
+            trafficLifecycleObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: Notification.Name(name),
+                    object: nil,
+                    queue: nil
+                ) { _ in AppTrafficMeter.shared.flush() }
+            )
+        }
         let root = ShareRoot(items: extensionContext?.inputItems as? [NSExtensionItem] ?? []) { [weak self] in
+            AppTrafficMeter.shared.flush()
             self?.extensionContext?.completeRequest(returningItems: nil)
         } cancel: { [weak self] in
+            AppTrafficMeter.shared.flush()
             self?.extensionContext?.cancelRequest(withError: CocoaError(.userCancelled))
         }
         let host = UIHostingController(rootView: root)
@@ -23,6 +41,17 @@ final class ShareViewController: UIViewController {
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         host.didMove(toParent: self)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        AppTrafficMeter.shared.flush()
+        super.viewWillDisappear(animated)
+    }
+
+    deinit {
+        for observer in trafficLifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }
 

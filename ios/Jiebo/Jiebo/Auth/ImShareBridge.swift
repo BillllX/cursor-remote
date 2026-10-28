@@ -90,6 +90,8 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         var lastError: String?
         var runningAt: Double?
         var taskToken: String?
+        /// enqueue 时固化承载网络；后台任务结束时进程当前网络可能早已变化。
+        var trafficTransport: GatewayNetworkTransport?
         /// 被限流（429）后不早于这个时间再发；用 task.earliestBeginDate 交给系统等，不需要进程常驻。
         var notBefore: Double?
     }
@@ -97,6 +99,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
     private struct TaskIdentity {
         var id: String
         var token: String?
+        var transport: GatewayNetworkTransport?
     }
 
     private struct StartingClaim: Codable {
@@ -348,7 +351,8 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             id: id, order: Double(order), sessionIdentifier: sessionIdentifier,
             tenant: tenant, clientId: clientId, mode: mode, endpoint: endpoint,
             uploadKind: uploadKind, mime: mime, message: message, metadataHeader: metadataHeader, bodyFile: relative,
-            state: .queued, attempts: 0, lastError: nil, runningAt: nil, taskToken: nil
+            state: .queued, attempts: 0, lastError: nil, runningAt: nil, taskToken: nil,
+            trafficTransport: AppTrafficMeter.shared.currentTransport()
         )
         do {
             try withJobsLock {
@@ -586,7 +590,8 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             if let notBefore = job.notBefore, notBefore > Date().timeIntervalSince1970 {
                 task.earliestBeginDate = Date(timeIntervalSince1970: notBefore)
             }
-            task.taskDescription = "\(candidate.id)|\(attemptToken)"
+            let taskTransport = job.trafficTransport ?? AppTrafficMeter.shared.currentTransport()
+            task.taskDescription = "\(candidate.id)|\(attemptToken)|\(taskTransport.rawValue)"
             task.resume()
             job.state = .running
             job.attempts += 1
@@ -620,6 +625,29 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
             reconcile(identifier)
             return
         }
+        // 后台 session 可能在扩展退出后由系统继续发送；task 计数按每次实际尝试累计，不按业务成功与否漏记。
+        let trafficContext: (String, GatewayNetworkTransport?) = {
+            let job = try? withJobsLock { try readJobLocked(identity.id) }
+            guard let job else { return ("分享扩展上传", identity.transport) }
+            let category = job.mode == .json
+                ? "分享扩展消息上传"
+                : "分享扩展 \(job.uploadKind ?? "附件")上传"
+            return (category, job.trafficTransport ?? identity.transport)
+        }()
+        AppTrafficMeter.shared.record(
+            direction: .outbound,
+            bytes: Int(clamping: task.countOfBytesSent),
+            category: trafficContext.0,
+            transport: trafficContext.1
+        )
+        AppTrafficMeter.shared.record(
+            direction: .inbound,
+            bytes: Int(clamping: task.countOfBytesReceived),
+            category: trafficContext.0,
+            transport: trafficContext.1
+        )
+        // 后台回调之后系统可立刻挂起扩展/主 App，不能只等待固定窗口。
+        AppTrafficMeter.shared.flush()
         let status = (task.response as? HTTPURLResponse)?.statusCode
         session.getAllTasks { [weak self] tasks in
             guard let self else { return }
@@ -650,6 +678,7 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        AppTrafficMeter.shared.flush()
         guard let identifier = session.configuration.identifier,
               let state = sessionState(identifier: identifier, create: false)
         else { return }
@@ -791,10 +820,11 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
 
     private func taskIdentity(_ description: String?) -> TaskIdentity? {
         guard let description, !description.isEmpty else { return nil }
-        let parts = description.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let parts = description.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false)
         return TaskIdentity(
             id: String(parts[0]),
-            token: parts.count == 2 && !parts[1].isEmpty ? String(parts[1]) : nil
+            token: parts.count >= 2 && !parts[1].isEmpty ? String(parts[1]) : nil,
+            transport: parts.count >= 3 ? GatewayNetworkTransport(rawValue: String(parts[2])) : nil
         )
     }
 

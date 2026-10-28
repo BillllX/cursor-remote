@@ -54,7 +54,11 @@ enum Uploader {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.upload(for: request, fromFile: file)
+            (data, response) = try await AppTrafficHTTP.upload(
+                for: request,
+                fromFile: file,
+                category: "工作台文件上传"
+            )
         } catch {
             throw UploadError.http(-1, error.localizedDescription)
         }

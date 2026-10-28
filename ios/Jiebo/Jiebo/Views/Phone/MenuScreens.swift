@@ -265,6 +265,18 @@ struct PhoneSettingsScreen: View {
                 }
                 .pickerStyle(.segmented)
                 .listRowBackground(JieboColor.white)
+
+                NavigationLink {
+                    TrafficStatsScreen()
+                } label: {
+                    settingsRow(
+                        symbol: "chart.bar.xaxis",
+                        title: "网络流量统计",
+                        trailing: nil,
+                        chevron: false
+                    )
+                }
+                .listRowBackground(JieboColor.white)
             } header: {
                 Text("移动数据")
             } footer: {
@@ -492,6 +504,122 @@ struct PhoneSettingsScreen: View {
         } else if let url = URL(string: UIApplication.openSettingsURLString) {
             openURL(url)
         }
+    }
+}
+
+struct TrafficStatsScreen: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var snapshot = AppTrafficMeter.shared.snapshot()
+    @State private var resetConfirm = false
+
+    var body: some View {
+        List {
+            trafficSection(
+                title: "移动数据",
+                transport: .cellular,
+                symbol: "antenna.radiowaves.left.and.right"
+            )
+            trafficSection(title: "Wi‑Fi", transport: .wifi, symbol: "wifi")
+
+            Section {
+                valueRow("有线与其他网络", value: AppTrafficFormat.bytes(snapshot.otherTotal))
+            } header: {
+                Text("其他网络")
+            }
+
+            let top = snapshot.topCategories(limit: 8)
+            if !top.isEmpty {
+                Section {
+                    ForEach(Array(top.enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.key.category)
+                                    .font(JieboFont.text(.subheadline))
+                                    .foregroundStyle(JieboColor.ink)
+                                Text("\(item.key.transport.title) · \(item.key.direction == .inbound ? "下载" : "上传") · \(item.count.messages) 次")
+                                    .font(JieboFont.text(.caption))
+                                    .foregroundStyle(JieboColor.dim)
+                            }
+                            Spacer()
+                            Text(AppTrafficFormat.bytes(item.count.bytes))
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                    }
+                } header: {
+                    Text("流量分类")
+                }
+            }
+
+            Section {
+                valueRow("开始统计", value: snapshot.startedAt.formatted(date: .abbreviated, time: .shortened))
+                Button("清零统计", role: .destructive) {
+                    resetConfirm = true
+                }
+            } footer: {
+                Text("这里只统计接驳 App 收发的应用载荷，不含 TLS、IP、DNS、APNs 等系统流量，也不等同于运营商账单。音视频预览会先计量下载到本地再播放；系统缓存命中不计。只保存类别、方向、字节与次数。")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
+        .navigationTitle("网络流量")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { refreshSnapshot() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshSnapshot() }
+        }
+        .task {
+            // 分享扩展写入不会发进程内通知，页面可见时每两秒重读 App Group。
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                refreshSnapshot()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AppTrafficMeter.changedNotification)) { _ in
+            refreshSnapshot()
+        }
+        .confirmationDialog("清零网络流量统计？", isPresented: $resetConfirm, titleVisibility: .visible) {
+            Button("清零", role: .destructive) {
+                AppTrafficMeter.shared.reset()
+                snapshot = AppTrafficMeter.shared.snapshot()
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("下载、上传、分类计数和统计起始时间都会重新开始。")
+        }
+    }
+
+    private func refreshSnapshot() {
+        snapshot = AppTrafficMeter.shared.snapshot()
+    }
+
+    @ViewBuilder
+    private func trafficSection(
+        title: String,
+        transport: GatewayNetworkTransport,
+        symbol: String
+    ) -> some View {
+        Section {
+            valueRow("下载", value: AppTrafficFormat.bytes(snapshot.bytes(transport, .inbound)))
+            valueRow("上传", value: AppTrafficFormat.bytes(snapshot.bytes(transport, .outbound)))
+            valueRow("合计", value: AppTrafficFormat.bytes(snapshot.total(transport)))
+        } header: {
+            Label(title, systemImage: symbol)
+        }
+    }
+
+    private func valueRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+                .foregroundStyle(JieboColor.ink)
+            Spacer()
+            Text(value)
+                .foregroundStyle(JieboColor.dim)
+                .monospacedDigit()
+        }
+        .font(JieboFont.text(.subheadline))
     }
 }
 

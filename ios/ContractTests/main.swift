@@ -2021,6 +2021,32 @@ func checkTrafficOptimizationPolicies() -> [String] {
     let wifi = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: false)
     let cellular = GatewayNetworkCost(reachable: true, isExpensive: true, isConstrained: false)
     let lowData = GatewayNetworkCost(reachable: true, isExpensive: false, isConstrained: true)
+    let hotspot = GatewayNetworkCost(
+        reachable: true,
+        isExpensive: true,
+        isConstrained: false,
+        transport: .wifi
+    )
+    if GatewayNetworkTransport.classify(
+        reachable: true, usesWiFi: true, usesCellular: false, usesWired: false
+    ) != .wifi
+        || GatewayNetworkTransport.classify(
+            reachable: true, usesWiFi: false, usesCellular: true, usesWired: false
+        ) != .cellular
+        || GatewayNetworkTransport.classify(
+            reachable: true, usesWiFi: false, usesCellular: false, usesWired: true
+        ) != .wired
+        || GatewayNetworkTransport.classify(
+            reachable: true, usesWiFi: false, usesCellular: false, usesWired: false
+        ) != .other
+        || GatewayNetworkTransport.classify(
+            reachable: false, usesWiFi: true, usesCellular: false, usesWired: false
+        ) != .unavailable
+        || hotspot.transport != .wifi
+        || !hotspot.shouldReduceBackgroundTraffic
+    {
+        problems.append("流量统计：transport 分类不得用 isExpensive 冒充蜂窝网络")
+    }
     if !MobileMediaPolicy.allowsAutomaticDownload(
         mode: .dataSaver, cost: wifi, kind: .imBodyImage
     ) || MobileMediaPolicy.allowsAutomaticDownload(
@@ -2110,6 +2136,55 @@ func checkTrafficOptimizationPolicies() -> [String] {
         != GatewayTrafficCount(bytes: inbound.count, messages: 1)
     {
         problems.append("流量 P0：WS 类型字节/次数累计不符")
+    }
+
+    let epoch = "epoch-a"
+    let wifiDown = AppTrafficKey(transport: .wifi, direction: .inbound, category: "会话状态下载")
+    let cellUp = AppTrafficKey(transport: .cellular, direction: .outbound, category: "IM image 上传")
+    let bucketA = AppTrafficBucket(
+        epoch: epoch,
+        owner: "app",
+        updatedAt: now,
+        counts: [wifiDown: GatewayTrafficCount(bytes: 1_500, messages: 2)]
+    )
+    let bucketB = AppTrafficBucket(
+        epoch: epoch,
+        owner: "share",
+        updatedAt: now,
+        counts: [
+            wifiDown: GatewayTrafficCount(bytes: 500, messages: 1),
+            cellUp: GatewayTrafficCount(bytes: 3_000, messages: 1),
+        ]
+    )
+    let appTraffic = AppTrafficSnapshot.merge(startedAt: now, buckets: [bucketA, bucketB])
+    if appTraffic.bytes(.wifi, .inbound) != 2_000
+        || appTraffic.bytes(.cellular, .outbound) != 3_000
+        || appTraffic.topCategories(limit: 1).first?.key != cellUp
+    {
+        problems.append("流量统计：跨进程分桶累加或 Top-N 不符")
+    }
+    if let encoded = try? JSONEncoder().encode(bucketB),
+       let restored = try? JSONDecoder().decode(AppTrafficBucket.self, from: encoded) {
+        if restored != bucketB {
+            problems.append("流量统计：持久化序列化恢复不符")
+        }
+    } else {
+        problems.append("流量统计：持久化序列化失败")
+    }
+    let resetSnapshot = AppTrafficSnapshot.merge(startedAt: now, epoch: "epoch-b", buckets: [bucketA, bucketB])
+    if resetSnapshot.total(.wifi) != 0 || !resetSnapshot.categories.isEmpty {
+        problems.append("流量统计：重置后的新 epoch 不为空")
+    }
+    if AppTrafficEpochPolicy.needsSwitch(current: "epoch-a", persisted: "epoch-a")
+        || !AppTrafficEpochPolicy.needsSwitch(current: "epoch-a", persisted: "epoch-b")
+    {
+        problems.append("流量统计：存活进程未按持久化 epoch 切换")
+    }
+    if AppTrafficFormat.bytes(0) != "0 B"
+        || AppTrafficFormat.bytes(1024) != "1.00 KB"
+        || AppTrafficFormat.bytes(10 * 1024 * 1024) != "10.0 MB"
+    {
+        problems.append("流量统计：人类可读字节格式不符")
     }
     print("iOS 流量 P0 纯策略：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
     return problems

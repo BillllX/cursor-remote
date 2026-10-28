@@ -150,6 +150,7 @@
 		A1B2C3D4E5F6071829000D30 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A10 /* ShareViewController.swift */; };
 		A1B2C3D4E5F6071829000D31 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000107 /* KeychainStore.swift */; };
 		A1B2C3D4E5F6071829000D32 /* ImShareBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A0E /* ImShareBridge.swift */; };
+		A1B2C3D4E5F6071829000D33 /* GatewayPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = NETP00101 /* GatewayPolicies.swift */; };
 		P6000201 /* AssistantCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000101 /* AssistantCaptureBridge.swift */; };
 		P6000202 /* AssistantCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000101 /* AssistantCaptureBridge.swift */; };
 		P6000203 /* JieboAppIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = P6000102 /* JieboAppIntents.swift */; };
@@ -968,6 +969,7 @@
 				A1B2C3D4E5F6071829000D30 /* ShareViewController.swift in Sources */,
 				A1B2C3D4E5F6071829000D31 /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F6071829000D32 /* ImShareBridge.swift in Sources */,
+				A1B2C3D4E5F6071829000D33 /* GatewayPolicies.swift in Sources */,
 				P6000202 /* AssistantCaptureBridge.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

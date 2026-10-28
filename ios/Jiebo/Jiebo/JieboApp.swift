@@ -66,6 +66,9 @@ private struct JieboSceneRoot: View {
         let change = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
         im.setAppActive(change.anyActive)
         WidgetSnapshotBridge.shared.refresh(from: store)
+        if phase == .background {
+            AppTrafficMeter.shared.flush()
+        }
         guard change.becameActive else { return }
         store.appBecameActive()
         // 普通回前台只重读本机权限；登录解锁的 onChange 仍会强制上报。

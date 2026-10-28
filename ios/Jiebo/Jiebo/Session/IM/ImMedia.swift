@@ -57,7 +57,12 @@ struct ImHTTPUploader: ImBlobUploader {
 
         let (data, response): (Data, URLResponse)
         do {
-            (data, response) = try await URLSession.shared.upload(for: request, fromFile: file, delegate: ImUploadProgress(progress))
+            (data, response) = try await AppTrafficHTTP.upload(
+                for: request,
+                fromFile: file,
+                category: "IM \(kind) 上传",
+                delegate: ImUploadProgress(progress)
+            )
         } catch {
             throw ImMediaError.http(-1, error.localizedDescription)
         }
@@ -178,7 +183,7 @@ final class ImImageCache {
 
     private nonisolated static func download(_ remote: URL, to file: URL) async -> Bool {
         do {
-            let (temp, response) = try await URLSession.shared.download(from: remote)
+            let (temp, response) = try await AppTrafficHTTP.download(from: remote, category: "IM 图片下载")
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 try? FileManager.default.removeItem(at: temp)
                 return false
@@ -481,7 +486,7 @@ enum ImAttachmentCache {
         ) else { return nil }
         guard let remote else { return nil }
         do {
-            let (temp, response) = try await URLSession.shared.download(from: remote)
+            let (temp, response) = try await AppTrafficHTTP.download(from: remote, category: "IM 附件下载")
             guard (response as? HTTPURLResponse)?.statusCode == 200 else {
                 try? FileManager.default.removeItem(at: temp)
                 return nil

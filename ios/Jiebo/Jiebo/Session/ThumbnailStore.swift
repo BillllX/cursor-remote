@@ -723,7 +723,7 @@ private enum ThumbRender {
     static func fetch(_ url: URL, limit: Int = 32 * 1024 * 1024) async -> Data? {
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
+        guard let (data, response) = try? await AppTrafficHTTP.data(for: request, category: "文件缩略图下载"),
               (200 ..< 300).contains((response as? HTTPURLResponse)?.statusCode ?? 0),
               data.count <= limit
         else { return nil }

@@ -27,6 +27,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    func applicationDidEnterBackground(_ application: UIApplication) {
+        // 系统可能随即挂起进程，不能等一秒固定窗口自然到期。
+        AppTrafficMeter.shared.flush()
+    }
+
     func application(
         _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,

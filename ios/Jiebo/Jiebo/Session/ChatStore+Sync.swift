@@ -322,7 +322,7 @@ extension ChatStore {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 60
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await AppTrafficHTTP.data(for: request, category: "会话状态下载")
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200 ..< 300).contains(status) else { return status >= 500 || status == 0 ? .retryable : .fatal }
             guard let object = try JSONValue.parse(data).object else { return .fatal }

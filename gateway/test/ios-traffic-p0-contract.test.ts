@@ -28,7 +28,8 @@ describe("iOS 流量优化 P0 契约", () => {
     const project = read("ios/Jiebo/Jiebo.xcodeproj/project.pbxproj");
     const client = read("ios/Jiebo/Jiebo/Gateway/GatewayClient.swift");
     assert.match(policies, /NWPathMonitor/);
-    assert.equal((project.match(/NETP00101 \/\* GatewayPolicies\.swift \*\//g) || []).length, 3);
+    // App 与分享扩展都编译该文件；额外一次来自分享扩展的 PBXBuildFile 引用。
+    assert.equal((project.match(/NETP00101 \/\* GatewayPolicies\.swift \*\//g) || []).length, 4);
     assert.equal((project.match(/NETP00201 \/\* GatewayPolicies\.swift in Sources \*\//g) || []).length, 2);
     assert.match(policies, /becameActive: !wasActive && anyActive/);
     assert.match(app, /guard change\.becameActive else \{ return \}/);
@@ -52,6 +53,46 @@ describe("iOS 流量优化 P0 契约", () => {
     assert.match(client, /trafficMeter\.record\(direction: \.outbound/);
     assert.match(client, /trafficMeter\.record\(direction: \.inbound/);
     assert.match(policies, /不保留正文/);
+  });
+
+  test("流量落盘、task 实际字节、WS 成功回调与统计页刷新形成静态闭环", () => {
+    const policies = read("ios/Jiebo/Jiebo/Gateway/GatewayPolicies.swift");
+    const client = read("ios/Jiebo/Jiebo/Gateway/GatewayClient.swift");
+    const share = read("ios/Jiebo/Jiebo/Auth/ImShareBridge.swift");
+    const app = read("ios/Jiebo/Jiebo/JieboApp.swift");
+    const delegate = read("ios/Jiebo/Jiebo/App/AppDelegate.swift");
+    const shareController = read("ios/Jiebo/JieboShare/ShareViewController.swift");
+    const settings = read("ios/Jiebo/Jiebo/Views/Phone/MenuScreens.swift");
+    const media = read("ios/Jiebo/Jiebo/Views/MediaPreviewViews.swift");
+
+    assert.match(policies, /guard pendingWrite == nil else \{ return \}/);
+    assert.doesNotMatch(policies, /private func scheduleWriteLocked\(\) \{\s*pendingWrite\?\.cancel\(\)/);
+    assert.match(policies, /func flush\(\)/);
+    assert.match(policies, /NSFileCoordinator/);
+    assert.match(policies, /AppTrafficEpochPolicy\.needsSwitch/);
+    assert.match(policies, /task\.countOfBytesSent/);
+    assert.match(policies, /task\.countOfBytesReceived/);
+    assert.match(policies, /didFinishCollecting metrics/);
+    assert.doesNotMatch(policies, /URLCache\.shared\.cachedResponse/);
+    assert.match(client, /socket\.send[\s\S]*if error == nil[\s\S]*trafficMeter\.record/);
+    assert.ok(client.indexOf("if error == nil") < client.indexOf("trafficMeter.record(direction: .outbound"));
+    assert.match(share, /trafficTransport: GatewayNetworkTransport\?/);
+    assert.match(share, /countOfBytesSent/);
+    assert.match(share, /countOfBytesReceived/);
+    assert.match(share, /urlSessionDidFinishEvents[\s\S]*AppTrafficMeter\.shared\.flush/);
+    assert.match(app, /phase == \.background[\s\S]*AppTrafficMeter\.shared\.flush/);
+    assert.match(delegate, /applicationDidEnterBackground[\s\S]*AppTrafficMeter\.shared\.flush/);
+    assert.match(shareController, /NSExtensionHostWillResignActiveNotification/);
+    assert.match(shareController, /viewWillDisappear[\s\S]*AppTrafficMeter\.shared\.flush/);
+    assert.match(settings, /onAppear \{ refreshSnapshot\(\) \}/);
+    assert.match(settings, /phase == \.active \{ refreshSnapshot\(\) \}/);
+    assert.match(settings, /Task\.sleep\(for: \.seconds\(2\)\)/);
+    assert.match(settings, /不含 TLS、IP、DNS、APNs/);
+    assert.doesNotMatch(media, /AsyncImage\s*\(/);
+    assert.match(media, /PreviewMediaCache/);
+    assert.match(media, /data:image\/svg\+xml;base64/);
+    assert.match(media, /MeasuredMediaPlayer\(remoteURL: url, category: "音频预览下载"\)/);
+    assert.match(media, /MeasuredMediaPlayer\(remoteURL: url, category: "视频预览下载"\)/);
   });
 
   test("mobile compact、文件索引新鲜度和 iPhone 自动拉取闸门已接线", () => {

@@ -785,7 +785,7 @@ extension ChatStore {
         var request = URLRequest(url: GatewayConfig.stateTurnURL(chatId: chatId, turnId: turnId))
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await AppTrafficHTTP.data(for: request, category: "会话详情下载")
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               let object = try JSONValue.parse(data).object,
               let responseChatId = object["chatId"]?.string,
