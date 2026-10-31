@@ -9,9 +9,14 @@ extension ThreadView {
     }
 
     var showThreadLoading: Bool {
-        if chatId == nil, store.coldStartPlaceholder { return true }
+        let waitingForStore = store.coldStartPlaceholder && store.linkState != .offline
+        if chatId == nil, waitingForStore { return true }
         guard let chat = threadChat else { return false }
-        return !chat.turnsComplete && chat.turns.isEmpty
+        guard !chat.turnsComplete, chat.turns.isEmpty else { return false }
+        // 没在读缓存、也没在拉分页时，空壳不再盖住对话区。超时放弃或断线后可以输入，重连会再拉。
+        return store.loadingChatIds.contains(chat.id)
+            || store.cacheReadingIds.contains(chat.id)
+            || waitingForStore
     }
 
     var emptyState: some View {

@@ -26,10 +26,15 @@ extension ChatStore {
                 return ensureTurnsLoaded(chatId)
             }
             displayOnlyIds.remove(chatId)
-            // 蜂窝/低数据模式停在已确认尾页；Wi‑Fi 恢复当前自动补齐行为。
-            if client.networkCost.shouldReduceBackgroundTraffic { return }
-            loadPreviousHistory(chatId)
-            return
+            let hasVisibleTurns = !chats[index].turns.isEmpty
+            // 屏幕上已经有尾页时，蜂窝/低数据模式不再自动往前翻；Wi‑Fi 恢复后继续补。
+            // 一个回合都没有时，这条游标不能代替第一页，否则会停在「正在加载会话」。
+            if hasVisibleTurns, client.networkCost.shouldReduceBackgroundTraffic { return }
+            if hasVisibleTurns {
+                loadPreviousHistory(chatId)
+                return
+            }
+            partialHistories[chatId] = nil
         }
         // 屏幕上只有首屏尾段：不要拿它接缝，也不要让分页去重把它当成权威正文
         if displayOnlyIds.contains(chatId) {

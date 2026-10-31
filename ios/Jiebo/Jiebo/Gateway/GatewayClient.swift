@@ -50,6 +50,8 @@ final class GatewayClient {
     #if canImport(Network)
     private let pathObserver = GatewayPathObserver()
     private var pathObserverStarted = false
+    /// NWPath 还没回报过。这段时间先允许拨号，避免首屏一直等路径、会话停在加载。
+    private var pathKnown = false
     #endif
 
     func connect(url: URL) {
@@ -82,10 +84,15 @@ final class GatewayClient {
 
     var isOpen: Bool { didAnnounceOpen && task?.state == .running }
 
+    /// 路径未知时先连。只有已经确认不可达才停拨。
+    private var socketPermitted: Bool {
+        !closedByUser && (!pathKnown || networkCost.reachable)
+    }
+
     /// 回到前台或请求迟迟没回包时调用：断着就立刻重连，不等退避计时；
     /// 看起来连着就发一个 ping，probeWait 内没有任何回音再重连
     func probe() {
-        guard !closedByUser, networkCost.reachable else { return }
+        guard socketPermitted else { return }
         // 没有 task，或 task 已结束却没等到关闭回调：立刻重开（open 会顺手取消待触发的重连计时）
         guard let task, task.state == .running else {
             if self.task != nil { handleClose(generation: generation) }
@@ -147,13 +154,13 @@ final class GatewayClient {
 
     /// 所有 retry / probe / path 回调最终都走这里；主 actor + task 守卫保证同一时刻只有一次 open。
     private func requestOpen(immediately: Bool) {
-        guard !closedByUser, networkCost.reachable, task == nil else { return }
+        guard socketPermitted, task == nil else { return }
         if immediately { retryTimer?.invalidate() }
         open()
     }
 
     private func open() {
-        guard !closedByUser, networkCost.reachable, task == nil else { return }
+        guard socketPermitted, task == nil else { return }
         retryTimer?.invalidate()
         pingTimer?.invalidate()
         probeTimer?.invalidate()
@@ -235,7 +242,7 @@ final class GatewayClient {
         delegate = nil
         didAnnounceOpen = false
         onClose?()
-        guard !closedByUser, networkCost.reachable else { return }
+        guard socketPermitted else { return }
         if countFailure { failureCount += 1 }
         retryTimer?.invalidate()
         let delay = GatewayRetryPolicy.delay(failureCount: failureCount, random: Double.random(in: 0 ... 1))
@@ -267,6 +274,7 @@ final class GatewayClient {
     }
 
     private func pathChanged(_ next: GatewayNetworkCost) {
+        pathKnown = true
         let transition = GatewayPathTransition.classify(from: networkCost, to: next)
         networkCost = next
         MobileDataRuntime.networkCost = next

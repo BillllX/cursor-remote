@@ -125,6 +125,10 @@ extension ChatStore {
                 send(.setModel(model: nextModel, chatId: current.id))
             }
             client.flushOutbox()
+            // stored_state 可能在解锁前到过，当时 ensureTurnsLoaded 会直接返回。解锁后补拉空壳。
+            if let current, !current.turnsComplete {
+                ensureTurnsLoaded(activeId)
+            }
             if activeId != "boot", chats.contains(where: { $0.id == activeId }) {
                 requestFileIndex(chatId: activeId)
             }
