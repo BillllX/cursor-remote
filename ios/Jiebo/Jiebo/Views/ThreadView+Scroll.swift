@@ -86,7 +86,13 @@ extension ThreadView {
                             GeometryReader { marker in
                                 Color.clear
                                     .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
-                                        guard minY >= -12, minY < viewportHeight - 48, !stickToBottom else { return }
+                                        let visible = minY >= -12 && minY < viewportHeight - 48
+                                        guard visible, !stickToBottom else {
+                                            if !visible { earlierNetworkArmed = true }
+                                            return
+                                        }
+                                        guard earlierNetworkArmed else { return }
+                                        earlierNetworkArmed = false
                                         loadNetworkEarlier(proxy: proxy, allTurns: allTurns)
                                     }
                             }

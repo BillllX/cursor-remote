@@ -393,10 +393,7 @@ extension ChatStore {
 
     func resumeTrafficDeferredWork() {
         guard unlocked, !client.networkCost.shouldReduceBackgroundTraffic else { return }
-        for id in Set([activeId, chatHomeThreadChatId].compactMap { $0 }) {
-            guard partialHistories[id] != nil else { continue }
-            ensureTurnsLoaded(id)
-        }
+        // 会话尾页不再因为回到 Wi‑Fi 就自动往前翻。这里只恢复图片和即时消息。
         imSink?.backgroundTrafficRestored()
         ThumbnailStore.shared.backgroundTrafficRestored()
     }

@@ -404,7 +404,7 @@ final class ChatStore {
     /// 连续超时次数，超过上限就停下等重连，不无限重发
     var loadTimeoutStreak: [String: Int] = [:]
     static let loadPageTimeout: Duration = .seconds(25)
-    /// 受限网络只自动取尾部两页；游标与 chatRev 绑定，版本变化即作废。
+    /// 自动只取尾部两页，更早的内容等用户滑到顶再拉一页。游标与 chatRev 绑定，版本变化即作废。
     struct PartialHistory: Equatable {
         var nextFrom: Int
         var chatRev: Int

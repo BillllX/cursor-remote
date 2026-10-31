@@ -493,7 +493,8 @@ extension ChatStore {
             if snapshotHold.contains(id) {
                 heldDeltas[id] = []
             }
-            if clipped {
+            // 尾页已停下时不再为了截断快照重拉整段。直接画到当前尾页上，否则这一轮会被删掉并一直挂起。
+            if clipped, !historyParked(id) {
                 snapshotHold.insert(id)
                 if let index = chats.firstIndex(where: { $0.id == id }) {
                     if let turnId, !turnId.isEmpty {
@@ -509,7 +510,7 @@ extension ChatStore {
                 ensureTurnsLoaded(id)
                 break
             }
-            if let chat = chats.first(where: { $0.id == id }), !chat.turnsComplete {
+            if let chat = chats.first(where: { $0.id == id }), !chat.turnsComplete, !historyParked(id) {
                 stagePendingSnapshot(id, message: message)
                 snapshotHold.insert(id)
                 break
@@ -602,8 +603,8 @@ extension ChatStore {
             mergePendingTurnFiles(chatId: chatId)
             if hasMore {
                 let loadedPages = loadPageCounts[chatId] ?? 1
-                if client.networkCost.shouldReduceBackgroundTraffic, let pageRev, loadedPages >= 2 {
-                    // 已确认尾页停在独立 partial 状态：不标完整、不写权威 body，也不会被 sync_state 回推。
+                if let pageRev, loadedPages >= 2 {
+                    // 自动和手动续拉都停在已确认尾页：不标完整、不写权威 body，也不会被 sync 回推。
                     partialHistories[chatId] = PartialHistory(nextFrom: from, chatRev: pageRev, loadedPages: loadedPages)
                     clearLoadTimeout(chatId)
                     loadingChatIds.remove(chatId)
@@ -614,6 +615,7 @@ extension ChatStore {
                     chats[index].turnsComplete = false
                     displayOnlyIds.remove(chatId)
                     rememberTail(chatId)
+                    applyPendingSnapshots(chatId)
                 } else {
                     if let partial = partialHistories[chatId] {
                         partialHistories[chatId] = PartialHistory(
@@ -997,6 +999,14 @@ extension ChatStore {
         for task in streamDeltaFlushTasks.values { task.cancel() }
         streamDeltaFlushTasks = [:]
         streamDeltaBuffers = [:]
+    }
+
+    /// 尾页已经确认停下：不在翻页、也不在增量补齐。这时新回复直接画出来，不再等整段历史翻完。
+    func historyParked(_ id: String) -> Bool {
+        partialHistories[id] != nil
+            && !loadingChatIds.contains(id)
+            && !refreshingChatIds.contains(id)
+            && bodyRefreshes[id] == nil
     }
 }
 

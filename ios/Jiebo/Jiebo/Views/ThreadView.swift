@@ -42,6 +42,8 @@ struct ThreadView: View {
     @State var loadingEarlierBatch = false
     /// 网络 prepend 前最上方回合；新页到达后原位复锚，避免列表跳动。
     @State var earlierNetworkAnchorId: String?
+    /// 顶部哨兵进视口只拉一页。离开视口后才允许下一次，避免停在顶部把整段历史连锁拉完。
+    @State var earlierNetworkArmed = true
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
     init(chrome: ThreadChrome = .pad, chatId: String? = nil, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {

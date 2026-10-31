@@ -27,13 +27,9 @@ extension ChatStore {
             }
             displayOnlyIds.remove(chatId)
             let hasVisibleTurns = !chats[index].turns.isEmpty
-            // 屏幕上已经有尾页时，蜂窝/低数据模式不再自动往前翻；Wi‑Fi 恢复后继续补。
+            // 屏幕上已经有尾页就停。更早的内容只由用户滑到顶触发，Wi‑Fi 也不自动补。
             // 一个回合都没有时，这条游标不能代替第一页，否则会停在「正在加载会话」。
-            if hasVisibleTurns, client.networkCost.shouldReduceBackgroundTraffic { return }
-            if hasVisibleTurns {
-                loadPreviousHistory(chatId)
-                return
-            }
+            if hasVisibleTurns { return }
             partialHistories[chatId] = nil
         }
         // 屏幕上只有首屏尾段：不要拿它接缝，也不要让分页去重把它当成权威正文
@@ -293,6 +289,7 @@ extension ChatStore {
         loadStartRevs[chatId] = partial.chatRev
         loadStartSegs[chatId] = currentServerSegs(chatId)
         loadedPageTurnCounts[chatId] = 0
+        // 沿用已确认页数，回包后会再次停在两页门槛上，一次手势只多一页。
         loadPageCounts[chatId] = partial.loadedPages
         loadingChatIds.insert(chatId)
         sendLoadChat(chatId, from: partial.nextFrom)
@@ -474,71 +471,7 @@ extension ChatStore {
         if let pending = pendingHistory.removeValue(forKey: chatId), !pending.isEmpty {
             applyHistory(chatId: chatId, incoming: pending)
         }
-        let latestSnapshot = pendingSnapshots.removeValue(forKey: chatId)
-        var snapshots = pendingSnapshotBacklog.removeValue(forKey: chatId) ?? []
-        if let latestSnapshot { snapshots.append(latestSnapshot) }
-        if !snapshots.isEmpty {
-            snapshotHold.remove(chatId)
-            var snapshotTurnId: String?
-            var snapshotAssistant = ""
-            for snap in snapshots {
-                if case .runSnapshot(
-                    _, let turnId, let phase, let status, let userText, let assistant, let thinking,
-                    let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
-                ) = snap {
-                    snapshotTurnId = turnId
-                    snapshotAssistant = assistant
-                    if !clipped {
-                        applyRunSnapshot(
-                            chatId: chatId,
-                            turnId: turnId,
-                            phase: phase,
-                            status: status,
-                            userText: userText,
-                            assistant: assistant,
-                            thinking: thinking,
-                            tools: tools,
-                            task: task,
-                            model: runModel,
-                            mode: runMode,
-                            awaitingApproval: awaitingApproval,
-                            queued: queued,
-                            durationMs: duration
-                        )
-                    } else if phase == "done", let turnId, !turnId.isEmpty {
-                        patch(chatId) { chat in
-                            guard let index = chat.turns.lastIndex(where: { $0.id == turnId }) else { return chat }
-                            var next = chat
-                            next.turns[index] = next.turns[index].settled(
-                                status: status ?? "finished",
-                                durationMs: duration
-                            )
-                            return next
-                        }
-                    }
-                }
-            }
-            let chunks = heldDeltas.removeValue(forKey: chatId) ?? []
-            if !chunks.isEmpty {
-                let extra = chunks.joined()
-                let combined = snapshotAssistant + extra
-                patch(chatId) { chat in
-                    var next = chat
-                    let index = snapshotTurnId.flatMap { id in
-                        id.isEmpty ? nil : next.turns.lastIndex(where: { $0.id == id })
-                    } ?? next.turns.lastIndex(where: \.running)
-                    if let index {
-                        let current = next.turns[index].assistant
-                        if combined.hasPrefix(current) {
-                            next.turns[index].assistant = combined
-                        } else if !current.hasPrefix(combined) && !current.hasSuffix(extra) {
-                            next.turns[index].assistant += extra
-                        }
-                    }
-                    return next
-                }
-            }
-        }
+        applyPendingSnapshots(chatId)
         // pending history / snapshot 可能刚创建目标回合，再消费一次。
         mergePendingTurnFiles(chatId: chatId)
         scheduleBodyCache(chatId)
@@ -546,6 +479,74 @@ extension ChatStore {
         if !hasLocalPriority(chatId), let bodyRev = bodyRevs[chatId], let serverRev = chatRevs[chatId], bodyRev != serverRev {
             markNeedsRefresh(chatId, rev: bodyRev)
             if chatId == activeId || chatId == chatHomeThreadChatId { ensureTurnsLoaded(chatId) }
+        }
+    }
+
+    /// 把分页期间挂起的运行快照画到当前尾页上。不改 turnsComplete，也不写正文缓存。
+    func applyPendingSnapshots(_ chatId: String) {
+        let latestSnapshot = pendingSnapshots.removeValue(forKey: chatId)
+        var snapshots = pendingSnapshotBacklog.removeValue(forKey: chatId) ?? []
+        if let latestSnapshot { snapshots.append(latestSnapshot) }
+        guard !snapshots.isEmpty else { return }
+        snapshotHold.remove(chatId)
+        var snapshotTurnId: String?
+        var snapshotAssistant = ""
+        for snap in snapshots {
+            if case .runSnapshot(
+                _, let turnId, let phase, let status, let userText, let assistant, let thinking,
+                let tools, let task, let runModel, let runMode, let awaitingApproval, let queued, let duration, let clipped
+            ) = snap {
+                snapshotTurnId = turnId
+                snapshotAssistant = assistant
+                if !clipped {
+                    applyRunSnapshot(
+                        chatId: chatId,
+                        turnId: turnId,
+                        phase: phase,
+                        status: status,
+                        userText: userText,
+                        assistant: assistant,
+                        thinking: thinking,
+                        tools: tools,
+                        task: task,
+                        model: runModel,
+                        mode: runMode,
+                        awaitingApproval: awaitingApproval,
+                        queued: queued,
+                        durationMs: duration
+                    )
+                } else if phase == "done", let turnId, !turnId.isEmpty {
+                    patch(chatId) { chat in
+                        guard let index = chat.turns.lastIndex(where: { $0.id == turnId }) else { return chat }
+                        var next = chat
+                        next.turns[index] = next.turns[index].settled(
+                            status: status ?? "finished",
+                            durationMs: duration
+                        )
+                        return next
+                    }
+                }
+            }
+        }
+        let chunks = heldDeltas.removeValue(forKey: chatId) ?? []
+        if !chunks.isEmpty {
+            let extra = chunks.joined()
+            let combined = snapshotAssistant + extra
+            patch(chatId) { chat in
+                var next = chat
+                let index = snapshotTurnId.flatMap { id in
+                    id.isEmpty ? nil : next.turns.lastIndex(where: { $0.id == id })
+                } ?? next.turns.lastIndex(where: \.running)
+                if let index {
+                    let current = next.turns[index].assistant
+                    if combined.hasPrefix(current) {
+                        next.turns[index].assistant = combined
+                    } else if !current.hasPrefix(combined) && !current.hasSuffix(extra) {
+                        next.turns[index].assistant += extra
+                    }
+                }
+                return next
+            }
         }
     }
 

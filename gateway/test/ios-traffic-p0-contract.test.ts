@@ -18,7 +18,8 @@ describe("iOS 流量优化 P0 契约", () => {
     assert.match(client, /GatewayRetryPolicy\.delay\(failureCount: failureCount, random: Double\.random/);
     assert.match(client, /GatewayRetryPolicy\.stableResetAfter/);
     assert.doesNotMatch(client, /withTimeInterval: 1\.5/);
-    assert.match(client, /guard !closedByUser, networkCost\.reachable, task == nil/);
+    assert.match(client, /guard socketPermitted, task == nil/);
+    assert.match(client, /!pathKnown \|\| networkCost\.reachable/);
   });
 
   test("路径恢复、多 Scene 边沿和权限上报遵守统一闸门", () => {
@@ -120,7 +121,10 @@ describe("iOS 流量优化 P0 契约", () => {
     const view = read("ios/Jiebo/Jiebo/Views/TurnView.swift");
     assert.match(protocol, /"deferred_turn"/);
     assert.match(protocol, /chatRev: object\["chatRev"\]\?\.int/);
-    assert.match(handle, /shouldReduceBackgroundTraffic[\s\S]*PartialHistory/);
+    assert.match(handle, /loadedPages >= 2[\s\S]*PartialHistory/);
+    assert.doesNotMatch(handle, /shouldReduceBackgroundTraffic[\s\S]{0,180}PartialHistory/);
+    assert.match(load, /屏幕上已经有尾页就停/);
+    assert.doesNotMatch(load, /func applyRefreshPage[\s\S]*loadedPages >= 2/);
     assert.match(load, /partial\.chatRev == chatRevs\[chatId\]/);
     assert.match(load, /GatewayConfig\.stateTurnURL/);
     assert.match(load, /payload\.chatRev == requestedRev/);

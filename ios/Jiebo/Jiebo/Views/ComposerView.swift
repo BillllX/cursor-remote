@@ -14,11 +14,12 @@ struct ComposerView: View {
     var focusNonce: Int = 0
     var style: ComposerStyle = .full
     @FocusState var focused: Bool
-    /// 打字只改这里。直接绑 store.draft 会让整段对话每次按键都重绘。
-    @State var text = ""
-    @State private var persistTask: Task<Void, Never>?
-    /// 防抖中还没落库的草稿和它所属的会话
-    @State private var pendingDraft: (chatId: String, text: String)?
+    /// 打字写进这个对象，不写进视图状态。这样每个字不会把整条输入栏和会话回合再画一遍。
+    @State var draftBuffer = ComposerDraftBuffer()
+    /// 外部改草稿时递增，输入框据此把文字灌进去。
+    @State var draftRevision = 0
+    /// 只在「有字 / 没字」之间翻转，用来换话筒和发送，不跟着每个字变。
+    @State var hasText = false
     /// 自己写回 store.draft 时不要再灌进输入框，否则会把后打的字盖掉。
     @State private var ignoreDraftEcho: String?
     /// 工具栏宽度。只在宽度变化时重选布局，避免每个字都把两套控件量一遍。
@@ -68,36 +69,9 @@ struct ComposerView: View {
                 assistantStatusLine
                 assistantCapsuleRow
             } else {
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .font(JieboFont.text(.body))
-                    .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1...8)
-                    .focused($focused)
-                    .background(TextViewKeyboardInsetLock())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 8)
-                    .overlay {
-                        if !focused || dictation.active {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .gesture(holdToTalk)
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    .accessibilityHint("长按说话，松开后转成文字")
-                    .onChange(of: text) { _, value in
-                        if value.contains("@") || !store.mentionSuggestions.isEmpty {
-                            store.updateMentions(for: value, chatId: chatId)
-                        }
-                        schedulePersist()
-                    }
-                    .onKeyPress(keys: [.return]) { press in
-                        if press.modifiers.contains(.shift) { return .ignored }
-                        commitAndSend()
-                        return .handled
-                    }
+                entryField(lineLimit: 1 ... 8, submitOnReturn: true, vertical: 8, horizontal: 6)
                 controls
-                if controlsWidth >= 420, text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if controlsWidth >= 420, !hasText {
                     Text("Return 发送，Shift+Return 换行")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
@@ -142,7 +116,7 @@ struct ComposerView: View {
             }
         }
         .onAppear {
-            text = sceneDraft(for: chatId)
+            replaceDraft(sceneDraft(for: chatId))
             store.refreshCheckpoints(chatId: chatId)
         }
         .onDisappear {
@@ -153,13 +127,13 @@ struct ComposerView: View {
         .onChange(of: chatId) { oldId, _ in
             stopVoice()
             flushDraft(currentChatId: oldId)
-            text = sceneDraft(for: chatId)
+            replaceDraft(sceneDraft(for: chatId))
             store.refreshCheckpoints(chatId: chatId)
         }
         .onChange(of: store.draft(for: chatId)) { _, value in
             guard sceneSession == nil else { return }
             if value == ignoreDraftEcho { return }
-            if value != text { text = value }
+            if value != draftBuffer.text { replaceDraft(value) }
         }
         .onChange(of: focusNonce) { _, _ in
             focused = true
@@ -212,8 +186,9 @@ struct ComposerView: View {
                 return String(trimmed.dropFirst())
             }
             guard !paths.isEmpty else { return false }
-            let separator = text.isEmpty || text.hasSuffix(" ") ? "" : " "
-            text += separator + paths.map { "@\($0)" }.joined(separator: " ")
+            let current = draftBuffer.text
+            let separator = current.isEmpty || current.hasSuffix(" ") ? "" : " "
+            replaceDraft(current + separator + paths.map { "@\($0)" }.joined(separator: " "))
             schedulePersist()
             return true
         }
@@ -224,8 +199,9 @@ struct ComposerView: View {
             guard !files.isEmpty || !links.isEmpty else { return false }
             if !files.isEmpty { store.attachFiles(files, chatId: chatId) }
             if !links.isEmpty {
-                let separator = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
-                text += separator + links.joined(separator: "\n")
+                let current = draftBuffer.text
+                let separator = current.isEmpty || current.hasSuffix("\n") ? "" : "\n"
+                replaceDraft(current + separator + links.joined(separator: "\n"))
                 schedulePersist()
             }
             return true
@@ -274,14 +250,67 @@ struct ComposerView: View {
 
     var canSendNow: Bool {
         store.uploads.isEmpty
-            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !chatImages.isEmpty)
+            && (hasText || !chatImages.isEmpty)
+    }
+
+    @ViewBuilder
+    func entryField(lineLimit: ClosedRange<Int>, submitOnReturn: Bool, vertical: CGFloat, horizontal: CGFloat) -> some View {
+        ComposerEntryField(
+            placeholder: placeholder,
+            lineLimit: lineLimit,
+            buffer: draftBuffer,
+            revision: draftRevision,
+            focused: $focused,
+            submitOnReturn: submitOnReturn,
+            onEdit: noteTyped,
+            onSubmit: commitAndSend
+        )
+        .padding(.horizontal, horizontal)
+        .padding(.vertical, vertical)
+        .overlay {
+            if !focused || dictation.active {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(holdToTalk)
+                    .accessibilityHidden(true)
+            }
+        }
+        .accessibilityHint(submitOnReturn ? "长按说话，松开后转成文字" : "")
+    }
+
+    /// 只在空与非空切换时改 hasText。补全和草稿防抖不碰视图状态。
+    func noteTyped(_ value: String) {
+        let filled = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if filled != hasText { hasText = filled }
+        if mentionsMayChange(value) {
+            store.updateMentions(for: value, chatId: chatId)
+        }
+        schedulePersist()
+    }
+
+    /// `@` 不在当前词尾、候选也收起时，不必每个字都扫一遍补全。
+    func mentionsMayChange(_ value: String) -> Bool {
+        if !store.mentionSuggestions.isEmpty { return true }
+        guard let at = value.lastIndex(of: "@") else { return false }
+        let tail = value[at...]
+        if tail.contains(where: \.isWhitespace) { return false }
+        let before = value[..<at]
+        return before.isEmpty || before.last?.isWhitespace == true
+    }
+
+    func replaceDraft(_ value: String) {
+        draftBuffer.text = value
+        draftRevision += 1
+        let filled = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if filled != hasText { hasText = filled }
     }
 
     func schedulePersist() {
-        if let pendingDraft, pendingDraft.chatId != chatId { flushDraft() }
-        persistTask?.cancel()
-        pendingDraft = (chatId, text)
-        persistTask = Task { @MainActor in
+        if let pending = draftBuffer.pendingChatId, pending != chatId { flushDraft() }
+        draftBuffer.persistTask?.cancel()
+        draftBuffer.pendingChatId = chatId
+        draftBuffer.pendingText = draftBuffer.text
+        draftBuffer.persistTask = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             guard !Task.isCancelled else { return }
             flushDraft()
@@ -289,28 +318,30 @@ struct ComposerView: View {
     }
 
     private func flushDraft(currentChatId: String? = nil) {
-        persistTask?.cancel()
-        guard let pending = pendingDraft else { return }
-        pendingDraft = nil
-        if pending.chatId == (currentChatId ?? chatId) { ignoreDraftEcho = pending.text }
+        draftBuffer.persistTask?.cancel()
+        guard let pendingId = draftBuffer.pendingChatId else { return }
+        let pendingText = draftBuffer.pendingText
+        draftBuffer.pendingChatId = nil
+        if pendingId == (currentChatId ?? chatId) { ignoreDraftEcho = pendingText }
         if let sceneSession {
-            sceneSession.saveDraft(pending.text, for: pending.chatId)
+            sceneSession.saveDraft(pendingText, for: pendingId)
         } else {
-            store.saveDraft(pending.text, forChat: pending.chatId)
+            store.saveDraft(pendingText, forChat: pendingId)
         }
     }
 
     func commitAndSend() {
         focused = false
-        persistTask?.cancel()
-        pendingDraft = nil
+        draftBuffer.persistTask?.cancel()
+        draftBuffer.pendingChatId = nil
         ignoreDraftEcho = ""
+        let current = draftBuffer.text
         // 发送接口保持兼容；共享 draft 只在这一瞬间作提交参数，不再作为多窗口编辑状态。
-        store.saveDraft(text, forChat: chatId)
-        store.submit(chatId: chatId, text: text)
+        store.saveDraft(current, forChat: chatId)
+        store.submit(chatId: chatId, text: current)
         let next = store.draft(for: chatId)
         sceneSession?.saveDraft(next, for: chatId)
-        text = next
+        replaceDraft(next)
     }
 
     private func sceneDraft(for id: String) -> String {
@@ -318,12 +349,65 @@ struct ComposerView: View {
     }
 }
 
+/// 输入框的字。不是视图状态，改它不会让整条输入栏重绘。
+final class ComposerDraftBuffer {
+    var text = ""
+    var pendingChatId: String?
+    var pendingText = ""
+    var persistTask: Task<Void, Never>?
+}
+
+/// 只有这一层跟着每个字重绘。按钮、会话回合和玻璃底留在外面。
+private struct ComposerEntryField: View {
+    var placeholder: String
+    var lineLimit: ClosedRange<Int>
+    var buffer: ComposerDraftBuffer
+    var revision: Int
+    var focused: FocusState<Bool>.Binding
+    var submitOnReturn: Bool
+    var onEdit: (String) -> Void
+    var onSubmit: () -> Void
+    @State private var text = ""
+    @State private var appliedRevision = -1
+
+    var body: some View {
+        TextField(placeholder, text: $text, axis: .vertical)
+            .font(JieboFont.text(.body))
+            .foregroundStyle(JieboColor.ink)
+            .lineLimit(lineLimit)
+            .focused(focused)
+            .background(TextViewKeyboardInsetLock())
+            .onAppear { adoptBuffer(revision) }
+            .onChange(of: revision) { _, revision in adoptBuffer(revision) }
+            .onChange(of: text) { _, value in
+                guard value != buffer.text else { return }
+                buffer.text = value
+                onEdit(value)
+            }
+            .onKeyPress(keys: [.return]) { press in
+                guard submitOnReturn else { return .ignored }
+                if press.modifiers.contains(.shift) { return .ignored }
+                onSubmit()
+                return .handled
+            }
+    }
+
+    private func adoptBuffer(_ revision: Int) {
+        guard revision != appliedRevision else { return }
+        appliedRevision = revision
+        if text != buffer.text { text = buffer.text }
+    }
+}
+
 /// 多行输入框是 UITextView。键盘弹起时它会按键盘高度再垫一层内边距，字和光标就离开可见区域，发送也点不中。
 struct TextViewKeyboardInsetLock: UIViewRepresentable {
     func makeUIView(context: Context) -> Anchor { Anchor() }
-    func updateUIView(_ uiView: Anchor, context: Context) { uiView.lock() }
+    func updateUIView(_ uiView: Anchor, context: Context) {
+        if !uiView.didLock { uiView.lock() }
+    }
 
     final class Anchor: UIView {
+        fileprivate var didLock = false
         override init(frame: CGRect) {
             super.init(frame: frame)
             isUserInteractionEnabled = false
@@ -338,17 +422,23 @@ struct TextViewKeyboardInsetLock: UIViewRepresentable {
         }
 
         func lock() {
+            guard !didLock else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.lockNow()
             }
         }
 
         private func lockNow() {
+            guard !didLock else { return }
             if let textView = ancestorTextView() ?? siblingTextView() {
-                guard textView.contentInsetAdjustmentBehavior != .never else { return }
+                guard textView.contentInsetAdjustmentBehavior != .never else {
+                    didLock = true
+                    return
+                }
                 textView.contentInsetAdjustmentBehavior = .never
                 textView.contentInset.bottom = 0
                 textView.verticalScrollIndicatorInsets.bottom = 0
+                didLock = true
             }
         }
 

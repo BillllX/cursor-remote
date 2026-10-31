@@ -7,27 +7,7 @@ extension ComposerView {
     var assistantCapsuleRow: some View {
         HStack(alignment: .bottom, spacing: 6) {
             assistantAttachMenu
-            TextField(placeholder, text: $text, axis: .vertical)
-                .font(JieboFont.text(.body))
-                .foregroundStyle(JieboColor.ink)
-                .lineLimit(1...6)
-                .focused($focused)
-                .background(TextViewKeyboardInsetLock())
-                .padding(.vertical, 11)
-                .overlay {
-                    if !focused || dictation.active {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .gesture(holdToTalk)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .onChange(of: text) { _, value in
-                    if value.contains("@") || !store.mentionSuggestions.isEmpty {
-                        store.updateMentions(for: value, chatId: chatId)
-                    }
-                    schedulePersist()
-                }
+            entryField(lineLimit: 1 ... 6, submitOnReturn: false, vertical: 11, horizontal: 0)
             // 忙碌时停止和发送并存：发送会排在当前这轮之后（与 iPad 的完整输入框一致）
             if chatBusy {
                 if !canSendNow { micButton }

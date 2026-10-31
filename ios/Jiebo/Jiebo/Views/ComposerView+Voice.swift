@@ -124,7 +124,8 @@ extension ComposerView {
             store.flash("没听清，再说一次")
             return
         }
-        text = text.isEmpty ? spoken : text + spoken
+        let next = draftBuffer.text.isEmpty ? spoken : draftBuffer.text + spoken
+        replaceDraft(next)
         schedulePersist()
         focused = true
     }
