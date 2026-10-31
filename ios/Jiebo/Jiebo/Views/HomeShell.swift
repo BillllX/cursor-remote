@@ -204,7 +204,7 @@ struct HomeShell: View {
                         postSceneCommand(.assistantComposerFocusRequested)
                     }
                 case .workbench:
-                    store.openNewChat()
+                    store.openNewChat(in: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
                     sceneSession?.workbenchChatId = store.activeId
                 case .messages:
                     if let sceneSession {
@@ -261,8 +261,12 @@ struct HomeShell: View {
         padRouter.domain = migrated
         UserDefaults.standard.set(migrated.rawValue, forKey: PadDomain.storageKey)
         padRouter.bootstrapped = true
-        if sceneSession?.workbenchChatId == nil {
-            sceneSession?.workbenchChatId = store.activeId
+        if sceneSession?.workbenchChatId == nil || store.isWorkspaceChat(sceneSession?.workbenchChatId ?? "") == false {
+            if let id = store.preferredWorkspaceChatId() {
+                sceneSession?.workbenchChatId = id
+            } else if sceneSession?.workbenchChatId == nil {
+                sceneSession?.workbenchChatId = store.activeId
+            }
         }
         // iPad 不启用 iPhone 的 activeId 限制；小驳始终显式绑定 assistantChatId。
         store.assistantOnly = false

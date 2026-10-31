@@ -499,6 +499,11 @@ final class ChatStore {
         tenantId.isEmpty ? nil : "jiebo.lastActiveChatId.\(tenantId)"
     }
 
+    /// 工作台最后打开的子工作区会话。切到助理会话时不覆盖，工作台仍回到这里。
+    var lastWorkspaceChatKey: String? {
+        tenantId.isEmpty ? nil : "jiebo.lastWorkspaceChatId.\(tenantId)"
+    }
+
     var assistantChatKey: String? {
         tenantId.isEmpty ? nil : "jiebo.assistantChatId.\(tenantId)"
     }

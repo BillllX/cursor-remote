@@ -4,8 +4,8 @@ import Photos
 import UIKit
 
 extension ChatStore {
-    func openNewChat() {
-        let path = currentWorkspacePath
+    func openNewChat(in path: String? = nil) {
+        let path = path?.nilIfEmpty ?? currentWorkspacePath
         guard !path.isEmpty, !isUserRoot(path) else {
             openWorkspaceSwitcher()
             return
@@ -63,7 +63,8 @@ extension ChatStore {
             return
         }
         let key = normPath(next)
-        if let chat = sidebarChats.first(where: { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }) {
+        let matches = sidebarChats.filter { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }
+        if let chat = matches.max(by: { ($0.touchedAt ?? 0) < ($1.touchedAt ?? 0) }) {
             if chat.id != activeId { select(chat.id) }
             return
         }
@@ -243,6 +244,7 @@ extension ChatStore {
         if newId != "boot", let key = lastChatKey {
             UserDefaults.standard.set(newId, forKey: key)
         }
+        rememberWorkspaceChat(newId)
         pendingImages = imagesByChat[newId] ?? []
         previewTask?.cancel() // 在途预览不带到新会话；取消分支早返回不会自己复位 loading
         previewLoading = false

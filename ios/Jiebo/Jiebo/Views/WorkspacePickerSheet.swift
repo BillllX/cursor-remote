@@ -20,9 +20,10 @@ struct WorkspacePickerSheet: View {
         let stats = store.workspaceStatsByKey
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let items = all.filter { $0.name.lowercased().contains(needle) || $0.path.lowercased().contains(needle) }
+        let currentPath = store.workspacePath(anchoredTo: sceneSession?.workbenchChatId)
         let recent = Array(all.filter {
             (stats[normPath($0.path)]?.touched ?? 0) > 0
-                || sameCwd($0.path, store.currentWorkspacePath)
+                || sameCwd($0.path, currentPath)
         }.prefix(5))
         let recentPaths = Set(recent.map { normPath($0.path) })
         let remaining = all.filter { !recentPaths.contains(normPath($0.path)) }
@@ -161,7 +162,7 @@ struct WorkspacePickerSheet: View {
     }
 
     private func row(_ item: WorkspaceItem, showPath: Bool, stat: WorkspaceStat?) -> some View {
-        let current = sameCwd(item.path, store.currentWorkspacePath)
+        let current = sameCwd(item.path, store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
         let manage = store.isTopLevelWorkspace(item.path)
         let chatCount = store.chatCountUnder(item.path)
         return Button {

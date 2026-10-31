@@ -30,14 +30,14 @@ struct SidebarView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if store.currentWorkspaceChats.isEmpty {
+                    if workspaceChats.isEmpty {
                         Text("这个工作区还没有对话")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(store.currentWorkspaceChats) { chat in
+                        ForEach(workspaceChats) { chat in
                             chatRow(chat)
                         }
                     }
@@ -74,11 +74,9 @@ struct SidebarView: View {
             }
         }
         .chatActionAlerts($chatActions)
-        .onAppear {
-            if sceneSession?.workbenchChatId == nil {
-                sceneSession?.workbenchChatId = store.activeId
-            }
-        }
+        .onAppear { adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.activeId) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
     }
 
     private var brandBar: some View {
@@ -156,7 +154,7 @@ struct SidebarView: View {
                     Text("当前工作区")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
-                    Text(store.currentWorkspaceName)
+                    Text(workspaceTitle)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -180,7 +178,7 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("当前工作区，\(store.currentWorkspaceName)")
+        .accessibilityLabel("当前工作区，\(workspaceTitle)")
         .accessibilityHint("切换到别的工作区")
     }
 
@@ -252,7 +250,10 @@ struct SidebarView: View {
                 .tracking(0.6)
                 .foregroundStyle(JieboColor.dim)
             Spacer(minLength: 8)
-            Button(action: store.openNewChat) {
+            Button {
+                store.openNewChat(in: store.workspacePath(anchoredTo: workspaceAnchor))
+                sceneSession?.workbenchChatId = store.activeId
+            } label: {
                 Label("新对话", systemImage: "square.and.pencil")
                     .font(JieboFont.text(.footnote, weight: .medium))
                     .foregroundStyle(JieboColor.pine)
@@ -304,6 +305,7 @@ struct SidebarView: View {
         return Button {
             if let sceneSession {
                 sceneSession.workbenchChatId = chat.id
+                store.rememberWorkspaceChat(chat.id)
                 store.ensureTurnsLoaded(chat.id)
             } else {
                 store.select(chat.id)
@@ -374,5 +376,17 @@ struct SidebarView: View {
 
     private var selectedChatId: String {
         sceneSession?.workbenchChatId ?? store.activeId
+    }
+
+    private var workspaceAnchor: String? { sceneSession?.workbenchChatId }
+    private var workspaceChats: [ChatSession] { store.workspaceChats(anchoredTo: workspaceAnchor) }
+    private var workspaceTitle: String { store.workspaceTitle(anchoredTo: workspaceAnchor) }
+
+    /// 工作台还停在助理会话或空占位时，换成上次打开的子工作区。已经在子工作区里就不抢。
+    private func adoptWorkbenchChatIfNeeded() {
+        guard let sceneSession else { return }
+        if let current = sceneSession.workbenchChatId, store.isWorkspaceChat(current) { return }
+        guard let id = store.preferredWorkspaceChatId() else { return }
+        sceneSession.workbenchChatId = id
     }
 }

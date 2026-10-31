@@ -189,17 +189,38 @@ extension ChatStore {
         return !rel.isEmpty && !rel.contains("/") && !rel.hasPrefix(".")
     }
 
-    /// 侧栏当前看着的工作区：活跃会话的目录，否则退回连接上的 cwd。
-    /// 落在 USER 根目录（助理会话）时退回最近用过的子工作区，没有子工作区才返回根目录。
-    var currentWorkspacePath: String {
-        let path = active?.cwd?.nilIfEmpty ?? cwd.nilIfEmpty ?? workspaceRoot
-        guard isUserRoot(path) else { return path }
-        let recent = sidebarChats.lazy.compactMap { $0.cwd?.nilIfEmpty }.first { !self.isUserRoot($0) }
-        return recent ?? subWorkspaces.first?.path ?? path
+    /// 是不是子工作区里的会话。助理会话和 USER 根目录都不算。
+    func isWorkspaceChat(_ id: String) -> Bool {
+        workspaceChat(id: id) != nil
     }
 
-    var currentWorkspaceName: String {
-        let path = currentWorkspacePath
+    /// 切到子工作区会话时记下。助理会话不写，避免工作台被小驳盖掉。
+    func rememberWorkspaceChat(_ id: String) {
+        guard let key = lastWorkspaceChatKey, workspaceChat(id: id) != nil else { return }
+        UserDefaults.standard.set(id, forKey: key)
+    }
+
+    /// 侧栏当前看着的工作区。
+    /// 先认锚定的工作台会话，再认正在用的子工作区会话，然后是上次打开的子工作区，最后才按活动时间挑。
+    /// 落在助理会话时不能拿列表第一条，那通常是旧目录。
+    var currentWorkspacePath: String { workspacePath(anchoredTo: nil) }
+
+    func workspacePath(anchoredTo chatId: String?) -> String {
+        if let chat = resolvedWorkspaceChat(anchoredTo: chatId) {
+            return chat.cwd?.nilIfEmpty ?? groupRoot
+        }
+        return subWorkspaces.first?.path ?? (cwd.nilIfEmpty ?? workspaceRoot)
+    }
+
+    /// 工作台该打开的会话。没有子工作区会话时返回 nil，调用处再决定要不要留在助理会话。
+    func preferredWorkspaceChatId() -> String? {
+        resolvedWorkspaceChat(anchoredTo: nil)?.id
+    }
+
+    var currentWorkspaceName: String { workspaceTitle(anchoredTo: nil) }
+
+    func workspaceTitle(anchoredTo chatId: String?) -> String {
+        let path = workspacePath(anchoredTo: chatId)
         if path.isEmpty { return "工作区" }
         let name = workspaceLabel(path, root: groupRoot)
         let leaf = workspaceName(path)
@@ -211,10 +232,46 @@ extension ChatStore {
     }
 
     /// 只含当前工作区的会话。侧栏不再把所有工作区叠在一张列表里。
-    var currentWorkspaceChats: [ChatSession] {
-        let path = currentWorkspacePath.nilIfEmpty ?? groupRoot
+    var currentWorkspaceChats: [ChatSession] { workspaceChats(anchoredTo: nil) }
+
+    func workspaceChats(anchoredTo chatId: String?) -> [ChatSession] {
+        let path = workspacePath(anchoredTo: chatId).nilIfEmpty ?? groupRoot
         if isUserRoot(path) { return [] }
         let key = normPath(path)
         return sidebarChats.filter { normPath($0.cwd?.nilIfEmpty ?? groupRoot) == key }
+    }
+
+    private func resolvedWorkspaceChat(anchoredTo chatId: String?) -> ChatSession? {
+        if let chatId, let chat = workspaceChat(id: chatId) { return chat }
+        if let active, let chat = workspaceChat(id: active.id) { return chat }
+        if let remembered = rememberedWorkspaceChat() { return remembered }
+        return mostRecentWorkspaceChat()
+    }
+
+    private func workspaceChat(id: String) -> ChatSession? {
+        guard id != "boot", !isAssistantChat(id),
+              let chat = chats.first(where: { $0.id == id }),
+              let path = chat.cwd?.nilIfEmpty, !isUserRoot(path)
+        else { return nil }
+        return chat
+    }
+
+    private func rememberedWorkspaceChat() -> ChatSession? {
+        guard let key = lastWorkspaceChatKey,
+              let id = UserDefaults.standard.string(forKey: key)
+        else { return nil }
+        return workspaceChat(id: id)
+    }
+
+    /// 没有记下上次打开的会话时，用最近动过的一条。时间相同则保持列表原顺序。
+    private func mostRecentWorkspaceChat() -> ChatSession? {
+        sidebarChats
+            .filter { workspaceChat(id: $0.id) != nil }
+            .max { lhs, rhs in
+                let left = lhs.touchedAt ?? 0
+                let right = rhs.touchedAt ?? 0
+                if left != right { return left < right }
+                return false
+            }
     }
 }

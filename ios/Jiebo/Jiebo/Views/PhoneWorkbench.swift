@@ -53,7 +53,10 @@ struct PhoneWorkbench: View {
                 PhoneDrawer(
                     close: closeDrawer,
                     openWorkspaces: { closeDrawer(then: store.openWorkspaceSwitcher) },
-                    newChat: { closeDrawer(then: store.openNewChat) },
+                    newChat: { closeDrawer(then: {
+                        store.openNewChat(in: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId))
+                        sceneSession?.workbenchChatId = store.activeId
+                    }) },
                     openSettings: { closeDrawer { settingsOpen = true } },
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
@@ -96,6 +99,8 @@ struct PhoneWorkbench: View {
         }
         .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
+        .onChange(of: store.activeId) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
     }
 
     private func closeDrawer() {
@@ -115,17 +120,32 @@ struct PhoneWorkbench: View {
     private func preferRunningChat() {
         guard !preferredRunning else { return }
         preferredRunning = true
-        let running = store.currentWorkspaceChats.first {
+        adoptWorkbenchChatIfNeeded()
+        let anchor = sceneSession?.workbenchChatId
+        let running = store.workspaceChats(anchoredTo: anchor).first {
             store.runningChatIds.contains($0.id) || $0.turns.contains(where: \.running)
         }
-        if let running, running.id != store.activeId {
+        guard let running else { return }
+        if running.id != anchor {
+            sceneSession?.workbenchChatId = running.id
+        }
+        if running.id != store.activeId {
             store.select(running.id)
         }
+    }
+
+    /// 工作台还停在助理会话或空占位时，换成上次打开的子工作区。已经在子工作区里就不抢。
+    private func adoptWorkbenchChatIfNeeded() {
+        guard let sceneSession else { return }
+        if let current = sceneSession.workbenchChatId, store.isWorkspaceChat(current) { return }
+        guard let id = store.preferredWorkspaceChatId() else { return }
+        sceneSession.workbenchChatId = id
     }
 }
 private struct PhoneDrawer: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var close: () -> Void
@@ -135,8 +155,13 @@ private struct PhoneDrawer: View {
     var renameChat: (ChatSession) -> Void
     var deleteChat: (ChatSession) -> Void
 
+    private var workspaceAnchor: String? { sceneSession?.workbenchChatId }
+    private var workspaceChats: [ChatSession] { store.workspaceChats(anchoredTo: workspaceAnchor) }
+    private var workspaceTitle: String { store.workspaceTitle(anchoredTo: workspaceAnchor) }
+    private var selectedChatId: String { sceneSession?.workbenchChatId ?? store.activeId }
+
     private var loopLive: Bool {
-        guard let row = store.loops[store.activeId] else { return false }
+        guard let row = store.loops[selectedChatId] else { return false }
         return row.status == "armed" || row.status == "running"
     }
 
@@ -156,14 +181,14 @@ private struct PhoneDrawer: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if store.currentWorkspaceChats.isEmpty {
+                    if workspaceChats.isEmpty {
                         Text("这个工作区还没有对话")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
                             .padding(.vertical, 10)
                     } else {
-                        ForEach(store.currentWorkspaceChats) { chat in
+                        ForEach(workspaceChats) { chat in
                             chatRow(chat)
                         }
                     }
@@ -246,7 +271,7 @@ private struct PhoneDrawer: View {
                     Text("当前工作区")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
-                    Text(store.currentWorkspaceName)
+                    Text(workspaceTitle)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
@@ -270,7 +295,7 @@ private struct PhoneDrawer: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("当前工作区，\(store.currentWorkspaceName)")
+        .accessibilityLabel("当前工作区，\(workspaceTitle)")
         .accessibilityHint("切换到别的工作区")
     }
 
@@ -359,10 +384,12 @@ private struct PhoneDrawer: View {
     }
 
     private func chatRow(_ chat: ChatSession) -> some View {
-        let selected = chat.id == store.activeId
+        let selected = chat.id == selectedChatId
         let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
         return Button {
-            store.select(chat.id)
+            sceneSession?.workbenchChatId = chat.id
+            store.rememberWorkspaceChat(chat.id)
+            if chat.id != store.activeId { store.select(chat.id) }
             close()
         } label: {
             HStack(spacing: 8) {

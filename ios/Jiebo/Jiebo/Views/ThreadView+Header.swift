@@ -42,7 +42,7 @@ extension ThreadView {
         if resolvedChatId == store.assistantChatId {
             return store.hasApiKey ? "个人助理 · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
         }
-        let place = store.currentWorkspaceName
+        let place = store.workspaceTitle(anchoredTo: resolvedChatId)
         return store.hasApiKey ? "\(place) · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
     }
 
@@ -91,7 +91,9 @@ extension ThreadView {
                         store.toggleFileBrowser(.files)
                     }
                 }
-                phoneIcon("plus", label: "新对话", action: store.openNewChat)
+                phoneIcon("plus", label: "新对话") {
+                    store.openNewChat(in: store.workspacePath(anchoredTo: resolvedChatId))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 4)
