@@ -52,6 +52,8 @@ final class GatewayClient {
     private var pathObserverStarted = false
     /// NWPath 还没回报过。这段时间先允许拨号，避免首屏一直等路径、会话停在加载。
     private var pathKnown = false
+    /// 这次套接字是在路径确认前拨出的。路径第一次回报时，半开的连接只替换一次。
+    private var earlySocket = false
     #endif
 
     func connect(url: URL) {
@@ -167,6 +169,7 @@ final class GatewayClient {
         generation += 1
         pump.gate.set(generation)
         didAnnounceOpen = false
+        earlySocket = !pathKnown
         let current = generation
         let delegate = SocketDelegate()
         delegate.onOpen = { [weak self] in
@@ -274,6 +277,8 @@ final class GatewayClient {
     }
 
     private func pathChanged(_ next: GatewayNetworkCost) {
+        let replaceEarly = earlySocket
+        earlySocket = false
         pathKnown = true
         let transition = GatewayPathTransition.classify(from: networkCost, to: next)
         networkCost = next
@@ -292,6 +297,13 @@ final class GatewayClient {
                 task?.cancel(with: .goingAway, reason: nil)
                 handleClose(generation: generation, countFailure: false)
             }
+            return
+        }
+        // 路径确认前拨出的套接字经常停在半开，task 又占着，后面的 requestOpen 进不来，stored_state 就永远不到。
+        if replaceEarly, task != nil, !didAnnounceOpen {
+            task?.cancel(with: .goingAway, reason: nil)
+            handleClose(generation: generation, countFailure: false)
+            requestOpen(immediately: true)
             return
         }
         guard transition == .reachabilityRestored else { return }

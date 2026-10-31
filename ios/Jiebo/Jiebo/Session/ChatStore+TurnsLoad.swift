@@ -52,8 +52,9 @@ extension ChatStore {
             sendLoadChat(chatId, from: nil)
             return
         }
-        // 基线就是服务端当前版本：直接视为完整，不发请求
-        if let bodyRev = bodyRevs[chatId], bodyRev == chatRevs[chatId] {
+        // 基线就是服务端当前版本，并且屏幕上已经有正文：直接视为完整，不发请求。
+        // 版本号对上但一个回合都没有，不能当成已加载，否则整段会话再也不会去拉。
+        if !chats[index].turns.isEmpty, let bodyRev = bodyRevs[chatId], bodyRev == chatRevs[chatId] {
             chats[index].turnsComplete = true
             chats[index].serverPreview = nil
             loadStartRevs[chatId] = nil
@@ -62,8 +63,8 @@ extension ChatStore {
             return
         }
         let segCompare = compareSegs(chatId)
-        // 段哈希全部一致：服务端正文没变，基线版本对齐到当前版本，同样不发请求
-        if case .same = segCompare, let serverRev = chatRevs[chatId] {
+        // 段哈希全部一致且正文还在：服务端没变，基线版本对齐到当前版本，同样不发请求
+        if !chats[index].turns.isEmpty, case .same = segCompare, let serverRev = chatRevs[chatId] {
             bodyRevs[chatId] = serverRev
             bodySegs[chatId] = serverSegs[chatId]
             chats[index].turnsComplete = true
