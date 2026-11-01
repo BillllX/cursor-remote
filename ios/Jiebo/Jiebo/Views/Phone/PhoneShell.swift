@@ -101,7 +101,7 @@ struct PhoneShell: View {
     /// 等 unlocked（自动登录时可能要等网络）→ 再等助理会话 id 到手（最多 8 秒）→ 选中助理会话 → bootstrapped
     @MainActor
     private func bootstrap() async {
-        store.assistantOnly = router.selectedTab != .messages
+        store.assistantOnly = router.locksActiveChatToAssistant
         while !store.unlocked, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(100))
         }
@@ -111,8 +111,8 @@ struct PhoneShell: View {
             waited += 1
         }
         guard !Task.isCancelled else { return }
-        store.assistantOnly = router.selectedTab != .messages
-        if router.selectedTab != .messages {
+        store.assistantOnly = router.locksActiveChatToAssistant
+        if router.locksActiveChatToAssistant {
             // 旧网关没有助理会话：openAssistantChat 只记下意图，助理页显示降级说明
             store.openAssistantChat()
         }

@@ -9,7 +9,9 @@ struct AssistantHome: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if store.assistantChatId == nil, router.bootstrapped {
+            if router.selectedTab == .workspace {
+                Color.clear
+            } else if store.assistantChatId == nil, router.bootstrapped {
                 unsupportedCard
             } else {
                 TodayStrip()

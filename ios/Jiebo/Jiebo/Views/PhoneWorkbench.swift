@@ -1,12 +1,13 @@
 import SwiftUI
 
-/// iPad 窄窗（compact）：打开就是当前对话。iPhone 不再进入这里，改走 PhoneShell（纯个人助理）。
-/// 抽屉只放工作区：当前工作区（切换、工具、对话）→ 底部设置菜单。小驳走底部自己的域。
-/// 切换工作区、主题、统计这些表单挂在这里而不是抽屉上——抽屉一关，挂在它身上的 sheet 会跟着消失。
+/// iPad 窄窗，以及 iPhone 的「工作区」页：打开就是当前工作区对话。
+/// 抽屉只放工作区：当前工作区（切换、工具、对话）→ 底部设置菜单。
+/// iPhone 的预览由外层 PhoneTabShell 盖住，这里不再叠一层。
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var embedsPreview = true
     @State private var drawerOpen = false
     @State private var preferredRunning = false
     @State private var settingsOpen = false
@@ -66,7 +67,7 @@ struct PhoneWorkbench: View {
                 .accessibilityAddTraits(.isModal)
                 .accessibilityAction(.escape) { closeDrawer() }
             }
-            if previewPanelOpen, let tab = activePreviewTab {
+            if embedsPreview, previewPanelOpen, let tab = activePreviewTab {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
                     .onTapGesture { closePreview() }

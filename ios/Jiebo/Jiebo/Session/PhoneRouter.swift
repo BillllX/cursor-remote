@@ -15,6 +15,7 @@ enum PhoneRoute: Hashable {
 enum PhoneTab: Hashable {
     case assistant
     case inbox
+    case workspace
     case messages
 }
 
@@ -39,7 +40,7 @@ extension EnvironmentValues {
     }
 }
 
-/// iPhone 三个一级空间的路由状态。只在 PhoneTabShell 创建并下发，不放进 ChatStore。
+/// iPhone 四个一级空间的路由状态。只在 PhoneTabShell 创建并下发，不放进 ChatStore。
 @Observable
 @MainActor
 final class PhoneRouter {
@@ -58,6 +59,11 @@ final class PhoneRouter {
     /// 只由当前前台 scene 接收，再定向交给小驳页唯一可见的 Composer。
     var pendingVoiceCapture: AssistantCaptureBridge.Capture?
     var bootstrapped = false
+
+    /// 小驳和待处理必须停在助理会话。工作区和消息可以打开别的会话。
+    var locksActiveChatToAssistant: Bool {
+        selectedTab != .workspace && selectedTab != .messages
+    }
 }
 
 extension PhoneRouter {

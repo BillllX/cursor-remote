@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// iPhone 的三个一级空间。TabView 直接使用 iOS 26 系统栏与 Liquid Glass。
+/// iPhone 的四个一级空间。TabView 直接使用 iOS 26 系统栏与 Liquid Glass。
 struct PhoneTabShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -42,6 +42,13 @@ struct PhoneTabShell: View {
             }
             .badge(store.assistantBadgeCount)
 
+            Tab("工作区", systemImage: "rectangle.3.group", value: PhoneTab.workspace) {
+                if router.selectedTab == .workspace {
+                    PhoneWorkbench(embedsPreview: false)
+                }
+            }
+            .badge(store.workspaceUnreadCount)
+
             Tab("消息", systemImage: "bubble.left.and.bubble.right", value: PhoneTab.messages) {
                 ChatHome()
             }
@@ -75,6 +82,9 @@ struct PhoneTabShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
+        .fullScreenCover(isPresented: workspaceFilesPresented) {
+            FileBrowserCover()
+        }
         .onAppear {
             AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             synchronizeSelectedTab()
@@ -91,7 +101,12 @@ struct PhoneTabShell: View {
                 dispatchWidgetDeepLink()
             }
         }
-        .onChange(of: router.selectedTab) { _, _ in
+        .onChange(of: router.selectedTab) { old, new in
+            if old == .workspace || new == .workspace {
+                if let sceneSession { sceneSession.dismissPreview() }
+                else { store.collapsePreview() }
+                store.fileBrowserOpen = false
+            }
             synchronizeSelectedTab()
         }
         .onChange(of: router.bootstrapped) { _, ready in
@@ -128,11 +143,18 @@ struct PhoneTabShell: View {
 
     private func synchronizeSelectedTab() {
         let messages = router.selectedTab == .messages
-        store.assistantOnly = !messages
+        store.assistantOnly = router.locksActiveChatToAssistant
         im.setHomeVisible(messages)
-        if !messages, router.bootstrapped {
+        if router.locksActiveChatToAssistant, router.bootstrapped {
             store.openAssistantChat()
         }
+    }
+
+    private var workspaceFilesPresented: Binding<Bool> {
+        Binding(
+            get: { router.selectedTab == .workspace && store.fileBrowserOpen },
+            set: { open in if !open { store.fileBrowserOpen = false } }
+        )
     }
 
     private func dispatchWidgetDeepLink() {
