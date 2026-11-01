@@ -285,17 +285,17 @@ struct HomeShell: View {
         case .todo(let id):
             guard store.assistantState != nil else {
                 store.requestAssistant()
-                padRouter.openAssistant(section: .tasks, selection: nil)
+                padRouter.openAssistant(section: .todos, selection: nil)
                 return
             }
             let tasks = PadAssistantProjection(state: store.assistantState).personalTasks
             guard let taskID = tasks.first(where: {
                 $0.id == id || $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.id == id })
             })?.id else {
-                padRouter.openAssistant(section: .tasks, selection: nil)
+                padRouter.openAssistant(section: .todos, selection: nil)
                 return
             }
-            padRouter.openAssistant(section: .tasks, selection: .task(taskID))
+            padRouter.openAssistant(section: .todos, selection: .task(taskID))
         }
     }
 
@@ -354,7 +354,7 @@ struct HomeShell: View {
 
         padRouter.select(nil)
         if target.delegationId != nil {
-            store.flash("这项委派已失效，已打开任务列表")
+            store.flash("这项委派已失效，已打开委派")
         } else {
             store.flash("这条通知对应的内容已失效，已打开相关列表")
         }
@@ -370,7 +370,8 @@ struct HomeShell: View {
             }
             padRouter.openAssistant(section: .inbox, selection: .inboxItem(id))
         case .task(let id):
-            padRouter.openAssistant(section: .tasks, selection: .task(id))
+            let kind = store.assistantState?.personalTasks?.first(where: { $0.id == id })?.kind ?? "todo"
+            padRouter.openAssistant(section: AssistantWorkColumn.matching(kind).section, selection: .task(id))
         }
     }
 

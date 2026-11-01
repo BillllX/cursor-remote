@@ -69,11 +69,13 @@ enum PadDomain: String, CaseIterable, Identifiable {
     }
 }
 
-/// 小驳域首期导航。selection 与 section 分离，P1 可直接扩展成三栏。
+/// 小驳域导航。待办、计划、委派分开，不再合成一个「任务」。
 enum PadAssistantSection: String, CaseIterable, Identifiable {
     case today
     case inbox
-    case tasks
+    case todos
+    case plans
+    case delegations
     case artifacts
     case memory
 
@@ -83,7 +85,9 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
         switch self {
         case .today: return "今日"
         case .inbox: return "收件箱"
-        case .tasks: return "任务"
+        case .todos: return "待办"
+        case .plans: return "计划"
+        case .delegations: return "委派"
         case .artifacts: return "产物"
         case .memory: return "记忆"
         }
@@ -93,9 +97,20 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
         switch self {
         case .today: return "sun.max"
         case .inbox: return "tray"
-        case .tasks: return "checklist"
+        case .todos: return "checkmark.circle"
+        case .plans: return "calendar"
+        case .delegations: return "person.2.wave.2"
         case .artifacts: return "square.stack.3d.up"
         case .memory: return NavigationIconId.memory.symbol
+        }
+    }
+
+    var workColumn: AssistantWorkColumn? {
+        switch self {
+        case .todos: return .todo
+        case .plans: return .plan
+        case .delegations: return .delegation
+        default: return nil
         }
     }
 }
@@ -377,7 +392,7 @@ final class PadRouter {
         case "delegation":
             return PadPushDestination(
                 domain: .assistant,
-                section: .tasks,
+                section: .delegations,
                 selection: target.delegationId.map(PadSelection.delegation)
             )
         case "inbox":
@@ -389,7 +404,7 @@ final class PadRouter {
         case "reminder":
             return PadPushDestination(
                 domain: .assistant,
-                section: .tasks,
+                section: target.itemId.map(AssistantWorkColumn.section(forTaskId:)) ?? .todos,
                 selection: target.itemId.map(PadSelection.task)
             )
         case "brief":
@@ -446,7 +461,7 @@ final class PadRouter {
 
     func openDelegation(_ id: String) {
         domain = .assistant
-        setAssistantSection(.tasks)
+        setAssistantSection(.delegations)
         selection = .delegation(id)
         inspectorMode = .detail
         inspectorPresented = true

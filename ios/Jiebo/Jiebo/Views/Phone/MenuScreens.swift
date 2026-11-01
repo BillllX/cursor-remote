@@ -5,7 +5,7 @@ import UserNotifications
 // 抽屉里 push 出去的页面（规格 §4.3）。都没有输入框（同一时刻只能挂载一个 ComposerView）。
 // 这些页面不改 store.activeId，也不调用 select。
 
-// MARK: 待办与日程
+// MARK: 今日
 
 struct AssistantTodayScreen: View {
     @Environment(ChatStore.self) private var store
@@ -20,7 +20,7 @@ struct AssistantTodayScreen: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(JieboColor.paper)
-        .navigationTitle("待办与日程")
+        .navigationTitle("今日")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .task { store.requestAssistant() }
@@ -32,18 +32,22 @@ struct AssistantTodayScreen: View {
 struct DelegationListScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
+    var column: AssistantWorkColumn
+    @State private var openedTask: PersonalTask?
 
-    init() {}
+    init(column: AssistantWorkColumn) {
+        self.column = column
+    }
 
     private let groups: [(phase: String, title: String)] = [
         ("needs_me", "需要我"),
         ("in_progress", "进行中"),
-        ("planned", "计划"),
+        ("planned", "未开始"),
         ("completed", "已完成"),
     ]
 
     private var rows: [PersonalTask] {
-        store.assistantState?.personalTasks ?? []
+        (store.assistantState?.personalTasks ?? []).filter { AssistantWorkColumn.matching($0.kind) == column }
     }
 
     private var legacyRows: [AssistantDelegation] {
@@ -64,7 +68,7 @@ struct DelegationListScreen: View {
                         }
                     }
                 }
-            } else {
+            } else if column == .delegation {
                 // 老网关没有投影时仍保留委派入口。
                 Section("委派") {
                     ForEach(legacyRows) { row in
@@ -77,19 +81,38 @@ struct DelegationListScreen: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle("任务与计划")
+        .navigationTitle(column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
-            if rows.isEmpty && legacyRows.isEmpty {
+            if rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
                 ContentUnavailableView(
-                    "还没有任务",
-                    systemImage: "checklist",
-                    description: Text("待办、日程、委派和后台运行会汇总在这里。")
+                    "还没有\(column.title)",
+                    systemImage: column.symbol,
+                    description: Text(column.emptyDetail)
                 )
             }
         }
         .task { store.requestAssistant() }
+        .sheet(item: $openedTask) { task in
+            PersonalTaskSheet(task: task)
+        }
+        .onAppear { openPendingTask() }
+        .onChange(of: router.pendingWorkTaskId) { _, _ in openPendingTask() }
+        .onChange(of: store.assistantState?.personalTasks?.map(\.id) ?? []) { _, _ in openPendingTask() }
+    }
+
+    /// 今日摘要或推送带过来的那一条。列表还没到就先留着，到了再打开。
+    private func openPendingTask() {
+        guard let id = router.pendingWorkTaskId else { return }
+        guard store.assistantState?.personalTasks != nil else { return }
+        router.pendingWorkTaskId = nil
+        guard let task = rows.first(where: { $0.id == id }) else { return }
+        if let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id {
+            router.delegationDetail = DelegationRef(id: delegationId)
+        } else {
+            openedTask = task
+        }
     }
 
     private func normalizedPhase(_ phase: String) -> String {
@@ -98,14 +121,11 @@ struct DelegationListScreen: View {
 
     private func taskRow(_ task: PersonalTask) -> some View {
         let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id
-        let opensToday = task.kind == "todo" || task.kind == "schedule"
         return Button {
             if let delegationId {
                 router.delegationDetail = DelegationRef(id: delegationId)
-            } else if task.kind == "todo" {
-                router.openHub(anchor: "todos")
-            } else if task.kind == "schedule" {
-                router.openHub(anchor: "schedules")
+            } else {
+                openedTask = task
             }
         } label: {
             HStack(spacing: 10) {
@@ -124,17 +144,14 @@ struct DelegationListScreen: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                if delegationId != nil || opensToday {
-                    Image(systemName: "chevron.right")
-                        .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.dim)
-                }
+                Image(systemName: "chevron.right")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(delegationId == nil && !opensToday)
         .accessibilityLabel("\(task.title)，\(taskStatus(task))")
     }
 
@@ -153,23 +170,18 @@ struct DelegationListScreen: View {
         switch task.phase {
         case "needs_me": return "需要处理"
         case "in_progress": return "进行中"
-        case "planned": return "已计划"
+        case "planned": return "未开始"
         case "completed": return "已完成"
         default: return task.status.nilIfEmpty ?? "未知状态"
         }
     }
 
     private func taskSubtitle(_ task: PersonalTask) -> String {
-        let kind: String
-        switch task.kind {
-        case "todo": kind = "待办"
-        case "schedule": kind = "日程"
-        case "delegation": kind = "委派"
-        case "background_run": kind = "后台运行"
-        default: kind = task.kind
-        }
         let at = task.updatedAt ?? task.dueAt ?? task.createdAt
-        return "\(kind) · \(taskStatus(task)) · \(assistantRelativeTime(at))"
+        if task.kind == "background_run" {
+            return "后台运行 · \(taskStatus(task)) · \(assistantRelativeTime(at))"
+        }
+        return "\(taskStatus(task)) · \(assistantRelativeTime(at))"
     }
 
     private func delegationRow(_ row: AssistantDelegation) -> some View {
@@ -204,6 +216,76 @@ struct DelegationListScreen: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title)，\(row.statusLabel)")
+    }
+}
+
+private struct PersonalTaskSheet: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let task: PersonalTask
+    @State private var editingTodo: AssistantTodo?
+
+    private var sourceTodo: AssistantTodo? {
+        guard let id = task.sources.first(where: { $0.kind == "todo" })?.id else { return nil }
+        return store.assistantState?.todos.first { $0.id == id }
+    }
+
+    private var heading: String {
+        switch task.kind {
+        case "todo": return "待办"
+        case "schedule": return "计划"
+        case "background_run": return "后台运行"
+        default: return "任务"
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(task.title.nilIfEmpty ?? heading)
+                        .font(JieboFont.text(.title3, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                    Text(task.attention?.nilIfEmpty ?? task.status)
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.ink2)
+                    if let due = TodoDue.label(task.due) {
+                        Text(due)
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    if let detail = task.detail?.nilIfEmpty {
+                        Text(detail)
+                            .font(JieboFont.text(.body))
+                            .foregroundStyle(JieboColor.ink)
+                    }
+                    if sourceTodo != nil {
+                        Button("修改") { editingTodo = sourceTodo }
+                            .buttonStyle(.bordered)
+                    }
+                    ForEach(Array(task.actions.enumerated()), id: \.offset) { _, action in
+                        Button(action.label) {
+                            store.performPersonalTaskAction(action)
+                            dismiss()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+            }
+            .background(JieboColor.paper)
+            .navigationTitle(heading)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+            .sheet(item: $editingTodo) { todo in
+                TodoEditSheet(todo: todo)
+            }
+        }
     }
 }
 

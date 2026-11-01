@@ -83,8 +83,8 @@ struct PhoneShell: View {
             InboxHome()
         case .todayManage:
             AssistantTodayScreen()
-        case .delegations:
-            DelegationListScreen()
+        case .worklist(let column):
+            DelegationListScreen(column: column)
         case .artifacts:
             ArtifactCenterView()
         case .settings:
@@ -128,7 +128,8 @@ struct PhoneShell: View {
     // MARK: DEBUG 启动参数（§8 P5）
 
     #if DEBUG
-    /// --phone-route=root|inbox|today|delegations|artifacts|settings|memory
+    /// --phone-route=root|inbox|today|delegations|todos|plans|runs|artifacts|settings|memory
+    /// runs 仍可用，打开的是委派。
     /// --phone-menu=open
     /// --phone-delegation=<id>
     @MainActor
@@ -142,7 +143,10 @@ struct PhoneShell: View {
             switch route {
             case "inbox": router.go(.inbox)
             case "today": router.path = [.todayManage]
-            case "delegations": router.path = [.delegations]
+            case "delegations": router.path = [.worklist(.delegation)]
+            case "todos": router.path = [.worklist(.todo)]
+            case "plans": router.path = [.worklist(.plan)]
+            case "runs": router.path = [.worklist(.delegation)]
             case "artifacts": router.path = [.artifacts]
             case "settings": router.path = [.settings]
             case "memory": router.path = [.settings, .memory]

@@ -231,6 +231,13 @@ struct InboxDetailView: View {
                             .textSelection(.enabled)
                             .padding(.top, 6)
                     }
+                    if let scheduleId = row.scheduleId {
+                        Button("查看计划") {
+                            router.openWorkTask("schedule:\(scheduleId)", column: .plan)
+                        }
+                        .buttonStyle(.bordered)
+                        .padding(.top, 8)
+                    }
                     if row.actionPrompt != nil {
                         Button("交给小驳处理") {
                             store.openAssistantInboxItem(row)

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// iPad 小驳域：五类真实数据共用一个 scene-local selection 与 Inspector。
+/// iPad 小驳域：今日、收件箱，以及分开的待办、计划、委派。
 /// 只有“今日”挂载固定助理会话，因此任何可见时刻都只有一个可编辑 Composer。
 struct PadAssistantShell: View {
     @Environment(ChatStore.self) private var store
@@ -179,6 +179,14 @@ struct PadAssistantShell: View {
             router.dropFeedback = "这个项目不能放到\(section.title)"
             return false
         }
+        if let column = section.workColumn,
+           let task = projection.personalTasks.first(where: { $0.id == transfer.stableID }),
+           AssistantWorkColumn.matching(task.kind) != column
+        {
+            let home = AssistantWorkColumn.matching(task.kind).title
+            router.dropFeedback = "「\(transfer.title)」属于\(home)"
+            return false
+        }
         if section == .today {
             let accepted = store.continuePadTransfer(transfer)
             if accepted { router.openAssistant() }
@@ -239,8 +247,12 @@ struct PadAssistantShell: View {
                 PadTodayExperience(projection: projection)
             case .inbox:
                 PadInboxExperience(projection: projection)
-            case .tasks:
-                PadTaskExperience(projection: projection)
+            case .todos:
+                PadTaskExperience(projection: projection, column: .todo)
+            case .plans:
+                PadTaskExperience(projection: projection, column: .plan)
+            case .delegations:
+                PadTaskExperience(projection: projection, column: .delegation)
             case .artifacts:
                 PadArtifactExperience(projection: projection)
             case .memory:
@@ -283,7 +295,9 @@ private struct PadSectionNavigationRow: View {
         let target: PadSemanticDropTarget? = switch section {
         case .today: .today
         case .inbox: .inbox
-        case .tasks: .tasks
+        case .todos: .todos
+        case .plans: .plans
+        case .delegations: .delegations
         case .artifacts: .artifacts
         case .memory: nil
         }

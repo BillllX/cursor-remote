@@ -128,6 +128,7 @@ private enum ArtifactKindFilter: String, CaseIterable, Identifiable {
 
 private struct ArtifactRow: View {
     @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
     let artifact: Artifact
     let onContinue: () -> Void
@@ -217,6 +218,17 @@ private struct ArtifactRow: View {
                     .buttonStyle(.plain)
                 Button("分享") {
                     store.exportPreview(path: file.path, content: nil, chatId: chatId)
+                }
+                .buttonStyle(.plain)
+            }
+            if let delegationId = artifact.provenance?.delegationId {
+                Button("查看来源委派") {
+                    router.delegationDetail = DelegationRef(id: delegationId)
+                }
+                .buttonStyle(.plain)
+            } else if let inboxId = artifact.provenance?.inboxId {
+                Button("查看来源消息") {
+                    router.openInboxItem(inboxId)
                 }
                 .buttonStyle(.plain)
             }

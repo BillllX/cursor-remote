@@ -5,7 +5,7 @@ import UIKit
 enum PhoneRoute: Hashable {
     case inbox
     case todayManage
-    case delegations
+    case worklist(AssistantWorkColumn)
     case artifacts
     case settings
     case memory                 // 只从设置页 push 进来，不直接挂在菜单上
@@ -53,6 +53,8 @@ final class PhoneRouter {
     var hubAnchor: String?
     /// 正在看的委派详情。sheet 挂在 PhoneTabShell 上，三个一级空间都能弹
     var delegationDetail: DelegationRef?
+    /// 进入待办、计划或委派后要打开的那一条。栏目页取走后清空。
+    var pendingWorkTaskId: String?
     /// 只由当前前台 scene 接收，再定向交给小驳页唯一可见的 Composer。
     var pendingVoiceCapture: AssistantCaptureBridge.Capture?
     var bootstrapped = false
@@ -85,6 +87,12 @@ extension PhoneRouter {
 
     func closeMenu() {
         menuOpen = false
+    }
+
+    /// 打开对应栏目，并在列表出现后展开这一条，而不是整页今日。
+    func openWorkTask(_ id: String, column: AssistantWorkColumn) {
+        pendingWorkTaskId = id
+        go(.worklist(column))
     }
 
     func openHub(anchor: String? = nil) {

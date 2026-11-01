@@ -1819,8 +1819,11 @@ func checkPadSemanticDropRules() -> [String] {
     if !PadSemanticDropTarget.inbox.accepts(.inbox)
         || !PadSemanticDropTarget.inbox.accepts(.draft)
         || PadSemanticDropTarget.inbox.accepts(.task)
-        || PadSemanticDropTarget.tasks.accepts(.artifact)
-        || !PadSemanticDropTarget.tasks.accepts(.task)
+        || PadSemanticDropTarget.todos.accepts(.artifact)
+        || !PadSemanticDropTarget.todos.accepts(.task)
+        || !PadSemanticDropTarget.plans.accepts(.task)
+        || !PadSemanticDropTarget.delegations.accepts(.task)
+        || PadSemanticDropTarget.plans.accepts(.inbox)
         || !PadSemanticDropTarget.artifacts.accepts(.artifact)
     {
         problems.append("iPad 拖放：栏目接受矩阵不符")

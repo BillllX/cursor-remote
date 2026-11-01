@@ -146,7 +146,7 @@ struct PhoneTabShell: View {
         case .inbox:
             router.go(.inbox)
         case .todo:
-            router.openHub(anchor: "todos")
+            router.go(.worklist(.todo))
         }
     }
 

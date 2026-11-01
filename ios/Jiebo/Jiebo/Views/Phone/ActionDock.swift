@@ -118,7 +118,7 @@ struct ActionDock: View {
         if running.count > runningLimit {
             // 折叠掉的那几项只在委派列表里看得到
             moreRow("还有 \(running.count - runningLimit) 项进行中，看全部") {
-                router.go(.delegations)
+                router.go(.worklist(.delegation))
             }
         }
     }

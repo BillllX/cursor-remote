@@ -257,8 +257,10 @@ struct TodayStrip: View {
                 router.go(.inbox)
             } else if let delegationId = item.delegationId {
                 router.delegationDetail = DelegationRef(id: delegationId)
-            } else if item.scheduleId != nil || item.kind == "brief" || item.kind == "reminder" {
-                router.openHub(anchor: item.scheduleId == nil ? nil : "schedules")
+            } else if item.kind == "brief" {
+                router.openHub()
+            } else if let scheduleId = item.scheduleId {
+                router.openWorkTask("schedule:\(scheduleId)", column: .plan)
             } else {
                 router.openInboxItem(item.id)
             }
@@ -270,13 +272,16 @@ struct TodayStrip: View {
             router.delegationDetail = DelegationRef(id: delegationId)
         } else if event.kind == "brief" {
             router.openHub()
-        } else if event.sources.contains(where: { $0.kind == "todo" }) {
-            router.openHub(anchor: "todos")
-        } else if event.sources.contains(where: { $0.kind == "schedule" }) {
-            router.openHub(anchor: "schedules")
+        } else if let source = event.sources.first(where: { $0.kind == "todo" }) {
+            router.openWorkTask(event.taskId ?? "todo:\(source.id)", column: .todo)
+        } else if let source = event.sources.first(where: { $0.kind == "schedule" }) {
+            router.openWorkTask(event.taskId ?? "schedule:\(source.id)", column: .plan)
+        } else if let source = event.sources.first(where: { $0.kind == "run" }) {
+            router.openWorkTask(event.taskId ?? "run:\(source.id)", column: .delegation)
+        } else if let taskId = event.taskId, taskId.hasPrefix("run:") {
+            router.openWorkTask(taskId, column: .delegation)
         } else {
-            // 普通回执和后台运行统一进入「任务与计划」。
-            router.go(.delegations)
+            router.go(.worklist(.delegation))
         }
     }
 

@@ -405,13 +405,15 @@ struct PadTaskExperience: View {
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
     let projection: PadAssistantProjection
+    let column: AssistantWorkColumn
 
     private let phases = ["needs_me", "in_progress", "planned", "completed"]
 
     private var tasks: [PersonalTask] {
+        let rows = projection.personalTasks.filter { AssistantWorkColumn.matching($0.kind) == column }
         let needle = router.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return projection.personalTasks }
-        return projection.personalTasks.filter {
+        guard !needle.isEmpty else { return rows }
+        return rows.filter {
             $0.title.localizedCaseInsensitiveContains(needle)
                 || ($0.detail?.localizedCaseInsensitiveContains(needle) == true)
         }
@@ -426,7 +428,7 @@ struct PadTaskExperience: View {
         List {
             if !projection.personalTasksAvailable, !projection.personalTasks.isEmpty {
                 Section {
-                    Label("当前为兼容模式，待办与委派仍可处理。", systemImage: "info.circle")
+                    Label("当前为兼容模式，这个栏目仍可处理。", systemImage: "info.circle")
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                 }
@@ -447,7 +449,7 @@ struct PadTaskExperience: View {
                                         Text(task.title.nilIfEmpty ?? "未命名任务")
                                             .font(JieboFont.text(.subheadline, weight: .semibold))
                                             .foregroundStyle(JieboColor.ink)
-                                        Text(task.attention?.nilIfEmpty ?? task.detail?.nilIfEmpty ?? task.status)
+                                        Text(taskLine(task))
                                             .font(JieboFont.text(.footnote))
                                             .foregroundStyle(JieboColor.dim)
                                             .lineLimit(2)
@@ -475,9 +477,9 @@ struct PadTaskExperience: View {
         .overlay {
             if tasks.isEmpty {
                 ContentUnavailableView(
-                    projection.personalTasksAvailable ? "还没有任务" : "任务投影不可用",
-                    systemImage: "checklist",
-                    description: Text("待办、日程与委派会汇总在这里。")
+                    (!projection.personalTasksAvailable && projection.personalTasks.isEmpty) ? "\(column.title)暂时不可用" : "还没有\(column.title)",
+                    systemImage: column.symbol,
+                    description: Text(column.emptyDetail)
                 )
             }
         }
@@ -1335,7 +1337,7 @@ private func padTaskPhaseTitle(_ phase: String) -> String {
     switch phase {
     case "needs_me": return "需要我"
     case "in_progress": return "进行中"
-    case "planned": return "已计划"
+    case "planned": return "未开始"
     case "completed": return "已完成"
     default: return "其他"
     }
@@ -1348,6 +1350,12 @@ private func padTaskSymbol(_ task: PersonalTask) -> String {
     case "delegation": return "person.2.wave.2"
     default: return "gearshape.2"
     }
+}
+
+private func taskLine(_ task: PersonalTask) -> String {
+    let body = task.attention?.nilIfEmpty ?? task.detail?.nilIfEmpty ?? task.status
+    guard task.kind == "background_run" else { return body }
+    return "后台运行 · \(body)"
 }
 
 private func padArtifactSymbol(_ artifact: Artifact) -> String {

@@ -125,15 +125,21 @@ struct MenuDrawer: View {
                     menuRow("sun.max", "今日", tag: 0) {
                         router.openHub()
                     }
-                    menuRow("checklist", "任务与计划", tag: 1) {
-                        router.go(.delegations)
+                    menuRow("checkmark.circle", "待办", tag: 1) {
+                        router.go(.worklist(.todo))
                     }
-                    menuRow("square.stack.3d.up", "产物中心", tag: 2) {
+                    menuRow("calendar", "计划", tag: 2) {
+                        router.go(.worklist(.plan))
+                    }
+                    menuRow("person.2.wave.2", "委派", tag: 3) {
+                        router.go(.worklist(.delegation))
+                    }
+                    menuRow("square.stack.3d.up", "产物中心", tag: 4) {
                         router.go(.artifacts)
                     }
                     divider
                         .padding(.vertical, 8)
-                    menuRow(NavigationIconId.account.symbol, "设置", tag: 3) {
+                    menuRow(NavigationIconId.account.symbol, "设置", tag: 5) {
                         router.go(.settings)
                     }
                 }

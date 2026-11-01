@@ -49,9 +49,11 @@ struct PadAppCommands: Commands {
         CommandMenu("小驳导航") {
             sectionButton(.today, key: "1")
             sectionButton(.inbox, key: "2")
-            sectionButton(.tasks, key: "3")
-            sectionButton(.artifacts, key: "4")
-            sectionButton(.memory, key: "5")
+            sectionButton(.todos, key: "3")
+            sectionButton(.plans, key: "4")
+            sectionButton(.delegations, key: "5")
+            sectionButton(.artifacts, key: "6")
+            sectionButton(.memory, key: "7")
             Divider()
             Button("上一处") { actions?.previous() }
                 .keyboardShortcut("[", modifiers: .command)
