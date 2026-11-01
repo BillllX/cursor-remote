@@ -148,8 +148,7 @@ extension ChatStore {
             flash("这个工作区里没有对话")
             return
         }
-        let busy = Set(runningChatIds)
-        if chats.contains(where: { ids.contains($0.id) && ($0.turns.contains(where: \.running) || busy.contains($0.id)) }) {
+        if chats.contains(where: { ids.contains($0.id) && chatShowsRunning($0) }) {
             flash("有对话正在运行，先停掉再清空")
             return
         }
@@ -245,6 +244,7 @@ extension ChatStore {
             UserDefaults.standard.set(newId, forKey: key)
         }
         rememberWorkspaceChat(newId)
+        syncComposerChrome(newId)
         pendingImages = imagesByChat[newId] ?? []
         previewTask?.cancel() // 在途预览不带到新会话；取消分支早返回不会自己复位 loading
         previewLoading = false
@@ -298,7 +298,7 @@ extension ChatStore {
             closeContentLayer()
             suppressContentDiscard = wasSuppressing
         }
-        if let doomed = chats.first(where: { $0.id == id }), doomed.turns.contains(where: \.running) {
+        if let doomed = chats.first(where: { $0.id == id }), chatShowsRunning(doomed) {
             send(.cancel(chatId: id))
         }
         send(.deleteSession(chatId: id))

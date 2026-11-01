@@ -20,7 +20,7 @@ extension ChatStore {
 
     /// 助理会话是否有一轮在跑
     var assistantRunning: Bool {
-        assistantChat?.turns.contains(where: \.running) == true
+        assistantChat.map(chatShowsRunning) ?? false
     }
 
     /// status 为 running / awaiting 的委派，createdAt 倒序

@@ -69,6 +69,16 @@ struct ShellEntry: Identifiable, Hashable {
     var running: Bool
 }
 
+/// 输入栏看的会话状态。不含助手正文。
+struct ComposerChrome: Equatable {
+    var mode: AgentMode = .agent
+    var model = ""
+    var policy = ""
+    var confirmWrites = false
+    var pending: PendingTool?
+    var queued: [Turn] = []
+}
+
 enum ContentDiscard {
     case closeContent
     case closeTool
@@ -194,13 +204,56 @@ final class ChatStore {
         return Array(fileIndex.filter { $0.lowercased().contains(query) }.prefix(40))
     }
     var shellEntries: [ShellEntry] {
-        guard let turns = active?.turns else { return [] }
+        let chatId = activeId
+        let revision = turnRenderRevisions[chatId, default: 0]
+        if let shellMemo, shellMemo.chatId == chatId, shellMemo.revision == revision {
+            return shellMemo.rows
+        }
+        let rows = buildShellEntries(chatId)
+        shellMemo = (chatId, revision, rows)
+        return rows
+    }
+
+    /// 侧栏和停止按钮用。从末尾往前看，排队的回合跳过；碰到已经结束的就停。不再扫整段历史。
+    func chatShowsRunning(_ chat: ChatSession) -> Bool {
+        if runningChatIds.contains(chat.id) { return true }
+        for turn in chat.turns.reversed() {
+            if turn.running { return true }
+            if !turn.queued { return false }
+        }
+        return false
+    }
+
+    func uniquedTurns(for chatId: String) -> [Turn] {
+        let revision = turnRenderRevisions[chatId, default: 0]
+        let source = chats.first { $0.id == chatId }?.turns ?? []
+        if let hit = uniquedTurnMemo[chatId], hit.0 == revision,
+           hit.1.count == source.count,
+           hit.1.first?.id == source.first?.id,
+           hit.1.last?.id == source.last?.id {
+            return hit.1
+        }
+        let turns = Turn.uniqued(source)
+        uniquedTurnMemo[chatId] = (revision, turns)
+        return turns
+    }
+
+    func invalidateTurnListMemo(_ chatId: String) {
+        uniquedTurnMemo[chatId] = nil
+        if shellMemo?.chatId == chatId { shellMemo = nil }
+    }
+
+    private func buildShellEntries(_ chatId: String) -> [ShellEntry] {
+        guard let turns = chats.first(where: { $0.id == chatId })?.turns else { return [] }
         var rows: [ShellEntry] = []
         for turn in turns {
             for tool in turn.tools where tool.kind == .shell {
                 let stdout = tool.result?.object?["stdout"]?.string ?? ""
                 let stderr = tool.result?.object?["stderr"]?.string ?? ""
-                let output = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+                var output = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+                if tool.status == "running" {
+                    output = Self.tailLines(output, limit: 80)
+                }
                 let command = tool.args?.string(in: "command", "cmd").nilIfEmpty ?? tool.summary
                 rows.append(ShellEntry(
                     id: tool.callId,
@@ -211,6 +264,22 @@ final class ChatStore {
             }
         }
         return rows
+    }
+
+    /// 只截展示。回合里的 stdout/stderr 和之后写入缓存的仍是全文。
+    private static func tailLines(_ text: String, limit: Int) -> String {
+        guard limit > 0, !text.isEmpty else { return text }
+        var newlines = 0
+        var index = text.endIndex
+        while index > text.startIndex {
+            let previous = text.index(before: index)
+            if text[previous] == "\n" {
+                newlines += 1
+                if newlines > limit { return String(text[index...]) }
+            }
+            index = previous
+        }
+        return text
     }
     /// 当前工具浮层。同一时间只开一个，再点一次关闭
     var toolLayer: ToolLayer?
@@ -298,7 +367,7 @@ final class ChatStore {
     var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
 
     var active: ChatSession? { chats.first { $0.id == activeId } }
-    var busy: Bool { active?.turns.contains(where: \.running) == true }
+    var busy: Bool { active.map(chatShowsRunning) ?? false }
     var canSend: Bool {
         // 对齐网页端：上传未完成时禁发（@path 还没写进草稿，发出去会漏附件）
         uploads.isEmpty
@@ -336,6 +405,10 @@ final class ChatStore {
     /// 运行中/排队会话 id（侧栏运行点也读它：slim 会话没 turns，不能靠 turns.contains(running)）
     var runningChatIds: [String] = []
     var queuedChatIds: [String] = []
+    /// 输入栏只读这个集合。只在开始跑、跑完时改，流式文字进来时不动。
+    var liveBusyIds = Set<String>()
+    /// 输入栏要的模式、审批和排队。助手正文变了不改这份，避免整条输入栏重画。
+    var composerChromeByChat: [String: ComposerChrome] = [:]
     /// P9：当前租户是否管理员（ready 带下来）；管理员统计面板数据
     var isAdmin = false
     var adminStats: [AdminTenantStats] = []
@@ -392,6 +465,18 @@ final class ChatStore {
     static let streamDeltaFlushDelay: Duration = .milliseconds(50)
     /// ThreadView 只关心「这一批可能改变了末轮高度」，不再为每次重算拼 liveTail 大字符串。
     var turnRenderRevisions: [String: UInt64] = [:]
+    /// 去重结果按渲染版本记一份。滚动跟随每帧都要这份列表，不能每次都扫整段历史。
+    @ObservationIgnored var uniquedTurnMemo: [String: (UInt64, [Turn])] = [:]
+    /// 终端面板按当前会话的渲染版本记一份，避免正文和滚动监听各拼一次全量输出。
+    @ObservationIgnored var shellMemo: (chatId: String, revision: UInt64, rows: [ShellEntry])?
+    /// 磁盘上的完整正文还在，内存里只留着尾部。版本对得上之前不能当成整段历史已齐。
+    struct DiskBodyCursor {
+        var rev: Int
+        var count: Int
+        var serverSegs: [String]?
+    }
+    var diskBodyCursors: [String: DiskBodyCursor] = [:]
+    var diskPrependIds = Set<String>()
     /// P8 slim：分页期间已 prepend 的页 turn 数（断线重启分页时剥掉页前缀、保留本地新发后缀）
     var loadedPageTurnCounts: [String: Int] = [:]
     /// 当前链已确认的页数；与 turn 数分开，受限网络据此在首两页后暂停。

@@ -27,7 +27,8 @@ extension ChatStore {
     }
 
     func isBusy(_ chatId: String) -> Bool {
-        chatSession(chatId)?.turns.contains(where: \.running) == true
+        guard let chat = chatSession(chatId) else { return false }
+        return chatShowsRunning(chat)
     }
 
     func pendingImages(for chatId: String) -> [PendingImage] {

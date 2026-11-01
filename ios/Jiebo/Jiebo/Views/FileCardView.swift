@@ -248,6 +248,7 @@ private struct ThumbRequest: ViewModifier {
     let file: TurnFile
     let chatId: String
     let writing: Bool
+    @State private var onScreen = false
 
     /// 末位：状态回到 .none（内存淘汰、被撤）时也算变化，卡片还在就重新要
     private var trigger: String {
@@ -256,16 +257,54 @@ private struct ThumbRequest: ViewModifier {
         return "\(key)|\(store.connected)|\(store.gatewayFeatures.contains("read_req_id"))|\(writing)|\(idle)"
     }
 
+    /// HTML / SVG / Canvas 要拉起离屏网页。首屏是普通 VStack，滑出视口的卡片也会 onAppear，所以这几类等进视口再截。
+    private var waitsForViewport: Bool {
+        switch file.kind {
+        case .html, .svg, .canvas: return true
+        default: return false
+        }
+    }
+
     private func request() {
         // 正在写的文件内容不完整，等写完再截
         guard !writing else { return }
         ThumbnailStore.shared.request(file: file, chatId: chatId, store: store)
     }
 
+    private func noteVisibility(_ frame: CGRect) {
+        guard frame.width > 1, frame.height > 1 else { return }
+        let visible = frame.maxY > -80 && frame.minY < 1600
+        onScreen = visible
+        guard visible else { return }
+        request()
+    }
+
     func body(content: Content) -> some View {
         content
-            .onAppear(perform: request)
-            .onChange(of: trigger) { _, _ in request() }
+            .onAppear {
+                if waitsForViewport,
+                   ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store) == .none {
+                    return
+                }
+                request()
+            }
+            .background {
+                if waitsForViewport {
+                    GeometryReader { geo in
+                        Color.clear
+                            .onChange(of: geo.frame(in: .named("threadScroll")).minY, initial: true) { _, _ in
+                                noteVisibility(geo.frame(in: .named("threadScroll")))
+                            }
+                    }
+                }
+            }
+            .onChange(of: trigger) { _, _ in
+                if waitsForViewport, !onScreen,
+                   ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store) == .none {
+                    return
+                }
+                request()
+            }
             .onDisappear { ThumbnailStore.shared.cancel(file: file, chatId: chatId, store: store) }
     }
 }

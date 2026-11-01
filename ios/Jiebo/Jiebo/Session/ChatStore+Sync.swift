@@ -70,7 +70,7 @@ extension ChatStore {
             // rev 不新（如断线重连后服务端还没收到我们的 sync_chat）：
             // 内容不应用，但断线时倒回 dirty 的在途会话必须有人重推，否则会永久搁置
             if !dirtyChatIds.isEmpty { scheduleSync() }
-            ensureTurnsLoaded(activeId) // 断线丢失的在途分页在此重启（onClose 已清 loadingChatIds）
+            ensureFollowedTurnsLoaded() // 断线丢失的在途分页在此重启（onClose 已清 loadingChatIds）
             return
         }
         deleted.filter { !isAssistantChat($0) }.forEach { deletedIds.insert($0) }
@@ -132,7 +132,7 @@ extension ChatStore {
                 applySession(keep)
             }
             if !dirtyChatIds.isEmpty { scheduleSync() }
-            ensureTurnsLoaded(activeId)
+            ensureFollowedTurnsLoaded()
             return
         }
         // 合并前记住服务端原始行（按 id），用于合并后的差异标脏
@@ -213,7 +213,7 @@ extension ChatStore {
         if let keep = chats.first(where: { $0.id == activeId }) {
             applySession(keep)
         }
-        ensureTurnsLoaded(activeId) // P8 slim：active 是壳就启动分页（含重连后在途丢失的重启）
+        ensureFollowedTurnsLoaded() // 当前屏、工作区线程和小驳都要补，不能只看 activeId
         markLive(running: runningChatIds, queued: queuedChatIds)
         scheduleListCache()
     }
@@ -269,12 +269,16 @@ extension ChatStore {
             // 本地优先的也要记下服务端版本：回执据此发现期间别处改过正文，等不脏了再补齐
             chatRevs[id] = serverRev
             guard !hasLocalPriority(id) else { continue }
+            let follow = followedBodyChatIds().contains(id)
             if let index = chats.firstIndex(where: { $0.id == id }), chats[index].turnsComplete {
                 let baseRev = bodyRevs[id] ?? prior
                 if baseRev != serverRev {
                     markNeedsRefresh(id, rev: baseRev)
-                    if id == activeId { ensureTurnsLoaded(id) }
+                    if follow { ensureTurnsLoaded(id) }
                 }
+            } else if follow {
+                // 尾页或磁盘尾部没有标完整。版本已经前进，就得把最新一页拉下来。
+                ensureTurnsLoaded(id)
             }
         }
         scheduleListCache()

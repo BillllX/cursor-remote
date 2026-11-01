@@ -61,6 +61,50 @@ enum ChatCache {
         }
     }
 
+    /// 只读清单：版本、总轮数、段哈希。不解码任何一段正文。
+    struct BodyHead: Sendable {
+        var rev: Int
+        var count: Int
+        var serverSegs: [String]?
+    }
+
+    /// 从磁盘往前翻的一页。reachedStart 表示已经读到这份缓存的开头。
+    struct EarlierPage: Sendable {
+        var turns: [Turn]
+        var reachedStart: Bool
+    }
+
+    static func loadBodyHead(tenant: String, chatId: String) async -> BodyHead? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readBodyHead(tenant: tenant, chatId: chatId))
+            }
+        }
+    }
+
+    /// 只解码末尾几段，取出最近 limit 轮。长会话打开时不用把全文读进内存。
+    static func loadRecentTurns(tenant: String, chatId: String, limit: Int) async -> [Turn]? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readRecentTurns(tenant: tenant, chatId: chatId, limit: limit))
+            }
+        }
+    }
+
+    /// 从 beforeTurnId 往前取一页。锚点不在这份缓存里就返回 nil，调用方不能据此把尾部标成全文。
+    static func loadTurnsBefore(tenant: String, chatId: String, beforeTurnId: String, limit: Int) async -> EarlierPage? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readTurnsBefore(
+                    tenant: tenant,
+                    chatId: chatId,
+                    beforeTurnId: beforeTurnId,
+                    limit: limit
+                ))
+            }
+        }
+    }
+
     /// turns 传 Turn.json() 的结果：编码和写盘都在后台做
     static func saveBody(tenant: String, chatId: String, rev: Int, turns: [JSONValue], serverSegs: [String]? = nil) {
         queue.async {
@@ -329,6 +373,68 @@ enum ChatCache {
     private static func writeManifest(_ manifest: Manifest, to dir: URL) {
         guard let data = try? JSONEncoder().encode(manifest) else { return }
         try? data.write(to: dir.appendingPathComponent("manifest.json"), options: .atomic)
+    }
+
+    private static func readBodyHead(tenant: String, chatId: String) -> BodyHead? {
+        guard let dir = bodyDir(tenant, chatId), let manifest = readManifest(dir), manifest.chatId == chatId else { return nil }
+        return BodyHead(rev: manifest.rev, count: manifest.count, serverSegs: manifest.serverSegs)
+    }
+
+    private static func readSegment(_ dir: URL, _ segment: Manifest.Segment) -> [Turn]? {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent(segment.file)),
+              data.count == segment.bytes,
+              fnv1a(data) == segment.hash,
+              let rows = (try? JSONValue.parse(data))?.array,
+              rows.count == segment.count
+        else { return nil }
+        let turns = rows.compactMap(Turn.from)
+        guard turns.count == rows.count else { return nil }
+        return turns
+    }
+
+    private static func readRecentTurns(tenant: String, chatId: String, limit: Int) -> [Turn]? {
+        guard limit > 0, let dir = bodyDir(tenant, chatId), var manifest = readManifest(dir), manifest.chatId == chatId else { return nil }
+        var turns: [Turn] = []
+        for segment in manifest.segments.reversed() {
+            guard let rows = readSegment(dir, segment) else {
+                try? FileManager.default.removeItem(at: dir)
+                return nil
+            }
+            turns.insert(contentsOf: rows, at: 0)
+            if turns.count >= limit { break }
+        }
+        let tail = Array(turns.suffix(limit))
+        guard !tail.isEmpty, !Turn.hasDuplicateIds(tail) else {
+            try? FileManager.default.removeItem(at: dir)
+            return nil
+        }
+        manifest.at = Date().timeIntervalSince1970
+        writeManifest(manifest, to: dir)
+        return tail
+    }
+
+    private static func readTurnsBefore(tenant: String, chatId: String, beforeTurnId: String, limit: Int) -> EarlierPage? {
+        guard limit > 0, let dir = bodyDir(tenant, chatId), let manifest = readManifest(dir), manifest.chatId == chatId else { return nil }
+        var collected: [Turn] = []
+        var seenAnchor = false
+        for segment in manifest.segments.reversed() {
+            guard let rows = readSegment(dir, segment) else {
+                try? FileManager.default.removeItem(at: dir)
+                return nil
+            }
+            for turn in rows.reversed() {
+                if !seenAnchor {
+                    if turn.id == beforeTurnId { seenAnchor = true }
+                    continue
+                }
+                collected.append(turn)
+                if collected.count >= limit {
+                    return EarlierPage(turns: Array(collected.reversed()), reachedStart: false)
+                }
+            }
+        }
+        guard seenAnchor else { return nil }
+        return EarlierPage(turns: Array(collected.reversed()), reachedStart: true)
     }
 
     private static func readBody(tenant: String, chatId: String) -> Body? {

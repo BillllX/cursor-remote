@@ -68,6 +68,8 @@ struct PreviewTab: Identifiable, Hashable {
     var content: String?
     var error: String?
     var loading: Bool
+    /// 正文超过编辑上限：不放进可观察状态，改走系统预览。HTML 相对路径重写仍要整份文档，这种大小不再半截重写。
+    var external: Bool = false
     /// 媒体类（或 preferHttpText 的大文本）的 /media 相对地址与票据
     var url: String?
     /// 图片/svg diff 的「改前」对照地址（rev=HEAD，P5c 图片 diff 用）

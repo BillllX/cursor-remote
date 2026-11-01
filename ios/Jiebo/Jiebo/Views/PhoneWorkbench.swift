@@ -123,7 +123,7 @@ struct PhoneWorkbench: View {
         adoptWorkbenchChatIfNeeded()
         let anchor = sceneSession?.workbenchChatId
         let running = store.workspaceChats(anchoredTo: anchor).first {
-            store.runningChatIds.contains($0.id) || $0.turns.contains(where: \.running)
+            store.chatShowsRunning($0)
         }
         guard let running else { return }
         if running.id != anchor {
@@ -385,7 +385,7 @@ private struct PhoneDrawer: View {
 
     private func chatRow(_ chat: ChatSession) -> some View {
         let selected = chat.id == selectedChatId
-        let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
+        let live = store.chatShowsRunning(chat)
         return Button {
             sceneSession?.workbenchChatId = chat.id
             store.rememberWorkspaceChat(chat.id)

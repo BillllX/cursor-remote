@@ -40,6 +40,34 @@ enum ImCache {
         }
     }
 
+    enum TimelineRead: Sendable {
+        case missing
+        case messages([ImLocalMessage])
+        case unreadable
+    }
+
+    /// 启动只用这份：每个会话里还没发出去的消息。已发送的历史等点进会话再读。
+    static func loadPending(tenant: String) async -> [String: [ImLocalMessage]] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                var pending: [String: [ImLocalMessage]] = [:]
+                for (convId, items) in readTimelines(tenant: tenant) {
+                    let unsent = items.filter { $0.seq == nil }
+                    if !unsent.isEmpty { pending[convId] = unsent }
+                }
+                continuation.resume(returning: pending)
+            }
+        }
+    }
+
+    static func loadTimeline(tenant: String, convId: String) async -> TimelineRead {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                continuation.resume(returning: readTimeline(tenant: tenant, convId: convId))
+            }
+        }
+    }
+
     private static func readState(tenant: String) -> Snapshot? {
         guard let dir = tenantDir(tenant),
               let data = try? Data(contentsOf: dir.appendingPathComponent("state.json")),
@@ -63,6 +91,18 @@ enum ImCache {
             snapshot.voiceText[convId] = value.object?.compactMapValues(\.string) ?? [:]
         }
         return snapshot
+    }
+
+    private static func readTimeline(tenant: String, convId: String) -> TimelineRead {
+        guard let dir = tenantDir(tenant) else { return .missing }
+        let file = dir.appendingPathComponent("conv", isDirectory: true)
+            .appendingPathComponent(safeName(convId) + ".json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return .missing }
+        guard let data = try? Data(contentsOf: file),
+              let row = try? JSONValue.parse(data).object,
+              row["convId"]?.string == convId
+        else { return .unreadable }
+        return .messages(row["messages"]?.array?.compactMap { ImLocalMessage.from($0) } ?? [])
     }
 
     private static func readTimelines(tenant: String) -> [String: [ImLocalMessage]] {

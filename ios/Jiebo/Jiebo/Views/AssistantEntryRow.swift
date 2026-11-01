@@ -10,9 +10,7 @@ struct AssistantEntryRow: View {
     var body: some View {
         let chat = store.assistantChat
         let selected = store.assistantChatActive
-        let live = chat.map { row in
-            row.turns.contains(where: \.running) || store.runningChatIds.contains(row.id)
-        } ?? false
+        let live = chat.map { store.chatShowsRunning($0) } ?? false
         let unread = !selected && (chat?.unread ?? false)
         let badge = store.assistantBadgeCount
         let preview = store.assistantPreview

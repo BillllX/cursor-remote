@@ -113,13 +113,13 @@ extension ComposerView {
             Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
             Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
             Section {
-                Toggle(isOn: Binding(get: { chat?.policy == "plane" }, set: { on in
-                    if on != (chat?.policy == "plane") { store.togglePolicy(chatId: chatId) }
+                Toggle(isOn: Binding(get: { chrome.policy == "plane" }, set: { on in
+                    if on != (chrome.policy == "plane") { store.togglePolicy(chatId: chatId) }
                 })) {
                     Label("策略层", systemImage: "square.stack.3d.up")
                 }
-                Toggle(isOn: Binding(get: { chat?.confirmWrites == true }, set: { on in
-                    if on != (chat?.confirmWrites == true) { store.toggleConfirmWrites(chatId: chatId) }
+                Toggle(isOn: Binding(get: { chrome.confirmWrites }, set: { on in
+                    if on != chrome.confirmWrites { store.toggleConfirmWrites(chatId: chatId) }
                 })) {
                     Label("写入前确认", systemImage: "checkmark.shield")
                 }

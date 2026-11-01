@@ -566,7 +566,19 @@ struct PreviewContentView: View {
 
     @ViewBuilder
     var body: some View {
-        if tab.loading, tab.content == nil, tab.mediaURL == nil {
+        if tab.external, tab.content == nil, !tab.loading {
+            VStack(spacing: 12) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 22))
+                    .foregroundStyle(JieboColor.dim)
+                Text("这份文件比较大，已用系统预览打开。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink2)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if tab.loading, tab.content == nil, tab.mediaURL == nil {
             VStack(spacing: 10) {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
                 Text("正在读取 \(tab.filename)…")

@@ -44,6 +44,7 @@ struct ThreadView: View {
     @State var earlierNetworkAnchorId: String?
     /// 顶部哨兵进视口只拉一页。离开视口后才允许下一次，避免停在顶部把整段历史连锁拉完。
     @State var earlierNetworkArmed = true
+    @State var earlierDiskArmed = true
     @AppStorage(CalendarInvite.dismissedKey) var calendarInviteDismissed = false
 
     init(chrome: ThreadChrome = .pad, chatId: String? = nil, openDrawer: @escaping () -> Void = {}, dock: AnyView? = nil) {
@@ -104,13 +105,15 @@ struct ThreadView: View {
         }
         .onAppear {
             editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+            store.ensureTurnsLoaded(resolvedChatId)
         }
         .onDisappear {
             editingOwnership.release(resource: editingResource, sceneToken: sceneToken)
         }
-        .onChange(of: resolvedChatId) { oldId, _ in
+        .onChange(of: resolvedChatId) { oldId, newId in
             editingOwnership.release(resource: resource(for: oldId), sceneToken: sceneToken)
             editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+            store.ensureTurnsLoaded(newId)
         }
         .onChange(of: scenePhase) { _, phase in
             editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: phase == .active)
@@ -119,7 +122,7 @@ struct ThreadView: View {
 
     var resolvedChatId: String { chatId ?? store.activeId }
     var threadChat: ChatSession? { store.chats.first { $0.id == resolvedChatId } }
-    var threadBusy: Bool { threadChat?.turns.contains(where: \.running) == true }
+    var threadBusy: Bool { threadChat.map { store.chatShowsRunning($0) } ?? false }
     var editingResource: String { resource(for: resolvedChatId) }
     var ownsEditing: Bool {
         editingOwnership.isOwner(resource: editingResource, sceneToken: sceneToken)

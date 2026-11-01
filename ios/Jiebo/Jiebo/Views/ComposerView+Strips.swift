@@ -3,13 +3,9 @@ import PhotosUI
 import UniformTypeIdentifiers
 
 extension ComposerView {
-    var pendingApproval: PendingTool? {
-        chat?.turns.reversed().first { $0.pendingTool != nil }?.pendingTool
-    }
+    var pendingApproval: PendingTool? { chrome.pending }
 
-    var queuedTurns: [Turn] {
-        chat?.turns.filter(\.queued) ?? []
-    }
+    var queuedTurns: [Turn] { chrome.queued }
 
     func approvalBar(_ tool: PendingTool) -> some View {
         let path = tool.args?.string(in: "path", "file", "target_file", "file_path", "target") ?? ""

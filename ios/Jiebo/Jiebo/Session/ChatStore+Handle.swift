@@ -19,8 +19,7 @@ extension ChatStore {
             markProgress(chatId)
         case .done, .error:
             if chatId == stallChatId {
-                stallTask?.cancel()
-                clearStallHint()
+                stopStallWatch()
             }
         default:
             break
@@ -127,7 +126,10 @@ extension ChatStore {
             client.flushOutbox()
             // stored_state 可能在解锁前到过，当时 ensureTurnsLoaded 会直接返回。解锁后补拉空壳。
             if let current, !current.turnsComplete {
-                ensureTurnsLoaded(activeId)
+                ensureFollowedTurnsLoaded()
+            } else if let assistant = assistantChatId,
+                      chats.first(where: { $0.id == assistant })?.turnsComplete == false {
+                ensureTurnsLoaded(assistant)
             }
             if activeId != "boot", chats.contains(where: { $0.id == activeId }) {
                 requestFileIndex(chatId: activeId)
@@ -192,7 +194,7 @@ extension ChatStore {
                 digestTimeoutTask?.cancel()
             }
             scheduleStateFetch()
-            ensureTurnsLoaded(activeId) // active 被降级就立即重启分页
+            ensureFollowedTurnsLoaded() // 当前屏被降级就立即重启分页，小驳也一起补
         case .syncAck(let rev, let ackRevs, let reviewOnly, let truncated):
             // P4b 回执：确认服务端收下了这些会话。保留回执只对齐版本，不把在途正文同步当成已落盘。
             serverSupportsP4 = true
@@ -206,16 +208,23 @@ extension ChatStore {
                 guard !reviewOnly else { continue }
                 inflightChatIds.remove(id)
                 let base = inflightBases.removeValue(forKey: id)
-                guard chats.first(where: { $0.id == id })?.turnsComplete == true else { continue }
-                if bodyRevs[id] == base, prior == base {
-                    // 上传的只是元数据：发出时正文就是服务端那一版，期间也没有别处写入，正文版本跟着前进
-                    bodyRevs[id] = chatRev
-                    if let segs = bodySegs[id] { bodySegs[id] = SegHashes(rev: chatRev, hashes: segs.hashes) }
+                let follow = followedBodyChatIds().contains(id)
+                guard chats.first(where: { $0.id == id })?.turnsComplete == true else {
+                    // 尾部还没标完整。回执里的版本若已经前进，不能继续把旧尾页当成最新。
+                    if follow, prior != chatRev { ensureTurnsLoaded(id) }
+                    continue
+                }
+                if bodyRevs[id] == base, prior == base, chatRev == base {
+                    // 上传的只是元数据，而且服务端版本号没动：正文仍是发出时那一版。
                     scheduleBodyCache(id)
+                } else if bodyRevs[id] == base, prior == base, chatRev != base {
+                    // 版本号前进了。不能把旧正文写成新版本，否则以后再也不去拉别端的新回合。
+                    markNeedsRefresh(id, rev: bodyRevs[id])
+                    if follow { ensureTurnsLoaded(id) }
                 } else if bodyRevs[id] != chatRev {
                     // 本地优先期间别处改过正文：现在不脏了，按新版本补齐
                     markNeedsRefresh(id, rev: bodyRevs[id] ?? Int.min)
-                    if id == activeId { ensureTurnsLoaded(id) }
+                    if follow { ensureTurnsLoaded(id) }
                 }
             }
             if let rev, rev > stateRev { stateRev = rev }
@@ -262,6 +271,8 @@ extension ChatStore {
                 }
                 if remote.id == activeId {
                     applySession(chats.first { $0.id == remote.id } ?? remote)
+                }
+                if followedBodyChatIds().contains(remote.id) {
                     ensureTurnsLoaded(remote.id)
                 }
             }
@@ -440,10 +451,12 @@ extension ChatStore {
                     runningChatIds.append(target)
                     touchChat(target)
                 }
+                syncLiveBusy(target)
             } else if status == "FINISHED" || status == "ERROR" || status == "CANCELLED" || status == "EXPIRED" {
                 let target = id ?? activeId
                 runningChatIds.removeAll { $0 == target }
                 queuedChatIds.removeAll { $0 == target }
+                syncLiveBusy(target)
                 let settled = (status == "ERROR" || status == "EXPIRED") ? "error" : (status == "CANCELLED" ? "cancelled" : "finished")
                 settlePendingSnapshot(target, status: settled)
                 patchOpen(target) { $0.settled(status: settled) }
@@ -465,6 +478,7 @@ extension ChatStore {
             }
             runningChatIds.removeAll { $0 == target }
             queuedChatIds.removeAll { $0 == target }
+            syncLiveBusy(target)
             settlePendingSnapshot(target, status: "error")
             patchOpen(target) { turn in
                 var next = turn.settled(status: "error")
@@ -475,6 +489,7 @@ extension ChatStore {
         case .done(let id, let status, let duration):
             runningChatIds.removeAll { $0 == id }
             queuedChatIds.removeAll { $0 == id }
+            syncLiveBusy(id)
             settlePendingSnapshot(id, status: status, durationMs: duration)
             patchOpen(id) { turn in
                 turn.settled(status: status, durationMs: duration)
@@ -597,6 +612,7 @@ extension ChatStore {
             }
             let fresh = page.filter { !existing.contains($0.id) }
             chats[index].turns = fresh + chats[index].turns
+            invalidateTurnListMemo(chatId)
             loadedPageTurnCounts[chatId] = (loadedPageTurnCounts[chatId] ?? 0) + fresh.count
             loadPageCounts[chatId] = (loadPageCounts[chatId] ?? 0) + 1
             // turn_files 可早于其所在分页；每页落入内存后立即尝试合并，不能只等最后一页。
@@ -777,12 +793,25 @@ extension ChatStore {
                 tab.mime = mime
                 tab.size = size
                 tab.chatId = msgChatId ?? owner ?? activeId // 票据签发会话（签名绑 chatId，视图拼 mediaSrc 要用它）
-                if let content { tab.content = content }
+                if let content {
+                    switch retainPreviewBody(content, path: path) {
+                    case .inline(let kept):
+                        tab.content = kept
+                        tab.external = false
+                    case .system:
+                        tab.content = nil
+                        tab.external = true
+                    case .failed:
+                        tab.content = nil
+                        tab.external = false
+                        tab.error = "这份文件比较大，系统预览没能打开"
+                    }
+                }
             }
             previewTabs[index] = tab
             // 大文本（markdown/html/canvas 超限时）可能只回 url 不回 content：走 HTTP 票据水合；
             // diff 页签不水合；媒体类（needsMediaURL）由媒体视图直接加载 URL，不能当文本拉
-            if tab.error == nil && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
+            if tab.error == nil && !tab.external && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
         case .files(let query, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError):
@@ -1002,8 +1031,9 @@ extension ChatStore {
     }
 
     /// 尾页已经确认停下：不在翻页、也不在增量补齐。这时新回复直接画出来，不再等整段历史翻完。
+    /// 磁盘尾部同样只是屏幕上的最近一段，别端快照要画上去，不能先收进待应用队列再等一次永远不来的补齐。
     func historyParked(_ id: String) -> Bool {
-        partialHistories[id] != nil
+        (partialHistories[id] != nil || diskBodyCursors[id] != nil)
             && !loadingChatIds.contains(id)
             && !refreshingChatIds.contains(id)
             && bodyRefreshes[id] == nil

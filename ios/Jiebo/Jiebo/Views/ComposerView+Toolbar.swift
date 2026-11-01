@@ -80,8 +80,8 @@ extension ComposerView {
     }
 
     private var moreMenu: some View {
-        let plane = chat?.policy == "plane"
-        let confirm = chat?.confirmWrites == true
+        let plane = chrome.policy == "plane"
+        let confirm = chrome.confirmWrites
         return Menu {
             if style == .assistant {
                 Menu {
@@ -177,7 +177,7 @@ extension ComposerView {
     }
 
     private var confirmToggle: some View {
-        let on = chat?.confirmWrites == true
+        let on = chrome.confirmWrites
         return Button { store.toggleConfirmWrites(chatId: chatId) } label: {
             HStack(spacing: 4) {
                 Image(systemName: on ? "checkmark.shield.fill" : "checkmark.shield")
@@ -198,7 +198,7 @@ extension ComposerView {
     }
 
     private var policyToggle: some View {
-        let plane = chat?.policy == "plane"
+        let plane = chrome.policy == "plane"
         return Button { store.togglePolicy(chatId: chatId) } label: {
             Text(plane ? "策略层" : "现状")
                 .font(JieboFont.text(.caption2, weight: .regular))

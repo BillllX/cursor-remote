@@ -21,7 +21,8 @@ extension ChatStore {
         queued: [JSONValue],
         durationMs: Double?
     ) {
-        patch(chatId) { chat in
+        // 别端快照不是本机编辑。标脏会挡住随后的正文补齐，回执还会把旧正文认成新版本。
+        patch(chatId, turnsTouched: true, sync: false) { chat in
             var next = chat
             let skipBody = (turnId ?? "").isEmpty && userText.isEmpty && assistant.isEmpty
             if !skipBody {
@@ -222,6 +223,7 @@ extension ChatStore {
             }
             return next
         }
+        refreshLiveBusyIds()
     }
 
     /// 会话从列表消失（远端删除/全量替换取消分页）时清理其分页/暂存状态（Kimi 评审 MINOR5）
@@ -240,6 +242,10 @@ extension ChatStore {
         loadStartRevs[id] = nil
         loadStartSegs[id] = nil
         partialHistories[id] = nil
+        diskBodyCursors[id] = nil
+        liveBusyIds.remove(id)
+        composerChromeByChat[id] = nil
+        invalidateTurnListMemo(id)
     }
 
     /// 本地优先门闩：显式脏 + 加载期间发过消息（Grok R2 M1——后者 turns 未齐时 sync 不带正文，
@@ -311,19 +317,24 @@ extension ChatStore {
         }
     }
 
-    func patch(_ id: String, _ update: (ChatSession) -> ChatSession) {
+    /// turnsTouched：调用方已经改了某一轮。流式每几十毫秒进来一次，不再把前面所有回合逐字段比一遍。
+    func patch(_ id: String, turnsTouched: Bool = false, sync: Bool = true, _ update: (ChatSession) -> ChatSession) {
         guard let index = chats.firstIndex(where: { $0.id == id }) else { return }
         let before = chats[index]
         chats[index] = update(before)
         mergePendingTurnFiles(chatId: id, bumpRevision: false)
-        let turnsChanged = chats[index].turns != before.turns
+        let turnsChanged = turnsTouched || chats[index].turns != before.turns
         // 本地改过的正文不再是那份服务端段哈希对应的内容（清掉后不再比，流式增量只比一次）
         if bodySegs[id] != nil, turnsChanged { bodySegs[id] = nil }
         if turnsChanged { turnRenderRevisions[id, default: 0] &+= 1 }
         if turnsChanged { scheduleDisplayTail(id) }
+        syncLiveBusy(id)
+        syncComposerChrome(id)
         // P4b：增量上传只推脏会话。冷启动缓存列表的行只读，不标脏（首个 stored_state 会整份替换）
-        if id != "boot", !cachedOnlyIds.contains(id) { dirtyChatIds.insert(id) }
-        scheduleSync()
+        if sync, id != "boot", !cachedOnlyIds.contains(id) {
+            dirtyChatIds.insert(id)
+            scheduleSync()
+        }
     }
 
     /// turn_files 是网关最终结果，不回推；目标回合尚未由 snapshot/history 建好时先保留。
@@ -333,6 +344,7 @@ extension ChatStore {
     }
 
     func mergePendingTurnFiles(chatId: String, bumpRevision: Bool = true) {
+        guard pendingTurnFiles.hasPending(chatId: chatId) else { return }
         guard let chatIndex = chats.firstIndex(where: { $0.id == chatId }) else { return }
         let available = Set(chats[chatIndex].turns.map(\.id))
         let ready = pendingTurnFiles.take(chatId: chatId, availableTurnIds: available)
@@ -351,7 +363,8 @@ extension ChatStore {
     }
 
     func patchRunning(_ id: String, _ update: (Turn) -> Turn) {
-        patch(id) { chat in
+        guard chats.first(where: { $0.id == id })?.turns.contains(where: \.running) == true else { return }
+        patch(id, turnsTouched: true) { chat in
             var next = chat
             if let index = next.turns.lastIndex(where: \.running) {
                 next.turns[index] = update(next.turns[index])
@@ -361,7 +374,8 @@ extension ChatStore {
     }
 
     func patchOpen(_ id: String, _ update: (Turn) -> Turn) {
-        patch(id) { chat in
+        guard chats.first(where: { $0.id == id })?.turns.contains(where: { $0.running || $0.tools.contains(where: { $0.status == "running" }) }) == true else { return }
+        patch(id, turnsTouched: true) { chat in
             var next = chat
             if let index = next.turns.lastIndex(where: { $0.running || $0.tools.contains(where: { $0.status == "running" }) }) {
                 next.turns[index] = update(next.turns[index])
@@ -375,6 +389,8 @@ extension ChatStore {
         guard chatId == activeId else { return }
         lastProgress = Date()
         clearStallHint()
+        // 同一轮还在盯着：只拨最后进展，不要每个字都拆掉任务再挂一个
+        guard stallChatId != chatId || stallTask == nil else { return }
         armStallWatch(chatId)
     }
 
@@ -382,16 +398,68 @@ extension ChatStore {
         if stallSeconds != 0 { stallSeconds = 0 }
     }
 
+    func stopStallWatch() {
+        stallTask?.cancel()
+        stallTask = nil
+        stallChatId = nil
+        clearStallHint()
+    }
+
+    /// 输入栏用。集合没变就不写，避免流式每个字都通知输入栏重画。
+    func syncLiveBusy(_ chatId: String) {
+        let busy = chats.first { $0.id == chatId }.map(chatShowsRunning) ?? runningChatIds.contains(chatId)
+        if busy {
+            guard !liveBusyIds.contains(chatId) else { return }
+            liveBusyIds.insert(chatId)
+        } else {
+            guard liveBusyIds.contains(chatId) else { return }
+            liveBusyIds.remove(chatId)
+        }
+    }
+
+    func refreshLiveBusyIds() {
+        var next = Set(runningChatIds)
+        for chat in chats where chatShowsRunning(chat) {
+            next.insert(chat.id)
+        }
+        if next != liveBusyIds { liveBusyIds = next }
+        for chat in chats {
+            syncComposerChrome(chat.id)
+        }
+    }
+
+    func syncComposerChrome(_ chatId: String) {
+        guard let chat = chats.first(where: { $0.id == chatId }) else {
+            if composerChromeByChat.removeValue(forKey: chatId) != nil {}
+            return
+        }
+        let next = ComposerChrome(
+            mode: chat.mode,
+            model: chat.sessionModel ?? model,
+            policy: chat.policy,
+            confirmWrites: chat.confirmWrites,
+            pending: chat.turns.reversed().first { $0.pendingTool != nil }?.pendingTool,
+            queued: chat.turns.filter(\.queued)
+        )
+        if composerChromeByChat[chatId] != next {
+            composerChromeByChat[chatId] = next
+        }
+    }
+
     func armStallWatch(_ chatId: String) {
         stallTask?.cancel()
         stallChatId = chatId
         stallTask = Task { @MainActor in
             var noticed = false
+            defer {
+                if !Task.isCancelled, stallChatId == chatId {
+                    stallTask = nil
+                }
+            }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                let live = chats.first { $0.id == chatId }?.turns.contains(where: { $0.running || $0.tools.contains(where: { $0.status == "running" }) }) == true
-                guard live else { clearStallHint(); return }
+                guard stallStillLive(chatId) else { clearStallHint(); return }
                 // 只盯正在看的这个对话：后台对话的提示没地方显示
                 let idle = Int(Date().timeIntervalSince(lastProgress))
                 if chatId == activeId, idle >= 4 {
@@ -405,5 +473,16 @@ extension ChatStore {
                 }
             }
         }
+    }
+
+    /// 从末尾看这一轮还开着没有。排队的回合跳过，不用扫整段历史。
+    private func stallStillLive(_ chatId: String) -> Bool {
+        if runningChatIds.contains(chatId) { return true }
+        guard let chat = chats.first(where: { $0.id == chatId }) else { return false }
+        for turn in chat.turns.reversed() {
+            if turn.running || turn.tools.contains(where: { $0.status == "running" }) { return true }
+            if !turn.queued { return false }
+        }
+        return false
     }
 }

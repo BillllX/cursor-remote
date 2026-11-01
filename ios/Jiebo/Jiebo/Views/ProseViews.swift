@@ -202,7 +202,9 @@ struct ProseLines: View {
                             if line.allSatisfy({ $0 == " " || $0 == "\t" }) {
                                 Color.clear.frame(height: 12)
                             } else {
-                                lineRow(line)
+                                // 已排好的行文字没变就跳过。流式只重做最后一行的 AttributedString。
+                                ProseLineRow(line: line, sizeCategory: sizeCategory)
+                                    .equatable()
                             }
                         }
                     }
@@ -281,16 +283,26 @@ struct ProseLines: View {
         }
     }
 
-    private func lineRow(_ line: String) -> some View {
+}
+
+/// 一行正文。相等时不重做行内 Markdown。字号档写进相等判断，动态字号仍会重排。
+private struct ProseLineRow: View, Equatable {
+    let line: String
+    let sizeCategory: ContentSizeCategory
+
+    static func == (lhs: ProseLineRow, rhs: ProseLineRow) -> Bool {
+        lhs.line == rhs.line && lhs.sizeCategory == rhs.sizeCategory
+    }
+
+    var body: some View {
         let expanded = line.replacingOccurrences(of: "\t", with: "    ")
         let indent = expanded.prefix { $0 == " " }.count
         let body = String(expanded.dropFirst(indent))
         let heading = headingLevel(of: body)
         let item = listItem(of: body)
-        let headingInfo = heading
-        let display = item?.rest ?? headingInfo?.rest ?? body
+        let display = item?.rest ?? heading?.rest ?? body
         let inlineKind: ProseInline.Kind = {
-            if let level = headingInfo?.level { return .heading(level: level) }
+            if let level = heading?.level { return .heading(level: level) }
             return .body
         }()
         return HStack(alignment: .top, spacing: 0) {
@@ -307,9 +319,7 @@ struct ProseLines: View {
             Text(ProseInline.attributed(display, sizeCategory: sizeCategory, kind: inlineKind))
                 .foregroundStyle(JieboColor.ink)
                 .tint(JieboColor.pine)
-                // 不逐行开 textSelection：整条消息已有长按菜单（复制/重新生成/分享），一行一个会抢掉它
                 .multilineTextAlignment(.leading)
-                // 竖向只按自己的折行高度占位；字重已写进 AttributedString，勿再套 .font()
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -334,7 +344,6 @@ struct ProseLines: View {
         guard rest.first == " " else { return nil }
         return (marks, String(rest.dropFirst()))
     }
-
 }
 
 /// 对话里的 Markdown 表。表头比单元格更淡，文件名用等宽，行与行之间只留发丝线。

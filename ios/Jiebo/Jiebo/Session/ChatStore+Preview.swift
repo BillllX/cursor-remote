@@ -3,6 +3,12 @@ import Observation
 import Photos
 import UIKit
 
+enum PreviewBodyHold {
+    case inline(String)
+    case system
+    case failed
+}
+
 extension ChatStore {
     /// 切工作区后重拉所有打开的页签（对齐网页 per-chat tabs 的意图：内容不能跨工作区复用）
     func reloadPreviewTabs() {
@@ -310,6 +316,21 @@ extension ChatStore {
         sendTabRead(previewTabs[index])
     }
 
+    /// 超过编辑上限的正文不放进页签。相对路径重写要整份 HTML，这种大小改走系统预览。
+    func retainPreviewBody(_ text: String, path: String) -> PreviewBodyHold {
+        guard text.utf16.count > Self.contentSaveLimit else { return .inline(text) }
+        let filename = (path as NSString).lastPathComponent
+        let ext = (filename as NSString).pathExtension
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jiebo-preview-\(UUID().uuidString)")
+            .appendingPathExtension(ext.isEmpty ? "txt" : ext)
+        guard (try? text.write(to: url, atomically: true, encoding: .utf8)) != nil else {
+            return .failed
+        }
+        setPreviewFile(PreviewFile(url: url, name: filename.isEmpty ? url.lastPathComponent : filename))
+        return .system
+    }
+
     /// 大文本的 HTTP 水合（对齐网页 fetchPreviewText）：file_content 只给 url 时经票据拉正文
     func hydratePreviewText(path: String) {
         guard let tab = previewTabs.first(where: { $0.path == path }),
@@ -331,8 +352,20 @@ extension ChatStore {
                       previewTabs[index].readSha == shaAtStart, // 期间换了版本的不写旧版本正文
                       previewTabs[index].content == nil // 期间 WS 已补上 content 的不覆盖
                 else { return }
-                previewTabs[index].content = text
-                previewTabs[index].error = nil // 清掉可能的陈旧错误（双 Task 竞态）
+                switch retainPreviewBody(text, path: path) {
+                case .inline(let kept):
+                    previewTabs[index].content = kept
+                    previewTabs[index].external = false
+                    previewTabs[index].error = nil
+                case .system:
+                    previewTabs[index].content = nil
+                    previewTabs[index].external = true
+                    previewTabs[index].error = nil
+                case .failed:
+                    previewTabs[index].content = nil
+                    previewTabs[index].external = false
+                    previewTabs[index].error = "这份文件比较大，系统预览没能打开"
+                }
                 previewTabs[index].loading = false
             } catch {
                 guard tenantId == tenantAtStart,

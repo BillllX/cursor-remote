@@ -83,8 +83,11 @@ final class ImStore {
     var voiceText: [String: [Int: String]] = [:]
     var listLoaded = false
     var contactsLoaded = false
-    /// 本机 conv 文件已经并进 timelines。在这之前不能 catchUp，也不能把半截时间线写回磁盘
+    /// 启动时的列表和待发消息已经读完。完整时间线按会话记在 timelineLoaded，没读完不能落盘。
     private var timelinesReady = false
+    /// 这份会话的 conv 文件已经并进内存。没进去之前落盘会把历史盖成待发消息。
+    private var timelineLoaded = Set<String>()
+    private var timelineLoading = Set<String>()
     private var deferredTimelineSaves = Set<String>()
 
     // MARK: 界面状态
@@ -305,13 +308,15 @@ final class ImStore {
             let snapshot = await ImCache.loadState(tenant: next)
             guard let self, self.loadEpoch == epoch, self.tenant == next else { return }
             if let snapshot { self.apply(snapshot) }
-            let timelines = await ImCache.loadTimelines(tenant: next)
+            let pending = await ImCache.loadPending(tenant: next)
             guard self.loadEpoch == epoch, self.tenant == next else { return }
-            self.applyTimelines(timelines)
+            self.applyTimelines(pending)
             self.timelinesReady = true
-            let pending = self.deferredTimelineSaves
+            ImCache.sweepOutbox(tenant: self.tenant, keep: self.pendingOutboxFiles())
+            if self.online { self.replayDurableOutbox() }
+            let deferred = self.deferredTimelineSaves
             self.deferredTimelineSaves = []
-            for convId in pending { self.saveTimelineSoon(convId) }
+            for convId in deferred { self.saveTimelineSoon(convId) }
             if self.listLoaded, self.online { self.catchUp() }
         }
     }
@@ -340,7 +345,8 @@ final class ImStore {
             }
         }
         for convId in Array(hidden.keys) { pruneHidden(convId) }
-        // 没发出去的图还要用 outbox 里的文件；其余（删掉的待发消息、旧版本留下的）清掉
+        // 待发消息还没从 conv 文件读进来时不能扫：keep 是空的，会把还要重发的附件清掉。
+        guard timelinesReady else { return }
         ImCache.sweepOutbox(tenant: tenant, keep: pendingOutboxFiles())
         if online { replayDurableOutbox() }
     }
@@ -386,6 +392,8 @@ final class ImStore {
         tickets = [:]
         blocked = []
         timelines = [:]
+        timelineLoaded = []
+        timelineLoading = []
         collabRuns = [:]
         olderMore = [:]
         loadingOlder = []
@@ -732,6 +740,7 @@ final class ImStore {
     private func catchUp() {
         guard timelinesReady else { return }
         for (convId, items) in timelines {
+            guard timelineLoaded.contains(convId) else { continue }
             guard let conv = convs[convId] else { continue }
             let local = ImTimeline.maxSeq(items)
             guard conv.maxSeq > local else { continue }
@@ -741,7 +750,7 @@ final class ImStore {
             }
             catchUp(convId: convId, items: items, conv: conv, local: local)
         }
-        if let open = visibleConvId, timelines[open]?.contains(where: { $0.seq != nil }) != true {
+        if let open = visibleConvId, timelineLoaded.contains(open), timelines[open]?.contains(where: { $0.seq != nil }) != true {
             requestLatest(open)
         }
     }
@@ -749,6 +758,11 @@ final class ImStore {
     /// 受限路径下进入会话时再补该会话；未读、撤回和已读权威值仍由列表/实时事件照常对账。
     private func catchUp(convId: String) {
         guard timelinesReady, let conv = convs[convId] else { return }
+        guard timelineLoaded.contains(convId) else {
+            deferredCatchUp.insert(convId)
+            loadTimelineIfNeeded(convId)
+            return
+        }
         let items = timelines[convId] ?? []
         let local = ImTimeline.maxSeq(items)
         guard conv.maxSeq > local else {
@@ -807,15 +821,54 @@ final class ImStore {
         }
     }
 
-    /// 聊天页出现：没有任何消息就拉最新一页
+    /// 聊天页出现：先把这一份时间线读进内存，没有已发送的消息再拉最新一页。
     func open(convId: String) {
         visibleConvId = convId
+        guard timelineLoaded.contains(convId) else {
+            loadTimelineIfNeeded(convId)
+            return
+        }
         catchUp(convId: convId)
         if timelines[convId]?.contains(where: { $0.seq != nil }) != true, convs[convId] != nil {
             requestLatest(convId)
         } else if convs[convId] == nil {
             // 没聊过：没什么可拉的
             olderMore[convId] = false
+        }
+    }
+
+    /// 点进会话，或有消息要落盘时，才读这一份 conv 文件。读失败不标已加载，避免用待发消息盖掉历史。
+    private func loadTimelineIfNeeded(_ convId: String) {
+        guard !convId.isEmpty, !timelineLoaded.contains(convId), !timelineLoading.contains(convId) else { return }
+        timelineLoading.insert(convId)
+        let tenant = tenant
+        let epoch = loadEpoch
+        Task { [weak self] in
+            let read = await ImCache.loadTimeline(tenant: tenant, convId: convId)
+            guard let self, self.loadEpoch == epoch, self.tenant == tenant else { return }
+            self.timelineLoading.remove(convId)
+            switch read {
+            case .unreadable:
+                return
+            case .missing:
+                self.applyTimelines([convId: []])
+            case .messages(let items):
+                self.applyTimelines([convId: items])
+            }
+            self.timelineLoaded.insert(convId)
+            if self.deferredTimelineSaves.contains(convId) {
+                self.saveTimelineSoon(convId)
+            }
+            if self.visibleConvId == convId || self.deferredCatchUp.contains(convId) {
+                self.catchUp(convId: convId)
+            }
+            if self.visibleConvId == convId,
+               self.timelines[convId]?.contains(where: { $0.seq != nil }) != true,
+               self.convs[convId] != nil {
+                self.requestLatest(convId)
+            } else if self.visibleConvId == convId, self.convs[convId] == nil {
+                self.olderMore[convId] = false
+            }
         }
     }
 
@@ -831,6 +884,7 @@ final class ImStore {
 
     /// 上滑到顶：拉更早的一页
     func loadOlder(_ convId: String) {
+        guard timelineLoaded.contains(convId) else { return }
         guard online, olderMore[convId] != false, !loadingOlder.contains(convId), !loadingLatest.contains(convId) else { return }
         guard let first = ImTimeline.minSeq(timelines[convId] ?? []) else {
             if convs[convId] != nil { requestLatest(convId) }
@@ -1768,14 +1822,20 @@ final class ImStore {
             deferredTimelineSaves.insert(convId)
             return
         }
+        guard timelineLoaded.contains(convId) else {
+            deferredTimelineSaves.insert(convId)
+            loadTimelineIfNeeded(convId)
+            return
+        }
         timelineSaveTasks[convId]?.cancel()
         timelineSaveTasks[convId] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(500))
             guard let self, !Task.isCancelled else { return }
             self.timelineSaveTasks[convId] = nil
             guard !self.tenant.isEmpty else { return }
-            guard self.timelinesReady else {
+            guard self.timelinesReady, self.timelineLoaded.contains(convId) else {
                 self.deferredTimelineSaves.insert(convId)
+                if self.timelinesReady { self.loadTimelineIfNeeded(convId) }
                 return
             }
             ImCache.saveTimeline(tenant: self.tenant, convId: convId, items: self.timelines[convId] ?? [])

@@ -301,7 +301,7 @@ struct SidebarView: View {
 
     private func chatRow(_ chat: ChatSession) -> some View {
         let selected = chat.id == selectedChatId
-        let live = chat.turns.contains(where: \.running) || store.runningChatIds.contains(chat.id)
+        let live = store.chatShowsRunning(chat)
         return Button {
             if let sceneSession {
                 sceneSession.workbenchChatId = chat.id

@@ -10,6 +10,10 @@ struct DeferredTurnFiles {
         values[chatId, default: [:]][turnId] = files
     }
 
+    func hasPending(chatId: String) -> Bool {
+        values[chatId]?.isEmpty == false
+    }
+
     mutating func take(chatId: String, availableTurnIds: Set<String>) -> [String: [TurnFile]] {
         guard let pending = values[chatId] else { return [:] }
         let ready = pending.filter { availableTurnIds.contains($0.key) }
@@ -627,9 +631,18 @@ struct ChatSession: Identifiable, Hashable {
     }
 
     /// sync_chat 只传元数据：正文由网关转录落盘，截断走 truncate_turns。
-    /// 本机正文可能落后于别的设备，带着它上传会把对方新写的回合覆盖掉
+    /// 不走 json()：那条在全文已齐时会先把每一轮编出来，再删掉 turns。
+    /// 本机正文可能落后于别的设备，带着它上传会把对方新写的回合覆盖掉。
     func metaJSON() -> JSONValue {
-        guard var object = json().object else { return json() }
+        var object = extra
+        object["id"] = .string(id)
+        object["title"] = .string(title)
+        object["mode"] = .string(mode.rawValue)
+        object["confirmWrites"] = .bool(confirmWrites)
+        object["policy"] = .string(policy)
+        if let agentId { object["agentId"] = .string(agentId) }
+        if let model { object["model"] = .string(model) }
+        if let cwd { object["cwd"] = .string(cwd) }
         object.removeValue(forKey: "turns")
         return .object(object)
     }

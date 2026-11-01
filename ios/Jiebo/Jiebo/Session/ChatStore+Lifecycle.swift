@@ -106,6 +106,7 @@ extension ChatStore {
         AppBootstrapCache.removeAll()
         imSink?.logout()
         ImImageCache.shared.removeAll()
+        JieboThumbDecoder.removeAll()
         client.disconnect()
     }
 
@@ -233,6 +234,8 @@ extension ChatStore {
         cancelUploadConfirmations()
         syncTask?.cancel()
         stallTask?.cancel()
+        stallTask = nil
+        stallChatId = nil
         // 换租户/退出登录不能把旧账号尚未 flush 的增量带进新会话。
         discardStreamDeltas()
         client.clearOutbox()
@@ -323,10 +326,16 @@ extension ChatStore {
         snapshotHold = []
         heldDeltas = [:]
         turnRenderRevisions = [:]
+        uniquedTurnMemo = [:]
+        shellMemo = nil
+        diskBodyCursors = [:]
+        diskPrependIds = []
         previewTabs = []
         previewActivePath = nil
         runningChatIds = []
         queuedChatIds = []
+        liveBusyIds = []
+        composerChromeByChat = [:]
         isAdmin = false // P9：换租户/登出后管理员身份与统计一并作废
         assistantState = nil
         assistantMemoryRevision = nil

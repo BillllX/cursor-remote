@@ -44,10 +44,12 @@ struct ComposerView: View {
     @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
-    var chat: ChatSession? { store.chatSession(chatId) }
-    var chatBusy: Bool { store.isBusy(chatId) }
-    var chatMode: AgentMode { store.mode(for: chatId) }
-    var chatModel: String { store.model(for: chatId) }
+    var chrome: ComposerChrome {
+        store.composerChromeByChat[chatId] ?? ComposerChrome(model: store.model)
+    }
+    var chatBusy: Bool { store.liveBusyIds.contains(chatId) }
+    var chatMode: AgentMode { chrome.mode }
+    var chatModel: String { chrome.model.isEmpty ? store.model : chrome.model }
     var chatImages: [PendingImage] { store.pendingImages(for: chatId) }
 
     var body: some View {

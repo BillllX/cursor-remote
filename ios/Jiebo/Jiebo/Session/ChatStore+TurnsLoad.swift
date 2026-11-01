@@ -32,6 +32,24 @@ extension ChatStore {
             if hasVisibleTurns { return }
             partialHistories[chatId] = nil
         }
+        // 磁盘上还有更早的段，内存里只留着尾部。版本没对上之前不能标完整，也不能把这段当基线上传。
+        if let cursor = diskBodyCursors[chatId] {
+            let revisionMismatch = chatRevs[chatId].map { $0 != cursor.rev } ?? false
+            if revisionMismatch || diskTailHashesDiffer(chatId, cursor) {
+                diskBodyCursors[chatId] = nil
+                displayOnlyIds.insert(chatId)
+            } else if !chats[index].turns.isEmpty {
+                let settled = chats[index].turns.filter { !ChatStore.isLiveTurn($0) }
+                if chatRevs[chatId] == cursor.rev, settled.count >= cursor.count {
+                    chats[index].turnsComplete = true
+                    chats[index].serverPreview = nil
+                    bodySegs[chatId] = cursor.serverSegs.map { SegHashes(rev: cursor.rev, hashes: $0) }
+                    diskBodyCursors[chatId] = nil
+                    completeTurnsLoad(chatId)
+                }
+                return
+            }
+        }
         // 屏幕上只有首屏尾段：不要拿它接缝，也不要让分页去重把它当成权威正文
         if displayOnlyIds.contains(chatId) {
             guard unlocked else { return }
@@ -90,6 +108,21 @@ extension ChatStore {
         sendLoadChat(chatId, from: nil)
     }
 
+    /// 屏幕上真正看得见的会话。iPad 的小驳绑在助理会话上，不一定是 activeId。
+    func followedBodyChatIds() -> [String] {
+        var ids = [activeId]
+        if let home = chatHomeThreadChatId, !home.isEmpty { ids.append(home) }
+        if let assistant = assistantChatId, !assistant.isEmpty { ids.append(assistant) }
+        var seen = Set<String>()
+        return ids.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    func ensureFollowedTurnsLoaded() {
+        for id in followedBodyChatIds() {
+            ensureTurnsLoaded(id)
+        }
+    }
+
     /// 发一页 load_chat 并重新计时。超时按断线同一套规则作废这条分页链，换新 nonce 从末页重拉，
     /// 迟到的旧页凭 nonce 丢弃，不会和新页拼在一起
     func sendLoadChat(_ chatId: String, from: Int?) {
@@ -130,6 +163,7 @@ extension ChatStore {
             } else if pageCount > chats[index].turns.count {
                 chats[index].turns = []
             }
+            invalidateTurnListMemo(id)
         }
         loadingChatIds.remove(id)
         loadedPageTurnCounts[id] = nil
@@ -143,6 +177,14 @@ extension ChatStore {
     /// 本地「活的」回合：补齐时以本地为准，不让服务端的旧副本盖掉
     static func isLiveTurn(_ turn: Turn) -> Bool {
         turn.running || turn.queued || turn.pendingTool != nil
+    }
+
+    /// 磁盘尾部记下的段哈希已经不是服务端这一版。版本号碰巧相同也不能再把它当成最新正文。
+    private func diskTailHashesDiffer(_ chatId: String, _ cursor: DiskBodyCursor) -> Bool {
+        guard let server = currentServerSegs(chatId) else { return false }
+        let local = cursor.serverSegs ?? []
+        if local.isEmpty || server.hashes.isEmpty { return false }
+        return local != server.hashes
     }
 
     /// 服务端段哈希，只在它就是 chatRevs 当前版本的哈希时返回
@@ -186,13 +228,10 @@ extension ChatStore {
                let tail = await ChatCache.loadTail(tenant: tenant, chatId: chatId) {
                 self.paintTail(chatId, tail: tail, epoch: epoch, tenant: tenant)
             }
-            let body = await ChatCache.loadBody(tenant: tenant, chatId: chatId)
+            await self.restoreCachedBody(chatId, tenant: tenant, epoch: epoch)
             guard self.cacheEpoch == epoch, self.tenantId == tenant else { return }
             self.cacheReadingIds.remove(chatId)
             self.cacheCheckedIds.insert(chatId)
-            if let body, !self.deletedIds.contains(chatId) {
-                self.installCachedBody(chatId, body: body)
-            }
             self.ensureTurnsLoaded(chatId)
         }
     }
@@ -211,6 +250,7 @@ extension ChatStore {
               let index = chats.firstIndex(where: { $0.id == chatId })
         else { return }
         chats[index].turns = tail.turns
+        invalidateTurnListMemo(chatId)
         chats[index].turnsComplete = false
         displayOnlyIds.insert(chatId)
         if let rev = tail.chatRev, let nextFrom = tail.nextFrom,
@@ -231,6 +271,7 @@ extension ChatStore {
         let cachedIds = Set(body.turns.map(\.id))
         let extra = chats[index].turns.filter { !cachedIds.contains($0.id) }
         chats[index].turns = body.turns + extra
+        invalidateTurnListMemo(chatId)
         mergePendingTurnFiles(chatId: chatId)
         let settledExtra = extra.contains { !ChatStore.isLiveTurn($0) }
         if !settledExtra {
@@ -240,6 +281,103 @@ extension ChatStore {
             partialHistories[chatId] = nil
         }
         rememberTail(chatId)
+    }
+
+    /// 长会话只把尾部放进内存。bodyRevs 和 turnsComplete 都先不动，避免同步把尾部当成全文推上去。
+    /// 返回 false 时调用方再决定要不要读全文（短会话，或尾部读失败）。
+    private func installDiskTail(_ chatId: String, turns: [Turn], head: ChatCache.BodyHead) -> Bool {
+        guard !deletedIds.contains(chatId), bodyRevs[chatId] == nil,
+              !loadingChatIds.contains(chatId), bodyRefreshes[chatId] == nil,
+              diskBodyCursors[chatId] == nil,
+              let index = chats.firstIndex(where: { $0.id == chatId }),
+              !chats[index].turnsComplete
+        else { return false }
+        if let server = chatRevs[chatId], server != head.rev { return false }
+        let cachedIds = Set(turns.map(\.id))
+        let extra = chats[index].turns.filter { !cachedIds.contains($0.id) }
+        let settledExtra = extra.contains { !ChatStore.isLiveTurn($0) }
+        chats[index].turns = turns + extra
+        invalidateTurnListMemo(chatId)
+        mergePendingTurnFiles(chatId: chatId)
+        if settledExtra {
+            // 尾部之外还有已经结束的本地回合。留在屏幕上，但不把磁盘尾部当成基线。
+            displayOnlyIds.insert(chatId)
+            return true
+        }
+        diskBodyCursors[chatId] = DiskBodyCursor(rev: head.rev, count: head.count, serverSegs: head.serverSegs)
+        displayOnlyIds.remove(chatId)
+        partialHistories[chatId] = nil
+        rememberTail(chatId)
+        return true
+    }
+
+    /// 清单超过一页尾部就只读末段；短会话仍整份装入。装入之后才回到 ensureTurnsLoaded。
+    private func restoreCachedBody(_ chatId: String, tenant: String, epoch: Int) async {
+        guard cacheEpoch == epoch, tenantId == tenant else { return }
+        guard let head = await ChatCache.loadBodyHead(tenant: tenant, chatId: chatId) else { return }
+        guard cacheEpoch == epoch, tenantId == tenant, !deletedIds.contains(chatId) else { return }
+        if head.count > ChatCache.tailLimit {
+            if let tail = await ChatCache.loadRecentTurns(tenant: tenant, chatId: chatId, limit: ChatCache.tailLimit),
+               cacheEpoch == epoch, tenantId == tenant {
+                _ = installDiskTail(chatId, turns: tail, head: head)
+            }
+            // 装不上尾部也不要改读全文，否则长会话又整段进内存。
+            return
+        }
+        guard cacheEpoch == epoch, tenantId == tenant else { return }
+        if let body = await ChatCache.loadBody(tenant: tenant, chatId: chatId),
+           cacheEpoch == epoch, tenantId == tenant, !deletedIds.contains(chatId) {
+            installCachedBody(chatId, body: body)
+        }
+    }
+
+    /// 用户已经把内存里的尾部翻完。再从磁盘往前接一页。只有内存里真是这份缓存的全文时才标完整。
+    func prependCachedTurns(_ chatId: String) async -> Bool {
+        guard let cursor = diskBodyCursors[chatId], !diskPrependIds.contains(chatId),
+              let oldest = chats.first(where: { $0.id == chatId })?.turns.first?.id
+        else { return false }
+        diskPrependIds.insert(chatId)
+        defer { diskPrependIds.remove(chatId) }
+        let tenant = tenantId
+        let epoch = cacheEpoch
+        let page = await ChatCache.loadTurnsBefore(
+            tenant: tenant,
+            chatId: chatId,
+            beforeTurnId: oldest,
+            limit: ChatCache.tailLimit
+        )
+        guard cacheEpoch == epoch, tenantId == tenant, !deletedIds.contains(chatId),
+              diskBodyCursors[chatId] != nil,
+              let index = chats.firstIndex(where: { $0.id == chatId }),
+              !chats[index].turnsComplete
+        else { return false }
+        guard let page else {
+            diskBodyCursors[chatId] = nil
+            displayOnlyIds.insert(chatId)
+            return false
+        }
+        let existing = Set(chats[index].turns.map(\.id))
+        let fresh = page.turns.filter { !existing.contains($0.id) }
+        if !fresh.isEmpty {
+            chats[index].turns = fresh + chats[index].turns
+            invalidateTurnListMemo(chatId)
+        }
+        if page.reachedStart {
+            let settled = chats[index].turns.filter { !ChatStore.isLiveTurn($0) }
+            if settled.count >= cursor.count, chatRevs[chatId] == cursor.rev {
+                chats[index].turnsComplete = true
+                chats[index].serverPreview = nil
+                bodySegs[chatId] = cursor.serverSegs.map { SegHashes(rev: cursor.rev, hashes: $0) }
+                diskBodyCursors[chatId] = nil
+                completeTurnsLoad(chatId)
+            } else if settled.count < cursor.count || chatRevs[chatId] != nil {
+                // 份数对不上，或服务端版本已经不是这份缓存：丢掉游标，交给现有的补齐，不把半截标完整。
+                diskBodyCursors[chatId] = nil
+                displayOnlyIds.insert(chatId)
+                if chatRevs[chatId] != nil { ensureTurnsLoaded(chatId) }
+            }
+        }
+        return !fresh.isEmpty
     }
 
     /// 把最近 40 条已结束回合写到不会被系统清掉的目录。正在生成的回合不写，避免下次启动盖住服务端终态
@@ -455,6 +593,8 @@ extension ChatStore {
 
     /// 正文齐了（全量分页、增量补齐、基线版本一致）之后的公共收尾。调用前已置 turnsComplete = true
     func completeTurnsLoad(_ chatId: String, authoritative: Bool = true) {
+        diskBodyCursors[chatId] = nil
+        invalidateTurnListMemo(chatId)
         // 基线版本相同、空会话等不经过并页路径，也必须消费先到的 turn_files。
         mergePendingTurnFiles(chatId: chatId)
         let startSegs = loadStartSegs.removeValue(forKey: chatId)
@@ -585,6 +725,8 @@ extension ChatStore {
         tailTasks.removeValue(forKey: chatId)?.cancel()
         displayOnlyIds.remove(chatId)
         partialHistories[chatId] = nil
+        diskBodyCursors[chatId] = nil
+        invalidateTurnListMemo(chatId)
         bodyRevs[chatId] = nil
         bodySegs[chatId] = nil
         guard chatId != "boot", !tenantId.isEmpty else { return }
@@ -671,16 +813,13 @@ extension ChatStore {
             self.activeId = targetId
             self.cwd = chat.cwd ?? self.cwd
             self.mode = chat.mode
-            let body = await ChatCache.loadBody(tenant: tenant, chatId: targetId)
+            await self.restoreCachedBody(targetId, tenant: tenant, epoch: epoch)
             guard self.cacheEpoch == epoch, self.tenantId == tenant else {
                 self.cacheReadingIds.remove(targetId)
                 return
             }
             self.cacheReadingIds.remove(targetId)
             self.cacheCheckedIds.insert(targetId)
-            if let body, !self.deletedIds.contains(targetId) {
-                self.installCachedBody(targetId, body: body)
-            }
             self.ensureTurnsLoaded(targetId) // 缓存行：只用本机正文，不发请求
         }
     }

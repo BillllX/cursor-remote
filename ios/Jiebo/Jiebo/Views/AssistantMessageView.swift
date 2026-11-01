@@ -161,6 +161,16 @@ private struct AssistantMessage: View, Equatable {
                 switch block {
                 case .code(let code, let lang):
                     CodeBlockView(code: code, lang: lang)
+                case .liveCode(let code):
+                    Text(code.isEmpty ? " " : code)
+                        .font(JieboFont.mono(13))
+                        .foregroundStyle(JieboColor.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(JieboColor.well.opacity(0.6))
+                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                 case .prose(let prose):
                     ProseLines(text: prose)
                 }
@@ -172,6 +182,8 @@ private struct AssistantMessage: View, Equatable {
     private enum Block {
         case prose(String)
         case code(String, lang: String)
+        /// 围栏还没闭合。只画尾部纯文本，闭合后再换成代码块。
+        case liveCode(String)
     }
 
     private var blocks: [Block] {
@@ -203,7 +215,10 @@ private struct AssistantMessage: View, Equatable {
             }
             if inCode { code.append(line) } else { prose.append(line) }
         }
-        if inCode { result.append(.code(code.joined(separator: "\n"), lang: lang)) }
+        if inCode {
+            let tail = code.count > 24 ? code.suffix(24).joined(separator: "\n") : code.joined(separator: "\n")
+            result.append(.liveCode(tail))
+        }
         flushProse()
         if result.isEmpty { result.append(.prose(text)) }
         return result

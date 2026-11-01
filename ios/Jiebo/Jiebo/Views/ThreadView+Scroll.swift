@@ -38,7 +38,7 @@ extension ThreadView {
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 4)
                     }
-                    let allTurns = Turn.uniqued(threadChat?.turns ?? [])
+                    let allTurns = store.uniquedTurns(for: resolvedChatId)
                     let renderLimit = renderedTurnLimit(for: resolvedChatId, total: allTurns.count)
                     let hiddenCount = max(0, allTurns.count - renderLimit)
                     let turns = Array(allTurns.suffix(renderLimit))
@@ -67,7 +67,34 @@ extension ThreadView {
                             }
                         }
                     }
-                    if hiddenCount == 0,
+                    if hiddenCount == 0, store.diskBodyCursors[resolvedChatId] != nil {
+                        Button {
+                            loadDiskEarlier(proxy: proxy, allTurns: allTurns)
+                        } label: {
+                            Text(store.diskPrependIds.contains(resolvedChatId) ? "正在加载更早内容…" : "加载更早内容")
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.diskPrependIds.contains(resolvedChatId))
+                        .background {
+                            GeometryReader { marker in
+                                Color.clear
+                                    .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
+                                        let visible = minY >= -12 && minY < viewportHeight - 48
+                                        guard visible, !stickToBottom else {
+                                            if !visible { earlierDiskArmed = true }
+                                            return
+                                        }
+                                        guard earlierDiskArmed else { return }
+                                        earlierDiskArmed = false
+                                        loadDiskEarlier(proxy: proxy, allTurns: allTurns)
+                                    }
+                            }
+                        }
+                    } else if hiddenCount == 0,
                        let partial = store.partialHistories[resolvedChatId],
                        partial.nextFrom > 0
                     {
@@ -470,6 +497,30 @@ extension ThreadView {
                 }
             }
             scrollingProgrammatically = false
+        }
+    }
+
+    /// 内存里的尾部已经露完，再从磁盘往前读一页。不把半截标成全文。
+    func loadDiskEarlier(proxy: ScrollViewProxy, allTurns: [Turn]) {
+        guard !loadingEarlierBatch,
+              store.diskBodyCursors[resolvedChatId] != nil,
+              !store.diskPrependIds.contains(resolvedChatId)
+        else { return }
+        let anchor = allTurns.first?.id
+        let previous = allTurns.count
+        loadingEarlierBatch = true
+        Task { @MainActor in
+            let added = await store.prependCachedTurns(resolvedChatId)
+            guard added else {
+                loadingEarlierBatch = false
+                return
+            }
+            let total = store.uniquedTurns(for: resolvedChatId).count
+            renderedTurnLimitByChat[resolvedChatId] = min(total, previous + Self.renderedTurnStep)
+            loadingEarlierBatch = false
+            guard let anchor else { return }
+            earlierNetworkAnchorId = anchor
+            restoreEarlierNetworkAnchor(anchor, proxy: proxy)
         }
     }
 

@@ -20,6 +20,10 @@ enum JieboThumbDecoder {
         cache.setObject(image, forKey: key as NSString, cost: cost)
     }
 
+    static func removeAll() {
+        cache.removeAllObjects()
+    }
+
     static func decode(_ data: Data, maxPixel: CGFloat) -> UIImage? {
         let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let source = CGImageSourceCreateWithData(data as CFData, options as CFDictionary) else { return nil }

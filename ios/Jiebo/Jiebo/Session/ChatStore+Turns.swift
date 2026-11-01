@@ -285,6 +285,7 @@ extension ChatStore {
         send(.cancel(chatId: targetId))
         runningChatIds.removeAll { $0 == targetId }
         queuedChatIds.removeAll { $0 == targetId }
+        syncLiveBusy(targetId)
         patch(targetId) { chat in
             var next = chat
             next.turns = next.turns.map { turn in
@@ -295,6 +296,8 @@ extension ChatStore {
             return next
         }
         stallTask?.cancel()
+        stallTask = nil
+        stallChatId = nil
         clearStallHint()
     }
 
