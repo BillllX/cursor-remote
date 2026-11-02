@@ -60,8 +60,6 @@ struct AssistantHome: View {
                     .padding(.top, 8)
                     .accessibilityAddTraits(.updatesFrequently)
                 }
-                destinationStrip
-                TodayStrip()
                 ThreadView(chrome: .embedded, dock: AnyView(ActionDock()))
             }
         }
@@ -72,15 +70,14 @@ struct AssistantHome: View {
             ToolbarItem(placement: .topBarLeading) {
                 menuButton
             }
-            .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .principal) {
                 titleView
             }
             ToolbarItem(placement: .topBarTrailing) {
                 todayButton
             }
-            .sharedBackgroundVisibility(.hidden)
         }
+        .modifier(AssistantToolbarMinimize())
     }
 
     /// 连接、同步或需要人处理时才出字。平常只留圆点，避免每句都占一行。
@@ -101,37 +98,6 @@ struct AssistantHome: View {
         return nil
     }
 
-    private var destinationStrip: some View {
-        DestinationWrap(spacing: 8) {
-            destination("sun.max", "今日") { router.openHub() }
-            destination("checkmark.circle", "待办") { router.go(.worklist(.todo)) }
-            destination("calendar", "计划") { router.go(.worklist(.plan)) }
-            destination("person.2.wave.2", "委派") { router.go(.worklist(.delegation)) }
-            destination("square.stack.3d.up", "产物") { router.go(.artifacts) }
-            destination(NavigationIconId.memory.symbol, "记忆") { router.go(.memory) }
-            destination(NavigationIconId.account.symbol, "设置") { router.go(.settings) }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .accessibilityLabel("小驳栏目")
-    }
-
-    private func destination(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(JieboFont.text(.subheadline, weight: .semibold))
-                .foregroundStyle(JieboColor.ink)
-                .padding(.horizontal, 10)
-                .frame(minHeight: 44)
-                .background(JieboColor.white)
-                .clipShape(Capsule())
-                .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityHint("打开\(title)")
-    }
-
     // MARK: 导航栏
 
     private var menuButton: some View {
@@ -140,18 +106,15 @@ struct AssistantHome: View {
             router.openMenu()
         } label: {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
                         PendingBadge(count: badge)
-                            .offset(x: 10, y: -8)
+                            .offset(x: 8, y: -6)
                     }
                 }
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(
             badge > 0
                 ? "菜单，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
@@ -160,10 +123,10 @@ struct AssistantHome: View {
     }
 
     private var titleView: some View {
-        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 56)
+        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
             .overlay(alignment: .bottomTrailing) {
                 LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(store.activeId))
-                    .offset(x: 1, y: 7)
+                    .offset(x: 1, y: 2)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(titleAccessibility)
@@ -201,12 +164,9 @@ struct AssistantHome: View {
             router.openHub()
         } label: {
             Image(systemName: NavigationIconId.assistant.symbol)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel("今日")
         .accessibilityAddTraits(router.hubOpen ? .isSelected : [])
     }
@@ -244,54 +204,13 @@ struct AssistantHome: View {
     }
 }
 
-/// 栏目胶囊按可用宽度换行，窄屏不用横滑才能看见后面的「设置」。
-private struct DestinationWrap: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let limit = proposal.width ?? .greatestFiniteMagnitude
-        let rows = rows(limit: limit, subviews: subviews)
-        let height = rows.reduce(CGFloat(0)) { $0 + $1.height } + spacing * CGFloat(max(0, rows.count - 1))
-        let width = proposal.width ?? (rows.map(\.width).max() ?? 0)
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
+/// 往下滚动时收起顶部玻璃栏。这个动作要 iOS 27；iOS 26 仍用系统玻璃栏，只是不收起。
+private struct AssistantToolbarMinimize: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 27, *) {
+            content.toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
+        } else {
+            content
         }
-    }
-
-    private func rows(limit: CGFloat, subviews: Subviews) -> [(width: CGFloat, height: CGFloat)] {
-        var rows: [(width: CGFloat, height: CGFloat)] = []
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            let next = rowWidth == 0 ? size.width : rowWidth + spacing + size.width
-            if rowWidth > 0, next > limit {
-                rows.append((rowWidth, rowHeight))
-                rowWidth = size.width
-                rowHeight = size.height
-            } else {
-                rowWidth = next
-                rowHeight = max(rowHeight, size.height)
-            }
-        }
-        if rowWidth > 0 || rows.isEmpty {
-            rows.append((rowWidth, rowHeight))
-        }
-        return rows
     }
 }

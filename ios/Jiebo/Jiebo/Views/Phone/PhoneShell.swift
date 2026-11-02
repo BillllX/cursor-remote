@@ -49,8 +49,8 @@ struct PhoneShell: View {
                     .frame(height: height)
                     .clipShape(Self.panelShape)
                     .background {
-                        Self.panelShape
-                            .fill(JieboColor.paper)
+                        Color.clear
+                            .jieboGlass(in: Self.panelShape)
                             .ignoresSafeArea(.container, edges: .bottom)
                     }
                     .offset(y: hubDrag)

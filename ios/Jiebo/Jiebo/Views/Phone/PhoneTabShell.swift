@@ -54,6 +54,7 @@ struct PhoneTabShell: View {
             }
             .badge(im.totalUnread)
         }
+        .tabBarMinimizeBehavior(.onScrollDown)
         .environment(router)
         .environment(\.assistantSceneToken, sceneToken)
         .environment(\.openDelegation, { [router = self.router] id in

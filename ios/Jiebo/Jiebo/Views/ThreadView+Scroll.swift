@@ -157,6 +157,7 @@ extension ThreadView {
                 .frame(width: geo.size.width, alignment: .topLeading)
             }
             .scrollDismissesKeyboard(.interactively)
+            .scrollEdgeEffectStyle(.automatic, for: .vertical)
             .coordinateSpace(name: "threadScroll")
             // 可视高度 = 这一层 GeometryReader 的高度减去 bottom safe area。
             // safeAreaInset 挂在这一层外面，输入框算进 inset，这里不要再减一次。

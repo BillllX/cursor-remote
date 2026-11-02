@@ -65,9 +65,10 @@ struct MenuDrawer: View {
                     panel
                         .frame(width: min(300, geo.size.width * 0.82))
                         .frame(maxHeight: .infinity)
-                        .background(JieboColor.sidebar.ignoresSafeArea())
-                        .overlay(alignment: .trailing) {
-                            Rectangle().fill(JieboColor.line).frame(width: 1).ignoresSafeArea()
+                        .background {
+                            Color.clear
+                                .jieboGlass(in: Rectangle())
+                                .ignoresSafeArea()
                         }
                         .gesture(
                             DragGesture(minimumDistance: 20)

@@ -70,7 +70,6 @@ struct AssistantHubSheet: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .background(JieboColor.paper)
         .phoneNotice()
         .onDisappear { router.hubAnchor = nil }
     }

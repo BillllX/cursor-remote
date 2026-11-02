@@ -72,10 +72,10 @@ struct PadTodayExperience: View {
         .background(JieboColor.paper)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 59.5)
+                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
                     .overlay(alignment: .bottomTrailing) {
                         LinkStatusDot(state: store.linkState, syncing: store.assistantThreadSyncBusy)
-                            .offset(x: 1, y: 7)
+                            .offset(x: 1, y: 2)
                     }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel("\(store.assistantName)，\(store.assistantAvatarPhase.accessibilityLabel)，\(store.linkState.title)")
