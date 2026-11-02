@@ -32,7 +32,7 @@ struct MemoryCenterImportPane: View {
                 Toggle("工作偏好 (W0)", isOn: $exportWorkPreference)
                 Toggle("个人设置", isOn: $exportSettings)
                 ForEach(workspaceScopeIds, id: \.self) { scopeId in
-                    Toggle("工作区 \(scopeId)", isOn: Binding(
+                    Toggle("文件夹 \(scopeId)", isOn: Binding(
                         get: { exportWorkspaceIds.contains(scopeId) },
                         set: { on in
                             if on { exportWorkspaceIds.insert(scopeId) } else { exportWorkspaceIds.remove(scopeId) }

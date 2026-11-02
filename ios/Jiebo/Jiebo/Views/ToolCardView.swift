@@ -5,6 +5,7 @@ struct ToolCardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.threadChatId) private var environmentChatId
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.openPadDomain) private var openPadDomain
     var tool: ToolCall
     var compactPresentation = false
     var showBorder = true
@@ -99,6 +100,22 @@ struct ToolCardView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("打开 \(path)")
+                } else if tool.kind == .shell {
+                    Button {
+                        openPadDomain?(.workbench)
+                        store.openTerminalOnWorkbench(chatId: chatId, callId: tool.callId)
+                    } label: {
+                        Text("终端输出")
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.ink)
+                            .padding(.horizontal, 10)
+                            .frame(minHeight: 44)
+                            .background(JieboColor.well)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("终端输出")
+                    .accessibilityHint("在工作台打开这条命令的输出")
                 }
                 if !compactPresentation { badge }
                 else if tool.status == "running" || tool.status == "error" {

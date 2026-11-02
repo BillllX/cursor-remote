@@ -22,18 +22,19 @@ struct FileBrowserSheet: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text((path as NSString).lastPathComponent)
-                                    .font(JieboFont.ui(14, weight: .medium))
+                                    .font(JieboFont.text(.subheadline, weight: .medium))
                                     .foregroundStyle(JieboColor.ink)
                                 Text(path)
-                                    .font(JieboFont.mono(11))
+                                    .font(JieboFont.monoText(.caption2))
                                     .foregroundStyle(JieboColor.dim)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("插入 \((path as NSString).lastPathComponent)")
                         // 眼睛：直接预览（不进草稿）
                         Button {
                             store.openPreview(path, chatId: chatId)
@@ -51,16 +52,22 @@ struct FileBrowserSheet: View {
                     }
                     .listRowBackground(Color.clear)
                 }
+                if filtered.isEmpty {
+                    Text(store.fileIndexEmptyTitle ?? (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.dim)
+                        .listRowBackground(Color.clear)
+                }
                 if store.treeTruncated {
-                    Text("工作区文件太多，清单被截断了，用搜索缩小范围。")
-                        .font(JieboFont.ui(12))
+                    Text("文件太多，清单被截断了，用搜索缩小范围。")
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .listRowBackground(Color.clear)
                 }
             }
             .listStyle(.plain)
             .searchable(text: $filter, prompt: "搜文件名或路径")
-            .navigationTitle("工作区文件")
+            .navigationTitle("文件")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

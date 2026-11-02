@@ -99,7 +99,7 @@ final class VoiceDictation {
             })
         } catch {
             teardown()
-            return "开不了麦克风：\(error.localizedDescription)"
+            return microphoneFailure(error)
         }
 
         phase = .recording
@@ -109,6 +109,22 @@ final class VoiceDictation {
             self?.stopEarly()
         }
         return nil
+    }
+
+    /// 开麦克风失败。这是本机录音，不接系统原文，也不写成断线。
+    private func microphoneFailure(_ error: Error) -> String {
+        let ns = error as NSError
+        let busy: Set<Int> = [
+            AVAudioSession.ErrorCode.cannotStartRecording.rawValue,
+            AVAudioSession.ErrorCode.isBusy.rawValue,
+            AVAudioSession.ErrorCode.cannotInterruptOthers.rawValue,
+            AVAudioSession.ErrorCode.insufficientPriority.rawValue,
+            AVAudioSession.ErrorCode.siriIsRecording.rawValue,
+        ]
+        if ns.domain == NSOSStatusErrorDomain, busy.contains(ns.code) {
+            return "现在用不了麦克风，可能正在通话，稍后再试"
+        }
+        return "现在用不了麦克风，稍后再试"
     }
 
     /// 松手：停止录音，等最后一段识别结果（最多 2 秒），返回整理好的文字。

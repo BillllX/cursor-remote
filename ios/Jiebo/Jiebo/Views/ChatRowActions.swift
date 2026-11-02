@@ -46,7 +46,7 @@ private struct ChatActionAlerts: ViewModifier {
                 isPresented: Binding(get: { targets.rename != nil }, set: { if !$0 { targets.rename = nil } }),
                 presenting: targets.rename
             ) { chat in
-                TextField("会话标题", text: $targets.draft)
+                TextField("对话标题", text: $targets.draft)
                     .textInputAutocapitalization(.sentences)
                 Button("取消", role: .cancel) { targets.rename = nil }
                 Button("确定") {
@@ -54,7 +54,11 @@ private struct ChatActionAlerts: ViewModifier {
                     targets.rename = nil
                 }
             } message: { chat in
-                Text(chat.title)
+                Text(store.cachedOnlyIds.contains(chat.id)
+                    ? "「\(chat.title)」还没对上服务器，现在改名不会留下。"
+                    : store.connected
+                        ? "「\(chat.title)」改名后，其他设备也会看到。"
+                        : "还没连上。「\(chat.title)」会先在这台设备改名，连上后其他设备也会看到。")
             }
             .alert(
                 "删除这个会话？",
@@ -67,7 +71,9 @@ private struct ChatActionAlerts: ViewModifier {
                 }
                 Button("取消", role: .cancel) { targets.delete = nil }
             } message: { chat in
-                Text("「\(chat.title)」会从这台设备上的列表里去掉。")
+                Text(store.connected
+                    ? "「\(chat.title)」会从列表里去掉，其他设备上也看不到。"
+                    : "「\(chat.title)」会先从这台设备去掉。连上后，其他设备上也看不到。")
             }
     }
 }

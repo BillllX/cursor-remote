@@ -70,8 +70,14 @@ extension ChatStore {
         tab.fromCard ? (tab.chatId ?? activeId) : activeId
     }
 
-    /// 按页签当前的 diff/sha 发 read_file 并挂看门狗
+    /// 按页签当前的 diff/sha 发 read_file 并挂看门狗。还没登录或没连上时不发，免得八秒后写成读取超时。
     func sendTabRead(_ tab: PreviewTab) {
+        if let blocked = contentReadBlockedTitle(),
+           let index = previewTabs.firstIndex(where: { $0.path == tab.path }) {
+            previewTabs[index].loading = false
+            previewTabs[index].error = blocked
+            return
+        }
         send(.readFile(path: tab.path, chatId: readChatId(tab), diff: tab.diff, sha: supportsReadSha ? tab.readSha : nil))
         armPreviewWatchdog(path: tab.path)
     }
@@ -84,7 +90,7 @@ extension ChatStore {
             let tab = self.previewTabs[index]
             if tab.loading, tab.content == nil, tab.error == nil {
                 self.previewTabs[index].loading = false
-                self.previewTabs[index].error = "读取超时。点重试再试一次。"
+                self.previewTabs[index].error = self.contentReadBlockedTitle() ?? "读取超时。点重试再试一次。"
             }
         }
     }
@@ -336,6 +342,12 @@ extension ChatStore {
         guard let tab = previewTabs.first(where: { $0.path == path }),
               let url = tab.mediaURL
         else { return }
+        if let blocked = contentReadBlockedTitle(),
+           let index = previewTabs.firstIndex(where: { $0.path == path }) {
+            previewTabs[index].loading = false
+            previewTabs[index].error = blocked
+            return
+        }
         let tenantAtStart = tenantId
         let shaAtStart = tab.readSha
         Task {
@@ -374,7 +386,7 @@ extension ChatStore {
                       previewTabs[index].content == nil // 已有内容时不盖错误
                 else { return }
                 previewTabs[index].loading = false
-                previewTabs[index].error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                previewTabs[index].error = self.contentReadBlockedTitle() ?? self.hydrateFailureTitle(error)
             }
         }
     }

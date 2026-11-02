@@ -31,7 +31,7 @@ struct SidebarView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     if workspaceChats.isEmpty {
-                        Text("这个工作区还没有对话")
+                        Text("这里还没有对话")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(.horizontal, 20)
@@ -114,8 +114,9 @@ struct SidebarView: View {
         }
     }
 
+    @ViewBuilder
     private var linkStatus: some View {
-        HStack(spacing: 6) {
+        let label = HStack(spacing: 6) {
             LinkStatusDot(state: store.linkState, size: 8)
                 .accessibilityHidden(true)
             Text(store.linkState.title)
@@ -123,8 +124,20 @@ struct SidebarView: View {
                 .foregroundStyle(JieboColor.dim)
                 .lineLimit(1)
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("连接状态，\(store.linkState.title)")
+        if store.linkState == .offline {
+            Button {
+                store.retryConnection()
+            } label: {
+                label.frame(minHeight: 44, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("连接状态，\(store.linkState.title)")
+            .accessibilityHint("重新连接")
+        } else {
+            label
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("连接状态，\(store.linkState.title)")
+        }
     }
 
     private var collapseButton: some View {
@@ -151,7 +164,7 @@ struct SidebarView: View {
                     .background(JieboColor.brass.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("当前工作区")
+                    Text("当前文件夹")
                         .font(JieboFont.text(.caption2))
                         .foregroundStyle(JieboColor.dim)
                     Text(workspaceTitle)
@@ -178,8 +191,8 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("当前工作区，\(workspaceTitle)")
-        .accessibilityHint("切换到别的工作区")
+        .accessibilityLabel("当前文件夹，\(workspaceTitle)")
+        .accessibilityHint("换一个文件夹")
     }
 
     private var toolStrip: some View {
@@ -245,7 +258,7 @@ struct SidebarView: View {
 
     private var chatsHeader: some View {
         HStack(spacing: 8) {
-            Text("工作区对话")
+            Text("对话")
                 .font(JieboFont.text(.caption, weight: .medium))
                 .tracking(0.6)
                 .foregroundStyle(JieboColor.dim)
@@ -272,7 +285,7 @@ struct SidebarView: View {
                 settingsOpen = true
             } label: {
                 HStack(spacing: 6) {
-                    Label("账户与设置", systemImage: NavigationIconId.account.symbol)
+                    Label("设置", systemImage: NavigationIconId.account.symbol)
                         .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink2)
                     if im.totalUnread > 0 {
@@ -283,7 +296,7 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(im.totalUnread > 0 ? "账户与设置，聊天有 \(im.totalUnread) 条未读" : "账户与设置")
+            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
@@ -363,7 +376,7 @@ struct SidebarView: View {
         .buttonStyle(.plain)
         .accessibilityLabel([
             chat.title,
-            selected ? "当前工作区会话" : nil,
+            selected ? "当前对话" : nil,
             live ? StatusLegendId.running.label : nil
         ].compactMap { $0 }.joined(separator: "，"))
         .accessibilityAddTraits(selected ? .isSelected : [])

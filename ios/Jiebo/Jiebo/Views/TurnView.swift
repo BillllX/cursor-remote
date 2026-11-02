@@ -11,6 +11,10 @@ struct TurnView: View, Equatable {
     /// iPhone 助理页：记忆类工具不出卡片，delegate / create_workspace 写成人话
     var embedded = false
     var isLastAssistant = false
+    /// 最后一轮失败且输入框是空的：可以把这一句放回去，不自动发送。
+    var canRestorePrompt = false
+    /// 这句话还在本地，连接回来才会开始。不要写成已经动手。
+    var waitingForLink = false
     /// 本机审阅记录与还原中：都存在 store 里而不在 Turn 上，作为入参让 == 能看到它们的变化
     var reviewMark: String? = nil
     var restoring = false
@@ -27,6 +31,8 @@ struct TurnView: View, Equatable {
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
             && lhs.embedded == rhs.embedded && lhs.isLastAssistant == rhs.isLastAssistant
+            && lhs.canRestorePrompt == rhs.canRestorePrompt
+            && lhs.waitingForLink == rhs.waitingForLink
             && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
             && lhs.captured == rhs.captured && lhs.calendarInvite == rhs.calendarInvite
     }
@@ -262,11 +268,22 @@ struct TurnView: View, Equatable {
                     Text(task)
                         .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.ink2)
+                } else if waitingForLink {
+                    HStack(spacing: 8) {
+                        Text("等连上再开始")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.dim)
+                        Button("不发送") { store.cancelUnsentTurn(turn.id, chatId: chatId) }
+                            .font(JieboFont.text(.caption, weight: .semibold))
+                            .buttonStyle(.bordered)
+                            .tint(JieboColor.ink2)
+                            .accessibilityHint("这句话回到输入框，连上后也不会发出去")
+                    }
                 } else if turn.thinking.isEmpty, turn.tools.isEmpty {
                     ShimmerText(text: "开始动手", font: JieboFont.text(.subheadline))
                 }
             }
-            if turn.running, isLastAssistant {
+            if turn.running, isLastAssistant, !waitingForLink {
                 StallHintRow()
             }
             if !captured.isEmpty {
@@ -284,20 +301,35 @@ struct TurnView: View, Equatable {
                 }
             }
             if !turn.deferred, let error = turn.error, !error.isEmpty, !turn.running {
-                HStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(JieboFont.text(.subheadline))
-                        .foregroundStyle(JieboColor.danger)
-                        .accessibilityHidden(true)
-                    Text(friendlyError(error))
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.danger)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .tint(JieboColor.danger)
-                        .font(JieboFont.text(.footnote, weight: .semibold))
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.danger)
+                            .accessibilityHidden(true)
+                        Text(friendlyError(error))
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.danger)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+                        if canRestorePrompt {
+                            Button("放回输入框") {
+                                store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .tint(JieboColor.ink2)
+                            .font(JieboFont.text(.footnote, weight: .semibold))
+                            .accessibilityHint("不发送，上一句回到输入框")
+                        }
+                        Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .tint(JieboColor.danger)
+                            .font(JieboFont.text(.footnote, weight: .semibold))
+                    }
                 }
                 .padding(.leading, 12)
                 .padding(.trailing, 8)
@@ -506,11 +538,14 @@ struct StallHintRow: View {
                     .foregroundStyle(JieboColor.dim)
                     .monospacedDigit()
                 if seconds >= 15 {
-                    Button("停止") { store.stop(chatId: chatId) }
-                        .font(JieboFont.text(.caption, weight: .semibold))
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        .tint(JieboColor.clay)
+                    Button("停止并放回") {
+                        store.stop(chatId: chatId)
+                        store.restoreLastPromptIfDraftEmpty(chatId: chatId)
+                    }
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .buttonStyle(.bordered)
+                    .tint(JieboColor.clay)
+                    .accessibilityHint("上一句回到输入框")
                 }
             }
             .accessibilityElement(children: .combine)

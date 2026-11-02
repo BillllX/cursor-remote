@@ -27,16 +27,16 @@ struct LoopSheet: View {
             Section {
                 if !store.loopError.isEmpty {
                     Text(store.loopError)
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.clay)
                 }
                 if let row {
                     Text(statusLine(row))
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                 } else {
                     Text("还没开始。关掉 App 也会继续，重新打开后状态还在。")
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                 }
             }

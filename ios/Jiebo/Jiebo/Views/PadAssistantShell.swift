@@ -11,6 +11,7 @@ struct PadAssistantShell: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     @State private var containerWidth: CGFloat = 0
+    @State private var settingsOpen = false
 
     private var projection: PadAssistantProjection {
         PadAssistantProjection(state: store.assistantState)
@@ -48,10 +49,93 @@ struct PadAssistantShell: View {
                 ideal: router.layoutMode.sidebarWidth.ideal,
                 max: router.layoutMode.sidebarWidth.maximum
             )
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Button {
+                    settingsOpen = true
+                } label: {
+                    Label("设置", systemImage: NavigationIconId.account.symbol)
+                        .font(JieboFont.text(.subheadline, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("设置")
+                .accessibilityHint("打开设置")
+                .background(JieboColor.paper)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(JieboColor.line).frame(height: 1)
+                }
+            }
+            .sheet(isPresented: $settingsOpen) {
+                NavigationStack {
+                    PhoneSettingsScreen()
+                        .navigationDestination(for: PhoneRoute.self) { route in
+                            switch route {
+                            case .memory: AssistantMemoryScreen()
+                            case .connections: DeviceConnectionsScreen()
+                            default: EmptyView()
+                            }
+                        }
+                }
+            }
         } detail: {
-            sectionContent
-                .navigationTitle(router.assistantSection.title)
-                .navigationBarTitleDisplayMode(.inline)
+            VStack(spacing: 0) {
+                if !store.connected {
+                    Button {
+                        store.retryConnection()
+                    } label: {
+                        Text(store.linkState.title)
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.danger)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.horizontal, 16)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.linkState != .offline)
+                    .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+                } else if store.assistantThreadSyncBusy {
+                    Button {
+                        store.retryAssistantThreadSync()
+                    } label: {
+                        Text(ChatStore.syncingThreadTitle)
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.horizontal, 16)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("再拉一次这条会话")
+                } else if !store.hasApiKey {
+                    Text(ChatStore.missingApiKeyTitle)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.danger)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .background(JieboColor.paper)
+                        .accessibilityAddTraits(.updatesFrequently)
+                } else if store.connected, let title = store.backgroundAttentionTitle {
+                    Button {
+                        store.requestAssistant(force: true)
+                    } label: {
+                        Text(title)
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .lineLimit(3)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.horizontal, 16)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("再向服务器确认后台模型")
+                }
+                sectionContent
+            }
+            .navigationTitle(router.assistantSection.title)
+            .navigationBarTitleDisplayMode(.inline)
         }
         .navigationSplitViewStyle(.balanced)
         .background(JieboColor.paper)
@@ -307,10 +391,12 @@ private struct PadSectionNavigationRow: View {
     var body: some View {
         Button(action: onOpen) {
             Label(section.title, systemImage: section.symbol)
-                .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .font(JieboFont.text(.body))
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(section.title)
         .dropDestination(for: PadSemanticTransfer.self, action: { items, _ in
             onDrop(items)
         }, isTargeted: { targeted = $0 })

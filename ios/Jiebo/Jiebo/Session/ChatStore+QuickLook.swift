@@ -16,8 +16,21 @@ extension ChatStore {
             if !trimmed.isEmpty { flash("这类内容暂不支持预览") }
             return
         }
+        guard unlocked else {
+            flash("还没登录。这次不会打开，登录后再看。")
+            return
+        }
         let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return }
+        guard !token.isEmpty else {
+            flash("还没登录。这次不会打开，登录后再看。")
+            return
+        }
+        guard client.isOpen else {
+            flash(linkState == .offline
+                ? "已断开。这次不会打开，点按重连后再看。"
+                : "正在连接。这次不会打开，连上后再看。")
+            return
+        }
         previewTask?.cancel() // 连续点两个 mention：取消在途的，避免覆盖泄漏
         previewLoading = true
         let chatId = fileChatId ?? activeId
@@ -38,7 +51,7 @@ extension ChatStore {
                 guard !Task.isCancelled else { return }
                 previewLoading = false
                 guard tenantId == tenantAtStart else { return }
-                bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                bannerError = mediaDownloadFailureTitle(verb: "打开", error: error)
             }
         }
     }
@@ -110,7 +123,10 @@ extension ChatStore {
         // 与 openMention 同一套入口守卫（对齐：空串/目录/精确 "diff"）
         guard !path.isEmpty, !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
         let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return }
+        if content == nil, let blocked = mediaDownloadBlockedTitle(verb: "导出") {
+            bannerError = blocked
+            return
+        }
         exportTask?.cancel()
         exportLoading = true
         bannerError = "" // 清旧错误：cover 顶条红优先于绿，不清的话成功 flash 被旧错误挡住（Grok R2 M1）
@@ -142,7 +158,7 @@ extension ChatStore {
                 guard !Task.isCancelled else { return }
                 exportLoading = false
                 guard tenantId == tenantAtStart else { return }
-                bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                bannerError = mediaDownloadFailureTitle(verb: "导出", error: error)
             }
         }
     }
@@ -153,7 +169,10 @@ extension ChatStore {
         let path = rawPath.trimmingCharacters(in: .whitespaces)
         guard !path.isEmpty, !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
         let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { return }
+        if let blocked = mediaDownloadBlockedTitle(verb: "存相册") {
+            bannerError = blocked
+            return
+        }
         exportTask?.cancel()
         exportLoading = true
         bannerError = "" // 同 exportPreview（Grok R2 M1）
@@ -195,9 +214,59 @@ extension ChatStore {
                 guard !Task.isCancelled else { return }
                 exportLoading = false
                 guard tenantId == tenantAtStart else { return }
-                bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                bannerError = photoLibraryFailureTitle(error) ?? mediaDownloadFailureTitle(verb: "存相册", error: error)
             }
         }
+    }
+
+    /// 写进相册失败。这是相册，不改成连接句，也不接系统原文。
+    private func photoLibraryFailureTitle(_ error: Error) -> String? {
+        let ns = error as NSError
+        guard ns.domain == PHPhotosErrorDomain else { return nil }
+        if ns.code == PHPhotosError.Code.userCancelled.rawValue {
+            return "这次存相册取消了。"
+        }
+        if ns.code == PHPhotosError.Code.networkAccessRequired.rawValue {
+            return "这张图还在 iCloud 里，下到本机后再存。"
+        }
+        return "没存进相册，再试一次。"
+    }
+
+    /// 下载已经发出去之后又失败。还没登录或没连上时不用系统的断线句子。
+    private func mediaDownloadFailureTitle(verb: String, error: Error) -> String {
+        if let blocked = mediaDownloadBlockedTitle(verb: verb) {
+            return blocked
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut:
+                return "这次\(verb)超时了，再试一次。"
+            case .cancelled:
+                return "这次\(verb)取消了。"
+            case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                 .cannotFindHost, .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff:
+                return "网络中断了，这次没能\(verb)。再试一次。"
+            default:
+                return "这次没能\(verb)，再试一次。"
+            }
+        }
+        if let text = (error as? LocalizedError)?.errorDescription, !text.isEmpty {
+            return text
+        }
+        return "这次没能\(verb)，再试一次。"
+    }
+
+    /// 要下载才拦。页签里已经有正文时，导出不走网络。
+    private func mediaDownloadBlockedTitle(verb: String) -> String? {
+        guard unlocked, !tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "还没登录。这次不会\(verb)，登录后再试。"
+        }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。这次不会\(verb)，点按重连后再试。"
+                : "正在连接。这次不会\(verb)，连上后再试。"
+        }
+        return nil
     }
 
     /// 写 exportFile 的唯一入口：先删旧 temp 再换新的（同 setPreviewFile 的防泄漏链）

@@ -45,8 +45,9 @@ extension ChatStore {
         send(.workspaceAgentOpen(path: item.path))
     }
 
-    /// 多窗口入口只请求规范化服务数据，不改任何窗口的导航选择。
+    /// 多窗口入口只请求规范化服务数据，不改任何窗口的导航选择。还没登录或没连上时不发，免得界面假装正在打开。
     func requestWorkspaceAgent(_ item: WorkspaceAgentItem) {
+        guard unlocked, connected else { return }
         if let chatId = item.mainChatId {
             ensureTurnsLoaded(chatId)
         } else {

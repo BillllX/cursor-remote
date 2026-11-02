@@ -389,6 +389,7 @@ extension ChatStore {
         guard chatId == activeId else { return }
         lastProgress = Date()
         clearStallHint()
+        clearStallRecoveryNotice()
         // 同一轮还在盯着：只拨最后进展，不要每个字都拆掉任务再挂一个
         guard stallChatId != chatId || stallTask == nil else { return }
         armStallWatch(chatId)
@@ -403,6 +404,11 @@ extension ChatStore {
         stallTask = nil
         stallChatId = nil
         clearStallHint()
+        clearStallRecoveryNotice()
+    }
+
+    func clearStallRecoveryNotice() {
+        if notice == Self.stallRecoveryNotice { notice = "" }
     }
 
     /// 输入栏用。集合没变就不写，避免流式每个字都通知输入栏重画。
@@ -459,7 +465,11 @@ extension ChatStore {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled else { return }
-                guard stallStillLive(chatId) else { clearStallHint(); return }
+                guard stallStillLive(chatId) else {
+                    clearStallHint()
+                    clearStallRecoveryNotice()
+                    return
+                }
                 // 只盯正在看的这个对话：后台对话的提示没地方显示
                 let idle = Int(Date().timeIntervalSince(lastProgress))
                 if chatId == activeId, idle >= 4 {
@@ -467,9 +477,12 @@ extension ChatStore {
                 } else {
                     clearStallHint()
                 }
-                if idle >= 90, !noticed {
+                if chatId == activeId, idle >= 90, !noticed {
                     noticed = true
-                    notice = "这一轮没有新进展。如果一直转圈，点停止再发一次。"
+                    notice = Self.stallRecoveryNotice
+                } else if idle < 90 || chatId != activeId {
+                    noticed = false
+                    clearStallRecoveryNotice()
                 }
             }
         }

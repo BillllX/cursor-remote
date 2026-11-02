@@ -42,7 +42,7 @@ struct PhoneTabShell: View {
             }
             .badge(store.assistantBadgeCount)
 
-            Tab("工作区", systemImage: "rectangle.3.group", value: PhoneTab.workspace) {
+            Tab("工作台", systemImage: "rectangle.3.group", value: PhoneTab.workspace) {
                 if router.selectedTab == .workspace {
                     PhoneWorkbench(embedsPreview: false)
                 }
@@ -82,6 +82,9 @@ struct PhoneTabShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            FirstUseHint()
+        }
         .fullScreenCover(isPresented: workspaceFilesPresented) {
             FileBrowserCover()
         }
@@ -101,8 +104,24 @@ struct PhoneTabShell: View {
                 dispatchWidgetDeepLink()
             }
         }
+        .onChange(of: store.workbenchFilesRequest) { _, _ in
+            if router.selectedTab != .workspace {
+                router.selectedTab = .workspace
+            }
+            if !(store.fileBrowserOpen && store.fileBrowserPane == .files) {
+                store.toggleFileBrowser(.files)
+            }
+        }
+        .onChange(of: store.workbenchTerminalRequest) { _, _ in
+            if router.selectedTab != .workspace {
+                router.selectedTab = .workspace
+            }
+        }
+        .onChange(of: store.returnToAssistantRequest) { _, _ in
+            router.popToRoot()
+        }
         .onChange(of: router.selectedTab) { old, new in
-            if old == .workspace || new == .workspace {
+            if old == .workspace, new != .workspace {
                 if let sceneSession { sceneSession.dismissPreview() }
                 else { store.collapsePreview() }
                 store.fileBrowserOpen = false

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 切换工作区（iPad 侧栏与手机抽屉共用）。由 store.workspaceSheetOpen 驱动，系统表单样式：
+/// 切换文件夹（iPad 侧栏与手机抽屉共用）。由 store.workspaceSheetOpen 驱动，系统表单样式：
 /// 当前项打勾，新建走右上角 + 和 alert，不夹带主题、退出这类账号操作。
 struct WorkspacePickerSheet: View {
     @Environment(ChatStore.self) private var store
@@ -32,22 +32,26 @@ struct WorkspacePickerSheet: View {
             List {
                 if all.isEmpty {
                     Section {
-                        if store.workspaces.isEmpty {
+                        if store.workspacesSyncInFlight {
                             HStack(spacing: 10) {
                                 ProgressView()
-                                Text("正在读取工作区…")
+                                Text("正在读取文件夹…")
                                     .font(JieboFont.text(.body))
                                     .foregroundStyle(JieboColor.dim)
                             }
+                        } else if let title = store.workspaceListBlockedTitle {
+                            Text(title)
+                                .font(JieboFont.text(.body))
+                                .foregroundStyle(JieboColor.dim)
                         } else {
-                            Text("还没有子工作区，点右上角 + 新建一个。")
+                            Text("还没有子文件夹，点右上角 + 新建一个。")
                                 .font(JieboFont.text(.body))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
                 } else if !needle.isEmpty, items.isEmpty {
                     Section {
-                        Text("没有匹配的工作区")
+                        Text("没有匹配的文件夹")
                             .font(JieboFont.text(.body))
                             .foregroundStyle(JieboColor.dim)
                     }
@@ -71,7 +75,7 @@ struct WorkspacePickerSheet: View {
                                 row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
                             }
                         } header: {
-                            Text("其他工作区")
+                            Text("其他文件夹")
                         } footer: {
                             Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
                         }
@@ -81,9 +85,9 @@ struct WorkspacePickerSheet: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
-            .navigationTitle("切换工作区")
+            .navigationTitle("切换文件夹")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: all.count > 6 ? "搜索 \(all.count) 个工作区" : "搜索工作区")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: all.count > 6 ? "搜索 \(all.count) 个文件夹" : "搜索文件夹")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -95,10 +99,10 @@ struct WorkspacePickerSheet: View {
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("新建工作区")
+                    .accessibilityLabel("新建文件夹")
                 }
             }
-            .alert("新建工作区", isPresented: $store.creatingWorkspace) {
+            .alert("新建文件夹", isPresented: $store.creatingWorkspace) {
                 TextField("名称", text: $store.newWorkspaceName)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -106,10 +110,12 @@ struct WorkspacePickerSheet: View {
                 Button("创建", action: store.createWorkspace)
                     .disabled(store.newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } message: {
-                Text("会在你的根目录下建一个同名文件夹，建好后直接进去。")
+                Text(store.connected
+                    ? "会在你的根目录下建一个同名文件夹，建好后直接进去。"
+                    : "还没连上。会在连上后建到根目录下，建好后直接进去。")
             }
             .alert(
-                "重命名工作区",
+                "重命名文件夹",
                 isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
                 presenting: renaming
             ) { item in
@@ -122,10 +128,12 @@ struct WorkspacePickerSheet: View {
                     renaming = nil
                 }
             } message: { item in
-                Text("「\(item.name)」里的对话会跟着改到新名字下。")
+                Text(store.connected
+                    ? "「\(item.name)」里的对话会跟着改到新名字下。"
+                    : "还没连上。「\(item.name)」会在连上后改名，里面的对话跟着到新名字下。")
             }
             .alert(
-                "清空这个工作区的对话？",
+                "清空这个文件夹的对话？",
                 isPresented: Binding(get: { clearing != nil }, set: { if !$0 { clearing = nil } }),
                 presenting: clearing
             ) { item in
@@ -135,10 +143,12 @@ struct WorkspacePickerSheet: View {
                 }
                 Button("取消", role: .cancel) { clearing = nil }
             } message: { item in
-                Text("「\(item.name)」下的对话都会删掉，目录里的文件不动，删除后不能恢复。")
+                Text(store.connected
+                    ? "「\(item.name)」下的对话都会删掉，其他设备上也看不到。目录里的文件不动，删除后不能恢复。"
+                    : "「\(item.name)」下的对话会先从这台设备去掉。连上后，其他设备上也看不到。目录里的文件不动，删除后不能恢复。")
             }
             .alert(
-                "删除工作区？",
+                "删除文件夹？",
                 isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
                 presenting: deleting
             ) { item in
@@ -148,7 +158,9 @@ struct WorkspacePickerSheet: View {
                 }
                 Button("取消", role: .cancel) { deleting = nil }
             } message: { item in
-                Text("「\(item.name)」目录是空的会直接删掉；里面有文件的只从列表里隐藏，文件不动（以后同名新建就能找回）。")
+                Text(store.connected
+                    ? "「\(item.name)」目录是空的会直接删掉；里面有文件的只从列表里隐藏，文件不动（以后同名新建就能找回）。"
+                    : "还没连上。「\(item.name)」的删除会在连上后发出。空目录会删掉；里面有文件的只从列表里隐藏，文件不动。")
             }
         }
         .presentationDetents([.medium, .large])
@@ -210,10 +222,10 @@ struct WorkspacePickerSheet: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(showPath ? "\(item.name)，\(item.path)" : item.name)
         .accessibilityValue([
-            current ? "当前工作区" : nil,
+            current ? "当前文件夹" : nil,
             detailLine(stat)
         ].compactMap { $0 }.joined(separator: "，"))
-        .accessibilityHint("切换到这个工作区")
+        .accessibilityHint("切换到这个文件夹")
         .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if manage {
@@ -271,7 +283,7 @@ struct WorkspacePickerSheet: View {
                     }
                     if manage {
                         Button(role: .destructive) { deleting = item } label: {
-                            Label(chatCount > 0 ? "删除工作区（先清空对话）" : "删除工作区", systemImage: "trash")
+                            Label(chatCount > 0 ? "删除文件夹（先清空对话）" : "删除文件夹", systemImage: "trash")
                         }
                         .disabled(chatCount > 0)
                     }

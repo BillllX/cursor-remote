@@ -370,7 +370,7 @@ struct MemoryCenterNavColumn: View {
                 navButton("overview", title: "总览", symbol: NavigationIconId.overview.symbol)
                 navButton("personal", title: "关于我", symbol: NavigationIconId.account.symbol)
                 navButton("work_preference", title: "工作偏好", symbol: "briefcase")
-                AssistantSection("工作区") {
+                AssistantSection("文件夹") {
                     ForEach(MemoryCenterReducer.buildScopeTreeRows(scopes: data.overview?.scopes ?? [])) { row in
                         navButton(row.id, title: row.summary.label, symbol: "folder", depth: row.depth)
                     }
@@ -651,6 +651,8 @@ struct MemoryCenterOverviewPane: View {
                 scopeListMiddleTab: scopeListMiddleTab,
                 scopeListStateFilter: scopeListStateFilter
             )
+        } else if let title = store.memoryCenterReadPendingTitle {
+            MemoryCenterEmptyBlock(title: title, hint: "")
         } else {
             MemoryCenterEmptyBlock(title: "暂无总览", hint: "点刷新重试。")
         }
@@ -672,7 +674,7 @@ struct MemoryCenterOverviewCards: View {
                 MemoryCenterBanner(text: "总览 payload 已截断", tone: .warn)
             }
             if overview.scopesTruncated {
-                MemoryCenterBanner(text: "工作区范围列表已截断", tone: .warn)
+                MemoryCenterBanner(text: "文件夹范围列表已截断", tone: .warn)
             }
             AssistantSection("个人") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -687,7 +689,7 @@ struct MemoryCenterOverviewCards: View {
                 }
                 .assistantCard()
             }
-            AssistantSection("工作区") {
+            AssistantSection("文件夹") {
                 Text("范围 \(MemoryCenterReducer.workspaceScopesForOverview(scopes: overview.scopes).count) · 待处理 \(pending)")
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
@@ -799,8 +801,10 @@ struct MemoryCenterScopeItemsPane: View {
                 selectedKey: $selectedKey,
                 itemNavigation: itemNavigation
             )
+        } else if let title = store.memoryCenterReadPendingTitle {
+            MemoryCenterEmptyBlock(title: title, hint: "")
         } else {
-            MemoryCenterEmptyBlock(title: "暂无详情", hint: "选择工作区或刷新。")
+            MemoryCenterEmptyBlock(title: "暂无详情", hint: "选择文件夹或刷新。")
         }
     }
 
@@ -1022,7 +1026,7 @@ struct MemoryCenterItemDetailView: View {
                 Button("编辑…") { showEdit = true }
                     .buttonStyle(.bordered)
                     .disabled(store.memoryCenterData.mutating)
-                    .accessibilityLabel("编辑工作区记忆")
+                    .accessibilityLabel("编辑文件夹记忆")
                 Text("规则文件只读；规则层编辑后续开放。")
                     .font(JieboFont.text(.caption2))
                     .foregroundStyle(JieboColor.dim)
@@ -1093,6 +1097,8 @@ struct MemoryCenterSearchList: View {
                     }
                 }
             }
+        } else if let title = store.memoryCenterSearchBlockedTitle {
+            MemoryCenterEmptyBlock(title: title, hint: "")
         } else {
             MemoryCenterEmptyBlock(title: "输入关键词", hint: "300ms 后自动搜索。")
         }
@@ -1355,6 +1361,10 @@ struct MemoryCenterPhoneHealthSection: View {
                     ProgressView()
                     Text("正在加载…")
                 }
+            } else if let title = store.memoryCenterReadPendingTitle {
+                Text(title)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink2)
             } else if !store.memoryCenterData.overviewError.isEmpty {
                 MemoryCenterErrorBlock(message: store.memoryCenterData.overviewError) {
                     store.memoryCenterRefreshOverview()

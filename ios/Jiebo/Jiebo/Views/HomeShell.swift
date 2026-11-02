@@ -109,6 +109,7 @@ struct HomeShell: View {
     private var padHomes: some View {
         @Bindable var router = padRouter
         return VStack(spacing: 0) {
+            FirstUseHint()
             Group {
                 switch router.domain {
                 case .assistant:
@@ -160,6 +161,9 @@ struct HomeShell: View {
         }
         .onChange(of: WidgetDeepLinkRouting.shared.pending) { _, _ in
             dispatchWidgetDeepLink()
+        }
+        .onChange(of: store.openApprovalsRequest) { _, _ in
+            openPendingApproval()
         }
         .onReceive(NotificationCenter.default.publisher(for: .assistantCaptureOpenRequested)) { _ in
             guard AssistantScenePresenter.shared.isPresenter(token: sceneToken) else { return }
@@ -216,11 +220,13 @@ struct HomeShell: View {
                 }
             },
             openFile: {
-                guard padRouter.domain == .workbench else {
-                    store.flash("请先切到工作台再打开文件")
-                    return
+                if padRouter.domain != .workbench {
+                    padRouter.openDomain(.workbench)
                 }
-                store.toggleFileBrowser()
+                Task { @MainActor in
+                    await Task.yield()
+                    store.openFilesOnWorkbench()
+                }
             },
             refresh: {
                 switch padRouter.domain {
@@ -297,6 +303,18 @@ struct HomeShell: View {
             }
             padRouter.openAssistant(section: .todos, selection: .task(taskID))
         }
+    }
+
+    /// 工作台状态句指向待处理。今日只有摘要，确认卡在待处理里。
+    private func openPendingApproval() {
+        let state = store.assistantState
+        let selection: PadSelection?
+        if state?.draftCards != nil {
+            selection = state?.draftCards?.max(by: { $0.createdAt < $1.createdAt }).map { .draft($0.id) }
+        } else {
+            selection = state?.approvals.max(by: { $0.createdAt < $1.createdAt }).map { .approval($0.id) }
+        }
+        padRouter.openAssistant(section: .inbox, selection: selection)
     }
 
     /// iPad 点通知：先映射业务域，再在助理状态刷新后定位实体；不再消费后丢弃。
@@ -448,7 +466,7 @@ private struct PadDomainSwitcher: View {
             .font(JieboFont.text(.subheadline, weight: .semibold))
             .foregroundStyle(router.domain == domain ? JieboColor.pine : JieboColor.ink2)
             .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 40)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .background {
                 if router.domain == domain {
                     Capsule().fill(JieboColor.white.opacity(0.72))
@@ -511,6 +529,34 @@ struct HomeModeSection: View {
             Text("iPad 默认空间（兼容设置）")
         } footer: {
             Text("iPad 可随时用底部的「小驳 / 工作台 / 消息」切换；这里保留旧版工作台与聊天偏好。")
+        }
+    }
+}
+
+/// 第一次打开时用一句话说明四个地方分别干什么。关掉之后不再出现。
+struct FirstUseHint: View {
+    @AppStorage("jiebo.firstUseHintDismissed.v3") private var dismissed = false
+
+    var body: some View {
+        if !dismissed {
+            HStack(alignment: .center, spacing: 12) {
+                Text(UIDevice.current.userInterfaceIdiom == .phone
+                     ? "小驳用来吩咐。待处理要你看。工作台改文件、看终端。消息是跟人聊。今日只是摘要，待办、计划、委派各自有栏目。"
+                     : "小驳用来吩咐，待处理在小驳里。工作台改文件、看终端。消息是跟人聊。底部可以切换这三处。今日只是摘要，待办、计划、委派各自有栏目。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("知道了") { dismissed = true }
+                    .font(JieboFont.text(.footnote, weight: .semibold))
+                    .foregroundStyle(JieboColor.pine)
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(JieboColor.mist)
+            .accessibilityElement(children: .combine)
         }
     }
 }

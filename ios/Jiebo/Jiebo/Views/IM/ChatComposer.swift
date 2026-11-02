@@ -628,6 +628,7 @@ struct CameraPicker: UIViewControllerRepresentable {
 /// 全屏看图：左右滑切换这个会话里的图片，可以存相册
 struct ImImageViewer: View {
     @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let convId: String
     @State private var selection: String
@@ -693,16 +694,22 @@ struct ImImageViewer: View {
             }
             .padding(.horizontal, 8)
             if !notice.isEmpty {
-                Text(notice)
-                    .font(JieboFont.text(.footnote, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 9)
-                    .background(Color.white.opacity(0.18))
-                    .clipShape(Capsule())
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 40)
-                    .transition(.opacity)
+                Group {
+                    if notice == ImStore.imageSaveOffline {
+                        Button {
+                            store.retryConnection()
+                            notice = "正在连接，连上后再存。"
+                        } label: {
+                            noticeCapsule
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        noticeCapsule
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 40)
+                .transition(.opacity)
             }
         }
         .statusBarHidden()
@@ -725,22 +732,37 @@ struct ImImageViewer: View {
             if let file {
                 result = await ImPhotoSaver.save(file: file)
             } else {
-                result = "图片还没下载下来，稍后再试"
+                result = im.imageSaveBlockedTitle
             }
             saving = false
             notice = result
-            try? await Task.sleep(for: .seconds(2))
-            if notice == result { notice = "" }
+            if result != ImStore.imageSaveOffline {
+                try? await Task.sleep(for: .seconds(2))
+                if notice == result { notice = "" }
+            }
         }
+    }
+
+    private var noticeCapsule: some View {
+        Text(notice)
+            .font(JieboFont.text(.footnote, weight: .medium))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Color.white.opacity(0.18))
+            .clipShape(Capsule())
+            .frame(minHeight: 44)
     }
 }
 
 private struct ImViewerPage: View {
     @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let message: ImLocalMessage
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var retry = 0
     @State private var scale: CGFloat = 1
     @State private var settledScale: CGFloat = 1
 
@@ -766,9 +788,24 @@ private struct ImViewerPage: View {
                     }
                     .accessibilityLabel("图片")
             } else if failed {
-                Text("图片加载不出来")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(.white.opacity(0.7))
+                VStack(spacing: 12) {
+                    Text(im.imageUnavailableTitle)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                    if store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 44, minHeight: 44)
+                    } else if store.connected, im.online {
+                        Button("再试一次") { retry += 1 }
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .padding(.horizontal, 24)
             } else {
                 ProgressView().tint(.white)
             }
@@ -778,11 +815,17 @@ private struct ImViewerPage: View {
     }
 
     private var loadKey: String {
-        "\(message.id)|\(im.tickets[message.convId]?.sig ?? "")"
+        let link = switch store.linkState {
+        case .connected: "up"
+        case .connecting: "wait"
+        case .offline: "down"
+        }
+        return "\(message.id)|\(im.tickets[message.convId]?.sig ?? "")|\(link)|\(retry)"
     }
 
     @MainActor
     private func load() async {
+        failed = false
         if let outgoing = message.outgoing, let dir = ImCache.outboxDir(tenant: im.tenant) {
             let file = dir.appendingPathComponent(outgoing.file)
             if FileManager.default.fileExists(atPath: file.path),

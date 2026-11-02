@@ -38,8 +38,16 @@ struct ComposerView: View {
     @State var voiceCancelArmed = false
     /// .assistant：点按麦克风开始的录音。期间长按手势不动作，两种入口互斥共用同一个 dictation
     @State var tapVoice = false
-    @Namespace var modeThumb
     @Environment(\.accessibilityReduceMotion) var reduceMotion
+    /// 发送、停止、更多跟正文同一套 Dynamic Type，圆钮和图形一起变大。
+    @ScaledMetric(relativeTo: .body) var sendGlyph = 15
+    @ScaledMetric(relativeTo: .body) var stopGlyph = 11
+    @ScaledMetric(relativeTo: .body) var moreGlyph = 14
+    @ScaledMetric(relativeTo: .body) var controlDiameter = 32
+    @ScaledMetric(relativeTo: .body) var assistantSendGlyph = 16
+    @ScaledMetric(relativeTo: .body) var assistantStopGlyph = 13
+    @ScaledMetric(relativeTo: .body) var assistantMoreGlyph = 17
+    @ScaledMetric(relativeTo: .body) var assistantControl = 36
     @Environment(\.assistantSceneToken) private var assistantSceneToken
     @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
 
@@ -72,6 +80,7 @@ struct ComposerView: View {
                 assistantCapsuleRow
             } else {
                 entryField(lineLimit: 1 ... 8, submitOnReturn: true, vertical: 8, horizontal: 6)
+                fullNarrowStatusLine
                 controls
                 if controlsWidth >= 420, !hasText {
                     Text("Return 发送，Shift+Return 换行")
@@ -133,7 +142,16 @@ struct ComposerView: View {
             store.refreshCheckpoints(chatId: chatId)
         }
         .onChange(of: store.draft(for: chatId)) { _, value in
-            guard sceneSession == nil else { return }
+            if let sceneSession {
+                // 卡住后上一句写进共享草稿。本窗口输入框读场景草稿，空的时候才接上，不盖住正在打的字。
+                let visible = draftBuffer.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let incoming = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard visible.isEmpty, !incoming.isEmpty else { return }
+                sceneSession.saveDraft(value, for: chatId)
+                replaceDraft(value)
+                focused = true
+                return
+            }
             if value == ignoreDraftEcho { return }
             if value != draftBuffer.text { replaceDraft(value) }
         }
@@ -237,11 +255,13 @@ struct ComposerView: View {
 
     var placeholder: String {
         if style == .assistant {
-            if !store.connected { return "正在连服务器…" }
+            if store.linkState == .offline { return "已断开" }
+            if !store.connected { return "正在连接…" }
             if chatBusy { return "正在回复，发送会排队" }
             return "跟\(store.assistantName)说点什么"
         }
-        if !store.connected { return "正在连服务器…" }
+        if store.linkState == .offline { return "已断开" }
+        if !store.connected { return "正在连接…" }
         if chatBusy { return "正在动手，Enter 会排队" }
         switch chatMode {
         case .ask: return "问一句，不改文件，@ 引用 · 长按说话"

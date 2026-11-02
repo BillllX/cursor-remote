@@ -95,39 +95,72 @@ struct FileBrowserCover: View {
             // cover 自己画通知/错误条——store.notice/bannerError 的横幅在 ThreadView，cover 背后用户看不见。
             // 错误（红）优先于通知（绿）：导出/存相册失败走 bannerError（Grok R1 M3）
             .overlay(alignment: .top) {
-                if !store.bannerError.isEmpty {
-                    Text(friendlyError(store.bannerError))
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.danger)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(JieboMotion.standard(reduceMotion), value: store.bannerError.isEmpty)
-                        .allowsHitTesting(false)
-                } else if !store.notice.isEmpty {
-                    Text(store.notice)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.ink)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .animation(JieboMotion.standard(reduceMotion), value: store.notice.isEmpty)
-                        .allowsHitTesting(false) // 纯提示，别挡搜索框（Grok R2 MINOR）
+                VStack(spacing: 8) {
+                    if !store.connected {
+                        Button {
+                            store.retryConnection()
+                        } label: {
+                            Text(store.linkState.title)
+                                .font(JieboFont.text(.caption, weight: .medium))
+                                .foregroundStyle(JieboColor.danger)
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .background(JieboColor.paper)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.linkState != .offline)
+                        .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+                    }
+                    if !store.bannerError.isEmpty {
+                        let message = friendlyError(store.bannerError)
+                        if store.bannerReconnects {
+                            Button {
+                                store.retryConnection()
+                            } label: {
+                                coverNotice(message, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("重新连接")
+                        } else if store.bannerError == ChatStore.hydrationRetryTitle,
+                                  !store.hydrationRetryTurnId.isEmpty {
+                            Button {
+                                store.hydrateTurn(
+                                    chatId: store.hydrationRetryChatId,
+                                    turnId: store.hydrationRetryTurnId
+                                )
+                            } label: {
+                                coverNotice(message, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("再加载一次")
+                        } else {
+                            Button {
+                                store.dismissBannerError()
+                            } label: {
+                                coverNotice(message, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("轻点关闭")
+                        }
+                    } else if store.notice == ChatStore.stallRecoveryNotice, let chatId = store.stallChatId {
+                        Button {
+                            store.stop(chatId: chatId)
+                            store.restoreLastPromptIfDraftEmpty(chatId: chatId)
+                            store.notice = ""
+                        } label: {
+                            coverNotice(store.notice, danger: false)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("停止这一轮，上一句回到输入框")
+                    } else if !store.notice.isEmpty {
+                        coverNotice(store.notice, danger: false)
+                            .allowsHitTesting(false)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
             }
         }
         .onAppear { store.requestFileIndex(userInitiated: true) }
@@ -144,10 +177,25 @@ struct FileBrowserCover: View {
         }
     }
 
+    private func coverNotice(_ value: String, danger: Bool) -> some View {
+        Text(value)
+            .font(JieboFont.text(.footnote))
+            .foregroundStyle(danger ? JieboColor.danger : JieboColor.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(JieboColor.paper.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
+    }
+
     /// 标题给当前工作区名，防迷失（sheet 期间切不了会话，文件一定是这个工作区的）。
     /// 用 active?.cwd 与 requestFileIndex 的 activeId 口径对齐（store.cwd 同步可能慢一拍）
     private var title: String {
-        browserBase.isEmpty ? "工作区文件" : workspaceLabel(browserBase, root: store.workspaceRoot)
+        browserBase.isEmpty ? "文件" : workspaceLabel(browserBase, root: store.workspaceRoot)
     }
 
     /// 浏览目标工作区的统一口径：active.cwd（空串归 nil）→ store.cwd → workspaceRoot。
@@ -228,7 +276,8 @@ struct FileBrowserCover: View {
                 onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,
-                onQuickLook: { store.openMention($0) } // 二进制/系统导出逃生门
+                onQuickLook: { store.openMention($0) }, // 二进制/系统导出逃生门
+                emptyDetail: store.fileIndexEmptyTitle
             )
             // 工作区身份隔离：cwd 变了（热替换/重建）openDirs 等 @State 不跨工作区残留
             //（与 title 共用 browserBase 口径——Kimi R2 MINOR）

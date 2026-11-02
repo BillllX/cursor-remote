@@ -479,9 +479,10 @@ struct ShimmerText: View {
 struct BotAvatar: View {
     var body: some View {
         Text("接")
-            .font(JieboFont.ui(11, weight: .semibold))
+            .font(JieboFont.text(.caption2, weight: .semibold))
             .foregroundStyle(JieboColor.pine)
-            .frame(width: 28, height: 28)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 28, minHeight: 28)
             .background(JieboColor.white)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .padding(.top, 2)

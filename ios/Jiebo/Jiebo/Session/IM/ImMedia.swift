@@ -12,6 +12,9 @@ enum ImMediaError: LocalizedError {
     case http(Int, String?)
     case badResponse
     case unreadable
+    case timedOut
+    case cancelled
+    case networkLost
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +31,9 @@ enum ImMediaError: LocalizedError {
             return "上传失败（\(code)）"
         case .badResponse: return "服务器回的东西读不懂"
         case .unreadable: return "读不到这张图"
+        case .timedOut: return "上传超时，再试一次。"
+        case .cancelled: return "这次上传取消了。"
+        case .networkLost: return "网络中断了，再传一次。"
         }
     }
 }
@@ -63,8 +69,20 @@ struct ImHTTPUploader: ImBlobUploader {
                 category: "IM \(kind) 上传",
                 delegate: ImUploadProgress(progress)
             )
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .timedOut:
+                throw ImMediaError.timedOut
+            case .cancelled:
+                throw ImMediaError.cancelled
+            case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                 .cannotFindHost, .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff:
+                throw ImMediaError.networkLost
+            default:
+                throw ImMediaError.http(-1, "没传上去，再试一次。")
+            }
         } catch {
-            throw ImMediaError.http(-1, error.localizedDescription)
+            throw ImMediaError.http(-1, "没传上去，再试一次。")
         }
         guard let http = response as? HTTPURLResponse else { throw ImMediaError.badResponse }
         let object = (try? JSONValue.parse(data).object) ?? [:]
@@ -462,7 +480,14 @@ enum ImPhotoSaver {
             }
             return "已存到相册"
         } catch {
-            return "没存进相册：\(error.localizedDescription)"
+            let ns = error as NSError
+            if ns.domain == PHPhotosErrorDomain, ns.code == PHPhotosError.Code.userCancelled.rawValue {
+                return "这次存相册取消了。"
+            }
+            if ns.domain == PHPhotosErrorDomain, ns.code == PHPhotosError.Code.networkAccessRequired.rawValue {
+                return "这张图还在 iCloud 里，下到本机后再存。"
+            }
+            return "没存进相册，再试一次。"
         }
     }
 }

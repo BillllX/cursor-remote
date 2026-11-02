@@ -114,7 +114,7 @@ struct TodoReceiptRow: View {
             if let todo = receipt.todo, !todo.done {
                 if !receipt.duplicate {
                     receiptButton("撤销") {
-                        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+                        store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办")
                     }
                 }
                 receiptButton("改") { edit(todo) }
@@ -161,11 +161,11 @@ enum AssistantToolText {
         case "delegate":
             let workspace = tool.args?.string(in: "workspace") ?? ""
             let detail = tool.args?.string(in: "title", "task") ?? ""
-            let head = workspace.isEmpty ? "交给工作区" : "交给 \(workspace)"
+            let head = workspace.isEmpty ? "交给文件夹" : "交给 \(workspace)"
             return detail.isEmpty ? head : "\(head)：\(String(detail.prefix(40)))"
         case "create_workspace":
             let name = tool.args?.string(in: "name") ?? ""
-            return name.isEmpty ? "申请新建工作区" : "申请新建工作区：\(name)"
+            return name.isEmpty ? "申请新建文件夹" : "申请新建文件夹：\(name)"
         default:
             return nil
         }

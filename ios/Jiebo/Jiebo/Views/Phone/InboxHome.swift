@@ -79,25 +79,43 @@ struct InboxHome: View {
                             }
                     }
                 } header: {
-                    Text("收件箱")
+                    Text("通知")
                 }
             }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !store.connected {
+                Button {
+                    store.retryConnection()
+                } label: {
+                    Text(store.linkState.title)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.danger)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .background(JieboColor.paper)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.linkState != .offline)
+                .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+            }
+        }
         .navigationTitle("待处理")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
             if pendingCount == 0 && items.isEmpty {
                 if state == nil {
-                    AssistantMutedText("正在加载…")
+                    AssistantMutedText(store.assistantStatePendingTitle ?? "正在加载…")
                 } else {
                     ContentUnavailableView(
                         "没有待处理的事",
                         systemImage: "tray",
-                        description: Text("\(store.assistantName) 有新消息会放在这里。")
+                        description: Text("\(store.assistantName) 有通知会放在这里。")
                     )
                 }
             }
@@ -252,11 +270,11 @@ struct InboxDetailView: View {
             }
         }
         .background(JieboColor.paper)
-        .navigationTitle("消息")
+        .navigationTitle("通知")
         .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if item == nil {
-                ContentUnavailableView("这条消息已不存在", systemImage: "tray")
+                ContentUnavailableView("这条通知已不存在", systemImage: "tray")
             }
         }
         .onAppear {

@@ -61,6 +61,17 @@ extension ChatStore {
         send(.assistantOp(op: "memory_center_get", args: args, reqId: reqId))
     }
 
+    /// 这次搜索发不出去。nil 表示已经连上，可以搜。
+    var memoryCenterSearchBlockedTitle: String? {
+        guard unlocked else { return "还没登录。这次不会搜，登录后再搜。" }
+        guard connected else {
+            return linkState == .offline
+                ? "已断开。这次不会搜，点按重连后再搜。"
+                : "正在连接。这次不会搜，连上后再搜。"
+        }
+        return nil
+    }
+
     func memoryCenterSendSearch(
         query: String,
         scope: String?,
@@ -68,9 +79,12 @@ extension ChatStore {
         state: String?,
         replaceSameKind: Bool = true
     ) {
-        guard connected, unlocked else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        guard connected, unlocked else {
+            memoryCenterData = MemoryCenterReducer.clearSearchSession(memoryCenterData)
+            return
+        }
         let scopeTag = scope ?? "all"
         let kindTag = kind ?? "all"
         let stateTag = state ?? "all"
@@ -176,9 +190,36 @@ extension ChatStore {
         return true
     }
 
+    /// 记忆中心读不了。nil 表示已经连上，界面可以写正在加载或暂无。
+    var memoryCenterReadPendingTitle: String? {
+        guard unlocked else { return "还没登录。登录后再看记忆。" }
+        guard connected else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看记忆。"
+                : "正在连接。连上后再看记忆。"
+        }
+        guard gatewayReady else { return "正在打开，稍后再看记忆。" }
+        return nil
+    }
+
+    /// 记忆中心的改动不进待发队列。还没登录或没连上时说明原因，调用方不要当成已经发出。
+    func memoryCenterCanWrite() -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return false
+        }
+        guard connected else {
+            flash(linkState == .offline
+                ? "已断开。这次不会排队，点按重连后再改。"
+                : "正在连接。这次不会排队，连上后再改。")
+            return false
+        }
+        return true
+    }
+
     @discardableResult
     func memoryCenterSendMutate(scopeId: String, mutation: [String: JSONValue]) -> String? {
-        guard connected, unlocked else { return nil }
+        guard memoryCenterCanWrite() else { return nil }
         let reqId = UUID().uuidString
         let pending = MemoryCenterPendingRequest(reqId: reqId, kind: .mutation, scopeId: scopeId, query: nil)
         memoryCenterData = MemoryCenterReducer.registerPending(memoryCenterData, req: pending, replaceSameKind: false)

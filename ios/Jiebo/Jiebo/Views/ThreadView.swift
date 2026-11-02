@@ -192,15 +192,11 @@ struct ThreadView: View {
             if chrome == .embedded {
                 if !store.bannerError.isEmpty {
                     dismissibleErrorBanner
-                } else if !store.notice.isEmpty {
-                    floatingBanner(store.notice, color: JieboColor.dim)
-                        .allowsHitTesting(false)
+                } else {
+                    noticeBanner
                 }
             } else {
-                if !store.notice.isEmpty {
-                    floatingBanner(store.notice, color: JieboColor.dim)
-                        .allowsHitTesting(false)
-                }
+                noticeBanner
                 if !store.bannerError.isEmpty {
                     dismissibleErrorBanner
                 }
@@ -212,14 +208,50 @@ struct ThreadView: View {
         .animation(JieboMotion.fade(reduceMotion), value: store.bannerError.isEmpty)
     }
 
+    @ViewBuilder
+    private var noticeBanner: some View {
+        if store.notice == ChatStore.stallRecoveryNotice, store.stallChatId == resolvedChatId {
+            Button {
+                let chatId = resolvedChatId
+                store.stop(chatId: chatId)
+                store.restoreLastPromptIfDraftEmpty(chatId: chatId)
+                store.notice = ""
+            } label: {
+                floatingBanner(ChatStore.stallRecoveryNotice, color: JieboColor.clay, tappable: true)
+                    .frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(ChatStore.stallRecoveryNotice)
+            .accessibilityHint("停止这一轮")
+        } else if !store.notice.isEmpty, store.notice != ChatStore.stallRecoveryNotice {
+            floatingBanner(store.notice, color: JieboColor.dim)
+                .allowsHitTesting(false)
+        }
+    }
+
     private var dismissibleErrorBanner: some View {
-        Button {
-            store.dismissBannerError()
+        let reconnectImages = store.bannerReconnects
+        let retryHydration = store.bannerError == ChatStore.hydrationRetryTitle
+            && !store.hydrationRetryTurnId.isEmpty
+        return Button {
+            if reconnectImages {
+                store.retryConnection()
+            } else if retryHydration {
+                store.hydrateTurn(chatId: store.hydrationRetryChatId, turnId: store.hydrationRetryTurnId)
+            } else {
+                store.dismissBannerError()
+            }
         } label: {
-            floatingBanner(friendlyError(store.bannerError), color: JieboColor.danger, closable: true)
+            floatingBanner(
+                friendlyError(store.bannerError),
+                color: JieboColor.danger,
+                closable: !reconnectImages && !retryHydration,
+                tappable: reconnectImages || retryHydration
+            )
+            .frame(minHeight: 44)
         }
         .buttonStyle(.plain)
-        .accessibilityHint("轻点关闭")
+        .accessibilityHint(reconnectImages ? "重新连接" : (retryHydration ? "再加载一次" : "轻点关闭"))
     }
 
     private func embeddedUndoBar(_ turn: Turn) -> some View {
@@ -254,7 +286,7 @@ struct ThreadView: View {
         .padding(.bottom, 4)
     }
 
-    func floatingBanner(_ text: String, color: Color, closable: Bool = false) -> some View {
+    func floatingBanner(_ text: String, color: Color, closable: Bool = false, tappable: Bool = false) -> some View {
         HStack(spacing: 8) {
             Text(text)
                 .multilineTextAlignment(.center)
@@ -271,8 +303,8 @@ struct ThreadView: View {
         .padding(.vertical, 8)
         .jieboGlass(in: Capsule())
         .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(closable ? [] : .isStaticText)
+        .accessibilityElement(children: tappable ? .ignore : .combine)
+        .accessibilityAddTraits(tappable || closable ? [] : .isStaticText)
     }
 
     /// 本会话派出去的委派子会话停在审批上：在输入框上方直接作答
@@ -364,7 +396,8 @@ struct ThreadView: View {
     ]
 
     let starters = [
-        "打开工作区文件",
+        "打开文件",
+        "终端输出",
         "看一下这个项目的结构",
         "最近改了哪些文件？",
         "用 Canvas 概括这个仓库",

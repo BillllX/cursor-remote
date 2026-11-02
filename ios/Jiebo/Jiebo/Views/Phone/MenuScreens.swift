@@ -14,8 +14,12 @@ struct AssistantTodayScreen: View {
 
     var body: some View {
         ScrollView {
-            // 待批在行动区和待处理里，委派在委派记录里
-            AssistantTodayPane(showsApprovals: false, showsDelegations: false)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("今日只看摘要。待办和计划在各自的栏目里。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink2)
+                AssistantTodayPane(showsApprovals: false, showsDelegations: false, showsWorklists: false)
+            }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -301,6 +305,7 @@ struct PhoneSettingsScreen: View {
     @State private var notifyStatus: UNAuthorizationStatus?
     @State private var logoutConfirm = false
     @State private var mobileDataMode = MobileDataMode.load()
+    @State private var hintReplayArmed = false
 
     init() {}
 
@@ -382,6 +387,21 @@ struct PhoneSettingsScreen: View {
             }
 
             Section {
+                Button {
+                    UserDefaults.standard.set(false, forKey: "jiebo.firstUseHintDismissed.v3")
+                    hintReplayArmed = true
+                } label: {
+                    settingsRow(
+                        symbol: "questionmark.circle",
+                        title: "再看一遍说明",
+                        trailing: hintReplayArmed ? hintReplayTrailing : nil,
+                        chevron: false
+                    )
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(JieboColor.white)
+                .accessibilityHint("再显示小驳、待处理、工作台和消息的说明")
+
                 settingsRow(
                     symbol: "cpu",
                     title: "后台模型",
@@ -409,7 +429,7 @@ struct PhoneSettingsScreen: View {
                 }
                 .listRowBackground(JieboColor.white)
             } header: {
-                Text("助理")
+                Text("小驳")
             }
 
             if store.isAdmin {
@@ -503,8 +523,15 @@ struct PhoneSettingsScreen: View {
         .contentShape(Rectangle())
     }
 
+    /// 手机说明条挂在底栏外，设置页推上去也能看见。iPad 设置是盖住的一页，关掉才看见。
+    private var hintReplayTrailing: String {
+        UIDevice.current.userInterfaceIdiom == .phone ? "已出现在页面上方" : "关闭后出现在上方"
+    }
+
     private var backgroundModelText: String {
-        guard let background = state?.background else { return "正在连接…" }
+        if store.linkState == .offline { return "已断开" }
+        if !store.connected { return "正在连接…" }
+        guard let background = state?.background else { return "未就绪" }
         let model = background.model.nilIfEmpty ?? "未知"
         let status = background.ok ? "就绪" : (background.reason ?? "未就绪")
         return "\(model) · \(status)"
@@ -548,8 +575,7 @@ struct PhoneSettingsScreen: View {
 
             if showsTestPush {
                 Button {
-                    store.assistantOp("push_test")
-                    store.flash("已发送测试通知，几秒内应该收到")
+                    store.sendTestPush()
                 } label: {
                     settingsRow(symbol: "paperplane", title: "发送测试通知", trailing: nil, chevron: false)
                 }

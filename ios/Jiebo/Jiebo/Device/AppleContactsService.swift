@@ -23,7 +23,7 @@ actor AppleContactsService {
                 "contacts": .array(contacts.prefix(request.limit).map(Self.contactJSON)),
             ])
         } catch {
-            throw DeviceRequestError.unavailable("搜索通讯录失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("搜索通讯录失败，再试一次。")
         }
     }
 
@@ -45,7 +45,7 @@ actor AppleContactsService {
                 if updated == .denied || updated == .restricted {
                     throw DeviceRequestError.permissionDenied("通讯录权限已被拒绝。")
                 }
-                throw DeviceRequestError.unavailable("请求通讯录权限失败：\(error.localizedDescription)")
+                throw DeviceRequestError.unavailable("请求通讯录权限失败，再试一次。")
             }
         case .limited:
             return

@@ -44,8 +44,23 @@ struct AssistantHubSheet: View {
             .gesture(pullDown)
             ScrollViewReader { proxy in
                 ScrollView {
-                    // 待批、委派在 iPhone 上不显示：它们在行动区和待处理里
-                    AssistantTodayPane(showsApprovals: false, showsDelegations: false)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("今日只看摘要。")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink2)
+                        HStack(spacing: 8) {
+                            hubLink("待办") {
+                                router.hubOpen = false
+                                router.go(.worklist(.todo))
+                            }
+                            hubLink("计划") {
+                                router.hubOpen = false
+                                router.go(.worklist(.plan))
+                            }
+                        }
+                        // 待批、委派、待办、计划都不在这份摘要里
+                        AssistantTodayPane(showsApprovals: false, showsDelegations: false, showsWorklists: false)
+                    }
                         .padding(14)
                         .padding(.bottom, 24)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -83,6 +98,22 @@ struct AssistantHubSheet: View {
                     withAnimation(JieboMotion.snappy(reduceMotion)) { drag = 0 }
                 }
             }
+    }
+
+    private func hubLink(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(JieboFont.text(.subheadline, weight: .semibold))
+                .foregroundStyle(JieboColor.ink)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 44)
+                .background(JieboColor.white)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(JieboColor.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint("打开\(title)")
     }
 
     /// 等分区布局出来再滚，否则 id 还没挂上

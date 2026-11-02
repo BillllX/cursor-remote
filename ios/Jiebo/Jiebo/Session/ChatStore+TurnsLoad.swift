@@ -123,6 +123,31 @@ extension ChatStore {
         }
     }
 
+    /// iPad 小驳上的同步句只重拉助理会话，不把工作台那条一起作废。
+    func retryAssistantThreadSync() {
+        guard let id = assistantChatId, !id.isEmpty else {
+            guard unlocked else {
+                retryConnection()
+                return
+            }
+            return
+        }
+        retryThreadSync(id)
+    }
+
+    /// 人点了「这条会话」：只作废这一条的在途分页，再从末页拉一次。
+    func retryThreadSync(_ chatId: String) {
+        guard unlocked else {
+            retryConnection()
+            return
+        }
+        guard !chatId.isEmpty else { return }
+        if refreshingChatIds.contains(chatId) || loadingChatIds.contains(chatId) {
+            abortTurnsLoad(chatId)
+        }
+        ensureTurnsLoaded(chatId)
+    }
+
     /// 发一页 load_chat 并重新计时。超时按断线同一套规则作废这条分页链，换新 nonce 从末页重拉，
     /// 迟到的旧页凭 nonce 丢弃，不会和新页拼在一起
     func sendLoadChat(_ chatId: String, from: Int?) {
@@ -143,7 +168,14 @@ extension ChatStore {
             if streak <= 2, self.client.isOpen {
                 self.ensureTurnsLoaded(chatId)
             } else if chatId == self.activeId || chatId == self.chatHomeThreadChatId {
-                self.flash(self.client.isOpen ? "聊天记录加载超时，稍后切回这个会话再试" : "聊天记录加载超时，正在重连…")
+                let timedOut = if self.client.isOpen {
+                    "聊天记录加载超时，稍后切回这个会话再试"
+                } else if self.linkState == .offline {
+                    "聊天记录加载超时。已断开，点按重连。"
+                } else {
+                    "聊天记录加载超时。正在连接…"
+                }
+                self.flash(timedOut)
             }
         }
     }
@@ -421,7 +453,8 @@ extension ChatStore {
               let partial = partialHistories[chatId],
               partial.nextFrom > 0,
               partial.chatRev == chatRevs[chatId],
-              unlocked
+              unlocked,
+              client.isOpen
         else { return }
         loadEpochs[chatId] = (loadEpochs[chatId] ?? 0) + 1
         loadStartRevs[chatId] = partial.chatRev
@@ -906,14 +939,25 @@ extension ChatStore {
                 }
                 self.rememberTail(chatId)
                 self.scheduleBodyCache(chatId)
+                if self.bannerError == Self.hydrationRetryTitle,
+                   self.hydrationRetryChatId == chatId,
+                   self.hydrationRetryTurnId == turnId {
+                    self.bannerError = ""
+                    self.hydrationRetryChatId = ""
+                    self.hydrationRetryTurnId = ""
+                }
             } catch is CancellationError {
                 return
             } catch let error as URLError where error.code == .cancelled {
                 return
             } catch TurnHydrationError.stale {
+                self.hydrationRetryChatId = ""
+                self.hydrationRetryTurnId = ""
                 self.bannerError = "这条内容已更新，请刷新会话后再加载。"
             } catch {
-                self.bannerError = "完整内容加载失败，请稍后重试。"
+                self.hydrationRetryChatId = chatId
+                self.hydrationRetryTurnId = turnId
+                self.bannerError = Self.hydrationRetryTitle
             }
         }
     }

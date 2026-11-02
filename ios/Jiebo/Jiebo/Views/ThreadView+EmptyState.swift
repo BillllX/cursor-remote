@@ -9,7 +9,7 @@ extension ThreadView {
     }
 
     var showThreadLoading: Bool {
-        if store.linkState == .offline { return false }
+        if !store.connected { return false }
         if chatId == nil, store.coldStartPlaceholder { return true }
         guard let chat = threadChat else { return false }
         guard !chat.turnsComplete, chat.turns.isEmpty else { return false }
@@ -20,6 +20,53 @@ extension ThreadView {
             || !store.appliedStore
     }
 
+    /// 对话区还没有正文，而且现在也拉不了。nil 表示可以转圈或显示已有内容。
+    var threadLoadBlockedTitle: String? {
+        if showThreadLoading { return nil }
+        let emptyShell: Bool = {
+            if chatId == nil, store.coldStartPlaceholder { return true }
+            guard let chat = threadChat else { return false }
+            return !chat.turnsComplete && chat.turns.isEmpty
+        }()
+        guard emptyShell else { return nil }
+        if !store.unlocked, !store.resumingLogin { return "还没登录。登录后再看这段对话。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看这段对话。"
+                : "正在连接。连上后再看这段对话。"
+        }
+        if let id = threadChat?.id, store.cachedOnlyIds.contains(id) {
+            return "这条对话还没对上服务器，稍后再看。"
+        }
+        return nil
+    }
+
+    /// 更早的内容现在拉不了。nil 表示已经连上，可以写正在加载或加载更早内容。
+    var earlierLoadBlockedTitle: String? {
+        if !store.unlocked { return "还没登录。登录后再看更早的内容。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看更早的内容。"
+                : "正在连接。连上后再看更早的内容。"
+        }
+        if store.cachedOnlyIds.contains(resolvedChatId) {
+            return "这条对话还没对上服务器，稍后再看更早的内容。"
+        }
+        return nil
+    }
+
+    var earlierNetworkTitle: String {
+        if let title = earlierLoadBlockedTitle { return title }
+        if store.loadingChatIds.contains(resolvedChatId) { return "正在加载更早内容…" }
+        return "加载更早内容"
+    }
+
+    var earlierNetworkDisabled: Bool {
+        if store.unlocked, store.linkState == .offline { return false }
+        if earlierLoadBlockedTitle != nil { return true }
+        return store.loadingChatIds.contains(resolvedChatId)
+    }
+
     var emptyState: some View {
         VStack(spacing: 16) {
             Spacer(minLength: 40)
@@ -28,7 +75,9 @@ extension ThreadView {
                 .font(JieboFont.display(34))
                 .tracking(0.68)
                 .foregroundStyle(JieboColor.ink)
-            Text("网页说话，远端动手。从左侧接着聊，或先打开一个工作区文件。")
+            Text(chrome == .phoneLegacy
+                 ? "点左上角菜单接着聊，或先打开文件、终端输出。"
+                 : "从左侧接着聊，或先打开文件、终端输出。")
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
@@ -38,7 +87,7 @@ extension ThreadView {
                 starterRow(axis: .vertical)
             }
             .padding(.top, 8)
-            Text("点左上角打开对话列表 · 可粘贴图片")
+            Text(chrome == .phoneLegacy ? "菜单在左上角 · 可粘贴图片" : "对话列表在左侧 · 可粘贴图片")
                 .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
@@ -142,10 +191,10 @@ extension ThreadView {
     func starterRow(axis: Axis) -> some View {
         let row = ForEach(starters, id: \.self) { text in
             Button {
-                if text == "打开工作区文件" {
-                    if !(store.fileBrowserOpen && store.fileBrowserPane == .files) {
-                        store.toggleFileBrowser(.files)
-                    }
+                if text == "打开文件" {
+                    store.openFilesOnWorkbench()
+                } else if text == "终端输出" {
+                    store.openTerminalOnWorkbench(chatId: resolvedChatId)
                 } else {
                     store.saveDraft(text, forChat: resolvedChatId)
                     composerFocusNonce += 1

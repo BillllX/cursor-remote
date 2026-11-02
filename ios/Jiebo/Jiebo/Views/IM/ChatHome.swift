@@ -36,6 +36,24 @@ struct ChatHome: View {
             }
         }
         .background(JieboColor.paper)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !store.connected {
+                Button {
+                    store.retryConnection()
+                } label: {
+                    Text(store.linkState.title)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.danger)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .background(JieboColor.paper)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.linkState != .offline)
+                .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+            }
+        }
         .overlay(alignment: .top) {
             ImToast(text: im.toast)
         }
@@ -136,13 +154,49 @@ struct ChatHome: View {
                 ThreadView(chrome: .embedded, chatId: chatId)
                     .onAppear { store.prepareAssistantThread() }
             } else {
-                ProgressView("正在加载助理…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { store.prepareAssistantThread() }
+                assistantPending
             }
         case .workspace(let path):
             WorkspaceAgentThread(path: path)
         }
+    }
+
+    /// 消息里点开小驳，主会话还没有。已经连上且还在等时才转圈。
+    private var assistantPendingWaiting: Bool {
+        store.unlocked && store.connected && (store.assistantState == nil || !store.gatewayReady)
+    }
+
+    private var assistantPendingTitle: String {
+        if !store.unlocked { return "还没登录。登录后再看小驳。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看小驳。"
+                : "正在连接。连上后再看小驳。"
+        }
+        if store.gatewayReady, store.assistantState != nil {
+            return "这个服务器还没有助理功能，请先升级服务器"
+        }
+        return "正在打开小驳主会话…"
+    }
+
+    private var assistantPending: some View {
+        VStack(spacing: 12) {
+            if assistantPendingWaiting {
+                ProgressView("正在打开小驳主会话…")
+            } else {
+                Text(assistantPendingTitle)
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.center)
+                if store.unlocked, store.linkState == .offline {
+                    ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
+                } else if store.unlocked, store.connected, store.gatewayReady {
+                    ActionButton(title: "再试一次", kind: .primary) { store.requestAssistant(force: true) }
+                }
+            }
+        }
+        .padding(.horizontal, 32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var destination: ChatDestination? {
@@ -201,7 +255,7 @@ struct ChatListView: View {
                             Text(store.assistantName)
                                 .font(JieboFont.text(.body, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink)
-                            Text("个人助理")
+                            Text("小驳")
                                 .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.dim)
                         }
@@ -223,7 +277,7 @@ struct ChatListView: View {
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(assistantSelected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
-                .accessibilityLabel(assistantSelected ? "\(store.assistantName)，个人助理，当前会话" : "\(store.assistantName)，个人助理")
+                .accessibilityLabel(assistantSelected ? "\(store.assistantName)，小驳，当前对话" : "\(store.assistantName)，小驳")
                 .accessibilityAddTraits(assistantSelected ? .isSelected : [])
             }
             if !rows.chatted.isEmpty {
@@ -250,7 +304,7 @@ struct ChatListView: View {
                 }
             }
             if !agents.isEmpty {
-                Section("工作区对话") {
+                Section("对话") {
                     ForEach(agents) { item in
                         workspaceRow(item)
                     }
@@ -290,9 +344,9 @@ struct ChatListView: View {
                         .font(JieboFont.text(.headline))
                         .foregroundStyle(JieboColor.ink)
                     if !im.online {
-                        Text(store.connected ? "服务器没开聊天功能" : "正在连接…")
+                        Text(store.connected ? "服务器没开聊天功能" : (store.linkState == .offline ? "已断开" : "正在连接…"))
                             .font(JieboFont.text(.caption2))
-                            .foregroundStyle(JieboColor.dim)
+                            .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -399,9 +453,13 @@ struct ChatListView: View {
                 } else {
                     // 断线时删除、置顶发不出去：不给按钮，只告诉为什么
                     Button {
-                        im.showToast("未连接，连上服务器后再试")
+                        if store.linkState == .offline {
+                            store.retryConnection()
+                        } else {
+                            im.showToast(im.settingsBlockedTitle)
+                        }
                     } label: {
-                        Label("未连接", systemImage: "wifi.slash")
+                        Label(store.linkState == .offline ? "重连" : (store.connected ? "不能改" : "正在连接"), systemImage: "wifi.slash")
                     }
                     .tint(JieboColor.dim)
                 }
@@ -487,7 +545,7 @@ struct ChatListView: View {
         .listRowBackground(selected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
         .accessibilityLabel([
             item.displayName,
-            "工作区对话",
+            "对话",
             selected ? "当前会话" : nil,
             item.status == "idle" ? nil : (item.status == "awaiting" ? "需处理" : "运行中")
         ].compactMap { $0 }.joined(separator: "，"))
@@ -621,6 +679,21 @@ struct WorkspaceAgentThread: View {
 
     private var item: WorkspaceAgentItem? { store.workspaceAgent(path: path) }
 
+    /// 对话还没到这台设备。已经连上且列表或会话还在来时才转圈。
+    private var folderPendingTitle: String? {
+        if !store.unlocked { return "还没登录。登录后再看这个文件夹。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看这个文件夹。"
+                : "正在连接。连上后再看这个文件夹。"
+        }
+        if !store.gatewayReady { return "正在打开，稍后再看这个文件夹。" }
+        if item == nil, store.workspaceAgentsLoaded {
+            return "这个文件夹还没出现在列表里。"
+        }
+        return nil
+    }
+
     var body: some View {
         Group {
             if let item, let chatId = item.mainChatId, store.chats.contains(where: { $0.id == chatId }) {
@@ -628,8 +701,20 @@ struct WorkspaceAgentThread: View {
                     .navigationTitle(item.directoryName)
                     .navigationBarTitleDisplayMode(.inline)
                     .onAppear { prepare(item, chatId: chatId) }
+            } else if let title = folderPendingTitle {
+                VStack(spacing: 12) {
+                    Text(title)
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.ink)
+                        .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
+                    }
+                }
+                .padding(.horizontal, 32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ProgressView("正在打开工作区…")
+                ProgressView("正在打开文件夹…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .task {
                         if let item { store.requestWorkspaceAgent(item) }
@@ -725,10 +810,10 @@ struct WorkspaceAgentProfileSheet: View {
                 } header: {
                     Text("聊天列表资料")
                 } footer: {
-                    Text("只改变聊天列表里的名称和头像，不会修改目录名、工作目录或会话标题。")
+                    Text("只改变聊天列表里的名称和头像，不会修改目录名或对话标题。")
                 }
             }
-            .navigationTitle("工作区聊天资料")
+            .navigationTitle("文件夹聊天资料")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

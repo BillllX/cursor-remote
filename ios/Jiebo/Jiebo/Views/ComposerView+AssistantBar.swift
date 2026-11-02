@@ -30,9 +30,9 @@ extension ComposerView {
     private var stopButton: some View {
         Button { store.stop(chatId: chatId) } label: {
             Image(systemName: "stop.fill")
-                .font(.system(size: 13, weight: .bold))
+                .font(.system(size: assistantStopGlyph, weight: .bold))
                 .foregroundStyle(JieboColor.danger)
-                .frame(width: 36, height: 36)
+                .frame(width: assistantControl, height: assistantControl)
                 .background(JieboColor.dangerBg)
                 .clipShape(Circle())
                 .hitTarget()
@@ -45,9 +45,9 @@ extension ComposerView {
     private func sendButton(queued: Bool) -> some View {
         Button(action: commitAndSend) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: assistantSendGlyph, weight: .semibold))
                 .foregroundStyle(JieboColor.fillFg)
-                .frame(width: 36, height: 36)
+                .frame(width: assistantControl, height: assistantControl)
                 .background(JieboColor.pine)
                 .clipShape(Circle())
                 .hitTarget()
@@ -83,12 +83,15 @@ extension ComposerView {
             }
             .pickerStyle(.menu)
         } label: {
-            HStack(spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(chatMode.label)
                     .foregroundStyle(chatMode == .agent ? JieboColor.ink2 : JieboColor.pine)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("·")
                 Text(ModelCatalog.label(for: chatModel))
-                    .lineLimit(1)
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(JieboFont.text(.caption2, weight: .semibold))
                     .accessibilityHidden(true)
@@ -96,7 +99,7 @@ extension ComposerView {
             .font(JieboFont.text(.caption, weight: .medium))
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 10)
-            .frame(minHeight: 24)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             // 浮在消息上时没有底，字会和正文叠在一起
             .jieboGlass(in: Capsule())
             .contentShape(Capsule())
@@ -138,13 +141,16 @@ extension ComposerView {
                     } label: {
                         Label("还原到检查点", systemImage: "clock.arrow.circlepath")
                     }
+                } else if let title = store.checkpointEmptyTitle {
+                    Button(title) {}
+                        .disabled(true)
                 }
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: assistantMoreGlyph, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
-                .frame(width: 36, height: 36)
+                .frame(width: assistantControl, height: assistantControl)
                 .hitTarget()
         }
         .menuOrder(.fixed)

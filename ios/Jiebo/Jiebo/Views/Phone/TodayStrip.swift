@@ -148,7 +148,13 @@ struct TodayStrip: View {
             if brief != nil || todoCount > 0 || nextLabel != nil {
                 Button {
                     JieboHaptic.selection()
-                    router.openHub()
+                    if todoCount > 0, brief == nil, nextLabel == nil {
+                        router.go(.worklist(.todo))
+                    } else if brief == nil, nextLabel != nil {
+                        router.go(.worklist(.plan))
+                    } else {
+                        router.openHub()
+                    }
                 } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "sun.max")
@@ -157,7 +163,7 @@ struct TodayStrip: View {
                             .frame(width: 32)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(todoCount > 0 ? "待办 \(todoCount)" : (brief != nil ? "今日简报" : "下一日程"))
+                            Text(todoCount > 0 ? "待办 \(todoCount)" : (brief != nil ? "今日简报" : "下一个计划"))
                                 .font(JieboFont.text(.headline, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink)
                             if let detail = nextLabel ?? brief {
@@ -293,7 +299,7 @@ struct TodayStrip: View {
               let millis = next.nextAt
         else { return nil }
         let date = Date(timeIntervalSince1970: millis / 1000)
-        let rawTitle = next.title.nilIfEmpty ?? "日程"
+        let rawTitle = next.title.nilIfEmpty ?? "计划"
         let title = rawTitle.count > 18 ? String(rawTitle.prefix(18)) + "…" : rawTitle
         let calendar = Calendar.current
         if calendar.isDateInToday(date) {

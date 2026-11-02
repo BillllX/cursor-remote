@@ -59,8 +59,20 @@ enum Uploader {
                 fromFile: file,
                 category: "工作台文件上传"
             )
+        } catch let urlError as URLError {
+            switch urlError.code {
+            case .timedOut:
+                throw UploadError.timeout
+            case .cancelled:
+                throw UploadError.http(-1, "这次上传取消了。")
+            case .notConnectedToInternet, .networkConnectionLost, .cannotConnectToHost,
+                 .cannotFindHost, .dnsLookupFailed, .dataNotAllowed, .internationalRoamingOff:
+                throw UploadError.notConnected
+            default:
+                throw UploadError.http(-1, "文件没传上去，再试一次。")
+            }
         } catch {
-            throw UploadError.http(-1, error.localizedDescription)
+            throw UploadError.http(-1, "文件没传上去，再试一次。")
         }
         guard let http = response as? HTTPURLResponse else { throw UploadError.badResponse }
         let object = (try? JSONValue.parse(data).object) ?? [:]

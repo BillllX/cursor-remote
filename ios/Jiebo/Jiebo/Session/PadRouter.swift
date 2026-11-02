@@ -84,7 +84,7 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .today: return "今日"
-        case .inbox: return "收件箱"
+        case .inbox: return "待处理"
         case .todos: return "待办"
         case .plans: return "计划"
         case .delegations: return "委派"
@@ -296,7 +296,7 @@ struct PadAssistantProjection {
             return PersonalTask(
                 id: "schedule:\(schedule.id)",
                 kind: "schedule",
-                title: schedule.title.nilIfEmpty ?? "日程",
+                title: schedule.title.nilIfEmpty ?? "计划",
                 phase: failed ? "needs_me" : "planned",
                 status: schedule.enabled ? (schedule.lastStatus ?? "scheduled") : "paused",
                 priority: failed ? "high" : "normal",

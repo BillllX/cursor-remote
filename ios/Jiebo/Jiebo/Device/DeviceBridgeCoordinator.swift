@@ -103,7 +103,7 @@ final class DeviceBridgeCoordinator {
             finish(invoke, status: status, error: error.localizedDescription, store: store)
         } catch {
             permissionStore.refresh(reqId: invoke.reqId)
-            finish(invoke, status: "error", error: "设备操作失败：\(error.localizedDescription)", store: store)
+            finish(invoke, status: "error", error: "设备操作失败，再试一次。", store: store)
         }
     }
 

@@ -158,12 +158,21 @@ func assistantElapsedMinutes(from startMillis: Double, to now: Date) -> Int {
 }
 
 extension ChatStore {
-    /// 日程开关：发 schedule_set（网关对已有 id 做部分更新，cron/prompt 沿用原值），并先本地翻转，避免开关弹回
+    /// 计划开关：发 schedule_set（网关对已有 id 做部分更新，cron/prompt 沿用原值），并先本地翻转，避免开关弹回。
+    /// 还没登录不改。没连上时先在这台设备改，并说明连上后才告诉服务器。
     func assistantSetScheduleEnabled(_ id: String, enabled: Bool) {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return
+        }
         assistantOp("schedule_set", args: ["id": .string(id), "enabled": .bool(enabled)])
         if let index = assistantState?.schedules.firstIndex(where: { $0.id == id }) {
             assistantState?.schedules[index].enabled = enabled
         }
+        guard !client.isOpen else { return }
+        flash(linkState == .offline
+            ? "已断开。这台设备已改了这条计划，连上后才会告诉服务器。"
+            : "正在连接。这台设备已改了这条计划，连上后才会告诉服务器。")
     }
 }
 
@@ -311,7 +320,7 @@ struct TodoEditSheet: View {
                 }
                 Section {
                     Button("删除这条", role: .destructive) {
-                        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+                        guard store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办") else { return }
                         dismiss()
                     }
                     .listRowBackground(JieboColor.white)
@@ -338,7 +347,9 @@ struct TodoEditSheet: View {
         var args: [String: JSONValue] = ["id": .string(todo.id)]
         if trimmed != todo.text { args["text"] = .string(trimmed) }
         if newDue != (todo.due ?? "") { args["due"] = .string(newDue) }
-        if args.count > 1 { store.assistantOp("todo_update", args: args) }
+        if args.count > 1 {
+            guard store.queueTodoChange("todo_update", args: args, pending: "这条待办的修改") else { return }
+        }
         dismiss()
     }
 }
@@ -550,8 +561,8 @@ struct ApprovalCard: View {
     }
 
     private var titleText: String {
-        if isCreateWorkspace { return "新建工作区" }
-        if approval.tool == "workspace_memory" { return "记进工作区记忆" }
+        if isCreateWorkspace { return "新建文件夹" }
+        if approval.tool == "workspace_memory" { return "记进文件夹记忆" }
         if approval.tool == "work_preferences" { return "记进工作偏好" }
         let owner = store.approvalDelegationTitle(approval)
         return isShell ? "\(owner) 想跑命令" : "\(owner) 想改文件"
@@ -688,26 +699,93 @@ struct PhoneNoticeOverlay: ViewModifier {
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .top) {
-                if !text.isEmpty {
-                    Text(text)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(store.bannerError.isEmpty ? JieboColor.ink : JieboColor.danger)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(JieboColor.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .allowsHitTesting(false)
-                        .accessibilityAddTraits(.updatesFrequently)
+                VStack(spacing: 8) {
+                    if !store.connected, UIDevice.current.userInterfaceIdiom == .phone {
+                        Button {
+                            store.retryConnection()
+                        } label: {
+                            Text(store.linkState.title)
+                                .font(JieboFont.text(.caption, weight: .medium))
+                                .foregroundStyle(JieboColor.danger)
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .background(JieboColor.white)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.linkState != .offline)
+                        .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+                    }
+                    if !text.isEmpty {
+                        if store.bannerReconnects {
+                            Button {
+                                store.retryConnection()
+                            } label: {
+                                noticeLabel(text, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("重新连接")
+                        } else if store.bannerError == ChatStore.hydrationRetryTitle,
+                                  !store.hydrationRetryTurnId.isEmpty {
+                            Button {
+                                store.hydrateTurn(
+                                    chatId: store.hydrationRetryChatId,
+                                    turnId: store.hydrationRetryTurnId
+                                )
+                            } label: {
+                                noticeLabel(text, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("再加载一次")
+                        } else if store.bannerError.isEmpty,
+                                  store.notice == ChatStore.stallRecoveryNotice,
+                                  let chatId = store.stallChatId {
+                            Button {
+                                store.stop(chatId: chatId)
+                                store.restoreLastPromptIfDraftEmpty(chatId: chatId)
+                                store.notice = ""
+                            } label: {
+                                noticeLabel(text, danger: false)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("停止这一轮，上一句回到输入框")
+                        } else if !store.bannerError.isEmpty {
+                            Button {
+                                store.dismissBannerError()
+                            } label: {
+                                noticeLabel(text, danger: true)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityHint("轻点关闭")
+                        } else {
+                            noticeLabel(text, danger: false)
+                                .allowsHitTesting(false)
+                        }
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
             .animation(JieboMotion.fade(reduceMotion), value: text)
+            .animation(JieboMotion.fade(reduceMotion), value: store.connected)
+    }
+
+    private func noticeLabel(_ value: String, danger: Bool) -> some View {
+        Text(value)
+            .font(JieboFont.text(.footnote))
+            .foregroundStyle(danger ? JieboColor.danger : JieboColor.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(JieboColor.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
+            .accessibilityAddTraits(.updatesFrequently)
     }
 }
 

@@ -270,11 +270,15 @@ struct ImBubbleRow: View {
                 Button {
                     im.resend(message)
                 } label: {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(JieboColor.danger)
-                        .frame(width: 32, height: 32)
-                        .contentShape(Rectangle())
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.system(size: 18))
+                        Text("重发")
+                            .font(JieboFont.text(.caption, weight: .medium))
+                    }
+                    .foregroundStyle(JieboColor.danger)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(

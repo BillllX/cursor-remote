@@ -313,7 +313,7 @@ extension ChatStore {
         case .workspaceRemoved(let path, let name, let mode):
             workspaces.removeAll { normPath($0.path) == normPath(path) }
             updateCachedWorkspaces(root: workspaceRoot, items: workspaces)
-            flash(mode == "deleted" ? "已删除工作区「\(name)」" : "「\(name)」里有文件，已从列表隐藏（文件没动）")
+            flash(mode == "deleted" ? "已删除文件夹「\(name)」" : "「\(name)」里有文件，已从列表隐藏（文件没动）")
         case .workspaceAgents(let items, let ticket, let reset, let more, let after, let cursor):
             if reset {
                 // 广播更新也会从第一页重新开始；旧的“已完整加载”不能沿用，
@@ -778,8 +778,8 @@ extension ChatStore {
                 }
                 // 对齐网页：「读不了/不是文件/不在工作区」改写为友好文案 + notice
                 if error.contains("读不了") || error.contains("不是文件") || error.contains("不在工作区") {
-                    if tab.content == nil { tab.error = "文件已不在当前工作区，换工作区后再打开，或关掉这个预览。" }
-                    flash("\(path) 已不在工作区")
+                    if tab.content == nil { tab.error = "文件已不在当前文件夹，换个文件夹后再打开，或关掉这个预览。" }
+                    flash("\(path) 已不在这个文件夹")
                 } else if tab.content == nil {
                     tab.error = error // 已有内容时静默保留旧内容（对齐网页）
                 }
@@ -854,6 +854,7 @@ extension ChatStore {
             searchHits = hits
             searchTruncated = truncated
             searchLoading = false
+            searchContentNote = ""
         case .checkpoints(let id, let items):
             guard id.isEmpty || id == activeId || id == chatHomeThreadChatId else { break }
             checkpoints = items

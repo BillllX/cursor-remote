@@ -13,13 +13,6 @@ extension ComposerView {
     private var fullControls: some View {
         HStack(alignment: .center, spacing: 8) {
             attachMenu
-            if controlsWidth >= 420 {
-                modePicker
-                modelPicker(maxWidth: 180)
-            } else {
-                compactMode
-                modelPicker(maxWidth: 108)
-            }
             if controlsWidth >= 640 {
                 policyToggle
                 confirmToggle
@@ -45,27 +38,76 @@ extension ComposerView {
         }
     }
 
+    /// 模式和模型独占一整行。长名字换行，不从中间省略。
+    var fullNarrowStatusLine: some View {
+        Menu {
+            Picker(selection: Binding(get: { chatMode }, set: { store.chooseMode($0, chatId: chatId) })) {
+                ForEach(AgentMode.allCases, id: \.self) { item in
+                    Text(item.label).tag(item)
+                }
+            } label: {
+                Label("模式", systemImage: "slider.horizontal.3")
+            }
+            .pickerStyle(.menu)
+            Picker(selection: Binding(get: { chatModel }, set: { store.chooseModel($0, chatId: chatId) })) {
+                ForEach(ModelCatalog.groups(from: store.models)) { group in
+                    Section(group.label) {
+                        ForEach(group.models) { item in
+                            Text(item.name).tag(item.id)
+                        }
+                    }
+                }
+            } label: {
+                Label("模型", systemImage: "cpu")
+            }
+            .pickerStyle(.menu)
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(chatMode.label)
+                    .fixedSize(horizontal: true, vertical: false)
+                Text("·")
+                Text(ModelCatalog.label(for: chatModel))
+                    .lineLimit(4)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(JieboFont.text(.caption2, weight: .semibold))
+                    .accessibilityHidden(true)
+                Spacer(minLength: 0)
+            }
+            .font(JieboFont.text(.footnote, weight: .medium))
+            .foregroundStyle(JieboColor.ink)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("模式 \(chatMode.label)，模型 \(ModelCatalog.label(for: chatModel))")
+        .accessibilityHint("轻点切换")
+    }
+
     private func sendCluster(enabled: Bool) -> some View {
         HStack(spacing: 8) {
             if chatBusy {
                 Button { store.stop(chatId: chatId) } label: {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.system(size: stopGlyph, weight: .bold))
                         .foregroundStyle(JieboColor.paper)
-                        .frame(width: 32, height: 32)
+                        .frame(width: controlDiameter, height: controlDiameter)
                         .background(JieboColor.danger)
                         .clipShape(Circle())
                         .hitTarget()
                 }
                 .buttonStyle(PressScaleButtonStyle())
-                .accessibilityLabel("停止")
+                .accessibilityLabel(store.localOnlyWaitTurnIds(chatId) != nil ? "不发送" : "停止")
+                .accessibilityHint(store.localOnlyWaitTurnIds(chatId) != nil ? "这句话回到输入框，连上后也不会发出去" : "")
                 .transition(.scale.combined(with: .opacity))
             }
             Button(action: commitAndSend) {
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: sendGlyph, weight: .semibold))
                     .foregroundStyle(enabled ? JieboColor.paper : JieboColor.dim.opacity(0.45))
-                    .frame(width: 32, height: 32)
+                    .frame(width: controlDiameter, height: controlDiameter)
                     .background(enabled ? JieboColor.pine : JieboColor.mist.opacity(0.55))
                     .clipShape(Circle())
                     .scaleEffect(enabled ? 1 : 0.94)
@@ -119,7 +161,7 @@ extension ComposerView {
             }
             .disabled(!store.canUndo(chatId))
             if store.checkpoints.isEmpty {
-                Button(chatMode == .ask ? "只问不会打检查点" : "动手或出方案时会记下检查点") {}
+                Button(store.checkpointEmptyTitle ?? (chatMode == .ask ? "只问不会打检查点" : "动手或出方案时会记下检查点")) {}
                     .disabled(true)
             } else {
                 ForEach(store.checkpoints) { item in
@@ -129,9 +171,9 @@ extension ComposerView {
             }
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: moreGlyph, weight: .semibold))
                 .foregroundStyle(JieboColor.ink2)
-                .frame(width: 32, height: 32)
+                .frame(width: controlDiameter, height: controlDiameter)
                 .background(Color.clear)
                 .clipShape(Circle())
                 .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
@@ -159,7 +201,7 @@ extension ComposerView {
                 Button {
                     fileBrowserOpen = true
                 } label: {
-                    Label("工作区文件…", systemImage: "folder")
+                    Label("文件…", systemImage: "folder")
                 }
             }
         } label: {
@@ -213,91 +255,5 @@ extension ComposerView {
         .accessibilityLabel(plane ? "策略层" : "现状路径")
     }
 
-    private var modePicker: some View {
-        HStack(spacing: 0) {
-            ForEach(AgentMode.allCases, id: \.self) { item in
-                Button {
-                    store.chooseMode(item, chatId: chatId)
-                } label: {
-                    Text(item.label)
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(chatMode == item ? JieboColor.ink : JieboColor.ink2)
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 32)
-                        .background {
-                            if chatMode == item {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(JieboColor.ink.opacity(0.06))
-                                    .matchedGeometryEffect(id: "mode-thumb", in: modeThumb)
-                            }
-                        }
-                        .hitTarget() // P6：滑块视觉 32 高不变，命中 44
-                }
-                .buttonStyle(PressScaleButtonStyle())
-            }
-        }
-        .padding(2)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
-        )
-        .animation(JieboMotion.snappy(reduceMotion), value: chatMode)
-    }
 
-    private var compactMode: some View {
-        Menu {
-            ForEach(AgentMode.allCases, id: \.self) { item in
-                Button(item.label) { store.chooseMode(item, chatId: chatId) }
-            }
-        } label: {
-            Text(chatMode.label)
-                .font(JieboFont.text(.footnote, weight: .medium))
-                .foregroundStyle(JieboColor.ink)
-                .padding(.horizontal, 10)
-                .frame(minHeight: 32)
-                .background(Color.clear)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
-                )
-                .hitTarget()
-        }
-        .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel("模式 \(chatMode.label)")
-    }
-
-    private func modelPicker(maxWidth: CGFloat) -> some View {
-        Menu {
-            ForEach(ModelCatalog.groups(from: store.models)) { group in
-                Section(group.label) {
-                    ForEach(group.models) { item in
-                        Button(item.name) { store.chooseModel(item.id, chatId: chatId) }
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Text(ModelCatalog.label(for: chatModel))
-                    .font(JieboFont.text(.footnote, weight: .medium))
-                    .foregroundStyle(JieboColor.ink)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
-            }
-            .padding(.horizontal, 10)
-            .frame(minHeight: 32)
-            .frame(maxWidth: maxWidth)
-            .background(Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
-            )
-            .hitTarget()
-        }
-        .buttonStyle(PressScaleButtonStyle())
-    }
 }

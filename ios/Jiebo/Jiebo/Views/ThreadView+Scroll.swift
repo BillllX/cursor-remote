@@ -30,8 +30,10 @@ extension ThreadView {
                         // 只在真的往前翻页时出现；显示本机缓存、增量补齐期间由导航栏的同步转圈提示
                         // 分页加载更早内容的轻提示（不抢滚动，对齐「分段加载」的可感知性）
                         HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
-                            Text("正在加载更早的内容…")
+                            if earlierLoadBlockedTitle == nil {
+                                ProgressView().controlSize(.small)
+                            }
+                            Text(earlierLoadBlockedTitle ?? "正在加载更早的内容…")
                                 .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.ink2)
                         }
@@ -99,16 +101,20 @@ extension ThreadView {
                        partial.nextFrom > 0
                     {
                         Button {
-                            loadNetworkEarlier(proxy: proxy, allTurns: allTurns)
+                            if store.unlocked, store.linkState == .offline {
+                                store.retryConnection()
+                            } else {
+                                loadNetworkEarlier(proxy: proxy, allTurns: allTurns)
+                            }
                         } label: {
-                            Text(store.loadingChatIds.contains(resolvedChatId) ? "正在加载更早内容…" : "加载更早内容")
+                            Text(earlierNetworkTitle)
                                 .font(JieboFont.text(.footnote, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(store.loadingChatIds.contains(resolvedChatId))
+                        .disabled(earlierNetworkDisabled)
                         .background {
                             GeometryReader { marker in
                                 Color.clear
@@ -205,9 +211,22 @@ extension ThreadView {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.paper.opacity(0.92))
                         .transition(.opacity)
+                    } else if let title = threadLoadBlockedTitle {
+                        VStack(spacing: 12) {
+                            Text(title)
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.ink)
+                                .multilineTextAlignment(.center)
+                            if store.unlocked, store.linkState == .offline {
+                                ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
+                            }
+                        }
+                        .padding(.horizontal, 32)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(JieboColor.paper.opacity(0.92))
                     }
                 }
-                .animation(JieboMotion.fade(reduceMotion), value: loadingVisible)
+                .animation(JieboMotion.fade(reduceMotion), value: loadingVisible || threadLoadBlockedTitle != nil)
             }
             .task(id: showThreadLoading) {
                 // 本机缓存通常几十毫秒就读完：等一小会儿再盖遮罩，免得冷启动先闪一下
@@ -311,6 +330,19 @@ extension ThreadView {
             canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
             embedded: chrome == .embedded,
             isLastAssistant: turn.id == turns.last?.id,
+            canRestorePrompt: turn.id == turns.last?.id
+                && store.draft(for: resolvedChatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && {
+                    let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return !trimmed.isEmpty && trimmed != "（附图）"
+                }(),
+            waitingForLink: turn.running
+                && turn.assistant.isEmpty
+                && turn.thinking.isEmpty
+                && turn.tools.isEmpty
+                && turn.pendingTool == nil
+                && !store.connected
+                && !store.runningChatIds.contains(resolvedChatId),
             reviewMark: store.localTurnReviews[turn.id],
             restoring: store.restoringTurnIds.contains(turn.id),
             captured: TodoReceipt.captured(in: turn, todos: store.assistantState?.todos),

@@ -20,13 +20,31 @@ extension ChatStore {
     func undoLast(chatId: String? = nil) {
         let targetId = chatId ?? activeId
         guard canUndo(targetId) else { return }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。还原会在连上后发出。"
+                : "正在连接。还原会在连上后发出。")
+        }
         send(.undo(chatId: targetId))
     }
 
     func keepTurnFiles(_ turnId: String, chatId: String? = nil) {
         let targetId = chatId ?? activeId
-        guard let chat = chatSession(targetId), chat.turns.contains(where: { $0.id == turnId }) else { return }
+        guard let chat = chatSession(targetId), let turn = chat.turns.first(where: { $0.id == turnId }) else { return }
+        guard !cachedOnlyIds.contains(targetId) else {
+            flash("这条对话还没对上服务器，保留不会留下。")
+            return
+        }
+        let untaggable = turn.reviewCallIds.isEmpty && !turn.files.isEmpty
         markTurnReview(turnId, review: "accepted", onlyEmpty: true, chatId: targetId)
+        if untaggable {
+            flash("这次保留只在这次打开里有效，下次进来还要再点。")
+            return
+        }
+        guard !client.isOpen else { return }
+        flash(linkState == .offline
+            ? "已断开。这台设备已标成保留，连上后才会告诉服务器。"
+            : "正在连接。这台设备已标成保留，连上后才会告诉服务器。")
     }
 
     /// 发出还原后先挂「还原中」，等 undone/restored 回执确认这一轮的文件真回去了才标 rejected
@@ -41,6 +59,19 @@ extension ChatStore {
         }
         guard !paths.isEmpty else { return }
         let last = chat.turns.reversed().first { !$0.queued && !$0.reviewPaths.isEmpty }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。还原会在连上后发出。"
+                : "正在连接。还原会在连上后发出。")
+            if last?.id == turnId {
+                send(.undo(chatId: chat.id))
+            } else {
+                for path in paths {
+                    send(.revertFile(chatId: chat.id, path: path))
+                }
+            }
+            return
+        }
         let viaUndo = last?.id == turnId
         restoringTurnIds.insert(turnId)
         let timeout = Task { @MainActor [weak self] in
@@ -131,6 +162,17 @@ extension ChatStore {
         send(.toolReview(chatId: chat.id, turnId: turnId, reviews: reviews))
     }
 
+    /// 检查点列表还没向服务器要过。打开菜单时用这句，不要写成还没有检查点。
+    var checkpointEmptyTitle: String? {
+        guard unlocked else { return "还没登录。登录后再看检查点。" }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看检查点。"
+                : "正在连接。连上后再看检查点。"
+        }
+        return nil
+    }
+
     func refreshCheckpoints(chatId: String? = nil) {
         let targetId = chatId ?? activeId
         guard client.isOpen, targetId != "boot" else { return }
@@ -139,7 +181,10 @@ extension ChatStore {
 
     func restoreCheckpoint(_ id: String, chatId: String? = nil) {
         let targetId = chatId ?? activeId
-        guard client.isOpen else { return }
+        guard client.isOpen else {
+            flash(linkState == .offline ? "已断开，点按重连后再还原" : "正在连接，连上后再还原")
+            return
+        }
         guard !isBusy(targetId) else {
             flash("等当前这条跑完再还原")
             return

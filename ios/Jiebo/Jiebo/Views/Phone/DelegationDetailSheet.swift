@@ -93,9 +93,6 @@ struct DelegationDetailSheet: View {
         processSection
         filesSection
         stopSection(row)
-        Text("完整过程在电脑或 iPad 上查看")
-            .font(JieboFont.text(.caption))
-            .foregroundStyle(JieboColor.dim)
     }
 
     private func header(_ row: AssistantDelegation) -> some View {
@@ -152,12 +149,14 @@ struct DelegationDetailSheet: View {
             if let chat = childChat {
                 let tools = chat.turns.last?.tools ?? []
                 if tools.isEmpty {
-                    AssistantMutedText(chat.turnsComplete ? "还没有步骤。" : "正在加载过程…")
+                    AssistantMutedText(chat.turnsComplete ? "还没有步骤。" : (store.delegationProcessPendingTitle(chatId: chat.id) ?? "正在加载过程…"))
                 } else {
                     processRows(tools)
                 }
+            } else if delegation?.childChatId.isEmpty != false {
+                AssistantMutedText("这项委派没有单独的过程记录")
             } else {
-                AssistantMutedText("过程在电脑上查看")
+                AssistantMutedText(store.delegationProcessPendingTitle(chatId: delegation?.childChatId) ?? "正在读取过程…")
             }
         }
     }
@@ -225,21 +224,17 @@ struct DelegationDetailSheet: View {
     @ViewBuilder
     private func stopSection(_ row: AssistantDelegation) -> some View {
         if row.status == "running" || row.status == "awaiting" {
-            if row.mode == "foreground" {
-                ActionButton(title: stopping ? "正在停止…" : "停止这项委派", kind: .destructive) {
-                    stopConfirm = true
-                }
-                .disabled(stopping)
-            } else {
-                AssistantMutedText("后台任务只读，会自己结束")
+            ActionButton(title: stopping ? "正在停止…" : "停止这项委派", kind: .destructive) {
+                stopConfirm = true
             }
+            .disabled(stopping)
         }
     }
 
     private func stop() {
         guard let row = delegation, row.status == "running" || row.status == "awaiting" else { return }
+        guard store.cancelDelegation(row.id) else { return }
         stopping = true
-        store.assistantOp("delegation_cancel", args: ["delegationId": .string(row.id)])
         Task { @MainActor in
             // 8 秒后状态还没变（多半是网关拒绝了，原因已经用 flash 显示）就把按钮恢复
             try? await Task.sleep(for: .seconds(8))

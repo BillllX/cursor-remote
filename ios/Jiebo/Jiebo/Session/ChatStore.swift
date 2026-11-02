@@ -38,11 +38,11 @@ enum ToolLayer: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .files: return "文件"
-        case .search: return "工作区搜索"
-        case .git: return "源代码管理"
+        case .search: return "搜索"
+        case .git: return "改动"
         case .terminal: return "终端输出"
         case .loop: return "Loop"
-        case .assistant: return "助理"
+        case .assistant: return "小驳"
         }
     }
 
@@ -119,9 +119,26 @@ final class ChatStore {
     var verifying = false
     var authError = ""
     var notice = ""
+    /// 卡住超过一分半时的横幅。点横幅会停掉这一轮。
+    static let stallRecoveryNotice = "这一轮没有新进展。点这里停止，上一句会回到输入框。"
+    /// 小驳这一轮失败时，点状态句只把上一句放回输入框，不自动重发。
+    static let failedRetryTitle = "执行没有完成。点这里把上一句放回输入框"
+    /// 带图时断线：图片还在输入框里，点横幅只重连，不自动发送。
+    static let offlineImageTitle = "图片需要在线发送。点这里重连，连上后再点发送。"
+    /// 文件没传上去且已经断开：点横幅只重连，不自动再传。
+    static let uploadOfflineTitle = "文件没传上去。已断开，点按重连。"
+    /// 完整内容没载下来时，点横幅再请求这一轮。
+    static let hydrationRetryTitle = "完整内容加载失败。点这里再加载一次。"
+    var hydrationRetryChatId = ""
+    var hydrationRetryTurnId = ""
     /// 红色错误条。8 秒后自动清掉，点一下也能关（dismissBannerError）
     var bannerError = "" {
         didSet { scheduleBannerErrorClear() }
+    }
+
+    /// 这两句点了只重连，不把图片或文件再发出去。
+    var bannerReconnects: Bool {
+        bannerError == Self.offlineImageTitle || bannerError == Self.uploadOfflineTitle
     }
     var tokenDraft = ""
     var chats: [ChatSession] = [ChatSession.blank(id: "boot")]
@@ -175,6 +192,8 @@ final class ChatStore {
     /// turn_files 可能早于非 owner 的 snapshot/history；按会话和回合暂存，回合出现时再合并。
     var pendingTurnFiles = DeferredTurnFiles()
     var workspaces: [WorkspaceItem] = []
+    /// 这次打开里已经拿到过服务器或缓存里的文件夹列表。空列表也算拿到。
+    var workspacesLoaded = false
     @ObservationIgnored var workspacesSyncInFlight = false
     @ObservationIgnored var workspacesSyncGeneration = 0
     @ObservationIgnored var workspacesInFlightGeneration: Int?
@@ -182,6 +201,18 @@ final class ChatStore {
     var workspaceSheetOpen = false
     /// P7a：Finder 式文件浏览器 fullScreenCover 的开关（挂在 WorkbenchView——从侧栏列弹 cover 会继承 compact sizeClass）
     var fileBrowserOpen = false
+    /// 每次从助理要求打开文件就加一。手机据此切到工作台，避免标记停在 true 后不再通知。
+    var workbenchFilesRequest = 0
+    /// 从对话里的命令要求打开终端时加一。手机据此切到工作台。
+    var workbenchTerminalRequest = 0
+    /// 工作台状态句写着回到小驳时加一。手机据此切回小驳。
+    var returnToAssistantRequest = 0
+    /// 工作台状态句写着待批在待处理时加一。iPad 据此打开待处理里的确认卡。
+    var openApprovalsRequest = 0
+    /// 钉住某条命令所属的会话。空串表示工作台工具条打开，跟当前会话。
+    var terminalFocusChatId = ""
+    /// 打开后滚到这一条命令。空串表示滚到最后一条。
+    var terminalFocusCallId = ""
     var fileBrowserPane: FileBrowserPane = .files
     var creatingWorkspace = false
     var newWorkspaceName = ""
@@ -196,6 +227,8 @@ final class ChatStore {
     /// 网关为了不超单条上限裁掉了一部分命中
     var searchTruncated = false
     var searchLoading = false
+    /// 内容搜索没发出去时的原因。文件名仍走本地索引。
+    var searchContentNote = ""
     var searchTask: Task<Void, Never>?
     var searchEpoch = 0
     var searchNameHits: [String] {
@@ -204,7 +237,7 @@ final class ChatStore {
         return Array(fileIndex.filter { $0.lowercased().contains(query) }.prefix(40))
     }
     var shellEntries: [ShellEntry] {
-        let chatId = activeId
+        let chatId = terminalFocusChatId.isEmpty ? activeId : terminalFocusChatId
         let revision = turnRenderRevisions[chatId, default: 0]
         if let shellMemo, shellMemo.chatId == chatId, shellMemo.revision == revision {
             return shellMemo.rows
@@ -218,7 +251,17 @@ final class ChatStore {
     func chatShowsRunning(_ chat: ChatSession) -> Bool {
         if runningChatIds.contains(chat.id) { return true }
         for turn in chat.turns.reversed() {
-            if turn.running { return true }
+            if turn.running {
+                // 还没连上、服务器也没开始：输入框不要出停止。
+                if !client.isOpen,
+                   turn.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   turn.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   turn.tools.isEmpty,
+                   turn.pendingTool == nil {
+                    continue
+                }
+                return true
+            }
             if !turn.queued { return false }
         }
         return false
@@ -311,6 +354,8 @@ final class ChatStore {
     /// 表单盖住主区时，校验和网关拒绝要画在 sheet 里
     var loopError = ""
     var hasApiKey = true
+    /// 没配钥匙时的下一步。钥匙在服务器上，应用里改不了。
+    static let missingApiKeyTitle = "没配 API Key。写入 CURSOR_API_KEY 后重启网关"
     var draft = ""
     var tenantId = ""
     var tenantName = ""
@@ -417,11 +462,31 @@ final class ChatStore {
     var cursorBill: CursorBill?
     /// P8 slim：内容分页加载中的会话（ThreadView 遮罩 + 在途页去重用）
     var loadingChatIds: Set<String> = []
+    /// 正在补正文时，导航和首页用同一句，点按会再拉一次。
+    static let syncingThreadTitle = "正在同步这条会话，点按再拉一次"
     /// 增量补齐正文时导航栏小 spinner（不阻塞输入）
     var threadSyncBusy: Bool {
-        (resumingLogin && !unlocked)
-            || refreshingChatIds.contains(activeId)
-            || (loadingChatIds.contains(activeId) && bodyRevs[activeId] != nil && !(active?.turnsComplete ?? true))
+        isThreadSyncBusy(activeId)
+    }
+
+    /// 顶栏写「这条会话」时，看的是屏幕上这一条，不是另一侧的 activeId。
+    func isThreadSyncBusy(_ chatId: String) -> Bool {
+        guard !chatId.isEmpty else { return resumingLogin && !unlocked }
+        let complete = chats.first { $0.id == chatId }?.turnsComplete ?? true
+        return (resumingLogin && !unlocked)
+            || refreshingChatIds.contains(chatId)
+            || (loadingChatIds.contains(chatId) && bodyRevs[chatId] != nil && !complete)
+    }
+
+    /// iPad 小驳看得见的是助理会话，不一定是工作台的 activeId。
+    var assistantThreadSyncBusy: Bool {
+        guard let id = assistantChatId, !id.isEmpty else {
+            return resumingLogin && !unlocked
+        }
+        let complete = chats.first { $0.id == id }?.turnsComplete ?? true
+        return (resumingLogin && !unlocked)
+            || refreshingChatIds.contains(id)
+            || (loadingChatIds.contains(id) && bodyRevs[id] != nil && !complete)
     }
 
     enum LinkState {
@@ -430,8 +495,8 @@ final class ChatStore {
         var title: String {
             switch self {
             case .connected: "已连接"
-            case .connecting: "连接中…"
-            case .offline: "已断开"
+            case .connecting: "正在连接"
+            case .offline: "已断开，点按重连"
             }
         }
     }
@@ -637,7 +702,7 @@ final class ChatStore {
         var errorDescription: String? {
             switch self {
             case .http(let code):
-                code == 404 ? "文件不在工作区里，可能已被移动或删除" : "获取文件失败（HTTP \(code)）"
+                code == 404 ? "文件不在这个文件夹里，可能已被移动或删除" : "获取文件失败（HTTP \(code)）"
             case .tooLarge:
                 "文件太大（超过 32MB），处理不了"
             }

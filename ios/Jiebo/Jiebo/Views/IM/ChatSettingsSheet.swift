@@ -73,7 +73,7 @@ struct ChatSettingsSheet: View {
                     Text("我的资料")
                 } footer: {
                     if !im.canChangeSettings {
-                        Text("未连接，连上服务器后才能改")
+                        SettingsBlockedNote()
                     }
                 }
 
@@ -241,6 +241,7 @@ struct PeerProfileSheet: View {
                     }
                     .tint(JieboColor.pine)
                     .frame(minHeight: 44)
+                    .disabled(!im.canChangeSettings)
                     .listRowBackground(JieboColor.white)
                     Toggle(isOn: Binding(get: { conv?.mute ?? false }, set: { im.setMute(convId, $0) })) {
                         Text("消息免打扰")
@@ -249,13 +250,13 @@ struct PeerProfileSheet: View {
                     }
                     .tint(JieboColor.pine)
                     .frame(minHeight: 44)
+                    .disabled(!im.canChangeSettings)
                     .listRowBackground(JieboColor.white)
                 } footer: {
                     if !im.canChangeSettings {
-                        Text("未连接，连上服务器后才能改")
+                        SettingsBlockedNote()
                     }
                 }
-                .disabled(!im.canChangeSettings)
 
                 Section {
                     Button {
@@ -316,6 +317,26 @@ struct PeerProfileSheet: View {
             } message: {
                 Text("拉黑后对方发来的消息不会送到你这里，对方不会收到提示。")
             }
+        }
+    }
+
+}
+
+private struct SettingsBlockedNote: View {
+    @Environment(ImStore.self) private var im
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        if store.linkState == .offline {
+            Button {
+                store.retryConnection()
+            } label: {
+                Text(im.settingsBlockedTitle)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Text(im.settingsBlockedTitle)
         }
     }
 }

@@ -76,6 +76,13 @@ extension ChatStore {
         armOfflineTimer()
     }
 
+    /// 人点了「重连」：先回到「正在连接」，再立刻再拨一次。
+    func retryConnection() {
+        clearOfflineTimer()
+        armOfflineTimer()
+        client.connect(url: GatewayConfig.url)
+    }
+
     func login() {
         let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else { return }
@@ -125,7 +132,9 @@ extension ChatStore {
             self.gatewayReady = false
             AppLaunchMetrics.event("ws_open")
             self.clearOfflineTimer()
-            if self.authError.hasPrefix("还没连上") { self.authError = "" }
+            if self.authError.hasPrefix("还没连上") || self.authError.hasPrefix("验证没有完成。") {
+                self.authError = ""
+            }
             // tokenDraft 是当前凭据（login 写入）；Keychain 只是持久化兜底
             var token = self.tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             if token.isEmpty { token = KeychainStore.token() ?? "" }
@@ -135,8 +144,10 @@ extension ChatStore {
                 self.client.send(.hello(token: token))
             }
         }
-        client.onDrop = { [weak self] reason in
-            self?.bannerError = reason
+        client.onDrop = { [weak self] reason, message in
+            guard let self else { return }
+            self.bannerError = reason
+            self.restoreOversizedSend(message)
         }
         client.onBackgroundTrafficRestored = { [weak self] in
             guard let self else { return }
@@ -202,8 +213,9 @@ extension ChatStore {
             for id in stalePartialIds { self.partialHistories[id] = nil }
             if !self.unlocked {
                 self.verifying = false
-            } else {
-                self.flash("正在重连服务器…")
+            } else if !self.linkOffline {
+                // 已经写成「已断开，点按重连」时不再弹「正在重连」，避免和顶栏对着说。
+                self.flash("正在连接…")
             }
         }
         client.onMessage = { [weak self] message in
@@ -245,6 +257,7 @@ extension ChatStore {
         cwd = ""
         workspaceRoot = ""
         workspaces = []
+        workspacesLoaded = false
         workspacesSyncInFlight = false
         workspacesInFlightGeneration = nil
         workspacesForcePending = false
@@ -357,6 +370,7 @@ extension ChatStore {
         searchHits = []
         searchTruncated = false
         searchLoading = false
+        searchContentNote = ""
         suppressContentDiscard = true
         closeContentLayer()
         suppressContentDiscard = false
@@ -418,7 +432,13 @@ extension ChatStore {
             try? await Task.sleep(for: .seconds(20))
             guard !Task.isCancelled, !unlocked else { return }
             verifying = false
-            authError = "验证超时，请再试一次。"
+            if self.connected {
+                authError = "验证超时，请再试一次。"
+            } else if self.linkState == .offline {
+                authError = "验证没有完成。已断开，点按重连后再进入。"
+            } else {
+                authError = "验证没有完成。正在连接，连上后再进入。"
+            }
         }
     }
 

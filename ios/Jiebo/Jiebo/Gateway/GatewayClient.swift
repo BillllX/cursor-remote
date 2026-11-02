@@ -8,7 +8,7 @@ final class GatewayClient {
     /// 连接仍可用、仅费用属性从受限恢复正常；主 actor 上同步通知各 Store 恢复延后任务。
     var onBackgroundTrafficRestored: (() -> Void)?
     /// outbox 拒收时的回调（原因文案，给 banner）
-    var onDrop: ((String) -> Void)?
+    var onDrop: ((String, ClientMessage) -> Void)?
 
     /// outbox 单条 payload 上限：超过的消息入队也大概率发不出去，只费内存
     private static let outboxPayloadLimit = 8 * 1024 * 1024
@@ -135,7 +135,7 @@ final class GatewayClient {
                 // syncState 静默丢弃：下一次 scheduleSync 全量重发即自愈，无需打扰用户
                 if case .syncState = message { return }
                 let mb = (data.count + 1_048_575) / 1_048_576
-                onDrop?("这条没发出去：消息太大（约 \(mb)MB），连上后请重发。")
+                onDrop?("这条没发出去：消息太大（约 \(mb)MB）。已经放回输入框，缩短后再发。", message)
                 return
             }
             outbox.append(Queued(message: message, payload: data))
@@ -143,6 +143,21 @@ final class GatewayClient {
             return
         }
         transmit(message, on: task)
+    }
+
+    /// 这句话还没交给服务器。从待发队列拿掉，返回真正拿掉的回合。重连后这些不会再发出去。
+    @discardableResult
+    func removePendingPrompts(chatId: String, turnIds: Set<String>) -> Set<String> {
+        guard !turnIds.isEmpty else { return [] }
+        var removed = Set<String>()
+        outbox.removeAll { item in
+            guard case .prompt(_, _, _, let id, _, _, _, _, _, _, _, _, let turnId) = item.message,
+                  id == chatId, let turnId, turnIds.contains(turnId)
+            else { return false }
+            removed.insert(turnId)
+            return true
+        }
+        return removed
     }
 
     func flushOutbox() {
@@ -335,6 +350,16 @@ final class GatewayClient {
 
     private func transmit(_ message: ClientMessage, on socket: URLSessionWebSocketTask) {
         guard let data = try? message.json().data() else { return }
+        if data.count > Self.outboxPayloadLimit {
+            if case .syncState = message { return }
+            if case .uploadFile = message {
+                transmit(data, on: socket)
+                return
+            }
+            let mb = (data.count + 1_048_575) / 1_048_576
+            onDrop?("这条没发出去：消息太大（约 \(mb)MB）。已经放回输入框，缩短后再发。", message)
+            return
+        }
         transmit(data, on: socket)
     }
 

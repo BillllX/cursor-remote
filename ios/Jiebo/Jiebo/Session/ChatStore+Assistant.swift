@@ -13,6 +13,56 @@ extension ChatStore {
     }
 
     /// 停在审批上的委派子会话里，父会话是 parentId 的那些
+    /// 待批已经出现在哪。用来把「等待你的确认」写成能找到按钮的一句。
+    enum ApprovalHint: Equatable {
+        case inComposer
+        case aboveComposer
+        case openInbox
+        case backToAssistant
+
+        var title: String {
+            switch self {
+            case .inComposer: "在输入框里批准或拒绝"
+            case .aboveComposer: "在输入框上方批准或拒绝"
+            case .openInbox: "待批在待处理，点按打开"
+            case .backToAssistant: "回到小驳，在输入框上方确认"
+            }
+        }
+    }
+
+    enum ApprovalSurface {
+        case phoneAssistant
+        case padThread
+        case phoneWorkbench
+    }
+
+    func approvalHint(for chatId: String, surface: ApprovalSurface) -> ApprovalHint? {
+        guard assistantAvatarPhase == .approval else { return nil }
+        if chats.first(where: { $0.id == chatId })?.turns.contains(where: { $0.pendingTool != nil }) == true {
+            return .inComposer
+        }
+        if !assistantApprovals(forParent: chatId).isEmpty {
+            return .aboveComposer
+        }
+        switch surface {
+        case .phoneAssistant: return .aboveComposer
+        case .padThread: return .openInbox
+        case .phoneWorkbench: return .backToAssistant
+        }
+    }
+
+    /// 后台模型没就绪时的原因。没有单独原因就用这句。
+    var backgroundAttentionReason: String? {
+        guard let background = assistantState?.background, !background.ok else { return nil }
+        return background.reason?.nilIfEmpty ?? "后台模型未就绪"
+    }
+
+    /// 手机首页可以换行，把原因和下一步写在一起。
+    var backgroundAttentionTitle: String? {
+        guard let reason = backgroundAttentionReason else { return nil }
+        return "\(reason)，点按再检查"
+    }
+
     func assistantApprovals(forParent parentId: String) -> [AssistantApproval] {
         guard let state = assistantState, !parentId.isEmpty else { return [] }
         let delegationIds = Set(state.delegations.filter { $0.parentChatId == parentId }.map(\.id))
@@ -159,6 +209,102 @@ extension ChatStore {
         }
     }
 
+    /// 停止委派。还没登录不发。没连上时排队并说明，返回 false，调用方不要写成正在停止。已经连上才返回 true。
+    @discardableResult
+    func cancelDelegation(_ id: String) -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再停。")
+            return false
+        }
+        assistantOp("delegation_cancel", args: ["delegationId": .string(id)])
+        guard client.isOpen else {
+            flash(linkState == .offline
+                ? "已断开。停止这项委派会在连上后发出。"
+                : "正在连接。停止这项委派会在连上后发出。")
+            return false
+        }
+        return true
+    }
+
+    /// 添加、修改或删除待办。还没登录不发，调用方不要清掉输入。没连上时排队，并说明连上后才发出。
+    @discardableResult
+    func queueTodoChange(_ op: String, args: [String: JSONValue], pending: String) -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return false
+        }
+        assistantOp(op, args: args)
+        guard !client.isOpen else { return true }
+        flash(linkState == .offline
+            ? "已断开。\(pending)会在连上后发出。"
+            : "正在连接。\(pending)会在连上后发出。")
+        return true
+    }
+
+    /// 完成或重新打开待办。还没登录不改。没连上时先在这台设备改，并说明连上后才告诉服务器。
+    func setTodoDone(_ id: String, done: Bool) {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return
+        }
+        assistantOp(done ? "todo_done" : "todo_undo", args: ["id": .string(id)])
+        if let index = assistantState?.todos.firstIndex(where: { $0.id == id }) {
+            assistantState?.todos[index].done = done
+            assistantState?.todos[index].doneAt = done ? Date().timeIntervalSince1970 * 1000 : nil
+        }
+        guard !client.isOpen else { return }
+        let marked = done ? "标成完成" : "标成未完成"
+        flash(linkState == .offline
+            ? "已断开。这台设备已把这条待办\(marked)，连上后才会告诉服务器。"
+            : "正在连接。这台设备已把这条待办\(marked)，连上后才会告诉服务器。")
+    }
+
+    /// 测试通知不进待发队列。还没登录、没连上，或服务器没配推送时不发，也不写成已经发出。
+    func sendTestPush() {
+        guard unlocked else {
+            flash("还没登录。这次不会发测试通知，登录后再试。")
+            return
+        }
+        guard client.isOpen else {
+            flash(linkState == .offline
+                ? "已断开。这次不会发测试通知，点按重连后再试。"
+                : "正在连接。这次不会发测试通知，连上后再试。")
+            return
+        }
+        if assistantState?.pushApns == false {
+            flash("服务器未配置推送，这次发不出去。")
+            return
+        }
+        assistantOp("push_test")
+        flash("已发送测试通知，几秒内应该收到")
+    }
+
+    /// 委派过程读不了。nil 表示已经连上，界面可以写正在读取。
+    func delegationProcessPendingTitle(chatId: String?) -> String? {
+        guard unlocked else { return "还没登录。登录后再看过程。" }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看过程。"
+                : "正在连接。连上后再看过程。"
+        }
+        if let chatId, !chatId.isEmpty, cachedOnlyIds.contains(chatId) {
+            return "这条过程还没对上服务器，稍后再看。"
+        }
+        return nil
+    }
+
+    /// 助理状态还没到。nil 表示已经连上，界面可以写正在加载。
+    var assistantStatePendingTitle: String? {
+        guard unlocked else { return "还没登录。登录后再看。" }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看。"
+                : "正在连接。连上后再看。"
+        }
+        guard gatewayReady else { return "正在打开，稍后再看。" }
+        return nil
+    }
+
     func assistantOp(_ op: String, args: [String: JSONValue] = [:]) {
         send(.assistantOp(op: op, args: args, reqId: UUID().uuidString))
     }
@@ -186,6 +332,7 @@ extension ChatStore {
     }
 
     func answerAssistantApproval(_ approval: AssistantApproval, allow: Bool) {
+        guard noteApprovalDelivery(chatId: approval.chatId) else { return }
         assistantOp("approval_answer", args: [
             "chatId": .string(approval.chatId),
             "callId": .string(approval.callId),
@@ -196,10 +343,7 @@ extension ChatStore {
 
     func openAssistantInboxItem(_ item: AssistantInboxItem) {
         if !item.read {
-            assistantOp("inbox_read", args: ["ids": .array([.string(item.id)])])
-            if let index = assistantState?.inbox.firstIndex(where: { $0.id == item.id }) {
-                assistantState?.inbox[index].read = true
-            }
+            markInboxRead(item)
         }
         if let chatId = item.chatId {
             openAssistantChat(chatId)
@@ -227,24 +371,23 @@ extension ChatStore {
     /// 产物续作始终定向助理主会话，并保留用户正在输入的草稿。
     private func continueArtifact(_ artifact: Artifact, selectAssistant: Bool) -> Bool {
         guard connected, unlocked else {
-            flash("尚未连接服务器，暂时不能继续加工")
+            flashNotHandedOff()
             return false
         }
         guard let assistantChatId,
               chats.contains(where: { $0.id == assistantChatId })
         else {
-            pendingAssistantOpen = true
-            flash("小驳主会话还在同步，请稍后再试")
+            flashAssistantChatMissing()
             return false
         }
         let source = artifact.provenance?.label ?? {
             if let turn = artifact.sourceTurnId { return "会话回合 \(turn)" }
-            if let inbox = artifact.provenance?.inboxId { return "助理收件箱 \(inbox)" }
+            if let inbox = artifact.provenance?.inboxId { return "通知 \(inbox)" }
             return "产物中心"
         }()
         let target: String
         if let path = artifact.path {
-            target = "工作区相对路径：\(path)"
+            target = "文件夹相对路径：\(path)"
         } else if let url = artifact.safeURL?.absoluteString {
             target = "来源 URL：\(url)"
         } else {
@@ -269,20 +412,16 @@ extension ChatStore {
         switch action.op {
         case "todo_done", "todo_undo":
             guard let id = action.id else { return }
-            assistantOp(action.op, args: ["id": .string(id)])
-            if let index = assistantState?.todos.firstIndex(where: { $0.id == id }) {
-                let done = action.op == "todo_done"
-                assistantState?.todos[index].done = done
-                assistantState?.todos[index].doneAt = done ? Date().timeIntervalSince1970 * 1000 : nil
-            }
+            setTodoDone(id, done: action.op == "todo_done")
         case "schedule_set":
             guard let id = action.id, let enabled = action.enabled else { return }
             assistantSetScheduleEnabled(id, enabled: enabled)
         case "delegation_cancel":
             guard let delegationId = action.delegationId else { return }
-            assistantOp("delegation_cancel", args: ["delegationId": .string(delegationId)])
+            cancelDelegation(delegationId)
         case "approval_answer":
             guard let chatId = action.chatId, let callId = action.callId, let allow = action.allow else { return }
+            guard noteApprovalDelivery(chatId: chatId) else { return }
             assistantOp("approval_answer", args: [
                 "chatId": .string(chatId),
                 "callId": .string(callId),
@@ -298,20 +437,47 @@ extension ChatStore {
     @discardableResult
     func handlePadInboxItem(_ item: AssistantInboxItem) -> Bool {
         if !item.read {
-            assistantOp("inbox_read", args: ["ids": .array([.string(item.id)])])
-            if let index = assistantState?.inbox.firstIndex(where: { $0.id == item.id }) {
-                assistantState?.inbox[index].read = true
-            }
+            markInboxRead(item)
         }
         guard let prompt = item.actionPrompt else { return true }
         guard let assistantChatId, chats.contains(where: { $0.id == assistantChatId }) else {
-            flash("小驳主会话还在同步，请稍后再试")
+            if !connected || !unlocked {
+                flashNotHandedOff()
+            } else {
+                flashAssistantChatMissing()
+            }
             return false
         }
         let savedDraft = draft(for: assistantChatId)
         submit(chatId: assistantChatId, text: prompt)
         saveDraft(savedDraft, forChat: assistantChatId)
         return true
+    }
+
+    /// 主会话还不能收。没有会话就再拉一次；有 id 但本机还没有，就等它到了再打开。这次不会排队。
+    private func flashAssistantChatMissing() {
+        if assistantChatId == nil, gatewayReady {
+            flash("这个服务器还没有助理功能，请先升级服务器")
+            return
+        }
+        if assistantChatId == nil {
+            requestAssistant(force: true)
+            flash("正在打开小驳主会话。这次不会排队，打开后再交给小驳。")
+            return
+        }
+        pendingAssistantOpen = true
+        flash("小驳主会话还没同步到这台设备。这次不会排队，到了会打开小驳，然后再交给它。")
+    }
+
+    /// 交给小驳没发出去。跟顶栏同一套连接状态，并写明这次不会排队。
+    private func flashNotHandedOff() {
+        if !unlocked {
+            flash("还没登录。这次不会排队，登录后再交给小驳。")
+        } else if linkState == .offline {
+            flash("已断开。这次不会排队，点按重连后再交给小驳。")
+        } else {
+            flash("正在连接。这次不会排队，连上后再交给小驳。")
+        }
     }
 
     /// 语义拖放只在实体仍存在且在线时提交；Prompt 没有服务端幂等回执，不能伪装成离线已入队。
@@ -322,12 +488,13 @@ extension ChatStore {
             return false
         }
         guard connected, unlocked else {
-            flash("尚未连接服务器；此操作不会离线排队，请连接后重试")
+            flashNotHandedOff()
             return false
         }
         let projection = PadAssistantProjection(state: assistantState)
         guard projection.contains(transfer) else {
-            flash("这个项目已更新或失效，请刷新后重试")
+            requestAssistant(force: true)
+            flash("这个项目已经变了，没有交给小驳。列表会再拉一次，然后重新拖。")
             return false
         }
         if transfer.kind == .artifact,
@@ -335,7 +502,7 @@ extension ChatStore {
             return continueArtifactOnPad(artifact)
         }
         guard let assistantChatId, chats.contains(where: { $0.id == assistantChatId }) else {
-            flash("小驳主会话还在同步，请稍后再试")
+            flashAssistantChatMissing()
             return false
         }
         let kind: String
@@ -415,9 +582,33 @@ extension ChatStore {
         select(chatId)
     }
 
+    /// 保存、修改、遗忘或删除记忆。还没登录不发，调用方不要清掉输入。没连上时排队，并说明连上后才发出。
+    @discardableResult
+    func queueMemoryChange(_ op: String, args: [String: JSONValue], pending: String) -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return false
+        }
+        assistantOp(op, args: args)
+        guard !client.isOpen else { return true }
+        flash(linkState == .offline
+            ? "已断开。\(pending)会在连上后发出。"
+            : "正在连接。\(pending)会在连上后发出。")
+        return true
+    }
+
+    /// 暂停记忆。还没登录不改开关。没连上时先在这台设备改，并说明连上后才告诉服务器。
     func setAssistantMemoryPaused(_ paused: Bool) {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return
+        }
         assistantOp("memory_settings", args: ["paused": .bool(paused)])
         assistantState?.memory?.paused = paused
+        guard !client.isOpen else { return }
+        flash(linkState == .offline
+            ? "已断开。这台设备已改了暂停记忆，连上后才会告诉服务器。"
+            : "正在连接。这台设备已改了暂停记忆，连上后才会告诉服务器。")
     }
 
     func applyDelegationState(_ delegation: AssistantDelegation, approval: AssistantApproval?) {

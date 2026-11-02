@@ -103,12 +103,12 @@ struct AdminStatsView: View {
                 }
                 if let error = bill.error, !error.isEmpty {
                     Text(error)
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                 }
             } else {
                 Text(store.adminStatsAt == nil ? "正在查询…" : "这台网关还没有账单数据。")
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
             }
         } header: {
@@ -143,7 +143,7 @@ struct AdminStatsView: View {
                 .font(JieboFont.display(22))
                 .foregroundStyle(JieboColor.ink)
             Text(label)
-                .font(JieboFont.ui(12))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
         }
         .frame(maxWidth: .infinity)
@@ -154,7 +154,7 @@ struct AdminStatsView: View {
 
     private func tenantSection(_ row: AdminTenantStats) -> some View {
         Section {
-            statRow("会话", "\(row.chats)")
+            statRow("对话", "\(row.chats)")
             statRow("消息 / 运行 / 工具", "\(Self.fmtCount(row.turns)) / \(Self.fmtCount(row.runs)) / \(Self.fmtCount(row.toolCalls))")
             statRow("运行时长", Self.fmtDuration(row.runMs))
             statRow("输入 / 输出", "\(Self.fmtCount(row.inChars)) / \(Self.fmtCount(row.outChars)) 字符")
@@ -168,7 +168,7 @@ struct AdminStatsView: View {
                 Text(row.name)
                 if row.admin {
                     Text("管理员")
-                        .font(JieboFont.ui(10, weight: .semibold))
+                        .font(JieboFont.text(.caption2, weight: .semibold))
                         .foregroundStyle(JieboColor.brass)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
@@ -186,11 +186,11 @@ struct AdminStatsView: View {
     private func statRow(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label)
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.ink2)
             Spacer()
             Text(value)
-                .font(JieboFont.ui(13, weight: .medium))
+                .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
         }
     }
@@ -198,7 +198,7 @@ struct AdminStatsView: View {
     private var footer: some View {
         Section {
             Text("上面是这台服务器 API Key 的官方账单，和 Cursor CLI 的 /usage 同一口径。下面各账号的 token 仍是按字符估算（英文 ≈4 字符/token；中文实际更高），只用来看相对消耗。")
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
         }
     }

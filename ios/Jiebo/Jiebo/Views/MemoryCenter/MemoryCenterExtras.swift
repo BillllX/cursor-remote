@@ -10,6 +10,8 @@ struct MemoryCenterActivityPane: View {
             }
             if store.memoryCenterActivityLoading {
                 ProgressView().accessibilityLabel("加载活动")
+            } else if store.memoryCenterActivityRows.isEmpty, let title = store.memoryCenterReadPendingTitle {
+                MemoryCenterEmptyBlock(title: title, hint: "")
             }
             ForEach(store.memoryCenterActivityRows) { row in
                 VStack(alignment: .leading, spacing: 4) {
@@ -43,6 +45,8 @@ struct MemoryCenterSuggestionsPane: View {
             }
             if store.memoryCenterSuggestionsLoading {
                 ProgressView().accessibilityLabel("加载建议")
+            } else if store.memoryCenterSuggestionRows.isEmpty, let title = store.memoryCenterReadPendingTitle {
+                MemoryCenterEmptyBlock(title: title, hint: "")
             }
             ForEach(store.memoryCenterSuggestionRows) { row in
                 VStack(alignment: .leading, spacing: 4) {

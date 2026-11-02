@@ -22,6 +22,22 @@ struct PreviewPanelView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if modal, !store.connected {
+                Button {
+                    store.retryConnection()
+                } label: {
+                    Text(store.linkState.title)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.danger)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .background(JieboColor.paper)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.linkState != .offline)
+                .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+            }
             if usesCompactHeader {
                 compactHeader
                 if previewTabs.count > 1 {
@@ -579,13 +595,30 @@ struct PreviewContentView: View {
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if tab.loading, tab.content == nil, tab.mediaURL == nil {
-            VStack(spacing: 10) {
-                ProgressView().controlSize(.regular).tint(JieboColor.dim)
-                Text("正在读取 \(tab.filename)…")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.dim)
+            if let blocked = store.contentReadBlockedTitle() {
+                VStack(spacing: 12) {
+                    Text(blocked)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink)
+                        .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 10) {
+                    ProgressView().controlSize(.regular).tint(JieboColor.dim)
+                    Text("正在读取 \(tab.filename)…")
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = tab.error {
             VStack(spacing: 12) {
                 Image(systemName: "exclamationmark.triangle")
@@ -685,14 +718,32 @@ struct PreviewContentView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    @ViewBuilder
     private var loadingView: some View {
-        VStack(spacing: 10) {
-            ProgressView().controlSize(.regular).tint(JieboColor.dim)
-            Text("正在读取 \(tab.filename)…")
-                .font(JieboFont.text(.footnote))
-                .foregroundStyle(JieboColor.dim)
+        if let blocked = store.contentReadBlockedTitle() {
+            VStack(spacing: 12) {
+                Text(blocked)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.center)
+                if store.unlocked, store.linkState == .offline {
+                    Button("重连") { store.retryConnection() }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 10) {
+                ProgressView().controlSize(.regular).tint(JieboColor.dim)
+                Text("正在读取 \(tab.filename)…")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.dim)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

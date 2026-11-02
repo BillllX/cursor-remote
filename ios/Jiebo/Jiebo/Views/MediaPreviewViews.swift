@@ -78,7 +78,7 @@ struct ImageFileView: View {
     private var captionView: some View {
         if let caption {
             Text(caption)
-                .font(JieboFont.ui(11))
+                .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
                 .frame(maxWidth: .infinity, alignment: .center)
         }
@@ -92,7 +92,7 @@ struct ImageFileView: View {
     private func labeledImage(_ label: String, url: URL?, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
-                .font(JieboFont.ui(11, weight: .semibold))
+                .font(JieboFont.text(.caption, weight: .semibold))
                 .foregroundStyle(tint)
             RemoteImage(url: url)
                 .frame(maxWidth: .infinity)
@@ -110,6 +110,7 @@ struct ImageFileView: View {
 /// 注意 scaleEffect 不改布局——zoomed 模式必须用「原始尺寸 × 倍率」的显式 frame 撑开
 /// ScrollView 的 contentSize，否则放大后边缘滚不到、超出布局框的部分不响应手势。
 private struct SingleImageView: View {
+    @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
     let label: String?
@@ -140,6 +141,26 @@ private struct SingleImageView: View {
                             .accessibilityLabel("缩小为适应宽度")
                             .padding(14)
                     }
+                } else if !store.unlocked || !store.connected {
+                    VStack(spacing: 10) {
+                        Text(store.previewImageFailedTitle)
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink)
+                            .multilineTextAlignment(.center)
+                        if store.unlocked, store.linkState == .offline {
+                            Button("重连") { store.retryConnection() }
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.pine)
+                                .frame(minWidth: 44, minHeight: 44)
+                        }
+                        Text("点空白处返回")
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .padding(.horizontal, 24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { exitZoom() }
                 } else {
                     // 预取没完成/失败：给出口（点一下退回 contain），不永久转圈
                     VStack(spacing: 10) {
@@ -148,12 +169,12 @@ private struct SingleImageView: View {
                                 .font(.system(size: 22))
                                 .foregroundStyle(JieboColor.danger)
                             Text("打不开原始尺寸，点任意处返回")
-                                .font(JieboFont.ui(13))
+                                .font(JieboFont.text(.footnote))
                                 .foregroundStyle(JieboColor.ink2)
                         } else {
                             ProgressView().controlSize(.regular).tint(JieboColor.dim)
                             Text("正在准备原始尺寸…")
-                                .font(JieboFont.ui(13))
+                                .font(JieboFont.text(.footnote))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
@@ -173,12 +194,16 @@ private struct SingleImageView: View {
             }
         }
         .background(JieboColor.paper)
-        .task(id: url) {
+        .task(id: "\(url?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)") {
             // 预取原始像素尺寸；RemoteImage 与这里共用计量磁盘缓存，不会二次下载。
             // url 变了必须重取（不设 natural==nil 守卫），否则下一张图沿用旧尺寸基准
             natural = nil
             naturalFailed = false
             guard let url else { naturalFailed = true; return }
+            guard store.unlocked, store.connected else {
+                naturalFailed = true
+                return
+            }
             if let data = try? await PreviewMediaCache.shared.data(for: url, category: "图片预览下载"),
                let image = UIImage(data: data)
             {
@@ -219,7 +244,7 @@ private struct SingleImageView: View {
         VStack(spacing: 8) {
             if let label {
                 Text(label)
-                    .font(JieboFont.ui(11, weight: .medium))
+                    .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(JieboColor.ok)
             }
             RemoteImage(url: url)
@@ -229,7 +254,7 @@ private struct SingleImageView: View {
                 .accessibilityLabel("放大为原始尺寸")
             if let caption {
                 Text(caption)
-                    .font(JieboFont.ui(11))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
@@ -240,10 +265,15 @@ private struct SingleImageView: View {
 /// 带加载/失败态的远程图（票据 URL 无需额外鉴权头）。
 /// 容器有界宽 → scaledToFit 即 contain；双向 ScrollView 无界提议 → 原始像素尺寸。
 struct RemoteImage: View {
+    @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let url: URL?
     @State private var image: UIImage?
     @State private var failed = false
+
+    private var loadKey: String {
+        "\(url?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+    }
 
     var body: some View {
         Group {
@@ -253,24 +283,33 @@ struct RemoteImage: View {
                     .scaledToFit()
                     .transition(.opacity)
             } else if failed {
-                Label("图片加载失败", systemImage: "exclamationmark.triangle")
-                    .font(JieboFont.ui(12))
-                    .foregroundStyle(JieboColor.danger)
-                    .frame(maxWidth: .infinity, minHeight: 120)
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(store.previewImageFailedTitle)
+                        .multilineTextAlignment(.center)
+                }
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.danger)
+                .frame(maxWidth: .infinity, minHeight: 120)
+                .padding(.horizontal, 16)
             } else if url != nil {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
                     .frame(maxWidth: .infinity, minHeight: 120)
             } else {
                 Text("缺少媒体地址")
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             }
         }
         .animation(JieboMotion.standard(reduceMotion), value: image != nil)
-        .task(id: url) {
+        .task(id: loadKey) {
             image = nil
             failed = false
             guard let url else { return }
+            guard store.unlocked, store.connected else {
+                failed = true
+                return
+            }
             do {
                 let data = try await PreviewMediaCache.shared.data(for: url, category: "图片预览下载")
                 try Task.checkCancellation()
@@ -302,7 +341,7 @@ struct SVGFileView: View {
                 labeledImage("改后", url: url, tint: JieboColor.ok)
                 if let caption {
                     Text(caption)
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 6)
@@ -314,7 +353,7 @@ struct SVGFileView: View {
                 MeasuredSVGImage(url: url)
                 if let caption {
                     Text(caption)
-                        .font(JieboFont.ui(11))
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .frame(maxWidth: .infinity, alignment: .center)
                         .padding(.vertical, 6)
@@ -327,7 +366,7 @@ struct SVGFileView: View {
     private func labeledImage(_ label: String, url: URL?, tint: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(JieboFont.ui(11, weight: .semibold))
+                .font(JieboFont.text(.caption, weight: .semibold))
                 .foregroundStyle(tint)
                 .padding(.leading, 14)
                 .padding(.top, 10)
@@ -337,17 +376,27 @@ struct SVGFileView: View {
 }
 
 private struct MeasuredSVGImage: View {
+    @Environment(ChatStore.self) private var store
     let url: URL?
     @State private var html: String?
     @State private var failed = false
     @State private var renderRetry = 0
 
+    private var loadKey: String {
+        "\(url?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+    }
+
     var body: some View {
         Group {
             if failed {
-                Label("SVG 加载失败", systemImage: "exclamationmark.triangle")
-                    .font(JieboFont.ui(12))
-                    .foregroundStyle(JieboColor.danger)
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(store.previewSvgFailedTitle)
+                        .multilineTextAlignment(.center)
+                }
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.danger)
+                .padding(.horizontal, 16)
             } else if let html {
                 SandboxWebView(
                     html: renderRetry == 0 ? html : html + "<!-- retry \(renderRetry) -->",
@@ -360,11 +409,15 @@ private struct MeasuredSVGImage: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) {
+        .task(id: loadKey) {
             html = nil
             failed = false
             renderRetry = 0
             guard let url else { failed = true; return }
+            guard store.unlocked, store.connected else {
+                failed = true
+                return
+            }
             do {
                 let data = try await PreviewMediaCache.shared.data(for: url, category: "SVG 预览下载")
                 try Task.checkCancellation()
@@ -490,7 +543,8 @@ struct SandboxWebView: UIViewRepresentable {
             // 首屏已 commit 后的失败不清 key 不上报（被拒导航的伴随错误不打断已渲染页面）
             guard !committed else { return }
             loadedKey = "" // 真失败才清 key，下次 updateUIView 可重试
-            onFail?(ns.localizedDescription)
+            // 这是本机页面渲染，不写成断线，也不把系统句子接上去。
+            onFail?("点重试，或查看源码。")
         }
     }
 }
@@ -517,7 +571,7 @@ struct SandboxPreviewView: View {
                         .font(.system(size: 22))
                         .foregroundStyle(JieboColor.danger)
                     Text("页面渲染失败：\(loadError)")
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                         .multilineTextAlignment(.center)
                     HStack(spacing: 16) {
@@ -531,7 +585,7 @@ struct SandboxPreviewView: View {
                             .foregroundStyle(JieboColor.pine)
                             .hitTarget()
                     }
-                    .font(JieboFont.ui(13, weight: .medium))
+                    .font(JieboFont.text(.footnote, weight: .medium))
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -559,10 +613,10 @@ struct SandboxPreviewView: View {
                     loadError = nil
                     retryCount += 1
                 }
-                .font(JieboFont.ui(12, weight: .medium))
+                .font(JieboFont.text(.caption, weight: .medium))
                 .foregroundStyle(JieboColor.pine)
                 .padding(.horizontal, 10)
-                .frame(height: 30)
+                .frame(minHeight: 44)
                 .background(JieboColor.mist)
                 .clipShape(Capsule())
                 .padding(10)
@@ -586,6 +640,7 @@ struct PDFFileView: View {
 /// URLSession 下载到临时文件（32MB 顶，对齐 Quick Look 路径），失败给错误态+重试而不是白屏；
 /// .task(id:) 在页签切换/视图消失时自动取消旧下载
 private struct PDFContent: View {
+    @Environment(ChatStore.self) private var store
     let url: URL?
     @State private var document: PDFDocument?
     @State private var failed = false
@@ -601,28 +656,41 @@ private struct PDFContent: View {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 22))
                         .foregroundStyle(JieboColor.danger)
-                    Text("PDF 加载失败或文件过大")
-                        .font(JieboFont.ui(13))
+                    Text(store.previewPdfFailedTitle)
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
-                    Button("重试") {
-                        failed = false
-                        retryCount += 1 // id 变化触发 .task 重跑
+                        .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    } else if store.unlocked, store.connected {
+                        Button("重试") {
+                            failed = false
+                            retryCount += 1
+                        }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
                     }
-                    .font(JieboFont.ui(13, weight: .medium))
-                    .foregroundStyle(JieboColor.pine)
-                    .hitTarget()
                 }
+                .padding(.horizontal, 24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        // .task(id:) 自带判重（同 url 不重跑）；retryCount 变化强制重试
-        .task(id: "\(url?.absoluteString ?? "")#\(retryCount)") {
+        // .task(id:) 自带判重（同 url 不重跑）；retryCount 或连接变化强制重试
+        .task(id: "\(url?.absoluteString ?? "")#\(retryCount)|\(store.unlocked)|\(store.connected)") {
             guard let url else { return }
             document = nil
             failed = false
+            guard store.unlocked, store.connected else {
+                failed = true
+                return
+            }
             let result = await Self.load(url: url)
             guard !Task.isCancelled else { return }
             tempFile = result?.1
@@ -678,7 +746,7 @@ struct AudioFileView: View {
                 .padding(.horizontal, 24)
             if let caption {
                 Text(caption)
-                    .font(JieboFont.ui(11))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             }
         }
@@ -689,27 +757,47 @@ struct AudioFileView: View {
 
 /// 音视频先复用计量磁盘缓存再交给 AVPlayer，避免 AVFoundation 自行联网而拿不到 task metrics。
 private struct MeasuredMediaPlayer: View {
+    @Environment(ChatStore.self) private var store
     let remoteURL: URL?
     let category: String
     @State private var localURL: URL?
     @State private var failed = false
+
+    private var loadKey: String {
+        "\(remoteURL?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+    }
 
     var body: some View {
         Group {
             if let localURL {
                 LocalMediaPlayer(url: localURL)
             } else if failed {
-                Label("媒体加载失败", systemImage: "exclamationmark.triangle")
-                    .font(JieboFont.ui(12))
-                    .foregroundStyle(JieboColor.danger)
+                VStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(store.previewMediaFailedTitle)
+                        .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.danger)
+                .padding(.horizontal, 16)
             } else {
                 ProgressView().controlSize(.regular).tint(JieboColor.dim)
             }
         }
-        .task(id: remoteURL) {
+        .task(id: loadKey) {
             localURL = nil
             failed = false
             guard let remoteURL else { failed = true; return }
+            guard store.unlocked, store.connected else {
+                failed = true
+                return
+            }
             do {
                 localURL = try await PreviewMediaCache.shared.file(for: remoteURL, category: category)
             } catch is CancellationError {

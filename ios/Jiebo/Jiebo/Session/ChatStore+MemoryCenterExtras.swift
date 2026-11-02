@@ -58,14 +58,14 @@ extension ChatStore {
     }
 
     func memoryCenterRestore(scope: String, auditId: String) {
-        guard connected, unlocked else { return }
+        guard memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         memoryCenterExtrasStorage = MemoryCenterExtrasReducer.beginRestore(memoryCenterExtrasStorage, reqId: reqId, auditId: auditId)
         send(.assistantOp(op: "memory_center_restore", args: ["scope": .string(scope), "auditId": .string(auditId)], reqId: reqId))
     }
 
     func memoryCenterAnswerSuggestion(scope: String, id: String, accept: Bool) {
-        guard connected, unlocked else { return }
+        guard memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         memoryCenterExtrasStorage = MemoryCenterExtrasReducer.beginAnswer(memoryCenterExtrasStorage, reqId: reqId, suggestionId: id)
         send(.assistantOp(
@@ -218,7 +218,7 @@ extension ChatStore {
     }
 
     func memoryCenterExportSnapshot(scopes: [String]) {
-        guard connected, unlocked, !scopes.isEmpty else { return }
+        guard !scopes.isEmpty, memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         var next = memoryCenterExtrasStorage
         next.importBusyReqId = reqId
@@ -228,7 +228,7 @@ extension ChatStore {
     }
 
     func memoryCenterImportPreview(path: String) {
-        guard connected, unlocked, !path.isEmpty else { return }
+        guard !path.isEmpty, memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         var next = memoryCenterExtrasStorage
         next.importBusyReqId = reqId
@@ -238,7 +238,7 @@ extension ChatStore {
     }
 
     func memoryCenterImportApply(planId: String, resolutions: [[String: JSONValue]]) {
-        guard connected, unlocked else { return }
+        guard memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         var next = memoryCenterExtrasStorage
         next.importBusyReqId = reqId
@@ -247,7 +247,7 @@ extension ChatStore {
     }
 
     func memoryCenterImportRollback(importId: String) {
-        guard connected, unlocked else { return }
+        guard memoryCenterCanWrite() else { return }
         let reqId = UUID().uuidString
         var next = memoryCenterExtrasStorage
         next.importBusyReqId = reqId

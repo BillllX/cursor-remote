@@ -8,12 +8,36 @@ struct PadTodayExperience: View {
     let projection: PadAssistantProjection
     @State private var dropTargeted = false
 
+    /// 主会话还没出现时，不要写「请稍后刷新」却不给按钮。还没登录或没连上时不要转圈。
+    private var assistantMissingTitle: String {
+        if !store.unlocked { return "还没登录。登录后再看小驳。" }
+        if !store.connected { return store.linkState.title }
+        if !store.gatewayReady { return "正在打开小驳主会话…" }
+        return "小驳主会话还没打开。点再试一次重新打开。"
+    }
+
     var body: some View {
         Group {
             if let chatId = store.assistantChatId {
                 VStack(spacing: 0) {
                     PadTodayTimeline(projection: projection)
                     Divider().overlay(JieboColor.line)
+                    if store.assistantAvatarPhase == .failure,
+                       store.hasApiKey,
+                       !store.assistantThreadSyncBusy,
+                       store.backgroundAttentionTitle == nil {
+                        Button {
+                            store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
+                        } label: {
+                            Text(ChatStore.failedRetryTitle)
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .padding(.horizontal, 16)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("上一句回到输入框")
+                    }
                     ThreadView(
                         chrome: .embedded,
                         chatId: chatId,
@@ -21,15 +45,28 @@ struct PadTodayExperience: View {
                     )
                     .id(chatId)
                 }
-            } else if store.assistantState == nil {
+            } else if store.unlocked, store.connected, store.assistantState == nil {
                 ProgressView("正在打开小驳主会话…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ContentUnavailableView(
-                    "小驳主会话不可用",
-                    systemImage: "bubble.left",
-                    description: Text("固定助理会话仍在同步，请稍后刷新。")
-                )
+                VStack(spacing: 12) {
+                    Spacer(minLength: 40)
+                    Image(systemName: "bubble.left")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                    Text(assistantMissingTitle)
+                        .font(JieboFont.text(.subheadline))
+                        .foregroundStyle(JieboColor.ink)
+                        .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
+                    } else if store.unlocked, store.connected, store.gatewayReady {
+                        ActionButton(title: "再试一次", kind: .primary) { store.requestAssistant(force: true) }
+                    }
+                    Spacer(minLength: 40)
+                }
+                .padding(.horizontal, 32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(JieboColor.paper)
@@ -37,7 +74,7 @@ struct PadTodayExperience: View {
             ToolbarItem(placement: .principal) {
                 AssistantAvatarView(phase: store.assistantAvatarPhase, size: 59.5)
                     .overlay(alignment: .bottomTrailing) {
-                        LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
+                        LinkStatusDot(state: store.linkState, syncing: store.assistantThreadSyncBusy)
                             .offset(x: 1, y: 7)
                     }
                     .accessibilityElement(children: .ignore)
@@ -263,7 +300,7 @@ struct PadInboxExperience: View {
 
             if filter != .pending {
                 if !inbox.isEmpty {
-                    Section("收件箱") {
+                    Section("通知") {
                         ForEach(inbox) { item in
                             PadInboxRow(
                                 title: item.title.nilIfEmpty ?? "小驳消息",
@@ -708,6 +745,18 @@ struct PadUnifiedInspector: View {
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.horizontalSizeClass) private var sizeClass
 
+    /// 预览模式开着，页签却还不在。不要写成正在打开。
+    private var previewMissingTitle: String {
+        if sceneSession?.previewKey == nil { return "没有可预览的文件。" }
+        if !store.unlocked { return "还没登录。登录后再看预览。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看预览。"
+                : "正在连接。连上后再看预览。"
+        }
+        return "这个预览还没打开。"
+    }
+
     var body: some View {
         Group {
             switch router.inspectorMode {
@@ -719,11 +768,26 @@ struct PadUnifiedInspector: View {
                         .fullscreenEnabled(sizeClass != .compact)
                 } else {
                     NavigationStack {
-                        ContentUnavailableView(
-                            "正在打开预览…",
-                            systemImage: "doc.text.magnifyingglass",
-                            description: Text("如果文件无法内嵌预览，将使用系统文件预览。")
-                        )
+                        VStack(spacing: 12) {
+                            Spacer(minLength: 24)
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(JieboColor.dim)
+                            Text(previewMissingTitle)
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.ink)
+                                .multilineTextAlignment(.center)
+                            Text("关掉之后回到刚才的页面。")
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.dim)
+                                .multilineTextAlignment(.center)
+                            if store.unlocked, store.linkState == .offline {
+                                ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
+                            }
+                            Spacer(minLength: 24)
+                        }
+                        .padding(.horizontal, 32)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .navigationTitle("预览")
                         .navigationBarTitleDisplayMode(.inline)
                         .toolbar {
@@ -1137,7 +1201,7 @@ private struct PadDelegationDetail: View {
                     } else {
                         AssistantMutedText(
                             childChat == nil || childChat?.turnsComplete == false
-                                ? "正在同步委派过程…"
+                                ? (store.delegationProcessPendingTitle(chatId: childChat?.id ?? delegation.childChatId) ?? "正在同步委派过程…")
                                 : "还没有执行步骤。"
                         )
                     }
@@ -1167,7 +1231,7 @@ private struct PadDelegationDetail: View {
 
                 if delegation.status == "running" || delegation.status == "awaiting" {
                     ActionButton(title: "停止这项委派", kind: .destructive, fullWidth: true) {
-                        store.assistantOp("delegation_cancel", args: ["delegationId": .string(delegation.id)])
+                        store.cancelDelegation(delegation.id)
                     }
                 }
             } else {
@@ -1377,7 +1441,7 @@ private func padArtifactKindTitle(_ kind: String) -> String {
 private func padArtifactSourceTitle(_ artifact: Artifact) -> String {
     if artifact.provenance?.collabTaskId != nil { return "协作" }
     if artifact.provenance?.delegationId != nil { return "委派" }
-    if artifact.provenance?.inboxId != nil { return "助理收件箱" }
+    if artifact.provenance?.inboxId != nil { return "通知" }
     if artifact.provenance?.turnId != nil { return "会话回合" }
     return "捕获"
 }
@@ -1385,9 +1449,9 @@ private func padArtifactSourceTitle(_ artifact: Artifact) -> String {
 private func padSourceTitle(_ kind: String) -> String {
     switch kind {
     case "delegation": return "委派"
-    case "inbox": return "收件箱"
+    case "inbox": return "通知"
     case "todo": return "待办"
-    case "schedule": return "日程"
+    case "schedule": return "计划"
     case "run": return "运行"
     case "approval": return "审批"
     default: return "来源"

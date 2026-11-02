@@ -4,7 +4,7 @@ enum MemoryCenterLabels {
     static let kind: [String: String] = [
         "personal": "个人",
         "work_preference": "工作偏好",
-        "workspace_memory": "工作区记忆",
+        "workspace_memory": "文件夹记忆",
         "rule": "规则",
         "document": "文档",
     ]

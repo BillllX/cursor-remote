@@ -120,7 +120,7 @@ struct MenuDrawer: View {
             divider
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    sectionTitle("助理")
+                    sectionTitle("小驳")
                     // 和导航栏「今日」是同一个面板，不再另开一个全屏页
                     menuRow("sun.max", "今日", tag: 0) {
                         router.openHub()
@@ -137,9 +137,12 @@ struct MenuDrawer: View {
                     menuRow("square.stack.3d.up", "产物中心", tag: 4) {
                         router.go(.artifacts)
                     }
+                    menuRow(NavigationIconId.memory.symbol, "记忆", tag: 5) {
+                        router.go(.memory)
+                    }
                     divider
                         .padding(.vertical, 8)
-                    menuRow(NavigationIconId.account.symbol, "设置", tag: 5) {
+                    menuRow(NavigationIconId.account.symbol, "设置", tag: 6) {
                         router.go(.settings)
                     }
                 }
@@ -165,13 +168,20 @@ struct MenuDrawer: View {
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                 }
+                .frame(minHeight: store.linkState == .offline ? 44 : 0, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if store.linkState == .offline { store.retryConnection() }
+                }
+                .accessibilityAddTraits(store.linkState == .offline ? .isButton : [])
+                .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
         .padding(.bottom, 14)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var divider: some View {

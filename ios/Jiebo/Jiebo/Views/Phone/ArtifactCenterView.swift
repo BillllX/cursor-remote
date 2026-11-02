@@ -256,7 +256,7 @@ private extension Artifact {
     var sourceTypeTitle: String {
         if provenance?.collabTaskId != nil { return "协作" }
         if provenance?.delegationId != nil { return "委派" }
-        if provenance?.inboxId != nil { return "助理收件箱" }
+        if provenance?.inboxId != nil { return "通知" }
         if provenance?.turnId != nil { return "会话回合" }
         return "捕获"
     }

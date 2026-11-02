@@ -34,11 +34,19 @@ extension ChatStore {
         }
         if targetId == activeId { pendingImages = restoredImages }
         else { imagesByChat[targetId] = restoredImages }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。这句话已放回输入框，连上后才会改到服务器。"
+                : "正在连接。这句话已放回输入框，连上后才会改到服务器。")
+        }
     }
 
     func retryTurn(_ turnId: String, chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
-        guard client.isOpen else { return }
+        guard client.isOpen else {
+            flash(linkState == .offline ? "已断开，点按重连后再重试" : "正在连接，连上后再重试")
+            return
+        }
         guard !isBusy(targetId) else {
             flash("等当前这条跑完再重试")
             return
@@ -108,8 +116,12 @@ extension ChatStore {
 
     func applyPlan(_ turnId: String, chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
-        guard client.isOpen, !isBusy(targetId) else {
-            if isBusy(targetId) { flash("等当前这条跑完再执行") }
+        guard client.isOpen else {
+            flash(linkState == .offline ? "已断开，点按重连后再执行" : "正在连接，连上后再执行")
+            return
+        }
+        guard !isBusy(targetId) else {
+            flash("等当前这条跑完再执行")
             return
         }
         guard let chat = chatSession(targetId),
@@ -117,7 +129,7 @@ extension ChatStore {
               !turn.deferred
         else { return }
         guard !cachedOnlyIds.contains(chat.id) else {
-            flash("正在同步会话，稍后再执行")
+            flash("这条对话还没对上服务器，稍后再执行")
             return
         }
         chooseMode(.agent, chatId: targetId)
@@ -162,7 +174,10 @@ extension ChatStore {
             next.turns.removeAll { $0.id == turnId }
             return next
         }
-        send(.dropQueued(chatId: chat.id, text: turn.user))
+        let removed = client.removePendingPrompts(chatId: chat.id, turnIds: [turn.id])
+        if !removed.contains(turn.id) {
+            send(.dropQueued(chatId: chat.id, text: turn.user))
+        }
     }
 
     func answerQuestion(_ text: String) {
@@ -182,24 +197,25 @@ extension ChatStore {
         guard !text.isEmpty || !images.isEmpty else { return }
         // 带图 prompt 不进 outbox（base64 太大），掉线时直接拒发
         if !images.isEmpty, !client.isOpen {
-            bannerError = "图片需要在线发送，等连接恢复再发。"
+            bannerError = Self.offlineImageTitle
             return
         }
         // 自动登录还没完成：send 会丢掉消息，草稿留着
         guard unlocked else {
-            flash("正在连接服务器，稍后再发")
+            flash(linkState == .offline ? "已断开，稍后再发" : "正在连接，稍后再发")
             return
         }
         // 冷启动缓存列表里的会话还没跟服务端对上：只读，草稿留着等同步完再发
         guard !cachedOnlyIds.contains(chatId) else {
-            flash("正在同步会话，稍后再发")
+            flash("这条对话还没对上服务器，稍后再发")
             return
         }
         // 工作台 USER 根目录的普通占位不发；聊天主页助理会话本身就在根目录，允许发送。
         if let target = chats.first(where: { $0.id == chatId }),
            !isAssistantChat(target.id), target.turnsComplete, target.turns.isEmpty,
            isUserRoot(target.cwd?.nilIfEmpty ?? workspaceRoot) {
-            flash("助理会话还在同步，稍后再发；要开普通对话请先选一个子工作区。")
+            flash("先选一个子文件夹，再发。")
+            openWorkspaceSwitcher()
             return
         }
         guard let session = chatSession(chatId) else { return }
@@ -250,7 +266,7 @@ extension ChatStore {
             history: history,
             turnId: turn.id
         ))
-        markProgress(chatId)
+        if client.isOpen { markProgress(chatId) }
     }
 
     /// P11：第三方模型（id 形如 "provider:model"）无状态，历史随 prompt 上行；
@@ -279,19 +295,85 @@ extension ChatStore {
         return out
     }
 
+    /// 只拿掉这一句。同一条对话里其他还没发出的句子不动。服务器已经在跑的不走这里。
+    func cancelUnsentTurn(_ turnId: String, chatId requestedId: String? = nil) {
+        let targetId = requestedId ?? activeId
+        guard !client.isOpen, !runningChatIds.contains(targetId) else { return }
+        guard let chat = chats.first(where: { $0.id == targetId }),
+              let turn = chat.turns.first(where: { $0.id == turnId }),
+              turn.running || turn.queued,
+              turn.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              turn.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              turn.tools.isEmpty,
+              turn.pendingTool == nil
+        else { return }
+        _ = client.removePendingPrompts(chatId: targetId, turnIds: [turnId])
+        patch(targetId) { item in
+            var next = item
+            next.turns = next.turns.compactMap { row in
+                guard row.id == turnId else { return row }
+                if row.queued { return nil }
+                return row.settled(status: "cancelled")
+            }
+            return next
+        }
+        let existing = (targetId == activeId ? draft : chats.first { $0.id == targetId }?.draft) ?? ""
+        let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
+        if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !trimmed.isEmpty, trimmed != "（附图）" {
+            saveDraft(turn.user, forChat: targetId)
+        }
+    }
+
+    /// 断开后本地刚记下、服务器还没开始的那些回合。没有的话返回 nil。
+    func localOnlyWaitTurnIds(_ chatId: String) -> Set<String>? {
+        guard !client.isOpen, !runningChatIds.contains(chatId) else { return nil }
+        guard let chat = chats.first(where: { $0.id == chatId }) else { return nil }
+        let live = chat.turns.filter(\.running)
+        guard !live.isEmpty else { return nil }
+        let waiting = live.allSatisfy { turn in
+            turn.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && turn.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && turn.tools.isEmpty
+                && turn.pendingTool == nil
+        }
+        guard waiting else { return nil }
+        return Set(live.map(\.id))
+    }
+
     func stop(chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
+        let localOnly = localOnlyWaitTurnIds(targetId)
+        var droppedLocalQueued = Set<String>()
         flushStreamDeltas(targetId)
-        send(.cancel(chatId: targetId))
+        if let localOnly {
+            let queuedIds = Set(
+                (chats.first { $0.id == targetId }?.turns ?? []).filter(\.queued).map(\.id)
+            )
+            let removed = client.removePendingPrompts(
+                chatId: targetId,
+                turnIds: localOnly.union(queuedIds)
+            )
+            droppedLocalQueued = queuedIds
+            if let chat = chats.first(where: { $0.id == targetId }) {
+                for turn in chat.turns where queuedIds.subtracting(removed).contains(turn.id) {
+                    send(.dropQueued(chatId: targetId, text: turn.user))
+                }
+            }
+        } else {
+            send(.cancel(chatId: targetId))
+        }
         runningChatIds.removeAll { $0 == targetId }
         queuedChatIds.removeAll { $0 == targetId }
         syncLiveBusy(targetId)
         patch(targetId) { chat in
             var next = chat
-            next.turns = next.turns.map { turn in
-                turn.running || turn.tools.contains(where: { $0.status == "running" })
-                    ? turn.settled(status: "cancelled")
-                    : turn
+            next.turns = next.turns.compactMap { turn in
+                if droppedLocalQueued.contains(turn.id) { return nil }
+                if turn.running || turn.tools.contains(where: { $0.status == "running" }) {
+                    return turn.settled(status: "cancelled")
+                }
+                return turn
             }
             return next
         }
@@ -299,10 +381,88 @@ extension ChatStore {
         stallTask = nil
         stallChatId = nil
         clearStallHint()
+        clearStallRecoveryNotice()
+        if localOnly != nil {
+            restoreLastPromptIfDraftEmpty(chatId: targetId)
+        }
+    }
+
+    /// 卡住后停下：输入框是空的，就把刚停掉的那一句放回去，方便再发。
+    func restoreLastPromptIfDraftEmpty(chatId: String) {
+        let existing = (chatId == activeId ? draft : chats.first { $0.id == chatId }?.draft) ?? ""
+        guard existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let chat = chats.first(where: { $0.id == chatId }) else { return }
+        guard let text = chat.turns.reversed().lazy.compactMap({ turn -> String? in
+            guard turn.status == "cancelled" else { return nil }
+            let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed != "（附图）" else { return nil }
+            return turn.user
+        }).first else { return }
+        saveDraft(text, forChat: chatId)
+    }
+
+    /// 执行失败后输入框是空的，就把最近一句放回去。不自动发送。
+    func restoreFailedPromptIfDraftEmpty(chatId: String) {
+        let existing = (chatId == activeId ? draft : chats.first { $0.id == chatId }?.draft) ?? ""
+        guard existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard let chat = chats.first(where: { $0.id == chatId }) else { return }
+        guard let text = chat.turns.reversed().lazy.compactMap({ turn -> String? in
+            let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed != "（附图）" else { return nil }
+            return turn.user
+        }).first else { return }
+        saveDraft(text, forChat: chatId)
+    }
+
+    /// 消息大到发不出去时，把刚放进对话的那一轮拿掉，原文回到输入框。不自动重发。
+    func restoreOversizedSend(_ message: ClientMessage) {
+        guard case let .prompt(text, _, _, chatId, _, images, _, _, _, _, _, _, turnId) = message else { return }
+        if let turnId {
+            patch(chatId) { chat in
+                var next = chat
+                next.turns.removeAll {
+                    $0.id == turnId && $0.assistant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+                return next
+            }
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            saveDraft(text, forChat: chatId)
+        }
+        guard pendingImages(for: chatId).isEmpty, let images, !images.isEmpty else { return }
+        let restored = images.compactMap { image -> PendingImage? in
+            guard let data = Data(base64Encoded: image.data), !data.isEmpty else { return nil }
+            return PendingImage(data: data, mimeType: image.mimeType, base64: image.data)
+        }
+        guard !restored.isEmpty else { return }
+        if chatId == activeId {
+            pendingImages = restored
+        } else {
+            imagesByChat[chatId] = restored
+        }
+    }
+
+    /// 换模型或策略层。还没登录、或对话还没对上服务器时不改。没连上时先在这台设备改，并说明连上后才告诉服务器。
+    func noteChatSettingDelivery(chatId: String, what: String) -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再改。")
+            return false
+        }
+        guard !cachedOnlyIds.contains(chatId) else {
+            flash("这条对话还没对上服务器，改\(what)不会留下。")
+            return false
+        }
+        guard !client.isOpen else { return true }
+        flash(linkState == .offline
+            ? "已断开。这台设备已改了\(what)，连上后才会告诉服务器。"
+            : "正在连接。这台设备已改了\(what)，连上后才会告诉服务器。")
+        return true
     }
 
     func chooseModel(_ id: String, chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
+        guard noteChatSettingDelivery(chatId: targetId, what: "模型") else { return }
         if targetId == activeId {
             model = id
             rememberModel(id)
@@ -325,11 +485,29 @@ extension ChatStore {
         }
     }
 
+    /// 待批决定还没对上服务器、或还没登录时不发，卡片留着。没连上时先在这台设备记下，并说明连上后才告诉服务器。
+    func noteApprovalDelivery(chatId: String) -> Bool {
+        guard unlocked else {
+            flash("还没登录。这次不会排队，登录后再决定。")
+            return false
+        }
+        guard !cachedOnlyIds.contains(chatId) else {
+            flash("这条对话还没对上服务器，这次决定不会留下。")
+            return false
+        }
+        guard !client.isOpen else { return true }
+        flash(linkState == .offline
+            ? "已断开。这台设备已记下这次决定，连上后才会告诉服务器。"
+            : "正在连接。这台设备已记下这次决定，连上后才会告诉服务器。")
+        return true
+    }
+
     func replyToApproval(allow: Bool, chatId requestedId: String? = nil) {
         let targetId = requestedId ?? activeId
         guard let chat = chatSession(targetId),
               let pending = chat.turns.last(where: { $0.pendingTool != nil })?.pendingTool
         else { return }
+        guard noteApprovalDelivery(chatId: chat.id) else { return }
         send(.approvalReply(chatId: chat.id, callId: pending.callId, allow: allow))
         patchRunning(chat.id) { turn in
             var next = turn

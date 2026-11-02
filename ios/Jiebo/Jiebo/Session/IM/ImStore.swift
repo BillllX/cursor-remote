@@ -13,6 +13,8 @@ protocol ImTransport: AnyObject {
     var imToken: String { get }
     /// 已登录且连接就绪：这时发出的 im_send 才真的出了门（断线时不进发件箱）
     var imLinkOpen: Bool { get }
+    /// 界面已经从「正在连接」改成「已断开」。链路没开时用它区分这两句。
+    var imLinkOffline: Bool { get }
     /// 蜂窝 / Low Data Mode 只延后非可见会话补齐，不影响实时消息和当前会话。
     var imNetworkCost: GatewayNetworkCost { get }
     func imSend(_ message: ClientMessage)
@@ -1050,6 +1052,11 @@ final class ImStore {
         guard item.seq == nil, item.state == .failed else { return }
         let peer = ImConv.peer(of: item.convId, me: meId) ?? ""
         guard !peer.isEmpty else { return }
+        if transport?.imLinkOpen != true {
+            showToast("现在发不出去。连上后再试。")
+        } else if !online {
+            showToast("服务器没开聊天功能")
+        }
         cancelUploadTask(clientId: item.clientId)
         mutatePending(item.clientId, item.convId) {
             $0.durableOutbox = ImDurableOutboxMetadata(stableID: item.clientId, now: Self.nowMs)
@@ -1147,7 +1154,7 @@ final class ImStore {
                 self.setOutgoing(clientId, convId, outgoing)
                 self.finishUploadTask(clientId: clientId, generation: generation)
                 self.failDurableOutbox(clientId: clientId, permanent: false)
-                self.showToast((error as? LocalizedError)?.errorDescription ?? "图片没传上去，点红色感叹号重发")
+                self.showToast(self.uploadFailedTitle(error, noun: "图片", retry: "点红色感叹号重发"))
                 return
             }
             guard let self,
@@ -1203,7 +1210,7 @@ final class ImStore {
                 self.setUpload(clientId, convId, upload)
                 self.finishUploadTask(clientId: clientId, generation: generation)
                 self.failDurableOutbox(clientId: clientId, permanent: false)
-                self.showToast((error as? LocalizedError)?.errorDescription ?? "附件没传上去，点红色感叹号重发")
+                self.showToast(self.uploadFailedTitle(error, noun: "附件", retry: "点红色感叹号重发"))
                 return
             }
             guard let self,
@@ -1437,9 +1444,37 @@ final class ImStore {
         online && transport?.imLinkOpen == true
     }
 
+    /// 图片下不来时的一句。链路没开时跟连接状态走，不要写成加载失败。
+    var imageUnavailableTitle: String {
+        if transport?.imLinkOpen != true {
+            return transport?.imLinkOffline == true ? "已断开，点按重连" : "正在连接…"
+        }
+        if !online { return "服务器没开聊天功能" }
+        return "图片加载不出来"
+    }
+
+    /// 存相册时原图还不在本机。断线和正在连接不要写成稍后再试。
+    var imageSaveBlockedTitle: String {
+        if transport?.imLinkOpen != true {
+            return transport?.imLinkOffline == true ? Self.imageSaveOffline : "正在连接，连上后再存。"
+        }
+        if !online { return "服务器没开聊天功能" }
+        return "图片还没下载下来，稍后再试"
+    }
+
+    static let imageSaveOffline = "已断开，点按重连后再存。"
+
+    /// 改不了设置时的一句。链路没开时跟连接状态走，开着但没聊天功能时不要写成未连接。
+    var settingsBlockedTitle: String {
+        if transport?.imLinkOpen != true {
+            return transport?.imLinkOffline == true ? "已断开，点按重连" : "正在连接，稍后再改"
+        }
+        return "服务器没开聊天功能"
+    }
+
     private func requireOnline() -> Bool {
         guard canChangeSettings else {
-            showToast("未连接，连上服务器后再试")
+            showToast(settingsBlockedTitle)
             return false
         }
         return true
@@ -1519,7 +1554,8 @@ final class ImStore {
             guard let self, !Task.isCancelled, let entry = self.pendingConfirms.removeValue(forKey: key) else { return }
             entry.rollback()
             self.saveStateSoon()
-            self.showToast("没保存上，网络好了再试一次")
+            let next = self.canChangeSettings ? "再改一次" : self.settingsBlockedTitle
+            self.showToast("没保存上。\(next)")
         }
         pendingConfirms[key] = (task: task, rollback: rollback)
     }
@@ -1542,8 +1578,8 @@ final class ImStore {
 
     /// 头像已压成 512px 方图放在 outbox：传成 kind=avatar 再改资料
     func uploadAvatar(file: String) {
-        guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
-            showToast("还没连上服务器，等连上再换头像")
+        guard canChangeSettings, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
+            showToast(canChangeSettings ? "这次换不了头像，稍后再试。" : settingsBlockedTitle)
             return
         }
         let url = dir.appendingPathComponent(file)
@@ -1558,15 +1594,15 @@ final class ImStore {
                 self.showToast("头像已更新")
             } catch {
                 guard let self, self.tenant == tenantAtStart else { return }
-                self.showToast((error as? LocalizedError)?.errorDescription ?? "头像没传上去，再试一次")
+                self.showToast(self.uploadFailedTitle(error, noun: "头像", retry: "再试一次。"))
             }
         }
     }
 
     /// 工作区头像走同一条 512px JPEG / 5MB 上传链，但资料写回 workspace_agent_profile。
     func uploadWorkspaceAvatar(file: String, path: String) {
-        guard online, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
-            showToast("还没连上服务器，等连上再换头像")
+        guard canChangeSettings, let uploader, let token = transport?.imToken.nilIfEmpty, let dir = ImCache.outboxDir(tenant: tenant) else {
+            showToast(canChangeSettings ? "这次换不了头像，稍后再试。" : settingsBlockedTitle)
             return
         }
         let url = dir.appendingPathComponent(file)
@@ -1581,9 +1617,35 @@ final class ImStore {
                 self.showToast("头像已更新")
             } catch {
                 guard let self, self.tenant == tenantAtStart else { return }
-                self.showToast((error as? LocalizedError)?.errorDescription ?? "头像没传上去，再试一次")
+                self.showToast(self.uploadFailedTitle(error, noun: "头像", retry: "再试一次。"))
             }
         }
+    }
+
+    /// 聊天上传失败。链路没开时跟连接状态走，不再用系统的断线句子。不会自动重发。
+    private func uploadFailedTitle(_ error: Error, noun: String, retry: String) -> String {
+        if transport?.imLinkOpen != true {
+            return transport?.imLinkOffline == true
+                ? "\(noun)没传上去。已断开，点按重连。"
+                : "\(noun)没传上去。正在连接，连上后再传。"
+        }
+        if !online { return "服务器没开聊天功能" }
+        if let media = error as? ImMediaError {
+            switch media {
+            case .timedOut:
+                return "\(noun)上传超时，\(retry)"
+            case .cancelled:
+                return "这次\(noun)上传取消了。"
+            case .networkLost:
+                return "\(noun)没传上去。网络中断了，\(retry)"
+            default:
+                break
+            }
+        }
+        if let text = (error as? LocalizedError)?.errorDescription, !text.isEmpty {
+            return text
+        }
+        return "\(noun)没传上去，\(retry)"
     }
 
     func setDraft(_ text: String, convId: String) {

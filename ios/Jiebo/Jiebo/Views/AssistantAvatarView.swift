@@ -26,14 +26,14 @@ enum AssistantAvatarPhase: String, CaseIterable {
 
     var accessibilityLabel: String {
         switch self {
-        case .idle: "助理空闲"
-        case .listening: "助理正在接收输入"
-        case .thinking: "助理正在思考"
-        case .executing: "助理正在执行"
-        case .approval: "助理正在等待确认"
-        case .success: "助理已完成"
-        case .failure: "助理执行失败"
-        case .offline: "助理已离线"
+        case .idle: "小驳空闲"
+        case .listening: "小驳正在接收输入"
+        case .thinking: "小驳正在思考"
+        case .executing: "小驳正在执行"
+        case .approval: "小驳正在等待确认"
+        case .success: "小驳已完成"
+        case .failure: "小驳执行失败"
+        case .offline: "小驳已离线"
         }
     }
 

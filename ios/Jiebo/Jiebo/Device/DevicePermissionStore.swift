@@ -54,7 +54,7 @@ final class DevicePermissionStore {
             DevicePermissionState(
                 id: "calendar",
                 title: "日历",
-                purpose: "按你的请求读取日程，确认后新建或修改事件。",
+                purpose: "按你的请求读取日历，确认后新建或修改事件。",
                 status: Self.eventKitStatus(EKEventStore.authorizationStatus(for: .event)),
                 updatedAt: now
             ),

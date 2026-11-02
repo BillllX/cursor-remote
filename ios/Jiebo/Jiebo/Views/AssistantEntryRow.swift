@@ -35,11 +35,11 @@ struct AssistantEntryRow: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.assistantName)
-                        .font(JieboFont.ui(14, weight: unread ? .semibold : .medium))
+                        .font(JieboFont.text(.subheadline, weight: unread ? .semibold : .medium))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
-                    Text(preview.isEmpty ? "今日 · 收件箱 · 记忆" : preview)
-                        .font(JieboFont.ui(12))
+                    Text(preview.isEmpty ? "跟小驳说一声" : preview)
+                        .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -88,7 +88,7 @@ struct AssistantEntryRow: View {
     private func accessibilityLabel(name: String, badge: Int, running: Bool, unread: Bool) -> String {
         var parts = [name]
         if badge > 0 { parts.append(StatusLegendId.attention.accessibilityLabel(count: badge)) }
-        if unread { parts.append("助理会话\(StatusLegendId.unread.label)") }
+        if unread { parts.append("小驳\(StatusLegendId.unread.label)") }
         if running { parts.append(StatusLegendId.running.label) }
         return parts.joined(separator: "，")
     }

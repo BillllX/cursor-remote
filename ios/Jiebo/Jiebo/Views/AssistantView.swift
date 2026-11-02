@@ -1,63 +1,48 @@
 import SwiftUI
 import UIKit
 
-/// 个人助理：今日 / 收件箱 / 记忆。对齐 web/components/AssistantPanel.tsx（通知页是浏览器推送，iOS 不做）
-/// 挂在工具层里：标题、关闭和提示条由 ToolLayerOverlay 画，这里只画内容。
-/// 三个 pane（AssistantTodayPane / AssistantInboxList / AssistantMemoryPane）在本文件下方，iPhone 的页面直接复用。
+/// 工作台工具层里的旧助理页。只留今日摘要，通知和记忆走各自的栏目，避免和待处理、记忆重名。
+/// 标题、关闭和提示条由 ToolLayerOverlay 画，这里只画内容。
 struct AssistantView: View {
     @Environment(ChatStore.self) private var store
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var tabThumb
-    @State private var tab: AssistantTab = .today
 
     private var state: AssistantState? { store.assistantState }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             statusLine
-            tabBar
             Divider()
-            Group {
-                if tab == .memory {
-                    MemoryCenterPanelView()
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            switch tab {
-                            case .today: AssistantTodayPane()
-                            case .inbox: AssistantInboxList()
-                            case .memory: EmptyView()
-                            }
-                        }
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("今日只看摘要。待办、计划和委派在各自的栏目里。")
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink2)
+                    AssistantTodayPane(
+                        showsApprovals: false,
+                        showsDelegations: false,
+                        showsWorklists: false
+                    )
                 }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(JieboColor.paper)
-        .task { store.requestAssistant(memory: tab == .memory) }
-        .onChange(of: tab) { _, next in
-            store.requestAssistant(memory: next == .memory, force: true)
-        }
-        .onDisappear {
-            if tab == .memory { store.requestAssistant(memory: false, force: true) }
-        }
+        .task { store.requestAssistant(memory: false) }
     }
 
-    private func tabTitle(_ item: AssistantTab) -> String {
-        if item == .inbox, let unread = state?.unreadInbox, unread > 0 {
-            return "收件箱 (\(unread))"
-        }
-        return item.title
+    private var connectionStatus: String {
+        if store.linkState == .offline { return "已断开" }
+        if !store.connected { return "正在连接…" }
+        return "未就绪"
     }
 
     private var statusLine: some View {
         let background = state?.background
         let ok = background?.ok ?? false
         let model = background?.model.nilIfEmpty ?? "grok-4.7"
-        let status = ok ? "就绪" : (background?.reason ?? (state == nil ? "正在连接…" : "未就绪"))
+        let status = store.linkState == .offline ? "已断开" : (ok ? "就绪" : (background?.reason ?? connectionStatus))
         let name = state?.name ?? store.assistantName
         return HStack(spacing: 6) {
             Circle()
@@ -71,57 +56,6 @@ struct AssistantView: View {
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
-    }
-
-    /// 与输入框的模式切换同一套：描边外框，选中项淡底滑块
-    private var tabBar: some View {
-        HStack(spacing: 0) {
-            ForEach(AssistantTab.allCases) { item in
-                Button {
-                    tab = item
-                } label: {
-                    Text(tabTitle(item))
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(tab == item ? JieboColor.ink : JieboColor.ink2)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 32)
-                        .background {
-                            if tab == item {
-                                RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                    .fill(JieboColor.ink.opacity(0.06))
-                                    .matchedGeometryEffect(id: "assistant-tab-thumb", in: tabThumb)
-                            }
-                        }
-                        .hitTarget()
-                }
-                .buttonStyle(PressScaleButtonStyle())
-                .accessibilityAddTraits(tab == item ? .isSelected : [])
-            }
-        }
-        .padding(2)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                .stroke(JieboColor.line, lineWidth: 1)
-        )
-        .animation(JieboMotion.snappy(reduceMotion), value: tab)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-    }
-}
-
-enum AssistantTab: String, CaseIterable, Identifiable {
-    case today, inbox, memory
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .today: return "今日"
-        case .inbox: return "收件箱"
-        case .memory: return "记忆"
-        }
     }
 }
 
@@ -157,6 +91,8 @@ struct AssistantTodayPane: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var showsApprovals: Bool
     var showsDelegations: Bool
+    /// 为 false 时今日只留简报，待办和计划留在各自栏目，避免变成另一份列表。
+    var showsWorklists: Bool
     /// 预留：今日页本身不含收件箱，保留参数让调用方写法统一
     var showsInbox: Bool
     @State private var todoDraft = ""
@@ -165,9 +101,10 @@ struct AssistantTodayPane: View {
     @AppStorage(CalendarInvite.dismissedKey) private var calendarInviteDismissed = false
     @AppStorage(CalendarInvite.staleDismissedKey) private var calendarStaleDismissedAt: Double = 0
 
-    init(showsApprovals: Bool = true, showsDelegations: Bool = true, showsInbox: Bool = true) {
+    init(showsApprovals: Bool = true, showsDelegations: Bool = true, showsWorklists: Bool = true, showsInbox: Bool = true) {
         self.showsApprovals = showsApprovals
         self.showsDelegations = showsDelegations
+        self.showsWorklists = showsWorklists
         self.showsInbox = showsInbox
     }
 
@@ -176,11 +113,16 @@ struct AssistantTodayPane: View {
     var body: some View {
         if state == nil {
             // 状态还没到时各区的空文案（「今天还没有简报」「没有未完成的待办」）会被当成真的没有
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                AssistantMutedText("正在加载…")
+            if let title = store.assistantStatePendingTitle {
+                AssistantMutedText(title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    AssistantMutedText("正在加载…")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             loadedBody
         }
@@ -196,8 +138,10 @@ struct AssistantTodayPane: View {
                     }
                 }
             }
-            todoSection
-            scheduleSection
+            if showsWorklists {
+                todoSection
+                scheduleSection
+            }
             if showsDelegations, let delegations = state?.delegations, !delegations.isEmpty {
                 AssistantSection("委派") {
                     ForEach(delegations.prefix(8)) { row in
@@ -267,7 +211,7 @@ struct AssistantTodayPane: View {
                             .accessibilityHint("轻点两下修改")
                             Spacer(minLength: 8)
                             ActionButton(title: "完成") {
-                                store.assistantOp("todo_done", args: ["id": .string(todo.id)])
+                                store.setTodoDone(todo.id, done: true)
                             }
                         }
                         .assistantCard()
@@ -285,7 +229,7 @@ struct AssistantTodayPane: View {
                                 .foregroundStyle(JieboColor.dim)
                             Spacer(minLength: 8)
                             ActionButton(title: "撤销") {
-                                store.assistantOp("todo_undo", args: ["id": .string(todo.id)])
+                                store.setTodoDone(todo.id, done: false)
                             }
                         }
                         .assistantCard()
@@ -357,12 +301,12 @@ struct AssistantTodayPane: View {
     private func addTodo() {
         let text = todoDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        store.assistantOp("todo_add", args: ["text": .string(text)])
+        guard store.queueTodoChange("todo_add", args: ["text": .string(text)], pending: "添加这条待办") else { return }
         todoDraft = ""
     }
 
     private func removeTodo(_ todo: AssistantTodo) {
-        store.assistantOp("todo_remove", args: ["id": .string(todo.id)])
+        store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办")
     }
 
     // MARK: 日程
@@ -370,7 +314,7 @@ struct AssistantTodayPane: View {
     @ViewBuilder
     private var scheduleSection: some View {
         if let schedules = state?.schedules, !schedules.isEmpty {
-            AssistantSection("日程") {
+            AssistantSection("计划") {
                 ForEach(schedules) { row in
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 4) {
@@ -521,7 +465,7 @@ struct AssistantInboxList: View {
         let items = state?.inbox ?? []
         VStack(alignment: .leading, spacing: 20) {
             if items.isEmpty {
-                AssistantMutedText(state == nil ? "正在加载…" : "收件箱是空的。")
+                AssistantMutedText(state == nil ? (store.assistantStatePendingTitle ?? "正在加载…") : "没有通知。")
             } else {
                 ForEach(items) { item in
                     Button {
@@ -589,7 +533,7 @@ struct AssistantMemoryPane: View {
         }
         .alert("彻底删除这条记忆？", isPresented: purgePresented, presenting: purgeTarget) { entry in
             Button("彻底删除", role: .destructive) {
-                store.assistantOp("memory_purge", args: ["id": .string(entry.id)])
+                guard store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "彻底删除这条记忆") else { return }
                 purgeTarget = nil
             }
             Button("取消", role: .cancel) { purgeTarget = nil }
@@ -662,7 +606,7 @@ struct AssistantMemoryPane: View {
                 }
             }
         } else {
-            AssistantMutedText("正在加载记忆…")
+            AssistantMutedText(store.assistantStatePendingTitle ?? "正在加载记忆…")
         }
     }
 
@@ -725,10 +669,10 @@ struct AssistantMemoryPane: View {
             fields[key] = .string(drafts[key] ?? "")
         }
         if !fields.isEmpty {
-            store.assistantOp("memory_core", args: [
+            guard store.queueMemoryChange("memory_core", args: [
                 "fields": .object(fields),
                 "rev": .number(Double(memory.coreRev)),
-            ])
+            ], pending: "核心档案的修改") else { return }
         }
         coreDrafts = nil
     }
@@ -737,7 +681,7 @@ struct AssistantMemoryPane: View {
         let topic = trimmed(memTopic)
         let text = trimmed(memText)
         guard !topic.isEmpty, !text.isEmpty else { return }
-        store.assistantOp("memory_save", args: ["topic": .string(topic), "text": .string(text)])
+        guard store.queueMemoryChange("memory_save", args: ["topic": .string(topic), "text": .string(text)], pending: "保存这条记忆") else { return }
         memTopic = ""
         memText = ""
     }
@@ -775,15 +719,15 @@ struct AssistantMemoryPane: View {
                         if entry.isValid {
                             ActionButton(title: "编辑") { beginEditing(entry) }
                             ActionButton(title: "标失效") {
-                                store.assistantOp("memory_invalidate", args: ["id": .string(entry.id)])
+                                store.queueMemoryChange("memory_invalidate", args: ["id": .string(entry.id)], pending: "把这条记忆标成失效")
                             }
                             ActionButton(title: "遗忘") {
-                                store.assistantOp("memory_forget", args: ["id": .string(entry.id)])
+                                store.queueMemoryChange("memory_forget", args: ["id": .string(entry.id)], pending: "遗忘这条记忆")
                             }
                             ActionButton(title: "彻底删除", kind: .destructive) { purgeTarget = entry }
                         } else {
                             ActionButton(title: "恢复") {
-                                store.assistantOp("memory_restore", args: ["id": .string(entry.id)])
+                                store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
                             }
                             ActionButton(title: "彻底删除", kind: .destructive) { purgeTarget = entry }
                         }
@@ -819,12 +763,12 @@ struct AssistantMemoryPane: View {
     }
 
     private func saveEntry(_ entry: AssistantMemoryEntry) {
-        store.assistantOp("memory_edit", args: [
+        guard store.queueMemoryChange("memory_edit", args: [
             "id": .string(entry.id),
             "rev": .number(Double(entry.rev)),
             "topic": .string(trimmed(entryTopic)),
             "text": .string(trimmed(entryText)),
-        ])
+        ], pending: "这条记忆的修改") else { return }
         editingEntryId = nil
     }
 

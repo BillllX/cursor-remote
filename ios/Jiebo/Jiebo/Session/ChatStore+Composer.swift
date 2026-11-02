@@ -86,6 +86,22 @@ extension ChatStore {
         return scored.prefix(limit).map(\.path)
     }
 
+    /// 文件列表还是空的时候，说明是还没读到，而不是这个文件夹没有文件。已经读到并且为空时返回 nil。
+    var fileIndexEmptyTitle: String? {
+        guard fileIndex.isEmpty else { return nil }
+        let chatId = fileIndexRequestChatId ?? activeId
+        if fileIndexInFlight[chatId] != nil { return "正在读取文件列表…" }
+        guard unlocked else { return "还没登录。登录后再看文件列表。" }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看文件列表。"
+                : "正在连接。连上后再看文件列表。"
+        }
+        guard gatewayReady else { return "正在打开，稍后再看文件列表。" }
+        if fileIndexUpdatedAt[chatId] == nil { return "文件列表还没读到。" }
+        return nil
+    }
+
     /// 拉当前会话工作区的文件索引（@补全的本地底数据 + 文件清单 sheet）
     func requestFileIndex(chatId: String? = nil, force: Bool = false, userInitiated: Bool = false) {
         let targetId = chatId ?? activeId
@@ -241,6 +257,7 @@ extension ChatStore {
 
     func togglePolicy(chatId: String? = nil) {
         let targetId = chatId ?? activeId
+        guard noteChatSettingDelivery(chatId: targetId, what: "策略层") else { return }
         let next = (chatSession(targetId)?.policy == "plane") ? "baseline" : "plane"
         patch(targetId) { chat in
             var copy = chat
@@ -352,7 +369,25 @@ extension ChatStore {
         } catch {
             uploads.removeAll { $0.id == item.id }
             guard tenantId == tenantAtStart else { return }
-            bannerError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if let upload = error as? UploadError, case .notConnected = upload {
+                if !client.isOpen {
+                    bannerError = linkState == .offline
+                        ? Self.uploadOfflineTitle
+                        : "文件没传上去。正在连接，连上后再传。"
+                } else {
+                    bannerError = "文件没传上去。网络中断了，再传一次。"
+                }
+            } else if let upload = error as? UploadError {
+                bannerError = upload.errorDescription ?? "文件没传上去，再试一次。"
+            } else if error is CocoaError {
+                bannerError = "读不到这个文件。"
+            } else if !client.isOpen {
+                bannerError = linkState == .offline
+                    ? Self.uploadOfflineTitle
+                    : "文件没传上去。正在连接，连上后再传。"
+            } else {
+                bannerError = "文件没传上去，再试一次。"
+            }
         }
     }
 

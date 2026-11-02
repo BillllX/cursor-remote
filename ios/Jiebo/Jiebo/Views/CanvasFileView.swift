@@ -40,6 +40,18 @@ struct CanvasFileView: View {
     }
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(ChatStore.self) private var store
+
+    /// 运行时页面在服务器上。还没登录或没连上时不要写成正在打开。
+    private var canvasBlockedTitle: String? {
+        if !store.unlocked { return "还没登录。登录后再看画布。" }
+        if !store.connected {
+            return store.linkState == .offline
+                ? "已断开。点按重连后再看画布。"
+                : "正在连接。连上后再看画布。"
+        }
+        return nil
+    }
 
     var body: some View {
         ZStack {
@@ -70,19 +82,45 @@ struct CanvasFileView: View {
             .background(JieboColor.paper)
             if status != .ready {
                 VStack(spacing: 12) {
-                    if status == .error {
+                    if let blocked = canvasBlockedTitle {
+                        Text(blocked)
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink)
+                            .multilineTextAlignment(.center)
+                        HStack(spacing: 16) {
+                            Button("查看源码", action: onFallback)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 44)
+                                .foregroundStyle(JieboColor.ink)
+                                .background(Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(JieboColor.line, lineWidth: 1)
+                                )
+                                .hitTarget()
+                            if store.unlocked, store.linkState == .offline {
+                                Button("重连") { store.retryConnection() }
+                                    .padding(.horizontal, 14)
+                                    .frame(minHeight: 44)
+                                    .foregroundStyle(JieboColor.pine)
+                                    .hitTarget()
+                            }
+                        }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                    } else if status == .error {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 22))
                             .foregroundStyle(JieboColor.danger)
                         Text(errorText ?? "画布打开超时。点重试，或切到源码看看。")
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                             .multilineTextAlignment(.center)
                         HStack(spacing: 16) {
                             // P6：源码是可落地的出口，升为主按钮；重试降为次按钮
                             Button("查看源码", action: onFallback)
                                 .padding(.horizontal, 14)
-                                .frame(height: 32)
+                                .frame(minHeight: 44)
                                 .foregroundStyle(JieboColor.ink)
                                 .background(Color.clear)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -98,7 +136,7 @@ struct CanvasFileView: View {
                                 boot += 1 // .id 变化 → 重建 WebView 重新加载运行时
                             }
                             .padding(.horizontal, 14)
-                            .frame(height: 32)
+                            .frame(minHeight: 44)
                             .foregroundStyle(JieboColor.ink2)
                             .background(Color.clear)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -108,11 +146,11 @@ struct CanvasFileView: View {
                             )
                             .hitTarget()
                         }
-                        .font(JieboFont.ui(13, weight: .medium))
+                        .font(JieboFont.text(.footnote, weight: .medium))
                     } else {
                         ProgressView().controlSize(.regular).tint(JieboColor.dim)
                         Text("正在打开画布…")
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                     }
                 }
@@ -128,7 +166,15 @@ struct CanvasFileView: View {
         }
         // 超时：就绪前 15s / 就绪后 8s（对齐网页 readyRef ? 8000 : 15000）；payload/boot 变化重置计时。
         // 未就绪超时先自动重建一次（对齐网页 retriesRef），再不行才报错
-        .task(id: "\(boot)\u{0}\(path)\u{0}\(chatId)\u{0}\(source)") {
+        .onChange(of: store.connected) { _, connected in
+            guard connected, store.unlocked, status != .ready else { return }
+            status = .loading
+            errorText = nil
+            didReady = false
+            boot += 1
+        }
+        .task(id: "\(boot)\u{0}\(path)\u{0}\(chatId)\u{0}\(source)\u{0}\(store.connected)\u{0}\(store.unlocked)") {
+            guard store.unlocked, store.connected else { return }
             try? await Task.sleep(for: .seconds(didReady ? 8 : 15))
             guard !Task.isCancelled, status != .ready else { return }
             if !didReady, bootRetries < 1 {
@@ -242,9 +288,22 @@ private struct CanvasWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             // dismantle 里的 stopLoading 会触发 cancelled，别误报
-            if (error as NSError).code == NSURLErrorCancelled { return }
+            let ns = error as NSError
+            if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
             invalidate()
-            reportFail("画布运行时加载失败：\(error.localizedDescription)")
+            // 还没登录或没连上时，外层仍用连接句盖住这里。链路还在时不要带系统原文。
+            if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorTimedOut {
+                reportFail("画布运行时加载超时。点重试，或切到源码看看。")
+            } else if ns.domain == NSURLErrorDomain, [
+                NSURLErrorNotConnectedToInternet, NSURLErrorNetworkConnectionLost,
+                NSURLErrorCannotConnectToHost, NSURLErrorCannotFindHost,
+                NSURLErrorDNSLookupFailed, NSURLErrorDataNotAllowed,
+                NSURLErrorInternationalRoamingOff,
+            ].contains(ns.code) {
+                reportFail("画布运行时没载下来。点重试，或切到源码看看。")
+            } else {
+                reportFail("画布运行时加载失败。点重试，或切到源码看看。")
+            }
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

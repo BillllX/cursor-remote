@@ -264,15 +264,28 @@ struct CollapsedSidebarRail: View {
                 }
             }
             Spacer()
-            railButton(NavigationIconId.workspace.symbol, label: "切换工作区", action: store.openWorkspaceSwitcher)
+            railButton(NavigationIconId.workspace.symbol, label: "切换文件夹", action: store.openWorkspaceSwitcher)
             railButton(HomeMode.chat.symbol, label: "切换到消息") { openPadDomain?(.messages) }
             railButton("paintpalette", label: "主题") { themeOpen = true }
             if store.isAdmin {
                 railButton(NavigationIconId.stats.symbol, label: "查看使用统计") { adminOpen = true }
             }
-            LinkStatusDot(state: store.linkState, size: 8)
-                .padding(.top, 4)
-            railButton(NavigationIconId.account.symbol, label: "账户与设置") { settingsOpen = true }
+            if store.linkState == .offline {
+                Button {
+                    store.retryConnection()
+                } label: {
+                    LinkStatusDot(state: store.linkState, size: 8)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(store.linkState.title)
+                .accessibilityHint("重新连接")
+            } else {
+                LinkStatusDot(state: store.linkState, size: 8)
+                    .padding(.top, 4)
+                    .accessibilityLabel("连接状态，\(store.linkState.title)")
+            }
+            railButton(NavigationIconId.account.symbol, label: "设置") { settingsOpen = true }
                 .padding(.bottom, 12)
         }
         .padding(.top, 16)
@@ -372,23 +385,23 @@ struct ToolLayerOverlay: View {
                                 closeTopLayer()
                             } label: {
                                 Label(store.contentPath == nil ? "对话" : layer.title, systemImage: "chevron.left")
-                                    .font(JieboFont.ui(15, weight: .medium))
+                                    .font(JieboFont.text(.subheadline, weight: .medium))
                                     .foregroundStyle(JieboColor.ink)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel(store.contentPath == nil ? "回到对话" : "返回")
                         }
                         Text(store.contentPath.map { ($0 as NSString).lastPathComponent } ?? (narrow ? "" : layer.title))
-                            .font(JieboFont.ui(16))
+                            .font(JieboFont.text(.callout))
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
                         Spacer()
                         if store.contentDiff {
                             Button("保留") { store.keepContentDiff() }
-                                .font(JieboFont.ui(14, weight: .medium))
+                                .font(JieboFont.text(.subheadline, weight: .medium))
                                 .foregroundStyle(JieboColor.ink)
                                 .padding(.horizontal, 10)
-                                .frame(height: 28)
+                                .frame(minHeight: 44)
                                 .background(Color.clear)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(
@@ -396,10 +409,10 @@ struct ToolLayerOverlay: View {
                                         .stroke(JieboColor.line, lineWidth: 1)
                                 )
                             Button("还原") { store.contentRevertPrompt = true }
-                                .font(JieboFont.ui(14, weight: .medium))
+                                .font(JieboFont.text(.subheadline, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                                 .padding(.horizontal, 10)
-                                .frame(height: 28)
+                                .frame(minHeight: 44)
                                 .background(Color.clear)
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(
@@ -408,7 +421,7 @@ struct ToolLayerOverlay: View {
                                 )
                         } else if store.contentDirty {
                             Button("保存") { store.saveContentLayer() }
-                                .font(JieboFont.ui(14, weight: .medium))
+                                .font(JieboFont.text(.subheadline, weight: .medium))
                                 .foregroundStyle(JieboColor.pine)
                         }
                         if !narrow {
@@ -427,18 +440,9 @@ struct ToolLayerOverlay: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     Divider()
-                    if !store.notice.isEmpty {
-                        Text(store.notice)
-                            .font(JieboFont.ui(13))
-                            .foregroundStyle(JieboColor.dim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Color.clear)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(JieboColor.line, lineWidth: 1)
-                            )
+                    // 滑层盖住对话后，ThreadView 上的横幅点不到。这里接上同一套动作。
+                    if !store.connected || !store.bannerError.isEmpty || !store.notice.isEmpty {
+                        layerStatus
                     }
                     ZStack {
                         layerBody
@@ -477,6 +481,91 @@ struct ToolLayerOverlay: View {
         }
     }
 
+    @ViewBuilder
+    private var layerStatus: some View {
+        VStack(spacing: 8) {
+            if !store.connected {
+                Button {
+                    store.retryConnection()
+                } label: {
+                    Text(store.linkState.title)
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.danger)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .background(JieboColor.paper)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .disabled(store.linkState != .offline)
+                .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+            }
+            if !store.bannerError.isEmpty {
+                let message = friendlyError(store.bannerError)
+                if store.bannerReconnects {
+                    Button {
+                        store.retryConnection()
+                    } label: {
+                        layerNotice(message, danger: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("重新连接")
+                } else if store.bannerError == ChatStore.hydrationRetryTitle,
+                          !store.hydrationRetryTurnId.isEmpty {
+                    Button {
+                        store.hydrateTurn(
+                            chatId: store.hydrationRetryChatId,
+                            turnId: store.hydrationRetryTurnId
+                        )
+                    } label: {
+                        layerNotice(message, danger: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("再加载一次")
+                } else {
+                    Button {
+                        store.dismissBannerError()
+                    } label: {
+                        layerNotice(message, danger: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("轻点关闭")
+                }
+            } else if store.notice == ChatStore.stallRecoveryNotice, let chatId = store.stallChatId {
+                Button {
+                    store.stop(chatId: chatId)
+                    store.restoreLastPromptIfDraftEmpty(chatId: chatId)
+                    store.notice = ""
+                } label: {
+                    layerNotice(store.notice, danger: false)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("停止这一轮，上一句回到输入框")
+            } else if !store.notice.isEmpty {
+                layerNotice(store.notice, danger: false)
+                    .allowsHitTesting(false)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private func layerNotice(_ value: String, danger: Bool) -> some View {
+        Text(value)
+            .font(JieboFont.text(.footnote))
+            .foregroundStyle(danger ? JieboColor.danger : JieboColor.ink)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(JieboColor.paper.opacity(0.92))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(JieboColor.line, lineWidth: 1)
+            )
+    }
+
     private func closeTopLayer() {
         if store.contentPath != nil {
             store.closeContentLayer()
@@ -512,10 +601,10 @@ struct ToolLayerOverlay: View {
     private func empty(_ title: String, _ body: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
             Text(body)
-                .font(JieboFont.ui(13))
+                .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
             Spacer()
         }
@@ -539,8 +628,7 @@ struct ContentLayerView: View {
             } else if let path = store.contentPath, let tab = store.previewTabs.first(where: { $0.path == path }) {
                 PreviewContentView(tab: tab)
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                missingPreviewBody
             }
         }
         .background(JieboColor.paper)
@@ -549,18 +637,26 @@ struct ContentLayerView: View {
     private var diffText: some View {
         VStack(alignment: .leading, spacing: 0) {
             if store.contentLoading {
-                ProgressView("正在读取改动…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                contentLoadingBody("正在读取改动…")
             } else if let error = store.contentError {
-                Text(error)
-                    .font(JieboFont.ui(13))
-                    .foregroundStyle(JieboColor.clay)
-                    .padding(16)
-                Spacer()
+                VStack(spacing: 12) {
+                    Text(error)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.clay)
+                        .multilineTextAlignment(.center)
+                    if let path = store.contentPath {
+                        Button("重试") { store.openContentDiff(path) }
+                            .font(JieboFont.text(.footnote, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     Text(store.contentDraft.isEmpty ? "没有可显示的改动" : store.contentDraft)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(JieboFont.monoText(.caption))
                         .foregroundStyle(JieboColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -573,31 +669,31 @@ struct ContentLayerView: View {
     private var textEditor: some View {
         VStack(alignment: .leading, spacing: 0) {
             if store.contentLoading {
-                ProgressView("正在读取…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                contentLoadingBody("正在读取…")
             } else if let error = store.contentError, store.contentDraft == store.contentOriginal {
                 VStack(spacing: 12) {
                     Text(error)
-                        .font(JieboFont.ui(13))
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.clay)
                         .multilineTextAlignment(.center)
                     if let path = store.contentPath {
                         Button("重试") { store.openContentFile(path) }
-                            .font(JieboFont.ui(13, weight: .medium))
+                            .font(JieboFont.text(.footnote, weight: .medium))
                             .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
                     }
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if store.contentOversized {
                 Text("超过 500KB，这里只能看，不能保存")
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.clay)
                     .padding(.horizontal, 14)
                     .padding(.top, 8)
                 ScrollView {
                     Text(store.contentDraft)
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(JieboFont.monoText(.footnote))
                         .foregroundStyle(JieboColor.ink)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
@@ -605,15 +701,90 @@ struct ContentLayerView: View {
                 }
             } else {
                 Text(store.contentDirty ? "未保存" : "已保存")
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(store.contentDirty ? JieboColor.clay : JieboColor.dim)
                     .padding(.horizontal, 14)
                     .padding(.top, 8)
                 TextEditor(text: Bindable(store).contentDraft)
-                    .font(.system(size: 13, design: .monospaced))
+                    .font(JieboFont.monoText(.footnote))
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 8)
             }
+        }
+    }
+
+    /// 图片、网页这类内容靠预览页签。页签不在时不要无字转圈。
+    @ViewBuilder
+    private var missingPreviewBody: some View {
+        if let blocked = store.contentReadBlockedTitle() {
+            VStack(spacing: 12) {
+                Text(blocked)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.center)
+                if store.unlocked, store.linkState == .offline {
+                    Button("重连") { store.retryConnection() }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = store.contentError {
+            VStack(spacing: 12) {
+                Text(error)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.clay)
+                    .multilineTextAlignment(.center)
+                if let path = store.contentPath {
+                    Button("重试") { store.openContentFile(path) }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 12) {
+                Text("这个预览还没打开。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.center)
+                if let path = store.contentPath {
+                    Button("打开") { store.openContentFile(path) }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// 正文还在读。还没登录或没连上时不要写成正在读取。
+    @ViewBuilder
+    private func contentLoadingBody(_ title: String) -> some View {
+        if let blocked = store.contentReadBlockedTitle() {
+            VStack(spacing: 12) {
+                Text(blocked)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink)
+                    .multilineTextAlignment(.center)
+                if store.unlocked, store.linkState == .offline {
+                    Button("重连") { store.retryConnection() }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ProgressView(title)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -633,7 +804,7 @@ struct SearchToolView: View {
             TextField("搜文件名或内容", text: Bindable(store).searchQuery)
                 .focused($focused)
                 .textFieldStyle(.plain)
-                .font(JieboFont.ui(15))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.ink)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -656,7 +827,7 @@ struct SearchToolView: View {
     private var results: some View {
         if query.isEmpty {
             Text("搜文件名或内容")
-                .font(JieboFont.ui(14))
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .padding(16)
             Spacer()
@@ -664,9 +835,15 @@ struct SearchToolView: View {
             if store.searchLoading {
                 ProgressView("正在搜索…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if !store.searchContentNote.isEmpty {
+                Text("文件名里没有「\(query)」。\(store.searchContentNote)")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.dim)
+                    .padding(16)
+                Spacer()
             } else {
                 Text("文件名和内容里都没有「\(query)」")
-                    .font(JieboFont.ui(14))
+                    .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.dim)
                     .padding(16)
                 Spacer()
@@ -695,11 +872,16 @@ struct SearchToolView: View {
                     }
                     if store.searchTruncated, !store.searchLoading {
                         Text("结果太多，只显示前 \(store.searchHits.count) 条。换个更具体的关键词试试。")
-                            .font(JieboFont.ui(13))
+                            .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                             .padding(16)
                     }
-                    if store.searchLoading {
+                    if !store.searchContentNote.isEmpty, !store.searchLoading {
+                        Text(store.searchContentNote)
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.dim)
+                            .padding(16)
+                    } else if store.searchLoading {
                         ProgressView("正在搜索内容…")
                             .padding(16)
                     }
@@ -719,12 +901,12 @@ struct SearchToolView: View {
     private func hitLabel(title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title)
-                .font(JieboFont.ui(13, weight: .medium))
+                .font(JieboFont.text(.footnote, weight: .medium))
                 .foregroundStyle(JieboColor.ink)
                 .lineLimit(1)
             if !detail.isEmpty {
                 Text(detail)
-                    .font(JieboFont.ui(12))
+                    .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
                     .lineLimit(1)
             }
@@ -743,8 +925,8 @@ struct GitToolView: View {
 
     var body: some View {
         if paths.isEmpty {
-            Text("工作区干净")
-                .font(JieboFont.ui(14))
+            Text("没有未提交的改动")
+                .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -761,11 +943,11 @@ struct GitToolView: View {
                         } label: {
                             HStack(spacing: 8) {
                                 Text(store.gitStatus[path] ?? "")
-                                    .font(JieboFont.ui(12, weight: .semibold))
+                                    .font(JieboFont.text(.caption, weight: .semibold))
                                     .foregroundStyle(JieboColor.brass)
-                                    .frame(width: 18)
+                                    .frame(minWidth: 18)
                                 Text(path)
-                                    .font(JieboFont.ui(13))
+                                    .font(JieboFont.text(.footnote))
                                     .foregroundStyle(JieboColor.ink)
                                     .lineLimit(1)
                                 Spacer(minLength: 0)
@@ -789,10 +971,10 @@ struct TerminalToolView: View {
         if rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("这个会话还没有 shell 输出")
-                    .font(JieboFont.ui(15))
+                    .font(JieboFont.text(.subheadline))
                     .foregroundStyle(JieboColor.ink)
                 Text("让 Agent 跑一条命令，输出会出现在这里。")
-                    .font(JieboFont.ui(13))
+                    .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
                 Spacer()
             }
@@ -805,10 +987,10 @@ struct TerminalToolView: View {
                         ForEach(rows) { row in
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("$ \(row.command)")
-                                    .font(JieboFont.ui(13, weight: .medium))
+                                    .font(JieboFont.monoText(.footnote))
                                     .foregroundStyle(JieboColor.ink)
                                 Text(row.output.isEmpty ? (row.running ? "正在跑…" : "没有输出") : row.output)
-                                    .font(.system(size: 12, design: .monospaced))
+                                    .font(JieboFont.monoText(.caption))
                                     .foregroundStyle(row.output.isEmpty ? JieboColor.dim : JieboColor.ink2)
                                     .textSelection(.enabled)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -819,12 +1001,25 @@ struct TerminalToolView: View {
                     }
                     .padding(.vertical, 12)
                 }
+                .onAppear {
+                    scrollTerminal(proxy, rows: rows)
+                }
+                .onChange(of: store.terminalFocusCallId) { _, _ in
+                    scrollTerminal(proxy, rows: rows)
+                }
                 .onChange(of: rows.last?.output) { _, _ in
                     if let id = rows.last?.id {
                         proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
+        }
+    }
+
+    private func scrollTerminal(_ proxy: ScrollViewProxy, rows: [ShellEntry]) {
+        let id = store.terminalFocusCallId.isEmpty ? rows.last?.id : store.terminalFocusCallId
+        if let id {
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 }

@@ -29,21 +29,34 @@ extension ThreadView {
         }
     }
 
-    /// 优先级和 iPhone 首页一致：没连上 > 没配 API Key > 正在回复 > 模式
+    /// 优先级：没连上 > 正在同步 > 没配 API Key > 正在回复 > 模式
     var padSubtitle: String {
         if !store.connected { return store.linkState.title }
-        if !store.hasApiKey { return "服务器还没配 API Key" }
+        if store.isThreadSyncBusy(resolvedChatId) { return ChatStore.syncingThreadTitle }
+        if let hint = store.approvalHint(for: resolvedChatId, surface: .padThread) {
+            return hint.title
+        }
+        if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
         if threadBusy { return "正在回复" }
+        if resolvedChatId == store.assistantChatId, let title = store.backgroundAttentionTitle {
+            return title
+        }
         return store.mode(for: resolvedChatId).label
     }
 
     var phoneSubtitle: String {
         if !store.connected { return store.linkState.title }
+        if store.isThreadSyncBusy(resolvedChatId) { return ChatStore.syncingThreadTitle }
+        if let hint = store.approvalHint(for: resolvedChatId, surface: .phoneWorkbench) {
+            return hint.title
+        }
         if resolvedChatId == store.assistantChatId {
-            return store.hasApiKey ? "个人助理 · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
+            if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
+            if !threadBusy, let title = store.backgroundAttentionTitle { return title }
+            return "小驳 · \(store.mode(for: resolvedChatId).label)"
         }
         let place = store.workspaceTitle(anchoredTo: resolvedChatId)
-        return store.hasApiKey ? "\(place) · \(store.mode(for: resolvedChatId).label)" : "服务器还没配 API Key"
+        return store.hasApiKey ? "\(place) · \(store.mode(for: resolvedChatId).label)" : ChatStore.missingApiKeyTitle
     }
 
     var phoneStatus: String? {
@@ -68,14 +81,9 @@ extension ThreadView {
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     HStack(spacing: 5) {
-                        LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy)
-                        Text(phoneSubtitle)
-                            .font(JieboFont.text(.caption2, weight: .medium))
-                            .tracking(0.3)
-                            .foregroundStyle(store.hasApiKey || !store.connected ? JieboColor.dim : JieboColor.danger)
-                            .lineLimit(1)
+                        LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(resolvedChatId))
+                        connectionSubtitle(phoneSubtitle)
                     }
-                    .accessibilityElement(children: .combine)
                 }
                 .frame(maxWidth: .infinity)
                 if resolvedChatId == store.assistantChatId {
@@ -87,12 +95,10 @@ extension ThreadView {
                     }
                 }
                 phoneIcon("folder", label: "文件") {
-                    if !(store.fileBrowserOpen && store.fileBrowserPane == .files) {
-                        store.toggleFileBrowser(.files)
-                    }
+                    store.openFilesOnWorkbench()
                 }
-                phoneIcon("plus", label: "新对话") {
-                    store.openNewChat(in: store.workspacePath(anchoredTo: resolvedChatId))
+                phoneIcon("terminal", label: "终端输出") {
+                    store.openTerminalOnWorkbench(chatId: resolvedChatId)
                 }
             }
             .padding(.horizontal, 12)
@@ -127,6 +133,61 @@ extension ThreadView {
         }
     }
 
+    @ViewBuilder
+    func connectionSubtitle(_ text: String) -> some View {
+        let label = Text(text)
+            .font(JieboFont.text(.caption, weight: .medium))
+            .foregroundStyle(!store.connected || !store.hasApiKey ? JieboColor.danger : JieboColor.dim)
+            .lineLimit(text == ChatStore.missingApiKeyTitle || text == store.backgroundAttentionTitle ? 2 : 1)
+        if !store.connected {
+            Button {
+                store.retryConnection()
+            } label: {
+                label.frame(minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.linkState != .offline)
+            .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
+        } else if store.isThreadSyncBusy(resolvedChatId) {
+            Button {
+                store.retryThreadSync(resolvedChatId)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("再拉一次这条会话")
+        } else if store.approvalHint(for: resolvedChatId, surface: chrome == .pad ? .padThread : .phoneWorkbench) == .openInbox {
+            Button {
+                store.requestOpenApprovals()
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("打开待处理")
+        } else if chrome == .phoneLegacy,
+                  store.approvalHint(for: resolvedChatId, surface: .phoneWorkbench) == .backToAssistant {
+            Button {
+                store.requestReturnToAssistant()
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("回到小驳")
+        } else if resolvedChatId == store.assistantChatId,
+                  let title = store.backgroundAttentionTitle,
+                  text == title {
+            Button {
+                store.requestAssistant(force: true)
+            } label: {
+                label
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(store.backgroundAttentionReason ?? "再检查后台模型")
+        } else {
+            label
+        }
+    }
+
     func phoneIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -150,14 +211,9 @@ extension ThreadView {
                     .foregroundStyle(JieboColor.ink)
                     .lineLimit(1)
                 HStack(spacing: 6) {
-                    LinkStatusDot(state: store.linkState, syncing: store.threadSyncBusy, size: 7)
-                    Text(padSubtitle)
-                        .font(JieboFont.text(.caption, weight: .medium))
-                        .tracking(0.4)
-                        .foregroundStyle(store.connected && !store.hasApiKey ? JieboColor.danger : JieboColor.dim)
-                        .lineLimit(1)
+                    LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(resolvedChatId), size: 7)
+                    connectionSubtitle(padSubtitle)
                 }
-                .accessibilityElement(children: .combine)
             }
             Spacer()
             if store.previewLoading {
@@ -168,6 +224,19 @@ extension ThreadView {
             if resolvedChatId == store.assistantChatId {
                 assistantTodayButton
             }
+            Button {
+                store.openTerminalOnWorkbench(chatId: resolvedChatId)
+            } label: {
+                Text("终端输出")
+                    .font(JieboFont.text(.footnote, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(JieboColor.mist)
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+            .accessibilityLabel("终端输出")
             if store.canUndo(resolvedChatId) {
                 Button {
                     store.undoLast(chatId: resolvedChatId)

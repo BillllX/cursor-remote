@@ -119,6 +119,8 @@ struct FileTreeView: View {
     let onPick: (String) -> Void
     let onCopyPath: (String) -> Void
     let onQuickLook: (String) -> Void
+    /// 列表还没读到时的原因。nil 表示服务器已经给过空清单。
+    var emptyDetail: String? = nil
 
     @State private var openDirs: [String: Bool] = [:]
     /// 树缓存：paths 变才重建（toTree 是 O(n×深度)，不在 body 里每次算）
@@ -130,7 +132,7 @@ struct FileTreeView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if rows.isEmpty {
-                    Text(filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件")
+                    Text(paths.isEmpty ? (emptyDetail ?? "没有文件列表") : (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                         .frame(maxWidth: .infinity, alignment: .center)
@@ -143,7 +145,7 @@ struct FileTreeView: View {
                 if (truncated || paths.count > 8000) && filter.trimmingCharacters(in: .whitespaces).isEmpty {
                     // 网关会报 truncated；客户端 toTree 还有 8000 硬顶，旧网关多发时也要提示。
                     // 搜索时隐藏——用户已经在「缩小范围」，再提示「用搜索缩小范围」自相矛盾（GLM R2 MINOR）
-                    Text("工作区文件太多，清单被截断了，用搜索缩小范围。")
+                    Text("文件太多，清单被截断了，用搜索缩小范围。")
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                         .padding(.horizontal, 14)

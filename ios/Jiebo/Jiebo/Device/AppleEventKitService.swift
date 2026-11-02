@@ -34,7 +34,7 @@ actor AppleEventKitService {
         do {
             try store.save(event, span: .thisEvent, commit: true)
         } catch {
-            throw DeviceRequestError.unavailable("保存日历事件失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("保存日历事件失败，再试一次。")
         }
         guard let identifier = event.eventIdentifier, !identifier.isEmpty else {
             throw DeviceRequestError.unavailable("日历已保存，但系统没有返回事件标识。")
@@ -51,7 +51,7 @@ actor AppleEventKitService {
         do {
             try store.remove(event, span: .thisEvent, commit: true)
         } catch {
-            throw DeviceRequestError.unavailable("删除日历事件失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("删除日历事件失败，再试一次。")
         }
     }
 
@@ -91,7 +91,7 @@ actor AppleEventKitService {
         do {
             try store.save(reminder, commit: true)
         } catch {
-            throw DeviceRequestError.unavailable("保存提醒事项失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("保存提醒事项失败，再试一次。")
         }
         let identifier = reminder.calendarItemIdentifier
         guard !identifier.isEmpty else {
@@ -111,7 +111,7 @@ actor AppleEventKitService {
         do {
             try store.save(reminder, commit: true)
         } catch {
-            throw DeviceRequestError.unavailable("修改提醒事项状态失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("修改提醒事项状态失败，再试一次。")
         }
     }
 
@@ -124,7 +124,7 @@ actor AppleEventKitService {
         do {
             try store.remove(reminder, commit: true)
         } catch {
-            throw DeviceRequestError.unavailable("删除提醒事项失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("删除提醒事项失败，再试一次。")
         }
     }
 
@@ -160,7 +160,7 @@ actor AppleEventKitService {
             if updated == .denied || updated == .restricted {
                 throw DeviceRequestError.permissionDenied(entity == .event ? "日历权限已被拒绝。" : "提醒事项权限已被拒绝。")
             }
-            throw DeviceRequestError.unavailable("请求系统权限失败：\(error.localizedDescription)")
+            throw DeviceRequestError.unavailable("请求系统权限失败，再试一次。")
         }
     }
 

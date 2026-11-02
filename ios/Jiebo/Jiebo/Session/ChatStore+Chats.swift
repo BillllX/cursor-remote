@@ -25,6 +25,19 @@ extension ChatStore {
         requestWorkspaces(force: true)
     }
 
+    /// 文件夹列表还没拿到时的原因。已经拿到过、只是没有子文件夹时返回 nil。
+    var workspaceListBlockedTitle: String? {
+        if workspacesLoaded { return nil }
+        guard unlocked else { return "还没登录。登录后再看文件夹。" }
+        guard client.isOpen else {
+            return linkState == .offline
+                ? "已断开。点按重连后再看文件夹。"
+                : "正在连接。连上后再看文件夹。"
+        }
+        guard gatewayReady else { return "正在打开，稍后再看文件夹。" }
+        return "文件夹列表还没读到。"
+    }
+
     func requestWorkspaces(force: Bool = false) {
         guard connected, unlocked, gatewayReady else { return }
         if workspacesSyncInFlight {
@@ -38,6 +51,7 @@ extension ChatStore {
     }
 
     func receiveWorkspaces(root: String, items: [WorkspaceItem]) {
+        workspacesLoaded = true
         workspaces = items
         if workspaceRoot.isEmpty, let first = items.first { workspaceRoot = first.path }
         updateCachedWorkspaces(root: root, items: items)
@@ -123,6 +137,11 @@ extension ChatStore {
     func createWorkspace() {
         let name = newWorkspaceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。新建文件夹会在连上后发出，建好后直接进去。"
+                : "正在连接。新建文件夹会在连上后发出，建好后直接进去。")
+        }
         send(.createWorkspace(name: name))
         newWorkspaceName = ""
         creatingWorkspace = false
@@ -131,11 +150,21 @@ extension ChatStore {
     func renameWorkspace(_ path: String, to rawName: String) {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。文件夹改名会在连上后发出。"
+                : "正在连接。文件夹改名会在连上后发出。")
+        }
         send(.renameWorkspace(path: path, name: name))
     }
 
     /// 空目录网关直接删；里面有文件只隐藏；还有对话会被拒（错误走顶部提示）
     func deleteWorkspace(_ path: String) {
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。文件夹的删除会在连上后发出。"
+                : "正在连接。文件夹的删除会在连上后发出。")
+        }
         send(.deleteWorkspace(path: path))
     }
 
@@ -145,7 +174,7 @@ extension ChatStore {
             .filter { !isAssistantChat($0.id) && $0.id != "boot" && isChatUnder($0, path) }
             .map(\.id)
         guard !ids.isEmpty else {
-            flash("这个工作区里没有对话")
+            flash("这个文件夹里没有对话")
             return
         }
         if chats.contains(where: { ids.contains($0.id) && chatShowsRunning($0) }) {
@@ -161,7 +190,10 @@ extension ChatStore {
             if !deletedIds.contains(id) { break }
             removed += 1
         }
-        flash(removed == ids.count ? "已清空 \(ids.count) 个对话" : "已删除 \(removed) 个，其余因有未保存的修改保留")
+        let done = removed == ids.count
+            ? "已清空 \(ids.count) 个对话"
+            : "已删除 \(removed) 个，其余因有未保存的修改保留"
+        flash(connected || removed == 0 ? done : "\(done)。连上后，其他设备上也看不到。")
     }
 
     /// 开始或结束回复时记一下时间：侧栏按它给工作区排序、显示「几分钟前」
@@ -276,6 +308,11 @@ extension ChatStore {
     func renameChat(_ id: String, to rawTitle: String) {
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
+        guard !cachedOnlyIds.contains(id) else {
+            flash("这条对话还没对上服务器，改名不会留下。")
+            return
+        }
+        let before = chats.first { $0.id == id }?.title
         patch(id) { chat in
             if chat.title == title { return chat }
             if title == "新对话", !chat.isUntitled { return chat }
@@ -283,6 +320,10 @@ extension ChatStore {
             next.title = title
             return next
         }
+        guard chats.first(where: { $0.id == id })?.title == title, before != title, !client.isOpen else { return }
+        flash(linkState == .offline
+            ? "已断开。这台设备已改名，连上后其他设备也会看到。"
+            : "正在连接。这台设备已改名，连上后其他设备也会看到。")
     }
 
     func deleteChat(_ id: String) {

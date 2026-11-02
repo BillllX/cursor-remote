@@ -19,7 +19,7 @@ func sameCwd(_ a: String?, _ b: String?) -> Bool {
 func workspaceLabel(_ path: String, root: String, rootName: String = AssistantDefaults.name) -> String {
     let abs = normPath(path)
     let base = normPath(root)
-    if abs.isEmpty { return base.isEmpty ? "工作区" : rootName }
+    if abs.isEmpty { return base.isEmpty ? "文件夹" : rootName }
     if base.isEmpty { return abs.split(separator: "/").last.map(String.init) ?? abs }
     if abs == base { return rootName }
     if abs.hasPrefix(base + "/") { return String(abs.dropFirst(base.count + 1)) }
@@ -221,7 +221,7 @@ extension ChatStore {
 
     func workspaceTitle(anchoredTo chatId: String?) -> String {
         let path = workspacePath(anchoredTo: chatId)
-        if path.isEmpty { return "工作区" }
+        if path.isEmpty { return "文件夹" }
         let name = workspaceLabel(path, root: groupRoot)
         let leaf = workspaceName(path)
         let duplicated = workspaces.filter { workspaceName($0.path) == leaf }.count > 1

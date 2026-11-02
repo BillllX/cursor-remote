@@ -21,14 +21,14 @@ struct LoginView: View {
                         .font(JieboFont.display(30))
                         .tracking(1.2)
                         .foregroundStyle(JieboColor.ink)
-                    Text("随身的个人助理，远端替你动手。输入访问码进入。")
-                        .font(JieboFont.ui(13))
+                    Text("小驳跟着你，远端替你动手。输入访问码进入。")
+                        .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
                     SecureField("访问码", text: $store.tokenDraft)
                         .textContentType(.password)
-                        .font(JieboFont.ui(17))
+                        .font(JieboFont.text(.body))
                         .padding(.horizontal, 14)
-                        .frame(height: 44)
+                        .frame(minHeight: 44)
                         .background(JieboColor.composer)
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                         .overlay(
@@ -40,15 +40,15 @@ struct LoginView: View {
                         .onSubmit { store.login() }
                     if !store.authError.isEmpty {
                         Text(friendlyError(store.authError))
-                            .font(JieboFont.ui(14))
+                            .font(JieboFont.text(.subheadline))
                             .foregroundStyle(JieboColor.danger)
                     }
                     Button(action: store.login) {
                         Text(store.verifying ? "正在验证…" : "进入")
-                            .font(JieboFont.ui(16, weight: .medium))
+                            .font(JieboFont.text(.callout, weight: .medium))
                             .foregroundStyle(canEnter || store.verifying ? JieboColor.fillFg : JieboColor.ink2)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 44)
+                            .frame(minHeight: 44)
                             .background(canEnter || store.verifying ? JieboColor.pine : JieboColor.mist)
                             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                             .overlay(
@@ -58,9 +58,16 @@ struct LoginView: View {
                     }
                     .buttonStyle(PressScaleButtonStyle(enabled: canEnter))
                     .disabled(!canEnter)
-                    Text(store.connected ? "已连上服务器" : "正在连接服务器…")
-                        .font(JieboFont.ui(12))
-                        .foregroundStyle(JieboColor.dim)
+                    Text(store.connected ? "已连上服务器" : store.linkState.title)
+                        .font(JieboFont.text(.caption, weight: store.linkState == .offline ? .medium : .regular))
+                        .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
+                        .frame(maxWidth: .infinity, minHeight: store.linkState == .offline ? 44 : 0, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if store.linkState == .offline { store.retryConnection() }
+                        }
+                        .accessibilityAddTraits(store.linkState == .offline ? .isButton : [])
+                        .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
                 }
                 .padding(EdgeInsets(top: 32, leading: 28, bottom: 24, trailing: 28))
                 .frame(maxWidth: 380)

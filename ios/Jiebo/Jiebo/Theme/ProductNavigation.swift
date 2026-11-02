@@ -24,15 +24,15 @@ enum NavigationIconId: String, CaseIterable {
 
     var label: String {
         switch self {
-        case .assistant: return "助理"
+        case .assistant: return "小驳"
         case .collab: return "协作"
-        case .workspace: return "工作区"
+        case .workspace: return "文件夹"
         case .account: return "账户"
         case .overview: return "概览"
         case .chats: return "会话"
         case .files: return "文件"
-        case .search: return "工作区搜索"
-        case .git: return "源代码管理"
+        case .search: return "搜索"
+        case .git: return "改动"
         case .memory: return "记忆与规则"
         case .terminal: return "终端输出"
         case .loop: return "Loop"

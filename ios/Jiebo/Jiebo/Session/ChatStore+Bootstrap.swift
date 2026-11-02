@@ -34,6 +34,7 @@ extension ChatStore {
                 self.bootstrapSnapshot = merged
                 if !self.bootstrapWorkspacesDirty {
                     self.workspaces = snapshot.workspaces
+                    self.workspacesLoaded = true
                     if self.workspaceRoot.isEmpty { self.workspaceRoot = snapshot.workspacesRoot }
                 }
                 if !self.bootstrapAssistantDirty, let state = cachedAssistant {
