@@ -62,7 +62,7 @@ struct PhoneWorkbench: View {
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
-                .transition(.move(edge: .leading))
+                .transition(.jieboPanel(from: .leading, reduceMotion: reduceMotion))
                 .accessibilityHidden(previewPanelOpen)
                 .accessibilityAddTraits(.isModal)
                 .accessibilityAction(.escape) { closeDrawer() }
@@ -76,7 +76,7 @@ struct PhoneWorkbench: View {
                 PreviewPanelView(tab: tab)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(JieboColor.white)
-                    .transition(.move(edge: .trailing))
+                    .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion))
                     .zIndex(3)
             }
         }

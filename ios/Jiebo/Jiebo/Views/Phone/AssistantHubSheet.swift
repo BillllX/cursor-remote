@@ -78,23 +78,38 @@ struct AssistantHubSheet: View {
     private var pullDown: some Gesture {
         DragGesture(minimumDistance: 6, coordinateSpace: .global)
             .onChanged { value in
-                drag = max(0, value.translation.height)
+                let y = value.translation.height
+                let span = max(panelHeight, 1)
+                drag = y >= 0 ? y : JieboMotion.rubberBand(y, limit: span, dimension: span)
             }
             .onEnded { value in
                 let threshold = max(100, panelHeight * 0.25)
-                if value.translation.height > threshold || value.predictedEndTranslation.height > threshold * 2 {
+                let projected = value.translation.height + JieboMotion.project(value.velocity.height)
+                if projected > threshold {
+                    let destination = panelHeight + 120
                     // 从手指位置接着滑出屏幕再收起，不在半空淡出
-                    // 多滑出一截：面板底色还铺在 Home 指示条下面
-                    withAnimation(JieboMotion.panel(reduceMotion)) {
-                        drag = panelHeight + 120
+                    withAnimation(JieboMotion.release(
+                        reduceMotion,
+                        velocity: value.velocity.height,
+                        from: drag,
+                        to: destination
+                    )) {
+                        drag = destination
                     } completion: {
-                        // 已经滑出屏幕，不再走淡出（透明层会在淡出期间挡住点按）
+                        // 已经滑出屏幕，去掉时不再播一段
                         var transaction = Transaction()
                         transaction.disablesAnimations = true
                         withTransaction(transaction) { router.hubOpen = false }
                     }
                 } else {
-                    withAnimation(JieboMotion.snappy(reduceMotion)) { drag = 0 }
+                    withAnimation(JieboMotion.release(
+                        reduceMotion,
+                        velocity: value.velocity.height,
+                        from: drag,
+                        to: 0
+                    )) {
+                        drag = 0
+                    }
                 }
             }
     }

@@ -76,8 +76,12 @@ struct ComposerView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if style == .assistant {
-                assistantStatusLine
-                assistantCapsuleRow
+                GlassEffectContainer(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        assistantStatusLine
+                        assistantCapsuleRow
+                    }
+                }
             } else {
                 entryField(lineLimit: 1 ... 8, submitOnReturn: true, vertical: 8, horizontal: 6)
                 fullNarrowStatusLine
@@ -109,8 +113,23 @@ struct ComposerView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, floating ? 8 : 16)
-        // 浮动玻璃底栏：不铺实底，让消息从胶囊下面透过去
-        .background(floating ? Color.clear : JieboColor.paper)
+        // 胶囊本身仍是玻璃。底栏铺一层纸色，避免正文从字缝里透出来盖住模式和输入。
+        .background {
+            if floating {
+                LinearGradient(
+                    stops: [
+                        .init(color: JieboColor.paper.opacity(0), location: 0),
+                        .init(color: JieboColor.paper.opacity(0.96), location: 0.22),
+                        .init(color: JieboColor.paper, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .padding(.top, -20)
+            } else {
+                JieboColor.paper
+            }
+        }
         .confirmationDialog(
             "确认上传大文件？",
             isPresented: Binding(

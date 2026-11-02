@@ -32,6 +32,7 @@ struct PhoneShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
+        .toolbar(router.hubOpen ? .hidden : .automatic, for: .tabBar)
         .task { await bootstrap() }
     }
 
@@ -49,8 +50,8 @@ struct PhoneShell: View {
                     .frame(height: height)
                     .clipShape(Self.panelShape)
                     .background {
-                        Color.clear
-                            .jieboGlass(in: Self.panelShape)
+                        Self.panelShape
+                            .fill(JieboColor.paper)
                             .ignoresSafeArea(.container, edges: .bottom)
                     }
                     .offset(y: hubDrag)
@@ -59,7 +60,7 @@ struct PhoneShell: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
-        .transition(.opacity)
+        .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion))
         .onDisappear { hubDrag = 0 }
     }
 

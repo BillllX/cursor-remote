@@ -18,8 +18,8 @@ struct PendingBadge: View {
 }
 
 /// 小驳空间的左侧菜单抽屉（docs/iphone-assistant-first.md §4.0.1 / §4.3）。
-/// 一直挂在 PhoneShell 的 ZStack 里：关着的时候不拦触摸，只在「路由栈为空且没有键盘」时留一条 16pt 的左缘热区，
-/// 从左缘向右拖就打开；push 页上这条热区撤掉，左缘右滑归系统的返回手势。
+/// 一直挂在 PhoneShell 的 ZStack 里：关着的时候不拦触摸，只在「路由栈为空且没有键盘」时留一条 16pt 的左缘热区。
+/// 手指拖到哪，面板跟到哪；松手再按速度停在开或关。push 页上这条热区撤掉，左缘右滑归系统的返回手势。
 struct MenuDrawer: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
@@ -27,20 +27,29 @@ struct MenuDrawer: View {
     /// VoiceOver 焦点：0 是首项「今日」。nil 时没有行被选中
     @AccessibilityFocusState private var focusedRow: Int?
     @State private var keyboardUp = false
+    /// 面板已经露出的宽度。拖动时直接写，点按开关时再做动画。
+    @State private var reveal: CGFloat = 0
+    @State private var panelWidth: CGFloat = 300
+    @State private var dragging = false
     private var edgeOpenEnabled: Bool {
         router.path.isEmpty && !keyboardUp
     }
 
     var body: some View {
         ZStack(alignment: .leading) {
-            openLayer
+            drawerLayer
             if !router.menuOpen, edgeOpenEnabled {
                 edgeStrip
             }
         }
-        .animation(JieboMotion.panel(reduceMotion), value: router.menuOpen)
         .onChange(of: router.menuOpen) { _, open in
-            if open { JieboHaptic.selection() }
+            guard !dragging else { return }
+            let target: CGFloat = open ? panelWidth : 0
+            guard abs(reveal - target) > 1 else { return }
+            withAnimation(JieboMotion.panel(reduceMotion)) {
+                reveal = target
+            }
+            if open { focusFirstRow() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardUp = true
@@ -50,47 +59,39 @@ struct MenuDrawer: View {
         }
     }
 
-    // MARK: 打开后的遮罩 + 面板
+    // MARK: 跟手的遮罩 + 面板
 
-    private var openLayer: some View {
+    private var drawerLayer: some View {
         GeometryReader { geo in
+            let width = min(300, geo.size.width * 0.82)
             ZStack(alignment: .leading) {
-                if router.menuOpen {
-                    Color.black.opacity(0.28)
+                if reveal > 0.5 {
+                    Color.black.opacity(0.28 * min(reveal / max(width, 1), 1))
                         .ignoresSafeArea()
-                        .onTapGesture { router.closeMenu() }
+                        .contentShape(Rectangle())
+                        .onTapGesture { settle(open: false, velocity: 0, width: width) }
                         .accessibilityLabel("关闭菜单")
                         .accessibilityAddTraits(.isButton)
-                        .transition(.opacity)
-                    panel
-                        .frame(width: min(300, geo.size.width * 0.82))
-                        .frame(maxHeight: .infinity)
-                        .background {
-                            Color.clear
-                                .jieboGlass(in: Rectangle())
-                                .ignoresSafeArea()
-                        }
-                        .gesture(
-                            DragGesture(minimumDistance: 20)
-                                .onEnded { value in
-                                    if value.translation.width < -60 || value.predictedEndTranslation.width < -140 {
-                                        router.closeMenu()
-                                    }
-                                }
-                        )
-                        .transition(.move(edge: .leading))
-                        .accessibilityAddTraits(.isModal)
-                        .accessibilityAction(.escape) { router.closeMenu() }
-                        .task {
-                            // 打开后把 VoiceOver 焦点放到首项；等滑入动画走完再设，否则会被动画吞掉
-                            try? await Task.sleep(for: .milliseconds(450))
-                            focusedRow = 0
-                        }
                 }
+                panel
+                    .frame(width: width)
+                    .frame(maxHeight: .infinity)
+                    .background {
+                        Color.clear
+                            .jieboGlass(in: Rectangle())
+                            .ignoresSafeArea()
+                    }
+                    .offset(x: reveal - width)
+                    .simultaneousGesture(closeDrag(width: width))
+                    .accessibilityHidden(!router.menuOpen)
+                    .accessibilityAddTraits(router.menuOpen ? .isModal : [])
+                    .accessibilityAction(.escape) { settle(open: false, velocity: 0, width: width) }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
+            .onAppear { syncWidth(width) }
+            .onChange(of: width) { _, newWidth in syncWidth(newWidth) }
         }
-        .allowsHitTesting(router.menuOpen)
+        .allowsHitTesting(reveal > 1 || dragging)
     }
 
     // MARK: 左缘热区
@@ -101,16 +102,84 @@ struct MenuDrawer: View {
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 12)
+                DragGesture(minimumDistance: 8, coordinateSpace: .global)
                     .onChanged { value in
-                        guard !router.menuOpen,
-                              value.translation.width > 24,
-                              abs(value.translation.height) < value.translation.width
+                        let width = panelWidth
+                        guard !router.menuOpen else { return }
+                        guard value.translation.width > 0,
+                              abs(value.translation.width) > abs(value.translation.height)
                         else { return }
-                        router.openMenu()
+                        dragging = true
+                        reveal = JieboMotion.rubberBand(value.translation.width, limit: width, dimension: width)
+                    }
+                    .onEnded { value in
+                        let width = panelWidth
+                        let horizontal = value.translation.width > 0
+                            && abs(value.translation.width) > abs(value.translation.height)
+                        guard dragging || horizontal else { return }
+                        let current = dragging
+                            ? reveal
+                            : JieboMotion.rubberBand(value.translation.width, limit: width, dimension: width)
+                        let projected = current + JieboMotion.project(value.velocity.width)
+                        settle(open: projected > width * 0.4, velocity: value.velocity.width, width: width)
                     }
             )
             .accessibilityHidden(true)
+    }
+
+    private func closeDrag(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 16, coordinateSpace: .global)
+            .onChanged { value in
+                guard router.menuOpen || reveal > 1 else { return }
+                guard value.translation.width < 0,
+                      abs(value.translation.width) > abs(value.translation.height)
+                else { return }
+                dragging = true
+                reveal = JieboMotion.rubberBand(width + value.translation.width, limit: width, dimension: width)
+            }
+            .onEnded { value in
+                guard dragging else { return }
+                let projected = reveal + JieboMotion.project(value.velocity.width)
+                settle(open: projected > width * 0.5, velocity: value.velocity.width, width: width)
+            }
+    }
+
+    /// 点按开关走临界阻尼；手指松开走带速度的弹簧。
+    private func settle(open: Bool, velocity: CGFloat, width: CGFloat) {
+        let from = reveal
+        let to: CGFloat = open ? width : 0
+        let wasOpen = router.menuOpen
+        dragging = false
+        let animation = velocity == 0
+            ? JieboMotion.panel(reduceMotion)
+            : JieboMotion.release(reduceMotion, velocity: velocity, from: from, to: to)
+        withAnimation(animation) {
+            reveal = to
+            if open {
+                router.openMenu()
+            } else {
+                router.closeMenu()
+            }
+        }
+        if open, !wasOpen { focusFirstRow() }
+    }
+
+    private func syncWidth(_ width: CGFloat) {
+        guard abs(width - panelWidth) > 1 else { return }
+        let previous = panelWidth
+        panelWidth = width
+        guard !dragging, router.menuOpen, abs(reveal - previous) < 1 else { return }
+        reveal = width
+    }
+
+    private func focusFirstRow() {
+        JieboHaptic.selection()
+        Task { @MainActor in
+            // 等滑入走完再把焦点放上，否则会被动画吞掉
+            try? await Task.sleep(for: .milliseconds(450))
+            guard router.menuOpen else { return }
+            focusedRow = 0
+        }
     }
 
     // MARK: 面板内容

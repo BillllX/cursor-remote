@@ -355,32 +355,73 @@ enum JieboMeasure {
 }
 
 enum JieboMotion {
-    /// 快速反馈：淡入淡出、轻量状态变化。
-    static func quick(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeOut(duration: 0.16)
+    /// 减少动态效果时仍给一个很短的淡化，不把反馈直接切掉。
+    static func reduced() -> Animation {
+        .easeOut(duration: 0.12)
     }
 
-    /// 标准过渡：页面内常规状态切换。
-    static func standard(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .easeInOut(duration: 0.2)
+    /// 淡入淡出、轻量状态。点按，不过冲。
+    static func quick(_ reduceMotion: Bool) -> Animation {
+        reduceMotion ? reduced() : .smooth(duration: 0.16)
     }
 
-    /// 空间变化：面板、缩放等带位置或尺寸变化的过渡。
-    static func spatial(_ reduceMotion: Bool) -> Animation? {
-        reduceMotion ? nil : .spring(duration: 0.42, bounce: 0.05)
+    /// 页面内状态切换。点按，不过冲。
+    static func standard(_ reduceMotion: Bool) -> Animation {
+        reduceMotion ? reduced() : .smooth(duration: 0.28)
     }
 
-    static func panel(_ reduceMotion: Bool) -> Animation? {
-        spatial(reduceMotion)
+    /// 点按打开的面板和侧栏。临界阻尼，没有过冲。
+    static func panel(_ reduceMotion: Bool) -> Animation {
+        reduceMotion ? reduced() : .smooth(duration: 0.35)
     }
 
-    static func snappy(_ reduceMotion: Bool) -> Animation? {
-        // 统一约 120ms 量级手感；chevron/模式滑块共用
-        reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.18)
+    /// 带位移的过渡，和点按打开的面板同一套。
+    static func spatial(_ reduceMotion: Bool) -> Animation {
+        panel(reduceMotion)
     }
 
-    static func fade(_ reduceMotion: Bool) -> Animation? {
+    /// 点按的小反馈：发送和话筒切换、按下。不过冲。
+    static func snappy(_ reduceMotion: Bool) -> Animation {
+        reduceMotion ? reduced() : .smooth(duration: 0.22)
+    }
+
+    static func fade(_ reduceMotion: Bool) -> Animation {
         quick(reduceMotion)
+    }
+
+    /// 松手。速度和目标同向才过冲；减少动态效果时只做短移，不把甩出去的速度交进去。
+    static func release(_ reduceMotion: Bool, velocity: CGFloat, from: CGFloat, to: CGFloat) -> Animation {
+        guard !reduceMotion else { return reduced() }
+        let delta = to - from
+        let relative = abs(delta) < 0.5 ? 0 : Double(velocity / delta)
+        let clamped = min(max(relative, -8), 8)
+        return .interpolatingSpring(duration: 0.32, bounce: 0.2, initialVelocity: clamped)
+    }
+
+    /// 以 0.998 的衰减把松手速度投到静止点，单位是点。
+    static func project(_ velocity: CGFloat) -> CGFloat {
+        let deceleration = 0.998
+        return (velocity / 1000) * deceleration / (1 - deceleration)
+    }
+
+    /// 越过边界时阻力逐渐变大，不硬停。
+    static func rubberBand(_ offset: CGFloat, limit: CGFloat, dimension: CGFloat) -> CGFloat {
+        if offset < 0 { return -rubberDistance(-offset, dimension) }
+        if offset > limit { return limit + rubberDistance(offset - limit, dimension) }
+        return offset
+    }
+
+    private static func rubberDistance(_ distance: CGFloat, _ dimension: CGFloat) -> CGFloat {
+        let coefficient: CGFloat = 0.55
+        let span = max(dimension, 1)
+        return (1 - (1 / ((distance * coefficient / span) + 1))) * span
+    }
+}
+
+extension AnyTransition {
+    /// 大块面板：平常滑入，减少动态效果时只淡入淡出。
+    static func jieboPanel(from edge: Edge, reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity : .move(edge: edge)
     }
 }
 
@@ -411,7 +452,7 @@ struct PressScaleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.98 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.09), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.12), value: configuration.isPressed)
     }
 }
 

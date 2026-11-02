@@ -92,7 +92,7 @@ struct WorkbenchView: View {
                   UIDevice.current.userInterfaceIdiom == .pad,
                   sizeClass == .regular
             else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+            withAnimation(JieboMotion.panel(reduceMotion)) {
                 columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
             }
         }
@@ -105,17 +105,17 @@ struct WorkbenchView: View {
         HStack(spacing: 0) {
             // 图标栏一直挂着，只改宽度。收起时不必等分栏动画结束再创建，图标就不会晚一拍才出现。
             CollapsedSidebarRail(expand: {
-                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                withAnimation(JieboMotion.panel(reduceMotion)) {
                     columnVisibility = .all
                 }
             })
             .frame(width: columnVisibility == .detailOnly ? 56 : 0)
             .clipped()
             .allowsHitTesting(columnVisibility == .detailOnly)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: columnVisibility == .detailOnly)
+            .animation(JieboMotion.panel(reduceMotion), value: columnVisibility == .detailOnly)
             NavigationSplitView(columnVisibility: $columnVisibility) {
                 SidebarView(collapse: {
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                    withAnimation(JieboMotion.panel(reduceMotion)) {
                         columnVisibility = .detailOnly
                     }
                 })
@@ -158,7 +158,7 @@ struct WorkbenchView: View {
             PreviewPanelView(tab: tab, modal: previewFullscreen, canFullscreen: true)
                 .frame(maxWidth: previewFullscreen ? .infinity : previewColumnWidth, maxHeight: .infinity)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-                .transition(.move(edge: .trailing))
+                .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion))
         }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen && previewSplit)
@@ -189,7 +189,7 @@ struct WorkbenchView: View {
                     PreviewPanelView(tab: tab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.white)
-                        .transition(.move(edge: .trailing))
+                        .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion))
                         .zIndex(3)
                 }
             }
@@ -221,12 +221,12 @@ struct WorkbenchView: View {
                 try? await Task.sleep(for: .milliseconds(700))
             }
             // 收起/展开侧栏：触发分栏与图标栏宽度动画
-            withAnimation(.easeOut(duration: 0.22)) {
+            withAnimation(JieboMotion.panel(false)) {
                 // 通过 toggle 工具层 Loop 的选中底淡入（不打开文件浮层）
                 store.toggleTool(.loop)
             }
             try? await Task.sleep(for: .milliseconds(650))
-            withAnimation(.easeOut(duration: 0.22)) {
+            withAnimation(JieboMotion.panel(false)) {
                 if store.toolLayer == .loop { store.toggleTool(.loop) }
             }
             try? await Task.sleep(for: .milliseconds(500))

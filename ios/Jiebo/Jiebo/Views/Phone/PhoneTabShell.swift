@@ -27,6 +27,7 @@ struct PhoneTabShell: View {
             Tab("小驳", systemImage: NavigationIconId.assistant.symbol, value: PhoneTab.assistant) {
                 PhoneShell()
                     .environment(\.assistantVoicePresenterActive, router.selectedTab == .assistant)
+                    .tabBarMinimizeBehavior(.never)
             }
 
             Tab("待处理", systemImage: "tray", value: PhoneTab.inbox) {
@@ -77,7 +78,7 @@ struct PhoneTabShell: View {
                     PreviewPanelView(tab: tab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.white)
-                        .transition(.move(edge: .trailing))
+                        .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion))
                 }
                 .zIndex(3)
             }

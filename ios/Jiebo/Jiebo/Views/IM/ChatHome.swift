@@ -84,7 +84,7 @@ struct ChatHome: View {
                     PreviewPanelView(tab: tab)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.white)
-                        .transition(.move(edge: .trailing))
+                        .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion))
                         .zIndex(3)
                 }
             }

@@ -89,8 +89,8 @@ extension ComposerView {
                     .fixedSize(horizontal: true, vertical: false)
                 Text("·")
                 Text(ModelCatalog.label(for: chatModel))
-                    .lineLimit(4)
-                    .multilineTextAlignment(.leading)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(JieboFont.text(.caption2, weight: .semibold))
@@ -100,13 +100,11 @@ extension ComposerView {
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            // 浮在消息上时没有底，字会和正文叠在一起
-            .jieboGlass(in: Capsule())
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24))
             .contentShape(Capsule())
         }
         .menuOrder(.fixed)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, -4)
         .accessibilityLabel("模式 \(chatMode.label)，模型 \(ModelCatalog.label(for: chatModel))")
         .accessibilityHint("轻点切换")
     }

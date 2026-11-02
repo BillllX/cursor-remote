@@ -2,7 +2,6 @@ import SwiftUI
 
 struct LoginView: View {
     @Environment(ChatStore.self) private var store
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
 
     private var canEnter: Bool {
@@ -13,6 +12,16 @@ struct LoginView: View {
         @Bindable var store = store
         ZStack {
             JieboColor.paper.ignoresSafeArea()
+            Circle()
+                .fill(JieboColor.pine.opacity(0.22))
+                .frame(width: 280, height: 280)
+                .blur(radius: 40)
+                .offset(x: -120, y: -220)
+            Circle()
+                .fill(JieboColor.clay.opacity(0.18))
+                .frame(width: 240, height: 240)
+                .blur(radius: 36)
+                .offset(x: 140, y: 180)
             VStack(spacing: 0) {
                 Spacer()
                 VStack(alignment: .leading, spacing: 14) {
@@ -24,40 +33,31 @@ struct LoginView: View {
                     Text("小驳跟着你，远端替你动手。输入访问码进入。")
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
-                    SecureField("访问码", text: $store.tokenDraft)
-                        .textContentType(.password)
-                        .font(JieboFont.text(.body))
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(JieboColor.composer)
-                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                                .stroke(focused ? JieboColor.pine.opacity(0.45) : JieboColor.borderStrong, lineWidth: 1)
-                        )
-                        .animation(JieboMotion.fade(reduceMotion), value: focused)
-                        .focused($focused)
-                        .onSubmit { store.login() }
-                    if !store.authError.isEmpty {
-                        Text(friendlyError(store.authError))
-                            .font(JieboFont.text(.subheadline))
-                            .foregroundStyle(JieboColor.danger)
+                    GlassEffectContainer(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            SecureField("访问码", text: $store.tokenDraft)
+                                .textContentType(.password)
+                                .font(JieboFont.text(.body))
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 44)
+                                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
+                                .focused($focused)
+                                .onSubmit { store.login() }
+                            if !store.authError.isEmpty {
+                                Text(friendlyError(store.authError))
+                                    .font(JieboFont.text(.subheadline))
+                                    .foregroundStyle(JieboColor.danger)
+                            }
+                            Button(action: store.login) {
+                                Text(store.verifying ? "正在验证…" : "进入")
+                                    .font(JieboFont.text(.callout, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(minHeight: 44)
+                            }
+                            .buttonStyle(.glassProminent)
+                            .disabled(!canEnter)
+                        }
                     }
-                    Button(action: store.login) {
-                        Text(store.verifying ? "正在验证…" : "进入")
-                            .font(JieboFont.text(.callout, weight: .medium))
-                            .foregroundStyle(canEnter || store.verifying ? JieboColor.fillFg : JieboColor.ink2)
-                            .frame(maxWidth: .infinity)
-                            .frame(minHeight: 44)
-                            .background(canEnter || store.verifying ? JieboColor.pine : JieboColor.mist)
-                            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                                    .stroke(canEnter || store.verifying ? Color.clear : JieboColor.line, lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(PressScaleButtonStyle(enabled: canEnter))
-                    .disabled(!canEnter)
                     Text(store.connected ? "已连上服务器" : store.linkState.title)
                         .font(JieboFont.text(.caption, weight: store.linkState == .offline ? .medium : .regular))
                         .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
@@ -71,14 +71,6 @@ struct LoginView: View {
                 }
                 .padding(EdgeInsets(top: 32, leading: 28, bottom: 24, trailing: 28))
                 .frame(maxWidth: 380)
-                .background(JieboColor.white)
-                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
-                )
-                .shadow(color: Color(hex: 0x1C1916, alpha: 0.05), radius: 1, y: 1)
-                .shadow(color: Color(hex: 0x1C1916, alpha: 0.08), radius: 16, y: 12)
                 Spacer()
             }
             .padding(32)
