@@ -163,7 +163,14 @@ struct FileBrowserCover: View {
                 .padding(.top, 8)
             }
         }
-        .onAppear { store.requestFileIndex(userInitiated: true) }
+        .onAppear {
+            store.requestDirFiles(dir: "")
+        }
+        .onChange(of: filter) { _, next in
+            if !next.trimmingCharacters(in: .whitespaces).isEmpty && store.fileIndex.isEmpty {
+                store.requestFileIndex(userInitiated: true)
+            }
+        }
         // Quick Look 挂在 cover 自己身上——ThreadView 的 sheet 在 cover 背后，弹不出来
         // （ThreadView 侧已用绑定守卫在 cover 期间不抢 present，故这里无需 onDisappear 兜底清理——
         //   无条件清理反而会误杀进 cover 前已开的 QL，Grok R2 MINOR）
@@ -269,10 +276,13 @@ struct FileBrowserCover: View {
             Divider().overlay(JieboColor.line)
 
             FileTreeView(
-                paths: store.fileIndex,
+                paths: store.mergedFileTreePaths,
                 truncated: store.treeTruncated,
                 filter: filter,
                 selectedPath: sceneSession?.previewKey ?? store.previewActivePath,
+                loadingDirs: store.loadingDirsByChat[store.activeId] ?? [],
+                truncatedDirs: store.truncatedDirsByChat[store.activeId] ?? [],
+                onExpandDir: { store.requestDirFiles(dir: $0) },
                 onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,

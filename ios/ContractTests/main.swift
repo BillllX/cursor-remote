@@ -1601,12 +1601,21 @@ func checkBootstrapCacheAndAssistantSync() -> [String] {
     }
     if let decoded = try? ServerMessage.decode(from: Data(
         #"{"type":"files","chatId":"chat-a","query":"","paths":[],"error":"服务器正忙","reqId":"rq-files-1"}"#.utf8
-    )), case .files(_, _, _, _, let chatId, _, let reqId, let filesError) = decoded {
+    )), case .files(_, _, _, _, _, let chatId, _, let reqId, let filesError) = decoded {
         if chatId != "chat-a" || reqId != "rq-files-1" || filesError != "服务器正忙" {
             problems.append("list_files files.error：请求标识或错误文案没有原样解码")
         }
     } else {
         problems.append("list_files files.error：无法关联 tagged 请求")
+    }
+    if let decodedDir = try? ServerMessage.decode(from: Data(
+        #"{"type":"files","chatId":"chat-a","query":"","dir":"牌照","paths":["牌照/README.md"],"truncated":false}"#.utf8
+    )), case .files(_, let dir, let paths, _, _, _, _, _, _) = decodedDir {
+        if dir != "牌照" || paths != ["牌照/README.md"] {
+            problems.append("list_files dir：单层目录响应未原样解码")
+        }
+    } else {
+        problems.append("list_files dir：无法解码带 dir 的 files 消息")
     }
 
     var gate = AssistantSyncGate()

@@ -29,47 +29,59 @@ struct FileNode: Identifiable, Hashable {
 }
 
 enum FileTreeBuilder {
-    /// 对齐 web toTree：按 "/" 分层，中间层自动补目录节点。
+    /// 对齐 web toTree：按 "/" 分层，中间层自动补目录节点；末尾带 "/" 的项显式标记为目录节点。
     /// 实现用「按首段分组递归」（字典分组，O(n×深度)），比 web 的 level.find（O(n²)）便宜；
     /// 语义等价（真实文件系统不会出现「同名既是文件又是目录」的歧义）。
     static func toTree(_ paths: [String]) -> [FileNode] {
-        build(paths.prefix(8000).map { $0.split(separator: "/").map(String.init) }, prefix: "")
+        let items: [(parts: [String], explicitDir: Bool)] = paths.prefix(8000).map { raw in
+            let explicitDir = raw.hasSuffix("/")
+            let parts = raw.split(separator: "/").map(String.init)
+            return (parts, explicitDir)
+        }
+        return build(items, prefix: "")
     }
 
-    private static func build(_ partsList: [[String]], prefix: String) -> [FileNode] {
+    private static func build(_ items: [(parts: [String], explicitDir: Bool)], prefix: String) -> [FileNode] {
         var order: [String] = []
-        var groups: [String: [[String]]] = [:]
-        for parts in partsList {
-            guard let first = parts.first else { continue }
+        var groups: [String: [(parts: [String], explicitDir: Bool)]] = [:]
+        var isDirSet: Set<String> = []
+        for item in items {
+            guard let first = item.parts.first else { continue }
             if groups[first] == nil {
                 order.append(first)
                 groups[first] = []
             }
-            groups[first]?.append(Array(parts.dropFirst()))
+            let tail = Array(item.parts.dropFirst())
+            if !tail.isEmpty || item.explicitDir {
+                isDirSet.insert(first)
+            }
+            if !tail.isEmpty {
+                groups[first]?.append((tail, item.explicitDir))
+            }
         }
         return order.map { name in
             let path = prefix.isEmpty ? name : "\(prefix)/\(name)"
-            let rest = (groups[name] ?? []).filter { !$0.isEmpty }
-            if rest.isEmpty {
+            let rest = groups[name] ?? []
+            if rest.isEmpty && !isDirSet.contains(name) {
                 return FileNode(name: name, path: path, children: nil)
             }
             return FileNode(name: name, path: path, children: build(rest, prefix: path))
         }
     }
 
-    /// 展开行（对齐 web rows walk）：目录默认 depth<1 展开；openDirs 有显式值以显式为准
+    /// 展开行（对齐 web rows walk）：目录默认折叠（expandAll 时全展开）；openDirs 有显式值以显式为准
     struct Row: Identifiable {
         let node: FileNode
         let depth: Int
         var id: String { node.path }
     }
 
-    static func flatten(_ tree: [FileNode], openDirs: [String: Bool], expandAll: Bool) -> [Row] {
+    static func flatten(_ tree: [FileNode], openDirs: [String: Bool], expandAll: Bool, defaultOpenDepth0: Bool = false) -> [Row] {
         var rows: [Row] = []
         func walk(_ nodes: [FileNode], depth: Int) {
             for node in nodes {
                 rows.append(Row(node: node, depth: depth))
-                let opened = node.isDir && (expandAll || (openDirs[node.path] ?? (depth < 1)))
+                let opened = node.isDir && (expandAll || (openDirs[node.path] ?? (defaultOpenDepth0 && depth < 1)))
                 if opened, let children = node.children { walk(children, depth: depth + 1) }
             }
         }
@@ -115,6 +127,9 @@ struct FileTreeView: View {
     let filter: String
     /// 当前右栏预览中的路径（高亮选中行）
     let selectedPath: String?
+    var loadingDirs: Set<String> = []
+    var truncatedDirs: Set<String> = []
+    var onExpandDir: ((String) -> Void)? = nil
     let onOpen: (String) -> Void
     let onPick: (String) -> Void
     let onCopyPath: (String) -> Void
@@ -142,7 +157,7 @@ struct FileTreeView: View {
                         rowView(row)
                     }
                 }
-                if (truncated || paths.count > 8000) && filter.trimmingCharacters(in: .whitespaces).isEmpty {
+                if (truncated || truncatedDirs.contains("") || paths.count > 8000) && filter.trimmingCharacters(in: .whitespaces).isEmpty {
                     // 网关会报 truncated；客户端 toTree 还有 8000 硬顶，旧网关多发时也要提示。
                     // 搜索时隐藏——用户已经在「缩小范围」，再提示「用搜索缩小范围」自相矛盾（GLM R2 MINOR）
                     Text("文件太多，清单被截断了，用搜索缩小范围。")
@@ -171,7 +186,7 @@ struct FileTreeView: View {
     private func rebuild() {
         // 搜索对齐 web：substring 过滤 → 建树 → 全展开（不用 rankMentions——打分排序会打乱树序）
         let q = filter.trimmingCharacters(in: .whitespaces).lowercased()
-        let filtered = q.isEmpty ? paths : paths.filter { $0.lowercased().contains(q) }
+        let filtered = q.isEmpty ? paths : paths.filter { !$0.hasSuffix("/") && $0.lowercased().contains(q) }
         tree = FileTreeBuilder.toTree(filtered)
     }
 
@@ -180,10 +195,14 @@ struct FileTreeView: View {
     @ViewBuilder
     private func rowView(_ row: FileTreeBuilder.Row) -> some View {
         let node = row.node
-        let isOpen = node.isDir && (expandAll || (openDirs[node.path] ?? (row.depth < 1)))
+        let isOpen = node.isDir && (expandAll || (openDirs[node.path] ?? false))
+        let isLoading = node.isDir && isOpen && loadingDirs.contains(node.path) && (node.children?.isEmpty ?? true)
+        let isDirTruncated = node.isDir && isOpen && truncatedDirs.contains(node.path)
         Button {
             if node.isDir {
-                openDirs[node.path] = !isOpen
+                let willOpen = !isOpen
+                if willOpen { onExpandDir?(node.path) }
+                openDirs[node.path] = willOpen
             } else {
                 onOpen(node.path)
             }
@@ -239,6 +258,20 @@ struct FileTreeView: View {
                 Button { onCopyPath(node.path) } label: { Label("复制路径", systemImage: "doc.on.doc") }
                 Button { onQuickLook(node.path) } label: { Label("用系统打开", systemImage: "arrow.up.forward.app") }
             }
+        }
+        if isLoading {
+            Text("正在加载…")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .padding(.leading, 14 + CGFloat(row.depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+                .padding(.vertical, 6)
+        }
+        if isDirTruncated {
+            Text("此目录文件较多，仅显示前 1000 项，请用搜索缩小范围。")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+                .padding(.leading, 14 + CGFloat(row.depth + 1) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+                .padding(.vertical, 6)
         }
     }
 

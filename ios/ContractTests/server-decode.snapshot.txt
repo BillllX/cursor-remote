@@ -205,6 +205,7 @@
 ## server[20] files #1
 .files(
   query: "login"
+  dir: nil
   paths: [
     "src/login.ts"
     "src/login.test.ts"
@@ -223,6 +224,7 @@
 ## server[21] files #2
 .files(
   query: ""
+  dir: nil
   paths: []
   mention: false
   truncated: false

@@ -814,10 +814,23 @@ extension ChatStore {
             if tab.error == nil && !tab.external && !tab.diff && tab.content == nil && tab.mediaURL != nil && !tab.kind.needsMediaURL {
                 hydratePreviewText(path: tab.path)
             }
-        case .files(let query, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError):
+        case .files(let query, let dir, let paths, let mention, let truncated, let filesChatId, let status, let reqId, let filesError):
             // 工作台和聊天主页各有明确线程；只接收其中一个正在显示的请求。
             let responseChatId = filesChatId?.nilIfEmpty ?? activeId
-            if mention {
+            if let dir {
+                if let filesError, !filesError.isEmpty {
+                    loadingDirsByChat[responseChatId]?.remove(dir)
+                    flash(friendlyError(filesError))
+                    break
+                }
+                receiveDirFiles(
+                    chatId: responseChatId,
+                    dir: dir,
+                    paths: paths,
+                    truncated: truncated,
+                    status: status
+                )
+            } else if mention {
                 guard responseChatId == mentionRequestChatId else { break }
                 // 过期查询的结果直接丢（对齐网页端 query 比对）
                 guard query == mentionQuery else { break }

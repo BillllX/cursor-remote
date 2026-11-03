@@ -383,6 +383,11 @@ final class ChatStore {
     @ObservationIgnored var fileIndexBroadcastAt: [String: Date] = [:]
     @ObservationIgnored var fileIndexFallbackTasks: [String: Task<Void, Never>] = [:]
     var treeTruncated = false
+    /// 按需逐层懒加载的文件目录缓存（chatId -> (dir -> paths)）
+    var dirEntriesByChat: [String: [String: [String]]] = [:]
+    var loadingDirsByChat: [String: Set<String>] = [:]
+    var truncatedDirsByChat: [String: Set<String>] = [:]
+    @ObservationIgnored var loadedDirsByChat: [String: Set<String>] = [:]
     /// @补全候选（mention 模式 list_files 的结果）
     var mentionSuggestions: [String] = []
     var mentionRequestChatId: String?

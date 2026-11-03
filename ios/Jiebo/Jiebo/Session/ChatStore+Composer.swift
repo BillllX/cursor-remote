@@ -88,9 +88,9 @@ extension ChatStore {
 
     /// 文件列表还是空的时候，说明是还没读到，而不是这个文件夹没有文件。已经读到并且为空时返回 nil。
     var fileIndexEmptyTitle: String? {
-        guard fileIndex.isEmpty else { return nil }
+        guard mergedFileTreePaths.isEmpty else { return nil }
         let chatId = fileIndexRequestChatId ?? activeId
-        if fileIndexInFlight[chatId] != nil { return "正在读取文件列表…" }
+        if fileIndexInFlight[chatId] != nil || !(loadingDirsByChat[chatId]?.isEmpty ?? true) { return "正在读取文件列表…" }
         guard unlocked else { return "还没登录。登录后再看文件列表。" }
         guard client.isOpen else {
             return linkState == .offline
@@ -100,6 +100,54 @@ extension ChatStore {
         guard gatewayReady else { return "正在打开，稍后再看文件列表。" }
         if fileIndexUpdatedAt[chatId] == nil { return "文件列表还没读到。" }
         return nil
+    }
+
+    /// 合并单层按需懒加载结果与全量索引（按需懒加载项排在最前，防止 >8000 条工作区被 toTree 截断）
+    var mergedFileTreePaths: [String] {
+        let targetId = fileIndexRequestChatId ?? activeId
+        let dirMap = dirEntriesByChat[targetId] ?? [:]
+        if dirMap.isEmpty { return fileIndex }
+        var seen = Set<String>()
+        var out: [String] = []
+        for key in dirMap.keys.sorted() {
+            for p in dirMap[key] ?? [] where seen.insert(p).inserted {
+                out.append(p)
+            }
+        }
+        for p in fileIndex where seen.insert(p).inserted {
+            out.append(p)
+        }
+        return out
+    }
+
+    /// 请求单层目录（dir == "" 为工作区根目录），用于文件浏览器逐层按需展开
+    func requestDirFiles(dir: String, chatId: String? = nil, force: Bool = false) {
+        let targetId = chatId ?? activeId
+        guard connected, unlocked, gatewayReady else { return }
+        if !force, loadedDirsByChat[targetId]?.contains(dir) == true { return }
+        loadingDirsByChat[targetId, default: []].insert(dir)
+        send(.listFiles(query: "", dir: dir, chatId: targetId, mention: nil, reqId: UUID().uuidString))
+    }
+
+    func receiveDirFiles(
+        chatId: String,
+        dir: String,
+        paths: [String],
+        truncated: Bool,
+        status: [String: String]
+    ) {
+        guard !deletedIds.contains(chatId) else { return }
+        loadedDirsByChat[chatId, default: []].insert(dir)
+        loadingDirsByChat[chatId]?.remove(dir)
+        dirEntriesByChat[chatId, default: [:]][dir] = paths
+        if truncated {
+            truncatedDirsByChat[chatId, default: []].insert(dir)
+        } else {
+            truncatedDirsByChat[chatId]?.remove(dir)
+        }
+        if !status.isEmpty, chatId == activeId || chatId == chatHomeThreadChatId {
+            for (k, v) in status { gitStatus[k] = v }
+        }
     }
 
     /// 拉当前会话工作区的文件索引（@补全的本地底数据 + 文件清单 sheet）

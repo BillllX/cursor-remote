@@ -411,7 +411,7 @@ enum ClientMessage {
     case approvalReply(chatId: String, callId: String, allow: Bool)
     case setPolicy(policy: String, chatId: String?)
     case uploadFile(chatId: String, name: String, data: String, mimeType: String?, id: String?)
-    case listFiles(query: String?, chatId: String?, mention: Bool?, reqId: String?)
+    case listFiles(query: String?, dir: String? = nil, chatId: String?, mention: Bool?, reqId: String?)
     case searchText(query: String, chatId: String?)
     case revertFile(chatId: String, path: String)
     case listCheckpoints(chatId: String)
@@ -576,9 +576,10 @@ enum ClientMessage {
             if let mimeType { object["mimeType"] = .string(mimeType) }
             if let id { object["id"] = .string(id) }
             return .object(object)
-        case .listFiles(let query, let chatId, let mention, let reqId):
+        case .listFiles(let query, let dir, let chatId, let mention, let reqId):
             var object: [String: JSONValue] = ["type": .string("list_files")]
             if let query { object["query"] = .string(query) }
+            if let dir { object["dir"] = .string(dir) }
             if let chatId { object["chatId"] = .string(chatId) }
             if let mention { object["mention"] = .bool(mention) }
             if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
@@ -1487,6 +1488,7 @@ enum ServerMessage {
     case fileWritten(path: String, chatId: String?, error: String?)
     case files(
         query: String,
+        dir: String? = nil,
         paths: [String],
         mention: Bool,
         truncated: Bool,
@@ -1558,7 +1560,7 @@ enum ServerMessage {
             return chatId
         case .fileUploaded(_, let chatId, _, _, _, _):
             return chatId
-        case .files(_, _, _, _, let chatId, _, _, _):
+        case .files(_, _, _, _, _, let chatId, _, _, _):
             return chatId
         case .fileContent(_, let chatId, _, _, _, _, _, _, _, _, _, _, _):
             return chatId
@@ -1824,6 +1826,7 @@ enum ServerMessage {
             // 网关附带 git status（M/A/D/U/R），全量清单时写入 gitStatus
             return .files(
                 query: object["query"]?.string ?? "",
+                dir: object["dir"]?.string,
                 paths: object["paths"]?.array?.compactMap(\.string) ?? [],
                 mention: object["mention"]?.bool ?? false,
                 truncated: object["truncated"]?.bool ?? false,
