@@ -172,7 +172,8 @@ try {
   const ctxAfter = wm.workspaceContext(tenant, resolve(root, "proj", "app"));
   check(ctxAfter.includes("依赖统一用 pnpm 装") && ctxAfter.includes("app 的入口在 src/main.ts"), "注入：之后的会话读到工作区记忆");
   rmSync(resolve(root, "proj", "app", "src", "main.ts"));
-  check(wm.workspaceContext(tenant, resolve(root, "proj", "app")).includes("待核实"), "注入：引用的文件没了标待核实");
+  check(!wm.workspaceContext(tenant, resolve(root, "proj", "app")).includes("app 的入口在 src/main.ts"), "注入：引用的文件对不上就退出这一轮");
+  check(readFileSync(resolve(root, "proj", "app", ".jiebo/memory.md"), "utf8").includes("src/main.ts"), "注入：对不上的引用留在文件里，还能查");
 
   // 人手加的行和顺序保留
   write(resolve(root, "proj", ".jiebo/memory.md"), `${projFile.trim()}\n- 人手加的一条\n`);

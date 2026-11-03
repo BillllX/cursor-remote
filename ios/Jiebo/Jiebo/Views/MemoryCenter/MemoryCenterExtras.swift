@@ -60,6 +60,9 @@ struct MemoryCenterSuggestionsPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Text("重复、日期和搬家后的文件，用「梳理一遍」处理。这里的卡片可以不点。")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
             if confirmBulk {
                 Button("返回") { confirmBulk = false }
                     .font(JieboFont.text(.subheadline))

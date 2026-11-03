@@ -27,6 +27,8 @@ struct TurnView: View, Equatable {
     @State private var shareItem: ShareItem?
     @State private var viewerItem: AttachmentViewerItem?
     private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
+    private var assistantText: String { ReplyText.repair(turn.assistant) }
+    private var thinkingText: String { ReplyText.repair(turn.thinking) }
 
     static func == (lhs: TurnView, rhs: TurnView) -> Bool {
         lhs.turn == rhs.turn && lhs.canAnswer == rhs.canAnswer
@@ -38,7 +40,7 @@ struct TurnView: View, Equatable {
     }
 
     private var thinkingShimmerActive: Bool {
-        turn.running && turn.assistant.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
+        turn.running && assistantText.isEmpty && turn.tools.isEmpty && turn.task?.nilIfEmpty == nil
     }
     private func turnThumb(_ image: PromptImage, index: Int, total: Int) -> some View {
         let base64 = image.data
@@ -78,7 +80,7 @@ struct TurnView: View, Equatable {
     }
 
     private var userFailed: Bool {
-        !turn.running && !turn.queued && turn.error?.nilIfEmpty != nil && turn.assistant.isEmpty
+        !turn.running && !turn.queued && turn.error?.nilIfEmpty != nil && assistantText.isEmpty
     }
 
     private var turnMeta: String? {
@@ -163,7 +165,7 @@ struct TurnView: View, Equatable {
             if turn.deferred {
                 deferredCard
             }
-            if !turn.deferred, !turn.thinking.isEmpty {
+            if !turn.deferred, !thinkingText.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     Button {
                         withAnimation(JieboMotion.snappy(reduceMotion)) {
@@ -194,7 +196,7 @@ struct TurnView: View, Equatable {
                     .accessibilityValue(thinkingOpen ? "已展开" : "已收起")
                     .accessibilityHint(thinkingOpen ? "轻点两下收起" : "轻点两下展开")
                     if thinkingOpen {
-                        Text(turn.thinking)
+                        Text(thinkingText)
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -230,12 +232,12 @@ struct TurnView: View, Equatable {
                     ToolCardView(tool: tool, showBorder: false)
                 }
             }
-            if !turn.deferred, !turn.assistant.isEmpty {
+            if !turn.deferred, !assistantText.isEmpty {
                 HStack(alignment: .top, spacing: embedded ? 0 : 12) {
                     if !embedded { BotAvatar() }
                     VStack(alignment: .leading, spacing: 6) {
                         StreamingAssistantText(
-                            text: turn.assistant,
+                            text: assistantText,
                             live: turn.running,
                             transform: linkMentions
                         )
@@ -247,11 +249,11 @@ struct TurnView: View, Equatable {
                         }
                     }
                     .contextMenu {
-                        if !turn.assistant.isEmpty {
-                            Button { copy(turn.assistant) } label: { Label("复制", systemImage: "doc.on.doc") }
+                        if !assistantText.isEmpty {
+                            Button { copy(assistantText) } label: { Label("复制", systemImage: "doc.on.doc") }
                             Button { store.retryTurn(turn.id, chatId: chatId) } label: { Label("重新生成", systemImage: "arrow.clockwise") }
                             // 菜单收起后 ShareLink 的宿主会被销毁：改成先记下、再由本视图弹分享面板
-                            Button { shareItem = ShareItem(text: turn.assistant) } label: {
+                            Button { shareItem = ShareItem(text: assistantText) } label: {
                                 Label("分享", systemImage: "square.and.arrow.up")
                             }
                         }
@@ -262,7 +264,7 @@ struct TurnView: View, Equatable {
                     }
                 }
             }
-            if turn.running, turn.assistant.isEmpty {
+            if turn.running, assistantText.isEmpty {
                 if let task = turn.task?.nilIfEmpty {
                     Text(task)
                         .font(JieboFont.text(.subheadline))
@@ -503,6 +505,34 @@ struct TurnView: View, Equatable {
             of: #"^(readme|license|makefile|dockerfile|changelog|gemfile|procfile|jenkinsfile)(\.[a-z0-9]+)?$"#,
             options: [.regularExpression, .caseInsensitive]
         ) != nil
+    }
+}
+
+enum ReplyText {
+    /// 只删紧挨在汉字前面的「점」。单独一段先留着，拼上下一段再判断。
+    static func repair(_ text: String) -> String {
+        guard text.contains("점") else { return text }
+        let chars = Array(text)
+        var index = 0
+        var out = ""
+        while index < chars.count {
+            if chars[index] == "점" {
+                let start = index
+                while index < chars.count, chars[index] == "점" { index += 1 }
+                if Self.han(index < chars.count ? chars[index] : nil) { continue }
+                out.append(contentsOf: chars[start..<index])
+                continue
+            }
+            out.append(chars[index])
+            index += 1
+        }
+        return out
+    }
+
+    private static func han(_ char: Character?) -> Bool {
+        guard let char, let scalar = char.unicodeScalars.first, char.unicodeScalars.count == 1 else { return false }
+        let value = scalar.value
+        return (value >= 0x4E00 && value <= 0x9FFF) || (value >= 0x3400 && value <= 0x4DBF)
     }
 }
 

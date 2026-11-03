@@ -7,9 +7,15 @@ import { slotByChat } from "../runtime/slots.ts";
 import { gatewayState } from "../runtime/state.ts";
 import type { Slot } from "../runtime/types.ts";
 import { notifyWorkspaceAgentAttention } from "../workspace/agentNotifications.ts";
+import { repairReplyText } from "../../../shared/replyText.ts";
 import { frameFor, reply } from "./frame.ts";
 
 export function send(ws: WebSocket, message: ServerMessage) {
+  if (message.type === "text-delta" || message.type === "thinking-delta") {
+    const text = repairReplyText(message.text);
+    if (!text) return;
+    if (text !== message.text) message = { ...message, text };
+  }
   const chatId = "chatId" in message && typeof message.chatId === "string" ? message.chatId : "";
   const tenantId = gatewayState.wsTenant.get(ws);
   const slot = chatId && tenantId ? slotByChat(tenantId, chatId) : undefined;

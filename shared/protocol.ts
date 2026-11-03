@@ -102,6 +102,8 @@ export type AssistantMemoryEntry = {
   invalidAt?: string | null;
   invalidReason?: string;
   supplements?: string[];
+  /** 这一轮对话会不会带上。旧网关不带这个字段。 */
+  resident?: boolean;
 };
 
 /** 统一记忆中心：条目种类 */
@@ -120,7 +122,7 @@ export type MemoryCenterState =
   | "待核实";
 
 export type MemoryInjectionReason = "pinned" | "section_anchor" | "relevant" | "rotation";
-export type MemoryInjectionSkipReason = "budget" | "cold_unrelated" | "terminal";
+export type MemoryInjectionSkipReason = "budget" | "cold_unrelated" | "terminal" | "missing_ref";
 
 export type WorkspaceMemoryItem = {
   id: string | null;
@@ -430,6 +432,19 @@ export type MemoryCenterSuggestionAnswerData = {
   detail?: string;
 };
 
+export type MemoryTidyData = {
+  expired: number;
+  supplements: number;
+  preferences: number;
+  files: number;
+  dropped: number;
+  dated: number;
+  refs: number;
+  cooled: number;
+  changed: boolean;
+  note: string;
+};
+
 export type MemoryCenterSuggestionAnswerErrorCode =
   | "invalid_scope"
   | "not_found"
@@ -477,6 +492,7 @@ export type AssistantOpResultMap = {
   memory_center_import_preview: import("./memoryCenterImportTypes.ts").MemoryCenterImportPreviewData;
   memory_center_import_apply: import("./memoryCenterImportTypes.ts").MemoryCenterImportApplyData;
   memory_center_import_rollback: import("./memoryCenterImportTypes.ts").MemoryCenterImportRollbackData;
+  memory_tidy: MemoryTidyData;
 };
 
 type AssistantResultBranchForOp<K extends AssistantOp> = K extends "memory_center_mutate"
@@ -730,6 +746,8 @@ export type AssistantOp =
   | "memory_core"
   | "memory_settings"
   | "memory_export"
+  /** 马上走一遍记忆整理，不调模型 */
+  | "memory_tidy"
   /** args: { scope?: string }；无 scope 为总览+作用域树，有 scope 为该层详情（只读） */
   | "memory_center_get"
   /** args: { query, scope?, kind?, state? }；跨个人/W0/工作区只读搜索，不续期 used */
@@ -769,7 +787,7 @@ export type MemoryCenterSuggestionAnswerResultBranch = Extract<
 export type AssistantOpLegacy = Exclude<AssistantOp, AssistantOpTyped>;
 
 /** 网关不依赖 args 字段即可执行的 op；ClientMessage 可省略 args。 */
-export type AssistantOpNoArgs = "memory_export" | "push_test";
+export type AssistantOpNoArgs = "memory_export" | "memory_tidy" | "push_test";
 
 type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "memory_center_search"

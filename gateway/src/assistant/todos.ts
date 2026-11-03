@@ -1,3 +1,4 @@
+import { closeMatchingPlans, reopenMatchingPlans } from "./memory.ts";
 import { assistantPath, clip, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 
 export type Todo = {
@@ -123,6 +124,8 @@ export function setTodoDone(ref: TenantRef, id: string, done = true) {
   todo.done = done;
   todo.doneAt = done ? Date.now() : undefined;
   writeJson(file(ref), data);
+  if (done) closeMatchingPlans(ref, todo.text, todo.due);
+  else reopenMatchingPlans(ref, todo.text, todo.due);
   return { ok: true as const, value: todo };
 }
 

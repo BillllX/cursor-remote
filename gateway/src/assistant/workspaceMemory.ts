@@ -229,6 +229,199 @@ function daysBefore(day: string, days: number) {
   return at.toISOString().slice(0, 10);
 }
 
+const TIDY_SKIP_DIR = new Set(["node_modules", ".git", "dist", "memory-migrate-backup"]);
+
+function collectMemoryDirs(root: string) {
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (depth > 6 || out.length > 80) return;
+    let names: string[] = [];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (TIDY_SKIP_DIR.has(name) || name.includes("memory-migrate-backup")) continue;
+      const abs = resolve(dir, name);
+      let isDirectory = false;
+      try {
+        isDirectory = statSync(abs).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDirectory) continue;
+      if (name === ".jiebo" && existsSync(resolve(abs, "memory.md"))) out.push(dirname(abs));
+      else if (!name.startsWith(".")) walk(abs, depth + 1);
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
+function ensureLineMeta(raw: string, key: string, value: string) {
+  const comment = /<!--([\s\S]*?)-->(\s*)$/.exec(raw);
+  if (!comment || comment.index === undefined) {
+    const trimmed = raw.replace(/\s*$/, "");
+    return `${trimmed} <!-- ${key}=${value} -->`;
+  }
+  const inner = setMetaValue(comment[1], key, value);
+  return `${raw.slice(0, comment.index)}<!--${inner}-->${comment[2]}`;
+}
+
+function uniqueMovedRef(dir: string, ref: string) {
+  if (!ref || ref.includes("..") || existsSync(resolve(dir, ref))) return null;
+  const baseName = ref.split("/").pop() ?? "";
+  if (!baseName || baseName.length < 3) return null;
+  const hits: string[] = [];
+  const walk = (folder: string, depth: number) => {
+    if (depth > 8 || hits.length > 1) return;
+    let names: string[] = [];
+    try {
+      names = readdirSync(folder);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (TIDY_SKIP_DIR.has(name)) continue;
+      const abs = resolve(folder, name);
+      let info;
+      try {
+        info = statSync(abs);
+      } catch {
+        continue;
+      }
+      if (info.isDirectory()) {
+        if (!name.startsWith(".")) walk(abs, depth + 1);
+        continue;
+      }
+      if (name === baseName) hits.push(abs);
+      if (hits.length > 1) return;
+    }
+  };
+  walk(dir, 0);
+  if (hits.length !== 1) return null;
+  return posix(relative(dir, hits[0]));
+}
+
+export type WorkspaceTidyStats = { files: number; dropped: number; dated: number; refs: number; cooled: number; changed: boolean };
+
+/** 凌晨整理文件夹记忆：去掉同一极性的重复句，给没写日期的行补上今天（满 90 天没用才变冷），引用只找到一处新位置就改路径，预算太满时把最少用到的未钉住条目标冷。不改句子本身。 */
+export function tidyWorkspaceMemories(workspaceRoot: string, day = today()): WorkspaceTidyStats {
+  const stats: WorkspaceTidyStats = { files: 0, dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
+  let root: string;
+  try {
+    root = realpathSync(workspaceRoot);
+  } catch {
+    return stats;
+  }
+  const datedAt = day;
+  for (const dir of collectMemoryDirs(root)) {
+    let paths: SafeMemoryPaths;
+    try {
+      paths = safeMemoryPaths(dir, root);
+    } catch {
+      continue;
+    }
+    const one = withFileLockSync(paths.lockTarget, () => {
+      let original = "";
+      try {
+        original = readFileSync(paths.memory, "utf8");
+      } catch {
+        return { dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
+      }
+      if (!original.trim()) return { dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
+      const kept: { text: string; id?: string }[] = [];
+      let dropped = 0;
+      let dated = 0;
+      let refs = 0;
+      const next = original.split("\n").flatMap((rawLine) => {
+        const raw = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+        if (!/^\s*[-*]\s+/.test(raw)) return [rawLine];
+        const parsed = parseMemoryFile(`## 约定\n${raw}`)[0];
+        if (!parsed) return [rawLine];
+        const match = findMemoryMatch(parsed.text, kept);
+        const exact = match?.matchKind === "normalized_exact";
+        const machineDup = Boolean(match && parsed.id && match.matchedId);
+        if (exact || machineDup) {
+          dropped += 1;
+          return [];
+        }
+        kept.push({ text: parsed.text, id: parsed.id });
+        let line = raw;
+        if (!parsed.at && !parsed.used && !parsed.pinned) {
+          line = ensureLineMeta(line, "at", datedAt);
+          dated += 1;
+        }
+        if (parsed.refs.length) {
+          const fixed = parsed.refs.map((ref) => uniqueMovedRef(dir, ref) ?? ref);
+          if (fixed.join(",") !== parsed.refs.join(",")) {
+            line = ensureLineMeta(line, "refs", fixed.join(","));
+            refs += 1;
+          }
+        }
+        return [line === raw ? rawLine : line];
+      });
+      const text = next.join("\n");
+      const edited = text !== original;
+      if (edited) writeTextAtomic(paths.memory, text);
+      const cooled = relieveBudget(dir, root, paths.memory);
+      return { dropped: edited ? dropped : 0, dated: edited ? dated : 0, refs: edited ? refs : 0, cooled, changed: edited || cooled > 0 };
+    });
+    stats.files += 1;
+    stats.dropped += one.dropped;
+    stats.dated += one.dated;
+    stats.refs += one.refs;
+    stats.cooled += one.cooled;
+    if (one.changed) stats.changed = true;
+  }
+  return stats;
+}
+
+/** 常驻预算用到八成以上时，把最少用到、又没钉住的热条目标成 cold。句子不动，相关时仍会被召回。 */
+function relieveBudget(dir: string, root: string, memoryPath: string) {
+  const plan = planMemoryInjection(dir, LAYER_TOKEN_BUDGET.workspace, "", root);
+  if (!plan) return 0;
+  const budget = LAYER_TOKEN_BUDGET.workspace;
+  let used = plan.selected.reduce((sum, row) => sum + row.cost, 0);
+  const limit = budget * 0.8;
+  if (used < limit) return 0;
+  const victims = [...plan.selected]
+    .filter((row) => !row.line.pinned && row.effectiveState === "hot")
+    .sort((a, b) => (a.line.uses ?? 0) - (b.line.uses ?? 0) || (a.line.at ?? "").localeCompare(b.line.at ?? ""));
+  const ids = new Set<string>();
+  const texts = new Set<string>();
+  for (const row of victims) {
+    if (used < limit || ids.size + texts.size >= 5) break;
+    if (row.line.id) ids.add(row.line.id);
+    else texts.add(row.line.text);
+    used -= row.cost;
+  }
+  if (!ids.size && !texts.size) return 0;
+  let original = "";
+  try {
+    original = readFileSync(memoryPath, "utf8");
+  } catch {
+    return 0;
+  }
+  const usedText = new Set<string>();
+  const next = original.split("\n").map((rawLine) => {
+    const raw = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const parsed = parseMemoryFile(`## 约定\n${raw}`)[0];
+    if (!parsed || parsed.pinned) return rawLine;
+    const hit = (parsed.id && ids.has(parsed.id)) || (!parsed.id && texts.has(parsed.text) && !usedText.has(parsed.text));
+    if (!hit) return rawLine;
+    if (!parsed.id) usedText.add(parsed.text);
+    const line = ensureLineMeta(raw, "state", "cold");
+    if (line === raw) return rawLine;
+    return rawLine.endsWith("\r") ? `${line}\r` : line;
+  });
+  const text = next.join("\n");
+  if (text === original) return 0;
+  writeTextAtomic(memoryPath, text);
+  return ids.size + texts.size;
+}
+
 /** 不改文件的统一生命周期视图；无日期的人工旧条目保持 hot。 */
 export function effectiveMemoryState(line: MemoryLine, day = today()): EffectiveMemoryState {
   if (line.state === "done") return "done";
@@ -532,6 +725,7 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
   const lines = parseMemoryFile(readText(paths.memory));
   if (!lines.length) return null;
   const terms = memoryInjectionTerms(query);
+  const missingRef = (line: MemoryLine) => line.refs.some((ref) => !existsSync(resolve(dir, ref)));
   const ranked: RankedMemoryLine[] = lines.map((line, index) => {
     const missing = line.refs.filter((ref) => !existsSync(resolve(dir, ref)));
     const text = `- ${line.text}${missing.length ? `（待核实：引用的 ${missing.join("、")} 不在了）` : ""}`;
@@ -547,7 +741,9 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
       cost: estimateTokens(text),
     };
   });
-  const resident = ranked.filter((row) => row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible));
+  const resident = ranked.filter(
+    (row) => !missingRef(row.line) && (row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible)),
+  );
   const pinned = resident.filter((row) => row.line.pinned).sort(newerFirst);
   const sectionOrder = [...new Set(lines.map((line) => line.section))];
   const anchoredSections = new Set(pinned.map((row) => row.line.section));
@@ -590,6 +786,10 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
   for (const row of ranked) {
     if (row.effectiveState === "done" || row.effectiveState === "expired") {
       allSkippedReasons.push({ id: row.line.id ?? null, reason: "terminal" });
+      continue;
+    }
+    if (missingRef(row.line)) {
+      allSkippedReasons.push({ id: row.line.id ?? null, reason: "missing_ref" });
       continue;
     }
     if (row.effectiveState === "cold" && !row.coldEligible) {

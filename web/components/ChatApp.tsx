@@ -26,6 +26,7 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
+import { repairReplyText } from "@shared/replyText";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -1123,7 +1124,8 @@ export default function ChatApp() {
             message.op !== "memory_center_export" &&
             message.op !== "memory_center_import_preview" &&
             message.op !== "memory_center_import_apply" &&
-            message.op !== "memory_center_import_rollback"
+            message.op !== "memory_center_import_rollback" &&
+            message.op !== "memory_tidy"
           ) {
             setNotice(message.error);
           }
@@ -4213,7 +4215,7 @@ export default function ChatApp() {
     modeRef.current = "agent";
     persistMode("agent");
     setNotice("按计划开始执行");
-    const text = `请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n${turn.assistant.slice(0, 4000)}`;
+    const text = `请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n${repairReplyText(turn.assistant).slice(0, 4000)}`;
     const next: Turn = {
       id: uid(),
       user: "执行这个计划",

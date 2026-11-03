@@ -1,3 +1,4 @@
+import { repairReplyText } from "../../shared/replyText.ts";
 import type { AgentMode, HistoryTurn, ServerMessage, TurnFile } from "../../shared/protocol.ts";
 
 export type RunTool = NonNullable<HistoryTurn["tools"]>[number];
@@ -100,10 +101,10 @@ export function turnIdOf(turn: unknown) {
 export function applyStreamEvent(transcript: RunTranscript, message: ServerMessage) {
   switch (message.type) {
     case "text-delta":
-      transcript.assistant += message.text || "";
+      transcript.assistant = repairReplyText(transcript.assistant + (message.text || ""));
       break;
     case "thinking-delta":
-      transcript.thinking += message.text || "";
+      transcript.thinking = repairReplyText(transcript.thinking + (message.text || ""));
       break;
     case "tool-started": {
       const index = transcript.tools.findIndex((item) => item.callId === message.callId);

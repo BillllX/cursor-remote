@@ -16,7 +16,7 @@ import { dropChatFromIndex, indexTurn, scrubChatIndex } from "./chatIndex.ts";
 import { describeLocal } from "./cron.ts";
 import { listApprovals, recoverApprovals, type PendingApproval } from "./approvals.ts";
 import { listDelegations, recoverDelegations, type Delegation } from "./delegations.ts";
-import { executeSchedule, latestBrief, runEpisodes, runIntegrator, runMaintenance, type JobRunner } from "./jobs.ts";
+import { executeSchedule, latestBrief, runEpisodes, runIntegrator, runMaintenance, tidyMemoriesNow, type JobRunner } from "./jobs.ts";
 import { listInbox, markInboxRead, onInbox, postInbox, PUSH_KINDS } from "./inbox.ts";
 import {
   CORE_FIELDS,
@@ -30,11 +30,13 @@ import {
   purgeMemory,
   readCore,
   readSettings,
+  projectSection,
   renderMemoryBlock,
   restoreMemory,
   saveMemory,
   sensitiveLabels,
   setCore,
+  turnIndexIds,
   writeSettings,
   type CoreField,
   type MemoryEntry,
@@ -176,6 +178,15 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
         : undefined,
     delegationStatus: (id) => delegationStatusText(ref, id),
     workspaces: () => deps?.workspaces(tenant) ?? [],
+    placeProjectFact: (workspace, text) => {
+      const cwd = resolve(tenant.workspaceRoot, workspace);
+      const result = proposeWorkspaceMemory(
+        tenant,
+        { chatId: chatId || "memory", cwd, section: projectSection(text), text },
+        { confirm: false },
+      );
+      return result.ok ? { ok: true as const } : { ok: false as const, error: result.error || "没有写进这个文件夹。" };
+    },
     workspaceMemory: role === "chat" ? (workspace, query) => readWorkspaceMemory(tenant, workspace, query) : undefined,
     deviceInvoke:
       role === "chat" && deps?.deviceInvoke
@@ -313,7 +324,7 @@ export function userRootPreamble(tenant: AssistantTenant) {
     "用户让你在某个项目里干活时，不要自己改文件：用 delegate 交给对应的子工作区，并用 delegation_status 跟进。同一个工作区一次只能有一项委派。",
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
     "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
-    "用户说“记住…”时调用 memory_save（basis=user_said）。用户说“提醒我…”时用 schedule_set 或带时间的 todo_add。",
+    "用户说“记住…”时调用 memory_save（basis=user_said）。还没到的安排、以及只属于某一个项目文件夹的命令和路径，不要 memory_save。用户说“提醒我…”时用 schedule_set 或带时间的 todo_add。",
     [
       "对话里出现能落到确切日期的、用户自己要做的事（“下周三交报告”“明天下午三点和老王开会”），不用问，直接 todo_add：text 写成一句话的事，due 按用户消息开头那行的时间和时区换算成具体日期（有钟点就写带时区偏移的时间），quote 填用户原话。",
       "记下后在回复里一句话带过，如“记下了：周三 交报告”，不要另起话题。返回 duplicate=true 就别再说一遍。",
@@ -425,10 +436,11 @@ export async function buildState(
   if (opts.memory) {
     const memory = listMemory(ref);
     const core = readCore(ref);
+    const indexed = turnIndexIds(memory.entries);
     state.memory = {
       rev: memory.rev,
       core,
-      entries: memory.entries,
+      entries: memory.entries.map((entry) => ({ ...entry, resident: indexed.has(entry.id) })),
       settings: readSettings(ref),
       sensitive: sensitiveLabels(),
       coreTokens: estimateTokens(CORE_FIELDS.map((key) => core.fields[key]).join("\n")),
@@ -700,6 +712,8 @@ export async function handleOp(
       }
       return { ok: true, data: writeSettings(ref, next) };
     }
+    case "memory_tidy":
+      return { ok: true, data: tidyMemoriesNow(ref, Date.now(), DEFAULT_TZ, tenant.workspaceRoot) };
     case "memory_export": {
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const file = resolve(tenant.workspaceRoot, ".jiebo", "memory-export", `memory-${stamp}.json`);
@@ -915,7 +929,7 @@ async function slowTick(tenant: AssistantTenant) {
   } catch (err) {
     log.error("expire memory cards", err);
   }
-  await runMaintenance(ref, runner, Date.now(), DEFAULT_TZ, () => void publishState(tenant)).catch(
+  await runMaintenance(ref, runner, Date.now(), DEFAULT_TZ, () => void publishState(tenant), tenant.workspaceRoot).catch(
     (err) => log.error("maintenance", err),
   );
   await runEpisodes(ref, runner).catch((err) => log.error("episodes", err));

@@ -121,6 +121,18 @@ function statusMark(item: { effectiveState: string; pinned?: boolean; missingRef
   return <Mark tone={tone}>{word}</Mark>;
 }
 
+function TidyControl({ busy, note, onTidy }: { busy: boolean; note: string | null; onTidy: () => void }) {
+  return (
+    <div className={styles.tidyBox}>
+      <button type="button" className={styles.pineBtn} disabled={busy} onClick={onTidy}>
+        {busy ? "正在梳理…" : "梳理一遍"}
+      </button>
+      <p className={styles.subline}>去掉重复，给新写的行补上今天，引用搬家了就改路径。不改你的原句。</p>
+      {note ? <p className={styles.subline}>{note}</p> : null}
+    </div>
+  );
+}
+
 export default function MemoryCenterPanel({
   active,
   initialScopeId,
@@ -148,6 +160,8 @@ export default function MemoryCenterPanel({
   const scrollBeforeSearch = useRef(0);
   const autoSelectedFolder = useRef<string | null>(null);
   const rowKeys = useRef<string[]>([]);
+  const [tidyBusy, setTidyBusy] = useState(false);
+  const [tidyNote, setTidyNote] = useState<string | null>(null);
 
   useEffect(() => {
     const wide = window.matchMedia("(min-width: 1200px)");
@@ -161,6 +175,17 @@ export default function MemoryCenterPanel({
       mid.removeEventListener("change", apply);
     };
   }, []);
+
+  useEffect(() => {
+    if (!lastResult || lastResult.op !== "memory_tidy") return;
+    setTidyBusy(false);
+    if (!lastResult.ok) {
+      setTidyNote(lastResult.error || "梳理没完成");
+      return;
+    }
+    setTidyNote(lastResult.data?.note || "梳理完了。");
+    mc.refreshCurrent();
+  }, [lastResult, resultTick]);
 
   useEffect(() => {
     if (!active) return;
@@ -389,7 +414,9 @@ export default function MemoryCenterPanel({
 
   function renderMe() {
     if (!memory) return <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载记忆…</div>;
-    const paused = memory.settings.paused ? "记忆已暂停" : "每次对话开头会带上";
+    const paused = memory.settings.paused
+      ? "记忆已暂停"
+      : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。";
     const entries = memory.entries.filter((entry) => !entry.invalidAt);
     return (
       <>
@@ -426,6 +453,7 @@ export default function MemoryCenterPanel({
               meta={
                 <>
                   {basisLabel(entry.basis) ? <Mark>{basisLabel(entry.basis)}</Mark> : null}
+                  {entry.resident === false ? <Mark>不在这一轮</Mark> : null}
                   <button
                     type="button"
                     className="pill"
@@ -632,6 +660,7 @@ export default function MemoryCenterPanel({
         <>
           <h2 className={styles.paneTitle}>要你看一眼</h2>
           <p className={styles.subline}>{reviewCount ? `${reviewCount} 条待看` : "都处理完了"}</p>
+          <p className={styles.subline}>重复、日期和搬家后的文件，用「梳理一遍」处理。这里的卡片可以不点。</p>
           <MemoryCenterSuggestionsPane
             state={mc.activity}
             onRefresh={mc.loadSuggestions}
@@ -827,6 +856,8 @@ export default function MemoryCenterPanel({
       ) : null}
 
       {tier === "narrow" && !searching ? (
+        <>
+        <TidyControl busy={tidyBusy} note={tidyNote} onTidy={() => { setTidyBusy(true); setTidyNote(null); op("memory_tidy"); }} />
         <div className={styles.destTabs} role="tablist" aria-label="记忆">
           {MEMORY_DESTINATIONS.map((dest) => (
             <button
@@ -842,6 +873,7 @@ export default function MemoryCenterPanel({
             </button>
           ))}
         </div>
+        </>
       ) : null}
 
       <div className={`${styles.layout} ${MEMORY_CENTER_CSS.layout} ${layoutClass}`}>
@@ -863,6 +895,7 @@ export default function MemoryCenterPanel({
                 {dest.id === "review" && reviewCount ? <span className={styles.clayCount}>{reviewCount}</span> : null}
               </button>
             ))}
+            <TidyControl busy={tidyBusy} note={tidyNote} onTidy={() => { setTidyBusy(true); setTidyNote(null); op("memory_tidy"); }} />
           </nav>
         ) : null}
 

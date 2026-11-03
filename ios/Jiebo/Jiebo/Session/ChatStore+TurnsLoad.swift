@@ -713,9 +713,9 @@ extension ChatStore {
                 if let index {
                     let current = next.turns[index].assistant
                     if combined.hasPrefix(current) {
-                        next.turns[index].assistant = combined
+                        next.turns[index].assistant = ReplyText.repair(combined)
                     } else if !current.hasPrefix(combined) && !current.hasSuffix(extra) {
-                        next.turns[index].assistant += extra
+                        next.turns[index].assistant = ReplyText.repair(next.turns[index].assistant + extra)
                     }
                 }
                 return next

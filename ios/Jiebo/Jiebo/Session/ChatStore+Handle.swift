@@ -929,6 +929,10 @@ extension ChatStore {
             if memoryCenterHandleAssistantResult(reqId: reqId, op: op, ok: ok, error: error, data: data) {
                 break
             }
+            if op == "memory_tidy" {
+                memoryTidyFinished(ok: ok, error: error, data: data)
+                break
+            }
             if let reqId, let waiter = assistantReplyWaiters.removeValue(forKey: reqId) {
                 waiter(ok)
                 break
@@ -1023,6 +1027,8 @@ extension ChatStore {
                     }
                 }
             }
+            next.assistant = ReplyText.repair(next.assistant)
+            next.thinking = ReplyText.repair(next.thinking)
             return next
         }
     }

@@ -878,6 +878,8 @@ struct AssistantMemoryEntry: Sendable, Hashable, Identifiable {
     /// 网关用 null 表示「有效」，字段缺失也按有效算
     var invalidAt: String?
     var invalidReason: String?
+    /// 这一轮会不会带上。旧网关不带这个字段时保持 nil，页面不标。
+    var resident: Bool?
 
     var isValid: Bool { invalidAt?.isEmpty ?? true }
     var inferred: Bool { basis == "inferred" }
@@ -896,7 +898,8 @@ struct AssistantMemoryEntry: Sendable, Hashable, Identifiable {
             createdAt: row["createdAt"]?.string ?? "",
             updatedAt: row["updatedAt"]?.string ?? "",
             invalidAt: row["invalidAt"]?.string?.nilIfEmpty,
-            invalidReason: row["invalidReason"]?.string?.nilIfEmpty
+            invalidReason: row["invalidReason"]?.string?.nilIfEmpty,
+            resident: row["resident"]?.bool
         )
     }
 }

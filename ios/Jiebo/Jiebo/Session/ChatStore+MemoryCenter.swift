@@ -54,6 +54,27 @@ extension ChatStore {
         memoryCenterData = MemoryCenterReducer.flushInFlight(memoryCenterData)
     }
 
+    func memoryTidy() {
+        guard connected, unlocked, !memoryTidyBusy else { return }
+        memoryTidyBusy = true
+        memoryTidyNote = nil
+        send(.assistantOp(op: "memory_tidy", args: [:], reqId: UUID().uuidString))
+    }
+
+    func memoryTidyFinished(ok: Bool, error: String?, data: JSONValue?) {
+        memoryTidyBusy = false
+        if ok {
+            memoryTidyNote = data?.object?["note"]?.string ?? "梳理完了。"
+            memoryCenterRefreshOverview()
+            if let scopeId = memoryCenterData.detail?.scope.id {
+                memoryCenterRefreshScope(scopeId)
+            }
+            memoryCenterLoadSuggestions()
+        } else {
+            memoryTidyNote = error ?? "梳理没完成"
+        }
+    }
+
     func memoryCenterRefreshOverview() {
         memoryCenterSendGet(scopeId: nil, replaceSameKind: true)
     }

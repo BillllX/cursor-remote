@@ -6,6 +6,7 @@
 //     也就不会有过期闭包的问题。
 import { memo, type CSSProperties, type RefObject } from "react";
 import type { Components } from "react-markdown";
+import { repairReplyText } from "@shared/replyText";
 import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../../lib/chat/format";
 import { PERF, perfCountRow } from "../../lib/chat/perf";
 import { silentAssistantTool } from "../../lib/chat/toolKinds";
@@ -214,6 +215,8 @@ function TurnRowView({
   const oversized = Boolean(turn.deferred || turn.oversized);
   const actionsDisabled = !turnAllowsActions(turn);
   const bodySize = formatBodyBytes(turn.bodyBytes);
+  const assistant = repairReplyText(turn.assistant);
+  const thinking = repairReplyText(turn.thinking);
   return (
     <article
       className={`turn${hideUser ? " turn-continue" : ""}${findHit ? " find-hit" : ""}${deferred ? " turn-cv" : ""}`}
@@ -284,7 +287,7 @@ function TurnRowView({
               )}
             </div>
           ) : null}
-          {turn.thinking && (turn.running || formatDuration(turn.durationMs)) ? (
+          {thinking && (turn.running || formatDuration(turn.durationMs)) ? (
             <details key={turn.running ? "live" : "done"} className="thinking" open={turn.running || undefined}>
               <summary>
                 <span className={turn.running ? "text-shimmer" : undefined}>
@@ -296,7 +299,7 @@ function TurnRowView({
                 </span>
               </summary>
               <pre>
-                <Highlight text={turn.thinking} query={findQuery} />
+                <Highlight text={thinking} query={findQuery} />
               </pre>
             </details>
           ) : null}
@@ -314,10 +317,10 @@ function TurnRowView({
             </ul>
           ) : null}
           {renderTools(turn, isLast, actions)}
-          {turn.assistant && !(isProgressBlurb(turn.assistant) && !turn.running) ? (
+          {assistant && !(isProgressBlurb(assistant) && !turn.running) ? (
             <div className={`markdown${turn.running ? " streaming" : ""}`}>
               <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
-                {turn.assistant}
+                {assistant}
               </MemoMarkdown>
             </div>
           ) : turn.running ? (
@@ -333,7 +336,7 @@ function TurnRowView({
           {!turn.running && !turn.queued && !turn.error && /approval/i.test(turn.status || "") ? (
             <div className="run-meta">{runMeta(turn.status, turn.durationMs)}</div>
           ) : null}
-          {turn.mode === "plan" && turn.assistant && !turn.running && !turn.queued ? (
+          {turn.mode === "plan" && assistant && !turn.running && !turn.queued ? (
             <button
               type="button"
               className="apply-plan"

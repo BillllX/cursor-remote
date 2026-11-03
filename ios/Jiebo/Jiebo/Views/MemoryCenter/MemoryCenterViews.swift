@@ -365,6 +365,28 @@ extension View {
 
 // MARK: - 导航栏
 
+struct MemoryTidyButton: View {
+    @Environment(ChatStore.self) private var store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button(store.memoryTidyBusy ? "正在梳理…" : "梳理一遍") {
+                store.memoryTidy()
+            }
+            .disabled(store.memoryTidyBusy)
+            Text("去掉重复，给新写的行补上今天，引用搬家了就改路径。不改你的原句。")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
+            if let note = store.memoryTidyNote, !note.isEmpty {
+                Text(note)
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.ink2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct MemoryCenterNavColumn: View {
     @Environment(ChatStore.self) private var store
     @Binding var navId: String
@@ -386,6 +408,8 @@ struct MemoryCenterNavColumn: View {
                 navButton(folderNavId, title: "这个文件夹", symbol: "folder", subtitle: folder?.label)
                 navButton("suggestions", title: "要你看一眼", symbol: "lightbulb", badge: store.memoryCenterSuggestionRows.count)
                 navButton("more", title: "更多", symbol: "ellipsis")
+                MemoryTidyButton()
+                    .padding(.top, 8)
                 navButton("activity", title: "最近改动", symbol: "clock", depth: 1)
                 navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up", depth: 1)
                 navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft", depth: 1)
@@ -1358,7 +1382,7 @@ struct MemoryCenterRememberMe: View {
         VStack(alignment: .leading, spacing: 12) {
             if let memory {
                 HStack {
-                    Text(memory.paused ? "记忆已暂停" : "每次对话开头会带上")
+                    Text(memory.paused ? "记忆已暂停" : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。")
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(memory.paused ? JieboColor.clay : JieboColor.dim)
                     Spacer()
@@ -1392,6 +1416,11 @@ struct MemoryCenterRememberMe: View {
                             Text(entry.inferred ? "推断" : "你说的")
                                 .font(JieboFont.text(.caption2))
                                 .foregroundStyle(JieboColor.dim)
+                            if entry.resident == false {
+                                Text("不在这一轮")
+                                    .font(JieboFont.text(.caption2))
+                                    .foregroundStyle(JieboColor.clay)
+                            }
                         }
                         Text(entry.text).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2).lineLimit(3)
                         HStack {
@@ -1487,7 +1516,7 @@ struct MemoryCenterPhoneRememberMe: View {
         List {
             if let memory = store.assistantState?.memory {
                 Section {
-                    Text(memory.paused ? "记忆已暂停" : "每次对话开头会带上 · 约 \(memory.coreTokens)/\(memory.coreBudget)")
+                    Text(memory.paused ? "记忆已暂停" : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。约 \(memory.coreTokens)/\(memory.coreBudget)")
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(memory.paused ? JieboColor.clay : JieboColor.dim)
                 }
@@ -1513,6 +1542,11 @@ struct MemoryCenterPhoneRememberMe: View {
                                 Text(entry.inferred ? "推断" : "你说的")
                                     .font(JieboFont.text(.caption2))
                                     .foregroundStyle(JieboColor.dim)
+                                if entry.resident == false {
+                                    Text("不在这一轮")
+                                        .font(JieboFont.text(.caption2))
+                                        .foregroundStyle(JieboColor.clay)
+                                }
                             }
                             Text(entry.text).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2).lineLimit(3)
                             Button("删") {
@@ -1657,6 +1691,11 @@ struct MemoryCenterPhoneHome: View {
 
     var body: some View {
         List {
+            if !searchActive {
+                Section {
+                    MemoryTidyButton()
+                }
+            }
             if searchActive {
                 Section {
                     MemoryCenterSearchList(selectedKey: .constant(nil), itemNavigation: .drillDownSearchHit)

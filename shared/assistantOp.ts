@@ -149,7 +149,7 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   if (operation === "memory_center_suggestion_answer") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["memory_center_suggestion_answer"] };
   }
-  if (operation === "memory_export" || operation === "push_test") {
+  if (operation === "memory_export" || operation === "memory_tidy" || operation === "push_test") {
     return { ...base, op: operation };
   }
   return args === undefined ? { ...base, op: operation } : { ...base, op: operation, args };

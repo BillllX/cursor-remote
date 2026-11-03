@@ -1,6 +1,7 @@
 import type { BackgroundResult } from "./background.ts";
 import { listInbox, postInbox } from "./inbox.ts";
-import { expireMemory, listMemory, readCore, isValid } from "./memory.ts";
+import { expireMemory, listMemory, readCore, isValid, tidyPersonalMemory } from "./memory.ts";
+import { tidyWorkspaceMemories } from "./workspaceMemory.ts";
 import { describeLocal, localParts } from "./cron.ts";
 import { listSchedules, DEFAULT_TZ, type Occurrence, type Schedule } from "./schedules.ts";
 import { listTodos } from "./todos.ts";
@@ -78,9 +79,9 @@ export function integratorPrompt(ref: TenantRef, chats: ReturnType<typeof pendin
     "规则：",
     "1. 只从用户亲手写的话里抽取关于用户本人的稳定事实、偏好、近期计划、重要的人；一次性的问题、闲聊、任务指令不记。",
     "2. 用户原话里明确说了“记住”或直接陈述自己的事实时 basis=user_said；其余推断 basis=inferred。",
-    "3. 和已有条目重复就跳过；是补充就用 memory_supplement；推断和推断矛盾时，用 memory_invalidate 标掉旧的再写新的。",
-    "4. 新推断和“你说的”条目矛盾时，不要改那条，用 inbox_post 提一句“可能变了”。",
-    "5. 带相对时间的（下周、明天）换算成具体日期再写，写进 validFrom / validUntil。",
+    "3. 和已有条目重复就跳过；正文里已经写过的话不要 memory_supplement。是新事实才补充。推断和推断矛盾时，用 memory_invalidate 标掉旧的再写新的。",
+    "4. 新推断和“你说的”条目矛盾时，不要改那条，也不要再问用户。",
+    "5. 带相对时间的（下周、明天）换算成具体日期再写，写进 validFrom / validUntil。还没到的安排不要 memory_save，那是待办。",
     "6. 核心档案（core_read / core_update）只放用户说过、或在 3 个以上不同会话里独立出现的内容。",
     "7. 不记密钥、密码、证件号；健康、信仰、政治、性取向、财务账号不记。",
     "做完只回复一行：写了几条、补充几条、标失效几条。",
@@ -104,13 +105,65 @@ export async function runIntegrator(ref: TenantRef, runner: JobRunner, now = Dat
   return { ran: true as const, ok: result.ok, chats: chats.length };
 }
 
-/** 每天本地 4 点后跑一次：过期标失效，再让助理把相对时间和过去的行程改写成具体日期或过去式，重写“近况” */
+export type MemoryTidyReport = {
+  expired: number;
+  supplements: number;
+  preferences: number;
+  files: number;
+  dropped: number;
+  dated: number;
+  refs: number;
+  cooled: number;
+  changed: boolean;
+  note: string;
+};
+
+function tidyNote(report: Omit<MemoryTidyReport, "note">) {
+  const parts: string[] = [];
+  if (report.expired) parts.push(`过期 ${report.expired} 条`);
+  if (report.supplements) parts.push(`去掉重复补充 ${report.supplements} 条`);
+  if (report.preferences) parts.push(`合并重复偏好 ${report.preferences} 条`);
+  if (report.dropped) parts.push(`去掉重复 ${report.dropped} 条`);
+  if (report.dated) parts.push(`补上日期 ${report.dated} 条`);
+  if (report.refs) parts.push(`改好引用 ${report.refs} 条`);
+  if (report.cooled) parts.push(`标成很久没用 ${report.cooled} 条`);
+  if (!parts.length) return "已经整齐，没有要改的。";
+  return `梳理完了：${parts.join("，")}。`;
+}
+
+/** 马上走一遍凌晨那套整理：不调模型，不改原句，也不占用当天的四点名额。 */
+export function tidyMemoriesNow(ref: TenantRef, now = Date.now(), tz = DEFAULT_TZ, workspaceRoot?: string): MemoryTidyReport {
+  const day = describeLocal(now, tz).slice(0, 10);
+  const expired = expireMemory(ref);
+  const personal = tidyPersonalMemory(ref);
+  const folders = workspaceRoot
+    ? tidyWorkspaceMemories(workspaceRoot, day)
+    : { files: 0, dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
+  const report = {
+    expired,
+    supplements: personal.supplements,
+    preferences: personal.preferences,
+    files: folders.files,
+    dropped: folders.dropped,
+    dated: folders.dated,
+    refs: folders.refs,
+    cooled: folders.cooled,
+    changed: Boolean(expired || personal.changed || folders.changed),
+  };
+  return { ...report, note: tidyNote(report) };
+}
+
+/**
+ * 每天本地 4 点后跑一次。自己遍历个人记忆和各个文件夹的 memory.md。
+ * 不改写原文，也不再叫模型补句子。
+ */
 export async function runMaintenance(
   ref: TenantRef,
-  runner: JobRunner,
+  _runner: JobRunner,
   now = Date.now(),
   tz = DEFAULT_TZ,
   onChanged?: () => void,
+  workspaceRoot?: string,
 ) {
   const local = localParts(now, tz);
   const day = describeLocal(now, tz).slice(0, 10);
@@ -118,27 +171,9 @@ export async function runMaintenance(
   if (local.hour < 4 || state.lastMaintenance === day) return { ran: false as const };
   state.lastMaintenance = day;
   writeJson(stateFile(ref), state);
-  const expired = expireMemory(ref);
-  if (expired) onChanged?.();
-  const entries = listMemory(ref).entries.filter((entry) => !entry.invalidAt);
-  const timed = entries.filter((entry) => entry.kind === "事件" || /(明天|后天|下周|下个月|今天|这周|本周|昨天|上周)/.test(entry.text));
-  let llm: BackgroundResult | null = null;
-  if (timed.length || readCore(ref).fields.近况) {
-    llm = await runner({
-      role: "integrator",
-      label: "时间维护",
-      origin: "integrator",
-      prompt: [
-        `今天是 ${day}（${tz}）。任务：维护记忆里的时间。`,
-        "1. 下面条目里的相对时间（明天、下周…）按条目写入日期换算成具体日期；已经过去的行程改写成过去式。做法：memory_invalidate 旧条目（原因“时间改写”），再 memory_save 新条目，basis 保持不变。用户亲口说的条目不能标失效，只能用 memory_supplement 补一句当前状态。",
-        "2. 用 core_read 看核心档案，把“近况”里已经过去的事改成过去式或删掉，用 core_update 写回。",
-        "做完只回复一行。",
-        "",
-        timed.map((entry) => `- ${entry.id} [${entry.basis}] 写入于 ${entry.createdAt.slice(0, 10)}：${entry.text}`).join("\n") || "（没有带时间的条目）",
-      ].join("\n"),
-    });
-  }
-  return { ran: true as const, expired, ok: llm ? llm.ok : true };
+  const report = tidyMemoriesNow(ref, now, tz, workspaceRoot);
+  if (report.changed) onChanged?.();
+  return { ran: true as const, ...report, ok: true as const };
 }
 
 /** 每月 1 日后生成上个月的会话摘要 */

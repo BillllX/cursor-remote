@@ -104,6 +104,14 @@
   cursor: default;
 }
 
+.tidyBox {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 4px 0 12px;
+}
+
 .clayText {
   color: #a35c3c;
   background: transparent;

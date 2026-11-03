@@ -35,6 +35,7 @@ enum MemoryCenterLabels {
         "budget": "这一轮太长，没带上",
         "cold_unrelated": "很久没用，也和这次无关",
         "terminal": "已经办完或过期",
+        "missing_ref": "引用的文件对不上，这一轮不带",
     ]
 
     static let searchMatchReason: [String: String] = [

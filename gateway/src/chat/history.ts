@@ -10,6 +10,7 @@ import type { Conn, Slot } from "../runtime/types.ts";
 import type { Tenant } from "../tenants.ts";
 import { fitTurnsFromEnd } from "../ws/frame.ts";
 import { send } from "../ws/send.ts";
+import { repairReplyText } from "../../../shared/replyText.ts";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
@@ -123,8 +124,8 @@ function conversationToTurns(conv: unknown[], roster?: ReviewBinding[]): History
     out.push({
       id: crypto.randomUUID(),
       user,
-      assistant: clipHistory(assistant, 80_000),
-      thinking: thinking ? clipHistory(thinking, 20_000) : undefined,
+      assistant: clipHistory(repairReplyText(assistant), 80_000),
+      thinking: thinking ? clipHistory(repairReplyText(thinking), 20_000) : undefined,
       tools,
     });
   }

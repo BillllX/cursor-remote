@@ -1,4 +1,5 @@
 import type { AssistantState, LoopState, ServerMessage } from "@shared/protocol";
+import { repairReplyText } from "@shared/replyText";
 import { isUntitled, stopOrphanRuns } from "./sessions";
 import { mergeToolOutput } from "./tools";
 import {
@@ -229,12 +230,12 @@ export function applyServerMessage(chats: Chat[], message: ServerMessage, ctx: C
     case "text-delta":
       return patchRunningTurnIn(chats, chatId, (turn) => ({
         ...turn,
-        assistant: turn.assistant + message.text,
+        assistant: repairReplyText(turn.assistant + message.text),
       }));
     case "thinking-delta":
       return patchRunningTurnIn(chats, chatId, (turn) => ({
         ...turn,
-        thinking: turn.thinking + message.text,
+        thinking: repairReplyText(turn.thinking + message.text),
       }));
     case "tool-started": {
       let next = patchRunningTurnIn(chats, chatId, (turn) => {

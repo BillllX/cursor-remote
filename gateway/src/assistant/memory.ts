@@ -244,6 +244,9 @@ export function supplementMemory(
   const extra = clip(cleanText(text), 300);
   if (!extra) return { ok: false, error: "补充内容为空。" };
   if (detectSecret(extra)) return { ok: false, error: "内容像密钥或密码，按规则不记。" };
+  const dataForDup = readEntries(ref);
+  const existing = dataForDup.entries.find((item) => item.id === id);
+  if (existing && supplementAlreadyThere(existing, extra)) return { ok: true, value: existing };
   const sensitive = actor === "page" ? null : detectSensitive(ref, extra);
   if (sensitive) return { ok: false, error: `内容涉及「${sensitive}」，这一类默认不记；要记的话在记忆页设置里打开。` };
   const data = readEntries(ref);
@@ -338,11 +341,20 @@ export function forgetMemory(ref: TenantRef, id: string, actor: MemoryActor): Me
 }
 
 function removeFromCore(ref: TenantRef, text: string) {
+  const needle = text.trim();
+  if (!needle) return;
   const core = readCore(ref);
   let changed = false;
   for (const key of CORE_FIELDS) {
-    if (text && core.fields[key].includes(text)) {
-      core.fields[key] = core.fields[key].split(text).join("").replace(/\n{3,}/g, "\n\n").trim();
+    const raw = core.fields[key] || "";
+    const next = raw
+      .split("\n")
+      .filter((line) => line.replace(/^\s*[-*•]\s*/, "").trim() !== needle)
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (next !== raw.trim()) {
+      core.fields[key] = next;
       changed = true;
     }
   }
@@ -599,11 +611,17 @@ export function renderMemoryBlock(ref: TenantRef): string {
     coreRows[key] = value;
     used += cost;
   }
-  const entries = readEntries(ref).entries.filter((entry) => isValid(entry)).sort((a, b) => rank(b) - rank(a));
+  const stored = readEntries(ref).entries.filter((entry) => isValid(entry));
+  const fileOrder = new Map(stored.map((entry, index) => [entry.id, index]));
+  const entries = [...stored].sort((a, b) => rank(b) - rank(a));
+  const shadowed = shadowedEntries(
+    entries.filter((entry) => isResident(entry)),
+    fileOrder,
+  );
   const index: Array<{ id: string; topic: string; text: string; basis: string; until?: string }> = [];
   let indexUsed = 0;
   for (const entry of entries) {
-    if (!isResident(entry)) continue;
+    if (!isResident(entry) || shadowed.has(entry.id)) continue;
     const row = {
       id: entry.id,
       topic: entry.topic,
@@ -634,9 +652,259 @@ export function renderMemoryBlock(ref: TenantRef): string {
   ].join("\n");
 }
 
-/** 常驻索引只放你说的，和被独立推断出至少两次的；其余只在 memory_search 里 */
-export function isResident(entry: MemoryEntry) {
+const PLAN_WORD = /计划|要在|要去|参加/;
+
+/** 安排的结束日。写了 validUntil 就以它为准（待办完成会把它改到昨天）；否则取正文里最晚的日期。没有日期的事实（如生日）不算安排。 */
+export function residentUntil(entry: MemoryEntry): string | null {
+  const planned = entry.kind === "事件" || PLAN_WORD.test(entry.text);
+  if (!planned) return null;
+  if (entry.validUntil && /^\d{4}-\d{2}-\d{2}$/.test(entry.validUntil)) return entry.validUntil;
+  const dates = [...entry.text.matchAll(/\d{4}-\d{2}-\d{2}/g)].map((match) => match[0]);
+  return dates.sort().at(-1) ?? null;
+}
+
+/** 还没到的安排不进个人记忆，改记待办。已经过去的经历仍按记忆保存。 */
+export function personalWriteRoute(
+  text: string,
+  kind: string | undefined,
+  validUntil: string | undefined,
+  day = today(),
+): { route: "todo"; due: string } | { route: "memory" } {
+  const planned = kind === "事件" || PLAN_WORD.test(text);
+  if (!planned) return { route: "memory" };
+  const dates = [...text.matchAll(/\d{4}-\d{2}-\d{2}/g)].map((match) => match[0]);
+  if (validUntil && /^\d{4}-\d{2}-\d{2}$/.test(validUntil)) dates.push(validUntil);
+  const due = dates.sort().at(-1);
+  if (due && due >= day) return { route: "todo", due };
+  return { route: "memory" };
+}
+
+function mentionsWorkspace(text: string, name: string) {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return false;
+  if (/[a-z0-9]/i.test(trimmed)) {
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|[^A-Za-z0-9])${escaped}(?:$|[^A-Za-z0-9])`, "i").test(text);
+  }
+  return text.includes(trimmed);
+}
+
+function looksLikeProjectFact(text: string) {
+  return (
+    /[\w.-]+\/[\w./-]*\.[a-z0-9]{1,8}\b/i.test(text) ||
+    /\.sh\b/i.test(text) ||
+    /(?:^|[^a-z])(?:npm|pnpm|yarn|nginx)\b/i.test(text) ||
+    /部署脚本|这条命令/.test(text)
+  );
+}
+
+/** 像项目命令或路径时：只对上一个文件夹就返回它；对不上就不进个人记忆。普通的个人事实返回 null。 */
+export function projectFactTarget(text: string, names: string[]): string | "ambiguous" | null {
+  if (!looksLikeProjectFact(text)) return null;
+  const hits = [...new Set(names.map((name) => name.trim()).filter((name) => mentionsWorkspace(text, name)))];
+  if (hits.length === 1) return hits[0];
+  return "ambiguous";
+}
+
+export function projectSection(text: string) {
+  if (/坑|失败|报错/.test(text)) return "坑";
+  if (/决定/.test(text)) return "决定";
+  if (/命令|npm\b|pnpm\b|yarn\b|nginx\b|\.sh\b/.test(text)) return "命令";
+  return "约定";
+}
+
+function shiftDay(day: string, delta: number) {
+  const [year, month, date] = day.split("-").map(Number);
+  const next = new Date(Date.UTC(year || 1970, (month || 1) - 1, date || 1));
+  next.setUTCDate(next.getUTCDate() + delta);
+  return next.toISOString().slice(0, 10);
+}
+
+function dueDay(due?: string) {
+  const match = due ? /^(\d{4}-\d{2}-\d{2})/.exec(due) : null;
+  return match?.[1] ?? null;
+}
+
+function planDates(entry: MemoryEntry) {
+  return [...entry.text.matchAll(/\d{4}-\d{2}-\d{2}/g)].map((match) => match[0]);
+}
+
+function planMatchesTodo(entry: MemoryEntry, todoText: string, due?: string) {
+  if (entry.invalidAt) return false;
+  if (!(entry.kind === "事件" || PLAN_WORD.test(entry.text))) return false;
+  if (negated(entry.text) !== negated(todoText)) return false;
+  const needle = foldText(todoText);
+  if ([...needle].length < 4) return false;
+  const hay = foldText(entry.text);
+  if (!hay || (hay !== needle && !hay.includes(needle) && !needle.includes(hay))) return false;
+  const dates = planDates(entry);
+  const day = dueDay(due);
+  if (dates.length && (!day || !dates.includes(day))) return false;
+  return true;
+}
+
+/** 待办完成后，同一天、极性相同的未过期安排退出常驻索引。不改原句。 */
+export function closeMatchingPlans(ref: TenantRef, todoText: string, due?: string, day = today()) {
+  const yesterday = shiftDay(day, -1);
+  const data = readEntries(ref);
+  let closed = 0;
+  for (const entry of data.entries) {
+    if (!planMatchesTodo(entry, todoText, due)) continue;
+    if (entry.validUntil && entry.validUntil < day) continue;
+    entry.validUntil = yesterday;
+    entry.rev += 1;
+    closed += 1;
+  }
+  if (closed) writeEntries(ref, data);
+  return closed;
+}
+
+/** 取消完成时，把这次关掉、正文里还有未来日期的安排放回索引。 */
+export function reopenMatchingPlans(ref: TenantRef, todoText: string, due?: string, day = today()) {
+  const data = readEntries(ref);
+  let opened = 0;
+  for (const entry of data.entries) {
+    if (!planMatchesTodo(entry, todoText, due)) continue;
+    if (!entry.validUntil || entry.validUntil >= day) continue;
+    if (!planDates(entry).some((date) => date >= day)) continue;
+    delete entry.validUntil;
+    entry.rev += 1;
+    opened += 1;
+  }
+  if (opened) writeEntries(ref, data);
+  return opened;
+}
+
+/** 常驻索引只放你说的，和被独立推断出至少两次的。过了结束日的安排退出索引，原文仍可检索。 */
+export function isResident(entry: MemoryEntry, at = today()) {
+  const until = residentUntil(entry);
+  if (until && until < at) return false;
   return entry.basis === "user_said" || (entry.seen ?? 1) >= INFERRED_RESIDENT_SEEN;
+}
+
+function foldText(text: string) {
+  return text
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[\s,，。!！?？:：;；'"“”‘’`()（）[\]{}<>《》、]+/g, "");
+}
+
+function negated(text: string) {
+  return /不|别|勿|没|禁止/.test(text);
+}
+
+/** 同一极性、而且是同一句或一句包着另一句。拿不准的（短句、反义）不算重复。 */
+function restates(left: string, right: string) {
+  if (negated(left) !== negated(right)) return false;
+  const a = foldText(left);
+  const b = foldText(right);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  return short.length >= 12 && long.includes(short);
+}
+
+function withoutPolarity(text: string) {
+  return foldText(text).replace(/不要|禁止|别|勿|没|不/g, "");
+}
+
+/** 整句只差否定时，算互相矛盾。文件夹里的反义命令不走这里。 */
+function contradicts(left: string, right: string) {
+  if (negated(left) === negated(right)) return false;
+  const a = withoutPolarity(left);
+  const b = withoutPolarity(right);
+  return a.length >= 8 && a === b;
+}
+
+/** 这一轮会写进个人短索引的条目。过期安排、只出现一次的推断、被更新句盖住的旧句都不在里面。 */
+export function turnIndexIds(entries: MemoryEntry[]) {
+  const order = new Map(entries.map((entry, index) => [entry.id, index]));
+  const live = entries.filter((entry) => isValid(entry) && isResident(entry));
+  const shadowed = shadowedEntries(live, order);
+  const ids = new Set<string>();
+  for (const entry of live) if (!shadowed.has(entry.id)) ids.add(entry.id);
+  return ids;
+}
+
+/** 同一句、一句包着另一句，或整句只差否定时，注入只留更新的那句。原文都还在。 */
+function shadowedEntries(entries: MemoryEntry[], fileOrder: Map<string, number>) {
+  const newer = (left: MemoryEntry, right: MemoryEntry) => {
+    if (left.updatedAt !== right.updatedAt) return left.updatedAt > right.updatedAt ? left : right;
+    if (left.createdAt !== right.createdAt) return left.createdAt > right.createdAt ? left : right;
+    return (fileOrder.get(left.id) ?? 0) >= (fileOrder.get(right.id) ?? 0) ? left : right;
+  };
+  const shadowed = new Set<string>();
+  for (const entry of entries) {
+    for (const other of entries) {
+      if (entry.id === other.id) continue;
+      if (!restates(entry.text, other.text) && !contradicts(entry.text, other.text)) continue;
+      const keep = newer(entry, other);
+      shadowed.add(keep.id === entry.id ? other.id : entry.id);
+    }
+  }
+  return shadowed;
+}
+
+function supplementAlreadyThere(entry: MemoryEntry, extra: string) {
+  const folded = foldText(extra);
+  if (!folded) return false;
+  return [entry.text, ...(entry.supplements ?? [])].some((item) => {
+    const hay = foldText(item);
+    if (!hay) return false;
+    if (hay === folded) return true;
+    return folded.length >= 8 && hay.includes(folded);
+  });
+}
+
+/** 凌晨整理：去掉复述性补充，工作偏好里折叠后相同的句子只留先写的那句。不改条目原文。 */
+export function tidyPersonalMemory(ref: TenantRef): { supplements: number; preferences: number; changed: boolean } {
+  const data = readEntries(ref);
+  let supplements = 0;
+  let touched = false;
+  for (const entry of data.entries) {
+    const extras = entry.supplements ?? [];
+    if (!extras.length) continue;
+    const kept: string[] = [];
+    const hay = [entry.text];
+    for (const extra of extras) {
+      const folded = foldText(extra);
+      const dup = hay.some((item) => {
+        const have = foldText(item);
+        if (!have || !folded) return false;
+        if (have === folded) return true;
+        return folded.length >= 8 && have.includes(folded);
+      });
+      if (dup) {
+        supplements += 1;
+        continue;
+      }
+      kept.push(extra);
+      hay.push(extra);
+    }
+    if (kept.length !== extras.length) {
+      entry.supplements = kept;
+      entry.rev += 1;
+      touched = true;
+    }
+  }
+  if (touched) writeEntries(ref, data);
+  const lines = workPreferenceLines(ref);
+  const keptPrefs: string[] = [];
+  let preferences = 0;
+  for (const line of lines) {
+    const dup = foldText(line) !== "" && keptPrefs.some((item) => foldText(item) === foldText(line));
+    if (dup) {
+      preferences += 1;
+      continue;
+    }
+    keptPrefs.push(line);
+  }
+  if (preferences) {
+    const result = setCore(ref, { [WORK_PREF_FIELD]: keptPrefs.map((item) => `- ${item}`).join("\n") }, "maintenance");
+    if (!result.ok) preferences = 0;
+  }
+  return { supplements, preferences, changed: touched || preferences > 0 };
 }
 
 export function workPreferenceLines(ref: TenantRef) {
@@ -671,7 +939,7 @@ export function addWorkPreference(ref: TenantRef, text: string, actor: "chat" | 
   const sensitive = actor === "page" ? null : detectSensitive(ref, line);
   if (sensitive) return { ok: false, error: `内容涉及「${sensitive}」，不能放进会给所有工作区看的工作偏好。` };
   const lines = workPreferenceLines(ref);
-  if (lines.includes(line)) return { ok: true, value: lines };
+  if (lines.some((item) => foldText(item) === foldText(line))) return { ok: true, value: lines };
   const next = [...lines, line];
   const result = setCore(ref, { [WORK_PREF_FIELD]: next.map((item) => `- ${item}`).join("\n") }, actor);
   return result.ok ? { ok: true, value: next } : { ok: false, error: result.error };

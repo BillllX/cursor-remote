@@ -23,6 +23,7 @@ import { broadcastFileChanged } from "../fileEvents.ts";
 import { log, slotLog } from "../log.ts";
 import { deleteSession } from "../native/session.ts";
 import { type ChatHistoryItem, externalRoute } from "../providers.ts";
+import { repairReplyText } from "../../../shared/replyText.ts";
 import { cancelRun, isAbortError, withTimeout } from "../runtime/abort.ts";
 import { rememberApproved, resolveApprovalWait, waitForApproval } from "../runtime/approvals.ts";
 import { isAssistantChat } from "../runtime/chats.ts";
@@ -90,9 +91,9 @@ export async function handlePrompt(
   const nextDialect = dialect !== false;
   // P11：history 白名单——只放行 user/assistant 的字符串文本，
   // 防客户端注入 system/tool 角色覆盖网关系统约束（Grok 评审 M5）
-  const safeHistory = (history ?? []).filter(
-    (h): h is ChatHistoryItem => !!h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string",
-  );
+  const safeHistory = (history ?? [])
+    .filter((h): h is ChatHistoryItem => !!h && (h.role === "user" || h.role === "assistant") && typeof h.text === "string")
+    .map((item) => (item.role === "assistant" ? { ...item, text: repairReplyText(item.text) } : item));
   if (fresh) {
     resolveApprovalWait(slot, false);
     await cancelRun(slot.run);

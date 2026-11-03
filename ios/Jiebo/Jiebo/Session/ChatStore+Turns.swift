@@ -134,7 +134,7 @@ extension ChatStore {
         }
         chooseMode(.agent, chatId: targetId)
         let visible = "执行这个计划"
-        let text = "请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n\(turn.assistant.prefix(4000))"
+        let text = "请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n\(ReplyText.repair(String(turn.assistant.prefix(4000))))"
         let targetModel = model(for: targetId)
         let next = Turn.blank(user: visible, model: targetModel, mode: .agent, running: true)
         patch(chat.id) { item in

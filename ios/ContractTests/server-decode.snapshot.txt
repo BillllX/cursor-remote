@@ -916,6 +916,7 @@
           updatedAt: "2026-02-09T10:00:00.000Z"
           invalidAt: "2026-02-11T12:00:00.000Z"
           invalidReason: "用户说已经不这么做了"
+          resident: nil
         )
       ]
       paused: true
@@ -1150,6 +1151,7 @@
     updatedAt: "2026-02-09T10:00:00.000Z"
     invalidAt: "2026-02-11T12:00:00.000Z"
     invalidReason: "用户说已经不这么做了"
+    resident: nil
   )
 )
 

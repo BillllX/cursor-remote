@@ -26,7 +26,7 @@ const LAYERS = new Set<MemoryCenterLayer>(["L0", "L1", "L2", "L3", "L4"]);
 const EFFECTIVE = new Set(["hot", "cold", "done", "expired"]);
 const ITEM_STATES = new Set(["hot", "cold", "done"]);
 const INJECTION_REASONS = new Set<MemoryInjectionReason>(["pinned", "section_anchor", "relevant", "rotation"]);
-const INJECTION_SKIP_REASONS = new Set<MemoryInjectionSkipReason>(["budget", "cold_unrelated", "terminal"]);
+const INJECTION_SKIP_REASONS = new Set<MemoryInjectionSkipReason>(["budget", "cold_unrelated", "terminal", "missing_ref"]);
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);

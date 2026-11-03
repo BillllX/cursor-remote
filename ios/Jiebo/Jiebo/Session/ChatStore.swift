@@ -169,6 +169,8 @@ final class ChatStore {
     @ObservationIgnored var assistantLastSuccessAt = Date.distantPast
     /// 统一记忆中心只读数据（overview / scope detail / search）
     var memoryCenterData = MemoryCenterDataState.initial
+    var memoryTidyBusy = false
+    var memoryTidyNote: String?
     @ObservationIgnored var memoryCenterActiveCount = 0
     /// 推迟释放用。重新进入记忆中心或下一级页面会加一，作废还没跑的清空。
     @ObservationIgnored var memoryCenterReleaseGeneration = 0
