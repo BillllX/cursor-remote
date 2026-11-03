@@ -75,39 +75,64 @@ extension EnvironmentValues {
 }
 
 /// 同一实体同时只给一个前台场景编辑租约；其它窗口仍可读，切回即可明确接管。
+/// 同一个窗口里可以有多块对话同时挂着。按视图分别记租约，一块卸下时不能把这个窗口的租约整段清掉。
 @Observable
 @MainActor
 final class SceneEditingOwnership {
     static let shared = SceneEditingOwnership()
 
     private(set) var revision: UInt64 = 0
-    @ObservationIgnored private var candidates: [String: [String: SceneEditorCandidate]] = [:]
+    /// resource → sceneToken → viewId → 这一块的租约
+    @ObservationIgnored private var holds: [String: [String: [String: SceneEditorHold]]] = [:]
     @ObservationIgnored private var nextOrder: UInt64 = 0
 
     private init() {}
 
-    func claim(resource: String, sceneToken: String, active: Bool) {
-        guard !resource.isEmpty, !sceneToken.isEmpty else { return }
+    func claim(resource: String, sceneToken: String, viewId: String, active: Bool) {
+        guard !resource.isEmpty, !sceneToken.isEmpty, !viewId.isEmpty else { return }
         nextOrder &+= 1
-        candidates[resource, default: [:]][sceneToken] = SceneEditorCandidate(
-            sceneToken: sceneToken,
+        holds[resource, default: [:]][sceneToken, default: [:]][viewId] = SceneEditorHold(
             active: active,
             order: nextOrder
         )
         revision &+= 1
     }
 
-    func release(resource: String, sceneToken: String) {
-        candidates[resource]?[sceneToken] = nil
-        if candidates[resource]?.isEmpty == true { candidates[resource] = nil }
+    func release(resource: String, sceneToken: String, viewId: String) {
+        holds[resource]?[sceneToken]?[viewId] = nil
+        if holds[resource]?[sceneToken]?.isEmpty == true {
+            holds[resource]?[sceneToken] = nil
+        }
+        if holds[resource]?.isEmpty == true { holds[resource] = nil }
         revision &+= 1
+    }
+
+    func hasClaimant(resource: String) -> Bool {
+        _ = revision
+        return holds[resource]?.isEmpty == false
     }
 
     func isOwner(resource: String, sceneToken: String) -> Bool {
         _ = revision
-        let rows = candidates[resource].map { Array($0.values) } ?? []
-        return SceneEditorElection.owner(in: rows) == sceneToken
+        return SceneEditorElection.owner(in: scenes(for: resource)) == sceneToken
     }
+
+    private func scenes(for resource: String) -> [SceneEditorCandidate] {
+        guard let scenes = holds[resource] else { return [] }
+        return scenes.map { token, views in
+            let latest = views.values.max { $0.order < $1.order }
+            return SceneEditorCandidate(
+                sceneToken: token,
+                active: views.values.contains(where: \.active),
+                order: latest?.order ?? 0
+            )
+        }
+    }
+}
+
+private struct SceneEditorHold {
+    var active: Bool
+    var order: UInt64
 }
 
 @MainActor

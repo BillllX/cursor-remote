@@ -827,6 +827,8 @@ struct PhoneSettingsDestination: View {
         switch route {
         case .memory:
             AssistantMemoryScreen()
+        case .memoryPage(let page):
+            MemoryCenterPhonePageHost(route: page)
         case .connections:
             DeviceConnectionsScreen()
         case .artifacts:
@@ -841,12 +843,27 @@ struct PhoneSettingsDestination: View {
 
 // MARK: 记忆
 
-struct AssistantMemoryScreen: View {
-    @Environment(ChatStore.self) private var store
+/// 工作台没有小驳那条导航栈，记忆从这里单独打开。下一级仍走 PhoneRoute.memoryPage。
+struct MemoryCenterSheet: View {
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AssistantMemoryScreen()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("完成") { dismiss() }
+                    }
+                }
+                .navigationDestination(for: PhoneRoute.self) { route in
+                    PhoneSettingsDestination(route: route)
+                }
+        }
+    }
+}
+
+struct AssistantMemoryScreen: View {
     @State private var navId = "overview"
-    @State private var middleTab = "all"
-    @State private var stateFilter = "useful"
     @State private var searchText = ""
     @State private var searchScopeFilter = "all"
     @State private var searchKindFilter = "all"
@@ -854,32 +871,25 @@ struct AssistantMemoryScreen: View {
     @State private var searchActive = false
 
     var body: some View {
-        // 小驳的栈只存 PhoneRoute。记忆里的下一级是另一种值，直接推进去会报没有目的地。
-        // 这一页自己开一条栈，返回仍交给外面那条。
-        NavigationStack {
-            MemoryCenterPhoneHome(
-                navId: $navId,
-                middleTab: $middleTab,
-                stateFilter: $stateFilter,
-                searchText: $searchText,
-                searchScopeFilter: $searchScopeFilter,
-                searchKindFilter: $searchKindFilter,
-                searchStateFilter: $searchStateFilter,
-                searchActive: $searchActive,
-                onLeave: { dismiss() }
-            )
-            .scrollDismissesKeyboard(.interactively)
-            .background(JieboColor.paper)
-            .memoryCenterLifecycle(
-                navId: navId,
-                searchActive: searchActive,
-                searchText: searchText,
-                searchScopeFilter: searchScopeFilter,
-                searchKindFilter: searchKindFilter,
-                searchStateFilter: searchStateFilter
-            )
-            .toolbar(.visible, for: .navigationBar)
-        }
-        .toolbar(.hidden, for: .navigationBar)
+        // 下一级是 PhoneRoute.memoryPage，跟这一页同一条栈。
+        // 这里再套 NavigationStack 的话，点过记忆再点菜单里别的页面会崩溃。
+        MemoryCenterPhoneHome(
+            navId: $navId,
+            searchText: $searchText,
+            searchScopeFilter: $searchScopeFilter,
+            searchKindFilter: $searchKindFilter,
+            searchStateFilter: $searchStateFilter,
+            searchActive: $searchActive
+        )
+        .scrollDismissesKeyboard(.interactively)
+        .background(JieboColor.paper)
+        .memoryCenterLifecycle(
+            navId: navId,
+            searchActive: searchActive,
+            searchText: searchText,
+            searchScopeFilter: searchScopeFilter,
+            searchKindFilter: searchKindFilter,
+            searchStateFilter: searchStateFilter
+        )
     }
 }

@@ -93,6 +93,8 @@ struct PhoneShell: View {
             PhoneSettingsScreen()
         case .memory:
             AssistantMemoryScreen()
+        case .memoryPage(let page):
+            MemoryCenterPhonePageHost(route: page)
         case .connections:
             DeviceConnectionsScreen()
         }

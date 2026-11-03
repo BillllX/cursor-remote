@@ -11,6 +11,7 @@ struct PhoneWorkbench: View {
     @State private var drawerOpen = false
     @State private var preferredRunning = false
     @State private var settingsOpen = false
+    @State private var memoryOpen = false
     @State private var chatActions = ChatActionTargets()
 
     private var activePreviewTab: PreviewTab? {
@@ -59,6 +60,7 @@ struct PhoneWorkbench: View {
                         sceneSession?.workbenchChatId = store.activeId
                     }) },
                     openSettings: { closeDrawer { settingsOpen = true } },
+                    openMemory: { closeDrawer { memoryOpen = true } },
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
@@ -93,6 +95,9 @@ struct PhoneWorkbench: View {
                         PhoneSettingsDestination(route: route)
                     }
             }
+        }
+        .sheet(isPresented: $memoryOpen) {
+            MemoryCenterSheet()
         }
         .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
@@ -155,6 +160,7 @@ private struct PhoneDrawer: View {
     var openWorkspaces: () -> Void
     var newChat: () -> Void
     var openSettings: () -> Void
+    var openMemory: () -> Void
     var renameChat: (ChatSession) -> Void
     var deleteChat: (ChatSession) -> Void
 
@@ -512,7 +518,16 @@ private struct PhoneDrawer: View {
     // MARK: 底部设置（低频账号操作收进系统菜单）
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 16) {
+            Button(action: openMemory) {
+                Label("记忆", systemImage: NavigationIconId.memory.symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("记忆")
             Button(action: openSettings) {
                 HStack(spacing: 6) {
                     Label("设置", systemImage: NavigationIconId.account.symbol)

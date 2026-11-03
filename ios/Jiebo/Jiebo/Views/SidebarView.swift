@@ -12,6 +12,7 @@ struct SidebarView: View {
     var collapse: () -> Void = {}
     @State private var chatActions = ChatActionTargets()
     @State private var settingsOpen = false
+    @State private var memoryOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -68,6 +69,9 @@ struct SidebarView: View {
                         PhoneSettingsDestination(route: route)
                     }
             }
+        }
+        .sheet(isPresented: $memoryOpen) {
+            MemoryCenterSheet()
         }
         .chatActionAlerts($chatActions)
         .onAppear { adoptWorkbenchChatIfNeeded() }
@@ -276,7 +280,18 @@ struct SidebarView: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 16) {
+            Button {
+                memoryOpen = true
+            } label: {
+                Label("记忆", systemImage: NavigationIconId.memory.symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("记忆")
             Button {
                 settingsOpen = true
             } label: {

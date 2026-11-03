@@ -10,6 +10,9 @@ enum PhoneRoute: Hashable {
     case artifacts
     case settings
     case memory                 // 资料菜单和设置页都能进来
+    /// 记忆再往下的一层。必须跟 memory 同一条栈。
+    /// 记忆页里再套一个 NavigationStack 时，点过记忆再点菜单里别的页面，外层换栈会把内层导航控制器拆掉，直接崩溃。
+    case memoryPage(MemoryCenterPhoneRoute)
     case connections            // 只从设置页进入
 }
 

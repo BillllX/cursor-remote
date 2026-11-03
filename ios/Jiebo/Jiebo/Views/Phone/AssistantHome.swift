@@ -10,7 +10,8 @@ struct AssistantHome: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if router.selectedTab == .workspace {
+            if router.selectedTab != .assistant {
+                // 工作台和即时消息各自有对话。这里再留一块会跟着 activeId 把那边的输入租约占住或清掉。
                 Color.clear
             } else if store.assistantChatId == nil, router.bootstrapped {
                 unsupportedCard

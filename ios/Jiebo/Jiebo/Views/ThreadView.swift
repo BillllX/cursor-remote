@@ -26,6 +26,8 @@ struct ThreadView: View {
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var editingOwnership = SceneEditingOwnership.shared
+    /// 同一窗口里新旧两块对话会先后出现。卸下旧的不能把新的租约一起清掉。
+    @State private var editorViewId = UUID().uuidString
     var chrome: ThreadChrome = .pad
     /// nil = 工作台 activeId；聊天主页必须显式传助理或工作区 chatId。
     var chatId: String?
@@ -104,19 +106,31 @@ struct ThreadView: View {
             ActivityView(items: [file.url])
         }
         .onAppear {
-            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+            claimEditing()
             store.ensureTurnsLoaded(resolvedChatId)
         }
         .onDisappear {
-            editingOwnership.release(resource: editingResource, sceneToken: sceneToken)
+            releaseEditing(resource: editingResource, sceneToken: sceneToken)
         }
         .onChange(of: resolvedChatId) { oldId, newId in
-            editingOwnership.release(resource: resource(for: oldId), sceneToken: sceneToken)
-            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: scenePhase == .active)
+            releaseEditing(resource: resource(for: oldId), sceneToken: sceneToken)
+            claimEditing()
             store.ensureTurnsLoaded(newId)
         }
+        .onChange(of: sceneToken) { oldToken, _ in
+            releaseEditing(resource: editingResource, sceneToken: oldToken)
+            claimEditing()
+        }
         .onChange(of: scenePhase) { _, phase in
-            editingOwnership.claim(resource: editingResource, sceneToken: sceneToken, active: phase == .active)
+            claimEditing(active: phase == .active)
+        }
+        .task(id: editingResource) {
+            // 上一块对话的 onDisappear 常常晚于这一块的 onAppear，会把刚占上的租约清掉。
+            // 等它卸完再占一次。视图自己已经消失就不要再占。
+            claimEditing()
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            claimEditing()
         }
     }
 
@@ -125,7 +139,22 @@ struct ThreadView: View {
     var threadBusy: Bool { threadChat.map { store.chatShowsRunning($0) } ?? false }
     var editingResource: String { resource(for: resolvedChatId) }
     var ownsEditing: Bool {
-        editingOwnership.isOwner(resource: editingResource, sceneToken: sceneToken)
+        if editingOwnership.isOwner(resource: editingResource, sceneToken: sceneToken) { return true }
+        // 没有任何窗口占着时，这一块就是唯一的输入区，不要提示去另一窗口。
+        return !editingOwnership.hasClaimant(resource: editingResource)
+    }
+
+    private func claimEditing(active: Bool? = nil) {
+        editingOwnership.claim(
+            resource: editingResource,
+            sceneToken: sceneToken,
+            viewId: editorViewId,
+            active: active ?? (scenePhase == .active)
+        )
+    }
+
+    private func releaseEditing(resource: String, sceneToken: String) {
+        editingOwnership.release(resource: resource, sceneToken: sceneToken, viewId: editorViewId)
     }
 
     private func resource(for chatId: String) -> String {

@@ -212,14 +212,17 @@ struct MemoryCenterSingleColumnBody: View {
         NavigationStack {
             MemoryCenterPhoneHome(
                 navId: $navId,
-                middleTab: $middleTab,
-                stateFilter: $stateFilter,
                 searchText: $searchText,
                 searchScopeFilter: $searchScopeFilter,
                 searchKindFilter: $searchKindFilter,
                 searchStateFilter: $searchStateFilter,
                 searchActive: $searchActive
             )
+            .navigationDestination(for: PhoneRoute.self) { route in
+                if case let .memoryPage(page) = route {
+                    MemoryCenterPhonePage(route: page, middleTab: $middleTab, stateFilter: $stateFilter)
+                }
+            }
         }
     }
 }
@@ -989,7 +992,7 @@ struct MemoryCenterItemsList: View {
                     .accessibilityAddTraits(selectedKey == key ? .isSelected : [])
                     .hitTarget()
                 case .drillDown(let scopeId):
-                    NavigationLink(value: MemoryCenterPhoneRoute.item(scopeId: scopeId, key: key)) {
+                    NavigationLink(value: PhoneRoute.memoryPage(.item(scopeId: scopeId, key: key))) {
                         MemoryCenterItemRow(item: item, diagnostics: diagnostics, selected: false)
                     }
                     .buttonStyle(.plain)
@@ -1170,7 +1173,7 @@ struct MemoryCenterSearchList: View {
                         .buttonStyle(.plain)
                         .hitTarget()
                     case .drillDown, .drillDownSearchHit:
-                        NavigationLink(value: MemoryCenterPhoneRoute.searchHit(key: key)) {
+                        NavigationLink(value: PhoneRoute.memoryPage(.searchHit(key: key))) {
                             MemoryCenterSearchHitRow(hit: hit, selected: false)
                         }
                         .buttonStyle(.plain)
@@ -1522,7 +1525,7 @@ struct MemoryCenterPhoneRememberMe: View {
                 }
                 Section {
                     ForEach(memory.orderedCoreKeys, id: \.self) { key in
-                        NavigationLink(value: MemoryCenterPhoneRoute.coreField(key)) {
+                        NavigationLink(value: PhoneRoute.memoryPage(.coreField(key))) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(key)
                                 Text((memory.coreFields[key] ?? "").isEmpty ? "还没写" : (memory.coreFields[key] ?? ""))
@@ -1564,7 +1567,7 @@ struct MemoryCenterPhoneRememberMe: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink(value: MemoryCenterPhoneRoute.personalCreate) {
+                NavigationLink(value: PhoneRoute.memoryPage(.personalCreate)) {
                     Text("记一条")
                 }
             }
@@ -1648,13 +1651,13 @@ struct MemoryCenterPhoneMore: View {
 
     var body: some View {
         List {
-            NavigationLink(value: MemoryCenterPhoneRoute.activity) { Text("最近改动") }
-            NavigationLink(value: MemoryCenterPhoneRoute.transfer) { Text("导出与导入") }
+            NavigationLink(value: PhoneRoute.memoryPage(.activity)) { Text("最近改动") }
+            NavigationLink(value: PhoneRoute.memoryPage(.transfer)) { Text("导出与导入") }
             if let folder {
-                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: folder.id, label: "上一轮怎么选的")) {
+                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder.id, label: "上一轮怎么选的"))) {
                     Text("上一轮怎么选的")
                 }
-                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: folder.id, label: "文件夹规则")) {
+                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder.id, label: "文件夹规则"))) {
                     Text("文件夹规则")
                 }
             } else {
@@ -1668,18 +1671,90 @@ struct MemoryCenterPhoneMore: View {
     }
 }
 
+/// 记忆下一级。打电话的栈和窄宽单栏各自注册，页面本身不再套导航栈。
+struct MemoryCenterPhonePage: View {
+    @Environment(ChatStore.self) private var store
+    let route: MemoryCenterPhoneRoute
+    @Binding var middleTab: String
+    @Binding var stateFilter: String
+
+    var body: some View {
+        switch route {
+        case let .scope(id, label):
+            if label == "上一轮怎么选的" {
+                ScrollView {
+                    MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
+                        .padding(12)
+                }
+                .navigationTitle("上一轮怎么选的")
+                .memoryCenterScreenHold(navId: id)
+            } else if label == "文件夹规则" {
+                ScrollView {
+                    if let detail = store.memoryCenterData.detail {
+                        MemoryCenterRulesList(rules: detail.rules, truncated: detail.rulesTruncated)
+                            .padding(12)
+                    }
+                }
+                .navigationTitle("文件夹规则")
+                .memoryCenterScreenHold(navId: id)
+            } else if id == "folder-missing" {
+                MemoryCenterEmptyBlock(title: "还没打开文件夹", hint: "打开一个工作区后再看这里。")
+                    .navigationTitle("这个文件夹")
+            } else {
+                MemoryCenterPhoneScopeList(
+                    scopeId: id,
+                    scopeLabel: label,
+                    middleTab: $middleTab,
+                    stateFilter: $stateFilter
+                )
+            }
+        case .suggestions:
+            MemoryCenterPhoneSuggestions()
+        case .activity:
+            MemoryCenterPhoneActivity()
+        case .search:
+            MemoryCenterPhoneSearchResults()
+        case .managePersonal:
+            MemoryCenterPhoneRememberMe()
+        case let .item(scopeId, key):
+            MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
+        case let .searchHit(key):
+            MemoryCenterSearchHitDetail(itemKey: key)
+        case .me:
+            MemoryCenterPhoneRememberMe()
+        case .more:
+            MemoryCenterPhoneMore()
+        case let .coreField(field):
+            MemoryCenterPhoneCoreField(field: field)
+        case .personalCreate:
+            MemoryCenterPhonePersonalCreate()
+        case .transfer:
+            ScrollView { MemoryCenterImportPane().padding(14) }
+                .navigationTitle("导出与导入")
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+/// 小驳和设置页没有现成的筛选状态，下一级自己记。
+struct MemoryCenterPhonePageHost: View {
+    let route: MemoryCenterPhoneRoute
+    @State private var middleTab = "all"
+    @State private var stateFilter = "useful"
+
+    var body: some View {
+        MemoryCenterPhonePage(route: route, middleTab: $middleTab, stateFilter: $stateFilter)
+    }
+}
+
 struct MemoryCenterPhoneHome: View {
     @Environment(ChatStore.self) private var store
     @Binding var navId: String
-    @Binding var middleTab: String
-    @Binding var stateFilter: String
     @Binding var searchText: String
     @Binding var searchScopeFilter: String
     @Binding var searchKindFilter: String
     @Binding var searchStateFilter: String
     @Binding var searchActive: Bool
-    /// 从外层页面进来时用来返回。单栏记忆没有外层页面，不传。
-    var onLeave: (() -> Void)? = nil
 
     private var folder: MemoryCenterScopeSummary? {
         MemoryCenterLabels.currentFolder(
@@ -1701,7 +1776,7 @@ struct MemoryCenterPhoneHome: View {
                     MemoryCenterSearchList(selectedKey: .constant(nil), itemNavigation: .drillDownSearchHit)
                 }
             } else {
-                NavigationLink(value: MemoryCenterPhoneRoute.me) {
+                NavigationLink(value: PhoneRoute.memoryPage(.me)) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("记得的我")
                         Text("关于我 · 工作偏好")
@@ -1709,7 +1784,7 @@ struct MemoryCenterPhoneHome: View {
                             .foregroundStyle(JieboColor.dim)
                     }
                 }
-                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: folder?.id ?? "folder-missing", label: folder?.label ?? "这个文件夹")) {
+                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder?.id ?? "folder-missing", label: folder?.label ?? "这个文件夹"))) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("这个文件夹")
                         Text(folder?.label ?? "还没打开文件夹")
@@ -1717,7 +1792,7 @@ struct MemoryCenterPhoneHome: View {
                             .foregroundStyle(JieboColor.dim)
                     }
                 }
-                NavigationLink(value: MemoryCenterPhoneRoute.suggestions) {
+                NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
                     HStack {
                         Text("要你看一眼")
                         Spacer()
@@ -1732,82 +1807,18 @@ struct MemoryCenterPhoneHome: View {
                         }
                     }
                 }
-                NavigationLink(value: MemoryCenterPhoneRoute.more) {
+                NavigationLink(value: PhoneRoute.memoryPage(.more)) {
                     Text("更多")
                 }
             }
         }
         .navigationTitle("记忆")
-        .navigationDestination(for: MemoryCenterPhoneRoute.self) { route in
-            switch route {
-            case let .scope(id, label):
-                if label == "上一轮怎么选的" {
-                    ScrollView {
-                        MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
-                            .padding(12)
-                    }
-                    .navigationTitle("上一轮怎么选的")
-                    .memoryCenterScreenHold(navId: id)
-                } else if label == "文件夹规则" {
-                    ScrollView {
-                        if let detail = store.memoryCenterData.detail {
-                            MemoryCenterRulesList(rules: detail.rules, truncated: detail.rulesTruncated)
-                                .padding(12)
-                        }
-                    }
-                    .navigationTitle("文件夹规则")
-                    .memoryCenterScreenHold(navId: id)
-                } else if id == "folder-missing" {
-                    MemoryCenterEmptyBlock(title: "还没打开文件夹", hint: "打开一个工作区后再看这里。")
-                        .navigationTitle("这个文件夹")
-                } else {
-                    MemoryCenterPhoneScopeList(
-                        scopeId: id,
-                        scopeLabel: label,
-                        middleTab: $middleTab,
-                        stateFilter: $stateFilter
-                    )
-                }
-            case .suggestions:
-                MemoryCenterPhoneSuggestions()
-            case .activity:
-                MemoryCenterPhoneActivity()
-            case .search:
-                MemoryCenterPhoneSearchResults()
-            case .managePersonal:
-                MemoryCenterPhoneRememberMe()
-            case let .item(scopeId, key):
-                MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
-            case let .searchHit(key):
-                MemoryCenterSearchHitDetail(itemKey: key)
-            case .me:
-                MemoryCenterPhoneRememberMe()
-            case .more:
-                MemoryCenterPhoneMore()
-            case let .coreField(field):
-                MemoryCenterPhoneCoreField(field: field)
-            case .personalCreate:
-                MemoryCenterPhonePersonalCreate()
-            case .transfer:
-                ScrollView { MemoryCenterImportPane().padding(14) }
-                    .navigationTitle("导出与导入")
-                    .navigationBarTitleDisplayMode(.inline)
-            }
-        }
         .searchable(text: $searchText, prompt: "搜索记忆")
         .refreshable {
             store.memoryCenterRefreshOverview()
             store.memoryCenterLoadSuggestions()
         }
         .toolbar {
-            if let onLeave {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button(action: onLeave) {
-                        Image(systemName: "chevron.left")
-                    }
-                    .accessibilityLabel("返回")
-                }
-            }
             if searchActive {
                 ToolbarItem(placement: .topBarTrailing) {
                     MemoryCenterSearchFilters(
