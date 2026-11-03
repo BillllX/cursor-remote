@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// iPhone 的四个一级空间。TabView 直接使用 iOS 26 系统栏与 Liquid Glass。
+/// iPhone 的三个大模块：小驳、工作台、即时消息。底栏不参与切换。
 struct PhoneTabShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -23,40 +23,23 @@ struct PhoneTabShell: View {
 
     var body: some View {
         @Bindable var router = router
-        TabView(selection: $router.selectedTab) {
-            Tab("小驳", systemImage: NavigationIconId.assistant.symbol, value: PhoneTab.assistant) {
-                PhoneShell()
-                    .environment(\.assistantVoicePresenterActive, router.selectedTab == .assistant)
-                    .tabBarMinimizeBehavior(.never)
+        ZStack {
+            PhoneShell()
+                .environment(\.assistantVoicePresenterActive, router.selectedTab == .assistant)
+                .opacity(router.selectedTab == .assistant ? 1 : 0)
+                .allowsHitTesting(router.selectedTab == .assistant)
+                .accessibilityHidden(router.selectedTab != .assistant)
+            if router.selectedTab == .workspace {
+                PhoneWorkbench(embedsPreview: false)
             }
-
-            Tab("待处理", systemImage: "tray", value: PhoneTab.inbox) {
-                NavigationStack(path: $router.inboxPath) {
-                    InboxHome()
-                        .navigationDestination(for: InboxRoute.self) { route in
-                            switch route {
-                            case .item(let id):
-                                InboxDetailView(itemId: id)
-                            }
-                        }
-                }
-            }
-            .badge(store.assistantBadgeCount)
-
-            Tab("工作台", systemImage: "rectangle.3.group", value: PhoneTab.workspace) {
-                if router.selectedTab == .workspace {
-                    PhoneWorkbench(embedsPreview: false)
-                }
-            }
-            .badge(store.workspaceUnreadCount)
-
-            Tab("消息", systemImage: "bubble.left.and.bubble.right", value: PhoneTab.messages) {
+            if router.selectedTab == .messages {
                 ChatHome()
             }
-            .badge(im.totalUnread)
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
         .environment(router)
+        .environment(\.switchPhoneSpace, { [router] tab in
+            router.openSpace(tab)
+        })
         .environment(\.assistantSceneToken, sceneToken)
         .environment(\.openDelegation, { [router = self.router] id in
             router.delegationDetail = DelegationRef(id: id)
@@ -209,7 +192,11 @@ struct PhoneTabShell: View {
         }
 
         guard router.bootstrapped else { return }
-        router.selectedTab = target.kind == "approval" ? .inbox : .assistant
+        if target.kind == "approval" {
+            router.go(.inbox)
+        } else {
+            router.selectedTab = .assistant
+        }
         Task { @MainActor in
             await consumeAssistantPush(target)
         }

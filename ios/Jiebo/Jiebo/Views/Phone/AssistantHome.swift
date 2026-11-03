@@ -5,6 +5,7 @@ import UIKit
 /// 整个 iPhone 上只有这里有 ComposerView（它由 ThreadView 内部创建），ActionDock 通过 ThreadView 的 dock 插槽放在输入框正上方。
 struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
 
     var body: some View {
@@ -73,8 +74,9 @@ struct AssistantHome: View {
             ToolbarItem(placement: .principal) {
                 titleView
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 todayButton
+                inboxButton
             }
         }
         .modifier(AssistantToolbarMinimize())
@@ -101,7 +103,7 @@ struct AssistantHome: View {
     // MARK: 导航栏
 
     private var menuButton: some View {
-        let badge = store.assistantBadgeCount
+        let badge = store.workspaceUnreadCount + im.totalUnread
         return Button {
             router.openMenu()
         } label: {
@@ -156,6 +158,24 @@ struct AssistantHome: View {
             if let reason = store.backgroundAttentionReason { return reason }
         }
         return store.linkState.title
+    }
+
+    private var inboxButton: some View {
+        let badge = store.assistantBadgeCount
+        return Button {
+            router.go(.inbox)
+        } label: {
+            Image(systemName: "tray")
+                .font(JieboFont.text(.body, weight: .semibold))
+                .foregroundStyle(JieboColor.ink)
+                .overlay(alignment: .topTrailing) {
+                    if badge > 0 {
+                        PendingBadge(count: badge)
+                            .offset(x: 10, y: -8)
+                    }
+                }
+        }
+        .accessibilityLabel(badge > 0 ? "待处理，\(badge)" : "待处理")
     }
 
     private var todayButton: some View {

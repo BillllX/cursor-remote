@@ -22,6 +22,7 @@ struct PendingBadge: View {
 /// 手指拖到哪，面板跟到哪；松手再按速度停在开或关。push 页上这条热区撤掉，左缘右滑归系统的返回手势。
 struct MenuDrawer: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// VoiceOver 焦点：0 是首项「今日」。nil 时没有行被选中
@@ -190,14 +191,21 @@ struct MenuDrawer: View {
             divider
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    sectionTitle("前往")
+                    menuRow("rectangle.3.group", "切换到工作台", tag: 0, badge: store.workspaceUnreadCount) {
+                        router.openSpace(.workspace)
+                    }
+                    menuRow("bubble.left.and.bubble.right", "切换到即时消息", tag: 1, badge: im.totalUnread) {
+                        router.openSpace(.messages)
+                    }
                     sectionTitle("资料")
-                    menuRow("square.stack.3d.up", "产物中心", tag: 0) {
+                    menuRow("square.stack.3d.up", "产物中心", tag: 2) {
                         router.go(.artifacts)
                     }
-                    menuRow(NavigationIconId.memory.symbol, "记忆", tag: 1) {
+                    menuRow(NavigationIconId.memory.symbol, "记忆", tag: 3) {
                         router.go(.memory)
                     }
-                    menuRow(NavigationIconId.account.symbol, "设置", tag: 2) {
+                    menuRow(NavigationIconId.account.symbol, "设置", tag: 4) {
                         router.go(.settings)
                     }
                 }
@@ -259,6 +267,7 @@ struct MenuDrawer: View {
         _ symbol: String,
         _ title: String,
         tag: Int,
+        badge: Int = 0,
         action: @escaping () -> Void
     ) -> some View {
         return Button(action: action) {
@@ -271,6 +280,9 @@ struct MenuDrawer: View {
                     .font(JieboFont.text(.callout, weight: .medium))
                     .foregroundStyle(JieboColor.ink)
                 Spacer(minLength: 8)
+                if badge > 0 {
+                    PendingBadge(count: badge)
+                }
                 Image(systemName: "chevron.right")
                     .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
@@ -282,7 +294,7 @@ struct MenuDrawer: View {
             .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(title)
+        .accessibilityLabel(badge > 0 ? "\(title)，\(badge)" : title)
         .accessibilityFocused($focusedRow, equals: tag)
     }
 

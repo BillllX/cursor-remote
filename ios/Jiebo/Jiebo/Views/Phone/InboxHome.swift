@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 待处理一级空间（规格 §4.2）：待批 + 收件箱，使用独立的 inboxPath。
+/// 小驳里的待处理（规格 §4.2）：待批 + 收件箱。从聊天页右上角推进来。
 /// 绝不调用 store.openAssistantInboxItem / select：收件箱条目指向的会话可能是工作区子会话，
 /// 一律走 router.open（委派 → 详情 sheet，助理 → 回助理页，其它 → 只提示）。
 struct InboxHome: View {

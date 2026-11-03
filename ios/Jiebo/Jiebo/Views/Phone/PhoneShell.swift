@@ -32,7 +32,6 @@ struct PhoneShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
-        .toolbar(router.hubOpen ? .hidden : .automatic, for: .tabBar)
         .task { await bootstrap() }
     }
 
@@ -82,6 +81,8 @@ struct PhoneShell: View {
         switch route {
         case .inbox:
             InboxHome()
+        case .inboxItem(let id):
+            InboxDetailView(itemId: id)
         case .todayManage:
             AssistantTodayScreen()
         case .worklist(let column):

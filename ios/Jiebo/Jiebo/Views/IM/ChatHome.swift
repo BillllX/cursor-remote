@@ -219,6 +219,7 @@ struct ChatListView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     var openSettings: () -> Void
     @State private var query = ""
     @State private var searchPresented = false
@@ -331,12 +332,41 @@ struct ChatListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: openSettings) {
-                    Image(systemName: NavigationIconId.account.symbol)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink2)
+                if let switchPhoneSpace {
+                    Menu {
+                        Button("切换到小驳", systemImage: NavigationIconId.assistant.symbol) {
+                            switchPhoneSpace(.assistant)
+                        }
+                        Button("切换到工作台", systemImage: "rectangle.3.group") {
+                            switchPhoneSpace(.workspace)
+                        }
+                        Button("聊天设置", systemImage: NavigationIconId.account.symbol) {
+                            openSettings()
+                        }
+                    } label: {
+                        Image(systemName: "line.3.horizontal")
+                            .font(JieboFont.text(.body, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                            .overlay(alignment: .topTrailing) {
+                                if store.workspaceUnreadCount > 0 {
+                                    PendingBadge(count: store.workspaceUnreadCount)
+                                        .offset(x: 8, y: -6)
+                                }
+                            }
+                    }
+                    .accessibilityLabel(
+                        store.workspaceUnreadCount > 0
+                            ? "菜单，工作台 \(store.workspaceUnreadCount)"
+                            : "菜单"
+                    )
+                } else {
+                    Button(action: openSettings) {
+                        Image(systemName: NavigationIconId.account.symbol)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                    .accessibilityLabel("聊天设置")
                 }
-                .accessibilityLabel("聊天设置")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {

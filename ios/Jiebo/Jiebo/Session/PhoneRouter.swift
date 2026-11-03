@@ -4,6 +4,7 @@ import UIKit
 /// 从助理页 push 出去的页面
 enum PhoneRoute: Hashable {
     case inbox
+    case inboxItem(String)      // AssistantInboxItem.id
     case todayManage
     case worklist(AssistantWorkColumn)
     case artifacts
@@ -14,13 +15,8 @@ enum PhoneRoute: Hashable {
 
 enum PhoneTab: Hashable {
     case assistant
-    case inbox
     case workspace
     case messages
-}
-
-enum InboxRoute: Hashable {
-    case item(String)           // AssistantInboxItem.id
 }
 
 /// 待处理这一页里的栏目。通知是原来的收件箱；待办、计划、委派不再从侧栏另开一页。
@@ -46,14 +42,14 @@ extension EnvironmentValues {
     }
 }
 
-/// iPhone 四个一级空间的路由状态。只在 PhoneTabShell 创建并下发，不放进 ChatStore。
+/// iPhone 三个大模块的路由状态。只在 PhoneTabShell 创建并下发，不放进 ChatStore。
+/// 待处理是小驳聊天页里的一页，不单独占一个模块。
 @Observable
 @MainActor
 final class PhoneRouter {
     var selectedTab: PhoneTab = .assistant
-    /// 小驳空间的导航栈；待处理使用独立的 inboxPath。
+    /// 小驳空间的导航栈。待处理、通知详情都在这条栈上。
     var path: [PhoneRoute] = []
-    var inboxPath: [InboxRoute] = []
     var inboxLane: InboxLane = .notices
     var menuOpen = false
     var hubOpen = false
@@ -67,9 +63,21 @@ final class PhoneRouter {
     var pendingVoiceCapture: AssistantCaptureBridge.Capture?
     var bootstrapped = false
 
-    /// 小驳和待处理必须停在助理会话。工作区和消息可以打开别的会话。
+    /// 小驳必须停在助理会话。工作区和即时消息可以打开别的会话。
     var locksActiveChatToAssistant: Bool {
-        selectedTab != .workspace && selectedTab != .messages
+        selectedTab == .assistant
+    }
+}
+
+private struct PhoneSpaceSwitchKey: EnvironmentKey {
+    static let defaultValue: ((PhoneTab) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    /// iPhone 上切换小驳、工作台、即时消息。iPad 不注入。
+    var switchPhoneSpace: ((PhoneTab) -> Void)? {
+        get { self[PhoneSpaceSwitchKey.self] }
+        set { self[PhoneSpaceSwitchKey.self] = newValue }
     }
 }
 
@@ -78,25 +86,33 @@ extension PhoneRouter {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// 待处理、待办、计划、委派都留在待处理这一页。其它页面回到小驳空间后 push（替换整个栈，不叠层）。
+    /// 待处理、待办、计划、委派都留在小驳的导航栈里。其它页面回到小驳后 push（替换整个栈，不叠层）。
     func go(_ route: PhoneRoute) {
         dismissKeyboard()
         menuOpen = false
         hubOpen = false
+        selectedTab = .assistant
         switch route {
-        case .inbox:
-            inboxPath = []
+        case .inbox, .inboxItem:
             inboxLane = .notices
-            selectedTab = .inbox
+            path = [.inbox]
         case .worklist(let column):
-            inboxPath = []
             inboxLane = .work(column)
-            path = []
-            selectedTab = .inbox
+            path = [.inbox]
         default:
-            selectedTab = .assistant
             path = [route]
         }
+    }
+
+    /// 三个大模块之间切换。回到小驳时落在聊天页，不留着上次推上去的页面。
+    func openSpace(_ tab: PhoneTab) {
+        dismissKeyboard()
+        menuOpen = false
+        hubOpen = false
+        if tab == .assistant {
+            path = []
+        }
+        selectedTab = tab
     }
 
     func openMenu() {
@@ -130,8 +146,13 @@ extension PhoneRouter {
 
     func openInboxItem(_ id: String) {
         dismissKeyboard()
-        selectedTab = .inbox
-        inboxPath.append(.item(id))
+        menuOpen = false
+        hubOpen = false
+        selectedTab = .assistant
+        if path.last != .inbox {
+            path.append(.inbox)
+        }
+        path.append(.inboxItem(id))
     }
 
     func queueVoice(_ capture: AssistantCaptureBridge.Capture) {
