@@ -732,6 +732,7 @@ struct MemoryCenterSuggestionRow: Identifiable, Hashable, Sendable {
     var scope: String
     var kind: String
     var summary: String
+    var reason: String
     var risk: String
 
     static func from(_ entry: MemoryCenterSuggestionEntry) -> MemoryCenterSuggestionRow {
@@ -740,6 +741,7 @@ struct MemoryCenterSuggestionRow: Identifiable, Hashable, Sendable {
             scope: entry.scope,
             kind: entry.kind,
             summary: entry.summary,
+            reason: entry.reason,
             risk: entry.risk
         )
     }

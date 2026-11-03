@@ -46,7 +46,101 @@
 }
 
 .layoutThree {
-  grid-template-columns: 220px minmax(0, 1fr) 320px;
+  grid-template-columns: 176px minmax(0, 1fr) 360px;
+}
+
+.layoutMid {
+  grid-template-columns: 176px minmax(0, 1fr);
+  position: relative;
+}
+
+.detailCover {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(360px, 100%);
+  background: var(--bg-panel, #fffcf8);
+  border-left: 1px solid var(--border, #ddd5c7);
+  z-index: 2;
+}
+
+.destTabs {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  min-height: 36px;
+  align-items: flex-end;
+}
+
+.destTab {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.destTabOn {
+  box-shadow: inset 0 -2px 0 #1a4f41;
+  color: #1a4f41;
+}
+
+.pineBtn {
+  background: #1a4f41;
+  color: #fffcf8;
+  border: 1px solid #1a4f41;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pineBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.clayText {
+  color: #a35c3c;
+  background: transparent;
+  border: 0;
+  padding: 6px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.clayCount {
+  color: #a35c3c;
+  background: #f8e5e0;
+  border-radius: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.headRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+}
+
+.subline {
+  color: #746d62;
+  font-size: 12px;
+}
+
+.folderMenu {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .nav {
@@ -224,7 +318,8 @@
 
 .paneTitle {
   margin: 0;
-  font-size: var(--fs-md);
+  font-family: var(--font-display, "Songti SC", serif);
+  font-size: 22px;
   font-weight: 600;
   outline: none;
 }

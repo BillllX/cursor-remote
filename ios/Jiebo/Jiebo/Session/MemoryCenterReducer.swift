@@ -334,7 +334,7 @@ enum MemoryCenterReducer {
     }
 
     static func scopeIdForNav(_ navId: String) -> String? {
-        if navId == "overview" || navId == "activity" || navId == "suggestions" || navId == "settings" { return nil }
+        if navId == "overview" || navId == "activity" || navId == "suggestions" || navId == "settings" || navId == "more" || navId == "diagnostics" || navId == "rules" || navId == "folder-missing" { return nil }
         return navId
     }
 

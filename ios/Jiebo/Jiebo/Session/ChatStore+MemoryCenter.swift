@@ -249,13 +249,11 @@ extension ChatStore {
 
     func memoryCenterEnsureLoaded(navId: String, searchActive: Bool) {
         guard memoryCenterActive else { return }
-        if searchActive { return }
-        if navId == "overview" {
-            if memoryCenterData.overview == nil, !memoryCenterData.loadingOverview {
-                memoryCenterSendGet(scopeId: nil)
-            }
-            return
+        if memoryCenterData.overview == nil, !memoryCenterData.loadingOverview {
+            memoryCenterSendGet(scopeId: nil)
         }
+        if searchActive { return }
+        if navId == "overview" { return }
         guard let scope = MemoryCenterReducer.scopeIdForNav(navId) else { return }
         let detailOk = memoryCenterData.detail?.scope.id == scope
         if !detailOk, !memoryCenterData.loadingScope {

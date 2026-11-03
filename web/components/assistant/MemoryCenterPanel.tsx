@@ -1,45 +1,55 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
+  AssistantMemoryEntry,
   AssistantResultMessage,
   AssistantState,
   ClientMessage,
   InjectionDiagnostics,
   MemoryCenterSearchHit,
-  MemoryCenterState,
   RuleFile,
   WorkspaceMemoryItem,
 } from "@shared/protocol";
 import styles from "./memoryCenter.module.css";
 import {
   INJECTION_REASON_LABEL,
-  KIND_LABEL,
   MEMORY_CENTER_CSS,
   MEMORY_CENTER_FOCUS,
   SEARCHABLE_KIND_LABEL,
   SKIP_REASON_LABEL,
   STATE_LABEL,
-  effectiveStateLabel,
   formatMemoryCenterSearchReasons,
   itemKey,
   type SearchableMemoryCenterKind,
 } from "./memoryCenterLabels";
-import PersonalMemoryManage from "./PersonalMemoryManage";
+import {
+  CORE_FIELD_ORDER,
+  FOLDER_MENUS,
+  MEMORY_DESTINATIONS,
+  MORE_PAGES,
+  basisLabel,
+  diagnosticsSummary,
+  filterFolderItems,
+  firstConfirmKey,
+  folderMenuLabel,
+  listStatusWord,
+  openingDestination,
+  preferredFolderId,
+  searchGroupLabel,
+  searchSourceLabel,
+  wasUsedLastRound,
+  type FolderMenu,
+  type MemoryDestination,
+  type MorePage,
+} from "./memoryCenterCopy";
 import {
   buildScopeTreeRows,
   detailForScope,
-  filterItemsByState,
-  injectionRoundItems,
-  isPlaceholderNav,
-  overviewPendingTotal,
-  pinnedOnlyItems,
   resolveScopeLabel,
-  scopeIdForNav,
   selectionReasonForItem,
   skipReasonForItem,
-  workspaceScopesForOverview,
   type McNavId,
 } from "./memoryCenterReducer";
 import MemoryCenterWorkspaceEditor from "./MemoryCenterWorkspaceEditor";
@@ -60,25 +70,10 @@ type Props = {
   onNotice: (text: string) => void;
 };
 
+type Tier = "wide" | "mid" | "narrow";
+
 function Mark({ tone, children }: { tone?: "ok" | "warn" | "danger" | "run"; children: ReactNode }) {
   return <span className={`chat-mark ${tone ?? ""} ${MEMORY_CENTER_CSS.badge}`}>{children}</span>;
-}
-
-function TruncatedBanner({ show, label }: { show?: boolean; label: string }) {
-  if (!show) return null;
-  return <div className={`loop-meta ${MEMORY_CENTER_CSS.truncated}`}>{label}</div>;
-}
-
-function ScopeHealthDot({ health, error }: { health?: string | null; error?: string | null }) {
-  if (error || health === "error")
-    return (
-      <span className={`${styles.healthDot} ${styles.healthError}`} title={error || "错误"} aria-label="作用域错误" />
-    );
-  if (health === "degraded")
-    return (
-      <span className={`${styles.healthDot} ${styles.healthWarn}`} title={error || "降级"} aria-label="作用域降级" />
-    );
-  return <span className={`${styles.healthDot} ${styles.healthOk}`} title="正常" aria-label="作用域正常" />;
 }
 
 function ItemRow({
@@ -90,238 +85,40 @@ function ItemRow({
 }: {
   title: string;
   body: string;
-  meta: ReactNode;
+  meta?: ReactNode;
   selected: boolean;
   onSelect: () => void;
 }) {
   return (
     <li>
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         className={`assistant-item assistant-item-btn ${MEMORY_CENTER_CSS.rowBtn}${selected ? ` ${MEMORY_CENTER_CSS.rowSelected}` : ""}`}
         aria-pressed={selected}
         onClick={onSelect}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect();
+          }
+        }}
       >
         <div className="assistant-item-head">
           <span className="assistant-item-title">{title}</span>
         </div>
-        <div className="assistant-item-body">{body}</div>
-        <div className={styles.rowMeta}>{meta}</div>
-      </button>
+        {body ? <div className="assistant-item-body">{body}</div> : null}
+        {meta ? <div className={styles.rowMeta}>{meta}</div> : null}
+      </div>
     </li>
   );
 }
 
-function itemMetaBadges(item: WorkspaceMemoryItem) {
-  const parts: ReactNode[] = [];
-  if (item.section) parts.push(<Mark key="sec">{item.section}</Mark>);
-  parts.push(<Mark key="st">{effectiveStateLabel(item.effectiveState)}</Mark>);
-  if (item.pinned)
-    parts.push(
-      <Mark key="pin" tone="ok">
-        常驻
-      </Mark>,
-    );
-  if (item.missingRefs.length)
-    parts.push(
-      <Mark key="miss" tone="warn">
-        缺引用 {item.missingRefs.length}
-      </Mark>,
-    );
-  if (item.truncated) parts.push(<Mark key="tr">已截断</Mark>);
-  return parts;
-}
-
-function DiagnosticsBlock({ diagnostics }: { diagnostics: InjectionDiagnostics | null }) {
-  if (!diagnostics) return <div className="loop-meta">暂无注入诊断。</div>;
-  return (
-    <div className={styles.diagnostics}>
-      <div className="side-label">注入诊断</div>
-      <ul className={styles.diagList}>
-        <li>预算策略：{diagnostics.strategy}</li>
-        <li>
-          已选 {diagnostics.selected} / 共 {diagnostics.total} · 预算跳过 {diagnostics.skippedBudget}
-        </li>
-        <li>
-          常驻 {diagnostics.pinnedSelected} · 锚点相关 {diagnostics.relevantSelected} · 冷召回{" "}
-          {diagnostics.coldRecalled}
-        </li>
-        <li>
-          终态跳过 {diagnostics.terminalSkipped}
-          {diagnostics.coldUnrelatedSkipped != null ? ` · 冷无关跳过 ${diagnostics.coldUnrelatedSkipped}` : ""}
-        </li>
-      </ul>
-      {diagnostics.selectedIdsTruncated ? <TruncatedBanner show label="选中条目列表已截断" /> : null}
-      {diagnostics.skippedReasonsTruncated ? <TruncatedBanner show label="跳过原因列表已截断" /> : null}
-      {diagnostics.truncated ? <TruncatedBanner show label="诊断 payload 已截断" /> : null}
-    </div>
-  );
-}
-
-function ItemDetail({
-  item,
-  diagnostics,
-  scopeLabel,
-  editableItem,
-  editScopeId,
-  mutating,
-  mutationError,
-  mutationConflict,
-  onMutate,
-  onOpenScopeForEdit,
-  onClearSelection,
-  onCreated,
-}: {
-  item: WorkspaceMemoryItem | MemoryCenterSearchHit;
-  diagnostics: InjectionDiagnostics | null;
-  scopeLabel: string;
-  editableItem: WorkspaceMemoryItem | null;
-  editScopeId: string | null;
-  mutating: boolean;
-  mutationError: string;
-  mutationConflict: boolean;
-  onMutate: (args: import("@shared/protocol").MemoryCenterMutateArgs) => void;
-  onOpenScopeForEdit?: () => void;
-  onClearSelection: () => void;
-  onCreated: () => void;
-}) {
-  const id = item.id;
-  const sel = selectionReasonForItem(id, diagnostics);
-  const skip = skipReasonForItem(id, diagnostics);
-  return (
-    <div className={styles.detailBody}>
-      <div className="assistant-item-body">{item.text}</div>
-      {"truncated" in item && item.truncated ? (
-        <TruncatedBanner show label="正文已在服务端截断，完整内容请打开源文件。" />
-      ) : null}
-      <dl className={styles.detailDl}>
-        <div>
-          <dt>层级</dt>
-          <dd>{item.layer}</dd>
-        </div>
-        <div>
-          <dt>种类</dt>
-          <dd>{KIND_LABEL[item.kind]}</dd>
-        </div>
-        <div>
-          <dt>作用域</dt>
-          <dd>{scopeLabel}</dd>
-        </div>
-        <div>
-          <dt>状态</dt>
-          <dd>{effectiveStateLabel(item.effectiveState)}</dd>
-        </div>
-        {"pinned" in item && item.pinned ? (
-          <div>
-            <dt>常驻</dt>
-            <dd>是</dd>
-          </div>
-        ) : null}
-        {item.section ? (
-          <div>
-            <dt>章节</dt>
-            <dd>{item.section}</dd>
-          </div>
-        ) : null}
-        {"at" in item && item.at ? (
-          <div>
-            <dt>日期</dt>
-            <dd>{item.at}</dd>
-          </div>
-        ) : null}
-        {"from" in item && item.from ? (
-          <div>
-            <dt>来源</dt>
-            <dd>{item.from}</dd>
-          </div>
-        ) : null}
-        {"used" in item && item.used ? (
-          <div>
-            <dt>最近采用</dt>
-            <dd>
-              {item.used}
-              {item.uses != null ? ` · ${item.uses} 次` : ""}
-            </dd>
-          </div>
-        ) : null}
-        {id ? (
-          <div>
-            <dt>标识</dt>
-            <dd>
-              <code className={styles.mono}>{id}</code>
-            </dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>引用</dt>
-          <dd>
-            {item.refs.length ? item.refs.join(", ") : "无"}
-            {item.missingRefs.length ? ` · 缺失：${item.missingRefs.join(", ")}` : ""}
-          </dd>
-        </div>
-        {sel ? (
-          <div>
-            <dt>入选原因</dt>
-            <dd>{INJECTION_REASON_LABEL[sel] ?? sel}</dd>
-          </div>
-        ) : null}
-        {skip ? (
-          <div>
-            <dt>跳过原因</dt>
-            <dd>{SKIP_REASON_LABEL[skip as keyof typeof SKIP_REASON_LABEL] ?? skip}</dd>
-          </div>
-        ) : null}
-        {"reasons" in item && item.reasons.length ? (
-          <div>
-            <dt>搜索匹配</dt>
-            <dd>
-              {formatMemoryCenterSearchReasons(item.reasons)} · 搜索不续期
-            </dd>
-          </div>
-        ) : null}
-      </dl>
-      {item.kind === "workspace_memory" && editScopeId && editableItem ? (
-        <MemoryCenterWorkspaceEditor
-          scopeId={editScopeId}
-          item={editableItem}
-          busy={mutating}
-          error={mutationError}
-          conflict={mutationConflict}
-          onMutate={onMutate}
-          onClearSelection={onClearSelection}
-          onCreated={onCreated}
-        />
-      ) : null}
-      {item.kind === "workspace_memory" && onOpenScopeForEdit ? (
-        <button type="button" className="pill" onClick={onOpenScopeForEdit}>
-          打开作用域并编辑（先加载 revision）
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function RuleDetail({ rule }: { rule: RuleFile }) {
-  return (
-    <div className={styles.detailBody}>
-      <dl className={styles.detailDl}>
-        <div>
-          <dt>来源</dt>
-          <dd>{rule.relPath}</dd>
-        </div>
-        <div>
-          <dt>作用目录</dt>
-          <dd>{rule.appliesDir}</dd>
-        </div>
-        <div>
-          <dt>字符数</dt>
-          <dd>{rule.chars}</dd>
-        </div>
-      </dl>
-      {rule.truncated ? <TruncatedBanner show label="规则正文已截断" /> : null}
-      <pre className="assistant-pre">{rule.body}</pre>
-    </div>
-  );
+function statusMark(item: { effectiveState: string; pinned?: boolean; missingRefs?: string[] }) {
+  const word = listStatusWord(item);
+  if (!word) return null;
+  const tone = word === "待你确认" ? "warn" : undefined;
+  return <Mark tone={tone}>{word}</Mark>;
 }
 
 export default function MemoryCenterPanel({
@@ -337,393 +134,206 @@ export default function MemoryCenterPanel({
   onNotice,
 }: Props) {
   const mc = useMemoryCenter({ active, send, lastResult, resultTick });
-  const dispatchMemoryUi = mc.dispatchUi;
-  const [wideThree, setWideThree] = useState(false);
-  const middleTitleRef = useRef<HTMLHeadingElement>(null);
-  const detailBackRef = useRef<HTMLButtonElement>(null);
-  const navTitleRef = useRef<HTMLHeadingElement>(null);
-  const activeNavRef = useRef<HTMLButtonElement>(null);
-
-  const currentScopeId = scopeIdForNav(mc.ui.navId);
-  const detailForView = useMemo(() => detailForScope(mc.data.detail, currentScopeId), [mc.data.detail, currentScopeId]);
-  const scopeLoadError =
-    mc.data.scopeError && currentScopeId && mc.data.activeScopeId === currentScopeId && !mc.ui.searchActive;
+  const [tier, setTier] = useState<Tier>("wide");
+  const [destination, setDestination] = useState<MemoryDestination>("me");
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folderMenu, setFolderMenu] = useState<FolderMenu>("useful");
+  const [morePage, setMorePage] = useState<MorePage | null>(null);
+  const [switchingFolder, setSwitchingFolder] = useState(false);
+  const [composer, setComposer] = useState<"create" | "edit" | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const middleRef = useRef<HTMLDivElement>(null);
+  const scrollBeforeSearch = useRef(0);
+  const autoSelectedFolder = useRef<string | null>(null);
+  const rowKeys = useRef<string[]>([]);
 
   useEffect(() => {
-    const mq = window.matchMedia("(min-width: 960px)");
-    const apply = () => setWideThree(mq.matches);
+    const wide = window.matchMedia("(min-width: 1200px)");
+    const mid = window.matchMedia("(min-width: 960px)");
+    const apply = () => setTier(wide.matches ? "wide" : mid.matches ? "mid" : "narrow");
     apply();
-    mq.addEventListener("change", apply);
-    return () => mq.removeEventListener("change", apply);
+    wide.addEventListener("change", apply);
+    mid.addEventListener("change", apply);
+    return () => {
+      wide.removeEventListener("change", apply);
+      mid.removeEventListener("change", apply);
+    };
   }, []);
-
-  const layoutThree = wideThree;
 
   useEffect(() => {
     if (!active) return;
-    dispatchMemoryUi({ type: "set_nav", navId: initialScopeId || "overview" });
-  }, [active, dispatchMemoryUi, initialScopeId, openRequest]);
+    const opened = openingDestination(initialScopeId);
+    setDestination(opened.destination);
+    setFolderId(opened.folderId);
+    setMorePage(null);
+    setComposer(null);
+    setSwitchingFolder(false);
+    autoSelectedFolder.current = null;
+    mc.loadSuggestions();
+  }, [active, initialScopeId, openRequest]);
 
   useEffect(() => {
-    if (!active || !initialScopeId || !mc.data.overview) return;
-    if (!mc.data.overview.scopes.some((scope) => scope.id === initialScopeId)) {
-      dispatchMemoryUi({ type: "set_nav", navId: "overview" });
-    }
-  }, [active, dispatchMemoryUi, initialScopeId, mc.data.overview, openRequest]);
+    if (!active || !mc.data.overview) return;
+    setFolderId((current) => preferredFolderId(mc.data.overview?.scopes ?? [], current));
+  }, [active, mc.data.overview]);
+
+  const navForDestination = (): McNavId => {
+    if (destination === "me") return "work_preference";
+    if (destination === "folder") return folderId || "overview";
+    if (destination === "review") return "suggestions";
+    if (morePage === "activity") return "activity";
+    if ((morePage === "diagnostics" || morePage === "rules") && folderId) return folderId;
+    return "overview";
+  };
 
   useEffect(() => {
-    if (layoutThree) return;
-    if (mc.ui.mobilePane === "nav") {
-      activeNavRef.current?.focus();
-      if (!activeNavRef.current) navTitleRef.current?.focus();
-    }
-    if (mc.ui.mobilePane === "middle") middleTitleRef.current?.focus();
-    if (mc.ui.mobilePane === "detail") detailBackRef.current?.focus();
-  }, [mc.ui.mobilePane, layoutThree, mc.ui.navId]);
-  const showNav = layoutThree || mc.ui.mobilePane === "nav";
-  const showMiddle = layoutThree || mc.ui.mobilePane === "middle";
-  const showDetail = layoutThree || mc.ui.mobilePane === "detail";
+    if (!active || mc.ui.searchActive) return;
+    const nav = navForDestination();
+    if (mc.ui.navId !== nav) mc.dispatchUi({ type: "set_nav", navId: nav });
+  }, [active, destination, folderId, morePage, mc.ui.searchActive, mc.ui.navId]);
 
-  const treeRows = useMemo(() => buildScopeTreeRows(mc.data.overview?.scopes ?? []), [mc.data.overview?.scopes]);
-  const workspaceCards = useMemo(
-    () => workspaceScopesForOverview(mc.data.overview?.scopes ?? []),
-    [mc.data.overview?.scopes],
-  );
+  const scopes = mc.data.overview?.scopes ?? [];
+  const folders = useMemo(() => {
+    const tree = buildScopeTreeRows(scopes);
+    if (tree.length) return tree;
+    return scopes
+      .filter((scope) => scope.id !== "personal" && scope.id !== "work_preference")
+      .map((scope) => ({ ...scope, depth: 0 }));
+  }, [scopes]);
+  const folder = folders.find((row) => row.id === folderId) ?? null;
+  const folderDetail = detailForScope(mc.data.detail, folderId ?? undefined);
+  const prefDetail = detailForScope(mc.data.detail, "work_preference");
+  const memory = state?.memory ?? null;
 
-  const diagnostics = detailForView?.diagnostics ?? null;
+  const folderItems = useMemo(() => {
+    if (!folderDetail) return [];
+    return filterFolderItems(folderDetail.items, folderMenu);
+  }, [folderDetail, folderMenu]);
 
-  const listItems: WorkspaceMemoryItem[] = useMemo(() => {
-    if (!detailForView) return [];
-    if (mc.ui.middleTab === "rules") return [];
-    let base = detailForView.items;
-    if (mc.ui.middleTab === "pinned") base = pinnedOnlyItems(base);
-    else if (mc.ui.middleTab === "injection") base = injectionRoundItems(base, diagnostics);
-    return filterItemsByState(base, mc.ui.stateFilter);
-  }, [detailForView, diagnostics, mc.ui.middleTab, mc.ui.stateFilter]);
+  useEffect(() => {
+    if (destination !== "folder" || !folderId || !folderDetail || composer) return;
+    if (autoSelectedFolder.current === folderId) return;
+    autoSelectedFolder.current = folderId;
+    const key = firstConfirmKey(folderDetail.items, itemKey);
+    if (key) mc.dispatchUi({ type: "select", key });
+  }, [destination, folderId, folderDetail, composer]);
 
-  const selectedItem = useMemo(() => {
-    if (!mc.ui.selectedKey) return null;
-    if (mc.ui.searchActive && mc.data.search) {
-      return mc.data.search.hits.find((hit, index) => itemKey(hit, index) === mc.ui.selectedKey) ?? null;
-    }
-    const idx = listItems.findIndex((row, index) => itemKey(row, index) === mc.ui.selectedKey);
-    return idx >= 0 ? listItems[idx] : null;
-  }, [listItems, mc.data.search, mc.ui.searchActive, mc.ui.selectedKey]);
+  const reviewCount = mc.activity.suggestions?.entries.length ?? 0;
 
-  const selectedRule = useMemo(() => {
-    if (mc.ui.middleTab !== "rules" || !detailForView || !mc.ui.selectedKey?.startsWith("rule:")) return null;
-    const rel = mc.ui.selectedKey.slice("rule:".length);
-    return detailForView.rules.find((r) => r.relPath === rel) ?? null;
-  }, [detailForView, mc.ui.middleTab, mc.ui.selectedKey]);
-
-  const overviewScopes = mc.data.overview?.scopes ?? [];
-
-  function goNav(id: McNavId) {
+  function pickDestination(next: MemoryDestination) {
     mc.clearSearch();
-    mc.dispatchUi({ type: "set_nav", navId: id });
+    setComposer(null);
+    setMorePage(null);
+    setDestination(next);
   }
 
-  function renderOverviewMiddle() {
-    const ov = mc.data.overview;
-    if (mc.data.loadingOverview && !ov) return <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载总览…</div>;
-    if (mc.data.overviewError && !ov) {
-      return (
-        <div className={MEMORY_CENTER_CSS.statusError}>
-          <p>{mc.data.overviewError}</p>
-          <button type="button" className="pill" onClick={() => mc.retryOverview()}>
-            重试总览
-          </button>
-        </div>
-      );
-    }
-    if (!ov) return <div className="loop-meta">暂无总览数据。</div>;
-    const pending = overviewPendingTotal(ov.scopes);
-    return (
-      <div className={styles.overview}>
-        {mc.data.overviewError ? (
-          <div className={MEMORY_CENTER_CSS.statusError}>
-            <p>{mc.data.overviewError}</p>
-            <button type="button" className="pill" onClick={() => mc.retryOverview()}>
-              重试总览
-            </button>
-          </div>
-        ) : null}
-        <TruncatedBanner show={mc.data.overviewPayloadTruncated} label="总览 payload 已截断" />
-        <TruncatedBanner show={ov.scopesTruncated} label="工作区列表已截断" />
-        <div className={styles.statGrid}>
-          <div className={styles.statCard}>
-            <div className="side-label">个人记忆</div>
-            <div>
-              有效 {ov.personal.validEntries} · 失效 {ov.personal.invalidEntries}
-            </div>
-            {ov.personal.paused ? <Mark tone="warn">已暂停写入</Mark> : null}
-          </div>
-          <div className={styles.statCard}>
-            <div className="side-label">工作偏好</div>
-            <div>{ov.personal.workPreferenceLines} 条</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className="side-label">工作区</div>
-            <div>{workspaceCards.length} 个</div>
-          </div>
-          <div className={styles.statCard}>
-            <div className="side-label">待处理</div>
-            <div>{pending}</div>
-          </div>
-        </div>
-        <div className="side-label">工作区健康</div>
-        <ul className="assistant-list">
-          {workspaceCards.map((row) => (
-            <li key={row.id}>
-              <button
-                type="button"
-                className={`assistant-item assistant-item-btn ${MEMORY_CENTER_CSS.rowBtn}`}
-                onClick={() => goNav(row.id)}
-              >
-                <div className="assistant-item-head">
-                  <ScopeHealthDot health={row.health} error={row.error} />
-                  <span className="assistant-item-title">{row.label}</span>
-                  {row.pendingCount ? <Mark tone="warn">待处理 {row.pendingCount}</Mark> : null}
-                </div>
-                <div className={styles.rowMeta}>
-                  <Mark>{row.memoryCount} 条</Mark>
-                  <Mark>热 {row.hot}</Mark>
-                  <Mark>冷 {row.cold}</Mark>
-                  <Mark>完成 {row.done}</Mark>
-                  <Mark>常驻 {row.pinned}</Mark>
-                  {row.missingRefs ? <Mark tone="warn">缺引用 {row.missingRefs}</Mark> : null}
-                  <Mark>本轮注入 {row.injectionSelected} 条</Mark>
-                  <Mark>预算 {row.tokenBudget} token</Mark>
-                </div>
-                {row.error ? <div className={`loop-meta ${styles.scopeError}`}>{row.error}</div> : null}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
+  function pickFolder(id: string) {
+    setFolderId(id);
+    setSwitchingFolder(false);
+    setComposer(null);
+    autoSelectedFolder.current = null;
+    setDestination("folder");
   }
 
-  function renderScopeMiddle() {
-    if (mc.ui.navId === "activity") {
-      return (
-        <MemoryCenterActivityPane
-          state={mc.activity}
-          scopeFilter={mc.activityScopeFilter}
-          onScopeFilter={mc.setActivityScopeFilter}
-          actionFilter={mc.activityActionFilter}
-          onActionFilter={mc.setActivityActionFilter}
-          onLoad={mc.loadActivity}
-          onRestore={mc.restoreActivity}
-          onOpenScope={(scopeId) => mc.dispatchUi({ type: "set_nav", navId: scopeId })}
-        />
-      );
-    }
-    if (mc.ui.navId === "suggestions") {
-      return (
-        <MemoryCenterSuggestionsPane
-          state={mc.activity}
-          onRefresh={mc.loadSuggestions}
-          onAnswer={mc.answerSuggestion}
-          onAcceptAllLowRisk={mc.acceptAllLowRisk}
-        />
-      );
-    }
-    if (isPlaceholderNav(mc.ui.navId)) {
-      return <div className="loop-meta">记忆相关设置将集中在此，当前请使用「管理个人记忆」。</div>;
-    }
-    if (mc.ui.searchActive) return renderSearchMiddle();
-    if (mc.data.loadingScope && currentScopeId && mc.data.activeScopeId === currentScopeId && !detailForView) {
-      return <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载…</div>;
-    }
-    if (scopeLoadError) {
-      return (
-        <div className={MEMORY_CENTER_CSS.statusError}>
-          <p>{mc.data.scopeError}</p>
-          <button
-            type="button"
-            className="pill"
-            onClick={() => (currentScopeId ? mc.retryScope(currentScopeId) : mc.refreshCurrent())}
-          >
-            重试作用域
-          </button>
-        </div>
-      );
-    }
-    if (!detailForView) return <div className="loop-meta">选择左侧作用域以查看条目。</div>;
-
-    const detail = detailForView;
-
-    if (mc.ui.navId === "personal" && state?.memory) {
-      return (
-        <>
-          <div className="loop-meta">关于我：只读列表与核心摘要如下；完整 CRUD 在下方折叠区。</div>
-          <TruncatedBanner show={mc.data.detailPayloadTruncated} label="作用域 payload 已截断" />
-          <TruncatedBanner show={detail.itemsTruncated} label="条目列表已截断" />
-          <ul className="assistant-list">
-            {detail.items.map((item, index) => (
-              <ItemRow
-                key={itemKey(item, index)}
-                title={item.section || "条目"}
-                body={item.text}
-                meta={itemMetaBadges(item)}
-                selected={mc.ui.selectedKey === itemKey(item, index)}
-                onSelect={() => mc.dispatchUi({ type: "select", key: itemKey(item, index) })}
-              />
-            ))}
-          </ul>
-          <MemoryCenterImportPane
-            op={op}
-            lastResult={lastResult}
-            resultTick={resultTick}
-            onNotice={onNotice}
-            overviewScopes={mc.data.overview?.scopes ?? []}
-          />
-          <PersonalMemoryManage name={name} memory={state.memory} op={op} onNotice={onNotice} />
-        </>
-      );
-    }
-
-    if (mc.ui.navId === "work_preference") {
-      return (
-        <>
-          <div className="loop-meta">工作偏好（L1）。编辑仍可通过下方「管理个人记忆」中的核心档案。</div>
-          <ul className="assistant-list">
-            {detail.items.map((item, index) => (
-              <ItemRow
-                key={itemKey(item, index)}
-                title={`偏好 ${index + 1}`}
-                body={item.text}
-                meta={itemMetaBadges(item)}
-                selected={mc.ui.selectedKey === itemKey(item, index)}
-                onSelect={() => mc.dispatchUi({ type: "select", key: itemKey(item, index) })}
-              />
-            ))}
-          </ul>
-          {state?.memory ? (
-            <>
-              <MemoryCenterImportPane
-            op={op}
-            lastResult={lastResult}
-            resultTick={resultTick}
-            onNotice={onNotice}
-            overviewScopes={mc.data.overview?.scopes ?? []}
-          />
-              <PersonalMemoryManage name={name} memory={state.memory} op={op} onNotice={onNotice} />
-            </>
-          ) : null}
-        </>
-      );
-    }
-
-    const tabs = (
-      <div className={styles.midTabs} role="group" aria-label="工作区视图">
-        {(
-          [
-            ["pinned", "常驻"],
-            ["injection", "本轮注入"],
-            ["all", "全部"],
-            ["rules", "规则"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={mc.ui.middleTab === id}
-            className={`pill${mc.ui.middleTab === id ? " on" : ""}`}
-            onClick={() => mc.dispatchUi({ type: "set_tab", tab: id })}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    );
-
-    if (mc.ui.middleTab === "rules") {
-      return (
-        <>
-          {tabs}
-          <TruncatedBanner show={detail.rulesTruncated} label="规则列表已截断" />
-          <TruncatedBanner show={detail.rulesPayloadTruncated} label="规则 payload 已截断" />
-          <ul className="assistant-list">
-            {detail.rules.map((rule) => (
-              <ItemRow
-                key={rule.relPath}
-                title={rule.relPath}
-                body={rule.body.slice(0, 160)}
-                meta={
-                  <>
-                    <Mark>{rule.appliesDir}</Mark>
-                    <Mark>{rule.chars} 字</Mark>
-                    {rule.truncated ? <Mark tone="warn">已截断</Mark> : null}
-                  </>
-                }
-                selected={mc.ui.selectedKey === `rule:${rule.relPath}`}
-                onSelect={() => mc.dispatchUi({ type: "select", key: `rule:${rule.relPath}` })}
-              />
-            ))}
-          </ul>
-        </>
-      );
-    }
-
-    const states: Array<MemoryCenterState | "all"> = ["all", "hot", "cold", "done", "pinned", "expired", "待核实"];
-    const workspaceEditable = detail.scope.kind === "workspace_memory";
-    return (
-      <>
-        {tabs}
-        {workspaceEditable ? (
-          <div className={MEMORY_CENTER_CSS.createEntry}>
-            <MemoryCenterWorkspaceEditor
-              scopeId={detail.scope.id}
-              item={null}
-              busy={mc.data.mutating}
-              error={mc.data.mutationError}
-              conflict={mc.data.mutationErrorCode === "conflict"}
-              onMutate={mc.sendMutate}
-              onClearSelection={() => mc.dispatchUi({ type: "select", key: null })}
-              onCreated={() => mc.refreshCurrent()}
-            />
-          </div>
-        ) : null}
-        <TruncatedBanner show={detail.itemsTruncated} label="条目列表已截断" />
-        <div className={styles.filters}>
-          {states.map((st) => (
-            <button
-              key={st}
-              type="button"
-              className={`pill${mc.ui.stateFilter === st ? " on" : ""}`}
-              aria-pressed={mc.ui.stateFilter === st}
-              onClick={() => mc.dispatchUi({ type: "set_state_filter", filter: st })}
-            >
-              {st === "all" ? "全部状态" : STATE_LABEL[st]}
-            </button>
-          ))}
-        </div>
-        <ul className="assistant-list">
-          {listItems.length ? (
-            listItems.map((item, index) => (
-              <ItemRow
-                key={itemKey(item, index)}
-                title={item.section || item.text.slice(0, 40)}
-                body={item.text}
-                meta={itemMetaBadges(item)}
-                selected={mc.ui.selectedKey === itemKey(item, index)}
-                onSelect={() => mc.dispatchUi({ type: "select", key: itemKey(item, index) })}
-              />
-            ))
-          ) : (
-            <li className="loop-meta">没有匹配的条目。</li>
-          )}
-        </ul>
-        <DiagnosticsBlock diagnostics={diagnostics} />
-      </>
-    );
+  function openDetail() {
+    if (tier !== "wide") mc.dispatchUi({ type: "set_mobile", pane: "detail" });
   }
 
-  function renderSearchMiddle() {
-    if (mc.data.loadingSearch && !mc.data.search)
-      return <div className={MEMORY_CENTER_CSS.statusLoading}>正在搜索…</div>;
+  function selectRow(key: string) {
+    setComposer(null);
+    mc.dispatchUi({ type: "select", key });
+  }
+
+  const searching = mc.ui.searchActive;
+  const wantsDetail = Boolean(mc.ui.selectedKey) || composer != null;
+  const showNav = tier !== "narrow";
+  const showMiddle = tier !== "narrow" || mc.ui.mobilePane !== "detail";
+  const showDetail = tier === "wide" || (tier === "mid" && wantsDetail) || (tier === "narrow" && mc.ui.mobilePane === "detail" && wantsDetail);
+
+  const visibleKeys = useMemo(() => {
+    if (searching && mc.data.search) return mc.data.search.hits.map((hit, index) => itemKey(hit, index));
+    if (destination === "folder") return folderItems.map((item, index) => itemKey(item, index));
+    if (destination === "me" && memory) {
+      const fields = CORE_FIELD_ORDER.map((field) => `core:${field}`);
+      const entries = memory.entries.filter((entry) => !entry.invalidAt).map((entry) => `entry:${entry.id}`);
+      return [...fields, ...entries];
+    }
+    if (destination === "more" && !morePage) return MORE_PAGES.map((page) => `more:${page.id}`);
+    return [];
+  }, [searching, mc.data.search, destination, folderItems, memory, morePage]);
+  rowKeys.current = visibleKeys;
+
+  useEffect(() => {
+    if (!active) return;
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing = Boolean(
+        target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable),
+      );
+      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        searchRef.current?.focus();
+        return;
+      }
+      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && !typing) {
+        const keys = rowKeys.current;
+        if (!keys.length) return;
+        event.preventDefault();
+        const current = mc.ui.selectedKey;
+        const index = Math.max(0, keys.indexOf(current ?? ""));
+        const next = keys[Math.min(keys.length - 1, Math.max(0, index + (event.key === "ArrowDown" ? 1 : -1)))] ?? keys[0];
+        if (next?.startsWith("more:")) {
+          setMorePage(next.slice(5) as MorePage);
+          return;
+        }
+        selectRow(next);
+        return;
+      }
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        rootRef.current?.querySelector<HTMLButtonElement>("[data-mc-save]")?.click();
+        return;
+      }
+      if (event.key === "Escape") {
+        if (composer) {
+          event.preventDefault();
+          setComposer(null);
+          return;
+        }
+        if (destination === "me" && mc.ui.selectedKey) {
+          event.preventDefault();
+          mc.dispatchUi({ type: "select", key: null });
+          return;
+        }
+        if (mc.ui.searchActive) {
+          event.preventDefault();
+          mc.clearSearch();
+          return;
+        }
+        if (tier !== "wide" && mc.ui.mobilePane === "detail") {
+          event.preventDefault();
+          mc.dispatchUi({ type: "set_mobile", pane: "middle" });
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, composer, destination, mc.ui.searchActive, mc.ui.selectedKey, mc.ui.mobilePane, tier]);
+
+  useEffect(() => {
+    if (!searching) return;
+    scrollBeforeSearch.current = middleRef.current?.scrollTop ?? 0;
+    return () => {
+      const top = scrollBeforeSearch.current;
+      requestAnimationFrame(() => {
+        if (middleRef.current) middleRef.current.scrollTop = top;
+      });
+    };
+  }, [searching]);
+
+  function renderSearch() {
+    if (mc.data.loadingSearch && !mc.data.search) return <div className={MEMORY_CENTER_CSS.statusLoading}>正在找…</div>;
     if (mc.data.searchError) {
       return (
         <div className={MEMORY_CENTER_CSS.statusError}>
@@ -735,287 +345,550 @@ export default function MemoryCenterPanel({
       );
     }
     const hits = mc.data.search?.hits ?? [];
+    if (!hits.length && !mc.data.loadingSearch) {
+      return (
+        <div>
+          <div className={styles.paneTitle}>没找到</div>
+          <p className={styles.subline}>换个词，或到筛选里放宽。</p>
+        </div>
+      );
+    }
+    const groups = new Map<string, MemoryCenterSearchHit[]>();
+    for (const hit of hits) {
+      const label = searchGroupLabel(hit.kind, resolveScopeLabel(hit.scopeId, scopes));
+      const list = groups.get(label) ?? [];
+      list.push(hit);
+      groups.set(label, list);
+    }
     return (
       <>
-        <div className="loop-meta">搜索不会续期条目的 used/uses；仅浏览与定位。</div>
-        <TruncatedBanner show={mc.data.search?.truncated} label="搜索结果条数已截断" />
-        <TruncatedBanner show={mc.data.search?.payloadTruncated} label="搜索 payload 已截断" />
+        {[...groups.entries()].map(([label, rows]) => (
+          <div key={label}>
+            <div className="side-label">{label}</div>
+            <ul className="assistant-list">
+              {rows.map((hit) => {
+                const index = hits.indexOf(hit);
+                const key = itemKey(hit, index);
+                return (
+                  <ItemRow
+                    key={key}
+                    title={`${searchSourceLabel(hit.kind, resolveScopeLabel(hit.scopeId, scopes))} · ${hit.section || hit.text.slice(0, 32)}`}
+                    body={hit.text}
+                    meta={statusMark(hit)}
+                    selected={mc.ui.selectedKey === key}
+                    onSelect={() => selectRow(key)}
+                  />
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </>
+    );
+  }
+
+  function renderMe() {
+    if (!memory) return <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载记忆…</div>;
+    const paused = memory.settings.paused ? "记忆已暂停" : "每次对话开头会带上";
+    const entries = memory.entries.filter((entry) => !entry.invalidAt);
+    return (
+      <>
+        <div className={styles.headRow}>
+          <h2 className={styles.paneTitle}>记得的我</h2>
+          {composer || mc.ui.selectedKey?.startsWith("core:") || mc.ui.selectedKey?.startsWith("entry:") ? null : (
+            <button type="button" className={styles.pineBtn} onClick={() => { setComposer("create"); openDetail(); }}>
+              记一条
+            </button>
+          )}
+        </div>
+        <p className={styles.subline}>
+          {name ? `${name} · ` : ""}
+          {paused}
+        </p>
         <ul className="assistant-list">
-          {hits.map((hit, index) => (
+          {CORE_FIELD_ORDER.map((field) => {
+            const value = memory.core.fields[field]?.trim() ?? "";
+            return (
+              <ItemRow
+                key={field}
+                title={field}
+                body={value || "还没写"}
+                selected={mc.ui.selectedKey === `core:${field}`}
+                onSelect={() => selectRow(`core:${field}`)}
+              />
+            );
+          })}
+          {entries.map((entry) => (
             <ItemRow
-              key={itemKey(hit, index)}
-              title={hit.section || hit.text.slice(0, 48)}
-              body={hit.text}
+              key={entry.id}
+              title={entry.topic || "一条记忆"}
+              body={entry.text}
               meta={
                 <>
-                  <Mark>{KIND_LABEL[hit.kind]}</Mark>
-                  <Mark>{hit.scopeId}</Mark>
-                  <Mark>{effectiveStateLabel(hit.effectiveState)}</Mark>
-                  {hit.reasons.length ? (
-                    <Mark tone="run">{formatMemoryCenterSearchReasons(hit.reasons)}</Mark>
-                  ) : null}
+                  {basisLabel(entry.basis) ? <Mark>{basisLabel(entry.basis)}</Mark> : null}
+                  <button
+                    type="button"
+                    className="pill"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      selectRow(`entry:${entry.id}`);
+                      setComposer("edit");
+                    }}
+                  >
+                    改
+                  </button>
+                  <button
+                    type="button"
+                    className="pill"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (window.confirm(`删掉「${entry.topic || "这条记忆"}」？`)) op("memory_purge", { id: entry.id });
+                    }}
+                  >
+                    删
+                  </button>
                 </>
               }
-              selected={mc.ui.selectedKey === itemKey(hit, index)}
-              onSelect={() => mc.dispatchUi({ type: "select", key: itemKey(hit, index) })}
+              selected={mc.ui.selectedKey === `entry:${entry.id}`}
+              onSelect={() => selectRow(`entry:${entry.id}`)}
             />
           ))}
         </ul>
-        {!hits.length && !mc.data.loadingSearch ? <div className="loop-meta">没有匹配结果。</div> : null}
+        {prefDetail?.items.length ? (
+          <>
+            <div className="side-label">工作偏好里的原话</div>
+            <ul className="assistant-list">
+              {prefDetail.items.map((item, index) => (
+                <ItemRow
+                  key={itemKey(item, index)}
+                  title={item.text.slice(0, 42)}
+                  body=""
+                  meta={<span className={styles.subline}>只读</span>}
+                  selected={mc.ui.selectedKey === itemKey(item, index)}
+                  onSelect={() => selectRow(itemKey(item, index))}
+                />
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </>
+    );
+  }
+
+  function renderFolder() {
+    const title = folder?.label || "这个文件夹";
+    const items = folderDetail?.items ?? [];
+    const emptyFile = items.length === 0 && !mc.data.loadingScope && !mc.data.scopeError;
+    return (
+      <>
+        <div className={styles.headRow}>
+          <h2 className={styles.paneTitle}>{emptyFile ? "这个文件夹还没有记忆" : title}</h2>
+          <button type="button" className={styles.folderMenu} onClick={() => setSwitchingFolder((open) => !open)}>
+            换文件夹
+          </button>
+        </div>
+        {switchingFolder ? (
+          <ul className="assistant-list">
+            {folders.map((row) => (
+              <ItemRow
+                key={row.id}
+                title={"　".repeat(row.depth) + row.label}
+                body=""
+                selected={row.id === folderId}
+                onSelect={() => pickFolder(row.id)}
+              />
+            ))}
+          </ul>
+        ) : null}
+        <div className={styles.headRow}>
+          <p className={styles.subline}>
+            {emptyFile ? "记一条，下次在这个文件夹里就会记得。" : `${folderMenuLabel(folderMenu)} ${folderItems.length} 条`}
+          </p>
+          <select
+            className={styles.folderMenu}
+            aria-label="列表范围"
+            value={folderMenu}
+            onChange={(event) => setFolderMenu(event.target.value as FolderMenu)}
+          >
+            {FOLDER_MENUS.map((menu) => (
+              <option key={menu.id} value={menu.id}>
+                {menu.label}
+              </option>
+            ))}
+          </select>
+          {composer || !folderId ? null : (
+            <button type="button" className={styles.pineBtn} onClick={() => { setComposer("create"); openDetail(); }}>
+              记一条
+            </button>
+          )}
+        </div>
+        {mc.data.scopeError && mc.data.activeScopeId === folderId ? (
+          <div className={MEMORY_CENTER_CSS.statusError}>
+            <p>{mc.data.scopeError}</p>
+            <button type="button" className="pill" onClick={() => folderId && mc.retryScope(folderId)}>
+              重试
+            </button>
+          </div>
+        ) : null}
+        {mc.data.loadingScope && !folderDetail ? <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载…</div> : null}
+        {!folder && !mc.data.loadingOverview ? <p className={styles.subline}>先打开一个文件夹。</p> : null}
+        <ul className="assistant-list">
+          {folderItems.map((item, index) => (
+            <ItemRow
+              key={itemKey(item, index)}
+              title={item.section || item.text.slice(0, 32)}
+              body={item.text}
+              meta={statusMark(item)}
+              selected={mc.ui.selectedKey === itemKey(item, index)}
+              onSelect={() => selectRow(itemKey(item, index))}
+            />
+          ))}
+        </ul>
+        {!emptyFile && folderDetail && !folderItems.length ? <p className={styles.subline}>这个筛选里没有。换一个，或看全部。</p> : null}
+      </>
+    );
+  }
+
+  function renderMore() {
+    if (!morePage) {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>更多</h2>
+          <ul className="assistant-list">
+            {MORE_PAGES.map((page) => (
+              <ItemRow key={page.id} title={page.label} body="" selected={false} onSelect={() => setMorePage(page.id)} />
+            ))}
+          </ul>
+        </>
+      );
+    }
+    return (
+      <>
+        <button type="button" className={`pill ${styles.drillBack}`} onClick={() => setMorePage(null)}>
+          返回
+        </button>
+        <h2 className={styles.paneTitle}>{MORE_PAGES.find((page) => page.id === morePage)?.label}</h2>
+        {morePage === "activity" ? (
+          <MemoryCenterActivityPane
+            state={mc.activity}
+            scopeFilter={mc.activityScopeFilter}
+            onScopeFilter={mc.setActivityScopeFilter}
+            actionFilter={mc.activityActionFilter}
+            onActionFilter={mc.setActivityActionFilter}
+            onLoad={mc.loadActivity}
+            onRestore={mc.restoreActivity}
+            onOpenScope={(scopeId) => {
+              if (scopeId === "personal" || scopeId === "work_preference") {
+                setDestination("me");
+                selectRow(scopeId === "work_preference" ? "core:工作偏好" : "core:关于我");
+                return;
+              }
+              pickFolder(scopeId);
+            }}
+          />
+        ) : null}
+        {morePage === "transfer" ? (
+          <MemoryCenterImportPane
+            op={op}
+            lastResult={lastResult}
+            resultTick={resultTick}
+            onNotice={onNotice}
+            overviewScopes={scopes}
+          />
+        ) : null}
+        {morePage === "diagnostics" ? (
+          <div>
+            {diagnosticsSummary(folderDetail?.diagnostics ?? null).map((line) => (
+              <p key={line} className="loop-meta">
+                {line}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        {morePage === "rules" ? (
+          <ul className="assistant-list">
+            {(folderDetail?.rules ?? []).map((rule) => (
+              <ItemRow
+                key={rule.relPath}
+                title={rule.relPath}
+                body={rule.body.slice(0, 120)}
+                selected={mc.ui.selectedKey === `rule:${rule.relPath}`}
+                onSelect={() => selectRow(`rule:${rule.relPath}`)}
+              />
+            ))}
+            {!folderDetail?.rules.length ? <li className={styles.subline}>这个文件夹没有规则。</li> : null}
+          </ul>
+        ) : null}
       </>
     );
   }
 
   function renderMiddle() {
-    if (mc.ui.navId === "overview" && !mc.ui.searchActive) return renderOverviewMiddle();
-    return renderScopeMiddle();
+    if (searching) return renderSearch();
+    if (destination === "me") return renderMe();
+    if (destination === "folder") return renderFolder();
+    if (destination === "review") {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>要你看一眼</h2>
+          <p className={styles.subline}>{reviewCount ? `${reviewCount} 条待看` : "都处理完了"}</p>
+          <MemoryCenterSuggestionsPane
+            state={mc.activity}
+            onRefresh={mc.loadSuggestions}
+            onAnswer={mc.answerSuggestion}
+            onAcceptAllLowRisk={mc.acceptAllLowRisk}
+          />
+        </>
+      );
+    }
+    return renderMore();
   }
 
   function renderDetail() {
-    if (selectedRule) return <RuleDetail rule={selectedRule} />;
-    if (selectedItem) {
-      const scopeLabel =
-        "scopeId" in selectedItem
-          ? resolveScopeLabel(selectedItem.scopeId, overviewScopes)
-          : (detailForView?.scope.label ?? resolveScopeLabel(String(mc.ui.navId), overviewScopes));
-      const itemDiagnostics =
-        mc.ui.searchActive || !detailForView || selectedItem.scopeId !== detailForView.scope.id ? null : diagnostics;
-      const editScopeId =
-        !mc.ui.searchActive && detailForView?.scope.kind === "workspace_memory" ? detailForView.scope.id : null;
-      let editableItem: WorkspaceMemoryItem | null = null;
-      if (editScopeId && detailForView && "revision" in selectedItem) {
-        const sid = selectedItem.id;
-        editableItem =
-          detailForView.items.find((row) => (sid ? row.id === sid : row.text === selectedItem.text)) ?? null;
-      }
-      const needScopeLoad =
-        mc.ui.searchActive &&
-        selectedItem.kind === "workspace_memory" &&
-        (!detailForView || detailForView.scope.id !== selectedItem.scopeId);
+    if (searching && mc.ui.selectedKey && mc.data.search) {
+      const hit = mc.data.search.hits.find((row, index) => itemKey(row, index) === mc.ui.selectedKey);
+      if (hit) return <HitDetail hit={hit} scopeLabel={resolveScopeLabel(hit.scopeId, scopes)} />;
+    }
+    if (destination === "me") return renderMeDetail();
+    if (destination === "more" && morePage === "rules" && mc.ui.selectedKey?.startsWith("rule:")) {
+      const rel = mc.ui.selectedKey.slice(5);
+      const rule = folderDetail?.rules.find((row) => row.relPath === rel);
+      if (rule) return <RuleDetail rule={rule} />;
+    }
+    if (composer === "create" && destination === "folder" && folderId) {
       return (
-        <ItemDetail
-          item={selectedItem}
-          diagnostics={itemDiagnostics}
-          scopeLabel={scopeLabel}
-          editableItem={editableItem}
-          editScopeId={editScopeId}
-          mutating={mc.data.mutating}
-          mutationError={mc.data.mutationError}
-          mutationConflict={mc.data.mutationErrorCode === "conflict"}
+        <MemoryCenterWorkspaceEditor
+          scopeId={folderId}
+          item={null}
+          mode="create"
+          busy={mc.data.mutating}
+          error={mc.data.mutationError}
+          conflict={mc.data.mutationErrorCode === "conflict"}
           onMutate={mc.sendMutate}
-          onClearSelection={() => mc.dispatchUi({ type: "select", key: null })}
-          onCreated={() => mc.refreshCurrent()}
-          onOpenScopeForEdit={
-            needScopeLoad
-              ? () => {
-                  mc.clearSearch();
-                  mc.dispatchUi({ type: "set_nav", navId: selectedItem.scopeId });
-                  mc.sendGet(selectedItem.scopeId);
-                }
-              : undefined
-          }
+          onClearSelection={() => setComposer(null)}
+          onCreated={() => {
+            setComposer(null);
+            mc.refreshCurrent();
+          }}
+          onCancel={() => setComposer(null)}
         />
       );
     }
-    return <div className="loop-meta">选择一条目查看详情。</div>;
+    const item = folderItems.find((row, index) => itemKey(row, index) === mc.ui.selectedKey)
+      ?? folderDetail?.items.find((row, index) => itemKey(row, index) === mc.ui.selectedKey);
+    if (item && folderId && folderDetail) {
+      if (composer === "edit") {
+        return (
+          <MemoryCenterWorkspaceEditor
+            scopeId={folderId}
+            item={item}
+            mode="edit"
+            busy={mc.data.mutating}
+            error={mc.data.mutationError}
+            conflict={mc.data.mutationErrorCode === "conflict"}
+            onMutate={mc.sendMutate}
+            onClearSelection={() => {
+              setComposer(null);
+              mc.dispatchUi({ type: "select", key: null });
+            }}
+            onCreated={() => mc.refreshCurrent()}
+            onCancel={() => setComposer(null)}
+          />
+        );
+      }
+      return (
+        <FolderReadDetail
+          item={item}
+          diagnostics={folderDetail.diagnostics}
+          onEdit={() => setComposer("edit")}
+        />
+      );
+    }
+    return <p className={styles.subline}>选一条来看，或记一条新的。</p>;
   }
 
+  function renderMeDetail() {
+    if (!memory) return <p className={styles.subline}>正在加载记忆…</p>;
+    const key = mc.ui.selectedKey;
+    if (composer === "create") {
+      return <PersonalCreate op={op} onDone={() => setComposer(null)} onNotice={onNotice} />;
+    }
+    if (key?.startsWith("core:")) {
+      return <CoreFieldEditor field={key.slice(5)} memory={memory} op={op} />;
+    }
+    if (key?.startsWith("entry:")) {
+      const entry = memory.entries.find((row) => row.id === key.slice(6));
+      if (!entry) return <p className={styles.subline}>这条已经不在了。</p>;
+      if (composer === "edit") return <PersonalEditor entry={entry} op={op} onDone={() => setComposer(null)} />;
+      return (
+        <div className={styles.detailBody}>
+          <div className="assistant-item-body">{entry.text}</div>
+          {basisLabel(entry.basis) ? <p className={styles.subline}>{basisLabel(entry.basis)}</p> : null}
+          <button type="button" className="pill" onClick={() => setComposer("edit")}>
+            改
+          </button>
+        </div>
+      );
+    }
+    const pref = prefDetail?.items.find((row, index) => itemKey(row, index) === key);
+    if (pref) {
+      return (
+        <div className={styles.detailBody}>
+          <div className="assistant-item-body">{pref.text}</div>
+          <p className={styles.subline}>这条是工作偏好里的原话，改动写在「工作偏好」那一栏。</p>
+          <button type="button" className={styles.clayText} onClick={() => selectRow("core:工作偏好")}>
+            去改档案
+          </button>
+        </div>
+      );
+    }
+    const about = memory.core.fields["关于我"]?.trim();
+    return <p className={styles.subline}>{about || "点一栏就能改。"}</p>;
+  }
+
+  const layoutClass = tier === "wide" ? styles.layoutThree : tier === "mid" ? styles.layoutMid : styles.layoutStack;
+
   return (
-    <div className={`${styles.root} ${MEMORY_CENTER_CSS.root}`}>
+    <div ref={rootRef} className={`${styles.root} ${MEMORY_CENTER_CSS.root}`}>
       <form
         className={`${styles.searchBar} ${MEMORY_CENTER_CSS.searchBar}`}
-        onSubmit={(e) => {
-          e.preventDefault();
+        onSubmit={(event) => {
+          event.preventDefault();
           mc.submitSearch(mc.ui.searchInput);
         }}
       >
         <input
+          ref={searchRef}
           className="side-input"
           value={mc.ui.searchInput}
           aria-label="搜索记忆"
-          placeholder="搜索记忆…"
-          onChange={(e) => mc.scheduleSearch(e.target.value)}
+          placeholder="搜索记忆"
+          onChange={(event) => mc.scheduleSearch(event.target.value)}
         />
-        <button type="submit" className="pill">
-          搜索
-        </button>
-        {mc.ui.searchActive ? (
+        {searching ? (
           <button type="button" className="pill" onClick={() => mc.clearSearch()}>
-            清空
+            取消
           </button>
         ) : null}
       </form>
-      <div className={styles.searchFilters}>
-        <label className="loop-meta">
-          作用域
-          <select
-            className="side-input"
-            value={mc.ui.searchScopeFilter}
-            onChange={(e) => mc.onSearchScopeChange(e.target.value === "all" ? "all" : e.target.value)}
-          >
-            <option value="all">全部</option>
-            {treeRows.map((row) => (
-              <option key={row.id} value={row.id}>
-                {"—".repeat(row.depth)}
-                {row.label}
-              </option>
-            ))}
-            <option value="personal">关于我</option>
-            <option value="work_preference">工作偏好</option>
-          </select>
-        </label>
-        <label className="loop-meta">
-          种类
-          <select
-            className="side-input"
-            value={mc.ui.searchKindFilter}
-            onChange={(e) => mc.onSearchKindChange(e.target.value as SearchableMemoryCenterKind | "all")}
-          >
-            <option value="all">全部</option>
-            {(Object.keys(SEARCHABLE_KIND_LABEL) as SearchableMemoryCenterKind[]).map((k) => (
-              <option key={k} value={k}>
-                {SEARCHABLE_KIND_LABEL[k]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="loop-meta">
-          状态
-          <select
-            className="side-input"
-            value={mc.ui.searchStateFilter}
-            onChange={(e) => mc.onSearchStateChange(e.target.value as typeof mc.ui.searchStateFilter)}
-          >
-            <option value="all">全部</option>
-            {(Object.keys(STATE_LABEL) as Array<keyof typeof STATE_LABEL>).map((k) => (
-              <option key={k} value={k}>
-                {STATE_LABEL[k]}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {searching ? (
+        <div>
+          <button type="button" className="pill" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>
+            筛选
+          </button>
+          {filtersOpen ? (
+            <div className={styles.searchFilters}>
+              <label className="loop-meta">
+                范围
+                <select className="side-input" value={mc.ui.searchScopeFilter} onChange={(event) => mc.onSearchScopeChange(event.target.value)}>
+                  <option value="all">全部</option>
+                  <option value="personal">我</option>
+                  <option value="work_preference">偏好</option>
+                  {folders.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="loop-meta">
+                种类
+                <select
+                  className="side-input"
+                  value={mc.ui.searchKindFilter}
+                  onChange={(event) => mc.onSearchKindChange(event.target.value as SearchableMemoryCenterKind | "all")}
+                >
+                  <option value="all">全部</option>
+                  {(Object.keys(SEARCHABLE_KIND_LABEL) as SearchableMemoryCenterKind[]).map((kind) => (
+                    <option key={kind} value={kind}>
+                      {SEARCHABLE_KIND_LABEL[kind]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="loop-meta">
+                状态
+                <select
+                  className="side-input"
+                  value={mc.ui.searchStateFilter}
+                  onChange={(event) => mc.onSearchStateChange(event.target.value as typeof mc.ui.searchStateFilter)}
+                >
+                  <option value="all">全部</option>
+                  {(Object.keys(STATE_LABEL) as Array<keyof typeof STATE_LABEL>).map((key) => (
+                    <option key={key} value={key}>
+                      {STATE_LABEL[key]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
-      <div
-        className={`${styles.layout} ${MEMORY_CENTER_CSS.layout} ${layoutThree ? MEMORY_CENTER_CSS.layoutThree : MEMORY_CENTER_CSS.layoutStack}`}
-      >
+      {tier === "narrow" && !searching ? (
+        <div className={styles.destTabs} role="tablist" aria-label="记忆">
+          {MEMORY_DESTINATIONS.map((dest) => (
+            <button
+              key={dest.id}
+              type="button"
+              role="tab"
+              aria-selected={destination === dest.id}
+              className={`${styles.destTab}${destination === dest.id ? ` ${styles.destTabOn}` : ""}`}
+              onClick={() => pickDestination(dest.id)}
+            >
+              {dest.label}
+              {dest.id === "review" && reviewCount ? <span className={styles.clayCount}> {reviewCount}</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className={`${styles.layout} ${MEMORY_CENTER_CSS.layout} ${layoutClass}`}>
         {showNav ? (
-          <nav className={`${styles.nav} ${MEMORY_CENTER_CSS.nav}`} aria-label="记忆中心导航">
-            <h2 ref={navTitleRef} tabIndex={-1} className={`${styles.paneTitle} ${MEMORY_CENTER_FOCUS.navTitle}`}>
-              范围导航
-            </h2>
-            <NavBtn
-              id="overview"
-              label="总览"
-              selected={mc.ui.navId === "overview"}
-              attention={0}
-              onPick={goNav}
-              buttonRef={mc.ui.navId === "overview" ? activeNavRef : undefined}
-            />
-            <NavBtn
-              id="personal"
-              label="关于我"
-              selected={mc.ui.navId === "personal"}
-              attention={0}
-              onPick={goNav}
-              buttonRef={mc.ui.navId === "personal" ? activeNavRef : undefined}
-            />
-            <NavBtn
-              id="work_preference"
-              label="工作偏好"
-              selected={mc.ui.navId === "work_preference"}
-              attention={0}
-              onPick={goNav}
-              buttonRef={mc.ui.navId === "work_preference" ? activeNavRef : undefined}
-            />
-            <div className="side-label">工作区</div>
-            {treeRows.map((row) => (
-              <NavBtn
-                key={row.id}
-                id={row.id}
-                label={row.label}
-                depth={row.depth}
-                selected={mc.ui.navId === row.id}
-                attention={row.pendingCount}
-                health={row.health}
-                error={row.error}
-                onPick={goNav}
-                buttonRef={mc.ui.navId === row.id ? activeNavRef : undefined}
-              />
+          <nav className={`${styles.nav} ${MEMORY_CENTER_CSS.nav}`} aria-label="记忆">
+            <h2 className={`${styles.paneTitle} ${MEMORY_CENTER_FOCUS.navTitle}`}>记忆</h2>
+            {MEMORY_DESTINATIONS.map((dest) => (
+              <button
+                key={dest.id}
+                type="button"
+                aria-current={destination === dest.id ? "page" : undefined}
+                className={`${styles.navBtn}${destination === dest.id ? ` ${styles.navBtnOn} ${MEMORY_CENTER_FOCUS.navCurrent}` : ""}`}
+                onClick={() => pickDestination(dest.id)}
+              >
+                <span className={styles.navLabel}>
+                  {dest.label}
+                  {dest.id === "folder" && folder ? <span className={styles.subline}> {folder.label}</span> : null}
+                </span>
+                {dest.id === "review" && reviewCount ? <span className={styles.clayCount}>{reviewCount}</span> : null}
+              </button>
             ))}
-            <NavBtn
-              id="activity"
-              label="活动"
-              selected={mc.ui.navId === "activity"}
-              attention={0}
-              onPick={goNav}
-              buttonRef={mc.ui.navId === "activity" ? activeNavRef : undefined}
-            />
-            <NavBtn
-              id="suggestions"
-              label="整理建议"
-              selected={mc.ui.navId === "suggestions"}
-              attention={0}
-              onPick={goNav}
-              buttonRef={mc.ui.navId === "suggestions" ? activeNavRef : undefined}
-            />
-            <NavBtn
-              id="settings"
-              label="设置"
-              selected={mc.ui.navId === "settings"}
-              attention={0}
-              onPick={goNav}
-              muted
-              buttonRef={mc.ui.navId === "settings" ? activeNavRef : undefined}
-            />
           </nav>
         ) : null}
 
         {showMiddle ? (
-          <div className={`${styles.middle} ${MEMORY_CENTER_CSS.middle}`}>
-            {!layoutThree && mc.ui.mobilePane !== "nav" ? (
-              <button
-                type="button"
-                className={`pill ${MEMORY_CENTER_CSS.drillBack}`}
-                onClick={() => mc.dispatchUi({ type: "set_mobile", pane: "nav" })}
-              >
-                ← 返回导航
-              </button>
-            ) : null}
-            <h2
-              ref={middleTitleRef}
-              tabIndex={-1}
-              className={`${styles.paneTitle} ${MEMORY_CENTER_FOCUS.middleTitle} ${mc.ui.mobilePane === "middle" && !layoutThree ? MEMORY_CENTER_FOCUS.middleFromDetail : ""}`}
-            >
-              {mc.ui.searchActive
-                ? "搜索结果"
-                : mc.ui.navId === "overview"
-                  ? "总览"
-                  : mc.ui.navId === "activity"
-                    ? "活动"
-                    : mc.ui.navId === "suggestions"
-                      ? "整理建议"
-                      : "条目列表"}
-            </h2>
-            {renderMiddle()}
+          <div ref={middleRef} className={`${styles.middle} ${MEMORY_CENTER_CSS.middle}`}>
+            {tier === "narrow" && mc.ui.mobilePane === "detail" ? null : renderMiddle()}
           </div>
         ) : null}
 
         {showDetail ? (
-          <aside className={`${styles.detail} ${MEMORY_CENTER_CSS.detail}`} aria-label="条目详情">
-            {!layoutThree && mc.ui.mobilePane === "detail" ? (
+          <aside
+            className={`${styles.detail} ${MEMORY_CENTER_CSS.detail}${tier === "mid" ? ` ${styles.detailCover}` : ""}`}
+            aria-label="详情"
+          >
+            {tier !== "wide" ? (
               <button
-                ref={detailBackRef}
                 type="button"
                 className={`pill ${MEMORY_CENTER_CSS.drillBack} ${MEMORY_CENTER_FOCUS.detailBack}`}
-                onClick={() => mc.dispatchUi({ type: "set_mobile", pane: "middle" })}
+                onClick={() => {
+                  setComposer(null);
+                  mc.dispatchUi({ type: "set_mobile", pane: "middle" });
+                }}
               >
-                ← 返回列表
+                返回
               </button>
             ) : null}
-            <h2 tabIndex={-1} className={styles.paneTitle}>
-              条目详情
-            </h2>
             {renderDetail()}
           </aside>
         ) : null}
@@ -1024,42 +897,156 @@ export default function MemoryCenterPanel({
   );
 }
 
-function NavBtn({
-  id,
-  label,
-  depth = 0,
-  selected,
-  attention,
-  health,
-  error,
-  muted,
-  onPick,
-  buttonRef,
+function FolderReadDetail({
+  item,
+  diagnostics,
+  onEdit,
 }: {
-  id: McNavId;
-  label: string;
-  depth?: number;
-  selected: boolean;
-  attention: number;
-  health?: string | null;
-  error?: string | null;
-  muted?: boolean;
-  onPick: (id: McNavId) => void;
-  buttonRef?: RefObject<HTMLButtonElement | null>;
+  item: WorkspaceMemoryItem;
+  diagnostics: InjectionDiagnostics | null;
+  onEdit: () => void;
 }) {
+  const reason = selectionReasonForItem(item.id, diagnostics);
+  const skip = skipReasonForItem(item.id, diagnostics);
+  const word = listStatusWord(item);
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      aria-current={selected ? "page" : undefined}
-      aria-label={label}
-      className={`${styles.navBtn}${selected ? ` ${styles.navBtnOn} ${MEMORY_CENTER_FOCUS.navCurrent}` : ""}${muted ? ` ${styles.navMuted}` : ""}`}
-      style={{ paddingLeft: `${10 + depth * 14}px` }}
-      onClick={() => onPick(id)}
+    <div className={styles.detailBody}>
+      {item.section ? <div className="side-label">{item.section}</div> : null}
+      <div className="assistant-item-body">{item.text}</div>
+      {word ? <p className={styles.subline}>{word}</p> : null}
+      {wasUsedLastRound(item.id, diagnostics) ? <p className={styles.subline}>上一轮用到了</p> : null}
+      {reason || skip ? (
+        <div>
+          <div className="side-label">上一轮为什么用到</div>
+          {reason ? <p className="loop-meta">{INJECTION_REASON_LABEL[reason] ?? reason}</p> : null}
+          {skip ? <p className="loop-meta">{SKIP_REASON_LABEL[skip as keyof typeof SKIP_REASON_LABEL] ?? skip}</p> : null}
+        </div>
+      ) : null}
+      {item.refs.length ? <p className="loop-meta">引用的文件：{item.refs.join("、")}</p> : null}
+      {item.missingRefs.length ? <p className={styles.clayText}>这些文件不在了：{item.missingRefs.join("、")}</p> : null}
+      <button type="button" className="pill" onClick={onEdit}>
+        改
+      </button>
+    </div>
+  );
+}
+
+function HitDetail({ hit, scopeLabel }: { hit: MemoryCenterSearchHit; scopeLabel: string }) {
+  return (
+    <div className={styles.detailBody}>
+      <div className="side-label">{searchSourceLabel(hit.kind, scopeLabel)}</div>
+      <div className="assistant-item-body">{hit.text}</div>
+      {hit.reasons.length ? <p className="loop-meta">{formatMemoryCenterSearchReasons(hit.reasons)}</p> : null}
+    </div>
+  );
+}
+
+function RuleDetail({ rule }: { rule: RuleFile }) {
+  return (
+    <div className={styles.detailBody}>
+      <div className="side-label">{rule.relPath}</div>
+      <pre className="assistant-pre">{rule.body}</pre>
+    </div>
+  );
+}
+
+function CoreFieldEditor({
+  field,
+  memory,
+  op,
+}: {
+  field: string;
+  memory: NonNullable<AssistantState["memory"]>;
+  op: BuildAssistantOpMessage;
+}) {
+  const original = memory.core.fields[field] ?? "";
+  const [draft, setDraft] = useState(original);
+  useEffect(() => setDraft(original), [field, original, memory.core.rev]);
+  const dirty = draft !== original;
+  return (
+    <form
+      className={styles.detailBody}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!dirty) return;
+        op("memory_core", { fields: { [field]: draft }, rev: memory.core.rev });
+      }}
     >
-      <ScopeHealthDot health={health} error={error} />
-      <span className={styles.navLabel}>{label}</span>
-      {attention ? <span className={`chat-mark warn ${MEMORY_CENTER_CSS.badge}`}>待处理 {attention}</span> : null}
-    </button>
+      <div className="side-label">{field}</div>
+      <textarea className="loop-goal" rows={6} value={draft} onChange={(event) => setDraft(event.target.value)} />
+      <button type="submit" className={styles.pineBtn} data-mc-save disabled={!dirty}>
+        保存
+      </button>
+    </form>
+  );
+}
+
+function PersonalCreate({
+  op,
+  onDone,
+  onNotice,
+}: {
+  op: BuildAssistantOpMessage;
+  onDone: () => void;
+  onNotice: (text: string) => void;
+}) {
+  const [topic, setTopic] = useState("");
+  const [text, setText] = useState("");
+  return (
+    <form
+      className={styles.detailBody}
+      onSubmit={(event) => {
+        event.preventDefault();
+        const body = text.trim();
+        if (!body) return;
+        op("memory_save", { topic: topic.trim() || body.slice(0, 12), text: body });
+        onNotice("已记下。");
+        onDone();
+      }}
+    >
+      <div className="side-label">记一条</div>
+      <input className="side-input" value={topic} placeholder="主题，可以空着" onChange={(event) => setTopic(event.target.value)} />
+      <textarea className="loop-goal" rows={5} value={text} placeholder="要记住的话" onChange={(event) => setText(event.target.value)} />
+      <button type="submit" className={styles.pineBtn} data-mc-save disabled={!text.trim()}>
+        保存
+      </button>
+      <button type="button" className="pill" onClick={onDone}>
+        取消
+      </button>
+    </form>
+  );
+}
+
+function PersonalEditor({
+  entry,
+  op,
+  onDone,
+}: {
+  entry: AssistantMemoryEntry;
+  op: BuildAssistantOpMessage;
+  onDone: () => void;
+}) {
+  const [topic, setTopic] = useState(entry.topic);
+  const [text, setText] = useState(entry.text);
+  const dirty = topic !== entry.topic || text !== entry.text;
+  return (
+    <form
+      className={styles.detailBody}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!dirty || !text.trim()) return;
+        op("memory_edit", { id: entry.id, rev: entry.rev, topic: topic.trim() || text.trim().slice(0, 12), text: text.trim() });
+        onDone();
+      }}
+    >
+      <input className="side-input" value={topic} onChange={(event) => setTopic(event.target.value)} />
+      <textarea className="loop-goal" rows={5} value={text} onChange={(event) => setText(event.target.value)} />
+      <button type="submit" className={styles.pineBtn} data-mc-save disabled={!dirty || !text.trim()}>
+        保存
+      </button>
+      <button type="button" className="pill" onClick={onDone}>
+        取消
+      </button>
+    </form>
   );
 }

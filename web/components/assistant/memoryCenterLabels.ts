@@ -53,31 +53,31 @@ export const KIND_LABEL: Record<MemoryCenterKind, string> = {
 export type SearchableMemoryCenterKind = "personal" | "work_preference" | "workspace_memory";
 
 export const SEARCHABLE_KIND_LABEL: Record<SearchableMemoryCenterKind, string> = {
-  personal: KIND_LABEL.personal,
-  work_preference: KIND_LABEL.work_preference,
-  workspace_memory: KIND_LABEL.workspace_memory,
+  personal: "我",
+  work_preference: "偏好",
+  workspace_memory: "文件夹",
 };
 
 export const STATE_LABEL: Record<MemoryCenterState, string> = {
-  pinned: "常驻",
-  hot: "活跃",
-  cold: "冷",
-  done: "完成",
-  expired: "失效",
-  待核实: "待核实",
+  pinned: "始终带上",
+  hot: "正在用",
+  cold: "很久没用",
+  done: "已办完",
+  expired: "已过期",
+  待核实: "待你确认",
 };
 
 export const INJECTION_REASON_LABEL: Record<MemoryInjectionReason, string> = {
-  pinned: "常驻",
-  section_anchor: "章节锚点",
-  relevant: "相关",
-  rotation: "轮换",
+  pinned: "始终带上",
+  section_anchor: "这一节正好用到",
+  relevant: "和你刚说的有关",
+  rotation: "轮到它",
 };
 
 export const SKIP_REASON_LABEL: Record<MemoryInjectionSkipReason, string> = {
-  budget: "预算",
-  cold_unrelated: "冷且无关",
-  terminal: "终态",
+  budget: "这一轮太长，没带上",
+  cold_unrelated: "很久没用，也和这次无关",
+  terminal: "已经办完或过期",
 };
 
 export function effectiveStateLabel(state: string): string {

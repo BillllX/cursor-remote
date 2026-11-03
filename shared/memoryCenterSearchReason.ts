@@ -5,9 +5,9 @@ export const MEMORY_CENTER_SEARCH_REASON_LABEL: Record<MemoryCenterSearchMatchRe
   text: "正文匹配",
   section: "分节匹配",
   ref: "引用匹配",
-  scope: "作用域匹配",
-  state: "状态匹配",
-  pinned: "置顶匹配",
+  scope: "在这个文件夹里",
+  state: "状态对上了",
+  pinned: "始终带上",
   related: "相关",
 };
 

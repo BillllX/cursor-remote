@@ -845,7 +845,7 @@ struct AssistantMemoryScreen: View {
     @Environment(ChatStore.self) private var store
     @State private var navId = "overview"
     @State private var middleTab = "all"
-    @State private var stateFilter = "all"
+    @State private var stateFilter = "useful"
     @State private var searchText = ""
     @State private var searchScopeFilter = "all"
     @State private var searchKindFilter = "all"

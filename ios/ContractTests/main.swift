@@ -933,8 +933,8 @@ func checkMemoryCenterExtrasRace() -> [String] {
         problems.append("extras reducer：最新 activity 响应应应用")
     }
     state.suggestionRows = [
-        MemoryCenterSuggestionRow(id: "s1", scope: "ws", kind: "stale_hot", summary: "a", risk: "low"),
-        MemoryCenterSuggestionRow(id: "s2", scope: "ws", kind: "stale_hot", summary: "b", risk: "low"),
+        MemoryCenterSuggestionRow(id: "s1", scope: "ws", kind: "stale_hot", summary: "a", reason: "旧了", risk: "low"),
+        MemoryCenterSuggestionRow(id: "s2", scope: "ws", kind: "stale_hot", summary: "b", reason: "旧了", risk: "low"),
     ]
     state = MemoryCenterExtrasReducer.beginAnswer(state, reqId: "ans1", suggestionId: "s1")
     state = MemoryCenterExtrasReducer.beginAnswer(state, reqId: "ans2", suggestionId: "s2")

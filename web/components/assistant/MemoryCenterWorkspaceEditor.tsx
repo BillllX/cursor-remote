@@ -13,9 +13,11 @@ type Props = {
   busy: boolean;
   error: string;
   conflict: boolean;
+  mode?: "create" | "edit";
   onMutate: (args: MemoryCenterMutateArgs) => void;
   onClearSelection: () => void;
   onCreated: () => void;
+  onCancel?: () => void;
 };
 
 export default function MemoryCenterWorkspaceEditor({
@@ -24,16 +26,22 @@ export default function MemoryCenterWorkspaceEditor({
   busy,
   error,
   conflict,
+  mode,
   onMutate,
   onClearSelection,
   onCreated,
+  onCancel,
 }: Props) {
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(mode === "create");
   const [section, setSection] = useState<string>("约定");
   const [text, setText] = useState("");
   const [refsText, setRefsText] = useState("");
   const [expires, setExpires] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+
+  useEffect(() => {
+    if (mode === "create") setCreating(true);
+  }, [mode]);
 
   useEffect(() => {
     if (!item) return;
@@ -60,26 +68,12 @@ export default function MemoryCenterWorkspaceEditor({
       refsList.join(",") !== item.refs.join(",") ||
       (expires || "") !== (item.expires ?? ""));
 
-  if (!item && !creating) {
-    return (
-      <div className={styles.editorBlock}>
-        <button
-          type="button"
-          className={`pill ${MEMORY_CENTER_CSS.createEntry}`}
-          disabled={busy}
-          aria-label="新增记忆"
-          onClick={() => setCreating(true)}
-        >
-          新增记忆
-        </button>
-      </div>
-    );
-  }
+  if (!item && !creating) return null;
 
   if (creating && !item) {
     return (
       <div className={styles.editorBlock}>
-        <div className="side-label">新增条目</div>
+        <div className="side-label">记一条</div>
         <label className={styles.editorField}>
           章节
           <select value={section} disabled={busy} onChange={(e) => setSection(e.target.value)}>
@@ -106,7 +100,8 @@ export default function MemoryCenterWorkspaceEditor({
         <div className={styles.editorActions}>
           <button
             type="button"
-            className="pill"
+            className={styles.pineBtn}
+            data-mc-save
             disabled={busy || !text.trim()}
             onClick={() => {
               onMutate({
@@ -126,9 +121,18 @@ export default function MemoryCenterWorkspaceEditor({
               onCreated();
             }}
           >
-            {busy ? "提交中…" : "创建"}
+            {busy ? "保存中…" : "保存"}
           </button>
-          <button type="button" className="pill ghost" disabled={busy} onClick={() => setCreating(false)}>
+          <button
+            type="button"
+            className="pill ghost"
+            disabled={busy}
+            onClick={() => {
+              setCreating(false);
+              setText("");
+              onCancel?.();
+            }}
+          >
             取消
           </button>
         </div>
@@ -144,7 +148,7 @@ export default function MemoryCenterWorkspaceEditor({
 
   return (
     <div className={styles.editorBlock}>
-      <div className="side-label">编辑工作区记忆</div>
+      <div className="side-label">改这一条</div>
       {conflict ? <div className={MEMORY_CENTER_CSS.statusError}>内容已变化，已刷新列表，请核对后重试。</div> : null}
       {error && !conflict ? <div className={MEMORY_CENTER_CSS.statusError}>{error}</div> : null}
       <label className={styles.editorField}>
@@ -172,7 +176,8 @@ export default function MemoryCenterWorkspaceEditor({
       <div className={styles.editorActions}>
         <button
           type="button"
-          className="pill"
+          className={styles.pineBtn}
+          data-mc-save
           disabled={busy || !dirty}
           onClick={() =>
             onMutate({
@@ -191,7 +196,7 @@ export default function MemoryCenterWorkspaceEditor({
             })
           }
         >
-          {busy ? "保存中…" : "保存修改"}
+          {busy ? "保存中…" : "保存"}
         </button>
         <button
           type="button"
@@ -204,7 +209,7 @@ export default function MemoryCenterWorkspaceEditor({
             })
           }
         >
-          {item.pinned ? "取消置顶" : "置顶"}
+          {item.pinned ? "不再始终带上" : "始终带上"}
         </button>
         {item.effectiveState === "done" ? (
           <button
@@ -218,7 +223,7 @@ export default function MemoryCenterWorkspaceEditor({
               })
             }
           >
-            恢复为热
+            再拿来用
           </button>
         ) : (
           <>
@@ -233,7 +238,7 @@ export default function MemoryCenterWorkspaceEditor({
                 })
               }
             >
-              标为完成
+              标成已办完
             </button>
             <button
               type="button"
@@ -251,7 +256,7 @@ export default function MemoryCenterWorkspaceEditor({
                 })
               }
             >
-              {item.state === "cold" ? "设为热" : "设为冷"}
+              {item.state === "cold" ? "再拿来用" : "标成很久没用"}
             </button>
           </>
         )}
@@ -282,7 +287,7 @@ export default function MemoryCenterWorkspaceEditor({
           </>
         )}
       </div>
-      <div className="loop-meta">规则文件只读；规则层编辑后续开放。</div>
+      <div className="loop-meta">文件夹规则在「更多」里，这里改不了。</div>
     </div>
   );
 }

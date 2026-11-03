@@ -22,19 +22,19 @@ struct MemoryCenterWorkspaceCreateSheet: View {
                 }
                 TextField("正文", text: $text, axis: .vertical)
                     .lineLimit(4...8)
-                TextField("引用（逗号分隔）", text: $refsText, axis: .vertical)
+                TextField("引用（逗号或换行分隔）", text: $refsText, axis: .vertical)
                     .lineLimit(2...4)
-                TextField("过期 YYYY-MM-DD", text: $expires)
+                TextField("过期日（可选）", text: $expires)
                     .textInputAutocapitalization(.never)
             }
-            .navigationTitle("新增记忆")
+            .navigationTitle("记一条")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("创建") { submitCreate() }
+                    Button("保存") { submitCreate() }
                         .disabled(store.memoryCenterData.mutating || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -112,12 +112,12 @@ struct MemoryCenterWorkspaceEditSheet: View {
                 }
                 TextField("正文", text: $text, axis: .vertical)
                     .lineLimit(4...8)
-                TextField("引用（逗号分隔）", text: $refsText, axis: .vertical)
+                TextField("引用", text: $refsText, axis: .vertical)
                     .lineLimit(2...4)
-                TextField("过期 YYYY-MM-DD", text: $expires)
+                TextField("过期日", text: $expires)
                     .textInputAutocapitalization(.never)
                 Section("状态") {
-                    Button(liveItem.pinned ? "取消置顶" : "置顶") {
+                    Button(liveItem.pinned ? "不再始终带上" : "始终带上") {
                         sendMutation([
                             "action": .string("set_pinned"),
                             "id": .string(liveItem.id!),
@@ -127,33 +127,16 @@ struct MemoryCenterWorkspaceEditSheet: View {
                     }
                     .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     if liveItem.effectiveState == "done" || liveItem.state == "done" {
-                        Button("恢复为热") {
+                        Button("再拿来用") {
                             sendMutation([
                                 "action": .string("set_state"),
                                 "id": .string(liveItem.id!),
                                 "revision": .string(liveItem.revision),
                                 "state": .string("hot"),
-                            ])
-                        }
-                    } else if liveItem.effectiveState == "expired" {
-                        Button("恢复为热") {
-                            sendMutation([
-                                "action": .string("set_state"),
-                                "id": .string(liveItem.id!),
-                                "revision": .string(liveItem.revision),
-                                "state": .string("hot"),
-                            ])
-                        }
-                        Button("恢复为冷") {
-                            sendMutation([
-                                "action": .string("set_state"),
-                                "id": .string(liveItem.id!),
-                                "revision": .string(liveItem.revision),
-                                "state": .string("cold"),
                             ])
                         }
                     } else {
-                        Button("标为完成") {
+                        Button("标成已办完") {
                             sendMutation([
                                 "action": .string("set_state"),
                                 "id": .string(liveItem.id!),
@@ -162,7 +145,7 @@ struct MemoryCenterWorkspaceEditSheet: View {
                             ])
                         }
                         .disabled(liveItem.pinned)
-                        Button(liveItem.state == "cold" ? "设为热" : "设为冷") {
+                        Button(liveItem.state == "cold" ? "再拿来用" : "标成很久没用") {
                             sendMutation([
                                 "action": .string("set_state"),
                                 "id": .string(liveItem.id!),
@@ -184,7 +167,7 @@ struct MemoryCenterWorkspaceEditSheet: View {
                     }
                 }
             }
-            .navigationTitle("编辑记忆")
+            .navigationTitle("改这一条")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
