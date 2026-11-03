@@ -5,6 +5,7 @@ import { serverSamples } from "@shared/protocol-fixtures";
 import {
   appendDraftMention,
   applyAssistantMessage,
+  applyAssistantSnapshot,
   applyLoopMessage,
   applyReadyRuns,
   applyServerMessage,
@@ -570,6 +571,26 @@ describe("applyAssistantMessage", () => {
     const state = base();
     assert.equal(applyAssistantMessage(state, sample("assistant_not_modified")), state);
     assert.equal(applyAssistantMessage(state, sample("pong")), state);
+  });
+
+  test("不带 memory 的投影刷新保留已打开的记忆", () => {
+    const current = base();
+    const memory = {
+      rev: 2,
+      core: { rev: 1, fields: { 关于我: "林晓" } },
+      entries: [],
+      settings: { paused: false, allowSensitive: {} },
+      sensitive: {},
+      coreTokens: 3,
+      coreBudget: 800,
+    };
+    const withMemory = { ...current, memory };
+    const stripped = { ...withMemory, memory: undefined };
+    const next = applyAssistantSnapshot(withMemory, { ...stripped, revision: (current.revision ?? 0) + 1 });
+    assert.equal(next.memory, memory);
+    assert.equal(next.revision, (current.revision ?? 0) + 1);
+    const replaced = applyAssistantSnapshot(withMemory, { ...withMemory, memory: { ...memory, rev: 9 } });
+    assert.equal(replaced.memory?.rev, 9);
   });
 
   test("assistant_not_modified 会采用网关确认的 revision", () => {

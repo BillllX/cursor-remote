@@ -59,7 +59,7 @@ import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
 import { useWorkspaceGroups } from "../lib/chat/hooks/useWorkspaceGroups";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
-import { appendDraftMention, applyAssistantMessage, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
+import { appendDraftMention, applyAssistantMessage, applyAssistantSnapshot, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows } from "../lib/chat/tools";
@@ -1089,11 +1089,13 @@ export default function ChatApp() {
         case "loop_tick":
           setLoops((prev) => applyLoopMessage(prev, message));
           break;
-        case "assistant_state":
-          assistantStateRef.current = message.state;
-          setAssistantState(message.state);
-          if (message.state.name?.trim()) setAssistantName(message.state.name.trim());
+        case "assistant_state": {
+          const next = applyAssistantSnapshot(assistantStateRef.current, message.state);
+          assistantStateRef.current = next;
+          setAssistantState(next);
+          if (next.name?.trim()) setAssistantName(next.name.trim());
           break;
+        }
         case "assistant_not_modified":
           setAssistantState((prev) => {
             const next = applyAssistantMessage(prev, message);

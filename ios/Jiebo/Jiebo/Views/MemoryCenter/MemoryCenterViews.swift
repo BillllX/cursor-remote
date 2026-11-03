@@ -274,9 +274,8 @@ struct MemoryCenterLifecycleModifier: ViewModifier {
             .onDisappear {
                 store.memoryCenterSetActive(false)
                 if !store.memoryCenterActive {
-                    store.requestAssistant(memory: false, force: true)
+                    store.memoryCenterScheduleRelease()
                 }
-                store.memoryCenterResetIfInactive()
             }
             .onChange(of: navId) { _, next in
                 store.memoryCenterEnsureLoaded(navId: next, searchActive: searchActive)
@@ -333,6 +332,18 @@ struct MemoryCenterLifecycleModifier: ViewModifier {
 }
 
 extension View {
+    /// 推进来的记忆页自己拿着活跃计数。上一页 onDisappear 不会把详情请求清掉。
+    func memoryCenterScreenHold(navId: String, searchActive: Bool = false) -> some View {
+        memoryCenterLifecycle(
+            navId: navId,
+            searchActive: searchActive,
+            searchText: "",
+            searchScopeFilter: "all",
+            searchKindFilter: "all",
+            searchStateFilter: "all"
+        )
+    }
+
     func memoryCenterLifecycle(
         navId: String,
         searchActive: Bool,
@@ -932,9 +943,7 @@ struct MemoryCenterItemsList: View {
                     .accessibilityAddTraits(selectedKey == key ? .isSelected : [])
                     .hitTarget()
                 case .drillDown(let scopeId):
-                    NavigationLink {
-                        MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
-                    } label: {
+                    NavigationLink(value: MemoryCenterPhoneRoute.item(scopeId: scopeId, key: key)) {
                         MemoryCenterItemRow(item: item, diagnostics: diagnostics, selected: false)
                     }
                     .buttonStyle(.plain)
@@ -1108,9 +1117,7 @@ struct MemoryCenterSearchList: View {
                         .buttonStyle(.plain)
                         .hitTarget()
                     case .drillDown, .drillDownSearchHit:
-                        NavigationLink {
-                            MemoryCenterSearchHitDetail(itemKey: key)
-                        } label: {
+                        NavigationLink(value: MemoryCenterPhoneRoute.searchHit(key: key)) {
                             MemoryCenterSearchHitRow(hit: hit, selected: false)
                         }
                         .buttonStyle(.plain)
@@ -1273,6 +1280,16 @@ struct MemoryCenterDiagnosticsBlock: View {
 
 // MARK: - iPhone 页面
 
+enum MemoryCenterPhoneRoute: Hashable {
+    case scope(id: String, label: String)
+    case suggestions
+    case activity
+    case search
+    case managePersonal
+    case item(scopeId: String, key: String)
+    case searchHit(key: String)
+}
+
 struct MemoryCenterPhoneHome: View {
     @Environment(ChatStore.self) private var store
     @Binding var navId: String
@@ -1288,70 +1305,59 @@ struct MemoryCenterPhoneHome: View {
         List {
             MemoryCenterPhoneHealthSection()
             Section("浏览") {
-                NavigationLink {
-                    MemoryCenterPhoneScopeList(
-                        scopeId: "overview",
-                        scopeLabel: "总览",
-                        middleTab: $middleTab,
-                        stateFilter: $stateFilter
-                    )
-                } label: {
+                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: "overview", label: "总览")) {
                     Label("总览", systemImage: "square.grid.2x2")
                 }
-                NavigationLink {
-                    MemoryCenterPhoneScopeList(
-                        scopeId: "personal",
-                        scopeLabel: "关于我",
-                        middleTab: $middleTab,
-                        stateFilter: $stateFilter
-                    )
-                } label: {
+                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: "personal", label: "关于我")) {
                     Label("关于我", systemImage: NavigationIconId.account.symbol)
                 }
-                NavigationLink {
-                    MemoryCenterPhoneScopeList(
-                        scopeId: "work_preference",
-                        scopeLabel: "工作偏好",
-                        middleTab: $middleTab,
-                        stateFilter: $stateFilter
-                    )
-                } label: {
+                NavigationLink(value: MemoryCenterPhoneRoute.scope(id: "work_preference", label: "工作偏好")) {
                     Label("工作偏好", systemImage: "briefcase")
                 }
-                NavigationLink {
-                    MemoryCenterPhoneSuggestions()
-                } label: {
+                NavigationLink(value: MemoryCenterPhoneRoute.suggestions) {
                     Label("整理建议", systemImage: "lightbulb")
                 }
-                NavigationLink {
-                    MemoryCenterPhoneActivity()
-                } label: {
+                NavigationLink(value: MemoryCenterPhoneRoute.activity) {
                     Label("活动", systemImage: "clock")
                 }
                 ForEach(MemoryCenterReducer.buildScopeTreeRows(scopes: store.memoryCenterData.overview?.scopes ?? [])) { row in
-                    NavigationLink {
-                        MemoryCenterPhoneScopeList(
-                            scopeId: row.id,
-                            scopeLabel: row.summary.label,
-                            middleTab: $middleTab,
-                            stateFilter: $stateFilter
-                        )
-                    } label: {
+                    NavigationLink(value: MemoryCenterPhoneRoute.scope(id: row.id, label: row.summary.label)) {
                         Text(String(repeating: " ", count: row.depth * 2) + row.summary.label)
                     }
                 }
             }
             if searchActive {
                 Section("搜索") {
-                    NavigationLink {
-                        MemoryCenterPhoneSearchResults()
-                    } label: {
+                    NavigationLink(value: MemoryCenterPhoneRoute.search) {
                         Label("查看搜索结果", systemImage: "magnifyingglass")
                     }
                 }
             }
         }
         .navigationTitle("记忆")
+        .navigationDestination(for: MemoryCenterPhoneRoute.self) { route in
+            switch route {
+            case let .scope(id, label):
+                MemoryCenterPhoneScopeList(
+                    scopeId: id,
+                    scopeLabel: label,
+                    middleTab: $middleTab,
+                    stateFilter: $stateFilter
+                )
+            case .suggestions:
+                MemoryCenterPhoneSuggestions()
+            case .activity:
+                MemoryCenterPhoneActivity()
+            case .search:
+                MemoryCenterPhoneSearchResults()
+            case .managePersonal:
+                MemoryCenterPhoneManagePersonal()
+            case let .item(scopeId, key):
+                MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
+            case let .searchHit(key):
+                MemoryCenterSearchHitDetail(itemKey: key)
+            }
+        }
         .searchable(text: $searchText, prompt: "搜索记忆")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -1403,7 +1409,6 @@ struct MemoryCenterPhoneHealthSection: View {
 }
 
 struct MemoryCenterPhoneScopeList: View {
-    @Environment(ChatStore.self) private var store
     let scopeId: String
     let scopeLabel: String
     @Binding var middleTab: String
@@ -1421,9 +1426,7 @@ struct MemoryCenterPhoneScopeList: View {
             } else if scopeId == "personal" {
                 VStack(alignment: .leading, spacing: 12) {
                     MemoryCenterPersonalSummaryPane(manageExpanded: .constant(false))
-                    NavigationLink {
-                        MemoryCenterPhoneManagePersonal()
-                    } label: {
+                    NavigationLink(value: MemoryCenterPhoneRoute.managePersonal) {
                         Label("管理个人记忆", systemImage: "pencil")
                             .font(JieboFont.text(.subheadline, weight: .semibold))
                     }
@@ -1443,9 +1446,7 @@ struct MemoryCenterPhoneScopeList: View {
         }
         .navigationTitle(scopeLabel)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            store.memoryCenterEnsureLoaded(navId: scopeId, searchActive: false)
-        }
+        .memoryCenterScreenHold(navId: scopeId)
     }
 }
 
@@ -1494,11 +1495,11 @@ struct MemoryCenterSearchHitDetail: View {
         }
         .navigationTitle("条目")
         .navigationBarTitleDisplayMode(.inline)
+        .memoryCenterScreenHold(navId: "overview", searchActive: true)
     }
 }
 
 struct MemoryCenterPhoneItemDetail: View {
-    @Environment(ChatStore.self) private var store
     let itemKey: String
     let scopeId: String
 
@@ -1509,6 +1510,7 @@ struct MemoryCenterPhoneItemDetail: View {
         }
         .navigationTitle("条目")
         .navigationBarTitleDisplayMode(.inline)
+        .memoryCenterScreenHold(navId: scopeId)
     }
 }
 
@@ -1522,6 +1524,7 @@ struct MemoryCenterPhoneSearchResults: View {
         }
         .navigationTitle("搜索结果")
         .navigationBarTitleDisplayMode(.inline)
+        .memoryCenterScreenHold(navId: "overview", searchActive: true)
     }
 }
 

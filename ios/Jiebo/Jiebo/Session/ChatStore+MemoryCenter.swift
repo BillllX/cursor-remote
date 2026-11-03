@@ -7,11 +7,27 @@ extension ChatStore {
     func memoryCenterSetActive(_ active: Bool) {
         if active {
             memoryCenterActiveCount += 1
+            memoryCenterReleaseGeneration += 1
         } else {
             memoryCenterActiveCount = max(0, memoryCenterActiveCount - 1)
             if memoryCenterActiveCount == 0 {
                 memoryCenterCancelSearchDebounce()
             }
+        }
+    }
+
+    /// NavigationStack 推进下一页时，上一页的 onDisappear 会先发生。
+    /// 立刻清空会把文件夹详情请求抹掉，页面就停在「暂无详情」。等下一拍再看还有没有页面拿着记忆中心。
+    func memoryCenterScheduleRelease() {
+        memoryCenterReleaseGeneration += 1
+        let generation = memoryCenterReleaseGeneration
+        Task { [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            guard generation == self.memoryCenterReleaseGeneration else { return }
+            guard !self.memoryCenterActive else { return }
+            self.requestAssistant(memory: false, force: true)
+            self.memoryCenterResetIfInactive()
         }
     }
 

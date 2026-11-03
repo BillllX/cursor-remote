@@ -111,7 +111,7 @@ export type CreateWorkspaceRequest = {
 
 export type AssistantDeps = {
   tenants: () => AssistantTenant[];
-  publish: (tenantId: string, message: ServerMessage) => void;
+  publish: (tenantId: string, message: ServerMessage, except?: Iterable<WebSocket>) => void;
   globalStateDir: string;
   delegate: (req: DelegateRequest) => Promise<string>;
   workspaces: (tenant: AssistantTenant) => string[];
@@ -500,7 +500,13 @@ export function publishState(tenant: AssistantTenant): Promise<void> {
     const state = await buildState(tenant, { memory: validWatchers.length > 0, revision });
     if (state.memory && validWatchers.length) {
       const { memory: _memory, ...withoutMemory } = state;
-      deps?.publish(tenant.id, { type: "assistant_state", state: withoutMemory });
+      // 订阅记忆的连接马上会收到带 memory 的直推。广播若先送到同一条连接，
+      // 客户端会先卸掉记忆面板再装上，打开「记忆与规则」就一直闪。
+      deps?.publish(
+        tenant.id,
+        { type: "assistant_state", state: withoutMemory },
+        validWatchers.map((watcher) => watcher.ws),
+      );
       for (const watcher of validWatchers) {
         if (memoryWatcherReceivesMemory(tenant.id, watcher)) {
           send(watcher.ws, { type: "assistant_state", state });

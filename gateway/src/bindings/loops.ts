@@ -108,8 +108,10 @@ export async function dispatchLoop(job: LoopJob) {
   return { text };
 }
 
-export function publishLoop(tenantId: string, message: ServerMessage) {
+export function publishLoop(tenantId: string, message: ServerMessage, except?: Iterable<WebSocket>) {
+  const skip = except ? new Set(except) : undefined;
   for (const conn of gatewayState.conns.values()) {
+    if (skip?.has(conn.ws)) continue;
     if (conn.authed && conn.tenant?.id === tenantId) reply(conn.ws, message);
   }
 }

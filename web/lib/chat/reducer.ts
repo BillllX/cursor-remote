@@ -374,6 +374,15 @@ export function applyLoopMessage(loops: Record<string, LoopRow>, message: Server
   }
 }
 
+/**
+ * 网关给没订阅记忆的连接广播的 assistant_state 不带 memory。
+ * 已经打开记忆的客户端要留着上一份，否则面板会跟着每次投影刷新拆掉再装上。
+ */
+export function applyAssistantSnapshot(current: AssistantState | null, incoming: AssistantState): AssistantState {
+  if (incoming.memory || !current?.memory) return incoming;
+  return { ...incoming, memory: current.memory };
+}
+
 export function applyAssistantMessage(state: AssistantState | null, message: ServerMessage): AssistantState | null {
   switch (message.type) {
     case "assistant_not_modified":
