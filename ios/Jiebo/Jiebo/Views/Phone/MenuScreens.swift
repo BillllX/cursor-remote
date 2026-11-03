@@ -843,6 +843,7 @@ struct PhoneSettingsDestination: View {
 
 struct AssistantMemoryScreen: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
     @State private var navId = "overview"
     @State private var middleTab = "all"
     @State private var stateFilter = "useful"
@@ -853,25 +854,32 @@ struct AssistantMemoryScreen: View {
     @State private var searchActive = false
 
     var body: some View {
-        MemoryCenterPhoneHome(
-            navId: $navId,
-            middleTab: $middleTab,
-            stateFilter: $stateFilter,
-            searchText: $searchText,
-            searchScopeFilter: $searchScopeFilter,
-            searchKindFilter: $searchKindFilter,
-            searchStateFilter: $searchStateFilter,
-            searchActive: $searchActive
-        )
-        .scrollDismissesKeyboard(.interactively)
-        .background(JieboColor.paper)
-        .memoryCenterLifecycle(
-            navId: navId,
-            searchActive: searchActive,
-            searchText: searchText,
-            searchScopeFilter: searchScopeFilter,
-            searchKindFilter: searchKindFilter,
-            searchStateFilter: searchStateFilter
-        )
+        // 小驳的栈只存 PhoneRoute。记忆里的下一级是另一种值，直接推进去会报没有目的地。
+        // 这一页自己开一条栈，返回仍交给外面那条。
+        NavigationStack {
+            MemoryCenterPhoneHome(
+                navId: $navId,
+                middleTab: $middleTab,
+                stateFilter: $stateFilter,
+                searchText: $searchText,
+                searchScopeFilter: $searchScopeFilter,
+                searchKindFilter: $searchKindFilter,
+                searchStateFilter: $searchStateFilter,
+                searchActive: $searchActive,
+                onLeave: { dismiss() }
+            )
+            .scrollDismissesKeyboard(.interactively)
+            .background(JieboColor.paper)
+            .memoryCenterLifecycle(
+                navId: navId,
+                searchActive: searchActive,
+                searchText: searchText,
+                searchScopeFilter: searchScopeFilter,
+                searchKindFilter: searchKindFilter,
+                searchStateFilter: searchStateFilter
+            )
+            .toolbar(.visible, for: .navigationBar)
+        }
+        .toolbar(.hidden, for: .navigationBar)
     }
 }

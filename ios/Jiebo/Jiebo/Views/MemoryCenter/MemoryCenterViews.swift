@@ -1644,6 +1644,8 @@ struct MemoryCenterPhoneHome: View {
     @Binding var searchKindFilter: String
     @Binding var searchStateFilter: String
     @Binding var searchActive: Bool
+    /// 从外层页面进来时用来返回。单栏记忆没有外层页面，不传。
+    var onLeave: (() -> Void)? = nil
 
     private var folder: MemoryCenterScopeSummary? {
         MemoryCenterLabels.currentFolder(
@@ -1759,6 +1761,14 @@ struct MemoryCenterPhoneHome: View {
             store.memoryCenterLoadSuggestions()
         }
         .toolbar {
+            if let onLeave {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button(action: onLeave) {
+                        Image(systemName: "chevron.left")
+                    }
+                    .accessibilityLabel("返回")
+                }
+            }
             if searchActive {
                 ToolbarItem(placement: .topBarTrailing) {
                     MemoryCenterSearchFilters(
