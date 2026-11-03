@@ -213,6 +213,12 @@ extension ChatStore {
         send(.adminStats)
     }
 
+    /// 工作台打开时，活动会话要落到正在看的子工作区。助理壳还锁着时不切。
+    func activateWorkspaceChat(_ id: String) {
+        guard !assistantOnly, isWorkspaceChat(id) else { return }
+        select(id)
+    }
+
     func select(_ requestedId: String) {
         var id = requestedId
         if assistantOnly, let assistantId = assistantChatId, id != assistantId {

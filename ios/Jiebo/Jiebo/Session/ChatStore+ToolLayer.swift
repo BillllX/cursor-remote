@@ -77,8 +77,13 @@ extension ChatStore {
         requestFileIndex(userInitiated: true)
     }
 
-    /// 文件树在工作台。手机看到请求后切过去；浮层在切页之前就打开。
-    func openFilesOnWorkbench() {
+    /// 文件树在工作台。先把活动会话对准正在看的子工作区，再打开浮层。
+    /// 否则列表会跟着助理会话，而助理会话的目录是用户根目录。
+    func openFilesOnWorkbench(chatId: String? = nil) {
+        let explicit = chatId.flatMap { isWorkspaceChat($0) ? $0 : nil }
+        if let target = explicit ?? preferredWorkspaceChatId() {
+            activateWorkspaceChat(target)
+        }
         workbenchFilesRequest += 1
         if !(fileBrowserOpen && fileBrowserPane == .files) {
             toggleFileBrowser(.files)

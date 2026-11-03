@@ -132,11 +132,16 @@ struct PhoneWorkbench: View {
     }
 
     /// 工作台还停在助理会话或空占位时，换成上次打开的子工作区。已经在子工作区里就不抢。
+    /// 窗口记下的会话还要成为活动会话，文件列表才会落在这个工作区，而不是用户根目录。
     private func adoptWorkbenchChatIfNeeded() {
         guard let sceneSession else { return }
-        if let current = sceneSession.workbenchChatId, store.isWorkspaceChat(current) { return }
+        if let current = sceneSession.workbenchChatId, store.isWorkspaceChat(current) {
+            store.activateWorkspaceChat(current)
+            return
+        }
         guard let id = store.preferredWorkspaceChatId() else { return }
         sceneSession.workbenchChatId = id
+        store.activateWorkspaceChat(id)
     }
 }
 private struct PhoneDrawer: View {

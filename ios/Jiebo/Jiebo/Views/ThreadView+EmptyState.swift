@@ -194,7 +194,7 @@ extension ThreadView {
         let row = ForEach(starters, id: \.self) { text in
             Button {
                 if text == "打开文件" {
-                    store.openFilesOnWorkbench()
+                    store.openFilesOnWorkbench(chatId: resolvedChatId)
                 } else if text == "终端输出" {
                     store.openTerminalOnWorkbench(chatId: resolvedChatId)
                 } else {

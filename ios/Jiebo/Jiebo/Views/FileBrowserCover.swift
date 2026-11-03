@@ -205,10 +205,19 @@ struct FileBrowserCover: View {
         browserBase.isEmpty ? "文件" : workspaceLabel(browserBase, root: store.workspaceRoot)
     }
 
-    /// 浏览目标工作区的统一口径：active.cwd（空串归 nil）→ store.cwd → workspaceRoot。
+    /// 浏览目标工作区的统一口径：正在看的工作台会话 → active.cwd → store.cwd → workspaceRoot。
+    /// 助理会话的目录是用户根目录，不能拿来当工作台的文件树。
     /// title 与树视图的 .id 隔离键共用，避免两处兜底不一致（Kimi R2 MINOR）
     private var browserBase: String {
-        store.active?.cwd?.nilIfEmpty ?? store.cwd.nilIfEmpty ?? store.workspaceRoot
+        if let chatId = sceneSession?.workbenchChatId,
+           let cwd = store.chats.first(where: { $0.id == chatId })?.cwd?.nilIfEmpty,
+           !store.isUserRoot(cwd) {
+            return cwd
+        }
+        if let cwd = store.active?.cwd?.nilIfEmpty, !store.isUserRoot(cwd) {
+            return cwd
+        }
+        return store.cwd.nilIfEmpty ?? store.workspaceRoot
     }
 
     // MARK: 左栏（搜索 + 树）

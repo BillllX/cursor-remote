@@ -94,7 +94,7 @@ extension ThreadView {
                     }
                 }
                 phoneIcon("folder", label: "文件") {
-                    store.openFilesOnWorkbench()
+                    store.openFilesOnWorkbench(chatId: resolvedChatId)
                 }
                 phoneIcon("terminal", label: "终端输出") {
                     store.openTerminalOnWorkbench(chatId: resolvedChatId)
