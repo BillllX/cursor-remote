@@ -290,6 +290,7 @@ export default function FileTree({
   query = "",
   variant = "panel",
   loadingDirs = {},
+  truncatedDirs = {},
   onExpandDir,
   onPick,
   onOpen,
@@ -305,6 +306,7 @@ export default function FileTree({
   query?: string;
   variant?: "panel" | "browser";
   loadingDirs?: Record<string, boolean>;
+  truncatedDirs?: Record<string, boolean>;
   onExpandDir?: (dir: string) => void;
   onPick: (path: string) => void;
   onOpen?: (path: string) => void;
@@ -534,6 +536,7 @@ export default function FileTree({
           cursor={cursor}
           openDirs={openDirs}
           loadingDirs={loadingDirs}
+          truncatedDirs={truncatedDirs}
           expandAll={expandAll}
           variant={variant}
           creating={creating}
@@ -624,7 +627,7 @@ export default function FileTree({
           ) : null}
         </div>
       ) : null}
-      {truncated ? (
+      {truncated || truncatedDirs[""] ? (
         <div className="tree-truncated">工作区文件太多，清单被截断了，用搜索缩小范围。</div>
       ) : null}
     </div>
@@ -677,6 +680,7 @@ function Branch({
   cursor,
   openDirs,
   loadingDirs,
+  truncatedDirs,
   expandAll,
   variant,
   creating,
@@ -699,6 +703,7 @@ function Branch({
   cursor: string;
   openDirs: Record<string, boolean>;
   loadingDirs: Record<string, boolean>;
+  truncatedDirs: Record<string, boolean>;
   expandAll: boolean;
   variant: "panel" | "browser";
   creating: { dir: string; kind: "file" | "dir" } | null;
@@ -721,6 +726,7 @@ function Branch({
   const parent = parentPath(node.path);
   if (node.children) {
     const dirLoading = Boolean(loadingDirs[node.path]) && node.children.length === 0;
+    const dirTruncated = Boolean(truncatedDirs[node.path]);
     return (
       <details className={`tree-dir${on ? " on" : ""}`} open={opened}>
         <summary
@@ -777,6 +783,7 @@ function Branch({
                 cursor={cursor}
                 openDirs={openDirs}
                 loadingDirs={loadingDirs}
+                truncatedDirs={truncatedDirs}
                 expandAll={expandAll}
                 variant={variant}
                 creating={creating}
@@ -794,6 +801,11 @@ function Branch({
                 onMenu={onMenu}
               />
             ))}
+            {dirTruncated ? (
+              <div className="tree-truncated" style={{ paddingLeft: rowPad(depth + 1) }}>
+                此目录文件较多，仅显示前 1000 项，请用搜索缩小范围。
+              </div>
+            ) : null}
           </>
         ) : null}
       </details>

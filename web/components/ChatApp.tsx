@@ -28,6 +28,7 @@ import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
+import { isDeleteToolName } from "@shared/toolNames";
 import { extractDiff, mutatingTool } from "./ToolCard";
 import FilePreview, { PREVIEW_SAVE_LIMIT, type PreviewTab } from "./FilePreview";
 import { SAMPLE_CANVAS_PATH, SAMPLE_CANVAS_SOURCE } from "../lib/canvas/sample";
@@ -240,6 +241,7 @@ export default function ChatApp() {
   const [treeTruncated, setTreeTruncated] = useState(false);
   const [dirEntriesByDir, setDirEntriesByDir] = useState<Record<string, string[]>>({});
   const [loadingDirs, setLoadingDirs] = useState<Record<string, boolean>>({});
+  const [truncatedDirs, setTruncatedDirs] = useState<Record<string, boolean>>({});
   const loadedDirsRef = useRef<Set<string>>(new Set());
   const treePathsRef = useRef<string[]>([]);
   treePathsRef.current = treePaths;
@@ -1035,6 +1037,17 @@ export default function ChatApp() {
             const targetDir = message.dir;
             loadedDirsRef.current.add(targetDir);
             setDirEntriesByDir((prev) => ({ ...prev, [targetDir]: message.paths }));
+            setTruncatedDirs((prev) =>
+              message.truncated
+                ? { ...prev, [targetDir]: true }
+                : prev[targetDir]
+                  ? (() => {
+                      const next = { ...prev };
+                      delete next[targetDir];
+                      return next;
+                    })()
+                  : prev,
+            );
             setLoadingDirs((prev) => {
               if (!prev[targetDir]) return prev;
               const next = { ...prev };
@@ -1162,23 +1175,22 @@ export default function ChatApp() {
               const kind = path ? kindFromPath(path) : "text";
               const skipDiff =
                 kind === "canvas" || kind === "markdown" || kind === "html" || kind === "pdf" || kind === "audio";
-              if (path && !skipDiff) {
+              const existing = path
+                ? previewTabsRef.current.find((tab) => sameFile(tab.path, path, cwdRef.current))
+                : undefined;
+              // 方案 B：工具开始时只刷新已打开的页签，不再为普通文件自动新建预览页签
+              if (path && existing && !existing.sha && !skipDiff) {
                 const now = Date.now();
                 if ((peekDiffAtRef.current[path] || 0) < now - 400) {
                   peekDiffAtRef.current[path] = now;
-                  setPreviewTabs((prev) => {
-                    const existing = prev.find((tab) => sameFile(tab.path, path, cwdRef.current));
-                    if (existing) {
-                      return prev.map((tab) =>
-                        sameFile(tab.path, path, cwdRef.current)
-                          ? { ...tab, diff: true, content: existing.diff ? tab.content : undefined, error: undefined }
-                          : tab,
-                      );
-                    }
-                    return [...prev, { path, diff: true }].slice(-8);
-                  });
-                  setPreviewPath(path);
-                  send({ type: "read_file", path, chatId, diff: true });
+                  setPreviewTabs((prev) =>
+                    prev.map((tab) =>
+                      sameFile(tab.path, path, cwdRef.current)
+                        ? { ...tab, diff: true, content: existing.diff ? tab.content : undefined, error: undefined }
+                        : tab,
+                    ),
+                  );
+                  send({ type: "read_file", path: existing.path, chatId, diff: true });
                 }
               }
             }
@@ -1191,12 +1203,14 @@ export default function ChatApp() {
             const running = chatsRef.current
               .find((chat) => chat.id === chatId)
               ?.turns.find((turn) => turn.running);
-            const args = running?.tools.find((tool) => tool.callId === message.callId)?.args;
+            const matchedTool = running?.tools.find((tool) => tool.callId === message.callId);
+            const args = matchedTool?.args;
+            const toolName = message.name || matchedTool?.name || "";
             const path = relToCwd(
               pathFromPayload(args) || pathFromPayload(message.result),
               cwdRef.current,
             );
-            if (path && mutatingTool(message.name || running?.tools.find((tool) => tool.callId === message.callId)?.name || "")) {
+            if (path && mutatingTool(toolName)) {
               send({ type: "list_files", query: "", chatId });
               const kind = kindFromPath(path);
               const skipDiff =
@@ -1206,21 +1220,36 @@ export default function ChatApp() {
                 kind === "pdf" ||
                 kind === "audio";
               const tab = previewTabsRef.current.find((item) => sameFile(item.path, path, cwdRef.current));
-              previewWantedRef.current.add(tab?.path || path);
-              if (!tab) {
-                setPreviewTabs((prev) =>
-                  prev.some((item) => sameFile(item.path, path, cwdRef.current))
-                    ? prev
-                    : [...prev, { path, diff: !skipDiff, kind }].slice(-8),
-                );
+              if (tab) {
+                if (!tab.sha) {
+                  previewWantedRef.current.add(tab.path);
+                  send({
+                    type: "read_file",
+                    path: tab.path,
+                    chatId,
+                    diff: skipDiff ? undefined : true,
+                  });
+                }
+              } else if (kind === "canvas" && !isDeleteToolName(toolName)) {
+                // 方案 B：仅新建/修改 .canvas.tsx 画布时自动打开预览（优先替换未固定的预览页签）
+                previewWantedRef.current.add(path);
+                setPreviewTabs((prev) => {
+                  if (prev.some((item) => sameFile(item.path, path, cwdRef.current))) return prev;
+                  const nextTab: PreviewTab = { path, diff: false, kind: "canvas" };
+                  const unpinnedIdx = prev.findIndex((item) => !item.pinned);
+                  if (unpinnedIdx >= 0 && prev.length >= 8) {
+                    const replaced = prev[unpinnedIdx];
+                    previewWantedRef.current.delete(replaced.path);
+                    delete previewTriesRef.current[replaced.path];
+                    return prev.map((item, i) => (i === unpinnedIdx ? nextTab : item));
+                  }
+                  return [...prev, nextTab].slice(-8);
+                });
                 setPreviewPath(path);
-              }
-              if (!tab?.sha) {
                 send({
                   type: "read_file",
-                  path: tab?.path || path,
+                  path,
                   chatId,
-                  diff: skipDiff ? undefined : true,
                 });
               }
             } else if (path) {
@@ -1275,11 +1304,29 @@ export default function ChatApp() {
                 : turn,
             ),
           }));
+          if (message.chatId === activeIdRef.current) {
+            const canvasFile = message.files.find((f) => kindFromPath(f.path) === "canvas");
+            if (canvasFile) {
+              const rel = relToCwd(canvasFile.path, cwdRef.current) || canvasFile.path;
+              const existing = previewTabsRef.current.find((item) => sameFile(item.path, rel, cwdRef.current));
+              if (!existing) {
+                previewWantedRef.current.add(rel);
+                setPreviewTabs((prev) =>
+                  prev.some((item) => sameFile(item.path, rel, cwdRef.current))
+                    ? prev
+                    : [...prev, { path: rel, diff: false, kind: "canvas" as const }].slice(-8),
+                );
+                setPreviewPath(rel);
+                send({ type: "read_file", path: rel, chatId: message.chatId });
+              }
+            }
+          }
           break;
         case "file_changed":
           if (message.chatId === activeIdRef.current) {
             send({ type: "list_files", query: "", chatId: message.chatId });
-            const tab = previewTabsRef.current.find((item) => sameFile(item.path, message.path, cwdRef.current));
+            const rel = relToCwd(message.path, cwdRef.current) || message.path;
+            const tab = previewTabsRef.current.find((item) => sameFile(item.path, rel, cwdRef.current));
             if (tab && !tab.sha && previewDraftsRef.current[tab.path] == null) {
               send({
                 type: "read_file",
@@ -1287,6 +1334,15 @@ export default function ChatApp() {
                 chatId: tab.sourceChatId || message.chatId,
                 diff: tab.diff || undefined,
               });
+            } else if (!tab && kindFromPath(rel) === "canvas") {
+              previewWantedRef.current.add(rel);
+              setPreviewTabs((prev) =>
+                prev.some((item) => sameFile(item.path, rel, cwdRef.current))
+                  ? prev
+                  : [...prev, { path: rel, diff: false, kind: "canvas" as const }].slice(-8),
+              );
+              setPreviewPath(rel);
+              send({ type: "read_file", path: rel, chatId: message.chatId });
             }
           }
           break;
@@ -2089,6 +2145,7 @@ export default function ChatApp() {
     loadedDirsRef.current.clear();
     setDirEntriesByDir({});
     setLoadingDirs({});
+    setTruncatedDirs({});
   }, [activeId, cwd]);
 
   useEffect(() => {
@@ -2097,8 +2154,12 @@ export default function ChatApp() {
       setLoadingDirs((prev) => ({ ...prev, "": true }));
       send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current });
     }
+  }, [filesOpen, activeId, cwd, send]);
+
+  useEffect(() => {
+    if (!filesOpen || !filesQuery.trim()) return;
     if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
-  }, [filesOpen, send, treePaths.length]);
+  }, [filesOpen, filesQuery, send, treePaths.length]);
 
   useEffect(() => {
     if (!grepOpen) return;
@@ -3093,9 +3154,16 @@ export default function ChatApp() {
   const mergedTreePaths = useMemo(() => {
     const extras = Object.values(dirEntriesByDir).flat();
     if (!extras.length) return treePaths;
-    const seen = new Set<string>(treePaths);
-    const out = [...treePaths];
+    // 按需懒加载出的目录项放在最前面，保证超大工作区（>8000 条）时不会被 toTree 的 slice(0, 8000) 截掉
+    const seen = new Set<string>();
+    const out: string[] = [];
     for (const p of extras) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    for (const p of treePaths) {
       if (!seen.has(p)) {
         seen.add(p);
         out.push(p);
@@ -4119,6 +4187,10 @@ export default function ChatApp() {
       if (!window.confirm(`关掉 ${name}？未保存的修改会丢掉。`)) return;
     }
     dropPreviewDraft(path);
+    for (const wanted of [...previewWantedRef.current]) {
+      if (sameFile(wanted, path, cwdRef.current)) previewWantedRef.current.delete(wanted);
+    }
+    delete previewTriesRef.current[path];
     setPreviewTabs((prev) => {
       const next = prev.filter((tab) => !sameFile(tab.path, path));
       if (!next.length) setPreviewMax(false);
@@ -4577,6 +4649,7 @@ export default function ChatApp() {
         treePaths={mergedTreePaths}
         treeTruncated={treeTruncated}
         loadingDirs={loadingDirs}
+        truncatedDirs={truncatedDirs}
         onExpandDir={handleExpandTreeDir}
         handlePickFile={handlePickFile}
         setNotice={setNotice}

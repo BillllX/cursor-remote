@@ -22,6 +22,7 @@ type FilesOverlayProps = {
   treePaths: string[];
   treeTruncated: boolean;
   loadingDirs?: Record<string, boolean>;
+  truncatedDirs?: Record<string, boolean>;
   onExpandDir?: (dir: string) => void;
   handlePickFile: (path: string, line?: number, endLine?: number, snippet?: string) => void;
   setNotice: Dispatch<SetStateAction<string>>;
@@ -49,6 +50,7 @@ export function FilesOverlay({
   treePaths,
   treeTruncated,
   loadingDirs,
+  truncatedDirs,
   onExpandDir,
   handlePickFile,
   setNotice,
@@ -132,6 +134,7 @@ export function FilesOverlay({
             query={filesQuery}
             variant="browser"
             loadingDirs={loadingDirs}
+            truncatedDirs={truncatedDirs}
             onExpandDir={onExpandDir}
             onPick={(path) => {
               handlePickFile(path);

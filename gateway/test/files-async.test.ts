@@ -806,6 +806,15 @@ describe("WS 处理函数：覆盖、断线取消、排队满回错误", () => {
     );
     assert.deepEqual(byDir[""], ["牌照/", "资金/", "归档说明.md"]);
     assert.deepEqual(byDir["牌照"], ["牌照/黑龙江三农信/", "牌照/README.md"]);
+
+    const bigDir = join(dir, "巨型目录");
+    mkdirSync(bigDir);
+    for (let i = 0; i < 1010; i++) {
+      writeFileSync(join(bigDir, `f${String(i).padStart(4, "0")}.txt`), "x");
+    }
+    const bigListed = await listWorkspaceDirForClientAsync(dir, "巨型目录");
+    assert.equal(bigListed.paths.length, 1000);
+    assert.equal(bigListed.truncated, true);
   });
 
   test("read_file：不起子进程的读取并发回包，各自带 reqId", async () => {

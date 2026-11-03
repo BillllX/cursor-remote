@@ -1091,15 +1091,6 @@ export async function listWorkspaceDirForClientAsync(
     for (const file of files) {
       if (cached.status[file]) status[file] = cached.status[file];
     }
-    for (const dirEntry of dirs) {
-      const dirPath = dirEntry.slice(0, -1);
-      for (const [path, letter] of Object.entries(cached.status)) {
-        if (path === dirPath || path.startsWith(dirEntry)) {
-          status[dirPath] = letter;
-          break;
-        }
-      }
-    }
   }
   return { paths: [...dirs, ...files], status, truncated };
 }

@@ -35,6 +35,16 @@ describe("toTree 逐层加载树构建", () => {
       ],
     );
   });
+
+  test("超大工作区（>8000 条）时，排在前面的按需懒加载目录项不会被 toTree 截断丢弃", () => {
+    const lazyExtras = ["牌照/", "牌照/黑龙江三农信/", "牌照/黑龙江三农信/执照.pdf"];
+    const bulkIndex = Array.from({ length: 8500 }, (_, i) => `archive/f${i}.txt`);
+    const tree = toTree([...lazyExtras, ...bulkIndex]);
+    const license = tree.find((n) => n.path === "牌照");
+    assert.ok(license?.children);
+    assert.equal(license.children[0]?.path, "牌照/黑龙江三农信");
+    assert.equal(license.children[0]?.children?.[0]?.path, "牌照/黑龙江三农信/执照.pdf");
+  });
 });
 
 describe("mentionHits", () => {
