@@ -22,27 +22,6 @@ extension ThreadView {
             || !store.appliedStore
     }
 
-    /// 对话区还没有正文，而且现在也拉不了。nil 表示可以转圈或显示已有内容。
-    var threadLoadBlockedTitle: String? {
-        if showThreadLoading { return nil }
-        let emptyShell: Bool = {
-            if chatId == nil, store.coldStartPlaceholder { return true }
-            guard let chat = threadChat else { return false }
-            return !chat.turnsComplete && chat.turns.isEmpty
-        }()
-        guard emptyShell else { return nil }
-        if !store.unlocked, !store.resumingLogin { return "还没登录。登录后再看这段对话。" }
-        if !store.connected {
-            return store.linkState == .offline
-                ? "已断开。点按重连后再看这段对话。"
-                : "正在连接。连上后再看这段对话。"
-        }
-        if let id = threadChat?.id, store.cachedOnlyIds.contains(id) {
-            return "这条对话还没对上服务器，稍后再看。"
-        }
-        return nil
-    }
-
     /// 更早的内容现在拉不了。nil 表示已经连上，可以写正在加载或加载更早内容。
     var earlierLoadBlockedTitle: String? {
         if !store.unlocked { return "还没登录。登录后再看更早的内容。" }

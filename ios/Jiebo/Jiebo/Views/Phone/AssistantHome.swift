@@ -224,11 +224,12 @@ struct AssistantHome: View {
     }
 }
 
-/// 往下滚动时收起顶部玻璃栏。这个动作要 iOS 27；iOS 26 仍用系统玻璃栏，只是不收起。
+/// iOS 27 可以在向下滚动时收起导航栏。冷启动时会话还是空的，这块玻璃会被铺成
+/// 左上角一块灰矩形，盖住半屏；iPad 没有这层行为，也没有灰块。先保持栏不收起。
 private struct AssistantToolbarMinimize: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 27, *) {
-            content.toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
+            content.toolbarMinimizationBehavior(.never, for: .navigationBar)
         } else {
             content
         }

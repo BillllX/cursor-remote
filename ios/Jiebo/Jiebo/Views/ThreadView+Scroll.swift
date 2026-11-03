@@ -212,22 +212,9 @@ extension ThreadView {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(JieboColor.paper.opacity(0.92))
                         .transition(.opacity)
-                    } else if let title = threadLoadBlockedTitle {
-                        VStack(spacing: 12) {
-                            Text(title)
-                                .font(JieboFont.text(.subheadline))
-                                .foregroundStyle(JieboColor.ink)
-                                .multilineTextAlignment(.center)
-                            if store.unlocked, store.linkState == .offline {
-                                ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
-                            }
-                        }
-                        .padding(.horizontal, 32)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(JieboColor.paper.opacity(0.92))
                     }
                 }
-                .animation(JieboMotion.fade(reduceMotion), value: loadingVisible || threadLoadBlockedTitle != nil)
+                .animation(JieboMotion.fade(reduceMotion), value: loadingVisible)
             }
             .task(id: showThreadLoading) {
                 // 本机缓存通常几十毫秒就读完：等一小会儿再盖遮罩，免得冷启动先闪一下。
