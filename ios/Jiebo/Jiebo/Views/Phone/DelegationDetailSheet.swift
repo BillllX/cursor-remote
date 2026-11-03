@@ -99,7 +99,7 @@ struct DelegationDetailSheet: View {
         let colors = row.statusColors
         return VStack(alignment: .leading, spacing: 8) {
             Text(row.title.nilIfEmpty ?? "委派")
-                .font(JieboFont.display(18))
+                .font(JieboFont.text(.title3, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
             TimelineView(.periodic(from: .now, by: 30)) { context in

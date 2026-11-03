@@ -468,9 +468,9 @@ struct ImMessageImage: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(JieboColor.line, lineWidth: 1)
         }
         .task(id: loadKey) { await load() }

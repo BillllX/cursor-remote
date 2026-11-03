@@ -208,9 +208,9 @@ extension ThreadView {
                     .padding(.horizontal, 14)
                     .frame(minHeight: 44)
                     .background(JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                             .stroke(JieboColor.line, lineWidth: 1)
                     )
             }

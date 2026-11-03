@@ -106,7 +106,7 @@ struct AssistantHome: View {
             router.openMenu()
         } label: {
             Image(systemName: "line.3.horizontal")
-                .font(.system(size: 17, weight: .semibold))
+                .font(JieboFont.text(.body, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .overlay(alignment: .topTrailing) {
                     if badge > 0 {
@@ -164,7 +164,7 @@ struct AssistantHome: View {
             router.openHub()
         } label: {
             Image(systemName: NavigationIconId.assistant.symbol)
-                .font(.system(size: 17, weight: .semibold))
+                .font(JieboFont.text(.body, weight: .semibold))
                 .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
         }
         .accessibilityLabel("今日")

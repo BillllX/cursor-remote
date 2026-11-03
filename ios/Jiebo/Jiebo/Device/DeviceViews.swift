@@ -25,7 +25,7 @@ struct DeviceWriteConfirmationSheet: View {
                     }
                     .padding(16)
                     .background(JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                     Text(draft.consequence)
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
@@ -38,15 +38,13 @@ struct DeviceWriteConfirmationSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaBar(edge: .bottom) {
                 HStack(spacing: 12) {
-                    Button("拒绝", role: .cancel) { coordinator.resolveConfirmation(allowed: false) }
-                        .buttonStyle(.bordered)
-                        .frame(maxWidth: .infinity)
-                    Button("允许并写入") { coordinator.resolveConfirmation(allowed: true) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(JieboColor.pine)
-                        .frame(maxWidth: .infinity)
+                    ActionButton(title: "拒绝", kind: .destructive, fullWidth: true) {
+                        coordinator.resolveConfirmation(allowed: false)
+                    }
+                    ActionButton(title: "允许并写入", kind: .primary, fullWidth: true) {
+                        coordinator.resolveConfirmation(allowed: true)
+                    }
                 }
-                .controlSize(.large)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 10)
             }

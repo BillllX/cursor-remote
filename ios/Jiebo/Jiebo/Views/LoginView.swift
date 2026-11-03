@@ -33,30 +33,31 @@ struct LoginView: View {
                     Text("小驳跟着你，远端替你动手。输入访问码进入。")
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.ink2)
-                    GlassEffectContainer(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            SecureField("访问码", text: $store.tokenDraft)
-                                .textContentType(.password)
-                                .font(JieboFont.text(.body))
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 44)
-                                .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 16))
-                                .focused($focused)
-                                .onSubmit { store.login() }
-                            if !store.authError.isEmpty {
-                                Text(friendlyError(store.authError))
-                                    .font(JieboFont.text(.subheadline))
-                                    .foregroundStyle(JieboColor.danger)
+                    VStack(alignment: .leading, spacing: 14) {
+                        SecureField("访问码", text: $store.tokenDraft)
+                            .textContentType(.password)
+                            .font(JieboFont.text(.body))
+                            .padding(.horizontal, 14)
+                            .frame(minHeight: 44)
+                            .background(JieboColor.composer, in: RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
+                                    .stroke(JieboColor.line, lineWidth: 1)
                             }
-                            Button(action: store.login) {
-                                Text(store.verifying ? "正在验证…" : "进入")
-                                    .font(JieboFont.text(.callout, weight: .medium))
-                                    .frame(maxWidth: .infinity)
-                                    .frame(minHeight: 44)
-                            }
-                            .buttonStyle(.glassProminent)
-                            .disabled(!canEnter)
+                            .focused($focused)
+                            .onSubmit { store.login() }
+                        if !store.authError.isEmpty {
+                            Text(friendlyError(store.authError))
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.danger)
                         }
+                        ActionButton(
+                            title: store.verifying ? "正在验证…" : "进入",
+                            kind: .primary,
+                            fullWidth: true,
+                            action: store.login
+                        )
+                        .disabled(!canEnter)
                     }
                     Text(loginStatusLine)
                         .font(JieboFont.text(.caption, weight: store.linkState == .offline ? .medium : .regular))

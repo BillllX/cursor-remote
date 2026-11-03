@@ -88,22 +88,26 @@ struct DelegationListScreen: View {
                                 .listRowBackground(JieboColor.white)
                             }
                         } else {
-                            Section(group.phase == "completed" ? "已完成" : group.title) {
+                            Section {
                                 ForEach(clusters(items)) { cluster in
                                     taskRow(cluster.items[0], count: cluster.items.count)
                                         .listRowBackground(JieboColor.white)
                                 }
+                            } header: {
+                                JieboListHeader(group.phase == "completed" ? "已完成" : group.title)
                             }
                         }
                     }
                 }
             } else if column == .delegation {
                 // 老网关没有投影时仍保留委派入口。
-                Section("委派") {
+                Section {
                     ForEach(legacyRows) { row in
                         delegationRow(row)
                             .listRowBackground(JieboColor.white)
                     }
+                } header: {
+                    JieboListHeader("委派")
                 }
             }
         }
@@ -193,7 +197,7 @@ struct DelegationListScreen: View {
                 Image(systemName: taskIcon(task.kind))
                     .font(JieboFont.text(.subheadline, weight: .semibold))
                     .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.ink2)
-                    .frame(width: 22)
+                    .frame(width: 24)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(task.title.nilIfEmpty ?? "未命名任务")
                         .font(JieboFont.text(.subheadline, weight: .semibold))
@@ -338,15 +342,13 @@ private struct PersonalTaskSheet: View {
                             .foregroundStyle(JieboColor.ink)
                     }
                     if sourceTodo != nil {
-                        Button("修改") { editingTodo = sourceTodo }
-                            .buttonStyle(.bordered)
+                        ActionButton(title: "修改", kind: .outline) { editingTodo = sourceTodo }
                     }
                     ForEach(Array(task.actions.enumerated()), id: \.offset) { _, action in
-                        Button(action.label) {
+                        ActionButton(title: action.label, kind: .primary) {
                             store.performPersonalTaskAction(action)
                             dismiss()
                         }
-                        .buttonStyle(.borderedProminent)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -817,12 +819,32 @@ struct TrafficStatsScreen: View {
     }
 }
 
+/// 设置页 push 出去的页面。工作台、侧栏和 iPad 的设置都是单独的导航栈，必须走这里，不能落成空页。
+struct PhoneSettingsDestination: View {
+    let route: PhoneRoute
+
+    var body: some View {
+        switch route {
+        case .memory:
+            AssistantMemoryScreen()
+        case .connections:
+            DeviceConnectionsScreen()
+        case .artifacts:
+            ArtifactCenterView()
+        case .settings:
+            PhoneSettingsScreen()
+        default:
+            EmptyView()
+        }
+    }
+}
+
 // MARK: 记忆
 
 struct AssistantMemoryScreen: View {
     @Environment(ChatStore.self) private var store
     @State private var navId = "overview"
-    @State private var middleTab = "pinned"
+    @State private var middleTab = "all"
     @State private var stateFilter = "all"
     @State private var searchText = ""
     @State private var searchScopeFilter = "all"

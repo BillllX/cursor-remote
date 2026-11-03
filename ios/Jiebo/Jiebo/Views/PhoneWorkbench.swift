@@ -90,11 +90,7 @@ struct PhoneWorkbench: View {
             NavigationStack {
                 PhoneSettingsScreen()
                     .navigationDestination(for: PhoneRoute.self) { route in
-                        switch route {
-                        case .memory: AssistantMemoryScreen()
-                        case .connections: DeviceConnectionsScreen()
-                        default: EmptyView()
-                        }
+                        PhoneSettingsDestination(route: route)
                     }
             }
         }
@@ -445,12 +441,12 @@ private struct PhoneDrawer: View {
             .padding(.horizontal, 12)
             .frame(minHeight: 44)
             .background(selected ? JieboColor.pine.opacity(0.1) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                     .stroke(selected ? JieboColor.pine.opacity(0.42) : Color.clear, lineWidth: 1)
             )
-            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
             .hoverEffect(.highlight)
             .padding(.horizontal, 8)
             .contentShape(Rectangle())

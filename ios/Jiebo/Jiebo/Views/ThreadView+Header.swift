@@ -76,8 +76,7 @@ extension ThreadView {
                 phoneIcon("line.3.horizontal", label: "菜单", action: openDrawer)
                 VStack(spacing: 1) {
                     Text(headerTitle)
-                        .font(JieboFont.display(17))
-                        .tracking(0.34)
+                        .font(JieboFont.text(.headline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                     HStack(spacing: 5) {
@@ -119,9 +118,9 @@ extension ThreadView {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                             .stroke(JieboColor.line, lineWidth: 1)
                     )
                 }
@@ -191,7 +190,7 @@ extension ThreadView {
     func phoneIcon(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(JieboFont.text(.callout, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
                 .frame(width: 32, height: 32)
                 .background(JieboColor.mist)

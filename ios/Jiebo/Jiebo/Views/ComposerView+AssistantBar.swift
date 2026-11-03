@@ -100,7 +100,7 @@ extension ComposerView {
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 24))
+            .glassEffect(.regular.interactive(), in: .capsule)
             .contentShape(Capsule())
         }
         .menuOrder(.fixed)
@@ -178,9 +178,8 @@ private struct CapsuleSurface: ViewModifier {
     var focused: Bool
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
         content
-            .glassEffect(.regular.interactive(), in: shape)
-            .overlay(shape.stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .overlay(Capsule().stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
     }
 }

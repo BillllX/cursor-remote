@@ -100,7 +100,7 @@ struct TodayStrip: View {
                 Image(systemName: display.icon)
                     .font(JieboFont.text(.subheadline, weight: .semibold))
                     .foregroundStyle(display.color)
-                    .frame(width: 22)
+                    .frame(width: 24)
                     .padding(.top, 2)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {

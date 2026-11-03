@@ -23,6 +23,22 @@ struct AssistantSection<Content: View>: View {
     }
 }
 
+/// 列表分组标题。和侧栏小节用同一档字，避免系统默认把标题改成全大写浅灰。
+struct JieboListHeader: View {
+    var title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(JieboFont.text(.caption, weight: .semibold))
+            .foregroundStyle(JieboColor.dim)
+            .textCase(nil)
+    }
+}
+
 /// 与侧栏会话行的「跑」标同一形状：小号字、浅底胶囊
 struct StatusTag: View {
     var text: String

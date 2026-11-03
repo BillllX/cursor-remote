@@ -73,7 +73,16 @@ enum MemoryCenterLabels {
         codes.map { searchMatchReasonLabel($0) }.joined(separator: " · ")
     }
 
-    static func scopeHealthText(health: String?, error: String?) -> String? {
+    /// 记忆文件还没写过。优先看 errorCode；旧网关只有「文件不存在。」这句。
+    static func isAbsentMemoryFile(error: String?, code: String?) -> Bool {
+        if code == "enoent" { return true }
+        guard let error else { return false }
+        return error == "文件不存在。" || error.hasPrefix("文件不存在：")
+    }
+
+    static func scopeHealthText(health: String?, error: String?, code: String?) -> String? {
+        if isAbsentMemoryFile(error: error, code: code) { return nil }
+        if code == "symlink" || error?.contains("符号链接") == true { return "路径含符号链接，不能读" }
         if let error, !error.isEmpty { return "错误：\(error)" }
         if health == "degraded" { return "降级" }
         if health == "error" { return "错误" }

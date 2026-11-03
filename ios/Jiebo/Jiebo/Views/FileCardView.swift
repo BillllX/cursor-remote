@@ -92,17 +92,15 @@ struct TurnReviewBar: View {
                 .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.ink2)
             Spacer(minLength: 4)
-            Button(restoring ? "还原中" : "全部还原") { confirmRestore = true }
-                .buttonStyle(.bordered)
-                .tint(JieboColor.ink2)
-                .disabled(restoring)
-            Button("全部保留") { store.keepTurnFiles(turn.id, chatId: chatId) }
-                .buttonStyle(.borderedProminent)
-                .tint(JieboColor.pine)
-                .disabled(restoring)
+            ActionButton(title: restoring ? "还原中" : "全部还原", kind: .destructive) {
+                confirmRestore = true
+            }
+            .disabled(restoring)
+            ActionButton(title: "全部保留", kind: .primary) {
+                store.keepTurnFiles(turn.id, chatId: chatId)
+            }
+            .disabled(restoring)
         }
-        .font(JieboFont.text(.footnote, weight: .semibold))
-        .controlSize(.large)
         .frame(minHeight: 44)
         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
         .confirmationDialog(

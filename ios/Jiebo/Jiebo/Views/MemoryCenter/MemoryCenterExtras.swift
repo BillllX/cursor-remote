@@ -10,8 +10,11 @@ struct MemoryCenterActivityPane: View {
             }
             if store.memoryCenterActivityLoading {
                 ProgressView().accessibilityLabel("加载活动")
-            } else if store.memoryCenterActivityRows.isEmpty, let title = store.memoryCenterReadPendingTitle {
-                MemoryCenterEmptyBlock(title: title, hint: "")
+            } else if store.memoryCenterActivityRows.isEmpty {
+                MemoryCenterEmptyBlock(
+                    title: store.memoryCenterReadPendingTitle ?? "还没有活动",
+                    hint: store.memoryCenterReadPendingTitle == nil ? "改过的记忆会出现在这里。" : ""
+                )
             }
             ForEach(store.memoryCenterActivityRows) { row in
                 VStack(alignment: .leading, spacing: 4) {
@@ -45,24 +48,26 @@ struct MemoryCenterSuggestionsPane: View {
             }
             if store.memoryCenterSuggestionsLoading {
                 ProgressView().accessibilityLabel("加载建议")
-            } else if store.memoryCenterSuggestionRows.isEmpty, let title = store.memoryCenterReadPendingTitle {
-                MemoryCenterEmptyBlock(title: title, hint: "")
+            } else if store.memoryCenterSuggestionRows.isEmpty {
+                MemoryCenterEmptyBlock(
+                    title: store.memoryCenterReadPendingTitle ?? "还没有整理建议",
+                    hint: store.memoryCenterReadPendingTitle == nil ? "小驳整理出可以合并或删掉的记忆后，会出现在这里。" : ""
+                )
             }
             ForEach(store.memoryCenterSuggestionRows) { row in
                 VStack(alignment: .leading, spacing: 4) {
                     Text("\(row.kind) · \(row.scope)").font(JieboFont.text(.subheadline, weight: .semibold))
                     Text(row.summary).font(JieboFont.text(.footnote))
-                    HStack {
-                        Button("接受") {
+                    HStack(spacing: 8) {
+                        ActionButton(title: "接受", kind: .primary) {
                             store.memoryCenterAnswerSuggestion(scope: row.scope, id: row.id, accept: true)
                         }
                         .disabled(store.memoryCenterExtrasStorage.suggestionBusyById[row.id] == true)
-                        Button("忽略") {
+                        ActionButton(title: "忽略", kind: .outline) {
                             store.memoryCenterAnswerSuggestion(scope: row.scope, id: row.id, accept: false)
                         }
                         .disabled(store.memoryCenterExtrasStorage.suggestionBusyById[row.id] == true)
                     }
-                    .font(JieboFont.text(.footnote))
                     if let err = store.memoryCenterExtrasStorage.suggestionErrorById[row.id], !err.isEmpty {
                         Text(err).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warnFg)
                     }

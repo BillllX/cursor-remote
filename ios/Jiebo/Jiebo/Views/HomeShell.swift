@@ -541,8 +541,8 @@ struct FirstUseHint: View {
         if !dismissed {
             HStack(alignment: .center, spacing: 12) {
                 Text(UIDevice.current.userInterfaceIdiom == .phone
-                     ? "小驳用来吩咐。待处理要你看。工作台改文件、看终端。消息是跟人聊。今日只是摘要，待办、计划、委派各自有栏目。"
-                     : "小驳用来吩咐，待处理在小驳里。工作台改文件、看终端。消息是跟人聊。底部可以切换这三处。今日只是摘要，待办、计划、委派各自有栏目。")
+                     ? "小驳用来吩咐。待处理里有通知、待办、计划和委派。工作台改文件、看终端。消息是跟人聊。"
+                     : "小驳用来吩咐。待处理在小驳里，含通知、待办、计划和委派。工作台改文件、看终端。消息是跟人聊。底部可以切换这三处。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)
                     .fixedSize(horizontal: false, vertical: true)

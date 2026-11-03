@@ -190,6 +190,8 @@ export type MemoryCenterScopeSummary = {
   pendingCount: number;
   health?: string | null;
   error?: string | null;
+  /** enoent、symlink、eacces 等。缺文件用 enoent，客户端不当成故障。 */
+  errorCode?: string | null;
 };
 
 export type MemoryCenterPersonalOverview = {

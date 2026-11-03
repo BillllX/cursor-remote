@@ -180,38 +180,39 @@ function leaksPersonal(ref: TenantRef, text: string, needles: string[]) {
 
 type MemoryReadResult =
   | { ok: true; lines: MemoryLine[]; bytes: number; fileTruncated: boolean; invalidUtf8?: boolean }
-  | { ok: false; error: string; lines?: MemoryLine[]; bytes?: number; fileTruncated?: boolean };
+  | { ok: false; error: string; code?: string; lines?: MemoryLine[]; bytes?: number; fileTruncated?: boolean };
 
 function readScopeMemory(scopeDir: string, allowedRoot: string): MemoryReadResult {
   if (!scopedRead.scopedReadSupported()) {
-    return { ok: false, error: "当前平台不支持安全读取（O_NOFOLLOW）。" };
+    return { ok: false, code: "unsupported", error: "当前平台不支持安全读取（O_NOFOLLOW）。" };
   }
   let paths;
   try {
     paths = safeMemoryPaths(scopeDir, allowedRoot);
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "工作区记忆路径不安全。" };
+    return { ok: false, code: "scope", error: err instanceof Error ? err.message : "工作区记忆路径不安全。" };
   }
   const read = scopeFileReader(paths.dir, MEMORY_FILE, MAX_MEMORY_FILE_BYTES);
   if (!read.ok) {
     if (read.code === "enoent") return { ok: true, lines: [], bytes: 0, fileTruncated: false };
-    return { ok: false, error: read.message };
+    return { ok: false, code: read.code, error: read.message };
   }
   if (read.truncated) {
     return {
       ok: false,
+      code: "too_large",
       error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限。`,
       lines: [],
       bytes: read.bytes,
       fileTruncated: true,
     };
   }
-  if (read.invalidUtf8) return { ok: false, error: "memory.md 含无效 UTF-8。" };
+  if (read.invalidUtf8) return { ok: false, code: "utf8", error: "memory.md 含无效 UTF-8。" };
   try {
     const lines = parseMemoryFile(read.text);
     return { ok: true, lines, bytes: read.bytes, fileTruncated: false, invalidUtf8: read.invalidUtf8 };
   } catch {
-    return { ok: false, error: "memory.md 解析失败。" };
+    return { ok: false, code: "parse", error: "memory.md 解析失败。" };
   }
 }
 
@@ -255,6 +256,7 @@ function toWorkspaceItem(
 function readRuleFiles(scopeDir: string, scopeId: string, cap: { left: number }) {
   const rules: RuleFile[] = [];
   let readError: string | null = null;
+  let readErrorCode: string | null = null;
   const take = (rel: string) => {
     if (cap.left <= 0) return;
     if (scopedRead.isSymlinkPath(resolve(scopeDir, rel))) return;
@@ -262,6 +264,7 @@ function readRuleFiles(scopeDir: string, scopeId: string, cap: { left: number })
     if (!read.ok) {
       if (read.code === "enoent") return;
       readError = read.message;
+      readErrorCode = read.code;
       return;
     }
     if (read.invalidUtf8) return;
@@ -279,7 +282,7 @@ function readRuleFiles(scopeDir: string, scopeId: string, cap: { left: number })
   take(".cursorrules");
   take("AGENTS.md");
   const rulesDir = resolve(scopeDir, ".cursor/rules");
-  if (scopedRead.isSymlinkPath(rulesDir)) return { rules, readError };
+  if (scopedRead.isSymlinkPath(rulesDir)) return { rules, readError, readErrorCode };
   if (isDir(rulesDir)) {
     try {
       for (const name of readdirSync(rulesDir).sort()) {
@@ -290,7 +293,7 @@ function readRuleFiles(scopeDir: string, scopeId: string, cap: { left: number })
       // unreadable
     }
   }
-  return { rules, readError };
+  return { rules, readError, readErrorCode };
 }
 
 function summarizeMemoryFile(scopeDir: string, allowedRoot: string, tokenBudget: number) {
@@ -298,6 +301,7 @@ function summarizeMemoryFile(scopeDir: string, allowedRoot: string, tokenBudget:
   if (!read.ok) {
     return {
       error: read.error,
+      errorCode: read.code ?? null,
       memoryCount: 0,
       hot: 0,
       cold: 0,
@@ -311,6 +315,7 @@ function summarizeMemoryFile(scopeDir: string, allowedRoot: string, tokenBudget:
   if (read.fileTruncated) {
     return {
       error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限，仅读取前缀。`,
+      errorCode: "too_large",
       memoryCount: read.lines.length,
       hot: 0,
       cold: 0,
@@ -352,6 +357,7 @@ function summarizeMemoryFile(scopeDir: string, allowedRoot: string, tokenBudget:
     missingRefs,
     diagnostics,
     error: null as string | null,
+    errorCode: null as string | null,
   };
 }
 
@@ -442,6 +448,7 @@ function buildScopeSummary(ref: TenantRef, scope: ScopeRecord, allowedRoot: stri
       injectionSkipped: 0,
       pendingCount: pendingForScope(ref, scope.id),
       error: "作用域目录不可用",
+      errorCode: "scope",
       health: "error",
     };
   }
@@ -450,7 +457,9 @@ function buildScopeSummary(ref: TenantRef, scope: ScopeRecord, allowedRoot: stri
   try {
     const ruleRead = readRuleFiles(scope.absDir, scope.id, { left: MAX_RULE_PAYLOAD_CHARS });
     ruleFileCount = ruleRead.rules.length;
-    if (ruleRead.readError && !stats.error) stats = { ...stats, error: ruleRead.readError };
+    if (ruleRead.readError && !stats.error) {
+      stats = { ...stats, error: ruleRead.readError, errorCode: ruleRead.readErrorCode };
+    }
   } catch {
     ruleFileCount = 0;
   }
@@ -474,6 +483,7 @@ function buildScopeSummary(ref: TenantRef, scope: ScopeRecord, allowedRoot: stri
     pendingCount: pendingForScope(ref, scope.id),
     health: stats.error ? "degraded" : null,
     error: stats.error,
+    errorCode: stats.errorCode,
   };
 }
 
@@ -736,11 +746,11 @@ function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): Memo
   let diagnostics: InjectionDiagnostics | null = null;
   let scopeSummary = buildScopeSummary(ref, scope, root);
   if (!read.ok) {
-    scopeSummary = { ...scopeSummary, error: read.error, health: "degraded" };
+    scopeSummary = { ...scopeSummary, error: read.error, errorCode: read.code ?? null, health: "degraded" };
     return { scope: scopeSummary, items: [], rules: [], diagnostics: null };
   }
   if (read.fileTruncated) {
-    scopeSummary = { ...scopeSummary, error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限`, health: "degraded" };
+    scopeSummary = { ...scopeSummary, error: `memory.md 超过 ${MAX_MEMORY_FILE_BYTES} 字节上限`, errorCode: "too_large", health: "degraded" };
   }
   if (read.lines.length > MAX_SCOPE_ITEMS) itemsTruncated = true;
   let textBudget = MAX_SCOPE_ITEM_TEXT_CHARS;
@@ -761,7 +771,7 @@ function workspaceDetail(ref: TenantRef, scope: ScopeRecord, root: string): Memo
   const cap = { left: MAX_RULE_PAYLOAD_CHARS };
   const ruleRead = readRuleFiles(absDir, scope.id, cap);
   if (ruleRead.readError) {
-    scopeSummary = { ...scopeSummary, error: ruleRead.readError, health: "degraded" };
+    scopeSummary = { ...scopeSummary, error: ruleRead.readError, errorCode: ruleRead.readErrorCode, health: "degraded" };
   }
   return {
     scope: scopeSummary,

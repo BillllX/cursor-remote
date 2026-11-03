@@ -45,6 +45,20 @@ describe("scopedRead errors", () => {
     if (read.ok) return;
     assert.equal(read.code, "enoent");
   });
+
+  test("缺少 .jiebo 目录不是符号链接", () => {
+    const dir = join(root, "no-jiebo");
+    mkdirSync(dir, { recursive: true });
+    assert.equal(relPathHasSymlink(dir, ".jiebo/memory.md"), false);
+    assert.equal(relPathHasSymlink(dir, ".cursor/rules/a.md"), false);
+    if (process.platform === "linux") {
+      const read = readFileAtScope(dir, ".jiebo/memory.md", 1000);
+      assert.equal(read.ok, false);
+      if (!read.ok) assert.equal(read.code, "enoent");
+    }
+    writeFileSync(join(dir, ".jiebo"), "not-a-directory");
+    assert.equal(relPathHasSymlink(dir, ".jiebo/memory.md"), true);
+  });
 });
 
 describe("scopedRead intermediate symlinks", () => {

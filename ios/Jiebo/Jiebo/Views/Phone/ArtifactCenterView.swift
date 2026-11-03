@@ -20,13 +20,15 @@ struct ArtifactCenterView: View {
             } else {
                 List {
                     ForEach(groups) { group in
-                        Section(group.title) {
+                        Section {
                             ForEach(group.items) { artifact in
                                 ArtifactRow(artifact: artifact, onContinue: {
                                     router.popToRoot()
                                     _ = store.continueArtifact(artifact)
                                 })
                             }
+                        } header: {
+                            JieboListHeader(group.title)
                         }
                     }
                 }
@@ -37,32 +39,30 @@ struct ArtifactCenterView: View {
         }
         .navigationTitle("产物中心")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Picker("呈现方式", selection: $presentation) {
+                    ForEach(ArtifactPresentation.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             filters
         }
         .task { store.requestAssistant() }
     }
 
-    /// 筛选属于控制层，使用 Liquid Glass；产物卡片本身保持实体表面。
+    /// 类型和待处理页同一套分段；呈现方式放在导航栏菜单里，不再另做一颗玻璃胶囊。
     private var filters: some View {
-        HStack(spacing: 10) {
-            Picker("呈现方式", selection: $presentation) {
-                ForEach(ArtifactPresentation.allCases) { item in
-                    Text(item.title).tag(item)
-                }
+        Picker("产物类型", selection: $kindFilter) {
+            ForEach(ArtifactKindFilter.allCases) { item in
+                Text(item.title).tag(item)
             }
-            .pickerStyle(.menu)
-            Picker("产物类型", selection: $kindFilter) {
-                ForEach(ArtifactKindFilter.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.menu)
         }
-        .font(JieboFont.text(.subheadline, weight: .medium))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .jieboGlass(in: Capsule(), interactive: true)
+        .pickerStyle(.segmented)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
@@ -115,7 +115,7 @@ private enum ArtifactKindFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .all: return "全部类型"
+        case .all: return "全部"
         case .file: return "文件"
         case .link: return "链接"
         case .capture: return "捕获"
@@ -130,6 +130,7 @@ private struct ArtifactRow: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.openURL) private var openURL
     let artifact: Artifact
     let onContinue: () -> Void
     @State private var excerptExpanded = false
@@ -138,9 +139,9 @@ private struct ArtifactRow: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: artifact.symbol)
-                    .font(JieboFont.text(.title3, weight: .medium))
+                    .font(JieboFont.text(.callout, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
-                    .frame(width: 28)
+                    .frame(width: 24)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(artifact.displayTitle)
                         .font(JieboFont.text(.body, weight: .semibold))
@@ -211,19 +212,19 @@ private struct ArtifactRow: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 8) {
             if let file = artifact.turnFile, let chatId = artifact.sourceChatId {
-                Button("预览") {
+                ActionButton(title: "预览", kind: .outline) {
                     store.openTurnFile(file, chatId: chatId)
                     sceneSession?.presentPreview(from: store)
                 }
-                .buttonStyle(.plain)
             } else if let url = artifact.safeURL {
-                Link("打开", destination: url)
+                ActionButton(title: "打开", kind: .outline) {
+                    openURL(url)
+                }
             }
             Spacer(minLength: 0)
-            Button("让小驳继续处理", action: onContinue)
-                .buttonStyle(.plain)
+            ActionButton(title: "让小驳继续处理", kind: .primary, action: onContinue)
             if hasSecondaryActions {
                 Menu {
                     if let file = artifact.turnFile, let chatId = artifact.sourceChatId {
@@ -242,13 +243,13 @@ private struct ArtifactRow: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis")
+                        .font(JieboFont.text(.body, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink2)
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel("更多")
             }
         }
-        .font(JieboFont.text(.subheadline, weight: .semibold))
-        .foregroundStyle(JieboColor.pine)
     }
 
     private var hasSecondaryActions: Bool {

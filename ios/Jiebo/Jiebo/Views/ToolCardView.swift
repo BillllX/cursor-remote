@@ -537,14 +537,9 @@ struct QuestionCardView: View {
                 }
             }
             if canAnswer {
-                Button("按这个回答继续") {
+                ActionButton(title: "按这个回答继续", kind: .primary) {
                     store.answerQuestion(asked.answer(picks: picks, notes: notes))
                 }
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .tint(JieboColor.pine)
-                .controlSize(.large)
-                .font(JieboFont.text(.subheadline, weight: .semibold))
                 .disabled(!ready)
             }
         }

@@ -299,11 +299,7 @@ struct CollapsedSidebarRail: View {
             NavigationStack {
                 PhoneSettingsScreen()
                     .navigationDestination(for: PhoneRoute.self) { route in
-                        switch route {
-                        case .memory: AssistantMemoryScreen()
-                        case .connections: DeviceConnectionsScreen()
-                        default: EmptyView()
-                        }
+                        PhoneSettingsDestination(route: route)
                     }
             }
         }

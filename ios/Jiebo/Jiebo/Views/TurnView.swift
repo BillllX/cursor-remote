@@ -240,11 +240,10 @@ struct TurnView: View, Equatable {
                             transform: linkMentions
                         )
                         if turn.mode == .plan, !turn.running, !turn.queued {
-                            Button("执行这个计划") { store.applyPlan(turn.id, chatId: chatId) }
-                                .buttonStyle(.borderedProminent)
-                                .tint(JieboColor.pine)
-                                .font(JieboFont.text(.subheadline, weight: .semibold))
-                                .padding(.top, 2)
+                            ActionButton(title: "执行这个计划", kind: .primary) {
+                                store.applyPlan(turn.id, chatId: chatId)
+                            }
+                            .padding(.top, 2)
                         }
                     }
                     .contextMenu {
@@ -273,11 +272,10 @@ struct TurnView: View, Equatable {
                         Text("等连上再开始")
                             .font(JieboFont.text(.subheadline))
                             .foregroundStyle(JieboColor.dim)
-                        Button("不发送") { store.cancelUnsentTurn(turn.id, chatId: chatId) }
-                            .font(JieboFont.text(.caption, weight: .semibold))
-                            .buttonStyle(.bordered)
-                            .tint(JieboColor.ink2)
-                            .accessibilityHint("这句话回到输入框，连上后也不会发出去")
+                        ActionButton(title: "不发送", kind: .outline) {
+                            store.cancelUnsentTurn(turn.id, chatId: chatId)
+                        }
+                        .accessibilityHint("这句话回到输入框，连上后也不会发出去")
                     }
                 } else if turn.thinking.isEmpty, turn.tools.isEmpty {
                     ShimmerText(text: "开始动手", font: JieboFont.text(.subheadline))
@@ -315,20 +313,14 @@ struct TurnView: View, Equatable {
                     HStack(spacing: 8) {
                         Spacer(minLength: 0)
                         if canRestorePrompt {
-                            Button("放回输入框") {
+                            ActionButton(title: "放回输入框", kind: .outline) {
                                 store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
                             }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .tint(JieboColor.ink2)
-                            .font(JieboFont.text(.footnote, weight: .semibold))
                             .accessibilityHint("不发送，上一句回到输入框")
                         }
-                        Button("重试") { store.retryTurn(turn.id, chatId: chatId) }
-                            .buttonStyle(.bordered)
-                            .controlSize(.large)
-                            .tint(JieboColor.danger)
-                            .font(JieboFont.text(.footnote, weight: .semibold))
+                        ActionButton(title: "重试", kind: .destructive) {
+                            store.retryTurn(turn.id, chatId: chatId)
+                        }
                     }
                 }
                 .padding(.leading, 12)
@@ -387,15 +379,13 @@ struct TurnView: View, Equatable {
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
             }
-            Button(loading ? "取消加载" : "加载完整内容") {
+            ActionButton(title: loading ? "取消加载" : "加载完整内容", kind: .primary) {
                 if loading {
                     store.cancelTurnHydration(chatId: chatId, turnId: turn.id)
                 } else {
                     store.hydrateTurn(chatId: chatId, turnId: turn.id)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(JieboColor.pine)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -538,13 +528,10 @@ struct StallHintRow: View {
                     .foregroundStyle(JieboColor.dim)
                     .monospacedDigit()
                 if seconds >= 15 {
-                    Button("停止并放回") {
+                    ActionButton(title: "停止并放回", kind: .outline) {
                         store.stop(chatId: chatId)
                         store.restoreLastPromptIfDraftEmpty(chatId: chatId)
                     }
-                    .font(JieboFont.text(.caption, weight: .semibold))
-                    .buttonStyle(.bordered)
-                    .tint(JieboColor.clay)
                     .accessibilityHint("上一句回到输入框")
                 }
             }

@@ -324,14 +324,13 @@ struct ThreadView: View {
                     .truncationMode(.middle)
             }
             HStack(spacing: 8) {
-                Button("拒绝", role: .destructive) { store.answerAssistantApproval(approval, allow: false) }
-                    .buttonStyle(.bordered)
-                Button("批准") { store.answerAssistantApproval(approval, allow: true) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(JieboColor.pine)
+                ActionButton(title: "拒绝", kind: .destructive) {
+                    store.answerAssistantApproval(approval, allow: false)
+                }
+                ActionButton(title: "批准", kind: .primary) {
+                    store.answerAssistantApproval(approval, allow: true)
+                }
             }
-            .font(JieboFont.text(.subheadline, weight: .semibold))
-            .controlSize(.large)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

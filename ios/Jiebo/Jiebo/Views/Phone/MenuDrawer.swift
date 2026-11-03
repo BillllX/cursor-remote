@@ -247,8 +247,7 @@ struct MenuDrawer: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
-            .font(JieboFont.text(.caption, weight: .medium))
-            .tracking(0.6)
+            .font(JieboFont.text(.caption, weight: .semibold))
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 20)
             .padding(.top, 14)
@@ -273,12 +272,12 @@ struct MenuDrawer: View {
                     .foregroundStyle(JieboColor.ink)
                 Spacer(minLength: 8)
                 Image(systemName: "chevron.right")
-                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .font(JieboFont.text(.caption2, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                     .accessibilityHidden(true)
             }
             .padding(.horizontal, 20)
-            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
             .hitTarget()
         }

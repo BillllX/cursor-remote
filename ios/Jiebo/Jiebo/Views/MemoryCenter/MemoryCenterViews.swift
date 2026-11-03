@@ -5,7 +5,7 @@ import SwiftUI
 struct MemoryCenterPanelView: View {
     @Environment(\.assistantSceneToken) private var sceneToken
     @State private var navId = "overview"
-    @State private var middleTab = "pinned"
+    @State private var middleTab = "all"
     @State private var stateFilter = "all"
     @State private var selectedKey: String?
     @State private var searchText = ""
@@ -632,6 +632,8 @@ struct MemoryCenterOverviewPane: View {
     @Environment(ChatStore.self) private var store
     var onSelectScope: (String) -> Void
     var linkScopes = false
+    /// 手机浏览列表已经列出文件夹时，总览不再重复列一遍。
+    var showsFolders = true
     var scopeListMiddleTab: Binding<String>?
     var scopeListStateFilter: Binding<String>?
 
@@ -648,6 +650,7 @@ struct MemoryCenterOverviewPane: View {
                 truncated: data.overviewPayloadTruncated,
                 onSelectScope: onSelectScope,
                 linkScopes: linkScopes,
+                showsFolders: showsFolders,
                 scopeListMiddleTab: scopeListMiddleTab,
                 scopeListStateFilter: scopeListStateFilter
             )
@@ -664,6 +667,7 @@ struct MemoryCenterOverviewCards: View {
     let truncated: Bool
     var onSelectScope: (String) -> Void
     var linkScopes = false
+    var showsFolders = true
     var scopeListMiddleTab: Binding<String>?
     var scopeListStateFilter: Binding<String>?
 
@@ -689,6 +693,7 @@ struct MemoryCenterOverviewCards: View {
                 }
                 .assistantCard()
             }
+            if showsFolders {
             AssistantSection("文件夹") {
                 Text("范围 \(MemoryCenterReducer.workspaceScopesForOverview(scopes: overview.scopes).count) · 待处理 \(pending)")
                     .font(JieboFont.text(.caption))
@@ -721,6 +726,7 @@ struct MemoryCenterOverviewCards: View {
                     }
                 }
             }
+            }
         }
     }
 }
@@ -734,15 +740,12 @@ struct MemoryCenterScopeHealthRow: View {
                 Text(scope.label)
                     .font(JieboFont.text(.subheadline, weight: .semibold))
                 Spacer()
-                if let health = MemoryCenterLabels.scopeHealthText(health: scope.health, error: scope.error) {
+                if let health = MemoryCenterLabels.scopeHealthText(health: scope.health, error: scope.error, code: scope.errorCode) {
                     StatusTag(text: health, fg: JieboColor.clay, bg: JieboColor.clay.opacity(0.12))
                 }
             }
-            Text("活跃 \(scope.hot) · 冷门 \(scope.cold) · 完成 \(scope.done) · 过期 \(scope.expired) · 常驻 \(scope.pinned)")
+            Text(folderStatusLine(scope))
                 .font(JieboFont.text(.caption))
-                .foregroundStyle(JieboColor.dim)
-            Text("缺引用 \(scope.missingRefs) · 本轮注入 \(scope.injectionSelected) · 预算 \(scope.tokenBudget) token")
-                .font(JieboFont.text(.caption2))
                 .foregroundStyle(JieboColor.dim)
             if scope.pendingCount > 0 {
                 Text("待处理 \(scope.pendingCount)")
@@ -752,6 +755,13 @@ struct MemoryCenterScopeHealthRow: View {
         }
         .assistantCard()
         .accessibilityElement(children: .combine)
+    }
+
+    private func folderStatusLine(_ scope: MemoryCenterScopeSummary) -> String {
+        if MemoryCenterLabels.isAbsentMemoryFile(error: scope.error, code: scope.errorCode) { return "还没有记忆" }
+        var parts = ["\(scope.memoryCount) 条"]
+        if scope.missingRefs > 0 { parts.append("缺引用 \(scope.missingRefs)") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -825,9 +835,12 @@ struct MemoryCenterScopeItemsContent: View {
                 if store.memoryCenterData.detailPayloadTruncated {
                     MemoryCenterBanner(text: "详情 payload 已截断", tone: .warn)
                 }
+                if let error = detail.scope.error?.nilIfEmpty,
+                   !MemoryCenterLabels.isAbsentMemoryFile(error: error, code: detail.scope.errorCode) {
+                    MemoryCenterBanner(text: error, tone: .warn)
+                }
                 if detail.scope.kind == "workspace_memory" {
-                    Button("新增记忆") { showCreate = true }
-                        .buttonStyle(.borderedProminent)
+                    ActionButton(title: "新增记忆", kind: .primary) { showCreate = true }
                         .disabled(store.memoryCenterData.mutating)
                         .accessibilityLabel("新增记忆")
                 }
@@ -856,11 +869,18 @@ struct MemoryCenterScopeItemsContent: View {
                         items: filteredItems(detail: detail),
                         diagnostics: detail.diagnostics,
                         selectedKey: $selectedKey,
-                        itemNavigation: itemNavigation
+                        itemNavigation: itemNavigation,
+                        emptyTitle: MemoryCenterLabels.isAbsentMemoryFile(error: detail.scope.error, code: detail.scope.errorCode) ? "这个文件夹还没有记忆" : "没有条目",
+                        emptyHint: MemoryCenterLabels.isAbsentMemoryFile(error: detail.scope.error, code: detail.scope.errorCode) ? "可以新增一条。" : "试试别的筛选或标签。"
                     )
                     if detail.itemsTruncated {
                         MemoryCenterBanner(text: "条目列表已截断", tone: .warn)
                     }
+                }
+                if detail.scope.kind == "workspace_memory" {
+                    Text("预算 \(detail.scope.tokenBudget) token · 本轮注入 \(detail.scope.injectionSelected)")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
                 }
                 MemoryCenterDiagnosticsBlock(diagnostics: detail.diagnostics)
             }
@@ -892,10 +912,12 @@ struct MemoryCenterItemsList: View {
     let diagnostics: InjectionDiagnostics?
     @Binding var selectedKey: String?
     var itemNavigation: MemoryCenterItemNavigation = .columnSelection
+    var emptyTitle = "没有条目"
+    var emptyHint = "试试别的筛选或标签。"
 
     var body: some View {
         if items.isEmpty {
-            MemoryCenterEmptyBlock(title: "没有条目", hint: "试试别的筛选或标签。")
+            MemoryCenterEmptyBlock(title: emptyTitle, hint: emptyHint)
         } else {
             ForEach(items, id: \.stableId) { item in
                 let key = MemoryCenterReducer.itemKey(scopeId: item.scopeId, id: item.id)
@@ -1023,8 +1045,7 @@ struct MemoryCenterItemDetailView: View {
                     .foregroundStyle(JieboColor.dim)
             }
             if item.kind == "workspace_memory", scopeId != nil, item.id != nil {
-                Button("编辑…") { showEdit = true }
-                    .buttonStyle(.bordered)
+                ActionButton(title: "编辑…", kind: .outline) { showEdit = true }
                     .disabled(store.memoryCenterData.mutating)
                     .accessibilityLabel("编辑文件夹记忆")
                 Text("规则文件只读；规则层编辑后续开放。")
@@ -1298,9 +1319,14 @@ struct MemoryCenterPhoneHome: View {
                     Label("工作偏好", systemImage: "briefcase")
                 }
                 NavigationLink {
-                    MemoryCenterPhoneManagePersonal()
+                    MemoryCenterPhoneSuggestions()
                 } label: {
-                    Label("管理个人记忆", systemImage: "pencil")
+                    Label("整理建议", systemImage: "lightbulb")
+                }
+                NavigationLink {
+                    MemoryCenterPhoneActivity()
+                } label: {
+                    Label("活动", systemImage: "clock")
                 }
                 ForEach(MemoryCenterReducer.buildScopeTreeRows(scopes: store.memoryCenterData.overview?.scopes ?? [])) { row in
                     NavigationLink {
@@ -1389,9 +1415,7 @@ struct MemoryCenterPhoneScopeList: View {
             if scopeId == "overview" {
                 MemoryCenterOverviewPane(
                     onSelectScope: { _ in },
-                    linkScopes: true,
-                    scopeListMiddleTab: $middleTab,
-                    scopeListStateFilter: $stateFilter
+                    showsFolders: false
                 )
                 .padding(12)
             } else if scopeId == "personal" {
@@ -1422,6 +1446,30 @@ struct MemoryCenterPhoneScopeList: View {
         .onAppear {
             store.memoryCenterEnsureLoaded(navId: scopeId, searchActive: false)
         }
+    }
+}
+
+struct MemoryCenterPhoneSuggestions: View {
+    var body: some View {
+        ScrollView {
+            MemoryCenterSuggestionsPane()
+                .padding(14)
+        }
+        .navigationTitle("整理建议")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(JieboColor.paper)
+    }
+}
+
+struct MemoryCenterPhoneActivity: View {
+    var body: some View {
+        ScrollView {
+            MemoryCenterActivityPane()
+                .padding(14)
+        }
+        .navigationTitle("活动")
+        .navigationBarTitleDisplayMode(.inline)
+        .background(JieboColor.paper)
     }
 }
 

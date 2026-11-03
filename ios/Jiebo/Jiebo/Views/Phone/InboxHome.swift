@@ -75,19 +75,19 @@ struct InboxHome: View {
                                 router.delegationDetail = DelegationRef(id: delegationId)
                             }
                             .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                            .listRowBackground(Color.clear)
+                            .listRowBackground(JieboColor.paper)
                             .listRowSeparator(.hidden)
                         }
                     } else {
                         ForEach(approvals) { approval in
                             ApprovalCard(approval: approval, onOpenDelegation: openDelegationAction(for: approval))
                                 .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
-                                .listRowBackground(Color.clear)
+                                .listRowBackground(JieboColor.paper)
                                 .listRowSeparator(.hidden)
                         }
                     }
                 } header: {
-                    Text("待批 (\(pendingCount))")
+                    JieboListHeader("待批 (\(pendingCount))")
                 }
             }
             if !items.isEmpty {
@@ -103,7 +103,7 @@ struct InboxHome: View {
                             }
                     }
                 } header: {
-                    Text("通知")
+                    JieboListHeader("通知")
                 }
             }
         }
@@ -258,7 +258,7 @@ struct InboxDetailView: View {
             if let row = item {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(row.title)
-                        .font(JieboFont.display(18))
+                        .font(JieboFont.text(.title3, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .textSelection(.enabled)
                     Text(assistantFormatMillis(row.createdAt))
@@ -271,19 +271,20 @@ struct InboxDetailView: View {
                             .textSelection(.enabled)
                             .padding(.top, 6)
                     }
-                    if let scheduleId = row.scheduleId {
-                        Button("查看计划") {
-                            router.openWorkTask("schedule:\(scheduleId)", column: .plan)
+                    if row.scheduleId != nil || row.actionPrompt != nil {
+                        HStack(spacing: 8) {
+                            if let scheduleId = row.scheduleId {
+                                ActionButton(title: "查看计划", kind: .outline) {
+                                    router.openWorkTask("schedule:\(scheduleId)", column: .plan)
+                                }
+                            }
+                            if row.actionPrompt != nil {
+                                ActionButton(title: "交给小驳处理", kind: .primary) {
+                                    store.openAssistantInboxItem(row)
+                                    router.popToRoot()
+                                }
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .padding(.top, 8)
-                    }
-                    if row.actionPrompt != nil {
-                        Button("交给小驳处理") {
-                            store.openAssistantInboxItem(row)
-                            router.popToRoot()
-                        }
-                        .buttonStyle(.borderedProminent)
                         .padding(.top, 8)
                     }
                 }

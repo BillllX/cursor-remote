@@ -79,14 +79,16 @@ export function relPathHasSymlink(scopeDir: string, rel: string) {
   let cur = scopeReal;
   for (let i = 0; i < parts.length; i += 1) {
     cur = resolve(cur, parts[i]!);
-    if (isSymlinkPath(cur)) return true;
-    if (i < parts.length - 1) {
-      try {
-        if (!lstatSync(cur).isDirectory()) return true;
-      } catch {
-        return true;
-      }
+    let st;
+    try {
+      st = lstatSync(cur);
+    } catch (err) {
+      // 中间目录或文件还没创建：不是符号链接，交给 open 报 enoent。
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+      return true;
     }
+    if (st.isSymbolicLink()) return true;
+    if (i < parts.length - 1 && !st.isDirectory()) return true;
   }
   return !isInside(cur, scopeReal);
 }

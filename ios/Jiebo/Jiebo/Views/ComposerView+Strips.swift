@@ -15,14 +15,13 @@ extension ComposerView {
                 .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.ink)
             HStack(spacing: 8) {
-                Button("拒绝", role: .destructive) { store.replyToApproval(allow: false, chatId: chatId) }
-                    .buttonStyle(.bordered)
-                Button("允许") { store.replyToApproval(allow: true, chatId: chatId) }
-                    .buttonStyle(.borderedProminent)
-                    .tint(JieboColor.pine)
+                ActionButton(title: "拒绝", kind: .destructive) {
+                    store.replyToApproval(allow: false, chatId: chatId)
+                }
+                ActionButton(title: "允许", kind: .primary) {
+                    store.replyToApproval(allow: true, chatId: chatId)
+                }
             }
-            .font(JieboFont.text(.subheadline, weight: .semibold))
-            .controlSize(.large)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

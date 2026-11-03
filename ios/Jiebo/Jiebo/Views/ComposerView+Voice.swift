@@ -157,9 +157,9 @@ extension ComposerView {
         }
         .padding(10)
         .background(voiceCancelArmed ? JieboColor.dangerBg : JieboColor.pine.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
                 .stroke(tint.opacity(0.35), lineWidth: 1)
         )
         .accessibilityElement(children: .combine)

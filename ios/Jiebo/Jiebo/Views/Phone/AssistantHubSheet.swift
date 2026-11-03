@@ -27,7 +27,7 @@ struct AssistantHubSheet: View {
                     .accessibilityHidden(true)
                 HStack {
                     Text("今日")
-                        .font(JieboFont.display(17))
+                        .font(JieboFont.text(.headline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .accessibilityAddTraits(.isHeader)
                     Spacer()

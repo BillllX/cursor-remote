@@ -232,6 +232,7 @@ struct MemoryCenterScopeSummary: Sendable, Hashable, Identifiable {
     var pendingCount: Int
     var health: String?
     var error: String?
+    var errorCode: String?
 
     static func from(_ json: JSONValue) -> MemoryCenterScopeSummary? {
         guard let row = json.object,
@@ -254,7 +255,8 @@ struct MemoryCenterScopeSummary: Sendable, Hashable, Identifiable {
         else { return nil }
         guard case let .some(parentId) = mcOptNullableString(row, "parentId"),
               case let .some(health) = mcOptNullableString(row, "health"),
-              case let .some(error) = mcOptNullableString(row, "error")
+              case let .some(error) = mcOptNullableString(row, "error"),
+              case let .some(errorCode) = mcOptNullableString(row, "errorCode")
         else { return nil }
         return MemoryCenterScopeSummary(
             id: id,
@@ -275,7 +277,8 @@ struct MemoryCenterScopeSummary: Sendable, Hashable, Identifiable {
             injectionSkipped: injectionSkipped,
             pendingCount: pendingCount,
             health: health?.nilIfEmpty,
-            error: error?.nilIfEmpty
+            error: error?.nilIfEmpty,
+            errorCode: errorCode?.nilIfEmpty
         )
     }
 }
