@@ -12,18 +12,22 @@ export const GIT_LABEL: Record<string, string> = {
   R: "已重命名",
 };
 
-function toTree(paths: string[]): Node[] {
+export function toTree(paths: string[]): Node[] {
   const root: Node[] = [];
-  for (const path of paths.slice(0, 8000)) {
-    const parts = path.split("/").filter(Boolean);
+  for (const rawPath of paths.slice(0, 8000)) {
+    const explicitDir = rawPath.endsWith("/");
+    const parts = rawPath.split("/").filter(Boolean);
     let level = root;
     let acc = "";
     parts.forEach((part, index) => {
       acc = acc ? `${acc}/${part}` : part;
+      const isDir = index < parts.length - 1 || explicitDir;
       let node = level.find((item) => item.name === part);
       if (!node) {
-        node = { name: part, path: acc, children: index < parts.length - 1 ? [] : undefined };
+        node = { name: part, path: acc, children: isDir ? [] : undefined };
         level.push(node);
+      } else if (isDir && !node.children) {
+        node.children = [];
       }
       if (node.children) level = node.children;
     });
@@ -37,7 +41,8 @@ function dirtyLetter(path: string, status: GitStatusMap): string | undefined {
 
 function dirDirty(node: Node, status: GitStatusMap): boolean {
   if (!node.children) return Boolean(status[node.path]);
-  return node.children.some((child) => dirDirty(child, status));
+  const prefix = `${node.path}/`;
+  return Object.keys(status).some((path) => path === node.path || path.startsWith(prefix));
 }
 
 function GitMark({ letter }: { letter?: string }) {
@@ -284,6 +289,8 @@ export default function FileTree({
   status = {},
   query = "",
   variant = "panel",
+  loadingDirs = {},
+  onExpandDir,
   onPick,
   onOpen,
   onCopyPath,
@@ -297,6 +304,8 @@ export default function FileTree({
   status?: GitStatusMap;
   query?: string;
   variant?: "panel" | "browser";
+  loadingDirs?: Record<string, boolean>;
+  onExpandDir?: (dir: string) => void;
   onPick: (path: string) => void;
   onOpen?: (path: string) => void;
   onCopyPath?: (path: string) => void;
@@ -308,7 +317,7 @@ export default function FileTree({
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return paths;
-    return paths.filter((path) => path.toLowerCase().includes(q));
+    return paths.filter((path) => !path.endsWith("/") && path.toLowerCase().includes(q));
   }, [paths, query]);
   const tree = useMemo(() => toTree(filtered), [filtered]);
   const expandAll = Boolean(query.trim());
@@ -320,10 +329,12 @@ export default function FileTree({
   const [renaming, setRenaming] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
 
+  const initialDirOpen = variant !== "browser";
+
   function isDirOpen(node: Node, depth: number) {
     if (expandAll) return true;
     if (openDirs[node.path] != null) return openDirs[node.path];
-    return depth < 1;
+    return initialDirOpen && depth < 1;
   }
 
   const rows = useMemo(() => {
@@ -332,13 +343,13 @@ export default function FileTree({
       for (const node of nodes) {
         const dir = Boolean(node.children);
         acc.push({ node, depth, dir });
-        const opened = dir && (expandAll || (openDirs[node.path] != null ? openDirs[node.path] : depth < 1));
+        const opened = dir && (expandAll || (openDirs[node.path] != null ? openDirs[node.path] : initialDirOpen && depth < 1));
         if (dir && opened && node.children) walk(node.children, depth + 1);
       }
     };
     walk(tree, 0);
     return acc;
-  }, [tree, openDirs, expandAll]);
+  }, [tree, openDirs, expandAll, initialDirOpen]);
 
   useEffect(() => {
     if (!rows.length) {
@@ -363,10 +374,10 @@ export default function FileTree({
   }, []);
 
   function toggleDir(path: string, depth: number, next?: boolean) {
-    setOpenDirs((prev) => {
-      const current = prev[path] != null ? prev[path] : depth < 1;
-      return { ...prev, [path]: next ?? !current };
-    });
+    const current = openDirs[path] != null ? openDirs[path] : initialDirOpen && depth < 1;
+    const willOpen = next ?? !current;
+    if (willOpen) onExpandDir?.(path);
+    setOpenDirs((prev) => ({ ...prev, [path]: willOpen }));
   }
 
   function activate(row: { node: Node; depth: number; dir: boolean }) {
@@ -381,7 +392,10 @@ export default function FileTree({
     setRenaming(null);
     setCreating({ dir, kind });
     setNameDraft("");
-    if (dir) setOpenDirs((prev) => ({ ...prev, [dir]: true }));
+    if (dir) {
+      onExpandDir?.(dir);
+      setOpenDirs((prev) => ({ ...prev, [dir]: true }));
+    }
   }
 
   function commitCreate() {
@@ -519,6 +533,7 @@ export default function FileTree({
           status={status}
           cursor={cursor}
           openDirs={openDirs}
+          loadingDirs={loadingDirs}
           expandAll={expandAll}
           variant={variant}
           creating={creating}
@@ -661,6 +676,7 @@ function Branch({
   status,
   cursor,
   openDirs,
+  loadingDirs,
   expandAll,
   variant,
   creating,
@@ -682,6 +698,7 @@ function Branch({
   status: GitStatusMap;
   cursor: string;
   openDirs: Record<string, boolean>;
+  loadingDirs: Record<string, boolean>;
   expandAll: boolean;
   variant: "panel" | "browser";
   creating: { dir: string; kind: "file" | "dir" } | null;
@@ -698,10 +715,12 @@ function Branch({
   onOpen?: (path: string) => void;
   onMenu: (event: MouseEvent, path: string, dir: boolean) => void;
 }) {
-  const opened = expandAll || (openDirs[node.path] != null ? openDirs[node.path] : depth < 1);
+  const defaultOpen = variant === "browser" ? false : depth < 1;
+  const opened = expandAll || (openDirs[node.path] != null ? openDirs[node.path] : defaultOpen);
   const on = cursor === node.path;
   const parent = parentPath(node.path);
   if (node.children) {
+    const dirLoading = Boolean(loadingDirs[node.path]) && node.children.length === 0;
     return (
       <details className={`tree-dir${on ? " on" : ""}`} open={opened}>
         <summary
@@ -744,6 +763,11 @@ function Branch({
                 pad={rowPad(depth + 1)}
               />
             ) : null}
+            {dirLoading ? (
+              <div className="tree-file" style={{ paddingLeft: rowPad(depth + 1), opacity: 0.6 }}>
+                <span className="tree-file-name">正在加载…</span>
+              </div>
+            ) : null}
             {node.children.map((child) => (
               <Branch
                 key={child.path}
@@ -752,6 +776,7 @@ function Branch({
                 status={status}
                 cursor={cursor}
                 openDirs={openDirs}
+                loadingDirs={loadingDirs}
                 expandAll={expandAll}
                 variant={variant}
                 creating={creating}

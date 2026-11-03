@@ -1071,7 +1071,7 @@ export type ClientMessage =
   | { type: "new_session"; chatId: string; cwd?: string }
   | { type: "delete_session"; chatId: string }
   | { type: "resume_session"; chatId: string; agentId: string }
-  | { type: "list_files"; query?: string; chatId?: string; mention?: boolean; reqId?: string }
+  | { type: "list_files"; query?: string; dir?: string; chatId?: string; mention?: boolean; reqId?: string }
   | { type: "search_text"; query: string; chatId?: string }
   // sha：读这一轮结束时的快照（TurnFile.sha），不读工作区；diff: true 时 sha 指 TurnFile.diffSha。
   // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
@@ -1398,6 +1398,7 @@ export type ServerMessage =
   | {
       type: "files";
       query: string;
+      dir?: string;
       paths: string[];
       status?: Record<string, string>;
       mention?: boolean;

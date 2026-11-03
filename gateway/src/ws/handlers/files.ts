@@ -6,6 +6,7 @@ import { cwdOf, slotOf } from "../../runtime/slots.ts";
 import type { WorkspaceFile } from "../../runtime/types.ts";
 import {
   filesMessage,
+  listWorkspaceDirForClientAsync,
   listWorkspaceFilesForClientAsync,
   MAX_UPLOAD_BYTES,
   payload,
@@ -219,9 +220,17 @@ export function onCanvasRestore(ctx: WsCtx, message: MessageOf<"canvas_restore">
  */
 export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_files">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
-  const { signal, end } = beginRequest(ws, `list_files:${message.chatId || ""}:${message.mention ? 1 : 0}`);
+  const dir = typeof message.dir === "string" ? message.dir : undefined;
+  const key =
+    dir !== undefined
+      ? `list_files_dir:${message.chatId || ""}:${dir}`
+      : `list_files:${message.chatId || ""}:${message.mention ? 1 : 0}`;
+  const { signal, end } = beginRequest(ws, key);
   try {
-    const listed = await listWorkspaceFilesForClientAsync(cwd, message.query || "", { signal });
+    const listed =
+      dir !== undefined
+        ? await listWorkspaceDirForClientAsync(cwd, dir, { signal })
+        : await listWorkspaceFilesForClientAsync(cwd, message.query || "", { signal });
     send(
       ws,
       filesMessage(
@@ -229,6 +238,7 @@ export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_
         {
           chatId: message.chatId,
           query: message.query || "",
+          dir,
           mention: Boolean(message.mention),
           reqId: message.reqId,
         },
@@ -245,6 +255,7 @@ export async function onListFiles({ ws, conn }: WsCtx, message: MessageOf<"list_
           {
             chatId: message.chatId,
             query: message.query || "",
+            dir,
             mention: Boolean(message.mention),
             reqId: message.reqId,
           },

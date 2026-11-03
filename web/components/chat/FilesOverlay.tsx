@@ -21,6 +21,8 @@ type FilesOverlayProps = {
   openFile: (path: string, line?: number, asDiff?: boolean) => void;
   treePaths: string[];
   treeTruncated: boolean;
+  loadingDirs?: Record<string, boolean>;
+  onExpandDir?: (dir: string) => void;
   handlePickFile: (path: string, line?: number, endLine?: number, snippet?: string) => void;
   setNotice: Dispatch<SetStateAction<string>>;
   downloadWorkspaceFile: (path: string) => void;
@@ -46,6 +48,8 @@ export function FilesOverlay({
   openFile,
   treePaths,
   treeTruncated,
+  loadingDirs,
+  onExpandDir,
   handlePickFile,
   setNotice,
   downloadWorkspaceFile,
@@ -127,6 +131,8 @@ export function FilesOverlay({
             status={gitStatus}
             query={filesQuery}
             variant="browser"
+            loadingDirs={loadingDirs}
+            onExpandDir={onExpandDir}
             onPick={(path) => {
               handlePickFile(path);
               if (!filesDocked) closeFiles();

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { toTree } from "../components/FileTree";
 import {
   isFileMention,
   mentionAt,
@@ -11,6 +12,30 @@ import {
 } from "../lib/chat/mentions";
 
 const PATHS = ["src/a.ts", "src/lib/b.ts", "README.md"];
+
+describe("toTree 逐层加载树构建", () => {
+  test("末尾带 / 的单层目录标记为可展开节点，后续加载出子项后自动合并进同一目录节点", () => {
+    const level0 = toTree(["牌照/", "资金/", "归档说明.md"]);
+    assert.deepEqual(
+      level0.map((n) => ({ name: n.name, path: n.path, isDir: Array.isArray(n.children) })),
+      [
+        { name: "牌照", path: "牌照", isDir: true },
+        { name: "资金", path: "资金", isDir: true },
+        { name: "归档说明.md", path: "归档说明.md", isDir: false },
+      ],
+    );
+    const merged = toTree(["牌照/", "资金/", "归档说明.md", "牌照/黑龙江三农信/", "牌照/README.md"]);
+    const license = merged.find((n) => n.path === "牌照");
+    assert.ok(license?.children);
+    assert.deepEqual(
+      license.children.map((n) => ({ name: n.name, path: n.path, isDir: Array.isArray(n.children) })),
+      [
+        { name: "黑龙江三农信", path: "牌照/黑龙江三农信", isDir: true },
+        { name: "README.md", path: "牌照/README.md", isDir: false },
+      ],
+    );
+  });
+});
 
 describe("mentionHits", () => {
   test("空查询：先 Diff 和目录（排序、带 /），再文件", () => {

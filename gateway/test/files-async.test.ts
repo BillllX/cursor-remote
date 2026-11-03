@@ -26,6 +26,7 @@ import type { Conn, Slot } from "../src/runtime/types.ts";
 import { getTenant } from "../src/tenants.ts";
 import { handlers } from "../src/ws/dispatch.ts";
 import {
+  listWorkspaceDirForClientAsync,
   listWorkspaceFilesForClient,
   listWorkspaceFilesForClientAsync,
   pushWorkspace,
@@ -38,6 +39,7 @@ import {
   settleWorkspacePushes,
   walkFiles,
   walkFilesAsync,
+  writeWorkspaceFile,
 } from "../src/workspace/files.ts";
 import {
   beginRequest,
@@ -494,11 +496,12 @@ describe("异步版与旧同步版行为一致", () => {
   test("walkFilesAsync 与 walkFiles：深度、条数上限、跳过规则一致", async () => {
     const dir = tempDir("walk");
     let d = dir;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 10; i++) {
       d = join(d, `d${i}`);
       mkdirSync(d);
       writeFileSync(join(d, "f.txt"), "x");
     }
+    writeFileSync(join(dir, ".DS_Store"), "ds");
     const bulk = join(dir, "bulk");
     mkdirSync(bulk);
     for (let i = 0; i < 260; i++) writeFileSync(join(bulk, `f${String(i).padStart(3, "0")}.txt`), "x");
@@ -507,7 +510,25 @@ describe("异步版与旧同步版行为一致", () => {
     const async_: string[] = [];
     await walkFilesAsync(dir, dir, async_, 0);
     assert.deepEqual(async_.sort(), sync.sort());
-    assert.ok(sync.length > 0);
+    assert.equal(sync.length, 270);
+    assert.ok(!sync.includes(".DS_Store"));
+  });
+
+  test("外层 git 仓库下的未跟踪子工作区：按子目录列文件且写文件后缓存立即失效", async () => {
+    const root = gitRepo("outer-repo");
+    writeFileSync(join(root, "root.txt"), "r");
+    sh(root, "add", "-A");
+    sh(root, "commit", "-q", "-m", "root");
+    const sub = join(root, "Fintopia集团");
+    const deep = join(sub, "牌照", "三农信", "04_现场检查", "2025", "附件");
+    mkdirSync(deep, { recursive: true });
+    writeFileSync(join(deep, "报告.md"), "# 报告");
+    const first = await listWorkspaceFilesForClientAsync(sub, "");
+    assert.deepEqual(first.paths, ["牌照/三农信/04_现场检查/2025/附件/报告.md"]);
+    writeWorkspaceFile(sub, "归档说明.md", "说明");
+    const second = await listWorkspaceFilesForClientAsync(sub, "");
+    assert.equal(second.paths.length, 2);
+    assert.ok(second.paths.includes("归档说明.md"));
   });
 
   describe("searchWorkspace", () => {
@@ -750,6 +771,41 @@ describe("WS 处理函数：覆盖、断线取消、排队满回错误", () => {
       Object.assign(heavyLimiter, saved);
       rg.restore();
     }
+  });
+
+  test("list_files (dir)：逐层懒加载只列单层目录（子目录带 / 结尾），且不受重任务队列占满阻塞", async () => {
+    const dir = tempDir("ws-lazy-dir");
+    mkdirSync(join(dir, "牌照", "黑龙江三农信", "01_底档"), { recursive: true });
+    mkdirSync(join(dir, "资金"), { recursive: true });
+    mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(dir, "归档说明.md"), "说明");
+    writeFileSync(join(dir, ".DS_Store"), "ds");
+    writeFileSync(join(dir, "牌照", "README.md"), "牌照");
+    writeFileSync(join(dir, "牌照", "黑龙江三农信", "01_底档", "执照.pdf"), "pdf");
+    writeFileSync(join(dir, "node_modules", "pkg", "index.js"), "js");
+
+    const rootListed = await listWorkspaceDirForClientAsync(dir, "");
+    assert.deepEqual(rootListed.paths, ["牌照/", "资金/", "归档说明.md"]);
+    assert.equal(rootListed.truncated, false);
+
+    const subListed = await listWorkspaceDirForClientAsync(dir, "牌照");
+    assert.deepEqual(subListed.paths, ["牌照/黑龙江三农信/", "牌照/README.md"]);
+
+    const escapeListed = await listWorkspaceDirForClientAsync(dir, "../outside");
+    assert.deepEqual(escapeListed.paths, []);
+
+    const ctx = fakeConn(dir);
+    await Promise.all([
+      handlers.list_files!(ctx, { type: "list_files", query: "", dir: "" }),
+      handlers.list_files!(ctx, { type: "list_files", query: "", dir: "牌照" }),
+    ]);
+    const byDir = Object.fromEntries(
+      ctx.sent
+        .filter((m): m is Extract<ServerMessage, { type: "files" }> => m.type === "files")
+        .map((m) => [m.dir ?? "ALL", m.paths]),
+    );
+    assert.deepEqual(byDir[""], ["牌照/", "资金/", "归档说明.md"]);
+    assert.deepEqual(byDir["牌照"], ["牌照/黑龙江三农信/", "牌照/README.md"]);
   });
 
   test("read_file：不起子进程的读取并发回包，各自带 reqId", async () => {

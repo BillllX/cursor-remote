@@ -179,6 +179,7 @@ export async function handleMessage(ctx: WsConnCtx, data: RawData, table: Handle
           {
             chatId,
             query: message.query ?? "",
+            dir: typeof message.dir === "string" ? message.dir : undefined,
             mention: Boolean(message.mention),
             reqId,
           },

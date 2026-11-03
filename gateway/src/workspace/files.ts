@@ -62,6 +62,7 @@ const pushState = new WeakMap<WebSocket, { tail: Promise<void>; queued: PendingP
  * 需要“先推文件再发 done”的调用方 await 返回值或 settleWorkspacePushes(ws)。
  */
 export function pushWorkspace(ws: WebSocket, slot: Slot, conn: Conn, paths: string[] = []): Promise<void> {
+  invalidateWorkspaceFilesCache();
   let state = pushState.get(ws);
   if (!state) {
     state = { tail: Promise.resolve(), queued: [] };
@@ -182,6 +183,7 @@ export function writeWorkspaceFile(cwd: string, raw: string, content: string): {
   try {
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content);
+    invalidateWorkspaceFilesCache();
     return { path };
   } catch (err) {
     return { path, error: err instanceof Error ? err.message : "写不了这个文件" };
@@ -233,6 +235,7 @@ export function writeWorkspaceBytes(
   try {
     mkdirSync(dirname(resolve(cwd, path)), { recursive: true });
     writeFileSync(resolve(cwd, path), buf);
+    invalidateWorkspaceFilesCache();
     return { path, size: buf.length };
   } catch (err) {
     return { path, error: err instanceof Error ? err.message : "写不了这个文件" };
@@ -254,12 +257,14 @@ export function runFsOp(
   try {
     if (op === "mkdir") {
       mkdirSync(abs, { recursive: true });
+      invalidateWorkspaceFilesCache();
       return { path };
     }
     if (op === "create") {
       mkdirSync(dirname(abs), { recursive: true });
       if (existsSync(abs)) return { path, error: "已经有这个文件" };
       writeFileSync(abs, "");
+      invalidateWorkspaceFilesCache();
       return { path };
     }
     if (op === "rename") {
@@ -270,6 +275,7 @@ export function runFsOp(
       if (existsSync(destAbs)) return { path, to: dest, error: "目标已存在" };
       mkdirSync(dirname(destAbs), { recursive: true });
       renameSync(abs, destAbs);
+      invalidateWorkspaceFilesCache();
       return { path, to: dest };
     }
     if (op === "delete") {
@@ -281,6 +287,7 @@ export function runFsOp(
       } else {
         unlinkSync(abs);
       }
+      invalidateWorkspaceFilesCache();
       return { path };
     }
   } catch (err) {
@@ -337,8 +344,32 @@ export function readWorkspaceDiff(cwd: string, raw: string): WorkspaceFile {
   }
 }
 
+export const LIST_MAX_BUFFER = 16 * 1024 * 1024;
+export const WALK_MAX_DEPTH = 12;
+export const WALK_MAX_FILES = 8000;
+const WALK_SKIP = new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  "dist",
+  ".loop",
+  ".cursor",
+  ".venv",
+  "venv",
+  "coverage",
+  ".DS_Store",
+]);
+
+const COLLECT_CACHE_TTL_MS = 1500;
+const collectCache = new Map<string, { at: number; paths: string[]; status: Record<string, string> }>();
+
+/** 工作区发生写入、上传、文件操作、回滚或主动推送时清空短期清单缓存 */
+export function invalidateWorkspaceFilesCache() {
+  collectCache.clear();
+}
+
 export function walkFiles(root: string, dir: string, acc: string[], depth: number) {
-  if (depth > 3 || acc.length > 200) return;
+  if (depth > WALK_MAX_DEPTH || acc.length >= WALK_MAX_FILES) return;
   let entries: string[] = [];
   try {
     entries = readdirSync(dir);
@@ -346,19 +377,8 @@ export function walkFiles(root: string, dir: string, acc: string[], depth: numbe
     return;
   }
   for (const name of entries) {
-    if (
-      name === "node_modules" ||
-      name === ".git" ||
-      name === ".next" ||
-      name === "dist" ||
-      name === ".loop" ||
-      name === ".cursor" ||
-      name === ".venv" ||
-      name === "venv" ||
-      name === "coverage"
-    ) {
-      continue;
-    }
+    if (acc.length >= WALK_MAX_FILES) return;
+    if (WALK_SKIP.has(name)) continue;
     const full = resolve(dir, name);
     try {
       const st = statSync(full);
@@ -436,6 +456,7 @@ function headNames(cwd: string, extra?: Record<string, string>): Set<string> {
           cwd,
           encoding: "utf8",
           timeout: 4000,
+          maxBuffer: LIST_MAX_BUFFER,
           stdio: ["ignore", "pipe", "ignore"],
         });
     return new Set(
@@ -454,20 +475,24 @@ function dropGhostStatus(
   map: Record<string, string>,
   extra?: Record<string, string>,
 ): Record<string, string> {
-  const head = headNames(cwd, extra);
+  const entries = Object.entries(map);
+  if (!entries.length) return {};
+  const exists = entries.map(([path]) => existsSync(resolve(cwd, path)));
+  const head = exists.every(Boolean) ? new Set<string>() : headNames(cwd, extra);
   const next: Record<string, string> = {};
-  for (const [path, letter] of Object.entries(map)) {
-    if (existsSync(resolve(cwd, path)) || head.has(path)) next[path] = letter;
-  }
+  entries.forEach(([path, letter], i) => {
+    if (exists[i] || head.has(path)) next[path] = letter;
+  });
   return next;
 }
 
 function gitStatusMap(cwd: string): Record<string, string> {
   const run = (root: string, extra?: Record<string, string>) => {
-    const out = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-uall", "-z"], {
+    const out = execFileSync("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-uall", "-z", "--", "."], {
       cwd,
       encoding: "utf8",
       timeout: 4000,
+      maxBuffer: LIST_MAX_BUFFER,
       stdio: ["ignore", "pipe", "ignore"],
       env: extra ? { ...process.env, ...extra } : process.env,
     });
@@ -539,6 +564,7 @@ function collectWorkspaceFiles(cwd: string): { paths: string[]; status: Record<s
         cwd,
         encoding: "utf8",
         timeout: 4000,
+        maxBuffer: LIST_MAX_BUFFER,
         stdio: ["ignore", "pipe", "ignore"],
       });
       paths = out
@@ -558,9 +584,13 @@ function collectWorkspaceFiles(cwd: string): { paths: string[]; status: Record<s
   }
   const status = gitStatusMap(cwd);
   paths = paths.filter((path) => existsSync(resolve(cwd, path)));
+  const have = new Set(paths);
   for (const path of Object.keys(status)) {
     if (status[path] === "D") continue;
-    if (!paths.includes(path) && existsSync(resolve(cwd, path))) paths.push(path);
+    if (!have.has(path) && existsSync(resolve(cwd, path))) {
+      paths.push(path);
+      have.add(path);
+    }
   }
   return { paths, status };
 }
@@ -584,16 +614,24 @@ function rankWorkspaceFiles(paths: string[], status: Record<string, string>, que
 
 export function filesMessage(
   conn: Conn | undefined,
-  base: { chatId?: string; query: string; mention?: boolean; reqId?: string },
+  base: { chatId?: string; query: string; dir?: string; mention?: boolean; reqId?: string },
   listed: WorkspaceFiles,
   error?: string,
 ): ServerMessage {
+  const cleanBase =
+    base.dir !== undefined
+      ? base
+      : (() => {
+          const copy = { ...base };
+          delete copy.dir;
+          return copy;
+        })();
   if (error) {
-    return { type: "files", ...base, paths: [], status: {}, truncated: false, error };
+    return { type: "files", ...cleanBase, paths: [], status: {}, truncated: false, error };
   }
-  const overhead = Buffer.byteLength(JSON.stringify({ type: "files", ...base, truncated: true }));
+  const overhead = Buffer.byteLength(JSON.stringify({ type: "files", ...cleanBase, truncated: true }));
   const fitted = fitWorkspaceFiles(listed, conn?.maxMessageBytes ?? 0, overhead);
-  return { type: "files", ...base, paths: fitted.paths, status: fitted.status, truncated: fitted.truncated };
+  return { type: "files", ...cleanBase, paths: fitted.paths, status: fitted.status, truncated: fitted.truncated };
 }
 
 function parseSearchHits(raw: string): { path: string; line: number; text: string }[] {
@@ -745,6 +783,7 @@ export function revertHunk(cwd: string, raw: string, hunk: string): { path: stri
     } else {
       writeFileSync(abs, next);
     }
+    invalidateWorkspaceFilesCache();
   } catch {
     return { path, error: "写回失败" };
   }
@@ -791,10 +830,6 @@ async function mapBatches<T, R>(
   return out;
 }
 
-/** 与旧 execFileSync 的默认输出上限（1MiB）保持一致，行为不变 */
-const LIST_MAX_BUFFER = 1024 * 1024;
-const WALK_SKIP = new Set(["node_modules", ".git", ".next", "dist", ".loop", ".cursor", ".venv", "venv", "coverage"]);
-
 type GitWhere = { root: string | null; shadow: Record<string, string> | null };
 
 async function locateGit(cwd: string, signal: AbortSignal | undefined): Promise<GitWhere> {
@@ -811,7 +846,7 @@ export async function walkFilesAsync(
   depth: number,
   signal?: AbortSignal,
 ): Promise<void> {
-  if (depth > 3 || acc.length > 200) return;
+  if (depth > WALK_MAX_DEPTH || acc.length >= WALK_MAX_FILES) return;
   throwIfAborted(signal);
   let entries: string[] = [];
   try {
@@ -820,6 +855,7 @@ export async function walkFilesAsync(
     return;
   }
   for (const name of entries) {
+    if (acc.length >= WALK_MAX_FILES) return;
     if (WALK_SKIP.has(name)) continue;
     throwIfAborted(signal);
     const full = resolve(dir, name);
@@ -863,41 +899,48 @@ async function dropGhostStatusAsync(
   map: Record<string, string>,
   where: GitWhere,
   signal: AbortSignal | undefined,
-): Promise<Record<string, string>> {
+): Promise<{ status: Record<string, string>; kinds: Map<string, "file" | "dir" | null> }> {
   const entries = Object.entries(map);
-  if (!entries.length) return {};
-  const exists = await mapBatches(entries, ([path]) => existsAsync(resolve(cwd, path)), signal);
+  const kinds = new Map<string, "file" | "dir" | null>();
+  if (!entries.length) return { status: {}, kinds };
+  // 一次 statKind 同时判断是否存在及是否为目录，结果留给 collectWorkspaceFilesAsync 复用，省掉重复 stat
+  const statResults = await mapBatches(entries, ([path]) => statKind(resolve(cwd, path)), signal);
+  entries.forEach(([path], i) => kinds.set(path, statResults[i]));
   // 只有磁盘上找不到的条目才需要 HEAD 清单；全都在磁盘上时省掉一次 git 调用，结果相同
-  const head = exists.every(Boolean) ? new Set<string>() : await headNamesAsync(cwd, where, signal);
-  const next: Record<string, string> = {};
+  const head = statResults.every((k) => k !== null) ? new Set<string>() : await headNamesAsync(cwd, where, signal);
+  const status: Record<string, string> = {};
   entries.forEach(([path, letter], i) => {
-    if (exists[i] || head.has(path)) next[path] = letter;
+    if (statResults[i] !== null || head.has(path)) status[path] = letter;
   });
-  return next;
+  return { status, kinds };
 }
 
 async function gitStatusMapAsync(
   cwd: string,
   where: GitWhere,
   signal: AbortSignal | undefined,
-): Promise<Record<string, string>> {
+): Promise<{ status: Record<string, string>; kinds: Map<string, "file" | "dir" | null> }> {
   const run = async (root: string, extra?: Record<string, string>) => {
-    const out = await execText("git", ["-c", "core.quotepath=false", "status", "--porcelain", "-uall", "-z"], {
-      cwd,
-      env: extra ? { ...process.env, ...extra } : process.env,
-      timeoutMs: 4000,
-      maxBuffer: LIST_MAX_BUFFER,
-      signal,
-    });
+    const out = await execText(
+      "git",
+      ["-c", "core.quotepath=false", "status", "--porcelain", "-uall", "-z", "--", "."],
+      {
+        cwd,
+        env: extra ? { ...process.env, ...extra } : process.env,
+        timeoutMs: 4000,
+        maxBuffer: LIST_MAX_BUFFER,
+        signal,
+      },
+    );
     return dropGhostStatusAsync(cwd, parsePorcelain(out, root, cwd), where, signal);
   };
   try {
     if (where.root) return await run(where.root);
-    if (!where.shadow) return {};
+    if (!where.shadow) return { status: {}, kinds: new Map() };
     return await run(cwd, where.shadow);
   } catch (err) {
     if (signal?.aborted) throw err;
-    return {};
+    return { status: {}, kinds: new Map() };
   }
 }
 
@@ -941,9 +984,13 @@ async function collectWorkspaceFilesAsync(
     if (signal?.aborted) throw err;
     await walkFilesAsync(cwd, cwd, paths, 0, signal);
   }
-  const status = await gitStatusMapAsync(cwd, where, signal);
-  // 存在性检查顺带记下哪些是目录，嵌套仓库探测直接用，省掉对每个文件再 stat 一遍
-  const kinds = await mapBatches(paths, (path) => statKind(resolve(cwd, path)), signal);
+  const { status, kinds: statusKinds } = await gitStatusMapAsync(cwd, where, signal);
+  // 存在性检查顺带记下哪些是目录，嵌套仓库探测直接用；status 里已经 stat 过的条目直接复用
+  const kinds = await mapBatches(
+    paths,
+    (path) => (statusKinds.has(path) ? Promise.resolve(statusKinds.get(path)!) : statKind(resolve(cwd, path))),
+    signal,
+  );
   const dirs = new Set<string>();
   paths = paths.filter((path, i) => {
     if (kinds[i] === "dir") dirs.add(path);
@@ -953,7 +1000,7 @@ async function collectWorkspaceFilesAsync(
   for (const path of Object.keys(status)) {
     if (status[path] === "D") continue;
     if (have.has(path)) continue;
-    const kind = await statKind(resolve(cwd, path));
+    const kind = statusKinds.has(path) ? statusKinds.get(path)! : await statKind(resolve(cwd, path));
     if (kind) {
       paths.push(path);
       have.add(path);
@@ -968,6 +1015,12 @@ async function collectWithNestedAsync(
   depth: number,
   signal: AbortSignal | undefined,
 ): Promise<{ paths: string[]; status: Record<string, string> }> {
+  if (depth === 0) {
+    const cached = collectCache.get(cwd);
+    if (cached && Date.now() - cached.at < COLLECT_CACHE_TTL_MS) {
+      return { paths: cached.paths, status: cached.status };
+    }
+  }
   const own = await collectWorkspaceFilesAsync(cwd, signal);
   if (depth >= 3) return { paths: own.paths, status: own.status };
   // 只有目录才可能是嵌套仓库（ls-files 里的 gitlink、符号链接指向的目录、状态里的 `dir/`）
@@ -976,7 +1029,11 @@ async function collectWithNestedAsync(
   const nestedSet = new Set(candidates.filter((_, i) => isNested[i]));
   // 保持与 own.paths 相同的相对顺序
   const nested = own.paths.filter((path) => nestedSet.has(path));
-  if (!nested.length) return { paths: own.paths, status: own.status };
+  if (!nested.length) {
+    const res = { paths: own.paths, status: own.status };
+    if (depth === 0) collectCache.set(cwd, { at: Date.now(), ...res });
+    return res;
+  }
   const skip = new Set(nested);
   const paths = own.paths.filter((path) => !skip.has(path));
   const status: Record<string, string> = {};
@@ -986,7 +1043,65 @@ async function collectWithNestedAsync(
     for (const path of inner.paths) paths.push(`${dir}/${path}`);
     for (const [path, letter] of Object.entries(inner.status)) status[`${dir}/${path}`] = letter;
   }
-  return { paths, status };
+  const res = { paths, status };
+  if (depth === 0) collectCache.set(cwd, { at: Date.now(), ...res });
+  return res;
+}
+
+const DIR_LIST_CAP = 1000;
+
+/**
+ * 逐层懒加载：只列出指定目录（`dir === ""` 表示工作区根目录）的直接子项。
+ * 子目录以末尾 `/` 标记（如 `"牌照/"`），前端据此渲染可展开文件夹并在用户点击展开时再拉下一层。
+ */
+export async function listWorkspaceDirForClientAsync(
+  cwd: string,
+  rawDir: string,
+  opt: AsyncOpt = {},
+): Promise<WorkspaceFiles> {
+  const clean = rawDir
+    .replace(/\\/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .trim();
+  const relDir = clean ? workspacePath(cwd, clean) : "";
+  if (clean && !relDir) return { paths: [], status: {}, truncated: false };
+  const targetAbs = relDir ? resolve(cwd, relDir) : cwd;
+  const prefix = relDir ? `${relDir}/` : "";
+  throwIfAborted(opt.signal);
+  let names: string[] = [];
+  try {
+    names = await fsReaddir(targetAbs);
+  } catch {
+    return { paths: [], status: {}, truncated: false };
+  }
+  const visible = names.filter((name) => !WALK_SKIP.has(name)).sort((a, b) => a.localeCompare(b));
+  const truncated = visible.length > DIR_LIST_CAP;
+  const sliced = visible.slice(0, DIR_LIST_CAP);
+  const kinds = await mapBatches(sliced, (name) => statKind(resolve(targetAbs, name)), opt.signal);
+  const dirs: string[] = [];
+  const files: string[] = [];
+  sliced.forEach((name, i) => {
+    const kind = kinds[i];
+    if (kind === "dir") dirs.push(`${prefix}${name}/`);
+    else if (kind === "file") files.push(`${prefix}${name}`);
+  });
+  const cached = collectCache.get(cwd);
+  const status: Record<string, string> = {};
+  if (cached) {
+    for (const file of files) {
+      if (cached.status[file]) status[file] = cached.status[file];
+    }
+    for (const dirEntry of dirs) {
+      const dirPath = dirEntry.slice(0, -1);
+      for (const [path, letter] of Object.entries(cached.status)) {
+        if (path === dirPath || path.startsWith(dirEntry)) {
+          status[dirPath] = letter;
+          break;
+        }
+      }
+    }
+  }
+  return { paths: [...dirs, ...files], status, truncated };
 }
 
 /** listWorkspaceFilesForClient 的异步版（文件树、@ 补全、推送用） */

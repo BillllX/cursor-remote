@@ -238,6 +238,9 @@ export default function ChatApp() {
   const [fileHits, setFileHits] = useState<string[]>([]);
   const [treePaths, setTreePaths] = useState<string[]>([]);
   const [treeTruncated, setTreeTruncated] = useState(false);
+  const [dirEntriesByDir, setDirEntriesByDir] = useState<Record<string, string[]>>({});
+  const [loadingDirs, setLoadingDirs] = useState<Record<string, boolean>>({});
+  const loadedDirsRef = useRef<Set<string>>(new Set());
   const treePathsRef = useRef<string[]>([]);
   treePathsRef.current = treePaths;
   const [gitStatus, setGitStatus] = useState<Record<string, string>>({});
@@ -1016,10 +1019,32 @@ export default function ChatApp() {
         case "files":
           if (message.chatId && message.chatId !== activeIdRef.current) break;
           if (message.error) {
+            if (typeof message.dir === "string") {
+              const targetDir = message.dir;
+              setLoadingDirs((prev) => {
+                if (!prev[targetDir]) return prev;
+                const next = { ...prev };
+                delete next[targetDir];
+                return next;
+              });
+            }
             setError(message.error);
             break;
           }
-          if (message.mention) {
+          if (typeof message.dir === "string") {
+            const targetDir = message.dir;
+            loadedDirsRef.current.add(targetDir);
+            setDirEntriesByDir((prev) => ({ ...prev, [targetDir]: message.paths }));
+            setLoadingDirs((prev) => {
+              if (!prev[targetDir]) return prev;
+              const next = { ...prev };
+              delete next[targetDir];
+              return next;
+            });
+            if (message.status && Object.keys(message.status).length) {
+              setGitStatus((prev) => ({ ...prev, ...message.status }));
+            }
+          } else if (message.mention) {
             if (mentionQueryRef.current == null || message.query !== mentionQueryRef.current) break;
             setFileHits(
               mentionHits(
@@ -2061,7 +2086,17 @@ export default function ChatApp() {
   }, []);
 
   useEffect(() => {
+    loadedDirsRef.current.clear();
+    setDirEntriesByDir({});
+    setLoadingDirs({});
+  }, [activeId, cwd]);
+
+  useEffect(() => {
     if (!filesOpen) return;
+    if (!loadedDirsRef.current.has("")) {
+      setLoadingDirs((prev) => ({ ...prev, "": true }));
+      send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current });
+    }
     if (!treePaths.length) send({ type: "list_files", query: "", chatId: activeIdRef.current });
   }, [filesOpen, send, treePaths.length]);
 
@@ -3055,22 +3090,54 @@ export default function ChatApp() {
     handlePickFile(path, start, end, text);
   }
 
+  const mergedTreePaths = useMemo(() => {
+    const extras = Object.values(dirEntriesByDir).flat();
+    if (!extras.length) return treePaths;
+    const seen = new Set<string>(treePaths);
+    const out = [...treePaths];
+    for (const p of extras) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    return out;
+  }, [dirEntriesByDir, treePaths]);
+
+  function handleExpandTreeDir(dir: string) {
+    if (loadedDirsRef.current.has(dir)) return;
+    setLoadingDirs((prev) => (prev[dir] ? prev : { ...prev, [dir]: true }));
+    send({ type: "list_files", query: "", dir, chatId: activeIdRef.current });
+  }
+
   function handleTreeCreate(path: string, kind: "file" | "dir") {
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    loadedDirsRef.current.delete(parent);
     send({
       type: "fs_op",
       op: kind === "dir" ? "mkdir" : "create",
       path,
       chatId: activeIdRef.current,
     });
+    send({ type: "list_files", query: "", dir: parent, chatId: activeIdRef.current });
   }
 
   function handleTreeRename(from: string, to: string) {
+    const p1 = from.includes("/") ? from.slice(0, from.lastIndexOf("/")) : "";
+    const p2 = to.includes("/") ? to.slice(0, to.lastIndexOf("/")) : "";
+    loadedDirsRef.current.delete(p1);
+    loadedDirsRef.current.delete(p2);
     send({ type: "fs_op", op: "rename", path: from, to, chatId: activeIdRef.current });
+    send({ type: "list_files", query: "", dir: p1, chatId: activeIdRef.current });
+    if (p2 !== p1) send({ type: "list_files", query: "", dir: p2, chatId: activeIdRef.current });
   }
 
   function handleTreeDelete(path: string, dir: boolean) {
     if (!window.confirm(dir ? `删除空目录 ${path}？` : `删除文件 ${path}？`)) return;
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    loadedDirsRef.current.delete(parent);
     send({ type: "fs_op", op: "delete", path, chatId: activeIdRef.current });
+    send({ type: "list_files", query: "", dir: parent, chatId: activeIdRef.current });
   }
 
   function handleComposerFiles(files: FileList | File[]) {
@@ -4507,8 +4574,10 @@ export default function ChatApp() {
         gitStatus={gitStatus}
         previewPath={previewPath}
         openFile={openFile}
-        treePaths={treePaths}
+        treePaths={mergedTreePaths}
         treeTruncated={treeTruncated}
+        loadingDirs={loadingDirs}
+        onExpandDir={handleExpandTreeDir}
         handlePickFile={handlePickFile}
         setNotice={setNotice}
         downloadWorkspaceFile={downloadWorkspaceFile}
