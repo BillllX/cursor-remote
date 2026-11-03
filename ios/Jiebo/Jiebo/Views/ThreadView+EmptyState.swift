@@ -13,6 +13,8 @@ extension ThreadView {
         if chatId == nil, store.coldStartPlaceholder { return true }
         guard let chat = threadChat else { return false }
         guard !chat.turnsComplete, chat.turns.isEmpty else { return false }
+        // 助理页在主会话选定前也会停在空壳上。先写「正在打开」，不要留一整块空白。
+        if chrome == .embedded { return true }
         // 正在读缓存、正在拉分页，或服务端列表还没到：空壳先盖住。
         // 已经对过账却没在拉，就不再一直转圈，避免失败后把输入区盖死。
         return store.loadingChatIds.contains(chat.id)

@@ -137,7 +137,7 @@ final class PushRegistrar {
             reportedKey = nil
             return
         }
-        requestAuthorizationIfNeeded()
+        requestAuthorizationIfNeeded(store)
         // 壳尚未挂载或正在其它域时也要补取 assistant_state（最多 30 秒一次），订阅上报靠它。
         if store.connected, !store.assistantNetworkConfirmed,
            lastAssistantRequest.map({ Date().timeIntervalSince($0) > 30 }) ?? true {
@@ -197,8 +197,20 @@ final class PushRegistrar {
 
     // MARK: 内部
 
-    private func requestAuthorizationIfNeeded() {
-        guard !authRequested else { return }
+    /// 登录当下不问。等出现要人处理的事（待批、待办到期、需要我）再问系统通知。
+    private func needsNotificationPrompt(_ store: ChatStore) -> Bool {
+        guard let state = store.assistantState else { return false }
+        if !state.approvals.isEmpty { return true }
+        let now = Date().timeIntervalSince1970 * 1000
+        for task in state.personalTasks ?? [] {
+            if task.phase == "needs_me" { return true }
+            if task.phase != "completed", let dueAt = task.dueAt, dueAt > 0, dueAt <= now { return true }
+        }
+        return false
+    }
+
+    private func requestAuthorizationIfNeeded(_ store: ChatStore) {
+        guard !authRequested, needsNotificationPrompt(store) else { return }
         authRequested = true
         Task { @MainActor in
             let center = UNUserNotificationCenter.current()

@@ -144,10 +144,10 @@ struct PhoneShell: View {
             switch route {
             case "inbox": router.go(.inbox)
             case "today": router.path = [.todayManage]
-            case "delegations": router.path = [.worklist(.delegation)]
-            case "todos": router.path = [.worklist(.todo)]
-            case "plans": router.path = [.worklist(.plan)]
-            case "runs": router.path = [.worklist(.delegation)]
+            case "delegations": router.go(.worklist(.delegation))
+            case "todos": router.go(.worklist(.todo))
+            case "plans": router.go(.worklist(.plan))
+            case "runs": router.go(.worklist(.delegation))
             case "artifacts": router.path = [.artifacts]
             case "settings": router.path = [.settings]
             case "memory": router.path = [.settings, .memory]

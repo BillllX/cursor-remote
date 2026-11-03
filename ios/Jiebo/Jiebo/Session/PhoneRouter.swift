@@ -8,7 +8,7 @@ enum PhoneRoute: Hashable {
     case worklist(AssistantWorkColumn)
     case artifacts
     case settings
-    case memory                 // 只从设置页 push 进来，不直接挂在菜单上
+    case memory                 // 资料菜单和设置页都能进来
     case connections            // 只从设置页进入
 }
 
@@ -21,6 +21,12 @@ enum PhoneTab: Hashable {
 
 enum InboxRoute: Hashable {
     case item(String)           // AssistantInboxItem.id
+}
+
+/// 待处理这一页里的栏目。通知是原来的收件箱；待办、计划、委派不再从侧栏另开一页。
+enum InboxLane: Hashable {
+    case notices
+    case work(AssistantWorkColumn)
 }
 
 struct DelegationRef: Identifiable, Hashable {
@@ -48,6 +54,7 @@ final class PhoneRouter {
     /// 小驳空间的导航栈；待处理使用独立的 inboxPath。
     var path: [PhoneRoute] = []
     var inboxPath: [InboxRoute] = []
+    var inboxLane: InboxLane = .notices
     var menuOpen = false
     var hubOpen = false
     /// 打开今日面板后滚到的锚点："todos" / "schedules"，nil 不滚
@@ -71,18 +78,25 @@ extension PhoneRouter {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
-    /// 待处理切一级 tab；其它页面回到小驳空间后 push（替换整个栈，不叠层）。
+    /// 待处理、待办、计划、委派都留在待处理这一页。其它页面回到小驳空间后 push（替换整个栈，不叠层）。
     func go(_ route: PhoneRoute) {
         dismissKeyboard()
         menuOpen = false
         hubOpen = false
-        if route == .inbox {
+        switch route {
+        case .inbox:
             inboxPath = []
+            inboxLane = .notices
             selectedTab = .inbox
-            return
+        case .worklist(let column):
+            inboxPath = []
+            inboxLane = .work(column)
+            path = []
+            selectedTab = .inbox
+        default:
+            selectedTab = .assistant
+            path = [route]
         }
-        selectedTab = .assistant
-        path = [route]
     }
 
     func openMenu() {

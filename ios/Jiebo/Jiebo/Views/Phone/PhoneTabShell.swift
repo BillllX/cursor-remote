@@ -84,9 +84,6 @@ struct PhoneTabShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            FirstUseHint()
-        }
         .fullScreenCover(isPresented: workspaceFilesPresented) {
             FileBrowserCover()
         }

@@ -58,7 +58,7 @@ struct LoginView: View {
                             .disabled(!canEnter)
                         }
                     }
-                    Text(store.connected ? "已连上服务器" : store.linkState.title)
+                    Text(loginStatusLine)
                         .font(JieboFont.text(.caption, weight: store.linkState == .offline ? .medium : .regular))
                         .foregroundStyle(store.linkState == .offline ? JieboColor.danger : JieboColor.dim)
                         .frame(maxWidth: .infinity, minHeight: store.linkState == .offline ? 44 : 0, alignment: .leading)
@@ -76,5 +76,11 @@ struct LoginView: View {
             .padding(32)
         }
         .onAppear { focused = true }
+    }
+
+    /// 核对访问码时不要再写「已连上」：线是通的，身份还没对上。
+    private var loginStatusLine: String {
+        if store.verifying { return "正在核对访问码" }
+        return store.connected ? "已连上服务器" : store.linkState.title
     }
 }

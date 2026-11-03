@@ -178,7 +178,7 @@ struct ThreadView: View {
             .animation(JieboMotion.fade(reduceMotion), value: embeddedUndoTurn?.id)
             ComposerView(
                 focusNonce: composerFocusNonce,
-                style: resolvedChatId == store.assistantChatId && chrome == .embedded ? .assistant : .full
+                style: chrome == .embedded ? .assistant : .full
             )
                 // 上面的出现动画不要套到输入框上，否则打字时的高度变化会被当成动画。
                 .transaction { $0.animation = nil }

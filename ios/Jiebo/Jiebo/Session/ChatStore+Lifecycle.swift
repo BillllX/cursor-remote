@@ -90,9 +90,13 @@ extension ChatStore {
         authError = ""
         verifying = true
         armVerifyTimeout()
-        // hello 由 client.onOpen 在握手完成后统一发出
-        client.connect(url: GatewayConfig.url)
-        armOfflineTimer()
+        // 套接字已经开着时 connect 不会再触发 onOpen，hello 也就发不出去，按钮会空等到超时。
+        if client.isOpen {
+            client.send(.hello(token: token))
+        } else {
+            client.connect(url: GatewayConfig.url)
+            armOfflineTimer()
+        }
     }
 
     func logout() {

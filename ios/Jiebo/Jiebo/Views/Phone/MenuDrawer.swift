@@ -190,29 +190,14 @@ struct MenuDrawer: View {
             divider
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    sectionTitle("小驳")
-                    // 和导航栏「今日」是同一个面板，不再另开一个全屏页
-                    menuRow("sun.max", "今日", tag: 0) {
-                        router.openHub()
-                    }
-                    menuRow("checkmark.circle", "待办", tag: 1) {
-                        router.go(.worklist(.todo))
-                    }
-                    menuRow("calendar", "计划", tag: 2) {
-                        router.go(.worklist(.plan))
-                    }
-                    menuRow("person.2.wave.2", "委派", tag: 3) {
-                        router.go(.worklist(.delegation))
-                    }
-                    menuRow("square.stack.3d.up", "产物中心", tag: 4) {
+                    sectionTitle("资料")
+                    menuRow("square.stack.3d.up", "产物中心", tag: 0) {
                         router.go(.artifacts)
                     }
-                    menuRow(NavigationIconId.memory.symbol, "记忆", tag: 5) {
+                    menuRow(NavigationIconId.memory.symbol, "记忆", tag: 1) {
                         router.go(.memory)
                     }
-                    divider
-                        .padding(.vertical, 8)
-                    menuRow(NavigationIconId.account.symbol, "设置", tag: 6) {
+                    menuRow(NavigationIconId.account.symbol, "设置", tag: 2) {
                         router.go(.settings)
                     }
                 }

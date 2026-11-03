@@ -142,14 +142,16 @@ private struct ArtifactRow: View {
                     .foregroundStyle(JieboColor.ink2)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(artifact.title)
+                    Text(artifact.displayTitle)
                         .font(JieboFont.text(.body, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
-                    if let path = artifact.path {
+                        .lineLimit(2)
+                    if let path = artifact.path, artifact.displayTitle != (path as NSString).lastPathComponent {
                         Text(path)
                             .font(JieboFont.monoText(.caption))
                             .foregroundStyle(JieboColor.dim)
-                            .lineLimit(2)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     } else if let url = artifact.safeURL {
                         Link(url.host ?? url.absoluteString, destination: url)
                             .font(JieboFont.text(.caption))
@@ -215,36 +217,57 @@ private struct ArtifactRow: View {
                     store.openTurnFile(file, chatId: chatId)
                     sceneSession?.presentPreview(from: store)
                 }
-                    .buttonStyle(.plain)
-                Button("分享") {
-                    store.exportPreview(path: file.path, content: nil, chatId: chatId)
-                }
                 .buttonStyle(.plain)
-            }
-            if let delegationId = artifact.provenance?.delegationId {
-                Button("查看来源委派") {
-                    router.delegationDetail = DelegationRef(id: delegationId)
-                }
-                .buttonStyle(.plain)
-            } else if let inboxId = artifact.provenance?.inboxId {
-                Button("查看来源消息") {
-                    router.openInboxItem(inboxId)
-                }
-                .buttonStyle(.plain)
-            }
-            if let url = artifact.safeURL {
+            } else if let url = artifact.safeURL {
                 Link("打开", destination: url)
             }
             Spacer(minLength: 0)
             Button("让小驳继续处理", action: onContinue)
                 .buttonStyle(.plain)
+            if hasSecondaryActions {
+                Menu {
+                    if let file = artifact.turnFile, let chatId = artifact.sourceChatId {
+                        Button("分享") {
+                            store.exportPreview(path: file.path, content: nil, chatId: chatId)
+                        }
+                    }
+                    if let delegationId = artifact.provenance?.delegationId {
+                        Button("查看来源委派") {
+                            router.delegationDetail = DelegationRef(id: delegationId)
+                        }
+                    } else if let inboxId = artifact.provenance?.inboxId {
+                        Button("查看来源消息") {
+                            router.openInboxItem(inboxId)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("更多")
+            }
         }
         .font(JieboFont.text(.subheadline, weight: .semibold))
         .foregroundStyle(JieboColor.pine)
     }
+
+    private var hasSecondaryActions: Bool {
+        if artifact.turnFile != nil, artifact.sourceChatId != nil { return true }
+        if artifact.provenance?.delegationId != nil { return true }
+        if artifact.provenance?.inboxId != nil { return true }
+        return false
+    }
 }
 
 private extension Artifact {
+    /// 路径当标题时只留文件名。已经是人能读的名字就原样显示。
+    var displayTitle: String {
+        if title.contains("/") {
+            return (title as NSString).lastPathComponent
+        }
+        return title
+    }
+
     var symbol: String {
         switch kind {
         case "file": return "doc"

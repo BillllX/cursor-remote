@@ -205,7 +205,7 @@ extension ThreadView {
                     if loadingVisible {
                         VStack(spacing: 12) {
                             ProgressView().controlSize(.large)
-                            Text("正在加载会话…")
+                            Text(chrome == .embedded ? "正在打开" : "正在加载会话…")
                                 .font(JieboFont.text(.footnote, weight: .medium))
                                 .foregroundStyle(JieboColor.ink2)
                         }
@@ -230,9 +230,14 @@ extension ThreadView {
                 .animation(JieboMotion.fade(reduceMotion), value: loadingVisible || threadLoadBlockedTitle != nil)
             }
             .task(id: showThreadLoading) {
-                // 本机缓存通常几十毫秒就读完：等一小会儿再盖遮罩，免得冷启动先闪一下
+                // 本机缓存通常几十毫秒就读完：等一小会儿再盖遮罩，免得冷启动先闪一下。
+                // 助理页的空壳本身就是空白，立刻写「正在打开」。
                 guard showThreadLoading else {
                     loadingVisible = false
+                    return
+                }
+                if chrome == .embedded {
+                    loadingVisible = true
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(350))

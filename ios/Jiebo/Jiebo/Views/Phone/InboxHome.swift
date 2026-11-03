@@ -42,6 +42,30 @@ struct InboxHome: View {
     }
 
     var body: some View {
+        @Bindable var router = router
+        VStack(spacing: 0) {
+            Picker("待处理栏目", selection: $router.inboxLane) {
+                Text("通知").tag(InboxLane.notices)
+                Text("待办").tag(InboxLane.work(.todo))
+                Text("计划").tag(InboxLane.work(.plan))
+                Text("委派").tag(InboxLane.work(.delegation))
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            switch router.inboxLane {
+            case .notices:
+                notices
+            case .work(let column):
+                DelegationListScreen(column: column, embeddedInInbox: true)
+            }
+        }
+        .background(JieboColor.paper)
+        .navigationTitle("待处理")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var notices: some View {
         List {
             if pendingCount > 0 {
                 Section {
@@ -104,8 +128,6 @@ struct InboxHome: View {
                 .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
             }
         }
-        .navigationTitle("待处理")
-        .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
             if pendingCount == 0 && items.isEmpty {

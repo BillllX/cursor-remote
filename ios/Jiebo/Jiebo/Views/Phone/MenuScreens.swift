@@ -37,15 +37,19 @@ struct DelegationListScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     var column: AssistantWorkColumn
+    var embeddedInInbox: Bool = false
     @State private var openedTask: PersonalTask?
+    @State private var showCompleted = false
 
-    init(column: AssistantWorkColumn) {
+    init(column: AssistantWorkColumn, embeddedInInbox: Bool = false) {
         self.column = column
+        self.embeddedInInbox = embeddedInInbox
     }
 
     private let groups: [(phase: String, title: String)] = [
         ("needs_me", "需要我"),
         ("in_progress", "进行中"),
+        ("overdue", "已过点"),
         ("planned", "未开始"),
         ("completed", "已完成"),
     ]
@@ -62,12 +66,33 @@ struct DelegationListScreen: View {
         List {
             if store.assistantState?.personalTasks != nil {
                 ForEach(groups, id: \.phase) { group in
-                    let items = rows.filter { normalizedPhase($0.phase) == group.phase }
+                    let items = rows.filter { bucket($0) == group.phase }
                     if !items.isEmpty {
-                        Section(group.title) {
-                            ForEach(items) { task in
-                                taskRow(task)
-                                    .listRowBackground(JieboColor.white)
+                        if group.phase == "completed", !showCompleted {
+                            Section {
+                                Button {
+                                    showCompleted = true
+                                } label: {
+                                    HStack {
+                                        Text("已完成 \(items.count)")
+                                            .font(JieboFont.text(.subheadline, weight: .medium))
+                                            .foregroundStyle(JieboColor.ink)
+                                        Spacer()
+                                        Image(systemName: "chevron.down")
+                                            .font(JieboFont.text(.caption2, weight: .semibold))
+                                            .foregroundStyle(JieboColor.dim)
+                                    }
+                                    .frame(minHeight: 44)
+                                }
+                                .buttonStyle(.plain)
+                                .listRowBackground(JieboColor.white)
+                            }
+                        } else {
+                            Section(group.phase == "completed" ? "已完成" : group.title) {
+                                ForEach(clusters(items)) { cluster in
+                                    taskRow(cluster.items[0], count: cluster.items.count)
+                                        .listRowBackground(JieboColor.white)
+                                }
                             }
                         }
                     }
@@ -85,7 +110,7 @@ struct DelegationListScreen: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle(column.title)
+        .navigationTitle(embeddedInInbox ? "待处理" : column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
@@ -123,7 +148,39 @@ struct DelegationListScreen: View {
         groups.contains(where: { $0.phase == phase }) ? phase : "planned"
     }
 
-    private func taskRow(_ task: PersonalTask) -> some View {
+    /// 计划时间已经过去，还停在「未开始」里时，单独归到已过点。
+    private func bucket(_ task: PersonalTask) -> String {
+        let phase = normalizedPhase(task.phase)
+        if phase == "planned", plannedIsPast(task) { return "overdue" }
+        return phase
+    }
+
+    private struct TaskCluster: Identifiable {
+        var id: String { items[0].id }
+        var items: [PersonalTask]
+    }
+
+    /// 同一标题、同一句失败叠在一起。普通待办标题碰巧相同仍各占一行。
+    private func clusters(_ items: [PersonalTask]) -> [TaskCluster] {
+        var result: [TaskCluster] = []
+        for task in items {
+            let key = "\(task.title)|\(taskStatus(task))"
+            if collapsesTogether(task),
+               let index = result.lastIndex(where: { "\($0.items[0].title)|\(taskStatus($0.items[0]))" == key }) {
+                result[index].items.append(task)
+            } else {
+                result.append(TaskCluster(items: [task]))
+            }
+        }
+        return result
+    }
+
+    private func collapsesTogether(_ task: PersonalTask) -> Bool {
+        let raw = task.attention ?? task.status
+        return friendlyAttention(raw) != raw || raw.contains("失败")
+    }
+
+    private func taskRow(_ task: PersonalTask, count: Int = 1) -> some View {
         let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id
         return Button {
             if let delegationId {
@@ -142,7 +199,7 @@ struct DelegationListScreen: View {
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(2)
-                    Text(taskSubtitle(task))
+                    Text(count > 1 ? "共 \(count) 次 · \(taskSubtitle(task))" : taskSubtitle(task))
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.dim)
                         .lineLimit(1)
@@ -156,7 +213,7 @@ struct DelegationListScreen: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(task.title)，\(taskStatus(task))")
+        .accessibilityLabel(count > 1 ? "\(task.title)，共 \(count) 次，\(taskStatus(task))" : "\(task.title)，\(taskStatus(task))")
     }
 
     private func taskIcon(_ kind: String) -> String {
@@ -170,14 +227,31 @@ struct DelegationListScreen: View {
     }
 
     private func taskStatus(_ task: PersonalTask) -> String {
-        if let attention = task.attention { return attention }
+        if let attention = task.attention { return friendlyAttention(attention) }
         switch task.phase {
         case "needs_me": return "需要处理"
         case "in_progress": return "进行中"
-        case "planned": return "未开始"
+        case "planned":
+            if plannedIsPast(task) { return "已过点" }
+            return "未开始"
         case "completed": return "已完成"
-        default: return task.status.nilIfEmpty ?? "未知状态"
+        default: return friendlyAttention(task.status.nilIfEmpty ?? "未知状态")
         }
+    }
+
+    private func plannedIsPast(_ task: PersonalTask) -> Bool {
+        guard let dueAt = task.dueAt, dueAt > 0 else { return false }
+        return dueAt < Date().timeIntervalSince1970 * 1000
+    }
+
+    /// 网关有时把英文用量错误原样放进状态。这里换成能读的一句。
+    private func friendlyAttention(_ text: String) -> String {
+        let lower = text.lowercased()
+        if lower.contains("monthly usage") || lower.contains("usage limit") || lower.contains("spend limit") {
+            return "这个月的用量到了"
+        }
+        if lower.contains("rate limit") { return "请求太频繁，过一会儿再试" }
+        return text
     }
 
     private func taskSubtitle(_ task: PersonalTask) -> String {
@@ -387,20 +461,22 @@ struct PhoneSettingsScreen: View {
             }
 
             Section {
-                Button {
-                    UserDefaults.standard.set(false, forKey: "jiebo.firstUseHintDismissed.v3")
-                    hintReplayArmed = true
-                } label: {
-                    settingsRow(
-                        symbol: "questionmark.circle",
-                        title: "再看一遍说明",
-                        trailing: hintReplayArmed ? hintReplayTrailing : nil,
-                        chevron: false
-                    )
+                if UIDevice.current.userInterfaceIdiom != .phone {
+                    Button {
+                        UserDefaults.standard.set(false, forKey: "jiebo.firstUseHintDismissed.v3")
+                        hintReplayArmed = true
+                    } label: {
+                        settingsRow(
+                            symbol: "questionmark.circle",
+                            title: "再看一遍说明",
+                            trailing: hintReplayArmed ? hintReplayTrailing : nil,
+                            chevron: false
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(JieboColor.white)
+                    .accessibilityHint("再显示小驳、待处理、工作台和消息的说明")
                 }
-                .buttonStyle(.plain)
-                .listRowBackground(JieboColor.white)
-                .accessibilityHint("再显示小驳、待处理、工作台和消息的说明")
 
                 settingsRow(
                     symbol: "cpu",
@@ -408,6 +484,16 @@ struct PhoneSettingsScreen: View {
                     trailing: backgroundModelText,
                     chevron: false
                 )
+                .listRowBackground(JieboColor.white)
+
+                NavigationLink(value: PhoneRoute.artifacts) {
+                    settingsRow(
+                        symbol: "square.stack.3d.up",
+                        title: "产物中心",
+                        trailing: nil,
+                        chevron: false
+                    )
+                }
                 .listRowBackground(JieboColor.white)
 
                 NavigationLink(value: PhoneRoute.memory) {
