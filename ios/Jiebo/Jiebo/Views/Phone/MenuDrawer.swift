@@ -32,6 +32,9 @@ struct MenuDrawer: View {
     @State private var reveal: CGFloat = 0
     @State private var panelWidth: CGFloat = 300
     @State private var dragging = false
+    /// 玻璃面板是否在树上。完全关上就拆掉：glassEffect 不跟 offset 走，
+    /// 冷启动时会在左上角留下一块灰色底板。
+    @State private var panelMounted = false
     private var edgeOpenEnabled: Bool {
         router.path.isEmpty && !keyboardUp
     }
@@ -46,11 +49,31 @@ struct MenuDrawer: View {
         .onChange(of: router.menuOpen) { _, open in
             guard !dragging else { return }
             let target: CGFloat = open ? panelWidth : 0
+            // 已经在目标位置（例如松手时 settle 刚写过 reveal）就不要再拆面板，
+            // 拆掉交给那段动画的 completion，否则关上的滑出还没画就被拆掉。
             guard abs(reveal - target) > 1 else { return }
+            if open {
+                // 先挂在屏幕外，下一拍再滑入。同一拍插入并改 reveal，第一帧会直接画在终点。
+                panelMounted = true
+                Task { @MainActor in
+                    guard router.menuOpen, !dragging else {
+                        if !router.menuOpen, !dragging { panelMounted = false }
+                        return
+                    }
+                    let width = panelWidth
+                    guard abs(reveal - width) > 1 else { return }
+                    withAnimation(JieboMotion.panel(reduceMotion)) {
+                        reveal = width
+                    }
+                }
+                focusFirstRow()
+                return
+            }
             withAnimation(JieboMotion.panel(reduceMotion)) {
                 reveal = target
+            } completion: {
+                if !router.menuOpen, !dragging { panelMounted = false }
             }
-            if open { focusFirstRow() }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
             keyboardUp = true
@@ -74,22 +97,32 @@ struct MenuDrawer: View {
                         .accessibilityLabel("关闭菜单")
                         .accessibilityAddTraits(.isButton)
                 }
-                panel
-                    .frame(width: width)
-                    .frame(maxHeight: .infinity)
-                    .background {
-                        Color.clear
-                            .jieboGlass(in: Rectangle())
-                            .ignoresSafeArea()
-                    }
-                    .offset(x: reveal - width)
-                    .simultaneousGesture(closeDrag(width: width))
-                    .accessibilityHidden(!router.menuOpen)
-                    .accessibilityAddTraits(router.menuOpen ? .isModal : [])
-                    .accessibilityAction(.escape) { settle(open: false, velocity: 0, width: width) }
+                if panelMounted {
+                    panel
+                        .frame(width: width)
+                        .frame(maxHeight: .infinity)
+                        .background {
+                            Color.clear
+                                .jieboGlass(in: Rectangle())
+                                .ignoresSafeArea()
+                        }
+                        .offset(x: reveal - width)
+                        .simultaneousGesture(closeDrag(width: width))
+                        .accessibilityHidden(!router.menuOpen)
+                        .accessibilityAddTraits(router.menuOpen ? .isModal : [])
+                        .accessibilityAction(.escape) { settle(open: false, velocity: 0, width: width) }
+                        // 出现和消失由 reveal 的位移动画负责，不要再叠一层淡入
+                        .transition(.identity)
+                }
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
-            .onAppear { syncWidth(width) }
+            .onAppear {
+                syncWidth(width)
+                if router.menuOpen {
+                    panelMounted = true
+                    reveal = width
+                }
+            }
             .onChange(of: width) { _, newWidth in syncWidth(newWidth) }
         }
         .allowsHitTesting(reveal > 1 || dragging)
@@ -110,6 +143,7 @@ struct MenuDrawer: View {
                         guard value.translation.width > 0,
                               abs(value.translation.width) > abs(value.translation.height)
                         else { return }
+                        panelMounted = true
                         dragging = true
                         reveal = JieboMotion.rubberBand(value.translation.width, limit: width, dimension: width)
                     }
@@ -151,6 +185,7 @@ struct MenuDrawer: View {
         let to: CGFloat = open ? width : 0
         let wasOpen = router.menuOpen
         dragging = false
+        if open { panelMounted = true }
         let animation = velocity == 0
             ? JieboMotion.panel(reduceMotion)
             : JieboMotion.release(reduceMotion, velocity: velocity, from: from, to: to)
@@ -161,6 +196,9 @@ struct MenuDrawer: View {
             } else {
                 router.closeMenu()
             }
+        } completion: {
+            // 滑出屏幕后再拆面板，避免关上的动画被提前拆掉
+            if !open, !dragging { panelMounted = false }
         }
         if open, !wasOpen { focusFirstRow() }
     }
