@@ -165,6 +165,14 @@ struct MemoryCenterDoubleColumnBody: View {
                 } else if searchActive {
                     MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: .columnSelection)
                         .padding(12)
+                } else if (navId == "personal" || navId == "work_preference"), let key = selectedKey {
+                    VStack(alignment: .leading, spacing: 0) {
+                        MemoryCenterInlineBackBar(title: "编辑记忆") { selectedKey = nil }
+                        ScrollView {
+                            MemoryCenterRememberDetail(selectedKey: key)
+                                .padding(12)
+                        }
+                    }
                 } else if let key = selectedKey,
                           let scope = MemoryCenterReducer.scopeIdForNav(navId),
                           scope != "personal"
@@ -1342,6 +1350,8 @@ struct MemoryCenterDiagnosticsBlock: View {
 
 enum MemoryCenterPhoneRoute: Hashable {
     case scope(id: String, label: String)
+    case diagnostics(scopeId: String)
+    case rules(scopeId: String)
     case suggestions
     case activity
     case search
@@ -1352,6 +1362,7 @@ enum MemoryCenterPhoneRoute: Hashable {
     case more
     case coreField(String)
     case personalCreate
+    case personalEdit(entryId: String)
     case transfer
 }
 
@@ -1450,6 +1461,10 @@ struct MemoryCenterRememberDetail: View {
     let selectedKey: String?
     @State private var draft = ""
     @State private var original = ""
+    @State private var entryTopic = ""
+    @State private var entryText = ""
+    @State private var originalEntryTopic = ""
+    @State private var originalEntryText = ""
 
     var body: some View {
         if let key = selectedKey, key.hasPrefix("core:"), let memory = store.assistantState?.memory {
@@ -1460,15 +1475,37 @@ struct MemoryCenterRememberDetail: View {
                     .lineLimit(4...10)
                 ActionButton(title: "保存", kind: .primary) {
                     guard draft != original else { return }
-                    _ = store.queueMemoryChange("memory_core", args: [
+                    guard store.queueMemoryChange("memory_core", args: [
                         "fields": .object([field: .string(draft)]),
                         "rev": .number(Double(memory.coreRev)),
-                    ], pending: "改\(field)")
+                    ], pending: "改\(field)") else { return }
+                    original = draft
                 }
                 .disabled(draft == original)
             }
             .onAppear { load(field, memory: memory) }
             .onChange(of: field) { _, _ in load(field, memory: memory) }
+        } else if let key = selectedKey, key.hasPrefix("entry:"), let memory = store.assistantState?.memory {
+            let entryId = String(key.dropFirst(6))
+            if let entry = memory.entries.first(where: { $0.id == entryId && $0.isValid }) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("修改记忆").font(JieboFont.display(22))
+                    TextField("主题，可以空着", text: $entryTopic)
+                    TextField("要记住的话", text: $entryText, axis: .vertical)
+                        .lineLimit(3...8)
+                    ActionButton(title: "保存", kind: .primary) {
+                        saveEntry(entry)
+                    }
+                    .disabled(!entryCanSave)
+                }
+                .onAppear { loadEntry(entry) }
+                .onChange(of: entry.id) { _, _ in loadEntry(entry) }
+                .onChange(of: entry.rev) { _, _ in loadEntry(entry) }
+            } else {
+                Text("这条已经不在了。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.dim)
+            }
         } else if selectedKey == "create" {
             MemoryCenterPersonalCreateForm()
         } else {
@@ -1478,10 +1515,40 @@ struct MemoryCenterRememberDetail: View {
         }
     }
 
+    private var entryCanSave: Bool {
+        let body = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return false }
+        return entryTopic != originalEntryTopic || entryText != originalEntryText
+    }
+
     private func load(_ field: String, memory: AssistantMemory) {
         let value = memory.coreFields[field] ?? ""
         draft = value
         original = value
+    }
+
+    private func loadEntry(_ entry: AssistantMemoryEntry) {
+        entryTopic = entry.topic
+        entryText = entry.text
+        originalEntryTopic = entry.topic
+        originalEntryText = entry.text
+    }
+
+    private func saveEntry(_ entry: AssistantMemoryEntry) {
+        let body = entryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, entryCanSave else { return }
+        let title = entryTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTopic = title.isEmpty ? String(body.prefix(12)) : title
+        guard store.queueMemoryChange("memory_edit", args: [
+            "id": .string(entry.id),
+            "rev": .number(Double(entry.rev)),
+            "topic": .string(resolvedTopic),
+            "text": .string(body),
+        ], pending: "改记忆") else { return }
+        entryTopic = resolvedTopic
+        entryText = body
+        originalEntryTopic = resolvedTopic
+        originalEntryText = body
     }
 }
 
@@ -1500,10 +1567,10 @@ struct MemoryCenterPersonalCreateForm: View {
                 let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !body.isEmpty else { return }
                 let title = topic.trimmingCharacters(in: .whitespacesAndNewlines)
-                _ = store.queueMemoryChange("memory_save", args: [
+                guard store.queueMemoryChange("memory_save", args: [
                     "topic": .string(title.isEmpty ? String(body.prefix(12)) : title),
                     "text": .string(body),
-                ], pending: "记一条")
+                ], pending: "记一条") else { return }
                 topic = ""
                 text = ""
             }
@@ -1552,8 +1619,13 @@ struct MemoryCenterPhoneRememberMe: View {
                                 }
                             }
                             Text(entry.text).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2).lineLimit(3)
-                            Button("删") {
-                                _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
+                            HStack(spacing: 12) {
+                                NavigationLink(value: PhoneRoute.memoryPage(.personalEdit(entryId: entry.id))) {
+                                    Text("改")
+                                }
+                                Button("删") {
+                                    _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
+                                }
                             }
                             .font(JieboFont.text(.caption))
                         }
@@ -1602,10 +1674,10 @@ struct MemoryCenterPhoneCoreField: View {
 
     private func save() {
         guard let memory = store.assistantState?.memory, draft != original else { return }
-        _ = store.queueMemoryChange("memory_core", args: [
+        guard store.queueMemoryChange("memory_core", args: [
             "fields": .object([field: .string(draft)]),
             "rev": .number(Double(memory.coreRev)),
-        ], pending: "改\(field)")
+        ], pending: "改\(field)") else { return }
         original = draft
     }
 }
@@ -1625,15 +1697,70 @@ struct MemoryCenterPhonePersonalCreate: View {
                 let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !body.isEmpty else { return }
                 let title = topic.trimmingCharacters(in: .whitespacesAndNewlines)
-                _ = store.queueMemoryChange("memory_save", args: [
+                guard store.queueMemoryChange("memory_save", args: [
                     "topic": .string(title.isEmpty ? String(body.prefix(12)) : title),
                     "text": .string(body),
-                ], pending: "记一条")
+                ], pending: "记一条") else { return }
                 dismiss()
             }
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .navigationTitle("记一条")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct MemoryCenterPhonePersonalEdit: View {
+    let entryId: String
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var topic = ""
+    @State private var text = ""
+    @State private var originalTopic = ""
+    @State private var originalText = ""
+
+    private var entry: AssistantMemoryEntry? {
+        store.assistantState?.memory?.entries.first(where: { $0.id == entryId && $0.isValid })
+    }
+
+    private var canSave: Bool {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return false }
+        return topic != originalTopic || text != originalText
+    }
+
+    var body: some View {
+        Form {
+            if let entry {
+                TextField("主题，可以空着", text: $topic)
+                TextField("要记住的话", text: $text, axis: .vertical)
+                    .lineLimit(3...8)
+                Button("保存") {
+                    let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !body.isEmpty, canSave else { return }
+                    let title = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard store.queueMemoryChange("memory_edit", args: [
+                        "id": .string(entry.id),
+                        "rev": .number(Double(entry.rev)),
+                        "topic": .string(title.isEmpty ? String(body.prefix(12)) : title),
+                        "text": .string(body),
+                    ], pending: "改记忆") else { return }
+                    dismiss()
+                }
+                .disabled(!canSave)
+                .onAppear {
+                    topic = entry.topic
+                    text = entry.text
+                    originalTopic = entry.topic
+                    originalText = entry.text
+                }
+            } else {
+                Text("这条已经不在了。")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.dim)
+            }
+        }
+        .navigationTitle("修改记忆")
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -1654,10 +1781,10 @@ struct MemoryCenterPhoneMore: View {
             NavigationLink(value: PhoneRoute.memoryPage(.activity)) { Text("最近改动") }
             NavigationLink(value: PhoneRoute.memoryPage(.transfer)) { Text("导出与导入") }
             if let folder {
-                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder.id, label: "上一轮怎么选的"))) {
+                NavigationLink(value: PhoneRoute.memoryPage(.diagnostics(scopeId: folder.id))) {
                     Text("上一轮怎么选的")
                 }
-                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder.id, label: "文件夹规则"))) {
+                NavigationLink(value: PhoneRoute.memoryPage(.rules(scopeId: folder.id))) {
                     Text("文件夹规则")
                 }
             } else {
@@ -1680,24 +1807,24 @@ struct MemoryCenterPhonePage: View {
 
     var body: some View {
         switch route {
-        case let .scope(id, label):
-            if label == "上一轮怎么选的" {
-                ScrollView {
-                    MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
+        case let .diagnostics(scopeId):
+            ScrollView {
+                MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
+                    .padding(12)
+            }
+            .navigationTitle("上一轮怎么选的")
+            .memoryCenterScreenHold(navId: scopeId)
+        case let .rules(scopeId):
+            ScrollView {
+                if let detail = store.memoryCenterData.detail {
+                    MemoryCenterRulesList(rules: detail.rules, truncated: detail.rulesTruncated)
                         .padding(12)
                 }
-                .navigationTitle("上一轮怎么选的")
-                .memoryCenterScreenHold(navId: id)
-            } else if label == "文件夹规则" {
-                ScrollView {
-                    if let detail = store.memoryCenterData.detail {
-                        MemoryCenterRulesList(rules: detail.rules, truncated: detail.rulesTruncated)
-                            .padding(12)
-                    }
-                }
-                .navigationTitle("文件夹规则")
-                .memoryCenterScreenHold(navId: id)
-            } else if id == "folder-missing" {
+            }
+            .navigationTitle("文件夹规则")
+            .memoryCenterScreenHold(navId: scopeId)
+        case let .scope(id, label):
+            if id == "folder-missing" {
                 MemoryCenterEmptyBlock(title: "还没打开文件夹", hint: "打开一个工作区后再看这里。")
                     .navigationTitle("这个文件夹")
             } else {
@@ -1728,6 +1855,8 @@ struct MemoryCenterPhonePage: View {
             MemoryCenterPhoneCoreField(field: field)
         case .personalCreate:
             MemoryCenterPhonePersonalCreate()
+        case let .personalEdit(entryId):
+            MemoryCenterPhonePersonalEdit(entryId: entryId)
         case .transfer:
             ScrollView { MemoryCenterImportPane().padding(14) }
                 .navigationTitle("导出与导入")

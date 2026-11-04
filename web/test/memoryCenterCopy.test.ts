@@ -40,8 +40,14 @@ test("会用到的不混进已办完和已过期", () => {
     item({ id: "b", text: "完", effectiveState: "done" }),
     item({ id: "c", text: "过", effectiveState: "expired" }),
   ];
-  assert.deepEqual(filterFolderItems(rows, "useful").map((row) => row.id), ["a"]);
-  assert.deepEqual(filterFolderItems(rows, "done").map((row) => row.id), ["b"]);
+  assert.deepEqual(
+    filterFolderItems(rows, "useful").map((row) => row.id),
+    ["a"],
+  );
+  assert.deepEqual(
+    filterFolderItems(rows, "done").map((row) => row.id),
+    ["b"],
+  );
 });
 
 test("建议按钮按结果起名，缺引用不进批量", () => {
@@ -52,7 +58,10 @@ test("建议按钮按结果起名，缺引用不进批量", () => {
     { id: "2", risk: "low", kind: "missing_ref" },
     { id: "3", risk: "medium", kind: "stale_hot" },
   ] as MemoryCenterSuggestionEntry[];
-  assert.deepEqual(lowRiskBulk(entries).map((row) => row.id), ["1"]);
+  assert.deepEqual(
+    lowRiskBulk(entries).map((row) => row.id),
+    ["1"],
+  );
 });
 
 test("从工作区打开停在这个文件夹，其余停在记得的我", () => {
@@ -62,9 +71,9 @@ test("从工作区打开停在这个文件夹，其余停在记得的我", () =>
 });
 
 test("有待确认时默认选中最上面一条", () => {
-  const rows = [
-    item({ id: "a", text: "普通" }),
-    item({ id: "b", text: "待确认", missingRefs: ["x"] }),
-  ];
-  assert.equal(firstConfirmKey(rows, (row) => row.id ?? ""), "b");
+  const rows = [item({ id: "a", text: "普通" }), item({ id: "b", text: "待确认", missingRefs: ["x"] })];
+  assert.equal(
+    firstConfirmKey(rows, (row) => row.id ?? ""),
+    "b",
+  );
 });

@@ -155,7 +155,32 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         const kind = str(args.kind) || undefined;
         const validUntil = str(args.validUntil) || undefined;
         const project = projectFactTarget(text, host.workspaces?.() ?? []);
+        if (project === "work_preference") {
+          if (basis !== "user_said") {
+            return {
+              ok: true,
+              routed: "skipped",
+              note: "工作偏好只收用户亲口说的跨项目习惯，推断内容没有写入。",
+            };
+          }
+          const pref = addWorkPreference(ref, text, actor);
+          if (!pref.ok) return { ok: false, error: pref.error };
+          changed();
+          return {
+            ok: true,
+            routed: "work_preference",
+            lines: pref.value,
+            note: "这是跨项目的通用工作习惯，已写进「工作偏好」。",
+          };
+        }
         if (project === "ambiguous") {
+          if (role === "chat" && basis === "user_said") {
+            return {
+              ok: false,
+              error:
+                "这条像是特定项目的命令或路径，但没有对上唯一的项目文件夹；请向用户确认具体文件夹，或若属跨项目通用习惯改用 work_preference_add。",
+            };
+          }
           return {
             ok: true,
             routed: "skipped",
@@ -167,6 +192,9 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
           if (placed.ok) {
             changed();
             return { ok: true, routed: "workspace", where: project, note: `已写进「${project}」的文件夹记忆。` };
+          }
+          if (role === "chat" && basis === "user_said") {
+            return { ok: false, error: placed.error };
           }
           return { ok: true, routed: "skipped", note: placed.error };
         }

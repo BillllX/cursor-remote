@@ -105,7 +105,10 @@ export function folderMenuLabel(menu: FolderMenu): string {
 }
 
 /** 打开记忆时：从工作区进来停在这个文件夹，其余停在记得的我。 */
-export function openingDestination(initialScopeId?: string): { destination: MemoryDestination; folderId: string | null } {
+export function openingDestination(initialScopeId?: string): {
+  destination: MemoryDestination;
+  folderId: string | null;
+} {
   if (
     initialScopeId &&
     initialScopeId !== "personal" &&
@@ -140,7 +143,10 @@ export function diagnosticsSummary(diagnostics: InjectionDiagnostics | null): st
   ];
 }
 
-export function firstConfirmKey(items: WorkspaceMemoryItem[], keyOf: (item: WorkspaceMemoryItem, index: number) => string): string | null {
+export function firstConfirmKey(
+  items: WorkspaceMemoryItem[],
+  keyOf: (item: WorkspaceMemoryItem, index: number) => string,
+): string | null {
   const index = items.findIndex((item) => item.missingRefs.length > 0);
   if (index < 0) return null;
   return keyOf(items[index], index);

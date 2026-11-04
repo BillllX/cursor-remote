@@ -65,6 +65,7 @@ extension ChatStore {
         memoryTidyBusy = false
         if ok {
             memoryTidyNote = data?.object?["note"]?.string ?? "梳理完了。"
+            requestAssistant(memory: true, force: true)
             memoryCenterRefreshOverview()
             if let scopeId = memoryCenterData.detail?.scope.id {
                 memoryCenterRefreshScope(scopeId)

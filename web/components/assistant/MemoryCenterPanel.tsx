@@ -184,6 +184,7 @@ export default function MemoryCenterPanel({
       return;
     }
     setTidyNote(lastResult.data?.note || "梳理完了。");
+    send({ type: "assistant_get", memory: true });
     mc.refreshCurrent();
   }, [lastResult, resultTick]);
 

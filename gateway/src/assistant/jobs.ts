@@ -134,7 +134,7 @@ function tidyNote(report: Omit<MemoryTidyReport, "note">) {
 /** 马上走一遍凌晨那套整理：不调模型，不改原句，也不占用当天的四点名额。 */
 export function tidyMemoriesNow(ref: TenantRef, now = Date.now(), tz = DEFAULT_TZ, workspaceRoot?: string): MemoryTidyReport {
   const day = describeLocal(now, tz).slice(0, 10);
-  const expired = expireMemory(ref);
+  const expired = expireMemory(ref, day);
   const personal = tidyPersonalMemory(ref);
   const folders = workspaceRoot
     ? tidyWorkspaceMemories(workspaceRoot, day)

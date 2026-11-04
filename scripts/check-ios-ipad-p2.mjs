@@ -35,8 +35,11 @@ requireSource(home, ".focusedSceneValue(\\.padCommandActions", "scene-local Comm
 for (const key of ['key: "1"', 'key: "2"', 'key: "3"']) {
   requireSource(commands, key, `三域快捷键 ${key}`);
 }
-for (const section of [".today", ".inbox", ".tasks", ".artifacts", ".memory"]) {
-  requireSource(commands, `sectionButton(${section}`, `五栏目快捷键 ${section}`);
+for (const section of [".today", ".inbox", ".todos", ".plans", ".delegations", ".artifacts", ".memory"]) {
+  requireSource(commands, `sectionButton(${section}`, `七栏目快捷键 ${section}`);
+}
+if (commands.includes("sectionButton(.tasks")) {
+  throw new Error("PadAppCommands 不得保留旧 .tasks 快捷键");
 }
 for (const title of ["搜索", "新建", "打开文件", "刷新", "关闭检查器或预览", "上一处", "下一处"]) {
   requireSource(commands, `Button("${title}`, `键盘菜单 ${title}`);
@@ -77,7 +80,7 @@ requireSource(shell, "if legalHover", "只高亮合法拖放目标");
 requireSource(shell, "记忆栏目不接受拖放", "记忆拒绝拖放反馈");
 requireSource(shell, "store.continuePadTransfer(transfer)", "侧栏今日执行与正文今日一致");
 requireSource(experience, "PadSemanticDragPreview", "拖动期间记录 typed payload 种类");
-requireSource(assistantStore, "此操作不会离线排队，请连接后重试", "无幂等 Prompt 不伪造 outbox");
+requireSource(assistantStore, "已断开。这次不会排队，点按重连后再交给小驳。", "无幂等 Prompt 不伪造 outbox");
 for (const needle of ["UTExportedTypeDeclarations", "ai.jiebo.ipad.semantic", "public.data"]) {
   requireSource(infoPlist, needle, "语义拖放 UTI 导出");
 }
@@ -122,7 +125,17 @@ requireSource(imStore, "prefix(ImDurableOutboxPolicy.replayBatchLimit)", "重放
 requireSource(imModels, "stableID == clientId", "稳定 clientId 元数据");
 requireSource(imStore, "ImDurableOutboxPolicy.isPermanent", "永久错误分类");
 requireSource(imStore, "ImCache.loadState(tenant: next)", "outbox 状态缓存租户隔离");
-requireSource(imStore, "ImCache.loadTimelines(tenant: next)", "outbox 时间线缓存租户隔离");
+requireSource(imStore, "ImCache.loadPending(tenant: next)", "outbox 待发队列缓存租户隔离");
+if (imStore.includes("ImCache.loadTimelines(")) {
+  throw new Error("ImStore 不得在启动时全量加载所有会话时间线");
+}
+const loadTimelineBlock =
+  imStore.match(/private func loadTimelineIfNeeded\(_ convId: String\)[\s\S]*?\n {4}\}/)?.[0] ?? "";
+requireSource(
+  loadTimelineBlock,
+  "ImCache.loadTimeline(tenant: tenant, convId: convId)",
+  "outbox 时间线按需缓存租户隔离",
+);
 requireSource(imStore, "self.tenant == tenantAtSchedule", "重放任务租户隔离");
 requireSource(imStore, "uploadTasks: [String: Task<Void, Never>]", "上传任务按 clientId 管理");
 requireSource(imStore, "uploadGenerations: [String: Int]", "上传 generation");

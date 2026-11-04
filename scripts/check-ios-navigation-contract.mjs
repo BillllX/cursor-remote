@@ -87,15 +87,21 @@ for (const [key, label] of webStatuses) {
   }
 }
 
-// 导航项只有在 id 与 icon 相同时才定义该图标的通用名称；management 等场景文案不覆盖图标语义。
+// iOS 口语化导航名（小驳/文件夹/搜索/改动）做显式映射，其余与 Web 保持一致。
+const iosConversationalLabels = new Map([
+  ["assistant", "小驳"],
+  ["workspace", "文件夹"],
+  ["search", "搜索"],
+  ["git", "改动"],
+]);
 const productNavigationLabels = new Map(
   [...product.matchAll(/\{ id: "([^"]+)", label: "([^"]+)", icon: "([^"]+)" \}/g)]
     .filter((match) => match[1] === match[3])
-    .map((match) => [match[1], match[2]]),
+    .map((match) => [match[1], iosConversationalLabels.get(match[1]) ?? match[2]]),
 );
 for (const [key, label] of productNavigationLabels) {
   if (navigationLabels.get(key) !== label) {
-    throw new Error(`导航文案 ${key} 不一致：iOS=${navigationLabels.get(key)} Web=${label}`);
+    throw new Error(`导航文案 ${key} 不一致：iOS=${navigationLabels.get(key)} 期望=${label}`);
   }
 }
 
@@ -105,11 +111,11 @@ if (!statusBody.includes('return "\\(label) \\(count)"')) {
 
 const toolContracts = [
   ["files", "文件", "files"],
-  ["search", "工作区搜索", "search"],
-  ["git", "源代码管理", "git"],
+  ["search", "搜索", "search"],
+  ["git", "改动", "git"],
   ["terminal", "终端输出", "terminal"],
   ["loop", "Loop", "loop"],
-  ["assistant", "助理", "assistant"],
+  ["assistant", "小驳", "assistant"],
 ];
 for (const [id, title, icon] of toolContracts) {
   requireSource(chatStore, `case .${id}: return "${title}"`, `ToolLayer.${id} 标题`);
@@ -123,8 +129,11 @@ for (const [source, needle, title] of [
   [chatHome, "NavigationIconId.assistant.symbol", "聊天主页助理入口"],
   [menuScreens, "NavigationIconId.memory.symbol", "设置页记忆入口"],
   [menuScreens, "NavigationIconId.stats.symbol", "设置页统计入口"],
-  [memoryViews, "NavigationIconId.overview.symbol", "记忆中心总览入口"],
   [memoryViews, "NavigationIconId.account.symbol", "记忆中心个人/设置入口"],
+  [memoryViews, '"记得的我"', "记忆中心四入口：记得的我"],
+  [memoryViews, '"这个文件夹"', "记忆中心四入口：这个文件夹"],
+  [memoryViews, '"要你看一眼"', "记忆中心四入口：要你看一眼"],
+  [memoryViews, '"更多"', "记忆中心四入口：更多"],
   [adminStats, "NavigationIconId.stats.symbol", "统计空态"],
   [rootView, "StatusLegendId.running", "RootView 运行状态"],
   [home, "StatusLegendId.attention", "iPad 域切换待处理状态"],
@@ -135,6 +144,9 @@ for (const [source, needle, title] of [
   [phoneWorkbench, "PhoneSettingsScreen()", "窄屏账户入口"],
 ]) {
   requireSource(source, needle, title);
+}
+if (memoryViews.includes("NavigationIconId.overview.symbol")) {
+  throw new Error("记忆中心已重做为四入口，不得恢复旧总览图标入口");
 }
 
 const buildFileDefinitions = project.match(/PN100201 \/\* ProductNavigation\.swift in Sources \*\/ = \{isa = PBXBuildFile;/g) ?? [];

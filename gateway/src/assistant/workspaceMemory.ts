@@ -15,6 +15,7 @@ import {
   readCore,
   renderWorkPreferences,
   splitTerms,
+  today,
 } from "./memory.ts";
 import { isValidCalendarDateUtc } from "../../../shared/calendarDateUtc.ts";
 import type { InjectionDiagnostics, MemoryInjectionReason, MemoryInjectionSkipReason } from "../../../shared/protocol.ts";
@@ -49,7 +50,6 @@ export const MEMORY_RECENT_USE_DAYS = 30;
 export const MEMORY_SEARCH_LIMIT = 12;
 
 const nowIso = () => new Date().toISOString();
-const today = () => nowIso().slice(0, 10);
 const posix = (path: string) => path.split(sep).join("/");
 
 function realOr(path: string) {
@@ -246,7 +246,9 @@ function collectMemoryDirs(root: string) {
       const abs = resolve(dir, name);
       let isDirectory = false;
       try {
-        isDirectory = statSync(abs).isDirectory();
+        const st = lstatSync(abs);
+        if (st.isSymbolicLink()) continue;
+        isDirectory = st.isDirectory();
       } catch {
         continue;
       }
@@ -269,13 +271,17 @@ function ensureLineMeta(raw: string, key: string, value: string) {
   return `${raw.slice(0, comment.index)}<!--${inner}-->${comment[2]}`;
 }
 
-function uniqueMovedRef(dir: string, ref: string) {
-  if (!ref || ref.includes("..") || existsSync(resolve(dir, ref))) return null;
-  const baseName = ref.split("/").pop() ?? "";
-  if (!baseName || baseName.length < 3) return null;
-  const hits: string[] = [];
+export const MOVED_REF_SCAN_CAP = 20_000;
+
+export function buildMovedRefIndex(dir: string, maxVisits = MOVED_REF_SCAN_CAP): {
+  index: Map<string, string | "ambiguous">;
+  truncated: boolean;
+} {
+  const index = new Map<string, string | "ambiguous">();
+  let visited = 0;
+  let truncated = false;
   const walk = (folder: string, depth: number) => {
-    if (depth > 8 || hits.length > 1) return;
+    if (depth > 8 || truncated) return;
     let names: string[] = [];
     try {
       names = readdirSync(folder);
@@ -284,30 +290,57 @@ function uniqueMovedRef(dir: string, ref: string) {
     }
     for (const name of names) {
       if (TIDY_SKIP_DIR.has(name)) continue;
+      if (visited >= maxVisits) {
+        truncated = true;
+        return;
+      }
+      visited += 1;
       const abs = resolve(folder, name);
       let info;
       try {
-        info = statSync(abs);
+        info = lstatSync(abs);
       } catch {
         continue;
       }
+      if (info.isSymbolicLink()) continue;
       if (info.isDirectory()) {
         if (!name.startsWith(".")) walk(abs, depth + 1);
+        if (truncated) return;
         continue;
       }
-      if (name === baseName) hits.push(abs);
-      if (hits.length > 1) return;
+      if (!info.isFile() || name.length < 3) continue;
+      const rel = posix(relative(dir, abs));
+      const existing = index.get(name);
+      if (existing === undefined) index.set(name, rel);
+      else if (existing !== rel) index.set(name, "ambiguous");
     }
   };
   walk(dir, 0);
-  if (hits.length !== 1) return null;
-  return posix(relative(dir, hits[0]));
+  return { index, truncated };
+}
+
+function uniqueMovedRef(
+  dir: string,
+  ref: string,
+  getIndex: () => { index: Map<string, string | "ambiguous">; truncated: boolean },
+) {
+  if (!ref || ref.includes("..") || existsSync(resolve(dir, ref))) return null;
+  const baseName = ref.split("/").pop() ?? "";
+  if (!baseName || baseName.length < 3) return null;
+  const scanned = getIndex();
+  if (scanned.truncated) return null;
+  const matched = scanned.index.get(baseName);
+  return matched && matched !== "ambiguous" ? matched : null;
 }
 
 export type WorkspaceTidyStats = { files: number; dropped: number; dated: number; refs: number; cooled: number; changed: boolean };
 
 /** 凌晨整理文件夹记忆：去掉同一极性的重复句，给没写日期的行补上今天（满 90 天没用才变冷），引用只找到一处新位置就改路径，预算太满时把最少用到的未钉住条目标冷。不改句子本身。 */
-export function tidyWorkspaceMemories(workspaceRoot: string, day = today()): WorkspaceTidyStats {
+export function tidyWorkspaceMemories(
+  workspaceRoot: string,
+  day = today(),
+  maxRefScanVisits = MOVED_REF_SCAN_CAP,
+): WorkspaceTidyStats {
   const stats: WorkspaceTidyStats = { files: 0, dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
   let root: string;
   try {
@@ -331,6 +364,11 @@ export function tidyWorkspaceMemories(workspaceRoot: string, day = today()): Wor
         return { dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
       }
       if (!original.trim()) return { dropped: 0, dated: 0, refs: 0, cooled: 0, changed: false };
+      let refIndex: { index: Map<string, string | "ambiguous">; truncated: boolean } | null = null;
+      const getRefIndex = () => {
+        if (!refIndex) refIndex = buildMovedRefIndex(dir, maxRefScanVisits);
+        return refIndex;
+      };
       const kept: { text: string; id?: string }[] = [];
       let dropped = 0;
       let dated = 0;
@@ -354,18 +392,19 @@ export function tidyWorkspaceMemories(workspaceRoot: string, day = today()): Wor
           dated += 1;
         }
         if (parsed.refs.length) {
-          const fixed = parsed.refs.map((ref) => uniqueMovedRef(dir, ref) ?? ref);
+          const fixed = parsed.refs.map((ref) => uniqueMovedRef(dir, ref, getRefIndex) ?? ref);
           if (fixed.join(",") !== parsed.refs.join(",")) {
             line = ensureLineMeta(line, "refs", fixed.join(","));
             refs += 1;
           }
         }
-        return [line === raw ? rawLine : line];
+        if (line === raw) return [rawLine];
+        return [rawLine.endsWith("\r") ? `${line}\r` : line];
       });
       const text = next.join("\n");
       const edited = text !== original;
       if (edited) writeTextAtomic(paths.memory, text);
-      const cooled = relieveBudget(dir, root, paths.memory);
+      const cooled = relieveBudget(dir, root, paths.memory, datedAt);
       return { dropped: edited ? dropped : 0, dated: edited ? dated : 0, refs: edited ? refs : 0, cooled, changed: edited || cooled > 0 };
     });
     stats.files += 1;
@@ -379,8 +418,8 @@ export function tidyWorkspaceMemories(workspaceRoot: string, day = today()): Wor
 }
 
 /** 常驻预算用到八成以上时，把最少用到、又没钉住的热条目标成 cold。句子不动，相关时仍会被召回。 */
-function relieveBudget(dir: string, root: string, memoryPath: string) {
-  const plan = planMemoryInjection(dir, LAYER_TOKEN_BUDGET.workspace, "", root);
+function relieveBudget(dir: string, root: string, memoryPath: string, day = today()) {
+  const plan = planMemoryInjection(dir, LAYER_TOKEN_BUDGET.workspace, "", root, day);
   if (!plan) return 0;
   const budget = LAYER_TOKEN_BUDGET.workspace;
   let used = plan.selected.reduce((sum, row) => sum + row.cost, 0);
@@ -715,7 +754,13 @@ function formatInjectionDiagnosticsLine(diagnostics: InjectionDiagnostics) {
 }
 
 /** 与 renderMemoryFile 共用：结构化注入选择 + 诊断，供 UI 与提示词对齐。 */
-export function planMemoryInjection(dir: string, budget: number, query = "", allowedRoot = dir): MemoryInjectionPlan | null {
+export function planMemoryInjection(
+  dir: string,
+  budget: number,
+  query = "",
+  allowedRoot = dir,
+  day = today(),
+): MemoryInjectionPlan | null {
   let paths: SafeMemoryPaths;
   try {
     paths = safeMemoryPaths(dir, allowedRoot);
@@ -725,9 +770,9 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
   const lines = parseMemoryFile(readText(paths.memory));
   if (!lines.length) return null;
   const terms = memoryInjectionTerms(query);
-  const missingRef = (line: MemoryLine) => line.refs.some((ref) => !existsSync(resolve(dir, ref)));
+  const missingByIndex = lines.map((line) => line.refs.filter((ref) => !existsSync(resolve(dir, ref))));
   const ranked: RankedMemoryLine[] = lines.map((line, index) => {
-    const missing = line.refs.filter((ref) => !existsSync(resolve(dir, ref)));
+    const missing = missingByIndex[index] ?? [];
     const text = `- ${line.text}${missing.length ? `（待核实：引用的 ${missing.join("、")} 不在了）` : ""}`;
     const relevance = injectionRelevance(line, terms);
     return {
@@ -736,13 +781,13 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
       relevance: relevance.score,
       highConfidence: relevance.highConfidence,
       coldEligible: relevance.coldEligible,
-      effectiveState: effectiveMemoryState(line),
+      effectiveState: effectiveMemoryState(line, day),
       text,
       cost: estimateTokens(text),
     };
   });
   const resident = ranked.filter(
-    (row) => !missingRef(row.line) && (row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible)),
+    (row) => !missingByIndex[row.index]?.length && (row.effectiveState === "hot" || (row.effectiveState === "cold" && row.coldEligible)),
   );
   const pinned = resident.filter((row) => row.line.pinned).sort(newerFirst);
   const sectionOrder = [...new Set(lines.map((line) => line.section))];
@@ -788,7 +833,7 @@ export function planMemoryInjection(dir: string, budget: number, query = "", all
       allSkippedReasons.push({ id: row.line.id ?? null, reason: "terminal" });
       continue;
     }
-    if (missingRef(row.line)) {
+    if (missingByIndex[row.index]?.length) {
       allSkippedReasons.push({ id: row.line.id ?? null, reason: "missing_ref" });
       continue;
     }

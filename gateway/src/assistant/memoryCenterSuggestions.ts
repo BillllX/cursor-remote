@@ -11,6 +11,7 @@ import type {
 import { describeLocal, isoWeekKey, localParts } from "./cron.ts";
 import { postInbox } from "./inbox.ts";
 import { memoryCenterGet } from "./memoryCenter.ts";
+import { today } from "./memory.ts";
 import { memoryCenterMutate } from "./memoryCenterMutate.ts";
 import { listWorkspaceScopeIds, resolveWorkspaceScope } from "./memoryCenterScope.ts";
 import { stableSuggestionId } from "./memoryCenterAudit.ts";
@@ -120,7 +121,7 @@ function scanScope(scopeId: string, scopeDir: string, allowedRoot: string, token
   }
   const lines = parseMemoryFile(text);
   const out: MemoryCenterSuggestionEntry[] = [];
-  const day = new Date().toISOString().slice(0, 10);
+  const day = today();
 
   for (const line of lines) {
     if (!line.id) continue;

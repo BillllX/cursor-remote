@@ -27,6 +27,7 @@ import {
   listMemory,
   PERSONAL_CORE_FIELDS,
   readCore,
+  today,
 } from "./memory.ts";
 import { newId, type TenantRef } from "./store.ts";
 import {
@@ -51,8 +52,6 @@ export type MutateFail = {
 };
 
 export type MutateOk = { ok: true; data: MemoryCenterMutateData };
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 function fail(code: MemoryCenterMutateErrorCode, message: string, detail?: MemoryCenterScopeDetail): MutateFail {
   return { ok: false, code, message, detail };

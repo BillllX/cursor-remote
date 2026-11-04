@@ -88,8 +88,18 @@ if (!padDock.includes("@Environment(PadRouter.self)") || padDock.includes("Phone
   throw new Error("PadActionDock 必须只通过 PadRouter 导航");
 }
 requireSource(phoneDock, "@Environment(PhoneRouter.self)", "iPhone ActionDock 路径保持");
-for (const tab of ['Tab("小驳"', 'Tab("待处理"', 'Tab("消息"']) {
-  requireSource(phoneShell, tab, "iPhone 三 Tab 保持");
+if (phoneShell.includes('Tab("')) {
+  throw new Error("iPhone 不得恢复底部 TabView");
+}
+for (const moduleEntry of [
+  "ZStack {",
+  "PhoneShell()",
+  ".opacity(router.selectedTab == .assistant ? 1 : 0)",
+  "if router.selectedTab == .workspace {\n                PhoneWorkbench(embedsPreview: false)",
+  "if router.selectedTab == .messages {\n                ChatHome()",
+  ".environment(\\.switchPhoneSpace",
+]) {
+  requireSource(phoneShell, moduleEntry, "iPhone 三模块保持");
 }
 
 // 委派 → 产物 → Preview，以及产物续作固定助理 chatId 且不 select 工作台。

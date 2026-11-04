@@ -33,7 +33,9 @@ for (const needle of [
   "case messages",
   "case today",
   "case inbox",
-  "case tasks",
+  "case todos",
+  "case plans",
+  "case delegations",
   "case artifacts",
   "case memory",
   "var selection: PadSelection?",
@@ -41,6 +43,9 @@ for (const needle of [
   "var delegationDetail",
 ]) {
   requireSource(router, needle, "PadRouter 状态契约");
+}
+if (router.includes("case tasks")) {
+  throw new Error("PadRouter 状态契约：不得保留已拆分的旧 case tasks");
 }
 requireSource(router, "case HomeMode.workbench.rawValue: return .workbench", "旧工作台迁移");
 requireSource(router, "case HomeMode.chat.rawValue: return .messages", "旧聊天迁移");
@@ -65,8 +70,16 @@ requireSource(
   "if UIDevice.current.userInterfaceIdiom == .phone {\n                PhoneTabShell()",
   "iPhone 三 Tab 路径",
 );
-if (!phone.includes('Tab("小驳"') || !phone.includes('Tab("待处理"') || !phone.includes('Tab("消息"')) {
-  throw new Error("iPhone 三 Tab 源码契约被改变");
+if (
+  phone.includes('Tab("') ||
+  !phone.includes("ZStack {") ||
+  !phone.includes("PhoneShell()") ||
+  !phone.includes(".opacity(router.selectedTab == .assistant ? 1 : 0)") ||
+  !phone.includes("if router.selectedTab == .workspace {\n                PhoneWorkbench(embedsPreview: false)") ||
+  !phone.includes("if router.selectedTab == .messages {\n                ChatHome()") ||
+  !phone.includes(".environment(\\.switchPhoneSpace")
+) {
+  throw new Error("iPhone 三大模块切换源码契约被改变");
 }
 if (router.includes("PhoneRouter") || home.includes("store.assistantOnly = true")) {
   throw new Error("iPad 路由不得复用 PhoneRouter 或启用 assistantOnly");

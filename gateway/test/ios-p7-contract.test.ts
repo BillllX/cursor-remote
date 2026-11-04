@@ -15,7 +15,11 @@ describe("iOS P7 静态契约", () => {
     assert.doesNotMatch(shareSources, /ArtifactCenterView/);
 
     const tabs = read("ios/Jiebo/Jiebo/Views/Phone/PhoneTabShell.swift");
-    assert.equal((tabs.match(/\bTab\("/g) || []).length, 3);
+    assert.equal((tabs.match(/\bTab\("/g) || []).length, 0);
+    assert.match(tabs, /ZStack\s*\{/);
+    assert.match(tabs, /PhoneShell\(\)[\s\S]*\.opacity\(router\.selectedTab == \.assistant \? 1 : 0\)/);
+    assert.match(tabs, /if router\.selectedTab == \.workspace \{\s*PhoneWorkbench\(embedsPreview: false\)/);
+    assert.match(tabs, /if router\.selectedTab == \.messages \{\s*ChatHome\(\)/);
     const menu = read("ios/Jiebo/Jiebo/Views/Phone/MenuDrawer.swift");
     assert.match(menu, /"产物中心"[\s\S]*router\.go\(\.artifacts\)/);
   });
@@ -31,7 +35,8 @@ describe("iOS P7 静态契约", () => {
     assert.match(view, /store\.openTurnFile\(file, chatId: chatId\)/);
     assert.match(view, /store\.exportPreview\(path: file\.path/);
     assert.match(view, /artifact\.safeURL/);
-    assert.match(view, /\.jieboGlass\(/);
+    assert.match(view, /\.pickerStyle\(\.segmented\)/);
+    assert.doesNotMatch(view, /\.jieboGlass\(/);
   });
 
   test("设备写入确认只有 HomeShell 一处，且绝对 deadline 在确认后和 EventKit 保存前检查", () => {

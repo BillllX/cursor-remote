@@ -25,6 +25,7 @@ import {
   readCore,
   readSettings,
   splitTerms,
+  today,
   WORK_PREF_FIELD,
   WORK_PREF_TOKEN_BUDGET,
 } from "./memory.ts";
@@ -373,7 +374,7 @@ function pendingForScope(ref: TenantRef, scopeId: string) {
 function buildScopeSummary(ref: TenantRef, scope: ScopeRecord, allowedRoot: string): MemoryCenterScopeSummary {
   if (scope.id === "personal") {
     const entries = listMemory(ref).entries;
-    const day = new Date().toISOString().slice(0, 10);
+    const day = today();
     let valid = 0;
     let invalid = 0;
     for (const entry of entries) {
@@ -652,7 +653,7 @@ function resolveScopeArg(
 
 function personalOverview(ref: TenantRef) {
   const entries = listMemory(ref).entries;
-  const day = new Date().toISOString().slice(0, 10);
+  const day = today();
   let validEntries = 0;
   let invalidEntries = 0;
   for (const entry of entries) {
@@ -963,7 +964,7 @@ function searchReasonsForLine(
 function personalSearchHits(ref: TenantRef, query: string, candidateLimit: number, stateFilter?: string) {
   const data = listMemory(ref);
   const terms = splitTerms(query);
-  const at = new Date().toISOString().slice(0, 10);
+  const at = today();
   const entriesPath = assistantPath(ref, "memory", "entries.json");
   const index = cachedIndex(
     entriesPath,

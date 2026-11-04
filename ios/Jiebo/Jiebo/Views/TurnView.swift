@@ -509,30 +509,13 @@ struct TurnView: View, Equatable {
 }
 
 enum ReplyText {
+    private static let strayJeom = try! NSRegularExpression(pattern: "점+(?=\\p{Script=Han})")
+
     /// 只删紧挨在汉字前面的「점」。单独一段先留着，拼上下一段再判断。
     static func repair(_ text: String) -> String {
         guard text.contains("점") else { return text }
-        let chars = Array(text)
-        var index = 0
-        var out = ""
-        while index < chars.count {
-            if chars[index] == "점" {
-                let start = index
-                while index < chars.count, chars[index] == "점" { index += 1 }
-                if Self.han(index < chars.count ? chars[index] : nil) { continue }
-                out.append(contentsOf: chars[start..<index])
-                continue
-            }
-            out.append(chars[index])
-            index += 1
-        }
-        return out
-    }
-
-    private static func han(_ char: Character?) -> Bool {
-        guard let char, let scalar = char.unicodeScalars.first, char.unicodeScalars.count == 1 else { return false }
-        let value = scalar.value
-        return (value >= 0x4E00 && value <= 0x9FFF) || (value >= 0x3400 && value <= 0x4DBF)
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return strayJeom.stringByReplacingMatches(in: text, range: range, withTemplate: "")
     }
 }
 
