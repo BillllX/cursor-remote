@@ -38,6 +38,7 @@ import { proxyUpgrade, proxyWeb } from "./http/proxy.ts";
 import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
 import { deviceRegistry } from "./device/registry.ts";
+import { startIngestRuntime } from "./ingest/notify.ts";
 
 loadDotEnv([resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]);
 
@@ -302,6 +303,7 @@ httpServer.listen(PORT, gatewayHost(), () => {
     mkdirSync(tenant.workspaceRoot, { recursive: true });
     mkdirSync(tenant.stateDir, { recursive: true });
   }
+  startIngestRuntime({ tenants: () => tenants });
   log.banner(`cursor-remote gateway  http://${gatewayHost()}:${PORT}`);
   if (tenants.length === 1) {
     log.banner(`工作区                 ${tenants[0].workspaceRoot}`);

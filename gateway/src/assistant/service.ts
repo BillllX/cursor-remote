@@ -55,8 +55,15 @@ import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } f
 import { assistantNameFor } from "./name.ts";
 import { errText, log } from "../log.ts";
 import { send } from "../ws/send.ts";
-import { workspaceUnread } from "../workspace/agents.ts";
+import { workspaceAgentById, readWorkspaceAgentFile, workspaceAgentDirectories, workspaceUnread } from "../workspace/agents.ts";
 import { getTenant } from "../tenants.ts";
+import {
+  createDropToken,
+  listDropTokens,
+  revokeDropToken,
+  setupKbWorkspaceForTenant,
+  type DropTenantHost,
+} from "../ingest/tokens.ts";
 import { migrateMemory } from "./migrate.ts";
 import {
   answerCard,
@@ -160,8 +167,38 @@ function delegationStatusText(ref: TenantRef, id?: string) {
   );
 }
 
+function dropHostFor(tenant: AssistantTenant): DropTenantHost {
+  const fullTenant = getTenant(tenant.id);
+  return {
+    id: tenant.id,
+    stateDir: tenant.stateDir,
+    workspaceRoot: tenant.workspaceRoot,
+    resolveWorkspace: (keyOrId: string) => {
+      const target = keyOrId.trim();
+      if (!target) return null;
+      if (fullTenant) {
+        if (target.startsWith("wsa_")) {
+          const byId = workspaceAgentById(fullTenant, target);
+          if (byId) return { workspaceId: byId.item.workspaceId, key: byId.key, path: byId.path };
+        }
+        const file = readWorkspaceAgentFile(fullTenant);
+        const dir = workspaceAgentDirectories(fullTenant).find((d) => d.key === target);
+        if (dir && file.items[dir.key]) {
+          return {
+            workspaceId: file.items[dir.key].workspaceId,
+            key: dir.key,
+            path: dir.path,
+          };
+        }
+      }
+      return null;
+    },
+  };
+}
+
 function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): ToolHost {
   const ref = refOf(tenant);
+  const dropHost = role === "chat" ? dropHostFor(tenant) : undefined;
   return {
     ref,
     role,
@@ -188,6 +225,22 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
       return result.ok ? { ok: true as const } : { ok: false as const, error: result.error || "没有写进这个文件夹。" };
     },
     workspaceMemory: role === "chat" ? (workspace, query) => readWorkspaceMemory(tenant, workspace, query) : undefined,
+    kbInitWorkspace:
+      role === "chat" && dropHost
+        ? (args) => setupKbWorkspaceForTenant(dropHost, args)
+        : undefined,
+    dropTokenCreate:
+      role === "chat" && dropHost
+        ? (args) => createDropToken(dropHost, args)
+        : undefined,
+    dropTokenList:
+      role === "chat" && dropHost
+        ? (args) => listDropTokens(dropHost, args)
+        : undefined,
+    dropTokenRevoke:
+      role === "chat"
+        ? (args) => revokeDropToken(ref, args.idOrLabel)
+        : undefined,
     deviceInvoke:
       role === "chat" && deps?.deviceInvoke
         ? async (input) => {

@@ -190,6 +190,9 @@ export function shellPublishes(name: string, args: unknown) {
 export function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
+  if (/(kb_workspace_init|drop_token_create|drop_token_revoke)/.test(n)) {
+    return true;
+  }
   if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile)/.test(n)) {
     return true;
   }

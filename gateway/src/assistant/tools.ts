@@ -52,6 +52,11 @@ export type ToolHost = {
     idempotencyKey?: string;
     approval?: DeviceApproval;
   }) => Promise<DeviceResult | { status: string; error: string }>;
+  /** 知识库工作区初始化与外部同事投递口令管理（仅前台个人助理注入） */
+  kbInitWorkspace?: (args: { workspace: string; title: string; categories: string[] }) => unknown;
+  dropTokenCreate?: (args: { workspace: string; passcode: string; label?: string; expiresInDays?: number }) => unknown;
+  dropTokenList?: (args: { includeRevoked?: boolean }) => unknown;
+  dropTokenRevoke?: (args: { idOrLabel: string }) => unknown;
 };
 
 /** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
@@ -638,6 +643,61 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     }
   }
 
+  if (role === "chat") {
+    if (host.kbInitWorkspace) {
+      out.kb_workspace_init = tool(
+        "将某个已存在的子工作区标记并初始化为「知识库工作区」（生成 .jiebo/kb.json 与一级分类目录白名单），初始化后即可配置外部同事投递口令。",
+        {
+          workspace: S("子工作区名称，如 Fintopia集团"),
+          title: S("知识库展示标题，如 Fintopia 集团知识库"),
+          categories: { type: "array", items: { type: "string" }, description: "允许归档的一级分类目录名数组，如 [\"资金\", \"资产\", \"牌照\"]" },
+        },
+        ["workspace", "title", "categories"],
+        (args) =>
+          host.kbInitWorkspace!({
+            workspace: str(args.workspace),
+            title: str(args.title),
+            categories: Array.isArray(args.categories) ? args.categories.filter((x): x is string => typeof x === "string") : [],
+          }),
+      );
+    }
+    if (host.dropTokenCreate) {
+      out.drop_token_create = tool(
+        "为已标记为知识库的子工作区创建一个外部同事投递口令（Passcode，6–64 位）。同事可在 /p/<租户>/drop 凭该口令向该工作区只写盲投文档。",
+        {
+          workspace: S("目标知识库工作区名称，如 Fintopia集团"),
+          passcode: S("6–64 位投递口令，如 fintopia-2026"),
+          label: S("可选，口令备注名称，如 财务与风控团队投递码"),
+          expiresInDays: { type: "number", description: "可选，有效天数（1–3650）" },
+        },
+        ["workspace", "passcode"],
+        (args) =>
+          host.dropTokenCreate!({
+            workspace: str(args.workspace),
+            passcode: str(args.passcode),
+            label: str(args.label) || undefined,
+            expiresInDays: typeof args.expiresInDays === "number" ? args.expiresInDays : undefined,
+          }),
+      );
+    }
+    if (host.dropTokenList) {
+      out.drop_token_list = tool(
+        "列出当前配置的外部同事投递口令及绑定的知识库工作区。",
+        { includeRevoked: { type: "boolean", description: "可选，是否包含已吊销的口令" } },
+        [],
+        (args) => host.dropTokenList!({ includeRevoked: Boolean(args.includeRevoked) }),
+      );
+    }
+    if (host.dropTokenRevoke) {
+      out.drop_token_revoke = tool(
+        "立即吊销一个外部同事投递口令（按口令 id 或备注 label），并使该口令已签发的活跃上传会话立即失效。",
+        { idOrLabel: S("要吊销的口令 id（如 dt_xxx）或备注名称") },
+        ["idOrLabel"],
+        (args) => host.dropTokenRevoke!({ idOrLabel: str(args.idOrLabel) }),
+      );
+    }
+  }
+
   return out;
 }
 
@@ -697,12 +757,18 @@ export function assistantToolSpecs(host: ToolHost): ToolSpec[] {
   return toolSpecs(assistantTools(host));
 }
 
+const WRITE_CATEGORY_ASSISTANT_TOOLS = new Set([
+  "kb_workspace_init",
+  "drop_token_create",
+  "drop_token_revoke",
+]);
+
 export function toolSpecs(defs: Record<string, SDKCustomTool>): ToolSpec[] {
   return Object.entries(defs).map(([name, def]) => ({
     name,
     description: def.description || name,
     parameters: (def.inputSchema ?? { type: "object", properties: {} }) as ToolSpec["parameters"],
-    category: "network" as const,
+    category: WRITE_CATEGORY_ASSISTANT_TOOLS.has(name) ? ("write" as const) : ("network" as const),
     run: async (args, ctx) => {
       const raw = await def.execute((args ?? {}) as Args, { toolCallId: ctx.callId });
       if (typeof raw === "string") return { ok: true, content: raw };

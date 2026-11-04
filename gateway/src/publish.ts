@@ -21,6 +21,7 @@ import { gatewayEnv } from "./config.ts";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { errText, log } from "./log.ts";
 import { servePublishedCanvas } from "./canvasVersions.ts";
+import { handleDropPortalHttp } from "./ingest/http.ts";
 
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const CONTROL_PATHS = new Set([
@@ -918,7 +919,7 @@ export function createPublishController(options: {
         const cookies: string[] = [];
         for (let i = 0; i < up.rawHeaders.length; i += 2) {
           const key = up.rawHeaders[i].toLowerCase();
-          if (HOP.has(key)) continue;
+          if (HOP.has(key) || key === "service-worker-allowed" || key === "clear-site-data") continue;
           const value = up.rawHeaders[i + 1];
           if (key === "set-cookie") {
             cookies.push(value);
@@ -949,6 +950,9 @@ export function createPublishController(options: {
       return;
     }
     const path = pathnameOf(req.url || "/");
+    if (handleDropPortalHttp(tenant, req, res, path)) {
+      return;
+    }
     const canvasPrefix = `${publishBasePath(label)}/c/`;
     if ((req.method === "GET" || req.method === "HEAD") && path.startsWith(canvasPrefix)) {
       const token = path.slice(canvasPrefix.length);
@@ -1083,6 +1087,11 @@ export function createPublishController(options: {
     handleUpgrade(req, socket, head) {
       const label = tenantFromPublishPath(req.url || "/");
       if (!label) return false;
+      const upPath = pathnameOf(req.url || "/");
+      if (upPath === `${publishBasePath(label)}/drop` || upPath.startsWith(`${publishBasePath(label)}/drop/`)) {
+        rejectUpgrade(socket, 404, "资料投递门户不支持 WebSocket。");
+        return true;
+      }
       const slot = liveSlot(label);
       if (!slot) {
         const tenant = tenantById(label);
