@@ -1,12 +1,12 @@
-// 全文搜索弹层
+// 工作区全文搜索浮窗
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { SearchHit } from "@shared/protocol";
 import styles from "./GrepOverlay.module.css";
 
 type GrepOverlayProps = {
   grepOpen: boolean;
-  wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
+  wideIDE?: boolean;
+  sidePane?: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   setGrepOpen: Dispatch<SetStateAction<boolean>>;
   grepTrap: RefObject<HTMLDivElement | null>;
   grepQ: string;
@@ -16,14 +16,13 @@ type GrepOverlayProps = {
   grepHits: SearchHit[];
   grepHi: number;
   openFile: (path: string, line?: number, asDiff?: boolean) => void;
-  wideIDERef: RefObject<boolean>;
+  wideIDERef?: RefObject<boolean>;
   grepWait: boolean;
+  workspaceName?: string;
 };
 
 export function GrepOverlay({
   grepOpen,
-  wideIDE,
-  sidePane,
   setGrepOpen,
   grepTrap,
   grepQ,
@@ -33,37 +32,72 @@ export function GrepOverlay({
   grepHits,
   grepHi,
   openFile,
-  wideIDERef,
   grepWait,
+  workspaceName = "工作区",
 }: GrepOverlayProps) {
-  const docked = wideIDE && sidePane === "search";
+  const totalHits = grepNameHits.length + grepHits.length;
+
   return (
     <div
-      className={`search-overlay${grepOpen ? " open" : ""}`}
-      onClick={() => {
-        if (docked) return;
-        setGrepOpen(false);
-      }}
+      className={`search-overlay workspace-modal-overlay${grepOpen ? " open" : ""}`}
+      onClick={() => setGrepOpen(false)}
     >
       <div
         ref={grepTrap}
-        className="search-box grep-box"
+        className="search-box grep-box workspace-modal-box"
         role="dialog"
-        aria-modal={docked ? undefined : true}
+        aria-modal="true"
         aria-label="全文搜索"
         onClick={(event) => event.stopPropagation()}
       >
+        <div className="workspace-modal-head">
+          <div className="workspace-modal-heading">
+            <div className="workspace-modal-title-row">
+              <span className="loop-title workspace-modal-title">工作区搜索</span>
+              {grepQ.trim() ? (
+                <span className="workspace-modal-badge">
+                  {grepWait ? "搜索中…" : `${totalHits} 条结果`}
+                </span>
+              ) : null}
+            </div>
+            <div className="workspace-modal-sub">{workspaceName} · 搜索文件名或代码全文内容</div>
+          </div>
+          <div className="workspace-modal-actions">
+            {grepQ ? (
+              <button
+                type="button"
+                className="workspace-modal-btn"
+                onClick={() => {
+                  setGrepQ("");
+                  setGrepIndex(0);
+                }}
+              >
+                清空
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="files-browser-close workspace-modal-close"
+              aria-label="关闭工作区搜索"
+              title="关闭 (Esc)"
+              onClick={() => setGrepOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
         <input
           autoFocus={grepOpen}
           className="search-input"
-          placeholder="搜文件名或内容"
+          placeholder="搜文件名或代码内容（↑↓ 选择，Enter 打开）"
           value={grepQ}
           onChange={(event) => {
             setGrepQ(event.target.value);
             setGrepIndex(0);
           }}
           onKeyDown={(event) => {
-            // Escape 由 ChatApp 的全局捕获按层处理（停靠时还要切回对话列表），这里再关会在上面还有一层时把搜索也关掉
+            // Escape 由 ChatApp 的全局捕获按层处理，避免上面还有一层时把搜索也关掉
             const total = grepNameHits.length + grepHits.length;
             if (event.key === "ArrowDown") {
               event.preventDefault();
@@ -81,10 +115,11 @@ export function GrepOverlay({
                 const hit = grepHits[grepHi - grepNameHits.length];
                 if (hit) openFile(hit.path, hit.line, false);
               }
-              if (!wideIDERef.current) setGrepOpen(false);
+              setGrepOpen(false);
             }
           }}
         />
+
         <div className="search-list">
           {grepQ.trim() ? (
             !grepNameHits.length && !grepHits.length ? (
@@ -95,6 +130,11 @@ export function GrepOverlay({
               )
             ) : (
               <>
+                {grepNameHits.length > 0 ? (
+                  <div className="side-label" style={{ padding: "8px 14px 4px" }}>
+                    文件名匹配 · {grepNameHits.length}
+                  </div>
+                ) : null}
                 {grepNameHits.map((path, index) => (
                   <button
                     key={`name:${path}`}
@@ -102,13 +142,18 @@ export function GrepOverlay({
                     className={`search-item file-hit${index === grepHi ? " active" : ""}`}
                     onClick={() => {
                       openFile(path);
-                      if (!wideIDERef.current) setGrepOpen(false);
+                      setGrepOpen(false);
                     }}
                   >
                     <span className="search-item-name">{path.split("/").pop()}</span>
-                    <span className="search-item-dir">文件名</span>
+                    <span className="search-item-dir">{path}</span>
                   </button>
                 ))}
+                {grepHits.length > 0 ? (
+                  <div className="side-label" style={{ padding: "8px 14px 4px" }}>
+                    文件内容匹配 · {grepHits.length}
+                  </div>
+                ) : null}
                 {grepHits.map((hit, index) => {
                   const at = grepNameHits.length + index;
                   return (
@@ -118,7 +163,7 @@ export function GrepOverlay({
                       className={`search-item file-hit${at === grepHi ? " active" : ""}`}
                       onClick={() => {
                         openFile(hit.path, hit.line, false);
-                        if (!wideIDERef.current) setGrepOpen(false);
+                        setGrepOpen(false);
                       }}
                     >
                       <span className="search-item-name">
@@ -136,7 +181,7 @@ export function GrepOverlay({
               </>
             )
           ) : (
-            <div className="search-item">搜文件名或内容</div>
+            <div className="search-item">输入关键字即可同时搜索工作区文件名与文件内容</div>
           )}
         </div>
       </div>

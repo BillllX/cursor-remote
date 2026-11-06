@@ -2,7 +2,7 @@
 import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
 import type { AssistantResultMessage, ClientMessage } from "@shared/protocol";
 import type { Chat } from "../../lib/chat/types";
-import { relToCwd, sameCwd, workspaceLabel } from "../../lib/chat/workspace";
+import { sameCwd, workspaceLabel } from "../../lib/chat/workspace";
 import type { AppearanceId, PaletteId } from "../../lib/theme";
 import type { WorkspaceNavId } from "../../lib/productNavigation";
 import { IconRail } from "../chromeIcons";
@@ -10,7 +10,6 @@ import { JieboMark as Mark } from "../JieboMark";
 import { AssistantNavigation, type AssistantSidebarView } from "./AssistantNavigation";
 import { ChatList } from "./sidebar/ChatList";
 import { SideFoot } from "./sidebar/SideFoot";
-import { WorkspaceKbPanel } from "./WorkspaceKbPanel";
 import { WorkspaceNavigation } from "./WorkspaceNavigation";
 import styles from "./Sidebar.module.css";
 
@@ -163,10 +162,6 @@ export function Sidebar({
   themeChoice,
   setThemeChoice,
   logout,
-  send,
-  assistantResults,
-  openFile,
-  setNotice,
 }: SidebarProps) {
   const assistantBadge = assistantInboxBadge + assistantApprovalBadge;
   const currentGroup = sidebarGroups[0];
@@ -244,58 +239,31 @@ export function Sidebar({
           <button className={`new-chat primary${workspaceMenuOpen ? " open" : ""}`} type="button" onClick={newChat}>
             + 新对话
           </button>
-          {workspaceSection === "management" ? (
-            <section className="workspace-management" aria-label="工作区管理">
-              <div className="side-label">工作区管理</div>
-              {canManageWorkspace && currentGroup ? (
-                <>
-                  <p className="loop-meta">管理「{currentGroup.name}」的名称或从列表移除。</p>
-                  <div className="workspace-management-menu">
-                    {groupMenuNode(currentGroup.path, currentGroup.name, currentGroup.chats.length)}
-                  </div>
-                  {send && openFile && setNotice ? (
-                    <WorkspaceKbPanel
-                      workspaceKey={relToCwd(currentGroup.path, workspaceRoot) || currentGroup.name}
-                      workspaceName={currentGroup.name}
-                      workspacePath={currentGroup.path}
-                      send={send}
-                      assistantResults={assistantResults ?? []}
-                      onOpenBoard={(relPath) => openFile(relPath)}
-                      setNotice={(msg) => setNotice(msg)}
-                    />
-                  ) : null}
-                </>
-              ) : (
-                <p className="loop-meta">当前没有可管理的子工作区。USER 根目录不能在这里管理，请先切换或新建工作区。</p>
-              )}
-            </section>
-          ) : (
-            <ChatList
-              sidebarGroups={sidebarGroups}
-              moreGroups={moreGroups}
-              activeId={activeId}
-              expandedGroups={expandedGroups}
-              groupMenu={groupMenu}
-              startChatIn={startChatIn}
-              setExpandedGroups={setExpandedGroups}
-              duplicateGroupNames={duplicateGroupNames}
-              workspaceRoot={workspaceRoot}
-              setGroupMenu={setGroupMenu}
-              groupMenuNode={groupMenuNode}
-              renameId={renameId}
-              renameDraft={renameDraft}
-              setRenameDraft={setRenameDraft}
-              commitRename={commitRename}
-              renameSkipRef={renameSkipRef}
-              setRenameId={setRenameId}
-              selectChat={selectChat}
-              startRename={startRename}
-              deleteChat={deleteChat}
-              moreOpen={moreOpen}
-              setMoreOpen={setMoreOpen}
-              openNewChatMenu={openNewChatMenu}
-            />
-          )}
+          <ChatList
+            sidebarGroups={sidebarGroups}
+            moreGroups={moreGroups}
+            activeId={activeId}
+            expandedGroups={expandedGroups}
+            groupMenu={groupMenu}
+            startChatIn={startChatIn}
+            setExpandedGroups={setExpandedGroups}
+            duplicateGroupNames={duplicateGroupNames}
+            workspaceRoot={workspaceRoot}
+            setGroupMenu={setGroupMenu}
+            groupMenuNode={groupMenuNode}
+            renameId={renameId}
+            renameDraft={renameDraft}
+            setRenameDraft={setRenameDraft}
+            commitRename={commitRename}
+            renameSkipRef={renameSkipRef}
+            setRenameId={setRenameId}
+            selectChat={selectChat}
+            startRename={startRename}
+            deleteChat={deleteChat}
+            moreOpen={moreOpen}
+            setMoreOpen={setMoreOpen}
+            openNewChatMenu={openNewChatMenu}
+          />
         </>
       )}
       <SideFoot

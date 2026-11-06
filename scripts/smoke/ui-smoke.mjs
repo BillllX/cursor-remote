@@ -248,12 +248,12 @@ async function main() {
       () => page.locator(".files-overlay.open .files-browser-close").click(),
     ),
   );
-  // 1440 宽是停靠模式：弹层收进侧栏列，是对话框但不是模态
+  // 工作区与当前会话工具统一为模态浮窗
   await step("b4", "全文搜索", () =>
-    overlay(() => workspaceButton("工作区搜索").click(), openBox('.grep-box[role="dialog"]:not([aria-modal])'), esc),
+    overlay(() => workspaceButton("工作区搜索").click(), openBox('.grep-box[role="dialog"][aria-modal="true"]'), esc),
   );
   await step("b5", "终端", () =>
-    overlay(() => sessionTool("终端输出").click(), openBox('.terminal-box[role="dialog"]:not([aria-modal])'), esc),
+    overlay(() => sessionTool("终端输出").click(), openBox('.terminal-box[role="dialog"][aria-modal="true"]'), esc),
   );
   await step("b6", "循环", () => overlay(() => sessionTool("Loop").click(), openBox(".loop-box"), esc));
   await step("b7", "工作区选择（新对话）：列表撑满对话框、对话框不出屏", () =>

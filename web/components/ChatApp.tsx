@@ -63,11 +63,11 @@ import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention 
 import { appendDraftMention, applyAssistantMessage, applyAssistantSnapshot, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
-import { pathFromPayload, shellRows } from "../lib/chat/tools";
+import { pathFromPayload, shellRows, workspaceShellRows } from "../lib/chat/tools";
 import { cancelTurnBodyRequest, startTurnBodyRequest, type TurnBodyRequest } from "../lib/chat/turnBodyRequest";
 import { deferredPlaceholder, editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnAllowsActions, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
-import { gitLetterOf, inWorkspaceRoot, moveWorkspacePath, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceRemovalRecovery } from "../lib/chat/workspace";
+import { gitLetterOf, inWorkspaceRoot, moveWorkspacePath, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel, workspaceRemovalRecovery } from "../lib/chat/workspace";
 import { isAssistantDomainActive, type WorkspaceNavId } from "../lib/productNavigation";
 import { AdminOverlay } from "./chat/AdminOverlay";
 import { AssistantChatHead } from "./chat/AssistantChatHead";
@@ -84,6 +84,7 @@ import { SearchOverlay } from "./chat/SearchOverlay";
 import { Sidebar } from "./chat/Sidebar";
 import { TerminalOverlay } from "./chat/TerminalOverlay";
 import { Thread } from "./chat/Thread";
+import { WorkspaceManagementOverlay } from "./chat/WorkspaceManagementOverlay";
 import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 import { CollabShell } from "./collab/CollabShell";
 import { readCollabRoute, replaceCollabRoute } from "./collab/collabNavigation";
@@ -216,6 +217,8 @@ export default function ChatApp() {
   const terminalShown = useHeldOpen(terminalOpen);
   const [filesOpen, setFilesOpen] = useState(false);
   const filesShown = useHeldOpen(filesOpen);
+  const [managementOpen, setManagementOpen] = useState(false);
+  const managementShown = useHeldOpen(managementOpen);
   const [filesQuery, setFilesQuery] = useState("");
   const [grepHits, setGrepHits] = useState<SearchHit[]>([]);
 
@@ -223,7 +226,8 @@ export default function ChatApp() {
     if ((workspaceSection === "files" || workspaceSection === "git") && !filesOpen) setWorkspaceSection("chats");
     if (workspaceSection === "search" && !grepOpen) setWorkspaceSection("chats");
     if (workspaceSection === "memory" && !assistantOpen) setWorkspaceSection("chats");
-  }, [assistantOpen, filesOpen, grepOpen, workspaceSection]);
+    if (workspaceSection === "management" && !managementOpen) setWorkspaceSection("chats");
+  }, [assistantOpen, filesOpen, grepOpen, managementOpen, workspaceSection]);
   const [grepIndex, setGrepIndex] = useState(0);
   const [grepWait, setGrepWait] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -298,7 +302,10 @@ export default function ChatApp() {
     () => chats.find((chat) => chat.id === activeId) ?? chats[0],
     [chats, activeId],
   );
-  const shellEntries = useMemo(() => shellRows(active?.turns ?? []), [active?.turns]);
+  const shellEntries = useMemo(
+    () => shellRows(active?.turns ?? [], { chatId: active?.id, chatTitle: active?.title || "新对话" }),
+    [active?.id, active?.title, active?.turns],
+  );
   const shellTail = shellEntries.at(-1);
   const shellTailKey = shellTail ? `${shellTail.id}\0${shellTail.output}` : "";
   useEffect(() => {
@@ -350,6 +357,16 @@ export default function ChatApp() {
     cwd: workspaceContextCwd,
     workspaceQuery,
   });
+  const workspaceShellEntries = useMemo(
+    () =>
+      workspaceShellRows(
+        chats,
+        sidebarGroups[0]?.path || workspaceContextCwd || cwd || workspaceRoot,
+        workspaceRoot,
+        isAssistantChat,
+      ),
+    [chats, sidebarGroups, workspaceContextCwd, cwd, workspaceRoot],
+  );
   const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
   const workspaceExact = workspaceChoices.some(
     (item) => item.name.toLowerCase() === workspaceQuery.trim().toLowerCase(),
@@ -372,6 +389,7 @@ export default function ChatApp() {
   const adminOpenRef = useRef(false);
   const terminalLogRef = useRef<HTMLDivElement>(null);
   const filesOpenRef = useRef(false);
+  const managementOpenRef = useRef(false);
   /** 最近一次收到的媒体票据（按对话），右键下载直接拿来签地址 */
   const mediaTicketRef = useRef<{ chatId: string; media: MediaTicket } | null>(null);
   /** 还没拿到票据时先发 read_file 换一张，reqId → 路径 */
@@ -1974,6 +1992,7 @@ export default function ChatApp() {
   const layerSeqRef = useRef<Record<string, number>>({});
   const layerOpen: Record<string, boolean> = {
     assistant: assistantOpen,
+    management: managementOpen,
     groupMenu: groupMenu != null,
     admin: adminOpen,
     workspace: workspaceMenuOpen,
@@ -2005,6 +2024,7 @@ export default function ChatApp() {
         // 同时开着几层时先关最后打开的那层；打开时间一样时按这里的先后
         const layers: [string, boolean, () => void][] = [
           ["assistant", assistantOpenRef.current, () => setAssistantOpen(false)],
+          ["management", managementOpenRef.current, () => setManagementOpen(false)],
           [
             "groupMenu",
             groupMenuRef.current != null,
@@ -2029,7 +2049,7 @@ export default function ChatApp() {
             grepOpenRef.current,
             () => {
               setGrepOpen(false);
-              if (wideIDERef.current) setSidePane("chats");
+              setSidePane("chats");
             },
           ],
           [
@@ -2037,7 +2057,7 @@ export default function ChatApp() {
             loopOpenRef.current,
             () => {
               setLoopOpen(false);
-              if (wideIDERef.current) setSidePane("chats");
+              setSidePane("chats");
             },
           ],
           [
@@ -2045,7 +2065,7 @@ export default function ChatApp() {
             terminalOpenRef.current,
             () => {
               setTerminalOpen(false);
-              if (wideIDERef.current) setSidePane("chats");
+              setSidePane("chats");
             },
           ],
           [
@@ -2054,7 +2074,7 @@ export default function ChatApp() {
             () => {
               setFilesOpen(false);
               setFilesQuery("");
-              if (wideIDERef.current) setSidePane("chats");
+              setSidePane("chats");
             },
           ],
           ["search", searchOpenRef.current, () => setSearchOpen(false)],
@@ -2645,16 +2665,19 @@ export default function ChatApp() {
     setGrepOpen(false);
     setLoopOpen(false);
     setTerminalOpen(false);
+    setManagementOpen(false);
+    setAssistantOpen(false);
     setPaletteOpen(false);
     setSearchOpen(false);
-    if (wideIDERef.current) setSidePane("files");
+    setSidePane("files");
+    setWorkspaceSection("files");
     setFilesOpen(true);
   }
 
   function closeFiles() {
     setFilesOpen(false);
     setFilesQuery("");
-    if (wideIDERef.current) setSidePane("chats");
+    setSidePane("chats");
   }
 
   /** 右键“下载”：有未过期的票据直接取，没有就先读一次文件换票据 */
@@ -2680,6 +2703,7 @@ export default function ChatApp() {
     replaceCollabRoute({ active: false });
     setNavOpen(false);
     setWorkspaceMenuOpen(false);
+    setManagementOpen(false);
     setGroupMenu(null);
     setAdminOpen(false);
     setSearchOpen(false);
@@ -2708,43 +2732,25 @@ export default function ChatApp() {
       return;
     }
     if (pane === "chats") setWorkspaceSection("chats");
-    if (pane === "files") setWorkspaceSection("files");
-    if (pane === "search") setWorkspaceSection("search");
-    if (pane === "git") setWorkspaceSection("git");
-    if (!wideIDERef.current) {
-      if (pane === "files" || pane === "git") openFilesBrowser();
-      if (pane === "search") {
-        setPaletteOpen(false);
-        setLoopOpen(false);
-        setAssistantOpen(false);
-        setTerminalOpen(false);
-        setGrepOpen(true);
-      }
-      if (pane === "loop") {
-        setGrepOpen(false);
-        setTerminalOpen(false);
-        setAssistantOpen(false);
-        setLoopOpen(true);
-      }
-      if (pane === "terminal") {
-        setGrepOpen(false);
-        setLoopOpen(false);
-        setAssistantOpen(false);
-        setTerminalOpen(true);
-      }
-      return;
-    }
+    else if (pane === "files") setWorkspaceSection("files");
+    else if (pane === "search") setWorkspaceSection("search");
+    else if (pane === "git") setWorkspaceSection("git");
+    else setWorkspaceSection("chats");
+
     setSidePane(pane);
-    setNavOpen(false);
     setSearchOpen(false);
     setPaletteOpen(false);
     setThreadFindOpen(false);
+    setManagementOpen(false);
+    setAssistantOpen(false);
     setFilesOpen(pane === "files" || pane === "git");
     setGrepOpen(pane === "search");
     setLoopOpen(pane === "loop");
-    setAssistantOpen(false);
     setTerminalOpen(pane === "terminal");
-    if (pane === "files") setFilesQuery("");
+    if (pane === "files" || pane === "git") {
+      setFilesQuery("");
+      send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current });
+    }
   }
 
   /** 主区切到助理会话；还没同步到本机时返回 false */
@@ -2789,6 +2795,7 @@ export default function ChatApp() {
   function openCollabDomain() {
     setNavOpen(false);
     setAssistantOpen(false);
+    setManagementOpen(false);
     setSearchOpen(false);
     setPaletteOpen(false);
     setFilesOpen(false);
@@ -2807,6 +2814,12 @@ export default function ChatApp() {
   function openWorkspaceMemory() {
     const scopeId = relToCwd(workspaceContextCwd || "", workspaceRoot);
     setNavOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setManagementOpen(false);
+    setSidePane("chats");
     setWorkspaceSection("memory");
     setAssistantInitialView("memory");
     setAssistantMemoryScopeId(scopeId || undefined);
@@ -2816,8 +2829,16 @@ export default function ChatApp() {
   }
 
   function openWorkspaceManagement() {
+    setNavOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setAssistantOpen(false);
+    setSidePane("chats");
     setWorkspaceSection("management");
     setGroupMenu(null);
+    setManagementOpen(true);
   }
 
   function openChatById(chatId: string) {
@@ -4320,6 +4341,7 @@ export default function ChatApp() {
   terminalOpenRef.current = terminalOpen;
   adminOpenRef.current = adminOpen;
   filesOpenRef.current = filesOpen;
+  managementOpenRef.current = managementOpen;
   grepQRef.current = grepQ;
   const searchHits = searchQ.trim()
     ? chats.filter((chat) => {
@@ -4388,22 +4410,30 @@ export default function ChatApp() {
     if (notice) announce(notice);
   }, [notice, announce]);
 
-  // 宽屏 IDE 模式下循环、终端、搜索是侧栏面板，不算模态，不圈焦点
+  // 所有工作区与会话功能面板均使用模态浮窗
   const adminTrap = useFocusTrap<HTMLDivElement>(adminOpen);
   const searchTrap = useFocusTrap<HTMLDivElement>(searchOpen);
   const paletteTrap = useFocusTrap<HTMLDivElement>(paletteOpen);
   const workspaceTrap = useFocusTrap<HTMLDivElement>(workspaceMenuOpen);
   const assistantTrap = useFocusTrap<HTMLDivElement>(assistantOpen);
+  const managementTrap = useFocusTrap<HTMLDivElement>(managementOpen);
   useEffect(() => {
     if (!workspaceMenuOpen) return;
     document.getElementById(`workspace-choice-${workspacePick}`)?.scrollIntoView({ block: "nearest" });
   }, [workspaceMenuOpen, workspacePick]);
-  const loopTrap = useFocusTrap<HTMLFormElement>(loopOpen && !(wideIDE && sidePane === "loop"));
-  const terminalTrap = useFocusTrap<HTMLDivElement>(terminalOpen && !(wideIDE && sidePane === "terminal"));
-  const grepTrap = useFocusTrap<HTMLDivElement>(grepOpen && !(wideIDE && sidePane === "search"));
-  // 只有 Git 面板还嵌在侧栏里；文件浏览器是浮层
-  const filesDocked = wideIDE && sidePane === "git";
-  const filesTrap = useFocusTrap<HTMLDivElement>(filesOpen && !filesDocked);
+  const loopTrap = useFocusTrap<HTMLFormElement>(loopOpen);
+  const terminalTrap = useFocusTrap<HTMLDivElement>(terminalOpen);
+  const grepTrap = useFocusTrap<HTMLDivElement>(grepOpen);
+  const filesTrap = useFocusTrap<HTMLDivElement>(filesOpen);
+  const currentWorkspaceGroup = sidebarGroups[0];
+  const canManageCurrentWorkspace = Boolean(
+    currentWorkspaceGroup &&
+      !currentWorkspaceGroup.user &&
+      !sameCwd(currentWorkspaceGroup.path, workspaceRoot),
+  );
+  const currentWorkspaceName =
+    currentWorkspaceGroup?.name ||
+    workspaceLabel(workspaceContextCwd || cwd || workspaceRoot, workspaceRoot, assistantName);
 
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
@@ -4598,6 +4628,27 @@ export default function ChatApp() {
         lastAssistantResult={lastAssistantResult}
         assistantResultTick={assistantResultTick}
       />
+      {managementShown ? (
+        <WorkspaceManagementOverlay
+          managementOpen={managementOpen}
+          setManagementOpen={setManagementOpen}
+          managementTrap={managementTrap}
+          currentGroup={currentWorkspaceGroup}
+          workspaceRoot={workspaceRoot}
+          canManageWorkspace={canManageCurrentWorkspace}
+          isTopLevelWorkspace={isTopLevelWorkspace}
+          startChatIn={startChatIn}
+          openWorkspaceSwitcher={openWorkspaceSwitcher}
+          renameWorkspacePrompt={renameWorkspacePrompt}
+          copyPath={copyPath}
+          clearWorkspaceChats={clearWorkspaceChats}
+          deleteWorkspaceConfirm={deleteWorkspaceConfirm}
+          send={send}
+          assistantResults={assistantResults}
+          openFile={openFile}
+          setNotice={setNotice}
+        />
+      ) : null}
       {loopOpen ? <LoopOverlay
         wideIDE={wideIDE}
         sidePane={sidePane}
@@ -4618,12 +4669,33 @@ export default function ChatApp() {
       /> : null}
       {terminalShown ? <TerminalOverlay
         terminalOpen={terminalOpen}
-        wideIDE={wideIDE}
-        sidePane={sidePane}
         setTerminalOpen={setTerminalOpen}
         terminalTrap={terminalTrap}
         shellEntries={shellEntries}
+        workspaceShellEntries={workspaceShellEntries}
         terminalLogRef={terminalLogRef}
+        workspaceName={currentWorkspaceName}
+        chatTitle={active?.title || "新对话"}
+        setNotice={setNotice}
+        onJumpToTurn={(turnId, targetChatId) => {
+          if (targetChatId && targetChatId !== activeIdRef.current) {
+            const targetChat = chatsRef.current.find((row) => row.id === targetChatId);
+            if (targetChat) selectChat(targetChat);
+          }
+          window.requestAnimationFrame(() => {
+            threadRef.current?.querySelector(`[data-turn="${turnId}"]`)?.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          });
+        }}
+        onSendCommandToComposer={(promptText) => {
+          applyDraft(promptText);
+          setNotice("已填入当前对话输入框");
+          window.requestAnimationFrame(() => {
+            document.querySelector<HTMLTextAreaElement>(".composer-input")?.focus();
+          });
+        }}
       /> : null}
       {grepShown ? <GrepOverlay
         grepOpen={grepOpen}
@@ -4640,15 +4712,15 @@ export default function ChatApp() {
         openFile={openFile}
         wideIDERef={wideIDERef}
         grepWait={grepWait}
+        workspaceName={currentWorkspaceName}
       /> : null}
       {filesShown ? <FilesOverlay
         filesOpen={filesOpen}
-        filesDocked={filesDocked}
         closeFiles={closeFiles}
         filesTrap={filesTrap}
         sidePane={sidePane}
         wideIDE={wideIDE}
-        cwd={cwd}
+        cwd={workspaceContextCwd || cwd}
         workspaceRoot={workspaceRoot}
         assistantName={assistantName}
         filesQuery={filesQuery}
@@ -4667,6 +4739,16 @@ export default function ChatApp() {
         handleTreeCreate={handleTreeCreate}
         handleTreeRename={handleTreeRename}
         handleTreeDelete={handleTreeDelete}
+        onSwitchMode={(nextMode) => {
+          setSidePane(nextMode);
+          setWorkspaceSection(nextMode);
+        }}
+        onRefresh={() => {
+          loadedDirsRef.current.clear();
+          setLoadingDirs({ "": true });
+          send({ type: "list_files", query: "", dir: "", chatId: activeIdRef.current });
+          setNotice("已刷新工作区文件与源代码状态");
+        }}
       /> : null}
       {collabOpen ? (
         <CollabShell

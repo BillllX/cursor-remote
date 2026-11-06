@@ -15,10 +15,167 @@
   word-break: break-word;
 }
 
+.gitToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 10px;
+}
+
+.gitFilterGroup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gitFilterPill {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.gitFilterPill:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.gitFilterPillOn {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.gitBody {
+  padding: 0 16px 16px;
+  overflow: auto;
+}
+
+.gitList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gitRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+}
+
+.gitRow:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.gitRowActive {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.gitRowMain {
+  flex: 1 1 260px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.gitFileCopy {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 2px;
+}
+
+.gitFileName {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gitFilePath {
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-2xs);
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gitStatusTag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--hover);
+  font-size: var(--fs-2xs);
+}
+
+.gitRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.gitActionBtn {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.gitActionBtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
 .gitEmpty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
   color: var(--dim);
   font-size: var(--fs-md);
-  padding: 16px 14px;
+  padding: 40px 16px;
+}
+
+.gitEmptyTitle {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
 }
 
 .kbBoardsSection {

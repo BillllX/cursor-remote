@@ -1,5 +1,346 @@
-.cmd {
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sidebar);
+}
+
+.filterGroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.filterPill {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+
+.filterPill:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.filterPillOn {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.searchWrap {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+}
+
+.searchInput {
+  width: 100%;
+  height: 30px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+.searchInput:focus {
+  border-color: var(--accent);
+  background: var(--bg-panel);
+}
+
+.clearBtn {
+  position: absolute;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--dim);
   font-size: var(--fs-md);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.clearBtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.cardRunning {
+  border-color: var(--accent-line);
+}
+
+.cardFailed {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+}
+
+.cmdRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.cmd {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text);
+  word-break: break-all;
+}
+
+.statusBadge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.statusRun {
+  background: var(--run-bg);
+  color: var(--run);
+}
+
+.statusOk {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.statusErr {
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.actionBtn {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+}
+
+.actionBtn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.actionBtnDanger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  color: var(--danger-fg);
+  background: var(--danger-bg);
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 60%, var(--bg));
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.metaChip {
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--hover);
+  color: var(--muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metaDesc {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outputWrap {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.stderrBlock {
+  border-left: 3px solid var(--danger);
+  background: color-mix(in srgb, var(--danger-bg) 45%, var(--bg));
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  padding: 6px 10px;
+}
+
+.stderrHeader {
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--danger-fg);
+  margin-bottom: 4px;
+}
+
+.stderrPre {
+  margin: 0;
+  color: var(--danger-fg);
+}
+
+.emptyBox {
+  flex: 1;
+  padding: 36px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.emptyTitle {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.quickSection {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 560px;
+}
+
+.quickPresets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.presetChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.presetChip:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.presetPrompt {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.presetLabel {
+  font-family: var(--sans, inherit);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+}
+
+.quickBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-sidebar);
+}
+
+.quickPrompt {
+  font-family: var(--mono, monospace);
+  font-weight: 700;
+  color: var(--accent);
+  font-size: var(--fs-base);
+}
+
+.quickInput {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+.quickInput:focus {
+  border-color: var(--accent);
+  background: var(--bg-panel);
 }

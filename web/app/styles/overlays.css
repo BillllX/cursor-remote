@@ -43,7 +43,166 @@
 }
 
 .grep-box {
-  width: min(720px, calc(100% - 32px));
+  width: min(760px, calc(100% - 32px));
+  max-height: min(780px, calc(100dvh - 64px));
+  display: flex;
+  flex-direction: column;
+}
+
+.grep-box .search-input {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.grep-box .search-list {
+  flex: 1;
+  min-height: 0;
+  max-height: min(560px, 62dvh);
+  border-top: 0;
+}
+
+.search-overlay.workspace-modal-overlay {
+  place-items: center;
+  padding: 24px;
+  z-index: 65;
+}
+
+.workspace-modal-box {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  flex: none;
+}
+
+.workspace-modal-heading {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 3px;
+}
+
+.workspace-modal-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-modal-title {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.workspace-modal-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--muted);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+.workspace-modal-sub {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.workspace-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+.workspace-modal-btn {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+}
+
+.workspace-modal-btn:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.workspace-modal-close {
+  width: 32px;
+  height: 32px;
+  font-size: var(--fs-2xl);
+}
+
+.workspace-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.workspace-modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workspace-manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workspace-manage-actions .new-chat {
+  flex: 0 1 auto;
+}
+
+.new-chat.danger-btn {
+  color: var(--danger, #d9534f);
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 35%, var(--border));
+}
+
+.new-chat.danger-btn:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.new-chat.danger-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.management-box {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(82vh, 760px);
 }
 
 .files-overlay {

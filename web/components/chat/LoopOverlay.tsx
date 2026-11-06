@@ -1,10 +1,10 @@
-// 循环任务（Loop）弹层
+// 循环任务（Loop）浮窗
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { AgentMode, ClientMessage, LoopState } from "@shared/protocol";
 
 type LoopOverlayProps = {
-  wideIDE: boolean;
-  sidePane: "search" | "chats" | "files" | "git" | "terminal" | "loop";
+  wideIDE?: boolean;
+  sidePane?: "search" | "chats" | "files" | "git" | "terminal" | "loop";
   setLoopOpen: Dispatch<SetStateAction<boolean>>;
   loopTrap: RefObject<HTMLFormElement | null>;
   loopGoal: string;
@@ -27,8 +27,6 @@ type LoopOverlayProps = {
 };
 
 export function LoopOverlay({
-  wideIDE,
-  sidePane,
   setLoopOpen,
   loopTrap,
   loopGoal,
@@ -44,17 +42,19 @@ export function LoopOverlay({
   setLoopMax,
   loops,
 }: LoopOverlayProps) {
+  const activeLoop = loops[activeId];
+  const isRunning = activeLoop && activeLoop.status !== "stopped" && activeLoop.status !== "idle";
+
   return (
     <div
-      className="search-overlay open"
-      onClick={() => {
-        if (wideIDE && sidePane === "loop") return;
-        setLoopOpen(false);
-      }}
+      className="search-overlay workspace-modal-overlay open"
+      onClick={() => setLoopOpen(false)}
     >
       <form
         ref={loopTrap}
-        className="search-box loop-box"
+        className="search-box loop-box workspace-modal-box"
+        role="dialog"
+        aria-modal="true"
         aria-label="循环任务"
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
@@ -89,68 +89,92 @@ export function LoopOverlay({
           });
         }}
       >
-        <div className="loop-title">Loop · 当前对话</div>
-        <textarea
-          className="loop-goal"
-          rows={4}
-          placeholder="每拍要做的事。做完时让它在最后一行写 LOOP_DONE"
-          value={loopGoal}
-          onChange={(event) => setLoopGoal(event.target.value)}
-        />
-        <label className="loop-field">
-          间隔（秒）
-          <input
-            className="side-input"
-            inputMode="numeric"
-            value={loopInterval}
-            onChange={(event) => setLoopInterval(event.target.value)}
-          />
-        </label>
-        <label className="loop-field">
-          最多拍数，可空
-          <input
-            className="side-input"
-            inputMode="numeric"
-            value={loopMax}
-            onChange={(event) => setLoopMax(event.target.value)}
-          />
-        </label>
-        {loops[activeId] ? (
-          <div className="loop-meta">
-            {loops[activeId].status === "running"
-              ? "正在跑"
-              : loops[activeId].status === "armed"
-                ? "等待下一拍"
-                : loops[activeId].status === "stopped"
-                  ? "已停止"
-                  : "空闲"}
-            {" · "}第 {loops[activeId].tick} 拍{loops[activeId].maxTicks ? ` / ${loops[activeId].maxTicks}` : ""}
-            {loops[activeId].tickStatus === "skipped"
-              ? " · 顺延"
-              : loops[activeId].tickStatus === "error"
-                ? " · 出错"
-                : ""}
-            {loops[activeId].lastSummary ? ` · ${loops[activeId].lastSummary}` : ""}
+        <div className="workspace-modal-head">
+          <div className="workspace-modal-heading">
+            <div className="workspace-modal-title-row">
+              <span className="loop-title workspace-modal-title">Loop · 当前对话</span>
+              {isRunning ? <span className="workspace-modal-badge">运行中</span> : null}
+            </div>
+            <div className="workspace-modal-sub">按设定间隔自动唤醒当前会话继续推进目标</div>
           </div>
-        ) : (
-          <div className="loop-meta">还没开始。关上网页也会继续，重新打开后状态还在。</div>
-        )}
-        <div className="loop-actions">
-          <button
-            className="new-chat"
-            type="submit"
-            disabled={!!loops[activeId] && loops[activeId].status !== "stopped" && loops[activeId].status !== "idle"}
-          >
-            开始
-          </button>
-          <button
-            className="new-chat"
-            type="button"
-            disabled={!loops[activeId] || loops[activeId].status === "stopped"}
-            onClick={() => send({ type: "loop_stop", chatId: activeId })}
-          >
-            停止
-          </button>
+          <div className="workspace-modal-actions">
+            <button
+              type="button"
+              className="files-browser-close workspace-modal-close"
+              aria-label="关闭循环任务"
+              title="关闭 (Esc)"
+              onClick={() => setLoopOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        <div className="workspace-modal-body" style={{ display: "grid", gap: 12 }}>
+          <textarea
+            className="loop-goal"
+            rows={4}
+            placeholder="每拍要做的事。做完时让它在最后一行写 LOOP_DONE"
+            value={loopGoal}
+            onChange={(event) => setLoopGoal(event.target.value)}
+          />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label className="loop-field">
+              间隔（秒）
+              <input
+                className="side-input"
+                inputMode="numeric"
+                value={loopInterval}
+                onChange={(event) => setLoopInterval(event.target.value)}
+              />
+            </label>
+            <label className="loop-field">
+              最多拍数，可空
+              <input
+                className="side-input"
+                inputMode="numeric"
+                value={loopMax}
+                onChange={(event) => setLoopMax(event.target.value)}
+              />
+            </label>
+          </div>
+          {activeLoop ? (
+            <div className="loop-meta">
+              {activeLoop.status === "running"
+                ? "正在跑"
+                : activeLoop.status === "armed"
+                  ? "等待下一拍"
+                  : activeLoop.status === "stopped"
+                    ? "已停止"
+                    : "空闲"}
+              {" · "}第 {activeLoop.tick} 拍{activeLoop.maxTicks ? ` / ${activeLoop.maxTicks}` : ""}
+              {activeLoop.tickStatus === "skipped"
+                ? " · 顺延"
+                : activeLoop.tickStatus === "error"
+                  ? " · 出错"
+                  : ""}
+              {activeLoop.lastSummary ? ` · ${activeLoop.lastSummary}` : ""}
+            </div>
+          ) : (
+            <div className="loop-meta">还没开始。关上网页也会继续，重新打开后状态还在。</div>
+          )}
+          <div className="loop-actions">
+            <button
+              className="new-chat primary"
+              type="submit"
+              disabled={Boolean(isRunning)}
+            >
+              开始
+            </button>
+            <button
+              className="new-chat"
+              type="button"
+              disabled={!activeLoop || activeLoop.status === "stopped"}
+              onClick={() => send({ type: "loop_stop", chatId: activeId })}
+            >
+              停止
+            </button>
+          </div>
         </div>
       </form>
     </div>

@@ -175,26 +175,41 @@ export default function AssistantPanel({
   const brief = state?.brief?.text?.trim();
   const memoryEntry = assistantMemoryEntryText(memoryNavigation);
 
+  const isWorkspaceMemoryMode = memoryNavigation.source === "workspace" && tab === "memory";
+
   return (
-    <div className="search-overlay open assistant-overlay" onClick={onClose}>
+    <div className="search-overlay workspace-modal-overlay open assistant-overlay" onClick={onClose}>
       <div
         ref={dialogRef}
-        className={`search-box assistant-box${tab === "memory" ? " memory-center-wide" : ""}`}
+        className={`search-box assistant-box workspace-modal-box${tab === "memory" ? " memory-center-wide" : ""}`}
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={`${name} · 助理`}
       >
-        <div className="assistant-head">
-          <div className="assistant-head-text">
-            <div className="loop-title">{name} · 助理</div>
-            <div className="loop-meta">
-              后台 {state?.background.model || "grok-4.7"} · {backgroundOk ? "就绪" : state?.background.reason || "未就绪"}
+        <div className="assistant-head workspace-modal-head">
+          <div className="assistant-head-text workspace-modal-heading">
+            <div className="workspace-modal-title-row">
+              <div className="loop-title workspace-modal-title">
+                {isWorkspaceMemoryMode ? "记忆与规则" : `${name} · 助理`}
+              </div>
+              {isWorkspaceMemoryMode ? (
+                <span className="workspace-modal-badge">
+                  {memoryNavigation.target === "personal" ? "当前工作区" : memoryNavigation.target}
+                </span>
+              ) : null}
+            </div>
+            <div className="loop-meta workspace-modal-sub">
+              {isWorkspaceMemoryMode
+                ? `管理当前工作区记忆（.jiebo/memory.md）、规则（AGENTS.md / .cursor/rules）与个人偏好 · ${name}`
+                : `后台 ${state?.background.model || "grok-4.7"} · ${backgroundOk ? "就绪" : state?.background.reason || "未就绪"}`}
             </div>
           </div>
-          <button type="button" className="logout-btn" onClick={onClose}>
-            关闭
-          </button>
+          <div className="workspace-modal-actions">
+            <button type="button" className="logout-btn" onClick={onClose}>
+              关闭
+            </button>
+          </div>
         </div>
         <div
           className="assistant-tabs"

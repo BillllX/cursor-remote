@@ -90,61 +90,6 @@
     grid-row: 1 / -1;
   }
 
-  .app.ide.pane-git .sidebar,
-  .app.ide.pane-search .sidebar,
-  .app.ide.pane-terminal .sidebar,
-  .app.ide.pane-loop .sidebar {
-    display: none;
-  }
-
-  .app.ide.pane-git > .files-overlay.open,
-  .app.ide.pane-search > .search-overlay.open,
-  .app.ide.pane-terminal > .search-overlay.open,
-  .app.ide.pane-loop > .search-overlay.open {
-    position: relative;
-    inset: auto;
-    grid-column: 2;
-    grid-row: 1;
-    z-index: 1;
-    display: flex;
-    padding: 0;
-    background: var(--bg-sidebar);
-    opacity: 1;
-    pointer-events: auto;
-    min-height: 0;
-    height: 100%;
-    overflow: hidden;
-    place-items: stretch;
-  }
-
-  .app.ide.pane-git .files-browser,
-  .app.ide.pane-search .search-box,
-  .app.ide.pane-terminal .terminal-box,
-  .app.ide.pane-loop .loop-box {
-    width: 100%;
-    height: 100%;
-    max-width: none;
-    max-height: none;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    opacity: 1;
-    transform: none;
-  }
-
-  .app.ide.pane-search .search-list,
-  .app.ide.pane-terminal .terminal-log {
-    min-height: 0;
-    overflow: auto;
-    flex: 1;
-  }
-
-  .app.ide.pane-git .file-tree,
-  .app.ide.pane-git .tree-empty,
-  .app.ide.pane-git .files-browser-search {
-    display: none;
-  }
-
   /* 921–1366 精细指针下，旧的 :has(.main.with-preview) 会把三列压成抽屉。ide 必须压过它。 */
   .app.ide:has(.main.with-preview) {
     grid-template-columns: 56px minmax(220px, 280px) minmax(0, 1fr);
