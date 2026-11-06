@@ -18,6 +18,14 @@ const validNoArgs: ClientMessage = { type: "assistant_op", op: "memory_export" }
 const validHelperSearch: ClientMessage = buildAssistantOpMessage("memory_center_search", { query: "x" });
 const validHelperLegacy: ClientMessage = buildAssistantOpMessage("todo_done", { id: "t1" });
 const validHelperNoArgs: ClientMessage = buildAssistantOpMessage("push_test");
+const validKbStatus: ClientMessage = buildAssistantOpMessage("kb_workspace_status", {
+  workspace: "Fintopia集团",
+});
+const validDropToken: ClientMessage = buildAssistantOpMessage("drop_token_create", {
+  workspace: "Fintopia集团",
+  passcode: "fintopia-2026",
+  expiresInDays: 90,
+});
 
 void validSearch;
 void validGetBare;
@@ -27,6 +35,8 @@ void validNoArgs;
 void validHelperSearch;
 void validHelperLegacy;
 void validHelperNoArgs;
+void validKbStatus;
+void validDropToken;
 
 // @ts-expect-error memory_center_search 缺 query
 const badSearchNoQuery: ClientMessage = { type: "assistant_op", op: "memory_center_search", args: { scope: "x" } };
@@ -39,6 +49,12 @@ const badHelperSearch: ClientMessage = buildAssistantOpMessage("memory_center_se
 
 // @ts-expect-error helper 缺必填 search args
 buildAssistantOpMessage("memory_center_search");
+
+// @ts-expect-error 知识库状态必须指定工作区
+buildAssistantOpMessage("kb_workspace_status", {});
+
+// @ts-expect-error 创建投递口令必须提供 passcode
+buildAssistantOpMessage("drop_token_create", { workspace: "Fintopia集团" });
 
 type McGetResult = Extract<ServerMessage, { type: "assistant_result"; op: "memory_center_get" }>;
 type McSearchResult = Extract<ServerMessage, { type: "assistant_result"; op: "memory_center_search" }>;

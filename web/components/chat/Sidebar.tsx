@@ -1,7 +1,8 @@
 // 左侧对话列表侧栏
 import type { Dispatch, JSX, RefObject, SetStateAction } from "react";
+import type { AssistantResultMessage, ClientMessage } from "@shared/protocol";
 import type { Chat } from "../../lib/chat/types";
-import { sameCwd, workspaceLabel } from "../../lib/chat/workspace";
+import { relToCwd, sameCwd, workspaceLabel } from "../../lib/chat/workspace";
 import type { AppearanceId, PaletteId } from "../../lib/theme";
 import type { WorkspaceNavId } from "../../lib/productNavigation";
 import { IconRail } from "../chromeIcons";
@@ -9,6 +10,7 @@ import { JieboMark as Mark } from "../JieboMark";
 import { AssistantNavigation, type AssistantSidebarView } from "./AssistantNavigation";
 import { ChatList } from "./sidebar/ChatList";
 import { SideFoot } from "./sidebar/SideFoot";
+import { WorkspaceKbPanel } from "./WorkspaceKbPanel";
 import { WorkspaceNavigation } from "./WorkspaceNavigation";
 import styles from "./Sidebar.module.css";
 
@@ -99,6 +101,10 @@ type SidebarProps = {
     } | null>
   >;
   logout: () => void;
+  send?: (message: ClientMessage) => void;
+  assistantResults?: AssistantResultMessage[];
+  openFile?: (path: string, line?: number, asDiff?: boolean) => void;
+  setNotice?: Dispatch<SetStateAction<string>>;
 };
 
 export function Sidebar({
@@ -157,6 +163,10 @@ export function Sidebar({
   themeChoice,
   setThemeChoice,
   logout,
+  send,
+  assistantResults,
+  openFile,
+  setNotice,
 }: SidebarProps) {
   const assistantBadge = assistantInboxBadge + assistantApprovalBadge;
   const currentGroup = sidebarGroups[0];
@@ -243,6 +253,17 @@ export function Sidebar({
                   <div className="workspace-management-menu">
                     {groupMenuNode(currentGroup.path, currentGroup.name, currentGroup.chats.length)}
                   </div>
+                  {send && openFile && setNotice ? (
+                    <WorkspaceKbPanel
+                      workspaceKey={relToCwd(currentGroup.path, workspaceRoot) || currentGroup.name}
+                      workspaceName={currentGroup.name}
+                      workspacePath={currentGroup.path}
+                      send={send}
+                      assistantResults={assistantResults ?? []}
+                      onOpenBoard={(relPath) => openFile(relPath)}
+                      setNotice={(msg) => setNotice(msg)}
+                    />
+                  ) : null}
                 </>
               ) : (
                 <p className="loop-meta">当前没有可管理的子工作区。USER 根目录不能在这里管理，请先切换或新建工作区。</p>

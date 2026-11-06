@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { assistantTools, assistantToolSpecs } from "../src/assistant/tools.ts";
 import { isMutatingTool } from "../src/chat/tools.ts";
+import { revokeDropTokenFromUi } from "../src/ingest/hub.ts";
 import {
   createDropToken,
   listDropTokens,
@@ -30,7 +31,10 @@ function makeTestEnv() {
 
   const registry = new Map<string, DropWorkspaceRef>();
 
-  const addWorkspace = (key: string, id = `wsa_${Math.random().toString(16).slice(2, 10)}-0000-4000-8000-000000000001`) => {
+  const addWorkspace = (
+    key: string,
+    id = `wsa_${Math.random().toString(16).slice(2, 10)}-0000-4000-8000-000000000001`,
+  ) => {
     const path = join(workspaceRoot, key);
     mkdirSync(path, { recursive: true });
     const ref: DropWorkspaceRef = { workspaceId: id, key, path };
@@ -167,6 +171,40 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
     }
     assert.equal(verifyDropSessionToken(host, auth1.session.sessionToken).ok, false);
     assert.equal(verifyDropSessionToken(host, auth2.session.sessionToken).ok, false);
+  });
+
+  test("管理端吊销仅作用于当前工作区，不会跨工作区吊销同名口令", () => {
+    const { host, addWorkspace } = makeTestEnv();
+    const fintopia = addWorkspace("Fintopia集团");
+    const keda = addWorkspace("keda");
+    for (const workspace of ["Fintopia集团", "keda"]) {
+      assert.equal(
+        setupKbWorkspaceForTenant(host, {
+          workspace,
+          title: `${workspace} 知识库`,
+          categories: ["资料"],
+        }).ok,
+        true,
+      );
+      assert.equal(
+        createDropToken(host, {
+          workspace,
+          passcode: `${workspace}-passcode`,
+          label: "同名投递码",
+        }).ok,
+        true,
+      );
+    }
+
+    const revoked = revokeDropTokenFromUi(host, {
+      workspace: "Fintopia集团",
+      idOrLabel: "同名投递码",
+    });
+    assert.equal(revoked.ok, true);
+
+    const tokens = listDropTokens(host, { includeRevoked: true });
+    assert.equal(tokens.find((token) => token.workspaceId === fintopia.workspaceId)?.active, false);
+    assert.equal(tokens.find((token) => token.workspaceId === keda.workspaceId)?.active, true);
   });
 
   test("持有有效口令者不能通过穿插成功认证重置失败计数绕过 429 锁定", () => {

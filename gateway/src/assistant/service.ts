@@ -64,6 +64,12 @@ import {
   setupKbWorkspaceForTenant,
   type DropTenantHost,
 } from "../ingest/tokens.ts";
+import {
+  createDropTokenFromUi,
+  getKbWorkspaceStatusForUi,
+  initKbWorkspaceFromUi,
+  revokeDropTokenFromUi,
+} from "../ingest/hub.ts";
 import { migrateMemory } from "./migrate.ts";
 import {
   answerCard,
@@ -921,6 +927,34 @@ export async function handleOp(
       const { item } = postInbox(ref, { kind: "reminder", title: "测试通知", body: "这是一条测试通知，看到就说明推送通了。" });
       // 走 onInbox → pushItem，Web 和 APNs 各发一遍；这里只回报有多少订阅会收到
       return { ok: true, data: { itemId: item.id, web: listSubscriptions(ref).length, apns: apnsReady() ? listApnsSubscriptions(ref).length : 0 } };
+    }
+    case "kb_workspace_status": {
+      const workspace = str(args.workspace);
+      const res = getKbWorkspaceStatusForUi(dropHostFor(tenant), workspace);
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
+    case "kb_workspace_init": {
+      const workspace = str(args.workspace);
+      const title = str(args.title);
+      const categories = Array.isArray(args.categories)
+        ? args.categories.filter((x): x is string => typeof x === "string")
+        : [];
+      const res = initKbWorkspaceFromUi(dropHostFor(tenant), { workspace, title, categories });
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
+    case "drop_token_create": {
+      const workspace = str(args.workspace);
+      const passcode = str(args.passcode);
+      const label = str(args.label) || undefined;
+      const expiresInDays = typeof args.expiresInDays === "number" ? args.expiresInDays : undefined;
+      const res = createDropTokenFromUi(dropHostFor(tenant), { workspace, passcode, label, expiresInDays });
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
+    case "drop_token_revoke": {
+      const workspace = str(args.workspace);
+      const idOrLabel = str(args.idOrLabel);
+      const res = revokeDropTokenFromUi(dropHostFor(tenant), { workspace, idOrLabel });
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
     }
     default:
       return fail(`不认识的操作：${String(op)}`);

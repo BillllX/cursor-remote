@@ -9,6 +9,7 @@ import { BACKGROUND_MODEL } from "../src/assistant/background.ts";
 import { listInbox, PUSH_KINDS } from "../src/assistant/inbox.ts";
 import { initKbWorkspaceConfig, KB_INGEST_LOG_REL_PATH } from "../src/ingest/contract.ts";
 import { buildDropTenantHost } from "../src/ingest/http.ts";
+import { getKbWorkspaceStatusForUi } from "../src/ingest/hub.ts";
 import { appendWorkspaceIngestLog, startIngestRuntime } from "../src/ingest/notify.ts";
 import {
   bindIngestBatchWorker,
@@ -310,7 +311,10 @@ describe("Step 6: 收件箱 brief 推送、ingest-log.jsonl 与 Fintopia 端到�
     assert.equal(logEntry.batchId, authData.batchId);
     assert.equal(logEntry.status, "completed");
     assert.equal(logEntry.submitterName, "张工-风控部");
-    assert.deepEqual(logEntry.movedFiles.map((m) => m.to), ["资产/洋钱罐（锋泰、瓴岳）/20261102_洋钱罐风险预估.xlsx"]);
+    assert.deepEqual(
+      logEntry.movedFiles.map((m) => m.to),
+      ["资产/洋钱罐（锋泰、瓴岳）/20261102_洋钱罐风险预估.xlsx"],
+    );
     assert.equal(readFileSync(join(wsPath, ".jiebo", "memory.md"), "utf8"), "# 工作区记忆\n保持纯净不被摘要污染\n");
 
     // 9. 验证收件箱收到 kind: "brief" 推送卡片（绑定真实 UUID mainChatId、带 @相对路径）
@@ -341,6 +345,68 @@ describe("Step 6: 收件箱 brief 推送、ingest-log.jsonl 与 Fintopia 端到�
     assert.equal(statusRes.status, 200);
     const statusData = (await statusRes.json()) as { status: { status: string } };
     assert.equal(statusData.status.status, "completed");
+
+    // 10b. 验证同事凭上传会话调用 /api/boards 与 /api/board 在线浏览知识库 HTML 看板（且禁止读取非同名 HTML 或原始 .xlsx 底表）
+    const boardsRes = await fetch(`${baseUrl}/p/default/drop/api/boards`, {
+      headers: {
+        origin: "null",
+        authorization: `Bearer ${authData.dropSessionToken}`,
+        "x-drop-page-ticket": pageTicket,
+      },
+    });
+    assert.equal(boardsRes.status, 200);
+    const boardsData = (await boardsRes.json()) as {
+      ok: boolean;
+      boards: Array<{ relPath: string; level: string }>;
+    };
+    assert.equal(boardsData.ok, true);
+    assert.equal(
+      boardsData.boards.some((b) => b.relPath === "资产/资产.html" && b.level === "category"),
+      true,
+    );
+    assert.equal(
+      boardsData.boards.some(
+        (b) => b.relPath === "资产/洋钱罐（锋泰、瓴岳）/洋钱罐（锋泰、瓴岳）.html" && b.level === "subject",
+      ),
+      true,
+    );
+
+    const viewBoardRes = await fetch(
+      `${baseUrl}/p/default/drop/api/board?path=${encodeURIComponent("资产/资产.html")}`,
+      {
+        headers: {
+          origin: "null",
+          authorization: `Bearer ${authData.dropSessionToken}`,
+          "x-drop-page-ticket": pageTicket,
+        },
+      },
+    );
+    assert.equal(viewBoardRes.status, 200);
+    const viewBoardData = (await viewBoardRes.json()) as { ok: boolean; htmlContent: string };
+    assert.equal(viewBoardData.ok, true);
+    assert.equal(viewBoardData.htmlContent.includes("已同步11月洋钱罐"), true);
+
+    // 尝试通过 /api/board 下载底层原始 .xlsx 底表或 .jiebo/memory.md -> 403 拒绝
+    const forbiddenRawFile = await fetch(
+      `${baseUrl}/p/default/drop/api/board?path=${encodeURIComponent("资产/洋钱罐（锋泰、瓴岳）/20261102_洋钱罐风险预估.xlsx")}`,
+      {
+        headers: {
+          origin: "null",
+          authorization: `Bearer ${authData.dropSessionToken}`,
+          "x-drop-page-ticket": pageTicket,
+        },
+      },
+    );
+    assert.equal(forbiddenRawFile.status, 403);
+
+    // 10c. 验证 getKbWorkspaceStatusForUi 返回完整的知识库状态、HTML 看板与口令列表
+    const uiStatus = getKbWorkspaceStatusForUi(host, "Fintopia集团");
+    assert.equal(uiStatus.ok, true);
+    if (uiStatus.ok) {
+      assert.equal(uiStatus.data.isKnowledgeBase, true);
+      assert.equal(uiStatus.data.boards.length, 2);
+      assert.equal(uiStatus.data.tokens.length, 1);
+    }
 
     // 11. 验证 appendWorkspaceIngestLog 在追加后总大小严格受控（≤ 1MB）且保留最新记录
     const bigSummary = "x".repeat(450 * 1024);

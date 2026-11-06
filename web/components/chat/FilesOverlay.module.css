@@ -20,3 +20,28 @@
   font-size: var(--fs-md);
   padding: 16px 14px;
 }
+
+.kbBoardsSection {
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.kbBoardsList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.kbBoardBtn {
+  border-radius: 6px;
+}
+
+.kbBoardBadge {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--fill-secondary, rgba(128, 128, 128, 0.14));
+  color: var(--muted);
+}

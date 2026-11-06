@@ -2,12 +2,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { resolve } from "node:path";
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
-import {
-  hasControlChars,
-  initKbWorkspaceConfig,
-  loadKbWorkspaceConfig,
-  type KbWorkspaceConfig,
-} from "./contract.ts";
+import { hasControlChars, initKbWorkspaceConfig, loadKbWorkspaceConfig, type KbWorkspaceConfig } from "./contract.ts";
 
 export type DropWorkspaceRef = {
   workspaceId: string;
@@ -67,7 +62,10 @@ const MAX_SESSIONS_PER_TENANT = 256;
 const activeDropSessions = new Map<string, DropSessionGrant>();
 
 /** 内存防暴力枚举限流表：key -> { failures: number[], attempts: number[], lockedUntil: number, lastSeen: number } */
-const authRateLimiter = new Map<string, { failures: number[]; attempts: number[]; lockedUntil: number; lastSeen: number }>();
+const authRateLimiter = new Map<
+  string,
+  { failures: number[]; attempts: number[]; lockedUntil: number; lastSeen: number }
+>();
 
 function tokenStorePath(ref: TenantRef): string {
   return assistantPath(ref, "drop-tokens.json");
@@ -75,7 +73,9 @@ function tokenStorePath(ref: TenantRef): string {
 
 function readTokenFileUnlocked(ref: TenantRef): DropTokenFile {
   const raw = readJson<Partial<DropTokenFile>>(tokenStorePath(ref), { version: 1, items: [] });
-  const items = Array.isArray(raw.items) ? raw.items.filter((r): r is DropTokenRecord => Boolean(r && typeof r.id === "string")) : [];
+  const items = Array.isArray(raw.items)
+    ? raw.items.filter((r): r is DropTokenRecord => Boolean(r && typeof r.id === "string"))
+    : [];
   return { version: 1, items };
 }
 
@@ -331,13 +331,19 @@ export function revokeDropToken(
   host: TenantRef,
   idOrLabel: string,
   now = Date.now(),
+  workspaceId?: string,
 ): { ok: true; revokedIds: string[]; revokedId: string } | { ok: false; error: string } {
   const target = idOrLabel.trim();
   if (!target) return { ok: false, error: "请提供要吊销的口令 id 或 label" };
   const file = tokenStorePath(host);
   return withFileLockSync(file, () => {
     const data = readTokenFileUnlocked(host);
-    const matches = data.items.filter((item) => !item.revokedAt && (item.id === target || item.label === target));
+    const matches = data.items.filter(
+      (item) =>
+        !item.revokedAt &&
+        (!workspaceId || item.workspaceId === workspaceId) &&
+        (item.id === target || item.label === target),
+    );
     if (matches.length === 0) {
       return { ok: false as const, error: `未找到有效口令：${target}` };
     }

@@ -17,6 +17,10 @@ export type AssistantOpMessageRest<O extends AssistantOp> = O extends "memory_ce
           | "memory_center_import_preview"
           | "memory_center_import_apply"
           | "memory_center_import_rollback"
+          | "kb_workspace_status"
+          | "kb_workspace_init"
+          | "drop_token_create"
+          | "drop_token_revoke"
       ? [args: AssistantOpArgsMap[O]]
       : O extends
             | "memory_center_get"
@@ -75,6 +79,22 @@ export type BuildAssistantOpMessage = {
     operation: "memory_center_import_rollback",
     args: AssistantOpArgsMap["memory_center_import_rollback"],
   ): AssistantOpMessageOf<"memory_center_import_rollback">;
+  (
+    operation: "kb_workspace_status",
+    args: AssistantOpArgsMap["kb_workspace_status"],
+  ): AssistantOpMessageOf<"kb_workspace_status">;
+  (
+    operation: "kb_workspace_init",
+    args: AssistantOpArgsMap["kb_workspace_init"],
+  ): AssistantOpMessageOf<"kb_workspace_init">;
+  (
+    operation: "drop_token_create",
+    args: AssistantOpArgsMap["drop_token_create"],
+  ): AssistantOpMessageOf<"drop_token_create">;
+  (
+    operation: "drop_token_revoke",
+    args: AssistantOpArgsMap["drop_token_revoke"],
+  ): AssistantOpMessageOf<"drop_token_revoke">;
   (operation: AssistantOpNoArgs): AssistantOpMessageOf<AssistantOpNoArgs>;
   (
     operation: Exclude<
@@ -90,6 +110,10 @@ export type BuildAssistantOpMessage = {
       | "memory_center_import_preview"
       | "memory_center_import_apply"
       | "memory_center_import_rollback"
+      | "kb_workspace_status"
+      | "kb_workspace_init"
+      | "drop_token_create"
+      | "drop_token_revoke"
       | AssistantOpNoArgs
     >,
     args?: Record<string, unknown>,
@@ -107,6 +131,10 @@ export type BuildAssistantOpMessage = {
       | "memory_center_import_preview"
       | "memory_center_import_apply"
       | "memory_center_import_rollback"
+      | "kb_workspace_status"
+      | "kb_workspace_init"
+      | "drop_token_create"
+      | "drop_token_revoke"
       | AssistantOpNoArgs
     >
   >;
@@ -148,6 +176,18 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   }
   if (operation === "memory_center_suggestion_answer") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["memory_center_suggestion_answer"] };
+  }
+  if (operation === "kb_workspace_status") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["kb_workspace_status"] };
+  }
+  if (operation === "kb_workspace_init") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["kb_workspace_init"] };
+  }
+  if (operation === "drop_token_create") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_create"] };
+  }
+  if (operation === "drop_token_revoke") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_revoke"] };
   }
   if (operation === "memory_export" || operation === "memory_tidy" || operation === "push_test") {
     return { ...base, op: operation };

@@ -452,6 +452,44 @@ export type MemoryCenterSuggestionAnswerErrorCode =
   | "conflict"
   | "write_failed";
 
+export type KbHtmlBoardItem = {
+  /** 工作区内相对路径，如 资产/资产.html 或 资产/洋钱罐（锋泰、瓴岳）/洋钱罐（锋泰、瓴岳）.html */
+  relPath: string;
+  /** 看板展示标题 */
+  title: string;
+  /** 所属一级分类，如 资产 */
+  category: string;
+  /** 层级：category 为顶层分类总览看板，subject 为主体/专题子看板 */
+  level: "category" | "subject";
+  /** 最后更新时间戳（毫秒） */
+  updatedAt: number;
+  /** 文件大小（字节） */
+  size: number;
+};
+
+export type KbDropTokenItem = {
+  id: string;
+  label: string;
+  workspaceId: string;
+  workspaceKey: string;
+  createdAt: number;
+  expiresAt?: number;
+  revokedAt?: number;
+  active: boolean;
+};
+
+export type KbWorkspaceStatusData = {
+  workspaceKey: string;
+  workspaceId: string;
+  isKnowledgeBase: boolean;
+  title: string;
+  allowedCategories: string[];
+  maxFileBytes?: number;
+  boards: KbHtmlBoardItem[];
+  tokens: KbDropTokenItem[];
+  dropPortalPath: string;
+};
+
 /** assistant_op 参数与结果 typed 映射（记忆中心与其它 op 可逐步补齐） */
 export type AssistantOpArgsMap = {
   memory_center_get: { scope?: string };
@@ -478,6 +516,10 @@ export type AssistantOpArgsMap = {
     resolutions: Array<{ changeId: string; resolution: "keep_current" | "use_snapshot" | "duplicate" }>;
   };
   memory_center_import_rollback: { importId: string };
+  kb_workspace_status: { workspace: string };
+  kb_workspace_init: { workspace: string; title: string; categories: string[] };
+  drop_token_create: { workspace: string; passcode: string; label?: string; expiresInDays?: number };
+  drop_token_revoke: { workspace: string; idOrLabel: string };
 };
 
 export type AssistantOpResultMap = {
@@ -493,6 +535,10 @@ export type AssistantOpResultMap = {
   memory_center_import_apply: import("./memoryCenterImportTypes.ts").MemoryCenterImportApplyData;
   memory_center_import_rollback: import("./memoryCenterImportTypes.ts").MemoryCenterImportRollbackData;
   memory_tidy: MemoryTidyData;
+  kb_workspace_status: KbWorkspaceStatusData;
+  kb_workspace_init: KbWorkspaceStatusData;
+  drop_token_create: KbWorkspaceStatusData;
+  drop_token_revoke: KbWorkspaceStatusData;
 };
 
 type AssistantResultBranchForOp<K extends AssistantOp> = K extends "memory_center_mutate"
@@ -772,7 +818,12 @@ export type AssistantOp =
   /** args: { chatId, callId, allow }；作答委派子会话的挂起审批 */
   | "approval_answer"
   /** args: { delegationId }；停掉一项在跑或等批准的前台委派 */
-  | "delegation_cancel";
+  | "delegation_cancel"
+  /** 知识库工作区状态、HTML 看板与投递口令管理 */
+  | "kb_workspace_status"
+  | "kb_workspace_init"
+  | "drop_token_create"
+  | "drop_token_revoke";
 
 export type AssistantOpTyped = keyof AssistantOpArgsMap;
 
@@ -797,6 +848,10 @@ type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "memory_center_import_preview"
   | "memory_center_import_apply"
   | "memory_center_import_rollback"
+  | "kb_workspace_status"
+  | "kb_workspace_init"
+  | "drop_token_create"
+  | "drop_token_revoke"
   ? { op: K; args: AssistantOpArgsMap[K] }
   : K extends "memory_center_get" | "memory_center_activity" | "memory_center_suggestions_get" | "memory_center_export"
     ? { op: K; args?: AssistantOpArgsMap[K] }

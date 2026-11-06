@@ -2,14 +2,15 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getTenant } from "../tenants.ts";
 import { readWorkspaceAgentFile, workspaceAgentById, workspaceAgentDirectories } from "../workspace/agents.ts";
-import { DEFAULT_ALLOWED_EXTS, DEFAULT_MAX_FILE_BYTES } from "./contract.ts";
-import { commitDropBatchAndEnqueue } from "./queue.ts";
 import {
-  createDropBatch,
-  getDropBatchPublicStatus,
-  MAX_FILES_PER_BATCH,
-  streamStageFileIntoBatch,
-} from "./staging.ts";
+  DEFAULT_ALLOWED_EXTS,
+  DEFAULT_MAX_FILE_BYTES,
+  safeReadWorkspaceTextFileSync,
+  validateKbHtmlRelPath,
+} from "./contract.ts";
+import { scanWorkspaceKbHtmlBoards } from "./hub.ts";
+import { commitDropBatchAndEnqueue } from "./queue.ts";
+import { createDropBatch, getDropBatchPublicStatus, MAX_FILES_PER_BATCH, streamStageFileIntoBatch } from "./staging.ts";
 import {
   bindBatchIdToDropSession,
   normalizeClientIp,
@@ -17,6 +18,7 @@ import {
   verifyDropSessionToken,
   type DropTenantHost,
 } from "./tokens.ts";
+import { MAX_KB_HTML_BYTES } from "./tools.ts";
 
 export type DropPortalTenant = {
   id: string;
@@ -109,7 +111,12 @@ function applySandboxedApiCors(res: ServerResponse) {
   res.setHeader("vary", "origin");
 }
 
-function sendJson(res: ServerResponse, status: number, body: Record<string, unknown>, extraHeaders: Record<string, string> = {}) {
+function sendJson(
+  res: ServerResponse,
+  status: number,
+  body: Record<string, unknown>,
+  extraHeaders: Record<string, string> = {},
+) {
   if (res.headersSent || res.writableEnded) return;
   applySandboxedApiCors(res);
   const raw = Buffer.from(JSON.stringify(body), "utf8");
@@ -126,8 +133,9 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
 
 /**
  * 顶层文档启用 `CSP: sandbox allow-scripts`（不带 `allow-same-origin`）：
- * 1. 使顶层文档直接处于唯一的不透明源（opaque origin），彻底隔绝同域名下其他 `/p/<租户>` 页面通过 `window.open` 访问本页 `window`、DOM 或脚本上下文（浏览器跨源安全策略在 C++ 层阻断）；
- * 2. `connect-src *` 允许沙箱内脚本直接 `fetch` 调用 `/p/<tenant>/drop/api/*`，并携带服务端直出内嵌的 `X-Drop-Page-Ticket` 票据完成请求。
+ * 1. 使顶层文档直接处于唯一的不透明源（opaque origin），彻底隔绝同域名下其他 `/p/<租户>` 页面通过 `window.open` 访问本页 `window`、DOM 或脚本上下文；
+ * 2. `connect-src *` 允许沙箱内脚本直接 `fetch` 调用 `/p/<tenant>/drop/api/*`，并携带服务端直出内嵌的 `X-Drop-Page-Ticket` 票据完成请求；
+ * 3. `frame-src data:` / `child-src data:` 允许在页面内通过 `<iframe sandbox="allow-scripts" srcdoc="...">` 安全预览知识库 HTML 看板。
  */
 function sendHtml(res: ServerResponse, status: number, page: string, headOnly: boolean) {
   if (res.headersSent || res.writableEnded) return;
@@ -142,7 +150,7 @@ function sendHtml(res: ServerResponse, status: number, page: string, headOnly: b
     "cross-origin-resource-policy": "same-origin",
     "referrer-policy": "no-referrer",
     "content-security-policy":
-      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *; img-src data:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; sandbox allow-scripts",
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *; img-src data:; frame-src data: about:; child-src data: about:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; sandbox allow-scripts",
   });
   res.end(headOnly ? undefined : raw);
 }
@@ -164,7 +172,10 @@ function extractClientIp(req: IncomingMessage): string {
     if (realIp) return normalizeClientIp(realIp);
     const xff = String(req.headers["x-forwarded-for"] || "").trim();
     if (xff) {
-      const parts = xff.split(",").map((s) => s.trim()).filter(Boolean);
+      const parts = xff
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       if (parts.length > 0) {
         return normalizeClientIp(parts[parts.length - 1]);
       }
@@ -219,7 +230,8 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts`）的单文件内联投递门户 HTML 页面。
+ * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts`）的单文件内联知识库协作与投递门户 HTML 页面。
+ * 支持验证口令后在「知识库看板（HTML）」与「上传新文档」两个标签页之间无缝切换，点击任意看板即可全宽内联预览。
  */
 export function renderDropPortalHtml(tenantId: string, tenantName?: string, pageTicket = ""): string {
   const displayTenant = escapeHtml(tenantName || tenantId);
@@ -230,7 +242,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>工作区资料投递箱 · ${displayTenant}</title>
+  <title>工作区资料投递箱与知识库看板 · ${displayTenant}</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -264,7 +276,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       color: var(--text);
       line-height: 1.5;
     }
-    .container { max-width: 680px; margin: 0 auto; }
+    .container { max-width: 1040px; margin: 0 auto; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -307,6 +319,13 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     }
     button:hover:not(:disabled) { background: var(--accent-hover); }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-ghost {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      font-size: 13px;
+    }
     .btn-rm {
       background: transparent;
       color: var(--muted);
@@ -314,6 +333,83 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       font-size: 12px;
       border: 1px solid var(--border);
       margin-left: 8px;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .tab-group { display: flex; gap: 8px; }
+    .tab-btn {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .board-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .board-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 0.15s, transform 0.1s;
+    }
+    .board-card:hover, .board-card.active {
+      border-color: var(--accent);
+    }
+    .board-tag {
+      display: inline-block;
+      font-size: 11px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+    .board-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
+    .board-meta { font-size: 12px; color: var(--muted); word-break: break-all; }
+    .board-viewer {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #ffffff;
+      margin-top: 12px;
+    }
+    .board-viewer-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .board-iframe {
+      width: 100%;
+      height: 76vh;
+      min-height: 540px;
+      border: 0;
+      display: block;
+      background: #ffffff;
     }
     .dropzone {
       border: 2px dashed var(--border);
@@ -359,9 +455,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 <body>
   <div class="container">
     <div class="card">
-      <span class="badge">只写安全盲投 · 自动分类归档</span>
-      <h1>工作区资料投递箱</h1>
-      <p class="sub">输入管理员分配的投递口令，将业务文档、报表或台账投递至目标知识库工作区。AI 将自动分类落盘并更新知识库看板。</p>
+      <span class="badge">知识库协作门户 · 自动分类归档与看板查阅</span>
+      <h1>工作区资料投递箱 & 知识库看板</h1>
+      <p class="sub">输入管理员分配的投递口令，即可在线查阅目标知识库工作区的各层 HTML 汇总看板，或上传新业务文档由 AI 自动分类归档并同步更新 HTML。</p>
       <div class="rules">
         <strong>上传规格说明：</strong><br/>
         • 单个文件最大 <strong>32 MB</strong>，单批次最多 <strong>${MAX_FILES_PER_BATCH} 个文件</strong>（多文件将自动逐个流式上传）；<br/>
@@ -371,28 +467,58 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     </div>
 
     <div id="step-auth" class="card">
-      <h2>第一步：验证投递口令</h2>
+      <h2>第一步：验证工作区口令</h2>
       <label for="submitter">您的称呼 / 部门（必填，便于归档留痕）</label>
       <input id="submitter" type="text" maxlength="40" autocomplete="off" placeholder="例如：张工-财务部" />
       <label for="passcode">工作区投递口令</label>
       <input id="passcode" type="password" maxlength="64" autocomplete="off" placeholder="请输入 6–64 位投递口令" />
-      <button id="btn-auth" type="button">验证口令并创建投递批次</button>
+      <button id="btn-auth" type="button">进入知识库看板与投递中心</button>
       <div id="auth-msg" class="status-box hidden"></div>
     </div>
 
-    <div id="step-upload" class="card hidden">
-      <h2 id="ws-title">第二步：上传文档</h2>
-      <p class="sub" id="batch-info"></p>
-      <div id="dropzone" class="dropzone">
-        <div>点击选择文件，或将多个文件直接拖拽至此处</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px;">单文件 ≤ 32MB · 单批 ≤ ${MAX_FILES_PER_BATCH} 个文件 · 选入后立即本地预检体积与格式</div>
-        <input id="file-input" type="file" multiple class="hidden" />
+    <div id="step-main" class="card hidden">
+      <div class="tabs">
+        <div>
+          <h2 id="ws-title" style="margin:0 0 4px;">知识库工作区</h2>
+          <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
+        </div>
+        <div class="tab-group">
+          <button id="tab-boards" type="button" class="tab-btn active">📊 知识库看板 (<span id="board-count">0</span>)</button>
+          <button id="tab-upload" type="button" class="tab-btn">📤 上传新文档</button>
+        </div>
       </div>
-      <ul id="file-list" class="file-list"></ul>
-      <label for="batch-note">批次补充说明（可选，帮助 AI 更精准分类与提炼摘要）</label>
-      <textarea id="batch-note" rows="2" maxlength="500" placeholder="例如：11月最新三农信代偿台账与洋钱罐风险预估"></textarea>
-      <button id="btn-submit" type="button">上传并提交 AI 自动归档</button>
-      <div id="upload-msg" class="status-box hidden"></div>
+
+      <!-- 面板 A：知识库 HTML 看板中心 -->
+      <div id="pane-boards">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:13px;color:var(--muted);">点击下方任意知识库卡片即可直接在线查阅全内联 HTML 看板：</span>
+          <button id="btn-refresh-boards" type="button" class="btn-ghost">刷新看板列表</button>
+        </div>
+        <div id="boards-empty" class="status-box hidden">当前知识库暂无已生成的同名 HTML 看板。您可以切换到「上传新文档」投递资料。</div>
+        <div id="boards-grid" class="board-grid"></div>
+
+        <div id="board-viewer" class="board-viewer hidden">
+          <div class="board-viewer-bar">
+            <strong id="viewer-title">看板预览</strong>
+            <button id="btn-close-viewer" type="button" class="btn-ghost">收起预览</button>
+          </div>
+          <iframe id="viewer-frame" class="board-iframe" sandbox="allow-scripts"></iframe>
+        </div>
+      </div>
+
+      <!-- 面板 B：上传新文档 -->
+      <div id="pane-upload" class="hidden">
+        <div id="dropzone" class="dropzone">
+          <div>点击选择文件，或将多个文件直接拖拽至此处</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px;">单文件 ≤ 32MB · 单批 ≤ ${MAX_FILES_PER_BATCH} 个文件 · 选入后立即本地预检体积与格式</div>
+          <input id="file-input" type="file" multiple class="hidden" />
+        </div>
+        <ul id="file-list" class="file-list"></ul>
+        <label for="batch-note">批次补充说明（可选，帮助 AI 更精准分类与提炼摘要）</label>
+        <textarea id="batch-note" rows="2" maxlength="500" placeholder="例如：11月最新三农信代偿台账与洋钱罐风险预估"></textarea>
+        <button id="btn-submit" type="button">上传并提交 AI 自动归档</button>
+        <div id="upload-msg" class="status-box hidden"></div>
+      </div>
     </div>
   </div>
 
@@ -406,9 +532,21 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const btnAuth = document.getElementById("btn-auth");
       const authMsg = document.getElementById("auth-msg");
       const stepAuth = document.getElementById("step-auth");
-      const stepUpload = document.getElementById("step-upload");
+      const stepMain = document.getElementById("step-main");
       const wsTitle = document.getElementById("ws-title");
       const batchInfo = document.getElementById("batch-info");
+      const tabBoards = document.getElementById("tab-boards");
+      const tabUpload = document.getElementById("tab-upload");
+      const paneBoards = document.getElementById("pane-boards");
+      const paneUpload = document.getElementById("pane-upload");
+      const boardCountEl = document.getElementById("board-count");
+      const boardsGrid = document.getElementById("boards-grid");
+      const boardsEmpty = document.getElementById("boards-empty");
+      const btnRefreshBoards = document.getElementById("btn-refresh-boards");
+      const boardViewer = document.getElementById("board-viewer");
+      const viewerTitle = document.getElementById("viewer-title");
+      const viewerFrame = document.getElementById("viewer-frame");
+      const btnCloseViewer = document.getElementById("btn-close-viewer");
       const dropzone = document.getElementById("dropzone");
       const fileInput = document.getElementById("file-input");
       const fileListEl = document.getElementById("file-list");
@@ -422,12 +560,113 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       let maxFileBytes = ${DEFAULT_MAX_FILE_BYTES};
       let allowedExts = ${JSON.stringify([...DEFAULT_ALLOWED_EXTS])};
       let pendingFiles = [];
+      let boardsList = [];
+      let activeBoardPath = "";
 
       function showBox(el, text, isErr) {
         el.textContent = text;
         el.classList.remove("hidden");
         el.style.borderColor = isErr ? "var(--danger)" : "var(--border)";
       }
+
+      function switchTab(tab) {
+        if (tab === "boards") {
+          tabBoards.classList.add("active");
+          tabUpload.classList.remove("active");
+          paneBoards.classList.remove("hidden");
+          paneUpload.classList.add("hidden");
+        } else {
+          tabUpload.classList.add("active");
+          tabBoards.classList.remove("active");
+          paneUpload.classList.remove("hidden");
+          paneBoards.classList.add("hidden");
+        }
+      }
+
+      tabBoards.addEventListener("click", function() { switchTab("boards"); });
+      tabUpload.addEventListener("click", function() { switchTab("upload"); });
+
+      function renderBoards(boards) {
+        boardsList = Array.isArray(boards) ? boards : [];
+        boardCountEl.textContent = String(boardsList.length);
+        boardsGrid.innerHTML = "";
+        if (boardsList.length === 0) {
+          boardsEmpty.classList.remove("hidden");
+          return;
+        }
+        boardsEmpty.classList.add("hidden");
+        boardsList.forEach(function(b) {
+          const card = document.createElement("div");
+          card.className = "board-card" + (activeBoardPath === b.relPath ? " active" : "");
+          const tag = document.createElement("span");
+          tag.className = "board-tag";
+          tag.textContent = b.level === "category" ? ("顶层总览 · " + b.category) : ("专题看板 · " + b.category);
+          const title = document.createElement("div");
+          title.className = "board-title";
+          title.textContent = b.title;
+          const meta = document.createElement("div");
+          meta.className = "board-meta";
+          const dt = b.updatedAt ? new Date(b.updatedAt).toLocaleString("zh-CN") : "";
+          meta.textContent = b.relPath + (dt ? " · 更新于 " + dt : "");
+          card.appendChild(tag);
+          card.appendChild(title);
+          card.appendChild(meta);
+          card.addEventListener("click", function() {
+            openBoardPreview(b.relPath, b.title);
+          });
+          boardsGrid.appendChild(card);
+        });
+      }
+
+      async function openBoardPreview(relPath, title) {
+        activeBoardPath = relPath;
+        renderBoards(boardsList);
+        viewerTitle.textContent = "正在加载：" + title + " (" + relPath + ")…";
+        boardViewer.classList.remove("hidden");
+        try {
+          const u = API_BASE + "/board?path=" + encodeURIComponent(relPath);
+          const res = await fetch(u, {
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET
+            }
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            viewerTitle.textContent = "加载失败：" + (data.error || "无法读取该看板");
+            return;
+          }
+          viewerTitle.textContent = title + " — " + relPath;
+          viewerFrame.srcdoc = data.htmlContent || "";
+        } catch (e) {
+          viewerTitle.textContent = "网络请求失败，无法加载看板";
+        }
+      }
+
+      btnCloseViewer.addEventListener("click", function() {
+        activeBoardPath = "";
+        boardViewer.classList.add("hidden");
+        viewerFrame.srcdoc = "";
+        renderBoards(boardsList);
+      });
+
+      async function refreshBoardsList() {
+        if (!sessionToken) return;
+        try {
+          const res = await fetch(API_BASE + "/boards", {
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET
+            }
+          });
+          const data = await res.json();
+          if (res.ok && data.ok && Array.isArray(data.boards)) {
+            renderBoards(data.boards);
+          }
+        } catch (_) {}
+      }
+
+      btnRefreshBoards.addEventListener("click", refreshBoardsList);
 
       btnAuth.addEventListener("click", async function() {
         const submitterName = submitterEl.value.trim();
@@ -458,10 +697,17 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
           receiptToken = data.receiptToken;
           maxFileBytes = data.maxFileBytes || maxFileBytes;
           allowedExts = data.allowedExts || allowedExts;
-          wsTitle.textContent = "投递目标：" + data.workspaceTitle;
-          batchInfo.textContent = "批次号：" + batchId + " · 提交人：" + submitterName;
+          wsTitle.textContent = data.workspaceTitle;
+          batchInfo.textContent = "当前投递批次：" + batchId + " · 访客：" + submitterName;
           stepAuth.classList.add("hidden");
-          stepUpload.classList.remove("hidden");
+          stepMain.classList.remove("hidden");
+          renderBoards(data.boards || []);
+          if (Array.isArray(data.boards) && data.boards.length > 0) {
+            switchTab("boards");
+            openBoardPreview(data.boards[0].relPath, data.boards[0].title);
+          } else {
+            switchTab("upload");
+          }
         } catch (e) {
           showBox(authMsg, "网络请求失败，请重试", true);
           btnAuth.disabled = false;
@@ -546,6 +792,8 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             showBox(uploadMsg, "当前状态 [" + data.status.status + "]：" + data.status.statusMessage, data.status.status === "failed");
             if (data.status.status === "queued" || data.status.status === "processing") {
               setTimeout(pollStatus, 2500);
+            } else if (data.status.status === "completed" || data.status.status === "partial") {
+              refreshBoardsList();
             }
           }
         } catch (_) {}
@@ -602,7 +850,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             btnSubmit.disabled = false;
             return;
           }
-          showBox(uploadMsg, "已提交成功！AI 正在后台自动分类归档并更新知识库…", false);
+          showBox(uploadMsg, "已提交成功！AI 正在后台自动分类归档并更新知识库，完成后看板列表将自动刷新…", false);
           setTimeout(pollStatus, 1000);
         } catch (err) {
           showBox(uploadMsg, "网络异常，请点击重试", true);
@@ -669,7 +917,7 @@ export function handleDropPortalHttp(
   const host = buildDropTenantHost(tenant);
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
-  // 2. POST /p/<tenant>/drop/api/auth — 口令校验 + 创建批次并绑定 session
+  // 2. POST /p/<tenant>/drop/api/auth — 口令校验 + 创建批次并绑定 session + 返回该知识库的 HTML 看板列表
   if (pathname === `${basePrefix}/api/auth`) {
     if (req.method !== "POST") {
       sendJson(res, 405, { ok: false, error: "只支持 POST" });
@@ -704,6 +952,8 @@ export function handleDropPortalHttp(
         return;
       }
 
+      const boards = scanWorkspaceKbHtmlBoards(authRes.session.workspacePath, authRes.session.kbConfig);
+
       sendJson(res, 200, {
         ok: true,
         dropSessionToken: authRes.session.sessionToken,
@@ -712,9 +962,62 @@ export function handleDropPortalHttp(
         workspaceTitle: authRes.session.workspaceTitle,
         maxFileBytes: authRes.session.kbConfig.maxFileBytes,
         allowedExts: authRes.session.kbConfig.allowedExts,
+        boards,
       });
     })().catch(() => {
       sendJson(res, 500, { ok: false, error: "处理投递鉴权时出错" });
+    });
+    return true;
+  }
+
+  // 2b. GET /p/<tenant>/drop/api/boards — 刷新当前授权知识库工作区的同名 HTML 看板列表
+  if (pathname === `${basePrefix}/api/boards`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const boards = scanWorkspaceKbHtmlBoards(sessCheck.session.workspacePath, sessCheck.session.kbConfig);
+    sendJson(res, 200, { ok: true, boards });
+    return true;
+  }
+
+  // 2c. GET /p/<tenant>/drop/api/board?path=... — 受控读取当前授权工作区下的同名 .html 知识库看板（严禁读取任何原始底表或非同名 HTML）
+  if (pathname === `${basePrefix}/api/board`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const rawRelPath = (url.searchParams.get("path") || "").trim();
+    const validHtml = validateKbHtmlRelPath(sessCheck.session.workspacePath, sessCheck.session.kbConfig, rawRelPath);
+    if (!validHtml.ok) {
+      sendJson(res, 403, { ok: false, error: "仅允许预览知识库目录同名的汇总 HTML 看板" });
+      return true;
+    }
+    const readRes = safeReadWorkspaceTextFileSync(
+      sessCheck.session.workspacePath,
+      validHtml.normalizedRel,
+      MAX_KB_HTML_BYTES + 64 * 1024,
+    );
+    if (!readRes.ok) {
+      sendJson(res, 404, { ok: false, error: "找不到该知识库 HTML 看板" });
+      return true;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      path: validHtml.normalizedRel,
+      htmlContent: readRes.text,
     });
     return true;
   }
@@ -827,7 +1130,7 @@ export function handleDropPortalHttp(
     return true;
   }
 
-  // 5. GET /p/<tenant>/drop/api/status — 仅接受 X-Drop-Receipt 请求头（禁止 query 传回执以防进入 nginx access_log）
+  // 5. GET /p/<tenant>/drop/api/status — 仅接受 X-Drop-Receipt 请求头
   if (pathname === `${basePrefix}/api/status`) {
     if (req.method !== "GET") {
       sendJson(res, 405, { ok: false, error: "只支持 GET" });

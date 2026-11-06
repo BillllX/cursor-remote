@@ -178,6 +178,7 @@ export default function ChatApp() {
   const assistantStateRef = useRef<AssistantState | null>(null);
   const [lastAssistantResult, setLastAssistantResult] = useState<AssistantResultMessage | null>(null);
   const [assistantResultTick, setAssistantResultTick] = useState(0);
+  const [assistantResults, setAssistantResults] = useState<AssistantResultMessage[]>([]);
   const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     return new URLSearchParams(window.location.search).get("inbox") || undefined;
@@ -1111,6 +1112,7 @@ export default function ChatApp() {
         case "assistant_result":
           setLastAssistantResult(message);
           setAssistantResultTick((tick) => tick + 1);
+          setAssistantResults((results) => [...results.slice(-99), message]);
           if (
             !message.ok &&
             message.error &&
@@ -1125,7 +1127,11 @@ export default function ChatApp() {
             message.op !== "memory_center_import_preview" &&
             message.op !== "memory_center_import_apply" &&
             message.op !== "memory_center_import_rollback" &&
-            message.op !== "memory_tidy"
+            message.op !== "memory_tidy" &&
+            message.op !== "kb_workspace_status" &&
+            message.op !== "kb_workspace_init" &&
+            message.op !== "drop_token_create" &&
+            message.op !== "drop_token_revoke"
           ) {
             setNotice(message.error);
           }
@@ -4757,6 +4763,10 @@ export default function ChatApp() {
         themeChoice={themeChoice}
         setThemeChoice={setThemeChoice}
         logout={logout}
+        send={send}
+        assistantResults={assistantResults}
+        openFile={openFile}
+        setNotice={setNotice}
       />
 
       <main tabIndex={-1} className={`main${previewTabs.length ? " with-preview" : ""}${previewMax ? " preview-max" : ""}${previewTabs.some((tab) => isWideKind(tabKind(tab.path, tab.kind)) && sameFile(tab.path, previewPath)) ? " with-canvas" : ""}`}>

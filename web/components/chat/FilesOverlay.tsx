@@ -1,6 +1,7 @@
 // 文件浏览器
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import { useMemo, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { sameFile, workspaceLabel } from "../../lib/chat/workspace";
+import { extractKbBoardShortcuts } from "../../lib/kbWorkspace";
 import FileTree, { FileGlyph, GIT_LABEL } from "../FileTree";
 import styles from "./FilesOverlay.module.css";
 
@@ -59,6 +60,8 @@ export function FilesOverlay({
   handleTreeRename,
   handleTreeDelete,
 }: FilesOverlayProps) {
+  const kbBoards = useMemo(() => extractKbBoardShortcuts(treePaths, filesQuery), [treePaths, filesQuery]);
+
   return (
     <div
       className={`files-overlay${filesOpen ? " open" : ""}`}
@@ -97,6 +100,32 @@ export function FilesOverlay({
           }}
         />
         <div className={`files-browser-body${wideIDE && sidePane === "git" ? " git-only" : ""}`}>
+          {kbBoards.length > 0 && !(wideIDE && sidePane === "git") ? (
+            <div className={styles.kbBoardsSection} aria-label="知识库 HTML 看板">
+              <div className="side-label">知识库看板（HTML） · {kbBoards.length}</div>
+              <div className={styles.kbBoardsList}>
+                {kbBoards.map((board) => (
+                  <button
+                    key={board.path}
+                    type="button"
+                    className={`tree-file ${styles.kbBoardBtn}${sameFile(previewPath, board.path) ? " on" : ""}`}
+                    title={`点击预览知识库看板：${board.path}`}
+                    onClick={() => {
+                      openFile(board.path);
+                      if (!filesDocked) closeFiles();
+                    }}
+                  >
+                    <FileGlyph path={board.path} />
+                    <span className="tree-file-copy">
+                      <span className="tree-file-name">{board.title}</span>
+                      <span className="tree-file-path">{board.path}</span>
+                    </span>
+                    <span className={styles.kbBoardBadge}>{board.level === "category" ? "顶层" : board.category}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {Object.keys(gitStatus).length ? (
             <div className="changes-list files-browser-changes">
               <div className="side-label">改动 · {Object.keys(gitStatus).length}</div>
@@ -150,8 +179,8 @@ export function FilesOverlay({
                 setNotice("复制失败");
                 return;
               }
-              void clip.writeText(path).then(
-                () => setNotice("已复制路径"),
+              clip.writeText(path).then(
+                () => setNotice(`已复制路径：${path}`),
                 () => setNotice("复制失败"),
               );
             }}
