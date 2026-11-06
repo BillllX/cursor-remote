@@ -324,11 +324,35 @@ extension ChatStore {
         }
     }
 
+    /// 要带回 data 的操作（知识库状态、口令）。超时或断线回 false
+    func assistantOpData(
+        _ op: String,
+        args: [String: JSONValue] = [:],
+        timeout: Duration = .seconds(20)
+    ) async -> (ok: Bool, error: String?, data: JSONValue?) {
+        guard connected, unlocked else { return (false, "还没连上", nil) }
+        let reqId = UUID().uuidString
+        return await withCheckedContinuation { continuation in
+            assistantDataWaiters[reqId] = { ok, error, data in
+                continuation.resume(returning: (ok, error, data))
+            }
+            send(.assistantOp(op: op, args: args, reqId: reqId))
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                guard let waiter = self.assistantDataWaiters.removeValue(forKey: reqId) else { return }
+                waiter(false, "没有等到服务器回应", nil)
+            }
+        }
+    }
+
     /// 断线：在等的回包不会来了
     func failAssistantReplyWaiters() {
         let waiters = assistantReplyWaiters
         assistantReplyWaiters = [:]
         for waiter in waiters.values { waiter(false) }
+        let dataWaiters = assistantDataWaiters
+        assistantDataWaiters = [:]
+        for waiter in dataWaiters.values { waiter(false, "已断开", nil) }
     }
 
     func answerAssistantApproval(_ approval: AssistantApproval, allow: Bool) {

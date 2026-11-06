@@ -1091,3 +1091,373 @@ struct AssistantMemoryScreen: View {
     }
 }
 
+// MARK: 知识库
+
+struct KbHtmlBoard: Identifiable, Hashable {
+    var relPath: String
+    var title: String
+    var category: String
+    var id: String { relPath }
+}
+
+struct KbDropToken: Identifiable, Hashable {
+    var id: String
+    var label: String
+    var expiresAt: Double?
+    var active: Bool
+}
+
+struct KbWorkspaceStatus: Hashable {
+    var workspaceKey: String
+    var isKnowledgeBase: Bool
+    var title: String
+    var allowedCategories: [String]
+    var boards: [KbHtmlBoard]
+    var tokens: [KbDropToken]
+    var dropPortalPath: String
+
+    static func parse(_ value: JSONValue?) -> KbWorkspaceStatus? {
+        guard let object = value?.object else { return nil }
+        let boards = object["boards"]?.array?.compactMap { item -> KbHtmlBoard? in
+            guard let row = item.object, let relPath = row["relPath"]?.string, !relPath.isEmpty else { return nil }
+            return KbHtmlBoard(
+                relPath: relPath,
+                title: row["title"]?.string?.nilIfEmpty ?? relPath,
+                category: row["category"]?.string ?? ""
+            )
+        } ?? []
+        let tokens = object["tokens"]?.array?.compactMap { item -> KbDropToken? in
+            guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+            return KbDropToken(
+                id: id,
+                label: row["label"]?.string?.nilIfEmpty ?? id,
+                expiresAt: row["expiresAt"]?.number,
+                active: row["active"]?.bool ?? true
+            )
+        } ?? []
+        return KbWorkspaceStatus(
+            workspaceKey: object["workspaceKey"]?.string ?? "",
+            isKnowledgeBase: object["isKnowledgeBase"]?.bool ?? false,
+            title: object["title"]?.string ?? "",
+            allowedCategories: object["allowedCategories"]?.array?.compactMap(\.string) ?? [],
+            boards: boards,
+            tokens: tokens,
+            dropPortalPath: object["dropPortalPath"]?.string ?? ""
+        )
+    }
+}
+
+/// 当前子工作区的知识库：分类、HTML 看板、同事投递口令。USER 根目录不能当知识库。
+struct KbWorkspaceSheet: View {
+    var workspacePath: String
+    var workspaceName: String
+    var chatId: String?
+
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.openURL) private var openURL
+
+    @State private var status: KbWorkspaceStatus?
+    @State private var busy = false
+    @State private var errorText = ""
+    @State private var editing = false
+    @State private var titleDraft = ""
+    @State private var categoriesDraft = ""
+    @State private var passcode = ""
+    @State private var tokenLabel = ""
+    @State private var expiresDays = "90"
+    @State private var revokeTarget: KbDropToken?
+
+    /// 网关认的是相对工作区根目录的 key，不认绝对路径
+    private var workspaceKey: String {
+        store.relToCwd(workspacePath, root: store.workspaceRoot.nilIfEmpty)
+    }
+    private var blocked: Bool {
+        workspacePath.isEmpty || workspaceKey.isEmpty || store.isUserRoot(workspacePath)
+    }
+    private var portalURL: URL? {
+        guard let path = status?.dropPortalPath.nilIfEmpty else { return nil }
+        return GatewayConfig.pageURL(path: path)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if blocked {
+                    Section {
+                        Text("请先切换或新建一个子工作区。USER 根目录不能作为知识库。")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                } else {
+                    configSection
+                    boardSection
+                    tokenSection
+                }
+            }
+            .navigationTitle(workspaceName.nilIfEmpty ?? "知识库")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .task(id: workspacePath + "|" + store.workspaceRoot) { await reload() }
+        .confirmationDialog(
+            "吊销这个投递口令？",
+            isPresented: Binding(get: { revokeTarget != nil }, set: { if !$0 { revokeTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("吊销", role: .destructive) {
+                guard let token = revokeTarget else { return }
+                revokeTarget = nil
+                Task { await revoke(token) }
+            }
+            Button("取消", role: .cancel) { revokeTarget = nil }
+        } message: {
+            Text("吊销后，同事不能再凭这个口令上传。")
+        }
+    }
+
+    @ViewBuilder
+    private var configSection: some View {
+        Section {
+            if let status, status.isKnowledgeBase, !editing {
+                LabeledContent("名称", value: status.title)
+                LabeledContent("分类", value: status.allowedCategories.joined(separator: "、"))
+                Button("修改分类") { editing = true }
+                    .disabled(busy)
+            } else {
+                TextField("名称", text: $titleDraft)
+                TextField("分类，用顿号或逗号分开", text: $categoriesDraft, axis: .vertical)
+                    .lineLimit(2 ... 4)
+                ActionButton(title: status?.isKnowledgeBase == true ? "保存" : "开启知识库", kind: .primary) {
+                    Task { await saveConfig() }
+                }
+                .disabled(busy || splitCategories(categoriesDraft).isEmpty)
+            }
+            if !errorText.isEmpty {
+                Text(errorText)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.danger)
+            }
+        } header: {
+            Text(status?.isKnowledgeBase == true ? "已开启" : "知识库")
+        } footer: {
+            if busy { Text("正在同步…") }
+        }
+    }
+
+    @ViewBuilder
+    private var boardSection: some View {
+        Section {
+            if status?.boards.isEmpty != false {
+                Text("还没有 HTML 看板。让小驳写一份后，会出现在这里。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            } else {
+                ForEach(status?.boards ?? []) { board in
+                    Button {
+                        openBoard(board)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(board.title)
+                                .font(JieboFont.text(.body))
+                                .foregroundStyle(JieboColor.ink)
+                            Text(board.category.isEmpty ? board.relPath : "\(board.category) · \(board.relPath)")
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.ink2)
+                                .lineLimit(1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        } header: {
+            Text("看板")
+        }
+    }
+
+    @ViewBuilder
+    private var tokenSection: some View {
+        Section {
+            if let url = portalURL {
+                LabeledContent("投递页") {
+                    Text(url.absoluteString)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Button("复制链接") { copyPortal(url) }
+                    Button("打开") { openURL(url) }
+                }
+                .disabled(busy)
+            }
+            if status?.tokens.isEmpty != false {
+                Text("还没有投递口令。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            } else {
+                ForEach(status?.tokens ?? []) { token in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(token.label)
+                                .font(JieboFont.text(.body))
+                            Text(token.active ? expiryText(token.expiresAt) : "已失效")
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        Spacer()
+                        if token.active {
+                            Button("吊销") { revokeTarget = token }
+                                .foregroundStyle(JieboColor.danger)
+                                .disabled(busy)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("同事投递")
+        }
+
+        if status?.isKnowledgeBase == true {
+            Section {
+                SecureField("口令，6–64 位", text: $passcode)
+                TextField("备注，可空", text: $tokenLabel)
+                TextField("有效天数，留空表示长期", text: $expiresDays)
+                    .keyboardType(.numberPad)
+                ActionButton(title: "生成口令", kind: .primary) {
+                    Task { await createToken() }
+                }
+                .disabled(busy || !validPasscode(passcode))
+            } header: {
+                Text("新口令")
+            } footer: {
+                Text("口令只在生成时交给同事。这里之后只看得到备注，看不到原文。")
+            }
+        }
+    }
+
+    private func reload() async {
+        guard !blocked else { return }
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("kb_workspace_status", args: ["workspace": .string(workspaceKey)])
+        busy = false
+        apply(reply)
+    }
+
+    private func saveConfig() async {
+        let categories = splitCategories(categoriesDraft)
+        guard !categories.isEmpty else {
+            errorText = "至少填一个分类"
+            return
+        }
+        let wasOn = status?.isKnowledgeBase == true
+        busy = true
+        errorText = ""
+        var args: [String: JSONValue] = [
+            "workspace": .string(workspaceKey),
+            "title": .string(titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "\(workspaceName) 知识库"),
+            "categories": .array(categories.map { .string($0) }),
+        ]
+        let reply = await store.assistantOpData("kb_workspace_init", args: args)
+        busy = false
+        if apply(reply), reply.ok { store.flash(wasOn ? "已保存" : "知识库已开启") }
+    }
+
+    private func createToken() async {
+        let code = passcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validPasscode(code) else {
+            errorText = "口令需要 6–64 位"
+            return
+        }
+        let rawDays = expiresDays.trimmingCharacters(in: .whitespacesAndNewlines)
+        var expiresInDays: Int?
+        if !rawDays.isEmpty {
+            guard let days = Int(rawDays), (1 ... 3650).contains(days) else {
+                errorText = "有效天数要在 1–3650 之间，留空表示长期"
+                return
+            }
+            expiresInDays = days
+        }
+        busy = true
+        errorText = ""
+        var args: [String: JSONValue] = [
+            "workspace": .string(workspaceKey),
+            "passcode": .string(code),
+        ]
+        let label = tokenLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty { args["label"] = .string(label) }
+        if let expiresInDays { args["expiresInDays"] = .number(Double(expiresInDays)) }
+        let reply = await store.assistantOpData("drop_token_create", args: args)
+        busy = false
+        if apply(reply), reply.ok {
+            passcode = ""
+            tokenLabel = ""
+            store.flash("口令已生成")
+        }
+    }
+
+    private func revoke(_ token: KbDropToken) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_revoke", args: [
+            "workspace": .string(workspaceKey),
+            "idOrLabel": .string(token.id),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已吊销") }
+    }
+
+    @discardableResult
+    private func apply(_ reply: (ok: Bool, error: String?, data: JSONValue?)) -> Bool {
+        if let parsed = KbWorkspaceStatus.parse(reply.data) {
+            status = parsed
+            if !editing || reply.ok {
+                titleDraft = parsed.title
+                categoriesDraft = parsed.allowedCategories.joined(separator: "、")
+            }
+            if reply.ok { editing = false }
+        }
+        if !reply.ok {
+            errorText = reply.error?.nilIfEmpty ?? "没有完成"
+        }
+        return reply.ok
+    }
+
+    private func openBoard(_ board: KbHtmlBoard) {
+        store.openPreview(board.relPath, chatId: chatId)
+        sceneSession?.presentPreview(from: store)
+        dismiss()
+    }
+
+    private func copyPortal(_ url: URL) {
+        UIPasteboard.general.string = url.absoluteString
+        store.flash("已复制投递链接")
+    }
+
+    private func splitCategories(_ raw: String) -> [String] {
+        var seen = Set<String>()
+        return raw.split { ",，、 \n\t".contains($0) }.compactMap { piece in
+            let name = String(piece).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, seen.insert(name).inserted else { return nil }
+            return name
+        }
+    }
+
+    private func validPasscode(_ raw: String) -> Bool {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (6 ... 64).contains(code.count)
+    }
+
+    private func expiryText(_ ms: Double?) -> String {
+        guard let ms, ms > 0 else { return "长期有效" }
+        let date = Date(timeIntervalSince1970: ms / 1000)
+        return date.formatted(date: .abbreviated, time: .omitted) + " 到期"
+    }
+}

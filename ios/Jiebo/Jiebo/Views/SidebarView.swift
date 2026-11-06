@@ -13,6 +13,7 @@ struct SidebarView: View {
     @State private var chatActions = ChatActionTargets()
     @State private var settingsOpen = false
     @State private var memoryOpen = false
+    @State private var kbOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -72,6 +73,13 @@ struct SidebarView: View {
         }
         .sheet(isPresented: $memoryOpen) {
             MemoryCenterSheet()
+        }
+        .sheet(isPresented: $kbOpen) {
+            KbWorkspaceSheet(
+                workspacePath: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId),
+                workspaceName: store.workspaceTitle(anchoredTo: sceneSession?.workbenchChatId),
+                chatId: sceneSession?.workbenchChatId
+            )
         }
         .chatActionAlerts($chatActions)
         .onAppear { adoptWorkbenchChatIfNeeded() }
@@ -281,6 +289,17 @@ struct SidebarView: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
+            Button {
+                kbOpen = true
+            } label: {
+                Label("知识库", systemImage: "books.vertical")
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("知识库")
             Button {
                 memoryOpen = true
             } label: {

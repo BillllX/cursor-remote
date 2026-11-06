@@ -1987,6 +1987,15 @@ enum GatewayConfig {
         derive(path: "/media")
     }
 
+    /// 网关返回的站内路径（如知识库投递页 /p/<租户>/drop）换成当前连接对应的 http(s) 地址
+    static func pageURL(path: String) -> URL {
+        if path.hasPrefix("http://") || path.hasPrefix("https://"), let url = URL(string: path) {
+            return url
+        }
+        let normalized = path.hasPrefix("/") ? path : "/\(path)"
+        return derive(path: normalized)
+    }
+
     /// 日历订阅地址：scheme 传 "webcal" 让系统直接弹「订阅日历」，nil 保留 http(s) 供复制
     static func calendarURL(token: String, scheme: String?) -> URL? {
         var components = URLComponents(url: derive(path: "/media/cal/\(token).ics"), resolvingAgainstBaseURL: false)

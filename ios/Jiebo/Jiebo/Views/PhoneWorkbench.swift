@@ -12,6 +12,7 @@ struct PhoneWorkbench: View {
     @State private var preferredRunning = false
     @State private var settingsOpen = false
     @State private var memoryOpen = false
+    @State private var kbOpen = false
     @State private var chatActions = ChatActionTargets()
 
     private var activePreviewTab: PreviewTab? {
@@ -61,6 +62,7 @@ struct PhoneWorkbench: View {
                     }) },
                     openSettings: { closeDrawer { settingsOpen = true } },
                     openMemory: { closeDrawer { memoryOpen = true } },
+                    openKnowledge: { closeDrawer { kbOpen = true } },
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
@@ -98,6 +100,13 @@ struct PhoneWorkbench: View {
         }
         .sheet(isPresented: $memoryOpen) {
             MemoryCenterSheet()
+        }
+        .sheet(isPresented: $kbOpen) {
+            KbWorkspaceSheet(
+                workspacePath: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId),
+                workspaceName: store.workspaceTitle(anchoredTo: sceneSession?.workbenchChatId),
+                chatId: sceneSession?.workbenchChatId
+            )
         }
         .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
@@ -159,6 +168,7 @@ private struct PhoneDrawer: View {
     var newChat: () -> Void
     var openSettings: () -> Void
     var openMemory: () -> Void
+    var openKnowledge: () -> Void
     var renameChat: (ChatSession) -> Void
     var deleteChat: (ChatSession) -> Void
 
@@ -475,6 +485,15 @@ private struct PhoneDrawer: View {
 
     private var footer: some View {
         HStack(spacing: 16) {
+            Button(action: openKnowledge) {
+                Label("知识库", systemImage: "books.vertical")
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("知识库")
             Button(action: openMemory) {
                 Label("记忆", systemImage: NavigationIconId.memory.symbol)
                     .font(JieboFont.text(.subheadline, weight: .medium))

@@ -933,6 +933,10 @@ extension ChatStore {
                 memoryTidyFinished(ok: ok, error: error, data: data)
                 break
             }
+            if let reqId, let waiter = assistantDataWaiters.removeValue(forKey: reqId) {
+                waiter(ok, error, data)
+                break
+            }
             if let reqId, let waiter = assistantReplyWaiters.removeValue(forKey: reqId) {
                 waiter(ok)
                 break
@@ -942,7 +946,9 @@ extension ChatStore {
                    op != "memory_center_activity", op != "memory_center_restore",
                    op != "memory_center_suggestions_get", op != "memory_center_suggestion_answer",
                    op != "memory_center_export", op != "memory_center_import_preview",
-                   op != "memory_center_import_apply", op != "memory_center_import_rollback" {
+                   op != "memory_center_import_apply", op != "memory_center_import_rollback",
+                   op != "kb_workspace_status", op != "kb_workspace_init",
+                   op != "drop_token_create", op != "drop_token_revoke" {
                     flash(error ?? "助理操作失败（\(op)）")
                 }
             } else if op == "memory_save" {

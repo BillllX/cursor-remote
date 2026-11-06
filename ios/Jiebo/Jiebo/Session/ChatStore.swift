@@ -433,6 +433,8 @@ final class ChatStore {
     @ObservationIgnored var deviceInvokeHandler: ((DeviceInvoke) -> Void)?
     /// 等 assistant_result 的 assistant_op（按 reqId）：回包、超时或断线时调一次，参数是 ok
     @ObservationIgnored var assistantReplyWaiters: [String: (Bool) -> Void] = [:]
+    /// 需要带回 data 的 assistant_op。和上面互斥：先认这个，避免知识库状态被当成普通成功丢掉
+    @ObservationIgnored var assistantDataWaiters: [String: (Bool, String?, JSONValue?) -> Void] = [:]
     var started = false
     /// 推送用的乐观版本号：每次推送先自增，推送丢了也不回退
     var stateRev = 0
