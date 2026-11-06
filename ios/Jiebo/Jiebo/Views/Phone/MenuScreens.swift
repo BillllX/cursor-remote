@@ -6,32 +6,6 @@ import UserNotifications
 // 抽屉里 push 出去的页面（规格 §4.3）。都没有输入框（同一时刻只能挂载一个 ComposerView）。
 // 这些页面不改 store.activeId，也不调用 select。
 
-// MARK: 今日
-
-struct AssistantTodayScreen: View {
-    @Environment(ChatStore.self) private var store
-
-    init() {}
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("今日只看摘要。待办和计划在各自的栏目里。")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.ink2)
-                AssistantTodayPane(showsApprovals: false, showsDelegations: false, showsWorklists: false)
-            }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(JieboColor.paper)
-        .navigationTitle("今日")
-        .navigationBarTitleDisplayMode(.inline)
-        .refreshable { store.requestAssistant(force: true) }
-        .task { store.requestAssistant() }
-    }
-}
-
 // MARK: 任务与计划
 
 struct DelegationListScreen: View {
@@ -79,6 +53,20 @@ struct DelegationListScreen: View {
                             .disabled(newTodo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                     .frame(minHeight: 44)
+                    .listRowBackground(JieboColor.white)
+                }
+            }
+            if column == .todo, rows.isEmpty, store.assistantState != nil {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("还没有待办")
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                        Text(column.emptyDetail)
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .padding(.vertical, 8)
                     .listRowBackground(JieboColor.white)
                 }
             }
@@ -132,7 +120,7 @@ struct DelegationListScreen: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle(embeddedInInbox ? "待处理" : column.title)
+        .navigationTitle(embeddedInInbox ? "助理中心" : column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
@@ -144,7 +132,7 @@ struct DelegationListScreen: View {
                 )
             }
         }
-        .task { store.requestAssistant() }
+        .task { if !embeddedInInbox { store.requestAssistant() } }
         .sheet(item: $openedTask) { task in
             PersonalTaskSheet(task: task)
         }
@@ -1431,7 +1419,10 @@ struct KbWorkspaceSheet: View {
     }
 
     private func openBoard(_ board: KbHtmlBoard) {
-        store.openPreview(board.relPath, chatId: chatId)
+        if let chatId, store.isWorkspaceChat(chatId), store.activeId != chatId {
+            store.activateWorkspaceChat(chatId)
+        }
+        store.openPreview(board.relPath)
         sceneSession?.presentPreview(from: store)
         dismiss()
     }

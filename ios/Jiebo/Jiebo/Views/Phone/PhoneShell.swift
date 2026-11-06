@@ -80,7 +80,6 @@ struct PhoneShell: View {
     #if DEBUG
     /// --phone-route=root|inbox|today|delegations|todos|plans|runs|artifacts|settings|memory
     /// runs 仍可用，打开的是委派。
-    /// --phone-menu=open
     /// --phone-delegation=<id>
     @MainActor
     private func applyDebugArguments() {
@@ -102,9 +101,6 @@ struct PhoneShell: View {
             case "memory": router.path = [.settings, .memory]
             default: router.path = []
             }
-        }
-        if value(of: "--phone-menu=") == "open" {
-            router.menuOpen = true
         }
         if let id = value(of: "--phone-delegation="), !id.isEmpty {
             router.delegationDetail = DelegationRef(id: id)

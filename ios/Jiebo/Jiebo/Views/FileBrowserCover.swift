@@ -24,6 +24,8 @@ struct FileBrowserCover: View {
     @State private var editing = false
     @State private var draft = ""
     @State private var revertConfirm = false
+    @State private var discardConfirm = false
+    @State private var pendingDiscard: (() -> Void)?
 
     private var activePreviewTab: PreviewTab? {
         if let sceneSession { return sceneSession.previewTab(in: store) }
@@ -34,7 +36,7 @@ struct FileBrowserCover: View {
         DragGesture(minimumDistance: 24, coordinateSpace: .local)
             .onEnded { value in
                 guard sizeClass == .compact, value.startLocation.x < 28, value.translation.width > 70 else { return }
-                dismiss()
+                requestDismiss()
             }
     }
 
@@ -56,8 +58,11 @@ struct FileBrowserCover: View {
                     VStack(spacing: 0) {
                         HStack {
                             Button {
-                                if let sceneSession { sceneSession.dismissPreview() }
-                                else { store.dismissPreviewPanel() }
+                                performOrConfirm {
+                                    editing = false
+                                    if let sceneSession { sceneSession.dismissPreview() }
+                                    else { store.dismissPreviewPanel() }
+                                }
                             } label: {
                                 Label("文件", systemImage: "chevron.left")
                                     .font(JieboFont.text(.subheadline, weight: .medium))
@@ -81,7 +86,7 @@ struct FileBrowserCover: View {
                 if sizeClass == .compact {
                     ToolbarItem(placement: .topBarLeading) {
                         Button {
-                            dismiss()
+                            requestDismiss()
                         } label: {
                             Label("对话", systemImage: "chevron.left")
                         }
@@ -89,7 +94,7 @@ struct FileBrowserCover: View {
                     }
                 } else {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("完成") { dismiss() }
+                        Button("完成") { requestDismiss() }
                             .hitTarget()
                     }
                 }
@@ -167,11 +172,14 @@ struct FileBrowserCover: View {
             }
         }
         .onAppear {
-            store.requestDirFiles(dir: "")
+            if store.activeId != workbenchChatId {
+                store.activateWorkspaceChat(workbenchChatId)
+            }
+            store.requestDirFiles(dir: "", chatId: workbenchChatId)
         }
         .onChange(of: filter) { _, next in
             if !next.trimmingCharacters(in: .whitespaces).isEmpty && store.fileIndex.isEmpty {
-                store.requestFileIndex(userInitiated: true)
+                store.requestFileIndex(chatId: workbenchChatId, userInitiated: true)
             }
         }
         // Quick Look 挂在 cover 自己身上——ThreadView 的 sheet 在 cover 背后，弹不出来
@@ -292,9 +300,9 @@ struct FileBrowserCover: View {
                 truncated: store.treeTruncated,
                 filter: filter,
                 selectedPath: sceneSession?.previewKey ?? store.previewActivePath,
-                loadingDirs: store.loadingDirsByChat[store.activeId] ?? [],
-                truncatedDirs: store.truncatedDirsByChat[store.activeId] ?? [],
-                onExpandDir: { store.requestDirFiles(dir: $0) },
+                loadingDirs: store.loadingDirsByChat[workbenchChatId] ?? [],
+                truncatedDirs: store.truncatedDirsByChat[workbenchChatId] ?? [],
+                onExpandDir: { store.requestDirFiles(dir: $0, chatId: workbenchChatId) },
                 onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,
@@ -328,7 +336,9 @@ struct FileBrowserCover: View {
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
                     if editing {
-                        Button("取消") { editing = false }
+                        Button("取消") {
+                            performOrConfirm { editing = false }
+                        }
                             .font(JieboFont.text(.subheadline, weight: .medium))
                         Button("保存") {
                             store.savePreviewText(tab, content: draft)
@@ -405,8 +415,17 @@ struct FileBrowserCover: View {
                     PreviewContentView(tab: tab)
                 }
             }
-            .onChange(of: tab.path) { _, _ in editing = false }
-            .onChange(of: tab.diff) { _, _ in editing = false }
+            .alert("放弃未保存的修改？", isPresented: $discardConfirm) {
+                Button("放弃修改", role: .destructive) {
+                    let action = pendingDiscard
+                    pendingDiscard = nil
+                    editing = false
+                    action?()
+                }
+                Button("继续编辑", role: .cancel) { pendingDiscard = nil }
+            } message: {
+                Text("这个文件里还有没保存的修改。")
+            }
             .alert("还原这个文件？", isPresented: $revertConfirm) {
                 Button("还原", role: .destructive) {
                     editing = false
@@ -434,9 +453,40 @@ struct FileBrowserCover: View {
 
     // MARK: 动作
 
+    private var workbenchChatId: String {
+        if let id = sceneSession?.workbenchChatId, store.isWorkspaceChat(id) {
+            return id
+        }
+        return store.activeId
+    }
+
+    private var hasUnsavedChanges: Bool {
+        guard let tab = activePreviewTab else { return false }
+        return editing && draft != (tab.content ?? "")
+    }
+
+    private func performOrConfirm(_ action: @escaping () -> Void) {
+        if hasUnsavedChanges {
+            pendingDiscard = action
+            discardConfirm = true
+        } else {
+            action()
+        }
+    }
+
+    private func requestDismiss() {
+        performOrConfirm {
+            editing = false
+            dismiss()
+        }
+    }
+
     private func openFile(_ path: String, diff: Bool = false) {
-        store.loadPreview(path, diff: diff)
-        sceneSession?.presentPreview(from: store)
+        performOrConfirm {
+            editing = false
+            store.loadPreview(path, diff: diff)
+            sceneSession?.presentPreview(from: store)
+        }
     }
 
     private func pickFile(_ path: String) {

@@ -137,6 +137,7 @@ struct HomeShell: View {
             bootstrapPadRouter()
             dispatchPush()
             dispatchWidgetDeepLink()
+            syncWorkbenchViewing()
         }
         .onDisappear {
             AssistantScenePresenter.shared.unregister(token: sceneToken)
@@ -148,9 +149,11 @@ struct HomeShell: View {
             // 只保存以后新场景的默认值；现有场景不观察它，因此不会被其它窗口带着切域。
             UserDefaults.standard.set(next.rawValue, forKey: PadDomain.storageKey)
             im.setHomeVisible(next == .messages)
+            syncWorkbenchViewing(domain: next)
         }
         .onChange(of: scenePhase) { _, phase in
             AssistantScenePresenter.shared.update(token: sceneToken, active: phase == .active)
+            syncWorkbenchViewing(phase: phase)
             if phase == .active {
                 dispatchPush()
                 dispatchWidgetDeepLink()
@@ -393,11 +396,26 @@ struct HomeShell: View {
         }
     }
 
+    private func syncWorkbenchViewing(domain: PadDomain? = nil, phase: ScenePhase? = nil) {
+        let domain = domain ?? padRouter.domain
+        let phase = phase ?? scenePhase
+        let viewing = domain == .workbench && phase == .active
+        store.syncWorkbenchAgentViewing(
+            chatId: viewing ? (sceneSession?.workbenchChatId ?? store.activeId) : nil,
+            active: viewing
+        )
+    }
+
     private func openWorkspace(_ chatId: String) {
         store.assistantOnly = false
         Task { @MainActor in
             var waited = 0
+            var nudged = false
             while !store.isWorkspaceChat(chatId), waited < 40 {
+                if !nudged, let item = store.workspaceAgent(chatId: chatId) {
+                    store.switchWorkspace(to: item.path)
+                    nudged = true
+                }
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
                 guard !Task.isCancelled else { return }

@@ -1,7 +1,23 @@
 import SwiftUI
 import UIKit
 
-// 从 AssistantView 抽出的共享组件。iPad 助理面板和 iPhone 的行动区 / 待处理 / 今日面板共用。
+// 从 AssistantView 抽出的共享组件。iPad 助理面板和 iPhone 的行动区 / 待处理共用。
+
+/// 助理入口使用的数字角标（> 99 显示 99+）
+struct PendingBadge: View {
+    var count: Int
+
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(JieboFont.text(.caption2, weight: .semibold))
+            .foregroundStyle(JieboColor.fillFg)
+            .padding(.horizontal, 5)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(JieboColor.danger)
+            .clipShape(Capsule())
+            .accessibilityHidden(true)
+    }
+}
 
 struct AssistantSection<Content: View>: View {
     var title: String

@@ -54,10 +54,8 @@ final class PhoneRouter {
     /// 小驳空间的导航栈。待处理、通知详情都在这条栈上。
     var path: [PhoneRoute] = []
     var inboxLane: InboxLane = .notices
-    var menuOpen = false
-    var hubOpen = false
-    /// 打开今日面板后滚到的锚点："todos" / "schedules"，nil 不滚
-    var hubAnchor: String?
+    /// 工作台左抽屉开着。底部空间栏要让开，抽屉底栏才点得到。
+    var workbenchDrawerOpen = false
     /// 正在看的委派详情。sheet 挂在 PhoneTabShell 上，三个一级空间都能弹
     var delegationDetail: DelegationRef?
     /// 进入待办、计划或委派后要打开的那一条。栏目页取走后清空。
@@ -92,8 +90,7 @@ extension PhoneRouter {
     /// 待处理、待办、计划、委派都留在小驳的导航栈里。其它页面回到小驳后 push（替换整个栈，不叠层）。
     func go(_ route: PhoneRoute) {
         dismissKeyboard()
-        menuOpen = false
-        hubOpen = false
+        workbenchDrawerOpen = false
         selectedTab = .assistant
         switch route {
         case .inbox, .inboxItem:
@@ -113,22 +110,11 @@ extension PhoneRouter {
     /// 三个大模块之间切换。回到小驳时落在聊天页，不留着上次推上去的页面。
     func openSpace(_ tab: PhoneTab) {
         dismissKeyboard()
-        menuOpen = false
-        hubOpen = false
+        workbenchDrawerOpen = false
         if tab == .assistant {
             path = []
         }
         selectedTab = tab
-    }
-
-    func openMenu() {
-        dismissKeyboard()
-        hubOpen = false
-        menuOpen = true
-    }
-
-    func closeMenu() {
-        menuOpen = false
     }
 
     /// 打开对应栏目，并在列表出现后展开这一条，而不是整页今日。
@@ -137,23 +123,15 @@ extension PhoneRouter {
         go(.worklist(column))
     }
 
-    func openHub(anchor: String? = nil) {
-        dismissKeyboard()
-        menuOpen = false
-        hubAnchor = anchor
-        hubOpen = true
-    }
-
     func popToRoot() {
         selectedTab = .assistant
         path = []
-        menuOpen = false
+        workbenchDrawerOpen = false
     }
 
     func openInboxItem(_ id: String) {
         dismissKeyboard()
-        menuOpen = false
-        hubOpen = false
+        workbenchDrawerOpen = false
         selectedTab = .assistant
         if path.last != .inbox {
             path.append(.inbox)

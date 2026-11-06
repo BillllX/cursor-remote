@@ -217,6 +217,7 @@ extension ChatStore {
     func activateWorkspaceChat(_ id: String) {
         guard !assistantOnly, isWorkspaceChat(id) else { return }
         select(id)
+        syncWorkbenchAgentViewing(chatId: id, active: true)
     }
 
     func select(_ requestedId: String) {
@@ -231,12 +232,6 @@ extension ChatStore {
         }
         pendingAssistantOpen = false
         guard id != activeId else { return }
-        let nextCwd = chats.first { $0.id == id }?.cwd
-        if contentPath != nil, !sameCwd(nextCwd, active?.cwd), contentDirty, !suppressContentDiscard {
-            contentDiscardFollowup = .selectChat(id)
-            contentDiscardPrompt = true
-            return
-        }
         swapActive(to: id)
         mentionQuery = nil
         mentionTask?.cancel()
@@ -263,16 +258,6 @@ extension ChatStore {
             newId = assistantId
         }
         guard newId != activeId else { return }
-        let nextCwd = chats.first { $0.id == newId }?.cwd
-        if contentPath != nil, !sameCwd(nextCwd, active?.cwd) {
-            let prompted = suppressContentDiscard
-            let dirty = contentDirty
-            let wasSuppressing = suppressContentDiscard
-            suppressContentDiscard = true
-            closeContentLayer()
-            suppressContentDiscard = wasSuppressing
-            if dirty, !prompted { flash("未保存的修改已丢掉") }
-        }
         let oldCwd = active?.cwd
         persistDraft()
         imagesByChat[activeId] = pendingImages // 待发图片跟会话走
@@ -307,6 +292,9 @@ extension ChatStore {
             gitStatus = [:]
         }
         ensureTurnsLoaded(newId) // P8 slim：点开的会话若只有元数据壳，启动分页加载
+        if !assistantOnly, isWorkspaceChat(newId) {
+            syncWorkbenchAgentViewing(chatId: newId, active: true)
+        }
     }
 
     /// 重命名（对齐 web commitRename）：空标题忽略；已命名的会话不许改回「新对话」（那是未命名标记）；
@@ -334,17 +322,6 @@ extension ChatStore {
 
     func deleteChat(_ id: String) {
         guard !isAssistantChat(id) else { return }
-        if contentChatId == id, contentPath != nil {
-            if contentDirty, !suppressContentDiscard {
-                contentDiscardFollowup = .deleteChat(id)
-                contentDiscardPrompt = true
-                return
-            }
-            let wasSuppressing = suppressContentDiscard
-            suppressContentDiscard = true
-            closeContentLayer()
-            suppressContentDiscard = wasSuppressing
-        }
         if let doomed = chats.first(where: { $0.id == id }), chatShowsRunning(doomed) {
             send(.cancel(chatId: id))
         }

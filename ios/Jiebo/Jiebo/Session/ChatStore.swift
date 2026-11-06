@@ -77,15 +77,11 @@ struct ComposerChrome: Equatable {
     var queued: [Turn] = []
 }
 
-enum ContentDiscard {
-    case closeContent
-    case closeTool
-    case switchTool(ToolLayer)
-    case openFile(String)
-    case openDiff(String)
-    case openFileBrowser
-    case selectChat(String)
-    case deleteChat(String)
+struct PreviewSave {
+    var path: String
+    var chatId: String
+    var previous: String
+    var snapshot: String
 }
 
 /// 聊天主页的类型化目标，避免用户 id、助理和工作区路径发生字符串碰撞。
@@ -328,31 +324,11 @@ final class ChatStore {
     }
     /// 当前工具浮层。同一时间只开一个，再点一次关闭
     var toolLayer: ToolLayer?
-    /// I2：叠在工具层上的内容。换路径即替换，关掉回到工具层
     var gitStatus: [String: String] = [:]
-    var contentPath: String?
-    var contentDiff = false
-    var contentKind: PreviewKind = .text
-    var contentOriginal = ""
-    var contentDraft = ""
-    var contentLoading = false
-    var contentError: String?
-    /// 网关 write_file 超过 500KB 会拒绝。这种文件只读，避免显示能保存。
-    var contentOversized = false
-    /// 关闭或换文件前，先问要不要丢掉未保存的修改
-    var contentDiscardPrompt = false
-    var contentDirty: Bool { contentPath != nil && !contentOversized && contentDraft != contentOriginal }
-    /// 打开内容时的会话。保存和读回都用它，避免切会话后写到另一个工作区
-    var contentChatId: String?
-    /// 内容层读取代际。换文件后，迟到的 HTTP 水合不能写进新文件
-    var contentLoadEpoch = 0
-    /// 已发出、还没对上 file_written 的正文快照。回包只把基线设成这份快照，之后的新输入仍算未保存
-    var contentSaves: [(path: String, snapshot: String)] = []
-    var contentDiscardFollowup: ContentDiscard?
-    var suppressContentDiscard = false
+    /// 预览里已发出、还没对上 file_written 的正文。失败时把页签退回 previous。
+    var previewSaves: [PreviewSave] = []
+    /// 网关 write_file 超过 500KB 会拒绝。
     static let contentSaveLimit = 500_000
-    /// 打开内容层之前右侧预览的焦点。内容层自己的页签不能把预览留在对话右侧
-    var contentRestorePreview: String?
     /// 表单盖住主区时，校验和网关拒绝要画在 sheet 里
     var loopError = ""
     var hasApiKey = true
@@ -414,7 +390,7 @@ final class ChatStore {
     var previewExpanded = false
     var previewPanelOpen: Bool {
         // 文件浮层开着时，内容画在浮层右栏，不再同时从右侧弹出另一块
-        previewExpanded && !fileBrowserOpen && contentPath == nil && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
+        previewExpanded && !fileBrowserOpen && previewActivePath != nil && previewTabs.contains { $0.path == previewActivePath }
     }
     var activePreviewTab: PreviewTab? { previewTabs.first { $0.path == previewActivePath } }
 

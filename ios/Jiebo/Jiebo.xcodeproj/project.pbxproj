@@ -67,11 +67,9 @@
 		A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000704 /* PhoneShell.swift */; };
 		A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */; };
 		P7000201 /* ArtifactCenterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = P7000101 /* ArtifactCenterView.swift */; };
-		A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */; };
 		A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000706 /* AssistantHome.swift */; };
 		A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000707 /* TodayStrip.swift */; };
 		A1B2C3D4E5F6071829000808 /* ActionDock.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000708 /* ActionDock.swift */; };
-		A1B2C3D4E5F6071829000809 /* AssistantHubSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */; };
 		A1B2C3D4E5F6071829000810 /* DelegationDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */; };
 		A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000711 /* InboxHome.swift */; };
 		A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000712 /* MenuScreens.swift */; };
@@ -100,7 +98,6 @@
 		A1B2C3D4E5F6071829000835 /* WorkspacePickerSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */; };
 		A1B2C3D4E5F6071829000836 /* AgoLabel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000736 /* AgoLabel.swift */; };
 		A1B2C3D4E5F6071829000837 /* LoopSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000737 /* LoopSheet.swift */; };
-		A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */; };
 		A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */; };
 		A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */; };
 		ICON000201 /* AppIconPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = ICON000101 /* AppIconPicker.swift */; };
@@ -267,11 +264,9 @@
 		A1B2C3D4E5F6071829000704 /* PhoneShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneShell.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTabShell.swift; sourceTree = "<group>"; };
 		P7000101 /* ArtifactCenterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtifactCenterView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuDrawer.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000706 /* AssistantHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantHome.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000707 /* TodayStrip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodayStrip.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000708 /* ActionDock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionDock.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantHubSheet.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DelegationDetailSheet.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000711 /* InboxHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxHome.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000712 /* MenuScreens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuScreens.swift; sourceTree = "<group>"; };
@@ -301,7 +296,6 @@
 		A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePickerSheet.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000736 /* AgoLabel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgoLabel.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000737 /* LoopSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoopSheet.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantEntryRow.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkStatusDot.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeSettingsSheet.swift; sourceTree = "<group>"; };
 		ICON000101 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
@@ -550,7 +544,6 @@
 				A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */,
 				A1B2C3D4E5F6071829000736 /* AgoLabel.swift */,
 				A1B2C3D4E5F6071829000737 /* LoopSheet.swift */,
-				A1B2C3D4E5F6071829000738 /* AssistantEntryRow.swift */,
 				A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */,
 				A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */,
 				ICON000101 /* AppIconPicker.swift */,
@@ -605,11 +598,9 @@
 				A1B2C3D4E5F6071829000A14 /* PhoneTabShell.swift */,
 				A1B2C3D4E5F6071829000704 /* PhoneShell.swift */,
 				P7000101 /* ArtifactCenterView.swift */,
-				A1B2C3D4E5F6071829000705 /* MenuDrawer.swift */,
 				A1B2C3D4E5F6071829000706 /* AssistantHome.swift */,
 				A1B2C3D4E5F6071829000707 /* TodayStrip.swift */,
 				A1B2C3D4E5F6071829000708 /* ActionDock.swift */,
-				A1B2C3D4E5F6071829000709 /* AssistantHubSheet.swift */,
 				A1B2C3D4E5F6071829000710 /* DelegationDetailSheet.swift */,
 				A1B2C3D4E5F6071829000711 /* InboxHome.swift */,
 				A1B2C3D4E5F6071829000712 /* MenuScreens.swift */,
@@ -834,11 +825,9 @@
 				A1B2C3D4E5F6071829000804 /* PhoneShell.swift in Sources */,
 				A1B2C3D4E5F6071829000B13 /* PhoneTabShell.swift in Sources */,
 				P7000201 /* ArtifactCenterView.swift in Sources */,
-				A1B2C3D4E5F6071829000805 /* MenuDrawer.swift in Sources */,
 				A1B2C3D4E5F6071829000806 /* AssistantHome.swift in Sources */,
 				A1B2C3D4E5F6071829000807 /* TodayStrip.swift in Sources */,
 				A1B2C3D4E5F6071829000808 /* ActionDock.swift in Sources */,
-				A1B2C3D4E5F6071829000809 /* AssistantHubSheet.swift in Sources */,
 				A1B2C3D4E5F6071829000810 /* DelegationDetailSheet.swift in Sources */,
 				A1B2C3D4E5F6071829000811 /* InboxHome.swift in Sources */,
 				A1B2C3D4E5F6071829000812 /* MenuScreens.swift in Sources */,
@@ -916,7 +905,6 @@
 				A1B2C3D4E5F6071829000835 /* WorkspacePickerSheet.swift in Sources */,
 				A1B2C3D4E5F6071829000836 /* AgoLabel.swift in Sources */,
 				A1B2C3D4E5F6071829000837 /* LoopSheet.swift in Sources */,
-				A1B2C3D4E5F6071829000838 /* AssistantEntryRow.swift in Sources */,
 				A1B2C3D4E5F6071829000839 /* LinkStatusDot.swift in Sources */,
 				A1B2C3D4E5F6071829000840 /* ThemeSettingsSheet.swift in Sources */,
 				ICON000201 /* AppIconPicker.swift in Sources */,

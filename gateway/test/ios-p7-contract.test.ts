@@ -20,8 +20,11 @@ describe("iOS P7 静态契约", () => {
     assert.match(tabs, /PhoneShell\(\)[\s\S]*\.opacity\(router\.selectedTab == \.assistant \? 1 : 0\)/);
     assert.match(tabs, /if router\.selectedTab == \.workspace \{\s*PhoneWorkbench\(embedsPreview: false\)/);
     assert.match(tabs, /if router\.selectedTab == \.messages \{\s*ChatHome\(\)/);
-    const menu = read("ios/Jiebo/Jiebo/Views/Phone/MenuDrawer.swift");
-    assert.match(menu, /"产物中心"[\s\S]*router\.go\(\.artifacts\)/);
+    const inbox = read("ios/Jiebo/Jiebo/Views/Phone/InboxHome.swift");
+    assert.match(inbox, /"产物"/);
+    assert.match(inbox, /ArtifactCenterView\(embedded: true\)/);
+    const shell = read("ios/Jiebo/Jiebo/Views/Phone/PhoneShell.swift");
+    assert.match(shell, /router\.go\(\.artifacts\)/);
   });
 
   test("续作固定提交助理主会话、保留草稿，文件复用既有预览与分享", () => {

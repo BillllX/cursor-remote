@@ -88,6 +88,42 @@ extension ChatStore {
         workspaceAgents.first { $0.mainChatId == chatId }
     }
 
+    /// 会话 id 对不上主会话时，再按它所在目录认工作区。
+    func workspaceAgentForWorkbench(chatId: String?) -> WorkspaceAgentItem? {
+        guard let chatId, !chatId.isEmpty else { return nil }
+        if let direct = workspaceAgents.first(where: { $0.mainChatId == chatId }) {
+            return direct
+        }
+        guard let chatCwd = chats.first(where: { $0.id == chatId })?.cwd?.nilIfEmpty else {
+            return nil
+        }
+        return workspaceAgents.first { sameCwd($0.path, chatCwd) }
+    }
+
+    /// 工作台在前台看着某个工作区会话时，同步 viewing 信标并消掉这个工作区的未读。
+    func syncWorkbenchAgentViewing(chatId: String?, active: Bool = true) {
+        guard active, unlocked, let chatId, !chatId.isEmpty, isWorkspaceChat(chatId) else {
+            WorkspaceViewingBeacon.shared.set(nil)
+            if connected { send(.workspaceAgentViewing(chatId: nil)) }
+            return
+        }
+        WorkspaceViewingBeacon.shared.set(chatId)
+        guard connected else { return }
+        if let item = workspaceAgentForWorkbench(chatId: chatId) {
+            let reportChatId = item.mainChatId ?? chatId
+            send(.workspaceAgentViewing(chatId: reportChatId))
+            if item.unread > 0 || item.readSeq < item.finishedSeq {
+                if let idx = workspaceAgents.firstIndex(where: { $0.path == item.path }) {
+                    workspaceAgents[idx].unread = 0
+                    workspaceAgents[idx].readSeq = max(workspaceAgents[idx].readSeq, item.finishedSeq)
+                }
+                send(.workspaceAgentRead(chatId: reportChatId, seq: item.finishedSeq))
+            }
+        } else {
+            send(.workspaceAgentViewing(chatId: nil))
+        }
+    }
+
     func workspaceAgent(path: String) -> WorkspaceAgentItem? {
         workspaceAgents.first { $0.path == path }
     }

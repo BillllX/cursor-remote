@@ -6,8 +6,7 @@ const iconsPath = "web/components/chromeIcons.tsx";
 const projectPath = "ios/Jiebo/Jiebo.xcodeproj/project.pbxproj";
 const chatStorePath = "ios/Jiebo/Jiebo/Session/ChatStore.swift";
 const rootViewPath = "ios/Jiebo/Jiebo/Views/RootView.swift";
-const assistantEntryPath = "ios/Jiebo/Jiebo/Views/AssistantEntryRow.swift";
-const menuDrawerPath = "ios/Jiebo/Jiebo/Views/Phone/MenuDrawer.swift";
+const assistantHomePath = "ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift";
 const menuScreensPath = "ios/Jiebo/Jiebo/Views/Phone/MenuScreens.swift";
 const chatHomePath = "ios/Jiebo/Jiebo/Views/IM/ChatHome.swift";
 const memoryViewsPath = "ios/Jiebo/Jiebo/Views/MemoryCenter/MemoryCenterViews.swift";
@@ -21,8 +20,7 @@ const icons = readFileSync(iconsPath, "utf8");
 const project = readFileSync(projectPath, "utf8");
 const chatStore = readFileSync(chatStorePath, "utf8");
 const rootView = readFileSync(rootViewPath, "utf8");
-const assistantEntry = readFileSync(assistantEntryPath, "utf8");
-const menuDrawer = readFileSync(menuDrawerPath, "utf8");
+const assistantHome = readFileSync(assistantHomePath, "utf8");
 const menuScreens = readFileSync(menuScreensPath, "utf8");
 const chatHome = readFileSync(chatHomePath, "utf8");
 const memoryViews = readFileSync(memoryViewsPath, "utf8");
@@ -123,7 +121,8 @@ for (const [id, title, icon] of toolContracts) {
 
 for (const [source, needle, title] of [
   [rootView, "NavigationIconId.account.symbol", "RootView 账户入口"],
-  [menuDrawer, "NavigationIconId.account.symbol", "手机菜单设置入口"],
+  [assistantHome, "NavigationIconId.account.symbol", "小驳页设置入口"],
+  [assistantHome, "StatusLegendId.attention", "小驳页待处理状态"],
   [chatHome, "NavigationIconId.account.symbol", "聊天主页设置入口"],
   [readFileSync("ios/Jiebo/Jiebo/Views/Phone/PhoneTabShell.swift", "utf8"), "NavigationIconId.assistant.symbol", "手机三空间里的小驳"],
   [menuScreens, "NavigationIconId.memory.symbol", "设置页记忆入口"],
@@ -137,7 +136,6 @@ for (const [source, needle, title] of [
   [adminStats, "NavigationIconId.stats.symbol", "统计空态"],
   [rootView, "StatusLegendId.running", "RootView 运行状态"],
   [home, "StatusLegendId.attention", "iPad 域切换待处理状态"],
-  [assistantEntry, "StatusLegendId.unread", "助理会话独立未读状态"],
   [sidebar, 'row.status == "armed" || row.status == "running"', "iPad Loop 活动状态"],
   [phoneWorkbench, 'row.status == "armed" || row.status == "running"', "窄屏 Loop 活动状态"],
   [sidebar, "PhoneSettingsScreen()", "iPad 账户入口"],

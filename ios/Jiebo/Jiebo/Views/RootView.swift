@@ -130,7 +130,7 @@ struct WorkbenchView: View {
                         }
                     }
             } detail: {
-                ZStack(alignment: .leading) {
+                ZStack(alignment: .trailing) {
                     ThreadView(chatId: sceneSession?.workbenchChatId ?? store.activeId)
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
@@ -243,9 +243,12 @@ struct WorkbenchView: View {
 }
 struct CollapsedSidebarRail: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var expand: () -> Void
     @State private var settingsOpen = false
+    @State private var kbOpen = false
+    @State private var memoryOpen = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -262,6 +265,8 @@ struct CollapsedSidebarRail: View {
             }
             Spacer()
             railButton(NavigationIconId.workspace.symbol, label: "切换文件夹", action: store.openWorkspaceSwitcher)
+            railButton("books.vertical", label: "知识库") { kbOpen = true }
+            railButton(NavigationIconId.memory.symbol, label: "记忆") { memoryOpen = true }
             if store.linkState == .offline {
                 Button {
                     store.retryConnection()
@@ -291,6 +296,16 @@ struct CollapsedSidebarRail: View {
                         PhoneSettingsDestination(route: route)
                     }
             }
+        }
+        .sheet(isPresented: $kbOpen) {
+            KbWorkspaceSheet(
+                workspacePath: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId),
+                workspaceName: store.workspaceTitle(anchoredTo: sceneSession?.workbenchChatId),
+                chatId: sceneSession?.workbenchChatId
+            )
+        }
+        .sheet(isPresented: $memoryOpen) {
+            MemoryCenterSheet()
         }
     }
 
@@ -370,57 +385,29 @@ struct ToolLayerOverlay: View {
                             Button {
                                 closeTopLayer()
                             } label: {
-                                Label(store.contentPath == nil ? "对话" : layer.title, systemImage: "chevron.left")
+                                Label("对话", systemImage: "chevron.left")
                                     .font(JieboFont.text(.subheadline, weight: .medium))
                                     .foregroundStyle(JieboColor.ink)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(store.contentPath == nil ? "回到对话" : "返回")
+                            .accessibilityLabel("回到对话")
                         }
-                        Text(store.contentPath.map { ($0 as NSString).lastPathComponent } ?? (narrow ? "" : layer.title))
+                        Text(narrow ? "" : layer.title)
                             .font(JieboFont.text(.callout))
                             .foregroundStyle(JieboColor.ink)
                             .lineLimit(1)
                         Spacer()
-                        if store.contentDiff {
-                            Button("保留") { store.keepContentDiff() }
-                                .font(JieboFont.text(.subheadline, weight: .medium))
-                                .foregroundStyle(JieboColor.ink)
-                                .padding(.horizontal, 10)
-                                .frame(minHeight: 44)
-                                .background(Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(JieboColor.line, lineWidth: 1)
-                                )
-                            Button("还原") { store.contentRevertPrompt = true }
-                                .font(JieboFont.text(.subheadline, weight: .medium))
-                                .foregroundStyle(JieboColor.ink2)
-                                .padding(.horizontal, 10)
-                                .frame(minHeight: 44)
-                                .background(Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(JieboColor.line, lineWidth: 1)
-                                )
-                        } else if store.contentDirty {
-                            Button("保存") { store.saveContentLayer() }
-                                .font(JieboFont.text(.subheadline, weight: .medium))
-                                .foregroundStyle(JieboColor.pine)
-                        }
                         if !narrow {
                             Button {
                                 closeTopLayer()
                             } label: {
-                                Image(systemName: store.contentPath == nil ? "xmark" : "chevron.left")
+                                Image(systemName: "xmark")
                                     .font(.system(size: 14, weight: .semibold))
                                     .foregroundStyle(JieboColor.ink2)
                                     .frame(width: 32, height: 32)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(store.contentPath == nil ? "关闭" : "返回")
+                            .accessibilityLabel("关闭")
                         }
                     }
                     .padding(.horizontal, 14)
@@ -438,20 +425,8 @@ struct ToolLayerOverlay: View {
                 .overlay(alignment: .leading) {
                     Rectangle().fill(JieboColor.line).frame(width: 1)
                 }
+                .gesture(edgeDismiss)
             }
-            .gesture(edgeDismiss)
-        }
-        .alert("放弃未保存的修改？", isPresented: Bindable(store).contentDiscardPrompt) {
-            Button("放弃", role: .destructive) { store.confirmContentDiscard() }
-            Button("继续编辑", role: .cancel) { store.cancelContentDiscard() }
-        } message: {
-            Text("这个文件里还有没保存的修改。")
-        }
-        .alert("还原这个文件？", isPresented: Bindable(store).contentRevertPrompt) {
-            Button("还原", role: .destructive) { store.revertContentFile() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("未提交的改动会丢掉。")
         }
     }
 
@@ -541,12 +516,8 @@ struct ToolLayerOverlay: View {
     }
 
     private func closeTopLayer() {
-        if store.contentPath != nil {
-            store.closeContentLayer()
-        } else {
-            store.toolLayer = nil
-            store.loopError = ""
-        }
+        store.toolLayer = nil
+        store.loopError = ""
     }
 
     private var edgeDismiss: some Gesture {
@@ -582,182 +553,6 @@ struct ToolLayerOverlay: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-    }
-}
-struct ContentLayerView: View {
-    @Environment(ChatStore.self) private var store
-
-    var body: some View {
-        Group {
-            if store.contentDiff, store.contentKind == .image || store.contentKind == .svg,
-               let path = store.contentPath,
-               let tab = store.previewTabs.first(where: { $0.path == path }) {
-                PreviewContentView(tab: tab)
-            } else if store.contentDiff {
-                diffText
-            } else if store.contentKind == .text || store.contentKind == .markdown {
-                textEditor
-            } else if let path = store.contentPath, let tab = store.previewTabs.first(where: { $0.path == path }) {
-                PreviewContentView(tab: tab)
-            } else {
-                missingPreviewBody
-            }
-        }
-        .background(JieboColor.paper)
-    }
-
-    private var diffText: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if store.contentLoading {
-                contentLoadingBody("正在读取改动…")
-            } else if let error = store.contentError {
-                VStack(spacing: 12) {
-                    Text(error)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.clay)
-                        .multilineTextAlignment(.center)
-                    if let path = store.contentPath {
-                        Button("重试") { store.openContentDiff(path) }
-                            .font(JieboFont.text(.footnote, weight: .medium))
-                            .foregroundStyle(JieboColor.pine)
-                            .frame(minWidth: 44, minHeight: 44)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    Text(store.contentDraft.isEmpty ? "没有可显示的改动" : store.contentDraft)
-                        .font(JieboFont.monoText(.caption))
-                        .foregroundStyle(JieboColor.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(12)
-                }
-            }
-        }
-    }
-
-    private var textEditor: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if store.contentLoading {
-                contentLoadingBody("正在读取…")
-            } else if let error = store.contentError, store.contentDraft == store.contentOriginal {
-                VStack(spacing: 12) {
-                    Text(error)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.clay)
-                        .multilineTextAlignment(.center)
-                    if let path = store.contentPath {
-                        Button("重试") { store.openContentFile(path) }
-                            .font(JieboFont.text(.footnote, weight: .medium))
-                            .foregroundStyle(JieboColor.pine)
-                            .frame(minWidth: 44, minHeight: 44)
-                    }
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if store.contentOversized {
-                Text("超过 500KB，这里只能看，不能保存")
-                    .font(JieboFont.text(.caption))
-                    .foregroundStyle(JieboColor.clay)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-                ScrollView {
-                    Text(store.contentDraft)
-                        .font(JieboFont.monoText(.footnote))
-                        .foregroundStyle(JieboColor.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .padding(12)
-                }
-            } else {
-                Text(store.contentDirty ? "未保存" : "已保存")
-                    .font(JieboFont.text(.caption))
-                    .foregroundStyle(store.contentDirty ? JieboColor.clay : JieboColor.dim)
-                    .padding(.horizontal, 14)
-                    .padding(.top, 8)
-                TextEditor(text: Bindable(store).contentDraft)
-                    .font(JieboFont.monoText(.footnote))
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 8)
-            }
-        }
-    }
-
-    /// 图片、网页这类内容靠预览页签。页签不在时不要无字转圈。
-    @ViewBuilder
-    private var missingPreviewBody: some View {
-        if let blocked = store.contentReadBlockedTitle() {
-            VStack(spacing: 12) {
-                Text(blocked)
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.ink)
-                    .multilineTextAlignment(.center)
-                if store.unlocked, store.linkState == .offline {
-                    Button("重连") { store.retryConnection() }
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(JieboColor.pine)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let error = store.contentError {
-            VStack(spacing: 12) {
-                Text(error)
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.clay)
-                    .multilineTextAlignment(.center)
-                if let path = store.contentPath {
-                    Button("重试") { store.openContentFile(path) }
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(JieboColor.pine)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            VStack(spacing: 12) {
-                Text("这个预览还没打开。")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.ink)
-                    .multilineTextAlignment(.center)
-                if let path = store.contentPath {
-                    Button("打开") { store.openContentFile(path) }
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(JieboColor.pine)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    /// 正文还在读。还没登录或没连上时不要写成正在读取。
-    @ViewBuilder
-    private func contentLoadingBody(_ title: String) -> some View {
-        if let blocked = store.contentReadBlockedTitle() {
-            VStack(spacing: 12) {
-                Text(blocked)
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.ink)
-                    .multilineTextAlignment(.center)
-                if store.unlocked, store.linkState == .offline {
-                    Button("重连") { store.retryConnection() }
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(JieboColor.pine)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ProgressView(title)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
     }
 }
 struct SearchToolView: View {

@@ -375,11 +375,7 @@ extension ChatStore {
         searchTruncated = false
         searchLoading = false
         searchContentNote = ""
-        suppressContentDiscard = true
-        closeContentLayer()
-        suppressContentDiscard = false
-        contentDiscardPrompt = false
-        contentDiscardFollowup = nil
+        previewSaves.removeAll()
         adminStats = []
         cursorBill = nil
         adminStatsAt = nil

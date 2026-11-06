@@ -233,9 +233,7 @@ struct TurnView: View, Equatable {
                 }
             }
             if !turn.deferred, !assistantText.isEmpty {
-                HStack(alignment: .top, spacing: embedded ? 0 : 12) {
-                    if !embedded { BotAvatar() }
-                    VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
                         StreamingAssistantText(
                             text: assistantText,
                             live: turn.running,
@@ -262,7 +260,6 @@ struct TurnView: View, Equatable {
                         ActivityView(items: [item.text])
                             .presentationDetents([.medium, .large])
                     }
-                }
             }
             if turn.running, assistantText.isEmpty {
                 if let task = turn.task?.nilIfEmpty {
@@ -295,7 +292,6 @@ struct TurnView: View, Equatable {
                         CalendarInviteCard(calendar: calendarInvite, compact: true)
                     }
                 }
-                .padding(.leading, embedded ? 0 : 40)
                 .sheet(item: $editingTodo) { todo in
                     TodoEditSheet(todo: todo)
                 }
@@ -335,15 +331,12 @@ struct TurnView: View, Equatable {
             // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
             if !turn.deferred, !turn.cardFiles.isEmpty {
                 TurnFileCards(turn: turn, chatId: chatId)
-                    .padding(.leading, embedded ? 0 : 40)
             }
             if !turn.deferred, turn.needsFileReview, reviewMark == nil {
                 TurnReviewBar(turn: turn)
-                    .padding(.leading, embedded ? 0 : 40)
             }
             if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
                 assistantActionRow
-                    .padding(.leading, embedded ? 0 : 40)
             } else if !turn.running, !turn.assistant.isEmpty {
                 // 更早的轮次只留复制：发了新消息以后，上一轮的按钮不该整个消失
                 Button { copy(turn.assistant) } label: {
@@ -355,7 +348,6 @@ struct TurnView: View, Equatable {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("复制回复")
-                .padding(.leading, embedded ? 0 : 40)
             }
             // 无助手正文时耗时仍贴在轮次底部，用 ink2 保证可读
             if turn.assistant.isEmpty,
@@ -365,7 +357,6 @@ struct TurnView: View, Equatable {
                 Text(duration)
                     .font(JieboFont.text(.caption, weight: .medium))
                     .foregroundStyle(JieboColor.ink2)
-                    .padding(.leading, embedded ? 0 : 40)
             }
         }
     }
@@ -393,7 +384,6 @@ struct TurnView: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(JieboColor.userBubble.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-        .padding(.leading, embedded ? 0 : 40)
     }
 
     /// 最后一轮的复制 / 重试 / 分享：只放图标（系统同款），每个 44pt 热区；更早的轮次走长按菜单

@@ -57,6 +57,7 @@ struct InboxHome: View {
         .background(JieboColor.paper)
         .navigationTitle("助理中心")
         .navigationBarTitleDisplayMode(.inline)
+        .task { store.requestAssistant() }
     }
 
     private var laneBar: some View {

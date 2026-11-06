@@ -5,6 +5,7 @@ import SwiftUI
 /// iPhone 的预览由外层 PhoneTabShell 盖住，这里不再叠一层。
 struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var embedsPreview = true
@@ -112,6 +113,11 @@ struct PhoneWorkbench: View {
         .task { preferRunningChat() }
         .onChange(of: store.activeId) { _, _ in adoptWorkbenchChatIfNeeded() }
         .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: drawerOpen) { _, open in
+            phoneRouter?.workbenchDrawerOpen = open
+        }
+        .onAppear { phoneRouter?.workbenchDrawerOpen = drawerOpen }
+        .onDisappear { phoneRouter?.workbenchDrawerOpen = false }
     }
 
     private func closeDrawer() {

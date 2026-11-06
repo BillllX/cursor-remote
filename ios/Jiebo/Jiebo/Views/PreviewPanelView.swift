@@ -19,6 +19,8 @@ struct PreviewPanelView: View {
     @State private var editing = false
     @State private var draft = ""
     @State private var revertConfirm = false
+    @State private var discardConfirm = false
+    @State private var pendingDiscard: (() -> Void)?
 
     private var compact: Bool { sizeClass == .compact }
     private var usesCompactHeader: Bool { compact || dynamicTypeSize.isAccessibilitySize }
@@ -82,8 +84,17 @@ struct PreviewPanelView: View {
         .accessibilityAddTraits(modal ? .isModal : [])
         .accessibilityAction(.escape) { escapePreview() }
         .background { keyboardShortcuts }
-        .onChange(of: tab.path) { _, _ in editing = false }
-        .onChange(of: tab.diff) { _, _ in editing = false }
+        .alert("放弃未保存的修改？", isPresented: $discardConfirm) {
+            Button("放弃修改", role: .destructive) {
+                let action = pendingDiscard
+                pendingDiscard = nil
+                editing = false
+                action?()
+            }
+            Button("继续编辑", role: .cancel) { pendingDiscard = nil }
+        } message: {
+            Text("这个文件里还有没保存的修改。")
+        }
         .alert("还原这个文件？", isPresented: $revertConfirm) {
             Button("还原", role: .destructive) {
                 editing = false
@@ -98,9 +109,9 @@ struct PreviewPanelView: View {
     /// 外接键盘：Esc / ⌘W 收起预览，⌘⇧[ / ⌘⇧] 切页签。按钮不可见，只为挂快捷键
     private var keyboardShortcuts: some View {
         Group {
-            Button("收起预览") { closePreview() }
+            Button("收起预览") { requestClose() }
                 .modifier(PhonePreviewEscapeShortcut())
-            Button("关闭预览") { closePreview() }
+            Button("关闭预览") { requestClose() }
                 .keyboardShortcut("w", modifiers: .command)
             Button("上一个页签") { stepTab(-1) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
@@ -125,6 +136,26 @@ struct PreviewPanelView: View {
 
     private var fullscreen: Bool { sceneSession?.previewFullscreen == true }
 
+    private var hasUnsavedChanges: Bool {
+        editing && draft != (tab.content ?? "")
+    }
+
+    private func performOrConfirm(_ action: @escaping () -> Void) {
+        if hasUnsavedChanges {
+            pendingDiscard = action
+            discardConfirm = true
+        } else {
+            action()
+        }
+    }
+
+    private func requestClose() {
+        performOrConfirm {
+            editing = false
+            closePreview()
+        }
+    }
+
     private func closePreview() {
         if let sceneSession { sceneSession.dismissPreview() }
         else { store.collapsePreview() }
@@ -139,7 +170,7 @@ struct PreviewPanelView: View {
         if canFullscreen, fullscreen {
             sceneSession?.setPreviewFullscreen(false)
         } else {
-            closePreview()
+            requestClose()
         }
     }
 
@@ -166,7 +197,7 @@ struct PreviewPanelView: View {
                 let dx = value.translation.width
                 let horizontal = abs(dx) > abs(value.translation.height)
                 if horizontal, dx > 120 || value.predictedEndTranslation.width > 260 {
-                    closePreview()
+                    requestClose()
                 } else {
                     withAnimation(JieboMotion.snappy(reduceMotion)) { dragX = 0 }
                 }
@@ -178,7 +209,7 @@ struct PreviewPanelView: View {
     private var compactHeader: some View {
         HStack(spacing: 4) {
             Button {
-                closePreview()
+                requestClose()
             } label: {
                 Image(systemName: "chevron.backward")
                     .font(.system(size: 17, weight: .semibold))
@@ -261,7 +292,9 @@ struct PreviewPanelView: View {
     @ViewBuilder
     private var editControlButtons: some View {
         if editing {
-            Button("取消") { editing = false }
+            Button("取消") {
+                performOrConfirm { editing = false }
+            }
                 .font(JieboFont.text(.subheadline, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
                 .frame(minHeight: 44)
@@ -298,7 +331,11 @@ struct PreviewPanelView: View {
         Menu {
             if canToggleDiff {
                 Toggle(isOn: Binding(get: { tab.diff }, set: { on in
-                    if on != tab.diff { store.togglePreviewDiff(tab.path) }
+                    guard on != tab.diff else { return }
+                    performOrConfirm {
+                        editing = false
+                        store.togglePreviewDiff(tab.path)
+                    }
                 })) {
                     Label("查看改动", systemImage: "plus.forwardslash.minus")
                 }
@@ -372,10 +409,15 @@ struct PreviewPanelView: View {
 
     /// 页签：文件名与 × 拆成两个独立 Button（容器挂 onTapGesture 会和 × 抢手势）
     private func tabChip(_ item: PreviewTab) -> some View {
-        let isActive = item.path == store.previewActivePath
+        let activePath = sceneSession?.previewKey ?? store.previewActivePath
+        let isActive = item.path == activePath
         return HStack(spacing: 0) {
             Button {
-                selectPreview(item.path)
+                guard item.path != tab.path else { return }
+                performOrConfirm {
+                    editing = false
+                    selectPreview(item.path)
+                }
             } label: {
                 HStack(spacing: 6) {
                     if item.diff {
@@ -452,7 +494,10 @@ struct PreviewPanelView: View {
             // 图标固定、当前态高亮（对齐网页 IconDiff + active.diff 高亮），不做「目标态图标」
             if tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg {
                 Button {
-                    store.togglePreviewDiff(tab.path)
+                    performOrConfirm {
+                        editing = false
+                        store.togglePreviewDiff(tab.path)
+                    }
                 } label: {
                     Image(systemName: "plus.forwardslash.minus")
                         .font(.system(size: 12, weight: .medium))
@@ -548,7 +593,7 @@ struct PreviewPanelView: View {
                 .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
             }
             Button {
-                closePreview()
+                requestClose()
             } label: {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 12, weight: .semibold))

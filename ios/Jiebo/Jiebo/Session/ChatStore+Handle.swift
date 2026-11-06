@@ -334,6 +334,9 @@ extension ChatStore {
             } else {
                 workspaceAgentsLoaded = true
             }
+            if !assistantOnly, isWorkspaceChat(activeId) {
+                syncWorkbenchAgentViewing(chatId: activeId, active: true)
+            }
             if let path = pendingWorkspacePath,
                chatHomeDestination == .workspace(path),
                let item = items.first(where: { $0.path == path }),
@@ -354,6 +357,9 @@ extension ChatStore {
             workspaceAgents[index].unread = unread
             workspaceAgents[index].readSeq = max(workspaceAgents[index].readSeq, readSeq)
             workspaceAgents[index].finishedSeq = max(workspaceAgents[index].finishedSeq, finishedSeq)
+            if !assistantOnly, activeId == chatId || workspaceAgentForWorkbench(chatId: activeId)?.mainChatId == chatId {
+                syncWorkbenchAgentViewing(chatId: activeId, active: true)
+            }
         case .session(let id, let agentId, let sessionCwd):
             let target = id.nilIfEmpty ?? activeId
             patch(target) { chat in
@@ -674,18 +680,22 @@ extension ChatStore {
                 return next
             }
         case .fileWritten(let path, let writtenChatId, let error):
-            if let writtenChatId, !writtenChatId.isEmpty,
-               writtenChatId != activeId, writtenChatId != contentChatId { break }
             let written = relToCwd(path)
-            guard let index = contentSaves.firstIndex(where: { $0.path == path || $0.path == written }) else { break }
-            let save = contentSaves.remove(at: index)
-            guard contentPath == save.path else { break }
+            guard let index = previewSaves.firstIndex(where: { save in
+                let samePath = save.path == path || save.path == written || relToCwd(save.path) == written
+                let chatOk = writtenChatId?.nilIfEmpty == nil || writtenChatId == save.chatId || writtenChatId == activeId
+                return samePath && chatOk
+            }) else { break }
+            let save = previewSaves.remove(at: index)
             if let error {
-                flash(error)
+                if let tabIndex = previewTabs.firstIndex(where: { tab in
+                    tab.path == save.path || tab.path == written || relToCwd(tab.path) == written
+                }) {
+                    previewTabs[tabIndex].content = save.previous
+                }
+                bannerError = friendlyError(error)
             } else {
-                contentOriginal = save.snapshot
-                contentError = nil
-                flash(contentDraft == save.snapshot ? "已保存" : "已保存。之后的修改还没写入")
+                flash("已保存")
             }
         case .fileUploaded(let path, let chatId, let name, let error, _, let id):
             // 超时后迟到的回包：丢弃（用户已看到失败提示，草稿不应再被污染）
@@ -721,38 +731,8 @@ extension ChatStore {
                 break
             }
             let forActive = msgChatId?.isEmpty != false || msgChatId == activeId
-            let forContent = msgChatId == contentChatId && contentChatId != nil
             let forPinned = previewTabs.contains { $0.path == path && $0.fromCard && $0.chatId != nil && $0.chatId == msgChatId }
-            if !forActive, !forContent, !forPinned { break }
-            if replySha == nil, forContent || forActive, contentPath == path, diff, contentDiff {
-                contentLoading = false
-                if let error {
-                    contentError = error
-                } else if let content {
-                    contentOversized = false
-                    contentKind = .text
-                    contentOriginal = content
-                    contentDraft = content
-                } else if kind == "image" || kind == "svg" || contentKind == .image || contentKind == .svg {
-                    contentLoading = false
-                    contentError = nil
-                } else {
-                    contentError = "读不到这次改动"
-                }
-            } else if replySha == nil, forContent || forActive, contentPath == path, !diff, (contentKind == .text || contentKind == .markdown) {
-                if let error {
-                    contentLoading = false
-                    contentError = error
-                } else if let content {
-                    acceptContentText(content)
-                } else if let url, !url.isEmpty {
-                    contentLoadEpoch += 1
-                    hydrateContentText(path: path, urlString: url, epoch: contentLoadEpoch)
-                } else {
-                    contentLoading = false
-                    contentError = "读不到这个文件"
-                }
-            }
+            if !forActive, !forPinned { break }
             guard let index = previewTabs.firstIndex(where: { $0.path == path }) else { break }
             // 卡片页签只认自己会话的回包；其余页签沿用「当前会话」口径
             let owner = previewTabs[index].fromCard ? previewTabs[index].chatId : nil
@@ -908,13 +888,27 @@ extension ChatStore {
             guard chatId == activeId || chatId == chatHomeThreadChatId else { break }
             if let error {
                 notice = error
+                for index in previewTabs.indices where previewTabs[index].loading && previewTabs[index].diff {
+                    previewTabs[index].loading = false
+                }
+            } else if paths.isEmpty {
+                notice = "没有可还原的改动"
+                for index in previewTabs.indices where previewTabs[index].loading && previewTabs[index].diff {
+                    previewTabs[index].loading = false
+                }
             } else {
-                notice = paths.isEmpty ? "没有可还原的改动" : "已还原 \(paths.joined(separator: ", "))"
-                if let path = contentPath, paths.contains(where: { relToCwd($0) == path || $0 == path }) {
-                    let was = suppressContentDiscard
-                    suppressContentDiscard = true
-                    closeContentLayer()
-                    suppressContentDiscard = was
+                notice = "已还原 \(paths.joined(separator: ", "))"
+                for raw in paths {
+                    let key = relToCwd(raw)
+                    gitStatus.removeValue(forKey: key)
+                    if raw != key { gitStatus.removeValue(forKey: raw) }
+                    for index in previewTabs.indices {
+                        let tabPath = previewTabs[index].path
+                        if tabPath == key || tabPath == raw || relToCwd(tabPath) == key {
+                            previewTabs[index].diff = false
+                        }
+                    }
+                    reloadPreview(path: raw, chatId: chatId)
                 }
             }
             scheduleFileIndexFallback(chatId: chatId)

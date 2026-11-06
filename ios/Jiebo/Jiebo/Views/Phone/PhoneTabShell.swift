@@ -25,6 +25,7 @@ struct PhoneTabShell: View {
 
     var body: some View {
         @Bindable var router = router
+        VStack(spacing: 0) {
         ZStack {
             PhoneShell()
                 .environment(\.assistantVoicePresenterActive, router.selectedTab == .assistant)
@@ -69,7 +70,7 @@ struct PhoneTabShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
             if spaceBarVisible {
                 PhoneSpaceBar(selection: router.selectedTab) { tab in
                     router.openSpace(tab)
@@ -98,6 +99,7 @@ struct PhoneTabShell: View {
         }
         .onChange(of: scenePhase) { _, phase in
             AssistantScenePresenter.shared.update(token: sceneToken, active: phase == .active)
+            syncWorkbenchViewing()
             if phase == .active {
                 dispatchPush()
                 dispatchWidgetDeepLink()
@@ -166,6 +168,15 @@ struct PhoneTabShell: View {
         if router.locksActiveChatToAssistant, router.bootstrapped {
             store.openAssistantChat()
         }
+        syncWorkbenchViewing()
+    }
+
+    private func syncWorkbenchViewing() {
+        let viewing = router.selectedTab == .workspace && scenePhase == .active
+        store.syncWorkbenchAgentViewing(
+            chatId: viewing ? (sceneSession?.workbenchChatId ?? store.activeId) : nil,
+            active: viewing
+        )
     }
 
     private var workspaceFilesPresented: Binding<Bool> {
@@ -250,7 +261,12 @@ struct PhoneTabShell: View {
         store.assistantOnly = false
         Task { @MainActor in
             var waited = 0
+            var nudged = false
             while !store.isWorkspaceChat(chatId), waited < 40 {
+                if !nudged, let item = store.workspaceAgent(chatId: chatId) {
+                    store.switchWorkspace(to: item.path)
+                    nudged = true
+                }
                 try? await Task.sleep(for: .milliseconds(100))
                 waited += 1
                 guard !Task.isCancelled else { return }
@@ -269,7 +285,7 @@ struct PhoneTabShell: View {
         case .assistant:
             return router.path.isEmpty
         case .workspace:
-            return true
+            return !router.workbenchDrawerOpen && store.toolLayer == nil
         case .messages:
             let destination = sceneSession?.chatDestination ?? store.chatHomeDestination
             return destination == nil

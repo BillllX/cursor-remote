@@ -55,7 +55,7 @@ struct ArtifactCenterView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             filters
         }
-        .task { store.requestAssistant() }
+        .task { if !embedded { store.requestAssistant() } }
     }
 
     /// 类型和待处理页同一套分段；呈现方式放在导航栏菜单里，不再另做一颗玻璃胶囊。

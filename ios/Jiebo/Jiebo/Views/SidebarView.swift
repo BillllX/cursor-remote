@@ -5,7 +5,6 @@ import UIKit
 /// 小驳是独立的域，不从工作台进入。多出来的只有收起按钮；点对话不收起侧栏。
 struct SidebarView: View {
     @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -314,19 +313,14 @@ struct SidebarView: View {
             Button {
                 settingsOpen = true
             } label: {
-                HStack(spacing: 6) {
-                    Label("设置", systemImage: NavigationIconId.account.symbol)
-                        .font(JieboFont.text(.subheadline, weight: .medium))
-                        .foregroundStyle(JieboColor.ink2)
-                    if im.totalUnread > 0 {
-                        ImUnreadBadge(count: im.totalUnread)
-                    }
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                Label("设置", systemImage: NavigationIconId.account.symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
+            .accessibilityLabel("设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)

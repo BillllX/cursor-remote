@@ -418,13 +418,17 @@ struct MemoryCenterNavColumn: View {
                 navButton("work_preference", title: "记得的我", symbol: NavigationIconId.account.symbol)
                 navButton(folderNavId, title: "这个文件夹", symbol: "folder", subtitle: folder?.label)
                 navButton("suggestions", title: "要你看一眼", symbol: "lightbulb", badge: store.memoryCenterSuggestionRows.count)
-                navButton("more", title: "更多", symbol: "ellipsis")
-                MemoryTidyButton()
+                Text("规则与诊断")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                    .padding(.horizontal, 8)
                     .padding(.top, 8)
-                navButton("activity", title: "最近改动", symbol: "clock", depth: 1)
-                navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up", depth: 1)
-                navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft", depth: 1)
-                navButton("rules", title: "文件夹规则", symbol: "doc.text", depth: 1)
+                navButton("activity", title: "最近改动", symbol: "clock")
+                navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up")
+                navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft")
+                navButton("rules", title: "文件夹规则", symbol: "doc.text")
+                Divider().padding(.vertical, 6)
+                MemoryTidyButton()
             }
             .padding(compact ? 8 : 10)
         }
@@ -545,8 +549,6 @@ struct MemoryCenterMiddleColumn: View {
             MemoryCenterSuggestionsPane()
         } else if navId == "settings" {
             MemoryCenterImportPane()
-        } else if navId == "more" {
-            MemoryCenterMoreMenu(navId: $navId)
         } else if navId == "diagnostics" {
             MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
         } else if navId == "rules" {
@@ -840,25 +842,6 @@ struct MemoryCenterScopeHealthRow: View {
         var parts = ["\(scope.memoryCount) 条"]
         if scope.missingRefs > 0 { parts.append("缺引用 \(scope.missingRefs)") }
         return parts.joined(separator: " · ")
-    }
-}
-
-struct MemoryCenterPersonalSummaryPane: View {
-    @Environment(ChatStore.self) private var store
-    @Binding var manageExpanded: Bool
-
-    private var data: MemoryCenterDataState { store.memoryCenterData }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let overview = data.overview {
-                MemoryCenterOverviewCards(overview: overview, truncated: data.overviewPayloadTruncated) { _ in }
-            }
-            Text("个人记忆在「记得的我」里改。")
-                .font(JieboFont.text(.footnote))
-                .foregroundStyle(JieboColor.dim)
-                .accessibilityHidden(manageExpanded)
-        }
     }
 }
 
@@ -1350,35 +1333,13 @@ enum MemoryCenterPhoneRoute: Hashable {
     case suggestions
     case activity
     case search
-    case managePersonal
     case item(scopeId: String, key: String)
     case searchHit(key: String)
     case me
-    case more
     case coreField(String)
     case personalCreate
     case personalEdit(entryId: String)
     case transfer
-}
-
-struct MemoryCenterMoreMenu: View {
-    @Binding var navId: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            moreRow("最近改动", id: "activity")
-            moreRow("导出与导入", id: "settings")
-            moreRow("上一轮怎么选的", id: "diagnostics")
-            moreRow("文件夹规则", id: "rules")
-        }
-    }
-
-    private func moreRow(_ title: String, id: String) -> some View {
-        Button(title) { navId = id }
-            .font(JieboFont.text(.body))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 8)
-    }
 }
 
 struct MemoryCenterRememberMe: View {
@@ -1817,39 +1778,6 @@ struct MemoryCenterPhonePersonalEdit: View {
     }
 }
 
-struct MemoryCenterPhoneMore: View {
-    @Environment(ChatStore.self) private var store
-
-    private var folder: MemoryCenterScopeSummary? {
-        MemoryCenterLabels.currentFolder(
-            scopes: store.memoryCenterData.overview?.scopes ?? [],
-            cwd: store.cwd,
-            root: store.workspaceRoot
-        )
-    }
-
-    var body: some View {
-        List {
-            NavigationLink(value: PhoneRoute.memoryPage(.activity)) { Text("最近改动") }
-            NavigationLink(value: PhoneRoute.memoryPage(.transfer)) { Text("导出与导入") }
-            if let folder {
-                NavigationLink(value: PhoneRoute.memoryPage(.diagnostics(scopeId: folder.id))) {
-                    Text("上一轮怎么选的")
-                }
-                NavigationLink(value: PhoneRoute.memoryPage(.rules(scopeId: folder.id))) {
-                    Text("文件夹规则")
-                }
-            } else {
-                Text("先打开一个文件夹，才能看规则和上一轮怎么选的。")
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.dim)
-            }
-        }
-        .navigationTitle("更多")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
 /// 记忆下一级。打电话的栈和窄宽单栏各自注册，页面本身不再套导航栈。
 struct MemoryCenterPhonePage: View {
     @Environment(ChatStore.self) private var store
@@ -1893,17 +1821,12 @@ struct MemoryCenterPhonePage: View {
             MemoryCenterPhoneActivity()
         case .search:
             MemoryCenterPhoneSearchResults()
-        case .managePersonal:
-            MemoryCenterPhoneRememberMe()
-            // 旧「管理个人记忆」并进「记得的我」。
         case let .item(scopeId, key):
             MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
         case let .searchHit(key):
             MemoryCenterSearchHitDetail(itemKey: key)
         case .me:
             MemoryCenterPhoneRememberMe()
-        case .more:
-            MemoryCenterPhoneMore()
         case let .coreField(field):
             MemoryCenterPhoneCoreField(field: field)
         case .personalCreate:
@@ -2140,12 +2063,6 @@ struct MemoryCenterPhoneActivity: View {
         .navigationTitle("最近改动")
         .navigationBarTitleDisplayMode(.inline)
         .background(JieboColor.paper)
-    }
-}
-
-struct MemoryCenterPhoneManagePersonal: View {
-    var body: some View {
-        MemoryCenterPhoneRememberMe()
     }
 }
 
