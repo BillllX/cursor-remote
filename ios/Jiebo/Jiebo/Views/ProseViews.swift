@@ -351,32 +351,130 @@ private struct ProseLineRow: View, Equatable {
     }
 }
 
-/// 对话里的 Markdown 表。表头比单元格更淡，文件名用等宽，行与行之间只留发丝线。
+/// 对话里的 Markdown 表。窄表按列并排；列多或格子里有换行时改成逐行展开。
+/// 横滑再配无限宽，后几列会甩到屏幕外，行高却被那边的长文撑出一片空白。
 private struct HairlineTable: View {
     @Environment(\.sizeCategory) private var sizeCategory
     let headers: [String]
     let rows: [[String]]
 
+    private static let lineBreak = try! NSRegularExpression(
+        pattern: "<br\\s*/?>",
+        options: [.caseInsensitive]
+    )
+
     var body: some View {
         Group {
-            if headers.count > 3 {
+            if unfolds {
+                unfolded
+            } else if headers.count > 3 {
                 ScrollView(.horizontal, showsIndicators: true) {
-                    tableBody
+                    tableBody(widths: columnWidths())
+                        .fixedSize(horizontal: true, vertical: true)
                 }
+                .fixedSize(horizontal: false, vertical: true)
             } else {
-                tableBody
+                tableBody(widths: nil)
             }
         }
         .padding(.top, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var tableBody: some View {
+    /// 五列以上，或任一格长到需要换行：并排会把内容推出屏幕。
+    private var unfolds: Bool {
+        if headers.count >= 5 { return true }
+        return rows.contains { row in row.contains { Self.unfoldsCell($0) } }
+    }
+
+    private var unfolded: some View {
         VStack(alignment: .leading, spacing: 0) {
-            row(headers, header: true, last: rows.isEmpty)
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
-                row(fit(cells), header: false, last: index == rows.count - 1)
+            if let caption = headers.first, !caption.isEmpty {
+                Text(inline(caption, kind: .tableHeader))
+                    .foregroundStyle(JieboColor.dim)
+                    .tracking(0.4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 6)
+                    .overlay(alignment: .bottom) {
+                        Rectangle().fill(JieboColor.line).frame(height: 1)
+                    }
             }
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                VStack(alignment: .leading, spacing: 8) {
+                    let title = Self.displayText(cell(cells, 0))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !title.isEmpty {
+                        Text(inline(title, kind: .tableBody))
+                            .foregroundStyle(JieboColor.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    ForEach(Array(headers.dropFirst().enumerated()), id: \.offset) { offset, header in
+                        unfoldedField(header: header, value: cell(cells, offset + 1))
+                    }
+                }
+                .padding(.vertical, 10)
+                .overlay(alignment: .bottom) {
+                    if index != rows.count - 1 {
+                        Rectangle().fill(JieboColor.line).frame(height: 0.5)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func unfoldedField(header: String, value: String) -> some View {
+        let shown = Self.displayText(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !shown.isEmpty {
+            if Self.unfoldsCell(shown) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(inline(header, kind: .tableHeader))
+                        .foregroundStyle(JieboColor.dim)
+                        .tracking(0.4)
+                    Text(inline(shown, kind: .tableBody))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .combine)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(inline(header, kind: .tableHeader))
+                        .foregroundStyle(JieboColor.dim)
+                        .tracking(0.4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 148, alignment: .leading)
+                    Text(inline(shown, kind: .tableBody))
+                        .foregroundStyle(JieboColor.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
+    private func tableBody(widths: [CGFloat]?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            row(headers, header: true, last: rows.isEmpty, widths: widths)
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                row(fit(cells), header: false, last: index == rows.count - 1, widths: widths)
+            }
+        }
+    }
+
+    /// 横滑里的列必须有确定宽度。无限宽会让整表高度失真，文字挤在左上角。
+    private func columnWidths() -> [CGFloat] {
+        (0..<headers.count).map { index in
+            let font: CGFloat = index == 0 ? 12 : 16
+            let samples = [headers[index]] + rows.map { cell($0, index) }
+            let widest = samples
+                .flatMap { Self.displayText($0).components(separatedBy: .newlines) }
+                .map { Self.estimatedWidth($0, font: font) }
+                .max() ?? 0
+            return min(max(widest + 2, 64), 168)
         }
     }
 
@@ -387,18 +485,17 @@ private struct HairlineTable: View {
         return cells + Array(repeating: "", count: count - cells.count)
     }
 
-    private func row(_ cells: [String], header: Bool, last: Bool) -> some View {
+    private func cell(_ cells: [String], _ index: Int) -> String {
+        index < cells.count ? cells[index] : ""
+    }
+
+    private func row(_ cells: [String], header: Bool, last: Bool, widths: [CGFloat]?) -> some View {
         HStack(alignment: .top, spacing: 18) {
             ForEach(Array(cells.enumerated()), id: \.offset) { index, cell in
                 let kind: ProseInline.Kind = header
                     ? .tableHeader
                     : (index == 0 ? .tableMono : .tableBody)
-                Text(ProseInline.attributed(cell, sizeCategory: sizeCategory, kind: kind))
-                    .foregroundStyle(color(index: index, header: header))
-                    .tracking(header ? 0.4 : 0)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                sized(cellText(cell, kind: kind, index: index, header: header), width: widths.flatMap { index < $0.count ? $0[index] : nil })
             }
         }
         .padding(.vertical, 7)
@@ -409,6 +506,54 @@ private struct HairlineTable: View {
                     .frame(height: header ? 1 : 0.5)
             }
         }
+    }
+
+    @ViewBuilder
+    private func sized<V: View>(_ text: V, width: CGFloat?) -> some View {
+        if let width {
+            text.frame(width: width, alignment: .leading)
+        } else {
+            text.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func cellText(_ text: String, kind: ProseInline.Kind, index: Int, header: Bool) -> some View {
+        Text(inline(text, kind: kind))
+            .foregroundStyle(color(index: index, header: header))
+            .tracking(header ? 0.4 : 0)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func inline(_ text: String, kind: ProseInline.Kind) -> AttributedString {
+        ProseInline.attributed(Self.displayText(text), sizeCategory: sizeCategory, kind: kind)
+    }
+
+    /// 单元格里的 br 是换行。并排时这一格会把整行撑得很高，旁边几列又看不见。
+    private static func unfoldsCell(_ raw: String) -> Bool {
+        let shown = displayText(raw)
+        if shown.contains(where: { $0.isNewline }) { return true }
+        return estimatedWidth(shown, font: 16) > 240
+    }
+
+    static func displayText(_ raw: String) -> String {
+        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        var text = lineBreak.stringByReplacingMatches(in: raw, range: range, withTemplate: "\n")
+        guard text.contains("&") else { return text }
+        return text
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+    }
+
+    private static func estimatedWidth(_ text: String, font: CGFloat) -> CGFloat {
+        var width: CGFloat = 0
+        for scalar in text.unicodeScalars {
+            if scalar == "*" || scalar == "`" { continue }
+            width += scalar.value > 0xFF ? font : font * 0.56
+        }
+        return width
     }
 
     private func color(index: Int, header: Bool) -> Color {
