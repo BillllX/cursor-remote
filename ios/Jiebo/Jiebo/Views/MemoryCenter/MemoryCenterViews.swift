@@ -567,8 +567,6 @@ struct MemoryCenterMiddleColumn: View {
             MemoryCenterOverviewPane(onSelectScope: { id in
                 navId = id
             })
-        } else if navId == "personal" {
-            MemoryCenterPersonalSummaryPane(manageExpanded: $managePersonalExpanded)
         } else {
             MemoryCenterScopeItemsPane(
                 scopeId: navId,
@@ -856,13 +854,10 @@ struct MemoryCenterPersonalSummaryPane: View {
             if let overview = data.overview {
                 MemoryCenterOverviewCards(overview: overview, truncated: data.overviewPayloadTruncated) { _ in }
             }
-            DisclosureGroup(isExpanded: $manageExpanded) {
-                AssistantMemoryPane()
-            } label: {
-                Text("管理个人记忆")
-                    .font(JieboFont.text(.subheadline, weight: .semibold))
-            }
-            .accessibilityHint("展开后可编辑核心档案与条目")
+            Text("个人记忆在「记得的我」里改。")
+                .font(JieboFont.text(.footnote))
+                .foregroundStyle(JieboColor.dim)
+                .accessibilityHidden(manageExpanded)
         }
     }
 }
@@ -1404,6 +1399,11 @@ struct MemoryCenterRememberMe: View {
                         ActionButton(title: "记一条", kind: .primary) { selectedKey = "create" }
                     }
                 }
+                Toggle("暂停记忆", isOn: Binding(
+                    get: { memory.paused },
+                    set: { store.setAssistantMemoryPaused($0) }
+                ))
+                .tint(JieboColor.pine)
                 Text("约 \(memory.coreTokens)/\(memory.coreBudget)")
                     .font(JieboFont.text(.caption2))
                     .foregroundStyle(JieboColor.dim)
@@ -1444,6 +1444,30 @@ struct MemoryCenterRememberMe: View {
                             }
                         }
                         .font(JieboFont.text(.caption))
+                    }
+                }
+                let stale = memory.entries.filter { !$0.isValid }
+                if !stale.isEmpty {
+                    DisclosureGroup("已失效记忆") {
+                        ForEach(stale) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.topic.nilIfEmpty ?? "一条记忆")
+                                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                                Text(entry.text)
+                                    .font(JieboFont.text(.footnote))
+                                    .foregroundStyle(JieboColor.dim)
+                                    .lineLimit(3)
+                                HStack {
+                                    Button("恢复") {
+                                        _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
+                                    }
+                                    Button("彻底删除") {
+                                        _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
+                                    }
+                                }
+                                .font(JieboFont.text(.caption))
+                            }
+                        }
                     }
                 }
             } else {
@@ -1589,6 +1613,11 @@ struct MemoryCenterPhoneRememberMe: View {
                     Text(memory.paused ? "记忆已暂停" : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。约 \(memory.coreTokens)/\(memory.coreBudget)")
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(memory.paused ? JieboColor.clay : JieboColor.dim)
+                    Toggle("暂停记忆", isOn: Binding(
+                        get: { memory.paused },
+                        set: { store.setAssistantMemoryPaused($0) }
+                    ))
+                    .tint(JieboColor.pine)
                 }
                 Section {
                     ForEach(memory.orderedCoreKeys, id: \.self) { key in
@@ -1628,6 +1657,29 @@ struct MemoryCenterPhoneRememberMe: View {
                                 }
                             }
                             .font(JieboFont.text(.caption))
+                        }
+                    }
+                }
+                let stale = memory.entries.filter { !$0.isValid }
+                if !stale.isEmpty {
+                    Section("已失效记忆") {
+                        ForEach(stale) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(entry.topic.nilIfEmpty ?? "一条记忆")
+                                Text(entry.text)
+                                    .font(JieboFont.text(.footnote))
+                                    .foregroundStyle(JieboColor.dim)
+                                    .lineLimit(3)
+                                HStack(spacing: 12) {
+                                    Button("恢复") {
+                                        _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
+                                    }
+                                    Button("彻底删除") {
+                                        _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
+                                    }
+                                }
+                                .font(JieboFont.text(.caption))
+                            }
                         }
                     }
                 }
@@ -1843,6 +1895,7 @@ struct MemoryCenterPhonePage: View {
             MemoryCenterPhoneSearchResults()
         case .managePersonal:
             MemoryCenterPhoneRememberMe()
+            // 旧「管理个人记忆」并进「记得的我」。
         case let .item(scopeId, key):
             MemoryCenterPhoneItemDetail(itemKey: key, scopeId: scopeId)
         case let .searchHit(key):
@@ -1905,39 +1958,58 @@ struct MemoryCenterPhoneHome: View {
                     MemoryCenterSearchList(selectedKey: .constant(nil), itemNavigation: .drillDownSearchHit)
                 }
             } else {
-                NavigationLink(value: PhoneRoute.memoryPage(.me)) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("记得的我")
-                        Text("关于我 · 工作偏好")
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
+                Section("核心与文件夹") {
+                    NavigationLink(value: PhoneRoute.memoryPage(.me)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("记得的我")
+                            Text("关于我 · 工作偏好")
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                        }
                     }
-                }
-                NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder?.id ?? "folder-missing", label: folder?.label ?? "这个文件夹"))) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("这个文件夹")
-                        Text(folder?.label ?? "还没打开文件夹")
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
+                    NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder?.id ?? "folder-missing", label: folder?.label ?? "这个文件夹"))) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("这个文件夹")
+                            Text(folder?.label ?? "还没打开文件夹")
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                        }
                     }
-                }
-                NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
-                    HStack {
-                        Text("要你看一眼")
-                        Spacer()
-                        if !store.memoryCenterSuggestionRows.isEmpty {
-                            Text("\(store.memoryCenterSuggestionRows.count)")
-                                .font(JieboFont.text(.caption, weight: .semibold))
-                                .foregroundStyle(JieboColor.clay)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(JieboColor.clay.opacity(0.16))
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
+                        HStack {
+                            Text("要你看一眼")
+                            Spacer()
+                            if !store.memoryCenterSuggestionRows.isEmpty {
+                                Text("\(store.memoryCenterSuggestionRows.count)")
+                                    .font(JieboFont.text(.caption, weight: .semibold))
+                                    .foregroundStyle(JieboColor.clay)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(JieboColor.clay.opacity(0.16))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            }
                         }
                     }
                 }
-                NavigationLink(value: PhoneRoute.memoryPage(.more)) {
-                    Text("更多")
+                Section("规则与诊断") {
+                    if let folder {
+                        NavigationLink(value: PhoneRoute.memoryPage(.rules(scopeId: folder.id))) {
+                            Text("文件夹规则")
+                        }
+                        NavigationLink(value: PhoneRoute.memoryPage(.diagnostics(scopeId: folder.id))) {
+                            Text("上一轮怎么选的")
+                        }
+                    } else {
+                        Text("先打开一个文件夹，才能看规则和上一轮怎么选的。")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    NavigationLink(value: PhoneRoute.memoryPage(.activity)) {
+                        Text("最近改动")
+                    }
+                    NavigationLink(value: PhoneRoute.memoryPage(.transfer)) {
+                        Text("导出与导入")
+                    }
                 }
             }
         }
@@ -2073,12 +2145,7 @@ struct MemoryCenterPhoneActivity: View {
 
 struct MemoryCenterPhoneManagePersonal: View {
     var body: some View {
-        ScrollView {
-            AssistantMemoryPane()
-                .padding(14)
-        }
-        .navigationTitle("管理个人记忆")
-        .navigationBarTitleDisplayMode(.inline)
+        MemoryCenterPhoneRememberMe()
     }
 }
 

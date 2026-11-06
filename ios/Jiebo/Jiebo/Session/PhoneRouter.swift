@@ -5,7 +5,6 @@ import UIKit
 enum PhoneRoute: Hashable {
     case inbox
     case inboxItem(String)      // AssistantInboxItem.id
-    case todayManage
     case worklist(AssistantWorkColumn)
     case artifacts
     case settings
@@ -26,6 +25,7 @@ enum PhoneTab: Hashable {
 enum InboxLane: Hashable {
     case notices
     case work(AssistantWorkColumn)
+    case artifacts
 }
 
 struct DelegationRef: Identifiable, Hashable {
@@ -101,6 +101,9 @@ extension PhoneRouter {
             path = [.inbox]
         case .worklist(let column):
             inboxLane = .work(column)
+            path = [.inbox]
+        case .artifacts:
+            inboxLane = .artifacts
             path = [.inbox]
         default:
             path = [route]

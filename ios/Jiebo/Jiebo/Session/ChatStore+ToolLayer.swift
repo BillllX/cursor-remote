@@ -516,6 +516,53 @@ extension ChatStore {
         send(.loopStop(chatId: activeId))
     }
 
+    func previewTextEditable(_ tab: PreviewTab) -> Bool {
+        guard !tab.diff, tab.kind == .text || tab.kind == .markdown, let content = tab.content else { return false }
+        return content.utf16.count <= Self.contentSaveLimit
+    }
+
+    func previewDiffRevertable(_ tab: PreviewTab) -> Bool {
+        tab.diff && gitStatus[tab.path] != nil
+    }
+
+    func savePreviewText(_ tab: PreviewTab, content: String) {
+        guard content.utf16.count <= Self.contentSaveLimit else {
+            flash("内容超过 500KB，不在这里保存")
+            return
+        }
+        let chatId = tab.chatId ?? activeId
+        guard chats.contains(where: { $0.id == chatId }) else {
+            flash("这个会话已经不在了，没法保存")
+            return
+        }
+        send(.writeFile(path: tab.path, content: content, chatId: chatId))
+        if let index = previewTabs.firstIndex(where: { $0.path == tab.path && $0.diff == tab.diff }) {
+            previewTabs[index].content = content
+        }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。改动会在连上后写入。"
+                : "正在连接。改动会在连上后写入。")
+        } else {
+            flash("已保存")
+        }
+    }
+
+    func revertPreviewFile(_ tab: PreviewTab) {
+        let chatId = tab.chatId ?? activeId
+        guard chats.contains(where: { $0.id == chatId }) else {
+            flash("这个会话已经不在了，没法还原")
+            return
+        }
+        if !client.isOpen {
+            flash(linkState == .offline
+                ? "已断开。还原会在连上后发出。"
+                : "正在连接。还原会在连上后发出。")
+        }
+        send(.revertFile(chatId: chatId, path: tab.path))
+        loadPreview(tab.path, diff: true, chatId: tab.chatId)
+    }
+
     /// 缩略图旁路读取：带 reqId，回包不进页签/内容层
     func sendThumbnailRead(path: String, chatId: String, sha: String?, reqId: String) {
         send(.readFile(path: path, chatId: chatId, diff: false, sha: sha, reqId: reqId))

@@ -1,6 +1,7 @@
 import SwiftUI
+import UIKit
 
-/// iPhone 的三个大模块：小驳、工作台、即时消息。底栏不参与切换。
+/// iPhone 的三个大模块：小驳、工作台、即时消息。底部同一条空间栏切换。
 struct PhoneTabShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -9,6 +10,7 @@ struct PhoneTabShell: View {
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var router = PhoneRouter()
     @State private var fallbackSceneToken = UUID().uuidString
+    @State private var keyboardUp = false
 
     private var sceneToken: String { sceneSession?.token ?? fallbackSceneToken }
 
@@ -67,6 +69,21 @@ struct PhoneTabShell: View {
             }
         }
         .animation(JieboMotion.panel(reduceMotion), value: previewPanelOpen)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if spaceBarVisible {
+                PhoneSpaceBar(selection: router.selectedTab) { tab in
+                    router.openSpace(tab)
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(JieboMotion.panel(reduceMotion), value: spaceBarVisible)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+            keyboardUp = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            keyboardUp = false
+        }
         .fullScreenCover(isPresented: workspaceFilesPresented) {
             FileBrowserCover()
         }
@@ -186,7 +203,8 @@ struct PhoneTabShell: View {
         }
         if target.isWorkspace, let chatId = target.chatId {
             _ = PushRouting.shared.consume()
-            router.selectedTab = .messages
+            store.assistantOnly = false
+            router.selectedTab = .workspace
             openWorkspace(chatId)
             return
         }
@@ -229,15 +247,32 @@ struct PhoneTabShell: View {
     }
 
     private func openWorkspace(_ chatId: String) {
+        store.assistantOnly = false
         Task { @MainActor in
-            store.requestWorkspaceAgents()
-            while store.workspaceAgent(chatId: chatId) == nil, !store.workspaceAgentsLoaded {
+            var waited = 0
+            while !store.isWorkspaceChat(chatId), waited < 40 {
                 try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
                 guard !Task.isCancelled else { return }
             }
-            guard let item = store.workspaceAgent(chatId: chatId) else { return }
-            store.chatHomeDestination = .workspace(item.path)
-            store.enterWorkspaceThread(path: item.path, chatId: chatId)
+            guard store.isWorkspaceChat(chatId) else { return }
+            store.assistantOnly = false
+            sceneSession?.workbenchChatId = chatId
+            store.activateWorkspaceChat(chatId)
+        }
+    }
+
+    /// 根页且键盘没收起时才占底部。二级页、预览和全屏文件都不挤输入框。
+    private var spaceBarVisible: Bool {
+        if keyboardUp || previewPanelOpen || store.fileBrowserOpen { return false }
+        switch router.selectedTab {
+        case .assistant:
+            return router.path.isEmpty
+        case .workspace:
+            return true
+        case .messages:
+            let destination = sceneSession?.chatDestination ?? store.chatHomeDestination
+            return destination == nil
         }
     }
 
@@ -252,5 +287,65 @@ struct PhoneTabShell: View {
             im.selectedPeer = peer
             store.chatHomeDestination = .person(peer)
         }
+    }
+}
+
+/// 三个空间共用的底部胶囊。角标各自只报本空间的事。
+private struct PhoneSpaceBar: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
+    var selection: PhoneTab
+    var select: (PhoneTab) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            spaceButton(.assistant, title: "小驳", symbol: NavigationIconId.assistant.symbol, badge: store.assistantBadgeCount, attention: true)
+            spaceButton(.workspace, title: "工作台", symbol: "rectangle.3.group", badge: store.workspaceUnreadCount, attention: false)
+            spaceButton(.messages, title: "消息", symbol: "bubble.left.and.bubble.right", badge: im.totalUnread, attention: false)
+        }
+        .padding(4)
+        .jieboGlass(in: Capsule(), interactive: true)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(JieboColor.paper)
+    }
+
+    private func spaceButton(_ tab: PhoneTab, title: String, symbol: String, badge: Int, attention: Bool) -> some View {
+        let selected = selection == tab
+        return Button {
+            select(tab)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .lineLimit(1)
+                if badge > 0 {
+                    ImUnreadBadge(count: badge)
+                }
+            }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .foregroundStyle(selected ? JieboColor.pine : JieboColor.ink2)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background {
+                if selected {
+                    Capsule().fill(JieboColor.white.opacity(0.72))
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(badgeLabel(title, badge: badge, attention: attention))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func badgeLabel(_ title: String, badge: Int, attention: Bool) -> String {
+        guard badge > 0 else { return title }
+        let status = attention
+            ? StatusLegendId.attention.accessibilityLabel(count: badge)
+            : StatusLegendId.unread.accessibilityLabel(count: badge)
+        return "\(title)，\(status)"
     }
 }

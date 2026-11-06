@@ -16,6 +16,9 @@ struct PreviewPanelView: View {
     var canFullscreen = false
     /// 窄屏左缘右滑关闭时的位移
     @State private var dragX: CGFloat = 0
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var revertConfirm = false
 
     private var compact: Bool { sizeClass == .compact }
     private var usesCompactHeader: Bool { compact || dynamicTypeSize.isAccessibilitySize }
@@ -50,7 +53,15 @@ struct PreviewPanelView: View {
                 header
             }
             Divider().overlay(JieboColor.line)
-            PreviewContentView(tab: tab)
+            if editing {
+                TextEditor(text: $draft)
+                    .font(JieboFont.monoText(.footnote))
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .background(JieboColor.white)
+            } else {
+                PreviewContentView(tab: tab)
+            }
         }
         .frame(maxHeight: .infinity)
         .background(JieboColor.white)
@@ -71,6 +82,17 @@ struct PreviewPanelView: View {
         .accessibilityAddTraits(modal ? .isModal : [])
         .accessibilityAction(.escape) { escapePreview() }
         .background { keyboardShortcuts }
+        .onChange(of: tab.path) { _, _ in editing = false }
+        .onChange(of: tab.diff) { _, _ in editing = false }
+        .alert("还原这个文件？", isPresented: $revertConfirm) {
+            Button("还原", role: .destructive) {
+                editing = false
+                store.revertPreviewFile(tab)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("未提交的改动会丢掉。")
+        }
     }
 
     /// 外接键盘：Esc / ⌘W 收起预览，⌘⇧[ / ⌘⇧] 切页签。按钮不可见，只为挂快捷键
@@ -188,6 +210,7 @@ struct PreviewPanelView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
+            previewEditControls
             Button {
                 store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
             } label: {
@@ -225,6 +248,45 @@ struct PreviewPanelView: View {
                 .foregroundStyle(JieboColor.dim)
                 .lineLimit(1)
                 .truncationMode(.middle)
+        }
+    }
+
+    @ViewBuilder
+    private var previewEditControls: some View {
+        HStack(spacing: 4) {
+            editControlButtons
+        }
+    }
+
+    @ViewBuilder
+    private var editControlButtons: some View {
+        if editing {
+            Button("取消") { editing = false }
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(minHeight: 44)
+            Button("保存") {
+                store.savePreviewText(tab, content: draft)
+                editing = false
+            }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .foregroundStyle(JieboColor.pine)
+            .frame(minHeight: 44)
+            .disabled(draft == (tab.content ?? ""))
+        } else if store.previewTextEditable(tab) {
+            Button("编辑") {
+                draft = tab.content ?? ""
+                editing = true
+            }
+            .font(JieboFont.text(.subheadline, weight: .semibold))
+            .foregroundStyle(JieboColor.pine)
+            .frame(minHeight: 44)
+        }
+        if !editing, store.previewDiffRevertable(tab) {
+            Button("还原") { revertConfirm = true }
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .foregroundStyle(JieboColor.ink2)
+                .frame(minHeight: 44)
         }
     }
 
@@ -385,6 +447,7 @@ struct PreviewPanelView: View {
                 versionLine
             }
             Spacer()
+            previewEditControls
             // diff/原文 切换（对齐网页的类型集：text/image/svg/markdown/html）。
             // 图标固定、当前态高亮（对齐网页 IconDiff + active.diff 高亮），不做「目标态图标」
             if tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg {

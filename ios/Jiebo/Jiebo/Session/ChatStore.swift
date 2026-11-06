@@ -28,9 +28,9 @@ enum FileBrowserPane: String, CaseIterable, Identifiable {
 }
 
 enum ToolLayer: String, CaseIterable, Identifiable {
-    case files, search, git, terminal, loop, assistant
+    case files, search, git, terminal, loop
 
-    /// 工具栏里的固定工具。助理不在这里，它有自己置顶的入口
+    /// 工作台自己的工具。小驳是独立空间，不从这里进入。
     static let workTools: [ToolLayer] = [.files, .search, .git, .terminal, .loop]
 
     var id: String { rawValue }
@@ -42,7 +42,6 @@ enum ToolLayer: String, CaseIterable, Identifiable {
         case .git: return "改动"
         case .terminal: return "终端输出"
         case .loop: return "Loop"
-        case .assistant: return "小驳"
         }
     }
 
@@ -57,7 +56,6 @@ enum ToolLayer: String, CaseIterable, Identifiable {
         case .git: return .git
         case .terminal: return .terminal
         case .loop: return .loop
-        case .assistant: return .assistant
         }
     }
 }

@@ -115,7 +115,6 @@ const toolContracts = [
   ["git", "改动", "git"],
   ["terminal", "终端输出", "terminal"],
   ["loop", "Loop", "loop"],
-  ["assistant", "小驳", "assistant"],
 ];
 for (const [id, title, icon] of toolContracts) {
   requireSource(chatStore, `case .${id}: return "${title}"`, `ToolLayer.${id} 标题`);
@@ -126,14 +125,15 @@ for (const [source, needle, title] of [
   [rootView, "NavigationIconId.account.symbol", "RootView 账户入口"],
   [menuDrawer, "NavigationIconId.account.symbol", "手机菜单设置入口"],
   [chatHome, "NavigationIconId.account.symbol", "聊天主页设置入口"],
-  [chatHome, "NavigationIconId.assistant.symbol", "聊天主页助理入口"],
+  [readFileSync("ios/Jiebo/Jiebo/Views/Phone/PhoneTabShell.swift", "utf8"), "NavigationIconId.assistant.symbol", "手机三空间里的小驳"],
   [menuScreens, "NavigationIconId.memory.symbol", "设置页记忆入口"],
   [menuScreens, "NavigationIconId.stats.symbol", "设置页统计入口"],
   [memoryViews, "NavigationIconId.account.symbol", "记忆中心个人/设置入口"],
   [memoryViews, '"记得的我"', "记忆中心四入口：记得的我"],
   [memoryViews, '"这个文件夹"', "记忆中心四入口：这个文件夹"],
   [memoryViews, '"要你看一眼"', "记忆中心四入口：要你看一眼"],
-  [memoryViews, '"更多"', "记忆中心四入口：更多"],
+  [memoryViews, '"规则与诊断"', "记忆中心规则分组"],
+  [memoryViews, '"文件夹规则"', "记忆中心直达文件夹规则"],
   [adminStats, "NavigationIconId.stats.symbol", "统计空态"],
   [rootView, "StatusLegendId.running", "RootView 运行状态"],
   [home, "StatusLegendId.attention", "iPad 域切换待处理状态"],

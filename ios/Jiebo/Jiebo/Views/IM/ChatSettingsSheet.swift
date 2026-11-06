@@ -18,12 +18,6 @@ struct ChatSettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                if UIDevice.current.userInterfaceIdiom == .pad {
-                    HomeModeSection { mode in
-                        if mode == .workbench { dismiss() }
-                    }
-                }
-
                 Section {
                     Button {
                         avatarPickerOpen = true
@@ -322,7 +316,7 @@ struct PeerProfileSheet: View {
 
 }
 
-private struct SettingsBlockedNote: View {
+struct SettingsBlockedNote: View {
     @Environment(ImStore.self) private var im
     @Environment(ChatStore.self) private var store
 

@@ -329,7 +329,7 @@ struct HomeShell: View {
             return
         }
         if target.isWorkspace, let chatId = target.chatId {
-            padRouter.route(target)
+            padRouter.openDomain(.workbench)
             openWorkspace(chatId)
             return
         }
@@ -394,19 +394,20 @@ struct HomeShell: View {
     }
 
     private func openWorkspace(_ chatId: String) {
+        store.assistantOnly = false
         Task { @MainActor in
-            store.requestWorkspaceAgents()
-            while store.workspaceAgent(chatId: chatId) == nil, !store.workspaceAgentsLoaded {
+            var waited = 0
+            while !store.isWorkspaceChat(chatId), waited < 40 {
                 try? await Task.sleep(for: .milliseconds(100))
+                waited += 1
                 guard !Task.isCancelled else { return }
             }
-            guard let item = store.workspaceAgent(chatId: chatId) else { return }
+            guard store.isWorkspaceChat(chatId) else { return }
+            store.assistantOnly = false
             if let sceneSession {
-                sceneSession.chatDestination = .workspace(item.path)
-            } else {
-                store.chatHomeDestination = .workspace(item.path)
+                sceneSession.workbenchChatId = chatId
             }
-            store.prepareWorkspaceThread(item, chatId: chatId)
+            store.activateWorkspaceChat(chatId)
         }
     }
 
@@ -489,51 +490,7 @@ private struct PadDomainSwitcher: View {
     }
 }
 
-/// 旧设置入口仍可切换工作台 / 消息；iPad 底部域切换是始终可见的主入口。
-struct HomeModeSection: View {
-    @AppStorage(HomeMode.storageKey) private var mode: HomeMode = .workbench
-    @Environment(\.openPadDomain) private var openPadDomain
-    var onPick: (HomeMode) -> Void = { _ in }
-
-    var body: some View {
-        Section {
-            ForEach(HomeMode.allCases) { item in
-                Button {
-                    mode = item
-                    openPadDomain?(item == .workbench ? .workbench : .messages)
-                    onPick(item)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: item.symbol)
-                            .font(JieboFont.text(.subheadline, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                            .frame(width: 24)
-                        Text(item.title)
-                            .font(JieboFont.text(.subheadline))
-                            .foregroundStyle(JieboColor.ink)
-                        Spacer(minLength: 8)
-                        if mode == item {
-                            Image(systemName: "checkmark")
-                                .font(JieboFont.text(.subheadline, weight: .semibold))
-                                .foregroundStyle(JieboColor.pine)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(JieboColor.white)
-                .accessibilityAddTraits(mode == item ? .isSelected : [])
-            }
-        } header: {
-            Text("iPad 默认空间（兼容设置）")
-        } footer: {
-            Text("iPad 可随时用底部的「小驳 / 工作台 / 消息」切换；这里保留旧版工作台与聊天偏好。")
-        }
-    }
-}
-
-/// 第一次打开时用一句话说明四个地方分别干什么。关掉之后不再出现。
+/// 第一次打开时用一句话说明三个地方分别干什么。关掉之后不再出现。
 struct FirstUseHint: View {
     @AppStorage("jiebo.firstUseHintDismissed.v3") private var dismissed = false
 
@@ -541,7 +498,7 @@ struct FirstUseHint: View {
         if !dismissed {
             HStack(alignment: .center, spacing: 12) {
                 Text(UIDevice.current.userInterfaceIdiom == .phone
-                     ? "小驳用来吩咐。待处理在聊天页右上角，含通知、待办、计划和委派。工作台和即时消息从左上角菜单进去。"
+                     ? "小驳用来吩咐。助理中心在右上角，含通知、待办、计划、委派和产物。底部可以切换小驳、工作台和消息。"
                      : "小驳用来吩咐。待处理在小驳里，含通知、待办、计划和委派。工作台改文件、看终端。消息是跟人聊。底部可以切换这三处。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)

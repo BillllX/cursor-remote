@@ -19,16 +19,6 @@ extension ThreadView {
         resolvedChatId == store.assistantChatId ? store.assistantName : (threadChat?.title ?? "新对话")
     }
 
-    /// 助理会话里打开今日/收件箱/记忆层；有未读或待批时挂点
-    var assistantTodayButton: some View {
-        AssistantTodayButton(
-            on: store.toolLayer == .assistant,
-            marked: store.assistantBadgeCount > 0
-        ) {
-            store.toggleTool(.assistant)
-        }
-    }
-
     /// 优先级：没连上 > 正在同步 > 没配 API Key > 正在回复 > 模式
     var padSubtitle: String {
         if !store.connected { return store.linkState.title }
@@ -85,9 +75,6 @@ extension ThreadView {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                if resolvedChatId == store.assistantChatId {
-                    assistantTodayButton
-                }
                 if store.canUndo(resolvedChatId) {
                     phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动") {
                         store.undoLast(chatId: resolvedChatId)
@@ -219,9 +206,6 @@ extension ThreadView {
                 ProgressView()
                     .controlSize(.small)
                     .tint(JieboColor.dim)
-            }
-            if resolvedChatId == store.assistantChatId {
-                assistantTodayButton
             }
             Button {
                 store.openTerminalOnWorkbench(chatId: resolvedChatId)

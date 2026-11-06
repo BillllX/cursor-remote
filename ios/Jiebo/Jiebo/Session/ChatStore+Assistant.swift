@@ -540,20 +540,13 @@ extension ChatStore {
         return last.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
-    /// 置顶入口：切到助理会话。旧网关没有助理会话时退回打开助理层
+    /// 切到助理会话。旧网关没有助理会话时只提示，不再打开工作台里的助理层。
     func openAssistantEntry() {
         guard assistantChatId != nil else {
-            if toolLayer != .assistant { toggleTool(.assistant) }
+            flash("这个服务器还没有助理功能，请先升级服务器")
             return
         }
         openAssistantChat()
-    }
-
-    /// iPad 图标栏：不在助理会话就切过去并打开今日层；已经在了就开关今日层
-    func toggleAssistantRail() {
-        let wasActive = assistantChatActive || assistantChatId == nil
-        if assistantChatId != nil { openAssistantChat() }
-        if wasActive || toolLayer != .assistant { toggleTool(.assistant) }
     }
 
     /// 切到助理会话。本机还没同步到就记下意图，会话到了再切（不在本地新建）

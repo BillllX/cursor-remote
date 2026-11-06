@@ -4,6 +4,7 @@ import SwiftUI
 struct ArtifactCenterView: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
+    var embedded = false
     @State private var kindFilter = ArtifactKindFilter.all
     @State private var presentation = ArtifactPresentation.recent
 
@@ -37,16 +38,18 @@ struct ArtifactCenterView: View {
                 .background(JieboColor.paper)
             }
         }
-        .navigationTitle("产物中心")
+        .navigationTitle(embedded ? "助理中心" : "产物中心")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Picker("呈现方式", selection: $presentation) {
-                    ForEach(ArtifactPresentation.allCases) { item in
-                        Text(item.title).tag(item)
+            if !embedded {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Picker("呈现方式", selection: $presentation) {
+                        ForEach(ArtifactPresentation.allCases) { item in
+                            Text(item.title).tag(item)
+                        }
                     }
+                    .pickerStyle(.menu)
                 }
-                .pickerStyle(.menu)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -57,12 +60,22 @@ struct ArtifactCenterView: View {
 
     /// 类型和待处理页同一套分段；呈现方式放在导航栏菜单里，不再另做一颗玻璃胶囊。
     private var filters: some View {
-        Picker("产物类型", selection: $kindFilter) {
-            ForEach(ArtifactKindFilter.allCases) { item in
-                Text(item.title).tag(item)
+        VStack(spacing: 8) {
+            if embedded {
+                Picker("呈现方式", selection: $presentation) {
+                    ForEach(ArtifactPresentation.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
             }
+            Picker("产物类型", selection: $kindFilter) {
+                ForEach(ArtifactKindFilter.allCases) { item in
+                    Text(item.title).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
         }
-        .pickerStyle(.segmented)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }

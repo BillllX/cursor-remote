@@ -151,8 +151,6 @@ struct PhoneWorkbench: View {
 }
 private struct PhoneDrawer: View {
     @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
-    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -177,9 +175,6 @@ private struct PhoneDrawer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             brandBar
-            if switchPhoneSpace != nil {
-                spaceSwitch
-            }
 
             workspaceCard
                 .padding(.horizontal, 12)
@@ -279,45 +274,6 @@ private struct PhoneDrawer: View {
         } else {
             label.accessibilityLabel("连接状态，\(store.linkState.title)")
         }
-    }
-
-    /// 只有 iPhone 注入了模块切换。从工作台回到小驳，或去即时消息。
-    private var spaceSwitch: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            spaceRow(NavigationIconId.assistant.symbol, "切换到小驳") {
-                switchPhoneSpace?(.assistant)
-            }
-            spaceRow("bubble.left.and.bubble.right", "切换到即时消息", badge: im.totalUnread) {
-                switchPhoneSpace?(.messages)
-            }
-        }
-        .padding(.bottom, 8)
-    }
-
-    private func spaceRow(_ symbol: String, _ title: String, badge: Int = 0, action: @escaping () -> Void) -> some View {
-        Button {
-            close()
-            action()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: symbol)
-                    .font(JieboFont.text(.callout, weight: .medium))
-                    .foregroundStyle(JieboColor.ink2)
-                    .frame(width: 24)
-                Text(title)
-                    .font(JieboFont.text(.callout, weight: .medium))
-                    .foregroundStyle(JieboColor.ink)
-                Spacer(minLength: 8)
-                if badge > 0 {
-                    ImUnreadBadge(count: badge)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(badge > 0 ? "\(title)，\(badge)" : title)
     }
 
     // MARK: 当前工作区
@@ -529,19 +485,14 @@ private struct PhoneDrawer: View {
             .buttonStyle(.plain)
             .accessibilityLabel("记忆")
             Button(action: openSettings) {
-                HStack(spacing: 6) {
-                    Label("设置", systemImage: NavigationIconId.account.symbol)
-                        .font(JieboFont.text(.subheadline, weight: .medium))
-                        .foregroundStyle(JieboColor.ink2)
-                    if im.totalUnread > 0 {
-                        ImUnreadBadge(count: im.totalUnread)
-                    }
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
+                Label("设置", systemImage: NavigationIconId.account.symbol)
+                    .font(JieboFont.text(.subheadline, weight: .medium))
+                    .foregroundStyle(JieboColor.ink2)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(im.totalUnread > 0 ? "设置，聊天有 \(im.totalUnread) 条未读" : "设置")
+            .accessibilityLabel("设置")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)

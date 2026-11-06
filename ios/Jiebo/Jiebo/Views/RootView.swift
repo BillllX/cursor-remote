@@ -135,7 +135,7 @@ struct WorkbenchView: View {
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
                             .id(layer)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -244,10 +244,7 @@ struct WorkbenchView: View {
 struct CollapsedSidebarRail: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.openPadDomain) private var openPadDomain
     var expand: () -> Void
-    @State private var adminOpen = false
-    @State private var themeOpen = false
     @State private var settingsOpen = false
 
     var body: some View {
@@ -265,11 +262,6 @@ struct CollapsedSidebarRail: View {
             }
             Spacer()
             railButton(NavigationIconId.workspace.symbol, label: "切换文件夹", action: store.openWorkspaceSwitcher)
-            railButton(HomeMode.chat.symbol, label: "切换到消息") { openPadDomain?(.messages) }
-            railButton("paintpalette", label: "主题") { themeOpen = true }
-            if store.isAdmin {
-                railButton(NavigationIconId.stats.symbol, label: "查看使用统计") { adminOpen = true }
-            }
             if store.linkState == .offline {
                 Button {
                     store.retryConnection()
@@ -292,9 +284,6 @@ struct CollapsedSidebarRail: View {
         .frame(width: 56)
         .frame(maxHeight: .infinity)
         .background(JieboColor.sidebar)
-        .sheet(isPresented: $adminOpen) {
-            AdminStatsView()
-        }
         .sheet(isPresented: $settingsOpen) {
             NavigationStack {
                 PhoneSettingsScreen()
@@ -302,9 +291,6 @@ struct CollapsedSidebarRail: View {
                         PhoneSettingsDestination(route: route)
                     }
             }
-        }
-        .sheet(isPresented: $themeOpen) {
-            ThemeSettingsSheet()
         }
     }
 
@@ -367,13 +353,17 @@ struct CollapsedSidebarRail: View {
 }
 struct ToolLayerOverlay: View {
     @Environment(ChatStore.self) private var store
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let layer: ToolLayer
 
     var body: some View {
         GeometryReader { geo in
             let narrow = geo.size.width < 600
             HStack(spacing: 0) {
+                if !narrow {
+                    Color.black.opacity(0.18)
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeTopLayer() }
+                }
                 VStack(spacing: 0) {
                     HStack {
                         if narrow {
@@ -440,25 +430,13 @@ struct ToolLayerOverlay: View {
                     if !store.connected || !store.bannerError.isEmpty || !store.notice.isEmpty {
                         layerStatus
                     }
-                    ZStack {
-                        layerBody
-                        if store.contentPath != nil {
-                            ContentLayerView()
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                        }
-                    }
-                    .animation(JieboMotion.panel(reduceMotion), value: store.contentPath != nil)
+                    layerBody
                 }
                 .frame(width: narrow ? geo.size.width : min(420, geo.size.width * 0.5))
                 .frame(maxHeight: .infinity)
                 .background(JieboColor.paper)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(JieboColor.line).frame(width: 1)
-                }
-                if !narrow {
-                    Color.black.opacity(0.18)
-                        .contentShape(Rectangle())
-                        .onTapGesture { closeTopLayer() }
                 }
             }
             .gesture(edgeDismiss)
@@ -589,8 +567,6 @@ struct ToolLayerOverlay: View {
             TerminalToolView()
         case .loop:
             LoopSheet()
-        case .assistant:
-            AssistantView()
         }
     }
 
@@ -890,7 +866,7 @@ struct SearchToolView: View {
         if let onOpen {
             onOpen(path)
         } else {
-            store.openContentFile(path)
+            store.loadPreview(path, diff: false)
         }
     }
 
@@ -934,7 +910,7 @@ struct GitToolView: View {
                             if let onOpen {
                                 onOpen(path)
                             } else {
-                                store.openContentDiff(path)
+                                store.loadPreview(path, diff: true)
                             }
                         } label: {
                             HStack(spacing: 8) {

@@ -379,7 +379,7 @@ final class PadRouter {
             return PadPushDestination(domain: .messages, section: nil, selection: nil)
         }
         if target.isWorkspace {
-            return PadPushDestination(domain: .messages, section: nil, selection: nil)
+            return PadPushDestination(domain: .workbench, section: nil, selection: nil)
         }
         switch target.kind {
         case "approval":

@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -40,6 +41,7 @@ struct DelegationListScreen: View {
     var embeddedInInbox: Bool = false
     @State private var openedTask: PersonalTask?
     @State private var showCompleted = false
+    @State private var newTodo = ""
 
     init(column: AssistantWorkColumn, embeddedInInbox: Bool = false) {
         self.column = column
@@ -64,6 +66,22 @@ struct DelegationListScreen: View {
 
     var body: some View {
         List {
+            if column == .todo {
+                Section {
+                    HStack(spacing: 8) {
+                        TextField("添加待办", text: $newTodo)
+                            .font(JieboFont.text(.subheadline))
+                            .submitLabel(.done)
+                            .onSubmit(addTodo)
+                        Button("添加", action: addTodo)
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
+                            .foregroundStyle(JieboColor.pine)
+                            .disabled(newTodo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .frame(minHeight: 44)
+                    .listRowBackground(JieboColor.white)
+                }
+            }
             if store.assistantState?.personalTasks != nil {
                 ForEach(groups, id: \.phase) { group in
                     let items = rows.filter { bucket($0) == group.phase }
@@ -118,7 +136,7 @@ struct DelegationListScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
-            if rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
+            if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
                 ContentUnavailableView(
                     "还没有\(column.title)",
                     systemImage: column.symbol,
@@ -133,6 +151,13 @@ struct DelegationListScreen: View {
         .onAppear { openPendingTask() }
         .onChange(of: router.pendingWorkTaskId) { _, _ in openPendingTask() }
         .onChange(of: store.assistantState?.personalTasks?.map(\.id) ?? []) { _, _ in openPendingTask() }
+    }
+
+    private func addTodo() {
+        let text = newTodo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        guard store.queueTodoChange("todo_add", args: ["text": .string(text)], pending: "添加这条待办") else { return }
+        newTodo = ""
     }
 
     /// 今日摘要或推送带过来的那一条。列表还没到就先留着，到了再打开。
@@ -186,37 +211,52 @@ struct DelegationListScreen: View {
 
     private func taskRow(_ task: PersonalTask, count: Int = 1) -> some View {
         let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id
-        return Button {
-            if let delegationId {
-                router.delegationDetail = DelegationRef(id: delegationId)
-            } else {
-                openedTask = task
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: taskIcon(task.kind))
-                    .font(JieboFont.text(.subheadline, weight: .semibold))
-                    .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.ink2)
-                    .frame(width: 24)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(task.title.nilIfEmpty ?? "未命名任务")
-                        .font(JieboFont.text(.subheadline, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(2)
-                    Text(count > 1 ? "共 \(count) 次 · \(taskSubtitle(task))" : taskSubtitle(task))
-                        .font(JieboFont.text(.caption))
-                        .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.dim)
-                        .lineLimit(1)
+        let scheduleId = task.sources.first(where: { $0.kind == "schedule" })?.id
+        return HStack(spacing: 8) {
+            Button {
+                if let delegationId {
+                    router.delegationDetail = DelegationRef(id: delegationId)
+                } else {
+                    openedTask = task
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(JieboFont.text(.caption2, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: taskIcon(task.kind))
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.ink2)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(task.title.nilIfEmpty ?? "未命名任务")
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                            .lineLimit(2)
+                        Text(count > 1 ? "共 \(count) 次 · \(taskSubtitle(task))" : taskSubtitle(task))
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(task.priority == "high" ? JieboColor.danger : JieboColor.dim)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    if column != .plan || scheduleId == nil {
+                        Image(systemName: "chevron.right")
+                            .font(JieboFont.text(.caption2, weight: .semibold))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            if column == .plan, let scheduleId {
+                Toggle("开关计划", isOn: Binding(
+                    get: { store.assistantState?.schedules.first { $0.id == scheduleId }?.enabled ?? false },
+                    set: { store.assistantSetScheduleEnabled(scheduleId, enabled: $0) }
+                ))
+                .labelsHidden()
+                .tint(JieboColor.pine)
+                .accessibilityLabel("\(task.title)，开关计划")
+            }
         }
-        .buttonStyle(.plain)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(count > 1 ? "\(task.title)，共 \(count) 次，\(taskStatus(task))" : "\(task.title)，\(taskStatus(task))")
     }
 
@@ -373,6 +413,7 @@ private struct PersonalTaskSheet: View {
 
 struct PhoneSettingsScreen: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
     @State private var themeOpen = false
@@ -382,6 +423,10 @@ struct PhoneSettingsScreen: View {
     @State private var logoutConfirm = false
     @State private var mobileDataMode = MobileDataMode.load()
     @State private var hintReplayArmed = false
+    @State private var nickname = ""
+    @State private var avatarItem: PhotosPickerItem?
+    @State private var avatarPickerOpen = false
+    @State private var unblockTarget: ImUser?
 
     init() {}
 
@@ -389,6 +434,8 @@ struct PhoneSettingsScreen: View {
 
     var body: some View {
         List {
+            profileSections
+
             Section {
                 Button {
                     themeOpen = true
@@ -488,16 +535,6 @@ struct PhoneSettingsScreen: View {
                 )
                 .listRowBackground(JieboColor.white)
 
-                NavigationLink(value: PhoneRoute.artifacts) {
-                    settingsRow(
-                        symbol: "square.stack.3d.up",
-                        title: "产物中心",
-                        trailing: nil,
-                        chevron: false
-                    )
-                }
-                .listRowBackground(JieboColor.white)
-
                 NavigationLink(value: PhoneRoute.memory) {
                     HStack(spacing: 12) {
                         Image(systemName: NavigationIconId.memory.symbol)
@@ -571,7 +608,30 @@ struct PhoneSettingsScreen: View {
         } message: {
             Text("退出后需要重新输入访问码才能连回来。")
         }
-        .onAppear { iconChoice = AppIconChoice.current }
+        .photosPicker(isPresented: $avatarPickerOpen, selection: $avatarItem, matching: .images)
+        .onChange(of: avatarItem) { _, item in
+            guard let item else { return }
+            avatarItem = nil
+            uploadAvatar(item)
+        }
+        .confirmationDialog(
+            "解除拉黑\(unblockTarget.map { "「\($0.nickname)」" } ?? "")？",
+            isPresented: Binding(get: { unblockTarget != nil }, set: { if !$0 { unblockTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("解除拉黑") {
+                if let user = unblockTarget { im.setBlocked(user.id, false) }
+                unblockTarget = nil
+            }
+            Button("取消", role: .cancel) { unblockTarget = nil }
+        }
+        .onAppear {
+            iconChoice = AppIconChoice.current
+            nickname = im.me?.nickname ?? ""
+        }
+        .onChange(of: im.me?.nickname) { _, next in
+            if let next { nickname = next }
+        }
         .onChange(of: mobileDataMode) { _, mode in mode.save() }
         .task { await refreshNotifyStatus() }
         .onChange(of: scenePhase) { _, phase in
@@ -579,6 +639,143 @@ struct PhoneSettingsScreen: View {
             if phase == .active {
                 Task { @MainActor in await refreshNotifyStatus() }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var profileSections: some View {
+        Section {
+            Button {
+                avatarPickerOpen = true
+            } label: {
+                HStack(spacing: 14) {
+                    ImAvatar(user: im.me?.user ?? ImUser(id: im.meId, nickname: "我", avatar: nil), size: 56)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("头像")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.ink)
+                        Text("从相册选一张，会裁成正方形")
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                .frame(minHeight: 64)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!im.canChangeSettings)
+            .listRowBackground(JieboColor.white)
+
+            HStack(spacing: 10) {
+                Text("昵称")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink)
+                TextField("1 到 32 个字", text: $nickname)
+                    .font(JieboFont.text(.subheadline))
+                    .multilineTextAlignment(.trailing)
+                    .submitLabel(.done)
+                    .onSubmit(saveNickname)
+                if nicknameChanged {
+                    Button("保存", action: saveNickname)
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .buttonStyle(.plain)
+                }
+            }
+            .frame(minHeight: 44)
+            .disabled(!im.canChangeSettings)
+            .listRowBackground(JieboColor.white)
+        } header: {
+            Text("个人资料与聊天")
+        } footer: {
+            if !im.canChangeSettings {
+                SettingsBlockedNote()
+            }
+        }
+
+        Section {
+            Toggle(isOn: Binding(
+                get: { im.me?.notifyPreview ?? false },
+                set: { im.setNotifyPreview($0) }
+            )) {
+                Text("通知显示消息内容")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink)
+            }
+            .tint(JieboColor.pine)
+            .frame(minHeight: 44)
+            .disabled(!im.canChangeSettings || im.me == nil)
+            .listRowBackground(JieboColor.white)
+        } footer: {
+            Text("关着时通知只写「某某发来一条消息」，锁屏上别人看不到内容。")
+        }
+
+        Section {
+            let list = im.blocked.sorted().map { im.user($0) }
+            if list.isEmpty {
+                Text("没有拉黑任何人")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.dim)
+                    .listRowBackground(JieboColor.white)
+            } else {
+                ForEach(list) { user in
+                    HStack(spacing: 12) {
+                        ImAvatar(user: user, size: 32)
+                        Text(user.nickname)
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.ink)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Button("解除") { unblockTarget = user }
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .buttonStyle(.plain)
+                            .disabled(!im.canChangeSettings)
+                    }
+                    .frame(minHeight: 44)
+                    .listRowBackground(JieboColor.white)
+                }
+            }
+        } header: {
+            Text("已拉黑")
+        } footer: {
+            Text("拉黑后对方照样能发，但消息不会送到你这里。")
+        }
+    }
+
+    private var nicknameChanged: Bool {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != im.me?.nickname
+    }
+
+    private func saveNickname() {
+        let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != im.me?.nickname else { return }
+        im.setNickname(trimmed)
+    }
+
+    private func uploadAvatar(_ item: PhotosPickerItem) {
+        let tenant = im.tenant
+        Task { @MainActor in
+            guard let picked = await ImPickTemp.load(item) else {
+                im.showToast("这张图读不出来，换一张试试")
+                return
+            }
+            let file = await Task.detached(priority: .userInitiated) { () -> String? in
+                let name = ImImagePrep.avatar(file: picked, tenant: tenant)
+                ImPickTemp.remove([picked])
+                return name
+            }.value
+            guard tenant == im.tenant else { return }
+            guard let file else {
+                im.showToast("这张图处理不了，换一张试试")
+                return
+            }
+            im.uploadAvatar(file: file)
         }
     }
 
@@ -893,3 +1090,4 @@ struct AssistantMemoryScreen: View {
         )
     }
 }
+

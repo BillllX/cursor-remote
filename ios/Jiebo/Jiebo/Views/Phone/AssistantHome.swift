@@ -5,7 +5,6 @@ import UIKit
 /// 整个 iPhone 上只有这里有 ComposerView（它由 ThreadView 内部创建），ActionDock 通过 ThreadView 的 dock 插槽放在输入框正上方。
 struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
 
     var body: some View {
@@ -69,15 +68,12 @@ struct AssistantHome: View {
         .background(JieboColor.paper.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                menuButton
-            }
             ToolbarItem(placement: .principal) {
                 titleView
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                todayButton
                 inboxButton
+                settingsButton
             }
         }
         .modifier(AssistantToolbarMinimize())
@@ -103,36 +99,20 @@ struct AssistantHome: View {
 
     // MARK: 导航栏
 
-    private var menuButton: some View {
-        let badge = store.workspaceUnreadCount + im.totalUnread
-        return Button {
-            router.openMenu()
-        } label: {
-            Image(systemName: "line.3.horizontal")
-                .font(JieboFont.text(.body, weight: .semibold))
-                .foregroundStyle(JieboColor.ink)
-                .overlay(alignment: .topTrailing) {
-                    if badge > 0 {
-                        PendingBadge(count: badge)
-                            .offset(x: 8, y: -6)
-                    }
-                }
-        }
-        .accessibilityLabel(
-            badge > 0
-                ? "菜单，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
-                : "菜单"
-        )
-    }
-
     private var titleView: some View {
-        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
-            .overlay(alignment: .bottomTrailing) {
-                LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(store.activeId))
-                    .offset(x: 1, y: 2)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(titleAccessibility)
+        HStack(spacing: 8) {
+            AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                .overlay(alignment: .bottomTrailing) {
+                    LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(store.activeId))
+                        .offset(x: 1, y: 2)
+                }
+            Text("小驳")
+                .font(JieboFont.text(.headline, weight: .semibold))
+                .foregroundStyle(JieboColor.ink)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(titleAccessibility)
     }
 
     private var titleAccessibility: String {
@@ -176,20 +156,22 @@ struct AssistantHome: View {
                     }
                 }
         }
-        .accessibilityLabel(badge > 0 ? "待处理，\(badge)" : "待处理")
+        .accessibilityLabel(
+            badge > 0
+                ? "助理中心，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
+                : "助理中心"
+        )
     }
 
-    private var todayButton: some View {
+    private var settingsButton: some View {
         Button {
-            JieboHaptic.selection()
-            router.openHub()
+            router.go(.settings)
         } label: {
-            Image(systemName: NavigationIconId.assistant.symbol)
+            Image(systemName: NavigationIconId.account.symbol)
                 .font(JieboFont.text(.body, weight: .semibold))
-                .foregroundStyle(router.hubOpen ? JieboColor.pine : JieboColor.ink)
+                .foregroundStyle(JieboColor.ink)
         }
-        .accessibilityLabel("今日")
-        .accessibilityAddTraits(router.hubOpen ? .isSelected : [])
+        .accessibilityLabel("记忆与设置")
     }
 
     // MARK: 降级（§4.1.6）

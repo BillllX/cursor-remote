@@ -67,7 +67,16 @@ struct TodayStrip: View {
             .accessibilityHint(expanded ? "轻点两下收起" : "轻点两下展开")
 
             if expanded {
-                if events.isEmpty {
+                if let brief = store.assistantState?.brief?.text.nilIfEmpty {
+                    Text(brief)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                }
+                if events.isEmpty, store.assistantState?.brief?.text.nilIfEmpty == nil {
                     Text("今天还没有需要关注的新动态")
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
@@ -79,6 +88,12 @@ struct TodayStrip: View {
                         eventRow(event)
                     }
                 }
+                HStack(spacing: 8) {
+                    briefJump("查看待办") { router.go(.worklist(.todo)) }
+                    briefJump("查看计划") { router.go(.worklist(.plan)) }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
             }
         }
         .background(JieboColor.white)
@@ -153,7 +168,7 @@ struct TodayStrip: View {
                     } else if brief == nil, nextLabel != nil {
                         router.go(.worklist(.plan))
                     } else {
-                        router.openHub()
+                        withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
                     }
                 } label: {
                     HStack(spacing: 12) {
@@ -185,7 +200,7 @@ struct TodayStrip: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PressScaleButtonStyle())
-                .accessibilityHint("打开今日面板")
+                .accessibilityHint("展开今日脉络")
                 .background(JieboColor.white)
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                 .overlay {
@@ -196,6 +211,19 @@ struct TodayStrip: View {
                 .padding(.vertical, 8)
             }
         }
+    }
+
+    private func briefJump(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(JieboFont.text(.caption, weight: .semibold))
+                .foregroundStyle(JieboColor.pine)
+                .padding(.horizontal, 12)
+                .frame(minHeight: 32)
+                .background(JieboColor.pine.opacity(0.12))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private var greeting: String {
@@ -231,7 +259,7 @@ struct TodayStrip: View {
             return ("checkmark.seal", event.title, JieboColor.warnFg, "前往待处理")
         }
         if event.kind == "brief" {
-            return ("sun.max", event.title, JieboColor.pine, "打开今日面板")
+            return ("sun.max", event.title, JieboColor.pine, "展开今日简报")
         }
         if event.kind == "receipt" {
             let failed = ["failed", "interrupted"].contains(event.receipt?.status ?? "")
@@ -264,7 +292,7 @@ struct TodayStrip: View {
             } else if let delegationId = item.delegationId {
                 router.delegationDetail = DelegationRef(id: delegationId)
             } else if item.kind == "brief" {
-                router.openHub()
+                withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
             } else if let scheduleId = item.scheduleId {
                 router.openWorkTask("schedule:\(scheduleId)", column: .plan)
             } else {
@@ -277,7 +305,7 @@ struct TodayStrip: View {
         {
             router.delegationDetail = DelegationRef(id: delegationId)
         } else if event.kind == "brief" {
-            router.openHub()
+            withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
         } else if let source = event.sources.first(where: { $0.kind == "todo" }) {
             router.openWorkTask(event.taskId ?? "todo:\(source.id)", column: .todo)
         } else if let source = event.sources.first(where: { $0.kind == "schedule" }) {

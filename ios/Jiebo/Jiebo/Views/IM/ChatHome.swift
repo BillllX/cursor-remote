@@ -11,6 +11,8 @@ struct ChatHome: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
+    @Environment(\.openPadDomain) private var openPadDomain
     @State private var settingsOpen = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
 
@@ -58,7 +60,17 @@ struct ChatHome: View {
             ImToast(text: im.toast)
         }
         .sheet(isPresented: $settingsOpen) {
-            ChatSettingsSheet()
+            NavigationStack {
+                PhoneSettingsScreen()
+                    .navigationDestination(for: PhoneRoute.self) { route in
+                        PhoneSettingsDestination(route: route)
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { settingsOpen = false }
+                        }
+                    }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .padSceneSidebarToggleRequested)) { note in
             guard split,
@@ -150,53 +162,35 @@ struct ChatHome: View {
         case .group(let convId):
             CollabRunGraphView(convId: convId, embedded: true)
         case .assistant:
-            if let chatId = store.assistantChatId {
-                ThreadView(chrome: .embedded, chatId: chatId)
-                    .onAppear { store.prepareAssistantThread() }
-            } else {
-                assistantPending
+            spaceHandoff("小驳在「小驳」里。", button: "打开小驳") {
+                if let switchPhoneSpace {
+                    switchPhoneSpace(.assistant)
+                } else {
+                    openPadDomain?(.assistant)
+                }
             }
-        case .workspace(let path):
-            WorkspaceAgentThread(path: path)
-        }
-    }
-
-    /// 消息里点开小驳，主会话还没有。已经连上且还在等时才转圈。
-    private var assistantPendingWaiting: Bool {
-        store.unlocked && store.connected && (store.assistantState == nil || !store.gatewayReady)
-    }
-
-    private var assistantPendingTitle: String {
-        if !store.unlocked { return "还没登录。登录后再看小驳。" }
-        if !store.connected {
-            return store.linkState == .offline
-                ? "已断开。点按重连后再看小驳。"
-                : "正在连接。连上后再看小驳。"
-        }
-        if store.gatewayReady, store.assistantState != nil {
-            return "这个服务器还没有助理功能，请先升级服务器"
-        }
-        return "正在打开小驳主会话…"
-    }
-
-    private var assistantPending: some View {
-        VStack(spacing: 12) {
-            if assistantPendingWaiting {
-                ProgressView("正在打开小驳主会话…")
-            } else {
-                Text(assistantPendingTitle)
-                    .font(JieboFont.text(.subheadline))
-                    .foregroundStyle(JieboColor.ink)
-                    .multilineTextAlignment(.center)
-                if store.unlocked, store.linkState == .offline {
-                    ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
-                } else if store.unlocked, store.connected, store.gatewayReady {
-                    ActionButton(title: "再试一次", kind: .primary) { store.requestAssistant(force: true) }
+        case .workspace:
+            spaceHandoff("文件夹对话在工作台里。", button: "打开工作台") {
+                if let switchPhoneSpace {
+                    switchPhoneSpace(.workspace)
+                } else {
+                    openPadDomain?(.workbench)
                 }
             }
         }
+    }
+
+    private func spaceHandoff(_ title: String, button: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 12) {
+            Text(title)
+                .font(JieboFont.text(.subheadline))
+                .foregroundStyle(JieboColor.ink)
+                .multilineTextAlignment(.center)
+            ActionButton(title: button, kind: .primary, action: action)
+        }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(JieboColor.paper)
     }
 
     private var destination: ChatDestination? {
@@ -219,68 +213,14 @@ struct ChatListView: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
-    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     var openSettings: () -> Void
     @State private var query = ""
     @State private var searchPresented = false
-    @State private var editingWorkspace: WorkspaceAgentItem?
 
     var body: some View {
         let rows = im.directory(query: query)
         let groups = im.groupConversations(query: query)
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let agents = store.workspaceAgents.filter {
-            needle.isEmpty
-                || $0.displayName.lowercased().contains(needle)
-                || $0.directoryName.lowercased().contains(needle)
-        }
-        let assistantSelected = destination == .assistant
         List {
-            Section {
-                Button {
-                    setDestination(.assistant)
-                    store.prepareAssistantThread()
-                } label: {
-                    HStack(spacing: 12) {
-                        Capsule()
-                            .fill(assistantSelected ? JieboColor.pine : Color.clear)
-                            .frame(width: 3, height: 28)
-                            .accessibilityHidden(true)
-                        Image(systemName: NavigationIconId.assistant.symbol)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(JieboColor.brass)
-                            .frame(width: 48, height: 48)
-                            .background(JieboColor.sidebar)
-                            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(store.assistantName)
-                                .font(JieboFont.text(.body, weight: .semibold))
-                                .foregroundStyle(JieboColor.ink)
-                            Text("小驳")
-                                .font(JieboFont.text(.caption))
-                                .foregroundStyle(JieboColor.dim)
-                        }
-                        Spacer()
-                        if assistantSelected {
-                            Text("当前")
-                                .font(JieboFont.text(.caption2, weight: .semibold))
-                                .foregroundStyle(JieboColor.pine)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(JieboColor.pine.opacity(0.12))
-                                .clipShape(Capsule())
-                                .accessibilityHidden(true)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-                .buttonStyle(.plain)
-                .listRowBackground(assistantSelected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
-                .accessibilityLabel(assistantSelected ? "\(store.assistantName)，小驳，当前对话" : "\(store.assistantName)，小驳")
-                .accessibilityAddTraits(assistantSelected ? .isSelected : [])
-            }
             if !rows.chatted.isEmpty {
                 Section {
                     ForEach(rows.chatted) { row in
@@ -304,19 +244,12 @@ struct ChatListView: View {
                     Text(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
                 }
             }
-            if !agents.isEmpty {
-                Section("对话") {
-                    ForEach(agents) { item in
-                        workspaceRow(item)
-                    }
-                }
-            }
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
         .overlay {
-            if rows.chatted.isEmpty, rows.others.isEmpty, groups.isEmpty, agents.isEmpty {
+            if rows.chatted.isEmpty, rows.others.isEmpty, groups.isEmpty {
                 emptyState
             }
         }
@@ -332,41 +265,12 @@ struct ChatListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                if let switchPhoneSpace {
-                    Menu {
-                        Button("切换到小驳", systemImage: NavigationIconId.assistant.symbol) {
-                            switchPhoneSpace(.assistant)
-                        }
-                        Button("切换到工作台", systemImage: "rectangle.3.group") {
-                            switchPhoneSpace(.workspace)
-                        }
-                        Button("聊天设置", systemImage: NavigationIconId.account.symbol) {
-                            openSettings()
-                        }
-                    } label: {
-                        Image(systemName: "line.3.horizontal")
-                            .font(JieboFont.text(.body, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink)
-                            .overlay(alignment: .topTrailing) {
-                                if store.workspaceUnreadCount > 0 {
-                                    PendingBadge(count: store.workspaceUnreadCount)
-                                        .offset(x: 8, y: -6)
-                                }
-                            }
-                    }
-                    .accessibilityLabel(
-                        store.workspaceUnreadCount > 0
-                            ? "菜单，工作台 \(store.workspaceUnreadCount)"
-                            : "菜单"
-                    )
-                } else {
-                    Button(action: openSettings) {
-                        Image(systemName: NavigationIconId.account.symbol)
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(JieboColor.ink2)
-                    }
-                    .accessibilityLabel("聊天设置")
+                Button(action: openSettings) {
+                    Image(systemName: NavigationIconId.account.symbol)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink2)
                 }
+                .accessibilityLabel("设置")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
@@ -381,9 +285,6 @@ struct ChatListView: View {
                 }
                 .accessibilityElement(children: .combine)
             }
-        }
-        .sheet(item: $editingWorkspace) { item in
-            WorkspaceAgentProfileSheet(item: item)
         }
     }
 
@@ -517,85 +418,6 @@ struct ChatListView: View {
         .accessibilityLabel(row.user.nickname)
     }
 
-    private func workspaceRow(_ item: WorkspaceAgentItem) -> some View {
-        let selected = destination == .workspace(item.path)
-        return Button {
-            setDestination(.workspace(item.path))
-            store.requestWorkspaceAgent(item)
-        } label: {
-            HStack(spacing: 12) {
-                Capsule()
-                    .fill(selected ? JieboColor.pine : Color.clear)
-                    .frame(width: 3, height: 28)
-                    .accessibilityHidden(true)
-                WorkspaceAgentAvatar(item: item, size: 44)
-                    .overlay(alignment: .topTrailing) {
-                        if item.unread > 0 {
-                            ImUnreadBadge(count: item.unread)
-                                .offset(x: 6, y: -6)
-                        }
-                    }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.displayName)
-                        .font(JieboFont.text(.body, weight: .medium))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                    if item.displayName != item.directoryName {
-                        Text(item.directoryName)
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer()
-                if selected {
-                    Text("当前")
-                        .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(JieboColor.pine.opacity(0.12))
-                        .clipShape(Capsule())
-                        .accessibilityHidden(true)
-                }
-                if item.status != "idle" {
-                    Text(item.status == "awaiting" ? "需处理" : "运行中")
-                        .font(JieboFont.text(.caption2, weight: .medium))
-                        .foregroundStyle(item.status == "awaiting" ? JieboColor.danger : JieboColor.pine)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-            }
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selected ? JieboColor.pine.opacity(0.1) : JieboColor.paper)
-        .accessibilityLabel([
-            item.displayName,
-            "对话",
-            selected ? "当前会话" : nil,
-            item.status == "idle" ? nil : (item.status == "awaiting" ? "需处理" : "运行中")
-        ].compactMap { $0 }.joined(separator: "，"))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-            Button {
-                editingWorkspace = item
-            } label: {
-                Label("聊天资料", systemImage: "pencil")
-            }
-            .tint(JieboColor.brass)
-        }
-        .contextMenu {
-            Button {
-                editingWorkspace = item
-            } label: {
-                Label("编辑聊天资料", systemImage: "person.crop.square")
-            }
-        }
-    }
 
     private var destination: ChatDestination? {
         sceneSession?.chatDestination ?? store.chatHomeDestination
@@ -696,184 +518,6 @@ struct ChatListView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: 工作区 Agent
-
-struct WorkspaceAgentThread: View {
-    @Environment(ChatStore.self) private var store
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.sceneSessionState) private var sceneSession
-    let path: String
-
-    private var item: WorkspaceAgentItem? { store.workspaceAgent(path: path) }
-
-    /// 对话还没到这台设备。已经连上且列表或会话还在来时才转圈。
-    private var folderPendingTitle: String? {
-        if !store.unlocked { return "还没登录。登录后再看这个文件夹。" }
-        if !store.connected {
-            return store.linkState == .offline
-                ? "已断开。点按重连后再看这个文件夹。"
-                : "正在连接。连上后再看这个文件夹。"
-        }
-        if !store.gatewayReady { return "正在打开，稍后再看这个文件夹。" }
-        if item == nil, store.workspaceAgentsLoaded {
-            return "这个文件夹还没出现在列表里。"
-        }
-        return nil
-    }
-
-    var body: some View {
-        Group {
-            if let item, let chatId = item.mainChatId, store.chats.contains(where: { $0.id == chatId }) {
-                ThreadView(chrome: .embedded, chatId: chatId)
-                    .navigationTitle(item.directoryName)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .onAppear { prepare(item, chatId: chatId) }
-            } else if let title = folderPendingTitle {
-                VStack(spacing: 12) {
-                    Text(title)
-                        .font(JieboFont.text(.subheadline))
-                        .foregroundStyle(JieboColor.ink)
-                        .multilineTextAlignment(.center)
-                    if store.unlocked, store.linkState == .offline {
-                        ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
-                    }
-                }
-                .padding(.horizontal, 32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ProgressView("正在打开文件夹…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .task {
-                        if let item { store.requestWorkspaceAgent(item) }
-                    }
-            }
-        }
-        .onChange(of: item?.mainChatId) { _, chatId in
-            if let item, let chatId { prepare(item, chatId: chatId) }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            guard let chatId = item?.mainChatId else { return }
-            if phase == .active {
-                if let item { prepare(item, chatId: chatId) }
-            } else if sceneSession == nil {
-                store.send(.workspaceAgentViewing(chatId: nil))
-            }
-        }
-        .onDisappear {
-            if sceneSession == nil { store.leaveWorkspaceThread() }
-        }
-    }
-
-    private func prepare(_ item: WorkspaceAgentItem, chatId: String) {
-        if sceneSession != nil {
-            store.prepareWorkspaceThread(item, chatId: chatId)
-        } else {
-            store.enterWorkspaceThread(path: path, chatId: chatId)
-        }
-    }
-}
-
-struct WorkspaceAgentAvatar: View {
-    @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
-    @Environment(\.displayScale) private var displayScale
-    let item: WorkspaceAgentItem
-    let size: CGFloat
-    @State private var image: UIImage?
-
-    var body: some View {
-        ZStack {
-            if let image {
-                Image(uiImage: image).resizable().scaledToFill()
-            } else {
-                JieboColor.sidebar
-                Image(systemName: "folder.fill")
-                    .font(.system(size: size * 0.42, weight: .medium))
-                    .foregroundStyle(JieboColor.brass)
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-        .task(id: "\(item.avatarBlob ?? "")|\(store.workspaceAvatarTicket?.sig ?? "")") {
-            guard let blob = item.avatarBlob, let ticket = store.workspaceAvatarTicket else {
-                image = nil
-                return
-            }
-            let pixel = Int(size * displayScale)
-            let url = GatewayConfig.imMediaURL(scope: "workspace-avatars", blob: blob, ticket: ticket)
-            image = await ImImageCache.shared.image(
-                blob: blob, tenant: im.tenant, remote: url, maxPixel: pixel, kind: .avatar
-            )
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-struct WorkspaceAgentProfileSheet: View {
-    @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
-    @Environment(\.dismiss) private var dismiss
-    let item: WorkspaceAgentItem
-    @State private var displayName: String
-    @State private var avatarItem: PhotosPickerItem?
-
-    init(item: WorkspaceAgentItem) {
-        self.item = item
-        _displayName = State(initialValue: item.displayName)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("显示名", text: $displayName)
-                    PhotosPicker(selection: $avatarItem, matching: .images) {
-                        Label("更换头像", systemImage: "photo")
-                    }
-                    Button("恢复默认") {
-                        store.updateWorkspaceProfile(path: item.path, displayName: "", avatar: "")
-                        dismiss()
-                    }
-                } header: {
-                    Text("聊天列表资料")
-                } footer: {
-                    Text("只改变聊天列表里的名称和头像，不会修改目录名或对话标题。")
-                }
-            }
-            .navigationTitle("文件夹聊天资料")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        store.updateWorkspaceProfile(path: item.path, displayName: displayName, avatar: nil)
-                        dismiss()
-                    }
-                }
-            }
-            .onChange(of: avatarItem) { _, picked in
-                guard let picked else { return }
-                avatarItem = nil
-                uploadAvatar(picked)
-            }
-        }
-    }
-
-    private func uploadAvatar(_ picked: PhotosPickerItem) {
-        let tenant = im.tenant
-        Task { @MainActor in
-            guard let source = await ImPickTemp.load(picked) else { return }
-            let file = await Task.detached(priority: .userInitiated) {
-                let output = ImImagePrep.avatar(file: source, tenant: tenant)
-                ImPickTemp.remove([source])
-                return output
-            }.value
-            guard tenant == im.tenant, let file else { return }
-            im.uploadWorkspaceAvatar(file: file, path: item.path)
-        }
     }
 }
 

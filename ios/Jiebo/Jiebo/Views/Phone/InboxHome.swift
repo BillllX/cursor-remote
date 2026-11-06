@@ -44,25 +44,52 @@ struct InboxHome: View {
     var body: some View {
         @Bindable var router = router
         VStack(spacing: 0) {
-            Picker("待处理栏目", selection: $router.inboxLane) {
-                Text("通知").tag(InboxLane.notices)
-                Text("待办").tag(InboxLane.work(.todo))
-                Text("计划").tag(InboxLane.work(.plan))
-                Text("委派").tag(InboxLane.work(.delegation))
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            laneBar
             switch router.inboxLane {
             case .notices:
                 notices
             case .work(let column):
                 DelegationListScreen(column: column, embeddedInInbox: true)
+            case .artifacts:
+                ArtifactCenterView(embedded: true)
             }
         }
         .background(JieboColor.paper)
-        .navigationTitle("待处理")
+        .navigationTitle("助理中心")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var laneBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                laneChip("通知", .notices)
+                laneChip("待办", .work(.todo))
+                laneChip("计划", .work(.plan))
+                laneChip("委派", .work(.delegation))
+                laneChip("产物", .artifacts)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .accessibilityLabel("助理中心栏目")
+    }
+
+    private func laneChip(_ title: String, _ lane: InboxLane) -> some View {
+        let selected = router.inboxLane == lane
+        return Button {
+            router.inboxLane = lane
+        } label: {
+            Text(title)
+                .font(JieboFont.text(.subheadline, weight: .semibold))
+                .foregroundStyle(selected ? JieboColor.pine : JieboColor.ink2)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 36)
+                .background(selected ? JieboColor.pine.opacity(0.12) : JieboColor.white)
+                .clipShape(Capsule())
+                .overlay(Capsule().stroke(selected ? JieboColor.pine.opacity(0.35) : JieboColor.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var notices: some View {

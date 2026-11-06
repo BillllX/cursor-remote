@@ -1,75 +1,23 @@
 import SwiftUI
 import UIKit
 
-/// iPhone 的「小驳」空间（docs/iphone-assistant-first.md §4.0）。
-/// 根页永远是 AssistantHome（唯一的 ComposerView 在它里面）；这里只承载菜单抽屉和今日面板。
+/// iPhone 的「小驳」空间。根页永远是 AssistantHome（唯一的 ComposerView 在它里面）。
 /// PhoneRouter 由外层 PhoneTabShell 唯一持有，避免和待处理空间共用导航栈。
 struct PhoneShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 今日面板顶部下拉的位移（抓手和标题行跟手）
-    @State private var hubDrag: CGFloat = 0
 
     var body: some View {
         @Bindable var router = router
-        ZStack {
-            NavigationStack(path: $router.path) {
-                AssistantHome()
-                    .navigationDestination(for: PhoneRoute.self) { route in
-                        destination(route)
-                    }
-            }
-            // 今日面板、菜单盖在上面时，底下的对话不再让 VoiceOver 摸到
-            .accessibilityHidden(router.hubOpen || router.menuOpen)
-            MenuDrawer()
-                .zIndex(2)
-                .accessibilityHidden(router.hubOpen)
-            if router.hubOpen {
-                todayPanel
-                    .zIndex(4)
-            }
+        NavigationStack(path: $router.path) {
+            AssistantHome()
+                .navigationDestination(for: PhoneRoute.self) { route in
+                    destination(route)
+                }
         }
-        .animation(JieboMotion.panel(reduceMotion), value: router.hubOpen)
         .task { await bootstrap() }
     }
-
-    /// 自绘底栏，避开系统 sheet。点遮罩或「完成」关掉。
-    private var todayPanel: some View {
-        // 外层不忽略安全区：键盘弹起时面板跟着让开；只有遮罩和面板底色铺到 Home 指示条下面
-        GeometryReader { geo in
-            let height = max(320, (geo.size.height + geo.safeAreaInsets.top) * 0.72)
-            ZStack(alignment: .bottom) {
-                Color.black.opacity(0.28 * (1 - min(hubDrag / height, 1)))
-                    .ignoresSafeArea()
-                    .onTapGesture { router.hubOpen = false }
-                    .accessibilityHidden(true)
-                AssistantHubSheet(drag: $hubDrag, panelHeight: height)
-                    .frame(height: height)
-                    .clipShape(Self.panelShape)
-                    .background {
-                        Self.panelShape
-                            .fill(JieboColor.paper)
-                            .ignoresSafeArea(.container, edges: .bottom)
-                    }
-                    .offset(y: hubDrag)
-                    .accessibilityAddTraits(.isModal)
-                    .accessibilityAction(.escape) { router.hubOpen = false }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        }
-        .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion))
-        .onDisappear { hubDrag = 0 }
-    }
-
-    private static let panelShape = UnevenRoundedRectangle(
-        topLeadingRadius: 16,
-        bottomLeadingRadius: 0,
-        bottomTrailingRadius: 0,
-        topTrailingRadius: 16,
-        style: .continuous
-    )
 
     @ViewBuilder
     private func destination(_ route: PhoneRoute) -> some View {
@@ -83,8 +31,6 @@ struct PhoneShell: View {
             InboxHome()
         case .inboxItem(let id):
             InboxDetailView(itemId: id)
-        case .todayManage:
-            AssistantTodayScreen()
         case .worklist(let column):
             DelegationListScreen(column: column)
         case .artifacts:
@@ -146,12 +92,12 @@ struct PhoneShell: View {
         if let route = value(of: "--phone-route=") {
             switch route {
             case "inbox": router.go(.inbox)
-            case "today": router.path = [.todayManage]
+            case "today": router.popToRoot()
             case "delegations": router.go(.worklist(.delegation))
             case "todos": router.go(.worklist(.todo))
             case "plans": router.go(.worklist(.plan))
             case "runs": router.go(.worklist(.delegation))
-            case "artifacts": router.path = [.artifacts]
+            case "artifacts": router.go(.artifacts)
             case "settings": router.path = [.settings]
             case "memory": router.path = [.settings, .memory]
             default: router.path = []

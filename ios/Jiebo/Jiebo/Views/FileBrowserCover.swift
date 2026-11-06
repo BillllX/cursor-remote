@@ -21,6 +21,9 @@ struct FileBrowserCover: View {
     @FocusState private var searchFocused: Bool
     @State private var filter = ""
     @State private var browserFullscreen = false
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var revertConfirm = false
 
     private var activePreviewTab: PreviewTab? {
         if let sceneSession { return sceneSession.previewTab(in: store) }
@@ -324,6 +327,29 @@ struct FileBrowserCover: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
+                    if editing {
+                        Button("取消") { editing = false }
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                        Button("保存") {
+                            store.savePreviewText(tab, content: draft)
+                            editing = false
+                        }
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                        .disabled(draft == (tab.content ?? ""))
+                    } else if store.previewTextEditable(tab) {
+                        Button("编辑") {
+                            draft = tab.content ?? ""
+                            editing = true
+                        }
+                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                    }
+                    if !editing, store.previewDiffRevertable(tab) {
+                        Button("还原") { revertConfirm = true }
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
                     if sizeClass != .compact {
                         PreviewFullscreenToggle(fullscreen: browserFullscreen) {
                             browserFullscreen.toggle()
@@ -370,7 +396,25 @@ struct FileBrowserCover: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 Divider().overlay(JieboColor.line)
-                PreviewContentView(tab: tab)
+                if editing {
+                    TextEditor(text: $draft)
+                        .font(JieboFont.monoText(.footnote))
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                } else {
+                    PreviewContentView(tab: tab)
+                }
+            }
+            .onChange(of: tab.path) { _, _ in editing = false }
+            .onChange(of: tab.diff) { _, _ in editing = false }
+            .alert("还原这个文件？", isPresented: $revertConfirm) {
+                Button("还原", role: .destructive) {
+                    editing = false
+                    store.revertPreviewFile(tab)
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("未提交的改动会丢掉。")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(JieboColor.white)
