@@ -76,17 +76,41 @@ export function chatIdsFrom(chats: unknown[]): Set<string> {
   return ids;
 }
 
+export function isSlotActive(slot: Slot): boolean {
+  return Boolean(
+    !slot.finished ||
+      slot.run ||
+      slot.externalAbort ||
+      slot.awaitingApproval ||
+      slot.pending.length > 0,
+  );
+}
+
+export function activeSlotChatIds(tenant: Tenant): Set<string> {
+  const ids = new Set<string>();
+  for (const [chatId, slot] of liveSlotsOf(tenant).entries()) {
+    if (isSlotActive(slot)) ids.add(chatId);
+  }
+  return ids;
+}
+
 export function pruneDroppedSlots(tenant: Tenant, keepIds: Set<string>) {
   if (!keepIds.size) return;
   const live = liveSlotsOf(tenant);
   for (const [chatId, slot] of [...live.entries()]) {
     if (keepIds.has(chatId)) continue;
+    // 保护正在运行、等待审批或有排队消息的活跃槽位，防止某台客户端上传滞后列表时误杀运行中任务
+    if (isSlotActive(slot)) continue;
     resolveApprovalWait(slot, false);
     void cancelRun(slot.run);
     void disposeSlot(slot);
     live.delete(chatId);
   }
-  tenant.disk.slots = tenant.disk.slots.filter((item) => keepIds.has(item.chatId));
+  tenant.disk.slots = tenant.disk.slots.filter((item) => {
+    if (keepIds.has(item.chatId)) return true;
+    const activeSlot = live.get(item.chatId);
+    return Boolean(activeSlot && isSlotActive(activeSlot));
+  });
 }
 
 export function hydrateConn(conn: Conn) {
@@ -171,8 +195,15 @@ export function slotOf(conn: Conn, chatId: string): Slot {
 export function runningChatIds(tenant: Tenant) {
   return (
     [...liveSlotsOf(tenant).values()]
-      // P11：externalAbort 非空 = 第三方在途（无 RunHandle）——也算 running，否则重连丢运行态
-      .filter((slot) => (!slot.finished && (slot.run || slot.externalAbort)) || slot.pending.length)
+      // P11：externalAbort 非空 = 第三方在途；transcript.phase === "running" && epoch 对齐覆盖 SDK 退避重试等待窗口
+      .filter(
+        (slot) =>
+          (!slot.finished &&
+            (slot.run ||
+              slot.externalAbort ||
+              (slot.transcript?.phase === "running" && slot.transcript.epoch === slot.epoch))) ||
+          slot.pending.length,
+      )
       .map((slot) => slot.chatId)
   );
 }
@@ -184,7 +215,13 @@ export function queuedChatIds(tenant: Tenant) {
 export function globalRunningCount() {
   let n = 0;
   for (const tenant of allTenants()) {
-    n += [...liveSlotsOf(tenant).values()].filter((slot) => !slot.finished && (slot.run || slot.externalAbort)).length;
+    n += [...liveSlotsOf(tenant).values()].filter(
+      (slot) =>
+        !slot.finished &&
+        (slot.run ||
+          slot.externalAbort ||
+          (slot.transcript?.phase === "running" && slot.transcript.epoch === slot.epoch)),
+    ).length;
   }
   return n;
 }

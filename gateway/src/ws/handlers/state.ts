@@ -4,7 +4,14 @@ import { confinedCwd, settlePersistedChats } from "../../tenants.ts";
 import { readRunMark } from "../../runlog.ts";
 import { log } from "../../log.ts";
 import { assistantChatIdOf, chatIdOf, isAssistantChat } from "../../runtime/chats.ts";
-import { chatIdsFrom, lockedChatCwd, persistConn, pruneDroppedSlots, runningChatIds } from "../../runtime/slots.ts";
+import {
+  activeSlotChatIds,
+  chatIdsFrom,
+  lockedChatCwd,
+  persistConn,
+  pruneDroppedSlots,
+  runningChatIds,
+} from "../../runtime/slots.ts";
 import { liveSlotsOf } from "../../runtime/state.ts";
 import {
   broadcastDigest,
@@ -41,16 +48,21 @@ export function onSyncState({ ws, conn, tenant }: WsCtx, message: MessageOf<"syn
       prevJson.set(row.id, stableStringify(item));
     }
   }
-  // 助理会话不占 MAX_STORED_CHATS 名额；客户端漏带时用服务端那份，不能被墓碑化
+  // 助理会话、工作区主会话与正在运行的活跃会话均受保护；其他端漏带时用服务端那份，不能被墓碑化
   const assistantId = assistantChatIdOf(tenant);
   const workspaceIds = workspaceMainChatIds(tenant);
+  const activeIds = activeSlotChatIds(tenant);
+  const isProtectedChatId = (id: string) => workspaceIds.has(id) || activeIds.has(id);
   const uploaded: unknown[] = Array.isArray(message.chats) ? message.chats : [];
   const assistantRow =
     uploaded.find((item) => chatIdOf(item) === assistantId) ??
     tenant.disk.chats.find((item) => chatIdOf(item) === assistantId);
-  const protectedRows = tenant.disk.chats.filter((item) => workspaceIds.has(chatIdOf(item)));
+  const protectedRows = tenant.disk.chats.filter((item) => isProtectedChatId(chatIdOf(item)));
   const incoming = uploaded
-    .filter((item) => chatIdOf(item) !== assistantId && !workspaceIds.has(chatIdOf(item)))
+    .filter((item) => {
+      const id = chatIdOf(item);
+      return id !== assistantId && !isProtectedChatId(id);
+    })
     .slice(0, MAX_STORED_CHATS);
   for (const row of protectedRows) {
     const id = chatIdOf(row);
@@ -59,7 +71,7 @@ export function onSyncState({ ws, conn, tenant }: WsCtx, message: MessageOf<"syn
   if (assistantRow) incoming.unshift(assistantRow);
   const incomingIds = chatIdsFrom(incoming);
   for (const id of prevIds) {
-    if (!incomingIds.has(id) && !workspaceIds.has(id)) tombstoneChat(tenant, id);
+    if (!incomingIds.has(id) && !isProtectedChatId(id)) tombstoneChat(tenant, id);
   }
   const gone = new Set(tenant.disk.deletedIds);
   tenant.disk.chats = incoming

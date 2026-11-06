@@ -30,7 +30,7 @@ import { isAssistantChat } from "../runtime/chats.ts";
 import { cwdOf, disposeSlot, globalRunningCount, maxRunning } from "../runtime/slots.ts";
 import { gatewayState, liveSlotsOf } from "../runtime/state.ts";
 import type { Conn, RunHandle, Slot } from "../runtime/types.ts";
-import { continueTranscript, emitOwnerRunSnapshot, openTranscript } from "../sync/transcript.ts";
+import { continueTranscript, emitOwnerRunSnapshot, flushTranscript, openTranscript } from "../sync/transcript.ts";
 import { allTenants, workspaceFenceForTenant } from "../tenants.ts";
 import { noteOutput, noteToolCall } from "../usage.ts";
 import { nativeStateDir, rollbackToLatestCheckpoint, undoEdits } from "../workspace/checkpoints.ts";
@@ -62,6 +62,55 @@ import {
 
 /** 助理会话不分段新建：每满这么多轮换一个新的模型会话，靠记忆块 + 最近摘录续上 */
 const ASSISTANT_ROLL_TURNS = 40;
+
+/** 模型已发出 turn-ended 且没有任何未完成工具时，等待流自然关闭的静默宽限窗口（毫秒） */
+export const RUN_QUIET_AFTER_TURN_ENDED_MS = 20_000;
+
+/** Cursor SDK 流内遇到瞬时限流（resource_exhausted / 429）或网络闪断时的最大自动续跑次数 */
+export const MAX_SDK_TRANSIENT_RETRIES = 2;
+
+const SDK_CONTINUATION_PROMPT =
+  "刚才的运行因上游限流或连接瞬断中断，请直接从中断处继续完成剩余任务，不要重复已完成的步骤。";
+
+/** 判断是否应在收到 turn-ended 后启动静默收尾定时器：只要还有工具或子代理在运行，绝不提前断流 */
+export function shouldArmRunWatchQuiet(turnEnded: boolean, openToolsSize: number): boolean {
+  return turnEnded && openToolsSize <= 0;
+}
+
+/** 识别 Cursor SDK 抛出的可自动退避续跑的瞬时错误（配额/速率限制、上游过载、网络闪断、无进展恢复熔断） */
+export function isTransientSdkError(errOrMessage: unknown): boolean {
+  if (!errOrMessage || isAbortError(errOrMessage)) return false;
+  const text =
+    typeof errOrMessage === "string"
+      ? errOrMessage
+      : errOrMessage instanceof Error
+        ? `${errOrMessage.name} ${errOrMessage.message} ${(errOrMessage as { cause?: Error }).cause?.message || ""}`
+        : String(errOrMessage);
+  return /resource_exhausted|rate[_ -]?limit|\b429\b|too many requests|overloaded|\bunavailable\b|\b50[234]\b|econnreset|etimedout|eai_again|socket hang up|fetch failed|repeated resume attempts made no progress/i.test(
+    text,
+  );
+}
+
+/** 计算第 attempt 次（0-based）自动续跑的退避等待毫秒数 */
+export function sdkRetryDelayMs(attempt: number, baseMs = 4_000): number {
+  return Math.min(baseMs * 2 ** Math.max(0, attempt), 16_000);
+}
+
+/** 可随时被取消/新 epoch 打断的退避等待 */
+export async function waitWithSlotCheck(
+  slot: { finished: boolean; epoch: number },
+  epoch: number,
+  totalMs: number,
+  stepMs = 100,
+): Promise<boolean> {
+  const deadline = Date.now() + Math.max(0, totalMs);
+  while (Date.now() < deadline) {
+    if (slot.finished || slot.epoch !== epoch) return false;
+    const wait = Math.min(stepMs, deadline - Date.now());
+    await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  return !slot.finished && slot.epoch === epoch;
+}
 
 /** 这条消息实际要用的模型：本条消息带的优先，没带才沿用会话和连接上次的 */
 export function promptModel(model: string | undefined, slot: { model?: string }, conn: { model: string }) {
@@ -525,74 +574,81 @@ export async function handlePrompt(
         slot.reseed = true;
       }
     }
-    const agent = await ensureAgent(conn, slot);
-    if (slot.reseed) {
-      prompt = attachReseedContext(conn.tenant, slot.chatId, userText, prompt);
-      slot.reseed = false;
-    }
-    const payload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
-    slot.agentId = agent.agentId;
-    send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
-    send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
-    send(ws, {
-      type: "run_meta",
-      chatId: slot.chatId,
-      model: usedModel,
-      mode,
-      policy: slot.policy,
-      dialect: slot.dialect,
-    });
-
-    const sendOpts: {
-      model: { id: string };
-      mode: "plan" | "agent";
-      local: { force: boolean };
-      disallowedTools?: string[];
-    } = {
-      model: { id: usedModel },
-      mode: mode === "plan" ? "plan" : "agent",
-      local: { force: true },
-    };
-    if (isPlane(slot.policy) && mode === "ask") sendOpts.disallowedTools = askDisallowedTools();
-    if (isPlane(slot.policy) && mode === "plan") sendOpts.disallowedTools = planDisallowedTools();
-
-    const runWatch: {
-      turnEnded: boolean;
-      quiet?: ReturnType<typeof setTimeout>;
-      stop?: () => void;
-    } = { turnEnded: false };
-    const clearRunQuiet = () => {
-      if (!runWatch.quiet) return;
-      clearTimeout(runWatch.quiet);
-      runWatch.quiet = undefined;
-    };
-    // 模型这一轮已经结束、又没有新输出时，stream 有时不再关闭，前端会一直停在「正在动手」。
-    const noteRunActivity = (continuing: boolean) => {
-      if (continuing) {
-        runWatch.turnEnded = false;
-        clearRunQuiet();
-        return;
+    let turnProgressed = false;
+    for (let sdkAttempt = 0; ; sdkAttempt += 1) {
+      const prevAgentId = slot.agentId;
+      const agent = await ensureAgent(conn, slot);
+      if (slot.reseed || (prevAgentId && agent.agentId !== prevAgentId)) {
+        prompt = attachReseedContext(conn.tenant, slot.chatId, userText, prompt);
+        slot.reseed = false;
+        turnProgressed = false;
       }
-      if (!runWatch.turnEnded) return;
-      clearRunQuiet();
-      runWatch.quiet = setTimeout(() => runWatch.stop?.(), 8_000);
-    };
-    const onDelta = ({ update }: { update: unknown }) => {
-      const rec = update as {
-        type?: string;
-        callId?: string;
-        text?: string;
-        toolCall?: {
-          name?: string;
-          type?: string;
-          args?: unknown;
-          result?: unknown;
-          status?: string;
-        };
-        event?: Record<string, unknown>;
-        taskUpdate?: {
+      const initialPayload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
+      const payload = sdkAttempt > 0 && turnProgressed ? SDK_CONTINUATION_PROMPT : initialPayload;
+      slot.agentId = agent.agentId;
+      if (sdkAttempt === 0) {
+        send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
+        send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
+        send(ws, {
+          type: "run_meta",
+          chatId: slot.chatId,
+          model: usedModel,
+          mode,
+          policy: slot.policy,
+          dialect: slot.dialect,
+        });
+      } else {
+        send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
+        send(ws, { type: "status", chatId: slot.chatId, status: "RUNNING" });
+      }
+
+      const sendOpts: {
+        model: { id: string };
+        mode: "plan" | "agent";
+        local: { force: boolean };
+        disallowedTools?: string[];
+      } = {
+        model: { id: usedModel },
+        mode: mode === "plan" ? "plan" : "agent",
+        local: { force: true },
+      };
+      if (isPlane(slot.policy) && mode === "ask") sendOpts.disallowedTools = askDisallowedTools();
+      if (isPlane(slot.policy) && mode === "plan") sendOpts.disallowedTools = planDisallowedTools();
+
+      let attemptClosed = false;
+      const runWatch: {
+        turnEnded: boolean;
+        quiet?: ReturnType<typeof setTimeout>;
+        stop?: () => void;
+      } = { turnEnded: false };
+      const clearRunQuiet = () => {
+        if (!runWatch.quiet) return;
+        clearTimeout(runWatch.quiet);
+        runWatch.quiet = undefined;
+      };
+      // 模型本轮已发出 turn-ended 且当前没有任何未完成工具时，才启动静默收尾定时器；
+      // 只有主模型开始新的输出流（text-delta / thinking-delta / step-started / partial-tool-call）才清除 turnEnded，
+      // 工具生命周期与输出事件只重置静默计时器并按 openTools.size 决定是否重新 arm。
+      const noteRunActivity = (modelContinuing: boolean) => {
+        if (modelContinuing) {
+          runWatch.turnEnded = false;
+          clearRunQuiet();
+          return;
+        }
+        clearRunQuiet();
+        if (!shouldArmRunWatchQuiet(runWatch.turnEnded, slot.openTools?.size ?? 0)) return;
+        runWatch.quiet = setTimeout(() => {
+          if (attemptClosed || slot.finished || slot.epoch !== epoch) return;
+          if (!shouldArmRunWatchQuiet(runWatch.turnEnded, slot.openTools?.size ?? 0)) return;
+          runWatch.stop?.();
+        }, RUN_QUIET_AFTER_TURN_ENDED_MS);
+      };
+      const onDelta = ({ update }: { update: unknown }) => {
+        if (attemptClosed || slot.finished || slot.epoch !== epoch) return;
+        const rec = update as {
           type?: string;
           callId?: string;
+          text?: string;
           toolCall?: {
             name?: string;
             type?: string;
@@ -601,72 +657,62 @@ export async function handlePrompt(
             status?: string;
           };
           event?: Record<string, unknown>;
+          taskUpdate?: {
+            type?: string;
+            callId?: string;
+            toolCall?: {
+              name?: string;
+              type?: string;
+              args?: unknown;
+              result?: unknown;
+              status?: string;
+            };
+            event?: Record<string, unknown>;
+          };
         };
-      };
-      const toolName = (tool?: { name?: string; type?: string }) => tool?.name || tool?.type || "tool";
-      switch (rec.type) {
-        case "text-delta":
-          noteRunActivity(true);
-          if (rec.text) {
-            send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
-            noteOutput(slot.tenantId, rec.text.length); // P9 计量：模型输出
-          }
-          break;
-        case "thinking-delta":
-          noteRunActivity(true);
-          if (rec.text) {
-            send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
-            noteOutput(slot.tenantId, rec.text.length); // P9 计量：thinking 也烧 token
-          }
-          break;
-        case "tool-call-started":
-          noteRunActivity(true);
-          startTool(rec.callId || "", toolName(rec.toolCall), rec.toolCall?.args);
-          break;
-        case "turn-ended":
-          runWatch.turnEnded = true;
-          noteRunActivity(false);
-          break;
-        case "shell-output-delta": {
-          noteRunActivity(false);
-          const parsed = parseShellDelta(rec.event || {});
-          if (parsed) {
-            emitToolOutput(ws, slot, {
-              callId: parsed.callId,
-              stream: parsed.stream,
-              chunk: parsed.chunk,
-            });
-          }
-          break;
-        }
-        case "tool-call-completed":
-          noteRunActivity(false);
-          finishTool(
-            rec.callId || "",
-            toolName(rec.toolCall),
-            rec.toolCall?.status === "error" ? "error" : "completed",
-            rec.toolCall?.result,
-            rec.toolCall?.args,
-          );
-          break;
-        case "tool-call-delta": {
-          const nested = rec.taskUpdate;
-          if (!nested) break;
-          if (nested.type === "tool-call-started") {
+        const toolName = (tool?: { name?: string; type?: string }) => tool?.name || tool?.type || "tool";
+        switch (rec.type) {
+          case "text-delta":
+            turnProgressed = true;
             noteRunActivity(true);
-            startTool(nested.callId || "", toolName(nested.toolCall), nested.toolCall?.args, rec.callId);
-          } else if (nested.type === "tool-call-completed") {
+            if (rec.text) {
+              send(ws, { type: "text-delta", chatId: slot.chatId, text: rec.text });
+              noteOutput(slot.tenantId, rec.text.length); // P9 计量：模型输出
+            }
+            break;
+          case "thinking-delta":
+            turnProgressed = true;
+            noteRunActivity(true);
+            if (rec.text) {
+              send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
+              noteOutput(slot.tenantId, rec.text.length); // P9 计量：thinking 也烧 token
+            }
+            break;
+          case "partial-tool-call":
+          case "step-started":
+          case "token-delta":
+            turnProgressed = true;
+            noteRunActivity(true);
+            break;
+          case "step-completed":
+          case "thinking-completed":
+          case "summary":
+            turnProgressed = true;
             noteRunActivity(false);
-            finishTool(
-              nested.callId || "",
-              toolName(nested.toolCall),
-              nested.toolCall?.status === "error" ? "error" : "completed",
-              nested.toolCall?.result,
-              nested.toolCall?.args,
-            );
-          } else if (nested.type === "shell-output-delta") {
+            break;
+          case "tool-call-started":
+            turnProgressed = true;
+            startTool(rec.callId || "", toolName(rec.toolCall), rec.toolCall?.args);
             noteRunActivity(false);
-            const parsed = parseShellDelta(nested.event || {});
+            break;
+          case "turn-ended":
+            runWatch.turnEnded = true;
+            noteRunActivity(false);
+            break;
+          case "shell-output-delta": {
+            turnProgressed = true;
+            noteRunActivity(false);
+            const parsed = parseShellDelta(rec.event || {});
             if (parsed) {
               emitToolOutput(ws, slot, {
                 callId: parsed.callId,
@@ -674,210 +720,350 @@ export async function handlePrompt(
                 chunk: parsed.chunk,
               });
             }
+            break;
           }
-          break;
+          case "tool-call-completed":
+            finishTool(
+              rec.callId || "",
+              toolName(rec.toolCall),
+              rec.toolCall?.status === "error" ? "error" : "completed",
+              rec.toolCall?.result,
+              rec.toolCall?.args,
+            );
+            noteRunActivity(false);
+            break;
+          case "tool-call-delta": {
+            const nested = rec.taskUpdate;
+            if (!nested) {
+              noteRunActivity(false);
+              break;
+            }
+            if (nested.type === "tool-call-started") {
+              turnProgressed = true;
+              startTool(nested.callId || "", toolName(nested.toolCall), nested.toolCall?.args, rec.callId);
+              noteRunActivity(false);
+            } else if (nested.type === "tool-call-completed") {
+              finishTool(
+                nested.callId || "",
+                toolName(nested.toolCall),
+                nested.toolCall?.status === "error" ? "error" : "completed",
+                nested.toolCall?.result,
+                nested.toolCall?.args,
+              );
+              noteRunActivity(false);
+            } else if (nested.type === "shell-output-delta") {
+              turnProgressed = true;
+              noteRunActivity(false);
+              const parsed = parseShellDelta(nested.event || {});
+              if (parsed) {
+                emitToolOutput(ws, slot, {
+                  callId: parsed.callId,
+                  stream: parsed.stream,
+                  chunk: parsed.chunk,
+                });
+              }
+            } else {
+              turnProgressed = true;
+              noteRunActivity(false);
+            }
+            break;
+          }
+          default:
+            noteRunActivity(false);
+            break;
         }
-        default:
-          break;
-      }
-    };
+      };
 
-    const startSend = async (opts: typeof sendOpts) => agent.send(payload, { ...opts, onDelta });
-    try {
-      run = await startSend(sendOpts);
-    } catch (err) {
-      if (!sendOpts.disallowedTools) throw err;
-      slotLog(slot).error("disallowedTools rejected, retrying without them", err);
-      const { disallowedTools: _drop, ...rest } = sendOpts;
-      run = await startSend(rest);
-    }
-
-    if (slot.epoch !== epoch || slot.finished) {
       try {
-        await cancelRun(run);
-      } catch (err) {
-        // Stale run after cancel or a newer prompt.
-        slotLog(slot).warn("取消过期运行失败", err instanceof Error ? err.message : err);
-      }
-      return;
-    }
-    slot.run = run;
-    if (blockedAsk) await cancelRun(run);
-    if (slot.awaitingApproval && !autoApprove) {
-      await cancelRun(run);
-      const allowed = await waitForApproval(slot);
-      if (slot.epoch !== epoch || slot.finished) return;
-      rollbackToLatestCheckpoint(ws, slot, conn, true);
-      if (!allowed) {
-        send(ws, {
-          type: "status",
-          chatId: slot.chatId,
-          status: "CANCELLED",
-          message: "已拒绝写入，已还原到发送前。",
-        });
-        send(ws, {
-          type: "text-delta",
-          chatId: slot.chatId,
-          text: "\n\n已拒绝写入，已还原到发送前。",
-        });
-        finishRun(ws, slot, "cancelled", undefined, epoch);
-        return;
-      }
-      send(ws, {
-        type: "text-delta",
-        chatId: slot.chatId,
-        text: "\n\n已允许写入，按确认后重新执行这一轮。",
-      });
-      rememberApproved(slot);
-      replayApproved = true;
-      slot.run = null;
-      slot.finished = true;
-      slot.awaitingApproval = false;
-    }
+        const startSend = async (opts: typeof sendOpts) => agent.send(payload, { ...opts, onDelta });
+        try {
+          run = await startSend(sendOpts);
+        } catch (err) {
+          if (!sendOpts.disallowedTools) throw err;
+          slotLog(slot).error("disallowedTools rejected, retrying without them", err);
+          const { disallowedTools: _drop, ...rest } = sendOpts;
+          run = await startSend(rest);
+        }
 
-    if (!replayApproved) {
-      let streamStatus: string | undefined;
-      const terminalStatus = new Set(["FINISHED", "ERROR", "CANCELLED", "EXPIRED"]);
-      const iterator = run.stream()[Symbol.asyncIterator]();
-      const stopped = new Promise<void>((resolve) => {
-        runWatch.stop = resolve;
-      });
-      try {
-        while (true) {
-          const pending = iterator.next().then(
-            (value) => ({ kind: "event" as const, value }),
-            (err: unknown) => ({ kind: "error" as const, err }),
-          );
-          const next = await Promise.race([pending, stopped.then(() => ({ kind: "quiet" as const }))]);
-          if (next.kind === "quiet") {
-            streamStatus = streamStatus || "FINISHED";
-            send(ws, { type: "status", chatId: slot.chatId, status: streamStatus });
-            break;
+        if (slot.epoch !== epoch || slot.finished) {
+          attemptClosed = true;
+          try {
+            await cancelRun(run);
+          } catch (err) {
+            // Stale run after cancel or a newer prompt.
+            slotLog(slot).warn("取消过期运行失败", err instanceof Error ? err.message : err);
           }
-          if (next.kind === "error") {
-            if (!isAbortError(next.err)) throw next.err;
-            break;
-          }
-          if (next.value.done) break;
-          const event = next.value.value;
-          if (event.type === "task" && event.text) {
-            noteRunActivity(true);
-            send(ws, { type: "task", chatId: slot.chatId, text: event.text });
-          }
-          if (event.type === "status") {
+          return;
+        }
+        slot.run = run;
+        if (blockedAsk) await cancelRun(run);
+        if (slot.awaitingApproval && !autoApprove) {
+          attemptClosed = true;
+          await cancelRun(run);
+          const allowed = await waitForApproval(slot);
+          if (slot.epoch !== epoch || slot.finished) return;
+          rollbackToLatestCheckpoint(ws, slot, conn, true);
+          if (!allowed) {
             send(ws, {
               type: "status",
               chatId: slot.chatId,
-              status: event.status,
-              message: event.message,
+              status: "CANCELLED",
+              message: "已拒绝写入，已还原到发送前。",
             });
-            if (terminalStatus.has(event.status)) {
-              streamStatus = event.status;
-              break;
-            }
-          }
-          if (event.type === "tool_call" && event.status === "running") {
-            noteRunActivity(true);
-            startTool(event.call_id, event.name, event.args);
-            const snap = snapshotFromResult(event.result);
-            if (snap.stdout || snap.stderr) {
-              emitToolOutput(ws, slot, { callId: event.call_id, ...snap });
-            }
-          }
-          if (event.type === "tool_call" && (event.status === "completed" || event.status === "error")) {
-            noteRunActivity(false);
-            finishTool(event.call_id, event.name, event.status, event.result, event.args);
-          }
-          if (slot.awaitingApproval && !autoApprove) break;
-        }
-      } catch (err) {
-        if (!isAbortError(err)) throw err;
-      } finally {
-        clearRunQuiet();
-        runWatch.stop = undefined;
-        try {
-          await iterator.return?.();
-        } catch (err) {
-          // stream already closed
-          log.debug("关闭运行流失败", slot.chatId, err instanceof Error ? err.message : err);
-        }
-      }
-
-      if (slot.awaitingApproval && !autoApprove) {
-        await cancelRun(run);
-        const allowed = await waitForApproval(slot);
-        if (slot.epoch !== epoch || slot.finished) return;
-        rollbackToLatestCheckpoint(ws, slot, conn, true);
-        if (!allowed) {
-          send(ws, {
-            type: "status",
-            chatId: slot.chatId,
-            status: "CANCELLED",
-            message: "已拒绝写入，已还原到发送前。",
-          });
-          send(ws, {
-            type: "text-delta",
-            chatId: slot.chatId,
-            text: "\n\n已拒绝写入，已还原到发送前。",
-          });
-          finishRun(ws, slot, "cancelled", undefined, epoch);
-          return;
-        }
-        send(ws, {
-          type: "text-delta",
-          chatId: slot.chatId,
-          text: "\n\n已允许写入，按确认后重新执行这一轮。",
-        });
-        rememberApproved(slot);
-        replayApproved = true;
-        slot.run = null;
-        slot.finished = true;
-        slot.awaitingApproval = false;
-      }
-
-      if (!replayApproved) {
-        const normalizeRunStatus = (status?: string) => {
-          const key = (status || "finished").toLowerCase();
-          if (key === "expired") return "error";
-          if (key === "canceled") return "cancelled";
-          return key;
-        };
-        let result: { status: string; durationMs?: number } = {
-          status: normalizeRunStatus(streamStatus),
-        };
-        try {
-          const waited = await withTimeout(run.wait(), 8_000);
-          result = { status: normalizeRunStatus(waited.status), durationMs: waited.durationMs };
-        } catch (err) {
-          const timedOut = err instanceof Error && err.message === "timeout";
-          if (!timedOut && !isAbortError(err)) throw err;
-          if (timedOut) await cancelRun(run);
-          result = {
-            status: slot.awaitingApproval ? "approval" : normalizeRunStatus(streamStatus),
-          };
-        }
-        if (mode === "ask" && slot.edited.length) {
-          const undone = undoEdits(cwd, slot.edited);
-          slot.edited = [];
-          if (undone.paths.length) {
             send(ws, {
               type: "text-delta",
               chatId: slot.chatId,
-              text: `\n\nAsk 模式已还原误改：${undone.paths.join(", ")}`,
+              text: "\n\n已拒绝写入，已还原到发送前。",
             });
+            finishRun(ws, slot, "cancelled", undefined, epoch);
+            return;
+          }
+          send(ws, {
+            type: "text-delta",
+            chatId: slot.chatId,
+            text: "\n\n已允许写入，按确认后重新执行这一轮。",
+          });
+          rememberApproved(slot);
+          replayApproved = true;
+          slot.run = null;
+          slot.finished = true;
+          slot.awaitingApproval = false;
+        }
+
+        if (!replayApproved) {
+          let streamStatus: string | undefined;
+          const terminalStatus = new Set(["FINISHED", "ERROR", "CANCELLED", "EXPIRED"]);
+          const iterator = run.stream()[Symbol.asyncIterator]();
+          const stopped = new Promise<void>((resolve) => {
+            runWatch.stop = resolve;
+          });
+          try {
+            while (true) {
+              const pending = iterator.next().then(
+                (value) => ({ kind: "event" as const, value }),
+                (err: unknown) => ({ kind: "error" as const, err }),
+              );
+              const next = await Promise.race([pending, stopped.then(() => ({ kind: "quiet" as const }))]);
+              if (next.kind === "quiet") {
+                if (slot.finished || slot.epoch !== epoch) break;
+                streamStatus = streamStatus || "FINISHED";
+                send(ws, { type: "status", chatId: slot.chatId, status: streamStatus });
+                break;
+              }
+              if (next.kind === "error") {
+                if (!isAbortError(next.err)) throw next.err;
+                break;
+              }
+              if (next.value.done) break;
+              const event = next.value.value;
+              if (event.type === "task" && event.text) {
+                turnProgressed = true;
+                noteRunActivity(false);
+                send(ws, { type: "task", chatId: slot.chatId, text: event.text });
+              }
+              if (event.type === "status") {
+                if (
+                  (event.status === "ERROR" || event.status === "EXPIRED") &&
+                  sdkAttempt < MAX_SDK_TRANSIENT_RETRIES &&
+                  isTransientSdkError(event.message)
+                ) {
+                  throw new Error(event.message || event.status);
+                }
+                send(ws, {
+                  type: "status",
+                  chatId: slot.chatId,
+                  status: event.status,
+                  message: event.message,
+                });
+                if (terminalStatus.has(event.status)) {
+                  streamStatus = event.status;
+                  break;
+                }
+              }
+              if (event.type === "tool_call" && event.status === "running") {
+                turnProgressed = true;
+                startTool(event.call_id, event.name, event.args);
+                noteRunActivity(false);
+                const snap = snapshotFromResult(event.result);
+                if (snap.stdout || snap.stderr) {
+                  emitToolOutput(ws, slot, { callId: event.call_id, ...snap });
+                }
+              }
+              if (event.type === "tool_call" && (event.status === "completed" || event.status === "error")) {
+                finishTool(event.call_id, event.name, event.status, event.result, event.args);
+                noteRunActivity(false);
+              }
+              if (slot.awaitingApproval && !autoApprove) break;
+            }
+          } catch (err) {
+            if (!isAbortError(err)) throw err;
+          } finally {
+            clearRunQuiet();
+            runWatch.stop = undefined;
+            try {
+              await iterator.return?.();
+            } catch (err) {
+              // stream already closed
+              log.debug("关闭运行流失败", slot.chatId, err instanceof Error ? err.message : err);
+            }
+          }
+
+          if (slot.awaitingApproval && !autoApprove) {
+            attemptClosed = true;
+            await cancelRun(run);
+            const allowed = await waitForApproval(slot);
+            if (slot.epoch !== epoch || slot.finished) return;
+            rollbackToLatestCheckpoint(ws, slot, conn, true);
+            if (!allowed) {
+              send(ws, {
+                type: "status",
+                chatId: slot.chatId,
+                status: "CANCELLED",
+                message: "已拒绝写入，已还原到发送前。",
+              });
+              send(ws, {
+                type: "text-delta",
+                chatId: slot.chatId,
+                text: "\n\n已拒绝写入，已还原到发送前。",
+              });
+              finishRun(ws, slot, "cancelled", undefined, epoch);
+              return;
+            }
             send(ws, {
-              type: "undone",
+              type: "text-delta",
               chatId: slot.chatId,
-              paths: undone.paths,
-              error: undone.error,
+              text: "\n\n已允许写入，按确认后重新执行这一轮。",
+            });
+            rememberApproved(slot);
+            replayApproved = true;
+            slot.run = null;
+            slot.finished = true;
+            slot.awaitingApproval = false;
+          }
+
+          if (!replayApproved) {
+            const normalizeRunStatus = (status?: string) => {
+              const key = (status || "finished").toLowerCase();
+              if (key === "expired") return "error";
+              if (key === "canceled") return "cancelled";
+              return key;
+            };
+            let result: { status: string; durationMs?: number } = {
+              status: normalizeRunStatus(streamStatus),
+            };
+            try {
+              const waited = await withTimeout(run.wait(), 8_000);
+              const waitedErrorMsg = (waited as { error?: { message?: string } })?.error?.message;
+              if (
+                normalizeRunStatus(waited.status) === "error" &&
+                sdkAttempt < MAX_SDK_TRANSIENT_RETRIES &&
+                isTransientSdkError(waitedErrorMsg)
+              ) {
+                throw new Error(waitedErrorMsg || "resource_exhausted");
+              }
+              result = { status: normalizeRunStatus(waited.status), durationMs: waited.durationMs };
+            } catch (err) {
+              const timedOut = err instanceof Error && err.message === "timeout";
+              if (!timedOut && !isAbortError(err)) throw err;
+              if (timedOut) await cancelRun(run);
+              result = {
+                status: slot.awaitingApproval ? "approval" : normalizeRunStatus(streamStatus),
+              };
+            }
+            attemptClosed = true;
+            if (mode === "ask" && slot.edited.length) {
+              const undone = undoEdits(cwd, slot.edited);
+              slot.edited = [];
+              if (undone.paths.length) {
+                send(ws, {
+                  type: "text-delta",
+                  chatId: slot.chatId,
+                  text: `\n\nAsk 模式已还原误改：${undone.paths.join(", ")}`,
+                });
+                send(ws, {
+                  type: "undone",
+                  chatId: slot.chatId,
+                  paths: undone.paths,
+                  error: undone.error,
+                });
+              }
+            } else if (slot.edited.length) {
+              // pushWorkspace 现在是异步的；等它发完再收尾，保持“文件推送在 done 之前”的顺序
+              await pushWorkspace(ws, slot, conn, slot.edited);
+            }
+            await settleWorkspacePushes(ws);
+            finishRun(ws, slot, slot.awaitingApproval ? "approval" : result.status, result.durationMs, epoch);
+          }
+        }
+        break;
+      } catch (err) {
+        attemptClosed = true;
+        const canRetry =
+          !replayApproved &&
+          !blockedAsk &&
+          !slot.awaitingApproval &&
+          !slot.finished &&
+          slot.epoch === epoch &&
+          sdkAttempt < MAX_SDK_TRANSIENT_RETRIES &&
+          isTransientSdkError(err);
+        if (!canRetry) throw err;
+
+        const failedRun = run;
+        run = null;
+        await cancelRun(failedRun);
+        // cancelRun 异步等待期间，若用户已取消、切了新会话或进入审批，不再继续旧栈重试
+        if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedAsk) {
+          return;
+        }
+        if (slot.run === failedRun) slot.run = null;
+        if (slot.openTools && slot.openTools.size > 0) {
+          for (const [callId, meta] of slot.openTools) {
+            send(ws, {
+              type: "tool-completed",
+              chatId: slot.chatId,
+              callId,
+              name: meta.name,
+              status: "error",
+              result: "因上游限流或瞬断中断，正在自动续跑",
+              parentCallId: meta.parentCallId,
+              agent: meta.agent,
+              model: meta.model,
             });
           }
-        } else if (slot.edited.length) {
-          // pushWorkspace 现在是异步的；等它发完再收尾，保持“文件推送在 done 之前”的顺序
-          await pushWorkspace(ws, slot, conn, slot.edited);
+          slot.openTools.clear();
         }
-        await settleWorkspacePushes(ws);
-        finishRun(ws, slot, slot.awaitingApproval ? "approval" : result.status, result.durationMs, epoch);
+        startedCalls.clear();
+        const reason = err instanceof Error ? err.message : String(err);
+        const isNoProgressResume = /repeated resume attempts made no progress/i.test(reason);
+        const isMissingAgent = /agent[-_ ].*not found/i.test(reason);
+        if (isNoProgressResume || isMissingAgent) {
+          flushTranscript(slot, false);
+          await disposeSlot(slot);
+          if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedAsk) {
+            return;
+          }
+          if (isMissingAgent) {
+            slot.agentId = null;
+            slot.reseed = true;
+            turnProgressed = false;
+          } else {
+            // repeated resume attempts made no progress：保留 agentId，由下一轮 ensureAgent 重新 Agent.resume 并发送续跑指令
+            turnProgressed = true;
+          }
+        }
+        const waitMs = sdkRetryDelayMs(sdkAttempt);
+        const statusHint = isNoProgressResume
+          ? `检测到后台长任务恢复停滞，${Math.ceil(waitMs / 1000)} 秒后第 ${sdkAttempt + 1} 次自动续跑…`
+          : `触发上游速率限制或连接瞬断（${reason.slice(0, 60)}），${Math.ceil(waitMs / 1000)} 秒后第 ${sdkAttempt + 1} 次自动续跑…`;
+        slotLog(slot).warn("SDK 瞬时错误，退避后自动续跑", { attempt: sdkAttempt + 1, waitMs, reason });
+        send(ws, {
+          type: "status",
+          chatId: slot.chatId,
+          status: "RUNNING",
+          message: statusHint,
+        });
+        const stillActive = await waitWithSlotCheck(slot, epoch, waitMs);
+        if (!stillActive) return;
       }
     }
   } catch (err) {

@@ -88,11 +88,13 @@ function sleep(ms: number, signal: AbortSignal) {
   });
 }
 
-/** 429 / 5xx / 网络错误按指数退避重试；已经流出正文的不重试，避免重复输出 */
+/** 429 / 5xx / 网络错误 / resource_exhausted 按指数退避重试；已经流出正文的不重试，避免重复输出 */
 export function retryable(err: unknown): boolean {
   if (err instanceof HttpError) return err.status === 429 || err.status === 408 || err.status >= 500;
   if (!(err instanceof Error)) return false;
-  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|停滞/i.test(`${err.message} ${(err as { cause?: Error }).cause?.message || ""}`);
+  return /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|resource_exhausted|rate[_ -]?limit|too many requests|overloaded|\bunavailable\b|停滞/i.test(
+    `${err.message} ${(err as { cause?: Error }).cause?.message || ""}`,
+  );
 }
 
 export function parseArgs(raw: string): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {

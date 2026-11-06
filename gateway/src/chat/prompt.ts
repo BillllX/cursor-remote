@@ -100,7 +100,7 @@ Import only from "cursor/canvas". Default-export one React component. Embed data
 Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-overview.canvas.tsx). Do not write a canvas for ordinary Q&A or a pure code edit.
 画布颜色跟应用主题走：只用 cursor/canvas 组件和 useHostTheme() 上色，不要写死 hex、rgb、hsl，也不要另做一套深浅色。宿主会套上用户当前的配色。
 
-命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。
+命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。执行构建、打包或全量测试等预计超过 30 秒的命令时，请显式将超时参数（Shell 的 block_until_ms 或 run_shell 的 timeout_ms）设为 120000 或更大，避免 30 秒转入后台后连续重复读取同一个终端文件触发死循环或无进展熔断。
 
 ${publishPrompt}
 
