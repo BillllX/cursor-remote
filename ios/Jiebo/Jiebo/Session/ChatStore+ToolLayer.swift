@@ -262,7 +262,9 @@ extension ChatStore {
     }
 
     func previewDiffRevertable(_ tab: PreviewTab) -> Bool {
-        tab.diff && gitStatus[tab.path] != nil
+        guard tab.diff, tab.readSha == nil else { return false }
+        let key = relToCwd(tab.path, chatId: tab.chatId ?? activeId)
+        return gitStatus[tab.path] != nil || (!key.isEmpty && gitStatus[key] != nil)
     }
 
     func savePreviewText(_ tab: PreviewTab, content: String) {

@@ -456,10 +456,12 @@ struct AskedForm: Hashable {
 
 struct QuestionCardView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.threadChatId) private var environmentChatId
     var asked: AskedForm
     var canAnswer: Bool
     @State private var picks: [String: Set<String>] = [:]
     @State private var notes: [String: String] = [:]
+    private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     private var ready: Bool {
         asked.questions.allSatisfy { question in
@@ -539,7 +541,7 @@ struct QuestionCardView: View {
             }
             if canAnswer {
                 ActionButton(title: "按这个回答继续", kind: .primary) {
-                    store.answerQuestion(asked.answer(picks: picks, notes: notes))
+                    store.answerQuestion(asked.answer(picks: picks, notes: notes), chatId: chatId)
                 }
                 .disabled(!ready)
             }

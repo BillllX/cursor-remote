@@ -180,11 +180,15 @@ extension ChatStore {
         }
     }
 
-    func answerQuestion(_ text: String) {
+    func answerQuestion(_ text: String, chatId requestedId: String? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        draft = trimmed
-        submit()
+        let targetId = requestedId?.nilIfEmpty ?? activeId
+        let savedDraft = draft(for: targetId)
+        submit(chatId: targetId, text: trimmed)
+        if !savedDraft.isEmpty {
+            applyExternalDraft(savedDraft, forChat: targetId)
+        }
     }
 
     func submit() {

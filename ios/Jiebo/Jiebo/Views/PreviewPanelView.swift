@@ -549,13 +549,13 @@ struct PreviewPanelView: View {
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                     if activeTab.diff {
-                        Text("DIFF")
+                        Text("改动")
                             .font(JieboFont.text(.caption2, weight: .bold))
                             .foregroundStyle(JieboColor.brass)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(JieboColor.brass.opacity(0.12))
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            .clipShape(Capsule())
                     }
                 }
                 // P6：副标题给工作区绝对路径（中段截断）——path==filename 时不再三遍重复同一文件名；
