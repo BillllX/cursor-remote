@@ -315,7 +315,7 @@ struct PreviewPanelView: View {
             previewEditControls
             if !editing {
                 Button {
-                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId, sha: tab.readSha)
                 } label: {
                     Group {
                         if store.exportLoading {
@@ -443,7 +443,7 @@ struct PreviewPanelView: View {
             }
             Section {
                 if tab.kind == .image, !tab.diff {
-                    Button { store.saveImageToPhotos(path: tab.path, chatId: tab.chatId) } label: {
+                    Button { store.saveImageToPhotos(path: tab.path, chatId: tab.chatId, sha: tab.readSha) } label: {
                         Label("存到相册", systemImage: "square.and.arrow.down")
                     }
                     .disabled(store.exportLoading)
@@ -614,7 +614,7 @@ struct PreviewPanelView: View {
                 // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
                 if tab.kind == .image, !tab.diff {
                     Button {
-                        store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
+                        store.saveImageToPhotos(path: tab.path, chatId: tab.chatId, sha: tab.readSha)
                     } label: {
                         Image(systemName: "square.and.arrow.down.on.square")
                             .font(.system(size: 12, weight: .medium))
@@ -633,7 +633,7 @@ struct PreviewPanelView: View {
                 // 系统分享 sheet 覆盖存文件/存相册/隔空投送；替代原媒体类的 Quick Look 逃生门
                 //（QL 全屏预览仍可从文件树长按菜单进）
                 Button {
-                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId, sha: tab.readSha)
                 } label: {
                     Group {
                         if store.exportLoading {

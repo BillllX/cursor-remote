@@ -100,6 +100,7 @@ private struct JieboWidgetFamilyLayout: View {
 
     private var todayURL: URL { URL(string: "jiebo://assistant/today")! }
     private var inboxURL: URL { URL(string: "jiebo://assistant/inbox")! }
+    private var todoURL: URL { URL(string: "jiebo://assistant/todo")! }
 
     var body: some View {
         Group {
@@ -201,8 +202,8 @@ private struct JieboWidgetFamilyLayout: View {
                 countBlock(
                     title: "待办",
                     value: entry.snapshot.todoCount,
-                    url: todayURL,
-                    label: "打开今日，待办 \(entry.snapshot.todoCount) 项",
+                    url: todoURL,
+                    label: "打开待办，待办 \(entry.snapshot.todoCount) 项",
                     fillsHeight: false,
                     font: countFont,
                     minHeight: 44
@@ -256,8 +257,8 @@ private struct JieboWidgetFamilyLayout: View {
                     countBlock(
                         title: "待办",
                         value: entry.snapshot.todoCount,
-                        url: todayURL,
-                        label: "打开今日，待办 \(entry.snapshot.todoCount) 项",
+                        url: todoURL,
+                        label: "打开待办，待办 \(entry.snapshot.todoCount) 项",
                         fillsHeight: true,
                         font: extraLargeCountFont,
                         minHeight: 60
@@ -302,7 +303,7 @@ private struct JieboWidgetFamilyLayout: View {
 
     private var mediumFooter: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Link(destination: todayURL) {
+            Link(destination: todoURL) {
                 Text("待办 \(countText(entry.snapshot.todoCount))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(entry.snapshot.todoCount > 0 ? Cyber.cyan : Cyber.text)
@@ -311,7 +312,7 @@ private struct JieboWidgetFamilyLayout: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("打开今日，待办 \(entry.snapshot.todoCount) 项")
+            .accessibilityLabel("打开待办，待办 \(entry.snapshot.todoCount) 项")
             Spacer(minLength: 6)
             if !tight {
                 updatedLabel

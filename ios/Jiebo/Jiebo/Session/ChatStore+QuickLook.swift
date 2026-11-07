@@ -118,7 +118,7 @@ extension ChatStore {
     /// 分享任意预览文件：文本类直接用已内联的 content 写 temp（省一次下载），
     /// 媒体/大文件走 /media 下载。temp 文件名保留原扩展名，分享 sheet 才能识别 UTType。
     /// chatId 用页签快照（票据/路径都绑签发时的会话）——页签全局存活，activeId 可能已切走（GLM R1 M1）
-    func exportPreview(path rawPath: String, content: String?, isDiff: Bool = false, chatId: String? = nil) {
+    func exportPreview(path rawPath: String, content: String?, isDiff: Bool = false, chatId: String? = nil, sha: String? = nil) {
         let path = rawPath.trimmingCharacters(in: .whitespaces)
         // 与 openMention 同一套入口守卫（对齐：空串/目录/精确 "diff"）
         guard !path.isEmpty, !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
@@ -131,6 +131,7 @@ extension ChatStore {
         exportLoading = true
         bannerError = "" // 清旧错误：cover 顶条红优先于绿，不清的话成功 flash 被旧错误挡住（Grok R2 M1）
         let chatId = chatId ?? activeId
+        let rev = supportsReadSha ? sha?.nilIfEmpty.map { "sha:\($0)" } : nil
         let tenantAtStart = tenantId
         let filename = (path as NSString).lastPathComponent
         exportTask = Task {
@@ -146,7 +147,7 @@ extension ChatStore {
                     temp = dir.appendingPathComponent(name)
                     try Data(content.utf8).write(to: temp)
                 } else {
-                    temp = try await downloadToTemp(path: path, chatId: chatId, token: token, prefix: "jiebo-export")
+                    temp = try await downloadToTemp(path: path, chatId: chatId, token: token, prefix: "jiebo-export", rev: rev)
                 }
                 guard !Task.isCancelled, tenantId == tenantAtStart else {
                     removeTempFile(temp)
@@ -165,7 +166,7 @@ extension ChatStore {
 
     /// 图片一键存相册（原始字节直存，PNG/JPEG/GIF 都不重编码；权限由系统在写入时弹）
     /// chatId 同 exportPreview——页签快照，防切会话后跨 cwd 404
-    func saveImageToPhotos(path rawPath: String, chatId: String? = nil) {
+    func saveImageToPhotos(path rawPath: String, chatId: String? = nil, sha: String? = nil) {
         let path = rawPath.trimmingCharacters(in: .whitespaces)
         guard !path.isEmpty, !path.hasSuffix("/"), path.lowercased() != "diff" else { return }
         let token = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -177,10 +178,11 @@ extension ChatStore {
         exportLoading = true
         bannerError = "" // 同 exportPreview（Grok R2 M1）
         let chatId = chatId ?? activeId
+        let rev = supportsReadSha ? sha?.nilIfEmpty.map { "sha:\($0)" } : nil
         let tenantAtStart = tenantId
         exportTask = Task {
             do {
-                let data = try await downloadData(path: path, chatId: chatId, token: token)
+                let data = try await downloadData(path: path, chatId: chatId, token: token, rev: rev)
                 guard !Task.isCancelled, tenantId == tenantAtStart else { return }
                 // 仅校验可解码（不用于写入——写入走 addResource(data:) 保原字节）；
                 // 损坏图/ico 等 Photos 不收的格式在这里给中文文案，不露 PHPhotosErrorDomain 原文（Grok R2 N1）

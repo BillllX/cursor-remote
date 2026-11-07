@@ -17,11 +17,9 @@ enum WidgetDeepLink: Equatable, Sendable {
         case "/inbox":
             self = .inbox
         case "/todo":
-            guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                  let id = components.queryItems?.first(where: { $0.name == "id" })?.value?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !id.isEmpty
-            else { return nil }
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            let id = components?.queryItems?.first(where: { $0.name == "id" })?.value?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             self = .todo(String(id.prefix(80)))
         default:
             return nil

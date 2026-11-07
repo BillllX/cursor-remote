@@ -244,7 +244,7 @@ private struct ArtifactRow: View {
                 Menu {
                     if let file = artifact.turnFile, let chatId = artifact.sourceChatId {
                         Button("分享") {
-                            store.exportPreview(path: file.path, content: nil, chatId: chatId)
+                            store.exportPreview(path: file.path, content: nil, chatId: chatId, sha: file.sha)
                         }
                     }
                     if let delegationId = artifact.provenance?.delegationId {

@@ -440,7 +440,7 @@ struct FileBrowserCover: View {
                         // P10：导出（与预览面板头部同款；图片多一个「存相册」）
                         if tab.kind == .image, !tab.diff {
                             Button {
-                                store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
+                                store.saveImageToPhotos(path: tab.path, chatId: tab.chatId, sha: tab.readSha)
                             } label: {
                                 Image(systemName: "square.and.arrow.down.on.square")
                                     .font(.system(size: 12, weight: .medium))
@@ -455,7 +455,7 @@ struct FileBrowserCover: View {
                             .accessibilityLabel("保存 \(tab.filename) 到相册")
                         }
                         Button {
-                            store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+                            store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId, sha: tab.readSha)
                         } label: {
                             Group {
                                 if store.exportLoading {
