@@ -234,11 +234,23 @@ struct FileTreeView: View {
                         .animation(JieboMotion.snappy(reduceMotion), value: isOpen)
                 }
             }
-            .padding(.leading, 14 + CGFloat(row.depth) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
-            .padding(.trailing, 12)
+            .padding(.leading, 10 + CGFloat(row.depth) * (dynamicTypeSize.isAccessibilitySize ? 10 : 16))
+            .padding(.trailing, 10)
             .padding(.vertical, 6)
-            .frame(minHeight: 48)
-            .background(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
+            .frame(minHeight: 44)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selectedPath == node.path ? JieboColor.userBubble : Color.clear)
+            )
+            .overlay(alignment: .leading) {
+                if selectedPath == node.path {
+                    Capsule()
+                        .fill(JieboColor.pine)
+                        .frame(width: 3, height: 18)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
             .animation(JieboMotion.fade(reduceMotion), value: selectedPath == node.path)
             .contentShape(Rectangle())
             .hoverEffect(.highlight)

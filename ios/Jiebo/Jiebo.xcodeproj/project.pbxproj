@@ -105,7 +105,6 @@
 		A1B2C3D4E5F6071829000842 /* ComposerView+Strips.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */; };
 		A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */; };
 		A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */; };
-		A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */; };
 		A1B2C3D4E5F6071829000B01 /* ImProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */; };
 		MC100201 /* MemoryCenterTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100101 /* MemoryCenterTypes.swift */; };
 		MC100202 /* MemoryCenterReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = MC100102 /* MemoryCenterReducer.swift */; };
@@ -303,7 +302,6 @@
 		A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Strips.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Voice.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+AssistantBar.swift"; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ComposerView+Toolbar.swift"; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000A01 /* ImProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImProtocol.swift; sourceTree = "<group>"; };
 		MC100101 /* MemoryCenterTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterTypes.swift; sourceTree = "<group>"; };
 		MC100102 /* MemoryCenterReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryCenterReducer.swift; sourceTree = "<group>"; };
@@ -561,7 +559,6 @@
 				A1B2C3D4E5F6071829000742 /* ComposerView+Strips.swift */,
 				A1B2C3D4E5F6071829000743 /* ComposerView+Voice.swift */,
 				A1B2C3D4E5F6071829000744 /* ComposerView+AssistantBar.swift */,
-				A1B2C3D4E5F6071829000745 /* ComposerView+Toolbar.swift */,
 				A1B2C3D4E5F6071829000115 /* ToolCardView.swift */,
 				A1B2C3D4E5F6071829000193 /* ToolRunSummaryView.swift */,
 				A1B2C3D4E5F6071829000190 /* FileCardView.swift */,
@@ -922,7 +919,6 @@
 				A1B2C3D4E5F6071829000842 /* ComposerView+Strips.swift in Sources */,
 				A1B2C3D4E5F6071829000843 /* ComposerView+Voice.swift in Sources */,
 				A1B2C3D4E5F6071829000844 /* ComposerView+AssistantBar.swift in Sources */,
-				A1B2C3D4E5F6071829000845 /* ComposerView+Toolbar.swift in Sources */,
 				A1B2C3D4E5F6071829000315 /* ToolCardView.swift in Sources */,
 				A1B2C3D4E5F6071829000393 /* ToolRunSummaryView.swift in Sources */,
 				A1B2C3D4E5F6071829000316 /* Uploader.swift in Sources */,

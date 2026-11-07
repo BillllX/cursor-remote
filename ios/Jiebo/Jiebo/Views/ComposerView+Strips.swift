@@ -69,16 +69,17 @@ extension ComposerView {
         }
     }
 
-    /// @补全候选条（对齐网页端 mention 下拉，iOS 用横滑芯片）
+    /// @补全候选条（对齐网页端 mention 下拉，iOS 用横滑芯片；按当前 chatId 隔离展示）
     @ViewBuilder
     var mentionStrip: some View {
-        if !store.mentionSuggestions.isEmpty {
+        let suggestions = store.mentionSuggestions(for: chatId)
+        if !suggestions.isEmpty {
             // 同名文件消歧：basename 有重复时显示父目录
-            let names = store.mentionSuggestions.map { ($0 as NSString).lastPathComponent }
+            let names = suggestions.map { ($0 as NSString).lastPathComponent }
             let duplicated = Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(store.mentionSuggestions, id: \.self) { path in
+                    ForEach(suggestions, id: \.self) { path in
                         let name = (path as NSString).lastPathComponent
                         let label = duplicated.contains(name) && path.contains("/")
                             ? (path as NSString).deletingLastPathComponent.components(separatedBy: "/").last.map { "\($0)/\(name)" } ?? name

@@ -55,6 +55,30 @@ final class ShareViewController: UIViewController {
     }
 }
 
+/// 分享扩展品牌视觉令牌（对齐主 App 接驳纸墨松绿体系，自适应浅色/深色）
+private enum ShareBrandColor {
+    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: CGFloat((hex >> 16) & 0xFF) / 255,
+                green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255,
+                alpha: 1
+            )
+        })
+    }
+
+    static let paper = dynamic(light: 0xF3EEE4, dark: 0x141512)
+    static let white = dynamic(light: 0xFFFCF8, dark: 0x1B1D1A)
+    static let ink = dynamic(light: 0x1C1916, dark: 0xEDE8DE)
+    static let ink2 = dynamic(light: 0x5C574F, dark: 0xB6B0A4)
+    static let dim = dynamic(light: 0x746D62, dark: 0x8A8478)
+    static let line = dynamic(light: 0xDDD5C7, dark: 0x2C2F2B)
+    static let pine = dynamic(light: 0x1A4F41, dark: 0x8FBFB0)
+    static let danger = dynamic(light: 0xB42318, dark: 0xE07068)
+}
+
 private struct ShareRoot: View {
     private enum Destination: String, CaseIterable, Identifiable {
         case assistant = "小驳"
@@ -89,18 +113,23 @@ private struct ShareRoot: View {
 
                 if loading {
                     ProgressView("正在读取分享内容")
+                        .tint(ShareBrandColor.dim)
+                        .foregroundStyle(ShareBrandColor.ink2)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if destination == .assistant {
                     Form {
                         Section("内容预览") {
                             if payloads.isEmpty {
-                                Text("没有可识别的分享内容").foregroundStyle(.secondary)
+                                Text("没有可识别的分享内容")
+                                    .foregroundStyle(ShareBrandColor.dim)
                             } else {
                                 ForEach(Array(payloads.enumerated()), id: \.offset) { _, payload in
                                     Label(payload.preview, systemImage: payload.symbol)
+                                        .foregroundStyle(ShareBrandColor.ink)
                                 }
                             }
                         }
+                        .listRowBackground(ShareBrandColor.white)
                         Section("请小驳") {
                             Picker("意图", selection: $intent) {
                                 ForEach([
@@ -110,11 +139,15 @@ private struct ShareRoot: View {
                                     Text(action.title).tag(action)
                                 }
                             }
+                            .foregroundStyle(ShareBrandColor.ink)
                             TextField("备注（可选）", text: $note, axis: .vertical)
+                                .foregroundStyle(ShareBrandColor.ink)
                                 .lineLimit(1 ... 4)
                         }
+                        .listRowBackground(ShareBrandColor.white)
                     }
                     .scrollContentBackground(.hidden)
+                    .background(ShareBrandColor.paper)
                 } else {
                     Group {
                         if let snapshot, !snapshot.people.isEmpty {
@@ -124,42 +157,72 @@ private struct ShareRoot: View {
                                 } label: {
                                     HStack {
                                         Image(systemName: selected.contains(person.id) ? "checkmark.circle.fill" : "circle")
-                                            .foregroundStyle(selected.contains(person.id) ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                                        VStack(alignment: .leading) {
-                                            Text(person.nickname).foregroundStyle(.primary)
+                                            .foregroundStyle(selected.contains(person.id) ? ShareBrandColor.pine : ShareBrandColor.dim)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(person.nickname)
+                                                .foregroundStyle(ShareBrandColor.ink)
                                             if person.recentAt > 0 {
-                                                Text("最近聊天").font(.caption).foregroundStyle(.secondary)
+                                                Text("最近聊天")
+                                                    .font(.caption)
+                                                    .foregroundStyle(ShareBrandColor.dim)
                                             }
                                         }
                                     }
                                 }
+                                .listRowBackground(ShareBrandColor.white)
                             }
+                            .scrollContentBackground(.hidden)
+                            .background(ShareBrandColor.paper)
                         } else {
                             ContentUnavailableView(
                                 "请先打开接驳",
                                 systemImage: "message",
                                 description: Text("主 App 打开后会同步联系人和登录状态")
                             )
+                            .foregroundStyle(ShareBrandColor.ink2)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(ShareBrandColor.paper)
                         }
                     }
                 }
             }
+            .background(ShareBrandColor.paper.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 8) {
                     if destination == .chat {
-                        TextField("留言（可选）", text: $note, axis: .vertical).lineLimit(1 ... 3)
-                            .textFieldStyle(.roundedBorder)
+                        TextField("留言（可选）", text: $note, axis: .vertical)
+                            .lineLimit(1 ... 3)
+                            .foregroundStyle(ShareBrandColor.ink)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(ShareBrandColor.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(ShareBrandColor.line, lineWidth: 1)
+                            )
                     }
                     if !loading, pendingBytes > 0 {
                         Text("待发送约 \(Self.byteText(pendingBytes))")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(ShareBrandColor.dim)
                     }
-                    if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
-                    if !notice.isEmpty { Text(notice).font(.caption).foregroundStyle(.secondary) }
+                    if !error.isEmpty {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(ShareBrandColor.danger)
+                    }
+                    if !notice.isEmpty {
+                        Text(notice)
+                            .font(.caption)
+                            .foregroundStyle(ShareBrandColor.ink2)
+                    }
                 }
                 .padding()
-                .background(.ultraThinMaterial)
+                .background(ShareBrandColor.paper.opacity(0.96))
+                .overlay(alignment: .top) {
+                    Rectangle().fill(ShareBrandColor.line).frame(height: 1)
+                }
             }
             .navigationTitle("分享给接驳")
             .navigationBarTitleDisplayMode(.inline)
@@ -169,14 +232,17 @@ private struct ShareRoot: View {
                         ShareLoader.removePayloadFiles(payloads)
                         cancel()
                     }
+                    .foregroundStyle(ShareBrandColor.ink2)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(sending ? "发送中…" : "发送") { send() }
                         .buttonStyle(.glassProminent)
+                        .tint(ShareBrandColor.pine)
                         .disabled(!canSend)
                 }
             }
         }
+        .tint(ShareBrandColor.pine)
         .onAppear {
             if let failure = ImShareBackgroundQueue.shared.failureSummary() {
                 error = failure

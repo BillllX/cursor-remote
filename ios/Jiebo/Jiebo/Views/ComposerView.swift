@@ -3,7 +3,7 @@ import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 
-/// full = 原来的完整工具栏（iPad / 工作区会话）；assistant = iPhone 助理页：＋ / ⋯ / 麦克风 / 发送。
+/// 胶囊输入栏样式（全端已统一使用 .assistant 胶囊栏，保留 .full 枚举项以兼容潜在引用）。
 enum ComposerStyle { case full, assistant }
 
 struct ComposerView: View {
@@ -12,7 +12,7 @@ struct ComposerView: View {
     @Environment(\.sceneSessionState) private var sceneSession
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
-    var style: ComposerStyle = .full
+    var style: ComposerStyle = .assistant
     @FocusState var focused: Bool
     /// 打字写进这个对象，不写进视图状态。这样每个字不会把整条输入栏和会话回合再画一遍。
     @State var draftBuffer = ComposerDraftBuffer()
@@ -22,8 +22,6 @@ struct ComposerView: View {
     @State var hasText = false
     /// 自己写回 store.draft 时不要再灌进输入框，否则会把后打的字盖掉。
     @State private var ignoreDraftEcho: String?
-    /// 工具栏宽度。只在宽度变化时重选布局，避免每个字都把两套控件量一遍。
-    @State var controlsWidth: CGFloat = 0
     @State private var photoItems: [PhotosPickerItem] = []
     @State var viewerItem: AttachmentViewerItem?
     @State var photoPickerOpen = false
@@ -40,10 +38,6 @@ struct ComposerView: View {
     @State var tapVoice = false
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     /// 发送、停止、更多跟正文同一套 Dynamic Type，圆钮和图形一起变大。
-    @ScaledMetric(relativeTo: .body) var sendGlyph = 15
-    @ScaledMetric(relativeTo: .body) var stopGlyph = 11
-    @ScaledMetric(relativeTo: .body) var moreGlyph = 14
-    @ScaledMetric(relativeTo: .body) var controlDiameter = 32
     @ScaledMetric(relativeTo: .body) var assistantSendGlyph = 16
     @ScaledMetric(relativeTo: .body) var assistantStopGlyph = 13
     @ScaledMetric(relativeTo: .body) var assistantMoreGlyph = 17
@@ -54,6 +48,15 @@ struct ComposerView: View {
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
     var isAssistantSession: Bool { store.isAssistantChat(chatId) }
+    var editingResource: String {
+        chatId == store.assistantChatId ? "assistant-composer" : "chat-composer:\(chatId)"
+    }
+    var ownsSceneEditing: Bool {
+        if SceneEditingOwnership.shared.isOwner(resource: editingResource, sceneToken: assistantSceneToken) {
+            return true
+        }
+        return !SceneEditingOwnership.shared.hasClaimant(resource: editingResource)
+    }
     var chrome: ComposerChrome {
         store.composerChromeByChat[chatId] ?? ComposerChrome(model: store.model)
     }
@@ -80,41 +83,16 @@ struct ComposerView: View {
                 voicePanel
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if style == .assistant {
-                GlassEffectContainer(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 16) {
-                        assistantStatusLine
-                        assistantCapsuleRow
-                    }
-                }
-            } else {
-                entryField(lineLimit: 1 ... 8, submitOnReturn: true, vertical: 8, horizontal: 6)
-                fullNarrowStatusLine
-                controls
-                if controlsWidth >= 420, !hasText {
-                    Text("Return 发送，Shift+Return 换行")
-                        .font(JieboFont.text(.caption2))
-                        .foregroundStyle(JieboColor.dim)
-                        .padding(.horizontal, 6)
-                        .transition(.opacity)
+            GlassEffectContainer(spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
+                    assistantStatusLine
+                    assistantCapsuleRow
                 }
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, style == .assistant ? 8 : 10)
-        .padding(.bottom, style == .assistant ? 8 : 10)
-        .background {
-            if style != .assistant {
-                RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                    .fill(JieboColor.composer)
-                    .shadow(color: JieboColor.ink.opacity(0.05), radius: 1, y: 1)
-                    .shadow(color: JieboColor.ink.opacity(focused ? 0.16 : 0.1), radius: focused ? 16 : 14, y: 8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                            .stroke(focused ? JieboColor.pine.opacity(0.45) : JieboColor.line, lineWidth: 1)
-                    )
-            }
-        }
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, floating ? 8 : 16)
@@ -205,7 +183,7 @@ struct ComposerView: View {
             sceneSession?.saveDraft(next, for: chatId)
             store.saveDraft(next, forChat: chatId)
             replaceDraft(next)
-            if scenePhase == .active {
+            if scenePhase == .active && ownsSceneEditing {
                 focused = true
             }
         }
@@ -319,7 +297,7 @@ struct ComposerView: View {
     }
 
     /// 最低支持 iOS 26：助理胶囊仍是浮在内容上的玻璃底。底栏本身用 safeAreaInset，不用 safeAreaBar。
-    private var floating: Bool { style == .assistant && JieboGlass.available }
+    private var floating: Bool { JieboGlass.available }
 
     var placeholder: String {
         if store.linkState == .offline { return "已断开" }
@@ -378,7 +356,7 @@ struct ComposerView: View {
 
     /// `@` 不在当前词尾、候选也收起时，不必每个字都扫一遍补全。
     func mentionsMayChange(_ value: String) -> Bool {
-        if !store.mentionSuggestions.isEmpty { return true }
+        if !store.mentionSuggestions(for: chatId).isEmpty { return true }
         guard let at = value.lastIndex(of: "@") else { return false }
         let tail = value[at...]
         if tail.contains(where: \.isWhitespace) { return false }

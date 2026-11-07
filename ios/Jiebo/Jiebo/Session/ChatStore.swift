@@ -379,8 +379,16 @@ final class ChatStore {
     var loadingDirsByChat: [String: Set<String>] = [:]
     var truncatedDirsByChat: [String: Set<String>] = [:]
     @ObservationIgnored var loadedDirsByChat: [String: Set<String>] = [:]
-    /// @补全候选（mention 模式 list_files 的结果）
-    var mentionSuggestions: [String] = []
+    /// @补全候选（按会话隔离，防止 iPad 多窗口互相串台或误清空）
+    var mentionSuggestionsByChat: [String: [String]] = [:]
+    var mentionSuggestions: [String] {
+        get { mentionSuggestionsByChat[activeId] ?? [] }
+        set { mentionSuggestionsByChat[activeId] = newValue }
+    }
+    func mentionSuggestions(for chatId: String) -> [String] {
+        let targetId = chatId.isEmpty ? activeId : chatId
+        return mentionSuggestionsByChat[targetId] ?? []
+    }
     var mentionRequestChatId: String?
     /// Quick Look 预览中的文件（sheet 驱动）
     var previewFile: PreviewFile?
@@ -390,9 +398,17 @@ final class ChatStore {
     var lastPreviewURL: URL?
     /// WS 上传超时后迟到的 file_uploaded 回包 id（防被当成「别的客户端上传」写进草稿）
     var expiredUploadIds: Set<String> = []
-    /// 当前草稿尾部的 @查询（无则 nil）
-    var mentionQuery: String?
-    var mentionTask: Task<Void, Never>?
+    /// 当前草稿尾部的 @查询（按会话隔离，无则 nil）
+    var mentionQueryByChat: [String: String] = [:]
+    var mentionQuery: String? {
+        get { mentionQueryByChat[activeId] }
+        set { mentionQueryByChat[activeId] = newValue }
+    }
+    @ObservationIgnored var mentionTasksByChat: [String: Task<Void, Never>] = [:]
+    var mentionTask: Task<Void, Never>? {
+        get { mentionTasksByChat[activeId] }
+        set { mentionTasksByChat[activeId] = newValue }
+    }
 
     // MARK: P5 - 预览面板（右侧 overlay，对齐网页 FilePreview）
     /// 打开的预览页签（上限 8，超出挤掉最旧的，对齐网页 slice(-8)）
@@ -717,7 +733,15 @@ final class ChatStore {
 
     // MARK: 检查点
 
-    var checkpoints: [CheckpointInfo] = []
+    var checkpointsByChat: [String: [CheckpointInfo]] = [:]
+    var checkpoints: [CheckpointInfo] {
+        get { checkpointsByChat[activeId] ?? [] }
+        set { checkpointsByChat[activeId] = newValue }
+    }
+    func checkpoints(for chatId: String) -> [CheckpointInfo] {
+        let targetId = chatId.isEmpty ? activeId : chatId
+        return checkpointsByChat[targetId] ?? []
+    }
     var notedCheckpointId: String?
 
     var contentRevertPrompt = false

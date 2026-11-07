@@ -211,7 +211,7 @@ private struct JieboWidgetFamilyLayout: View {
                     title: "未读",
                     value: entry.snapshot.unreadCount,
                     url: inboxURL,
-                    label: "打开收件箱，未读 \(entry.snapshot.unreadCount) 项",
+                    label: "打开助理中心，未读 \(entry.snapshot.unreadCount) 项",
                     fillsHeight: false,
                     font: countFont,
                     minHeight: 44
@@ -266,7 +266,7 @@ private struct JieboWidgetFamilyLayout: View {
                         title: "未读",
                         value: entry.snapshot.unreadCount,
                         url: inboxURL,
-                        label: "打开收件箱，未读 \(entry.snapshot.unreadCount) 项",
+                        label: "打开助理中心，未读 \(entry.snapshot.unreadCount) 项",
                         fillsHeight: true,
                         font: extraLargeCountFont,
                         minHeight: 60
@@ -296,7 +296,7 @@ private struct JieboWidgetFamilyLayout: View {
             }
             .buttonStyle(.plain)
             .layoutPriority(1)
-            .accessibilityLabel("打开收件箱，未读 \(entry.snapshot.unreadCount) 项")
+            .accessibilityLabel("打开助理中心，未读 \(entry.snapshot.unreadCount) 项")
         }
     }
 
@@ -657,7 +657,7 @@ struct JieboAssistantWidget: Widget {
             JieboWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("小驳助理")
-        .description("快速查看助理状态、待办与收件箱摘要。")
+        .description("快速查看助理状态、待办与助理中心摘要。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
     }
 }

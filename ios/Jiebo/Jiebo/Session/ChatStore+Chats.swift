@@ -232,10 +232,11 @@ extension ChatStore {
         }
         pendingAssistantOpen = false
         guard id != activeId else { return }
+        let previousActiveId = activeId
         swapActive(to: id)
-        mentionQuery = nil
-        mentionTask?.cancel()
-        mentionSuggestions = []
+        mentionQueryByChat.removeValue(forKey: previousActiveId)
+        mentionTasksByChat.removeValue(forKey: previousActiveId)?.cancel()
+        mentionSuggestionsByChat[previousActiveId] = []
         patch(id) { chat in
             var next = chat
             next.unread = false
@@ -274,9 +275,8 @@ extension ChatStore {
         exportTask?.cancel() // P10：在途导出同样不带到新会话（Grok R1 M1）——页签虽全局存活，
         exportLoading = false // 但「下载中切会话」是被动场景，完成时弹 sheet 会打断新上下文
         requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
-        checkpoints = []
         notedCheckpointId = nil
-        refreshCheckpoints()
+        refreshCheckpoints(chatId: newId)
         searchHits = []
         searchTruncated = false
         if !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -341,6 +341,15 @@ extension ChatStore {
         fileIndexFallbackTasks.removeValue(forKey: id)?.cancel()
         fileIndexTimeoutTasks.removeValue(forKey: id)?.cancel()
         if fileIndexRequestChatId == id { fileIndexRequestChatId = nil }
+        dirEntriesByChat.removeValue(forKey: id)
+        loadingDirsByChat.removeValue(forKey: id)
+        truncatedDirsByChat.removeValue(forKey: id)
+        loadedDirsByChat.removeValue(forKey: id)
+        mentionSuggestionsByChat.removeValue(forKey: id)
+        mentionQueryByChat.removeValue(forKey: id)
+        mentionTasksByChat.removeValue(forKey: id)?.cancel()
+        if mentionRequestChatId == id { mentionRequestChatId = nil }
+        checkpointsByChat.removeValue(forKey: id)
         var rest = chats.filter { $0.id != id }
         if rest.isEmpty {
             let place = cwd.nilIfEmpty ?? workspaceRoot

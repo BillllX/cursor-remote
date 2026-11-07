@@ -811,17 +811,25 @@ extension ChatStore {
                     status: status
                 )
             } else if mention {
-                guard responseChatId == mentionRequestChatId else { break }
+                guard !deletedIds.contains(responseChatId) else { break }
+                let activeQuery = mentionQueryByChat[responseChatId]
+                guard activeQuery != nil || responseChatId == mentionRequestChatId else { break }
                 // 过期查询的结果直接丢（对齐网页端 query 比对）
-                guard query == mentionQuery else { break }
-                // 合并本地索引与服务端结果（对齐网页 mentionHits 的 remote 合并；
+                guard query == activeQuery else { break }
+                // 合并该会话的本地索引与服务端结果（对齐网页 mentionHits 的 remote 合并；
                 // 本地索引被截断时服务端结果可能是唯一来源）
+                let localPool: [String]
+                if fileIndexRequestChatId == responseChatId {
+                    localPool = fileIndex
+                } else {
+                    localPool = bootstrapSnapshot?.fileIndexes[responseChatId]?.paths ?? []
+                }
                 var seen = Set<String>()
                 var merged: [String] = []
-                for path in paths + fileIndex where seen.insert(path).inserted {
+                for path in paths + localPool where seen.insert(path).inserted {
                     merged.append(path)
                 }
-                mentionSuggestions = ChatStore.rankMentions(merged, query: query)
+                mentionSuggestionsByChat[responseChatId] = ChatStore.rankMentions(merged, query: query)
             } else {
                 guard query.isEmpty else { break }
                 if let filesError, !filesError.isEmpty {
@@ -849,8 +857,10 @@ extension ChatStore {
             searchLoading = false
             searchContentNote = ""
         case .checkpoints(let id, let items):
+            let targetChatId = id.nilIfEmpty ?? activeId
+            guard !deletedIds.contains(targetChatId) else { break }
+            checkpointsByChat[targetChatId] = items
             guard id.isEmpty || id == activeId || id == chatHomeThreadChatId else { break }
-            checkpoints = items
             if let newest = items.first,
                newest.id != notedCheckpointId,
                Date().timeIntervalSince1970 * 1000 - newest.createdAt < 5000

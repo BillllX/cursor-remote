@@ -99,33 +99,75 @@ func rewriteHtml(source: String, fromFile: String, toSrc: (String) -> String) ->
 
 // MARK: - Markdown → HTML（紧凑转换器，覆盖常见语法；图片经 rewriteHtml 走票据）
 
-/// 把 markdown 转成带 CSP + Jiebo 风格的完整 html 文档
-func markdownToHtmlDocument(_ markdown: String, fromFile: String, toSrc: (String) -> String) -> String {
+private func cssHex(_ hex: UInt32) -> String {
+    String(format: "#%06X", hex & 0xFFFFFF)
+}
+
+/// 把 markdown 转成带 CSP + Jiebo 动态主题风格的完整 html 文档
+func markdownToHtmlDocument(
+    _ markdown: String,
+    fromFile: String,
+    palette: JieboPalette = .jiebo,
+    appearance: JieboAppearance = .system,
+    toSrc: (String) -> String
+) -> String {
     let body = markdownBodyToHtml(markdown)
+    let light = palette.light
+    let dark = palette.dark
+    let colorSchemeRule: String
+    switch appearance {
+    case .light: colorSchemeRule = "light"
+    case .dark: colorSchemeRule = "dark"
+    case .system: colorSchemeRule = "light dark"
+    }
+    let lightCss = """
+    body { color: \(cssHex(light.text)); background: \(cssHex(light.bg)); }
+    code, pre { background: \(cssHex(light.panel)); border: 1px solid \(cssHex(light.border)); }
+    blockquote { border-left-color: \(cssHex(light.border)); color: \(cssHex(light.muted)); }
+    a { color: \(cssHex(light.accent)); }
+    hr, td, th { border-color: \(cssHex(light.border)); }
+    th { background: \(cssHex(light.sidebar)); }
+    """
+    let darkCss = """
+    body { color: \(cssHex(dark.text)); background: \(cssHex(dark.bg)); }
+    code, pre { background: \(cssHex(dark.panel)); border: 1px solid \(cssHex(dark.border)); }
+    blockquote { border-left-color: \(cssHex(dark.border)); color: \(cssHex(dark.muted)); }
+    a { color: \(cssHex(dark.accent)); }
+    hr, td, th { border-color: \(cssHex(dark.border)); }
+    th { background: \(cssHex(dark.sidebar)); }
+    """
+    let themeCss: String
+    switch appearance {
+    case .light:
+        themeCss = lightCss
+    case .dark:
+        themeCss = darkCss
+    case .system:
+        themeCss = """
+        \(lightCss)
+        @media (prefers-color-scheme: dark) {
+          \(darkCss)
+        }
+        """
+    }
     let html = """
     <!doctype html><html><head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-    :root { color-scheme: light dark; }
-    body { font: 15px/1.65 -apple-system, sans-serif; color: #1A1A1A; background: #FAFAFA; margin: 16px; }
+    :root { color-scheme: \(colorSchemeRule); }
+    body { font: 15px/1.65 -apple-system, sans-serif; margin: 16px; }
     h1, h2, h3, h4 { line-height: 1.3; margin: 1.1em 0 0.5em; }
     h1 { font-size: 1.5em; } h2 { font-size: 1.3em; } h3 { font-size: 1.15em; }
-    code { font-family: ui-monospace, monospace; font-size: 0.88em; background: #F5F5F5; padding: 1px 5px; border-radius: 4px; }
-    pre { background: #F5F5F5; padding: 12px; border-radius: 8px; overflow-x: auto; }
-    pre code { background: none; padding: 0; }
-    blockquote { margin: 0.8em 0; padding-left: 12px; border-left: 3px solid #ECECEC; color: #737373; }
+    code { font-family: ui-monospace, monospace; font-size: 0.88em; padding: 1px 5px; border-radius: 4px; }
+    pre { padding: 12px; border-radius: 8px; overflow-x: auto; }
+    pre code { background: none; border: none; padding: 0; }
+    blockquote { margin: 0.8em 0; padding-left: 12px; border-left: 3px solid; }
     img { max-width: 100%; height: auto; border-radius: 6px; }
-    a { color: #2F6F5E; text-decoration: none; }
+    a { text-decoration: none; }
     ul, ol { padding-left: 1.4em; }
-    hr { border: none; border-top: 1px solid #ECECEC; margin: 1.2em 0; }
-    table { border-collapse: collapse; } td, th { border: 1px solid #ECECEC; padding: 4px 10px; }
-    @media (prefers-color-scheme: dark) {
-      body { color: #EDE8DE; background: #141512; }
-      code, pre { background: #1F211E; }
-      blockquote { border-left-color: #2C2F2B; color: #B6B0A4; }
-      a { color: #8FBFB0; }
-      hr, td, th { border-color: #2C2F2B; }
-    }
+    hr { border: none; border-top: 1px solid; margin: 1.2em 0; }
+    table { border-collapse: collapse; } td, th { border: 1px solid; padding: 4px 10px; }
+    \(themeCss)
     </style></head><body>\(body)</body></html>
     """
     return rewriteHtml(source: html, fromFile: fromFile, toSrc: toSrc)

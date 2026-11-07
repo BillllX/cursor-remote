@@ -134,13 +134,14 @@ extension ComposerView {
                 }
             }
             Section {
+                let chatCheckpoints = store.checkpoints(for: chatId)
                 Button { store.undoLast(chatId: chatId) } label: {
                     Label("撤销上一次", systemImage: "arrow.uturn.backward")
                 }
                 .disabled(!store.canUndo(chatId))
-                if !store.checkpoints.isEmpty {
+                if !chatCheckpoints.isEmpty {
                     Menu {
-                        ForEach(store.checkpoints) { item in
+                        ForEach(chatCheckpoints) { item in
                             Button(item.label) { store.restoreCheckpoint(item.id, chatId: chatId) }
                                 .disabled(chatBusy)
                         }

@@ -1076,6 +1076,10 @@ struct MarkdownFileView: View {
     let media: MediaTicket?
     @State private var renderedHtml: String?
 
+    private var renderTaskKey: String {
+        "\(content)\u{0}\(JieboTheme.shared.palette.rawValue)\u{0}\(JieboTheme.shared.appearance.rawValue)"
+    }
+
     var body: some View {
         Group {
             if let renderedHtml {
@@ -1088,8 +1092,15 @@ struct MarkdownFileView: View {
             }
         }
         .background(JieboColor.paper)
-        .task(id: content) {
-            renderedHtml = markdownToHtmlDocument(content, fromFile: path) { resolved in
+        .task(id: renderTaskKey) {
+            let palette = JieboTheme.shared.palette
+            let appearance = JieboTheme.shared.appearance
+            renderedHtml = markdownToHtmlDocument(
+                content,
+                fromFile: path,
+                palette: palette,
+                appearance: appearance
+            ) { resolved in
                 // loadHTMLString 的 baseURL=nil，相对地址不可靠——补全成绝对地址
                 mediaSrc(path: resolved, chatId: chatId, media: media)
                     .flatMap { GatewayConfig.resolveHTTP($0)?.absoluteString } ?? ""

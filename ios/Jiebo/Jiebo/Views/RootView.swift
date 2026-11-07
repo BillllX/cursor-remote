@@ -568,23 +568,46 @@ struct SearchToolView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TextField("搜文件名或内容", text: Bindable(store).searchQuery)
-                .focused($focused)
-                .textFieldStyle(.plain)
-                .font(JieboFont.text(.subheadline))
-                .foregroundStyle(JieboColor.ink)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(focused ? JieboColor.ink.opacity(0.28) : Color.clear)
-                        .frame(height: focused ? 1.5 : 0)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.dim)
+                TextField("搜文件名或内容", text: Bindable(store).searchQuery)
+                    .focused($focused)
+                    .textFieldStyle(.plain)
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                if !store.searchQuery.isEmpty {
+                    Button {
+                        store.searchQuery = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(JieboFont.text(.subheadline))
+                            .foregroundStyle(JieboColor.dim)
+                            .hitTarget(30)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除搜索词")
                 }
-                .animation(JieboMotion.fade(reduceMotion), value: focused)
-                .onChange(of: store.searchQuery) { _, _ in
-                    store.scheduleSearch()
-                }
-            Divider()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(JieboColor.mist)
+            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                    .stroke(focused ? JieboColor.ink.opacity(0.28) : Color.clear, lineWidth: focused ? 1.5 : 0)
+            )
+            .animation(JieboMotion.fade(reduceMotion), value: focused)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .onChange(of: store.searchQuery) { _, _ in
+                store.scheduleSearch()
+            }
+
+            Divider().overlay(JieboColor.line)
             results
         }
         .onAppear { focused = true }

@@ -37,21 +37,31 @@ extension ChatStore {
 
     /// 打字时只更新 @ 候选，不把草稿写进会话列表。
     func updateMentions(for text: String, chatId: String? = nil) {
-        let targetId = chatId ?? activeId
+        let targetId = (chatId?.isEmpty == false ? chatId : nil) ?? activeId
         guard let range = text.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else {
-            if mentionQuery != nil { mentionQuery = nil }
-            mentionTask?.cancel()
-            if !mentionSuggestions.isEmpty { mentionSuggestions = [] }
+            if mentionQueryByChat[targetId] != nil { mentionQueryByChat.removeValue(forKey: targetId) }
+            mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
+            if !(mentionSuggestionsByChat[targetId]?.isEmpty ?? true) {
+                mentionSuggestionsByChat[targetId] = []
+            }
             return
         }
         let tail = String(text[range.lowerBound...])
         let queryString = String(tail.drop(while: { $0 != "@" }).dropFirst())
-        guard queryString != mentionQuery else { return }
-        mentionQuery = queryString
-        mentionTask?.cancel()
-        let next = ChatStore.rankMentions(fileIndex, query: queryString)
-        if next != mentionSuggestions { mentionSuggestions = next }
-        mentionTask = Task { [weak self] in
+        guard queryString != mentionQueryByChat[targetId] else { return }
+        mentionQueryByChat[targetId] = queryString
+        mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
+        let localPool: [String]
+        if fileIndexRequestChatId == targetId {
+            localPool = fileIndex
+        } else {
+            localPool = bootstrapSnapshot?.fileIndexes[targetId]?.paths ?? []
+        }
+        let next = ChatStore.rankMentions(localPool, query: queryString)
+        if next != (mentionSuggestionsByChat[targetId] ?? []) {
+            mentionSuggestionsByChat[targetId] = next
+        }
+        mentionTasksByChat[targetId] = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
             self?.mentionRequestChatId = targetId
@@ -63,7 +73,7 @@ extension ChatStore {
 
     /// 点选候选：把草稿尾部的 @查询 替换成 @路径（保留查询前的空白分隔）
     func insertMention(_ path: String, chatId: String? = nil) {
-        let targetId = chatId ?? activeId
+        let targetId = (chatId?.isEmpty == false ? chatId : nil) ?? activeId
         let current = draft(for: targetId)
         if let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) {
             let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
@@ -71,9 +81,9 @@ extension ChatStore {
             next.replaceSubrange(range, with: "\(leading)@\(path) ")
             saveDraft(next, forChat: targetId)
         }
-        mentionQuery = nil
-        mentionTask?.cancel()
-        mentionSuggestions = []
+        mentionQueryByChat.removeValue(forKey: targetId)
+        mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
+        mentionSuggestionsByChat[targetId] = []
         deliverExternalDraft(.insertMention(path), forChat: targetId)
     }
 

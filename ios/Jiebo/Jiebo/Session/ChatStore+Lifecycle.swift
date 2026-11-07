@@ -384,13 +384,21 @@ extension ChatStore {
         pendingImages = []
         imagesByChat = [:]
         uploads = []
+        externalDraftDelivery = nil
         fileIndex = []
         treeTruncated = false
         gitStatus = [:]
+        dirEntriesByChat = [:]
+        loadingDirsByChat = [:]
+        truncatedDirsByChat = [:]
+        loadedDirsByChat = [:]
         fileBrowserOpen = false // 切租户/登出时文件浏览器不能还挂着（Grok R2 MINOR）
-        mentionQuery = nil
-        mentionTask?.cancel()
-        mentionSuggestions = []
+        mentionQueryByChat = [:]
+        for task in mentionTasksByChat.values { task.cancel() }
+        mentionTasksByChat = [:]
+        mentionSuggestionsByChat = [:]
+        checkpointsByChat = [:]
+        notedCheckpointId = nil
         previewTask?.cancel()
         setPreviewFile(nil) // 强制关预览（closePreview 有 dismiss 竞态守卫，这里绕过）
         previewLoading = false
