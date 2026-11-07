@@ -460,7 +460,7 @@ struct PhoneSettingsScreen: View {
                 }
                 .listRowBackground(JieboColor.white)
             } header: {
-                Text("外观")
+                JieboListHeader("外观")
             }
 
             notificationSection
@@ -486,7 +486,7 @@ struct PhoneSettingsScreen: View {
                 }
                 .listRowBackground(JieboColor.white)
             } header: {
-                Text("移动数据")
+                JieboListHeader("移动数据")
             } footer: {
                 Text("仅在蜂窝网络、个人热点或系统低数据模式下生效；Wi‑Fi 保持完整体验。省流量会等待你点按后再加载正文图片和文件预览。")
             }
@@ -502,7 +502,7 @@ struct PhoneSettingsScreen: View {
                 }
                 .listRowBackground(JieboColor.white)
             } header: {
-                Text("设备")
+                JieboListHeader("设备")
             } footer: {
                 Text("管理 Apple 日历、提醒事项和通讯录权限，并查看脱敏的本机操作记录。")
             }
@@ -552,7 +552,7 @@ struct PhoneSettingsScreen: View {
                 }
                 .listRowBackground(JieboColor.white)
             } header: {
-                Text("小驳")
+                JieboListHeader("小驳")
             }
 
             if store.isAdmin {
@@ -565,7 +565,7 @@ struct PhoneSettingsScreen: View {
                     .buttonStyle(.plain)
                     .listRowBackground(JieboColor.white)
                 } header: {
-                    Text("用量")
+                    JieboListHeader("用量")
                 }
             }
 
@@ -689,7 +689,7 @@ struct PhoneSettingsScreen: View {
             .disabled(!im.canChangeSettings)
             .listRowBackground(JieboColor.white)
         } header: {
-            Text("个人资料与聊天")
+            JieboListHeader("个人资料与聊天")
         } footer: {
             if !im.canChangeSettings {
                 SettingsBlockedNote()
@@ -740,7 +740,7 @@ struct PhoneSettingsScreen: View {
                 }
             }
         } header: {
-            Text("已拉黑")
+            JieboListHeader("已拉黑")
         } footer: {
             Text("拉黑后对方照样能发，但消息不会送到你这里。")
         }
@@ -867,7 +867,7 @@ struct PhoneSettingsScreen: View {
                 .listRowBackground(JieboColor.white)
             }
         } header: {
-            Text("通知")
+            JieboListHeader("通知")
         } footer: {
             if state != nil, state?.pushApns != true {
                 Text("服务器未配置推送，iPhone 暂时收不到系统通知。")
@@ -916,7 +916,7 @@ struct TrafficStatsScreen: View {
             Section {
                 valueRow("有线与其他网络", value: AppTrafficFormat.bytes(snapshot.otherTotal))
             } header: {
-                Text("其他网络")
+                JieboListHeader("其他网络")
             }
             .listRowBackground(JieboColor.white)
 
@@ -940,7 +940,7 @@ struct TrafficStatsScreen: View {
                         }
                     }
                 } header: {
-                    Text("流量分类")
+                    JieboListHeader("流量分类")
                 }
                 .listRowBackground(JieboColor.white)
             }

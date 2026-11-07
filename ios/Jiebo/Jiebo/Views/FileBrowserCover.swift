@@ -318,7 +318,7 @@ struct FileBrowserCover: View {
                 onOpen: { openFile($0) },
                 onPick: pickFile,
                 onCopyPath: copyPath,
-                onQuickLook: { store.openMention($0) }, // 二进制/系统导出逃生门
+                onQuickLook: { store.openMention($0, chatId: workbenchChatId) }, // 二进制/系统导出逃生门
                 emptyDetail: store.fileIndexEmptyTitle
             )
             // 工作区身份隔离：cwd 变了（热替换/重建）openDirs 等 @State 不跨工作区残留
@@ -341,6 +341,15 @@ struct FileBrowserCover: View {
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
+                    if tab.diff {
+                        Text("改动")
+                            .font(JieboFont.text(.caption2, weight: .bold))
+                            .foregroundStyle(JieboColor.brass)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(JieboColor.brass.opacity(0.12))
+                            .clipShape(Capsule())
+                    }
                     Text(tab.path)
                         .font(JieboFont.monoText(.caption2))
                         .foregroundStyle(JieboColor.dim)
@@ -388,6 +397,41 @@ struct FileBrowserCover: View {
                             .buttonStyle(.plain)
                     }
                     if !editing {
+                        if tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg {
+                            Button {
+                                performOrConfirm {
+                                    editing = false
+                                    store.togglePreviewDiff(tab.path)
+                                }
+                            } label: {
+                                Image(systemName: "plus.forwardslash.minus")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(tab.diff ? JieboColor.ink : JieboColor.ink2)
+                                    .frame(width: 30, height: 30)
+                                    .background(tab.diff ? JieboColor.ink.opacity(0.06) : Color.clear)
+                                    .clipShape(Circle())
+                                    .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
+                                    .hitTarget()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(tab.diff ? "查看原文" : "查看改动")
+                        }
+                        if tab.kind == .canvas, GatewayConfig.canvasRuntimeURL != nil {
+                            Button {
+                                store.toggleCanvasSource(tab.path)
+                            } label: {
+                                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(tab.showSource ? JieboColor.ink : JieboColor.ink2)
+                                    .frame(width: 30, height: 30)
+                                    .background(tab.showSource ? JieboColor.ink.opacity(0.06) : Color.clear)
+                                    .clipShape(Circle())
+                                    .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
+                                    .hitTarget()
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
+                        }
                         if sizeClass != .compact {
                             PreviewFullscreenToggle(fullscreen: browserFullscreen) {
                                 browserFullscreen.toggle()
@@ -564,7 +608,7 @@ struct FileBrowserCover: View {
 
     private func openFile(_ path: String, diff: Bool = false) {
         performOrConfirm {
-            store.loadPreview(path, diff: diff)
+            store.loadPreview(path, diff: diff, chatId: workbenchChatId)
             sceneSession?.presentPreview(from: store)
         }
     }
