@@ -97,6 +97,11 @@ struct PhoneWorkbench: View {
                     .navigationDestination(for: PhoneRoute.self) { route in
                         PhoneSettingsDestination(route: route)
                     }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { settingsOpen = false }
+                        }
+                    }
             }
         }
         .sheet(isPresented: $memoryOpen) {
@@ -111,7 +116,13 @@ struct PhoneWorkbench: View {
         }
         .chatActionAlerts($chatActions)
         .task { preferRunningChat() }
-        .onChange(of: store.activeId) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.activeId) { _, nextId in
+            if store.isWorkspaceChat(nextId) {
+                sceneSession?.workbenchChatId = nextId
+            } else {
+                adoptWorkbenchChatIfNeeded()
+            }
+        }
         .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
         .onChange(of: drawerOpen) { _, open in
             phoneRouter?.workbenchDrawerOpen = open
@@ -425,7 +436,7 @@ private struct PhoneDrawer: View {
         return Button {
             sceneSession?.workbenchChatId = chat.id
             store.rememberWorkspaceChat(chat.id)
-            if chat.id != store.activeId { store.select(chat.id) }
+            store.activateWorkspaceChat(chat.id)
             close()
         } label: {
             HStack(spacing: 8) {

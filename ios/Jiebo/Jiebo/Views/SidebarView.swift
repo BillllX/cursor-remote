@@ -87,7 +87,13 @@ struct SidebarView: View {
         }
         .chatActionAlerts($chatActions)
         .onAppear { adoptWorkbenchChatIfNeeded() }
-        .onChange(of: store.activeId) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.activeId) { _, nextId in
+            if store.isWorkspaceChat(nextId) {
+                sceneSession?.workbenchChatId = nextId
+            } else {
+                adoptWorkbenchChatIfNeeded()
+            }
+        }
         .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
     }
 
@@ -347,11 +353,10 @@ struct SidebarView: View {
         return Button {
             if let sceneSession {
                 sceneSession.workbenchChatId = chat.id
-                store.rememberWorkspaceChat(chat.id)
-                store.ensureTurnsLoaded(chat.id)
-            } else {
-                store.select(chat.id)
             }
+            store.rememberWorkspaceChat(chat.id)
+            store.activateWorkspaceChat(chat.id)
+            store.ensureTurnsLoaded(chat.id)
         } label: {
             HStack(spacing: 8) {
                 Capsule()
