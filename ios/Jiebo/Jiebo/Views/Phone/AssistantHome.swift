@@ -7,6 +7,10 @@ struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
 
+    private var assistantTargetChatId: String {
+        store.assistantChatId ?? store.activeId
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if router.selectedTab != .assistant {
@@ -26,9 +30,9 @@ struct AssistantHome: View {
                             .buttonStyle(.plain)
                             .disabled(store.linkState != .offline)
                             .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
-                        } else if store.isThreadSyncBusy(store.activeId) {
+                        } else if store.isThreadSyncBusy(assistantTargetChatId) {
                             Button {
-                                store.retryThreadSync(store.activeId)
+                                store.retryThreadSync(assistantTargetChatId)
                             } label: {
                                 Text(attentionLine)
                             }
@@ -82,7 +86,7 @@ struct AssistantHome: View {
     /// 连接、同步或需要人处理时才出字。平常只留圆点，避免每句都占一行。
     private var attentionLine: String? {
         if !store.connected { return store.linkState.title }
-        if store.isThreadSyncBusy(store.activeId) { return ChatStore.syncingThreadTitle }
+        if store.isThreadSyncBusy(assistantTargetChatId) { return ChatStore.syncingThreadTitle }
         if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
         if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
             return hint.title
@@ -103,7 +107,7 @@ struct AssistantHome: View {
         HStack(spacing: 8) {
             AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
                 .overlay(alignment: .bottomTrailing) {
-                    LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(store.activeId))
+                    LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))
                         .offset(x: 1, y: 2)
                 }
             Text("小驳")

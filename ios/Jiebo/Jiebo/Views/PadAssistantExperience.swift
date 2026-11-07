@@ -1340,15 +1340,31 @@ private struct PadSourceLinks: View {
 private struct PadReceiptCard: View {
     let receipt: TaskReceipt
 
+    private var meta: (title: String, symbol: String, color: Color) {
+        switch receipt.status {
+        case "done", "completed":
+            return ("已完成", "checkmark.seal", JieboColor.ok)
+        case "failed":
+            return ("失败", "xmark.octagon", JieboColor.danger)
+        case "interrupted":
+            return ("已中断", "exclamationmark.triangle", JieboColor.warnFg)
+        case "cancelled":
+            return ("已取消", "slash.circle", JieboColor.dim)
+        case "recorded":
+            return ("已记录", "tray.and.arrow.down", JieboColor.pine)
+        default:
+            return (receipt.status, "checkmark.seal", JieboColor.ok)
+        }
+    }
+
     var body: some View {
+        let info = meta
         VStack(alignment: .leading, spacing: 5) {
-            Label(receipt.status == "done" ? "已完成" : receipt.status, systemImage: "checkmark.seal")
+            Label(info.title, systemImage: info.symbol)
                 .font(JieboFont.text(.subheadline, weight: .semibold))
-                .foregroundStyle(JieboColor.ok)
-            if let summary = receipt.summary {
-                Text(summary)
-                    .font(JieboFont.text(.footnote))
-                    .foregroundStyle(JieboColor.ink2)
+                .foregroundStyle(info.color)
+            if let summary = receipt.summary?.nilIfEmpty {
+                ProseLines(text: ReplyText.repair(summary))
             }
             AssistantMutedText(assistantFormatMillis(receipt.at))
         }
@@ -1432,8 +1448,23 @@ private func padTaskSymbol(_ task: PersonalTask) -> String {
     }
 }
 
+private func padLocalizedTaskStatus(_ status: String) -> String {
+    switch status {
+    case "open": return "待办"
+    case "done", "completed": return "已完成"
+    case "running", "in_progress": return "进行中"
+    case "awaiting", "needs_me": return "需要处理"
+    case "scheduled", "planned": return "计划中"
+    case "paused": return "已暂停"
+    case "failed": return "失败"
+    case "interrupted": return "已中断"
+    case "cancelled": return "已取消"
+    default: return status
+    }
+}
+
 private func taskLine(_ task: PersonalTask) -> String {
-    let body = task.attention?.nilIfEmpty ?? task.detail?.nilIfEmpty ?? task.status
+    let body = task.attention?.nilIfEmpty ?? task.detail?.nilIfEmpty ?? padLocalizedTaskStatus(task.status)
     guard task.kind == "background_run" else { return body }
     return "后台运行 · \(body)"
 }
