@@ -58,18 +58,22 @@ struct WorkspacePickerSheet: View {
                     }
                     .listRowBackground(JieboColor.white)
                 } else if !needle.isEmpty {
-                    Section("搜索结果") {
+                    Section {
                         ForEach(items) { item in
                             row(item, showPath: true, stat: stats[normPath(item.path)])
                         }
+                    } header: {
+                        JieboListHeader("搜索结果")
                     }
                     .listRowBackground(JieboColor.white)
                 } else {
                     if !recent.isEmpty {
-                        Section("最近") {
+                        Section {
                             ForEach(recent) { item in
                                 row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
                             }
+                        } header: {
+                            JieboListHeader("最近")
                         }
                         .listRowBackground(JieboColor.white)
                     }
@@ -79,7 +83,7 @@ struct WorkspacePickerSheet: View {
                                 row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
                             }
                         } header: {
-                            Text("其他文件夹")
+                            JieboListHeader("其他文件夹")
                         } footer: {
                             Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
                         }
@@ -166,6 +170,11 @@ struct WorkspacePickerSheet: View {
                 Text(store.connected
                     ? "「\(item.name)」目录是空的会直接删掉；里面有文件的只从列表里隐藏，文件不动（以后同名新建就能找回）。"
                     : "还没连上。「\(item.name)」的删除会在连上后发出。空目录会删掉；里面有文件的只从列表里隐藏，文件不动。")
+            }
+            .onChange(of: store.activeId) { _, nextId in
+                if store.isWorkspaceChat(nextId) {
+                    sceneSession?.workbenchChatId = nextId
+                }
             }
         }
         .presentationDetents([.medium, .large])

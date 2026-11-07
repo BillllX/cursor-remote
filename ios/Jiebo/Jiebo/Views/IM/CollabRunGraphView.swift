@@ -33,10 +33,8 @@ struct CollabRunGraphView: View {
                                     Text(task.workspaceId)
                                         .font(JieboFont.text(.caption))
                                         .foregroundStyle(JieboColor.dim)
-                                    if let summary = task.summary, !summary.isEmpty {
-                                        Text(summary)
-                                            .font(JieboFont.text(.callout))
-                                            .foregroundStyle(JieboColor.ink)
+                                    if let summary = task.summary?.nilIfEmpty {
+                                        ProseLines(text: ReplyText.repair(summary))
                                     }
                                     HStack(spacing: 12) {
                                         if task.attempt > 0 { Label("第 \(task.attempt) 次", systemImage: "arrow.clockwise") }

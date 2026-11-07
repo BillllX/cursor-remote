@@ -68,6 +68,11 @@ struct SidebarView: View {
                     .navigationDestination(for: PhoneRoute.self) { route in
                         PhoneSettingsDestination(route: route)
                     }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { settingsOpen = false }
+                        }
+                    }
             }
         }
         .sheet(isPresented: $memoryOpen) {
