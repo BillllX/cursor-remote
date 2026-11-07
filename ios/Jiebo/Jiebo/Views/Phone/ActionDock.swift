@@ -88,7 +88,12 @@ struct ActionDock: View {
     @ViewBuilder
     private func approvalsBlock(_ approvals: [AssistantApproval]) -> some View {
         ForEach(approvals.prefix(approvalLimit)) { approval in
-            ApprovalCard(approval: approval)
+            ApprovalCard(
+                approval: approval,
+                onOpenDelegation: approval.delegationId.map { delegationId in
+                    { router.delegationDetail = DelegationRef(id: delegationId) }
+                }
+            )
         }
         if approvals.count > approvalLimit {
             moreRow("还有 \(approvals.count - approvalLimit) 项待批，去待处理") {

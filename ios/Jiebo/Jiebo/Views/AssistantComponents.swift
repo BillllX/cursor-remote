@@ -489,6 +489,10 @@ struct DraftActionCard: View {
         return store.assistantState?.approvals.first(where: { $0.id == approvalId })
     }
 
+    private var delegationId: String? {
+        approval?.delegationId ?? draft.sources.first(where: { $0.kind == "delegation" })?.id.nilIfEmpty
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -549,7 +553,7 @@ struct DraftActionCard: View {
     private var buttons: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
-                if let delegationId = approval?.delegationId, let onOpenDelegation {
+                if let delegationId, let onOpenDelegation {
                     ActionButton(title: "看委派", kind: .outline) { onOpenDelegation(delegationId) }
                 }
                 Spacer(minLength: 0)
@@ -563,7 +567,7 @@ struct DraftActionCard: View {
                     .disabled(approval == nil)
                 ActionButton(title: "拒绝", kind: .secondary, fullWidth: true) { answer(false) }
                     .disabled(approval == nil)
-                if let delegationId = approval?.delegationId, let onOpenDelegation {
+                if let delegationId, let onOpenDelegation {
                     ActionButton(title: "看委派", kind: .outline, fullWidth: true) {
                         onOpenDelegation(delegationId)
                     }

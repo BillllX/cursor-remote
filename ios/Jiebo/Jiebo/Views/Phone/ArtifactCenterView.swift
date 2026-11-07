@@ -9,7 +9,9 @@ struct ArtifactCenterView: View {
     @State private var presentation = ArtifactPresentation.recent
 
     private var artifacts: [Artifact] {
-        (store.assistantState?.artifacts ?? []).filter { kindFilter.matches($0) }
+        (store.assistantState?.artifacts ?? [])
+            .filter { kindFilter.matches($0) }
+            .sorted { $0.createdAt > $1.createdAt }
     }
 
     var body: some View {

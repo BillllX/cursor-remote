@@ -234,6 +234,29 @@ extension ChatStore {
             return false
         }
         assistantOp(op, args: args)
+        if let id = args["id"]?.string?.nilIfEmpty {
+            if op == "todo_remove" {
+                assistantState?.todos.removeAll { $0.id == id }
+                assistantState?.personalTasks?.removeAll {
+                    $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
+                }
+                syncLocalAssistantMutation()
+            } else if op == "todo_update" {
+                let updatedText = args["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+                let updatedDue = args["due"]?.string
+                if let index = assistantState?.todos.firstIndex(where: { $0.id == id }) {
+                    if let updatedText { assistantState?.todos[index].text = updatedText }
+                    if let updatedDue { assistantState?.todos[index].due = updatedDue.nilIfEmpty }
+                }
+                if let taskIndex = assistantState?.personalTasks?.firstIndex(where: {
+                    $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
+                }) {
+                    if let updatedText { assistantState?.personalTasks?[taskIndex].title = updatedText }
+                    if let updatedDue { assistantState?.personalTasks?[taskIndex].due = updatedDue.nilIfEmpty }
+                }
+                syncLocalAssistantMutation()
+            }
+        }
         guard !client.isOpen else { return true }
         flash(linkState == .offline
             ? "已断开。\(pending)会在连上后发出。"
