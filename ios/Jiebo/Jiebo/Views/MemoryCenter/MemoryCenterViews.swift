@@ -1627,12 +1627,16 @@ struct MemoryCenterPhoneRememberMe: View {
                             HStack(spacing: 12) {
                                 NavigationLink(value: PhoneRoute.memoryPage(.personalEdit(entryId: entry.id))) {
                                     Text("改")
+                                        .foregroundStyle(JieboColor.pine)
                                 }
+                                .buttonStyle(.borderless)
                                 Button("删") {
                                     _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
                                 }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(JieboColor.danger)
                             }
-                            .font(JieboFont.text(.caption))
+                            .font(JieboFont.text(.caption, weight: .medium))
                         }
                     }
                 }
@@ -1651,11 +1655,15 @@ struct MemoryCenterPhoneRememberMe: View {
                                     Button("恢复") {
                                         _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
                                     }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.pine)
                                     Button("彻底删除") {
                                         _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
                                     }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.danger)
                                 }
-                                .font(JieboFont.text(.caption))
+                                .font(JieboFont.text(.caption, weight: .medium))
                             }
                         }
                     }
@@ -2039,6 +2047,7 @@ struct MemoryCenterPhoneHealthSection: View {
         } header: {
             Text("健康")
         }
+        .listRowBackground(JieboColor.white)
     }
 }
 

@@ -403,8 +403,19 @@ final class ThumbnailStore {
             }
             return .web(.html(html))
         case .svg:
-            guard let url else { return .done(nil) }
-            return .web(.html(ThumbRender.imgDocument(url)))
+            let data: Data?
+            if let content, !content.isEmpty {
+                data = Data(content.utf8)
+            } else if let url {
+                data = await ThumbRender.fetch(url, limit: 8 * 1024 * 1024)
+            } else {
+                data = nil
+            }
+            guard let data, !data.isEmpty else { return .done(nil) }
+            let html = await Task.detached(priority: .utility) {
+                ThumbRender.svgDocument(data: data)
+            }.value
+            return .web(.html(html))
         case .canvas:
             guard GatewayConfig.canvasRuntimeURL != nil,
                   let text = await ThumbRender.text(content: content, url: url),
@@ -516,6 +527,11 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         webView.navigationDelegate = self
         webView.isUserInteractionEnabled = false
         webView.accessibilityElementsHidden = true
+        switch JieboTheme.shared.appearance {
+        case .light: webView.overrideUserInterfaceStyle = .light
+        case .dark: webView.overrideUserInterfaceStyle = .dark
+        case .system: webView.overrideUserInterfaceStyle = .unspecified
+        }
         // 没写背景的页面按浏览器默认白底黑字渲染；垫 App 底色会在深色模式下变成黑底黑字
         webView.isOpaque = true
         webView.backgroundColor = .white
@@ -778,19 +794,17 @@ private enum ThumbRender {
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
     }
 
-    /// 同 SVGFileView：<img> 包装页，不执行 SVG 内嵌脚本
-    static func imgDocument(_ url: URL) -> String {
-        let src = url.absoluteString
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
+    /// 同 MeasuredSVGImage：把受控下载好的 SVG data 编码为 base64 注入 <img>，不执行内嵌脚本；
+    /// 统一使用中性浅底，保证带 sha 的磁盘缩略图跨主题/明暗切换保持一致
+    nonisolated static func svgDocument(data: Data) -> String {
+        let b64 = data.base64EncodedString()
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html{color-scheme:light dark}html,body{margin:0;height:100%;background:#FAFAFA}
-        @media (prefers-color-scheme: dark){html,body{background:#141512}}
+        <style>html{color-scheme:light}html,body{margin:0;height:100%;background:#FAFAFA}
         body{display:flex;align-items:center;justify-content:center}
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
-        <body><img src="\(src)"></body></html>
+        <body><img src="data:image/svg+xml;base64,\(b64)"></body></html>
         """
     }
 }
@@ -922,9 +936,9 @@ private enum ThumbDisk {
         }
     }
 
-    /// v2：透明图改存 PNG 之前写下的 JPEG（透明区已变黑）不再命中，留给 prune 按时间清掉
+    /// v4：SVG 缩略图改为受控 base64 + 固定浅底，避免之前带 prefers-color-scheme 的旧快照命中黑底
     private static func fileName(_ key: String) -> String {
-        SHA256.hash(data: Data("v3|\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data("v4|\(key)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// 目录名必须和 ChatCache.tenantDir 一致（同一套 safeName），清缓存才删得到

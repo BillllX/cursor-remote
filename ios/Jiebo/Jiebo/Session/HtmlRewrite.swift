@@ -285,11 +285,11 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
            lines[index + 1].trimmingCharacters(in: .whitespaces).range(of: #"^\|[\s:|-]+\|$"#, options: .regularExpression) != nil
         {
             flushParagraph(); flushList()
-            let cells = trimmed.split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+            let cells = splitMarkdownTableCells(trimmed)
             html += "<table><thead><tr>" + cells.map { "<th>" + inlineMarkdown($0) + "</th>" }.joined() + "</tr></thead><tbody>"
             index += 2
             while index < lines.count, lines[index].trimmingCharacters(in: .whitespaces).hasPrefix("|") {
-                let row = lines[index].trimmingCharacters(in: .whitespaces).split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                let row = splitMarkdownTableCells(lines[index].trimmingCharacters(in: .whitespaces))
                 html += "<tr>" + row.map { "<td>" + inlineMarkdown($0) + "</td>" }.joined() + "</tr>"
                 index += 1
             }
@@ -302,4 +302,49 @@ private func markdownBodyToHtml(_ markdown: String) -> String {
     if inCode { html += "<pre><code>" + escapeHtml(codeBuffer) + "</code></pre>" }
     flushParagraph(); flushList()
     return html
+}
+
+/// 切分 Markdown 表格行：保留空单元格，忽略行内反引号 `...` 里的 | 并识别 \| 转义
+private func splitMarkdownTableCells(_ line: String) -> [String] {
+    var trimmed = line.trimmingCharacters(in: .whitespaces)
+    if trimmed.hasPrefix("|") { trimmed.removeFirst() }
+    if trimmed.hasSuffix("|") {
+        let withoutPipe = trimmed.dropLast()
+        let trailingSlashes = withoutPipe.reversed().prefix(while: { $0 == "\\" }).count
+        if trailingSlashes % 2 == 0 {
+            trimmed.removeLast()
+        }
+    }
+    var out: [String] = []
+    var current = ""
+    var inCode = false
+    var iterator = trimmed.makeIterator()
+    while let ch = iterator.next() {
+        if ch == "\\" {
+            if let next = iterator.next() {
+                if next == "|" && !inCode {
+                    current.append("|")
+                } else {
+                    current.append("\\")
+                    current.append(next)
+                }
+            } else {
+                current.append("\\")
+            }
+            continue
+        }
+        if ch == "`" {
+            inCode.toggle()
+            current.append(ch)
+            continue
+        }
+        if ch == "|" && !inCode {
+            out.append(current.trimmingCharacters(in: .whitespaces))
+            current = ""
+        } else {
+            current.append(ch)
+        }
+    }
+    out.append(current.trimmingCharacters(in: .whitespaces))
+    return out
 }

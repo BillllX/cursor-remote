@@ -570,6 +570,7 @@ struct PhoneSettingsScreen: View {
                         chevron: false
                     )
                 }
+                .listRowBackground(JieboColor.white)
             } header: {
                 Label("账户", systemImage: NavigationIconId.account.symbol)
             }
@@ -907,6 +908,7 @@ struct TrafficStatsScreen: View {
             } header: {
                 Text("其他网络")
             }
+            .listRowBackground(JieboColor.white)
 
             let top = snapshot.topCategories(limit: 8)
             if !top.isEmpty {
@@ -930,6 +932,7 @@ struct TrafficStatsScreen: View {
                 } header: {
                     Text("流量分类")
                 }
+                .listRowBackground(JieboColor.white)
             }
 
             Section {
@@ -940,6 +943,7 @@ struct TrafficStatsScreen: View {
             } footer: {
                 Text("这里只统计接驳 App 收发的应用载荷，不含 TLS、IP、DNS、APNs 等系统流量，也不等同于运营商账单。音视频预览会先计量下载到本地再播放；系统缓存命中不计。只保存类别、方向、字节与次数。")
             }
+            .listRowBackground(JieboColor.white)
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
@@ -989,6 +993,7 @@ struct TrafficStatsScreen: View {
         } header: {
             Label(title, systemImage: symbol)
         }
+        .listRowBackground(JieboColor.white)
     }
 
     private func valueRow(_ title: String, value: String) -> some View {
@@ -1288,10 +1293,15 @@ struct KbWorkspaceSheet: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.trailing)
                 }
-                HStack {
+                HStack(spacing: 16) {
                     Button("复制链接") { copyPortal(url) }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(JieboColor.pine)
                     Button("打开") { openURL(url) }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(JieboColor.pine)
                 }
+                .font(JieboFont.text(.subheadline, weight: .medium))
                 .disabled(busy)
             }
             if status?.tokens.isEmpty != false {
@@ -1311,6 +1321,7 @@ struct KbWorkspaceSheet: View {
                         Spacer()
                         if token.active {
                             Button("吊销") { revokeTarget = token }
+                                .buttonStyle(.borderless)
                                 .foregroundStyle(JieboColor.danger)
                                 .disabled(busy)
                         }
@@ -1430,10 +1441,11 @@ struct KbWorkspaceSheet: View {
     }
 
     private func openBoard(_ board: KbHtmlBoard) {
-        if let chatId, store.isWorkspaceChat(chatId), store.activeId != chatId {
-            store.activateWorkspaceChat(chatId)
+        let resolvedChatId = store.preferredWorkspaceChatId(anchoredTo: chatId) ?? chatId
+        if sceneSession == nil, let resolvedChatId, store.isWorkspaceChat(resolvedChatId), store.activeId != resolvedChatId {
+            store.activateWorkspaceChat(resolvedChatId)
         }
-        store.openPreview(board.relPath)
+        store.openPreview(board.relPath, chatId: resolvedChatId)
         sceneSession?.presentPreview(from: store)
         dismiss()
     }

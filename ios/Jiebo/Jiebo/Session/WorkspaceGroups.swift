@@ -213,8 +213,8 @@ extension ChatStore {
     }
 
     /// 工作台该打开的会话。没有子工作区会话时返回 nil，调用处再决定要不要留在助理会话。
-    func preferredWorkspaceChatId() -> String? {
-        resolvedWorkspaceChat(anchoredTo: nil)?.id
+    func preferredWorkspaceChatId(anchoredTo chatId: String? = nil) -> String? {
+        resolvedWorkspaceChat(anchoredTo: chatId)?.id
     }
 
     var currentWorkspaceName: String { workspaceTitle(anchoredTo: nil) }

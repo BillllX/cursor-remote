@@ -21,9 +21,10 @@ struct MemoryCenterActivityPane: View {
                     Text("\(Self.actionLabel(row.action)) · \(row.scope)").font(JieboFont.text(.subheadline, weight: .semibold))
                     Text(row.summary).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2)
                     if row.canRestore {
-                        Button("恢复") { store.memoryCenterRestore(scope: row.scope, auditId: row.auditId) }
-                            .font(JieboFont.text(.footnote))
-                            .disabled(store.memoryCenterExtrasStorage.restoreReqByAuditId[row.auditId] != nil)
+                        ActionButton(title: "恢复", kind: .outline) {
+                            store.memoryCenterRestore(scope: row.scope, auditId: row.auditId)
+                        }
+                        .disabled(store.memoryCenterExtrasStorage.restoreReqByAuditId[row.auditId] != nil)
                     } else if let blocked = row.blocked {
                         Text(blocked).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
                     }
@@ -64,8 +65,7 @@ struct MemoryCenterSuggestionsPane: View {
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.dim)
             if confirmBulk {
-                Button("返回") { confirmBulk = false }
-                    .font(JieboFont.text(.subheadline))
+                ActionButton(title: "返回", kind: .outline) { confirmBulk = false }
                 Text("看完全文再确认。缺引用的不会进这里。")
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
@@ -88,9 +88,10 @@ struct MemoryCenterSuggestionsPane: View {
             } else {
             suggestionList
             if !bulk.isEmpty {
-                Button("一次处理风险低的 \(bulk.count) 条") { confirmBulk = true }
-                    .font(JieboFont.text(.subheadline))
-                    .padding(.top, 8)
+                ActionButton(title: "一次处理风险低的 \(bulk.count) 条", kind: .outline) {
+                    confirmBulk = true
+                }
+                .padding(.top, 8)
             }
             }
         }
@@ -119,11 +120,17 @@ struct MemoryCenterSuggestionsPane: View {
                             store.memoryCenterAnswerSuggestion(scope: row.scope, id: row.id, accept: false)
                         }
                         .disabled(store.memoryCenterExtrasStorage.suggestionBusyById[row.id] == true)
-                        Button(MemoryCenterLabels.suggestionOutcome(row.kind)) {
+                        Button {
                             store.memoryCenterAnswerSuggestion(scope: row.scope, id: row.id, accept: true)
+                        } label: {
+                            Text(MemoryCenterLabels.suggestionOutcome(row.kind))
+                                .font(JieboFont.text(.subheadline, weight: .semibold))
+                                .foregroundStyle(JieboColor.clay)
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 36)
+                                .contentShape(Rectangle())
                         }
-                        .font(JieboFont.text(.subheadline, weight: .semibold))
-                        .foregroundStyle(JieboColor.clay)
+                        .buttonStyle(.plain)
                         .disabled(store.memoryCenterExtrasStorage.suggestionBusyById[row.id] == true)
                     }
                     if let err = store.memoryCenterExtrasStorage.suggestionErrorById[row.id], !err.isEmpty {

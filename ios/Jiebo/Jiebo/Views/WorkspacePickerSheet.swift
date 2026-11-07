@@ -49,18 +49,21 @@ struct WorkspacePickerSheet: View {
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
+                    .listRowBackground(JieboColor.white)
                 } else if !needle.isEmpty, items.isEmpty {
                     Section {
                         Text("没有匹配的文件夹")
                             .font(JieboFont.text(.body))
                             .foregroundStyle(JieboColor.dim)
                     }
+                    .listRowBackground(JieboColor.white)
                 } else if !needle.isEmpty {
                     Section("搜索结果") {
                         ForEach(items) { item in
                             row(item, showPath: true, stat: stats[normPath(item.path)])
                         }
                     }
+                    .listRowBackground(JieboColor.white)
                 } else {
                     if !recent.isEmpty {
                         Section("最近") {
@@ -68,6 +71,7 @@ struct WorkspacePickerSheet: View {
                                 row(item, showPath: duplicates.contains(item.name), stat: stats[normPath(item.path)])
                             }
                         }
+                        .listRowBackground(JieboColor.white)
                     }
                     if !remaining.isEmpty {
                         Section {
@@ -79,6 +83,7 @@ struct WorkspacePickerSheet: View {
                         } footer: {
                             Text("切过去会打开那里最近的对话，没有就新建一个。长按或左滑可以重命名、清空对话、删除。")
                         }
+                        .listRowBackground(JieboColor.white)
                     }
                 }
             }

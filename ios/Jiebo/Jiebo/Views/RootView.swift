@@ -301,7 +301,7 @@ struct CollapsedSidebarRail: View {
             KbWorkspaceSheet(
                 workspacePath: store.workspacePath(anchoredTo: sceneSession?.workbenchChatId),
                 workspaceName: store.workspaceTitle(anchoredTo: sceneSession?.workbenchChatId),
-                chatId: sceneSession?.workbenchChatId
+                chatId: store.preferredWorkspaceChatId(anchoredTo: sceneSession?.workbenchChatId)
             )
         }
         .sheet(isPresented: $memoryOpen) {

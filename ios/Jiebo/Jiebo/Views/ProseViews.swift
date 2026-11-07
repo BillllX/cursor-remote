@@ -277,10 +277,45 @@ struct ProseLines: View {
     private static func cells(_ line: String) -> [String] {
         var trimmed = line.trimmingCharacters(in: .whitespaces)
         if trimmed.hasPrefix("|") { trimmed.removeFirst() }
-        if trimmed.hasSuffix("|") { trimmed.removeLast() }
-        return trimmed.split(separator: "|", omittingEmptySubsequences: false).map {
-            $0.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasSuffix("|") {
+            let withoutPipe = trimmed.dropLast()
+            let trailingSlashes = withoutPipe.reversed().prefix(while: { $0 == "\\" }).count
+            if trailingSlashes % 2 == 0 {
+                trimmed.removeLast()
+            }
         }
+        var out: [String] = []
+        var current = ""
+        var inCode = false
+        var iterator = trimmed.makeIterator()
+        while let ch = iterator.next() {
+            if ch == "\\" {
+                if let next = iterator.next() {
+                    if next == "|" && !inCode {
+                        current.append("|")
+                    } else {
+                        current.append("\\")
+                        current.append(next)
+                    }
+                } else {
+                    current.append("\\")
+                }
+                continue
+            }
+            if ch == "`" {
+                inCode.toggle()
+                current.append(ch)
+                continue
+            }
+            if ch == "|" && !inCode {
+                out.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(ch)
+            }
+        }
+        out.append(current.trimmingCharacters(in: .whitespaces))
+        return out
     }
 
 }
@@ -355,12 +390,16 @@ private struct ProseLineRow: View, Equatable {
 /// 横滑再配无限宽，后几列会甩到屏幕外，行高却被那边的长文撑出一片空白。
 private struct HairlineTable: View {
     @Environment(\.sizeCategory) private var sizeCategory
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let headers: [String]
     let rows: [[String]]
 
     private static let lineBreak = try! NSRegularExpression(
         pattern: "<br\\s*/?>",
         options: [.caseInsensitive]
+    )
+    private static let markdownLink = try! NSRegularExpression(
+        pattern: #"!?\[([^\]]*)\]\([^)]*\)"#
     )
 
     var body: some View {
@@ -377,14 +416,23 @@ private struct HairlineTable: View {
                 tableBody(widths: nil)
             }
         }
+        .tint(JieboColor.pine)
         .padding(.top, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 五列以上，或任一格长到需要换行：并排会把内容推出屏幕。
+    /// 五列以上、无障碍超大字号，或任一格长到需要换行：并排会把内容推出屏幕。
     private var unfolds: Bool {
-        if headers.count >= 5 { return true }
+        if headers.count >= 5 || dynamicTypeSize.isAccessibilitySize { return true }
         return rows.contains { row in row.contains { Self.unfoldsCell($0) } }
+    }
+
+    /// 展开态左侧表头列宽：按除首列外的表头实际可见宽度自适应（56~116pt），避免 2 字表头硬占 148pt 挤压窄屏正文
+    private var unfoldedHeaderWidth: CGFloat {
+        let widest = headers.dropFirst()
+            .map { Self.estimatedWidth(Self.visibleText($0), font: 12) }
+            .max() ?? 56
+        return min(max(widest + 8, 56), 116)
     }
 
     private var unfolded: some View {
@@ -427,7 +475,7 @@ private struct HairlineTable: View {
     private func unfoldedField(header: String, value: String) -> some View {
         let shown = Self.displayText(value).trimmingCharacters(in: .whitespacesAndNewlines)
         if !shown.isEmpty {
-            if Self.unfoldsCell(shown) {
+            if Self.unfoldsCell(shown) || dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(inline(header, kind: .tableHeader))
                         .foregroundStyle(JieboColor.dim)
@@ -445,7 +493,7 @@ private struct HairlineTable: View {
                         .foregroundStyle(JieboColor.dim)
                         .tracking(0.4)
                         .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 148, alignment: .leading)
+                        .frame(width: unfoldedHeaderWidth, alignment: .leading)
                     Text(inline(shown, kind: .tableBody))
                         .foregroundStyle(JieboColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
@@ -471,7 +519,7 @@ private struct HairlineTable: View {
             let font: CGFloat = index == 0 ? 12 : 16
             let samples = [headers[index]] + rows.map { cell($0, index) }
             let widest = samples
-                .flatMap { Self.displayText($0).components(separatedBy: .newlines) }
+                .flatMap { Self.visibleText($0).components(separatedBy: .newlines) }
                 .map { Self.estimatedWidth($0, font: font) }
                 .max() ?? 0
             return min(max(widest + 2, 64), 168)
@@ -530,15 +578,24 @@ private struct HairlineTable: View {
     }
 
     /// 单元格里的 br 是换行。并排时这一格会把整行撑得很高，旁边几列又看不见。
+    /// 注意：先剥离 [label](url) 的隐藏 URL，避免 @文件 链接把普通短表误判成超宽而强行展开。
     private static func unfoldsCell(_ raw: String) -> Bool {
-        let shown = displayText(raw)
+        let shown = visibleText(raw)
         if shown.contains(where: { $0.isNewline }) { return true }
         return estimatedWidth(shown, font: 16) > 240
     }
 
+    /// 剥掉 Markdown 链接的隐藏 URL，只保留用户肉眼可见的文字用于测宽
+    static func visibleText(_ raw: String) -> String {
+        let text = displayText(raw)
+        guard text.contains("](") else { return text }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return markdownLink.stringByReplacingMatches(in: text, range: range, withTemplate: "$1")
+    }
+
     static func displayText(_ raw: String) -> String {
         let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        var text = lineBreak.stringByReplacingMatches(in: raw, range: range, withTemplate: "\n")
+        let text = lineBreak.stringByReplacingMatches(in: raw, range: range, withTemplate: "\n")
         guard text.contains("&") else { return text }
         return text
             .replacingOccurrences(of: "&nbsp;", with: " ")
@@ -550,7 +607,7 @@ private struct HairlineTable: View {
     private static func estimatedWidth(_ text: String, font: CGFloat) -> CGFloat {
         var width: CGFloat = 0
         for scalar in text.unicodeScalars {
-            if scalar == "*" || scalar == "`" { continue }
+            if scalar == "*" || scalar == "`" || scalar == "~" { continue }
             width += scalar.value > 0xFF ? font : font * 0.56
         }
         return width
