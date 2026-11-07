@@ -879,39 +879,53 @@ extension ChatStore {
         case .fileChanged(let changedChatId, let path):
             ThumbnailStore.shared.invalidateCurrent(chatId: changedChatId, path: path, store: self)
             reloadPreview(path: path, chatId: changedChatId)
-            if changedChatId == activeId || changedChatId == chatHomeThreadChatId {
-                scheduleFileIndexFallback(chatId: changedChatId)
+            let sameWorkspace = sameCwd(chats.first(where: { $0.id == changedChatId })?.cwd, active?.cwd)
+            if changedChatId == activeId || changedChatId == chatHomeThreadChatId || sameWorkspace {
+                scheduleFileIndexFallback(chatId: sameWorkspace ? activeId : changedChatId)
             }
         case .undone(_, let paths, let error):
             settleRestore(chatId: chatId, paths: paths, error: error?.nilIfEmpty)
-            // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
-            guard chatId == activeId || chatId == chatHomeThreadChatId else { break }
-            if let error {
-                notice = error
-                for index in previewTabs.indices where previewTabs[index].loading && previewTabs[index].diff {
-                    previewTabs[index].loading = false
-                }
-            } else if paths.isEmpty {
-                notice = "没有可还原的改动"
-                for index in previewTabs.indices where previewTabs[index].loading && previewTabs[index].diff {
+            let sourceCwd = chats.first(where: { $0.id == chatId })?.cwd
+            let affectsActiveWorkspace = chatId == activeId
+                || chatId == chatHomeThreadChatId
+                || sameCwd(sourceCwd, active?.cwd)
+            if error != nil || paths.isEmpty {
+                for index in previewTabs.indices where previewTabs[index].loading
+                    && previewTabs[index].diff
+                    && previewTabs[index].readSha == nil
+                    && (readChatId(previewTabs[index]) == chatId || (!previewTabs[index].fromCard && sameCwd(sourceCwd, previewTabs[index].cwd ?? active?.cwd))) {
                     previewTabs[index].loading = false
                 }
             } else {
-                notice = "已还原 \(paths.joined(separator: ", "))"
                 for raw in paths {
-                    let key = relToCwd(raw)
-                    gitStatus.removeValue(forKey: key)
-                    if raw != key { gitStatus.removeValue(forKey: raw) }
+                    let key = relToCwd(raw, chatId: chatId)
+                    if affectsActiveWorkspace {
+                        gitStatus.removeValue(forKey: key)
+                        if raw != key { gitStatus.removeValue(forKey: raw) }
+                    }
                     for index in previewTabs.indices {
-                        let tabPath = previewTabs[index].path
-                        if tabPath == key || tabPath == raw || relToCwd(tabPath) == key {
+                        let tab = previewTabs[index]
+                        let matchesSession = readChatId(tab) == chatId
+                        let matchesWorkspace = !tab.fromCard && sameCwd(sourceCwd, tab.cwd ?? active?.cwd)
+                        guard tab.readSha == nil, matchesSession || matchesWorkspace else { continue }
+                        let tabPath = tab.path
+                        if tabPath == key || tabPath == raw || relToCwd(tabPath, chatId: chatId) == key {
                             previewTabs[index].diff = false
                         }
                     }
                     reloadPreview(path: raw, chatId: chatId)
                 }
             }
-            scheduleFileIndexFallback(chatId: chatId)
+            // 只反馈当前会话的 undo（chatId 已在 handle 入口解析为 activeId 兜底）
+            guard affectsActiveWorkspace else { break }
+            if let error {
+                notice = error
+            } else if paths.isEmpty {
+                notice = "没有可还原的改动"
+            } else {
+                notice = "已还原 \(paths.joined(separator: ", "))"
+            }
+            scheduleFileIndexFallback(chatId: activeId)
         case .assistantState(let state, let reqId, let generation):
             receiveAssistantState(state, reqId: reqId, generation: generation)
         case .assistantNotModified(let revision, let reqId, let generation):

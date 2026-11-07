@@ -27,16 +27,24 @@ struct AdminStatsView: View {
                             systemImage: NavigationIconId.stats.symbol,
                             description: Text(store.connected ? "点右上角刷新再试一次。" : "连上以后会自动拉取。")
                         )
+                        .listRowBackground(Color.clear)
                     }
                 } else {
                     cursorSection
+                        .listRowBackground(JieboColor.white)
                     summarySection
+                        .listRowBackground(JieboColor.white)
                     ForEach(store.adminStats) { row in
                         tenantSection(row)
+                            .listRowBackground(JieboColor.white)
                     }
                     footer
+                        .listRowBackground(Color.clear)
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle("使用统计")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

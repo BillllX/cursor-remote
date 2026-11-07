@@ -285,13 +285,18 @@ struct ProseLines: View {
 
 }
 
-/// 一行正文。相等时不重做行内 Markdown。字号档写进相等判断，动态字号仍会重排。
+/// 一行正文。相等时不重做行内 Markdown。字号档与主题写进相等判断，动态字号和切主题仍会重排。
 private struct ProseLineRow: View, Equatable {
     let line: String
     let sizeCategory: ContentSizeCategory
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
 
     static func == (lhs: ProseLineRow, rhs: ProseLineRow) -> Bool {
-        lhs.line == rhs.line && lhs.sizeCategory == rhs.sizeCategory
+        lhs.line == rhs.line
+            && lhs.sizeCategory == rhs.sizeCategory
+            && lhs.palette == rhs.palette
+            && lhs.appearance == rhs.appearance
     }
 
     var body: some View {

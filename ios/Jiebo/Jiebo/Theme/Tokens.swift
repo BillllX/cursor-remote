@@ -171,10 +171,23 @@ final class JieboTheme {
 
 /// 表面色跟当前配色和系统明暗走。视图继续写 JieboColor.paper，读取时会订上 JieboTheme。
 enum JieboColor {
+    fileprivate static func isDark(_ traits: UITraitCollection, appearance: JieboAppearance) -> Bool {
+        switch appearance {
+        case .light: return false
+        case .dark: return true
+        case .system: return traits.userInterfaceStyle == .dark
+        }
+    }
+
     private static func surface(_ key: KeyPath<JieboSurfaces, UInt32>) -> Color {
         let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         return Color(uiColor: UIColor { traits in
-            let ink = traits.userInterfaceStyle == .dark ? palette.dark : palette.light
+            let currentPalette = JieboTheme.shared.palette
+            let currentAppearance = JieboTheme.shared.appearance
+            let dark = isDark(traits, appearance: currentAppearance)
+            let ink = dark ? currentPalette.dark : currentPalette.light
+            _ = (palette, appearance)
             return UIColor(hex: ink[keyPath: key])
         })
     }
@@ -193,33 +206,51 @@ enum JieboColor {
     /// 实心按钮上的字。浅色用面板色，深色用页面底。
     static var fillFg: Color {
         let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         return Color(uiColor: UIColor { traits in
-            let dark = traits.userInterfaceStyle == .dark
-            let ink = dark ? palette.dark : palette.light
+            let currentPalette = JieboTheme.shared.palette
+            let currentAppearance = JieboTheme.shared.appearance
+            let dark = isDark(traits, appearance: currentAppearance)
+            let ink = dark ? currentPalette.dark : currentPalette.light
+            _ = (palette, appearance)
             return UIColor(hex: dark ? ink.bg : ink.panel)
         })
     }
 
     private static func extra(_ key: KeyPath<(composer: UInt32, dim: UInt32, borderStrong: UInt32), UInt32>) -> Color {
         let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         return Color(uiColor: UIColor { traits in
-            let dark = traits.userInterfaceStyle == .dark
-            return UIColor(hex: palette.extras(dark: dark)[keyPath: key])
+            let currentPalette = JieboTheme.shared.palette
+            let currentAppearance = JieboTheme.shared.appearance
+            let dark = isDark(traits, appearance: currentAppearance)
+            _ = (palette, appearance)
+            return UIColor(hex: currentPalette.extras(dark: dark)[keyPath: key])
         })
     }
     /// 缩略图占位、浅胶囊的底：卡片色往细边色靠 45%。浅色比卡片略深，深色比卡片略亮——两种主题下都不会比卡片更黑
     static var well: Color {
         let palette = JieboTheme.shared.palette
+        let appearance = JieboTheme.shared.appearance
         return Color(uiColor: UIColor { traits in
-            let ink = traits.userInterfaceStyle == .dark ? palette.dark : palette.light
+            let currentPalette = JieboTheme.shared.palette
+            let currentAppearance = JieboTheme.shared.appearance
+            let dark = isDark(traits, appearance: currentAppearance)
+            let ink = dark ? currentPalette.dark : currentPalette.light
+            _ = (palette, appearance)
             return UIColor(hex: blend(ink.panel, ink.border, 0.45))
         })
     }
 
     /// 骨架扫光：任何主题下都比底色亮一点（深色里只是一层很淡的白）
-    static let shimmer = Color(uiColor: UIColor { traits in
-        UIColor.white.withAlphaComponent(traits.userInterfaceStyle == .dark ? 0.12 : 0.55)
-    })
+    static var shimmer: Color {
+        let appearance = JieboTheme.shared.appearance
+        return Color(uiColor: UIColor { traits in
+            let dark = isDark(traits, appearance: JieboTheme.shared.appearance)
+            _ = appearance
+            return UIColor.white.withAlphaComponent(dark ? 0.12 : 0.55)
+        })
+    }
 
     private static func blend(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {
         func channel(_ shift: UInt32) -> UInt32 {
@@ -325,7 +356,8 @@ extension Color {
 
     init(light: UInt32, dark: UInt32) {
         self.init(uiColor: UIColor { traits in
-            traits.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light)
+            let isDark = JieboColor.isDark(traits, appearance: JieboTheme.shared.appearance)
+            return isDark ? UIColor(hex: dark) : UIColor(hex: light)
         })
     }
 }
@@ -513,20 +545,5 @@ struct ShimmerText: View {
                 }
             }
         }
-    }
-}
-
-/// 助手头像（对齐 web 的 .bot-avatar：28px 圆、浅底、muted 小字）
-struct BotAvatar: View {
-    var body: some View {
-        Text("接")
-            .font(JieboFont.text(.caption2, weight: .semibold))
-            .foregroundStyle(JieboColor.pine)
-            .padding(.horizontal, 4)
-            .frame(minWidth: 28, minHeight: 28)
-            .background(JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .padding(.top, 2)
-            .accessibilityHidden(true)
     }
 }

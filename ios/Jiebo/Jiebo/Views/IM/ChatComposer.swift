@@ -117,19 +117,21 @@ struct ChatComposer: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
                         .background(JieboColor.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
                                 .stroke(JieboColor.line, lineWidth: 1)
                         )
                 }
                 if canSend {
                     Button(action: send) {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 30))
-                            .foregroundStyle(JieboColor.pine)
-                            .frame(width: 40, height: 40)
-                            .contentShape(Rectangle())
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(JieboColor.fillFg)
+                            .frame(width: 36, height: 36)
+                            .background(JieboColor.pine)
+                            .clipShape(Circle())
+                            .hitTarget()
                     }
                     .buttonStyle(PressScaleButtonStyle())
                     .keyboardShortcut(.return, modifiers: .command)
@@ -141,7 +143,7 @@ struct ChatComposer: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
         }
-        .background(JieboColor.sidebar.ignoresSafeArea(edges: .bottom))
+        .background(JieboColor.paper.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) {
             Rectangle().fill(JieboColor.line).frame(height: 1)
         }
@@ -247,11 +249,11 @@ struct ChatComposer: View {
                 }
             }
         } label: {
-            Image(systemName: "plus.circle")
-                .font(.system(size: 26, weight: .regular))
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
+                .frame(width: 36, height: 36)
+                .hitTarget()
         }
         .accessibilityLabel("发送附件")
     }
@@ -259,10 +261,10 @@ struct ChatComposer: View {
     private func iconButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 22))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
-                .frame(width: 40, height: 40)
-                .contentShape(Rectangle())
+                .frame(width: 36, height: 36)
+                .hitTarget()
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -333,9 +335,9 @@ struct ChatComposer: View {
             .foregroundStyle(recorder.cancelling ? JieboColor.danger : JieboColor.ink)
             .frame(maxWidth: .infinity, minHeight: 40)
             .background(recorder.recording ? JieboColor.well : JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(JieboColor.line)
+                RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(JieboColor.line)
             }
             .contentShape(Rectangle())
             .gesture(

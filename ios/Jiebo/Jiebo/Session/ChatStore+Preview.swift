@@ -42,12 +42,15 @@ extension ChatStore {
         }
     }
 
-    /// 文件变化推送只刷新对应会话的当前版本；卡片历史快照保持不变。
+    /// 文件变化推送只刷新对应会话（或同工作区的普通页签）的当前版本；卡片历史快照保持不变。
     func reloadPreview(path rawPath: String, chatId: String) {
         let path = relToCwd(rawPath, chatId: chatId)
+        let sourceCwd = chats.first(where: { $0.id == chatId })?.cwd
         for index in previewTabs.indices {
             let tab = previewTabs[index]
-            guard readChatId(tab) == chatId,
+            let sameSession = readChatId(tab) == chatId
+            let sameWorkspace = !tab.fromCard && sameCwd(sourceCwd, tab.cwd ?? active?.cwd)
+            guard sameSession || sameWorkspace,
                   (tab.path == path || tab.path == rawPath),
                   tab.readSha == nil else { continue }
             previewTabs[index].content = nil

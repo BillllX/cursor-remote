@@ -543,7 +543,7 @@ struct ImUnreadBadge: View {
     var body: some View {
         Text(ImFormat.badge(count))
             .font(JieboFont.text(.caption2, weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(JieboColor.fillFg)
             .padding(.horizontal, 5)
             .frame(minWidth: 16, minHeight: 16)
             .background(JieboColor.danger)

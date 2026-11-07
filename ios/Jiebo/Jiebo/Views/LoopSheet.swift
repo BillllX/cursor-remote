@@ -24,6 +24,7 @@ struct LoopSheet: View {
                 TextField("最多拍数，可空", text: $maxTicks)
                     .keyboardType(.numbersAndPunctuation)
             }
+            .listRowBackground(JieboColor.white)
             Section {
                 if !store.loopError.isEmpty {
                     Text(store.loopError)
@@ -40,13 +41,17 @@ struct LoopSheet: View {
                         .foregroundStyle(JieboColor.dim)
                 }
             }
+            .listRowBackground(JieboColor.white)
             Section {
                 Button("开始") { start() }
                     .disabled(live)
                 Button("停止", role: .destructive) { store.stopActiveLoop() }
                     .disabled(!live)
             }
+            .listRowBackground(JieboColor.white)
         }
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .onAppear { refill() }
         .onChange(of: store.activeId) { _, _ in refill() }
     }

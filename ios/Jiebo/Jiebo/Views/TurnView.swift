@@ -21,6 +21,8 @@ struct TurnView: View, Equatable {
     /// 这一轮 todo_add 记下的待办（按工具结果里的 id 对上今日里的那条），回执里能撤销和改
     var captured: [TodoReceipt] = []
     var calendarInvite: AssistantCalendar? = nil
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
     @State private var editingTodo: AssistantTodo?
     @State private var thinkingOpen = false
     @State private var thinkingPinned = false
@@ -37,6 +39,7 @@ struct TurnView: View, Equatable {
             && lhs.waitingForLink == rhs.waitingForLink
             && lhs.reviewMark == rhs.reviewMark && lhs.restoring == rhs.restoring
             && lhs.captured == rhs.captured && lhs.calendarInvite == rhs.calendarInvite
+            && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
     }
 
     private var thinkingShimmerActive: Bool {

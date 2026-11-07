@@ -126,7 +126,7 @@ struct ToolCardView: View {
                 ToolDetail(tool: tool)
             }
         }
-        .padding(.horizontal, compactPresentation ? 8 : 12)
+        .padding(.horizontal, compactPresentation ? 8 : (showBorder ? 12 : 0))
         .padding(.bottom, expanded ? 10 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)

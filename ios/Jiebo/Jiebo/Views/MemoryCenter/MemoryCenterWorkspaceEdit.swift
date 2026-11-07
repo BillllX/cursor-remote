@@ -16,17 +16,22 @@ struct MemoryCenterWorkspaceCreateSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                mutationErrorBlock
-                Picker("章节", selection: $section) {
-                    ForEach(mcSections, id: \.self) { Text($0).tag($0) }
+                Section {
+                    mutationErrorBlock
+                    Picker("章节", selection: $section) {
+                        ForEach(mcSections, id: \.self) { Text($0).tag($0) }
+                    }
+                    TextField("正文", text: $text, axis: .vertical)
+                        .lineLimit(4...8)
+                    TextField("引用（逗号或换行分隔）", text: $refsText, axis: .vertical)
+                        .lineLimit(2...4)
+                    TextField("过期日（可选）", text: $expires)
+                        .textInputAutocapitalization(.never)
                 }
-                TextField("正文", text: $text, axis: .vertical)
-                    .lineLimit(4...8)
-                TextField("引用（逗号或换行分隔）", text: $refsText, axis: .vertical)
-                    .lineLimit(2...4)
-                TextField("过期日（可选）", text: $expires)
-                    .textInputAutocapitalization(.never)
+                .listRowBackground(JieboColor.white)
             }
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle("记一条")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -50,14 +55,17 @@ struct MemoryCenterWorkspaceCreateSheet: View {
     private var mutationErrorBlock: some View {
         if !store.memoryCenterData.mutationError.isEmpty {
             Text(store.memoryCenterData.mutationError)
-                .foregroundStyle(.red)
+                .foregroundStyle(JieboColor.danger)
                 .font(JieboFont.text(.caption))
                 .accessibilityLabel("保存错误")
         }
     }
 
     private func submitCreate() {
-        let refs = refsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let refs = refsText
+            .components(separatedBy: CharacterSet(charactersIn: ",，\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         var mutation: [String: JSONValue] = [
             "action": .string("create"),
             "section": .string(section),
@@ -106,21 +114,25 @@ struct MemoryCenterWorkspaceEditSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                mutationErrorBlock
-                Picker("章节", selection: $section) {
-                    ForEach(mcSections, id: \.self) { Text($0).tag($0) }
+                Section {
+                    mutationErrorBlock
+                    Picker("章节", selection: $section) {
+                        ForEach(mcSections, id: \.self) { Text($0).tag($0) }
+                    }
+                    TextField("正文", text: $text, axis: .vertical)
+                        .lineLimit(4...8)
+                    TextField("引用", text: $refsText, axis: .vertical)
+                        .lineLimit(2...4)
+                    TextField("过期日", text: $expires)
+                        .textInputAutocapitalization(.never)
                 }
-                TextField("正文", text: $text, axis: .vertical)
-                    .lineLimit(4...8)
-                TextField("引用", text: $refsText, axis: .vertical)
-                    .lineLimit(2...4)
-                TextField("过期日", text: $expires)
-                    .textInputAutocapitalization(.never)
+                .listRowBackground(JieboColor.white)
                 Section("状态") {
                     Button(liveItem.pinned ? "不再始终带上" : "始终带上") {
+                        guard let itemId = liveItem.id else { return }
                         sendMutation([
                             "action": .string("set_pinned"),
-                            "id": .string(liveItem.id!),
+                            "id": .string(itemId),
                             "revision": .string(liveItem.revision),
                             "pinned": .bool(!liveItem.pinned),
                         ])
@@ -128,45 +140,56 @@ struct MemoryCenterWorkspaceEditSheet: View {
                     .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     if liveItem.effectiveState == "done" || liveItem.state == "done" {
                         Button("再拿来用") {
+                            guard let itemId = liveItem.id else { return }
                             sendMutation([
                                 "action": .string("set_state"),
-                                "id": .string(liveItem.id!),
+                                "id": .string(itemId),
                                 "revision": .string(liveItem.revision),
                                 "state": .string("hot"),
                             ])
                         }
+                        .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     } else {
                         Button("标成已办完") {
+                            guard let itemId = liveItem.id else { return }
                             sendMutation([
                                 "action": .string("set_state"),
-                                "id": .string(liveItem.id!),
+                                "id": .string(itemId),
                                 "revision": .string(liveItem.revision),
                                 "state": .string("done"),
                             ])
                         }
-                        .disabled(liveItem.pinned)
+                        .disabled(liveItem.pinned || store.memoryCenterData.mutating || liveItem.id == nil)
                         Button(liveItem.state == "cold" ? "再拿来用" : "标成很久没用") {
+                            guard let itemId = liveItem.id else { return }
                             sendMutation([
                                 "action": .string("set_state"),
-                                "id": .string(liveItem.id!),
+                                "id": .string(itemId),
                                 "revision": .string(liveItem.revision),
                                 "state": .string(liveItem.state == "cold" ? "hot" : "cold"),
                             ])
                         }
+                        .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     }
                     if confirmDelete {
                         Button("确认永久删除", role: .destructive) {
+                            guard let itemId = liveItem.id else { return }
                             sendMutation([
                                 "action": .string("delete"),
-                                "id": .string(liveItem.id!),
+                                "id": .string(itemId),
                                 "revision": .string(liveItem.revision),
                             ], deleteAfter: true)
                         }
+                        .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     } else {
                         Button("彻底删除…", role: .destructive) { confirmDelete = true }
+                            .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     }
                 }
+                .listRowBackground(JieboColor.white)
             }
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle("改这一条")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -208,14 +231,17 @@ struct MemoryCenterWorkspaceEditSheet: View {
     private var mutationErrorBlock: some View {
         if !store.memoryCenterData.mutationError.isEmpty {
             Text(store.memoryCenterData.mutationError)
-                .foregroundStyle(.red)
+                .foregroundStyle(JieboColor.danger)
                 .font(JieboFont.text(.caption))
         }
     }
 
     private func savePatch() {
         guard let id = liveItem.id else { return }
-        let refs = refsText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let refs = refsText
+            .components(separatedBy: CharacterSet(charactersIn: ",，\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         var patch: [String: JSONValue] = [
             "section": .string(section),
             "text": .string(text.trimmingCharacters(in: .whitespacesAndNewlines)),

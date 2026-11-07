@@ -7,7 +7,12 @@ extension ComposerView {
     var assistantCapsuleRow: some View {
         HStack(alignment: .bottom, spacing: 6) {
             assistantAttachMenu
-            entryField(lineLimit: 1 ... 6, submitOnReturn: false, vertical: 11, horizontal: 0)
+            entryField(
+                lineLimit: 1 ... 6,
+                submitOnReturn: UIDevice.current.userInterfaceIdiom == .pad,
+                vertical: 11,
+                horizontal: 0
+            )
             // 忙碌时停止和发送并存：发送会排在当前这轮之后（与 iPad 的完整输入框一致）
             if chatBusy {
                 if !canSendNow { micButton }
@@ -112,7 +117,10 @@ extension ComposerView {
     private var assistantAttachMenu: some View {
         Menu {
             Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
-            Button { filePickerOpen = true } label: { Label("文件", systemImage: "doc") }
+            Button { filePickerOpen = true } label: { Label("本地文件", systemImage: "doc") }
+            if !isAssistantSession {
+                Button { fileBrowserOpen = true } label: { Label("工作区文件…", systemImage: "folder") }
+            }
             Section {
                 Toggle(isOn: Binding(get: { chrome.policy == "plane" }, set: { on in
                     if on != (chrome.policy == "plane") { store.togglePolicy(chatId: chatId) }

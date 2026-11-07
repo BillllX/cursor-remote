@@ -325,6 +325,9 @@ private struct PhoneSpaceBar: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .background(JieboColor.paper)
+        .overlay(alignment: .top) {
+            Rectangle().fill(JieboColor.line).frame(height: 1)
+        }
     }
 
     private func spaceButton(_ tab: PhoneTab, title: String, symbol: String, badge: Int, attention: Bool) -> some View {

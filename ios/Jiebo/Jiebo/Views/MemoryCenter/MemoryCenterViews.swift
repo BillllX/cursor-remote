@@ -1102,7 +1102,7 @@ struct MemoryCenterItemDetailView: View {
                 ActionButton(title: "改", kind: .outline) { showEdit = true }
                     .disabled(store.memoryCenterData.mutating)
                     .accessibilityLabel("改")
-                Text("文件夹规则在「更多」里，这里改不了。")
+                Text("文件夹规则在「规则与诊断」里查看，这里只改单条记忆。")
                     .font(JieboFont.text(.caption2))
                     .foregroundStyle(JieboColor.dim)
             }
@@ -1580,6 +1580,7 @@ struct MemoryCenterPhoneRememberMe: View {
                     ))
                     .tint(JieboColor.pine)
                 }
+                .listRowBackground(JieboColor.white)
                 Section {
                     ForEach(memory.orderedCoreKeys, id: \.self) { key in
                         NavigationLink(value: PhoneRoute.memoryPage(.coreField(key))) {
@@ -1593,6 +1594,7 @@ struct MemoryCenterPhoneRememberMe: View {
                         }
                     }
                 }
+                .listRowBackground(JieboColor.white)
                 Section {
                     ForEach(memory.entries.filter(\.isValid)) { entry in
                         VStack(alignment: .leading, spacing: 4) {
@@ -1621,6 +1623,7 @@ struct MemoryCenterPhoneRememberMe: View {
                         }
                     }
                 }
+                .listRowBackground(JieboColor.white)
                 let stale = memory.entries.filter { !$0.isValid }
                 if !stale.isEmpty {
                     Section("已失效记忆") {
@@ -1643,11 +1646,16 @@ struct MemoryCenterPhoneRememberMe: View {
                             }
                         }
                     }
+                    .listRowBackground(JieboColor.white)
                 }
             } else {
                 Text(store.assistantStatePendingTitle ?? "正在加载记忆…")
+                    .listRowBackground(JieboColor.white)
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .navigationTitle("记得的我")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -1671,9 +1679,13 @@ struct MemoryCenterPhoneCoreField: View {
         Form {
             TextField(field, text: $draft, axis: .vertical)
                 .lineLimit(4...12)
+                .listRowBackground(JieboColor.white)
             Button("保存") { save() }
                 .disabled(draft == original)
+                .listRowBackground(JieboColor.white)
         }
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .navigationTitle(field)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { reload() }
@@ -1704,8 +1716,10 @@ struct MemoryCenterPhonePersonalCreate: View {
     var body: some View {
         Form {
             TextField("主题，可以空着", text: $topic)
+                .listRowBackground(JieboColor.white)
             TextField("要记住的话", text: $text, axis: .vertical)
                 .lineLimit(3...8)
+                .listRowBackground(JieboColor.white)
             Button("保存") {
                 let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !body.isEmpty else { return }
@@ -1717,7 +1731,10 @@ struct MemoryCenterPhonePersonalCreate: View {
                 dismiss()
             }
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .listRowBackground(JieboColor.white)
         }
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .navigationTitle("记一条")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1746,8 +1763,10 @@ struct MemoryCenterPhonePersonalEdit: View {
         Form {
             if let entry {
                 TextField("主题，可以空着", text: $topic)
+                    .listRowBackground(JieboColor.white)
                 TextField("要记住的话", text: $text, axis: .vertical)
                     .lineLimit(3...8)
+                    .listRowBackground(JieboColor.white)
                 Button("保存") {
                     let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !body.isEmpty, canSave else { return }
@@ -1761,6 +1780,7 @@ struct MemoryCenterPhonePersonalEdit: View {
                     dismiss()
                 }
                 .disabled(!canSave)
+                .listRowBackground(JieboColor.white)
                 .onAppear {
                     topic = entry.topic
                     text = entry.text
@@ -1771,8 +1791,11 @@ struct MemoryCenterPhonePersonalEdit: View {
                 Text("这条已经不在了。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
+                    .listRowBackground(JieboColor.white)
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .navigationTitle("修改记忆")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1875,11 +1898,13 @@ struct MemoryCenterPhoneHome: View {
                 Section {
                     MemoryTidyButton()
                 }
+                .listRowBackground(JieboColor.white)
             }
             if searchActive {
                 Section {
                     MemoryCenterSearchList(selectedKey: .constant(nil), itemNavigation: .drillDownSearchHit)
                 }
+                .listRowBackground(JieboColor.white)
             } else {
                 Section("核心与文件夹") {
                     NavigationLink(value: PhoneRoute.memoryPage(.me)) {
@@ -1914,6 +1939,7 @@ struct MemoryCenterPhoneHome: View {
                         }
                     }
                 }
+                .listRowBackground(JieboColor.white)
                 Section("规则与诊断") {
                     if let folder {
                         NavigationLink(value: PhoneRoute.memoryPage(.rules(scopeId: folder.id))) {
@@ -1934,8 +1960,12 @@ struct MemoryCenterPhoneHome: View {
                         Text("导出与导入")
                     }
                 }
+                .listRowBackground(JieboColor.white)
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
         .navigationTitle("记忆")
         .searchable(text: $searchText, prompt: "搜索记忆")
         .refreshable {

@@ -17,10 +17,16 @@ struct PreviewPanelView: View {
     /// 窄屏左缘右滑关闭时的位移
     @State private var dragX: CGFloat = 0
     @State private var editing = false
+    @State private var editingOrigin: PreviewTab?
     @State private var draft = ""
     @State private var revertConfirm = false
     @State private var discardConfirm = false
     @State private var pendingDiscard: (() -> Void)?
+
+    private var activeTab: PreviewTab { editing ? (editingOrigin ?? tab) : tab }
+    private var tabIdentity: String {
+        "\(tab.path)\u{0}\(tab.diff)\u{0}\(tab.chatId ?? "")\u{0}\(tab.cwd ?? "")\u{0}\(tab.readSha ?? "")"
+    }
 
     private var compact: Bool { sizeClass == .compact }
     private var usesCompactHeader: Bool { compact || dynamicTypeSize.isAccessibilitySize }
@@ -56,11 +62,30 @@ struct PreviewPanelView: View {
             }
             Divider().overlay(JieboColor.line)
             if editing {
-                TextEditor(text: $draft)
-                    .font(JieboFont.monoText(.footnote))
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(JieboColor.white)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(hasUnsavedChanges ? JieboColor.clay : JieboColor.pine)
+                            .frame(width: 6, height: 6)
+                        Text(hasUnsavedChanges ? "未保存改动" : "正在编辑")
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(hasUnsavedChanges ? JieboColor.clay : JieboColor.ink2)
+                        Spacer()
+                        Text("\(draft.count) 字符")
+                            .font(JieboFont.monoText(.caption2))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(JieboColor.paper)
+                    Divider().overlay(JieboColor.line)
+                    TextEditor(text: $draft)
+                        .font(JieboFont.monoText(.footnote))
+                        .foregroundStyle(JieboColor.ink)
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .background(JieboColor.white)
+                }
             } else {
                 PreviewContentView(tab: tab)
             }
@@ -84,14 +109,43 @@ struct PreviewPanelView: View {
         .accessibilityAddTraits(modal ? .isModal : [])
         .accessibilityAction(.escape) { escapePreview() }
         .background { keyboardShortcuts }
+        .onChange(of: tabIdentity) { _, _ in
+            guard editing else { return }
+            if hasUnsavedChanges {
+                discardConfirm = true
+            } else {
+                editing = false
+                editingOrigin = nil
+                draft = tab.content ?? ""
+                discardConfirm = false
+                pendingDiscard = nil
+            }
+        }
+        .onChange(of: tab.content) { _, newContent in
+            guard editing, let newContent, let origin = editingOrigin, origin.path == tab.path else { return }
+            guard newContent != origin.content, newContent != draft else { return }
+            if !hasUnsavedChanges {
+                draft = newContent
+                editingOrigin?.content = newContent
+            } else {
+                discardConfirm = true
+            }
+        }
         .alert("放弃未保存的修改？", isPresented: $discardConfirm) {
             Button("放弃修改", role: .destructive) {
                 let action = pendingDiscard
                 pendingDiscard = nil
                 editing = false
+                editingOrigin = nil
+                draft = tab.content ?? ""
                 action?()
             }
-            Button("继续编辑", role: .cancel) { pendingDiscard = nil }
+            Button("继续编辑", role: .cancel) {
+                pendingDiscard = nil
+                if let origin = editingOrigin, origin.path != tab.path {
+                    selectPreview(origin.path)
+                }
+            }
         } message: {
             Text("这个文件里还有没保存的修改。")
         }
@@ -127,7 +181,12 @@ struct PreviewPanelView: View {
         let tabs = previewTabs
         guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.path == tab.path }) else { return }
         let next = (index + delta + tabs.count) % tabs.count
-        selectPreview(tabs[next].path)
+        let targetPath = tabs[next].path
+        guard targetPath != tab.path else { return }
+        performOrConfirm {
+            editing = false
+            selectPreview(targetPath)
+        }
     }
 
     private var previewTabs: [PreviewTab] {
@@ -137,7 +196,7 @@ struct PreviewPanelView: View {
     private var fullscreen: Bool { sceneSession?.previewFullscreen == true }
 
     private var hasUnsavedChanges: Bool {
-        editing && draft != (tab.content ?? "")
+        editing && draft != (editingOrigin?.content ?? tab.content ?? "")
     }
 
     private func performOrConfirm(_ action: @escaping () -> Void) {
@@ -145,13 +204,14 @@ struct PreviewPanelView: View {
             pendingDiscard = action
             discardConfirm = true
         } else {
+            editing = false
+            editingOrigin = nil
             action()
         }
     }
 
     private func requestClose() {
         performOrConfirm {
-            editing = false
             closePreview()
         }
     }
@@ -180,8 +240,16 @@ struct PreviewPanelView: View {
     }
 
     private func closePreviewTab(_ path: String) {
-        if let sceneSession { sceneSession.closePreview(path) }
-        else { store.closePreviewTab(path) }
+        if path == tab.path {
+            performOrConfirm {
+                editing = false
+                if let sceneSession { sceneSession.closePreview(path) }
+                else { store.closePreviewTab(path) }
+            }
+        } else {
+            if let sceneSession { sceneSession.closePreview(path) }
+            else { store.closePreviewTab(path) }
+        }
     }
 
     /// 横向为主才跟手；拖过 120 或甩出去就关——不先归位，直接从当前位置滑出
@@ -197,6 +265,9 @@ struct PreviewPanelView: View {
                 let dx = value.translation.width
                 let horizontal = abs(dx) > abs(value.translation.height)
                 if horizontal, dx > 120 || value.predictedEndTranslation.width > 260 {
+                    if hasUnsavedChanges {
+                        withAnimation(JieboMotion.snappy(reduceMotion)) { dragX = 0 }
+                    }
                     requestClose()
                 } else {
                     withAnimation(JieboMotion.snappy(reduceMotion)) { dragX = 0 }
@@ -222,12 +293,12 @@ struct PreviewPanelView: View {
             .accessibilityLabel("返回对话")
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text(tab.filename)
+                    Text(activeTab.filename)
                         .font(JieboFont.text(.headline))
                         .foregroundStyle(JieboColor.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if tab.diff {
+                    if activeTab.diff {
                         Text("改动")
                             .font(JieboFont.text(.caption2, weight: .bold))
                             .foregroundStyle(JieboColor.brass)
@@ -242,26 +313,28 @@ struct PreviewPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             previewEditControls
-            Button {
-                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
-            } label: {
-                Group {
-                    if store.exportLoading {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 17, weight: .regular))
-                            .foregroundStyle(JieboColor.pine)
+            if !editing {
+                Button {
+                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+                } label: {
+                    Group {
+                        if store.exportLoading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 17, weight: .regular))
+                                .foregroundStyle(JieboColor.pine)
+                        }
                     }
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                 }
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+                .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+                .accessibilityLabel("分享 \(tab.filename)")
+                moreMenu
             }
-            .buttonStyle(.plain)
-            .hoverEffect(.highlight)
-            .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
-            .accessibilityLabel("分享 \(tab.filename)")
-            moreMenu
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
@@ -293,22 +366,28 @@ struct PreviewPanelView: View {
     private var editControlButtons: some View {
         if editing {
             Button("取消") {
-                performOrConfirm { editing = false }
+                performOrConfirm {
+                    editing = false
+                    editingOrigin = nil
+                }
             }
                 .font(JieboFont.text(.subheadline, weight: .medium))
                 .foregroundStyle(JieboColor.ink2)
                 .frame(minHeight: 44)
             Button("保存") {
-                store.savePreviewText(tab, content: draft)
+                let target = editingOrigin ?? tab
+                store.savePreviewText(target, content: draft)
                 editing = false
+                editingOrigin = nil
             }
             .font(JieboFont.text(.subheadline, weight: .semibold))
             .foregroundStyle(JieboColor.pine)
             .frame(minHeight: 44)
-            .disabled(draft == (tab.content ?? ""))
+            .disabled(!hasUnsavedChanges)
         } else if store.previewTextEditable(tab) {
             Button("编辑") {
                 draft = tab.content ?? ""
+                editingOrigin = tab
                 editing = true
             }
             .font(JieboFont.text(.subheadline, weight: .semibold))
@@ -466,10 +545,10 @@ struct PreviewPanelView: View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(tab.filename)
+                    Text(activeTab.filename)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
-                    if tab.diff {
+                    if activeTab.diff {
                         Text("DIFF")
                             .font(JieboFont.text(.caption2, weight: .bold))
                             .foregroundStyle(JieboColor.brass)
@@ -490,107 +569,109 @@ struct PreviewPanelView: View {
             }
             Spacer()
             previewEditControls
-            // diff/原文 切换（对齐网页的类型集：text/image/svg/markdown/html）。
-            // 图标固定、当前态高亮（对齐网页 IconDiff + active.diff 高亮），不做「目标态图标」
-            if tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg {
-                Button {
-                    performOrConfirm {
-                        editing = false
-                        store.togglePreviewDiff(tab.path)
+            if !editing {
+                // diff/原文 切换（对齐网页的类型集：text/image/svg/markdown/html）。
+                // 图标固定、当前态高亮（对齐网页 IconDiff + active.diff 高亮），不做「目标态图标」
+                if tab.kind == .text || tab.kind == .markdown || tab.kind == .html || tab.kind == .image || tab.kind == .svg {
+                    Button {
+                        performOrConfirm {
+                            editing = false
+                            store.togglePreviewDiff(tab.path)
+                        }
+                    } label: {
+                        Image(systemName: "plus.forwardslash.minus")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(tab.diff ? JieboColor.ink : JieboColor.ink2)
+                            .frame(width: 30, height: 30)
+                            .background(tab.diff ? JieboColor.ink.opacity(0.06) : Color.clear)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
+                            .hitTarget() // P6：视觉 30，命中 44
                     }
-                } label: {
-                    Image(systemName: "plus.forwardslash.minus")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(tab.diff ? JieboColor.ink : JieboColor.ink2)
-                        .frame(width: 30, height: 30)
-                        .background(tab.diff ? JieboColor.ink.opacity(0.06) : Color.clear)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
-                        .hitTarget() // P6：视觉 30，命中 44
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .accessibilityLabel(tab.diff ? "查看原文" : "查看改动")
                 }
-                .buttonStyle(.plain)
-                .hoverEffect(.highlight)
-                .accessibilityLabel(tab.diff ? "查看原文" : "查看改动")
-            }
-            // canvas 的 源码/画布 切换（P5d；对齐网页 live 开关，图标固定、当前态高亮）。
-            // 无运行时（本地 dev 降级源码）时隐藏——否则按钮点了视图不变
-            if tab.kind == .canvas, GatewayConfig.canvasRuntimeURL != nil {
-                Button {
-                    store.toggleCanvasSource(tab.path)
-                } label: {
-                    Image(systemName: "chevron.left.forwardslash.chevron.right")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(tab.showSource ? JieboColor.ink : JieboColor.ink2)
-                        .frame(width: 30, height: 30)
-                        .background(tab.showSource ? JieboColor.ink.opacity(0.06) : Color.clear)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
-                        .hitTarget()
+                // canvas 的 源码/画布 切换（P5d；对齐网页 live 开关，图标固定、当前态高亮）。
+                // 无运行时（本地 dev 降级源码）时隐藏——否则按钮点了视图不变
+                if tab.kind == .canvas, GatewayConfig.canvasRuntimeURL != nil {
+                    Button {
+                        store.toggleCanvasSource(tab.path)
+                    } label: {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(tab.showSource ? JieboColor.ink : JieboColor.ink2)
+                            .frame(width: 30, height: 30)
+                            .background(tab.showSource ? JieboColor.ink.opacity(0.06) : Color.clear)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(JieboColor.line, lineWidth: 1))
+                            .hitTarget()
+                    }
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
                 }
-                .buttonStyle(.plain)
-                .hoverEffect(.highlight)
-                .accessibilityLabel(tab.showSource ? "查看画布" : "查看源码")
-            }
-            // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
-            if tab.kind == .image, !tab.diff {
-                Button {
-                    store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
-                } label: {
-                    Image(systemName: "square.and.arrow.down.on.square")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(JieboColor.ink2)
-                        .frame(width: 30, height: 30)
-                        .background(JieboColor.mist)
-                        .clipShape(Circle())
-                        .hitTarget()
-                }
-                .buttonStyle(.plain)
-                .hoverEffect(.highlight)
-                .disabled(store.exportLoading) // 与分享按钮同一互斥位（GLM R1 M2）
-                .accessibilityLabel("保存 \(tab.filename) 到相册")
-            }
-            // P10：全类型分享（文本用内联 content 写 temp，媒体/大文件走 /media 下载）——
-            // 系统分享 sheet 覆盖存文件/存相册/隔空投送；替代原媒体类的 Quick Look 逃生门
-            //（QL 全屏预览仍可从文件树长按菜单进）
-            Button {
-                store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
-            } label: {
-                Group {
-                    if store.exportLoading {
-                        ProgressView().controlSize(.small).tint(JieboColor.dim)
-                    } else {
-                        Image(systemName: "square.and.arrow.up")
+                // P10：图片一键存相册（diff 对照态不给——diff 视图不是单张可存的图）
+                if tab.kind == .image, !tab.diff {
+                    Button {
+                        store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
+                    } label: {
+                        Image(systemName: "square.and.arrow.down.on.square")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
+                            .frame(width: 30, height: 30)
+                            .background(JieboColor.mist)
+                            .clipShape(Circle())
+                            .hitTarget()
                     }
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .disabled(store.exportLoading) // 与分享按钮同一互斥位（GLM R1 M2）
+                    .accessibilityLabel("保存 \(tab.filename) 到相册")
                 }
-                .frame(width: 30, height: 30)
-                .background(JieboColor.mist)
-                .clipShape(Circle())
-                .hitTarget()
-            }
-            .buttonStyle(.plain)
-            .hoverEffect(.highlight)
-            .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
-            .accessibilityLabel("分享 \(tab.filename)")
-            if canFullscreen {
-                PreviewFullscreenToggle(fullscreen: fullscreen, action: toggleFullscreen)
-            }
-            if tab.content != nil {
+                // P10：全类型分享（文本用内联 content 写 temp，媒体/大文件走 /media 下载）——
+                // 系统分享 sheet 覆盖存文件/存相册/隔空投送；替代原媒体类的 Quick Look 逃生门
+                //（QL 全屏预览仍可从文件树长按菜单进）
                 Button {
-                    UIPasteboard.general.string = tab.content
+                    store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
                 } label: {
-                    Image(systemName: "doc.on.doc")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(JieboColor.ink2)
-                        .frame(width: 30, height: 30)
-                        .background(JieboColor.mist)
-                        .clipShape(Circle())
-                        .hitTarget()
+                    Group {
+                        if store.exportLoading {
+                            ProgressView().controlSize(.small).tint(JieboColor.dim)
+                        } else {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                    }
+                    .frame(width: 30, height: 30)
+                    .background(JieboColor.mist)
+                    .clipShape(Circle())
+                    .hitTarget()
                 }
                 .buttonStyle(.plain)
                 .hoverEffect(.highlight)
-                .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
+                .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+                .accessibilityLabel("分享 \(tab.filename)")
+                if canFullscreen {
+                    PreviewFullscreenToggle(fullscreen: fullscreen, action: toggleFullscreen)
+                }
+                if tab.content != nil {
+                    Button {
+                        UIPasteboard.general.string = tab.content
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .frame(width: 30, height: 30)
+                            .background(JieboColor.mist)
+                            .clipShape(Circle())
+                            .hitTarget()
+                    }
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .accessibilityLabel(tab.diff ? "复制 diff" : "复制全部内容")
+                }
             }
             Button {
                 requestClose()
@@ -633,10 +714,10 @@ struct PreviewPanelView: View {
     }
 
     private var headerSubtitle: String {
-        if tab.path.hasPrefix("/") { return tab.path }
-        let base = tab.cwd ?? store.cwd
-        if base.isEmpty { return tab.path }
-        return base.hasSuffix("/") ? base + tab.path : "\(base)/\(tab.path)"
+        if activeTab.path.hasPrefix("/") { return activeTab.path }
+        let base = activeTab.cwd ?? store.cwd
+        if base.isEmpty { return activeTab.path }
+        return base.hasSuffix("/") ? base + activeTab.path : "\(base)/\(activeTab.path)"
     }
 }
 

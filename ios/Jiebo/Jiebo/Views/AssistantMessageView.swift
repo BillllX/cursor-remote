@@ -74,6 +74,12 @@ struct StreamingAssistantText: View {
 /// 流式时只有最后一段在变，前面的段不再重新拆块、解析表格和排版
 private struct ChunkedAssistantMessage: View, Equatable {
     let text: String
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
+
+    static func == (lhs: ChunkedAssistantMessage, rhs: ChunkedAssistantMessage) -> Bool {
+        lhs.text == rhs.text && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
+    }
 
     /// 段间距 = 原来一行空行的高度（5 + 12 + 5）
     private static let gap: CGFloat = 22
@@ -150,9 +156,11 @@ private final class ChunkMemo {
 
 private struct AssistantMessage: View, Equatable {
     let text: String
+    var palette: JieboPalette = JieboTheme.shared.palette
+    var appearance: JieboAppearance = JieboTheme.shared.appearance
 
     static func == (lhs: AssistantMessage, rhs: AssistantMessage) -> Bool {
-        lhs.text == rhs.text
+        lhs.text == rhs.text && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
     }
 
     var body: some View {

@@ -109,7 +109,7 @@ describe("iOS 流量优化 P0 契约", () => {
     assert.match(composer, /if reqId == nil[\s\S]*fileIndexFallbackTasks/);
     assert.match(handle, /case \.toolCompleted[\s\S]*scheduleFileIndexFallback/);
     assert.match(handle, /case \.fileChanged[\s\S]*scheduleFileIndexFallback/);
-    assert.match(cover, /requestFileIndex\(userInitiated: true\)/);
+    assert.match(cover, /requestFileIndex\((chatId: workbenchChatId, )?userInitiated: true\)/);
     assert.match(sheet, /requestFileIndex\(chatId: chatId, userInitiated: true\)/);
   });
 

@@ -45,10 +45,14 @@ struct ImLocationPicker: View {
                                 Text(place.address).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.dim)
                             }
                         }
+                        .listRowBackground(JieboColor.paper)
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .background(JieboColor.paper)
             }
+            .background(JieboColor.paper)
             .searchable(text: $query, prompt: "搜索地点")
             .onSubmit(of: .search) {
                 Task { results = await ImPlaceSearch.search(query, near: locator.coordinate) }

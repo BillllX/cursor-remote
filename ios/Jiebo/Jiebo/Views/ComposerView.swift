@@ -52,6 +52,7 @@ struct ComposerView: View {
     @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
+    var isAssistantSession: Bool { store.isAssistantChat(chatId) }
     var chrome: ComposerChrome {
         store.composerChromeByChat[chatId] ?? ComposerChrome(model: store.model)
     }
@@ -273,19 +274,17 @@ struct ComposerView: View {
     private var floating: Bool { style == .assistant && JieboGlass.available }
 
     var placeholder: String {
-        if style == .assistant {
-            if store.linkState == .offline { return "已断开" }
-            if !store.connected { return "正在连接…" }
+        if store.linkState == .offline { return "已断开" }
+        if !store.connected { return "正在连接…" }
+        if isAssistantSession {
             if chatBusy { return "正在回复，发送会排队" }
             return "跟\(store.assistantName)说点什么"
         }
-        if store.linkState == .offline { return "已断开" }
-        if !store.connected { return "正在连接…" }
-        if chatBusy { return "正在动手，Enter 会排队" }
+        if chatBusy { return "正在动手，发送会排队" }
         switch chatMode {
-        case .ask: return "问一句，不改文件，@ 引用 · 长按说话"
-        case .plan: return "描述任务，只出方案 · 长按说话"
-        case .agent: return "交代要做的事，@ 引用 · 长按说话"
+        case .ask: return "问一句，不改文件，@ 引用"
+        case .plan: return "描述任务，只出方案"
+        case .agent: return "交代要做的事，@ 引用"
         }
     }
 

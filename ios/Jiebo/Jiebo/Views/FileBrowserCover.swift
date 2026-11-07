@@ -22,14 +22,26 @@ struct FileBrowserCover: View {
     @State private var filter = ""
     @State private var browserFullscreen = false
     @State private var editing = false
+    @State private var editingOrigin: PreviewTab?
     @State private var draft = ""
     @State private var revertConfirm = false
     @State private var discardConfirm = false
     @State private var pendingDiscard: (() -> Void)?
 
     private var activePreviewTab: PreviewTab? {
+        if editing, let editingOrigin { return editingOrigin }
         if let sceneSession { return sceneSession.previewTab(in: store) }
         return store.activePreviewTab
+    }
+
+    private var rawPreviewTab: PreviewTab? {
+        if let sceneSession { return sceneSession.previewTab(in: store) }
+        return store.activePreviewTab
+    }
+
+    private var rawTabIdentity: String {
+        guard let tab = rawPreviewTab else { return "" }
+        return "\(tab.path)\u{0}\(tab.diff)\u{0}\(tab.chatId ?? "")\u{0}\(tab.cwd ?? "")\u{0}\(tab.readSha ?? "")"
     }
 
     private var edgeDismiss: some Gesture {
@@ -337,82 +349,141 @@ struct FileBrowserCover: View {
                     Spacer(minLength: 0)
                     if editing {
                         Button("取消") {
-                            performOrConfirm { editing = false }
+                            performOrConfirm {
+                                editing = false
+                                editingOrigin = nil
+                            }
                         }
-                            .font(JieboFont.text(.subheadline, weight: .medium))
+                        .font(JieboFont.text(.subheadline, weight: .medium))
+                        .foregroundStyle(JieboColor.ink2)
+                        .frame(minHeight: 44)
+                        .buttonStyle(.plain)
                         Button("保存") {
-                            store.savePreviewText(tab, content: draft)
+                            let target = editingOrigin ?? tab
+                            store.savePreviewText(target, content: draft)
                             editing = false
+                            editingOrigin = nil
                         }
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.pine)
-                        .disabled(draft == (tab.content ?? ""))
+                        .frame(minHeight: 44)
+                        .buttonStyle(.plain)
+                        .disabled(!hasUnsavedChanges)
                     } else if store.previewTextEditable(tab) {
                         Button("编辑") {
                             draft = tab.content ?? ""
+                            editingOrigin = tab
                             editing = true
                         }
                         .font(JieboFont.text(.subheadline, weight: .semibold))
                         .foregroundStyle(JieboColor.pine)
+                        .frame(minHeight: 44)
+                        .buttonStyle(.plain)
                     }
                     if !editing, store.previewDiffRevertable(tab) {
                         Button("还原") { revertConfirm = true }
                             .font(JieboFont.text(.subheadline, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
+                            .frame(minHeight: 44)
+                            .buttonStyle(.plain)
                     }
-                    if sizeClass != .compact {
-                        PreviewFullscreenToggle(fullscreen: browserFullscreen) {
-                            browserFullscreen.toggle()
-                        }
-                    }
-                    // P10：导出（与预览面板头部同款；图片多一个「存相册」）
-                    if tab.kind == .image, !tab.diff {
-                        Button {
-                            store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
-                        } label: {
-                            Image(systemName: "square.and.arrow.down.on.square")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(JieboColor.ink2)
-                                .frame(width: 30, height: 30)
-                                .background(JieboColor.mist)
-                                .clipShape(Circle())
-                                .hitTarget()
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(store.exportLoading)
-                        .accessibilityLabel("保存 \(tab.filename) 到相册")
-                    }
-                    Button {
-                        store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
-                    } label: {
-                        Group {
-                            if store.exportLoading {
-                                ProgressView().controlSize(.small).tint(JieboColor.dim)
-                            } else {
-                                Image(systemName: "square.and.arrow.up")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(JieboColor.ink2)
+                    if !editing {
+                        if sizeClass != .compact {
+                            PreviewFullscreenToggle(fullscreen: browserFullscreen) {
+                                browserFullscreen.toggle()
                             }
                         }
-                        .frame(width: 30, height: 30)
-                        .background(JieboColor.mist)
-                        .clipShape(Circle())
-                        .hitTarget()
+                        // P10：导出（与预览面板头部同款；图片多一个「存相册」）
+                        if tab.kind == .image, !tab.diff {
+                            Button {
+                                store.saveImageToPhotos(path: tab.path, chatId: tab.chatId)
+                            } label: {
+                                Image(systemName: "square.and.arrow.down.on.square")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink2)
+                                    .frame(width: 30, height: 30)
+                                    .background(JieboColor.mist)
+                                    .clipShape(Circle())
+                                    .hitTarget()
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(store.exportLoading)
+                            .accessibilityLabel("保存 \(tab.filename) 到相册")
+                        }
+                        Button {
+                            store.exportPreview(path: tab.path, content: tab.content, isDiff: tab.diff, chatId: tab.chatId)
+                        } label: {
+                            Group {
+                                if store.exportLoading {
+                                    ProgressView().controlSize(.small).tint(JieboColor.dim)
+                                } else {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(JieboColor.ink2)
+                                }
+                            }
+                            .frame(width: 30, height: 30)
+                            .background(JieboColor.mist)
+                            .clipShape(Circle())
+                            .hitTarget()
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
+                        .accessibilityLabel("分享 \(tab.filename)")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(store.exportLoading || (tab.content == nil && tab.mediaURL == nil))
-                    .accessibilityLabel("分享 \(tab.filename)")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 Divider().overlay(JieboColor.line)
                 if editing {
-                    TextEditor(text: $draft)
-                        .font(JieboFont.monoText(.footnote))
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(hasUnsavedChanges ? JieboColor.clay : JieboColor.pine)
+                                .frame(width: 6, height: 6)
+                            Text(hasUnsavedChanges ? "未保存改动" : "正在编辑")
+                                .font(JieboFont.text(.caption, weight: .medium))
+                                .foregroundStyle(hasUnsavedChanges ? JieboColor.clay : JieboColor.ink2)
+                            Spacer()
+                            Text("\(draft.count) 字符")
+                                .font(JieboFont.monoText(.caption2))
+                                .foregroundStyle(JieboColor.dim)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .background(JieboColor.paper)
+                        Divider().overlay(JieboColor.line)
+                        TextEditor(text: $draft)
+                            .font(JieboFont.monoText(.footnote))
+                            .foregroundStyle(JieboColor.ink)
+                            .scrollContentBackground(.hidden)
+                            .padding(8)
+                            .background(JieboColor.white)
+                    }
                 } else {
                     PreviewContentView(tab: tab)
+                }
+            }
+            .onChange(of: rawTabIdentity) { _, _ in
+                guard editing else { return }
+                if hasUnsavedChanges {
+                    discardConfirm = true
+                } else {
+                    editing = false
+                    editingOrigin = nil
+                    draft = rawPreviewTab?.content ?? ""
+                    discardConfirm = false
+                    pendingDiscard = nil
+                }
+            }
+            .onChange(of: rawPreviewTab?.content) { _, newContent in
+                guard editing, let newContent, let origin = editingOrigin, origin.path == rawPreviewTab?.path else { return }
+                guard newContent != origin.content, newContent != draft else { return }
+                if !hasUnsavedChanges {
+                    draft = newContent
+                    editingOrigin?.content = newContent
+                } else {
+                    discardConfirm = true
                 }
             }
             .alert("放弃未保存的修改？", isPresented: $discardConfirm) {
@@ -420,15 +491,24 @@ struct FileBrowserCover: View {
                     let action = pendingDiscard
                     pendingDiscard = nil
                     editing = false
+                    editingOrigin = nil
+                    draft = rawPreviewTab?.content ?? ""
                     action?()
                 }
-                Button("继续编辑", role: .cancel) { pendingDiscard = nil }
+                Button("继续编辑", role: .cancel) {
+                    pendingDiscard = nil
+                    if let origin = editingOrigin, origin.path != rawPreviewTab?.path {
+                        if let sceneSession { sceneSession.selectPreview(origin.path, in: store) }
+                        else { store.selectPreviewTab(origin.path) }
+                    }
+                }
             } message: {
                 Text("这个文件里还有没保存的修改。")
             }
             .alert("还原这个文件？", isPresented: $revertConfirm) {
                 Button("还原", role: .destructive) {
                     editing = false
+                    editingOrigin = nil
                     store.revertPreviewFile(tab)
                 }
                 Button("取消", role: .cancel) {}
@@ -461,8 +541,8 @@ struct FileBrowserCover: View {
     }
 
     private var hasUnsavedChanges: Bool {
-        guard let tab = activePreviewTab else { return false }
-        return editing && draft != (tab.content ?? "")
+        guard editing else { return false }
+        return draft != (editingOrigin?.content ?? rawPreviewTab?.content ?? "")
     }
 
     private func performOrConfirm(_ action: @escaping () -> Void) {
@@ -470,20 +550,20 @@ struct FileBrowserCover: View {
             pendingDiscard = action
             discardConfirm = true
         } else {
+            editing = false
+            editingOrigin = nil
             action()
         }
     }
 
     private func requestDismiss() {
         performOrConfirm {
-            editing = false
             dismiss()
         }
     }
 
     private func openFile(_ path: String, diff: Bool = false) {
         performOrConfirm {
-            editing = false
             store.loadPreview(path, diff: diff)
             sceneSession?.presentPreview(from: store)
         }

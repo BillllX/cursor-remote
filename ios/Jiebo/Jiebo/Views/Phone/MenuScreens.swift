@@ -1178,12 +1178,19 @@ struct KbWorkspaceSheet: View {
                             .font(JieboFont.text(.subheadline))
                             .foregroundStyle(JieboColor.ink2)
                     }
+                    .listRowBackground(JieboColor.white)
                 } else {
                     configSection
+                        .listRowBackground(JieboColor.white)
                     boardSection
+                        .listRowBackground(JieboColor.white)
                     tokenSection
+                        .listRowBackground(JieboColor.white)
                 }
             }
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle(workspaceName.nilIfEmpty ?? "知识库")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1236,6 +1243,7 @@ struct KbWorkspaceSheet: View {
         } footer: {
             if busy { Text("正在同步…") }
         }
+        .listRowBackground(JieboColor.white)
     }
 
     @ViewBuilder
@@ -1266,6 +1274,7 @@ struct KbWorkspaceSheet: View {
         } header: {
             Text("看板")
         }
+        .listRowBackground(JieboColor.white)
     }
 
     @ViewBuilder
@@ -1311,6 +1320,7 @@ struct KbWorkspaceSheet: View {
         } header: {
             Text("同事投递")
         }
+        .listRowBackground(JieboColor.white)
 
         if status?.isKnowledgeBase == true {
             Section {
@@ -1327,6 +1337,7 @@ struct KbWorkspaceSheet: View {
             } footer: {
                 Text("口令只在生成时交给同事。这里之后只看得到备注，看不到原文。")
             }
+            .listRowBackground(JieboColor.white)
         }
     }
 

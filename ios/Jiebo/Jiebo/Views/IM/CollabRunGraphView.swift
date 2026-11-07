@@ -63,9 +63,13 @@ struct CollabRunGraphView: View {
                                 Text("这是部分结果，网关仍在汇总。")
                             }
                         }
+                        .listRowBackground(JieboColor.white)
                     }
+                    .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
                 }
             }
+            .background(JieboColor.paper)
             .navigationTitle("协作运行图")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
