@@ -94,8 +94,13 @@ private struct ChunkedAssistantMessage: View, Equatable {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 围栏判定与 AssistantMessage.blocks 一致（行首 ```）。
+    /// 围栏判定与 AssistantMessage.blocks 一致（允许前导空格的 ``` 或 ~~~）。
     /// 返回值里 stableEnd 是最后一个「围栏外空行」之后的 UTF-8 偏移，stableCount 是它之前已经封口的段数。
+    static func isFenceLine(_ line: Substring) -> Bool {
+        let trimmed = line.drop { $0 == " " || $0 == "\t" }
+        return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
+    }
+
     static func scan(_ text: Substring) -> (chunks: [String], stableEnd: Int, stableCount: Int) {
         var result: [String] = []
         var current: [Substring] = []
@@ -106,7 +111,7 @@ private struct ChunkedAssistantMessage: View, Equatable {
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let next = offset + line.utf8.count + 1
             defer { offset = next }
-            if line.hasPrefix("```") { inFence.toggle() }
+            if isFenceLine(line) { inFence.toggle() }
             if !inFence, line.allSatisfy({ $0 == " " || $0 == "\t" }) {
                 if !current.isEmpty {
                     result.append(current.joined(separator: "\n"))
@@ -126,29 +131,47 @@ private struct ChunkedAssistantMessage: View, Equatable {
     }
 }
 
-/// 流式时正文只在末尾追加：上次已经封口的段直接复用，只扫新增的尾巴
+/// 流式时正文只在末尾追加：保留多槽位前缀缓存，避免多窗口或同屏多气泡重绘时互相冲掉缓存
 @MainActor
 private final class ChunkMemo {
     static let shared = ChunkMemo()
-    private var stablePrefix = ""
-    private var stableChunks: [String] = []
+    private struct Entry {
+        var prefix: String
+        var chunks: [String]
+    }
+    private var entries: [Entry] = []
+    private static let maxEntries = 8
 
     func chunks(_ text: String) -> [String] {
         var head: [String] = []
         var tail = Substring(text)
-        if !stablePrefix.isEmpty, text.hasPrefix(stablePrefix) {
-            head = stableChunks
-            tail = text[text.utf8.index(text.startIndex, offsetBy: stablePrefix.utf8.count)...]
+        var matchedIndex: Int?
+        for (index, entry) in entries.enumerated() where !entry.prefix.isEmpty && text.hasPrefix(entry.prefix) {
+            if let currentBest = matchedIndex {
+                if entry.prefix.utf8.count > entries[currentBest].prefix.utf8.count {
+                    matchedIndex = index
+                }
+            } else {
+                matchedIndex = index
+            }
+        }
+        if let idx = matchedIndex {
+            let entry = entries[idx]
+            head = entry.chunks
+            tail = text[text.utf8.index(text.startIndex, offsetBy: entry.prefix.utf8.count)...]
         }
         let scanned = ChunkedAssistantMessage.scan(tail)
         let all = head + scanned.chunks
         if scanned.stableEnd > 0 {
             let consumed = (text.utf8.count - tail.utf8.count) + scanned.stableEnd
-            stablePrefix = String(text[..<text.utf8.index(text.startIndex, offsetBy: consumed)])
-            stableChunks = head + scanned.chunks.prefix(scanned.stableCount)
-        } else if head.isEmpty {
-            stablePrefix = ""
-            stableChunks = []
+            let newPrefix = String(text[..<text.utf8.index(text.startIndex, offsetBy: consumed)])
+            let newChunks = head + Array(scanned.chunks.prefix(scanned.stableCount))
+            if let idx = matchedIndex {
+                entries[idx] = Entry(prefix: newPrefix, chunks: newChunks)
+            } else {
+                if entries.count >= Self.maxEntries { entries.removeFirst() }
+                entries.append(Entry(prefix: newPrefix, chunks: newChunks))
+            }
         }
         return all.isEmpty ? [text] : all
     }
@@ -208,7 +231,8 @@ private struct AssistantMessage: View, Equatable {
             prose = []
         }
         for line in text.components(separatedBy: "\n") {
-            if line.hasPrefix("```") {
+            let trimmedFence = line.drop { $0 == " " || $0 == "\t" }
+            if trimmedFence.hasPrefix("```") || trimmedFence.hasPrefix("~~~") {
                 if inCode {
                     result.append(.code(code.joined(separator: "\n"), lang: lang))
                     code = []
@@ -216,7 +240,7 @@ private struct AssistantMessage: View, Equatable {
                     inCode = false
                 } else {
                     flushProse()
-                    lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    lang = String(trimmedFence.dropFirst(3)).trimmingCharacters(in: .whitespaces)
                     inCode = true
                 }
                 continue

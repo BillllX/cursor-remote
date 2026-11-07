@@ -338,31 +338,63 @@ private struct ProseLineRow: View, Equatable {
         let expanded = line.replacingOccurrences(of: "\t", with: "    ")
         let indent = expanded.prefix { $0 == " " }.count
         let body = String(expanded.dropFirst(indent))
-        let heading = headingLevel(of: body)
-        let item = listItem(of: body)
-        let display = item?.rest ?? heading?.rest ?? body
-        let inlineKind: ProseInline.Kind = {
-            if let level = heading?.level { return .heading(level: level) }
-            return .body
-        }()
-        return HStack(alignment: .top, spacing: 0) {
-            if indent > 0 {
-                Color.clear.frame(width: CGFloat(indent) * 8)
+        if isHorizontalRule(body) {
+            Rectangle()
+                .fill(JieboColor.line)
+                .frame(height: 1)
+                .padding(.vertical, 6)
+        } else if let quote = blockquote(of: body) {
+            HStack(alignment: .top, spacing: 10) {
+                Capsule()
+                    .fill(JieboColor.pine.opacity(0.45))
+                    .frame(width: 3)
+                Text(ProseInline.attributed(quote, sizeCategory: sizeCategory, kind: .body))
+                    .foregroundStyle(JieboColor.ink2)
+                    .tint(JieboColor.pine)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            if let item {
-                Text(item.marker)
-                    .font(JieboFont.text(.footnote, weight: .medium))
-                    .foregroundStyle(JieboColor.dim)
-                    .frame(width: 22, alignment: .leading)
-                    .padding(.top, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            let heading = headingLevel(of: body)
+            let item = listItem(of: body)
+            let display = item?.rest ?? heading?.rest ?? body
+            let inlineKind: ProseInline.Kind = {
+                if let level = heading?.level { return .heading(level: level) }
+                return .body
+            }()
+            HStack(alignment: .top, spacing: 0) {
+                if indent > 0 {
+                    Color.clear.frame(width: CGFloat(indent) * 8)
+                }
+                if let item {
+                    Text(item.marker)
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .foregroundStyle(JieboColor.dim)
+                        .frame(width: 22, alignment: .leading)
+                        .padding(.top, 2)
+                }
+                Text(ProseInline.attributed(display, sizeCategory: sizeCategory, kind: inlineKind))
+                    .foregroundStyle(JieboColor.ink)
+                    .tint(JieboColor.pine)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Text(ProseInline.attributed(display, sizeCategory: sizeCategory, kind: inlineKind))
-                .foregroundStyle(JieboColor.ink)
-                .tint(JieboColor.pine)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func isHorizontalRule(_ line: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 3 else { return false }
+        return trimmed.allSatisfy({ $0 == "-" }) || trimmed.allSatisfy({ $0 == "*" })
+    }
+
+    private func blockquote(of line: String) -> String? {
+        guard line.hasPrefix(">") else { return nil }
+        let rest = line.dropFirst()
+        if rest.first == " " { return String(rest.dropFirst()) }
+        return String(rest)
     }
 
     private func listItem(of line: String) -> (marker: String, rest: String)? {
