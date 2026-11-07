@@ -9,7 +9,7 @@ struct ThemeSettingsSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("外观") {
+                Section {
                     Picker("外观", selection: Bindable(theme).appearance) {
                         ForEach(JieboAppearance.allCases) { item in
                             Text(item.title).tag(item)
@@ -18,9 +18,11 @@ struct ThemeSettingsSheet: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .listRowBackground(JieboColor.white)
+                } header: {
+                    JieboListHeader("外观")
                 }
 
-                Section("配色") {
+                Section {
                     ForEach(JieboPalette.allCases) { palette in
                         ThemePaletteCard(
                             palette: palette,
@@ -33,6 +35,8 @@ struct ThemeSettingsSheet: View {
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
                     }
+                } header: {
+                    JieboListHeader("配色")
                 }
             }
             .listStyle(.insetGrouped)

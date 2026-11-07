@@ -314,7 +314,13 @@ extension ChatStore {
         }
         guard chats.contains(where: { $0.id == id }) else { return }
         var list = imagesByChat[id] ?? []
-        list.append(contentsOf: images.prefix(max(0, ImagePrep.maxCount - list.count)))
+        let room = ImagePrep.maxCount - list.count
+        guard room > 0 else {
+            flash("一次最多带 \(ImagePrep.maxCount) 张图")
+            return
+        }
+        if images.count > room { flash("一次最多带 \(ImagePrep.maxCount) 张图") }
+        list.append(contentsOf: images.prefix(room))
         imagesByChat[id] = list
     }
 
@@ -572,21 +578,11 @@ extension ChatStore {
 
     func appendMention(_ path: String, to chatId: String) {
         let mention = "@\(path)"
-        if chatId == activeId {
-            if !draft.contains(mention) {
-                let base = stripTrailingQuery(draft)
-                let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
-                saveDraft(base + (needsSpace ? " " : "") + mention + " ")
-            }
-        } else {
-            patch(chatId) { chat in
-                guard !chat.draft.contains(mention) else { return chat }
-                var next = chat
-                let base = stripTrailingQuery(next.draft)
-                let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
-                next.draft = base + (needsSpace ? " " : "") + mention + " "
-                return next
-            }
+        let current = draft(for: chatId)
+        if !current.contains(mention) {
+            let base = stripTrailingQuery(current)
+            let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
+            saveDraft(base + (needsSpace ? " " : "") + mention + " ", forChat: chatId)
         }
         deliverExternalDraft(.appendMention(path), forChat: chatId)
     }
