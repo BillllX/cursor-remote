@@ -27,7 +27,7 @@ extension ChatStore {
         }
         forgetBodyCache(chat.id) // 截断回合：本机缓存作废
         send(.newSession(chatId: chat.id, cwd: chat.cwd))
-        saveDraft(text == "（附图）" ? "" : text, forChat: targetId)
+        applyExternalDraft(text == "（附图）" ? "" : text, forChat: targetId)
         let restoredImages: [PendingImage] = turn.images.compactMap { image -> PendingImage? in
             guard let data = Data(base64Encoded: image.data), !data.isEmpty else { return nil }
             return PendingImage(data: data, mimeType: image.mimeType, base64: image.data)
@@ -321,7 +321,7 @@ extension ChatStore {
         let trimmed = turn.user.trimmingCharacters(in: .whitespacesAndNewlines)
         if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !trimmed.isEmpty, trimmed != "（附图）" {
-            saveDraft(turn.user, forChat: targetId)
+            applyExternalDraft(turn.user, forChat: targetId)
         }
     }
 
@@ -398,7 +398,7 @@ extension ChatStore {
             guard !trimmed.isEmpty, trimmed != "（附图）" else { return nil }
             return turn.user
         }).first else { return }
-        saveDraft(text, forChat: chatId)
+        applyExternalDraft(text, forChat: chatId)
     }
 
     /// 执行失败后输入框是空的，就把最近一句放回去。不自动发送。
@@ -411,7 +411,7 @@ extension ChatStore {
             guard !trimmed.isEmpty, trimmed != "（附图）" else { return nil }
             return turn.user
         }).first else { return }
-        saveDraft(text, forChat: chatId)
+        applyExternalDraft(text, forChat: chatId)
     }
 
     /// 消息大到发不出去时，把刚放进对话的那一轮拿掉，原文回到输入框。不自动重发。
@@ -428,7 +428,7 @@ extension ChatStore {
         }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty, draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            saveDraft(text, forChat: chatId)
+            applyExternalDraft(text, forChat: chatId)
         }
         guard pendingImages(for: chatId).isEmpty, let images, !images.isEmpty else { return }
         let restored = images.compactMap { image -> PendingImage? in

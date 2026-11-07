@@ -23,6 +23,18 @@ extension ChatStore {
         chats[index].draft = value
     }
 
+    /// 外部操作（@补全、文件引用、附件上传、历史消息编辑、空态快捷词）写入草稿并通知 ComposerView 同步缓冲区。
+    func applyExternalDraft(_ value: String, forChat id: String) {
+        saveDraft(value, forChat: id)
+        let nextRev = (externalDraftDelivery?.revision ?? 0) &+ 1
+        externalDraftDelivery = ExternalDraftDelivery(revision: nextRev, chatId: id, kind: .replace(value))
+    }
+
+    func deliverExternalDraft(_ kind: ExternalDraftDelivery.Kind, forChat id: String) {
+        let nextRev = (externalDraftDelivery?.revision ?? 0) &+ 1
+        externalDraftDelivery = ExternalDraftDelivery(revision: nextRev, chatId: id, kind: kind)
+    }
+
     /// 打字时只更新 @ 候选，不把草稿写进会话列表。
     func updateMentions(for text: String, chatId: String? = nil) {
         let targetId = chatId ?? activeId
@@ -53,14 +65,16 @@ extension ChatStore {
     func insertMention(_ path: String, chatId: String? = nil) {
         let targetId = chatId ?? activeId
         let current = draft(for: targetId)
-        guard let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }
-        let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
-        var next = current
-        next.replaceSubrange(range, with: "\(leading)@\(path) ")
+        if let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) {
+            let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+            var next = current
+            next.replaceSubrange(range, with: "\(leading)@\(path) ")
+            saveDraft(next, forChat: targetId)
+        }
         mentionQuery = nil
         mentionTask?.cancel()
         mentionSuggestions = []
-        saveDraft(next, forChat: targetId)
+        deliverExternalDraft(.insertMention(path), forChat: targetId)
     }
 
     /// 候选排序：文件名前缀 > 文件名包含 > 路径包含，同分短路径优先（对齐网页 mentionHits 的意图）
@@ -320,7 +334,7 @@ extension ChatStore {
         // 对齐网页端 MAX_UPLOAD_FILES = 10
         if urls.count > 10 { flash("一次最多传 10 个文件") }
         for url in urls.prefix(10) {
-            let item = UploadItem(id: UUID().uuidString.lowercased(), name: url.lastPathComponent)
+            let item = UploadItem(id: UUID().uuidString.lowercased(), name: url.lastPathComponent, chatId: targetId)
             uploads.append(item)
             Task { await uploadAttachment(item: item, source: url, chatId: targetId) }
         }
@@ -538,10 +552,11 @@ extension ChatStore {
     func appendMention(_ path: String, to chatId: String) {
         let mention = "@\(path)"
         if chatId == activeId {
-            guard !draft.contains(mention) else { return } // 对齐网页端去重
-            let base = stripTrailingQuery(draft)
-            let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
-            saveDraft(base + (needsSpace ? " " : "") + mention + " ")
+            if !draft.contains(mention) {
+                let base = stripTrailingQuery(draft)
+                let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
+                saveDraft(base + (needsSpace ? " " : "") + mention + " ")
+            }
         } else {
             patch(chatId) { chat in
                 guard !chat.draft.contains(mention) else { return chat }
@@ -552,5 +567,6 @@ extension ChatStore {
                 return next
             }
         }
+        deliverExternalDraft(.appendMention(path), forChat: chatId)
     }
 }

@@ -2,54 +2,6 @@ import SwiftUI
 import UIKit
 import ImageIO
 
-/// 「今日」按钮：ThreadView 的助理标题栏和 iPhone 助理页导航栏共用，外观一致。
-struct AssistantTodayButton: View {
-    @Environment(ChatStore.self) private var store
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var on: Bool
-    var marked: Bool
-    var action: () -> Void
-
-    init(on: Bool, marked: Bool, action: @escaping () -> Void) {
-        self.on = on
-        self.marked = marked
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: NavigationIconId.assistant.symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                Text("今日")
-                    .font(JieboFont.text(.footnote, weight: .medium))
-            }
-            .foregroundStyle(on ? JieboColor.pine : JieboColor.ink)
-            .padding(.horizontal, 10)
-            .frame(minHeight: 30)
-            .background(on ? JieboColor.pine.opacity(0.12) : JieboColor.mist)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                Circle()
-                    .fill(JieboColor.ok)
-                    .frame(width: 6, height: 6)
-                    .offset(x: 2, y: -2)
-                    .opacity(marked ? 1 : 0)
-                    .animation(JieboMotion.fade(reduceMotion), value: marked)
-            }
-            .animation(JieboMotion.fade(reduceMotion), value: on)
-            .hitTarget()
-        }
-        .buttonStyle(PressScaleButtonStyle())
-        .accessibilityLabel(
-            marked
-                ? "今日，\(StatusLegendId.attention.accessibilityLabel(count: store.assistantBadgeCount))"
-                : "今日"
-        )
-        .accessibilityAddTraits(on ? .isSelected : [])
-    }
-}
-
 /// 助理工具名的判断与人话文案。工具名可能带 MCP 前缀，所以取最后一段再比。
 /// 助理在这一轮里 todo_add 的一条。todo 是今日里现在的样子；nil 且 known 表示已经撤销或删掉了
 struct TodoReceipt: Identifiable, Hashable {

@@ -40,6 +40,7 @@ struct MemoryCenterImportPane: View {
                     ))
                 }
             }
+            .tint(JieboColor.pine)
             .font(JieboFont.text(.caption))
             .onAppear {
                 exportWorkspaceIds = Set(workspaceScopeIds)
@@ -47,7 +48,7 @@ struct MemoryCenterImportPane: View {
             .onChange(of: workspaceScopeIds) { _, ids in
                 exportWorkspaceIds = Set(ids)
             }
-            Button("导出记忆中心快照") {
+            ActionButton(title: "导出记忆中心快照", kind: .outline) {
                 var scopes: [String] = []
                 if exportPersonal { scopes.append("personal") }
                 if exportWorkPreference { scopes.append("work_preference") }
@@ -55,7 +56,7 @@ struct MemoryCenterImportPane: View {
                 scopes.append(contentsOf: exportWorkspaceIds.sorted())
                 store.memoryCenterExportSnapshot(scopes: scopes)
             }
-                .disabled(extras.importBusyReqId != nil || (!exportPersonal && !exportWorkPreference && !exportSettings && exportWorkspaceIds.isEmpty))
+            .disabled(extras.importBusyReqId != nil || (!exportPersonal && !exportWorkPreference && !exportSettings && exportWorkspaceIds.isEmpty))
             if let path = extras.importExportPath {
                 Text("路径：\(path)").font(JieboFont.text(.caption)).textSelection(.enabled)
                 if let sha = extras.importExportSha256, let bytes = extras.importExportBytes {
@@ -63,17 +64,26 @@ struct MemoryCenterImportPane: View {
                         .font(JieboFont.text(.caption))
                         .textSelection(.enabled)
                 }
-                Button("复制路径") {
+                ActionButton(title: "复制路径", kind: .outline) {
                     #if os(iOS)
                     UIPasteboard.general.string = path
                     #endif
                 }
-                .font(JieboFont.text(.caption))
             }
             TextField("导入 JSON 路径", text: $importPath)
-                .textFieldStyle(.roundedBorder)
-            Button("预演") { store.memoryCenterImportPreview(path: importPath) }
-                .disabled(extras.importBusyReqId != nil || importPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .font(JieboFont.text(.subheadline))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(JieboColor.paper)
+                .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                )
+            ActionButton(title: "预演", kind: .outline) {
+                store.memoryCenterImportPreview(path: importPath)
+            }
+            .disabled(extras.importBusyReqId != nil || importPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             ForEach(extras.importWarnings, id: \.self) { w in
                 Text("⚠ \(w)").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg)
             }
@@ -96,7 +106,7 @@ struct MemoryCenterImportPane: View {
                         }
                     }
                 }
-                Button("应用导入") { applyConfirm = true }
+                ActionButton(title: "应用导入", kind: .primary) { applyConfirm = true }
                     .disabled(extras.importBusyReqId != nil)
                     .confirmationDialog("确认应用导入？", isPresented: $applyConfirm, titleVisibility: .visible) {
                         Button("应用", role: .destructive) { store.memoryCenterImportApply(planId: planId, resolutions: buildResolutions()) }
@@ -105,7 +115,7 @@ struct MemoryCenterImportPane: View {
             }
             if let importId = extras.importLastImportId {
                 Text("可回滚：\(importId)").font(JieboFont.text(.caption))
-                Button("回滚") { rollbackConfirm = true }
+                ActionButton(title: "回滚", kind: .destructive) { rollbackConfirm = true }
                     .disabled(extras.importBusyReqId != nil)
                     .confirmationDialog("确认回滚？", isPresented: $rollbackConfirm, titleVisibility: .visible) {
                         Button("回滚", role: .destructive) { store.memoryCenterImportRollback(importId: importId) }

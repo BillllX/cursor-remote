@@ -436,8 +436,7 @@ private struct MeasuredSVGImage: View {
         return """
         <!doctype html><html><head><meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>html{color-scheme:light dark}html,body{margin:0;height:100%;background:#FAFAFA}
-        @media (prefers-color-scheme: dark){html,body{background:#141512}}
+        <style>html,body{margin:0;height:100%;background:transparent}
         body{display:flex;align-items:center;justify-content:center}
         img{max-width:100%;max-height:100%;object-fit:contain}</style></head>
         <body><img src="\(src)"></body></html>
@@ -459,7 +458,12 @@ struct SandboxWebView: UIViewRepresentable {
     private static var pageColor: UIColor {
         UIColor { traits in
             let palette = JieboTheme.shared.palette
-            let ink = traits.userInterfaceStyle == .dark ? palette.dark : palette.light
+            let dark: Bool = switch JieboTheme.shared.appearance {
+            case .light: false
+            case .dark: true
+            case .system: traits.userInterfaceStyle == .dark
+            }
+            let ink = dark ? palette.dark : palette.light
             return UIColor(hex: ink.bg)
         }
     }
@@ -473,24 +477,36 @@ struct SandboxWebView: UIViewRepresentable {
         config.preferences.isTextInteractionEnabled = true
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.isOpaque = opaque
+        webView.isOpaque = false
         webView.backgroundColor = opaque ? Self.pageColor : .clear
         webView.scrollView.backgroundColor = opaque ? Self.pageColor : .clear
+        webView.underPageBackgroundColor = opaque ? Self.pageColor : .clear
+        webView.overrideUserInterfaceStyle = Self.interfaceStyle
         context.coordinator.onFail = onFail
         load(into: webView, coordinator: context.coordinator)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.overrideUserInterfaceStyle = Self.interfaceStyle
         if opaque {
             webView.backgroundColor = Self.pageColor
             webView.scrollView.backgroundColor = Self.pageColor
+            webView.underPageBackgroundColor = Self.pageColor
         }
         context.coordinator.onFail = onFail
         // 内容随页签切换可能变化；Coordinator 记录已加载标识避免重复加载（html 用整串当 key，不赌 hash）
         let key = html.map { "html:\($0)" } ?? ""
         guard context.coordinator.loadedKey != key else { return }
         load(into: webView, coordinator: context.coordinator)
+    }
+
+    private static var interfaceStyle: UIUserInterfaceStyle {
+        switch JieboTheme.shared.appearance {
+        case .light: .light
+        case .dark: .dark
+        case .system: .unspecified
+        }
     }
 
     private func load(into webView: WKWebView, coordinator: Coordinator) {

@@ -572,7 +572,7 @@ struct FileBrowserCover: View {
     private func pickFile(_ path: String) {
         // 用 appendMentionToDraft（带去重），不是 insertMention——后者只替换草稿尾部的
         // @查询，浏览场景草稿通常没有尾查询，会静默空操作还谎报成功（评审 Kimi/Grok M1）
-        store.appendMentionToDraft(path)
+        store.appendMentionToDraft(path, chatId: workbenchChatId)
         store.flash("已把 @\(path) 加进草稿")
     }
 

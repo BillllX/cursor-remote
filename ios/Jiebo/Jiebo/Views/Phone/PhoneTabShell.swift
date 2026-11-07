@@ -324,7 +324,7 @@ private struct PhoneSpaceBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .background(JieboColor.paper)
+        .background(JieboColor.paper.ignoresSafeArea(edges: .bottom))
         .overlay(alignment: .top) {
             Rectangle().fill(JieboColor.line).frame(height: 1)
         }

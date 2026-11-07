@@ -1380,11 +1380,12 @@ struct MemoryCenterRememberMe: View {
                                 .lineLimit(2)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .assistantCard()
                     }
                     .buttonStyle(.plain)
                 }
                 ForEach(memory.entries.filter(\.isValid)) { entry in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(entry.topic.nilIfEmpty ?? "一条记忆").font(JieboFont.text(.subheadline, weight: .semibold))
                             Spacer()
@@ -1398,36 +1399,48 @@ struct MemoryCenterRememberMe: View {
                             }
                         }
                         Text(entry.text).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2).lineLimit(3)
-                        HStack {
+                        HStack(spacing: 12) {
                             Button("改") { selectedKey = "entry:\(entry.id)" }
+                                .foregroundStyle(JieboColor.pine)
+                                .frame(minHeight: 36)
                             Button("删") {
                                 _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
                             }
+                            .foregroundStyle(JieboColor.danger)
+                            .frame(minHeight: 36)
                         }
-                        .font(JieboFont.text(.caption))
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .buttonStyle(.plain)
                     }
+                    .assistantCard()
                 }
                 let stale = memory.entries.filter { !$0.isValid }
                 if !stale.isEmpty {
                     DisclosureGroup("已失效记忆") {
                         ForEach(stale) { entry in
-                            VStack(alignment: .leading, spacing: 4) {
+                            VStack(alignment: .leading, spacing: 6) {
                                 Text(entry.topic.nilIfEmpty ?? "一条记忆")
                                     .font(JieboFont.text(.subheadline, weight: .semibold))
                                 Text(entry.text)
                                     .font(JieboFont.text(.footnote))
                                     .foregroundStyle(JieboColor.dim)
                                     .lineLimit(3)
-                                HStack {
+                                HStack(spacing: 12) {
                                     Button("恢复") {
                                         _ = store.queueMemoryChange("memory_restore", args: ["id": .string(entry.id)], pending: "恢复这条记忆")
                                     }
+                                    .foregroundStyle(JieboColor.pine)
+                                    .frame(minHeight: 36)
                                     Button("彻底删除") {
                                         _ = store.queueMemoryChange("memory_purge", args: ["id": .string(entry.id)], pending: "删掉这条记忆")
                                     }
+                                    .foregroundStyle(JieboColor.danger)
+                                    .frame(minHeight: 36)
                                 }
-                                .font(JieboFont.text(.caption))
+                                .font(JieboFont.text(.caption, weight: .medium))
+                                .buttonStyle(.plain)
                             }
+                            .assistantCard()
                         }
                     }
                 }
@@ -1815,6 +1828,7 @@ struct MemoryCenterPhonePage: View {
                 MemoryCenterDiagnosticsBlock(diagnostics: store.memoryCenterData.detail?.diagnostics)
                     .padding(12)
             }
+            .background(JieboColor.paper)
             .navigationTitle("上一轮怎么选的")
             .memoryCenterScreenHold(navId: scopeId)
         case let .rules(scopeId):
@@ -1824,11 +1838,14 @@ struct MemoryCenterPhonePage: View {
                         .padding(12)
                 }
             }
+            .background(JieboColor.paper)
             .navigationTitle("文件夹规则")
             .memoryCenterScreenHold(navId: scopeId)
         case let .scope(id, label):
             if id == "folder-missing" {
                 MemoryCenterEmptyBlock(title: "还没打开文件夹", hint: "打开一个工作区后再看这里。")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(JieboColor.paper)
                     .navigationTitle("这个文件夹")
             } else {
                 MemoryCenterPhoneScopeList(
@@ -1857,7 +1874,8 @@ struct MemoryCenterPhonePage: View {
         case let .personalEdit(entryId):
             MemoryCenterPhonePersonalEdit(entryId: entryId)
         case .transfer:
-            ScrollView { MemoryCenterImportPane().padding(14) }
+            ScrollView { MemoryCenterImportPane().padding(12) }
+                .background(JieboColor.paper)
                 .navigationTitle("导出与导入")
                 .navigationBarTitleDisplayMode(.inline)
         }
@@ -2066,6 +2084,7 @@ struct MemoryCenterPhoneScopeList: View {
                 .padding(12)
             }
         }
+        .background(JieboColor.paper)
         .navigationTitle(shownLabel)
         .navigationBarTitleDisplayMode(.inline)
         .memoryCenterScreenHold(navId: shownId)
@@ -2076,7 +2095,7 @@ struct MemoryCenterPhoneSuggestions: View {
     var body: some View {
         ScrollView {
             MemoryCenterSuggestionsPane()
-                .padding(14)
+                .padding(12)
         }
         .navigationTitle("要你看一眼")
         .navigationBarTitleDisplayMode(.inline)
@@ -2088,7 +2107,7 @@ struct MemoryCenterPhoneActivity: View {
     var body: some View {
         ScrollView {
             MemoryCenterActivityPane()
-                .padding(14)
+                .padding(12)
         }
         .navigationTitle("最近改动")
         .navigationBarTitleDisplayMode(.inline)
@@ -2104,6 +2123,7 @@ struct MemoryCenterSearchHitDetail: View {
             MemoryCenterSearchDetail(selectedKey: itemKey)
                 .padding(12)
         }
+        .background(JieboColor.paper)
         .navigationTitle("条目")
         .navigationBarTitleDisplayMode(.inline)
         .memoryCenterScreenHold(navId: "overview", searchActive: true)
@@ -2119,6 +2139,7 @@ struct MemoryCenterPhoneItemDetail: View {
             MemoryCenterItemDetailPane(scopeId: scopeId, middleTab: "all", selectedKey: itemKey)
                 .padding(12)
         }
+        .background(JieboColor.paper)
         .navigationTitle("条目")
         .navigationBarTitleDisplayMode(.inline)
         .memoryCenterScreenHold(navId: scopeId)
@@ -2133,6 +2154,7 @@ struct MemoryCenterPhoneSearchResults: View {
             MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: .drillDownSearchHit)
                 .padding(12)
         }
+        .background(JieboColor.paper)
         .navigationTitle("搜索结果")
         .navigationBarTitleDisplayMode(.inline)
         .memoryCenterScreenHold(navId: "overview", searchActive: true)

@@ -50,6 +50,7 @@ struct ComposerView: View {
     @ScaledMetric(relativeTo: .body) var assistantControl = 36
     @Environment(\.assistantSceneToken) private var assistantSceneToken
     @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
+    @Environment(\.scenePhase) private var scenePhase
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
     var isAssistantSession: Bool { store.isAssistantChat(chatId) }
@@ -60,6 +61,9 @@ struct ComposerView: View {
     var chatMode: AgentMode { chrome.mode }
     var chatModel: String { chrome.model.isEmpty ? store.model : chrome.model }
     var chatImages: [PendingImage] { store.pendingImages(for: chatId) }
+    var chatUploads: [UploadItem] {
+        store.uploads.filter { $0.chatId == chatId }
+    }
 
     var body: some View {
         @Bindable var store = store
@@ -175,6 +179,36 @@ struct ComposerView: View {
             if value == ignoreDraftEcho { return }
             if value != draftBuffer.text { replaceDraft(value) }
         }
+        .onChange(of: store.externalDraftDelivery) { _, delivery in
+            guard let delivery, delivery.chatId == chatId else { return }
+            let current = draftBuffer.text
+            let next: String
+            switch delivery.kind {
+            case .replace(let value):
+                next = value
+            case .insertMention(let path):
+                guard let range = current.range(of: #"(^|\s)@(\S*)$"#, options: .regularExpression) else { return }
+                let leading = current[range.lowerBound...].first.map { $0 == " " || $0 == "\n" ? String($0) : "" } ?? ""
+                var updated = current
+                updated.replaceSubrange(range, with: "\(leading)@\(path) ")
+                next = updated
+            case .appendMention(let path):
+                let mention = "@\(path)"
+                guard !current.contains(mention) else { return }
+                let base = store.stripTrailingQuery(current)
+                let needsSpace = !base.isEmpty && !base.hasSuffix(" ") && !base.hasSuffix("\n")
+                next = base + (needsSpace ? " " : "") + mention + " "
+            }
+            draftBuffer.persistTask?.cancel()
+            draftBuffer.pendingChatId = nil
+            ignoreDraftEcho = next
+            sceneSession?.saveDraft(next, for: chatId)
+            store.saveDraft(next, forChat: chatId)
+            replaceDraft(next)
+            if scenePhase == .active {
+                focused = true
+            }
+        }
         .onChange(of: focusNonce) { _, _ in
             focused = true
         }
@@ -237,7 +271,10 @@ struct ComposerView: View {
             let files = urls.filter(\.isFileURL)
             let links = urls.filter { !$0.isFileURL }.map(\.absoluteString)
             guard !files.isEmpty || !links.isEmpty else { return false }
-            if !files.isEmpty { store.attachFiles(files, chatId: chatId) }
+            if !files.isEmpty {
+                syncBufferToStore()
+                store.attachFiles(files, chatId: chatId)
+            }
             if !links.isEmpty {
                 let current = draftBuffer.text
                 let separator = current.isEmpty || current.hasSuffix("\n") ? "" : "\n"
@@ -249,14 +286,25 @@ struct ComposerView: View {
         .photosPicker(isPresented: $photoPickerOpen, selection: $photoItems, maxSelectionCount: ImagePrep.maxCount, matching: .images)
         .fileImporter(isPresented: $filePickerOpen, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result {
+                syncBufferToStore()
                 store.attachFiles(urls, chatId: chatId)
             }
         }
         .sheet(isPresented: $fileBrowserOpen) {
             FileBrowserSheet(chatId: chatId) { path in
+                syncBufferToStore()
                 store.appendMentionToDraft(path, chatId: chatId)
             }
         }
+    }
+
+    func syncBufferToStore() {
+        draftBuffer.persistTask?.cancel()
+        draftBuffer.pendingChatId = nil
+        let current = draftBuffer.text
+        ignoreDraftEcho = current
+        sceneSession?.saveDraft(current, for: chatId)
+        store.saveDraft(current, forChat: chatId)
     }
 
     private func handleAssistantVoice(_ notification: Notification) {
@@ -289,7 +337,7 @@ struct ComposerView: View {
     }
 
     var canSendNow: Bool {
-        store.uploads.isEmpty
+        chatUploads.isEmpty
             && (hasText || !chatImages.isEmpty)
     }
 
@@ -357,17 +405,14 @@ struct ComposerView: View {
         }
     }
 
-    private func flushDraft(currentChatId: String? = nil) {
+    func flushDraft(currentChatId: String? = nil) {
         draftBuffer.persistTask?.cancel()
         guard let pendingId = draftBuffer.pendingChatId else { return }
         let pendingText = draftBuffer.pendingText
         draftBuffer.pendingChatId = nil
         if pendingId == (currentChatId ?? chatId) { ignoreDraftEcho = pendingText }
-        if let sceneSession {
-            sceneSession.saveDraft(pendingText, for: pendingId)
-        } else {
-            store.saveDraft(pendingText, forChat: pendingId)
-        }
+        sceneSession?.saveDraft(pendingText, for: pendingId)
+        store.saveDraft(pendingText, forChat: pendingId)
     }
 
     func commitAndSend() {

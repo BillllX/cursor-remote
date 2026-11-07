@@ -138,7 +138,7 @@ extension ThreadView {
 
     private func assistantStarterButton(_ text: String, symbol: String) -> some View {
         Button {
-            store.saveDraft(text, forChat: resolvedChatId)
+            store.applyExternalDraft(text, forChat: resolvedChatId)
             composerFocusNonce += 1
         } label: {
             HStack(spacing: 10) {
@@ -177,7 +177,7 @@ extension ThreadView {
                 } else if text == "终端输出" {
                     store.openTerminalOnWorkbench(chatId: resolvedChatId)
                 } else {
-                    store.saveDraft(text, forChat: resolvedChatId)
+                    store.applyExternalDraft(text, forChat: resolvedChatId)
                     composerFocusNonce += 1
                 }
             } label: {

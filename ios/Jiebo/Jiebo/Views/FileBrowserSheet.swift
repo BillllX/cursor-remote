@@ -50,22 +50,24 @@ struct FileBrowserSheet: View {
                         .buttonStyle(.borderless)
                         .accessibilityLabel("预览 \(path)")
                     }
-                    .listRowBackground(Color.clear)
+                    .listRowBackground(JieboColor.paper)
                 }
                 if filtered.isEmpty {
                     Text(store.fileIndexEmptyTitle ?? (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
                         .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.dim)
-                        .listRowBackground(Color.clear)
+                        .listRowBackground(JieboColor.paper)
                 }
                 if store.treeTruncated {
                     Text("文件太多，清单被截断了，用搜索缩小范围。")
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
-                        .listRowBackground(Color.clear)
+                        .listRowBackground(JieboColor.paper)
                 }
             }
             .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .searchable(text: $filter, prompt: "搜文件名或路径")
             .navigationTitle("文件")
             .navigationBarTitleDisplayMode(.inline)

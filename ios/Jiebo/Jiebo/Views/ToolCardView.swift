@@ -38,11 +38,12 @@ struct ToolCardView: View {
                         userPinned = next
                     }
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Image(systemName: kindSymbol)
                             .font(JieboFont.text(.caption, weight: .semibold))
                             .foregroundStyle(statusColor)
                             .frame(width: 16)
+                            .alignmentGuide(.firstTextBaseline) { d in d[.bottom] * 0.78 }
                         Text(Self.chineseVerb(tool))
                             .font(JieboFont.text(.footnote, weight: .medium))
                             .foregroundStyle(JieboColor.ink)

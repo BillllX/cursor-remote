@@ -324,7 +324,7 @@ struct ImBubbleRow: View {
         } else if case .link? = message.body, let body = message.body {
             ImLinkBubble(payload: body, mine: mine, convId: message.convId)
         } else if case .location? = message.body, let body = message.body {
-            ImLocationBubble(payload: body)
+            ImLocationBubble(payload: body, mine: mine)
         } else if let url = ImLinkMetadata.recognized(bubbleText) {
             Link(destination: url) {
                 textBubble

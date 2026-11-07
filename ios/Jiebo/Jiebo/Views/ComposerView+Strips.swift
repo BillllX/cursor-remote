@@ -84,6 +84,7 @@ extension ComposerView {
                             ? (path as NSString).deletingLastPathComponent.components(separatedBy: "/").last.map { "\($0)/\(name)" } ?? name
                             : name
                         Button {
+                            syncBufferToStore()
                             store.insertMention(path, chatId: chatId)
                         } label: {
                             Text("@\(label)")
@@ -108,7 +109,7 @@ extension ComposerView {
 
     @ViewBuilder
     var attachmentStrip: some View {
-        if !chatImages.isEmpty || !store.uploads.isEmpty {
+        if !chatImages.isEmpty || !chatUploads.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 26) {
                     ForEach(chatImages) { image in
@@ -146,7 +147,7 @@ extension ComposerView {
                             }
                         }
                     }
-                    ForEach(store.uploads) { item in
+                    ForEach(chatUploads) { item in
                         HStack(spacing: 6) {
                             ProgressView()
                                 .controlSize(.small)

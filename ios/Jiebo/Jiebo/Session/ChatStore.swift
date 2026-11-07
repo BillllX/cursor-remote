@@ -84,6 +84,17 @@ struct PreviewSave {
     var snapshot: String
 }
 
+struct ExternalDraftDelivery: Equatable {
+    enum Kind: Equatable {
+        case replace(String)
+        case insertMention(String)
+        case appendMention(String)
+    }
+    var revision: Int
+    var chatId: String
+    var kind: Kind
+}
+
 /// 聊天主页的类型化目标，避免用户 id、助理和工作区路径发生字符串碰撞。
 enum ChatDestination: Hashable {
     case assistant
@@ -335,6 +346,8 @@ final class ChatStore {
     /// 没配钥匙时的下一步。钥匙在服务器上，应用里改不了。
     static let missingApiKeyTitle = "没配 API Key。写入 CURSOR_API_KEY 后重启网关"
     var draft = ""
+    /// 外部主动回填草稿（@补全、文件引用、附件上传、历史编辑、空态快捷词）：revision 递增通知 ComposerView 无条件采纳。
+    var externalDraftDelivery: ExternalDraftDelivery?
     var tenantId = ""
     var tenantName = ""
     var pendingImages: [PendingImage] = []

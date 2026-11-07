@@ -166,6 +166,7 @@ struct PendingTool: Hashable {
 struct UploadItem: Identifiable, Hashable {
     var id: String
     var name: String
+    var chatId: String
     var compressing = false
 }
 

@@ -110,6 +110,12 @@ struct ImVoiceBubble: View {
             .frame(width: min(230, 100 + CGFloat(detail.duration) / 600), alignment: .leading)
             .background(mine ? JieboColor.pine : JieboColor.white)
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                if !mine {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                }
+            }
             if let text = im.voiceTranscript(message) {
                 Text(text)
                     .font(JieboFont.text(.caption))
@@ -165,7 +171,13 @@ struct ImFileBubble: View {
             .padding(12)
             .frame(maxWidth: 260, alignment: .leading)
             .background(mine ? JieboColor.pine : JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                if !mine {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(JieboColor.line, lineWidth: 1)
+                }
+            }
         }
         .buttonStyle(.plain)
         .sheet(item: $preview, onDismiss: {
@@ -244,7 +256,13 @@ struct ImLinkBubble: View {
                     .foregroundStyle(mine ? JieboColor.fillFg : JieboColor.ink)
                     .padding(12).frame(maxWidth: 270, alignment: .leading)
                     .background(mine ? JieboColor.pine : JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        if !mine {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        }
+                    }
                 }
                 .buttonStyle(.plain)
                 .task(id: icon) {
@@ -261,6 +279,7 @@ struct ImLinkBubble: View {
 struct ImLocationBubble: View {
     @Environment(\.openURL) private var openURL
     let payload: ImBody
+    var mine: Bool = false
     @State private var snapshot: UIImage?
 
     var body: some View {
@@ -282,11 +301,21 @@ struct ImLocationBubble: View {
                         .frame(width: 260, height: 130).clipped()
                         VStack(alignment: .leading, spacing: 3) {
                             Text(name.isEmpty ? "位置" : name).font(JieboFont.text(.subheadline, weight: .semibold))
-                            Text(address).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.dim).lineLimit(2)
+                            Text(address)
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(mine ? JieboColor.fillFg.opacity(0.75) : JieboColor.dim)
+                                .lineLimit(2)
                         }.padding(10)
                     }
-                    .foregroundStyle(JieboColor.ink).background(JieboColor.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .foregroundStyle(mine ? JieboColor.fillFg : JieboColor.ink)
+                    .background(mine ? JieboColor.pine : JieboColor.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        if !mine {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        }
+                    }
                 }
                 .task(id: "\(lat),\(lng)") { snapshot = await mapSnapshot(lat: lat, lng: lng) }
             }

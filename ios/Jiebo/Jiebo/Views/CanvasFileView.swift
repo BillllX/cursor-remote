@@ -87,27 +87,12 @@ struct CanvasFileView: View {
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink)
                             .multilineTextAlignment(.center)
-                        HStack(spacing: 16) {
-                            Button("查看源码", action: onFallback)
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 44)
-                                .foregroundStyle(JieboColor.ink)
-                                .background(Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(JieboColor.line, lineWidth: 1)
-                                )
-                                .hitTarget()
+                        HStack(spacing: 12) {
+                            ActionButton(title: "查看源码", kind: .outline, action: onFallback)
                             if store.unlocked, store.linkState == .offline {
-                                Button("重连") { store.retryConnection() }
-                                    .padding(.horizontal, 14)
-                                    .frame(minHeight: 44)
-                                    .foregroundStyle(JieboColor.pine)
-                                    .hitTarget()
+                                ActionButton(title: "重连", kind: .primary) { store.retryConnection() }
                             }
                         }
-                        .font(JieboFont.text(.footnote, weight: .medium))
                     } else if status == .error {
                         Image(systemName: "exclamationmark.triangle")
                             .font(.system(size: 22))
@@ -116,37 +101,16 @@ struct CanvasFileView: View {
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
                             .multilineTextAlignment(.center)
-                        HStack(spacing: 16) {
+                        HStack(spacing: 12) {
                             // P6：源码是可落地的出口，升为主按钮；重试降为次按钮
-                            Button("查看源码", action: onFallback)
-                                .padding(.horizontal, 14)
-                                .frame(minHeight: 44)
-                                .foregroundStyle(JieboColor.ink)
-                                .background(Color.clear)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .stroke(JieboColor.line, lineWidth: 1)
-                                )
-                                .hitTarget()
-                            Button("重试") {
+                            ActionButton(title: "查看源码", kind: .outline, action: onFallback)
+                            ActionButton(title: "重试", kind: .secondary) {
                                 status = .loading
                                 errorText = nil
                                 didReady = false
                                 boot += 1 // .id 变化 → 重建 WebView 重新加载运行时
                             }
-                            .padding(.horizontal, 14)
-                            .frame(minHeight: 44)
-                            .foregroundStyle(JieboColor.ink2)
-                            .background(Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(JieboColor.line, lineWidth: 1)
-                            )
-                            .hitTarget()
                         }
-                        .font(JieboFont.text(.footnote, weight: .medium))
                     } else {
                         ProgressView().controlSize(.regular).tint(JieboColor.dim)
                         Text("正在打开画布…")
