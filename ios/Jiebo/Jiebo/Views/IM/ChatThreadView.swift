@@ -151,16 +151,24 @@ struct ChatThreadView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
             } else {
+                let quotedMessage = quoted(item)
                 ImBubbleRow(
                     message: item,
                     peer: person,
                     mine: item.from == im.meId,
-                    quoted: quoted(item),
+                    quoted: quotedMessage,
                     openImage: { viewer = ImViewerTarget(id: item.id) },
                     quote: {
                         if let seq = item.seq {
                             im.replyTo[item.convId] = seq
                             composerFocused = true
+                        }
+                    },
+                    onTapQuote: quotedMessage.map { target in
+                        {
+                            withAnimation(JieboMotion.standard(reduceMotion)) {
+                                proxy.scrollTo(target.id, anchor: .center)
+                            }
                         }
                     }
                 )
@@ -213,6 +221,7 @@ struct ImBubbleRow: View {
     let quoted: ImLocalMessage?
     var openImage: () -> Void
     var quote: () -> Void
+    var onTapQuote: (() -> Void)? = nil
     @State private var collabOpen = false
 
     var body: some View {
@@ -409,7 +418,17 @@ struct ImBubbleRow: View {
     private func quoteBlock(_ target: ImLocalMessage) -> some View {
         let who = target.from == im.meId ? "我" : im.user(target.from).nickname
         let text = target.recalled ? "这条消息已撤回" : ImFormat.preview(kind: target.kind, body: target.body)
-        return quoteText("\(who)：\(text)")
+        return Group {
+            if let onTapQuote {
+                Button(action: onTapQuote) {
+                    quoteText("\(who)：\(text)")
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("轻点两下定位到被引用的消息")
+            } else {
+                quoteText("\(who)：\(text)")
+            }
+        }
     }
 
     private func quoteText(_ text: String) -> some View {

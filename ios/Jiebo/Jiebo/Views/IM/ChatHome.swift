@@ -229,10 +229,12 @@ struct ChatListView: View {
                 }
             }
             if !groups.isEmpty {
-                Section("iOS 协作") {
+                Section {
                     ForEach(groups, id: \.convId) { group in
                         groupRow(group)
                     }
+                } header: {
+                    JieboListHeader("iOS 协作")
                 }
             }
             if !rows.others.isEmpty {
@@ -241,7 +243,7 @@ struct ChatListView: View {
                         contactRow(row)
                     }
                 } header: {
-                    Text(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
+                    JieboListHeader(rows.chatted.isEmpty ? "平台上的人" : "还没聊过")
                 }
             }
         }

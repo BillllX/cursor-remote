@@ -167,6 +167,14 @@ struct ChatComposer: View {
             loadedDraft = true
             text = im.drafts[convId] ?? ""
         }
+        .onChange(of: convId) { _, nextConvId in
+            text = im.drafts[nextConvId] ?? ""
+        }
+        .onChange(of: im.drafts[convId] ?? "") { _, externalDraft in
+            if externalDraft != text, !focused.wrappedValue {
+                text = externalDraft
+            }
+        }
         .onChange(of: text) { _, value in
             im.setDraft(value, convId: convId)
         }
