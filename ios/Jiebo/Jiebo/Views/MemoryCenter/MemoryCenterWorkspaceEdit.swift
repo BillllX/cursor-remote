@@ -127,7 +127,7 @@ struct MemoryCenterWorkspaceEditSheet: View {
                         .textInputAutocapitalization(.never)
                 }
                 .listRowBackground(JieboColor.white)
-                Section("状态") {
+                Section {
                     Button(liveItem.pinned ? "不再始终带上" : "始终带上") {
                         guard let itemId = liveItem.id else { return }
                         sendMutation([
@@ -185,6 +185,8 @@ struct MemoryCenterWorkspaceEditSheet: View {
                         Button("彻底删除…", role: .destructive) { confirmDelete = true }
                             .disabled(store.memoryCenterData.mutating || liveItem.id == nil)
                     }
+                } header: {
+                    JieboListHeader("状态")
                 }
                 .listRowBackground(JieboColor.white)
             }

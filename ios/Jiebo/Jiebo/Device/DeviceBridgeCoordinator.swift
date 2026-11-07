@@ -48,6 +48,10 @@ final class DeviceBridgeCoordinator {
         presenterOrder &+= 1
         presenterCandidates[token] = AssistantSceneCandidate(token: token, active: active, order: presenterOrder)
         presenterToken = AssistantSceneElection.presenter(in: Array(presenterCandidates.values))
+        if presenterToken == nil, confirmationContinuation != nil {
+            resolveConfirmation(allowed: false)
+        }
+        if presenterToken == nil { mailDraft = nil }
     }
 
     func removeConfirmationPresenter(token: String) {
@@ -195,11 +199,17 @@ final class DeviceBridgeCoordinator {
         ) == .ready else {
             throw DeviceRequestError.busy
         }
+        let timeoutTask = Task { @MainActor [weak self] in
+            try? await ContinuousClock().sleep(until: deadline)
+            guard !Task.isCancelled, let self, self.confirmation?.id == draft.id else { return }
+            self.resolveConfirmation(allowed: false)
+        }
+        defer { timeoutTask.cancel() }
         let allowed = await withCheckedContinuation { continuation in
             confirmationContinuation = continuation
             confirmation = draft
         }
-        // 用户点下允许时可能已经越过网关给出的绝对截止点。
+        // 用户点下允许或超时唤醒时若已越过网关给出的绝对截止点，按 timeout 结清。
         try ensureBeforeDeadline(deadline)
         guard DeviceWriteConfirmationPolicy.outcome(allowed: allowed) == .allowed else {
             throw DeviceRequestError.cancelled

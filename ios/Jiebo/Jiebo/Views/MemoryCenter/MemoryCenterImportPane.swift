@@ -12,6 +12,7 @@ struct MemoryCenterImportPane: View {
     @State private var exportWorkPreference = true
     @State private var exportSettings = false
     @State private var exportWorkspaceIds: Set<String> = []
+    @State private var initializedScopes = false
 
     private var extras: MemoryCenterExtrasDataState { store.memoryCenterExtrasStorage }
     private var workspaceScopeIds: [String] {
@@ -43,10 +44,19 @@ struct MemoryCenterImportPane: View {
             .tint(JieboColor.pine)
             .font(JieboFont.text(.caption))
             .onAppear {
-                exportWorkspaceIds = Set(workspaceScopeIds)
+                if !initializedScopes, !workspaceScopeIds.isEmpty {
+                    exportWorkspaceIds = Set(workspaceScopeIds)
+                    initializedScopes = true
+                }
             }
             .onChange(of: workspaceScopeIds) { _, ids in
-                exportWorkspaceIds = Set(ids)
+                let valid = Set(ids)
+                if !initializedScopes, !valid.isEmpty {
+                    exportWorkspaceIds = valid
+                    initializedScopes = true
+                } else {
+                    exportWorkspaceIds = exportWorkspaceIds.intersection(valid)
+                }
             }
             ActionButton(title: "导出记忆中心快照", kind: .outline) {
                 var scopes: [String] = []
@@ -67,6 +77,7 @@ struct MemoryCenterImportPane: View {
                 ActionButton(title: "复制路径", kind: .outline) {
                     #if os(iOS)
                     UIPasteboard.general.string = path
+                    store.flash("已复制导出路径")
                     #endif
                 }
             }
