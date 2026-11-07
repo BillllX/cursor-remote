@@ -538,6 +538,7 @@ extension ChatStore {
                         chats[index].turns.removeAll { $0.id == turnId }
                     }
                     chats[index].turnsComplete = false
+                    invalidateTurnListMemo(id)
                 }
                 // 正文少了这一轮，不能按「版本一致」直接补齐：有基线的作废版本号（只走增量补齐），也不再读本机缓存
                 if bodyRevs[id] != nil { bodyRevs[id] = Int.min }

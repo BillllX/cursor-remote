@@ -164,6 +164,10 @@ extension ChatStore {
                 chats[index].turns = cached.turns
             }
             if chats[index].draft.isEmpty { chats[index].draft = cached.draft }
+            invalidateTurnListMemo(id)
+        }
+        for chat in chats {
+            invalidateTurnListMemo(chat.id)
         }
         // 合并结果与服务端不一致的（本地优先胜出的/本地独有的）标脏，随后 sync_chat 增量重推。
         // 比较前把服务端行过一遍 from→json 归一化默认值，避免字段缺失造成的假差异。

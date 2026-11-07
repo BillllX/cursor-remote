@@ -291,6 +291,7 @@ final class ChatStore {
     }
 
     func invalidateTurnListMemo(_ chatId: String) {
+        turnRenderRevisions[chatId, default: 0] &+= 1
         uniquedTurnMemo[chatId] = nil
         if shellMemo?.chatId == chatId { shellMemo = nil }
     }

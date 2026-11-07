@@ -478,7 +478,10 @@ extension ChatStore {
         }
         if chats[index].turnsComplete, bodyRevs[id] == nil, let rev { bodyRevs[id] = rev }
         // 首屏尾段没有版本号。清掉的话，补齐完成前界面会空
-        if bodyRevs[id] == nil, !displayOnlyIds.contains(id) { chats[index].turns = [] }
+        if bodyRevs[id] == nil, !displayOnlyIds.contains(id) {
+            chats[index].turns = []
+            invalidateTurnListMemo(id)
+        }
         chats[index].turnsComplete = false
     }
 
@@ -926,6 +929,7 @@ extension ChatStore {
                 full.extra["clipped"] = nil
                 full.extra["bodyBytes"] = nil
                 self.chats[index].turns[turnIndex] = full.mergingFiles(from: placeholder)
+                self.invalidateTurnListMemo(chatId)
                 self.mergePendingTurnFiles(chatId: chatId)
                 if self.partialHistories[chatId]?.nextFrom == 0,
                    !self.chats[index].turns.contains(where: \.deferred)

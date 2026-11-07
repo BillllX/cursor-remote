@@ -96,6 +96,16 @@ struct TurnReviewBar: View {
                 confirmRestore = true
             }
             .disabled(restoring)
+            .confirmationDialog(
+                "还原这一轮的 \(turn.reviewPaths.count) 个文件？",
+                isPresented: $confirmRestore,
+                titleVisibility: .visible
+            ) {
+                Button("全部还原", role: .destructive) { store.restoreTurnFiles(turn.id, chatId: chatId) }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("文件会回到这一轮开始之前的样子。")
+            }
             ActionButton(title: "全部保留", kind: .primary) {
                 store.keepTurnFiles(turn.id, chatId: chatId)
             }
@@ -103,16 +113,6 @@ struct TurnReviewBar: View {
         }
         .frame(minHeight: 44)
         .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
-        .confirmationDialog(
-            "还原这一轮的 \(turn.reviewPaths.count) 个文件？",
-            isPresented: $confirmRestore,
-            titleVisibility: .visible
-        ) {
-            Button("全部还原", role: .destructive) { store.restoreTurnFiles(turn.id, chatId: chatId) }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("文件会回到这一轮开始之前的样子。")
-        }
     }
 }
 

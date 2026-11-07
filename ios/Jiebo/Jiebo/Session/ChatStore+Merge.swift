@@ -255,11 +255,11 @@ extension ChatStore {
         dirtyChatIds.contains(id) || localTurnsPendingSync.contains(id)
     }
 
-    /// 保留 base 的正文与顺序，只从同 id 的另一份回合补文件状态。
+    /// 保留 base 的正文与顺序，只从同 id 的另一份回合补文件状态与审阅标记。
     static func mergingTurnFiles(base: [Turn], other: [Turn]) -> [Turn] {
         let otherById = Dictionary(uniqueKeysWithValues: Turn.uniqued(other).map { ($0.id, $0) })
         return base.map { turn in
-            guard turn.filesSource != .authoritative, let remote = otherById[turn.id] else { return turn }
+            guard let remote = otherById[turn.id] else { return turn }
             return turn.mergingFiles(from: remote)
         }
     }
@@ -357,8 +357,9 @@ extension ChatStore {
                 : (files.isEmpty ? [] : Turn.stableAuthoritativeFiles(current: turn.cardFiles, incoming: files))
             chats[chatIndex].turns[turnIndex].filesSource = .authoritative
         }
-        if bumpRevision { turnRenderRevisions[chatId, default: 0] &+= 1 }
+        if bumpRevision { invalidateTurnListMemo(chatId) }
         bodySegs[chatId] = nil
+        scheduleDisplayTail(chatId)
         scheduleBodyCache(chatId)
     }
 
