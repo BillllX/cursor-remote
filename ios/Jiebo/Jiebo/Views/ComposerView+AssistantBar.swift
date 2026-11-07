@@ -105,7 +105,7 @@ extension ComposerView {
             .foregroundStyle(JieboColor.dim)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .jieboGlass(in: Capsule(), interactive: true)
             .contentShape(Capsule())
         }
         .menuOrder(.fixed)
@@ -188,7 +188,7 @@ private struct CapsuleSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .jieboGlass(in: Capsule(), interactive: true)
             .overlay(Capsule().stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
     }
 }

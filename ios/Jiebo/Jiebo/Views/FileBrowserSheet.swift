@@ -53,7 +53,7 @@ struct FileBrowserSheet: View {
                     .listRowBackground(JieboColor.white)
                 }
                 if filtered.isEmpty {
-                    Text(store.fileIndexEmptyTitle ?? (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
+                    Text(store.fileIndexEmptyTitle(for: chatId) ?? (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
                         .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.dim)
                         .listRowBackground(JieboColor.paper)
@@ -82,9 +82,7 @@ struct FileBrowserSheet: View {
     }
 
     private var filtered: [String] {
-        let base = store.fileIndex.isEmpty
-            ? store.mergedFileTreePaths.filter { !$0.hasSuffix("/") }
-            : store.fileIndex
+        let base = store.mergedFileTreePaths(for: chatId).filter { !$0.hasSuffix("/") }
         let q = filter.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return base }
         return ChatStore.rankMentions(base, query: q, limit: 500)

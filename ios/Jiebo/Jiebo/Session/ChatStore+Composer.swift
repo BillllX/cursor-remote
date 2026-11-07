@@ -51,12 +51,7 @@ extension ChatStore {
         guard queryString != mentionQueryByChat[targetId] else { return }
         mentionQueryByChat[targetId] = queryString
         mentionTasksByChat.removeValue(forKey: targetId)?.cancel()
-        let localPool: [String]
-        if fileIndexRequestChatId == targetId {
-            localPool = fileIndex
-        } else {
-            localPool = bootstrapSnapshot?.fileIndexes[targetId]?.paths ?? []
-        }
+        let localPool = mergedFileTreePaths(for: targetId).filter { !$0.hasSuffix("/") }
         let next = ChatStore.rankMentions(localPool, query: queryString)
         if next != (mentionSuggestionsByChat[targetId] ?? []) {
             mentionSuggestionsByChat[targetId] = next
@@ -112,8 +107,12 @@ extension ChatStore {
 
     /// 文件列表还是空的时候，说明是还没读到，而不是这个文件夹没有文件。已经读到并且为空时返回 nil。
     var fileIndexEmptyTitle: String? {
-        guard mergedFileTreePaths.isEmpty else { return nil }
-        let chatId = fileIndexRequestChatId ?? activeId
+        fileIndexEmptyTitle(for: nil)
+    }
+
+    func fileIndexEmptyTitle(for requestedId: String?) -> String? {
+        let chatId = requestedId?.nilIfEmpty ?? fileIndexRequestChatId ?? activeId
+        guard mergedFileTreePaths(for: chatId).isEmpty else { return nil }
         if fileIndexInFlight[chatId] != nil || !(loadingDirsByChat[chatId]?.isEmpty ?? true) { return "正在读取文件列表…" }
         guard unlocked else { return "还没登录。登录后再看文件列表。" }
         guard client.isOpen else {
@@ -122,15 +121,27 @@ extension ChatStore {
                 : "正在连接。连上后再看文件列表。"
         }
         guard gatewayReady else { return "正在打开，稍后再看文件列表。" }
-        if fileIndexUpdatedAt[chatId] == nil { return "文件列表还没读到。" }
+        if fileIndexUpdatedAt[chatId] == nil && (loadedDirsByChat[chatId]?.isEmpty ?? true) {
+            return "文件列表还没读到。"
+        }
         return nil
     }
 
     /// 合并单层按需懒加载结果与全量索引（按需懒加载项排在最前，防止 >8000 条工作区被 toTree 截断）
     var mergedFileTreePaths: [String] {
-        let targetId = fileIndexRequestChatId ?? activeId
+        mergedFileTreePaths(for: nil)
+    }
+
+    func mergedFileTreePaths(for requestedId: String?) -> [String] {
+        let targetId = requestedId?.nilIfEmpty ?? fileIndexRequestChatId ?? activeId
         let dirMap = dirEntriesByChat[targetId] ?? [:]
-        if dirMap.isEmpty { return fileIndex }
+        let baseIndex: [String]
+        if fileIndexRequestChatId == targetId || (fileIndexRequestChatId == nil && targetId == activeId) {
+            baseIndex = fileIndex
+        } else {
+            baseIndex = bootstrapSnapshot?.fileIndexes[targetId]?.paths ?? []
+        }
+        if dirMap.isEmpty { return baseIndex }
         var seen = Set<String>()
         var out: [String] = []
         for key in dirMap.keys.sorted() {
@@ -138,7 +149,7 @@ extension ChatStore {
                 out.append(p)
             }
         }
-        for p in fileIndex where seen.insert(p).inserted {
+        for p in baseIndex where seen.insert(p).inserted {
             out.append(p)
         }
         return out

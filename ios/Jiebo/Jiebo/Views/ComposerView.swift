@@ -241,7 +241,7 @@ struct ComposerView: View {
             let current = draftBuffer.text
             let separator = current.isEmpty || current.hasSuffix(" ") ? "" : " "
             replaceDraft(current + separator + paths.map { "@\($0)" }.joined(separator: " "))
-            schedulePersist()
+            syncBufferToStore()
             return true
         }
         // iPad Files / Safari 拖入：文件走现有上传，网页地址只写入当前草稿，由用户确认后发送。
@@ -257,7 +257,7 @@ struct ComposerView: View {
                 let current = draftBuffer.text
                 let separator = current.isEmpty || current.hasSuffix("\n") ? "" : "\n"
                 replaceDraft(current + separator + links.joined(separator: "\n"))
-                schedulePersist()
+                syncBufferToStore()
             }
             return true
         }

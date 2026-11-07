@@ -308,7 +308,7 @@ struct FileBrowserCover: View {
             Divider().overlay(JieboColor.line)
 
             FileTreeView(
-                paths: store.mergedFileTreePaths,
+                paths: store.mergedFileTreePaths(for: workbenchChatId),
                 truncated: store.treeTruncated,
                 filter: filter,
                 selectedPath: sceneSession?.previewKey ?? store.previewActivePath,
@@ -319,7 +319,7 @@ struct FileBrowserCover: View {
                 onPick: pickFile,
                 onCopyPath: copyPath,
                 onQuickLook: { store.openMention($0, chatId: workbenchChatId) }, // 二进制/系统导出逃生门
-                emptyDetail: store.fileIndexEmptyTitle
+                emptyDetail: store.fileIndexEmptyTitle(for: workbenchChatId)
             )
             // 工作区身份隔离：cwd 变了（热替换/重建）openDirs 等 @State 不跨工作区残留
             //（与 title 共用 browserBase 口径——Kimi R2 MINOR）
