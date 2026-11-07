@@ -18,7 +18,7 @@ struct MemoryCenterActivityPane: View {
             }
             ForEach(store.memoryCenterActivityRows) { row in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(Self.actionLabel(row.action)) · \(row.scope)").font(JieboFont.text(.subheadline, weight: .semibold))
+                    Text("\(Self.actionLabel(row.action)) · \(Self.scopeLabel(row.scope))").font(JieboFont.text(.subheadline, weight: .semibold))
                     Text(row.summary).font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2)
                     if row.canRestore {
                         ActionButton(title: "恢复", kind: .outline) {
@@ -47,6 +47,15 @@ struct MemoryCenterActivityPane: View {
         case "delete": return "删除"
         case "restore": return "恢复"
         default: return action
+        }
+    }
+
+    private static func scopeLabel(_ scope: String) -> String {
+        switch scope {
+        case "personal": return "关于我"
+        case "work_preference": return "工作偏好"
+        case "personal_settings": return "个人设置"
+        default: return scope
         }
     }
 }

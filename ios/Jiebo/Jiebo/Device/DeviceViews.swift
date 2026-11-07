@@ -77,7 +77,7 @@ struct DeviceConnectionsScreen: View {
 
     var body: some View {
         List {
-            Section("设备权限") {
+            Section {
                 ForEach(permissions.permissions) { permission in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -106,12 +106,15 @@ struct DeviceConnectionsScreen: View {
                     Label("打开系统设置", systemImage: "gear")
                 }
                 .listRowBackground(JieboColor.white)
+            } header: {
+                JieboListHeader("设备权限")
             }
 
             Section {
                 if permissions.audit.isEmpty {
                     Text("暂无设备操作")
                         .foregroundStyle(JieboColor.dim)
+                        .listRowBackground(JieboColor.white)
                 } else {
                     ForEach(permissions.audit) { entry in
                         HStack {
@@ -132,7 +135,7 @@ struct DeviceConnectionsScreen: View {
                     }
                 }
             } header: {
-                Text("最近设备操作")
+                JieboListHeader("最近设备操作")
             } footer: {
                 Text("仅保存在本机，只记录操作类型、状态和时间；不记录标题、联系人、地点或备注。")
             }
@@ -157,8 +160,12 @@ struct DeviceConnectionsScreen: View {
         switch op {
         case "calendar_events_list": return "读取日历"
         case "calendar_event_upsert": return "写入日历"
+        case "calendar_event_delete": return "删除日历事件"
         case "reminders_list": return "读取提醒事项"
         case "reminders_upsert": return "写入提醒事项"
+        case "reminder_complete": return "完成提醒事项"
+        case "reminder_delete": return "删除提醒事项"
+        case "mail_draft_open": return "打开邮件草稿"
         case "contacts_search": return "搜索通讯录"
         default: return op
         }
@@ -171,6 +178,7 @@ struct DeviceConnectionsScreen: View {
         case "cancelled": return "已拒绝"
         case "busy": return "确认繁忙"
         case "unavailable": return "不可用"
+        case "timeout": return "确认超时"
         default: return "失败"
         }
     }
