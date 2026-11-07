@@ -197,7 +197,8 @@ extension ChatStore {
         return "读不到这个文件，点重试再试一次。"
     }
 
-    func startActiveLoop(goal: String, intervalSec: Int, maxTicks: Int?) {
+    func startActiveLoop(goal: String, intervalSec: Int, maxTicks: Int?, chatId requestedId: String? = nil) {
+        let targetId = requestedId?.nilIfEmpty ?? activeId
         let trimmed = goal.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             loopError = "Loop 需要一段目标"
@@ -227,16 +228,17 @@ extension ChatStore {
         }
         loopError = ""
         send(.loopStart(
-            chatId: activeId,
+            chatId: targetId,
             goal: trimmed,
             intervalSec: intervalSec,
             maxTicks: maxTicks,
-            model: model,
-            mode: mode
+            model: model(for: targetId),
+            mode: mode(for: targetId)
         ))
     }
 
-    func stopActiveLoop() {
+    func stopActiveLoop(chatId requestedId: String? = nil) {
+        let targetId = requestedId?.nilIfEmpty ?? activeId
         guard unlocked else {
             loopError = "还没登录。这次不会停止，登录后再试。"
             return
@@ -247,7 +249,7 @@ extension ChatStore {
                 : "正在连接。这次不会停止，连上后再试。"
             return
         }
-        send(.loopStop(chatId: activeId))
+        send(.loopStop(chatId: targetId))
     }
 
     func previewTextEditable(_ tab: PreviewTab) -> Bool {

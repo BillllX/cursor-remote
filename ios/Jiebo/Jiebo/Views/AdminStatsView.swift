@@ -120,7 +120,7 @@ struct AdminStatsView: View {
                     .foregroundStyle(JieboColor.dim)
             }
         } header: {
-            Text("Cursor 账单" + stamp)
+            JieboListHeader("Cursor 账单" + stamp)
         }
     }
 
@@ -141,7 +141,7 @@ struct AdminStatsView: View {
             }
             .padding(.vertical, 6)
         } header: {
-            Text("各账号估算消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened)) 更新" } ?? ""))
+            JieboListHeader("各账号估算消耗" + (store.adminStatsAt.map { " · \($0.formatted(date: .omitted, time: .shortened)) 更新" } ?? ""))
         }
     }
 

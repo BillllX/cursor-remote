@@ -50,7 +50,7 @@ struct FileBrowserSheet: View {
                         .buttonStyle(.borderless)
                         .accessibilityLabel("预览 \(path)")
                     }
-                    .listRowBackground(JieboColor.paper)
+                    .listRowBackground(JieboColor.white)
                 }
                 if filtered.isEmpty {
                     Text(store.fileIndexEmptyTitle ?? (filter.trimmingCharacters(in: .whitespaces).isEmpty ? "没有文件列表" : "没有匹配的文件"))
@@ -82,8 +82,11 @@ struct FileBrowserSheet: View {
     }
 
     private var filtered: [String] {
+        let base = store.fileIndex.isEmpty
+            ? store.mergedFileTreePaths.filter { !$0.hasSuffix("/") }
+            : store.fileIndex
         let q = filter.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return store.fileIndex }
-        return ChatStore.rankMentions(store.fileIndex, query: q, limit: 500)
+        guard !q.isEmpty else { return base }
+        return ChatStore.rankMentions(base, query: q, limit: 500)
     }
 }

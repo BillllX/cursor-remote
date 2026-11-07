@@ -3,11 +3,13 @@ import UIKit
 
 struct LoopSheet: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @State private var goal = ""
     @State private var interval = "900"
     @State private var maxTicks = ""
 
-    private var row: LoopSnapshot? { store.loops[store.activeId] }
+    private var targetChatId: String { sceneSession?.workbenchChatId ?? store.activeId }
+    private var row: LoopSnapshot? { store.loops[targetChatId] }
 
     private var live: Bool {
         guard let row else { return false }
@@ -45,7 +47,7 @@ struct LoopSheet: View {
             Section {
                 Button("开始") { start() }
                     .disabled(live)
-                Button("停止", role: .destructive) { store.stopActiveLoop() }
+                Button("停止", role: .destructive) { store.stopActiveLoop(chatId: targetChatId) }
                     .disabled(!live)
             }
             .listRowBackground(JieboColor.white)
@@ -53,7 +55,7 @@ struct LoopSheet: View {
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
         .onAppear { refill() }
-        .onChange(of: store.activeId) { _, _ in refill() }
+        .onChange(of: targetChatId) { _, _ in refill() }
     }
 
     private func refill() {
@@ -80,7 +82,7 @@ struct LoopSheet: View {
             store.loopError = "间隔要是整数"
             return
         }
-        store.startActiveLoop(goal: goal, intervalSec: seconds, maxTicks: parsed)
+        store.startActiveLoop(goal: goal, intervalSec: seconds, maxTicks: parsed, chatId: targetChatId)
     }
 
     private func statusLine(_ row: LoopSnapshot) -> String {
