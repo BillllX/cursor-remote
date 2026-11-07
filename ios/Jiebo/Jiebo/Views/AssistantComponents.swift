@@ -201,6 +201,25 @@ extension ChatStore {
         if let index = assistantState?.schedules.firstIndex(where: { $0.id == id }) {
             assistantState?.schedules[index].enabled = enabled
         }
+        if let taskIndex = assistantState?.personalTasks?.firstIndex(where: {
+            $0.id == "schedule:\(id)" || $0.sources.contains(where: { $0.kind == "schedule" && $0.id == id })
+        }) {
+            assistantState?.personalTasks?[taskIndex].status = enabled ? "计划中" : "已暂停"
+            assistantState?.personalTasks?[taskIndex].actions = [
+                PersonalTaskAction(
+                    kind: "schedule_set",
+                    title: enabled ? "暂停计划" : "启用计划",
+                    op: "schedule_set",
+                    id: id,
+                    enabled: !enabled,
+                    delegationId: nil,
+                    chatId: nil,
+                    callId: nil,
+                    allow: nil
+                )
+            ]
+        }
+        syncLocalAssistantMutation()
         guard !client.isOpen else { return }
         flash(linkState == .offline
             ? "已断开。这台设备已改了这条计划，连上后才会告诉服务器。"

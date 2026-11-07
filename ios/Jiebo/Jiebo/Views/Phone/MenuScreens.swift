@@ -341,13 +341,17 @@ private struct PersonalTaskSheet: View {
     let task: PersonalTask
     @State private var editingTodo: AssistantTodo?
 
+    private var currentTask: PersonalTask {
+        store.assistantState?.personalTasks?.first(where: { $0.id == task.id }) ?? task
+    }
+
     private var sourceTodo: AssistantTodo? {
-        guard let id = task.sources.first(where: { $0.kind == "todo" })?.id else { return nil }
+        guard let id = currentTask.sources.first(where: { $0.kind == "todo" })?.id else { return nil }
         return store.assistantState?.todos.first { $0.id == id }
     }
 
     private var heading: String {
-        switch task.kind {
+        switch currentTask.kind {
         case "todo": return "待办"
         case "schedule": return "计划"
         case "background_run": return "后台运行"
@@ -356,29 +360,29 @@ private struct PersonalTaskSheet: View {
     }
 
     var body: some View {
+        let active = currentTask
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text(task.title.nilIfEmpty ?? heading)
+                    Text(sourceTodo?.text.nilIfEmpty ?? active.title.nilIfEmpty ?? heading)
                         .font(JieboFont.text(.title3, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
-                    Text(task.attention?.nilIfEmpty ?? task.status)
+                    Text(active.attention?.nilIfEmpty ?? active.status)
                         .font(JieboFont.text(.subheadline))
                         .foregroundStyle(JieboColor.ink2)
-                    if let due = TodoDue.label(task.due) {
+                    if let due = TodoDue.label(sourceTodo?.due ?? active.due) {
                         Text(due)
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                     }
-                    if let detail = task.detail?.nilIfEmpty {
-                        Text(detail)
-                            .font(JieboFont.text(.body))
-                            .foregroundStyle(JieboColor.ink)
+                    if let detail = active.detail?.nilIfEmpty {
+                        ProseLines(text: ReplyText.repair(detail))
+                            .textSelection(.enabled)
                     }
                     if sourceTodo != nil {
                         ActionButton(title: "修改", kind: .outline) { editingTodo = sourceTodo }
                     }
-                    ForEach(Array(task.actions.enumerated()), id: \.offset) { _, action in
+                    ForEach(Array(active.actions.enumerated()), id: \.offset) { _, action in
                         ActionButton(title: action.label, kind: .primary) {
                             store.performPersonalTaskAction(action)
                             dismiss()

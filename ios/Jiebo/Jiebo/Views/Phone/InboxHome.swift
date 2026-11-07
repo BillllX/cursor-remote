@@ -293,9 +293,7 @@ struct InboxDetailView: View {
                         .font(JieboFont.text(.caption))
                         .foregroundStyle(JieboColor.dim)
                     if !row.body.isEmpty {
-                        Text(row.body)
-                            .font(JieboFont.text(.subheadline))
-                            .foregroundStyle(JieboColor.ink)
+                        ProseLines(text: ReplyText.repair(row.body))
                             .textSelection(.enabled)
                             .padding(.top, 6)
                     }

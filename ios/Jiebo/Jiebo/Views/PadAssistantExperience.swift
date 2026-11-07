@@ -903,9 +903,7 @@ private struct PadBriefDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PadDetailTitle("今日简报", symbol: "sun.max.fill")
-            Text(store.assistantState?.brief?.text.nilIfEmpty ?? "今天还没有生成简报。")
-                .font(JieboFont.text(.body))
-                .foregroundStyle(JieboColor.ink2)
+            ProseLines(text: ReplyText.repair(store.assistantState?.brief?.text.nilIfEmpty ?? "今天还没有生成简报。"))
                 .textSelection(.enabled)
             let events = projection.dayThread.filter { $0.kind != "brief" }
             AssistantSection("今日脉络") {
@@ -977,14 +975,17 @@ private struct PadInboxDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PadDetailTitle(item.title.nilIfEmpty ?? "小驳消息", symbol: "tray")
-            Text(item.body.nilIfEmpty ?? "这条消息没有更多内容。")
-                .font(JieboFont.text(.body))
-                .foregroundStyle(JieboColor.ink2)
+            ProseLines(text: ReplyText.repair(item.body.nilIfEmpty ?? "这条消息没有更多内容。"))
                 .textSelection(.enabled)
             AssistantMutedText(assistantFormatMillis(item.createdAt))
             if let delegationId = item.delegationId {
                 ActionButton(title: "查看委派", kind: .outline) {
                     router.openDelegation(delegationId)
+                }
+            }
+            if let scheduleId = item.scheduleId {
+                ActionButton(title: "查看计划", kind: .outline) {
+                    router.openAssistant(section: .plans, selection: .task("schedule:\(scheduleId)"))
                 }
             }
             if item.actionPrompt != nil {
@@ -1007,6 +1008,12 @@ private struct PadTaskDetail: View {
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
+    @State private var editingTodo: AssistantTodo?
+
+    private var sourceTodo: AssistantTodo? {
+        guard let id = task.sources.first(where: { $0.kind == "todo" })?.id else { return nil }
+        return store.assistantState?.todos.first { $0.id == id }
+    }
 
     private var linkedArtifacts: [Artifact] {
         let delegationIds = Set(task.sources.filter { $0.kind == "delegation" }.map(\.id))
@@ -1031,20 +1038,23 @@ private struct PadTaskDetail: View {
                     .font(JieboFont.text(.subheadline, weight: .semibold))
                     .foregroundStyle(JieboColor.warnFg)
             }
-            if let detail = task.detail {
-                Text(detail)
-                    .font(JieboFont.text(.body))
-                    .foregroundStyle(JieboColor.ink2)
+            if let detail = task.detail?.nilIfEmpty {
+                ProseLines(text: ReplyText.repair(detail))
                     .textSelection(.enabled)
             }
-            if let due = TodoDue.label(task.due) {
+            if let due = TodoDue.label(sourceTodo?.due ?? task.due) {
                 Label(due, systemImage: "calendar")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.dim)
             }
             if let receipt = task.receipt { PadReceiptCard(receipt: receipt) }
-            if !task.actions.isEmpty {
+            if sourceTodo != nil || !task.actions.isEmpty {
                 AssistantSection("可用操作") {
+                    if sourceTodo != nil {
+                        ActionButton(title: "修改", kind: .outline, fullWidth: true) {
+                            editingTodo = sourceTodo
+                        }
+                    }
                     ForEach(Array(task.actions.enumerated()), id: \.offset) { _, action in
                         ActionButton(
                             title: action.label,
@@ -1066,6 +1076,9 @@ private struct PadTaskDetail: View {
                     }
                 }
             }
+        }
+        .sheet(item: $editingTodo) { todo in
+            TodoEditSheet(todo: todo)
         }
     }
 }
