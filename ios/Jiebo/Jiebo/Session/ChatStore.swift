@@ -246,7 +246,11 @@ final class ChatStore {
         return Array(fileIndex.filter { $0.lowercased().contains(query) }.prefix(40))
     }
     var shellEntries: [ShellEntry] {
-        let chatId = terminalFocusChatId.isEmpty ? activeId : terminalFocusChatId
+        shellEntries(for: nil)
+    }
+
+    func shellEntries(for preferredChatId: String?) -> [ShellEntry] {
+        let chatId = terminalFocusChatId.isEmpty ? (preferredChatId?.nilIfEmpty ?? activeId) : terminalFocusChatId
         let revision = turnRenderRevisions[chatId, default: 0]
         if let shellMemo, shellMemo.chatId == chatId, shellMemo.revision == revision {
             return shellMemo.rows

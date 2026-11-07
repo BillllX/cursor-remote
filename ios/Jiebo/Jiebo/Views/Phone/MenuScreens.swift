@@ -1254,7 +1254,7 @@ struct KbWorkspaceSheet: View {
                     .foregroundStyle(JieboColor.danger)
             }
         } header: {
-            Text(status?.isKnowledgeBase == true ? "已开启" : "知识库")
+            JieboListHeader(status?.isKnowledgeBase == true ? "已开启" : "知识库")
         } footer: {
             if busy { Text("正在同步…") }
         }
@@ -1287,7 +1287,7 @@ struct KbWorkspaceSheet: View {
                 }
             }
         } header: {
-            Text("看板")
+            JieboListHeader("看板")
         }
         .listRowBackground(JieboColor.white)
     }
@@ -1339,7 +1339,7 @@ struct KbWorkspaceSheet: View {
                 }
             }
         } header: {
-            Text("同事投递")
+            JieboListHeader("同事投递")
         }
         .listRowBackground(JieboColor.white)
 
@@ -1354,7 +1354,7 @@ struct KbWorkspaceSheet: View {
                 }
                 .disabled(busy || !validPasscode(passcode))
             } header: {
-                Text("新口令")
+                JieboListHeader("新口令")
             } footer: {
                 Text("口令只在生成时交给同事。这里之后只看得到备注，看不到原文。")
             }

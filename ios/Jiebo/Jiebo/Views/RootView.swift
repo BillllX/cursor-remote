@@ -295,6 +295,11 @@ struct CollapsedSidebarRail: View {
                     .navigationDestination(for: PhoneRoute.self) { route in
                         PhoneSettingsDestination(route: route)
                     }
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { settingsOpen = false }
+                        }
+                    }
             }
         }
         .sheet(isPresented: $kbOpen) {
@@ -310,7 +315,8 @@ struct CollapsedSidebarRail: View {
     }
 
     private var loopLive: Bool {
-        guard let row = store.loops[store.activeId] else { return false }
+        let chatId = sceneSession?.workbenchChatId ?? store.activeId
+        guard let row = store.loops[chatId] else { return false }
         return row.status == "armed" || row.status == "running"
     }
 
@@ -557,6 +563,7 @@ struct ToolLayerOverlay: View {
 }
 struct SearchToolView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     /// 在文件浮层里打开预览；不传则仍走内容层。
@@ -604,7 +611,7 @@ struct SearchToolView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .onChange(of: store.searchQuery) { _, _ in
-                store.scheduleSearch()
+                store.scheduleSearch(chatId: sceneSession?.workbenchChatId)
             }
 
             Divider().overlay(JieboColor.line)
@@ -755,9 +762,10 @@ struct GitToolView: View {
 }
 struct TerminalToolView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
 
     var body: some View {
-        let rows = store.shellEntries
+        let rows = store.shellEntries(for: sceneSession?.workbenchChatId)
         if rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 Text("这个会话还没有 shell 输出")
