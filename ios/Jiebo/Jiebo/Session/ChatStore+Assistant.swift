@@ -252,6 +252,26 @@ extension ChatStore {
             assistantState?.todos[index].done = done
             assistantState?.todos[index].doneAt = done ? Date().timeIntervalSince1970 * 1000 : nil
         }
+        if let taskIndex = assistantState?.personalTasks?.firstIndex(where: {
+            $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.kind == "todo" && $0.id == id })
+        }) {
+            assistantState?.personalTasks?[taskIndex].phase = done ? "completed" : "planned"
+            assistantState?.personalTasks?[taskIndex].status = done ? "已完成" : "待办"
+            assistantState?.personalTasks?[taskIndex].actions = [
+                PersonalTaskAction(
+                    kind: done ? "todo_undo" : "todo_done",
+                    title: done ? "标为未完成" : "完成",
+                    op: done ? "todo_undo" : "todo_done",
+                    id: id,
+                    enabled: nil,
+                    delegationId: nil,
+                    chatId: nil,
+                    callId: nil,
+                    allow: nil
+                )
+            ]
+        }
+        syncLocalAssistantMutation()
         guard !client.isOpen else { return }
         let marked = done ? "标成完成" : "标成未完成"
         flash(linkState == .offline
@@ -363,6 +383,14 @@ extension ChatStore {
             "allow": .bool(allow),
         ])
         assistantState?.approvals.removeAll { $0.id == approval.id }
+        syncLocalAssistantMutation()
+    }
+
+    func syncLocalAssistantMutation() {
+        if let state = assistantState {
+            updateCachedAssistant(state, memoryRevision: assistantMemoryRevision)
+        }
+        WidgetSnapshotBridge.shared.refresh(from: self)
     }
 
     func openAssistantInboxItem(_ item: AssistantInboxItem) {

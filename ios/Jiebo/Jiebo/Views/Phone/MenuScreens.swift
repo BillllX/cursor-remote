@@ -153,7 +153,13 @@ struct DelegationListScreen: View {
         guard let id = router.pendingWorkTaskId else { return }
         guard store.assistantState?.personalTasks != nil else { return }
         router.pendingWorkTaskId = nil
-        guard let task = rows.first(where: { $0.id == id }) else { return }
+        guard let task = rows.first(where: {
+            $0.id == id
+                || $0.id == "todo:\(id)"
+                || $0.id == "schedule:\(id)"
+                || $0.id == "delegation:\(id)"
+                || $0.sources.contains(where: { $0.id == id })
+        }) else { return }
         if let delegationId = task.sources.first(where: { $0.kind == "delegation" })?.id {
             router.delegationDetail = DelegationRef(id: delegationId)
         } else {

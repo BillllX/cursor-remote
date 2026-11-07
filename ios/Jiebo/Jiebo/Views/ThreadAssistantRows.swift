@@ -217,6 +217,7 @@ struct AssistantActionRow: View {
         .padding(.horizontal, 12)
         .frame(minHeight: 44)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(JieboColor.white)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)

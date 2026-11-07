@@ -8,6 +8,7 @@ extension ChatStore {
         guard queueInboxRead(id: item.id) else { return }
         if let index = assistantState?.inbox.firstIndex(where: { $0.id == item.id }) {
             assistantState?.inbox[index].read = true
+            syncLocalAssistantMutation()
         }
     }
 
@@ -16,6 +17,7 @@ extension ChatStore {
         guard let state = assistantState, state.unreadInbox > 0 else { return }
         guard queueInboxRead(id: nil) else { return }
         for index in assistantState!.inbox.indices { assistantState!.inbox[index].read = true }
+        syncLocalAssistantMutation()
     }
 
     /// id 为 nil 时标全部。还没登录返回 false，调用方不要改本地已读。
