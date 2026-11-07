@@ -205,7 +205,23 @@ extension ChatStore {
                     settleTruncate(id, prior: prior, chatRev: chatRev, truncated: truncated)
                     continue
                 }
-                guard !reviewOnly else { continue }
+                if reviewOnly {
+                    if !inflightChatIds.contains(id) {
+                        if bodyRevs[id] == prior {
+                            bodyRevs[id] = chatRev
+                            scheduleBodyCache(id)
+                        }
+                        if let partial = partialHistories[id], partial.chatRev == prior {
+                            partialHistories[id] = PartialHistory(
+                                nextFrom: partial.nextFrom,
+                                chatRev: chatRev,
+                                loadedPages: partial.loadedPages
+                            )
+                        }
+                        scheduleDisplayTail(id)
+                    }
+                    continue
+                }
                 inflightChatIds.remove(id)
                 let base = inflightBases.removeValue(forKey: id)
                 let follow = followedBodyChatIds().contains(id)

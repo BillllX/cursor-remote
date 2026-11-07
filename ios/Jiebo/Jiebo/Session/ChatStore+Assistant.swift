@@ -375,8 +375,22 @@ extension ChatStore {
             toolLayer = nil
             openAssistantChat()
         }
-        if let prompt = item.actionPrompt, let assistantChatId {
-            submit(chatId: assistantChatId, text: prompt)
+    if let prompt = item.actionPrompt, let assistantChatId {
+            submitAssistantHandoffPrompt(prompt, assistantChatId: assistantChatId)
+        }
+    }
+
+    /// 把产物、收件箱动作或语义拖放作为新消息发给小驳主会话，同时无损恢复用户正在输入的草稿（含 ComposerView 的防抖缓冲区与 sceneSession 草稿）。
+    private func submitAssistantHandoffPrompt(
+        _ prompt: String,
+        assistantChatId: String,
+        selectAssistant: Bool = false
+    ) {
+        let savedDraft = draft(for: assistantChatId)
+        if selectAssistant { openAssistantChat() }
+        submit(chatId: assistantChatId, text: prompt)
+        if !savedDraft.isEmpty {
+            applyExternalDraft(savedDraft, forChat: assistantChatId)
         }
     }
 
@@ -423,10 +437,7 @@ extension ChatStore {
         来源：\(source)
         \(target)
         """
-        let savedDraft = draft(for: assistantChatId)
-        if selectAssistant { openAssistantChat() }
-        submit(chatId: assistantChatId, text: prompt)
-        saveDraft(savedDraft, forChat: assistantChatId)
+        submitAssistantHandoffPrompt(prompt, assistantChatId: assistantChatId, selectAssistant: selectAssistant)
         flash("已交给小驳继续处理")
         return true
     }
@@ -472,9 +483,7 @@ extension ChatStore {
             }
             return false
         }
-        let savedDraft = draft(for: assistantChatId)
-        submit(chatId: assistantChatId, text: prompt)
-        saveDraft(savedDraft, forChat: assistantChatId)
+        submitAssistantHandoffPrompt(prompt, assistantChatId: assistantChatId)
         return true
     }
 
@@ -537,9 +546,7 @@ extension ChatStore {
         case .artifact: kind = "产物"
         }
         let prompt = "请继续处理这项\(kind)：\(transfer.title)\n稳定 ID：\(transfer.stableID)"
-        let savedDraft = draft(for: assistantChatId)
-        submit(chatId: assistantChatId, text: prompt)
-        saveDraft(savedDraft, forChat: assistantChatId)
+        submitAssistantHandoffPrompt(prompt, assistantChatId: assistantChatId)
         flash("已交给小驳继续处理")
         return true
     }

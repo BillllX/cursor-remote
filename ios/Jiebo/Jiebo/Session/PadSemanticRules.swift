@@ -39,26 +39,12 @@ enum AssistantWorkColumn: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    var section: PadAssistantSection {
-        switch self {
-        case .todo: return .todos
-        case .plan: return .plans
-        case .delegation: return .delegations
-        }
-    }
-
     static func matching(_ kind: String) -> AssistantWorkColumn {
         switch kind {
         case "schedule": return .plan
         case "delegation", "background_run": return .delegation
         default: return .todo
         }
-    }
-
-    static func section(forTaskId id: String) -> PadAssistantSection {
-        if id.hasPrefix("schedule:") { return .plans }
-        if id.hasPrefix("delegation:") || id.hasPrefix("run:") { return .delegations }
-        return .todos
     }
 }
 

@@ -756,6 +756,28 @@ func checkTurnFilesState() -> [String] {
         problems.append("turn files state：权威空数组恢复后退回了工具推导")
     }
 
+    // 同一轮对同一文件先后传入绝对路径与相对路径时，editPaths / reviewPaths 应按 samePath 去重
+    var dupPathTurn = settled
+    dupPathTurn.tools = [
+        ToolCall(callId: "edit-abs", name: "Edit", args: .object(["path": .string("/workspace/proj/A.swift")]), result: nil, status: "completed"),
+        ToolCall(callId: "edit-rel", name: "Edit", args: .object(["path": .string("A.swift")]), result: nil, status: "completed"),
+    ]
+    if dupPathTurn.editPaths.count != 1 || dupPathTurn.reviewPaths.count != 2 {
+        problems.append("turn files state：editPaths 未按 samePath 去重相对与绝对路径")
+    }
+
+    // 远端回合带 tool.review 时，mergingFiles 应合入审阅标记使 needsFileReview 收敛
+    var remoteReviewed = authoritative
+    remoteReviewed.tools = authoritative.tools.map { tool in
+        var copy = tool
+        copy.review = "accepted"
+        return copy
+    }
+    let mergedReview = settled.mergingFiles(from: remoteReviewed)
+    if mergedReview.needsFileReview || !mergedReview.tools.allSatisfy({ $0.review == "accepted" }) {
+        problems.append("turn files state：mergingFiles 未合入远端 tool.review 标记")
+    }
+
     print("回合文件来源 / 恢复合并：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
     return problems
 }

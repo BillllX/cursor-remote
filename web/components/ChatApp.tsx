@@ -3784,7 +3784,7 @@ export default function ChatApp() {
     if (!paths.length) return;
     if (!window.confirm(`还原这一轮的 ${paths.length} 个文件？`)) return;
     const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
-    const last = [...(chat?.turns || [])].reverse().find((item) => !item.queued && editPathsOf(item).length);
+    const last = [...(chat?.turns || [])].reverse().find((item) => !item.queued);
     if (last?.id === turn.id) send({ type: "undo", chatId: activeIdRef.current });
     else {
       for (const path of paths) revertFile(path, true);

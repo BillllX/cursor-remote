@@ -43,6 +43,8 @@ struct PadAssistantShell: View {
                 )
                 .accessibilityAddTraits(router.assistantSection == section ? .isSelected : [])
             }
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
             .navigationTitle("小驳")
             .navigationSplitViewColumnWidth(
                 min: router.layoutMode.sidebarWidth.minimum,
@@ -386,10 +388,17 @@ private struct PadSectionNavigationRow: View {
 
     var body: some View {
         Button(action: onOpen) {
-            Label(section.title, systemImage: section.symbol)
-                .font(JieboFont.text(.body))
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Capsule()
+                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .frame(width: 3, height: 18)
+                    .accessibilityHidden(true)
+                Label(section.title, systemImage: section.symbol)
+                    .font(JieboFont.text(.body, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? JieboColor.pine : JieboColor.ink)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(section.title)

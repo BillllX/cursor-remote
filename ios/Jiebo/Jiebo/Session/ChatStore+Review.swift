@@ -24,6 +24,33 @@ extension ChatStore {
             flash(linkState == .offline
                 ? "已断开。还原会在连上后发出。"
                 : "正在连接。还原会在连上后发出。")
+            send(.undo(chatId: targetId))
+            return
+        }
+        if let chat = chatSession(targetId),
+           let turn = chat.turns.last(where: { !$0.running && !$0.queued }),
+           turn.needsFileReview,
+           !restoringTurnIds.contains(turn.id) {
+            var paths: [String] = []
+            for path in turn.reviewPaths.map({ relToCwd($0, chatId: targetId) }) where !path.isEmpty && !paths.contains(path) {
+                paths.append(path)
+            }
+            restoringTurnIds.insert(turn.id)
+            let turnId = turn.id
+            let timeout = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, let self, self.restoreWaits[turnId] != nil else { return }
+                self.restoreWaits[turnId] = nil
+                self.restoringTurnIds.remove(turnId)
+                self.flash("还原没有收到回音，看一下文件再决定要不要重试")
+            }
+            restoreWaits[turnId] = RestoreWait(
+                chatId: targetId,
+                paths: Set(paths),
+                viaUndo: true,
+                remaining: 1,
+                timeout: timeout
+            )
         }
         send(.undo(chatId: targetId))
     }
@@ -58,7 +85,9 @@ extension ChatStore {
             paths.append(path)
         }
         guard !paths.isEmpty else { return }
-        let last = chat.turns.reversed().first { !$0.queued && !$0.reviewPaths.isEmpty }
+        // 只有当前会话最后一个非排队回合才能走整轮 undo（网关 slot.checkpoints[0] 与 slot.edited 总是对应最新一轮，
+        // 若后续已有纯问答回合，再发 undo 会还原到纯问答回合的检查点而非本轮之前）
+        let last = chat.turns.last { !$0.queued }
         if !client.isOpen {
             flash(linkState == .offline
                 ? "已断开。还原会在连上后发出。"
@@ -157,6 +186,10 @@ extension ChatStore {
         }
         chats[index] = chat
         bodySegs[chat.id] = nil // 本地写了保留/还原标记，正文与段哈希不再对应
+        turnRenderRevisions[chat.id, default: 0] &+= 1
+        invalidateTurnListMemo(chat.id)
+        scheduleDisplayTail(chat.id)
+        scheduleBodyCache(chat.id)
         if untaggable { localTurnReviews[turnId] = review }
         guard !reviews.isEmpty else { return }
         send(.toolReview(chatId: chat.id, turnId: turnId, reviews: reviews))

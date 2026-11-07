@@ -24,7 +24,9 @@ struct ImLocationPicker: View {
                 .frame(height: 260)
                 List {
                     if locator.denied {
-                        Text("没有定位权限，仍可搜索地点").foregroundStyle(JieboColor.dim)
+                        Text("没有定位权限，仍可搜索地点")
+                            .foregroundStyle(JieboColor.dim)
+                            .listRowBackground(JieboColor.white)
                     } else if let coordinate = locator.coordinate {
                         Button {
                             Task {
@@ -33,19 +35,38 @@ struct ImLocationPicker: View {
                             }
                         } label: {
                             Label("发送当前位置", systemImage: "location.fill")
+                                .foregroundStyle(JieboColor.pine)
                         }
+                        .listRowBackground(JieboColor.white)
                     }
                     ForEach(results) { place in
+                        let isSelected = selected?.id == place.id
                         Button {
                             selected = place
                             center(place.coordinate)
                         } label: {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(place.name).foregroundStyle(JieboColor.ink)
-                                Text(place.address).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.dim)
+                            HStack(spacing: 8) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(place.name)
+                                        .font(JieboFont.text(.body, weight: isSelected ? .semibold : .regular))
+                                        .foregroundStyle(JieboColor.ink)
+                                    Text(place.address)
+                                        .font(JieboFont.text(.caption))
+                                        .foregroundStyle(JieboColor.dim)
+                                }
+                                Spacer(minLength: 8)
+                                if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(JieboFont.text(.subheadline, weight: .semibold))
+                                        .foregroundStyle(JieboColor.pine)
+                                        .accessibilityHidden(true)
+                                }
                             }
+                            .contentShape(Rectangle())
                         }
-                        .listRowBackground(JieboColor.paper)
+                        .buttonStyle(.plain)
+                        .listRowBackground(JieboColor.white)
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                     }
                 }
                 .listStyle(.plain)

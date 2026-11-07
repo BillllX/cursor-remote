@@ -244,7 +244,7 @@ struct Turn: Identifiable, Hashable {
         return out
     }
 
-    /// 把远端回合的文件状态合入当前回合；缺少 files 字段的旧副本不能抹掉已有权威状态。
+    /// 把远端回合的文件状态与工具审阅标记合入当前回合；缺少 files 字段的旧副本不能抹掉已有权威状态。
     func mergingFiles(from remote: Turn) -> Turn {
         var row = self
         if remote.filesSource == .authoritative {
@@ -255,6 +255,22 @@ struct Turn: Identifiable, Hashable {
         } else if filesSource != .authoritative, !remote.files.isEmpty {
             row.files = Turn.stableAuthoritativeFiles(current: cardFiles, incoming: remote.files)
             row.filesSource = remote.filesSource
+        }
+        if !remote.tools.isEmpty, !row.tools.isEmpty {
+            var remoteReviews: [String: String] = [:]
+            for tool in remote.tools {
+                if let review = tool.review, !review.isEmpty {
+                    remoteReviews[tool.callId] = review
+                }
+            }
+            if !remoteReviews.isEmpty {
+                row.tools = row.tools.map { tool in
+                    guard (tool.review ?? "").isEmpty, let review = remoteReviews[tool.callId] else { return tool }
+                    var copy = tool
+                    copy.review = review
+                    return copy
+                }
+            }
         }
         return row
     }
@@ -309,7 +325,7 @@ struct Turn: Identifiable, Hashable {
         var paths: [String] = []
         for tool in tools where tool.kind.isMutating {
             let path = toolFilePath(args: tool.args, result: tool.result) ?? ""
-            if !path.isEmpty, !paths.contains(path) { paths.append(path) }
+            if !path.isEmpty, !paths.contains(where: { Turn.samePath($0, path) }) { paths.append(path) }
         }
         return paths
     }

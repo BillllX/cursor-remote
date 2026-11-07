@@ -81,11 +81,9 @@ struct DelegationDetailSheet: View {
                 }
             }
         }
-        if row.status == "done" || row.status == "failed", let result = row.result {
+        if row.status == "done" || row.status == "failed", let result = row.result?.nilIfEmpty {
             AssistantSection("汇报") {
-                Text(result)
-                    .font(JieboFont.text(.subheadline))
-                    .foregroundStyle(JieboColor.ink)
+                ProseLines(text: ReplyText.repair(result))
                     .textSelection(.enabled)
                     .assistantCard()
             }
@@ -209,14 +207,7 @@ struct DelegationDetailSheet: View {
     }
 
     private static func verb(for tool: ToolCall) -> String {
-        switch tool.kind {
-        case .read: return "读"
-        case .edit: return "改"
-        case .write: return "写"
-        case .shell: return "跑"
-        case .search: return "搜"
-        case .other: return tool.name.isEmpty ? "工具" : tool.name
-        }
+        ToolCardView.chineseVerb(tool)
     }
 
     // MARK: 停止

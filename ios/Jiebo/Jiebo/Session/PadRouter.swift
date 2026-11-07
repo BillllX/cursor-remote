@@ -115,6 +115,22 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
     }
 }
 
+extension AssistantWorkColumn {
+    var section: PadAssistantSection {
+        switch self {
+        case .todo: return .todos
+        case .plan: return .plans
+        case .delegation: return .delegations
+        }
+    }
+
+    static func section(forTaskId id: String) -> PadAssistantSection {
+        if id.hasPrefix("schedule:") { return .plans }
+        if id.hasPrefix("delegation:") || id.hasPrefix("run:") { return .delegations }
+        return .todos
+    }
+}
+
 struct PadPushDestination: Equatable {
     var domain: PadDomain
     var section: PadAssistantSection?

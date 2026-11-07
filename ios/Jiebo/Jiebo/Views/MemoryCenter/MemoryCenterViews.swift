@@ -75,6 +75,7 @@ struct MemoryCenterPanelView: View {
             guard let delivery = note.object as? PadSceneCommandDelivery,
                   delivery.sceneToken == sceneToken
             else { return }
+            selectedKey = nil
             navId = "search"
             searchActive = true
         }
@@ -162,9 +163,6 @@ struct MemoryCenterDoubleColumnBody: View {
                                 .padding(12)
                         }
                     }
-                } else if searchActive {
-                    MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: .columnSelection)
-                        .padding(12)
                 } else if (navId == "personal" || navId == "work_preference"), let key = selectedKey {
                     VStack(alignment: .leading, spacing: 0) {
                         MemoryCenterInlineBackBar(title: "编辑记忆") { selectedKey = nil }
@@ -543,7 +541,9 @@ struct MemoryCenterMiddleColumn: View {
 
     @ViewBuilder
     private var content: some View {
-        if navId == "activity" {
+        if searchActive || navId == "search" {
+            MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: itemNavigation)
+        } else if navId == "activity" {
             MemoryCenterActivityPane()
         } else if navId == "suggestions" {
             MemoryCenterSuggestionsPane()
@@ -563,8 +563,6 @@ struct MemoryCenterMiddleColumn: View {
             MemoryCenterRememberMe(selectedKey: $selectedKey, itemNavigation: itemNavigation)
         } else if MemoryCenterReducer.isPlaceholderNav(navId) {
             MemoryCenterPlaceholderPane(title: "设置")
-        } else if searchActive {
-            MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: itemNavigation)
         } else if navId == "overview" {
             MemoryCenterOverviewPane(onSelectScope: { id in
                 navId = id
@@ -610,7 +608,7 @@ struct MemoryCenterDetailColumn: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if searchActive {
+                if searchActive || navId == "search" {
                     MemoryCenterSearchDetail(selectedKey: selectedKey)
                 } else if navId == "personal" || navId == "work_preference" {
                     MemoryCenterRememberDetail(selectedKey: selectedKey)
@@ -653,9 +651,11 @@ struct MemoryCenterToolbar: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .searchable(text: $searchText, prompt: "搜索记忆")
+        .searchable(text: $searchText, isPresented: $searchActive, prompt: "搜索记忆")
         .onChange(of: searchText) { _, value in
-            searchActive = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                searchActive = true
+            }
         }
     }
 }
@@ -1993,7 +1993,7 @@ struct MemoryCenterPhoneHome: View {
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
         .navigationTitle("记忆")
-        .searchable(text: $searchText, prompt: "搜索记忆")
+        .searchable(text: $searchText, isPresented: $searchActive, prompt: "搜索记忆")
         .refreshable {
             store.memoryCenterRefreshOverview()
             store.memoryCenterLoadSuggestions()
@@ -2011,7 +2011,9 @@ struct MemoryCenterPhoneHome: View {
         }
         .onAppear { store.memoryCenterLoadSuggestions() }
         .onChange(of: searchText) { _, value in
-            searchActive = !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                searchActive = true
+            }
         }
     }
 }

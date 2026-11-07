@@ -196,8 +196,13 @@ struct PhoneTabShell: View {
             store.openAssistantChat()
         case .inbox:
             router.go(.inbox)
-        case .todo:
-            router.go(.worklist(.todo))
+        case .todo(let id):
+            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                router.go(.worklist(.todo))
+            } else {
+                router.openWorkTask(trimmed.hasPrefix("todo:") ? trimmed : "todo:\(trimmed)", column: .todo)
+            }
         }
     }
 
@@ -250,8 +255,16 @@ struct PhoneTabShell: View {
         }
         if target.kind == "approval" {
             router.go(.inbox)
+        } else if target.kind == "reminder", let itemId = target.itemId?.nilIfEmpty {
+            router.openWorkTask(itemId, column: AssistantWorkColumn.matching(itemId))
         } else if target.delegationId != nil || target.chatId != nil {
             router.open(chatId: target.chatId, delegationId: target.delegationId, store: store)
+        } else if let itemId = target.itemId?.nilIfEmpty {
+            if store.assistantState?.inbox.contains(where: { $0.id == itemId }) == true {
+                router.openInboxItem(itemId)
+            } else {
+                router.openWorkTask(itemId, column: AssistantWorkColumn.matching(itemId))
+            }
         } else {
             router.popToRoot()
         }
@@ -301,6 +314,7 @@ struct PhoneTabShell: View {
             }
             guard let peer = ImConv.peer(of: convId, me: im.meId) else { return }
             im.selectedPeer = peer
+            sceneSession?.chatDestination = .person(peer)
             store.chatHomeDestination = .person(peer)
         }
     }

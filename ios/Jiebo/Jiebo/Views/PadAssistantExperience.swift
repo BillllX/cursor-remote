@@ -469,6 +469,7 @@ struct PadTaskExperience: View {
                         .font(JieboFont.text(.footnote))
                         .foregroundStyle(JieboColor.dim)
                 }
+                .listRowBackground(JieboColor.white)
             }
             ForEach(visiblePhases, id: \.self) { phase in
                 let rows = tasks.filter { $0.phase == phase }
@@ -1171,11 +1172,9 @@ private struct PadDelegationDetail: View {
                     ApprovalCard(approval: approval, style: .plain)
                 }
 
-                if let result = delegation.result {
+                if let result = delegation.result?.nilIfEmpty {
                     AssistantSection("汇报") {
-                        Text(result)
-                            .font(JieboFont.text(.subheadline))
-                            .foregroundStyle(JieboColor.ink)
+                        ProseLines(text: ReplyText.repair(result))
                             .textSelection(.enabled)
                             .assistantCard()
                     }
@@ -1183,18 +1182,22 @@ private struct PadDelegationDetail: View {
 
                 AssistantSection("过程") {
                     if let tools = childChat?.turns.last?.tools, !tools.isEmpty {
-                        ForEach(tools.suffix(30)) { tool in
-                            let running = tool.status == "running"
-                            let failed = tool.status == "error"
-                            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                Image(systemName: running ? "ellipsis" : (failed ? "xmark.circle" : "checkmark.circle"))
-                                    .foregroundStyle(running ? JieboColor.run : (failed ? JieboColor.danger : JieboColor.ok))
-                                Text(tool.name.nilIfEmpty ?? "工具")
-                                    .font(JieboFont.text(.footnote, weight: .semibold))
-                                Text(tool.summary)
-                                    .font(JieboFont.monoText(.caption))
-                                    .foregroundStyle(JieboColor.dim)
-                                    .lineLimit(1)
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(tools.suffix(30)) { tool in
+                                let running = tool.status == "running"
+                                let failed = tool.status == "error"
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    Image(systemName: running ? "ellipsis" : (failed ? "xmark.circle" : "checkmark.circle"))
+                                        .foregroundStyle(running ? JieboColor.run : (failed ? JieboColor.danger : JieboColor.ok))
+                                    Text(ToolCardView.chineseVerb(tool))
+                                        .font(JieboFont.text(.footnote, weight: .semibold))
+                                        .foregroundStyle(JieboColor.ink)
+                                    Text(tool.summary)
+                                        .font(JieboFont.monoText(.caption))
+                                        .foregroundStyle(JieboColor.dim)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
                             }
                         }
                         .assistantCard()
