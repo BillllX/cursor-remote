@@ -270,9 +270,10 @@ struct RemoteImage: View {
     let url: URL?
     @State private var image: UIImage?
     @State private var failed = false
+    @State private var retryCount = 0
 
     private var loadKey: String {
-        "\(url?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+        "\(url?.absoluteString ?? "")#\(retryCount)|\(store.unlocked)|\(store.connected)"
     }
 
     var body: some View {
@@ -287,6 +288,20 @@ struct RemoteImage: View {
                     Image(systemName: "exclamationmark.triangle")
                     Text(store.previewImageFailedTitle)
                         .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    } else if store.unlocked, store.connected {
+                        Button("重试") {
+                            failed = false
+                            retryCount += 1
+                        }
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                    }
                 }
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.danger)
@@ -381,9 +396,10 @@ private struct MeasuredSVGImage: View {
     @State private var html: String?
     @State private var failed = false
     @State private var renderRetry = 0
+    @State private var downloadRetry = 0
 
     private var loadKey: String {
-        "\(url?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+        "\(url?.absoluteString ?? "")#\(downloadRetry)|\(store.unlocked)|\(store.connected)"
     }
 
     var body: some View {
@@ -393,6 +409,20 @@ private struct MeasuredSVGImage: View {
                     Image(systemName: "exclamationmark.triangle")
                     Text(store.previewSvgFailedTitle)
                         .multilineTextAlignment(.center)
+                    if store.unlocked, store.linkState == .offline {
+                        Button("重连") { store.retryConnection() }
+                            .font(JieboFont.text(.caption, weight: .medium))
+                            .foregroundStyle(JieboColor.pine)
+                            .frame(minWidth: 44, minHeight: 44)
+                    } else if store.unlocked, store.connected {
+                        Button("重试") {
+                            failed = false
+                            downloadRetry += 1
+                        }
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
+                    }
                 }
                 .font(JieboFont.text(.caption))
                 .foregroundStyle(JieboColor.danger)
@@ -778,9 +808,10 @@ private struct MeasuredMediaPlayer: View {
     let category: String
     @State private var localURL: URL?
     @State private var failed = false
+    @State private var retryCount = 0
 
     private var loadKey: String {
-        "\(remoteURL?.absoluteString ?? "")|\(store.unlocked)|\(store.connected)"
+        "\(remoteURL?.absoluteString ?? "")#\(retryCount)|\(store.unlocked)|\(store.connected)"
     }
 
     var body: some View {
@@ -797,6 +828,14 @@ private struct MeasuredMediaPlayer: View {
                             .font(JieboFont.text(.caption, weight: .medium))
                             .foregroundStyle(JieboColor.pine)
                             .frame(minWidth: 44, minHeight: 44)
+                    } else if store.unlocked, store.connected {
+                        Button("重试") {
+                            failed = false
+                            retryCount += 1
+                        }
+                        .font(JieboFont.text(.caption, weight: .medium))
+                        .foregroundStyle(JieboColor.pine)
+                        .frame(minWidth: 44, minHeight: 44)
                     }
                 }
                 .font(JieboFont.text(.caption))

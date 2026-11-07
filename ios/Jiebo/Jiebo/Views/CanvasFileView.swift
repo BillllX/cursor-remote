@@ -250,7 +250,15 @@ private struct CanvasWebView: UIViewRepresentable {
             reportFail("画布进程崩溃了，点重试恢复")
         }
 
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(error)
+        }
+
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(error)
+        }
+
+        private func handleNavigationFailure(_ error: Error) {
             // dismantle 里的 stopLoading 会触发 cancelled，别误报
             let ns = error as NSError
             if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorCancelled { return }
