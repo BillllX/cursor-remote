@@ -18,9 +18,19 @@ import {
   recoverInterruptedIngestQueue,
   type IngestQueueEntry,
 } from "./queue.ts";
+import { bindQaRunner, type QaRunnerDeps } from "./qaRunner.ts";
+import {
+  clearQaSessionStorageSync,
+  purgeQaSessionsByTokenIdsSync,
+  sweepTenantQaTempStorageSync,
+} from "./qaStorage.ts";
 import { bindIngestRunner, runIngestBatchJob, type IngestRunnerDeps } from "./runner.ts";
 import type { DropBatchMeta } from "./staging.ts";
-import type { DropTenantHost } from "./tokens.ts";
+import {
+  onDropSessionEvicted,
+  onDropTokensRevoked,
+  type DropTenantHost,
+} from "./tokens.ts";
 import type { IngestToolExecutionLog } from "./tools.ts";
 
 export type IngestLogRecord = {
@@ -231,21 +241,54 @@ export function handleIngestBatchCompleted(ctx: {
   };
 }
 
+const QA_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+let activeQaStartupImmediate: ReturnType<typeof setImmediate> | null = null;
+let activeQaSweepTimer: ReturnType<typeof setInterval> | null = null;
+let activeRevokeUnsub: (() => void) | null = null;
+let activeEvictUnsub: (() => void) | null = null;
+
+export function stopIngestQaSweepTimer() {
+  if (activeQaStartupImmediate) {
+    clearImmediate(activeQaStartupImmediate);
+    activeQaStartupImmediate = null;
+  }
+  if (activeQaSweepTimer) {
+    clearInterval(activeQaSweepTimer);
+    activeQaSweepTimer = null;
+  }
+  if (activeRevokeUnsub) {
+    activeRevokeUnsub();
+    activeRevokeUnsub = null;
+  }
+  if (activeEvictUnsub) {
+    activeEvictUnsub();
+    activeEvictUnsub = null;
+  }
+}
+
 /**
- * 启动并绑定网关知识库归档运行时（由 `gateway/src/index.ts` 与端到端测试统一调用）：
- * 1. 绑定 `IngestRunner`（含 `handleIngestBatchCompleted` 通知回调）；
+ * 启动并绑定网关知识库归档与只读问答（QA）运行时（由 `gateway/src/index.ts` 与端到端测试统一调用）：
+ * 1. 绑定 `IngestRunner`（含 `handleIngestBatchCompleted` 通知回调）与 `QaRunner`；
  * 2. 绑定 `IngestBatchWorker` 为 `runIngestBatchJob`；
- * 3. 对所有租户执行 `recoverInterruptedIngestQueue` 启动恢复。
+ * 3. 对所有租户执行 `recoverInterruptedIngestQueue` 启动恢复；
+ * 4. 启动知识库 QA 临时目录清理器（启动首扫 + 每 10 分钟定期清扫 + 口令吊销/会话淘汰即时销毁钩子）。
  */
 export function startIngestRuntime(opts: {
   tenants: () => DropPortalTenant[];
   runnerOverrides?: Partial<IngestRunnerDeps>;
+  qaRunnerOverrides?: Partial<QaRunnerDeps>;
+  qaSweepIntervalMs?: number;
 }): string[] {
+  const apiKeyFn = opts.runnerOverrides?.apiKey ?? (() => gatewayEnv.cursorApiKey());
+  const listModelsFn = opts.runnerOverrides?.listModels ?? listModels;
+  const promptFn = opts.runnerOverrides?.prompt ?? ((message, options) => Agent.prompt(message, options));
+  const sandboxFn = opts.runnerOverrides?.sandbox ?? ((tenantId) => sandboxEnabledForTenant(getTenant(tenantId)));
+
   bindIngestRunner({
-    apiKey: opts.runnerOverrides?.apiKey ?? (() => gatewayEnv.cursorApiKey()),
-    listModels: opts.runnerOverrides?.listModels ?? listModels,
-    prompt: opts.runnerOverrides?.prompt ?? ((message, options) => Agent.prompt(message, options)),
-    sandbox: opts.runnerOverrides?.sandbox ?? ((tenantId) => sandboxEnabledForTenant(getTenant(tenantId))),
+    apiKey: apiKeyFn,
+    listModels: listModelsFn,
+    prompt: promptFn,
+    sandbox: sandboxFn,
     onBatchCompleted:
       opts.runnerOverrides?.onBatchCompleted ??
       ((ctx) => {
@@ -254,14 +297,71 @@ export function startIngestRuntime(opts: {
   });
   bindIngestBatchWorker(runIngestBatchJob);
 
+  bindQaRunner({
+    apiKey: opts.qaRunnerOverrides?.apiKey ?? apiKeyFn,
+    listModels: opts.qaRunnerOverrides?.listModels ?? listModelsFn,
+    prompt: opts.qaRunnerOverrides?.prompt ?? promptFn,
+    sandbox: opts.qaRunnerOverrides?.sandbox ?? sandboxFn,
+  });
+
+  stopIngestQaSweepTimer();
+
+  activeRevokeUnsub = onDropTokensRevoked((ref, revokedIds) => {
+    const matchedTenant = opts.tenants().find((t) => t.id === ref.id && t.stateDir === ref.stateDir);
+    const wsRoot = matchedTenant?.workspaceRoot ?? getTenant(ref.id)?.workspaceRoot ?? ref.stateDir;
+    try {
+      purgeQaSessionsByTokenIdsSync(ref, wsRoot, revokedIds);
+    } catch (err) {
+      log.error("purge qa sessions on revoke", err instanceof Error ? err.message : err);
+    }
+  });
+
+  activeEvictUnsub = onDropSessionEvicted((grant) => {
+    const matchedTenant = opts.tenants().find((t) => t.id === grant.tenantId);
+    if (!matchedTenant) return;
+    try {
+      clearQaSessionStorageSync(buildDropTenantHost(matchedTenant), grant.qaSessionId, grant.workspaceId);
+    } catch {
+      // ignore
+    }
+  });
+
   const recoveredWorkspaces: string[] = [];
   for (const tenant of opts.tenants()) {
     try {
-      const drained = recoverInterruptedIngestQueue(buildDropTenantHost(tenant));
+      const host = buildDropTenantHost(tenant);
+      const drained = recoverInterruptedIngestQueue(host);
       recoveredWorkspaces.push(...drained);
     } catch (err) {
       log.error("recover ingest queue", err instanceof Error ? err.message : err);
     }
   }
+
+  // 启动首扫延后到下一个事件循环 tick 执行，避免阻塞启动主路径
+  activeQaStartupImmediate = setImmediate(() => {
+    activeQaStartupImmediate = null;
+    for (const tenant of opts.tenants()) {
+      try {
+        sweepTenantQaTempStorageSync(buildDropTenantHost(tenant), { isStartup: true });
+      } catch (err) {
+        log.error("startup sweep qa temp", err instanceof Error ? err.message : err);
+      }
+    }
+  });
+
+  const intervalMs = opts.qaSweepIntervalMs ?? QA_SWEEP_INTERVAL_MS;
+  if (intervalMs > 0) {
+    activeQaSweepTimer = setInterval(() => {
+      for (const tenant of opts.tenants()) {
+        try {
+          sweepTenantQaTempStorageSync(buildDropTenantHost(tenant));
+        } catch (err) {
+          log.error("periodic sweep qa temp", err instanceof Error ? err.message : err);
+        }
+      }
+    }, intervalMs);
+    activeQaSweepTimer.unref?.();
+  }
+
   return recoveredWorkspaces;
 }

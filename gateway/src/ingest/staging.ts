@@ -173,8 +173,20 @@ export function writeBatchMetaSync(
   return { ok: true };
 }
 
+/** 分配一个新的 batchId 与 receiptToken（不触碰工作区文件系统，仅在内存或真正调用 stageFileIntoBatch 时按需落盘） */
+export function allocateDropBatchCredentials(now = Date.now()): {
+  batchId: string;
+  receiptToken: string;
+  receiptHash: string;
+} {
+  const batchId = `b_${now.toString(36)}${randomBytes(5).toString("hex")}`;
+  const receiptToken = `rcpt_${randomBytes(24).toString("hex")}`;
+  const receiptHash = hashReceipt(receiptToken);
+  return { batchId, receiptToken, receiptHash };
+}
+
 /**
- * 创建一个新的投递批次（在同事通过口令鉴权后调用）：
+ * 创建一个新的投递批次（在同事通过口令鉴权或首次上传文件时调用）：
  * 1. 在目标工作区创建 `.cursor-remote/uploads/inbox/<batchId>/`；
  * 2. 生成不可枚举的 `receiptToken`（仅将 SHA-256 哈希存入 `meta.json` 和租户级 `drop-batches.json`）；
  * 3. 写入初始 `meta.json`（状态为 `staging`）。
@@ -183,6 +195,7 @@ export function createDropBatch(
   host: DropTenantHost,
   session: DropSessionGrant,
   now = Date.now(),
+  preallocated?: { batchId: string; receiptToken?: string; receiptHash: string },
 ):
   | {
       ok: true;
@@ -200,11 +213,17 @@ export function createDropBatch(
     return { ok: false, error: kbCheck.error };
   }
 
-  const batchId = `b_${now.toString(36)}${randomBytes(5).toString("hex")}`;
-  const receiptToken = `rcpt_${randomBytes(24).toString("hex")}`;
-  const receiptHash = hashReceipt(receiptToken);
-  bindBatchIdToDropSession(session.sessionToken, batchId);
+  const creds = preallocated
+    ? {
+        batchId: preallocated.batchId,
+        receiptToken: preallocated.receiptToken || "",
+        receiptHash: preallocated.receiptHash,
+      }
+    : allocateDropBatchCredentials(now);
+  const { batchId, receiptToken, receiptHash } = creds;
+  bindBatchIdToDropSession(session.sessionToken, batchId, receiptHash);
   session.batchId = batchId;
+  session.receiptHash = receiptHash;
 
   const dirRes = safeMkdirInWorkspaceSync(kbCheck.workspaceRealPath, batchDirRelPath(batchId));
   if (!dirRes.ok) return dirRes;
@@ -228,22 +247,28 @@ export function createDropBatch(
 
   const lockFile = ingestStateLockPath(host);
   return withFileLockSync(lockFile, () => {
+    const existingMeta = readBatchMetaSync(kbCheck.workspaceRealPath, batchId);
+    if (existingMeta.ok) {
+      return { ok: true as const, batchId, receiptToken, meta: existingMeta.meta };
+    }
     const metaRes = writeBatchMetaSync(kbCheck.workspaceRealPath, meta);
     if (!metaRes.ok) return metaRes;
 
     const reg = readRegistryUnlocked(host);
-    reg.items.push({
-      batchId,
-      tenantId: host.id,
-      tokenId: session.tokenId,
-      workspaceId: wsRef.workspaceId,
-      receiptHash,
-      createdAt: now,
-    });
-    if (reg.items.length > MAX_REGISTRY_ITEMS) {
-      reg.items = reg.items.slice(-MAX_REGISTRY_ITEMS);
+    if (!reg.items.some((x) => x.batchId === batchId)) {
+      reg.items.push({
+        batchId,
+        tenantId: host.id,
+        tokenId: session.tokenId,
+        workspaceId: wsRef.workspaceId,
+        receiptHash,
+        createdAt: now,
+      });
+      if (reg.items.length > MAX_REGISTRY_ITEMS) {
+        reg.items = reg.items.slice(-MAX_REGISTRY_ITEMS);
+      }
+      writeRegistryUnlocked(host, reg);
     }
-    writeRegistryUnlocked(host, reg);
 
     return { ok: true as const, batchId, receiptToken, meta };
   });
@@ -561,7 +586,22 @@ export async function streamStageFileIntoBatch(
     return { ok: false, status: 400, error: nameCheck.error };
   }
 
-  // 流式接收前先检查批次状态与文件数量上限
+  // 流式接收前先检查批次状态与文件数量上限（若该会话采用惰性批次尚未在工作区落盘，则在此处首次按需创建 inbox/<batchId>）
+  if (!existsSync(resolve(kbCheck.workspaceRealPath, batchMetaRelPath(input.batchId)))) {
+    const lazyCreated = createDropBatch(
+      host,
+      initialSession,
+      now,
+      initialSession.receiptHash
+        ? { batchId: input.batchId, receiptHash: initialSession.receiptHash }
+        : undefined,
+    );
+    if (!lazyCreated.ok) {
+      input.req.resume();
+      return { ok: false, status: 400, error: lazyCreated.error };
+    }
+  }
+
   const preCheck = withFileLockSync(ingestStateLockPath(host), () => {
     const metaLoaded = readBatchMetaSync(kbCheck.workspaceRealPath, input.batchId);
     if (!metaLoaded.ok) {

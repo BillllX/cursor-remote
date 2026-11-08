@@ -10,7 +10,23 @@ import {
 } from "./contract.ts";
 import { scanWorkspaceKbHtmlBoards } from "./hub.ts";
 import { commitDropBatchAndEnqueue } from "./queue.ts";
-import { createDropBatch, getDropBatchPublicStatus, MAX_FILES_PER_BATCH, streamStageFileIntoBatch } from "./staging.ts";
+import { runKbQaAsk } from "./qaRunner.ts";
+import {
+  clearQaSessionStorageSync,
+  ensureQaSessionStorageSync,
+  measureQaSessionDiskUsageSync,
+  QA_MAX_FILE_BYTES,
+  QA_UPLOAD_ALLOWED_EXTS,
+  safeReadQaFileSync,
+  streamUploadQaTempFile,
+  validateQaTempFileName,
+} from "./qaStorage.ts";
+import {
+  allocateDropBatchCredentials,
+  getDropBatchPublicStatus,
+  MAX_FILES_PER_BATCH,
+  streamStageFileIntoBatch,
+} from "./staging.ts";
 import {
   bindBatchIdToDropSession,
   normalizeClientIp,
@@ -54,16 +70,21 @@ function issuePageTicket(tenantId: string, clientIp: string, now = Date.now()): 
 function verifyPageTicket(tenantId: string, clientIp: string, rawTicket: string, now = Date.now()): boolean {
   const clean = rawTicket.trim();
   if (!clean.startsWith("pt_")) return false;
-  const entry = activePageTickets.get(clean);
-  if (!entry) return false;
-  if (entry.expiresAt <= now) {
-    activePageTickets.delete(clean);
-    return false;
+  let matched = false;
+  for (const [storedTicket, entry] of activePageTickets.entries()) {
+    if (entry.expiresAt <= now) {
+      activePageTickets.delete(storedTicket);
+      continue;
+    }
+    const a = Buffer.from(clean);
+    const b = Buffer.from(storedTicket);
+    if (a.length === b.length && timingSafeEqual(a, b)) {
+      if (entry.tenantId === tenantId && entry.clientIp === clientIp) {
+        matched = true;
+      }
+    }
   }
-  if (entry.tenantId !== tenantId || entry.clientIp !== clientIp) return false;
-  const a = Buffer.from(clean);
-  const b = Buffer.from(clean);
-  return timingSafeEqual(a, b);
+  return matched;
 }
 
 /** 构造供 HTTP 投递门户使用的 DropTenantHost */
@@ -150,9 +171,30 @@ function sendHtml(res: ServerResponse, status: number, page: string, headOnly: b
     "cross-origin-resource-policy": "same-origin",
     "referrer-policy": "no-referrer",
     "content-security-policy":
-      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *; img-src data:; frame-src data: about:; child-src data: about:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; sandbox allow-scripts",
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *; img-src data:; frame-src data: about:; child-src data: about:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; sandbox allow-scripts allow-downloads",
   });
   res.end(headOnly ? undefined : raw);
+}
+
+function sendBinaryAttachment(
+  res: ServerResponse,
+  fileName: string,
+  buffer: Buffer,
+) {
+  if (res.headersSent || res.writableEnded) return;
+  applySandboxedApiCors(res);
+  const asciiFallback = fileName.replace(/[^\x20-\x7e]|["\\;\r\n]/g, "_") || "download.txt";
+  const utf8Encoded = encodeURIComponent(fileName);
+  res.writeHead(200, {
+    "content-type": "application/octet-stream",
+    "content-length": String(buffer.length),
+    "content-disposition": `attachment; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`,
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; sandbox",
+    "cross-origin-resource-policy": "cross-origin",
+  });
+  res.end(buffer);
 }
 
 function extractBearerToken(req: IncomingMessage): string {
@@ -449,6 +491,80 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       font-size: 13px;
       margin-top: 12px;
     }
+    .qa-chat-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg);
+      padding: 14px;
+      min-height: 280px;
+      max-height: 520px;
+      overflow-y: auto;
+      margin-bottom: 14px;
+    }
+    .qa-msg {
+      padding: 12px 14px;
+      border-radius: 10px;
+      margin-bottom: 12px;
+      font-size: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .qa-msg-user {
+      background: rgba(59, 130, 246, 0.14);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+    }
+    .qa-msg-ai {
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .qa-msg-role {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .qa-temp-bar {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      background: rgba(139, 155, 176, 0.06);
+      font-size: 13px;
+    }
+    .qa-chip-list {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .qa-file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      font-size: 12px;
+    }
+    .qa-preview-box {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      margin-top: 12px;
+      overflow: hidden;
+      background: var(--card);
+    }
+    .qa-preview-pre {
+      margin: 0;
+      padding: 14px;
+      font-size: 13px;
+      max-height: 400px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--bg);
+      color: var(--text);
+    }
     .hidden { display: none !important; }
   </style>
 </head>
@@ -457,12 +573,13 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     <div class="card">
       <span class="badge">知识库协作门户 · 自动分类归档与看板查阅</span>
       <h1>工作区资料投递箱 & 知识库看板</h1>
-      <p class="sub">输入管理员分配的投递口令，即可在线查阅目标知识库工作区的各层 HTML 汇总看板，或上传新业务文档由 AI 自动分类归档并同步更新 HTML。</p>
+      <p class="sub">输入管理员分配的投递口令，即可在线查阅目标知识库工作区的各层 HTML 汇总看板、通过只读问答助手询问知识库数据并导出临时统计文件，或上传新业务文档由 AI 自动分类归档。</p>
       <div class="rules">
-        <strong>上传规格说明：</strong><br/>
+        <strong>上传与问答规格说明：</strong><br/>
         • 单个文件最大 <strong>32 MB</strong>，单批次最多 <strong>${MAX_FILES_PER_BATCH} 个文件</strong>（多文件将自动逐个流式上传）；<br/>
         • 支持格式：<code>${escapeHtml(allowedListText)}</code>；<br/>
-        • 严禁上传 <code>.exe / .sh / .bat / .js / .html</code> 等可执行脚本；超过 32MB 的巨型底表请先分卷或压缩为 <code>.zip</code>。
+        • 严禁上传 <code>.exe / .sh / .bat / .js / .html</code> 等可执行脚本；超过 32MB 的巨型底表请先分卷或压缩为 <code>.zip</code>；<br/>
+        • <strong>知识库问答权限隔离</strong>：问答对话框对知识库工作区保持 100% 只读，问答上传的比对附件与 AI 生成的统计表格/看板均存放在工作区外的独立临时目录，空闲 30 分钟后自动物理清理。
       </div>
     </div>
 
@@ -484,6 +601,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         </div>
         <div class="tab-group">
           <button id="tab-boards" type="button" class="tab-btn active">📊 知识库看板 (<span id="board-count">0</span>)</button>
+          <button id="tab-qa" type="button" class="tab-btn">💬 知识库问答</button>
           <button id="tab-upload" type="button" class="tab-btn">📤 上传新文档</button>
         </div>
       </div>
@@ -500,9 +618,55 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         <div id="board-viewer" class="board-viewer hidden">
           <div class="board-viewer-bar">
             <strong id="viewer-title">看板预览</strong>
-            <button id="btn-close-viewer" type="button" class="btn-ghost">收起预览</button>
+            <div style="display:flex;gap:8px;">
+              <button id="btn-ask-this-board" type="button" class="btn-ghost">💬 询问此看板数据</button>
+              <button id="btn-close-viewer" type="button" class="btn-ghost">收起预览</button>
+            </div>
           </div>
           <iframe id="viewer-frame" class="board-iframe" sandbox="allow-scripts"></iframe>
+        </div>
+      </div>
+
+      <!-- 面板 C：知识库只读问答与临时统计生成 -->
+      <div id="pane-qa" class="hidden">
+        <div class="qa-temp-bar">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+              <strong>🔒 只读问答与临时统计空间</strong>
+              <span style="color:var(--muted);margin-left:6px;">不修改知识库原文件 · 支持要求 AI 汇总生成 CSV / MD / HTML 统计文件并下载 · 空闲 30 分钟自动销毁</span>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button id="btn-qa-attach" type="button" class="btn-ghost">📎 上传临时比对附件</button>
+              <input id="qa-file-input" type="file" accept=".csv,.md,.txt,.json,.sql" class="hidden" />
+              <button id="btn-qa-clear" type="button" class="btn-ghost">🗑️ 清空对话与临时文件</button>
+            </div>
+          </div>
+          <div id="qa-temp-files" class="qa-chip-list"></div>
+        </div>
+
+        <div id="qa-chat-box" class="qa-chat-box">
+          <div id="qa-empty-hint" style="color:var(--muted);font-size:13px;text-align:center;padding:42px 12px;">
+            您可以直接询问知识库中的业务指标、主体台账，或输入：<br/>
+            「帮我统计知识库内各主体的核心指标，生成一份 CSV 表格（或 HTML 汇总表）给我下载」
+          </div>
+          <div id="qa-messages"></div>
+        </div>
+
+        <label for="qa-input">向知识库提问或要求生成统计文件</label>
+        <textarea id="qa-input" rows="3" maxlength="4000" placeholder="例如：帮我统计当前知识库里所有主体的关键风险与余额指标，并生成一个 CSV 统计文件供我下载"></textarea>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+          <button id="btn-qa-send" type="button">发送提问</button>
+          <span id="qa-board-hint" style="font-size:12px;color:var(--muted);"></span>
+        </div>
+        <div id="qa-msg-box" class="status-box hidden"></div>
+
+        <div id="qa-file-preview" class="qa-preview-box hidden">
+          <div class="board-viewer-bar">
+            <strong id="qa-preview-title">临时统计文件预览</strong>
+            <button id="btn-close-qa-preview" type="button" class="btn-ghost">关闭预览</button>
+          </div>
+          <pre id="qa-preview-pre" class="qa-preview-pre hidden"></pre>
+          <iframe id="qa-preview-frame" class="board-iframe hidden" sandbox=""></iframe>
         </div>
       </div>
 
@@ -536,8 +700,10 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const wsTitle = document.getElementById("ws-title");
       const batchInfo = document.getElementById("batch-info");
       const tabBoards = document.getElementById("tab-boards");
+      const tabQa = document.getElementById("tab-qa");
       const tabUpload = document.getElementById("tab-upload");
       const paneBoards = document.getElementById("pane-boards");
+      const paneQa = document.getElementById("pane-qa");
       const paneUpload = document.getElementById("pane-upload");
       const boardCountEl = document.getElementById("board-count");
       const boardsGrid = document.getElementById("boards-grid");
@@ -547,12 +713,29 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const viewerTitle = document.getElementById("viewer-title");
       const viewerFrame = document.getElementById("viewer-frame");
       const btnCloseViewer = document.getElementById("btn-close-viewer");
+      const btnAskThisBoard = document.getElementById("btn-ask-this-board");
       const dropzone = document.getElementById("dropzone");
       const fileInput = document.getElementById("file-input");
       const fileListEl = document.getElementById("file-list");
       const noteEl = document.getElementById("batch-note");
       const btnSubmit = document.getElementById("btn-submit");
       const uploadMsg = document.getElementById("upload-msg");
+      const btnQaAttach = document.getElementById("btn-qa-attach");
+      const qaFileInput = document.getElementById("qa-file-input");
+      const btnQaClear = document.getElementById("btn-qa-clear");
+      const qaTempFilesEl = document.getElementById("qa-temp-files");
+      const qaEmptyHint = document.getElementById("qa-empty-hint");
+      const qaMessagesEl = document.getElementById("qa-messages");
+      const qaChatBox = document.getElementById("qa-chat-box");
+      const qaInputEl = document.getElementById("qa-input");
+      const btnQaSend = document.getElementById("btn-qa-send");
+      const qaBoardHint = document.getElementById("qa-board-hint");
+      const qaMsgBox = document.getElementById("qa-msg-box");
+      const qaFilePreview = document.getElementById("qa-file-preview");
+      const qaPreviewTitle = document.getElementById("qa-preview-title");
+      const qaPreviewPre = document.getElementById("qa-preview-pre");
+      const qaPreviewFrame = document.getElementById("qa-preview-frame");
+      const btnCloseQaPreview = document.getElementById("btn-close-qa-preview");
 
       let sessionToken = "";
       let batchId = "";
@@ -562,6 +745,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       let pendingFiles = [];
       let boardsList = [];
       let activeBoardPath = "";
+      let qaTempFiles = [];
 
       function showBox(el, text, isErr) {
         el.textContent = text;
@@ -569,22 +753,33 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         el.style.borderColor = isErr ? "var(--danger)" : "var(--border)";
       }
 
-      function switchTab(tab) {
-        if (tab === "boards") {
-          tabBoards.classList.add("active");
-          tabUpload.classList.remove("active");
-          paneBoards.classList.remove("hidden");
-          paneUpload.classList.add("hidden");
+      function updateQaBoardHint() {
+        if (activeBoardPath) {
+          qaBoardHint.textContent = "已关联当前看板上下文：" + activeBoardPath;
         } else {
-          tabUpload.classList.add("active");
-          tabBoards.classList.remove("active");
-          paneUpload.classList.remove("hidden");
-          paneBoards.classList.add("hidden");
+          qaBoardHint.textContent = "检索范围：全知识库白名单目录";
+        }
+      }
+
+      function switchTab(tab) {
+        tabBoards.classList.toggle("active", tab === "boards");
+        tabQa.classList.toggle("active", tab === "qa");
+        tabUpload.classList.toggle("active", tab === "upload");
+        paneBoards.classList.toggle("hidden", tab !== "boards");
+        paneQa.classList.toggle("hidden", tab !== "qa");
+        paneUpload.classList.toggle("hidden", tab !== "upload");
+        if (tab === "qa") {
+          updateQaBoardHint();
         }
       }
 
       tabBoards.addEventListener("click", function() { switchTab("boards"); });
+      tabQa.addEventListener("click", function() { switchTab("qa"); });
       tabUpload.addEventListener("click", function() { switchTab("upload"); });
+      btnAskThisBoard.addEventListener("click", function() {
+        switchTab("qa");
+        qaInputEl.focus();
+      });
 
       function renderBoards(boards) {
         boardsList = Array.isArray(boards) ? boards : [];
@@ -857,6 +1052,256 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
           btnSubmit.disabled = false;
         }
       });
+
+      function renderQaTempFiles(files) {
+        qaTempFiles = Array.isArray(files) ? files : [];
+        qaTempFilesEl.innerHTML = "";
+        if (qaTempFiles.length === 0) {
+          const emptySpan = document.createElement("span");
+          emptySpan.style.color = "var(--muted)";
+          emptySpan.style.fontSize = "12px";
+          emptySpan.textContent = "当前会话暂无临时文件（生成的统计文件与上传的比对附件会显示在此处）";
+          qaTempFilesEl.appendChild(emptySpan);
+          return;
+        }
+        qaTempFiles.forEach(function(f) {
+          const chip = document.createElement("div");
+          chip.className = "qa-file-chip";
+          const tag = document.createElement("span");
+          tag.textContent = (f.scope === "outputs" ? "📊 统计生成: " : "📎 临时附件: ") + f.name + " (" + (f.size / 1024).toFixed(1) + " KB)";
+          chip.appendChild(tag);
+
+          if (f.scope === "outputs") {
+            const btnPrev = document.createElement("button");
+            btnPrev.type = "button";
+            btnPrev.className = "btn-rm";
+            btnPrev.textContent = "预览";
+            btnPrev.addEventListener("click", function() {
+              previewOrDownloadQaFile(f.name, false);
+            });
+            chip.appendChild(btnPrev);
+
+            const btnDl = document.createElement("button");
+            btnDl.type = "button";
+            btnDl.className = "btn-rm";
+            btnDl.textContent = "下载";
+            btnDl.addEventListener("click", function() {
+              previewOrDownloadQaFile(f.name, true);
+            });
+            chip.appendChild(btnDl);
+          }
+          qaTempFilesEl.appendChild(chip);
+        });
+      }
+
+      async function previewOrDownloadQaFile(fileName, triggerDownload) {
+        try {
+          const u = API_BASE + "/qa/file?name=" + encodeURIComponent(fileName);
+          const res = await fetch(u, {
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET
+            }
+          });
+          if (!res.ok) {
+            showBox(qaMsgBox, "读取临时统计文件失败（可能已过期或被清理）", true);
+            return;
+          }
+          const blob = await res.blob();
+          if (triggerDownload) {
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = blobUrl;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
+            return;
+          }
+          const text = await blob.text();
+          qaPreviewTitle.textContent = "临时统计文件预览：" + fileName;
+          qaFilePreview.classList.remove("hidden");
+          if (fileName.toLowerCase().endsWith(".html")) {
+            qaPreviewPre.classList.add("hidden");
+            qaPreviewFrame.classList.remove("hidden");
+            qaPreviewFrame.srcdoc = text;
+          } else {
+            qaPreviewFrame.classList.add("hidden");
+            qaPreviewFrame.srcdoc = "";
+            qaPreviewPre.classList.remove("hidden");
+            qaPreviewPre.textContent = text;
+          }
+        } catch (err) {
+          showBox(qaMsgBox, "网络异常，无法读取临时文件", true);
+        }
+      }
+
+      btnCloseQaPreview.addEventListener("click", function() {
+        qaFilePreview.classList.add("hidden");
+        qaPreviewPre.textContent = "";
+        qaPreviewFrame.srcdoc = "";
+      });
+
+      function appendQaMessageBubble(role, text, citedPaths, generatedFiles) {
+        qaEmptyHint.classList.add("hidden");
+        const box = document.createElement("div");
+        box.className = "qa-msg " + (role === "user" ? "qa-msg-user" : "qa-msg-ai");
+        const roleEl = document.createElement("div");
+        roleEl.className = "qa-msg-role";
+        roleEl.textContent = role === "user" ? "您的提问" : "知识库 AI 助手（只读权限 · 临时目录输出）";
+        const bodyEl = document.createElement("div");
+        bodyEl.textContent = text;
+        box.appendChild(roleEl);
+        box.appendChild(bodyEl);
+
+        if (Array.isArray(citedPaths) && citedPaths.length > 0) {
+          const citeEl = document.createElement("div");
+          citeEl.style.marginTop = "8px";
+          citeEl.style.fontSize = "12px";
+          citeEl.style.color = "var(--muted)";
+          citeEl.textContent = "参考知识库路径：" + citedPaths.join(" 、 ");
+          box.appendChild(citeEl);
+        }
+
+        if (Array.isArray(generatedFiles) && generatedFiles.length > 0) {
+          const genWrap = document.createElement("div");
+          genWrap.className = "qa-chip-list";
+          generatedFiles.forEach(function(gf) {
+            const chip = document.createElement("div");
+            chip.className = "qa-file-chip";
+            const lbl = document.createElement("span");
+            lbl.textContent = "📄 " + gf.name;
+            chip.appendChild(lbl);
+
+            const pBtn = document.createElement("button");
+            pBtn.type = "button";
+            pBtn.className = "btn-rm";
+            pBtn.textContent = "在线预览";
+            pBtn.addEventListener("click", function() {
+              previewOrDownloadQaFile(gf.name, false);
+            });
+            chip.appendChild(pBtn);
+
+            const dBtn = document.createElement("button");
+            dBtn.type = "button";
+            dBtn.className = "btn-rm";
+            dBtn.textContent = "下载文件";
+            dBtn.addEventListener("click", function() {
+              previewOrDownloadQaFile(gf.name, true);
+            });
+            chip.appendChild(dBtn);
+            genWrap.appendChild(chip);
+          });
+          box.appendChild(genWrap);
+        }
+
+        qaMessagesEl.appendChild(box);
+        qaChatBox.scrollTop = qaChatBox.scrollHeight;
+      }
+
+      btnQaAttach.addEventListener("click", function() { qaFileInput.click(); });
+      qaFileInput.addEventListener("change", async function() {
+        if (!qaFileInput.files || qaFileInput.files.length === 0) return;
+        const f = qaFileInput.files[0];
+        qaFileInput.value = "";
+        if (f.size === 0 || f.size > ${QA_MAX_FILE_BYTES}) {
+          showBox(qaMsgBox, "问答临时比对附件大小需在 1B – 4MB 之间", true);
+          return;
+        }
+        btnQaAttach.disabled = true;
+        try {
+          const u = API_BASE + "/qa/upload?fileName=" + encodeURIComponent(f.name);
+          const res = await fetch(u, {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/octet-stream"
+            },
+            body: f
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            showBox(qaMsgBox, data.error || "上传临时比对附件失败", true);
+          } else {
+            showBox(qaMsgBox, "已上传临时比对附件：" + data.file.name + "（仅存放在临时目录，不写入知识库）", false);
+            if (Array.isArray(data.files)) renderQaTempFiles(data.files);
+          }
+        } catch (err) {
+          showBox(qaMsgBox, "网络异常，上传临时附件失败", true);
+        } finally {
+          btnQaAttach.disabled = false;
+        }
+      });
+
+      btnQaSend.addEventListener("click", async function() {
+        const question = qaInputEl.value.trim();
+        if (!question) {
+          showBox(qaMsgBox, "请输入您要询问或统计的问题", true);
+          return;
+        }
+        btnQaSend.disabled = true;
+        qaInputEl.value = "";
+        appendQaMessageBubble("user", question, [], []);
+        showBox(qaMsgBox, "AI 正在只读检索知识库并分析统计，请稍候…", false);
+        try {
+          const res = await fetch(API_BASE + "/qa/ask", {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({
+              question: question,
+              activeBoardPath: activeBoardPath || undefined
+            })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            showBox(qaMsgBox, data.error || "提问失败", true);
+          } else {
+            qaMsgBox.classList.add("hidden");
+            appendQaMessageBubble("ai", data.answer, data.citedPaths || [], data.generatedFiles || []);
+            if (Array.isArray(data.tempFiles)) {
+              renderQaTempFiles(data.tempFiles);
+            }
+          }
+        } catch (err) {
+          showBox(qaMsgBox, "网络请求异常，请重试", true);
+        } finally {
+          btnQaSend.disabled = false;
+        }
+      });
+
+      btnQaClear.addEventListener("click", async function() {
+        btnQaClear.disabled = true;
+        try {
+          const res = await fetch(API_BASE + "/qa/clear", {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({})
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            qaMessagesEl.innerHTML = "";
+            qaEmptyHint.classList.remove("hidden");
+            qaFilePreview.classList.add("hidden");
+            renderQaTempFiles([]);
+            showBox(qaMsgBox, "已清空当前问答对话并物理销毁临时目录中的所有文件", false);
+          }
+        } catch (_) {
+        } finally {
+          btnQaClear.disabled = false;
+        }
+      });
+
+      renderQaTempFiles([]);
     })();
   </script>
 </body>
@@ -946,9 +1391,9 @@ export function handleDropPortalHttp(
         return;
       }
 
-      const batchRes = createDropBatch(host, authRes.session);
-      if (!batchRes.ok || !bindBatchIdToDropSession(authRes.session.sessionToken, batchRes.batchId)) {
-        sendJson(res, 400, { ok: false, error: "创建投递批次失败" });
+      const creds = allocateDropBatchCredentials();
+      if (!bindBatchIdToDropSession(authRes.session.sessionToken, creds.batchId, creds.receiptHash)) {
+        sendJson(res, 400, { ok: false, error: "分配投递批次凭证失败" });
         return;
       }
 
@@ -957,11 +1402,13 @@ export function handleDropPortalHttp(
       sendJson(res, 200, {
         ok: true,
         dropSessionToken: authRes.session.sessionToken,
-        batchId: batchRes.batchId,
-        receiptToken: batchRes.receiptToken,
+        qaSessionId: authRes.session.qaSessionId,
+        batchId: creds.batchId,
+        receiptToken: creds.receiptToken,
         workspaceTitle: authRes.session.workspaceTitle,
         maxFileBytes: authRes.session.kbConfig.maxFileBytes,
         allowedExts: authRes.session.kbConfig.allowedExts,
+        qaAllowedUploadExts: [...QA_UPLOAD_ALLOWED_EXTS],
         boards,
       });
     })().catch(() => {
@@ -1146,6 +1593,210 @@ export function handleDropPortalHttp(
     sendJson(res, 200, {
       ok: true,
       status: statusRes.status,
+    });
+    return true;
+  }
+
+  // 6. POST /p/<tenant>/drop/api/qa/ask — 只读知识库问答与临时统计生成（严禁写知识库工作区本身）
+  if (pathname === `${basePrefix}/api/qa/ask`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      req.resume();
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+
+    void (async () => {
+      const parsed = await readJsonBody(req, 32 * 1024);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { ok: false, error: parsed.error });
+        return;
+      }
+      const rechecked = verifyDropSessionToken(host, token, Date.now(), clientIp);
+      if (!rechecked.ok) {
+        sendJson(res, rechecked.status, { ok: false, error: rechecked.error });
+        return;
+      }
+
+      const question = typeof parsed.data.question === "string" ? parsed.data.question : "";
+      const activeBoardPath =
+        typeof parsed.data.activeBoardPath === "string" ? parsed.data.activeBoardPath : undefined;
+
+      const askRes = await runKbQaAsk({
+        host,
+        initialSession: rechecked.session,
+        question,
+        activeBoardPath,
+        reverifySession: () => verifyDropSessionToken(host, token, Date.now(), clientIp),
+      });
+
+      if (!askRes.ok) {
+        sendJson(res, askRes.status, { ok: false, error: askRes.error });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        qaSessionId: rechecked.session.qaSessionId,
+        answer: askRes.answer,
+        citedPaths: askRes.citedPaths,
+        generatedFiles: askRes.generatedFiles,
+        tempFiles: askRes.allTempFiles,
+        turns: askRes.turns,
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "处理知识库问答请求时出错" });
+    });
+    return true;
+  }
+
+  // 7. POST /p/<tenant>/drop/api/qa/upload — 流式上传仅用于当前问答会话比对的临时附件（写入工作区外的独立临时目录 uploads/）
+  if (pathname === `${basePrefix}/api/qa/upload`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      req.resume();
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+
+    const rawFileName = url.searchParams.get("fileName") || "";
+    let fileName = rawFileName;
+    try {
+      fileName = decodeURIComponent(rawFileName);
+    } catch {
+      fileName = rawFileName;
+    }
+
+    const declaredLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > QA_MAX_FILE_BYTES) {
+      req.resume();
+      sendJson(res, 413, { ok: false, error: `问答临时附件超过 4MB 上限` });
+      return true;
+    }
+
+    void (async () => {
+      const uploaded = await streamUploadQaTempFile(host, sessCheck.session, {
+        fileName,
+        req,
+        reverifySession: () => verifyDropSessionToken(host, token, Date.now(), clientIp),
+      });
+      if (!uploaded.ok) {
+        sendJson(res, uploaded.status, { ok: false, error: uploaded.error });
+        return;
+      }
+      const ensured = ensureQaSessionStorageSync(host, sessCheck.session);
+      const files = ensured.ok ? measureQaSessionDiskUsageSync(ensured.sessionDir).files : [uploaded.file];
+      sendJson(res, 200, {
+        ok: true,
+        file: uploaded.file,
+        totalBytes: uploaded.totalBytes,
+        fileCount: uploaded.fileCount,
+        files,
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "保存问答临时附件时出错" });
+    });
+    return true;
+  }
+
+  // 8. GET /p/<tenant>/drop/api/qa/files — 查询当前问答会话的临时文件列表与多轮历史
+  if (pathname === `${basePrefix}/api/qa/files`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const ensured = ensureQaSessionStorageSync(host, sessCheck.session);
+    if (!ensured.ok) {
+      sendJson(res, ensured.status, { ok: false, error: ensured.error });
+      return true;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      qaSessionId: sessCheck.session.qaSessionId,
+      files: ensured.usage.files,
+      totalBytes: ensured.usage.totalBytes,
+      fileCount: ensured.usage.fileCount,
+      turns: ensured.meta.turns,
+    });
+    return true;
+  }
+
+  // 9. GET /p/<tenant>/drop/api/qa/file?name=... — 受控下载当前问答会话临时目录 outputs/ 下的统计文件
+  if (pathname === `${basePrefix}/api/qa/file`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const rawName = (url.searchParams.get("name") || "").trim();
+    const scopeParam = url.searchParams.get("scope") === "uploads" ? "uploads" : "outputs";
+    const nameCheck = validateQaTempFileName(rawName, scopeParam);
+    if (!nameCheck.ok) {
+      sendJson(res, 400, { ok: false, error: nameCheck.error });
+      return true;
+    }
+
+    const ensured = ensureQaSessionStorageSync(host, sessCheck.session);
+    if (!ensured.ok) {
+      sendJson(res, ensured.status, { ok: false, error: ensured.error });
+      return true;
+    }
+
+    const readRes = safeReadQaFileSync(
+      ensured.sessionDir,
+      `${scopeParam}/${nameCheck.cleanName}`,
+      QA_MAX_FILE_BYTES,
+    );
+    if (!readRes.ok) {
+      sendJson(res, 404, { ok: false, error: readRes.error });
+      return true;
+    }
+
+    sendBinaryAttachment(res, nameCheck.cleanName, readRes.buffer);
+    return true;
+  }
+
+  // 10. POST /p/<tenant>/drop/api/qa/clear — 主动清空当前问答记录并物理销毁该会话的临时目录
+  if (pathname === `${basePrefix}/api/qa/clear`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      req.resume();
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    req.resume();
+    clearQaSessionStorageSync(host, sessCheck.session.qaSessionId, sessCheck.session.workspaceId, {
+      reopenAfterClear: true,
+    });
+    sendJson(res, 200, {
+      ok: true,
+      cleared: true,
     });
     return true;
   }

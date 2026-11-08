@@ -803,3 +803,58 @@ export function initKbWorkspaceConfig(
     workspaceRealPath: realpathSync(workspaceDir),
   };
 }
+
+/**
+ * 校验知识库只读问答（QA）允许读取的工作区相对路径（纯白名单策略）：
+ * 1. 允许读取工作区根目录下的《归档说明.md》；
+ * 2. 允许读取 `kb.json` 的 `allowedCategories` 一级分类目录下的普通文件或目录（深度 ≤ 8 层）；
+ * 3. 严禁任何层级包含以 `.` 开头的隐藏目录/文件（天然封死 `.jiebo/*`、`.cursor-remote/*`、`.git/*`、`.env` 等一切系统或未归档批次数据）；
+ * 4. 严禁读取任意层级的 `AGENTS.md` 或 `CLAUDE.md`；
+ * 5. 全程经 `ensureSafePathInWorkspace` 校验，拒绝符号链接（含悬空链接）与硬链接（`nlink > 1`）。
+ */
+export function validateKbQaReadableRelPath(
+  workspaceDir: string,
+  config: KbWorkspaceConfig,
+  relPath: string,
+  expectLeaf: "file" | "dir" | "any" = "file",
+): { ok: true; absPath: string; normalizedRel: string; category?: string } | { ok: false; error: string } {
+  const safe = ensureSafePathInWorkspace(workspaceDir, relPath, { expectLeaf });
+  if (!safe.ok) return safe;
+
+  if (safe.normalizedRel === KB_POLICY_DOC_REL_PATH) {
+    return {
+      ok: true,
+      absPath: safe.absPath,
+      normalizedRel: safe.normalizedRel,
+    };
+  }
+
+  const parts = safe.normalizedRel.split("/");
+  if (parts.length < 1 || parts.length > 8) {
+    return { ok: false, error: "知识库问答访问路径层级超出限制（1–8 层）" };
+  }
+
+  if (parts.some((segment) => segment.startsWith(".") || !isValidPathSegment(segment))) {
+    return { ok: false, error: "禁止访问隐藏目录/文件或系统元数据目录" };
+  }
+
+  const category = parts[0];
+  if (!config.allowedCategories.includes(category)) {
+    return {
+      ok: false,
+      error: `仅允许读取知识库开放分类目录 [${config.allowedCategories.join(", ")}] 或 归档说明.md`,
+    };
+  }
+
+  const leafLower = parts[parts.length - 1].toLowerCase();
+  if (leafLower === "agents.md" || leafLower === "claude.md") {
+    return { ok: false, error: "禁止读取系统代理指令文件" };
+  }
+
+  return {
+    ok: true,
+    absPath: safe.absPath,
+    normalizedRel: safe.normalizedRel,
+    category,
+  };
+}

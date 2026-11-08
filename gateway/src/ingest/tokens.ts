@@ -35,6 +35,7 @@ type DropTokenFile = {
 
 export type DropSessionGrant = {
   sessionToken: string;
+  qaSessionId: string;
   tokenId: string;
   tenantId: string;
   workspaceId: string;
@@ -43,13 +44,18 @@ export type DropSessionGrant = {
   workspaceTitle: string;
   kbConfig: KbWorkspaceConfig;
   submitterName: string;
+  clientIp?: string;
   batchId?: string;
+  receiptHash?: string;
+  createdAt: number;
+  lastActiveAt: number;
   expiresAt: number;
 };
 
 const MIN_PASSCODE_LEN = 6;
 const MAX_PASSCODE_LEN = 64;
-const SESSION_TTL_MS = 30 * 60 * 1000;
+export const SESSION_TTL_MS = 30 * 60 * 1000;
+export const SESSION_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_FAILURES = 5;
 const RATE_LIMIT_MAX_ATTEMPTS = 20;
@@ -60,6 +66,22 @@ const MAX_SESSIONS_PER_TENANT = 256;
 
 /** 内存短期上传会话表：sessionTokenHash -> DropSessionGrant */
 const activeDropSessions = new Map<string, DropSessionGrant>();
+
+export type DropTokensRevokedListener = (ref: TenantRef, revokedTokenIds: ReadonlySet<string>) => void;
+export type DropSessionEvictedListener = (grant: DropSessionGrant) => void;
+
+const revokedListeners = new Set<DropTokensRevokedListener>();
+const evictedListeners = new Set<DropSessionEvictedListener>();
+
+export function onDropTokensRevoked(listener: DropTokensRevokedListener): () => void {
+  revokedListeners.add(listener);
+  return () => revokedListeners.delete(listener);
+}
+
+export function onDropSessionEvicted(listener: DropSessionEvictedListener): () => void {
+  evictedListeners.add(listener);
+  return () => evictedListeners.delete(listener);
+}
 
 /** 内存防暴力枚举限流表：key -> { failures: number[], attempts: number[], lockedUntil: number, lastSeen: number } */
 const authRateLimiter = new Map<
@@ -336,7 +358,7 @@ export function revokeDropToken(
   const target = idOrLabel.trim();
   if (!target) return { ok: false, error: "请提供要吊销的口令 id 或 label" };
   const file = tokenStorePath(host);
-  return withFileLockSync(file, () => {
+  const res = withFileLockSync(file, () => {
     const data = readTokenFileUnlocked(host);
     const matches = data.items.filter(
       (item) =>
@@ -360,8 +382,20 @@ export function revokeDropToken(
       }
     }
     const revokedIds = [...revokedIdSet];
-    return { ok: true as const, revokedIds, revokedId: revokedIds[0] };
+    return { ok: true as const, revokedIds, revokedId: revokedIds[0], revokedIdSet };
   });
+
+  if (res.ok) {
+    for (const listener of revokedListeners) {
+      try {
+        listener(host, res.revokedIdSet);
+      } catch {
+        // ignore listener error
+      }
+    }
+    return { ok: true, revokedIds: res.revokedIds, revokedId: res.revokedId };
+  }
+  return res;
 }
 
 /**
@@ -440,8 +474,12 @@ export function verifyDropPasscodeAndCreateSession(
   }
 
   // 清理过期 session，并按 tokenId（上限 32）与 tenantId（上限 256）分区淘汰最旧会话，绝不影响其他口令或租户
+  const evictedGrants: DropSessionGrant[] = [];
   for (const [k, v] of activeDropSessions.entries()) {
-    if (v.expiresAt <= now) activeDropSessions.delete(k);
+    if (v.expiresAt <= now) {
+      activeDropSessions.delete(k);
+      evictedGrants.push(v);
+    }
   }
   const sameTokenKeys: string[] = [];
   const sameTenantKeys: string[] = [];
@@ -455,18 +493,35 @@ export function verifyDropPasscodeAndCreateSession(
   }
   while (sameTokenKeys.length >= MAX_SESSIONS_PER_TOKEN) {
     const evictKey = sameTokenKeys.shift()!;
+    const prev = activeDropSessions.get(evictKey);
     activeDropSessions.delete(evictKey);
+    if (prev) evictedGrants.push(prev);
     const idx = sameTenantKeys.indexOf(evictKey);
     if (idx >= 0) sameTenantKeys.splice(idx, 1);
   }
   while (sameTenantKeys.length >= MAX_SESSIONS_PER_TENANT) {
     const evictKey = sameTenantKeys.shift()!;
+    const prev = activeDropSessions.get(evictKey);
     activeDropSessions.delete(evictKey);
+    if (prev) evictedGrants.push(prev);
+  }
+
+  for (const evicted of evictedGrants) {
+    for (const listener of evictedListeners) {
+      try {
+        listener(evicted);
+      } catch {
+        // ignore listener error
+      }
+    }
   }
 
   const rawSessionToken = `ds_${randomBytes(24).toString("hex")}`;
+  const qaSessionId = `qa_${randomBytes(16).toString("hex")}`;
+  const normalizedIp = normalizeClientIp(input.clientIp);
   const grant: DropSessionGrant = {
     sessionToken: rawSessionToken,
+    qaSessionId,
     tokenId: matchedRecord.id,
     tenantId: host.id,
     workspaceId: wsRef.workspaceId,
@@ -475,6 +530,9 @@ export function verifyDropPasscodeAndCreateSession(
     workspaceTitle: kbLoaded.config.title,
     kbConfig: kbLoaded.config,
     submitterName: submitter.name,
+    clientIp: normalizedIp,
+    createdAt: now,
+    lastActiveAt: now,
     expiresAt: now + SESSION_TTL_MS,
   };
   activeDropSessions.set(hashSessionToken(rawSessionToken), grant);
@@ -489,6 +547,7 @@ export function verifyDropSessionToken(
   host: DropTenantHost,
   rawSessionToken: string,
   now = Date.now(),
+  expectedClientIp?: string,
 ): { ok: true; session: DropSessionGrant } | { ok: false; status: 401 | 403; error: string } {
   const token = rawSessionToken.trim();
   if (!token.startsWith("ds_") || token.length < 20) {
@@ -499,8 +558,23 @@ export function verifyDropSessionToken(
   if (!sess || sess.tenantId !== host.id) {
     return { ok: false, status: 401, error: "未授权或上传会话已失效" };
   }
-  if (sess.expiresAt <= now) {
+  if (expectedClientIp && sess.clientIp && normalizeClientIp(expectedClientIp) !== sess.clientIp) {
+    return { ok: false, status: 403, error: "会话客户端网络地址不匹配，请重新输入口令" };
+  }
+
+  const dropAndNotifyEvicted = (grant: DropSessionGrant) => {
     activeDropSessions.delete(key);
+    for (const listener of evictedListeners) {
+      try {
+        listener(grant);
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  if (sess.expiresAt <= now || now - sess.createdAt >= SESSION_MAX_LIFETIME_MS) {
+    dropAndNotifyEvicted(sess);
     return { ok: false, status: 401, error: "上传会话已过期，请重新输入口令" };
   }
 
@@ -508,39 +582,43 @@ export function verifyDropSessionToken(
   const data = readTokenFileUnlocked(host);
   const tokenRecord = data.items.find((r) => r.id === sess.tokenId);
   if (!tokenRecord || tokenRecord.revokedAt || (tokenRecord.expiresAt && tokenRecord.expiresAt <= now)) {
-    activeDropSessions.delete(key);
+    dropAndNotifyEvicted(sess);
     return { ok: false, status: 401, error: "投递口令已被吊销或过期" };
   }
 
   // 实时复核工作区仍然有效（哪怕工作区中途改名也能按稳定 workspaceId 解析到新路径）
   const wsRef = host.resolveWorkspace(sess.workspaceId);
   if (!wsRef) {
-    activeDropSessions.delete(key);
+    dropAndNotifyEvicted(sess);
     return { ok: false, status: 403, error: "目标工作区已不存在" };
   }
   const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
   if (!kbLoaded.ok) {
-    activeDropSessions.delete(key);
+    dropAndNotifyEvicted(sess);
     return { ok: false, status: 403, error: "目标工作区知识库配置已失效" };
   }
 
-  // 更新最新路径与配置快照，刷新 LRU 顺序，并返回深拷贝副本防外部篡改
+  // 更新最新路径与配置快照，滑动顺延 expiresAt（受限于 createdAt + 2h 封顶），刷新 LRU 顺序，并返回深拷贝副本防外部篡改
   sess.workspaceKey = wsRef.key;
   sess.workspacePath = kbLoaded.workspaceRealPath;
   sess.workspaceTitle = kbLoaded.config.title;
   sess.kbConfig = kbLoaded.config;
+  sess.lastActiveAt = now;
+  const maxLifetimeDeadline = sess.createdAt + SESSION_MAX_LIFETIME_MS;
+  sess.expiresAt = Math.min(maxLifetimeDeadline, now + SESSION_TTL_MS);
   activeDropSessions.delete(key);
   activeDropSessions.set(key, sess);
 
   return { ok: true, session: cloneSessionGrant(sess) };
 }
 
-/** 将创建好的 batchId 绑定到短期上传会话上，后续该会话只能操作该 batchId */
-export function bindBatchIdToDropSession(rawSessionToken: string, batchId: string): boolean {
+/** 将创建好的 batchId（及可选的 receiptHash）绑定到短期上传会话上，后续该会话只能操作该 batchId */
+export function bindBatchIdToDropSession(rawSessionToken: string, batchId: string, receiptHash?: string): boolean {
   const key = hashSessionToken(rawSessionToken.trim());
   const sess = activeDropSessions.get(key);
   if (!sess) return false;
   sess.batchId = batchId;
+  if (receiptHash) sess.receiptHash = receiptHash;
   return true;
 }
 
