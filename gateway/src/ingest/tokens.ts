@@ -513,6 +513,12 @@ export function createDropToken(
           error: `该投递口令已被「${existing.label}」使用，请直接将该同事授权加入本知识库或更换口令`,
         };
       }
+      if (imTenantId && existing.imTenantId && existing.imTenantId === imTenantId) {
+        return {
+          ok: false as const,
+          error: `站内 IM 账号 "${imTenantId}" 已绑定在同事通行证「${existing.label}」上，请先解绑后再关联`,
+        };
+      }
     }
 
     const salt = randomBytes(16).toString("hex");
@@ -627,6 +633,19 @@ export function updateDropToken(
         if (hasControlChars(cleanIm)) {
           return { ok: false as const, error: "IM 账号 ID 非法" };
         }
+        const dupIm = data.items.find(
+          (other) =>
+            other.id !== record.id &&
+            !other.revokedAt &&
+            (!other.expiresAt || other.expiresAt > now) &&
+            other.imTenantId === cleanIm,
+        );
+        if (dupIm) {
+          return {
+            ok: false as const,
+            error: `站内 IM 账号 "${cleanIm}" 已绑定在同事通行证「${dupIm.label}」上，请先解绑后再关联`,
+          };
+        }
         record.imTenantId = cleanIm;
       }
     }
@@ -635,7 +654,27 @@ export function updateDropToken(
       if (input.wxBinding === null) {
         delete record.wxBinding;
       } else {
-        record.wxBinding = input.wxBinding;
+        const cleanWxOpenId = input.wxBinding.openId?.trim();
+        if (cleanWxOpenId) {
+          const dupWx = data.items.find(
+            (other) =>
+              other.id !== record.id &&
+              !other.revokedAt &&
+              (!other.expiresAt || other.expiresAt > now) &&
+              other.wxBinding?.openId === cleanWxOpenId &&
+              other.wxBinding.status !== "revoked",
+          );
+          if (dupWx) {
+            return {
+              ok: false as const,
+              error: `微信账号 "${cleanWxOpenId}" 已绑定在同事通行证「${dupWx.label}」上，请先解绑后再关联`,
+            };
+          }
+        }
+        record.wxBinding = {
+          ...(record.wxBinding ?? {}),
+          ...input.wxBinding,
+        };
       }
     }
 

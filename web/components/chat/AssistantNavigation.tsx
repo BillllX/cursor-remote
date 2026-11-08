@@ -46,6 +46,16 @@ export function AssistantNavigation({ assistantName, active, inboxBadge, overvie
             </button>
           );
         })}
+        <button
+          type="button"
+          className={`workspace-nav-item${active === "colleagues" ? " on" : ""}`}
+          aria-current={active === "colleagues" ? "page" : undefined}
+          aria-label="同事与通行证"
+          onClick={() => onNavigate("colleagues")}
+        >
+          <IconRail name="collab" size={14} />
+          <span>同事与通行证</span>
+        </button>
       </nav>
     </>
   );

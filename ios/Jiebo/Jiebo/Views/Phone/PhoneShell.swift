@@ -43,6 +43,8 @@ struct PhoneShell: View {
             MemoryCenterPhonePageHost(route: page)
         case .connections:
             DeviceConnectionsScreen()
+        case .colleagues:
+            AssistantColleaguesScreen()
         }
     }
 

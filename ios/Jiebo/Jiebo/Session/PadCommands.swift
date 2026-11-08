@@ -54,6 +54,7 @@ struct PadAppCommands: Commands {
             sectionButton(.delegations, key: "5")
             sectionButton(.artifacts, key: "6")
             sectionButton(.memory, key: "7")
+            sectionButton(.colleagues, key: "8")
             Divider()
             Button("上一处") { actions?.previous() }
                 .keyboardShortcut("[", modifiers: .command)

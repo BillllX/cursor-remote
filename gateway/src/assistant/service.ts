@@ -1145,6 +1145,21 @@ export async function handleOp(
     }
     case "drop_token_update": {
       const workspace = str(args.workspace);
+      const host = dropHostFor(tenant);
+      if (args.decideProposal && typeof args.decideProposal === "object") {
+        const dp = args.decideProposal as Record<string, unknown>;
+        const proposalId = typeof dp.proposalId === "string" ? dp.proposalId : "";
+        const approve = Boolean(dp.approve);
+        const decisionNote = typeof dp.decisionNote === "string" ? dp.decisionNote : undefined;
+        const decided = await decideColleagueProposal(host, {
+          proposalId,
+          approve,
+          decisionNote,
+        });
+        if (!decided.ok) return fail(decided.error);
+        const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+        return statusRes.ok ? { ok: true, data: statusRes.data } : fail(statusRes.error);
+      }
       const tokenId = str(args.tokenId);
       const label = args.label !== undefined ? str(args.label) : undefined;
       const addWorkspaces = Array.isArray(args.addWorkspaces)
@@ -1158,9 +1173,14 @@ export async function handleOp(
           ? (args.permissions as Record<string, boolean>)
           : undefined;
       const imTenantId = args.imTenantId === null ? null : args.imTenantId !== undefined ? str(args.imTenantId) : undefined;
+      const wxOpenId = args.wxOpenId === null ? null : args.wxOpenId !== undefined ? str(args.wxOpenId) : undefined;
+      const wxStatus =
+        args.wxStatus === "pending_owner" || args.wxStatus === "active" || args.wxStatus === "revoked"
+          ? args.wxStatus
+          : undefined;
       const neverExpire = typeof args.neverExpire === "boolean" ? args.neverExpire : undefined;
       const expiresInDays = typeof args.expiresInDays === "number" ? args.expiresInDays : undefined;
-      const res = updateDropTokenFromUi(dropHostFor(tenant), {
+      const res = updateDropTokenFromUi(host, {
         workspace,
         tokenId,
         label,
@@ -1168,6 +1188,8 @@ export async function handleOp(
         removeWorkspaces,
         permissions,
         imTenantId,
+        wxOpenId,
+        wxStatus,
         neverExpire,
         expiresInDays,
       });

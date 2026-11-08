@@ -5,6 +5,7 @@ import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/a
 import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
+import { AssistantColleaguesSection } from "./assistant/AssistantColleaguesSection";
 import {
   assistantMemoryEntryText,
   initialAssistantMemoryNavigation,
@@ -15,7 +16,7 @@ import {
 import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "./chat/markdown";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
-export type AssistantView = "overview" | "inbox" | "memory" | "notify";
+export type AssistantView = "overview" | "inbox" | "colleagues" | "memory" | "notify";
 
 export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = {
   running: "进行中",
@@ -236,7 +237,7 @@ export default function AssistantPanel({
           role="tablist"
           aria-label="助理功能"
           onKeyDown={(event) => {
-            const tabs: AssistantView[] = ["overview", "inbox", "notify", "memory"];
+            const tabs: AssistantView[] = ["overview", "inbox", "colleagues", "notify", "memory"];
             const index = tabs.indexOf(tab);
             let next = index;
             if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
@@ -254,6 +255,7 @@ export default function AssistantPanel({
             [
               ["overview", approvals.length ? `总览 · ${approvals.length}` : "总览"],
               ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
+              ["colleagues", "同事"],
               ["notify", "通知"],
             ] as const
           ).map(([id, label]) => (
@@ -613,7 +615,29 @@ export default function AssistantPanel({
                   <Empty>还没有委派。在助理会话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
                 )}
               </Section>
+              <Section title="同事与通行证">
+                <div className="assistant-item">
+                  <div className="assistant-item-head">
+                    <span className="assistant-item-title">跨工作区同事权限与门户管理</span>
+                    <button type="button" className="pill" onClick={() => selectTab("colleagues")}>
+                      管理同事
+                    </button>
+                  </div>
+                  <div className="loop-meta">
+                    统一分配同事可访问的多个知识库工作区、脱敏日历忙闲查询、站内 IM 与微信绑定，以及审批同事提交的日历/知识库变更提案。
+                  </div>
+                </div>
+              </Section>
             </>
+          ) : null}
+
+          {tab === "colleagues" ? (
+            <AssistantColleaguesSection
+              send={send}
+              lastResult={lastAssistantResult}
+              resultTick={assistantResultTick}
+              onNotice={setNotice}
+            />
           ) : null}
 
           {tab === "inbox" ? (

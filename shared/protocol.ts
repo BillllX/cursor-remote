@@ -501,6 +501,23 @@ export type KbDropTokenItem = {
   active: boolean;
 };
 
+export type KbWorkspaceSummaryItem = {
+  workspaceId: string;
+  workspaceKey: string;
+  title: string;
+};
+
+export type KbColleagueProposalItem = {
+  id: string;
+  status: "pending" | "applying" | "approved" | "rejected";
+  kind: "calendar_book" | "calendar_reschedule" | "knowledge_update";
+  proposerName: string;
+  sourceChannel: "drop_portal" | "im_dm" | "wechat";
+  summary: string;
+  detail: string;
+  createdAt: number;
+};
+
 export type KbWorkspaceStatusData = {
   workspaceKey: string;
   workspaceId: string;
@@ -512,6 +529,10 @@ export type KbWorkspaceStatusData = {
   tokens: KbDropTokenItem[];
   /** 当前租户下已创建但尚未绑定到本知识库的其他有效同事通行证（支持一键勾选授权访问本库） */
   otherTokens?: KbDropTokenItem[];
+  /** 当前租户下所有已启用为知识库的子工作区列表（供小驳界面跨工作区勾选授权） */
+  kbWorkspaces?: KbWorkspaceSummaryItem[];
+  /** 同事提交的日历预约/知识库更新提案列表（供小驳界面一键批准或拒绝） */
+  proposals?: KbColleagueProposalItem[];
   dropPortalPath: string;
 };
 
@@ -560,8 +581,15 @@ export type AssistantOpArgsMap = {
     removeWorkspaces?: string[];
     permissions?: Partial<ColleaguePermissions>;
     imTenantId?: string | null;
+    wxOpenId?: string | null;
+    wxStatus?: "pending_owner" | "active" | "revoked";
     neverExpire?: boolean;
     expiresInDays?: number;
+    decideProposal?: {
+      proposalId: string;
+      approve: boolean;
+      decisionNote?: string;
+    };
   };
   drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };
 };

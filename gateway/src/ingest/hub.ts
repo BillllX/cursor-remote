@@ -1,6 +1,13 @@
 import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ColleaguePermissions, KbHtmlBoardItem, KbWorkspaceStatusData } from "../../../shared/protocol.ts";
+import type {
+  ColleaguePermissions,
+  KbColleagueProposalItem,
+  KbHtmlBoardItem,
+  KbWorkspaceStatusData,
+  KbWorkspaceSummaryItem,
+} from "../../../shared/protocol.ts";
+import { listColleagueProposals } from "../assistant/proposals.ts";
 import {
   ensureSafePathInWorkspace,
   loadKbWorkspaceConfig,
@@ -112,17 +119,70 @@ export function scanWorkspaceKbHtmlBoards(workspaceDir: string, config: KbWorksp
   return boards;
 }
 
+function buildTenantKbWorkspacesSummary(host: DropTenantHost): KbWorkspaceSummaryItem[] {
+  return listTenantKbWorkspaces(host).map((w) => ({
+    workspaceId: w.workspaceId,
+    workspaceKey: w.workspaceKey,
+    title: w.config.title,
+  }));
+}
+
+function buildTenantProposalsSummary(host: DropTenantHost): KbColleagueProposalItem[] {
+  const pending = listColleagueProposals(host, { status: "pending", limit: 100 });
+  const recentAll = listColleagueProposals(host, { limit: 30 });
+  const seen = new Set<string>();
+  const merged = [...pending, ...recentAll].filter((p) => {
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+  return merged.map((p) => ({
+    id: p.id,
+    status: p.status,
+    kind: p.payload.kind,
+    proposerName: p.proposerName,
+    sourceChannel: p.sourceChannel,
+    summary: p.payload.kind === "knowledge_update" ? p.payload.summary : p.payload.title,
+    detail:
+      p.payload.kind === "knowledge_update"
+        ? `知识库：${p.payload.workspaceKey} · 文件：${p.payload.fileName}`
+        : `时间：${p.payload.startIso} ~ ${p.payload.endIso}${p.payload.location ? ` · 地点：${p.payload.location}` : ""}`,
+    createdAt: p.createdAt,
+  }));
+}
+
 /**
- * 获取指定子工作区的知识库状态、已生成的 HTML 看板列表、以及关联的投递口令列表（供前端 UI 展示）
+ * 获取指定子工作区（或传 `""` / `"__all__"` 获取小驳全局跨工作区）的知识库状态、HTML 看板列表、同事通行证列表及待批提案（供 Web / iOS 前端展示）
  */
 export function getKbWorkspaceStatusForUi(
   host: DropTenantHost,
   workspaceKeyOrPath: string,
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
   const raw = workspaceKeyOrPath.trim();
-  if (!raw) {
-    return { ok: false, error: "请指定工作区名称或路径" };
+  const dropPortalPath = `/p/${host.id}/drop`;
+  const kbWorkspaces = buildTenantKbWorkspacesSummary(host);
+  const proposals = buildTenantProposalsSummary(host);
+
+  // 小驳全局跨工作区同事管理视图（workspace 传 "" 或 "__all__"）
+  if (!raw || raw === "__all__") {
+    const allTokens = listDropTokens(host, { includeRevoked: false });
+    return {
+      ok: true,
+      data: {
+        workspaceKey: "",
+        workspaceId: "",
+        isKnowledgeBase: kbWorkspaces.length > 0,
+        title: "跨工作区同事与知识库通行证",
+        allowedCategories: [],
+        boards: [],
+        tokens: allTokens,
+        kbWorkspaces,
+        proposals,
+        dropPortalPath,
+      },
+    };
   }
+
   // 支持传入相对工作区名或绝对路径
   const rootAbs = resolve(host.workspaceRoot);
   let targetKey = raw;
@@ -141,7 +201,6 @@ export function getKbWorkspaceStatusForUi(
     return { ok: false, error: `找不到子工作区：${targetKey}` };
   }
 
-  const dropPortalPath = `/p/${host.id}/drop`;
   const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
 
   // 读取工作区下现有一级子目录，供未开启知识库时一键勾选推荐分类
@@ -173,6 +232,8 @@ export function getKbWorkspaceStatusForUi(
         allowedCategories: existingSubDirs.length > 0 ? existingSubDirs : ["资金", "资产", "牌照"],
         boards: [],
         tokens: [],
+        kbWorkspaces,
+        proposals,
         dropPortalPath,
       },
     };
@@ -205,6 +266,8 @@ export function getKbWorkspaceStatusForUi(
       boards,
       tokens: wsTokens,
       otherTokens,
+      kbWorkspaces,
+      proposals,
       dropPortalPath,
     },
   };
@@ -235,9 +298,24 @@ export function createDropTokenFromUi(
     imTenantId?: string;
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
-  const created = createDropToken(host, input);
+  const rawWs = input.workspace.trim();
+  const isGlobalView = !rawWs || rawWs === "__all__";
+  const candidateWorkspaces = Array.isArray(input.workspaces)
+    ? input.workspaces.map((w) => w.trim()).filter(Boolean)
+    : [];
+  const primaryWorkspace = !isGlobalView
+    ? rawWs
+    : candidateWorkspaces[0] || listTenantKbWorkspaces(host)[0]?.workspaceKey || "";
+  if (!primaryWorkspace) {
+    return { ok: false, error: "当前还没有已开启的知识库子工作区，请先将一个子工作区设为知识库" };
+  }
+  const created = createDropToken(host, {
+    ...input,
+    workspace: primaryWorkspace,
+    workspaces: candidateWorkspaces.length > 0 ? candidateWorkspaces : [primaryWorkspace],
+  });
   if (!created.ok) return created;
-  return getKbWorkspaceStatusForUi(host, input.workspace);
+  return getKbWorkspaceStatusForUi(host, isGlobalView ? "" : rawWs);
 }
 
 export function updateDropTokenFromUi(
@@ -250,13 +328,38 @@ export function updateDropTokenFromUi(
     removeWorkspaces?: string[];
     permissions?: Partial<ColleaguePermissions>;
     imTenantId?: string | null;
+    wxOpenId?: string | null;
+    wxStatus?: "pending_owner" | "active" | "revoked";
     neverExpire?: boolean;
     expiresInDays?: number;
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
-  const updated = updateDropToken(host, input);
+  const rawWs = input.workspace.trim();
+  const isGlobalView = !rawWs || rawWs === "__all__";
+  const updated = updateDropToken(host, {
+    tokenId: input.tokenId,
+    label: input.label,
+    addWorkspaces: input.addWorkspaces,
+    removeWorkspaces: input.removeWorkspaces,
+    permissions: input.permissions,
+    imTenantId: input.imTenantId,
+    ...(input.wxOpenId !== undefined
+      ? {
+          wxBinding:
+            input.wxOpenId === null || input.wxOpenId.trim() === ""
+              ? null
+              : {
+                  status: input.wxStatus ?? "active",
+                  openId: input.wxOpenId.trim(),
+                  updatedAt: Date.now(),
+                },
+        }
+      : {}),
+    neverExpire: input.neverExpire,
+    expiresInDays: input.expiresInDays,
+  });
   if (!updated.ok) return updated;
-  return getKbWorkspaceStatusForUi(host, input.workspace);
+  return getKbWorkspaceStatusForUi(host, isGlobalView ? "" : rawWs);
 }
 
 export function revokeDropTokenFromUi(
@@ -267,13 +370,22 @@ export function revokeDropTokenFromUi(
     globalRevoke?: boolean;
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
-  const wsRef = host.resolveWorkspace(input.workspace);
-  if (!wsRef) return { ok: false, error: `找不到子工作区：${input.workspace}` };
+  const rawWs = input.workspace.trim();
+  const isGlobalView = !rawWs || rawWs === "__all__";
+  if (isGlobalView || input.globalRevoke) {
+    const revoked = revokeDropToken(host, input.idOrLabel, Date.now(), undefined, {
+      globalRevoke: true,
+    });
+    if (!revoked.ok) return revoked;
+    return getKbWorkspaceStatusForUi(host, isGlobalView ? "" : rawWs);
+  }
+  const wsRef = host.resolveWorkspace(rawWs);
+  if (!wsRef) return { ok: false, error: `找不到子工作区：${rawWs}` };
   const revoked = revokeDropToken(host, input.idOrLabel, Date.now(), wsRef.workspaceId, {
     globalRevoke: input.globalRevoke,
   });
   if (!revoked.ok) return revoked;
-  return getKbWorkspaceStatusForUi(host, input.workspace);
+  return getKbWorkspaceStatusForUi(host, rawWs);
 }
 
 /**

@@ -78,6 +78,7 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
     case delegations
     case artifacts
     case memory
+    case colleagues
 
     var id: String { rawValue }
 
@@ -89,6 +90,7 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
         case .plans: return "计划"
         case .delegations: return "委派"
         case .artifacts: return "产物"
+        case .colleagues: return "同事"
         case .memory: return "记忆"
         }
     }
@@ -101,6 +103,7 @@ enum PadAssistantSection: String, CaseIterable, Identifiable {
         case .plans: return "calendar"
         case .delegations: return "person.2.wave.2"
         case .artifacts: return "square.stack.3d.up"
+        case .colleagues: return NavigationIconId.collab.symbol
         case .memory: return NavigationIconId.memory.symbol
         }
     }

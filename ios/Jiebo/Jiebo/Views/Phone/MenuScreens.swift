@@ -551,6 +551,25 @@ struct PhoneSettingsScreen: View {
                     .frame(minHeight: 44, alignment: .leading)
                 }
                 .listRowBackground(JieboColor.white)
+
+                NavigationLink(value: PhoneRoute.colleagues) {
+                    HStack(spacing: 12) {
+                        Image(systemName: NavigationIconId.collab.symbol)
+                            .font(JieboFont.text(.subheadline, weight: .medium))
+                            .foregroundStyle(JieboColor.ink2)
+                            .frame(width: 24)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("同事与通行证")
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.ink)
+                            Text("管理跨工作区知识库、日历忙闲与 IM 权限")
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                        }
+                    }
+                    .frame(minHeight: 44, alignment: .leading)
+                }
+                .listRowBackground(JieboColor.white)
             } header: {
                 JieboListHeader("小驳")
             }
@@ -1031,6 +1050,8 @@ struct PhoneSettingsDestination: View {
             MemoryCenterPhonePageHost(route: page)
         case .connections:
             DeviceConnectionsScreen()
+        case .colleagues:
+            AssistantColleaguesScreen()
         case .artifacts:
             ArtifactCenterView()
         case .settings:
@@ -1103,11 +1124,58 @@ struct KbHtmlBoard: Identifiable, Hashable {
     var id: String { relPath }
 }
 
+struct KbWorkspaceSummary: Identifiable, Hashable {
+    var workspaceId: String
+    var workspaceKey: String
+    var title: String
+    var id: String { workspaceId }
+}
+
+struct KbColleagueProposal: Identifiable, Hashable {
+    var id: String
+    var status: String
+    var kind: String
+    var proposerName: String
+    var sourceChannel: String
+    var summary: String
+    var detail: String
+    var createdAt: Double
+}
+
 struct KbDropToken: Identifiable, Hashable {
     var id: String
     var label: String
+    var workspaceKey: String
+    var workspaces: [String]
+    var calendarFreeBusy: Bool
+    var imTenantId: String?
+    var wxStatus: String?
+    var wxOpenId: String?
     var expiresAt: Double?
     var active: Bool
+
+    static func parse(_ item: JSONValue) -> KbDropToken? {
+        guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        let primaryKey = row["workspaceKey"]?.string ?? ""
+        let wsArray = row["workspaces"]?.array?.compactMap { entry -> String? in
+            entry.object?["workspaceKey"]?.string?.nilIfEmpty
+        } ?? []
+        let perms = row["permissions"]?.object
+        let calFreeBusy = perms?["calendarFreeBusy"]?.bool ?? true
+        let wxObj = row["wxBinding"]?.object
+        return KbDropToken(
+            id: id,
+            label: row["label"]?.string?.nilIfEmpty ?? id,
+            workspaceKey: primaryKey,
+            workspaces: wsArray.isEmpty ? (primaryKey.isEmpty ? [] : [primaryKey]) : wsArray,
+            calendarFreeBusy: calFreeBusy,
+            imTenantId: row["imTenantId"]?.string?.nilIfEmpty,
+            wxStatus: wxObj?["status"]?.string?.nilIfEmpty,
+            wxOpenId: wxObj?["openId"]?.string?.nilIfEmpty,
+            expiresAt: row["expiresAt"]?.number,
+            active: row["active"]?.bool ?? true
+        )
+    }
 }
 
 struct KbWorkspaceStatus: Hashable {
@@ -1117,6 +1185,9 @@ struct KbWorkspaceStatus: Hashable {
     var allowedCategories: [String]
     var boards: [KbHtmlBoard]
     var tokens: [KbDropToken]
+    var otherTokens: [KbDropToken]
+    var kbWorkspaces: [KbWorkspaceSummary]
+    var proposals: [KbColleagueProposal]
     var dropPortalPath: String
 
     static func parse(_ value: JSONValue?) -> KbWorkspaceStatus? {
@@ -1129,13 +1200,31 @@ struct KbWorkspaceStatus: Hashable {
                 category: row["category"]?.string ?? ""
             )
         } ?? []
-        let tokens = object["tokens"]?.array?.compactMap { item -> KbDropToken? in
+        let tokens = object["tokens"]?.array?.compactMap(KbDropToken.parse) ?? []
+        let otherTokens = object["otherTokens"]?.array?.compactMap(KbDropToken.parse) ?? []
+        let kbWorkspaces = object["kbWorkspaces"]?.array?.compactMap { item -> KbWorkspaceSummary? in
+            guard let row = item.object,
+                  let wsId = row["workspaceId"]?.string,
+                  let wsKey = row["workspaceKey"]?.string,
+                  !wsKey.isEmpty
+            else { return nil }
+            return KbWorkspaceSummary(
+                workspaceId: wsId,
+                workspaceKey: wsKey,
+                title: row["title"]?.string?.nilIfEmpty ?? wsKey
+            )
+        } ?? []
+        let proposals = object["proposals"]?.array?.compactMap { item -> KbColleagueProposal? in
             guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
-            return KbDropToken(
+            return KbColleagueProposal(
                 id: id,
-                label: row["label"]?.string?.nilIfEmpty ?? id,
-                expiresAt: row["expiresAt"]?.number,
-                active: row["active"]?.bool ?? true
+                status: row["status"]?.string ?? "pending",
+                kind: row["kind"]?.string ?? "calendar_book",
+                proposerName: row["proposerName"]?.string ?? "同事",
+                sourceChannel: row["sourceChannel"]?.string ?? "drop_portal",
+                summary: row["summary"]?.string ?? "",
+                detail: row["detail"]?.string ?? "",
+                createdAt: row["createdAt"]?.number ?? 0
             )
         } ?? []
         return KbWorkspaceStatus(
@@ -1145,8 +1234,527 @@ struct KbWorkspaceStatus: Hashable {
             allowedCategories: object["allowedCategories"]?.array?.compactMap(\.string) ?? [],
             boards: boards,
             tokens: tokens,
+            otherTokens: otherTokens,
+            kbWorkspaces: kbWorkspaces,
+            proposals: proposals,
             dropPortalPath: object["dropPortalPath"]?.string ?? ""
         )
+    }
+}
+
+/// 小驳界面的「跨工作区同事与知识库通行证」统一管理页（iPhone 助理中心/设置 与 iPad 小驳侧栏共用）
+struct AssistantColleaguesScreen: View {
+    var embedded = false
+
+    @Environment(ChatStore.self) private var store
+    @Environment(\.openURL) private var openURL
+
+    @State private var status: KbWorkspaceStatus?
+    @State private var busy = false
+    @State private var errorText = ""
+    @State private var passcode = ""
+    @State private var tokenLabel = ""
+    @State private var expiresDays = ""
+    @State private var selectedWorkspaces = Set<String>()
+    @State private var calFreeBusy = true
+    @State private var imTenantIdDraft = ""
+    @State private var editingTokenId: String?
+    @State private var editImTenantId = ""
+    @State private var revokeTarget: KbDropToken?
+
+    private var portalURL: URL? {
+        guard let path = status?.dropPortalPath.nilIfEmpty else { return nil }
+        return GatewayConfig.pageURL(path: path)
+    }
+
+    private var pendingProposals: [KbColleagueProposal] {
+        (status?.proposals ?? []).filter { $0.status == "pending" }
+    }
+
+    var body: some View {
+        List {
+            portalSection
+            if !errorText.isEmpty {
+                Section {
+                    Text(errorText)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.danger)
+                }
+                .listRowBackground(JieboColor.white)
+            }
+            if !pendingProposals.isEmpty {
+                proposalsSection
+            }
+            tokensSection
+            createSection
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(JieboColor.paper)
+        .navigationTitle("同事与通行证")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await reload() }
+        .task { await reload() }
+        .confirmationDialog(
+            "全局吊销这个同事通行证？",
+            isPresented: Binding(get: { revokeTarget != nil }, set: { if !$0 { revokeTarget = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("全局吊销", role: .destructive) {
+                guard let token = revokeTarget else { return }
+                revokeTarget = nil
+                Task { await revokeGlobal(token) }
+            }
+            Button("取消", role: .cancel) { revokeTarget = nil }
+        } message: {
+            Text("吊销后，该同事在门户网页的记住登录状态、站内 IM 与微信查询权限将立即失效。")
+        }
+    }
+
+    @ViewBuilder
+    private var portalSection: some View {
+        Section {
+            if let url = portalURL {
+                LabeledContent("门户地址") {
+                    Text(url.absoluteString)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
+                HStack(spacing: 16) {
+                    Button("复制链接") {
+                        UIPasteboard.general.string = url.absoluteString
+                        store.flash("已复制门户链接")
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(JieboColor.pine)
+
+                    Button("打开门户") { openURL(url) }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(JieboColor.pine)
+                }
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .disabled(busy)
+            }
+        } header: {
+            JieboListHeader("对外知识库与问答门户")
+        } footer: {
+            Text("同事打开链接输入一次口令后将自动记住登录状态，可跨获权知识库问答、查询你的脱敏日历忙闲或提交变更提案。")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var proposalsSection: some View {
+        Section {
+            ForEach(pendingProposals) { prop in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        StatusTag(
+                            text: prop.kind == "knowledge_update" ? "知识库更新" : "日历预约",
+                            fg: JieboColor.warnFg,
+                            bg: JieboColor.warnBg
+                        )
+                        Text("\(prop.proposerName)：\(prop.summary)")
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                    }
+                    Text("\(prop.detail) · 来源：\(prop.sourceChannel)")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.ink2)
+                    HStack(spacing: 10) {
+                        ActionButton(title: "批准", kind: .primary) {
+                            Task { await decideProposal(prop.id, approve: true) }
+                        }
+                        .disabled(busy)
+                        ActionButton(title: "拒绝", kind: .secondary) {
+                            Task { await decideProposal(prop.id, approve: false) }
+                        }
+                        .disabled(busy)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        } header: {
+            JieboListHeader("待批同事提案 (\(pendingProposals.count))")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var tokensSection: some View {
+        Section {
+            if status?.tokens.isEmpty != false {
+                Text("还没有配置同事通行证。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            } else {
+                ForEach(status?.tokens ?? []) { token in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(token.label)
+                                    .font(JieboFont.text(.body, weight: .medium))
+                                    .foregroundStyle(JieboColor.ink)
+                                Text("知识库：\(token.workspaces.joined(separator: "、"))")
+                                    .font(JieboFont.text(.footnote))
+                                    .foregroundStyle(JieboColor.ink2)
+                                Text(
+                                    [
+                                        token.active ? expiryText(token.expiresAt) : "已失效",
+                                        token.calendarFreeBusy ? "可查日历忙闲" : "仅知识库",
+                                        token.imTenantId.map { "IM:\($0)" },
+                                        token.wxStatus == "active" ? "微信已绑" : (token.wxStatus == "pending_owner" ? "微信待确认" : nil),
+                                    ]
+                                    .compactMap { $0 }
+                                    .joined(separator: " · ")
+                                )
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                            }
+                            Spacer()
+                            HStack(spacing: 12) {
+                                if token.wxStatus == "pending_owner" {
+                                    Button("激活微信") {
+                                        Task { await activateWechat(token) }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.pine)
+                                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                                    .disabled(busy)
+                                }
+                                Button(editingTokenId == token.id ? "收起" : "配置") {
+                                    if editingTokenId == token.id {
+                                        editingTokenId = nil
+                                    } else {
+                                        editingTokenId = token.id
+                                        editImTenantId = token.imTenantId ?? ""
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(JieboColor.pine)
+                                .font(JieboFont.text(.subheadline, weight: .medium))
+
+                                Button("吊销") { revokeTarget = token }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.danger)
+                                    .font(JieboFont.text(.subheadline, weight: .medium))
+                                    .disabled(busy)
+                            }
+                        }
+
+                        if editingTokenId == token.id {
+                            Divider()
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("勾选允许访问的知识库工作区：")
+                                    .font(JieboFont.text(.caption))
+                                    .foregroundStyle(JieboColor.dim)
+                                ForEach(status?.kbWorkspaces ?? []) { ws in
+                                    let hasWs = token.workspaces.contains(ws.workspaceKey)
+                                    Button {
+                                        Task { await toggleTokenWorkspace(token, wsKey: ws.workspaceKey, currentlyHas: hasWs) }
+                                    } label: {
+                                        HStack {
+                                            Image(systemName: hasWs ? "checkmark.circle.fill" : "circle")
+                                                .foregroundStyle(hasWs ? JieboColor.pine : JieboColor.dim)
+                                            Text(ws.workspaceKey)
+                                                .font(JieboFont.text(.subheadline))
+                                                .foregroundStyle(JieboColor.ink)
+                                            Spacer()
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .disabled(busy)
+                                }
+
+                                Toggle(
+                                    "允许查日历忙闲与发起提案",
+                                    isOn: Binding(
+                                        get: { token.calendarFreeBusy },
+                                        set: { next in Task { await toggleCalendarPerm(token, enabled: next) } }
+                                    )
+                                )
+                                .font(JieboFont.text(.subheadline))
+                                .tint(JieboColor.pine)
+                                .disabled(busy)
+
+                                HStack {
+                                    TextField("绑定站内 IM 账号（留空解绑）", text: $editImTenantId)
+                                        .font(JieboFont.text(.subheadline))
+                                    Button("保存 IM") {
+                                        Task { await saveImBinding(token) }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.pine)
+                                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                                    .disabled(busy)
+                                }
+
+                                if token.expiresAt != nil {
+                                    Button("设为永久不过期") {
+                                        Task { await makeNeverExpire(token) }
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .foregroundStyle(JieboColor.pine)
+                                    .font(JieboFont.text(.subheadline, weight: .medium))
+                                    .disabled(busy)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        } header: {
+            JieboListHeader("跨工作区同事通行证 (\(status?.tokens.count ?? 0))")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var createSection: some View {
+        Section {
+            if status?.kbWorkspaces.isEmpty != false {
+                Text("请先在任意子工作区的「知识库」设置中开启知识库分类，之后即可在此为同事分配跨工作区通行证。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            } else {
+                TextField("同事称呼（如：王明-风控）", text: $tokenLabel)
+                SecureField("通行口令，6–64 位", text: $passcode)
+                TextField("有效天数，留空表示永久有效", text: $expiresDays)
+                    .keyboardType(.numberPad)
+                TextField("关联站内 IM 账号（选填）", text: $imTenantIdDraft)
+                Toggle("允许查日历忙闲与发起变更提案", isOn: $calFreeBusy)
+                    .tint(JieboColor.pine)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("授权访问的知识库工作区（可多选）：")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                    ForEach(status?.kbWorkspaces ?? []) { ws in
+                        let checked = selectedWorkspaces.contains(ws.workspaceKey)
+                        Button {
+                            if checked {
+                                selectedWorkspaces.remove(ws.workspaceKey)
+                            } else {
+                                selectedWorkspaces.insert(ws.workspaceKey)
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: checked ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(checked ? JieboColor.pine : JieboColor.dim)
+                                Text("\(ws.workspaceKey)（\(ws.title)）")
+                                    .font(JieboFont.text(.subheadline))
+                                    .foregroundStyle(JieboColor.ink)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
+
+                ActionButton(title: "添加同事通行证", kind: .primary) {
+                    Task { await createToken() }
+                }
+                .disabled(busy || !validPasscode(passcode))
+            }
+        } header: {
+            JieboListHeader("新增同事通行证")
+        } footer: {
+            Text("同事凭此口令可在门户网页、站内 IM 单聊（@小驳）及绑定后的微信中访问勾选的全部知识库与你的脱敏日历忙闲。")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    private func reload() async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("kb_workspace_status", args: ["workspace": .string("")])
+        busy = false
+        apply(reply)
+    }
+
+    private func createToken() async {
+        let code = passcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard validPasscode(code) else {
+            errorText = "口令需要 6–64 位"
+            return
+        }
+        let targetWorkspaces = selectedWorkspaces.isEmpty
+            ? (status?.kbWorkspaces.first.map { [$0.workspaceKey] } ?? [])
+            : Array(selectedWorkspaces).sorted()
+        guard !targetWorkspaces.isEmpty else {
+            errorText = "请至少勾选一个知识库工作区"
+            return
+        }
+        let rawDays = expiresDays.trimmingCharacters(in: .whitespacesAndNewlines)
+        var expiresInDays: Int?
+        if !rawDays.isEmpty {
+            guard let days = Int(rawDays), (1 ... 3650).contains(days) else {
+                errorText = "有效天数要在 1–3650 之间，留空表示永久有效"
+                return
+            }
+            expiresInDays = days
+        }
+        busy = true
+        errorText = ""
+        var args: [String: JSONValue] = [
+            "workspace": .string(""),
+            "workspaces": .array(targetWorkspaces.map { .string($0) }),
+            "passcode": .string(code),
+            "permissions": .object([
+                "kbAsk": .bool(true),
+                "kbDrop": .bool(true),
+                "kbPropose": .bool(true),
+                "calendarFreeBusy": .bool(calFreeBusy),
+                "calendarPropose": .bool(calFreeBusy),
+            ]),
+        ]
+        let label = tokenLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty { args["label"] = .string(label) }
+        if let expiresInDays { args["expiresInDays"] = .number(Double(expiresInDays)) }
+        let imId = imTenantIdDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !imId.isEmpty { args["imTenantId"] = .string(imId) }
+
+        let reply = await store.assistantOpData("drop_token_create", args: args)
+        busy = false
+        if apply(reply), reply.ok {
+            passcode = ""
+            tokenLabel = ""
+            imTenantIdDraft = ""
+            store.flash("同事通行证已生成")
+        }
+    }
+
+    private func toggleTokenWorkspace(_ token: KbDropToken, wsKey: String, currentlyHas: Bool) async {
+        if currentlyHas, token.workspaces.count <= 1 {
+            errorText = "至少需保留 1 个关联的知识库工作区（如需停用请点吊销）"
+            return
+        }
+        busy = true
+        errorText = ""
+        var args: [String: JSONValue] = [
+            "workspace": .string(""),
+            "tokenId": .string(token.id),
+        ]
+        if currentlyHas {
+            args["removeWorkspaces"] = .array([.string(wsKey)])
+        } else {
+            args["addWorkspaces"] = .array([.string(wsKey)])
+        }
+        let reply = await store.assistantOpData("drop_token_update", args: args)
+        busy = false
+        apply(reply)
+    }
+
+    private func toggleCalendarPerm(_ token: KbDropToken, enabled: Bool) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(""),
+            "tokenId": .string(token.id),
+            "permissions": .object([
+                "calendarFreeBusy": .bool(enabled),
+                "calendarPropose": .bool(enabled),
+            ]),
+        ])
+        busy = false
+        apply(reply)
+    }
+
+    private func saveImBinding(_ token: KbDropToken) async {
+        busy = true
+        errorText = ""
+        let trimmed = editImTenantId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(""),
+            "tokenId": .string(token.id),
+            "imTenantId": trimmed.isEmpty ? .null : .string(trimmed),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已更新 IM 绑定") }
+    }
+
+    private func activateWechat(_ token: KbDropToken) async {
+        guard let openId = token.wxOpenId else { return }
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(""),
+            "tokenId": .string(token.id),
+            "wxOpenId": .string(openId),
+            "wxStatus": .string("active"),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已确认激活微信绑定") }
+    }
+
+    private func makeNeverExpire(_ token: KbDropToken) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(""),
+            "tokenId": .string(token.id),
+            "neverExpire": .bool(true),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已设为永久有效") }
+    }
+
+    private func decideProposal(_ proposalId: String, approve: Bool) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(""),
+            "tokenId": .string("__proposal__"),
+            "decideProposal": .object([
+                "proposalId": .string(proposalId),
+                "approve": .bool(approve),
+            ]),
+        ])
+        busy = false
+        if apply(reply), reply.ok {
+            store.flash(approve ? "已批准提案" : "已拒绝提案")
+        }
+    }
+
+    private func revokeGlobal(_ token: KbDropToken) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_revoke", args: [
+            "workspace": .string(""),
+            "idOrLabel": .string(token.id),
+            "globalRevoke": .bool(true),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已吊销同事通行证") }
+    }
+
+    @discardableResult
+    private func apply(_ reply: (ok: Bool, error: String?, data: JSONValue?)) -> Bool {
+        if let parsed = KbWorkspaceStatus.parse(reply.data) {
+            status = parsed
+            if selectedWorkspaces.isEmpty, let first = parsed.kbWorkspaces.first {
+                selectedWorkspaces = [first.workspaceKey]
+            }
+        }
+        if !reply.ok {
+            errorText = reply.error?.nilIfEmpty ?? "操作未完成"
+        }
+        return reply.ok
+    }
+
+    private func validPasscode(_ raw: String) -> Bool {
+        let code = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (6 ... 64).contains(code.count)
+    }
+
+    private func expiryText(_ ms: Double?) -> String {
+        guard let ms, ms > 0 else { return "永久有效" }
+        let date = Date(timeIntervalSince1970: ms / 1000)
+        return date.formatted(date: .abbreviated, time: .omitted) + " 到期"
     }
 }
 
@@ -1169,7 +1777,7 @@ struct KbWorkspaceSheet: View {
     @State private var categoriesDraft = ""
     @State private var passcode = ""
     @State private var tokenLabel = ""
-    @State private var expiresDays = "90"
+    @State private var expiresDays = ""
     @State private var revokeTarget: KbDropToken?
 
     /// 网关认的是相对工作区根目录的 key，不认绝对路径
@@ -1330,7 +1938,7 @@ struct KbWorkspaceSheet: View {
                         }
                         Spacer()
                         if token.active {
-                            Button("吊销") { revokeTarget = token }
+                            Button(token.workspaces.count > 1 ? "移出本库" : "吊销") { revokeTarget = token }
                                 .buttonStyle(.borderless)
                                 .foregroundStyle(JieboColor.danger)
                                 .disabled(busy)
@@ -1338,8 +1946,28 @@ struct KbWorkspaceSheet: View {
                     }
                 }
             }
+            if let others = status?.otherTokens, !others.isEmpty {
+                ForEach(others) { other in
+                    Button {
+                        Task { await bindExistingToken(other) }
+                    } label: {
+                        HStack {
+                            Image(systemName: "plus.circle")
+                                .foregroundStyle(JieboColor.pine)
+                            Text("授权「\(other.label)」访问本库")
+                                .font(JieboFont.text(.subheadline))
+                                .foregroundStyle(JieboColor.pine)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy)
+                }
+            }
         } header: {
-            JieboListHeader("同事投递")
+            JieboListHeader("本库获权同事")
+        } footer: {
+            Text("跨工作区同事通行证、日历忙闲权限与 IM/微信绑定可在「小驳 → 同事」中统一管理。")
         }
         .listRowBackground(JieboColor.white)
 
@@ -1421,6 +2049,18 @@ struct KbWorkspaceSheet: View {
             tokenLabel = ""
             store.flash("口令已生成")
         }
+    }
+
+    private func bindExistingToken(_ token: KbDropToken) async {
+        busy = true
+        errorText = ""
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(workspaceKey),
+            "tokenId": .string(token.id),
+            "addWorkspaces": .array([.string(workspaceKey)]),
+        ])
+        busy = false
+        if apply(reply), reply.ok { store.flash("已授权访问本知识库") }
     }
 
     private func revoke(_ token: KbDropToken) async {

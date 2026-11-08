@@ -13,6 +13,7 @@ enum PhoneRoute: Hashable {
     /// 记忆页里再套一个 NavigationStack 时，点过记忆再点菜单里别的页面，外层换栈会把内层导航控制器拆掉，直接崩溃。
     case memoryPage(MemoryCenterPhoneRoute)
     case connections            // 只从设置页进入
+    case colleagues             // 小驳跨工作区同事与知识库通行证管理
 }
 
 enum PhoneTab: Hashable {
@@ -26,6 +27,7 @@ enum InboxLane: Hashable {
     case notices
     case work(AssistantWorkColumn)
     case artifacts
+    case colleagues
 }
 
 struct DelegationRef: Identifiable, Hashable {

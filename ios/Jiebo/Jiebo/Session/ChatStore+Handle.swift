@@ -983,7 +983,7 @@ extension ChatStore {
                    op != "memory_center_export", op != "memory_center_import_preview",
                    op != "memory_center_import_apply", op != "memory_center_import_rollback",
                    op != "kb_workspace_status", op != "kb_workspace_init",
-                   op != "drop_token_create", op != "drop_token_revoke" {
+                   op != "drop_token_create", op != "drop_token_update", op != "drop_token_revoke" {
                     flash(error ?? "助理操作失败（\(op)）")
                 }
             } else if op == "memory_save" {

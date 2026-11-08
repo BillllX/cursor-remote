@@ -157,7 +157,7 @@ struct PadAssistantShell: View {
                     }
             }
         }
-        .modifier(PadAssistantSearch(enabled: router.assistantSection != .memory))
+        .modifier(PadAssistantSearch(enabled: router.assistantSection != .memory && router.assistantSection != .colleagues))
         .environment(\.assistantVoicePresenterActive, router.assistantSection == .today)
         .task {
             showDetailIfCompact()
@@ -256,6 +256,10 @@ struct PadAssistantShell: View {
             router.dropFeedback = "记忆栏目不接受拖放，请使用记忆管理操作"
             return false
         }
+        if section == .colleagues {
+            router.dropFeedback = "同事栏目不接受拖放"
+            return false
+        }
         guard let target = PadSemanticDropTarget(rawValue: section.rawValue) else { return false }
         guard transfers.count == 1,
               let transfer = transfers.first,
@@ -342,6 +346,8 @@ struct PadAssistantShell: View {
                 PadTaskExperience(projection: projection, column: .delegation)
             case .artifacts:
                 PadArtifactExperience(projection: projection)
+            case .colleagues:
+                AssistantColleaguesScreen()
             case .memory:
                 MemoryCenterPanelView()
             }
@@ -386,7 +392,7 @@ private struct PadSectionNavigationRow: View {
         case .plans: .plans
         case .delegations: .delegations
         case .artifacts: .artifacts
-        case .memory: nil
+        case .colleagues, .memory: nil
         }
         return target?.accepts(kind) == true
     }

@@ -52,6 +52,8 @@ struct InboxHome: View {
                 DelegationListScreen(column: column, embeddedInInbox: true)
             case .artifacts:
                 ArtifactCenterView(embedded: true)
+            case .colleagues:
+                AssistantColleaguesScreen(embedded: true)
             }
         }
         .background(JieboColor.paper)
@@ -68,6 +70,7 @@ struct InboxHome: View {
                 laneChip("计划", .work(.plan))
                 laneChip("委派", .work(.delegation))
                 laneChip("产物", .artifacts)
+                laneChip("同事", .colleagues)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
