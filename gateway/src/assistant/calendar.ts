@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { listCalendarEvents, type CalendarEvent } from "./calendarEvents.ts";
 import { assistantPath, readJson, writeJson, type TenantRef } from "./store.ts";
 import { listTodos, type Todo } from "./todos.ts";
 
@@ -149,7 +150,47 @@ function eventLines(todo: Todo) {
   return lines;
 }
 
-/** 未完成、带日期的待办；30 天前的旧日期不再放进日历 */
+/** 时段日程事件转 VEVENT（只响一次，绝不写 RRULE 按年重复） */
+function calendarEventLines(ev: CalendarEvent) {
+  const stamp = utcStamp(ev.updatedAt ?? ev.createdAt);
+  const lines = [
+    "BEGIN:VEVENT",
+    `UID:${ev.id}@jiebo`,
+    `DTSTAMP:${stamp}`,
+    `LAST-MODIFIED:${stamp}`,
+    `SEQUENCE:${ev.rev}`,
+    `SUMMARY:${escapeText(ev.title)}`,
+    `STATUS:${ev.status === "cancelled" ? "CANCELLED" : "CONFIRMED"}`,
+    `TRANSP:${ev.busy === "free" ? "TRANSPARENT" : "OPAQUE"}`,
+  ];
+  if (ev.location) {
+    lines.push(`LOCATION:${escapeText(ev.location)}`);
+  }
+  if (ev.notes) {
+    lines.push(`DESCRIPTION:${escapeText(ev.notes)}`);
+  }
+  if (ev.allDay) {
+    const startDay = ev.startIso.slice(0, 10).replace(/-/g, "");
+    const endDayRaw = ev.endIso ? ev.endIso.slice(0, 10).replace(/-/g, "") : "";
+    const endDay = endDayRaw && endDayRaw > startDay ? endDayRaw : nextDay(ev.startIso.slice(0, 10));
+    lines.push(`DTSTART;VALUE=DATE:${startDay}`, `DTEND;VALUE=DATE:${endDay}`);
+  } else {
+    lines.push(`DTSTART:${utcStamp(ev.startAt)}`, `DTEND:${utcStamp(ev.endAt)}`);
+  }
+  if (ev.remindMinutesBefore !== undefined && !ev.reminded) {
+    lines.push(
+      "BEGIN:VALARM",
+      "ACTION:DISPLAY",
+      `DESCRIPTION:${escapeText(ev.title)}`,
+      `TRIGGER:-PT${Math.max(0, ev.remindMinutesBefore)}M`,
+      "END:VALARM",
+    );
+  }
+  lines.push("END:VEVENT");
+  return lines;
+}
+
+/** 未完成、带日期的待办 + 时段日程事件（双轨合并）；30 天前的旧日期不再放进日历 */
 export function buildIcs(ref: TenantRef, name: string, now = Date.now()) {
   const cutoff = now - 30 * 86_400_000;
   const enabled = readJson<CalendarFile | null>(file(ref), null)?.enabled !== false;
@@ -158,6 +199,9 @@ export function buildIcs(ref: TenantRef, name: string, now = Date.now()) {
     const at = todo.remindAt ?? Date.parse(`${todo.due.slice(0, 10)}T23:59:59Z`);
     return Number.isFinite(at) && at >= cutoff;
   });
+  const events = enabled
+    ? listCalendarEvents(ref, { fromMs: cutoff, toMs: now + 365 * 86_400_000, includeCancelled: false })
+    : [];
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -167,6 +211,7 @@ export function buildIcs(ref: TenantRef, name: string, now = Date.now()) {
     `X-WR-CALNAME:${escapeText(`${name}的待办`)}`,
     "X-PUBLISHED-TTL:PT15M",
     "REFRESH-INTERVAL;VALUE=DURATION:PT15M",
+    ...events.flatMap(calendarEventLines),
     ...todos.flatMap(eventLines),
     "END:VCALENDAR",
   ];

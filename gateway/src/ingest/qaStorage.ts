@@ -1411,7 +1411,8 @@ export function sweepTenantQaTempStorageSync(
       );
 
       if (lifeExpired || ((idleExpired || runTimedOut) && !isActivelyRunning)) {
-        markQaSessionClosedAndAbort(item.qaSessionId);
+        // 清理磁盘临时目录并中止运行，但仅重置 generation 而不置 closed=true，以便持久化记住登录会话在超过 30m/2h 后继续发起新提问
+        bumpQaSessionGenerationAndAbort(item.qaSessionId);
         tombstoneDeleteSessionDirSync(item.tempDir, rootRealPath);
         runtimeLeases.delete(item.qaSessionId);
         removedSessions += 1;

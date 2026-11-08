@@ -1,5 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
+import type { ColleaguePermissions, KbDropTokenItem } from "../../../shared/protocol.ts";
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
 import { hasControlChars, initKbWorkspaceConfig, loadKbWorkspaceConfig, type KbWorkspaceConfig } from "./contract.ts";
@@ -16,11 +17,32 @@ export type DropTenantHost = TenantRef & {
   resolveWorkspace: (keyOrId: string) => DropWorkspaceRef | null;
 };
 
+export type DropTokenWorkspaceBinding = {
+  workspaceId: string;
+  workspaceKeySnapshot: string;
+};
+
+export type DropTokenWxBinding = {
+  status: "pending_owner" | "active" | "revoked";
+  botId?: string;
+  openId?: string;
+  nickname?: string;
+  updatedAt: number;
+};
+
 export type DropTokenRecord = {
   id: string;
   label: string;
   workspaceId: string;
   workspaceKeySnapshot: string;
+  /** 多知识库绑定列表（向下兼容：缺省时自动按 [workspaceId] 处理） */
+  workspaces?: DropTokenWorkspaceBinding[];
+  /** 同事细粒度权限开关 */
+  permissions?: ColleaguePermissions;
+  /** 关联的平台内部 IM 租户账号 ID */
+  imTenantId?: string;
+  /** 关联的微信通道身份 */
+  wxBinding?: DropTokenWxBinding;
   salt: string;
   codeHash: string;
   createdAt: number;
@@ -28,9 +50,25 @@ export type DropTokenRecord = {
   revokedAt?: number;
 };
 
+export type OwnerWxBinding = {
+  botId: string;
+  openId: string;
+  nickname?: string;
+  boundAt: number;
+};
+
 type DropTokenFile = {
   version: 1;
+  ownerWx?: OwnerWxBinding;
   items: DropTokenRecord[];
+};
+
+export type AuthorizedWorkspaceGrant = {
+  workspaceId: string;
+  workspaceKey: string;
+  workspacePath: string;
+  workspaceTitle: string;
+  kbConfig: KbWorkspaceConfig;
 };
 
 export type DropSessionGrant = {
@@ -43,19 +81,43 @@ export type DropSessionGrant = {
   workspacePath: string;
   workspaceTitle: string;
   kbConfig: KbWorkspaceConfig;
+  /** 该口令当前获权访问的全部有效知识库工作区 */
+  authorizedWorkspaces?: AuthorizedWorkspaceGrant[];
+  /** 该同事的权限开关 */
+  permissions?: ColleaguePermissions;
   submitterName: string;
   clientIp?: string;
   batchId?: string;
   receiptHash?: string;
+  /** 是否为持久化记住登录会话（落盘于 drop-sessions.json，跨网关重启不丢） */
+  persistent?: boolean;
   createdAt: number;
   lastActiveAt: number;
   expiresAt: number;
+};
+
+type PersistedDropSessionRecord = {
+  sessionTokenHash: string;
+  qaSessionId: string;
+  tokenId: string;
+  tenantId: string;
+  activeWorkspaceId: string;
+  submitterName: string;
+  createdAt: number;
+  lastActiveAt: number;
+};
+
+type PersistedDropSessionFile = {
+  version: 1;
+  items: PersistedDropSessionRecord[];
 };
 
 const MIN_PASSCODE_LEN = 6;
 const MAX_PASSCODE_LEN = 64;
 export const SESSION_TTL_MS = 30 * 60 * 1000;
 export const SESSION_MAX_LIFETIME_MS = 2 * 60 * 60 * 1000;
+/** 持久化记住登录态寿命：10 年（只要底层口令未吊销/未过期即长期有效） */
+export const PERSISTENT_SESSION_TTL_MS = 10 * 365 * 86_400_000;
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_FAILURES = 5;
 const RATE_LIMIT_MAX_ATTEMPTS = 20;
@@ -64,7 +126,15 @@ const MAX_RATE_LIMIT_ENTRIES = 2048;
 const MAX_SESSIONS_PER_TOKEN = 32;
 const MAX_SESSIONS_PER_TENANT = 256;
 
-/** 内存短期上传会话表：sessionTokenHash -> DropSessionGrant */
+export const DEFAULT_COLLEAGUE_PERMISSIONS: ColleaguePermissions = {
+  kbAsk: true,
+  kbDrop: true,
+  kbPropose: true,
+  calendarFreeBusy: true,
+  calendarPropose: true,
+};
+
+/** 内存短期/长期上传会话表：sessionTokenHash -> DropSessionGrant */
 const activeDropSessions = new Map<string, DropSessionGrant>();
 
 export type DropTokensRevokedListener = (ref: TenantRef, revokedTokenIds: ReadonlySet<string>) => void;
@@ -93,16 +163,43 @@ function tokenStorePath(ref: TenantRef): string {
   return assistantPath(ref, "drop-tokens.json");
 }
 
+function persistentSessionStorePath(ref: TenantRef): string {
+  return assistantPath(ref, "drop-sessions.json");
+}
+
 function readTokenFileUnlocked(ref: TenantRef): DropTokenFile {
   const raw = readJson<Partial<DropTokenFile>>(tokenStorePath(ref), { version: 1, items: [] });
   const items = Array.isArray(raw.items)
     ? raw.items.filter((r): r is DropTokenRecord => Boolean(r && typeof r.id === "string"))
     : [];
-  return { version: 1, items };
+  return {
+    version: 1,
+    ...(raw.ownerWx && typeof raw.ownerWx === "object" ? { ownerWx: raw.ownerWx } : {}),
+    items,
+  };
 }
 
 function writeTokenFileUnlocked(ref: TenantRef, data: DropTokenFile) {
   atomicWriteFileSync(tokenStorePath(ref), `${JSON.stringify(data, null, 2)}\n`, {
+    encoding: "utf8",
+    mkdir: true,
+    mode: 0o600,
+  });
+}
+
+function readPersistentSessionsUnlocked(ref: TenantRef): PersistedDropSessionFile {
+  const raw = readJson<Partial<PersistedDropSessionFile>>(persistentSessionStorePath(ref), { version: 1, items: [] });
+  const items = Array.isArray(raw.items)
+    ? raw.items.filter(
+        (r): r is PersistedDropSessionRecord =>
+          Boolean(r && typeof r.sessionTokenHash === "string" && typeof r.tokenId === "string"),
+      )
+    : [];
+  return { version: 1, items };
+}
+
+function writePersistentSessionsUnlocked(ref: TenantRef, data: PersistedDropSessionFile) {
+  atomicWriteFileSync(persistentSessionStorePath(ref), `${JSON.stringify(data, null, 2)}\n`, {
     encoding: "utf8",
     mkdir: true,
     mode: 0o600,
@@ -117,14 +214,89 @@ function hashSessionToken(rawToken: string): string {
   return createHash("sha256").update(rawToken).digest("hex");
 }
 
+export function normalizeColleaguePermissions(raw?: Partial<ColleaguePermissions>): ColleaguePermissions {
+  return {
+    kbAsk: raw?.kbAsk !== undefined ? Boolean(raw.kbAsk) : DEFAULT_COLLEAGUE_PERMISSIONS.kbAsk,
+    kbDrop: raw?.kbDrop !== undefined ? Boolean(raw.kbDrop) : DEFAULT_COLLEAGUE_PERMISSIONS.kbDrop,
+    kbPropose: raw?.kbPropose !== undefined ? Boolean(raw.kbPropose) : DEFAULT_COLLEAGUE_PERMISSIONS.kbPropose,
+    calendarFreeBusy:
+      raw?.calendarFreeBusy !== undefined ? Boolean(raw.calendarFreeBusy) : DEFAULT_COLLEAGUE_PERMISSIONS.calendarFreeBusy,
+    calendarPropose:
+      raw?.calendarPropose !== undefined ? Boolean(raw.calendarPropose) : DEFAULT_COLLEAGUE_PERMISSIONS.calendarPropose,
+  };
+}
+
+/** 归一化提取一条口令记录绑定的所有工作区（向下兼容单字段 workspaceId） */
+export function getTokenWorkspaceBindings(record: DropTokenRecord): DropTokenWorkspaceBinding[] {
+  const seen = new Set<string>();
+  const result: DropTokenWorkspaceBinding[] = [];
+  const rawList = Array.isArray(record.workspaces) && record.workspaces.length > 0
+    ? record.workspaces
+    : [{ workspaceId: record.workspaceId, workspaceKeySnapshot: record.workspaceKeySnapshot }];
+  for (const item of rawList) {
+    if (!item || typeof item.workspaceId !== "string" || !item.workspaceId.trim()) continue;
+    const id = item.workspaceId.trim();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push({
+      workspaceId: id,
+      workspaceKeySnapshot: (item.workspaceKeySnapshot || id).trim(),
+    });
+  }
+  if (result.length === 0 && record.workspaceId) {
+    result.push({
+      workspaceId: record.workspaceId,
+      workspaceKeySnapshot: record.workspaceKeySnapshot || record.workspaceId,
+    });
+  }
+  return result;
+}
+
+/** 解析口令记录下当前所有真实有效且含合法 .jiebo/kb.json 的知识库工作区 */
+export function resolveAuthorizedWorkspacesForToken(
+  host: DropTenantHost,
+  record: DropTokenRecord,
+): AuthorizedWorkspaceGrant[] {
+  const bindings = getTokenWorkspaceBindings(record);
+  const grants: AuthorizedWorkspaceGrant[] = [];
+  for (const b of bindings) {
+    const wsRef = host.resolveWorkspace(b.workspaceId) ?? host.resolveWorkspace(b.workspaceKeySnapshot);
+    if (!wsRef) continue;
+    const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+    if (!kbLoaded.ok) continue;
+    if (grants.some((g) => g.workspaceId === wsRef.workspaceId)) continue;
+    grants.push({
+      workspaceId: wsRef.workspaceId,
+      workspaceKey: wsRef.key,
+      workspacePath: kbLoaded.workspaceRealPath,
+      workspaceTitle: kbLoaded.config.title,
+      kbConfig: kbLoaded.config,
+    });
+  }
+  return grants;
+}
+
+function cloneKbConfig(cfg: KbWorkspaceConfig): KbWorkspaceConfig {
+  return {
+    ...cfg,
+    allowedCategories: [...cfg.allowedCategories],
+    allowedExts: [...cfg.allowedExts],
+  };
+}
+
 function cloneSessionGrant(grant: DropSessionGrant): DropSessionGrant {
   return {
     ...grant,
-    kbConfig: {
-      ...grant.kbConfig,
-      allowedCategories: [...grant.kbConfig.allowedCategories],
-      allowedExts: [...grant.kbConfig.allowedExts],
-    },
+    kbConfig: cloneKbConfig(grant.kbConfig),
+    ...(grant.authorizedWorkspaces
+      ? {
+          authorizedWorkspaces: grant.authorizedWorkspaces.map((w) => ({
+            ...w,
+            kbConfig: cloneKbConfig(w.kbConfig),
+          })),
+        }
+      : {}),
+    ...(grant.permissions ? { permissions: { ...grant.permissions } } : {}),
   };
 }
 
@@ -168,7 +340,6 @@ function sweepRateLimiter(now: number) {
     }
   }
   if (authRateLimiter.size >= MAX_RATE_LIMIT_ENTRIES) {
-    // 仅驱逐未处于 lockedUntil 冷却锁定期的旧条目；绝不驱逐正在锁定的 IP
     for (const [k, state] of authRateLimiter.entries()) {
       if (authRateLimiter.size < MAX_RATE_LIMIT_ENTRIES) break;
       if (state.lockedUntil <= now) {
@@ -201,7 +372,6 @@ function checkAndRecordAttempt(
   if (authRateLimiter.size >= MAX_RATE_LIMIT_ENTRIES) {
     sweepRateLimiter(now);
     if (authRateLimiter.size >= MAX_RATE_LIMIT_ENTRIES) {
-      // 表已被锁定条目占满，直接 fail-closed 拒绝新 IP 尝试
       return { ok: false, retryAfterSec: 60 };
     }
   }
@@ -225,10 +395,6 @@ function recordAuthFailure(tenantId: string, clientIp: string, now = Date.now())
   authRateLimiter.set(key, state);
 }
 
-/**
- * 无状态 Webhook 口令验证通过后撤回本次 attempts 计数（但保留已有的 failures 不清零，防止利用合法口令掩护暴力枚举其他口令），
- * 使得合法自动化脚本/热文件夹每分钟连续投递超过 20 个文件时不会触发 429 自锁。
- */
 function refundStatelessSuccessAttempt(tenantId: string, clientIp: string) {
   const key = rateLimitKey(tenantId, clientIp);
   const state = authRateLimiter.get(key);
@@ -244,54 +410,94 @@ export function resetDropAuthMemoryStateForTest() {
   authRateLimiter.clear();
 }
 
+function validateAndResolveWorkspaces(
+  host: DropTenantHost,
+  workspaceKeysOrIds: string[],
+): { ok: true; bindings: DropTokenWorkspaceBinding[] } | { ok: false; error: string } {
+  const seen = new Set<string>();
+  const bindings: DropTokenWorkspaceBinding[] = [];
+  for (const raw of workspaceKeysOrIds) {
+    const target = raw.trim();
+    if (!target) continue;
+    const wsRef = host.resolveWorkspace(target);
+    if (!wsRef) {
+      return { ok: false, error: `找不到工作区：${target}` };
+    }
+    const kbCheck = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+    if (!kbCheck.ok) {
+      return {
+        ok: false,
+        error: `工作区 "${wsRef.key}" 尚未初始化为知识库工作区（${kbCheck.error}），请先调用 kb_workspace_init 初始化`,
+      };
+    }
+    if (seen.has(wsRef.workspaceId)) continue;
+    seen.add(wsRef.workspaceId);
+    bindings.push({
+      workspaceId: wsRef.workspaceId,
+      workspaceKeySnapshot: wsRef.key,
+    });
+  }
+  if (bindings.length === 0) {
+    return { ok: false, error: "请至少指定一个有效的知识库工作区" };
+  }
+  return { ok: true, bindings };
+}
+
 /**
- * 为指定知识库工作区创建或更新投递口令（在小驳工具中调用）：
- * 1. 校验目标工作区存在且已配置合法的 .jiebo/kb.json；
+ * 为指定知识库工作区创建投递口令/同事通行证（支持一次绑定多个知识库工作区、配置日历与提案权限、关联站内 IM 账号，默认不过期）：
+ * 1. 校验所有目标工作区存在且已配置合法的 .jiebo/kb.json；
  * 2. 口令经 scrypt 派生哈希落盘（0o600 权限），绝不保存明文；
- * 3. 同一租户内不允许两个未吊销口令使用相同的明文 passcode。
+ * 3. 同一租户内不允许两个未吊销口令使用相同的明文 passcode（防撞库越权）。
  */
 export function createDropToken(
   host: DropTenantHost,
   input: {
     workspace: string;
+    workspaces?: string[];
     passcode: string;
     label?: string;
     expiresInDays?: number;
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string;
   },
   now = Date.now(),
 ): { ok: true; record: Omit<DropTokenRecord, "salt" | "codeHash"> } | { ok: false; error: string } {
   const passCheck = isValidPasscodeFormat(input.passcode);
   if (!passCheck.ok) return passCheck;
 
-  const wsRef = host.resolveWorkspace(input.workspace.trim());
-  if (!wsRef) {
-    return { ok: false, error: `找不到工作区：${input.workspace}` };
-  }
-  const kbCheck = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
-  if (!kbCheck.ok) {
-    return {
-      ok: false,
-      error: `工作区 "${wsRef.key}" 尚未初始化为知识库工作区（${kbCheck.error}），请先调用 kb_workspace_init 初始化`,
-    };
-  }
+  const requestedWsList = [
+    input.workspace,
+    ...(Array.isArray(input.workspaces) ? input.workspaces : []),
+  ].filter((x): x is string => typeof x === "string" && Boolean(x.trim()));
 
-  const label = (input.label?.trim() || `${wsRef.key} 投递码`).slice(0, 80);
+  const wsResolved = validateAndResolveWorkspaces(host, requestedWsList);
+  if (!wsResolved.ok) return wsResolved;
+  const primary = wsResolved.bindings[0]!;
+
+  const label = (input.label?.trim() || `${primary.workspaceKeySnapshot} 投递码`).slice(0, 80);
   if (hasControlChars(label)) {
     return { ok: false, error: "备注名称包含非法控制字符" };
   }
 
   let expiresAt: number | undefined;
-  if (input.expiresInDays !== undefined) {
+  if (input.expiresInDays !== undefined && input.expiresInDays !== null) {
     if (
       typeof input.expiresInDays !== "number" ||
       !Number.isFinite(input.expiresInDays) ||
       input.expiresInDays <= 0 ||
       input.expiresInDays > 3650
     ) {
-      return { ok: false, error: "expiresInDays 必须为 1–3650 之间的正数" };
+      return { ok: false, error: "expiresInDays 必须为 1–3650 之间的正数（不传则永久有效不过期）" };
     }
     expiresAt = now + Math.floor(input.expiresInDays * 86_400_000);
   }
+
+  const imTenantId = input.imTenantId?.trim() || undefined;
+  if (imTenantId && hasControlChars(imTenantId)) {
+    return { ok: false, error: "关联的 IM 账号包含非法字符" };
+  }
+
+  const permissions = normalizeColleaguePermissions(input.permissions);
 
   const file = tokenStorePath(host);
   return withFileLockSync(file, () => {
@@ -302,7 +508,10 @@ export function createDropToken(
       const candidateHash = hashPasscode(passCheck.clean, existing.salt);
       const storedBuf = Buffer.from(existing.codeHash, "hex");
       if (storedBuf.length === candidateHash.length && timingSafeEqual(storedBuf, candidateHash)) {
-        return { ok: false as const, error: "该投递口令已存在且处于有效状态，请更换口令或先吊销旧口令" };
+        return {
+          ok: false as const,
+          error: `该投递口令已被「${existing.label}」使用，请直接将该同事授权加入本知识库或更换口令`,
+        };
       }
     }
 
@@ -311,8 +520,11 @@ export function createDropToken(
     const record: DropTokenRecord = {
       id: `dt_${now.toString(36)}${randomBytes(4).toString("hex")}`,
       label,
-      workspaceId: wsRef.workspaceId,
-      workspaceKeySnapshot: wsRef.key,
+      workspaceId: primary.workspaceId,
+      workspaceKeySnapshot: primary.workspaceKeySnapshot,
+      workspaces: wsResolved.bindings,
+      permissions,
+      ...(imTenantId ? { imTenantId } : {}),
       salt,
       codeHash,
       createdAt: now,
@@ -326,33 +538,198 @@ export function createDropToken(
   });
 }
 
-/** 列出当前租户下的投递口令（不含 salt 和 codeHash） */
+/**
+ * 显式更新已有同事通行证（支持增删绑定的知识库工作区、修改权限开关、关联站内 IM 账号、设为永不过期或调整有效期）
+ */
+export function updateDropToken(
+  host: DropTenantHost,
+  input: {
+    tokenId: string;
+    label?: string;
+    addWorkspaces?: string[];
+    removeWorkspaces?: string[];
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string | null;
+    wxBinding?: DropTokenWxBinding | null;
+    neverExpire?: boolean;
+    expiresInDays?: number;
+  },
+  now = Date.now(),
+): { ok: true; record: Omit<DropTokenRecord, "salt" | "codeHash"> } | { ok: false; error: string } {
+  const targetId = input.tokenId.trim();
+  if (!targetId) return { ok: false, error: "请指定要更新的口令 ID" };
+
+  let toAddBindings: DropTokenWorkspaceBinding[] = [];
+  if (Array.isArray(input.addWorkspaces) && input.addWorkspaces.length > 0) {
+    const check = validateAndResolveWorkspaces(host, input.addWorkspaces);
+    if (!check.ok) return check;
+    toAddBindings = check.bindings;
+  }
+
+  const removeSet = new Set<string>();
+  if (Array.isArray(input.removeWorkspaces)) {
+    for (const raw of input.removeWorkspaces) {
+      const clean = raw.trim();
+      if (!clean) continue;
+      const wsRef = host.resolveWorkspace(clean);
+      removeSet.add(wsRef ? wsRef.workspaceId : clean);
+    }
+  }
+
+  const file = tokenStorePath(host);
+  return withFileLockSync(file, () => {
+    const data = readTokenFileUnlocked(host);
+    const record = data.items.find((r) => r.id === targetId && !r.revokedAt);
+    if (!record) {
+      return { ok: false as const, error: `找不到有效的同事口令：${targetId}` };
+    }
+
+    if (input.label !== undefined) {
+      const cleanLabel = input.label.trim().slice(0, 80);
+      if (!cleanLabel || hasControlChars(cleanLabel)) {
+        return { ok: false as const, error: "称呼备注不能为空或含控制字符" };
+      }
+      record.label = cleanLabel;
+    }
+
+    let bindings = getTokenWorkspaceBindings(record);
+    if (removeSet.size > 0) {
+      bindings = bindings.filter(
+        (b) => !removeSet.has(b.workspaceId) && !removeSet.has(b.workspaceKeySnapshot),
+      );
+    }
+    for (const add of toAddBindings) {
+      if (!bindings.some((b) => b.workspaceId === add.workspaceId)) {
+        bindings.push(add);
+      }
+    }
+    if (bindings.length === 0) {
+      return { ok: false as const, error: "至少需要保留一个关联的知识库工作区（如需彻底停用请点全局吊销）" };
+    }
+    record.workspaces = bindings;
+    record.workspaceId = bindings[0]!.workspaceId;
+    record.workspaceKeySnapshot = bindings[0]!.workspaceKeySnapshot;
+
+    if (input.permissions) {
+      record.permissions = normalizeColleaguePermissions({
+        ...normalizeColleaguePermissions(record.permissions),
+        ...input.permissions,
+      });
+    } else if (!record.permissions) {
+      record.permissions = normalizeColleaguePermissions();
+    }
+
+    if (input.imTenantId !== undefined) {
+      if (input.imTenantId === null || input.imTenantId.trim() === "") {
+        delete record.imTenantId;
+      } else {
+        const cleanIm = input.imTenantId.trim();
+        if (hasControlChars(cleanIm)) {
+          return { ok: false as const, error: "IM 账号 ID 非法" };
+        }
+        record.imTenantId = cleanIm;
+      }
+    }
+
+    if (input.wxBinding !== undefined) {
+      if (input.wxBinding === null) {
+        delete record.wxBinding;
+      } else {
+        record.wxBinding = input.wxBinding;
+      }
+    }
+
+    if (input.neverExpire === true) {
+      delete record.expiresAt;
+    } else if (typeof input.expiresInDays === "number" && Number.isFinite(input.expiresInDays) && input.expiresInDays > 0) {
+      record.expiresAt = now + Math.floor(Math.min(3650, input.expiresInDays) * 86_400_000);
+    }
+
+    writeTokenFileUnlocked(host, data);
+    const { salt: _s, codeHash: _h, ...publicRecord } = record;
+    return { ok: true as const, record: publicRecord };
+  });
+}
+
+/** 读取或设置主人（Owner）绑定的个人微信通知通道 */
+export function getOwnerWxBinding(ref: TenantRef): OwnerWxBinding | undefined {
+  return readTokenFileUnlocked(ref).ownerWx;
+}
+
+export function setOwnerWxBinding(ref: TenantRef, binding: OwnerWxBinding | undefined): void {
+  const file = tokenStorePath(ref);
+  withFileLockSync(file, () => {
+    const data = readTokenFileUnlocked(ref);
+    if (binding) data.ownerWx = binding;
+    else delete data.ownerWx;
+    writeTokenFileUnlocked(ref, data);
+  });
+}
+
+/** 按平台内部 IM 租户账号或微信 openId 查找对应的同事通行证记录 */
+export function findColleaguePassByChannel(
+  host: DropTenantHost,
+  query: { imTenantId?: string; wxOpenId?: string },
+  now = Date.now(),
+): { record: DropTokenRecord; workspaces: AuthorizedWorkspaceGrant[]; permissions: ColleaguePermissions } | null {
+  const data = readTokenFileUnlocked(host);
+  for (const item of data.items) {
+    if (item.revokedAt) continue;
+    if (item.expiresAt && item.expiresAt <= now) continue;
+    const matchedIm = Boolean(query.imTenantId && item.imTenantId && item.imTenantId === query.imTenantId.trim());
+    const matchedWx = Boolean(
+      query.wxOpenId &&
+        item.wxBinding?.status === "active" &&
+        item.wxBinding.openId &&
+        item.wxBinding.openId === query.wxOpenId.trim(),
+    );
+    if (!matchedIm && !matchedWx) continue;
+    const workspaces = resolveAuthorizedWorkspacesForToken(host, item);
+    return {
+      record: item,
+      workspaces,
+      permissions: normalizeColleaguePermissions(item.permissions),
+    };
+  }
+  return null;
+}
+
+/** 列出当前租户下的投递口令/同事通行证（不含 salt 和 codeHash） */
 export function listDropTokens(
   host: DropTenantHost,
   opts: { includeRevoked?: boolean; now?: number } = {},
-): Array<{
-  id: string;
-  label: string;
-  workspaceId: string;
-  workspaceKey: string;
-  createdAt: number;
-  expiresAt?: number;
-  revokedAt?: number;
-  active: boolean;
-}> {
+): KbDropTokenItem[] {
   const now = opts.now ?? Date.now();
   const data = readTokenFileUnlocked(host);
   return data.items
     .filter((item) => opts.includeRevoked || !item.revokedAt)
     .map((item) => {
-      const resolvedWs = host.resolveWorkspace(item.workspaceId);
+      const rawBindings = getTokenWorkspaceBindings(item);
+      const workspaces = rawBindings.map((b) => {
+        const resolved = host.resolveWorkspace(b.workspaceId) ?? host.resolveWorkspace(b.workspaceKeySnapshot);
+        return {
+          workspaceId: resolved?.workspaceId ?? b.workspaceId,
+          workspaceKey: resolved?.key ?? b.workspaceKeySnapshot,
+        };
+      });
+      const validGrants = resolveAuthorizedWorkspacesForToken(host, item);
+      const primaryResolved =
+        validGrants[0] ??
+        workspaces[0] ?? {
+          workspaceId: item.workspaceId,
+          workspaceKey: item.workspaceKeySnapshot,
+        };
       const expired = Boolean(item.expiresAt && item.expiresAt <= now);
-      const active = !item.revokedAt && !expired && Boolean(resolvedWs);
+      const active = !item.revokedAt && !expired && validGrants.length > 0;
       return {
         id: item.id,
         label: item.label,
-        workspaceId: item.workspaceId,
-        workspaceKey: resolvedWs?.key ?? item.workspaceKeySnapshot,
+        workspaceId: primaryResolved.workspaceId,
+        workspaceKey: primaryResolved.workspaceKey,
+        workspaces,
+        permissions: normalizeColleaguePermissions(item.permissions),
+        ...(item.imTenantId ? { imTenantId: item.imTenantId } : {}),
+        ...(item.wxBinding ? { wxBinding: item.wxBinding } : {}),
         createdAt: item.createdAt,
         ...(item.expiresAt ? { expiresAt: item.expiresAt } : {}),
         ...(item.revokedAt ? { revokedAt: item.revokedAt } : {}),
@@ -361,49 +738,88 @@ export function listDropTokens(
     });
 }
 
-/** 吊销匹配 id 或 label 的所有未吊销投递口令，并立即清除其派生的所有活跃上传会话 */
+function purgeSessionsForRevokedTokens(host: TenantRef, revokedIdSet: ReadonlySet<string>) {
+  if (revokedIdSet.size === 0) return;
+  for (const [hashKey, sess] of activeDropSessions.entries()) {
+    if (sess.tenantId === host.id && revokedIdSet.has(sess.tokenId)) {
+      activeDropSessions.delete(hashKey);
+    }
+  }
+  const pFile = persistentSessionStorePath(host);
+  try {
+    withFileLockSync(pFile, () => {
+      const pData = readPersistentSessionsUnlocked(host);
+      const before = pData.items.length;
+      pData.items = pData.items.filter((s) => !(s.tenantId === host.id && revokedIdSet.has(s.tokenId)));
+      if (pData.items.length !== before) {
+        writePersistentSessionsUnlocked(host, pData);
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * 吊销匹配 id 或 label 的未吊销投递口令，或将其从单个指定工作区解绑：
+ * - 若传入了 `workspaceId` 且 `globalRevoke !== true`，而该口令还绑定了其他工作区，则仅将该工作区从 `workspaces[]` 移除；
+ * - 若该口令只绑了这一个工作区，或未指定 `workspaceId` / `globalRevoke === true`，则整条口令置 `revokedAt` 并清除所有活跃会话。
+ */
 export function revokeDropToken(
   host: TenantRef,
   idOrLabel: string,
   now = Date.now(),
   workspaceId?: string,
+  opts?: { globalRevoke?: boolean },
 ): { ok: true; revokedIds: string[]; revokedId: string } | { ok: false; error: string } {
   const target = idOrLabel.trim();
   if (!target) return { ok: false, error: "请提供要吊销的口令 id 或 label" };
   const file = tokenStorePath(host);
   const res = withFileLockSync(file, () => {
     const data = readTokenFileUnlocked(host);
-    const matches = data.items.filter(
-      (item) =>
-        !item.revokedAt &&
-        (!workspaceId || item.workspaceId === workspaceId) &&
-        (item.id === target || item.label === target),
-    );
+    const matches = data.items.filter((item) => {
+      if (item.revokedAt) return false;
+      if (item.id !== target && item.label !== target) return false;
+      if (!workspaceId) return true;
+      const bindings = getTokenWorkspaceBindings(item);
+      return bindings.some((b) => b.workspaceId === workspaceId || b.workspaceKeySnapshot === workspaceId);
+    });
     if (matches.length === 0) {
       return { ok: false as const, error: `未找到有效口令：${target}` };
     }
     const revokedIdSet = new Set<string>();
+    const touchedIds: string[] = [];
     for (const item of matches) {
+      const bindings = getTokenWorkspaceBindings(item);
+      if (workspaceId && !opts?.globalRevoke && bindings.length > 1) {
+        const remaining = bindings.filter(
+          (b) => b.workspaceId !== workspaceId && b.workspaceKeySnapshot !== workspaceId,
+        );
+        if (remaining.length > 0) {
+          item.workspaces = remaining;
+          item.workspaceId = remaining[0]!.workspaceId;
+          item.workspaceKeySnapshot = remaining[0]!.workspaceKeySnapshot;
+          touchedIds.push(item.id);
+          continue;
+        }
+      }
       item.revokedAt = now;
       revokedIdSet.add(item.id);
+      touchedIds.push(item.id);
     }
     writeTokenFileUnlocked(host, data);
-
-    for (const [hashKey, sess] of activeDropSessions.entries()) {
-      if (sess.tenantId === host.id && revokedIdSet.has(sess.tokenId)) {
-        activeDropSessions.delete(hashKey);
-      }
-    }
-    const revokedIds = [...revokedIdSet];
-    return { ok: true as const, revokedIds, revokedId: revokedIds[0], revokedIdSet };
+    purgeSessionsForRevokedTokens(host, revokedIdSet);
+    return { ok: true as const, revokedIds: touchedIds, revokedId: touchedIds[0]!, revokedIdSet };
   });
 
   if (res.ok) {
-    for (const listener of revokedListeners) {
-      try {
-        listener(host, res.revokedIdSet);
-      } catch {
-        // ignore listener error
+    if (res.revokedIdSet.size > 0) {
+      for (const listener of revokedListeners) {
+        try {
+          listener(host, res.revokedIdSet);
+        } catch {
+          // ignore listener error
+        }
       }
     }
     return { ok: true, revokedIds: res.revokedIds, revokedId: res.revokedId };
@@ -412,10 +828,7 @@ export function revokeDropToken(
 }
 
 /**
- * 外部同事在网页端输入投递口令进行校验并签发短期上传会话 Token：
- * 1. 先检查 IP 限流冷却（注意：成功认证不会清空该 IP 已有的失败记录，防止持有 A 口令者交替暴力枚举 B 口令）；
- * 2. 遍历有效口令做常量时间哈希比对；
- * 3. 动态解析 workspaceId 当前路径并实时复核 .jiebo/kb.json 合法且位于租户根目录内（若工作区失效统一返回 401 并记失败，不泄露口令已命中）。
+ * 外部同事在网页端输入投递口令进行校验并签发上传会话 Token（默认开启 remember=true 持久化记住登录态，访问过一次后无缝自动登入）
  */
 export function verifyDropPasscodeAndCreateSession(
   host: DropTenantHost,
@@ -423,6 +836,8 @@ export function verifyDropPasscodeAndCreateSession(
     passcode: string;
     submitterName: string;
     clientIp: string;
+    remember?: boolean;
+    preferredWorkspace?: string;
   },
   now = Date.now(),
 ):
@@ -474,19 +889,19 @@ export function verifyDropPasscodeAndCreateSession(
     return { ok: false, status: 401, error: "投递口令无效或已过期" };
   }
 
-  const wsRef = host.resolveWorkspace(matchedRecord.workspaceId);
-  if (!wsRef) {
+  const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, matchedRecord);
+  if (authorizedWorkspaces.length === 0) {
     recordAuthFailure(host.id, input.clientIp, now);
     return { ok: false, status: 401, error: "投递口令无效或已过期" };
   }
 
-  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
-  if (!kbLoaded.ok) {
-    recordAuthFailure(host.id, input.clientIp, now);
-    return { ok: false, status: 401, error: "投递口令无效或已过期" };
-  }
+  const preferred = input.preferredWorkspace?.trim();
+  const activeWs =
+    (preferred
+      ? authorizedWorkspaces.find((w) => w.workspaceId === preferred || w.workspaceKey === preferred)
+      : undefined) ?? authorizedWorkspaces[0]!;
 
-  // 清理过期 session，并按 tokenId（上限 32）与 tenantId（上限 256）分区淘汰最旧会话，绝不影响其他口令或租户
+  // 清理过期 session，并按 tokenId（上限 32）与 tenantId（上限 256）分区淘汰最旧会话
   const evictedGrants: DropSessionGrant[] = [];
   for (const [k, v] of activeDropSessions.entries()) {
     if (v.expiresAt <= now) {
@@ -529,32 +944,77 @@ export function verifyDropPasscodeAndCreateSession(
     }
   }
 
+  const persistent = input.remember !== false;
   const rawSessionToken = `ds_${randomBytes(24).toString("hex")}`;
   const qaSessionId = `qa_${randomBytes(16).toString("hex")}`;
   const normalizedIp = normalizeClientIp(input.clientIp);
+  const tokenHash = hashSessionToken(rawSessionToken);
+  const permissions = normalizeColleaguePermissions(matchedRecord.permissions);
+
   const grant: DropSessionGrant = {
     sessionToken: rawSessionToken,
     qaSessionId,
     tokenId: matchedRecord.id,
     tenantId: host.id,
-    workspaceId: wsRef.workspaceId,
-    workspaceKey: wsRef.key,
-    workspacePath: kbLoaded.workspaceRealPath,
-    workspaceTitle: kbLoaded.config.title,
-    kbConfig: kbLoaded.config,
+    workspaceId: activeWs.workspaceId,
+    workspaceKey: activeWs.workspaceKey,
+    workspacePath: activeWs.workspacePath,
+    workspaceTitle: activeWs.workspaceTitle,
+    kbConfig: activeWs.kbConfig,
+    authorizedWorkspaces,
+    permissions,
     submitterName: submitter.name,
     clientIp: normalizedIp,
+    persistent,
     createdAt: now,
     lastActiveAt: now,
-    expiresAt: now + SESSION_TTL_MS,
+    expiresAt: now + (persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_TTL_MS),
   };
-  activeDropSessions.set(hashSessionToken(rawSessionToken), grant);
+  activeDropSessions.set(tokenHash, grant);
+
+  if (persistent) {
+    const pFile = persistentSessionStorePath(host);
+    try {
+      withFileLockSync(pFile, () => {
+        const pData = readPersistentSessionsUnlocked(host);
+        pData.items.push({
+          sessionTokenHash: tokenHash,
+          qaSessionId,
+          tokenId: matchedRecord.id,
+          tenantId: host.id,
+          activeWorkspaceId: activeWs.workspaceId,
+          submitterName: submitter.name,
+          createdAt: now,
+          lastActiveAt: now,
+        });
+        // 同步执行每个 token 最多 MAX_SESSIONS_PER_TOKEN 与每个租户最多 MAX_SESSIONS_PER_TENANT 的淘汰上限
+        let sameTokenCount = pData.items.filter(
+          (x) => x.tenantId === host.id && x.tokenId === matchedRecord.id,
+        ).length;
+        while (sameTokenCount > MAX_SESSIONS_PER_TOKEN) {
+          const oldestIdx = pData.items.findIndex(
+            (x) => x.tenantId === host.id && x.tokenId === matchedRecord.id,
+          );
+          if (oldestIdx < 0) break;
+          pData.items.splice(oldestIdx, 1);
+          sameTokenCount -= 1;
+        }
+        while (pData.items.length > MAX_SESSIONS_PER_TENANT) {
+          pData.items.shift();
+        }
+        writePersistentSessionsUnlocked(host, pData);
+      });
+    } catch {
+      // ignore disk persistence error
+    }
+  }
 
   return { ok: true, session: cloneSessionGrant(grant) };
 }
 
 /**
- * 校验短期上传会话 Token，并实时复核口令未被吊销、工作区路径仍在租户根内且 kb.json 有效。
+ * 校验上传会话 Token（支持从持久化 drop-sessions.json 自动恢复跨网关重启的记住登录会话），
+ * 并实时复核口令未被吊销、至少有一个绑定工作区有效。
  */
 export function verifyDropSessionToken(
   host: DropTenantHost,
@@ -567,12 +1027,55 @@ export function verifyDropSessionToken(
     return { ok: false, status: 401, error: "未授权或上传会话已失效" };
   }
   const key = hashSessionToken(token);
-  const sess = activeDropSessions.get(key);
+  let sess = activeDropSessions.get(key);
+
+  // 若内存未命中（例如网关进程重启过），尝试从持久化 drop-sessions.json 恢复
+  if (!sess) {
+    const pData = readPersistentSessionsUnlocked(host);
+    const persisted = pData.items.find((x) => x.sessionTokenHash === key && x.tenantId === host.id);
+    if (persisted) {
+      const tokenData = readTokenFileUnlocked(host);
+      const tokenRecord = tokenData.items.find((r) => r.id === persisted.tokenId);
+      if (tokenRecord && !tokenRecord.revokedAt && (!tokenRecord.expiresAt || tokenRecord.expiresAt > now)) {
+        const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, tokenRecord);
+        if (authorizedWorkspaces.length > 0) {
+          const activeWs =
+            authorizedWorkspaces.find((w) => w.workspaceId === persisted.activeWorkspaceId) ??
+            authorizedWorkspaces[0]!;
+          sess = {
+            sessionToken: token,
+            qaSessionId: persisted.qaSessionId,
+            tokenId: tokenRecord.id,
+            tenantId: host.id,
+            workspaceId: activeWs.workspaceId,
+            workspaceKey: activeWs.workspaceKey,
+            workspacePath: activeWs.workspacePath,
+            workspaceTitle: activeWs.workspaceTitle,
+            kbConfig: activeWs.kbConfig,
+            authorizedWorkspaces,
+            permissions: normalizeColleaguePermissions(tokenRecord.permissions),
+            submitterName: persisted.submitterName,
+            ...(expectedClientIp ? { clientIp: normalizeClientIp(expectedClientIp) } : {}),
+            persistent: true,
+            createdAt: persisted.createdAt,
+            lastActiveAt: now,
+            expiresAt: now + PERSISTENT_SESSION_TTL_MS,
+          };
+          activeDropSessions.set(key, sess);
+        }
+      }
+    }
+  }
+
   if (!sess || sess.tenantId !== host.id) {
     return { ok: false, status: 401, error: "未授权或上传会话已失效" };
   }
-  if (expectedClientIp && sess.clientIp && normalizeClientIp(expectedClientIp) !== sess.clientIp) {
+  // 对非持久化的短期会话保持严格 IP 校验；对持久化「记住我」会话允许同事在 Wi-Fi / 蜂窝网络切换后自动无缝续用
+  if (!sess.persistent && expectedClientIp && sess.clientIp && normalizeClientIp(expectedClientIp) !== sess.clientIp) {
     return { ok: false, status: 403, error: "会话客户端网络地址不匹配，请重新输入口令" };
+  }
+  if (sess.persistent && expectedClientIp) {
+    sess.clientIp = normalizeClientIp(expectedClientIp);
   }
 
   const dropAndNotifyEvicted = (grant: DropSessionGrant) => {
@@ -586,7 +1089,8 @@ export function verifyDropSessionToken(
     }
   };
 
-  if (sess.expiresAt <= now || now - sess.createdAt >= SESSION_MAX_LIFETIME_MS) {
+  const maxLife = sess.persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_MAX_LIFETIME_MS;
+  if (sess.expiresAt <= now || now - sess.createdAt >= maxLife) {
     dropAndNotifyEvicted(sess);
     return { ok: false, status: 401, error: "上传会话已过期，请重新输入口令" };
   }
@@ -599,30 +1103,140 @@ export function verifyDropSessionToken(
     return { ok: false, status: 401, error: "投递口令已被吊销或过期" };
   }
 
-  // 实时复核工作区仍然有效（哪怕工作区中途改名也能按稳定 workspaceId 解析到新路径）
-  const wsRef = host.resolveWorkspace(sess.workspaceId);
-  if (!wsRef) {
+  // 实时复核绑定的多工作区列表（只要至少有 1 个工作区有效即不连坐 401）
+  const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, tokenRecord);
+  if (authorizedWorkspaces.length === 0) {
     dropAndNotifyEvicted(sess);
-    return { ok: false, status: 403, error: "目标工作区已不存在" };
-  }
-  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
-  if (!kbLoaded.ok) {
-    dropAndNotifyEvicted(sess);
-    return { ok: false, status: 403, error: "目标工作区知识库配置已失效" };
+    return { ok: false, status: 403, error: "目标工作区已不存在或知识库配置已失效" };
   }
 
-  // 更新最新路径与配置快照，滑动顺延 expiresAt（受限于 createdAt + 2h 封顶），刷新 LRU 顺序，并返回深拷贝副本防外部篡改
-  sess.workspaceKey = wsRef.key;
-  sess.workspacePath = kbLoaded.workspaceRealPath;
-  sess.workspaceTitle = kbLoaded.config.title;
-  sess.kbConfig = kbLoaded.config;
+  const activeWs =
+    authorizedWorkspaces.find((w) => w.workspaceId === sess!.workspaceId) ?? authorizedWorkspaces[0]!;
+
+  // 若原激活工作区已被解绑或失效导致自动回落到另一个工作区，必须清除旧工作区绑定的 batchId 与 receiptHash，防止跨库误投
+  if (sess.workspaceId !== activeWs.workspaceId) {
+    sess.batchId = undefined;
+    sess.receiptHash = undefined;
+  }
+
+  sess.workspaceId = activeWs.workspaceId;
+  sess.workspaceKey = activeWs.workspaceKey;
+  sess.workspacePath = activeWs.workspacePath;
+  sess.workspaceTitle = activeWs.workspaceTitle;
+  sess.kbConfig = activeWs.kbConfig;
+  sess.authorizedWorkspaces = authorizedWorkspaces;
+  sess.permissions = normalizeColleaguePermissions(tokenRecord.permissions);
   sess.lastActiveAt = now;
-  const maxLifetimeDeadline = sess.createdAt + SESSION_MAX_LIFETIME_MS;
-  sess.expiresAt = Math.min(maxLifetimeDeadline, now + SESSION_TTL_MS);
+  const maxLifetimeDeadline = sess.createdAt + maxLife;
+  sess.expiresAt = Math.min(
+    maxLifetimeDeadline,
+    now + (sess.persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_TTL_MS),
+  );
   activeDropSessions.delete(key);
   activeDropSessions.set(key, sess);
 
   return { ok: true, session: cloneSessionGrant(sess) };
+}
+
+/**
+ * 在同一登录会话内切换当前激活的知识库工作区（校验目标工作区在该口令的 authorizedWorkspaces 白名单内）
+ */
+export function switchDropSessionWorkspace(
+  host: DropTenantHost,
+  rawSessionToken: string,
+  targetWorkspaceKeyOrId: string,
+  now = Date.now(),
+):
+  | {
+      ok: true;
+      session: DropSessionGrant;
+      previousWorkspacePath: string;
+      previousBatchId?: string;
+    }
+  | { ok: false; status: 400 | 401 | 403; error: string } {
+  const key = hashSessionToken(rawSessionToken.trim());
+  const preVerifySnap = activeDropSessions.get(key);
+  const previousWorkspacePath = preVerifySnap?.workspacePath || "";
+  const previousBatchId = preVerifySnap?.batchId;
+
+  const verified = verifyDropSessionToken(host, rawSessionToken, now);
+  if (!verified.ok) return verified;
+
+  const target = targetWorkspaceKeyOrId.trim();
+  if (!target) {
+    return { ok: false, status: 400, error: "请指定要切换的知识库工作区" };
+  }
+
+  const sess = activeDropSessions.get(key);
+  if (!sess) {
+    return { ok: false, status: 401, error: "会话不存在或已过期" };
+  }
+
+  const authorized = sess.authorizedWorkspaces ?? [];
+  const matched = authorized.find(
+    (w) => w.workspaceId === target || w.workspaceKey === target || w.workspaceKey.toLowerCase() === target.toLowerCase(),
+  );
+  if (!matched) {
+    return { ok: false, status: 403, error: `您的通行证未获权访问知识库：${target}` };
+  }
+
+  const finalPrevPath = previousWorkspacePath || sess.workspacePath;
+  const finalPrevBatch = previousBatchId || sess.batchId;
+
+  sess.workspaceId = matched.workspaceId;
+  sess.workspaceKey = matched.workspaceKey;
+  sess.workspacePath = matched.workspacePath;
+  sess.workspaceTitle = matched.workspaceTitle;
+  sess.kbConfig = matched.kbConfig;
+  sess.batchId = undefined;
+  sess.receiptHash = undefined;
+  sess.lastActiveAt = now;
+
+  if (sess.persistent) {
+    const pFile = persistentSessionStorePath(host);
+    try {
+      withFileLockSync(pFile, () => {
+        const pData = readPersistentSessionsUnlocked(host);
+        const rec = pData.items.find((x) => x.sessionTokenHash === key && x.tenantId === host.id);
+        if (rec) {
+          rec.activeWorkspaceId = matched.workspaceId;
+          rec.lastActiveAt = now;
+          writePersistentSessionsUnlocked(host, pData);
+        }
+      });
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    ok: true,
+    session: cloneSessionGrant(sess),
+    previousWorkspacePath: finalPrevPath,
+    ...(finalPrevBatch ? { previousBatchId: finalPrevBatch } : {}),
+  };
+}
+
+/** 主动注销单个登录会话（同事点击「退出登录/切换口令」时清除内存与磁盘持久化会话） */
+export function logoutDropSessionToken(host: TenantRef, rawSessionToken: string): boolean {
+  const token = rawSessionToken.trim();
+  if (!token.startsWith("ds_")) return false;
+  const key = hashSessionToken(token);
+  const existed = activeDropSessions.delete(key);
+  const pFile = persistentSessionStorePath(host);
+  try {
+    withFileLockSync(pFile, () => {
+      const pData = readPersistentSessionsUnlocked(host);
+      const before = pData.items.length;
+      pData.items = pData.items.filter((x) => !(x.sessionTokenHash === key && x.tenantId === host.id));
+      if (pData.items.length !== before) {
+        writePersistentSessionsUnlocked(host, pData);
+      }
+    });
+  } catch {
+    // ignore
+  }
+  return existed;
 }
 
 /** 将创建好的 batchId（及可选的 receiptHash）绑定到短期上传会话上，后续该会话只能操作该 batchId */
@@ -637,9 +1251,7 @@ export function bindBatchIdToDropSession(rawSessionToken: string, batchId: strin
 
 /**
  * 供单步 Webhook / CLI / 本地热文件夹同步使用的无状态口令校验：
- * 1. 与网页登录共享同一套 IP 限流器（checkAndRecordAttempt / recordAuthFailure），防暴力枚举；
- * 2. 常量时间 scrypt 比对口令，实时校验口令未吊销/未过期、工作区存在且 .jiebo/kb.json 合法；
- * 3. 返回一次性内存授权对象（不写入 activeDropSessions，避免高频自动化推送挤掉浏览器交互式会话）。
+ * 支持通过 preferredWorkspace 指定多工作区口令下的目标知识库。
  */
 export function verifyDropPasscodeStateless(
   host: DropTenantHost,
@@ -647,6 +1259,7 @@ export function verifyDropPasscodeStateless(
     passcode: string;
     submitterName?: string;
     clientIp: string;
+    preferredWorkspace?: string;
   },
   now = Date.now(),
 ):
@@ -656,7 +1269,7 @@ export function verifyDropPasscodeStateless(
     }
   | {
       ok: false;
-      status: 400 | 401 | 429;
+      status: 400 | 401 | 403 | 429;
       error: string;
       retryAfterSec?: number;
     } {
@@ -700,16 +1313,25 @@ export function verifyDropPasscodeStateless(
     return { ok: false, status: 401, error: "投递口令无效或已过期" };
   }
 
-  const wsRef = host.resolveWorkspace(matchedRecord.workspaceId);
-  if (!wsRef) {
+  const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, matchedRecord);
+  if (authorizedWorkspaces.length === 0) {
     recordAuthFailure(host.id, input.clientIp, now);
     return { ok: false, status: 401, error: "投递口令无效或已过期" };
   }
 
-  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
-  if (!kbLoaded.ok) {
-    recordAuthFailure(host.id, input.clientIp, now);
-    return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  const preferred = input.preferredWorkspace?.trim();
+  let activeWs = authorizedWorkspaces[0]!;
+  if (preferred) {
+    const found = authorizedWorkspaces.find(
+      (w) =>
+        w.workspaceId === preferred ||
+        w.workspaceKey === preferred ||
+        w.workspaceKey.toLowerCase() === preferred.toLowerCase(),
+    );
+    if (!found) {
+      return { ok: false, status: 403, error: `该投递口令无权访问指定工作区：${preferred}` };
+    }
+    activeWs = found;
   }
 
   refundStatelessSuccessAttempt(host.id, input.clientIp);
@@ -719,11 +1341,13 @@ export function verifyDropPasscodeStateless(
     qaSessionId: `qa_wh_${randomBytes(12).toString("hex")}`,
     tokenId: matchedRecord.id,
     tenantId: host.id,
-    workspaceId: wsRef.workspaceId,
-    workspaceKey: wsRef.key,
-    workspacePath: kbLoaded.workspaceRealPath,
-    workspaceTitle: kbLoaded.config.title,
-    kbConfig: kbLoaded.config,
+    workspaceId: activeWs.workspaceId,
+    workspaceKey: activeWs.workspaceKey,
+    workspacePath: activeWs.workspacePath,
+    workspaceTitle: activeWs.workspaceTitle,
+    kbConfig: activeWs.kbConfig,
+    authorizedWorkspaces,
+    permissions: normalizeColleaguePermissions(matchedRecord.permissions),
     submitterName: submitter.name,
     clientIp: normalizeClientIp(input.clientIp),
     createdAt: now,
@@ -747,22 +1371,21 @@ export function reverifyStatelessDropSession(
   if (!tokenRecord || tokenRecord.revokedAt || (tokenRecord.expiresAt && tokenRecord.expiresAt <= now)) {
     return { ok: false, status: 401, error: "投递口令已被吊销或过期" };
   }
-  const wsRef = host.resolveWorkspace(grant.workspaceId);
-  if (!wsRef) {
-    return { ok: false, status: 403, error: "目标工作区已不存在" };
-  }
-  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
-  if (!kbLoaded.ok) {
-    return { ok: false, status: 403, error: "目标工作区知识库配置已失效" };
+  const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, tokenRecord);
+  const matched = authorizedWorkspaces.find((w) => w.workspaceId === grant.workspaceId);
+  if (!matched) {
+    return { ok: false, status: 403, error: "目标工作区已不存在或知识库配置已失效" };
   }
   return {
     ok: true,
     session: cloneSessionGrant({
       ...grant,
-      workspaceKey: wsRef.key,
-      workspacePath: kbLoaded.workspaceRealPath,
-      workspaceTitle: kbLoaded.config.title,
-      kbConfig: kbLoaded.config,
+      workspaceKey: matched.workspaceKey,
+      workspacePath: matched.workspacePath,
+      workspaceTitle: matched.workspaceTitle,
+      kbConfig: matched.kbConfig,
+      authorizedWorkspaces,
+      permissions: normalizeColleaguePermissions(tokenRecord.permissions),
       lastActiveAt: now,
     }),
   };

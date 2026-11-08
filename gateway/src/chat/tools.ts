@@ -200,7 +200,11 @@ export function shellPublishes(name: string, args: unknown) {
 export function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
-  if (/(kb_workspace_init|drop_token_create|drop_token_revoke|kb_ingest_submit)/.test(n)) {
+  if (
+    /(kb_workspace_init|drop_token_create|drop_token_update|drop_token_revoke|kb_ingest_submit|gateway_calendar_event_add|gateway_calendar_event_update|colleague_proposal_decide)/.test(
+      n,
+    )
+  ) {
     return true;
   }
   if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile)/.test(n)) {

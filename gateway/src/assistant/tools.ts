@@ -52,11 +52,35 @@ export type ToolHost = {
     idempotencyKey?: string;
     approval?: DeviceApproval;
   }) => Promise<DeviceResult | { status: string; error: string }>;
-  /** 知识库工作区初始化、外部同事投递口令管理与日常增量数据直投归档 */
+  /** 知识库工作区初始化、外部同事投递口令/通行证管理与日常增量数据直投归档 */
   kbInitWorkspace?: (args: { workspace: string; title: string; categories: string[] }) => unknown;
-  dropTokenCreate?: (args: { workspace: string; passcode: string; label?: string; expiresInDays?: number }) => unknown;
+  dropTokenCreate?: (args: {
+    workspace: string;
+    workspaces?: string[];
+    passcode: string;
+    label?: string;
+    expiresInDays?: number;
+    calendarFreeBusy?: boolean;
+    calendarPropose?: boolean;
+    kbPropose?: boolean;
+    imTenantId?: string;
+  }) => unknown;
+  dropTokenUpdate?: (args: {
+    tokenId: string;
+    label?: string;
+    addWorkspaces?: string[];
+    removeWorkspaces?: string[];
+    calendarFreeBusy?: boolean;
+    calendarPropose?: boolean;
+    kbPropose?: boolean;
+    imTenantId?: string | null;
+    wxOpenId?: string | null;
+    wxStatus?: "pending_owner" | "active" | "revoked";
+    neverExpire?: boolean;
+    expiresInDays?: number;
+  }) => unknown;
   dropTokenList?: (args: { includeRevoked?: boolean }) => unknown;
-  dropTokenRevoke?: (args: { idOrLabel: string }) => unknown;
+  dropTokenRevoke?: (args: { idOrLabel: string; workspace?: string; globalRevoke?: boolean }) => unknown;
   kbIngestSubmit?: (args: {
     workspace: string;
     fileName: string;
@@ -64,6 +88,40 @@ export type ToolHost = {
     note?: string;
     submitterName?: string;
   }) => unknown;
+  /** 双轨日历时段事件管理与同事提案（日历预约/知识库更新）审批 */
+  calendarEventsList?: (args: { fromIso?: string; toIso?: string; includeCancelled?: boolean }) => unknown;
+  calendarEventAdd?: (args: {
+    title: string;
+    startIso: string;
+    endIso?: string;
+    location?: string;
+    notes?: string;
+    visibility?: "public" | "private";
+    remindMinutesBefore?: number;
+    allowConflict?: boolean;
+  }) => unknown;
+  calendarEventUpdate?: (args: {
+    id: string;
+    expectedRev?: number;
+    title?: string;
+    startIso?: string;
+    endIso?: string;
+    location?: string;
+    notes?: string;
+    visibility?: "public" | "private";
+    status?: "confirmed" | "cancelled";
+    remindMinutesBefore?: number | null;
+    allowConflict?: boolean;
+  }) => unknown;
+  colleagueProposalList?: (args: { status?: "pending" | "approved" | "rejected" }) => unknown;
+  colleagueProposalDecide?: (args: {
+    proposalId: string;
+    approve: boolean;
+    decisionNote?: string;
+    overrideStartIso?: string;
+    overrideEndIso?: string;
+    allowConflict?: boolean;
+  }) => Promise<unknown> | unknown;
 };
 
 /** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
@@ -682,26 +740,96 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     }
     if (host.dropTokenCreate) {
       out.drop_token_create = tool(
-        "为已标记为知识库的子工作区创建一个外部同事投递口令（Passcode，6–64 位）。同事可在 /p/<租户>/drop 凭该口令向该工作区只写盲投文档。",
+        "为已标记为知识库的子工作区创建一个同事通行口令（Passcode，6–64 位，默认永久有效不过期）。支持同时绑定多个知识库工作区、开启日历忙闲查询与变更提案权限、关联平台内部 IM 账号。同事在 /p/<租户>/drop 登录一次后会自动记住登录状态无缝登入。",
         {
-          workspace: S("目标知识库工作区名称，如 Fintopia集团"),
-          passcode: S("6–64 位投递口令，如 fintopia-2026"),
-          label: S("可选，口令备注名称，如 财务与风控团队投递码"),
-          expiresInDays: { type: "number", description: "可选，有效天数（1–3650）" },
+          workspace: S("主知识库工作区名称，如 Fintopia集团"),
+          workspaces: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选，同时授权该同事访问的多个知识库工作区名称数组，如 [\"Fintopia集团\", \"sannongxin\"]",
+          },
+          passcode: S("6–64 位投递/通行口令，如 fintopia-2026"),
+          label: S("可选，同事称呼或团队备注，如 王明（风控中心）"),
+          expiresInDays: { type: "number", description: "可选，有效天数（1–3650）；不传则永久不过期" },
+          calendarFreeBusy: { type: "boolean", description: "可选，是否允许查询你的脱敏日历忙闲（默认 true）" },
+          calendarPropose: { type: "boolean", description: "可选，是否允许向你提议预约/修改日历（默认 true）" },
+          kbPropose: { type: "boolean", description: "可选，是否允许在对话中提议修改知识库指标（默认 true）" },
+          imTenantId: S("可选，关联该同事在平台内的 IM 账号 ID（绑定后他在站内单聊 @小驳 免输口令直接可用）"),
         },
         ["workspace", "passcode"],
         (args) =>
           host.dropTokenCreate!({
             workspace: str(args.workspace),
+            workspaces: Array.isArray(args.workspaces)
+              ? args.workspaces.filter((x): x is string => typeof x === "string")
+              : undefined,
             passcode: str(args.passcode),
             label: str(args.label) || undefined,
+            expiresInDays: typeof args.expiresInDays === "number" ? args.expiresInDays : undefined,
+            calendarFreeBusy: typeof args.calendarFreeBusy === "boolean" ? args.calendarFreeBusy : undefined,
+            calendarPropose: typeof args.calendarPropose === "boolean" ? args.calendarPropose : undefined,
+            kbPropose: typeof args.kbPropose === "boolean" ? args.kbPropose : undefined,
+            imTenantId: str(args.imTenantId) || undefined,
+          }),
+      );
+    }
+    if (host.dropTokenUpdate) {
+      out.drop_token_update = tool(
+        "更新已有同事通行口令（支持追加或移除授权的知识库工作区、修改日历/提案权限开关、关联站内 IM 账号、设为永久不过期）。",
+        {
+          tokenId: S("要更新的口令 ID（如 dt_xxx）"),
+          label: S("可选，更新同事称呼备注"),
+          addWorkspaces: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选，要追加授权的知识库工作区名称数组",
+          },
+          removeWorkspaces: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选，要移除授权的知识库工作区名称数组",
+          },
+          calendarFreeBusy: { type: "boolean", description: "可选，是否允许查询脱敏日历忙闲" },
+          calendarPropose: { type: "boolean", description: "可选，是否允许发起日历预约提案" },
+          kbPropose: { type: "boolean", description: "可选，是否允许发起知识库更新提案" },
+          imTenantId: S("可选，关联站内 IM 账号 ID（传空串表示解绑）"),
+          wxOpenId: S("可选，确认并绑定该同事的微信 openId（如 o9cq809L...@im.wechat，传空串表示解绑）"),
+          wxStatus: {
+            type: "string",
+            enum: ["pending_owner", "active", "revoked"],
+            description: "可选，微信绑定状态（确认激活传 'active'）",
+          },
+          neverExpire: { type: "boolean", description: "可选，传 true 设为永久有效不过期" },
+          expiresInDays: { type: "number", description: "可选，重新设置有效天数" },
+        },
+        ["tokenId"],
+        (args) =>
+          host.dropTokenUpdate!({
+            tokenId: str(args.tokenId),
+            label: args.label !== undefined ? str(args.label) : undefined,
+            addWorkspaces: Array.isArray(args.addWorkspaces)
+              ? args.addWorkspaces.filter((x): x is string => typeof x === "string")
+              : undefined,
+            removeWorkspaces: Array.isArray(args.removeWorkspaces)
+              ? args.removeWorkspaces.filter((x): x is string => typeof x === "string")
+              : undefined,
+            calendarFreeBusy: typeof args.calendarFreeBusy === "boolean" ? args.calendarFreeBusy : undefined,
+            calendarPropose: typeof args.calendarPropose === "boolean" ? args.calendarPropose : undefined,
+            kbPropose: typeof args.kbPropose === "boolean" ? args.kbPropose : undefined,
+            imTenantId: args.imTenantId !== undefined ? str(args.imTenantId) : undefined,
+            wxOpenId: args.wxOpenId !== undefined ? str(args.wxOpenId) : undefined,
+            wxStatus:
+              args.wxStatus === "pending_owner" || args.wxStatus === "active" || args.wxStatus === "revoked"
+                ? args.wxStatus
+                : undefined,
+            neverExpire: typeof args.neverExpire === "boolean" ? args.neverExpire : undefined,
             expiresInDays: typeof args.expiresInDays === "number" ? args.expiresInDays : undefined,
           }),
       );
     }
     if (host.dropTokenList) {
       out.drop_token_list = tool(
-        "列出当前配置的外部同事投递口令及绑定的知识库工作区。",
+        "列出当前配置的外部同事投递口令/通行证、绑定的多个知识库工作区、日历权限及 IM/微信绑定状态。",
         { includeRevoked: { type: "boolean", description: "可选，是否包含已吊销的口令" } },
         [],
         (args) => host.dropTokenList!({ includeRevoked: Boolean(args.includeRevoked) }),
@@ -709,10 +837,19 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     }
     if (host.dropTokenRevoke) {
       out.drop_token_revoke = tool(
-        "立即吊销一个外部同事投递口令（按口令 id 或备注 label），并使该口令已签发的活跃上传会话立即失效。",
-        { idOrLabel: S("要吊销的口令 id（如 dt_xxx）或备注名称") },
+        "吊销一个同事投递口令（按 id 或备注 label），或将其从指定工作区移除。全局吊销后该口令的网页记住登录会话、IM 与微信权限立即失效。",
+        {
+          idOrLabel: S("要吊销的口令 id（如 dt_xxx）或备注名称"),
+          workspace: S("可选，仅从该工作区解绑（若不传或 globalRevoke=true 则全局彻底吊销）"),
+          globalRevoke: { type: "boolean", description: "可选，是否强制全局彻底吊销" },
+        },
         ["idOrLabel"],
-        (args) => host.dropTokenRevoke!({ idOrLabel: str(args.idOrLabel) }),
+        (args) =>
+          host.dropTokenRevoke!({
+            idOrLabel: str(args.idOrLabel),
+            workspace: str(args.workspace) || undefined,
+            globalRevoke: typeof args.globalRevoke === "boolean" ? args.globalRevoke : undefined,
+          }),
       );
     }
   }
@@ -743,6 +880,147 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
           submitterName: str(args.submitterName).trim() || (role === "schedule" ? "定时数据巡检" : "助理对话沉淀"),
         }),
     );
+  }
+
+  if (role === "chat") {
+    if (host.calendarEventsList) {
+      out.gateway_calendar_events_list = tool(
+        "查询网关权威日历时段事件（calendar-events.json，已同步进苹果日历 .ics 订阅与同事脱敏忙闲计算）。",
+        {
+          fromIso: S("可选，起始时间（带时区的 ISO 格式或 YYYY-MM-DD）"),
+          toIso: S("可选，结束时间（带时区的 ISO 格式或 YYYY-MM-DD）"),
+          includeCancelled: { type: "boolean", description: "可选，是否包含已取消的日程" },
+        },
+        [],
+        (args) =>
+          host.calendarEventsList!({
+            fromIso: str(args.fromIso) || undefined,
+            toIso: str(args.toIso) || undefined,
+            includeCancelled: Boolean(args.includeCancelled),
+          }),
+      );
+    }
+    if (host.calendarEventAdd) {
+      out.gateway_calendar_event_add = tool(
+        "新增一条网关日历时段事件（自动合并至 /media/cal/<token>.ics 订阅，且提醒只响一次、绝不按年重复；visibility='private' 对同事忙闲查询自动隐藏标题只显示忙碌）。",
+        {
+          title: S("日程标题"),
+          startIso: S("开始时间（如 2026-11-12T15:00:00+08:00 或全天 2026-11-12）"),
+          endIso: S("可选，结束时间（如 2026-11-12T16:00:00+08:00，不传默认 1 小时）"),
+          location: S("可选，地点或会议链接"),
+          notes: S("可选，备注说明"),
+          visibility: {
+            type: "string",
+            enum: ["public", "private"],
+            description: "可选，对同事忙闲查询的可见性：private（默认，仅显示忙碌）或 public（显示标题）",
+          },
+          remindMinutesBefore: {
+            type: "number",
+            description: "可选，提前多少分钟提醒（只响一次，不每年重复）",
+          },
+          allowConflict: {
+            type: "boolean",
+            description: "可选，若与现有日程时间重叠是否仍强制创建（默认 false 先提示冲突）",
+          },
+        },
+        ["title", "startIso"],
+        (args) =>
+          host.calendarEventAdd!({
+            title: str(args.title),
+            startIso: str(args.startIso),
+            endIso: str(args.endIso) || undefined,
+            location: str(args.location) || undefined,
+            notes: str(args.notes) || undefined,
+            visibility: str(args.visibility) === "public" ? "public" : "private",
+            remindMinutesBefore:
+              typeof args.remindMinutesBefore === "number" ? args.remindMinutesBefore : undefined,
+            allowConflict: Boolean(args.allowConflict),
+          }),
+      );
+    }
+    if (host.calendarEventUpdate) {
+      out.gateway_calendar_event_update = tool(
+        "修改或取消一条网关日历时段事件（status='cancelled' 为取消；支持传 expectedRev 进行 CAS 乐观锁校验）。",
+        {
+          id: S("日程 ID（如 ev_xxx）"),
+          expectedRev: { type: "number", description: "可选，期望的当前版本号 rev（CAS 防并发覆盖）" },
+          title: S("可选，新标题"),
+          startIso: S("可选，新开始时间"),
+          endIso: S("可选，新结束时间"),
+          location: S("可选，新地点"),
+          notes: S("可选，新备注"),
+          visibility: { type: "string", enum: ["public", "private"] },
+          status: { type: "string", enum: ["confirmed", "cancelled"] },
+          remindMinutesBefore: { type: "number", description: "可选，修改提前提醒分钟数（传 -1 取消提醒）" },
+          allowConflict: { type: "boolean", description: "可选，是否允许与已有日程重叠" },
+        },
+        ["id"],
+        (args) =>
+          host.calendarEventUpdate!({
+            id: str(args.id),
+            expectedRev: typeof args.expectedRev === "number" ? args.expectedRev : undefined,
+            title: args.title !== undefined ? str(args.title) : undefined,
+            startIso: args.startIso !== undefined ? str(args.startIso) : undefined,
+            endIso: args.endIso !== undefined ? str(args.endIso) : undefined,
+            location: args.location !== undefined ? str(args.location) : undefined,
+            notes: args.notes !== undefined ? str(args.notes) : undefined,
+            visibility:
+              args.visibility === "public" || args.visibility === "private" ? args.visibility : undefined,
+            status:
+              args.status === "confirmed" || args.status === "cancelled" ? args.status : undefined,
+            remindMinutesBefore:
+              typeof args.remindMinutesBefore === "number"
+                ? args.remindMinutesBefore < 0
+                  ? null
+                  : args.remindMinutesBefore
+                : undefined,
+            allowConflict: Boolean(args.allowConflict),
+          }),
+      );
+    }
+    if (host.colleagueProposalList) {
+      out.colleague_proposal_list = tool(
+        "列出同事在知识库门户、站内 IM 或微信中向你提交的「日历预约/改期提案」与「知识库更新提案」。",
+        {
+          status: {
+            type: "string",
+            enum: ["pending", "approved", "rejected"],
+            description: "可选，按状态筛选（默认返回全部，优先看 pending 待审批）",
+          },
+        },
+        [],
+        (args) =>
+          host.colleagueProposalList!({
+            status:
+              args.status === "pending" || args.status === "approved" || args.status === "rejected"
+                ? args.status
+                : undefined,
+          }),
+      );
+    }
+    if (host.colleagueProposalDecide) {
+      out.colleague_proposal_decide = tool(
+        "批准或拒绝一条同事提交的日历变更或知识库更新提案（approve=true 时立即将日程写入日历或将知识更新送入归档队列，并通过 Outbox 自动向同事原通道发送确认回执）。",
+        {
+          proposalId: S("提案 ID（如 prop_xxx）"),
+          approve: { type: "boolean", description: "true 为批准执行，false 为拒绝" },
+          decisionNote: S("可选，附带给同事的审批说明或备注"),
+          overrideStartIso: S("可选，批准日历提案时微调后的开始时间"),
+          overrideEndIso: S("可选，批准日历提案时微调后的结束时间"),
+          allowConflict: { type: "boolean", description: "可选，日历时段有重叠时是否仍强制批准" },
+        },
+        ["proposalId", "approve"],
+        (args) =>
+          host.colleagueProposalDecide!({
+            proposalId: str(args.proposalId),
+            approve: Boolean(args.approve),
+            decisionNote: str(args.decisionNote) || undefined,
+            overrideStartIso: str(args.overrideStartIso) || undefined,
+            overrideEndIso: str(args.overrideEndIso) || undefined,
+            allowConflict: Boolean(args.allowConflict),
+          }),
+      );
+    }
   }
 
   return out;
@@ -829,8 +1107,12 @@ export function assistantToolSpecs(host: ToolHost): ToolSpec[] {
 const WRITE_CATEGORY_ASSISTANT_TOOLS = new Set([
   "kb_workspace_init",
   "drop_token_create",
+  "drop_token_update",
   "drop_token_revoke",
   "kb_ingest_submit",
+  "gateway_calendar_event_add",
+  "gateway_calendar_event_update",
+  "colleague_proposal_decide",
 ]);
 
 export function toolSpecs(defs: Record<string, SDKCustomTool>): ToolSpec[] {

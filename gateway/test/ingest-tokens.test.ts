@@ -10,10 +10,14 @@ import { revokeDropTokenFromUi } from "../src/ingest/hub.ts";
 import { listIngestQueue, submitDirectIngestBatch } from "../src/ingest/queue.ts";
 import {
   createDropToken,
+  findColleaguePassByChannel,
   listDropTokens,
+  logoutDropSessionToken,
   resetDropAuthMemoryStateForTest,
   revokeDropToken,
   setupKbWorkspaceForTenant,
+  switchDropSessionWorkspace,
+  updateDropToken,
   verifyDropPasscodeAndCreateSession,
   verifyDropSessionToken,
   type DropTenantHost,
@@ -438,5 +442,104 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
       { readonly: true },
     );
     assert.equal("kb_ingest_submit" in readonlyDelegateTools, false, "只读后台委派严禁挂载 kb_ingest_submit");
+  });
+
+  test("多工作区绑定、持久化记住登录态（跨网关重启自动恢复）、在线切库、单库解绑 vs 全局吊销、以及 IM/微信身份匹配", () => {
+    const { host, addWorkspace } = makeTestEnv();
+    const fintopia = addWorkspace("Fintopia集团");
+    const sannong = addWorkspace("sannongxin");
+    const keda = addWorkspace("keda");
+
+    for (const ws of ["Fintopia集团", "sannongxin", "keda"]) {
+      assert.equal(
+        setupKbWorkspaceForTenant(host, {
+          workspace: ws,
+          title: `${ws} 知识库`,
+          categories: ["核心资料"],
+        }).ok,
+        true,
+      );
+    }
+
+    // 1. 创建王明的口令，默认不过期，且初始绑定 Fintopia集团
+    const created = createDropToken(host, {
+      workspace: "Fintopia集团",
+      passcode: "wang-multi-2026",
+      label: "王明（风控）",
+      imTenantId: "wangming",
+    });
+    assert.equal(created.ok, true);
+    if (!created.ok) return;
+    assert.equal(created.record.expiresAt, undefined, "默认应永久有效不过期");
+
+    // 2. 通过 updateDropToken 将 sannongxin 追加给王明
+    const updated = updateDropToken(host, {
+      tokenId: created.record.id,
+      addWorkspaces: ["sannongxin"],
+      permissions: { calendarFreeBusy: true, calendarPropose: true },
+    });
+    assert.equal(updated.ok, true);
+    if (!updated.ok) return;
+    assert.equal(updated.record.workspaces?.length, 2);
+
+    // 3. 按 IM 账号 wangming 可直接查到王明的通行证及 2 个授权知识库
+    const byIm = findColleaguePassByChannel(host, { imTenantId: "wangming" });
+    assert.equal(Boolean(byIm), true);
+    assert.equal(byIm?.workspaces.length, 2);
+
+    // 4. 王明登录（默认 remember=true 持久化），拿到 2 个 authorizedWorkspaces
+    const authRes = verifyDropPasscodeAndCreateSession(host, {
+      passcode: "wang-multi-2026",
+      submitterName: "王明",
+      clientIp: "10.0.1.10",
+    });
+    assert.equal(authRes.ok, true);
+    if (!authRes.ok) return;
+    assert.equal(authRes.session.persistent, true);
+    assert.equal(authRes.session.authorizedWorkspaces?.length, 2);
+    assert.equal(authRes.session.workspaceKey, "Fintopia集团");
+
+    // 5. 模拟网关进程重启（清空内存 activeDropSessions）且王明切换了网络 IP -> 仍能从 drop-sessions.json 自动无缝恢复会话
+    resetDropAuthMemoryStateForTest();
+    const recovered = verifyDropSessionToken(host, authRes.session.sessionToken, Date.now() + 7 * 86_400_000, "172.16.0.99");
+    assert.equal(recovered.ok, true, "跨重启且过 7 天、换 IP 后，记住登录会话仍应无缝恢复");
+    if (!recovered.ok) return;
+    assert.equal(recovered.session.submitterName, "王明");
+    assert.equal(recovered.session.authorizedWorkspaces?.length, 2);
+
+    // 6. 在线切换到 sannongxin 知识库（越权切到未授权的 keda 被 403 拦截）
+    const forbiddenSwitch = switchDropSessionWorkspace(host, authRes.session.sessionToken, "keda");
+    assert.equal(forbiddenSwitch.ok, false);
+    if (!forbiddenSwitch.ok) assert.equal(forbiddenSwitch.status, 403);
+
+    const okSwitch = switchDropSessionWorkspace(host, authRes.session.sessionToken, "sannongxin");
+    assert.equal(okSwitch.ok, true);
+    if (okSwitch.ok) {
+      assert.equal(okSwitch.session.workspaceKey, "sannongxin");
+    }
+
+    // 再次模拟重启，验证激活的工作区保持为切换后的 sannongxin
+    resetDropAuthMemoryStateForTest();
+    const recoveredAfterSwitch = verifyDropSessionToken(host, authRes.session.sessionToken);
+    assert.equal(recoveredAfterSwitch.ok, true);
+    if (recoveredAfterSwitch.ok) {
+      assert.equal(recoveredAfterSwitch.session.workspaceKey, "sannongxin");
+    }
+
+    // 7. 单工作区解绑：从 sannongxin 移除王明，王明对 Fintopia集团 的会话依然有效且自动切回 Fintopia集团
+    const singleUnbind = revokeDropToken(host, created.record.id, Date.now(), sannong.workspaceId, {
+      globalRevoke: false,
+    });
+    assert.equal(singleUnbind.ok, true);
+    const afterSingleUnbind = verifyDropSessionToken(host, authRes.session.sessionToken);
+    assert.equal(afterSingleUnbind.ok, true, "仅解绑 1 个工作区时，仍绑有 Fintopia集团 的通行证不应连坐失效");
+    if (afterSingleUnbind.ok) {
+      assert.equal(afterSingleUnbind.session.workspaceId, fintopia.workspaceId);
+      assert.equal(afterSingleUnbind.session.authorizedWorkspaces?.length, 1);
+    }
+
+    // 8. 主动退出登录清除持久化会话
+    assert.equal(logoutDropSessionToken(host, authRes.session.sessionToken), true);
+    assert.equal(verifyDropSessionToken(host, authRes.session.sessionToken).ok, false);
   });
 });

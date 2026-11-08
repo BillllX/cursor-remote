@@ -49,6 +49,14 @@ import { DEFAULT_TZ, listSchedules, recoverSchedules, removeSchedule, seedDefaul
 import { assistantDir, estimateTokens, writeJson, type TenantRef } from "./store.ts";
 import { addTodo, listTodos, removeTodo, setTodoDone, takeDueReminders, updateTodo } from "./todos.ts";
 import { buildIcs, calendarInfo, findByToken, noteFetch, setCalendar } from "./calendar.ts";
+import {
+  addCalendarEvent,
+  listCalendarEvents,
+  parseEventTimeInput,
+  takeDueCalendarEventReminders,
+  updateCalendarEvent,
+} from "./calendarEvents.ts";
+import { decideColleagueProposal, flushProposalReceiptOutbox, listColleagueProposals } from "./proposals.ts";
 import { buildTaskProjection } from "./taskProjection.ts";
 import { buildArtifactProjection } from "./artifactProjection.ts";
 import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } from "./tools.ts";
@@ -62,6 +70,7 @@ import {
   listDropTokens,
   revokeDropToken,
   setupKbWorkspaceForTenant,
+  updateDropToken,
   type DropTenantHost,
 } from "../ingest/tokens.ts";
 import {
@@ -69,6 +78,7 @@ import {
   getKbWorkspaceStatusForUi,
   initKbWorkspaceFromUi,
   revokeDropTokenFromUi,
+  updateDropTokenFromUi,
 } from "../ingest/hub.ts";
 import { submitDirectIngestBatch } from "../ingest/queue.ts";
 import { loadKbWorkspaceConfig } from "../ingest/contract.ts";
@@ -239,7 +249,50 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
         : undefined,
     dropTokenCreate:
       role === "chat" && dropHost
-        ? (args) => createDropToken(dropHost, args)
+        ? (args) =>
+            createDropToken(dropHost, {
+              workspace: args.workspace,
+              workspaces: args.workspaces,
+              passcode: args.passcode,
+              label: args.label,
+              expiresInDays: args.expiresInDays,
+              permissions: {
+                ...(args.calendarFreeBusy !== undefined ? { calendarFreeBusy: args.calendarFreeBusy } : {}),
+                ...(args.calendarPropose !== undefined ? { calendarPropose: args.calendarPropose } : {}),
+                ...(args.kbPropose !== undefined ? { kbPropose: args.kbPropose } : {}),
+              },
+              imTenantId: args.imTenantId,
+            })
+        : undefined,
+    dropTokenUpdate:
+      role === "chat" && dropHost
+        ? (args) =>
+            updateDropToken(dropHost, {
+              tokenId: args.tokenId,
+              label: args.label,
+              addWorkspaces: args.addWorkspaces,
+              removeWorkspaces: args.removeWorkspaces,
+              permissions: {
+                ...(args.calendarFreeBusy !== undefined ? { calendarFreeBusy: args.calendarFreeBusy } : {}),
+                ...(args.calendarPropose !== undefined ? { calendarPropose: args.calendarPropose } : {}),
+                ...(args.kbPropose !== undefined ? { kbPropose: args.kbPropose } : {}),
+              },
+              imTenantId: args.imTenantId,
+              ...(args.wxOpenId !== undefined
+                ? {
+                    wxBinding:
+                      args.wxOpenId === null || args.wxOpenId.trim() === ""
+                        ? null
+                        : {
+                            status: args.wxStatus ?? "active",
+                            openId: args.wxOpenId.trim(),
+                            updatedAt: Date.now(),
+                          },
+                  }
+                : {}),
+              neverExpire: args.neverExpire,
+              expiresInDays: args.expiresInDays,
+            })
         : undefined,
     dropTokenList:
       role === "chat" && dropHost
@@ -247,7 +300,59 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
         : undefined,
     dropTokenRevoke:
       role === "chat"
-        ? (args) => revokeDropToken(ref, args.idOrLabel)
+        ? (args) => {
+            const wsRef = args.workspace && dropHost ? dropHost.resolveWorkspace(args.workspace) : null;
+            return revokeDropToken(ref, args.idOrLabel, Date.now(), wsRef?.workspaceId, {
+              globalRevoke: args.globalRevoke,
+            });
+          }
+        : undefined,
+    calendarEventsList:
+      role === "chat"
+        ? (args) => {
+            let fromMs: number | undefined;
+            let toMs: number | undefined;
+            if (args.fromIso) {
+              const p = parseEventTimeInput(args.fromIso, args.toIso);
+              if (!p.ok) return p;
+              fromMs = p.startAt;
+              if (args.toIso) toMs = p.endAt;
+            }
+            return listCalendarEvents(ref, {
+              fromMs,
+              toMs,
+              includeCancelled: args.includeCancelled,
+            });
+          }
+        : undefined,
+    calendarEventAdd:
+      role === "chat"
+        ? (args) => {
+            const res = addCalendarEvent(ref, args);
+            if (res.ok) void publishState(tenant);
+            return res;
+          }
+        : undefined,
+    calendarEventUpdate:
+      role === "chat"
+        ? (args) => {
+            const { id, ...patch } = args;
+            const res = updateCalendarEvent(ref, id, patch);
+            if (res.ok) void publishState(tenant);
+            return res;
+          }
+        : undefined,
+    colleagueProposalList:
+      role === "chat"
+        ? (args) => listColleagueProposals(ref, { status: args.status })
+        : undefined,
+    colleagueProposalDecide:
+      role === "chat" && dropHost
+        ? async (args) => {
+            const res = await decideColleagueProposal(dropHost, args);
+            if (res.ok) void publishState(tenant);
+            return res;
+          }
         : undefined,
     kbIngestSubmit:
       (role === "chat" || role === "schedule") && dropHost
@@ -1019,13 +1124,60 @@ export async function handleOp(
       const passcode = str(args.passcode);
       const label = str(args.label) || undefined;
       const expiresInDays = typeof args.expiresInDays === "number" ? args.expiresInDays : undefined;
-      const res = createDropTokenFromUi(dropHostFor(tenant), { workspace, passcode, label, expiresInDays });
+      const workspaces = Array.isArray(args.workspaces)
+        ? args.workspaces.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const permissions =
+        args.permissions && typeof args.permissions === "object"
+          ? (args.permissions as Record<string, boolean>)
+          : undefined;
+      const imTenantId = str(args.imTenantId) || undefined;
+      const res = createDropTokenFromUi(dropHostFor(tenant), {
+        workspace,
+        passcode,
+        label,
+        expiresInDays,
+        workspaces,
+        permissions,
+        imTenantId,
+      });
+      return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
+    case "drop_token_update": {
+      const workspace = str(args.workspace);
+      const tokenId = str(args.tokenId);
+      const label = args.label !== undefined ? str(args.label) : undefined;
+      const addWorkspaces = Array.isArray(args.addWorkspaces)
+        ? args.addWorkspaces.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const removeWorkspaces = Array.isArray(args.removeWorkspaces)
+        ? args.removeWorkspaces.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const permissions =
+        args.permissions && typeof args.permissions === "object"
+          ? (args.permissions as Record<string, boolean>)
+          : undefined;
+      const imTenantId = args.imTenantId === null ? null : args.imTenantId !== undefined ? str(args.imTenantId) : undefined;
+      const neverExpire = typeof args.neverExpire === "boolean" ? args.neverExpire : undefined;
+      const expiresInDays = typeof args.expiresInDays === "number" ? args.expiresInDays : undefined;
+      const res = updateDropTokenFromUi(dropHostFor(tenant), {
+        workspace,
+        tokenId,
+        label,
+        addWorkspaces,
+        removeWorkspaces,
+        permissions,
+        imTenantId,
+        neverExpire,
+        expiresInDays,
+      });
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
     }
     case "drop_token_revoke": {
       const workspace = str(args.workspace);
       const idOrLabel = str(args.idOrLabel);
-      const res = revokeDropTokenFromUi(dropHostFor(tenant), { workspace, idOrLabel });
+      const globalRevoke = typeof args.globalRevoke === "boolean" ? args.globalRevoke : undefined;
+      const res = revokeDropTokenFromUi(dropHostFor(tenant), { workspace, idOrLabel, globalRevoke });
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
     }
     default:
@@ -1113,6 +1265,15 @@ function tick() {
     for (const todo of takeDueReminders(ref, now)) {
       postInbox(ref, { kind: "reminder", title: todo.text, body: `待办到点了${todo.due ? `（${todo.due}）` : ""}。`, key: `todo:${todo.id}` });
     }
+    for (const ev of takeDueCalendarEventReminders(ref, now)) {
+      postInbox(ref, {
+        kind: "reminder",
+        title: ev.title,
+        body: `日程即将开始（${ev.startIso}${ev.location ? ` · ${ev.location}` : ""}）。`,
+        key: `calev:${ev.id}:${ev.rev}`,
+      });
+    }
+    void flushProposalReceiptOutbox(dropHostFor(tenant)).catch((err) => log.error("flush proposal outbox", err));
     const runner = runnerFor(tenant);
     tickSchedules(
       ref,

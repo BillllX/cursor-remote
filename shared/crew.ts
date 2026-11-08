@@ -124,7 +124,8 @@ export function pickReviewPanel(lead: string, catalog: string[]): ReviewBinding[
     if (picked.length >= PANEL_CAP) break;
   }
   if (picked.length < 2) {
-    for (const id of unique) {
+    const orderedFallback = [...unique.filter((id) => !isLiteModel(id)), ...unique.filter((id) => isLiteModel(id))];
+    for (const id of orderedFallback) {
       if (picked.some((item) => item.toLowerCase() === id.toLowerCase())) continue;
       picked.push(id);
       if (picked.length >= 2) break;
@@ -149,10 +150,11 @@ export function reviewPanelPrompt(panel: ReviewBinding[]): string {
 
 export function wantsMultiModelReview(text: string): boolean {
   const compact = text.replace(/\s+/g, "");
-  if (!/评审|审查|审一下|审这个|review/i.test(compact)) return false;
-  return /多个模型|不同模型|多模型|各模型|各个模型|几家模型|多家模型|分别评审|共同评审|multiple models|different models/i.test(
-    compact,
-  );
+  if (!/评审|审查|审一下|审这个|审审|review/i.test(compact)) return false;
+  if (/多个模型|不同模型|多模型|各模型|各个模型|几家模型|几个模型|多家模型|分别评审|共同评审/i.test(compact)) {
+    return true;
+  }
+  return /\b(?:multiple|different|several|various)\s+models\b/i.test(text);
 }
 
 export function isCrewRole(value: string | undefined | null): value is CrewRole {

@@ -1176,6 +1176,7 @@ export default function ChatApp() {
             message.op !== "kb_workspace_status" &&
             message.op !== "kb_workspace_init" &&
             message.op !== "drop_token_create" &&
+            message.op !== "drop_token_update" &&
             message.op !== "drop_token_revoke"
           ) {
             setNotice(message.error);

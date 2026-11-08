@@ -1,13 +1,20 @@
 // IM 进程内单例：把 ImService 接到真实的租户名单、连接表和 APNs
+import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { sendApns } from "../assistant/apns.ts";
 import { assistantBadgeCached } from "../assistant/badge.ts";
+import { bindProposalOutboxDispatcher } from "../assistant/proposals.ts";
 import { assistantName } from "../assistant/service.ts";
 import { log } from "../log.ts";
 import { gatewayState } from "../runtime/state.ts";
 import { allTenants, getTenant, mediaSecret, stateDir } from "../tenants.ts";
 import { reply } from "../ws/frame.ts";
+import {
+  bindImSystemReplySender,
+  dispatchProposalReceiptOutbox,
+  handleColleagueDmMention,
+} from "../wx/pushGuard.ts";
 import { ImService, type ImLiveConn } from "./service.ts";
 import { ImStore } from "./store.ts";
 import { workspaceUnread } from "../workspace/agents.ts";
@@ -80,7 +87,34 @@ export function imRuntime() {
         })),
       ];
     },
+    onDmMessage: (ev) => {
+      void handleColleagueDmMention({
+        ownerTenantId: ev.recipientTenantId,
+        senderTenantId: ev.senderTenantId,
+        convId: ev.convId,
+        messageSeq: ev.seq,
+        messageText: ev.text,
+      }).catch((err) => log.error("im dm colleague mention", err));
+    },
   });
+  bindImSystemReplySender(async (input) => {
+    const ack = await service.send(
+      input.fromTenantId,
+      null,
+      {
+        type: "im_send",
+        clientId: `bot_reply_${randomUUID()}`,
+        ...(input.convId ? { convId: input.convId } : {}),
+        to: input.toTenantId,
+        kind: "text",
+        body: { text: input.text },
+        ...(typeof input.replyToSeq === "number" ? { replyTo: input.replyToSeq } : {}),
+      },
+      false,
+    );
+    return { rejected: ack.rejected };
+  });
+  bindProposalOutboxDispatcher(dispatchProposalReceiptOutbox);
   instance = { service, store };
   return instance;
 }

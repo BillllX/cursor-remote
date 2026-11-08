@@ -467,11 +467,34 @@ export type KbHtmlBoardItem = {
   size: number;
 };
 
+export type ColleaguePermissions = {
+  kbAsk: boolean;
+  kbDrop: boolean;
+  kbPropose: boolean;
+  calendarFreeBusy: boolean;
+  calendarPropose: boolean;
+};
+
+export type KbDropTokenWorkspaceItem = {
+  workspaceId: string;
+  workspaceKey: string;
+};
+
 export type KbDropTokenItem = {
   id: string;
   label: string;
   workspaceId: string;
   workspaceKey: string;
+  workspaces?: KbDropTokenWorkspaceItem[];
+  permissions?: ColleaguePermissions;
+  imTenantId?: string;
+  wxBinding?: {
+    status: "pending_owner" | "active" | "revoked";
+    botId?: string;
+    openId?: string;
+    nickname?: string;
+    updatedAt: number;
+  };
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
@@ -487,6 +510,8 @@ export type KbWorkspaceStatusData = {
   maxFileBytes?: number;
   boards: KbHtmlBoardItem[];
   tokens: KbDropTokenItem[];
+  /** 当前租户下已创建但尚未绑定到本知识库的其他有效同事通行证（支持一键勾选授权访问本库） */
+  otherTokens?: KbDropTokenItem[];
   dropPortalPath: string;
 };
 
@@ -518,8 +543,27 @@ export type AssistantOpArgsMap = {
   memory_center_import_rollback: { importId: string };
   kb_workspace_status: { workspace: string };
   kb_workspace_init: { workspace: string; title: string; categories: string[] };
-  drop_token_create: { workspace: string; passcode: string; label?: string; expiresInDays?: number };
-  drop_token_revoke: { workspace: string; idOrLabel: string };
+  drop_token_create: {
+    workspace: string;
+    passcode: string;
+    label?: string;
+    expiresInDays?: number;
+    workspaces?: string[];
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string;
+  };
+  drop_token_update: {
+    workspace: string;
+    tokenId: string;
+    label?: string;
+    addWorkspaces?: string[];
+    removeWorkspaces?: string[];
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string | null;
+    neverExpire?: boolean;
+    expiresInDays?: number;
+  };
+  drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };
 };
 
 export type AssistantOpResultMap = {
@@ -538,6 +582,7 @@ export type AssistantOpResultMap = {
   kb_workspace_status: KbWorkspaceStatusData;
   kb_workspace_init: KbWorkspaceStatusData;
   drop_token_create: KbWorkspaceStatusData;
+  drop_token_update: KbWorkspaceStatusData;
   drop_token_revoke: KbWorkspaceStatusData;
 };
 
@@ -823,6 +868,7 @@ export type AssistantOp =
   | "kb_workspace_status"
   | "kb_workspace_init"
   | "drop_token_create"
+  | "drop_token_update"
   | "drop_token_revoke";
 
 export type AssistantOpTyped = keyof AssistantOpArgsMap;
@@ -851,6 +897,7 @@ type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "kb_workspace_status"
   | "kb_workspace_init"
   | "drop_token_create"
+  | "drop_token_update"
   | "drop_token_revoke"
   ? { op: K; args: AssistantOpArgsMap[K] }
   : K extends "memory_center_get" | "memory_center_activity" | "memory_center_suggestions_get" | "memory_center_export"

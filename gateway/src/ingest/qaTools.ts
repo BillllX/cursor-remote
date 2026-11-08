@@ -1,6 +1,12 @@
 import type { SDKCustomTool, SDKCustomToolContext, SDKJsonValue } from "@cursor/sdk";
 import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { queryColleagueFreeBusy } from "../assistant/calendarEvents.ts";
+import {
+  createCalendarProposal,
+  createKnowledgeUpdateProposal,
+  type ColleagueProposalChannel,
+} from "../assistant/proposals.ts";
 import {
   fileExtension,
   isValidPathSegment,
@@ -293,7 +299,7 @@ export function executeKbQaReadFile(
   workspaceDir: string,
   config: KbWorkspaceConfig,
   relPath: string,
-  opts: { startLine?: number; maxLines?: number; rawHtml?: boolean } = {},
+  opts: { startLine?: number; maxLines?: number; rawHtml?: boolean; citePrefix?: string } = {},
   log?: QaToolExecutionLog,
 ):
   | {
@@ -345,8 +351,11 @@ export function executeKbQaReadFile(
     truncated = true;
   }
 
-  if (log && !log.citedPaths.includes(pathCheck.normalizedRel)) {
-    log.citedPaths.push(pathCheck.normalizedRel);
+  if (log) {
+    const citedItem = opts.citePrefix ? `${opts.citePrefix}:${pathCheck.normalizedRel}` : pathCheck.normalizedRel;
+    if (!log.citedPaths.includes(citedItem)) {
+      log.citedPaths.push(citedItem);
+    }
   }
 
   return {
@@ -361,15 +370,17 @@ export function executeKbQaReadFile(
 }
 
 /**
- * 构建挂载给 QA Runner 的 6 个受控 customTools（运行在网关进程内，每次调用均实时复核口令、工作区与会话关闭状态）
+ * 构建挂载给 QA Runner 的 9 个受控 customTools（运行在网关进程内，每次调用均实时复核口令、工作区与会话关闭状态）
  */
 export function buildQaCustomTools(ctx: {
   host: DropTenantHost;
   getSession: () => { ok: true; session: DropSessionGrant } | { ok: false; error: string };
   executionLog: QaToolExecutionLog;
   isClosed: () => boolean;
+  sourceChannel?: ColleagueProposalChannel;
+  sourcePeerId?: string;
 }): Record<string, SDKCustomTool> {
-  const { host, getSession, executionLog, isClosed } = ctx;
+  const { host, getSession, executionLog, isClosed, sourceChannel = "drop_portal", sourcePeerId } = ctx;
 
   const resolveActiveWorkspaceAndSession = ():
     | {
@@ -436,25 +447,81 @@ export function buildQaCustomTools(ctx: {
     },
   });
 
+  const resolveWorkspaceForTool = (
+    active: { session: DropSessionGrant; workspaceDir: string; config: KbWorkspaceConfig },
+    requestedWorkspace?: string,
+  ): { ok: true; workspaceKey: string; workspaceDir: string; config: KbWorkspaceConfig } | { ok: false; error: string } => {
+    const reqWs = (requestedWorkspace || "").trim();
+    if (!reqWs) {
+      return {
+        ok: true,
+        workspaceKey: active.session.workspaceKey,
+        workspaceDir: active.workspaceDir,
+        config: active.config,
+      };
+    }
+    const authorized = active.session.authorizedWorkspaces ?? [];
+    const matched = authorized.find(
+      (w) =>
+        w.workspaceId === reqWs ||
+        w.workspaceKey === reqWs ||
+        w.workspaceKey.toLowerCase() === reqWs.toLowerCase(),
+    );
+    if (!matched) {
+      return {
+        ok: false,
+        error: `您的通行口令无权访问知识库 "${reqWs}"。当前获权知识库：${
+          authorized.length > 0 ? authorized.map((w) => w.workspaceKey).join("、") : active.session.workspaceKey
+        }`,
+      };
+    }
+    const wsRef = host.resolveWorkspace(matched.workspaceId);
+    if (!wsRef) {
+      return { ok: false, error: `知识库工作区 "${matched.workspaceKey}" 已不存在` };
+    }
+    const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+    if (!kbLoaded.ok) {
+      return { ok: false, error: kbLoaded.error };
+    }
+    return {
+      ok: true,
+      workspaceKey: wsRef.key,
+      workspaceDir: kbLoaded.workspaceRealPath,
+      config: kbLoaded.config,
+    };
+  };
+
   return {
     kb_qa_list_files: makeTool(
-      "列出当前知识库工作区白名单分类目录下的所有 HTML 汇总看板、归档文档清单及《归档说明.md》（只读，自动过滤隐藏系统目录）。",
+      "列出知识库工作区白名单分类目录下的所有 HTML 汇总看板、归档文档清单及《归档说明.md》（只读，自动过滤隐藏系统目录；支持通过 workspace 参数查看该同事获权访问的其他知识库）。",
       {
+        workspace: {
+          type: "string",
+          description: "可选，指定要查看的获权知识库工作区名称（如 'Fintopia集团' 或 'sannongxin'），留空则查看当前激活知识库。",
+        },
         categoryOrDir: {
           type: "string",
           description: "可选，指定要查看的一级分类名或子目录相对路径（如 '资产' 或 '资产/洋钱罐（锋泰、瓴岳）'），留空则列出全部白名单分类。",
         },
       },
       [],
-      (active, args) => executeKbQaListFiles(active.workspaceDir, active.config, str(args.categoryOrDir)),
+      (active, args) => {
+        const ws = resolveWorkspaceForTool(active, str(args.workspace));
+        if (!ws.ok) return ws;
+        return executeKbQaListFiles(ws.workspaceDir, ws.config, str(args.categoryOrDir));
+      },
     ),
 
     kb_qa_search: makeTool(
-      "在当前知识库工作区的 HTML 看板与可读文本档案中按关键词搜索匹配内容片段（只读）。",
+      "在知识库工作区的 HTML 看板与可读文本档案中按关键词搜索匹配内容片段（只读；支持通过 workspace 参数跨获权知识库检索）。",
       {
         query: {
           type: "string",
           description: "要检索的关键词（支持空格分隔多个词，长度 1–200 字符）",
+        },
+        workspace: {
+          type: "string",
+          description: "可选，指定要搜索的获权知识库工作区名称，留空则搜索当前激活知识库。",
         },
         categoryOrDir: {
           type: "string",
@@ -462,16 +529,23 @@ export function buildQaCustomTools(ctx: {
         },
       },
       ["query"],
-      (active, args) =>
-        executeKbQaSearch(active.workspaceDir, active.config, str(args.query), str(args.categoryOrDir)),
+      (active, args) => {
+        const ws = resolveWorkspaceForTool(active, str(args.workspace));
+        if (!ws.ok) return ws;
+        return executeKbQaSearch(ws.workspaceDir, ws.config, str(args.query), str(args.categoryOrDir));
+      },
     ),
 
     kb_qa_read_file: makeTool(
-      "安全只读读取知识库工作区内的同名 .html 看板（默认自动提取结构化纯文本与表格数据）或 .md/.csv/.txt/.json/.sql 文件。",
+      "安全只读读取知识库工作区内的同名 .html 看板（默认自动提取结构化纯文本与表格数据）或 .md/.csv/.txt/.json/.sql 文件（支持通过 workspace 参数读取获权的其他知识库）。",
       {
         relPath: {
           type: "string",
           description: "知识库内的相对路径，如 '资产/资产.html' 或 '归档说明.md'",
+        },
+        workspace: {
+          type: "string",
+          description: "可选，指定文件所属的获权知识库工作区名称，留空则读取当前激活知识库。",
         },
         startLine: {
           type: "number",
@@ -483,17 +557,22 @@ export function buildQaCustomTools(ctx: {
         },
       },
       ["relPath"],
-      (active, args) =>
-        executeKbQaReadFile(
-          active.workspaceDir,
-          active.config,
+      (active, args) => {
+        const ws = resolveWorkspaceForTool(active, str(args.workspace));
+        if (!ws.ok) return ws;
+        const isCrossWs = ws.workspaceKey !== active.session.workspaceKey;
+        return executeKbQaReadFile(
+          ws.workspaceDir,
+          ws.config,
           str(args.relPath),
           {
             startLine: args.startLine !== undefined ? num(args.startLine, 1) : undefined,
             maxLines: args.maxLines !== undefined ? num(args.maxLines, 250) : undefined,
+            ...(isCrossWs ? { citePrefix: ws.workspaceKey } : {}),
           },
           executionLog,
-        ),
+        );
+      },
     ),
 
     kb_qa_temp_list: makeTool(
@@ -616,6 +695,142 @@ export function buildQaCustomTools(ctx: {
           size: writeRes.file.size,
           ext: writeRes.file.ext,
           message: "已写入独立问答临时目录 outputs/，用户可在对话框直接预览或下载，过期将自动清理",
+        };
+      },
+    ),
+
+    colleague_calendar_freebusy: makeTool(
+      "只读查询主人（Owner）在指定时间段内的日历忙闲状态（私人日程已自动脱敏显示为『忙碌』，公开日程显示标题）。当同事询问『周四下午有空吗』『哪天能约会』时调用。",
+      {
+        fromIso: {
+          type: "string",
+          description: "查询起始时间（带时区的 ISO 格式，如 '2026-11-12T09:00:00+08:00' 或日期 '2026-11-12'）",
+        },
+        toIso: {
+          type: "string",
+          description: "查询结束时间（带时区的 ISO 格式，如 '2026-11-12T18:00:00+08:00' 或日期 '2026-11-13'）",
+        },
+      },
+      ["fromIso", "toIso"],
+      (active, args) => {
+        if (active.session.permissions?.calendarFreeBusy === false) {
+          return { ok: false, error: "当前通行口令未开启日历忙闲查询权限" };
+        }
+        return queryColleagueFreeBusy(host, {
+          fromIso: str(args.fromIso),
+          toIso: str(args.toIso),
+        });
+      },
+    ),
+
+    colleague_propose_calendar_change: makeTool(
+      "向主人发起一条『预约会议 / 修改日历安排』申请提案（不直接修改日历，生成审批卡推送给主人，主人点击批准后正式写入日历并通知申请人）。",
+      {
+        title: {
+          type: "string",
+          description: "会议或日程主题，如 '与王明过三农鑫风控方案'",
+        },
+        startIso: {
+          type: "string",
+          description: "开始时间（带时区的 ISO 格式，如 '2026-11-12T15:00:00+08:00'）",
+        },
+        endIso: {
+          type: "string",
+          description: "结束时间（带时区的 ISO 格式，如 '2026-11-12T16:00:00+08:00'）",
+        },
+        kind: {
+          type: "string",
+          enum: ["calendar_book", "calendar_reschedule"],
+          description: "可选，'calendar_book'（新建预约，默认）或 'calendar_reschedule'（改期）",
+        },
+        targetEventId: {
+          type: "string",
+          description: "可选，改期时对应的原日程 ID（如 'ev_xxx'）",
+        },
+        location: {
+          type: "string",
+          description: "可选，会议地点或线上会议号",
+        },
+        notes: {
+          type: "string",
+          description: "可选，议题说明或补充备注",
+        },
+      },
+      ["title", "startIso", "endIso"],
+      (active, args) => {
+        if (active.session.permissions?.calendarPropose === false) {
+          return { ok: false, error: "当前通行口令未开启发起日历预约提案的权限" };
+        }
+        const res = createCalendarProposal(host, {
+          tokenId: active.session.tokenId,
+          proposerName: active.session.submitterName,
+          sourceChannel,
+          sourcePeerId,
+          kind: str(args.kind) === "calendar_reschedule" ? "calendar_reschedule" : "calendar_book",
+          targetEventId: str(args.targetEventId) || undefined,
+          title: str(args.title),
+          startIso: str(args.startIso),
+          endIso: str(args.endIso),
+          location: str(args.location) || undefined,
+          notes: str(args.notes) || undefined,
+        });
+        if (!res.ok) return res;
+        return {
+          ok: true,
+          proposalId: res.proposal.id,
+          status: res.proposal.status,
+          conflictWarning: res.conflictWarning,
+          message: `已为您提交日程申请（提案号：${res.proposal.id}），等待主人批准后将正式写入日历并通知您。`,
+        };
+      },
+    ),
+
+    colleague_propose_knowledge_update: makeTool(
+      "向主人发起一条『更新知识库数据 / 补充业务指标或文档』申请提案（不直接修改知识库，生成审批卡推送给主人，主人点击批准后自动合入知识库并更新 HTML 看板）。",
+      {
+        summary: {
+          type: "string",
+          description: "本次知识库更新的简明摘要，如 '更新洋钱罐11月最新撮合规模为18.5亿'",
+        },
+        content: {
+          type: "string",
+          description: "要合入知识库的完整结构化内容（Markdown 报告或 CSV 数据文本）",
+        },
+        workspace: {
+          type: "string",
+          description: "可选，目标知识库工作区名称（留空则为当前激活知识库）",
+        },
+        fileName: {
+          type: "string",
+          description: "可选，建议归档的文件名（如 '202611_洋钱罐最新撮合补充.md'）",
+        },
+      },
+      ["summary", "content"],
+      (active, args) => {
+        if (active.session.permissions?.kbPropose === false) {
+          return { ok: false, error: "当前通行口令未开启发起知识库更新提案的权限" };
+        }
+        const ws = resolveWorkspaceForTool(active, str(args.workspace));
+        if (!ws.ok) return ws;
+        const authorizedIds = (active.session.authorizedWorkspaces ?? []).map((w) => w.workspaceId);
+        const res = createKnowledgeUpdateProposal(host, {
+          tokenId: active.session.tokenId,
+          proposerName: active.session.submitterName,
+          sourceChannel,
+          sourcePeerId,
+          workspaceKeyOrId: ws.workspaceKey,
+          fileName: str(args.fileName) || undefined,
+          content: str(args.content),
+          summary: str(args.summary),
+          authorizedWorkspaceIds: authorizedIds.length > 0 ? authorizedIds : [active.session.workspaceId],
+        });
+        if (!res.ok) return res;
+        return {
+          ok: true,
+          proposalId: res.proposal.id,
+          status: res.proposal.status,
+          targetWorkspace: ws.workspaceKey,
+          message: `已生成知识库更新提案（提案号：${res.proposal.id}），等待主人批准后将自动归档入库并更新看板。`,
         };
       },
     ),

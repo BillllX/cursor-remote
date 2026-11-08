@@ -20,6 +20,7 @@ export type AssistantOpMessageRest<O extends AssistantOp> = O extends "memory_ce
           | "kb_workspace_status"
           | "kb_workspace_init"
           | "drop_token_create"
+          | "drop_token_update"
           | "drop_token_revoke"
       ? [args: AssistantOpArgsMap[O]]
       : O extends
@@ -92,6 +93,10 @@ export type BuildAssistantOpMessage = {
     args: AssistantOpArgsMap["drop_token_create"],
   ): AssistantOpMessageOf<"drop_token_create">;
   (
+    operation: "drop_token_update",
+    args: AssistantOpArgsMap["drop_token_update"],
+  ): AssistantOpMessageOf<"drop_token_update">;
+  (
     operation: "drop_token_revoke",
     args: AssistantOpArgsMap["drop_token_revoke"],
   ): AssistantOpMessageOf<"drop_token_revoke">;
@@ -113,6 +118,7 @@ export type BuildAssistantOpMessage = {
       | "kb_workspace_status"
       | "kb_workspace_init"
       | "drop_token_create"
+      | "drop_token_update"
       | "drop_token_revoke"
       | AssistantOpNoArgs
     >,
@@ -134,6 +140,7 @@ export type BuildAssistantOpMessage = {
       | "kb_workspace_status"
       | "kb_workspace_init"
       | "drop_token_create"
+      | "drop_token_update"
       | "drop_token_revoke"
       | AssistantOpNoArgs
     >
@@ -185,6 +192,9 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   }
   if (operation === "drop_token_create") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_create"] };
+  }
+  if (operation === "drop_token_update") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_update"] };
   }
   if (operation === "drop_token_revoke") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_revoke"] };

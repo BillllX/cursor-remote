@@ -5,6 +5,7 @@ import { readWorkspaceAgentFile, workspaceAgentById, workspaceAgentDirectories }
 import {
   DEFAULT_ALLOWED_EXTS,
   DEFAULT_MAX_FILE_BYTES,
+  hasControlChars,
   isAllowedUploadFileName,
   safeReadWorkspaceTextFileSync,
   validateKbHtmlRelPath,
@@ -32,13 +33,20 @@ import {
 } from "./staging.ts";
 import {
   bindBatchIdToDropSession,
+  logoutDropSessionToken,
   normalizeClientIp,
+  PERSISTENT_SESSION_TTL_MS,
   reverifyStatelessDropSession,
+  switchDropSessionWorkspace,
+  updateDropToken,
   verifyDropPasscodeAndCreateSession,
   verifyDropPasscodeStateless,
   verifyDropSessionToken,
+  type DropSessionGrant,
   type DropTenantHost,
 } from "./tokens.ts";
+import { postInbox } from "../assistant/inbox.ts";
+import { listColleagueProposals } from "../assistant/proposals.ts";
 import { MAX_KB_HTML_BYTES } from "./tools.ts";
 
 export type DropPortalTenant = {
@@ -48,8 +56,66 @@ export type DropPortalTenant = {
   name?: string;
 };
 
-const PAGE_TICKET_TTL_MS = 2 * 60 * 60 * 1000;
+const PAGE_TICKET_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_PAGE_TICKETS = 2048;
+
+function dropSessionCookieName(tenantId: string): string {
+  return `jiebo_drop_sess_${tenantId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+}
+
+function extractDropSessionCookie(req: IncomingMessage, tenantId: string): string {
+  const cookieHeader = String(req.headers.cookie || "");
+  if (!cookieHeader) return "";
+  const targetName = dropSessionCookieName(tenantId);
+  for (const part of cookieHeader.split(";")) {
+    const eqIdx = part.indexOf("=");
+    if (eqIdx <= 0) continue;
+    const k = part.slice(0, eqIdx).trim();
+    const v = part.slice(eqIdx + 1).trim();
+    if (k === targetName && v.startsWith("ds_")) {
+      return v;
+    }
+  }
+  return "";
+}
+
+function isSecureRequest(req: IncomingMessage): boolean {
+  const proto = String(req.headers["x-forwarded-proto"] || "").trim().toLowerCase();
+  if (proto === "https") return true;
+  if (Boolean((req.socket as { encrypted?: boolean })?.encrypted)) return true;
+  return Boolean(process.env.CURSOR_REMOTE_HTTPS === "1" || process.env.CURSOR_REMOTE_HTTPS === "true");
+}
+
+function buildDropSessionSetCookie(
+  tenantId: string,
+  sessionToken: string,
+  clear = false,
+  secure = false,
+): string {
+  const name = dropSessionCookieName(tenantId);
+  const path = `/p/${tenantId}/drop`;
+  const secureFlag = secure ? "; Secure" : "";
+  if (clear) {
+    return `${name}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Lax${secureFlag}`;
+  }
+  const maxAgeSec = Math.floor(PERSISTENT_SESSION_TTL_MS / 1000);
+  return `${name}=${sessionToken}; Path=${path}; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax${secureFlag}`;
+}
+
+export type DropPortalPreloadedSession = {
+  dropSessionToken: string;
+  qaSessionId: string;
+  batchId: string;
+  receiptToken: string;
+  submitterName: string;
+  workspaceKey: string;
+  workspaceTitle: string;
+  authorizedWorkspaces: Array<{ workspaceId: string; workspaceKey: string; workspaceTitle: string }>;
+  maxFileBytes: number;
+  allowedExts: string[];
+  qaAllowedUploadExts: string[];
+  boards: ReturnType<typeof scanWorkspaceKbHtmlBoards>;
+};
 
 /** 短期页面访问票据：仅在服务端直出 /p/<tenant>/drop HTML 时内嵌下发，绑定 tenantId 与 clientIp */
 const activePageTickets = new Map<string, { tenantId: string; clientIp: string; expiresAt: number }>();
@@ -131,6 +197,7 @@ export function buildDropTenantHost(tenant: DropPortalTenant): DropTenantHost {
 
 function applySandboxedApiCors(res: ServerResponse) {
   res.setHeader("access-control-allow-origin", "null");
+  res.setHeader("access-control-allow-credentials", "true");
   res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
   res.setHeader("access-control-allow-headers", "authorization, content-type, x-drop-receipt, x-drop-page-ticket");
   res.setHeader("access-control-max-age", "600");
@@ -276,10 +343,16 @@ function escapeHtml(text: string): string {
  * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts allow-downloads`）的单文件内联知识库协作与投递门户 HTML 页面。
  * 采用横向双栏紧凑设计：左侧按优先级由上至下依次为「知识库只读问答（核心区）→ 资料上传 → 知识库页面目录」，右侧常驻实时预览工作台。
  */
-export function renderDropPortalHtml(tenantId: string, tenantName?: string, pageTicket = ""): string {
+export function renderDropPortalHtml(
+  tenantId: string,
+  tenantName?: string,
+  pageTicket = "",
+  preloadedSession: DropPortalPreloadedSession | null = null,
+): string {
   const displayTenant = escapeHtml(tenantName || tenantId);
   const basePath = `/p/${encodeURIComponent(tenantId)}/drop`;
   const allowedListText = DEFAULT_ALLOWED_EXTS.join(" / ");
+  const safePreloadedJson = JSON.stringify(preloadedSession).replace(/</g, "\\u003c");
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -685,8 +758,12 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span class="badge">知识库</span>
           <h2 id="ws-title">知识库工作区</h2>
+          <select id="ws-switcher" class="hidden" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px;font-weight:500;"></select>
         </div>
-        <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
+          <button id="btn-logout" type="button" class="btn-ghost" title="退出当前记住的口令或切换其他口令">切换口令 / 退出</button>
+        </div>
       </div>
 
       <div class="split-workbench">
@@ -802,6 +879,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       try { window.opener = null; } catch (_) {}
       const API_BASE = ${JSON.stringify(basePath)} + "/api";
       const PAGE_TICKET = ${JSON.stringify(pageTicket)};
+      const PRELOADED_SESSION = ${safePreloadedJson};
       const submitterEl = document.getElementById("submitter");
       const passcodeEl = document.getElementById("passcode");
       const btnAuth = document.getElementById("btn-auth");
@@ -809,7 +887,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const stepAuth = document.getElementById("step-auth");
       const stepMain = document.getElementById("step-main");
       const wsTitle = document.getElementById("ws-title");
+      const wsSwitcher = document.getElementById("ws-switcher");
       const batchInfo = document.getElementById("batch-info");
+      const btnLogout = document.getElementById("btn-logout");
       const tabBoards = document.getElementById("tab-boards");
       const tabQa = document.getElementById("tab-qa");
       const boardCountEl = document.getElementById("board-count");
@@ -850,6 +930,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       let sessionToken = "";
       let batchId = "";
       let receiptToken = "";
+      let currentSubmitterName = "";
+      let activeWorkspaceKey = "";
+      let authorizedWorkspaces = [];
       let maxFileBytes = ${DEFAULT_MAX_FILE_BYTES};
       let allowedExts = ${JSON.stringify([...DEFAULT_ALLOWED_EXTS])};
       let pendingFiles = [];
@@ -1024,6 +1107,100 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 
       btnRefreshBoards.addEventListener("click", refreshBoardsList);
 
+      function renderWorkspaceSwitcher() {
+        wsSwitcher.innerHTML = "";
+        if (!Array.isArray(authorizedWorkspaces) || authorizedWorkspaces.length <= 1) {
+          wsSwitcher.classList.add("hidden");
+          return;
+        }
+        wsSwitcher.classList.remove("hidden");
+        authorizedWorkspaces.forEach(function(w) {
+          const opt = document.createElement("option");
+          opt.value = w.workspaceKey;
+          opt.textContent = "切换知识库：" + (w.workspaceTitle || w.workspaceKey);
+          if (w.workspaceKey === activeWorkspaceKey) opt.selected = true;
+          wsSwitcher.appendChild(opt);
+        });
+      }
+
+      function applyAuthenticatedSession(data, fallbackSubmitterName) {
+        sessionToken = data.dropSessionToken;
+        batchId = data.batchId;
+        receiptToken = data.receiptToken;
+        currentSubmitterName = data.submitterName || fallbackSubmitterName || currentSubmitterName || "访客";
+        activeWorkspaceKey = data.workspaceKey || "";
+        authorizedWorkspaces = Array.isArray(data.authorizedWorkspaces) ? data.authorizedWorkspaces : [];
+        maxFileBytes = data.maxFileBytes || maxFileBytes;
+        allowedExts = data.allowedExts || allowedExts;
+        wsTitle.textContent = data.workspaceTitle;
+        batchInfo.textContent = "当前投递批次：" + batchId + " · 访客：" + currentSubmitterName;
+        renderWorkspaceSwitcher();
+        stepAuth.classList.add("hidden");
+        stepMain.classList.remove("hidden");
+        pendingFiles = [];
+        renderFiles();
+        activeBoardPath = "";
+        activeBoardTitle = "";
+        viewerFrame.srcdoc = "";
+        renderBoards(data.boards || []);
+        updateQaBoardHint();
+        if (Array.isArray(data.boards) && data.boards.length > 0) {
+          openBoardPreview(data.boards[0].relPath, data.boards[0].title);
+        } else {
+          switchRightPreview("empty");
+        }
+      }
+
+      wsSwitcher.addEventListener("change", async function() {
+        const targetWs = wsSwitcher.value;
+        if (!targetWs || targetWs === activeWorkspaceKey) return;
+        wsSwitcher.disabled = true;
+        try {
+          const res = await fetch(API_BASE + "/switch-workspace", {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({ workspace: targetWs })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            showBox(uploadMsg, data.error || "切换知识库失败", true);
+            renderWorkspaceSwitcher();
+          } else {
+            applyAuthenticatedSession(data, currentSubmitterName);
+          }
+        } catch (e) {
+          showBox(uploadMsg, "网络异常，切换知识库失败", true);
+          renderWorkspaceSwitcher();
+        } finally {
+          wsSwitcher.disabled = false;
+        }
+      });
+
+      btnLogout.addEventListener("click", async function() {
+        try {
+          await fetch(API_BASE + "/logout", {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({})
+          });
+        } catch (_) {}
+        sessionToken = "";
+        batchId = "";
+        receiptToken = "";
+        stepMain.classList.add("hidden");
+        stepAuth.classList.remove("hidden");
+        btnAuth.disabled = false;
+      });
+
       btnAuth.addEventListener("click", async function() {
         const submitterName = submitterEl.value.trim();
         const passcode = passcodeEl.value.trim();
@@ -1035,11 +1212,12 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         try {
           const res = await fetch(API_BASE + "/auth", {
             method: "POST",
+            credentials: "include",
             headers: {
               "content-type": "application/json",
               "x-drop-page-ticket": PAGE_TICKET
             },
-            body: JSON.stringify({ passcode: passcode, submitterName: submitterName })
+            body: JSON.stringify({ passcode: passcode, submitterName: submitterName, remember: true })
           });
           const data = await res.json();
           if (!res.ok || !data.ok) {
@@ -1048,22 +1226,8 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             return;
           }
           passcodeEl.value = "";
-          sessionToken = data.dropSessionToken;
-          batchId = data.batchId;
-          receiptToken = data.receiptToken;
-          maxFileBytes = data.maxFileBytes || maxFileBytes;
-          allowedExts = data.allowedExts || allowedExts;
-          wsTitle.textContent = data.workspaceTitle;
-          batchInfo.textContent = "当前投递批次：" + batchId + " · 访客：" + submitterName;
-          stepAuth.classList.add("hidden");
-          stepMain.classList.remove("hidden");
-          renderBoards(data.boards || []);
-          updateQaBoardHint();
-          if (Array.isArray(data.boards) && data.boards.length > 0) {
-            openBoardPreview(data.boards[0].relPath, data.boards[0].title);
-          } else {
-            switchRightPreview("empty");
-          }
+          authMsg.classList.add("hidden");
+          applyAuthenticatedSession(data, submitterName);
         } catch (e) {
           showBox(authMsg, "网络请求失败，请重试", true);
           btnAuth.disabled = false;
@@ -1494,10 +1658,45 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       });
 
       renderQaTempFiles([]);
+      if (PRELOADED_SESSION && PRELOADED_SESSION.dropSessionToken) {
+        applyAuthenticatedSession(PRELOADED_SESSION, PRELOADED_SESSION.submitterName || "访客");
+      }
     })();
   </script>
 </body>
 </html>`;
+}
+
+function buildPortalSessionResponsePayload(session: DropSessionGrant, batchId: string, receiptToken: string): DropPortalPreloadedSession {
+  const boards = scanWorkspaceKbHtmlBoards(session.workspacePath, session.kbConfig);
+  const authorizedWorkspaces = (session.authorizedWorkspaces && session.authorizedWorkspaces.length > 0
+    ? session.authorizedWorkspaces
+    : [
+        {
+          workspaceId: session.workspaceId,
+          workspaceKey: session.workspaceKey,
+          workspaceTitle: session.workspaceTitle,
+        },
+      ]
+  ).map((w) => ({
+    workspaceId: w.workspaceId,
+    workspaceKey: w.workspaceKey,
+    workspaceTitle: w.workspaceTitle,
+  }));
+  return {
+    dropSessionToken: session.sessionToken,
+    qaSessionId: session.qaSessionId,
+    batchId,
+    receiptToken,
+    submitterName: session.submitterName,
+    workspaceKey: session.workspaceKey,
+    workspaceTitle: session.workspaceTitle,
+    authorizedWorkspaces,
+    maxFileBytes: session.kbConfig.maxFileBytes,
+    allowedExts: session.kbConfig.allowedExts,
+    qaAllowedUploadExts: [...QA_UPLOAD_ALLOWED_EXTS],
+    boards,
+  };
 }
 
 /**
@@ -1516,15 +1715,32 @@ export function handleDropPortalHttp(
   }
 
   const clientIp = extractClientIp(req);
+  const host = buildDropTenantHost(tenant);
 
-  // 1. 静态投递门户 HTML 页面（顶层 CSP: sandbox allow-scripts 唯一不透明源隔离 + 内嵌短期 pageTicket）
+  // 1. 静态投递门户 HTML 页面（顶层 CSP: sandbox allow-scripts 唯一不透明源隔离 + 内嵌 pageTicket + 自动恢复上次记住的登录会话）
   if (pathname === basePrefix || pathname === `${basePrefix}/`) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       sendJson(res, 405, { ok: false, error: "只支持 GET/HEAD" });
       return true;
     }
     const ticket = req.method === "HEAD" ? "" : issuePageTicket(tenant.id, clientIp);
-    sendHtml(res, 200, renderDropPortalHtml(tenant.id, tenant.name, ticket), req.method === "HEAD");
+    let preloadedSession: DropPortalPreloadedSession | null = null;
+    if (req.method === "GET") {
+      const cookieToken = extractDropSessionCookie(req, tenant.id);
+      if (cookieToken) {
+        const verified = verifyDropSessionToken(host, cookieToken, Date.now(), clientIp);
+        if (verified.ok) {
+          if (verified.session.batchId && verified.session.workspacePath) {
+            cleanupAbortedStagingBatchSync(host, verified.session.workspacePath, verified.session.batchId);
+          }
+          const creds = allocateDropBatchCredentials();
+          if (bindBatchIdToDropSession(verified.session.sessionToken, creds.batchId, creds.receiptHash)) {
+            preloadedSession = buildPortalSessionResponsePayload(verified.session, creds.batchId, creds.receiptToken);
+          }
+        }
+      }
+    }
+    sendHtml(res, 200, renderDropPortalHtml(tenant.id, tenant.name, ticket, preloadedSession), req.method === "HEAD");
     return true;
   }
 
@@ -1551,10 +1767,9 @@ export function handleDropPortalHttp(
     }
   }
 
-  const host = buildDropTenantHost(tenant);
   const url = new URL(req.url || "/", "http://127.0.0.1");
 
-  // 2. POST /p/<tenant>/drop/api/auth — 口令校验 + 创建批次并绑定 session + 返回该知识库的 HTML 看板列表
+  // 2. POST /p/<tenant>/drop/api/auth — 口令校验 + 创建批次并绑定 session + 签发持久化记住登录 Cookie + 返回该知识库的 HTML 看板列表
   if (pathname === `${basePrefix}/api/auth`) {
     if (req.method !== "POST") {
       sendJson(res, 405, { ok: false, error: "只支持 POST" });
@@ -1568,11 +1783,16 @@ export function handleDropPortalHttp(
       }
       const passcode = typeof parsed.data.passcode === "string" ? parsed.data.passcode : "";
       const submitterName = typeof parsed.data.submitterName === "string" ? parsed.data.submitterName : "";
+      const remember = parsed.data.remember !== false;
+      const preferredWorkspace =
+        typeof parsed.data.workspace === "string" ? parsed.data.workspace : undefined;
 
       const authRes = verifyDropPasscodeAndCreateSession(host, {
         passcode,
         submitterName,
         clientIp,
+        remember,
+        preferredWorkspace,
       });
       if (!authRes.ok) {
         const extra: Record<string, string> = {};
@@ -1589,23 +1809,87 @@ export function handleDropPortalHttp(
         return;
       }
 
-      const boards = scanWorkspaceKbHtmlBoards(authRes.session.workspacePath, authRes.session.kbConfig);
+      const payload = buildPortalSessionResponsePayload(authRes.session, creds.batchId, creds.receiptToken);
+      const extraHeaders: Record<string, string> = {};
+      if (remember) {
+        extraHeaders["set-cookie"] = buildDropSessionSetCookie(
+          tenant.id,
+          authRes.session.sessionToken,
+          false,
+          isSecureRequest(req),
+        );
+      }
 
-      sendJson(res, 200, {
-        ok: true,
-        dropSessionToken: authRes.session.sessionToken,
-        qaSessionId: authRes.session.qaSessionId,
-        batchId: creds.batchId,
-        receiptToken: creds.receiptToken,
-        workspaceTitle: authRes.session.workspaceTitle,
-        maxFileBytes: authRes.session.kbConfig.maxFileBytes,
-        allowedExts: authRes.session.kbConfig.allowedExts,
-        qaAllowedUploadExts: [...QA_UPLOAD_ALLOWED_EXTS],
-        boards,
-      });
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          ...payload,
+        },
+        extraHeaders,
+      );
     })().catch(() => {
       sendJson(res, 500, { ok: false, error: "处理投递鉴权时出错" });
     });
+    return true;
+  }
+
+  // 2a-1. POST /p/<tenant>/drop/api/switch-workspace — 在同一同事会话下切换当前激活的获权知识库工作区（自动清理旧工作区未提交的 staging batch）
+  if (pathname === `${basePrefix}/api/switch-workspace`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    void (async () => {
+      const parsed = await readJsonBody(req, 16 * 1024);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { ok: false, error: parsed.error });
+        return;
+      }
+      const targetWs = typeof parsed.data.workspace === "string" ? parsed.data.workspace : "";
+      const switched = switchDropSessionWorkspace(host, token, targetWs, Date.now());
+      if (!switched.ok) {
+        sendJson(res, switched.status, { ok: false, error: switched.error });
+        return;
+      }
+      if (switched.previousBatchId && switched.previousWorkspacePath) {
+        cleanupAbortedStagingBatchSync(host, switched.previousWorkspacePath, switched.previousBatchId);
+      }
+      const creds = allocateDropBatchCredentials();
+      if (!bindBatchIdToDropSession(switched.session.sessionToken, creds.batchId, creds.receiptHash)) {
+        sendJson(res, 400, { ok: false, error: "分配新知识库投递批次凭证失败" });
+        return;
+      }
+      const payload = buildPortalSessionResponsePayload(switched.session, creds.batchId, creds.receiptToken);
+      sendJson(res, 200, {
+        ok: true,
+        ...payload,
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "切换知识库工作区时出错" });
+    });
+    return true;
+  }
+
+  // 2a-2. POST /p/<tenant>/drop/api/logout — 主动退出记住的登录会话并清除持久化 Cookie
+  if (pathname === `${basePrefix}/api/logout`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    req.resume();
+    const token = extractBearerToken(req) || extractDropSessionCookie(req, tenant.id);
+    if (token) {
+      logoutDropSessionToken(host, token);
+    }
+    sendJson(
+      res,
+      200,
+      { ok: true },
+      { "set-cookie": buildDropSessionSetCookie(tenant.id, "", true, isSecureRequest(req)) },
+    );
     return true;
   }
 
@@ -1616,7 +1900,7 @@ export function handleDropPortalHttp(
       return true;
     }
     const token = extractBearerToken(req);
-    const sessCheck = verifyDropSessionToken(host, token);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
     if (!sessCheck.ok) {
       sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
       return true;
@@ -1633,7 +1917,7 @@ export function handleDropPortalHttp(
       return true;
     }
     const token = extractBearerToken(req);
-    const sessCheck = verifyDropSessionToken(host, token);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
     if (!sessCheck.ok) {
       sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
       return true;
@@ -1661,17 +1945,22 @@ export function handleDropPortalHttp(
     return true;
   }
 
-  // 3. POST /p/<tenant>/drop/api/upload — 先校验 Bearer Session 与文件名后缀，再逐 chunk 流式写入临时文件并在结束时二次复核会话
+  // 3. POST /p/<tenant>/drop/api/upload — 先校验 Bearer Session 与 kbDrop 权限及文件名后缀，再逐 chunk 流式写入临时文件并在结束时二次复核会话
   if (pathname === `${basePrefix}/api/upload`) {
     if (req.method !== "POST") {
       sendJson(res, 405, { ok: false, error: "只支持 POST" });
       return true;
     }
     const token = extractBearerToken(req);
-    const sessCheck = verifyDropSessionToken(host, token);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
     if (!sessCheck.ok) {
       req.resume();
       sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    if (sessCheck.session.permissions?.kbDrop === false) {
+      req.resume();
+      sendJson(res, 403, { ok: false, error: "当前通行口令未开启资料投递权限" });
       return true;
     }
 
@@ -1697,7 +1986,7 @@ export function handleDropPortalHttp(
         batchId,
         fileName,
         req,
-        reverifySession: () => verifyDropSessionToken(host, token),
+        reverifySession: () => verifyDropSessionToken(host, token, Date.now(), clientIp),
       });
       if (!staged.ok) {
         sendJson(res, staged.status, { ok: false, error: staged.error });
@@ -1724,10 +2013,15 @@ export function handleDropPortalHttp(
       return true;
     }
     const token = extractBearerToken(req);
-    const sessCheck = verifyDropSessionToken(host, token);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
     if (!sessCheck.ok) {
       req.resume();
       sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    if (sessCheck.session.permissions?.kbDrop === false) {
+      req.resume();
+      sendJson(res, 403, { ok: false, error: "当前通行口令未开启资料投递权限" });
       return true;
     }
 
@@ -1737,9 +2031,13 @@ export function handleDropPortalHttp(
         sendJson(res, parsed.status, { ok: false, error: parsed.error });
         return;
       }
-      const rechecked = verifyDropSessionToken(host, token);
+      const rechecked = verifyDropSessionToken(host, token, Date.now(), clientIp);
       if (!rechecked.ok) {
         sendJson(res, rechecked.status, { ok: false, error: rechecked.error });
+        return;
+      }
+      if (rechecked.session.permissions?.kbDrop === false) {
+        sendJson(res, 403, { ok: false, error: "当前通行口令未开启资料投递权限" });
         return;
       }
 
@@ -1802,6 +2100,11 @@ export function handleDropPortalHttp(
       sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
       return true;
     }
+    if (sessCheck.session.permissions?.kbAsk === false) {
+      req.resume();
+      sendJson(res, 403, { ok: false, error: "当前通行口令未开启知识库问答权限" });
+      return true;
+    }
 
     void (async () => {
       const parsed = await readJsonBody(req, 32 * 1024);
@@ -1812,6 +2115,10 @@ export function handleDropPortalHttp(
       const rechecked = verifyDropSessionToken(host, token, Date.now(), clientIp);
       if (!rechecked.ok) {
         sendJson(res, rechecked.status, { ok: false, error: rechecked.error });
+        return;
+      }
+      if (rechecked.session.permissions?.kbAsk === false) {
+        sendJson(res, 403, { ok: false, error: "当前通行口令未开启知识库问答权限" });
         return;
       }
 
@@ -2011,10 +2318,20 @@ export function handleDropPortalHttp(
     }
     const submitterName = querySubmitter || headerSubmitter;
 
+    const queryWorkspace = (url.searchParams.get("workspace") || "").trim();
+    let headerWorkspace = String(req.headers["x-drop-workspace"] || "").trim();
+    try {
+      if (headerWorkspace) headerWorkspace = decodeURIComponent(headerWorkspace);
+    } catch {
+      // keep raw
+    }
+    const preferredWorkspace = queryWorkspace || headerWorkspace || undefined;
+
     const authRes = verifyDropPasscodeStateless(host, {
       passcode,
       submitterName: submitterName || undefined,
       clientIp,
+      preferredWorkspace,
     });
     if (!authRes.ok) {
       req.resume();
@@ -2259,6 +2576,101 @@ export function handleDropPortalHttp(
     })().catch(() => {
       cleanupAbortedStagingBatchSync(host, webhookSession.workspacePath, creds.batchId);
       sendJson(res, 500, { ok: false, error: "处理流式 Webhook 投递时出错" });
+    });
+    return true;
+  }
+
+  // 12. GET /p/<tenant>/drop/api/proposals — 同事查询自己提交的日历预约或知识库更新提案审批状态
+  if (pathname === `${basePrefix}/api/proposals`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const proposals = listColleagueProposals(host, {
+      tokenId: sessCheck.session.tokenId,
+      limit: 30,
+    }).map((p) => ({
+      id: p.id,
+      status: p.status,
+      kind: p.payload.kind,
+      summary: p.payload.kind === "knowledge_update" ? p.payload.summary : p.payload.title,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      appliedResult: p.appliedResult,
+    }));
+    sendJson(res, 200, { ok: true, proposals });
+    return true;
+  }
+
+  // 13. POST /p/<tenant>/drop/api/wx-bind — 同事在登录态下提交自己的微信 openid 申请绑定到当前通行口令（进入 pending_owner 待主人确认）
+  if (pathname === `${basePrefix}/api/wx-bind`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      req.resume();
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    void (async () => {
+      const parsed = await readJsonBody(req, 16 * 1024);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { ok: false, error: parsed.error });
+        return;
+      }
+      const openId = typeof parsed.data.openId === "string" ? parsed.data.openId.trim() : "";
+      const rawNickname = typeof parsed.data.nickname === "string" ? parsed.data.nickname.trim() : "";
+      const nickname = rawNickname.replace(/[\r\n\t]+/g, " ").slice(0, 40);
+      if (
+        !openId ||
+        openId.length > 120 ||
+        hasControlChars(openId) ||
+        !/^[A-Za-z0-9_.@-]+$/.test(openId) ||
+        hasControlChars(nickname)
+      ) {
+        sendJson(res, 400, { ok: false, error: "请提供合法的微信 openid（如 o9cq809L...@im.wechat）且不含非法字符" });
+        return;
+      }
+      const updated = updateDropToken(host, {
+        tokenId: sessCheck.session.tokenId,
+        wxBinding: {
+          status: "pending_owner",
+          openId,
+          ...(nickname ? { nickname } : {}),
+          updatedAt: Date.now(),
+        },
+      });
+      if (!updated.ok) {
+        sendJson(res, 400, { ok: false, error: updated.error });
+        return;
+      }
+      postInbox(host, {
+        kind: "approval",
+        key: `wxbind:${sessCheck.session.tokenId}:${openId}`,
+        title: `[微信通道绑定确认] ${sessCheck.session.submitterName} 请求绑定微信`,
+        body: [
+          `通行口令：${updated.record.label} (${sessCheck.session.tokenId})`,
+          `微信标识：${openId}${nickname ? `（${nickname}）` : ""}`,
+          `操作提示：确认是本人后，可对我说「激活同事 ${sessCheck.session.tokenId} 的微信绑定」。`,
+        ].join("\n"),
+        actionPrompt: `请帮我确认并激活同事口令 ${sessCheck.session.tokenId} 的微信绑定（openId: ${openId}）`,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        status: "pending_owner",
+        message: "已提交微信绑定申请，主人确认后即可在微信内直接收发通知与问答",
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "提交微信绑定申请时出错" });
     });
     return true;
   }

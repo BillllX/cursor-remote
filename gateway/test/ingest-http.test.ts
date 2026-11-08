@@ -8,7 +8,13 @@ import { initKbWorkspaceConfig } from "../src/ingest/contract.ts";
 import { buildDropTenantHost } from "../src/ingest/http.ts";
 import { bindIngestBatchWorker, drainWorkspaceIngestQueue } from "../src/ingest/queue.ts";
 import { normalizeWebhookUrl, scanWatchFolderOnce } from "../src/ingest/watchFolder.ts";
-import { createDropToken, resetDropAuthMemoryStateForTest, revokeDropToken } from "../src/ingest/tokens.ts";
+import {
+  createDropToken,
+  listDropTokens,
+  resetDropAuthMemoryStateForTest,
+  revokeDropToken,
+  updateDropToken,
+} from "../src/ingest/tokens.ts";
 import { createPublishController, type PublishTenant } from "../src/publish.ts";
 import type { Tenant } from "../src/tenants.ts";
 import { readWorkspaceAgentFile } from "../src/workspace/agents.ts";
@@ -469,5 +475,114 @@ describe("Step 4: 网关内置 /p/<tenant>/drop 盲投页面与流式 API (http.
     assert.equal(synced2.uploaded.length, 0);
     assert.deepEqual(synced2.duplicates, ["03_重复内容的尽调报告.md"]);
     assert.equal(existsSync(join(watchDir, "03_重复内容的尽调报告.md")), false);
+  });
+
+  test("记住上次登录状态（HttpOnly Cookie 预加载免登直入）+ 多知识库在线切换并自动清理旧未提交 batch", async () => {
+    const { baseUrl, host, workspaceRoot, wsPath } = await makeHttpTestEnv();
+
+    // 再初始化第二个知识库 sannongxin，并把它绑定到同一张口令上
+    const sannongPath = join(workspaceRoot, "sannongxin");
+    mkdirSync(sannongPath, { recursive: true });
+    initKbWorkspaceConfig(sannongPath, {
+      title: "三农鑫知识库",
+      allowedCategories: ["资产", "客诉"],
+    });
+    const agentFile = readWorkspaceAgentFile({
+      id: "default",
+      stateDir: host.stateDir,
+      workspaceRoot,
+    } as Tenant);
+    if (agentFile.items["sannongxin"]) {
+      agentFile.items["sannongxin"].mainChatId = "chat-sannong";
+    }
+    writeFileSync(join(host.stateDir, "workspace-agent-chats.json"), JSON.stringify(agentFile), "utf8");
+
+    const tokens = listDropTokens(host);
+    assert.equal(tokens.length, 1);
+    updateDropToken(host, {
+      tokenId: tokens[0]!.id,
+      addWorkspaces: ["sannongxin"],
+    });
+
+    // 1. 首次调用 /api/auth 登录，验证返回 Set-Cookie 且包含 2 个 authorizedWorkspaces
+    const authRes = await fetch(`${baseUrl}/p/default/drop/api/auth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ passcode: "fintopia-2026", submitterName: "王明-跨库" }),
+    });
+    assert.equal(authRes.status, 200);
+    const setCookie = authRes.headers.get("set-cookie") || "";
+    assert.equal(setCookie.includes("jiebo_drop_sess_default=ds_"), true);
+    assert.equal(setCookie.includes("HttpOnly"), true);
+    const cookiePair = setCookie.split(";")[0]!;
+
+    const authJson = (await authRes.json()) as {
+      dropSessionToken: string;
+      batchId: string;
+      authorizedWorkspaces: Array<{ workspaceKey: string }>;
+    };
+    assert.equal(authJson.authorizedWorkspaces.length, 2);
+
+    // 2. 先在 Fintopia集团 上传一个文件但【不】点 commit（产生未提交 staging 批次）
+    const upRes = await fetch(
+      `${baseUrl}/p/default/drop/api/upload?batchId=${encodeURIComponent(authJson.batchId)}&fileName=temp.pdf`,
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${authJson.dropSessionToken}` },
+        body: Buffer.from("staged-before-switch"),
+      },
+    );
+    assert.equal(upRes.status, 200);
+    const oldBatchDir = join(wsPath, ".cursor-remote/uploads/inbox", authJson.batchId);
+    assert.equal(existsSync(oldBatchDir), true);
+
+    // 3. 调用 /api/switch-workspace 切换到 sannongxin，验证旧未提交 batch 目录被自动清理，且返回新工作区信息
+    const switchRes = await fetch(`${baseUrl}/p/default/drop/api/switch-workspace`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${authJson.dropSessionToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ workspace: "sannongxin" }),
+    });
+    assert.equal(switchRes.status, 200);
+    const switchJson = (await switchRes.json()) as {
+      ok: boolean;
+      workspaceKey: string;
+      workspaceTitle: string;
+      batchId: string;
+    };
+    assert.equal(switchJson.ok, true);
+    assert.equal(switchJson.workspaceKey, "sannongxin");
+    assert.equal(switchJson.workspaceTitle, "三农鑫知识库");
+    assert.equal(existsSync(oldBatchDir), false, "切库时未提交的旧工作区暂存批次应自动清理防串库");
+
+    // 4. 模拟网关重启清空内存，同事再次打开 GET /p/default/drop（带上次的 Cookie）-> 页面直接内嵌 PRELOADED_SESSION 免登进入
+    resetDropAuthMemoryStateForTest();
+    const revisitRes = await fetch(`${baseUrl}/p/default/drop`, {
+      headers: { cookie: cookiePair },
+    });
+    assert.equal(revisitRes.status, 200);
+    const revisitHtml = await revisitRes.text();
+    assert.equal(revisitHtml.includes(`"submitterName":"王明-跨库"`), true);
+    assert.equal(revisitHtml.includes(`"workspaceKey":"sannongxin"`), true);
+
+    // 5. 点击退出登录 /api/logout -> 清除 Cookie 与持久化会话，再次访问恢复为未登录状态
+    const logoutRes = await fetch(`${baseUrl}/p/default/drop/api/logout`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${authJson.dropSessionToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    assert.equal(logoutRes.status, 200);
+    assert.equal((logoutRes.headers.get("set-cookie") || "").includes("Max-Age=0"), true);
+
+    const afterLogoutRes = await fetch(`${baseUrl}/p/default/drop`, {
+      headers: { cookie: cookiePair },
+    });
+    const afterLogoutHtml = await afterLogoutRes.text();
+    assert.equal(afterLogoutHtml.includes("const PRELOADED_SESSION = null;"), true);
   });
 });

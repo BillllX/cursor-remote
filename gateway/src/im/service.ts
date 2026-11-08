@@ -71,6 +71,14 @@ export type ImDeps = {
   workspaceBadge?: (tenantId: string) => Promise<number | undefined>;
   /** 第一版群 Actor 由服务端的助理和工作区注册表生成。 */
   actors?: (ownerTenantId: string) => ActorRef[];
+  /** 单聊新消息落盘后的回调钩子（例如用于识别同事在单聊中 @小驳 触发受控分身代答） */
+  onDmMessage?: (event: {
+    convId: string;
+    senderTenantId: string;
+    recipientTenantId: string;
+    seq: number;
+    text: string;
+  }) => void;
   now?: () => number;
 };
 
@@ -777,6 +785,26 @@ export class ImService {
       for (const recipient of conv.meta.members) {
         if (!isOwnMessage(row.author ?? tenantAuthor(row.from), recipient)) {
           await this.maybePush(conv, recipient, row);
+        }
+      }
+      if (
+        conv.meta.kind !== "group" &&
+        peer &&
+        row.kind === "text" &&
+        row.body &&
+        "text" in row.body &&
+        this.deps.onDmMessage
+      ) {
+        try {
+          this.deps.onDmMessage({
+            convId,
+            senderTenantId: me.id,
+            recipientTenantId: peer.id,
+            seq: row.seq,
+            text: String(row.body.text || ""),
+          });
+        } catch (err) {
+          log.error("im onDmMessage", err);
         }
       }
     }

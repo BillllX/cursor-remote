@@ -269,6 +269,13 @@ export async function handlePrompt(
   // 历史由客户端随 prompt 上行（iOS 是会话内容权威源）
   const external = externalEarly;
   if (external && external.provider.tools) {
+    if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
+      send(ws, {
+        type: "text-delta",
+        chatId: slot.chatId,
+        text: "当前模型是第三方直连模型，不能分别调用目录里的其他模型。下面只由这一个模型回答。\n\n",
+      });
+    }
     await runNativeChat(ws, conn, slot, external, {
       prompt,
       userText: text.trim(),
@@ -561,7 +568,7 @@ export async function handlePrompt(
         });
         prompt += "\n\n目录里除了当前模型，没有足够的其他模型可以并行评审。直接告诉用户，不要用同一个模型假装多家。";
       } else if (apiKey) {
-        prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch);
+        prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch, { files });
         if (slot.finished || slot.epoch !== epoch) return;
       }
     }

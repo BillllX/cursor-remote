@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import type { KbHtmlBoardItem, KbWorkspaceStatusData } from "../../../shared/protocol.ts";
+import type { ColleaguePermissions, KbHtmlBoardItem, KbWorkspaceStatusData } from "../../../shared/protocol.ts";
 import {
   ensureSafePathInWorkspace,
   loadKbWorkspaceConfig,
@@ -12,6 +12,7 @@ import {
   listDropTokens,
   revokeDropToken,
   setupKbWorkspaceForTenant,
+  updateDropToken,
   type DropTenantHost,
 } from "./tokens.ts";
 
@@ -179,7 +180,18 @@ export function getKbWorkspaceStatusForUi(
 
   const boards = scanWorkspaceKbHtmlBoards(kbLoaded.workspaceRealPath, kbLoaded.config);
   const allTokens = listDropTokens(host, { includeRevoked: false });
-  const wsTokens = allTokens.filter((t) => t.workspaceId === wsRef.workspaceId);
+  const wsTokens = allTokens.filter((t) =>
+    t.workspaces
+      ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId)
+      : t.workspaceId === wsRef.workspaceId,
+  );
+  const otherTokens = allTokens.filter(
+    (t) =>
+      t.active &&
+      !(t.workspaces
+        ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId)
+        : t.workspaceId === wsRef.workspaceId),
+  );
 
   return {
     ok: true,
@@ -192,6 +204,7 @@ export function getKbWorkspaceStatusForUi(
       maxFileBytes: kbLoaded.config.maxFileBytes,
       boards,
       tokens: wsTokens,
+      otherTokens,
       dropPortalPath,
     },
   };
@@ -217,10 +230,32 @@ export function createDropTokenFromUi(
     passcode: string;
     label?: string;
     expiresInDays?: number;
+    workspaces?: string[];
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string;
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
   const created = createDropToken(host, input);
   if (!created.ok) return created;
+  return getKbWorkspaceStatusForUi(host, input.workspace);
+}
+
+export function updateDropTokenFromUi(
+  host: DropTenantHost,
+  input: {
+    workspace: string;
+    tokenId: string;
+    label?: string;
+    addWorkspaces?: string[];
+    removeWorkspaces?: string[];
+    permissions?: Partial<ColleaguePermissions>;
+    imTenantId?: string | null;
+    neverExpire?: boolean;
+    expiresInDays?: number;
+  },
+): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
+  const updated = updateDropToken(host, input);
+  if (!updated.ok) return updated;
   return getKbWorkspaceStatusForUi(host, input.workspace);
 }
 
@@ -229,11 +264,14 @@ export function revokeDropTokenFromUi(
   input: {
     workspace: string;
     idOrLabel: string;
+    globalRevoke?: boolean;
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
   const wsRef = host.resolveWorkspace(input.workspace);
   if (!wsRef) return { ok: false, error: `找不到子工作区：${input.workspace}` };
-  const revoked = revokeDropToken(host, input.idOrLabel, Date.now(), wsRef.workspaceId);
+  const revoked = revokeDropToken(host, input.idOrLabel, Date.now(), wsRef.workspaceId, {
+    globalRevoke: input.globalRevoke,
+  });
   if (!revoked.ok) return revoked;
   return getKbWorkspaceStatusForUi(host, input.workspace);
 }

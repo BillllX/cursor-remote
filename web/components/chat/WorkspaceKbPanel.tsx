@@ -32,10 +32,12 @@ export function WorkspaceKbPanel({
   const [kbTitleDraft, setKbTitleDraft] = useState("");
   const [kbCategoriesDraft, setKbCategoriesDraft] = useState("");
 
-  // 新增投递口令表单
+  // 新增投递口令表单（默认留空表示永久不过期）
   const [passcodeDraft, setPasscodeDraft] = useState("");
   const [labelDraft, setLabelDraft] = useState("");
-  const [expiresDraft, setExpiresDraft] = useState("90");
+  const [expiresDraft, setExpiresDraft] = useState("");
+  const [calFreeBusyDraft, setCalFreeBusyDraft] = useState(true);
+  const [imTenantIdDraft, setImTenantIdDraft] = useState("");
   const pendingReqIdsRef = useRef(new Set<string>());
 
   const sendKbOperation = useCallback(
@@ -66,6 +68,7 @@ export function WorkspaceKbPanel({
         op !== "kb_workspace_status" &&
         op !== "kb_workspace_init" &&
         op !== "drop_token_create" &&
+        op !== "drop_token_update" &&
         op !== "drop_token_revoke"
       ) {
         continue;
@@ -87,9 +90,12 @@ export function WorkspaceKbPanel({
       } else if (op === "drop_token_create") {
         setPasscodeDraft("");
         setLabelDraft("");
-        setNotice("已创建投递口令");
+        setImTenantIdDraft("");
+        setNotice("已创建同事通行口令（默认永久有效）");
+      } else if (op === "drop_token_update") {
+        setNotice("已更新同事通行权限配置");
       } else if (op === "drop_token_revoke") {
-        setNotice("已吊销投递口令");
+        setNotice("已更新/吊销投递口令");
       }
     }
     if (consumed) setLoading(pendingReqIdsRef.current.size > 0);
@@ -120,25 +126,66 @@ export function WorkspaceKbPanel({
       setErrorText("投递口令长度需在 6–64 位之间");
       return;
     }
-    const days = Number(expiresDraft);
+    const rawExp = expiresDraft.trim();
+    let expiresInDays: number | undefined;
+    if (rawExp) {
+      const days = Number(rawExp);
+      if (!Number.isFinite(days) || days <= 0 || days > 3650) {
+        setErrorText("有效天数需为 1–3650 之间的正数（留空表示永久不过期）");
+        return;
+      }
+      expiresInDays = days;
+    }
     sendKbOperation(
       buildAssistantOpMessage("drop_token_create", {
         workspace: workspaceKey,
         passcode,
         label: labelDraft.trim() || undefined,
-        ...(Number.isFinite(days) && days > 0 ? { expiresInDays: days } : {}),
+        ...(expiresInDays !== undefined ? { expiresInDays } : {}),
+        permissions: {
+          kbAsk: true,
+          kbDrop: true,
+          kbPropose: true,
+          calendarFreeBusy: calFreeBusyDraft,
+          calendarPropose: calFreeBusyDraft,
+        },
+        ...(imTenantIdDraft.trim() ? { imTenantId: imTenantIdDraft.trim() } : {}),
       }),
     );
   }
 
-  function handleRevokeToken(id: string, label: string) {
-    if (!window.confirm(`确定吊销投递口令「${label}」吗？吊销后同事将无法继续凭该口令上传。`)) {
+  function handleBindExistingToken(tokenId: string) {
+    sendKbOperation(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: workspaceKey,
+        tokenId,
+        addWorkspaces: [workspaceKey],
+      }),
+    );
+  }
+
+  function handleMakeNeverExpire(tokenId: string) {
+    sendKbOperation(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: workspaceKey,
+        tokenId,
+        neverExpire: true,
+      }),
+    );
+  }
+
+  function handleRevokeToken(id: string, label: string, globalRevoke = false) {
+    const promptMsg = globalRevoke
+      ? `确定全局吊销同事通行证「${label}」吗？吊销后其所有知识库、IM 与微信权限将立即失效。`
+      : `确定从当前知识库移出或吊销「${label}」吗？`;
+    if (!window.confirm(promptMsg)) {
       return;
     }
     sendKbOperation(
       buildAssistantOpMessage("drop_token_revoke", {
         workspace: workspaceKey,
         idOrLabel: id,
+        ...(globalRevoke ? { globalRevoke: true } : {}),
       }),
     );
   }
@@ -383,52 +430,121 @@ export function WorkspaceKbPanel({
 
           {status.tokens.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              {status.tokens.map((tok) => (
-                <div
-                  key={tok.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "5px 8px",
-                    borderRadius: 6,
-                    border: "1px solid var(--line)",
-                    fontSize: 12,
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis" }}>{tok.label}</div>
-                    <div style={{ fontSize: 10, color: "var(--muted)" }}>
-                      ID: {tok.id}
-                      {tok.expiresAt
-                        ? ` · 有效期至 ${new Date(tok.expiresAt).toLocaleDateString("zh-CN")}`
-                        : " · 长期有效"}
+              {status.tokens.map((tok) => {
+                const wsCount = tok.workspaces && tok.workspaces.length > 0 ? tok.workspaces.length : 1;
+                return (
+                  <div
+                    key={tok.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      border: "1px solid var(--line)",
+                      fontSize: 12,
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {tok.label}
+                        {wsCount > 1 ? `（共 ${wsCount} 个知识库）` : ""}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                        ID: {tok.id}
+                        {tok.expiresAt
+                          ? ` · 有效期至 ${new Date(tok.expiresAt).toLocaleDateString("zh-CN")}`
+                          : " · 永久有效"}
+                        {tok.permissions?.calendarFreeBusy !== false ? " · 可查忙闲/预约" : ""}
+                        {tok.imTenantId ? ` · IM:${tok.imTenantId}` : ""}
+                        {tok.wxBinding?.status === "active" ? " · 微信已绑" : ""}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 4, flex: "none" }}>
+                      {tok.expiresAt ? (
+                        <button
+                          type="button"
+                          style={{
+                            background: "transparent",
+                            border: "1px solid var(--line)",
+                            borderRadius: 5,
+                            padding: "2px 6px",
+                            fontSize: 11,
+                            color: "var(--ink)",
+                            cursor: "pointer",
+                          }}
+                          title="改为永久不过期"
+                          onClick={() => handleMakeNeverExpire(tok.id)}
+                        >
+                          设为永不过期
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--line)",
+                          borderRadius: 5,
+                          padding: "2px 6px",
+                          fontSize: 11,
+                          color: "var(--danger, #d9534f)",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => handleRevokeToken(tok.id, tok.label, false)}
+                      >
+                        {wsCount > 1 ? "移出本库" : "吊销"}
+                      </button>
                     </div>
                   </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ fontSize: 11, color: "var(--muted)" }}>
+              尚未配置投递口令。在下方创建一个口令发给同事，同事登录一次后将自动记住状态无缝进入。
+            </div>
+          )}
+
+          {/* 将其他知识库已有的同事口令一键授权到本知识库 */}
+          {status.otherTokens && status.otherTokens.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                padding: 8,
+                borderRadius: 8,
+                border: "1px dashed var(--line)",
+                fontSize: 11,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "var(--muted)" }}>
+                将已有同事通行证加入本知识库（同一口令跨库通用）：
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {status.otherTokens.map((ot) => (
                   <button
+                    key={ot.id}
                     type="button"
                     style={{
                       background: "transparent",
                       border: "1px solid var(--line)",
                       borderRadius: 5,
-                      padding: "2px 6px",
+                      padding: "3px 7px",
                       fontSize: 11,
-                      color: "var(--danger, #d9534f)",
+                      color: "var(--ink)",
                       cursor: "pointer",
-                      flex: "none",
                     }}
-                    onClick={() => handleRevokeToken(tok.id, tok.label)}
+                    disabled={loading}
+                    onClick={() => handleBindExistingToken(ot.id)}
                   >
-                    吊销
+                    + 授权「{ot.label}」访问本库
                   </button>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          ) : (
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>
-              尚未配置投递口令。在下方创建一个口令发给同事，同事即可在投递页上传文档并查阅 HTML 看板。
-            </div>
-          )}
+          ) : null}
 
           {/* 新增口令表单 */}
           <div
@@ -441,7 +557,7 @@ export function WorkspaceKbPanel({
               border: "1px solid var(--line)",
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 600 }}>+ 新增投递密钥（口令）</div>
+            <div style={{ fontSize: 11, fontWeight: 600 }}>+ 新增同事通行证（口令）</div>
             <input
               type="password"
               className="search-input"
@@ -455,18 +571,36 @@ export function WorkspaceKbPanel({
                 type="text"
                 className="search-input"
                 style={{ padding: "5px 8px", fontSize: 12, margin: 0, flex: 1 }}
-                placeholder="备注（如：风控团队）"
+                placeholder="同事称呼/备注（如：王明-风控）"
                 value={labelDraft}
                 onChange={(e) => setLabelDraft(e.target.value)}
               />
               <input
                 type="number"
                 className="search-input"
-                style={{ padding: "5px 8px", fontSize: 12, margin: 0, width: 76 }}
-                placeholder="有效天数"
-                title="有效天数（留空为长期有效）"
+                style={{ padding: "5px 8px", fontSize: 12, margin: 0, width: 88 }}
+                placeholder="永久有效"
+                title="有效天数（默认留空为永久有效不过期）"
                 value={expiresDraft}
                 onChange={(e) => setExpiresDraft(e.target.value)}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, color: "var(--muted)" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 4, margin: 0, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={calFreeBusyDraft}
+                  onChange={(e) => setCalFreeBusyDraft(e.target.checked)}
+                />
+                允许查日历忙闲与发起变更提案
+              </label>
+              <input
+                type="text"
+                className="search-input"
+                style={{ padding: "3px 6px", fontSize: 11, margin: 0, width: 115 }}
+                placeholder="站内IM账号(可选)"
+                value={imTenantIdDraft}
+                onChange={(e) => setImTenantIdDraft(e.target.value)}
               />
             </div>
             <button
@@ -476,7 +610,7 @@ export function WorkspaceKbPanel({
               disabled={loading}
               onClick={handleCreateToken}
             >
-              创建投递口令
+              创建同事通行口令
             </button>
           </div>
         </div>
