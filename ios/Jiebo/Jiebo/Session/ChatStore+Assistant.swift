@@ -282,15 +282,14 @@ extension ChatStore {
             assistantState?.personalTasks?[taskIndex].status = done ? "已完成" : "待办"
             assistantState?.personalTasks?[taskIndex].actions = [
                 PersonalTaskAction(
-                    kind: done ? "todo_undo" : "todo_done",
-                    title: done ? "标为未完成" : "完成",
+                    label: done ? "标为未完成" : "完成",
                     op: done ? "todo_undo" : "todo_done",
                     id: id,
-                    enabled: nil,
                     delegationId: nil,
                     chatId: nil,
                     callId: nil,
-                    allow: nil
+                    allow: nil,
+                    enabled: nil
                 )
             ]
         }

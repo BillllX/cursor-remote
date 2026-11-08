@@ -1380,7 +1380,7 @@ struct KbWorkspaceSheet: View {
         let wasOn = status?.isKnowledgeBase == true
         busy = true
         errorText = ""
-        var args: [String: JSONValue] = [
+        let args: [String: JSONValue] = [
             "workspace": .string(workspaceKey),
             "title": .string(titleDraft.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "\(workspaceName) 知识库"),
             "categories": .array(categories.map { .string($0) }),

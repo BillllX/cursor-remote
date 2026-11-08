@@ -30,7 +30,7 @@ struct ChatThreadView: View {
                 LazyVStack(spacing: 0) {
                     olderHeader(hasMessages: !messages.isEmpty)
                     ForEach(Self.rows(messages)) { row in
-                        rowView(row, person: person)
+                        rowView(row, person: person, proxy: proxy)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -134,7 +134,7 @@ struct ChatThreadView: View {
     }
 
     @ViewBuilder
-    private func rowView(_ row: Row, person: ImUser) -> some View {
+    private func rowView(_ row: Row, person: ImUser, proxy: ScrollViewProxy) -> some View {
         switch row {
         case .time(_, let at):
             Text(ImFormat.dividerTime(at))

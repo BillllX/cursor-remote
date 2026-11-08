@@ -207,15 +207,14 @@ extension ChatStore {
             assistantState?.personalTasks?[taskIndex].status = enabled ? "计划中" : "已暂停"
             assistantState?.personalTasks?[taskIndex].actions = [
                 PersonalTaskAction(
-                    kind: "schedule_set",
-                    title: enabled ? "暂停计划" : "启用计划",
+                    label: enabled ? "暂停计划" : "启用计划",
                     op: "schedule_set",
                     id: id,
-                    enabled: !enabled,
                     delegationId: nil,
                     chatId: nil,
                     callId: nil,
-                    allow: nil
+                    allow: nil,
+                    enabled: !enabled
                 )
             ]
         }

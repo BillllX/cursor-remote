@@ -24,6 +24,7 @@ final class ImVoiceRecorder {
     func start() async -> String? {
         guard !recording else { return nil }
         ImVoicePlayer.shared.stop()
+        await ImVoicePlayer.shared.waitForAudioSession()
         if AVAudioApplication.shared.recordPermission == .undetermined {
             let granted = await AVAudioApplication.requestRecordPermission()
             return granted ? "麦克风权限已开启，请再次按住说话" : "没有麦克风权限，到「设置 › 接驳」里打开"
@@ -140,7 +141,7 @@ final class ImVoiceRecorder {
     }
 
     private func stopSession() {
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        ImVoicePlayer.shared.deactivateSession()
     }
 
     private static func fileDuration(_ url: URL) -> Double? {
@@ -167,6 +168,8 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
     private var queue: [ImLocalMessage] = []
     private weak var store: ImStore?
     private var proximityObserver: NSObjectProtocol?
+    /// 停用和再次激活串成一队。停用改成异步后，不能让它落在下一次播放或录音的激活之后。
+    private var sessionOps: Task<Void, Never>?
 
     func toggle(_ item: ImLocalMessage, messages: [ImLocalMessage], store: ImStore) {
         if playingId == item.id {
@@ -193,7 +196,16 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         proximityObserver = nil
         UIDevice.current.isProximityMonitoringEnabled = false
         try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        deactivateSession()
+    }
+
+    /// 等 stop() 排进去的停用做完，再去开麦克风。
+    fileprivate func waitForAudioSession() async {
+        await sessionOps?.value
+    }
+
+    fileprivate func deactivateSession() {
+        enqueueSession { await Self.releaseSession() }
     }
 
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
@@ -222,7 +234,8 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
             }
             do {
                 observeProximity()
-                configureRoute()
+                await configureRoute()
+                guard playingId == item.id else { return }
                 let player = try AVAudioPlayer(contentsOf: file)
                 player.delegate = self
                 self.player = player
@@ -246,11 +259,17 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
         proximityObserver = NotificationCenter.default.addObserver(
             forName: UIDevice.proximityStateDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.configureRoute() }
+            Task { @MainActor in await self?.configureRoute() }
         }
     }
 
-    private func configureRoute() {
+    private func configureRoute() async {
+        await enqueueSession { [weak self] in
+            self?.applyRoute()
+        }.value
+    }
+
+    private func applyRoute() {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(
@@ -265,6 +284,32 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
             try session.setActive(true)
         } catch {
             // 路由切换失败时系统当前输出仍可继续播放。
+        }
+    }
+
+    @discardableResult
+    private func enqueueSession(_ body: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let previous = sessionOps
+        let task = Task { @MainActor in
+            await previous?.value
+            await body()
+        }
+        sessionOps = task
+        return task
+    }
+
+    /// 同步 setActive(false) 会堵住主线程。iOS 27 走异步停用；更早的系统放到后台线程做。
+    private static func releaseSession() async {
+        if #available(iOS 27.0, *) {
+            await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().deactivate(options: .notifyOthersOnDeactivation) { _, _ in
+                    continuation.resume()
+                }
+            }
+        } else {
+            await Task.detached(priority: .userInitiated) {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            }.value
         }
     }
 
