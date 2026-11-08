@@ -47,6 +47,10 @@ import {
 } from "./tokens.ts";
 import { postInbox } from "../assistant/inbox.ts";
 import { listColleagueProposals } from "../assistant/proposals.ts";
+import {
+  checkWechatQrBindingStatus,
+  startWechatQrBindingSession,
+} from "../wx/pushGuard.ts";
 import { MAX_KB_HTML_BYTES } from "./tools.ts";
 
 export type DropPortalTenant = {
@@ -82,7 +86,7 @@ function extractDropSessionCookie(req: IncomingMessage, tenantId: string): strin
 function isSecureRequest(req: IncomingMessage): boolean {
   const proto = String(req.headers["x-forwarded-proto"] || "").trim().toLowerCase();
   if (proto === "https") return true;
-  if (Boolean((req.socket as { encrypted?: boolean })?.encrypted)) return true;
+  if ((req.socket as { encrypted?: boolean })?.encrypted) return true;
   return Boolean(process.env.CURSOR_REMOTE_HTTPS === "1" || process.env.CURSOR_REMOTE_HTTPS === "true");
 }
 
@@ -726,12 +730,42 @@ export function renderDropPortalHtml(
       background: var(--bg);
       color: var(--text);
     }
-    .status-box {
+      .status-box {
       padding: 7px 10px;
       border-radius: 6px;
       border: 1px solid var(--border);
       font-size: 12px;
       margin-top: 8px;
+    }
+    .wx-modal-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      padding: 16px;
+    }
+    .wx-modal-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+    .wx-qr-img {
+      width: 220px;
+      height: 220px;
+      margin: 12px auto;
+      display: block;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #ffffff;
+      padding: 6px;
     }
     .hidden { display: none !important; }
   </style>
@@ -762,7 +796,40 @@ export function renderDropPortalHtml(
         </div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
+          <button id="btn-wx-qr-bind" type="button" class="btn-ghost" title="扫码绑定个人微信，在微信里直接向小驳提问或接收审批通知">📲 微信扫码绑定</button>
           <button id="btn-logout" type="button" class="btn-ghost" title="退出当前记住的口令或切换其他口令">切换口令 / 退出</button>
+        </div>
+      </div>
+
+      <!-- 微信扫码绑定弹窗 -->
+      <div id="wx-qr-modal" class="wx-modal-mask hidden">
+        <div class="wx-modal-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong style="font-size:15px;">📲 微信扫码绑定（腾讯官方 iLink 通道）</strong>
+            <button id="btn-wx-modal-close" type="button" class="btn-ghost">关闭</button>
+          </div>
+          <div id="wx-qr-desc" style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+            正在向腾讯微信 iLink 申请官方绑定二维码…
+          </div>
+          <img id="wx-qr-image" class="wx-qr-img hidden" alt="微信扫码绑定二维码" />
+          <div id="wx-verify-box" class="hidden" style="margin:8px 0;">
+            <div style="display:flex;gap:6px;">
+              <input id="wx-verify-input" type="text" maxlength="12" placeholder="输入手机微信显示的6位数字验证码" />
+              <button id="btn-wx-verify-submit" type="button">提交验证码</button>
+            </div>
+          </div>
+          <div id="wx-qr-status-msg" class="status-box" style="margin-top:8px;">请稍候…</div>
+          <div style="display:flex;justify-content:center;gap:8px;margin-top:10px;">
+            <button id="btn-wx-qr-refresh" type="button" class="btn-ghost">🔄 刷新二维码</button>
+            <button id="btn-wx-manual-toggle" type="button" class="btn-ghost">手动填 openId 兜底</button>
+          </div>
+          <div id="wx-manual-box" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);text-align:left;">
+            <label for="wx-manual-openid">手动输入微信 openId（如 o9cq809L...@im.wechat）</label>
+            <div style="display:flex;gap:6px;margin-top:4px;">
+              <input id="wx-manual-openid" type="text" maxlength="120" placeholder="xxx@im.wechat" />
+              <button id="btn-wx-manual-submit" type="button">提交申请</button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1658,6 +1725,160 @@ export function renderDropPortalHtml(
       });
 
       renderQaTempFiles([]);
+      const btnWxQrBind = document.getElementById("btn-wx-qr-bind");
+      const wxQrModal = document.getElementById("wx-qr-modal");
+      const btnWxModalClose = document.getElementById("btn-wx-modal-close");
+      const wxQrDesc = document.getElementById("wx-qr-desc");
+      const wxQrImage = document.getElementById("wx-qr-image");
+      const wxVerifyBox = document.getElementById("wx-verify-box");
+      const wxVerifyInput = document.getElementById("wx-verify-input");
+      const btnWxVerifySubmit = document.getElementById("btn-wx-verify-submit");
+      const wxQrStatusMsg = document.getElementById("wx-qr-status-msg");
+      const btnWxQrRefresh = document.getElementById("btn-wx-qr-refresh");
+      const btnWxManualToggle = document.getElementById("btn-wx-manual-toggle");
+      const wxManualBox = document.getElementById("wx-manual-box");
+      const wxManualOpenId = document.getElementById("wx-manual-openid");
+      const btnWxManualSubmit = document.getElementById("btn-wx-manual-submit");
+
+      let activeWxQrSessionId = "";
+      let wxPollTimer = null;
+
+      function stopWxQrPoll() {
+        if (wxPollTimer) {
+          clearTimeout(wxPollTimer);
+          wxPollTimer = null;
+        }
+      }
+
+      async function startPortalWxQr() {
+        stopWxQrPoll();
+        activeWxQrSessionId = "";
+        wxQrImage.classList.add("hidden");
+        wxVerifyBox.classList.add("hidden");
+        wxQrDesc.textContent = "正在向腾讯微信 iLink 申请官方绑定二维码…";
+        showBox(wxQrStatusMsg, "正在生成二维码…", false);
+        try {
+          const res = await fetch(API_BASE + "/wx-qrcode", {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({})
+          });
+          const data = await res.json();
+          if (wxQrModal.classList.contains("hidden")) return;
+          if (!res.ok || !data.ok) {
+            showBox(wxQrStatusMsg, data.error || "获取微信二维码失败", true);
+            return;
+          }
+          activeWxQrSessionId = data.qrSessionId;
+          wxQrImage.src = data.qrSvgDataUrl;
+          wxQrImage.classList.remove("hidden");
+          wxQrDesc.textContent = "请用手机微信扫描下方二维码并点击「确认连接」";
+          showBox(wxQrStatusMsg, "等待手机微信扫码…", false);
+          wxPollTimer = setTimeout(function() { pollPortalWxQrStatus(); }, 2000);
+        } catch (err) {
+          showBox(wxQrStatusMsg, "网络异常，获取二维码失败", true);
+        }
+      }
+
+      async function pollPortalWxQrStatus(verifyCode) {
+        const reqSessionId = activeWxQrSessionId;
+        if (!reqSessionId || wxQrModal.classList.contains("hidden")) return;
+        try {
+          let u = API_BASE + "/wx-qrcode-status?qrSessionId=" + encodeURIComponent(reqSessionId);
+          if (verifyCode) {
+            u += "&verifyCode=" + encodeURIComponent(verifyCode);
+          }
+          const res = await fetch(u, {
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET
+            }
+          });
+          const data = await res.json();
+          if (wxQrModal.classList.contains("hidden") || activeWxQrSessionId !== reqSessionId) return;
+          if (!res.ok || !data.ok) {
+            showBox(wxQrStatusMsg, data.error || "查询扫码状态失败", true);
+            return;
+          }
+          const st = data.status;
+          showBox(wxQrStatusMsg, data.message || ("状态：" + st), st === "expired" || st === "verify_code_blocked");
+          if (st === "need_verifycode") {
+            wxVerifyBox.classList.remove("hidden");
+            return;
+          }
+          wxVerifyBox.classList.add("hidden");
+          if (st === "confirmed") {
+            stopWxQrPoll();
+            btnWxQrBind.textContent = "📲 微信已扫码(待确认)";
+            return;
+          }
+          if (st === "expired" || st === "verify_code_blocked") {
+            stopWxQrPoll();
+            return;
+          }
+          wxPollTimer = setTimeout(function() { pollPortalWxQrStatus(); }, 2000);
+        } catch (err) {
+          if (!wxQrModal.classList.contains("hidden") && activeWxQrSessionId === reqSessionId) {
+            wxPollTimer = setTimeout(function() { pollPortalWxQrStatus(); }, 3000);
+          }
+        }
+      }
+
+      btnWxQrBind.addEventListener("click", function() {
+        wxQrModal.classList.remove("hidden");
+        startPortalWxQr();
+      });
+      btnWxModalClose.addEventListener("click", function() {
+        stopWxQrPoll();
+        wxQrModal.classList.add("hidden");
+      });
+      btnWxQrRefresh.addEventListener("click", function() {
+        startPortalWxQr();
+      });
+      btnWxVerifySubmit.addEventListener("click", function() {
+        const code = wxVerifyInput.value.trim();
+        if (!code) return;
+        wxVerifyInput.value = "";
+        pollPortalWxQrStatus(code);
+      });
+      btnWxManualToggle.addEventListener("click", function() {
+        wxManualBox.classList.toggle("hidden");
+      });
+      btnWxManualSubmit.addEventListener("click", async function() {
+        const openId = wxManualOpenId.value.trim();
+        if (!openId) {
+          showBox(wxQrStatusMsg, "请输入微信 openId", true);
+          return;
+        }
+        btnWxManualSubmit.disabled = true;
+        try {
+          const res = await fetch(API_BASE + "/wx-bind", {
+            method: "POST",
+            headers: {
+              "authorization": "Bearer " + sessionToken,
+              "x-drop-page-ticket": PAGE_TICKET,
+              "content-type": "application/json"
+            },
+            body: JSON.stringify({ openId: openId, nickname: currentSubmitterName })
+          });
+          const data = await res.json();
+          if (!res.ok || !data.ok) {
+            showBox(wxQrStatusMsg, data.error || "提交失败", true);
+          } else {
+            stopWxQrPoll();
+            showBox(wxQrStatusMsg, data.message || "已提交申请，等待主人确认激活", false);
+          }
+        } catch (err) {
+          showBox(wxQrStatusMsg, "网络请求异常", true);
+        } finally {
+          btnWxManualSubmit.disabled = false;
+        }
+      });
+
       if (PRELOADED_SESSION && PRELOADED_SESSION.dropSessionToken) {
         applyAuthenticatedSession(PRELOADED_SESSION, PRELOADED_SESSION.submitterName || "访客");
       }
@@ -2605,6 +2826,74 @@ export function handleDropPortalHttp(
       appliedResult: p.appliedResult,
     }));
     sendJson(res, 200, { ok: true, proposals });
+    return true;
+  }
+
+  // 13a. POST /p/<tenant>/drop/api/wx-qrcode — 同事在登录态下申请一张微信官方 iLink 扫码绑定二维码
+  if (pathname === `${basePrefix}/api/wx-qrcode`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      req.resume();
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    req.resume();
+    void (async () => {
+      const qrRes = await startWechatQrBindingSession(host, {
+        mode: "portal_colleague",
+        tokenId: sessCheck.session.tokenId,
+        submitterName: sessCheck.session.submitterName,
+      });
+      if (!qrRes.ok) {
+        sendJson(res, 502, { ok: false, error: qrRes.error });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        ...qrRes.data,
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "生成微信绑定二维码时出错" });
+    });
+    return true;
+  }
+
+  // 13b. GET /p/<tenant>/drop/api/wx-qrcode-status — 同事轮询扫码状态（confirmed 后自动将真实 ilink_user_id 写入 pending_owner 并通知主人收件箱）
+  if (pathname === `${basePrefix}/api/wx-qrcode-status`) {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { ok: false, error: "只支持 GET" });
+      return true;
+    }
+    const token = extractBearerToken(req);
+    const sessCheck = verifyDropSessionToken(host, token, Date.now(), clientIp);
+    if (!sessCheck.ok) {
+      sendJson(res, sessCheck.status, { ok: false, error: sessCheck.error });
+      return true;
+    }
+    const qrSessionId = (url.searchParams.get("qrSessionId") || "").trim();
+    const verifyCode = (url.searchParams.get("verifyCode") || "").trim() || undefined;
+    void (async () => {
+      const pollRes = await checkWechatQrBindingStatus(host, {
+        qrSessionId,
+        verifyCode,
+        expectedTokenId: sessCheck.session.tokenId,
+      });
+      if (!pollRes.ok) {
+        sendJson(res, 400, { ok: false, error: pollRes.error });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        ...pollRes.data,
+      });
+    })().catch(() => {
+      sendJson(res, 500, { ok: false, error: "查询微信扫码状态时出错" });
+    });
     return true;
   }
 

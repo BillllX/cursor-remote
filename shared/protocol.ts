@@ -518,6 +518,32 @@ export type KbColleagueProposalItem = {
   createdAt: number;
 };
 
+export type WxQrCodeStartData = {
+  qrSessionId: string;
+  tokenId: string;
+  targetLabel: string;
+  qrcode: string;
+  qrcodeImgContent: string;
+  qrSvgDataUrl: string;
+  expiresAt: number;
+};
+
+export type WxQrCodeStatusData = {
+  qrSessionId: string;
+  tokenId: string;
+  status:
+    | "wait"
+    | "scaned"
+    | "need_verifycode"
+    | "verify_code_blocked"
+    | "confirmed"
+    | "expired";
+  botId?: string;
+  openId?: string;
+  bindingStatus?: "pending_owner" | "active";
+  message: string;
+};
+
 export type KbWorkspaceStatusData = {
   workspaceKey: string;
   workspaceId: string;
@@ -533,6 +559,16 @@ export type KbWorkspaceStatusData = {
   kbWorkspaces?: KbWorkspaceSummaryItem[];
   /** 同事提交的日历预约/知识库更新提案列表（供小驳界面一键批准或拒绝） */
   proposals?: KbColleagueProposalItem[];
+  /** 主人自己绑定的个人微信通知通道（用于接收同事提案审批通知） */
+  ownerWx?: {
+    botId: string;
+    openId: string;
+    nickname?: string;
+    boundAt: number;
+  };
+  /** 当触发 wxQrAction 时返回的二维码或轮询状态结果 */
+  wxQrStart?: WxQrCodeStartData;
+  wxQrStatus?: WxQrCodeStatusData;
   dropPortalPath: string;
 };
 
@@ -589,6 +625,13 @@ export type AssistantOpArgsMap = {
       proposalId: string;
       approve: boolean;
       decisionNote?: string;
+    };
+    wxQrAction?: {
+      kind: "start" | "status" | "unbind_owner";
+      mode?: "owner_colleague" | "owner_self";
+      tokenId?: string;
+      qrSessionId?: string;
+      verifyCode?: string;
     };
   };
   drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };

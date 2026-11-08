@@ -1,6 +1,12 @@
 // 工作区知识库与投递口令可视化管理面板（嵌入在工作区侧栏「管理」中）
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AssistantResultMessage, ClientMessage, KbWorkspaceStatusData } from "@shared/protocol";
+import type {
+  AssistantResultMessage,
+  ClientMessage,
+  KbWorkspaceStatusData,
+  WxQrCodeStartData,
+  WxQrCodeStatusData,
+} from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { FileGlyph } from "../FileTree";
 
@@ -38,25 +44,74 @@ export function WorkspaceKbPanel({
   const [expiresDraft, setExpiresDraft] = useState("");
   const [calFreeBusyDraft, setCalFreeBusyDraft] = useState(true);
   const [imTenantIdDraft, setImTenantIdDraft] = useState("");
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrTargetTokenId, setQrTargetTokenId] = useState("");
+  const [qrTargetLabel, setQrTargetLabel] = useState("");
+  const [qrStartData, setQrStartData] = useState<WxQrCodeStartData | null>(null);
+  const [qrStatusData, setQrStatusData] = useState<WxQrCodeStatusData | null>(null);
+  const [qrVerifyCode, setQrVerifyCode] = useState("");
   const pendingReqIdsRef = useRef(new Set<string>());
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeQrSessionIdRef = useRef<string>("");
+
+  const clearPollTimer = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeQrSessionIdRef.current = "";
+      clearPollTimer();
+    };
+  }, [clearPollTimer]);
 
   const sendKbOperation = useCallback(
-    (message: ClientMessage) => {
+    (message: ClientMessage, silent = false) => {
       if (message.type !== "assistant_op" || !message.reqId) return;
       pendingReqIdsRef.current.add(message.reqId);
-      setLoading(true);
-      setErrorText("");
+      if (!silent) {
+        setLoading(true);
+        setErrorText("");
+      }
       send(message);
     },
     [send],
   );
 
+  const pollQrStatus = useCallback(
+    (qrSessionId: string, verifyCode?: string) => {
+      clearPollTimer();
+      sendKbOperation(
+        buildAssistantOpMessage("drop_token_update", {
+          workspace: workspaceKey,
+          tokenId: qrTargetTokenId,
+          wxQrAction: {
+            kind: "status",
+            qrSessionId,
+            ...(verifyCode ? { verifyCode } : {}),
+          },
+        }),
+        true,
+      );
+    },
+    [clearPollTimer, qrTargetTokenId, sendKbOperation, workspaceKey],
+  );
+
   useEffect(() => {
     if (!workspaceKey) return;
+    clearPollTimer();
+    activeQrSessionIdRef.current = "";
+    setQrModalOpen(false);
+    setQrStartData(null);
+    setQrStatusData(null);
+    setQrVerifyCode("");
     pendingReqIdsRef.current.clear();
     setStatus(null);
     sendKbOperation(buildAssistantOpMessage("kb_workspace_status", { workspace: workspaceKey }));
-  }, [workspaceKey, sendKbOperation]);
+  }, [workspaceKey, sendKbOperation, clearPollTimer]);
 
   useEffect(() => {
     let consumed = false;
@@ -84,6 +139,41 @@ export function WorkspaceKbPanel({
       setKbTitleDraft(data.title || `${workspaceName} 知识库`);
       setKbCategoriesDraft((data.allowedCategories || ["资金", "资产", "牌照"]).join("、"));
 
+      if (data.wxQrStart) {
+        if (!qrModalOpen) continue;
+        activeQrSessionIdRef.current = data.wxQrStart.qrSessionId;
+        setQrStartData(data.wxQrStart);
+        setQrStatusData({
+          qrSessionId: data.wxQrStart.qrSessionId,
+          tokenId: data.wxQrStart.tokenId,
+          status: "wait",
+          message: "等待微信扫码确认…",
+        });
+        clearPollTimer();
+        pollTimerRef.current = setTimeout(() => {
+          pollQrStatus(data.wxQrStart!.qrSessionId);
+        }, 2200);
+        continue;
+      }
+
+      if (data.wxQrStatus) {
+        if (!qrModalOpen || data.wxQrStatus.qrSessionId !== activeQrSessionIdRef.current) continue;
+        setQrStatusData(data.wxQrStatus);
+        const st = data.wxQrStatus.status;
+        if (st === "confirmed") {
+          clearPollTimer();
+          setNotice(data.wxQrStatus.message || "微信扫码绑定成功！");
+        } else if (st === "expired" || st === "verify_code_blocked") {
+          clearPollTimer();
+        } else if (st !== "need_verifycode" && qrModalOpen) {
+          clearPollTimer();
+          pollTimerRef.current = setTimeout(() => {
+            pollQrStatus(data.wxQrStatus!.qrSessionId);
+          }, 2200);
+        }
+        continue;
+      }
+
       if (op === "kb_workspace_init") {
         setEditingKb(false);
         setNotice(`已启用知识库工作区：${data.title}`);
@@ -99,7 +189,29 @@ export function WorkspaceKbPanel({
       }
     }
     if (consumed) setLoading(pendingReqIdsRef.current.size > 0);
-  }, [assistantResults, workspaceKey, workspaceName, setNotice]);
+  }, [assistantResults, workspaceKey, workspaceName, setNotice, clearPollTimer, pollQrStatus, qrModalOpen]);
+
+  function handleOpenColleagueWxQr(tokenId: string, label: string) {
+    clearPollTimer();
+    activeQrSessionIdRef.current = "";
+    setQrTargetTokenId(tokenId);
+    setQrTargetLabel(label);
+    setQrStartData(null);
+    setQrStatusData(null);
+    setQrVerifyCode("");
+    setQrModalOpen(true);
+    sendKbOperation(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: workspaceKey,
+        tokenId,
+        wxQrAction: {
+          kind: "start",
+          mode: "owner_colleague",
+          tokenId,
+        },
+      }),
+    );
+  }
 
   function handleSaveKbConfig() {
     const title = kbTitleDraft.trim() || `${workspaceName} 知识库`;
@@ -462,6 +574,22 @@ export function WorkspaceKbPanel({
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 4, flex: "none" }}>
+                      <button
+                        type="button"
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--line)",
+                          borderRadius: 5,
+                          padding: "2px 6px",
+                          fontSize: 11,
+                          color: "var(--ink)",
+                          cursor: "pointer",
+                        }}
+                        title="生成微信扫码绑定二维码"
+                        onClick={() => handleOpenColleagueWxQr(tok.id, tok.label)}
+                      >
+                        📲 微信码
+                      </button>
                       {tok.expiresAt ? (
                         <button
                           type="button"
@@ -505,6 +633,75 @@ export function WorkspaceKbPanel({
               尚未配置投递口令。在下方创建一个口令发给同事，同事登录一次后将自动记住状态无缝进入。
             </div>
           )}
+
+          {qrModalOpen ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 6,
+                padding: 10,
+                borderRadius: 8,
+                border: "1px solid var(--accent, #2f6b52)",
+                background: "var(--fill-quaternary, rgba(47, 107, 82, 0.06))",
+                fontSize: 11,
+                textAlign: "center",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+                <strong>📲 微信绑定码 · {qrTargetLabel}</strong>
+                <button
+                  type="button"
+                  style={{ background: "transparent", border: 0, cursor: "pointer", fontSize: 11, color: "var(--muted)" }}
+                  onClick={() => {
+                    clearPollTimer();
+                    activeQrSessionIdRef.current = "";
+                    setQrModalOpen(false);
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+              {qrStartData?.qrSvgDataUrl ? (
+                <img
+                  src={qrStartData.qrSvgDataUrl}
+                  alt="微信二维码"
+                  style={{ width: 150, height: 150, borderRadius: 6, background: "#fff", padding: 4 }}
+                />
+              ) : (
+                <div style={{ padding: 20, color: "var(--muted)" }}>正在获取微信二维码…</div>
+              )}
+              <div style={{ color: "var(--muted)" }}>
+                {qrStatusData?.message || "截图发给同事扫码确认即自动激活"}
+              </div>
+              {qrStatusData?.status === "need_verifycode" && qrStartData ? (
+                <div style={{ display: "flex", gap: 6, width: "100%", justifyContent: "center", marginTop: 4 }}>
+                  <input
+                    type="text"
+                    className="search-input"
+                    style={{ padding: "4px 6px", fontSize: 11, margin: 0, width: 130 }}
+                    placeholder="手机6位验证码"
+                    value={qrVerifyCode}
+                    onChange={(e) => setQrVerifyCode(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="new-chat primary"
+                    style={{ margin: 0, padding: "4px 8px", fontSize: 11 }}
+                    onClick={() => {
+                      const code = qrVerifyCode.trim();
+                      if (!code) return;
+                      setQrVerifyCode("");
+                      pollQrStatus(qrStartData.qrSessionId, code);
+                    }}
+                  >
+                    提交
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {/* 将其他知识库已有的同事口令一键授权到本知识库 */}
           {status.otherTokens && status.otherTokens.length > 0 ? (

@@ -69,10 +69,15 @@ import {
   createDropToken,
   listDropTokens,
   revokeDropToken,
+  setOwnerWxBinding,
   setupKbWorkspaceForTenant,
   updateDropToken,
   type DropTenantHost,
 } from "../ingest/tokens.ts";
+import {
+  checkWechatQrBindingStatus,
+  startWechatQrBindingSession,
+} from "../wx/pushGuard.ts";
 import {
   createDropTokenFromUi,
   getKbWorkspaceStatusForUi,
@@ -304,6 +309,22 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
             const wsRef = args.workspace && dropHost ? dropHost.resolveWorkspace(args.workspace) : null;
             return revokeDropToken(ref, args.idOrLabel, Date.now(), wsRef?.workspaceId, {
               globalRevoke: args.globalRevoke,
+            });
+          }
+        : undefined,
+    wxQrcodeGenerate:
+      role === "chat" && dropHost
+        ? async (args) => {
+            const cleanTokenId = args.tokenId?.trim();
+            const mode =
+              args.mode === "owner_self" || !cleanTokenId || cleanTokenId === "__owner__"
+                ? "owner_self"
+                : "owner_colleague";
+            return startWechatQrBindingSession(dropHost, {
+              mode,
+              tokenId: cleanTokenId || "__owner__",
+              autoPollInBackground: true,
+              onConfirmed: () => void publishState(tenant),
             });
           }
         : undefined,
@@ -1159,6 +1180,52 @@ export async function handleOp(
         if (!decided.ok) return fail(decided.error);
         const statusRes = getKbWorkspaceStatusForUi(host, workspace);
         return statusRes.ok ? { ok: true, data: statusRes.data } : fail(statusRes.error);
+      }
+      if (args.wxQrAction && typeof args.wxQrAction === "object") {
+        const wqa = args.wxQrAction as Record<string, unknown>;
+        const kind = typeof wqa.kind === "string" ? wqa.kind : "";
+        if (kind === "unbind_owner") {
+          setOwnerWxBinding(host, undefined);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          return statusRes.ok ? { ok: true, data: statusRes.data } : fail(statusRes.error);
+        }
+        if (kind === "start") {
+          const mode = wqa.mode === "owner_self" ? "owner_self" : "owner_colleague";
+          const targetTokId = typeof wqa.tokenId === "string" ? wqa.tokenId : str(args.tokenId);
+          const qrRes = await startWechatQrBindingSession(host, {
+            mode,
+            tokenId: targetTokId,
+          });
+          if (!qrRes.ok) return fail(qrRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wxQrStart: qrRes.data,
+            },
+          };
+        }
+        if (kind === "status") {
+          const qrSessionId = typeof wqa.qrSessionId === "string" ? wqa.qrSessionId : "";
+          const verifyCode = typeof wqa.verifyCode === "string" ? wqa.verifyCode : undefined;
+          const pollRes = await checkWechatQrBindingStatus(host, {
+            qrSessionId,
+            verifyCode,
+          });
+          if (!pollRes.ok) return fail(pollRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wxQrStatus: pollRes.data,
+            },
+          };
+        }
+        return fail("未知的 wxQrAction 操作类型");
       }
       const tokenId = str(args.tokenId);
       const label = args.label !== undefined ? str(args.label) : undefined;

@@ -9,6 +9,8 @@ import type {
   KbDropTokenItem,
   KbWorkspaceStatusData,
   KbWorkspaceSummaryItem,
+  WxQrCodeStartData,
+  WxQrCodeStatusData,
 } from "@shared/protocol";
 
 type AssistantColleaguesSectionProps = {
@@ -40,14 +42,41 @@ export function AssistantColleaguesSection({
   const [editingTokenId, setEditingTokenId] = useState<string | null>(null);
   const [editImTenantId, setEditImTenantId] = useState("");
 
+  // 微信 iLink 扫码绑定弹窗状态（支持为指定同事生成绑定码，或绑定主人自己的微信）
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrTargetMode, setQrTargetMode] = useState<"owner_colleague" | "owner_self">("owner_colleague");
+  const [qrTargetTokenId, setQrTargetTokenId] = useState<string>("");
+  const [qrTargetLabel, setQrTargetLabel] = useState<string>("");
+  const [qrStartData, setQrStartData] = useState<WxQrCodeStartData | null>(null);
+  const [qrStatusData, setQrStatusData] = useState<WxQrCodeStatusData | null>(null);
+  const [qrVerifyCode, setQrVerifyCode] = useState("");
+
   const pendingReqIdsRef = useRef(new Set<string>());
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeQrSessionIdRef = useRef<string>("");
+
+  const clearPollTimer = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeQrSessionIdRef.current = "";
+      clearPollTimer();
+    };
+  }, [clearPollTimer]);
 
   const dispatchOp = useCallback(
-    (message: ClientMessage) => {
+    (message: ClientMessage, silent = false) => {
       if (message.type !== "assistant_op" || !message.reqId) return;
       pendingReqIdsRef.current.add(message.reqId);
-      setLoading(true);
-      setErrorText("");
+      if (!silent) {
+        setLoading(true);
+        setErrorText("");
+      }
       send(message);
     },
     [send],
@@ -60,6 +89,25 @@ export function AssistantColleaguesSection({
   useEffect(() => {
     reload();
   }, [reload]);
+
+  const pollQrStatus = useCallback(
+    (qrSessionId: string, verifyCode?: string) => {
+      clearPollTimer();
+      dispatchOp(
+        buildAssistantOpMessage("drop_token_update", {
+          workspace: "",
+          tokenId: qrTargetTokenId || "__owner__",
+          wxQrAction: {
+            kind: "status",
+            qrSessionId,
+            ...(verifyCode ? { verifyCode } : {}),
+          },
+        }),
+        true,
+      );
+    },
+    [clearPollTimer, dispatchOp, qrTargetTokenId],
+  );
 
   useEffect(() => {
     if (!lastResult || !lastResult.reqId) return;
@@ -88,6 +136,41 @@ export function AssistantColleaguesSection({
       setSelectedWorkspaces([data.kbWorkspaces[0]!.workspaceKey]);
     }
 
+    if (data.wxQrStart) {
+      if (!qrModalOpen) return;
+      activeQrSessionIdRef.current = data.wxQrStart.qrSessionId;
+      setQrStartData(data.wxQrStart);
+      setQrStatusData({
+        qrSessionId: data.wxQrStart.qrSessionId,
+        tokenId: data.wxQrStart.tokenId,
+        status: "wait",
+        message: "请使用手机微信扫描上方二维码并点击「确认连接」（可截图发给同事扫码）",
+      });
+      clearPollTimer();
+      pollTimerRef.current = setTimeout(() => {
+        pollQrStatus(data.wxQrStart!.qrSessionId);
+      }, 2200);
+      return;
+    }
+
+    if (data.wxQrStatus) {
+      if (!qrModalOpen || data.wxQrStatus.qrSessionId !== activeQrSessionIdRef.current) return;
+      setQrStatusData(data.wxQrStatus);
+      const st = data.wxQrStatus.status;
+      if (st === "confirmed") {
+        clearPollTimer();
+        onNotice(data.wxQrStatus.message || "微信扫码绑定成功！");
+      } else if (st === "expired" || st === "verify_code_blocked") {
+        clearPollTimer();
+      } else if (st !== "need_verifycode" && qrModalOpen) {
+        clearPollTimer();
+        pollTimerRef.current = setTimeout(() => {
+          pollQrStatus(data.wxQrStatus!.qrSessionId);
+        }, 2200);
+      }
+      return;
+    }
+
     if (op === "drop_token_create") {
       setPasscodeDraft("");
       setLabelDraft("");
@@ -98,13 +181,80 @@ export function AssistantColleaguesSection({
     } else if (op === "drop_token_revoke") {
       onNotice("已吊销同事通行证");
     }
-  }, [lastResult, resultTick, onNotice, selectedWorkspaces.length]);
+  }, [
+    lastResult,
+    resultTick,
+    onNotice,
+    selectedWorkspaces.length,
+    clearPollTimer,
+    pollQrStatus,
+    qrModalOpen,
+  ]);
 
   const kbWorkspaces: KbWorkspaceSummaryItem[] = status?.kbWorkspaces || [];
   const tokens: KbDropTokenItem[] = status?.tokens || [];
   const pendingProposals: KbColleagueProposalItem[] = (status?.proposals || []).filter(
     (p) => p.status === "pending",
   );
+  const ownerWx = status?.ownerWx;
+
+  function openWechatQrModal(mode: "owner_colleague" | "owner_self", tok?: KbDropTokenItem) {
+    clearPollTimer();
+    activeQrSessionIdRef.current = "";
+    const targetId = mode === "owner_self" ? "__owner__" : tok?.id || "";
+    const label = mode === "owner_self" ? "主人微信（接收审批通知）" : tok?.label || "同事";
+    setQrTargetMode(mode);
+    setQrTargetTokenId(targetId);
+    setQrTargetLabel(label);
+    setQrStartData(null);
+    setQrStatusData(null);
+    setQrVerifyCode("");
+    setQrModalOpen(true);
+
+    dispatchOp(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: "",
+        tokenId: targetId,
+        wxQrAction: {
+          kind: "start",
+          mode,
+          tokenId: targetId,
+        },
+      }),
+    );
+  }
+
+  function closeWechatQrModal() {
+    clearPollTimer();
+    activeQrSessionIdRef.current = "";
+    setQrModalOpen(false);
+    setQrStartData(null);
+    setQrStatusData(null);
+  }
+
+  function handleUnbindOwnerWx() {
+    if (!window.confirm("确定解绑主人微信通知通道吗？")) return;
+    dispatchOp(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: "",
+        tokenId: "__owner__",
+        wxQrAction: {
+          kind: "unbind_owner",
+        },
+      }),
+    );
+  }
+
+  function handleUnbindColleagueWx(tok: KbDropTokenItem) {
+    if (!window.confirm(`确定解绑同事「${tok.label}」的微信通道吗？`)) return;
+    dispatchOp(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: "",
+        tokenId: tok.id,
+        wxOpenId: null,
+      }),
+    );
+  }
 
   function toggleNewWorkspaceSelection(wsKey: string) {
     setSelectedWorkspaces((prev) =>
@@ -226,7 +376,11 @@ export function AssistantColleaguesSection({
   }
 
   function handleGlobalRevoke(tok: KbDropTokenItem) {
-    if (!window.confirm(`确定全局吊销同事「${tok.label}」的通行证吗？吊销后其网页免登、IM 与微信权限将立即失效。`)) {
+    if (
+      !window.confirm(
+        `确定全局吊销同事「${tok.label}」的通行证吗？吊销后其网页免登、IM 与微信权限将立即失效。`,
+      )
+    ) {
       return;
     }
     dispatchOp(
@@ -265,15 +419,34 @@ export function AssistantColleaguesSection({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* 1. 对外门户入口栏 */}
+      {/* 1. 对外门户入口栏 & 主人微信绑定入口 */}
       <section className="assistant-section">
         <div className="assistant-item-head" style={{ marginBottom: 6 }}>
           <span className="side-label" style={{ margin: 0 }}>
-            对外知识库与问答门户
+            对外知识库门户 & 微信通道
           </span>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" className="pill" disabled={!status?.dropPortalPath} onClick={copyPortalUrl}>
-              复制链接
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="pill"
+              disabled={loading}
+              onClick={() => openWechatQrModal("owner_self")}
+              title="扫码绑定主人自己的微信，在微信内接收审批单并回复『批准』"
+            >
+              {ownerWx?.openId ? "📲 重绑主人微信" : "📲 绑定主人微信"}
+            </button>
+            {ownerWx?.openId ? (
+              <button type="button" className="pill" disabled={loading} onClick={handleUnbindOwnerWx}>
+                解绑主人微信
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="pill"
+              disabled={!status?.dropPortalPath}
+              onClick={copyPortalUrl}
+            >
+              复制门户链接
             </button>
             {status?.dropPortalPath ? (
               <a
@@ -292,9 +465,124 @@ export function AssistantColleaguesSection({
           </div>
         </div>
         <div className="loop-meta">
-          同事打开 <code>{status?.dropPortalPath || "门户链接"}</code> 输入一次通行口令后自动记住登录态，可跨获权知识库问答、查你的脱敏日历忙闲、发起预约或知识库更新提案。
+          同事可打开 <code>{status?.dropPortalPath || "门户链接"}</code> 免登问答，或点击下方卡片的「📲 生成微信绑定码」直接用微信扫码与小驳直连收发消息。
+          {ownerWx?.openId ? (
+            <span>
+              {" "}
+              · 主人微信已绑定：<code>{ownerWx.openId}</code>
+            </span>
+          ) : null}
         </div>
       </section>
+
+      {/* 微信扫码绑定模态框 */}
+      {qrModalOpen ? (
+        <section
+          className="assistant-section"
+          style={{
+            border: "1px solid var(--accent, #2f6b52)",
+            background: "var(--fill-quaternary, rgba(47, 107, 82, 0.06))",
+            padding: 14,
+            borderRadius: 10,
+          }}
+        >
+          <div className="assistant-item-head" style={{ marginBottom: 8 }}>
+            <span className="assistant-item-title">
+              📲 微信官方 iLink 扫码绑定 · {qrTargetLabel}
+            </span>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                className="pill"
+                disabled={loading}
+                onClick={() => {
+                  const tok = tokens.find((t) => t.id === qrTargetTokenId);
+                  openWechatQrModal(qrTargetMode, tok);
+                }}
+              >
+                🔄 刷新二维码
+              </button>
+              <button type="button" className="pill" onClick={closeWechatQrModal}>
+                关闭
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            {qrStartData?.qrSvgDataUrl ? (
+              <img
+                src={qrStartData.qrSvgDataUrl}
+                alt="微信绑定二维码"
+                style={{
+                  width: 180,
+                  height: 180,
+                  borderRadius: 8,
+                  border: "1px solid var(--line)",
+                  background: "#ffffff",
+                  padding: 6,
+                }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: 180,
+                  height: 180,
+                  borderRadius: 8,
+                  border: "1px dashed var(--line)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  color: "var(--muted)",
+                }}
+              >
+                正在拉取微信二维码…
+              </div>
+            )}
+
+            <div style={{ flex: 1, minWidth: 220, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="loop-meta" style={{ fontSize: 13, color: "var(--ink)" }}>
+                {qrStatusData?.message || "正在向腾讯 iLink 申请微信官方 ClawBot 绑定二维码…"}
+              </div>
+              <div className="loop-meta">
+                {qrTargetMode === "owner_self"
+                  ? "请用您本人的手机微信扫一扫，确认后即可在微信里接收同事提案通知并直接回复「批准」。"
+                  : `您可以直接截图此二维码发给「${qrTargetLabel}」在微信里长按识别，或让对方当面扫码；扫码确认后将直接激活绑定到 ${qrTargetTokenId}。`}
+              </div>
+
+              {qrStatusData?.status === "need_verifycode" && qrStartData ? (
+                <div className="assistant-inline-form">
+                  <input
+                    className="side-input"
+                    style={{ maxWidth: 180 }}
+                    value={qrVerifyCode}
+                    onChange={(e) => setQrVerifyCode(e.target.value)}
+                    placeholder="输入手机微信显示的6位验证码"
+                  />
+                  <button
+                    type="button"
+                    className="pill on"
+                    onClick={() => {
+                      const code = qrVerifyCode.trim();
+                      if (!code) return;
+                      setQrVerifyCode("");
+                      pollQrStatus(qrStartData.qrSessionId, code);
+                    }}
+                  >
+                    提交验证码
+                  </button>
+                </div>
+              ) : null}
+
+              {qrStartData?.qrcodeImgContent ? (
+                <div className="loop-meta" style={{ wordBreak: "break-all" }}>
+                  备用扫码链接：<code>{qrStartData.qrcodeImgContent}</code>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       {errorText ? (
         <div className="loop-meta" style={{ color: "var(--danger, #d9534f)" }}>
@@ -374,15 +662,37 @@ export function AssistantColleaguesSection({
                     </span>
                     {tok.imTenantId ? <span className="chat-mark">IM:{tok.imTenantId}</span> : null}
                     {tok.wxBinding?.status === "active" ? (
-                      <span className="chat-mark ok">微信已绑</span>
+                      <span className="chat-mark ok" title={tok.wxBinding.openId || ""}>
+                        微信已绑
+                      </span>
                     ) : tok.wxBinding?.status === "pending_owner" ? (
+                      <button
+                        type="button"
+                        className="pill on"
+                        disabled={loading}
+                        onClick={() => handleActivateWechat(tok)}
+                        title={`待确认微信 ID: ${tok.wxBinding.openId || ""}`}
+                      >
+                        ✓ 确认激活微信
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="pill"
+                      disabled={loading}
+                      onClick={() => openWechatQrModal("owner_colleague", tok)}
+                      title="生成该同事专属的微信官方扫码绑定二维码（扫码确认即直接激活）"
+                    >
+                      {tok.wxBinding?.status === "active" ? "📲 重绑微信码" : "📲 生成微信绑定码"}
+                    </button>
+                    {tok.wxBinding?.status === "active" ? (
                       <button
                         type="button"
                         className="pill"
                         disabled={loading}
-                        onClick={() => handleActivateWechat(tok)}
+                        onClick={() => handleUnbindColleagueWx(tok)}
                       >
-                        确认激活微信
+                        解绑微信
                       </button>
                     ) : null}
                     <button
@@ -410,6 +720,7 @@ export function AssistantColleaguesSection({
                   </div>
                   <div className="loop-meta">
                     获权知识库：{wsList.map((w) => w.workspaceKey).join(" 、 ")} · ID: {tok.id}
+                    {tok.wxBinding?.openId ? ` · 微信: ${tok.wxBinding.openId}` : ""}
                   </div>
 
                   {isEditing ? (

@@ -31,6 +31,7 @@ import {
   onDropTokensRevoked,
   type DropTenantHost,
 } from "./tokens.ts";
+import { startWeixinIlinkRuntime, stopAllWxMonitorLoops } from "../wx/pushGuard.ts";
 import type { IngestToolExecutionLog } from "./tools.ts";
 
 export type IngestLogRecord = {
@@ -209,7 +210,7 @@ export function handleIngestBatchCompleted(ctx: {
   status: "completed" | "partial" | "failed";
   errorReason?: string;
 }): { inboxItemId: string; chatId?: string; logWritten: boolean } {
-  const { host, workspacePath, config, meta, executionLog, summaryText, status, errorReason } = ctx;
+  const { host, workspacePath, meta, executionLog, summaryText, status, errorReason } = ctx;
 
   const logRes = appendWorkspaceIngestLog(workspacePath, {
     batchId: meta.batchId,
@@ -264,6 +265,7 @@ export function stopIngestQaSweepTimer() {
     activeEvictUnsub();
     activeEvictUnsub = null;
   }
+  stopAllWxMonitorLoops();
 }
 
 /**
@@ -362,6 +364,9 @@ export function startIngestRuntime(opts: {
     }, intervalMs);
     activeQaSweepTimer.unref?.();
   }
+
+  // 启动微信 iLink 长轮询监控协程（自动恢复 ~/.openclaw/openclaw-weixin/accounts/ 下所有已绑定 Bot 通道）
+  startWeixinIlinkRuntime({ tenants: opts.tenants });
 
   return recoveredWorkspaces;
 }

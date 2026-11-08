@@ -16,6 +16,7 @@ import {
 } from "./contract.ts";
 import {
   createDropToken,
+  getOwnerWxBinding,
   listDropTokens,
   revokeDropToken,
   setupKbWorkspaceForTenant,
@@ -162,6 +163,7 @@ export function getKbWorkspaceStatusForUi(
   const dropPortalPath = `/p/${host.id}/drop`;
   const kbWorkspaces = buildTenantKbWorkspacesSummary(host);
   const proposals = buildTenantProposalsSummary(host);
+  const ownerWx = getOwnerWxBinding(host);
 
   // 小驳全局跨工作区同事管理视图（workspace 传 "" 或 "__all__"）
   if (!raw || raw === "__all__") {
@@ -178,6 +180,7 @@ export function getKbWorkspaceStatusForUi(
         tokens: allTokens,
         kbWorkspaces,
         proposals,
+        ...(ownerWx ? { ownerWx } : {}),
         dropPortalPath,
       },
     };
@@ -268,6 +271,7 @@ export function getKbWorkspaceStatusForUi(
       otherTokens,
       kbWorkspaces,
       proposals,
+      ...(ownerWx ? { ownerWx } : {}),
       dropPortalPath,
     },
   };

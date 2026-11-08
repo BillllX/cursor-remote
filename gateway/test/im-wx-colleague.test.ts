@@ -23,15 +23,24 @@ import {
 import { loadTenants } from "../src/tenants.ts";
 import { readWorkspaceAgentFile } from "../src/workspace/agents.ts";
 import {
+  bindIlinkFetchForTest,
+  normalizeIlinkAccountId,
+  parseIlinkJson,
+  sanitizeIlinkBaseUrl,
+} from "../src/wx/ilinkClient.ts";
+import {
   bindImSystemReplySender,
   bindOpenClawCliExecutorForTest,
+  checkWechatQrBindingStatus,
   detectActiveWechatAccount,
   dispatchProposalReceiptOutbox,
   extractDmAssistantQuestion,
   generateRandomWechatUin,
   handleColleagueDmMention,
+  handleInboundWeixinMessage,
   resetWxPushGuardMemoryForTest,
   sendProactiveWechatMessage,
+  startWechatQrBindingSession,
 } from "../src/wx/pushGuard.ts";
 
 const tempDirs: string[] = [];
@@ -42,6 +51,7 @@ afterEach(() => {
   bindProposalOutboxDispatcher(null);
   bindImSystemReplySender(null);
   bindOpenClawCliExecutorForTest(null);
+  bindIlinkFetchForTest(null);
   bindQaRunner(null);
   resetWxPushGuardMemoryForTest();
   resetDropAuthMemoryStateForTest();
@@ -354,5 +364,200 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
     });
     assert.equal(deniedRes.handled, true);
     assert.equal(deniedRes.answer?.includes("未开启知识库与助理问答权限"), true);
+  });
+
+  test("微信 iLink 扫码绑定全闭环（主人直绑同事/门户自助扫码 + 路径穿越/SSRF拦截 + 入站 getUpdates 消息直连问答与主人微信批单）", async () => {
+    // 1. 路径穿越与非法账号拦截、SSRF 域名白名单校验、毒丸 JSON 防护
+    assert.equal(normalizeIlinkAccountId("../../etc/passwd"), "");
+    assert.equal(normalizeIlinkAccountId("bot_123@im.bot"), "bot_123-im-bot");
+    assert.equal(sanitizeIlinkBaseUrl("http://169.254.169.254/latest"), "https://ilinkai.weixin.qq.com");
+    assert.equal(sanitizeIlinkBaseUrl("https://evil.example.com/ilink"), "https://ilinkai.weixin.qq.com");
+    assert.equal(sanitizeIlinkBaseUrl("https://sz.weixin.qq.com/"), "https://sz.weixin.qq.com");
+
+    const parsedPoison = parseIlinkJson<{ message_id: string; text: string }>(
+      `{"message_id":9007199254740993,"text":"log \\"message_id\\": 12345 ok"}`,
+    );
+    assert.equal(parsedPoison.message_id, "9007199254740993");
+    assert.equal(parsedPoison.text, 'log "message_id": 12345 ok');
+
+    const base = join(tmpdir(), `wx-ilink-qr-test-${Date.now()}`);
+    const tenantsFile = join(base, "tenants.json");
+    const defaultStateDir = join(base, "tenants", "default");
+    const defaultWsRoot = join(defaultStateDir, "workspace");
+    const fintopiaPath = join(defaultWsRoot, "Fintopia集团");
+    const accountsDir = join(base, "openclaw-accounts");
+
+    mkdirSync(defaultStateDir, { recursive: true });
+    mkdirSync(fintopiaPath, { recursive: true });
+    mkdirSync(accountsDir, { recursive: true });
+    tempDirs.push(base);
+
+    writeFileSync(
+      tenantsFile,
+      JSON.stringify({
+        tenants: [{ id: "default", name: "BillXu", token: "tok_default" }],
+      }),
+      "utf8",
+    );
+    process.env.CURSOR_REMOTE_STATE_DIR = base;
+    process.env.CURSOR_REMOTE_TENANTS_FILE = tenantsFile;
+    loadTenants();
+
+    writeFileSync(join(fintopiaPath, "归档说明.md"), "# 归档说明\n一级分类：资产。\n", "utf8");
+    initKbWorkspaceConfig(fintopiaPath, {
+      title: "Fintopia 集团知识库",
+      allowedCategories: ["资产"],
+    });
+    const agentFile = readWorkspaceAgentFile({
+      id: "default",
+      stateDir: defaultStateDir,
+      workspaceRoot: defaultWsRoot,
+    } as never);
+    writeFileSync(join(defaultStateDir, "workspace-agent-chats.json"), JSON.stringify(agentFile), "utf8");
+
+    const host = buildDropTenantHost({
+      id: "default",
+      stateDir: defaultStateDir,
+      workspaceRoot: defaultWsRoot,
+      name: "BillXu",
+    });
+
+    const tokRes = createDropToken(host, {
+      workspace: "Fintopia集团",
+      passcode: "tu-pass-2026",
+      label: "屠姐",
+    });
+    assert.equal(tokRes.ok, true);
+    if (!tokRes.ok) return;
+
+    const sentWxMessages: Array<{ to: string; text: string }> = [];
+    let qrPollStep = 0;
+
+    bindIlinkFetchForTest(async (url, init) => {
+      if (url.includes("/ilink/bot/get_bot_qrcode")) {
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({
+            ret: 0,
+            qrcode: "qr_ticket_tu_001",
+            qrcode_img_content: "https://liteapp.weixin.qq.com/q/7GiQu1?qrcode=qr_ticket_tu_001",
+          }),
+        };
+      }
+      if (url.includes("/ilink/bot/get_qrcode_status")) {
+        qrPollStep += 1;
+        if (qrPollStep === 1) {
+          return {
+            status: 200,
+            ok: true,
+            text: JSON.stringify({
+              status: "scaned_but_redirect",
+              redirect_host: "sz.weixin.qq.com",
+            }),
+          };
+        }
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({
+            status: "confirmed",
+            ilink_bot_id: "wxbot_tu@im.bot",
+            bot_token: "secret_bot_token_tu",
+            ilink_user_id: "o9cq_tujie@im.wechat",
+            baseurl: "https://ilinkai.weixin.qq.com",
+          }),
+        };
+      }
+      if (url.includes("/ilink/bot/sendmessage")) {
+        const bodyObj = JSON.parse(init.body || "{}") as {
+          msg?: { to_user_id?: string; item_list?: Array<{ text_item?: { text?: string } }> };
+        };
+        sentWxMessages.push({
+          to: bodyObj.msg?.to_user_id || "",
+          text: bodyObj.msg?.item_list?.[0]?.text_item?.text || "",
+        });
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ ret: 0, message_id: 888001 }),
+        };
+      }
+      if (url.includes("/ilink/bot/getconfig") || url.includes("/ilink/bot/sendtyping")) {
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ ret: 0, typing_ticket: "tt_123" }),
+        };
+      }
+      return {
+        status: 200,
+        ok: true,
+        text: JSON.stringify({ ret: 0, msgs: [], get_updates_buf: "buf_1" }),
+      };
+    });
+
+    // 2. 主人为屠姐生成微信扫码绑定会话
+    const startRes = await startWechatQrBindingSession(host, {
+      mode: "owner_colleague",
+      tokenId: tokRes.record.id,
+      accountsDir,
+    });
+    assert.equal(startRes.ok, true);
+    if (!startRes.ok) return;
+    assert.equal(startRes.data.qrSvgDataUrl.startsWith("data:image/svg+xml;utf8,"), true);
+
+    // 第一次轮询：返回 scaned_but_redirect，状态转为 scaned
+    const poll1 = await checkWechatQrBindingStatus(host, {
+      qrSessionId: startRes.data.qrSessionId,
+    });
+    assert.equal(poll1.ok, true);
+    if (poll1.ok) {
+      assert.equal(poll1.data.status, "scaned");
+    }
+
+    // 第二次轮询：返回 confirmed，直接激活屠姐的 wxBinding 并落盘 Bot 凭证
+    const poll2 = await checkWechatQrBindingStatus(host, {
+      qrSessionId: startRes.data.qrSessionId,
+    });
+    assert.equal(poll2.ok, true);
+    if (poll2.ok) {
+      assert.equal(poll2.data.status, "confirmed");
+      assert.equal(poll2.data.bindingStatus, "active");
+      assert.equal(poll2.data.openId, "o9cq_tujie@im.wechat");
+      assert.equal(poll2.data.botId, "wxbot_tu-im-bot");
+    }
+
+    // 3. 屠姐在微信里发消息，触发内置 QA 回复并写回微信
+    bindQaRunner({
+      apiKey: () => "test-key",
+      listModels: async () => [BACKGROUND_MODEL],
+      sandbox: () => true,
+      prompt: async () => ({
+        id: "run_wx_inbound",
+        status: "finished",
+        result: "屠姐您好，Fintopia 11月核心指标一切正常。",
+        messages: [],
+      }),
+    });
+
+    const inboundRes = await handleInboundWeixinMessage({
+      account: {
+        accountId: "wxbot_tu-im-bot",
+        token: "secret_bot_token_tu",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+      },
+      message: {
+        message_id: "99001",
+        from_user_id: "o9cq_tujie@im.wechat",
+        message_type: 1,
+        context_token: "ctx_tu_live_001",
+        item_list: [{ type: 1, text_item: { text: "帮我看下11月核心指标" } }],
+      },
+      tenants: [{ id: "default", stateDir: defaultStateDir, workspaceRoot: defaultWsRoot, name: "BillXu" }],
+      accountsDir,
+    });
+    assert.equal(inboundRes.handled, true);
+    assert.equal(sentWxMessages.some((m) => m.to === "o9cq_tujie@im.wechat" && m.text.includes("Fintopia 11月核心指标一切正常")), true);
   });
 });

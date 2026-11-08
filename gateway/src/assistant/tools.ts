@@ -81,6 +81,7 @@ export type ToolHost = {
   }) => unknown;
   dropTokenList?: (args: { includeRevoked?: boolean }) => unknown;
   dropTokenRevoke?: (args: { idOrLabel: string; workspace?: string; globalRevoke?: boolean }) => unknown;
+  wxQrcodeGenerate?: (args: { tokenId?: string; mode?: "owner_colleague" | "owner_self" }) => Promise<unknown> | unknown;
   kbIngestSubmit?: (args: {
     workspace: string;
     fileName: string;
@@ -849,6 +850,30 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
             idOrLabel: str(args.idOrLabel),
             workspace: str(args.workspace) || undefined,
             globalRevoke: typeof args.globalRevoke === "boolean" ? args.globalRevoke : undefined,
+          }),
+      );
+    }
+    if (host.wxQrcodeGenerate) {
+      out.wx_qrcode_generate = tool(
+        "为指定的同事通行证（tokenId）或主人自己（mode='owner_self'）生成一张腾讯官方微信 iLink 扫码绑定二维码（返回 qrcodeImgContent 链接与内联 SVG 二维码，主人在「小驳 → 同事」里也可一键点按钮弹窗展示）。",
+        {
+          tokenId: S("可选，同事通行证 ID（如 dt_mw89yh4e4d5e8a5b 屠姐；若绑定主人自己可传 __owner__）"),
+          mode: {
+            type: "string",
+            enum: ["owner_colleague", "owner_self"],
+            description: "可选，owner_colleague 为同事生成绑定码（扫码确认即自动激活），owner_self 为绑定主人自己的个人微信",
+          },
+        },
+        [],
+        (args) =>
+          host.wxQrcodeGenerate!({
+            tokenId: str(args.tokenId) || undefined,
+            mode:
+              args.mode === "owner_self"
+                ? "owner_self"
+                : args.mode === "owner_colleague"
+                  ? "owner_colleague"
+                  : undefined,
           }),
       );
     }
