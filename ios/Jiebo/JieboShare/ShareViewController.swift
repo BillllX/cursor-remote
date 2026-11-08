@@ -133,14 +133,19 @@ private struct ShareRoot: View {
                         Section("请小驳") {
                             Picker("意图", selection: $intent) {
                                 ForEach([
-                                    AssistantCaptureBridge.Action.summarize,
+                                    AssistantCaptureBridge.Action.archiveToKb,
+                                    .summarize,
                                     .remember, .createTask, .readLater, .custom,
                                 ], id: \.self) { action in
                                     Text(action.title).tag(action)
                                 }
                             }
                             .foregroundStyle(ShareBrandColor.ink)
-                            TextField("备注（可选）", text: $note, axis: .vertical)
+                            TextField(
+                                intent == .archiveToKb ? "备注或目标知识库名（如 Fintopia集团，可选）" : "备注（可选）",
+                                text: $note,
+                                axis: .vertical
+                            )
                                 .foregroundStyle(ShareBrandColor.ink)
                                 .lineLimit(1 ... 4)
                         }

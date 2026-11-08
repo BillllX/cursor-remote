@@ -225,6 +225,19 @@ function recordAuthFailure(tenantId: string, clientIp: string, now = Date.now())
   authRateLimiter.set(key, state);
 }
 
+/**
+ * 无状态 Webhook 口令验证通过后撤回本次 attempts 计数（但保留已有的 failures 不清零，防止利用合法口令掩护暴力枚举其他口令），
+ * 使得合法自动化脚本/热文件夹每分钟连续投递超过 20 个文件时不会触发 429 自锁。
+ */
+function refundStatelessSuccessAttempt(tenantId: string, clientIp: string) {
+  const key = rateLimitKey(tenantId, clientIp);
+  const state = authRateLimiter.get(key);
+  if (!state) return;
+  if (state.attempts.length > 0) {
+    state.attempts.pop();
+  }
+}
+
 /** 测试用：清空内存限流与短期会话状态 */
 export function resetDropAuthMemoryStateForTest() {
   activeDropSessions.clear();
@@ -620,6 +633,139 @@ export function bindBatchIdToDropSession(rawSessionToken: string, batchId: strin
   sess.batchId = batchId;
   if (receiptHash) sess.receiptHash = receiptHash;
   return true;
+}
+
+/**
+ * 供单步 Webhook / CLI / 本地热文件夹同步使用的无状态口令校验：
+ * 1. 与网页登录共享同一套 IP 限流器（checkAndRecordAttempt / recordAuthFailure），防暴力枚举；
+ * 2. 常量时间 scrypt 比对口令，实时校验口令未吊销/未过期、工作区存在且 .jiebo/kb.json 合法；
+ * 3. 返回一次性内存授权对象（不写入 activeDropSessions，避免高频自动化推送挤掉浏览器交互式会话）。
+ */
+export function verifyDropPasscodeStateless(
+  host: DropTenantHost,
+  input: {
+    passcode: string;
+    submitterName?: string;
+    clientIp: string;
+  },
+  now = Date.now(),
+):
+  | {
+      ok: true;
+      session: DropSessionGrant;
+    }
+  | {
+      ok: false;
+      status: 400 | 401 | 429;
+      error: string;
+      retryAfterSec?: number;
+    } {
+  const rate = checkAndRecordAttempt(host.id, input.clientIp, now);
+  if (!rate.ok) {
+    return {
+      ok: false,
+      status: 429,
+      error: `口令尝试次数过多，请 ${rate.retryAfterSec} 秒后再试`,
+      retryAfterSec: rate.retryAfterSec,
+    };
+  }
+
+  const rawSubmitter =
+    typeof input.submitterName === "string" && input.submitterName.trim() ? input.submitterName : "Webhook 自动投递";
+  const submitter = sanitizeSubmitterName(rawSubmitter);
+  if (!submitter.ok) {
+    return { ok: false, status: 400, error: submitter.error };
+  }
+
+  const passCheck = isValidPasscodeFormat(input.passcode);
+  if (!passCheck.ok) {
+    recordAuthFailure(host.id, input.clientIp, now);
+    return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  }
+
+  const data = readTokenFileUnlocked(host);
+  let matchedRecord: DropTokenRecord | null = null;
+  for (const record of data.items) {
+    if (record.revokedAt) continue;
+    if (record.expiresAt && record.expiresAt <= now) continue;
+    const computed = hashPasscode(passCheck.clean, record.salt);
+    const expected = Buffer.from(record.codeHash, "hex");
+    if (expected.length === computed.length && timingSafeEqual(expected, computed)) {
+      matchedRecord = record;
+    }
+  }
+
+  if (!matchedRecord) {
+    recordAuthFailure(host.id, input.clientIp, now);
+    return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  }
+
+  const wsRef = host.resolveWorkspace(matchedRecord.workspaceId);
+  if (!wsRef) {
+    recordAuthFailure(host.id, input.clientIp, now);
+    return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  }
+
+  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+  if (!kbLoaded.ok) {
+    recordAuthFailure(host.id, input.clientIp, now);
+    return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  }
+
+  refundStatelessSuccessAttempt(host.id, input.clientIp);
+
+  const grant: DropSessionGrant = {
+    sessionToken: `ds_wh_${randomBytes(20).toString("hex")}`,
+    qaSessionId: `qa_wh_${randomBytes(12).toString("hex")}`,
+    tokenId: matchedRecord.id,
+    tenantId: host.id,
+    workspaceId: wsRef.workspaceId,
+    workspaceKey: wsRef.key,
+    workspacePath: kbLoaded.workspaceRealPath,
+    workspaceTitle: kbLoaded.config.title,
+    kbConfig: kbLoaded.config,
+    submitterName: submitter.name,
+    clientIp: normalizeClientIp(input.clientIp),
+    createdAt: now,
+    lastActiveAt: now,
+    expiresAt: now + SESSION_TTL_MS,
+  };
+
+  return { ok: true, session: cloneSessionGrant(grant) };
+}
+
+/**
+ * 在单步流式上传结束时复核无状态 Webhook 会话对应的口令是否仍有效（未被中途吊销或过期）、工作区是否仍合法。
+ */
+export function reverifyStatelessDropSession(
+  host: DropTenantHost,
+  grant: DropSessionGrant,
+  now = Date.now(),
+): { ok: true; session: DropSessionGrant } | { ok: false; status: 401 | 403; error: string } {
+  const data = readTokenFileUnlocked(host);
+  const tokenRecord = data.items.find((r) => r.id === grant.tokenId);
+  if (!tokenRecord || tokenRecord.revokedAt || (tokenRecord.expiresAt && tokenRecord.expiresAt <= now)) {
+    return { ok: false, status: 401, error: "投递口令已被吊销或过期" };
+  }
+  const wsRef = host.resolveWorkspace(grant.workspaceId);
+  if (!wsRef) {
+    return { ok: false, status: 403, error: "目标工作区已不存在" };
+  }
+  const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+  if (!kbLoaded.ok) {
+    return { ok: false, status: 403, error: "目标工作区知识库配置已失效" };
+  }
+  return {
+    ok: true,
+    session: cloneSessionGrant({
+      ...grant,
+      workspaceKey: wsRef.key,
+      workspacePath: kbLoaded.workspaceRealPath,
+      workspaceTitle: kbLoaded.config.title,
+      kbConfig: kbLoaded.config,
+      lastActiveAt: now,
+    }),
+  };
 }
 
 /** 供小驳调用的知识库工作区初始化包装（校验工作区位于租户根内） */

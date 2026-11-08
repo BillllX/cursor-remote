@@ -1,17 +1,22 @@
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
-import { loadKbWorkspaceConfig } from "./contract.ts";
+import { isAllowedUploadFileName, loadKbWorkspaceConfig } from "./contract.ts";
 import {
+  allocateDropBatchCredentials,
+  cleanupAbortedStagingBatchSync,
+  createDropBatch,
   fixedPublicStatusMessage,
   ingestStateLockPath,
   isValidBatchId,
+  MAX_FILES_PER_BATCH,
   readBatchMetaSync,
   sanitizeBatchNote,
+  stageFileIntoBatch,
   writeBatchMetaSync,
   type DropBatchMeta,
   type DropBatchStatus,
 } from "./staging.ts";
-import type { DropSessionGrant, DropTenantHost } from "./tokens.ts";
+import { sanitizeSubmitterName, SESSION_TTL_MS, type DropSessionGrant, type DropTenantHost } from "./tokens.ts";
 
 export type IngestQueueEntry = {
   batchId: string;
@@ -235,6 +240,8 @@ export function commitDropBatchAndEnqueue(
 
     const savedMeta = writeBatchMetaSync(kbCheck.workspaceRealPath, meta);
     if (!savedMeta.ok) {
+      qData.items = qData.items.filter((item) => item.batchId !== meta.batchId);
+      writeQueueFileUnlocked(host, qData);
       return { ok: false as const, status: 400 as const, error: savedMeta.error };
     }
 
@@ -255,6 +262,156 @@ export function commitDropBatchAndEnqueue(
 /** 列出指定租户队列中的条目（测试与诊断用） */
 export function listIngestQueue(ref: TenantRef): IngestQueueEntry[] {
   return readQueueFileUnlocked(ref).items;
+}
+
+/** 检查当前租户的活跃归档队列是否仍有容量（未达到 MAX_ACTIVE_QUEUE_ITEMS） */
+export function hasIngestQueueCapacity(ref: TenantRef): boolean {
+  const qData = readQueueFileUnlocked(ref);
+  const activeCount = qData.items.filter((x) => x.status === "queued" || x.status === "processing").length;
+  return activeCount < MAX_ACTIVE_QUEUE_ITEMS;
+}
+
+/**
+ * 一步完成「创建投递批次 → 写入 1..N 个文件 → 提交归档队列并唤醒后台执行器」：
+ * 供单步 Webhook（JSON/多文件模式）、iOS 分享扩展直投知识库、以及日常巡检/助理工具（kb_ingest_submit）统一调用。
+ * 1. 落盘前先完成全部文件名、后缀、非空、单文件体积、备注与活跃队列容量预检；
+ * 2. 若中途任何一步失败，自动调用 cleanupAbortedStagingBatchSync 清理未提交的 staging 目录，确保工作区零残留。
+ */
+export function submitDirectIngestBatch(
+  host: DropTenantHost,
+  input: {
+    workspaceKeyOrId: string;
+    tokenId: string;
+    submitterName: string;
+    note?: unknown;
+    files: Array<{ fileName: string; data: Buffer }>;
+  },
+  now = Date.now(),
+):
+  | {
+      ok: true;
+      batchId: string;
+      receiptToken: string;
+      workspaceKey: string;
+      workspaceTitle: string;
+      meta: DropBatchMeta;
+      queueEntry: IngestQueueEntry;
+    }
+  | {
+      ok: false;
+      status: 400 | 403 | 404 | 409 | 413 | 429;
+      error: string;
+    } {
+  const submitterCheck = sanitizeSubmitterName(input.submitterName);
+  if (!submitterCheck.ok) {
+    return { ok: false, status: 400, error: submitterCheck.error };
+  }
+  const noteCheck = sanitizeBatchNote(input.note);
+  if (!noteCheck.ok) {
+    return { ok: false, status: 400, error: noteCheck.error };
+  }
+
+  const wsRef = host.resolveWorkspace(input.workspaceKeyOrId.trim());
+  if (!wsRef) {
+    return { ok: false, status: 404, error: `找不到目标知识库工作区：${input.workspaceKeyOrId}` };
+  }
+  const kbCheck = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+  if (!kbCheck.ok) {
+    return { ok: false, status: 403, error: kbCheck.error };
+  }
+
+  if (!Array.isArray(input.files) || input.files.length === 0) {
+    return { ok: false, status: 400, error: "请至少提供一个待归档文件" };
+  }
+  if (input.files.length > MAX_FILES_PER_BATCH) {
+    return { ok: false, status: 400, error: `单批次最多允许提交 ${MAX_FILES_PER_BATCH} 个文件` };
+  }
+
+  for (const f of input.files) {
+    const nameCheck = isAllowedUploadFileName(f.fileName, kbCheck.config);
+    if (!nameCheck.ok) {
+      return { ok: false, status: 400, error: nameCheck.error };
+    }
+    if (!Buffer.isBuffer(f.data) || f.data.length === 0) {
+      return { ok: false, status: 400, error: `文件 "${f.fileName}" 内容不能为空` };
+    }
+    if (f.data.length > kbCheck.config.maxFileBytes) {
+      return {
+        ok: false,
+        status: 413,
+        error: `文件 "${f.fileName}" 体积（${f.data.length} bytes）超过单文件上限（${kbCheck.config.maxFileBytes} bytes）`,
+      };
+    }
+  }
+
+  if (!hasIngestQueueCapacity(host)) {
+    return { ok: false, status: 429, error: "当前排队归档的批次过多，请稍后再试" };
+  }
+
+  const creds = allocateDropBatchCredentials(now);
+  const session: DropSessionGrant = {
+    sessionToken: `ds_direct_${creds.batchId}`,
+    qaSessionId: `qa_direct_${creds.batchId}`,
+    tokenId: input.tokenId,
+    tenantId: host.id,
+    workspaceId: wsRef.workspaceId,
+    workspaceKey: wsRef.key,
+    workspacePath: kbCheck.workspaceRealPath,
+    workspaceTitle: kbCheck.config.title,
+    kbConfig: kbCheck.config,
+    submitterName: submitterCheck.name,
+    batchId: creds.batchId,
+    receiptHash: creds.receiptHash,
+    createdAt: now,
+    lastActiveAt: now,
+    expiresAt: now + SESSION_TTL_MS,
+  };
+
+  const created = createDropBatch(host, session, now, creds);
+  if (!created.ok) {
+    return { ok: false, status: 400, error: created.error };
+  }
+
+  for (const f of input.files) {
+    const staged = stageFileIntoBatch(
+      host,
+      session,
+      {
+        batchId: creds.batchId,
+        fileName: f.fileName,
+        data: f.data,
+      },
+      now,
+    );
+    if (!staged.ok) {
+      cleanupAbortedStagingBatchSync(host, kbCheck.workspaceRealPath, creds.batchId);
+      return staged;
+    }
+  }
+
+  const committed = commitDropBatchAndEnqueue(
+    host,
+    session,
+    {
+      batchId: creds.batchId,
+      note: noteCheck.note,
+    },
+    now,
+  );
+  if (!committed.ok) {
+    cleanupAbortedStagingBatchSync(host, kbCheck.workspaceRealPath, creds.batchId);
+    return committed;
+  }
+
+  return {
+    ok: true,
+    batchId: creds.batchId,
+    receiptToken: creds.receiptToken,
+    workspaceKey: wsRef.key,
+    workspaceTitle: kbCheck.config.title,
+    meta: committed.meta,
+    queueEntry: committed.queueEntry,
+  };
 }
 
 /** 测试辅助：强制修改队列中某批次的状态与尝试次数（用于模拟网关在 processing 期间崩溃） */

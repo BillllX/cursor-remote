@@ -1,17 +1,14 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { initKbWorkspaceConfig } from "../src/ingest/contract.ts";
 import { buildDropTenantHost } from "../src/ingest/http.ts";
 import { bindIngestBatchWorker, drainWorkspaceIngestQueue } from "../src/ingest/queue.ts";
-import {
-  createDropToken,
-  resetDropAuthMemoryStateForTest,
-  revokeDropToken,
-} from "../src/ingest/tokens.ts";
+import { normalizeWebhookUrl, scanWatchFolderOnce } from "../src/ingest/watchFolder.ts";
+import { createDropToken, resetDropAuthMemoryStateForTest, revokeDropToken } from "../src/ingest/tokens.ts";
 import { createPublishController, type PublishTenant } from "../src/publish.ts";
 import type { Tenant } from "../src/tenants.ts";
 import { readWorkspaceAgentFile } from "../src/workspace/agents.ts";
@@ -112,10 +109,7 @@ describe("Step 4: 网关内置 /p/<tenant>/drop 盲投页面与流式 API (http.
     });
     assert.equal(optRes.status, 204);
     assert.equal(optRes.headers.get("access-control-allow-origin"), "null");
-    assert.equal(
-      optRes.headers.get("access-control-allow-headers")?.includes("x-drop-page-ticket"),
-      true,
-    );
+    assert.equal(optRes.headers.get("access-control-allow-headers")?.includes("x-drop-page-ticket"), true);
 
     // 验证来自 Origin: null 但未携带有效 X-Drop-Page-Ticket 的请求被 403 拒绝
     const forgedSandboxReq = await fetch(`${baseUrl}/p/default/drop/api/auth`, {
@@ -213,7 +207,10 @@ describe("Step 4: 网关内置 /p/<tenant>/drop 盲投页面与流式 API (http.
     // 验证批次目录中无残留 .part 临时文件
     const batchADir = join(wsPath, ".cursor-remote/uploads/inbox", batchA.batchId);
     const remainingFiles = readdirSync(batchADir);
-    assert.equal(remainingFiles.some((f) => f.endsWith(".part") || f.startsWith(".tmp-")), false);
+    assert.equal(
+      remainingFiles.some((f) => f.endsWith(".part") || f.startsWith(".tmp-")),
+      false,
+    );
 
     // 6. 上传危险脚本文件 (.sh) 被 400 拦截
     const badFileRes = await fetch(
@@ -307,5 +304,170 @@ describe("Step 4: 网关内置 /p/<tenant>/drop 盲投页面与流式 API (http.
       },
     );
     assert.equal(revokedUploadRes.status, 401);
+  });
+
+  test("单步 Webhook API (/p/default/drop/api/webhook) 与本地热文件夹同步：支持二进制流直传、JSON 多文件/邮件拆解及安全清理", async () => {
+    const { baseUrl, host, wsPath, base } = await makeHttpTestEnv({ maxFileBytes: 4096 });
+
+    bindIngestBatchWorker(async () => ({
+      status: "completed",
+      statusMessage: "已完成自动归档",
+    }));
+
+    // 1. 携带 Origin 头的浏览器跨域请求被 403 拒绝
+    const browserWebhook = await fetch(`${baseUrl}/p/default/drop/api/webhook?fileName=a.csv`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer fintopia-2026",
+        origin: "https://evil.example",
+      },
+      body: "a,b\n1,2\n",
+    });
+    assert.equal(browserWebhook.status, 403);
+
+    // 2. 错误口令返回 401
+    const badPassRes = await fetch(`${baseUrl}/p/default/drop/api/webhook?fileName=a.csv`, {
+      method: "POST",
+      headers: { authorization: "Bearer wrong-pass" },
+      body: "a,b\n1,2\n",
+    });
+    assert.equal(badPassRes.status, 401);
+
+    // 3. 模式 A：二进制流单步上传并入队（含 % 字符文件名验证不会二次 decodeURIComponent 破坏），立即可通过 receiptToken 查状态
+    const streamRes = await fetch(
+      `${baseUrl}/p/default/drop/api/webhook?fileName=${encodeURIComponent("每日资金日报_收益率15%30分析.csv")}&submitterName=${encodeURIComponent("BI每日跑批")}&note=${encodeURIComponent("自动推送%20正常")}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer fintopia-2026",
+          "content-type": "text/csv",
+        },
+        body: "主体,余额\n三农信,12000\n",
+      },
+    );
+    assert.equal(streamRes.status, 200);
+    const streamJson = (await streamRes.json()) as {
+      ok: boolean;
+      batchId: string;
+      receiptToken: string;
+      fileCount: number;
+      storedName: string;
+    };
+    assert.equal(streamJson.ok, true);
+    assert.equal(streamJson.fileCount, 1);
+    assert.equal(streamJson.storedName, "每日资金日报_收益率15%30分析.csv");
+
+    const wsRef = host.resolveWorkspace("Fintopia集团")!;
+    await drainWorkspaceIngestQueue(host, wsRef.workspaceId);
+
+    const statusRes = await fetch(
+      `${baseUrl}/p/default/drop/api/status?batchId=${encodeURIComponent(streamJson.batchId)}`,
+      { headers: { "x-drop-receipt": streamJson.receiptToken } },
+    );
+    assert.equal(statusRes.status, 200);
+    const statusJson = (await statusRes.json()) as { status: { status: string } };
+    assert.equal(statusJson.status.status, "completed");
+
+    // 4. 模式 B：JSON 载荷一次提交邮件正文 (.md) + Base64 附件 (.xlsx)
+    const jsonWebhookRes = await fetch(`${baseUrl}/p/default/drop/api/webhook`, {
+      method: "POST",
+      headers: {
+        "x-drop-passcode": "fintopia-2026",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        submitterName: "邮件转发网关",
+        note: "来自财务部的每日资金日报邮件",
+        files: [
+          {
+            fileName: "邮件正文_1108资金简报.md",
+            content: "# 11月8日资金简报\n\n今日资金回流正常。",
+            encoding: "utf8",
+          },
+          {
+            fileName: "附件_资金明细表.xlsx",
+            content: Buffer.from("mock-xlsx-binary-content").toString("base64"),
+            encoding: "base64",
+          },
+        ],
+      }),
+    });
+    assert.equal(jsonWebhookRes.status, 200);
+    const jsonWebhookData = (await jsonWebhookRes.json()) as {
+      ok: boolean;
+      batchId: string;
+      fileCount: number;
+    };
+    assert.equal(jsonWebhookData.ok, true);
+    assert.equal(jsonWebhookData.fileCount, 2);
+    await drainWorkspaceIngestQueue(host, wsRef.workspaceId);
+
+    // 5. 超限流式上传失败时，自动清理未提交的 staging 批次目录（工作区 inbox 不留孤儿批次）
+    const inboxRoot = join(wsPath, ".cursor-remote/uploads/inbox");
+    const batchesBeforeOversized = readdirSync(inboxRoot);
+    const oversizedStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(3000));
+        controller.enqueue(new Uint8Array(3000));
+        controller.close();
+      },
+    });
+    const oversizedInit: RequestInit & { duplex?: "half" } = {
+      method: "POST",
+      headers: { authorization: "Bearer fintopia-2026" },
+      body: oversizedStream,
+      duplex: "half",
+    };
+    const oversizedWebhook = await fetch(`${baseUrl}/p/default/drop/api/webhook?fileName=too-big.pdf`, oversizedInit);
+    assert.equal(oversizedWebhook.status, 413);
+    assert.deepEqual(
+      readdirSync(inboxRoot),
+      batchesBeforeOversized,
+      "失败的单步 Webhook 不得在 inbox 中残留孤儿批次目录",
+    );
+
+    // 6. 本地热文件夹同步脚本 scanWatchFolderOnce 端到端测试（自动上传、去重、单文件报错隔离并移入 .archived / .failed）
+    assert.throws(() => normalizeWebhookUrl("http://remote.example.com/p/default/drop/api/webhook"), /必须使用 https/);
+
+    const watchDir = join(base, "watch-folder");
+    mkdirSync(watchDir, { recursive: true });
+    writeFileSync(join(watchDir, "01_超限报错文件.pdf"), Buffer.alloc(5000, 0x41));
+    writeFileSync(join(watchDir, "02_本地保存的尽调报告.md"), "# 尽调报告\n核心指标良好", "utf8");
+    writeFileSync(join(watchDir, "正在下载的临时文件.xlsx.part"), "partial", "utf8");
+
+    const synced1 = await scanWatchFolderOnce({
+      watchDir,
+      webhookUrl: `${baseUrl}/p/default/drop`,
+      passcode: "fintopia-2026",
+      submitter: "Mac热文件夹",
+      settleMs: 0,
+      maxBytes: 4096,
+    });
+    // 排序在前的 01_超限报错文件.pdf 被隔离进 .failed，不会卡死后面的 02_本地保存的尽调报告.md
+    assert.equal(synced1.failed.length, 1);
+    assert.equal(synced1.failed[0].fileName, "01_超限报错文件.pdf");
+    assert.equal(existsSync(join(watchDir, "01_超限报错文件.pdf")), false);
+    assert.equal(Boolean(synced1.failed[0].failedPath && existsSync(synced1.failed[0].failedPath)), true);
+
+    assert.equal(synced1.uploaded.length, 1);
+    assert.equal(synced1.uploaded[0].fileName, "02_本地保存的尽调报告.md");
+    assert.equal(existsSync(join(watchDir, "02_本地保存的尽调报告.md")), false);
+    assert.equal(existsSync(synced1.uploaded[0].archivedPath), true);
+    // .part 临时文件不会被误上传
+    assert.equal(existsSync(join(watchDir, "正在下载的临时文件.xlsx.part")), true);
+
+    // 再次放入相同内容文件，验证 SHA-256 账本去重直接移入 .archived
+    writeFileSync(join(watchDir, "03_重复内容的尽调报告.md"), "# 尽调报告\n核心指标良好", "utf8");
+    const synced2 = await scanWatchFolderOnce({
+      watchDir,
+      webhookUrl: `${baseUrl}/p/default/drop`,
+      passcode: "fintopia-2026",
+      submitter: "Mac热文件夹",
+      settleMs: 0,
+      maxBytes: 4096,
+    });
+    assert.equal(synced2.uploaded.length, 0);
+    assert.deepEqual(synced2.duplicates, ["03_重复内容的尽调报告.md"]);
+    assert.equal(existsSync(join(watchDir, "03_重复内容的尽调报告.md")), false);
   });
 });

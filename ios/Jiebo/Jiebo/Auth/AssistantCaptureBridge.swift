@@ -23,6 +23,7 @@ enum AssistantCaptureBridge {
         case remember
         case createTask
         case readLater
+        case archiveToKb
         case custom
         case voice
 
@@ -33,6 +34,7 @@ enum AssistantCaptureBridge {
             case .remember: return "记住"
             case .createTask: return "建任务"
             case .readLater: return "稍后读"
+            case .archiveToKb: return "归档入库"
             case .custom: return "自定义"
             case .voice: return "语音输入"
             }
@@ -135,6 +137,9 @@ enum AssistantCaptureBridge {
     static func prompt(for capture: Capture) -> String {
         if capture.action == .voice { return "" }
         var parts = ["意图：\(capture.action.title)"]
+        if capture.action == .archiveToKb {
+            parts.append("请直接调用 kb_ingest_submit 工具将以下内容归档入对应的知识库工作区并自动更新 HTML 看板。")
+        }
         if let note = capture.note { parts.append("备注：\(note)") }
         switch capture.kind {
         case .text, .action:

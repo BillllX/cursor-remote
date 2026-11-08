@@ -7,6 +7,7 @@ enum AssistantIntentChoice: String, AppEnum {
     case remember
     case createTask
     case readLater
+    case archiveToKb
     case custom
 
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "处理意图")
@@ -16,6 +17,7 @@ enum AssistantIntentChoice: String, AppEnum {
         .remember: "记住",
         .createTask: "建任务",
         .readLater: "稍后读",
+        .archiveToKb: "归档入库",
         .custom: "自定义",
     ]
 
@@ -26,6 +28,7 @@ enum AssistantIntentChoice: String, AppEnum {
         case .remember: return .remember
         case .createTask: return .createTask
         case .readLater: return .readLater
+        case .archiveToKb: return .archiveToKb
         case .custom: return .custom
         }
     }
@@ -51,7 +54,7 @@ struct AskJieboIntent: AppIntent {
 
 struct CaptureForJieboIntent: AppIntent {
     static let title: LocalizedStringResource = "交给小驳"
-    static let description = IntentDescription("保存文字，并选择总结、记住、建任务或稍后读。")
+    static let description = IntentDescription("保存文字，并选择总结、记住、建任务、稍后读或归档入库。")
     static let openAppWhenRun = true
 
     @Parameter(title: "内容")

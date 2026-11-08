@@ -153,10 +153,20 @@ export function summarizeToolArgs(args: unknown): unknown {
     "agent",
     "model",
     "readonly",
+    "workspace",
+    "fileName",
+    "note",
+    "submitterName",
+    "categories",
+    "label",
+    "idOrLabel",
   ];
   const out: Record<string, unknown> = {};
   for (const key of keep) {
     if (key in record) out[key] = record[key];
+  }
+  if ("passcode" in record) {
+    out.passcode = "***";
   }
   if (typeof out.prompt === "string" && out.prompt.length > 500) {
     out.prompt = `${out.prompt.slice(0, 500)}\n…`;
@@ -190,7 +200,7 @@ export function shellPublishes(name: string, args: unknown) {
 export function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
-  if (/(kb_workspace_init|drop_token_create|drop_token_revoke)/.test(n)) {
+  if (/(kb_workspace_init|drop_token_create|drop_token_revoke|kb_ingest_submit)/.test(n)) {
     return true;
   }
   if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile)/.test(n)) {

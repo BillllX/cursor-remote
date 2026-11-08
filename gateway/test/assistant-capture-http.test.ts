@@ -15,6 +15,9 @@ import { assistantTools } from "../src/assistant/tools.ts";
 import { listInbox, postInbox } from "../src/assistant/inbox.ts";
 import { getTenant, loadTenants } from "../src/tenants.ts";
 import { artifactPath, storeArtifact } from "../src/turnFiles.ts";
+import { initKbWorkspaceConfig } from "../src/ingest/contract.ts";
+import { listIngestQueue } from "../src/ingest/queue.ts";
+import { readWorkspaceAgentFile } from "../src/workspace/agents.ts";
 
 const root = mkdtempSync(join(tmpdir(), "jiebo-assistant-capture-"));
 const workspace = join(root, "user");
@@ -230,5 +233,131 @@ describe("assistant capture HTTP", () => {
       String(await other.execute({ path: "captures/a.txt", sha }, { toolCallId: "read-b" })),
       /不属于当前租户/,
     );
+  });
+
+  test("iOS 分享扩展「归档入库」意图：支持文本/网页链接与文件自动桥接进入知识库 Ingest 归档队列", async () => {
+    const kbWsPath = join(workspace, "Fintopia集团");
+    mkdirSync(kbWsPath, { recursive: true });
+    const tenant = getTenant("default")!;
+    readWorkspaceAgentFile(tenant);
+    const kbInit = initKbWorkspaceConfig(kbWsPath, {
+      title: "Fintopia 集团知识库",
+      allowedCategories: ["资金", "资产", "牌照"],
+    });
+    assert.equal(kbInit.ok, true);
+
+    // 1. 文本分享选择「归档入库」-> 自动生成 .md 并进入知识库归档队列
+    const textCaptureRes = await fetch(`${origin}/upload/assistant/ingest`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: "kb-share-text-1",
+        kind: "text",
+        text: "三农信11月最新实缴保证金回流1200万元，不良率环比下降0.3%。",
+        intent: "归档入库",
+        note: "Fintopia集团 资金日报随手记",
+      }),
+    });
+    assert.equal(textCaptureRes.status, 200);
+    const textCaptureJson = (await textCaptureRes.json()) as {
+      ok: boolean;
+      created: boolean;
+      kbBatchId?: string;
+      kbWorkspace?: string;
+    };
+    assert.equal(textCaptureJson.ok, true);
+    assert.equal(textCaptureJson.kbWorkspace, "Fintopia集团");
+    assert.ok(textCaptureJson.kbBatchId?.startsWith("b_"));
+
+    // 2. 文件分享选择「归档入库」-> 既存入租户受控快照，又自动桥接进入知识库归档队列
+    const fileRow = {
+      clientId: "kb-share-file-1",
+      kind: "file",
+      filename: "微信收到的11月资金台账.csv",
+      mime: "text/csv",
+      intent: "归档入库",
+      note: "微信群随手分享入库",
+    };
+    const fileCaptureRes = await fetch(`${origin}/upload/assistant/ingest-file`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "text/csv",
+        "x-jiebo-assistant": metadata(fileRow),
+      },
+      body: "主体,资金余额\n新余瓴岳,5600\n",
+    });
+    assert.equal(fileCaptureRes.status, 200);
+    const fileCaptureJson = (await fileCaptureRes.json()) as {
+      ok: boolean;
+      kbBatchId?: string;
+      kbWorkspace?: string;
+    };
+    assert.equal(fileCaptureJson.ok, true);
+    assert.equal(fileCaptureJson.kbWorkspace, "Fintopia集团");
+    assert.ok(fileCaptureJson.kbBatchId?.startsWith("b_"));
+
+    const queueItems = listIngestQueue(tenant);
+    assert.equal(
+      queueItems.some((q) => q.batchId === textCaptureJson.kbBatchId),
+      true,
+    );
+    assert.equal(
+      queueItems.some((q) => q.batchId === fileCaptureJson.kbBatchId),
+      true,
+    );
+
+    // 3. 网页链接 (kind="link") 选择「归档入库」-> 自动转为 Markdown 归档入库
+    const linkCaptureRes = await fetch(`${origin}/upload/assistant/ingest`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: "kb-share-link-1",
+        kind: "link",
+        url: "https://example.invalid/fintopia-report",
+        title: "Fintopia 2026 四季度牌照合规简报",
+        intent: "归档入库",
+        note: "Fintopia集团 牌照进展",
+      }),
+    });
+    assert.equal(linkCaptureRes.status, 200);
+    const linkCaptureJson = (await linkCaptureRes.json()) as {
+      ok: boolean;
+      kbBridged?: boolean;
+      kbBatchId?: string;
+      kbWorkspace?: string;
+    };
+    assert.equal(linkCaptureJson.kbBridged, true);
+    assert.equal(linkCaptureJson.kbWorkspace, "Fintopia集团");
+
+    // 4. 多知识库工作区下，若分享内容与备注均未提及任何知识库（0分或平局），严格拒绝盲投并退回收件箱（绝不误投进第一个库）
+    const secondKbPath = join(workspace, "Alpha量化库");
+    mkdirSync(secondKbPath, { recursive: true });
+    readWorkspaceAgentFile(tenant);
+    const kbInit2 = initKbWorkspaceConfig(secondKbPath, {
+      title: "Alpha 量化研究知识库",
+      allowedCategories: ["策略", "回测"],
+    });
+    assert.equal(kbInit2.ok, true);
+
+    const ambiguousRes = await fetch(`${origin}/upload/assistant/ingest`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        clientId: "kb-share-ambiguous-1",
+        kind: "text",
+        text: "今天天气不错，记录一下普通随笔。",
+        intent: "归档入库",
+      }),
+    });
+    assert.equal(ambiguousRes.status, 200);
+    const ambiguousJson = (await ambiguousRes.json()) as {
+      ok: boolean;
+      kbBridged?: boolean;
+      kbFallbackReason?: string;
+    };
+    assert.equal(ambiguousJson.ok, true);
+    assert.equal(ambiguousJson.kbBridged, false);
+    assert.match(ambiguousJson.kbFallbackReason || "", /存在多个知识库工作区/);
   });
 });

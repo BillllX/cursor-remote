@@ -3,9 +3,11 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
-import { assistantTools, assistantToolSpecs } from "../src/assistant/tools.ts";
-import { isMutatingTool } from "../src/chat/tools.ts";
+import { workspaceToolsFor } from "../src/assistant/service.ts";
+import { assistantTools, assistantToolSpecs, toolSpecs, workspaceSessionTools } from "../src/assistant/tools.ts";
+import { isMutatingTool, summarizeToolArgs } from "../src/chat/tools.ts";
 import { revokeDropTokenFromUi } from "../src/ingest/hub.ts";
+import { listIngestQueue, submitDirectIngestBatch } from "../src/ingest/queue.ts";
 import {
   createDropToken,
   listDropTokens,
@@ -294,17 +296,20 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
         createDropToken(host, args),
       dropTokenList: (args: { includeRevoked?: boolean }) => listDropTokens(host, args),
       dropTokenRevoke: (args: { idOrLabel: string }) => revokeDropToken(host, args.idOrLabel),
+      kbIngestSubmit: () => ({ ok: true }),
     };
 
     const specs = assistantToolSpecs(hostConfig);
     const initSpec = specs.find((s) => s.name === "kb_workspace_init");
     const createSpec = specs.find((s) => s.name === "drop_token_create");
     const revokeSpec = specs.find((s) => s.name === "drop_token_revoke");
+    const ingestSubmitSpec = specs.find((s) => s.name === "kb_ingest_submit");
     const listSpec = specs.find((s) => s.name === "drop_token_list");
 
     assert.equal(initSpec?.category, "write");
     assert.equal(createSpec?.category, "write");
     assert.equal(revokeSpec?.category, "write");
+    assert.equal(ingestSubmitSpec?.category, "write");
     assert.equal(listSpec?.category, "network");
 
     // Ask / Plan 模式下 toolsForMode 自动过滤掉 category === "write" 的工具
@@ -312,12 +317,126 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
     assert.equal(askModeNames.has("kb_workspace_init"), false);
     assert.equal(askModeNames.has("drop_token_create"), false);
     assert.equal(askModeNames.has("drop_token_revoke"), false);
+    assert.equal(askModeNames.has("kb_ingest_submit"), false);
     assert.equal(askModeNames.has("drop_token_list"), true);
 
-    // isMutatingTool 识别这三个工具为变更工具
+    // summarizeToolArgs 保留 workspace/fileName 并对 passcode 脱敏
+    const summarized = summarizeToolArgs({
+      workspace: "Fintopia集团",
+      fileName: "a.md",
+      passcode: "secret-pass-123",
+    }) as Record<string, unknown>;
+    assert.equal(summarized.workspace, "Fintopia集团");
+    assert.equal(summarized.fileName, "a.md");
+    assert.equal(summarized.passcode, "***");
+
+    // isMutatingTool 识别这些工具为变更工具
     assert.equal(isMutatingTool("kb_workspace_init", {}), true);
     assert.equal(isMutatingTool("mcp__custom__drop_token_create", {}), true);
     assert.equal(isMutatingTool("drop_token_revoke", {}), true);
+    assert.equal(isMutatingTool("kb_ingest_submit", {}), true);
     assert.equal(isMutatingTool("drop_token_list", {}), false);
+  });
+
+  test("kb_ingest_submit 工具：支持在 chat、schedule 定时巡检与子工作区会话中直接提交日常增量数据进入归档队列", async () => {
+    const { host, addWorkspace } = makeTestEnv();
+    addWorkspace("Fintopia集团");
+    setupKbWorkspaceForTenant(host, {
+      workspace: "Fintopia集团",
+      title: "Fintopia 集团知识库",
+      categories: ["资金", "资产", "牌照"],
+    });
+
+    const submitCallback = (args: {
+      workspace: string;
+      fileName: string;
+      content: string;
+      note?: string;
+      submitterName?: string;
+    }) => {
+      const res = submitDirectIngestBatch(host, {
+        workspaceKeyOrId: args.workspace,
+        tokenId: "dt_tool_test",
+        submitterName: args.submitterName || "定时数据巡检",
+        note: args.note,
+        files: [{ fileName: args.fileName, data: Buffer.from(args.content, "utf8") }],
+      });
+      return res.ok
+        ? { ok: true, batchId: res.batchId, workspaceKey: res.workspaceKey }
+        : { ok: false, error: res.error };
+    };
+
+    // 1. schedule 角色同时拥有 web_read 与 kb_ingest_submit
+    const scheduleTools = assistantTools({
+      ref: { id: host.id, stateDir: host.stateDir },
+      role: "schedule",
+      kbIngestSubmit: submitCallback,
+    });
+    assert.ok(scheduleTools.web_read, "schedule 角色应具备 web_read 工具以支持定时巡检公开网页");
+    assert.ok(scheduleTools.kb_ingest_submit, "schedule 角色应具备 kb_ingest_submit 工具以将巡检增量入库");
+
+    const scheduleOut = JSON.parse(
+      String(
+        await scheduleTools.kb_ingest_submit.execute(
+          {
+            workspace: "Fintopia集团",
+            fileName: "20261108_定时巡检增量.md",
+            content: "# 11月8日舆情与牌照巡检增量\n\n未发现异常负面。",
+            note: "每日早间8:30自动巡检",
+          },
+          { toolCallId: "sched-call-1" },
+        ),
+      ),
+    ) as { ok: boolean; batchId: string; workspaceKey: string };
+    assert.equal(scheduleOut.ok, true);
+    assert.equal(scheduleOut.workspaceKey, "Fintopia集团");
+
+    // 2. 子工作区会话工具 (workspaceSessionTools) 支持免填 workspace 直接向本知识库提交对话沉淀
+    const wsTools = workspaceSessionTools({
+      propose: () => ({ ok: true }),
+      search: () => [],
+      markUsed: () => ({ ok: true }),
+      kbIngestSubmit: (args) =>
+        submitCallback({
+          workspace: "Fintopia集团",
+          ...args,
+        }),
+    });
+    assert.ok(wsTools.kb_ingest_submit);
+    const wsOut = JSON.parse(
+      String(
+        await wsTools.kb_ingest_submit.execute(
+          {
+            fileName: "20261108_对话口头更新_三农信保证金.md",
+            content: "# 三农信最新保证金回流\n\n最新确认回流 1200 万元。",
+          },
+          { toolCallId: "ws-call-1" },
+        ),
+      ),
+    ) as { ok: boolean; batchId: string };
+    assert.equal(wsOut.ok, true);
+
+    const queue = listIngestQueue(host);
+    assert.equal(
+      queue.some((q) => q.batchId === scheduleOut.batchId),
+      true,
+    );
+    assert.equal(
+      queue.some((q) => q.batchId === wsOut.batchId),
+      true,
+    );
+
+    // 3. 子工作区 Ask 模式下剥离 kb_ingest_submit，且只读后台委派 (readonly: true) 绝不挂载 kb_ingest_submit
+    const wsToolSpecs = toolSpecs(wsTools);
+    const wsAskNames = new Set(toolsForMode("ask", wsToolSpecs).map((t) => t.name));
+    assert.equal(wsAskNames.has("kb_ingest_submit"), false);
+
+    const readonlyDelegateTools = workspaceToolsFor(
+      { id: host.id, stateDir: host.stateDir, name: "Default", workspaceRoot: host.workspaceRoot },
+      "delegate-chat-1",
+      join(host.workspaceRoot, "Fintopia集团"),
+      { readonly: true },
+    );
+    assert.equal("kb_ingest_submit" in readonlyDelegateTools, false, "只读后台委派严禁挂载 kb_ingest_submit");
   });
 });

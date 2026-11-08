@@ -5,11 +5,12 @@ import { readWorkspaceAgentFile, workspaceAgentById, workspaceAgentDirectories }
 import {
   DEFAULT_ALLOWED_EXTS,
   DEFAULT_MAX_FILE_BYTES,
+  isAllowedUploadFileName,
   safeReadWorkspaceTextFileSync,
   validateKbHtmlRelPath,
 } from "./contract.ts";
 import { scanWorkspaceKbHtmlBoards } from "./hub.ts";
-import { commitDropBatchAndEnqueue } from "./queue.ts";
+import { commitDropBatchAndEnqueue, hasIngestQueueCapacity, submitDirectIngestBatch } from "./queue.ts";
 import { runKbQaAsk } from "./qaRunner.ts";
 import {
   clearQaSessionStorageSync,
@@ -23,14 +24,18 @@ import {
 } from "./qaStorage.ts";
 import {
   allocateDropBatchCredentials,
+  cleanupAbortedStagingBatchSync,
   getDropBatchPublicStatus,
   MAX_FILES_PER_BATCH,
+  sanitizeBatchNote,
   streamStageFileIntoBatch,
 } from "./staging.ts";
 import {
   bindBatchIdToDropSession,
   normalizeClientIp,
+  reverifyStatelessDropSession,
   verifyDropPasscodeAndCreateSession,
+  verifyDropPasscodeStateless,
   verifyDropSessionToken,
   type DropTenantHost,
 } from "./tokens.ts";
@@ -176,11 +181,7 @@ function sendHtml(res: ServerResponse, status: number, page: string, headOnly: b
   res.end(headOnly ? undefined : raw);
 }
 
-function sendBinaryAttachment(
-  res: ServerResponse,
-  fileName: string,
-  buffer: Buffer,
-) {
+function sendBinaryAttachment(res: ServerResponse, fileName: string, buffer: Buffer) {
   if (res.headersSent || res.writableEnded) return;
   applySandboxedApiCors(res);
   const asciiFallback = fileName.replace(/[^\x20-\x7e]|["\\;\r\n]/g, "_") || "download.txt";
@@ -1813,8 +1814,7 @@ export function handleDropPortalHttp(
       }
 
       const question = typeof parsed.data.question === "string" ? parsed.data.question : "";
-      const activeBoardPath =
-        typeof parsed.data.activeBoardPath === "string" ? parsed.data.activeBoardPath : undefined;
+      const activeBoardPath = typeof parsed.data.activeBoardPath === "string" ? parsed.data.activeBoardPath : undefined;
 
       const askRes = await runKbQaAsk({
         host,
@@ -1952,11 +1952,7 @@ export function handleDropPortalHttp(
       return true;
     }
 
-    const readRes = safeReadQaFileSync(
-      ensured.sessionDir,
-      `${scopeParam}/${nameCheck.cleanName}`,
-      QA_MAX_FILE_BYTES,
-    );
+    const readRes = safeReadQaFileSync(ensured.sessionDir, `${scopeParam}/${nameCheck.cleanName}`, QA_MAX_FILE_BYTES);
     if (!readRes.ok) {
       sendJson(res, 404, { ok: false, error: readRes.error });
       return true;
@@ -1986,6 +1982,281 @@ export function handleDropPortalHttp(
     sendJson(res, 200, {
       ok: true,
       cleared: true,
+    });
+    return true;
+  }
+
+  // 11. POST /p/<tenant>/drop/api/webhook — 单步直传 Webhook API（免网页 PageTicket 握手，支持二进制流直传与 JSON 多文件/邮件拆解入队）
+  if (pathname === `${basePrefix}/api/webhook`) {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "只支持 POST" });
+      return true;
+    }
+    // 禁止任何来自浏览器跨域页面（携带 Origin 头）的直调，防范跨站伪造调用
+    if (req.headers.origin !== undefined) {
+      req.resume();
+      sendJson(res, 403, { ok: false, error: "Webhook 接口仅供脚本、服务端或原生工具调用" });
+      return true;
+    }
+
+    const passcode = extractBearerToken(req) || String(req.headers["x-drop-passcode"] || "").trim();
+    const querySubmitter = (url.searchParams.get("submitterName") || url.searchParams.get("submitter") || "").trim();
+    let headerSubmitter = String(req.headers["x-drop-submitter"] || "").trim();
+    try {
+      if (headerSubmitter) headerSubmitter = decodeURIComponent(headerSubmitter);
+    } catch {
+      // keep raw
+    }
+    const submitterName = querySubmitter || headerSubmitter;
+
+    const authRes = verifyDropPasscodeStateless(host, {
+      passcode,
+      submitterName: submitterName || undefined,
+      clientIp,
+    });
+    if (!authRes.ok) {
+      req.resume();
+      const extra: Record<string, string> = {};
+      if (authRes.status === 429 && authRes.retryAfterSec) {
+        extra["retry-after"] = String(authRes.retryAfterSec);
+      }
+      sendJson(res, authRes.status, { ok: false, error: authRes.error }, extra);
+      return true;
+    }
+
+    const contentType = String(req.headers["content-type"] || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase();
+    const rawQueryFileName = (url.searchParams.get("fileName") || "").trim();
+    let rawHeaderFileName = String(req.headers["x-drop-filename"] || "").trim();
+    try {
+      if (rawHeaderFileName) rawHeaderFileName = decodeURIComponent(rawHeaderFileName);
+    } catch {
+      // keep raw
+    }
+
+    // 模式 B：Content-Type 为 application/json 且未显式指定单文件名时，按结构化 JSON 载荷（支持多文件/邮件转发拆解）处理
+    if (contentType === "application/json" && !rawQueryFileName && !rawHeaderFileName) {
+      const maxJsonBytes = Math.min(
+        64 * 1024 * 1024,
+        Math.ceil(authRes.session.kbConfig.maxFileBytes * 1.5) + 64 * 1024,
+      );
+      const declaredLength = Number(req.headers["content-length"]);
+      if (Number.isFinite(declaredLength) && declaredLength > maxJsonBytes) {
+        req.resume();
+        sendJson(res, 413, { ok: false, error: `JSON 载荷体积超过上限（${maxJsonBytes} bytes）` });
+        return true;
+      }
+
+      void (async () => {
+        const parsed = await readJsonBody(req, maxJsonBytes);
+        if (!parsed.ok) {
+          sendJson(res, parsed.status, { ok: false, error: parsed.error });
+          return;
+        }
+        const rechecked = reverifyStatelessDropSession(host, authRes.session);
+        if (!rechecked.ok) {
+          sendJson(res, rechecked.status, { ok: false, error: rechecked.error });
+          return;
+        }
+
+        const bodySubmitter =
+          typeof parsed.data.submitterName === "string" && parsed.data.submitterName.trim()
+            ? parsed.data.submitterName.trim()
+            : rechecked.session.submitterName;
+        let fallbackHeaderNote = String(req.headers["x-drop-note"] || "").trim();
+        try {
+          if (fallbackHeaderNote) fallbackHeaderNote = decodeURIComponent(fallbackHeaderNote);
+        } catch {
+          // keep raw
+        }
+        const bodyNote =
+          parsed.data.note !== undefined
+            ? parsed.data.note
+            : url.searchParams.get("note") || fallbackHeaderNote || undefined;
+
+        const fileItems: Array<{ fileName: string; data: Buffer }> = [];
+        if (Array.isArray(parsed.data.files) && parsed.data.files.length > 0) {
+          if (parsed.data.files.length > MAX_FILES_PER_BATCH) {
+            sendJson(res, 400, { ok: false, error: `单批次最多允许提交 ${MAX_FILES_PER_BATCH} 个文件` });
+            return;
+          }
+          for (const rawItem of parsed.data.files) {
+            if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+              sendJson(res, 400, { ok: false, error: "files 数组元素必须是对象" });
+              return;
+            }
+            const itemObj = rawItem as Record<string, unknown>;
+            const fName = typeof itemObj.fileName === "string" ? itemObj.fileName.trim() : "";
+            if (itemObj.encoding !== undefined && itemObj.encoding !== "utf8" && itemObj.encoding !== "base64") {
+              sendJson(res, 400, {
+                ok: false,
+                error: `文件 "${fName || "未知"}" 的 encoding 只能是 "utf8" 或 "base64"`,
+              });
+              return;
+            }
+            const encoding = itemObj.encoding === "base64" ? "base64" : "utf8";
+            if (typeof itemObj.content !== "string") {
+              sendJson(res, 400, { ok: false, error: `文件 "${fName || "未知"}" 缺少字符串类型的 content 字段` });
+              return;
+            }
+            const buf =
+              encoding === "base64" ? Buffer.from(itemObj.content, "base64") : Buffer.from(itemObj.content, "utf8");
+            fileItems.push({ fileName: fName, data: buf });
+          }
+        } else if (typeof parsed.data.fileName === "string" && typeof parsed.data.content === "string") {
+          if (
+            parsed.data.encoding !== undefined &&
+            parsed.data.encoding !== "utf8" &&
+            parsed.data.encoding !== "base64"
+          ) {
+            sendJson(res, 400, { ok: false, error: `encoding 只能是 "utf8" 或 "base64"` });
+            return;
+          }
+          const encoding = parsed.data.encoding === "base64" ? "base64" : "utf8";
+          const buf =
+            encoding === "base64"
+              ? Buffer.from(parsed.data.content, "base64")
+              : Buffer.from(parsed.data.content, "utf8");
+          fileItems.push({ fileName: parsed.data.fileName.trim(), data: buf });
+        } else {
+          sendJson(res, 400, {
+            ok: false,
+            error: "JSON 载荷需提供 { fileName, content, encoding? } 或 { files: [{ fileName, content, encoding? }] }",
+          });
+          return;
+        }
+
+        const submitted = submitDirectIngestBatch(host, {
+          workspaceKeyOrId: rechecked.session.workspaceId,
+          tokenId: rechecked.session.tokenId,
+          submitterName: bodySubmitter,
+          note: bodyNote,
+          files: fileItems,
+        });
+        if (!submitted.ok) {
+          sendJson(res, submitted.status, { ok: false, error: submitted.error });
+          return;
+        }
+
+        sendJson(res, 200, {
+          ok: true,
+          batchId: submitted.batchId,
+          receiptToken: submitted.receiptToken,
+          workspaceKey: submitted.workspaceKey,
+          workspaceTitle: submitted.workspaceTitle,
+          status: submitted.meta.status,
+          statusMessage: submitted.meta.statusMessage,
+          fileCount: submitted.meta.files.length,
+          files: submitted.meta.files.map((f) => ({
+            storedName: f.storedName,
+            size: f.size,
+            sha256: f.sha256,
+          })),
+        });
+      })().catch(() => {
+        sendJson(res, 500, { ok: false, error: "处理 JSON Webhook 投递时出错" });
+      });
+      return true;
+    }
+
+    // 模式 A：单文件二进制流式直传（POST /p/<tenant>/drop/api/webhook?fileName=xxx.xlsx&note=...）
+    const fileName = rawQueryFileName || rawHeaderFileName;
+
+    const nameCheck = isAllowedUploadFileName(fileName, authRes.session.kbConfig);
+    if (!nameCheck.ok) {
+      req.resume();
+      sendJson(res, 400, { ok: false, error: nameCheck.error });
+      return true;
+    }
+
+    const queryNote = url.searchParams.get("note");
+    let headerNote = String(req.headers["x-drop-note"] || "").trim();
+    try {
+      if (headerNote) headerNote = decodeURIComponent(headerNote);
+    } catch {
+      // keep raw
+    }
+    const rawNote = queryNote !== null ? queryNote : headerNote;
+    const noteCheck = sanitizeBatchNote(rawNote || undefined);
+    if (!noteCheck.ok) {
+      req.resume();
+      sendJson(res, 400, { ok: false, error: noteCheck.error });
+      return true;
+    }
+
+    const maxBytes = authRes.session.kbConfig.maxFileBytes;
+    const declaredLength = Number(req.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      req.resume();
+      sendJson(res, 413, { ok: false, error: `文件体积超过单文件上限（${maxBytes} bytes）` });
+      return true;
+    }
+
+    if (!hasIngestQueueCapacity(host)) {
+      req.resume();
+      sendJson(res, 429, { ok: false, error: "当前排队归档的批次过多，请稍后再试" });
+      return true;
+    }
+
+    const creds = allocateDropBatchCredentials();
+    const webhookSession = {
+      ...authRes.session,
+      batchId: creds.batchId,
+      receiptHash: creds.receiptHash,
+    };
+
+    void (async () => {
+      const staged = await streamStageFileIntoBatch(host, webhookSession, {
+        batchId: creds.batchId,
+        fileName: nameCheck.normalizedName,
+        req,
+        reverifySession: () => {
+          const rev = reverifyStatelessDropSession(host, webhookSession);
+          if (!rev.ok) return rev;
+          return {
+            ok: true,
+            session: {
+              ...rev.session,
+              batchId: creds.batchId,
+              receiptHash: creds.receiptHash,
+            },
+          };
+        },
+      });
+      if (!staged.ok) {
+        cleanupAbortedStagingBatchSync(host, webhookSession.workspacePath, creds.batchId);
+        sendJson(res, staged.status, { ok: false, error: staged.error });
+        return;
+      }
+
+      const committed = commitDropBatchAndEnqueue(host, webhookSession, {
+        batchId: creds.batchId,
+        note: noteCheck.note,
+      });
+      if (!committed.ok) {
+        cleanupAbortedStagingBatchSync(host, webhookSession.workspacePath, creds.batchId);
+        sendJson(res, committed.status, { ok: false, error: committed.error });
+        return;
+      }
+
+      sendJson(res, 200, {
+        ok: true,
+        batchId: creds.batchId,
+        receiptToken: creds.receiptToken,
+        workspaceKey: webhookSession.workspaceKey,
+        workspaceTitle: webhookSession.workspaceTitle,
+        status: committed.meta.status,
+        statusMessage: committed.meta.statusMessage,
+        fileCount: committed.meta.files.length,
+        storedName: staged.file.storedName,
+        size: staged.file.size,
+        sha256: staged.file.sha256,
+      });
+    })().catch(() => {
+      cleanupAbortedStagingBatchSync(host, webhookSession.workspacePath, creds.batchId);
+      sendJson(res, 500, { ok: false, error: "处理流式 Webhook 投递时出错" });
     });
     return true;
   }

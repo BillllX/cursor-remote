@@ -1,5 +1,18 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, realpathSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeSync,
+} from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { resolve } from "node:path";
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
@@ -15,11 +28,7 @@ import {
   safeReadWorkspaceTextFileSync,
   safeWriteWorkspaceFileSync,
 } from "./contract.ts";
-import {
-  bindBatchIdToDropSession,
-  type DropSessionGrant,
-  type DropTenantHost,
-} from "./tokens.ts";
+import { bindBatchIdToDropSession, type DropSessionGrant, type DropTenantHost } from "./tokens.ts";
 
 export const MAX_FILES_PER_BATCH = 20;
 export const MAX_NOTE_LENGTH = 500;
@@ -345,7 +354,11 @@ export function stageFileIntoBatch(
       return { ok: false as const, status: 403 as const, error: "无权操作该投递批次" };
     }
     if (meta.status !== "staging") {
-      return { ok: false as const, status: 409 as const, error: `该批次已提交（当前状态：${meta.status}），不能再追加文件` };
+      return {
+        ok: false as const,
+        status: 409 as const,
+        error: `该批次已提交（当前状态：${meta.status}），不能再追加文件`,
+      };
     }
     const batchAbsDir = resolve(kbCheck.workspaceRealPath, batchDirRelPath(input.batchId));
     let diskFileCount = 0;
@@ -369,10 +382,7 @@ export function stageFileIntoBatch(
     }
     const existingNames = new Set(meta.files.map((f) => f.storedName.toLowerCase()));
     let seq = 2;
-    while (
-      existingNames.has(storedName.toLowerCase()) ||
-      existsSync(resolve(batchAbsDir, storedName))
-    ) {
+    while (existingNames.has(storedName.toLowerCase()) || existsSync(resolve(batchAbsDir, storedName))) {
       storedName = `${stem}-${seq}${ext}`;
       seq += 1;
     }
@@ -465,9 +475,7 @@ export function getDropBatchPublicStatus(
   const candidateHash = Buffer.from(hashReceipt(receiptToken), "hex");
   const expectedHash = record ? Buffer.from(record.receiptHash, "hex") : candidateHash;
   const hashMatched =
-    Boolean(record) &&
-    candidateHash.length === expectedHash.length &&
-    timingSafeEqual(candidateHash, expectedHash);
+    Boolean(record) && candidateHash.length === expectedHash.length && timingSafeEqual(candidateHash, expectedHash);
 
   if (!record || !hashMatched) {
     return { ok: false, status: 404, error: "找不到该投递批次或回执凭证无效" };
@@ -592,9 +600,7 @@ export async function streamStageFileIntoBatch(
       host,
       initialSession,
       now,
-      initialSession.receiptHash
-        ? { batchId: input.batchId, receiptHash: initialSession.receiptHash }
-        : undefined,
+      initialSession.receiptHash ? { batchId: input.batchId, receiptHash: initialSession.receiptHash } : undefined,
     );
     if (!lazyCreated.ok) {
       input.req.resume();
@@ -693,6 +699,11 @@ export async function streamStageFileIntoBatch(
       });
       input.req.on("end", () => resolveStream());
       input.req.on("error", (err) => rejectStream(err));
+      input.req.on("close", () => {
+        if (!input.req.complete) {
+          rejectStream(new Error("upload stream aborted"));
+        }
+      });
     });
 
     if (tooLarge) {
@@ -748,10 +759,7 @@ export async function streamStageFileIntoBatch(
       }
       const existingNames = new Set(meta.files.map((f) => f.storedName.toLowerCase()));
       let seq = 2;
-      while (
-        existingNames.has(storedName.toLowerCase()) ||
-        existsSync(resolve(dirSafety.absPath, storedName))
-      ) {
+      while (existingNames.has(storedName.toLowerCase()) || existsSync(resolve(dirSafety.absPath, storedName))) {
         storedName = `${stem}-${seq}${ext}`;
         seq += 1;
       }
@@ -816,5 +824,47 @@ export async function streamStageFileIntoBatch(
         // ignore
       }
     }
+  }
+}
+
+/**
+ * 清理单步直投（Webhook / 内部桥接）在提交入队前中断或失败的 staging 批次目录与注册表项：
+ * 仅当该批次仍处于 `staging` 状态（或尚未生成有效非 staging 的 meta.json）时执行物理删除，绝不触碰已入队批次。
+ */
+export function cleanupAbortedStagingBatchSync(host: TenantRef, workspaceDir: string, batchId: string): void {
+  if (!isValidBatchId(batchId)) return;
+  try {
+    withFileLockSync(ingestStateLockPath(host), () => {
+      const metaRes = readBatchMetaSync(workspaceDir, batchId);
+      if (metaRes.ok && metaRes.meta.status !== "staging") {
+        return;
+      }
+      const dirSafety = ensureSafePathInWorkspace(workspaceDir, batchDirRelPath(batchId), { expectLeaf: "dir" });
+      if (dirSafety.ok && existsSync(dirSafety.absPath)) {
+        rmSync(dirSafety.absPath, { recursive: true, force: true });
+      }
+      const reg = readRegistryUnlocked(host);
+      const filtered = reg.items.filter((x) => x.batchId !== batchId);
+      if (filtered.length !== reg.items.length) {
+        reg.items = filtered;
+        writeRegistryUnlocked(host, reg);
+      }
+      // 同步回滚可能残留在 ingest-queue.json 中的同 batchId 孤儿项
+      const qPath = assistantPath(host, "ingest-queue.json");
+      const rawQueue = readJson<{ version?: number; items?: Array<{ batchId?: string }> }>(qPath, {
+        version: 1,
+        items: [],
+      });
+      if (Array.isArray(rawQueue.items) && rawQueue.items.some((x) => x && x.batchId === batchId)) {
+        const nextItems = rawQueue.items.filter((x) => x && x.batchId !== batchId);
+        atomicWriteFileSync(qPath, `${JSON.stringify({ version: 1, items: nextItems }, null, 2)}\n`, {
+          encoding: "utf8",
+          mkdir: true,
+          mode: 0o600,
+        });
+      }
+    });
+  } catch {
+    // ignore cleanup error
   }
 }

@@ -237,3 +237,135 @@ export function revokeDropTokenFromUi(
   if (!revoked.ok) return revoked;
   return getKbWorkspaceStatusForUi(host, input.workspace);
 }
+
+/**
+ * 列出当前租户下所有已初始化为知识库（含合法 `.jiebo/kb.json`）的子工作区：
+ * 供 iOS 分享扩展「归档入库」自动路由、以及日常巡检/助理工具使用。
+ */
+export function listTenantKbWorkspaces(host: DropTenantHost): Array<{
+  workspaceKey: string;
+  workspaceId: string;
+  workspacePath: string;
+  config: KbWorkspaceConfig;
+}> {
+  const results: Array<{
+    workspaceKey: string;
+    workspaceId: string;
+    workspacePath: string;
+    config: KbWorkspaceConfig;
+  }> = [];
+  let dirNames: string[] = [];
+  try {
+    dirNames = readdirSync(host.workspaceRoot).sort();
+  } catch {
+    return results;
+  }
+  for (const name of dirNames) {
+    if (!name || name.startsWith(".")) continue;
+    const wsRef = host.resolveWorkspace(name);
+    if (!wsRef) continue;
+    const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+    if (!kbLoaded.ok) continue;
+    results.push({
+      workspaceKey: wsRef.key,
+      workspaceId: wsRef.workspaceId,
+      workspacePath: kbLoaded.workspaceRealPath,
+      config: kbLoaded.config,
+    });
+  }
+  return results;
+}
+
+/**
+ * 根据可选的 workspace 参数、用户备注、文件名/标题与正文，智能且严格地匹配目标知识库子工作区：
+ * 1. 若显式传入了 `preferredWorkspace`，优先精确匹配或大小写不敏感匹配，未命中直接拒绝；
+ * 2. 若未指定且租户下只有 1 个知识库工作区，直接选中该工作区；
+ * 3. 若有多个知识库工作区，赋予用户备注（note）最高权重（+30），文件名/标题次之（+12），正文再次之（+6）；
+ * 4. 必须取得正分（`bestScore > 0`）且严格唯一最高分（无并列第一）才自动选中；若为 0 分或最高分并列，返回 `ok: false` 拒绝盲投，防止跨知识库误归档。
+ */
+export function resolveTargetKbWorkspaceForCapture(
+  host: DropTenantHost,
+  opts: {
+    preferredWorkspace?: string;
+    note?: string;
+    hintTexts?: string[];
+  } = {},
+):
+  | {
+      ok: true;
+      target: {
+        workspaceKey: string;
+        workspaceId: string;
+        workspacePath: string;
+        config: KbWorkspaceConfig;
+      };
+    }
+  | { ok: false; error: string } {
+  const kbList = listTenantKbWorkspaces(host);
+  if (kbList.length === 0) {
+    return { ok: false, error: "当前还没有已初始化的知识库工作区" };
+  }
+
+  const preferred = (opts.preferredWorkspace || "").trim();
+  if (preferred) {
+    const exact = kbList.find(
+      (item) =>
+        item.workspaceKey === preferred ||
+        item.workspaceId === preferred ||
+        item.workspaceKey.toLowerCase() === preferred.toLowerCase() ||
+        item.config.title.toLowerCase() === preferred.toLowerCase(),
+    );
+    if (exact) return { ok: true, target: exact };
+    return { ok: false, error: `指定的知识库工作区不存在或未开启知识库：${preferred}` };
+  }
+
+  if (kbList.length === 1) {
+    return { ok: true, target: kbList[0] };
+  }
+
+  const noteLower = (opts.note || "").trim().toLowerCase();
+  const combinedHint = (opts.hintTexts || []).filter(Boolean).join(" ").toLowerCase();
+
+  let best = kbList[0];
+  let bestScore = 0;
+  let tiedCount = 0;
+
+  for (const candidate of kbList) {
+    let score = 0;
+    const keyLower = candidate.workspaceKey.toLowerCase();
+    const titleLower = candidate.config.title.toLowerCase();
+
+    if (noteLower) {
+      if (keyLower.length >= 2 && noteLower.includes(keyLower)) score += 30;
+      if (titleLower.length >= 2 && noteLower.includes(titleLower)) score += 24;
+    }
+
+    if (keyLower.length >= 2 && combinedHint.includes(keyLower)) score += 10;
+    if (titleLower.length >= 2 && combinedHint.includes(titleLower)) score += 8;
+
+    for (const cat of candidate.config.allowedCategories) {
+      const catLower = cat.trim().toLowerCase();
+      if (catLower.length >= 2 && combinedHint.includes(catLower)) {
+        score += 2;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = candidate;
+      tiedCount = 1;
+    } else if (score > 0 && score === bestScore) {
+      tiedCount += 1;
+    }
+  }
+
+  if (bestScore <= 0 || tiedCount > 1) {
+    const availableNames = kbList.map((k) => k.workspaceKey).join("、");
+    return {
+      ok: false,
+      error: `存在多个知识库工作区（${availableNames}），未能唯一定位目标库，请在备注中写明目标知识库名称`,
+    };
+  }
+
+  return { ok: true, target: best };
+}
