@@ -15,6 +15,30 @@ export const TASK_STATUS: Record<
   cancelled: { label: "已取消", tone: "quiet" },
 };
 
+const COLLAB_TOOL_LABELS: Record<string, string> = {
+  shell: "运行终端命令",
+  run_shell: "运行终端命令",
+  bash: "运行终端命令",
+  write: "写入文件",
+  write_file: "写入文件",
+  edit: "修改文件",
+  str_replace: "修改文件",
+  patch: "修改文件",
+  delete: "删除文件",
+  delete_file: "删除文件",
+  rm: "删除文件",
+  read: "读取文件",
+  read_file: "读取文件",
+  create_workspace: "新建工作区",
+  workspace_memory: "写入工作区记忆",
+  work_preferences: "更新工作偏好",
+};
+
+export function collabToolLabel(tool: string): string {
+  const key = tool.trim().toLowerCase();
+  return COLLAB_TOOL_LABELS[key] || tool;
+}
+
 export type RoomIndicators = { running: number; attention: number; failed: number };
 
 export function latestRunForRoom(roomRuns: CollabRunState[]) {

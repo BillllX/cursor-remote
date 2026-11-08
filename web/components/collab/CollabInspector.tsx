@@ -1,6 +1,8 @@
 import type { ActorRef, CollabAnchorBody, CollabRunState, ImMessage, TurnFile } from "@shared/protocol";
+import { repairReplyText } from "@shared/replyText";
+import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "../chat/markdown";
 import type { CollabInspectorView } from "./collabState";
-import { TASK_STATUS } from "./collabView";
+import { collabToolLabel, TASK_STATUS } from "./collabView";
 import styles from "./collab.module.css";
 
 function filesFrom(messages: ImMessage[], runs: CollabRunState[]) {
@@ -103,6 +105,12 @@ export function CollabInspector({
                 <dt>当前 attempt</dt>
                 <dd>{selectedTask.attempt}</dd>
               </dl>
+              {selectedTask.approval ? (
+                <p>
+                  待批操作：{collabToolLabel(selectedTask.approval.tool)}
+                  {selectedTask.approval.summary ? ` · ${selectedTask.approval.summary}` : ""}
+                </p>
+              ) : null}
               {selectedTask.suggestedNextActors?.length ? (
                 <p>建议下一步 Agent：{selectedTask.suggestedNextActors.join("、")}（仅供小驳规划）</p>
               ) : null}
@@ -205,7 +213,11 @@ export function CollabInspector({
             {selectedRun?.summary ? (
               <section className={styles.detailBlock}>
                 <span className={styles.eyebrow}>{selectedRun.partial ? "部分成功汇总" : "最终汇总"}</span>
-                <p>{selectedRun.summary}</p>
+                <div className="markdown">
+                  <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                    {repairReplyText(selectedRun.summary)}
+                  </MemoMarkdown>
+                </div>
               </section>
             ) : null}
             <div className={styles.inspectorList}>

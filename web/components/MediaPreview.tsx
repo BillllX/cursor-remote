@@ -12,6 +12,7 @@ export default function MediaPreview({
   diff,
   size,
   mime,
+  onReload,
 }: {
   kind: PreviewKind;
   path: string;
@@ -20,24 +21,70 @@ export default function MediaPreview({
   diff?: boolean;
   size?: number;
   mime?: string;
+  onReload?: () => void;
 }) {
-  const src = previewSrc(url);
-  const head = previewSrc(headUrl);
+  const rawSrc = previewSrc(url);
+  const rawHead = previewSrc(headUrl);
   const name = path.split("/").pop() || path;
   const [fit, setFit] = useState(true);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [loadError, setLoadError] = useState(false);
+  const [headError, setHeadError] = useState(false);
+  const [retrySeq, setRetrySeq] = useState(0);
   const drag = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
 
   useEffect(() => {
     setFit(true);
     setScale(1);
     setOffset({ x: 0, y: 0 });
+    setLoadError(false);
+    setHeadError(false);
     drag.current = null;
-  }, [src]);
+  }, [rawSrc, rawHead]);
+
+  const withRetry = (href?: string) => {
+    if (!href) return "";
+    if (!retrySeq) return href;
+    return `${href}${href.includes("?") ? "&" : "?"}_retry=${retrySeq}`;
+  };
+  const src = withRetry(rawSrc);
+  const head = withRetry(rawHead);
+
+  const handleReload = () => {
+    setLoadError(false);
+    setHeadError(false);
+    setRetrySeq((n) => n + 1);
+    onReload?.();
+  };
 
   if (!src) {
-    return <div className="tree-empty">没有可预览的内容</div>;
+    return (
+      <div className="tree-empty">
+        没有可预览的内容
+        {onReload ? (
+          <>
+            {" "}
+            <button type="button" className="pill" onClick={handleReload}>
+              重新加载
+            </button>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="tree-empty" role="alert">
+        <span>媒体加载失败（可能是网络中断或临时访问凭证已过期）</span>
+        <div style={{ marginTop: 8 }}>
+          <button type="button" className="pill" onClick={handleReload}>
+            重新加载
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (kind === "audio") {
@@ -47,7 +94,7 @@ export default function MediaPreview({
           {name}
           {size != null ? ` · ${formatBytes(size)}` : ""}
         </div>
-        <audio className="media-audio" controls src={src} />
+        <audio className="media-audio" controls src={src} onError={() => setLoadError(true)} />
       </div>
     );
   }
@@ -55,7 +102,14 @@ export default function MediaPreview({
   if (kind === "video") {
     return (
       <div className="media-pane">
-        <video className="media-video" controls playsInline preload="metadata" src={src} />
+        <video
+          className="media-video"
+          controls
+          playsInline
+          preload="metadata"
+          src={src}
+          onError={() => setLoadError(true)}
+        />
         <div className="media-meta">{name}{mime ? ` · ${mime}` : ""}{size != null ? ` · ${formatBytes(size)}` : ""}</div>
       </div>
     );
@@ -72,11 +126,15 @@ export default function MediaPreview({
       <div className="media-diff">
         <figure>
           <figcaption>HEAD{head ? "" : " · 没有旧版"}</figcaption>
-          {head ? <img src={head} alt={`${name} HEAD`} /> : <div className="tree-empty">新文件</div>}
+          {head && !headError ? (
+            <img src={head} alt={`${name} HEAD`} onError={() => setHeadError(true)} />
+          ) : (
+            <div className="tree-empty">{headError ? "旧版图片加载失败" : "新文件"}</div>
+          )}
         </figure>
         <figure>
           <figcaption>当前{size != null ? ` · ${formatBytes(size)}` : ""}</figcaption>
-          <img src={src} alt={name} />
+          <img src={src} alt={name} onError={() => setLoadError(true)} />
         </figure>
       </div>
     );
@@ -130,7 +188,13 @@ export default function MediaPreview({
             drag.current = null;
           }}
         >
-          <img src={src} alt={name} draggable={false} style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }} />
+          <img
+            src={src}
+            alt={name}
+            draggable={false}
+            style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})` }}
+            onError={() => setLoadError(true)}
+          />
         </div>
         <div className="media-meta">
           {name}

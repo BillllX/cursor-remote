@@ -27,6 +27,7 @@ type ThreadProps = {
   busy: boolean;
   retryTurn: (turn: Turn) => void;
   submit: (raw?: string) => void;
+  submitQuestionAnswer: (raw: string) => void;
   keepTool: (turnId: string, tool: ToolCall) => void;
   rejectTool: (turn: Turn, tool: ToolCall) => void;
   mdComponents: Components;
@@ -36,6 +37,7 @@ type ThreadProps = {
   applyPlan: (turn: Turn) => void;
   keepTurnFiles: (turn: Turn) => void;
   restoreTurnFiles: (turn: Turn) => void;
+  restoringTurnIds: Readonly<Record<string, boolean>>;
   turnBodyLoads: Readonly<Record<string, "loading" | "error">>;
   loadTurnBody: (chatId: string, turnId: string) => void;
   releaseTurnBody: (chatId: string, turnId: string) => void;
@@ -62,6 +64,7 @@ export function Thread({
   busy,
   retryTurn,
   submit,
+  submitQuestionAnswer,
   keepTool,
   rejectTool,
   mdComponents,
@@ -71,6 +74,7 @@ export function Thread({
   applyPlan,
   keepTurnFiles,
   restoreTurnFiles,
+  restoringTurnIds,
   turnBodyLoads,
   loadTurnBody,
   releaseTurnBody,
@@ -85,6 +89,7 @@ export function Thread({
     editTurn,
     retryTurn,
     submit,
+    submitQuestionAnswer,
     keepTool,
     rejectTool,
     stopChat,
@@ -143,6 +148,7 @@ export function Thread({
             findHit={turn.id === findHitId}
             findQuery={findQuery}
             locked={locked}
+            restoring={Boolean(restoringTurnIds[turn.id])}
             oversizedState={
               turnBodyLoads[`${activeId}:${turn.id}`] || (turn.oversized && !turn.deferred ? "loaded" : "idle")
             }

@@ -20,12 +20,18 @@ export function CollabComposer({
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const selectRef = useRef<HTMLSelectElement>(null);
+  const initializedConvRef = useRef<string>("");
   const assistant = actors.find((actor) => actor.kind === "assistant");
   const current = draft ?? { text: "", mentions: assistant ? [assistant.actorId] : [] };
 
   useEffect(() => {
-    if (!draft && assistant) onChange({ text: "", mentions: [assistant.actorId] });
-  }, [assistant, draft, onChange]);
+    setPickerOpen(false);
+    if (!convId || !assistant) return;
+    if (!draft && initializedConvRef.current !== convId) {
+      initializedConvRef.current = convId;
+      onChange({ text: "", mentions: [assistant.actorId] });
+    }
+  }, [assistant, convId, draft, onChange]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

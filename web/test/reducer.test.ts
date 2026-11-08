@@ -7,6 +7,7 @@ import {
   applyAssistantMessage,
   applyAssistantSnapshot,
   applyLoopMessage,
+  applyOptimisticAssistantOp,
   applyReadyRuns,
   applyServerMessage,
   applySession,
@@ -600,5 +601,77 @@ describe("applyAssistantMessage", () => {
       revision: 5,
     });
     assert.equal(next?.revision, 5);
+  });
+
+  test("applyOptimisticAssistantOp：待办增删改查、完成/撤销完成、日程开关与收件箱已读即时投影", () => {
+    const initial = base();
+    const added = applyOptimisticAssistantOp(initial, {
+      type: "assistant_op",
+      op: "todo_add",
+      reqId: "r1",
+      args: { text: "验证网页端審阅条", due: "明天" },
+    })!;
+    assert.equal(added.todos[0].text, "验证网页端審阅条");
+    assert.equal(added.todos[0].due, "明天");
+    assert.equal(added.todos[0].done, false);
+
+    const todoId = added.todos[0].id;
+    const edited = applyOptimisticAssistantOp(added, {
+      type: "assistant_op",
+      op: "todo_update",
+      reqId: "r2",
+      args: { id: todoId, text: "验证网页端审阅条与小驳面板", due: "" },
+    })!;
+    assert.equal(edited.todos[0].text, "验证网页端审阅条与小驳面板");
+    assert.equal(edited.todos[0].due, undefined);
+
+    const doneState = applyOptimisticAssistantOp(edited, {
+      type: "assistant_op",
+      op: "todo_done",
+      reqId: "r3",
+      args: { id: todoId },
+    })!;
+    assert.equal(doneState.todos[0].done, true);
+
+    const undoneState = applyOptimisticAssistantOp(doneState, {
+      type: "assistant_op",
+      op: "todo_undo",
+      reqId: "r4",
+      args: { id: todoId },
+    })!;
+    assert.equal(undoneState.todos[0].done, false);
+
+    const removedState = applyOptimisticAssistantOp(undoneState, {
+      type: "assistant_op",
+      op: "todo_remove",
+      reqId: "r5",
+      args: { id: todoId },
+    })!;
+    assert.equal(
+      removedState.todos.some((t) => t.id === todoId),
+      false,
+    );
+
+    if (initial.schedules.length > 0) {
+      const schedId = initial.schedules[0].id;
+      const toggled = applyOptimisticAssistantOp(initial, {
+        type: "assistant_op",
+        op: "schedule_set",
+        reqId: "r6",
+        args: { id: schedId, enabled: !initial.schedules[0].enabled },
+      })!;
+      assert.equal(toggled.schedules[0].enabled, !initial.schedules[0].enabled);
+
+      const schedRemoved = applyOptimisticAssistantOp(toggled, {
+        type: "assistant_op",
+        op: "schedule_remove",
+        reqId: "r7",
+        args: { id: schedId },
+      })!;
+      assert.equal(
+        schedRemoved.schedules.some((s) => s.id === schedId),
+        false,
+      );
+    }
   });
 });

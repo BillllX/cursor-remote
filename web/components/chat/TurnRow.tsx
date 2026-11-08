@@ -26,6 +26,7 @@ export type TurnRowActions = {
   editTurn: (turn: Turn) => void;
   retryTurn: (turn: Turn) => void;
   submit: (raw?: string) => void;
+  submitQuestionAnswer: (raw: string) => void;
   keepTool: (turnId: string, tool: ToolCall) => void;
   rejectTool: (turn: Turn, tool: ToolCall) => void;
   stopChat: (chatId: string) => void;
@@ -50,6 +51,8 @@ export type TurnRowProps = {
   findQuery: string | undefined;
   /** 未连上或有回合在跑：重试、执行计划按钮禁用 */
   locked: boolean;
+  /** 正在等待网关还原回执 */
+  restoring?: boolean;
   oversizedState: "idle" | "loading" | "error" | "loaded";
   activeId: string;
   mdComponents: Components;
@@ -108,7 +111,7 @@ function renderTools(turn: Turn, isLast: boolean, actions: TurnRowActions) {
           key={tool.callId}
           asked={asked}
           canAnswer={isLast && !turn.running && !turn.queued}
-          onAnswer={(text) => actions.submit(text)}
+          onAnswer={(text) => actions.submitQuestionAnswer(text)}
         />
       );
     }
@@ -198,6 +201,7 @@ function TurnRowView({
   findHit,
   findQuery,
   locked,
+  restoring,
   oversizedState,
   activeId,
   mdComponents,
@@ -381,11 +385,21 @@ function TurnRowView({
           {paths.length && !turn.running && !turn.queued && pendingReview && !writesWereRejected(turn) ? (
             <div className="turn-review">
               <span>{paths.length} 个文件改动</span>
-              <button type="button" className="pill" onClick={() => actions.keepTurnFiles(turn)}>
+              <button
+                type="button"
+                className="pill"
+                disabled={Boolean(restoring)}
+                onClick={() => actions.keepTurnFiles(turn)}
+              >
                 全部保留
               </button>
-              <button type="button" className="pill" onClick={() => actions.restoreTurnFiles(turn)}>
-                全部还原
+              <button
+                type="button"
+                className="pill"
+                disabled={Boolean(restoring)}
+                onClick={() => actions.restoreTurnFiles(turn)}
+              >
+                {restoring ? "还原中…" : "全部还原"}
               </button>
             </div>
           ) : null}

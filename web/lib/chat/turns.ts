@@ -2,7 +2,8 @@
 import type { HistoryTurn, ServerMessage } from "@shared/protocol";
 import { mutatingTool } from "./toolKinds";
 import { pathFromPayload } from "./tools";
-import type { TodoItem, Turn } from "./types";
+import type { TodoItem, ToolCall, Turn } from "./types";
+import { relToCwd, sameFile } from "./workspace";
 
 export function uid() {
   return crypto.randomUUID();
@@ -39,12 +40,20 @@ export function turnSuperseded(turns: Turn[], index: number) {
   return Boolean(next && next.user.trim() === turn.user.trim());
 }
 
-export function editPathsOf(turn: Turn): string[] {
+export function editPathsOf(turn: Turn, cwd = ""): string[] {
   const paths: string[] = [];
   for (const tool of turn.tools) {
     if (!mutatingTool(tool.name)) continue;
-    const path = pathFromPayload(tool.args) || pathFromPayload(tool.result);
-    if (path && !paths.includes(path)) paths.push(path);
+    const raw = pathFromPayload(tool.args) || pathFromPayload(tool.result);
+    const path = raw ? relToCwd(raw, cwd) || raw : "";
+    if (!path) continue;
+    const existingIdx = paths.findIndex((item) => sameFile(item, path, cwd));
+    if (existingIdx < 0) {
+      paths.push(path);
+    } else if (paths[existingIdx].startsWith("/") && !path.startsWith("/")) {
+      // 同一文件混用绝对路径与相对路径时，优先保留更短的相对路径
+      paths[existingIdx] = path;
+    }
   }
   return paths;
 }
@@ -135,11 +144,33 @@ export function formatBodyBytes(bytes?: number): string {
 }
 
 /**
+ * 保留本地已标记的 tool.review（如用户已点保留/还原，而迟到的快照或历史分页尚未带回 review 字段时）
+ */
+export function preserveToolReviews(localTools: ToolCall[], incomingTools: ToolCall[]): ToolCall[] {
+  if (!localTools.length || !incomingTools.length) return incomingTools;
+  const reviewsByCallId = new Map<string, "accepted" | "rejected">();
+  for (const tool of localTools) {
+    if (tool.callId && tool.review) reviewsByCallId.set(tool.callId, tool.review);
+  }
+  if (!reviewsByCallId.size) return incomingTools;
+  let changed = false;
+  const merged = incomingTools.map((tool) => {
+    if (tool.review) return tool;
+    const localReview = reviewsByCallId.get(tool.callId);
+    if (!localReview) return tool;
+    changed = true;
+    return { ...tool, review: localReview };
+  });
+  return changed ? merged : incomingTools;
+}
+
+/**
  * 按 id 合并服务端回合；完整正文一旦到达，迟到的截断分页或 deferred 快照只能补其它回合，
- * 不能把同 id 的完整正文降级成占位。
+ * 不能把同 id 的完整正文降级成占位。同时保留已审阅的 tool.review 标记。
  */
 export function preferCompleteTurns(local: Turn[], incoming: Turn[], targetRev?: number): Turn[] {
   if (!incoming.length) return [];
+  const localById = new Map(local.map((turn) => [turn.id, turn]));
   const complete = new Map(
     local
       .filter(
@@ -151,8 +182,20 @@ export function preferCompleteTurns(local: Turn[], incoming: Turn[], targetRev?:
   let changed = false;
   const out = incoming.map((turn) => {
     const preferred = incompleteTurn(turn) ? complete.get(turn.id) : undefined;
-    if (preferred) changed = true;
-    return preferred ?? turn;
+    if (preferred) {
+      changed = true;
+      const mergedTools = preserveToolReviews(turn.tools, preferred.tools);
+      return mergedTools === preferred.tools ? preferred : { ...preferred, tools: mergedTools };
+    }
+    const existing = localById.get(turn.id);
+    if (existing) {
+      const mergedTools = preserveToolReviews(existing.tools, turn.tools);
+      if (mergedTools !== turn.tools) {
+        changed = true;
+        return { ...turn, tools: mergedTools };
+      }
+    }
+    return turn;
   });
   return changed ? out : incoming;
 }
@@ -213,6 +256,7 @@ export function historyToTurns(items: HistoryTurn[]): Turn[] {
         args: tool.args,
         result: tool.result,
         status: tool.status === "running" ? "completed" : tool.status,
+        review: (tool as { review?: "accepted" | "rejected" }).review,
         parentCallId: tool.parentCallId,
         agent: tool.agent,
         model: tool.model,
@@ -240,9 +284,15 @@ function mergeTools(local: Turn["tools"], remote: Turn["tools"]): Turn["tools"] 
         ...out[index],
         result: tool.result,
         status: tool.status === "running" ? out[index].status : tool.status,
+        review: out[index].review || tool.review,
         parentCallId: out[index].parentCallId || tool.parentCallId,
         agent: out[index].agent || tool.agent,
         model: out[index].model || tool.model,
+      };
+    } else if (!out[index].review && tool.review) {
+      out[index] = {
+        ...out[index],
+        review: tool.review,
       };
     }
   }
@@ -289,6 +339,7 @@ export function applyRunSnapshot(
       args: tool.args,
       result: tool.result,
       status: tool.status,
+      review: (tool as { review?: "accepted" | "rejected" }).review,
       parentCallId: tool.parentCallId,
       agent: tool.agent,
       model: tool.model,
@@ -354,7 +405,10 @@ export function applyRunSnapshot(
             snapshotIncomplete || (message.thinking || "").length < (cur.thinking || "").length
               ? cur.thinking
               : message.thinking || "",
-          tools: snapshotIncomplete || tools.length < cur.tools.length ? cur.tools : tools,
+          tools:
+            snapshotIncomplete || tools.length < cur.tools.length
+              ? cur.tools
+              : preserveToolReviews(cur.tools, tools),
           clipped: keepComplete ? cur.clipped : message.clipped || undefined,
           deferred: keepComplete ? cur.deferred : snapshotMeta.deferred || undefined,
           bodyBytes: snapshotMeta.bodyBytes ?? cur.bodyBytes,

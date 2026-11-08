@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
 import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
+import { repairReplyText } from "@shared/replyText";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
 import {
   assistantMemoryEntryText,
@@ -11,6 +12,7 @@ import {
   revisitAssistantMemoryNavigation,
   type AssistantMemorySource,
 } from "./assistant/assistantMemoryNavigation";
+import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "./chat/markdown";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
 export type AssistantView = "overview" | "inbox" | "memory" | "notify";
@@ -44,7 +46,9 @@ type Props = {
   send: (message: ClientMessage) => void;
   onOpenInboxItem: (item: { chatId?: string; id: string }) => void;
   onOpenChat: (chatId: string) => void;
+  onHandoffToAssistant?: (prompt: string) => void;
   initialInboxId?: string;
+  initialDelegationId?: string;
   basePath: string;
   lastAssistantResult: AssistantResultMessage | null;
   assistantResultTick: number;
@@ -77,7 +81,9 @@ export default function AssistantPanel({
   send,
   onOpenInboxItem,
   onOpenChat,
+  onHandoffToAssistant,
   initialInboxId,
+  initialDelegationId,
   basePath,
   lastAssistantResult,
   assistantResultTick,
@@ -89,6 +95,13 @@ export default function AssistantPanel({
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
   const [todoDraft, setTodoDraft] = useState("");
+  const [todoDueDraft, setTodoDueDraft] = useState("");
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [editTodoText, setEditTodoText] = useState("");
+  const [editTodoDue, setEditTodoDue] = useState("");
+  const [selectedDelegationId, setSelectedDelegationId] = useState<string | null>(null);
+  const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null);
+  const [highlightedScheduleId, setHighlightedScheduleId] = useState<string | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -123,20 +136,26 @@ export default function AssistantPanel({
       openAssistantMemoryNavigation(current, initialMemorySource, initialMemoryScopeId),
     );
     setAppliedOpenRequest(openRequest);
+    if (initialDelegationId) {
+      setSelectedDelegationId(initialDelegationId);
+    }
     if (initialView === "memory") {
       setMemoryLoaded(true);
     }
-  }, [initialMemoryScopeId, initialMemorySource, initialView, open, openRequest]);
+  }, [initialDelegationId, initialMemoryScopeId, initialMemorySource, initialView, open, openRequest]);
 
   useEffect(() => {
     if (!open || !initialInboxId || !state?.inbox.length) return;
     const item = state.inbox.find((row) => row.id === initialInboxId);
     if (item) {
       setTab("inbox");
+      setSelectedInboxId(item.id);
       onViewChange?.("inbox");
       if (!item.read) op("inbox_read", { ids: [item.id] });
       void closeInboxNotification(item.id);
-      onOpenInboxItem(item);
+      if (item.chatId) {
+        onOpenInboxItem(item);
+      }
     }
   }, [open, initialInboxId, state?.inbox, op, onOpenInboxItem, onViewChange]);
 
@@ -172,6 +191,7 @@ export default function AssistantPanel({
   const approvals = state?.approvals || [];
   const backgroundOk = state?.background.ok ?? false;
   const todosOpen = (state?.todos || []).filter((t) => !t.done);
+  const todosDone = (state?.todos || []).filter((t) => t.done);
   const brief = state?.brief?.text?.trim();
   const memoryEntry = assistantMemoryEntryText(memoryNavigation);
 
@@ -302,9 +322,22 @@ export default function AssistantPanel({
                           拒绝
                         </button>
                         {item.tool === "create_workspace" || item.tool === "work_preferences" ? null : (
-                          <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
-                            看子会话
-                          </button>
+                          <>
+                            {item.delegationId ? (
+                              <button
+                                type="button"
+                                className="pill"
+                                onClick={() => {
+                                  setSelectedDelegationId(item.delegationId!);
+                                }}
+                              >
+                                看委派
+                              </button>
+                            ) : null}
+                            <button type="button" className="pill" onClick={() => onOpenChat(item.chatId)}>
+                              看子会话
+                            </button>
+                          </>
                         )}
                       </div>
                     );
@@ -312,7 +345,15 @@ export default function AssistantPanel({
                 </Section>
               ) : null}
               <Section title="简报">
-                {brief ? <div className="assistant-pre">{brief}</div> : <Empty>今天还没有简报。每日简报的日程到点后会生成。</Empty>}
+                {brief ? (
+                  <div className="markdown assistant-markdown">
+                    <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                      {repairReplyText(brief)}
+                    </MemoMarkdown>
+                  </div>
+                ) : (
+                  <Empty>今天还没有简报。每日简报的日程到点后会生成。</Empty>
+                )}
               </Section>
               <Section title="待办">
                 <form
@@ -321,11 +362,25 @@ export default function AssistantPanel({
                     event.preventDefault();
                     const text = todoDraft.trim();
                     if (!text) return;
-                    op("todo_add", { text });
+                    const due = todoDueDraft.trim();
+                    op("todo_add", due ? { text, due } : { text });
                     setTodoDraft("");
+                    setTodoDueDraft("");
                   }}
                 >
-                  <input className="side-input" value={todoDraft} onChange={(e) => setTodoDraft(e.target.value)} placeholder="加一条待办" />
+                  <input
+                    className="side-input"
+                    value={todoDraft}
+                    onChange={(e) => setTodoDraft(e.target.value)}
+                    placeholder="加一条待办"
+                  />
+                  <input
+                    className="side-input"
+                    style={{ maxWidth: 140 }}
+                    value={todoDueDraft}
+                    onChange={(e) => setTodoDueDraft(e.target.value)}
+                    placeholder="截止时间（选填）"
+                  />
                   <button type="submit" className="new-chat primary">
                     添加
                   </button>
@@ -334,33 +389,139 @@ export default function AssistantPanel({
                   <ul className="assistant-list">
                     {todosOpen.map((todo) => (
                       <li key={todo.id} className="assistant-item">
-                        <div className="assistant-item-head">
-                          <span className="assistant-item-title">{todo.text}</span>
-                          {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
-                          <button type="button" className="pill" onClick={() => op("todo_done", { id: todo.id })}>
-                            完成
-                          </button>
-                        </div>
+                        {editingTodoId === todo.id ? (
+                          <form
+                            className="assistant-inline-form"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              const nextText = editTodoText.trim();
+                              if (!nextText) return;
+                              op("todo_update", {
+                                id: todo.id,
+                                text: nextText,
+                                due: editTodoDue.trim(),
+                              });
+                              setEditingTodoId(null);
+                            }}
+                          >
+                            <input
+                              className="side-input"
+                              value={editTodoText}
+                              onChange={(e) => setEditTodoText(e.target.value)}
+                              placeholder="待办内容"
+                              autoFocus
+                            />
+                            <input
+                              className="side-input"
+                              style={{ maxWidth: 130 }}
+                              value={editTodoDue}
+                              onChange={(e) => setEditTodoDue(e.target.value)}
+                              placeholder="截止时间（空则清除）"
+                            />
+                            <button type="submit" className="pill">
+                              保存
+                            </button>
+                            <button type="button" className="pill" onClick={() => setEditingTodoId(null)}>
+                              取消
+                            </button>
+                          </form>
+                        ) : (
+                          <>
+                            <div className="assistant-item-head">
+                              <span className="assistant-item-title">{todo.text}</span>
+                              {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
+                              <button type="button" className="pill" onClick={() => op("todo_done", { id: todo.id })}>
+                                完成
+                              </button>
+                              <button
+                                type="button"
+                                className="pill"
+                                onClick={() => {
+                                  setEditingTodoId(todo.id);
+                                  setEditTodoText(todo.text);
+                                  setEditTodoDue(todo.due || "");
+                                }}
+                              >
+                                编辑
+                              </button>
+                              <button
+                                type="button"
+                                className="pill"
+                                onClick={() => op("todo_remove", { id: todo.id })}
+                              >
+                                删除
+                              </button>
+                            </div>
+                            {todo.quote ? <div className="loop-meta">来源：{todo.quote}</div> : null}
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>
                 ) : (
                   <Empty>没有未完成的待办。</Empty>
                 )}
+                {todosDone.length ? (
+                  <details className="assistant-done-todos" style={{ marginTop: 8 }}>
+                    <summary className="loop-meta" style={{ cursor: "pointer", userSelect: "none" }}>
+                      已完成 · {todosDone.length}
+                    </summary>
+                    <ul className="assistant-list" style={{ marginTop: 6 }}>
+                      {todosDone.map((todo) => (
+                        <li key={todo.id} className="assistant-item">
+                          <div className="assistant-item-head">
+                            <span className="assistant-item-title" style={{ textDecoration: "line-through", opacity: 0.72 }}>
+                              {todo.text}
+                            </span>
+                            {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
+                            <button type="button" className="pill" onClick={() => op("todo_undo", { id: todo.id })}>
+                              撤销完成
+                            </button>
+                            <button type="button" className="pill" onClick={() => op("todo_remove", { id: todo.id })}>
+                              删除
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
               </Section>
               <Section title="日程">
                 {state?.schedules?.length ? (
                   <ul className="assistant-list">
                     {state.schedules.map((row) => (
-                      <li key={row.id} className="assistant-item">
+                      <li
+                        key={row.id}
+                        className={`assistant-item${highlightedScheduleId === row.id ? " unread" : ""}`}
+                      >
                         <div className="assistant-item-head">
                           <span className="assistant-item-title">{row.title}</span>
                           <span className={`chat-mark ${row.enabled ? "ok" : "warn"}`}>{row.enabled ? "启用" : "暂停"}</span>
+                          <button
+                            type="button"
+                            className="pill"
+                            onClick={() => op("schedule_set", { id: row.id, enabled: !row.enabled })}
+                          >
+                            {row.enabled ? "暂停" : "启用"}
+                          </button>
+                          <button
+                            type="button"
+                            className="pill"
+                            onClick={() => {
+                              if (window.confirm(`删除日程「${row.title}」？`)) {
+                                op("schedule_remove", { id: row.id });
+                              }
+                            }}
+                          >
+                            删除
+                          </button>
                         </div>
                         <div className="loop-meta">
                           {row.cron}
                           {row.pausedReason ? ` · ${row.pausedReason}` : ""}
                         </div>
+                        {row.prompt ? <div className="assistant-item-body">{row.prompt}</div> : null}
                       </li>
                     ))}
                   </ul>
@@ -371,18 +532,82 @@ export default function AssistantPanel({
               <Section title="委派">
                 {state?.delegations?.length ? (
                   <ul className="assistant-list">
-                    {state.delegations.slice(0, 8).map((row) => (
-                      <li key={row.id}>
-                        <button type="button" className="assistant-item assistant-item-btn" onClick={() => onOpenChat(row.childChatId)}>
-                          <div className="assistant-item-head">
+                    {state.delegations.slice(0, 12).map((row) => {
+                      const expanded = selectedDelegationId === row.id;
+                      return (
+                        <li key={row.id} className="assistant-item">
+                          <div
+                            className="assistant-item-head"
+                            style={{ cursor: "pointer" }}
+                            onClick={() => setSelectedDelegationId(expanded ? null : row.id)}
+                          >
                             <span className="assistant-item-title">{row.title}</span>
-                            <span className={`chat-mark ${DELEGATION_TONE[row.status] ?? ""}`}>{DELEGATION_STATUS[row.status] ?? row.status}</span>
+                            <span className={`chat-mark ${DELEGATION_TONE[row.status] ?? ""}`}>
+                              {DELEGATION_STATUS[row.status] ?? row.status}
+                            </span>
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedDelegationId(expanded ? null : row.id);
+                              }}
+                            >
+                              {expanded ? "收起详情" : "详情"}
+                            </button>
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenChat(row.childChatId);
+                              }}
+                            >
+                              打开子会话
+                            </button>
                           </div>
-                          <div className="loop-meta">{row.workspace}</div>
-                          {row.result ? <div className="assistant-item-body">{row.result.slice(0, 200)}</div> : null}
-                        </button>
-                      </li>
-                    ))}
+                          <div className="loop-meta">
+                            {row.workspace} · {new Date(row.createdAt).toLocaleString()}
+                          </div>
+                          {row.result ? (
+                            expanded ? (
+                              <div className="markdown assistant-markdown" style={{ marginTop: 8 }}>
+                                <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                                  {repairReplyText(row.result)}
+                                </MemoMarkdown>
+                              </div>
+                            ) : (
+                              <div className="assistant-item-body">{row.result.slice(0, 200)}</div>
+                            )
+                          ) : null}
+                          {expanded ? (
+                            <div className="loop-actions" style={{ marginTop: 8 }}>
+                              <button type="button" className="pill" onClick={() => onOpenChat(row.childChatId)}>
+                                打开子会话
+                              </button>
+                              {row.parentChatId ? (
+                                <button type="button" className="pill" onClick={() => onOpenChat(row.parentChatId!)}>
+                                  打开父会话
+                                </button>
+                              ) : null}
+                              {onHandoffToAssistant ? (
+                                <button
+                                  type="button"
+                                  className="pill"
+                                  onClick={() =>
+                                    onHandoffToAssistant(
+                                      `请帮我跟进委派任务「${row.title}」（工作区：${row.workspace}，状态：${DELEGATION_STATUS[row.status] ?? row.status}）${row.result ? `：\n\n${row.result.slice(0, 1200)}` : ""}`,
+                                    )
+                                  }
+                                >
+                                  交给{name}处理
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
                   </ul>
                 ) : (
                   <Empty>还没有委派。在助理会话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
@@ -393,30 +618,130 @@ export default function AssistantPanel({
 
           {tab === "inbox" ? (
             state?.inbox.length ? (
-              <ul className="assistant-list">
-                {state.inbox.map((item) => (
-                  <li key={item.id}>
+              <>
+                {unread > 0 ? (
+                  <div className="loop-actions" style={{ marginBottom: 8 }}>
                     <button
                       type="button"
-                      className={`assistant-item assistant-item-btn${item.read ? "" : " unread"}`}
-                      onClick={() => {
-                        if (!item.read) {
-                          op("inbox_read", { ids: [item.id] });
-                          void closeInboxNotification(item.id);
-                        }
-                        onOpenInboxItem(item);
-                      }}
+                      className="pill"
+                      onClick={() =>
+                        op("inbox_read", {
+                          ids: state.inbox.filter((item) => !item.read).map((item) => item.id),
+                        })
+                      }
                     >
-                      <div className="assistant-item-head">
-                        {item.read ? null : <span className="chat-mark unread">未读</span>}
-                        <span className="assistant-item-title">{item.title}</span>
-                      </div>
-                      <div className="loop-meta">{new Date(item.createdAt).toLocaleString()}</div>
-                      <div className="assistant-item-body">{item.body.slice(0, 240)}</div>
+                      全部标为已读（{unread}）
                     </button>
-                  </li>
-                ))}
-              </ul>
+                  </div>
+                ) : null}
+                <ul className="assistant-list">
+                  {state.inbox.map((item) => {
+                    const expanded = selectedInboxId === item.id;
+                    return (
+                      <li
+                        key={item.id}
+                        className={`assistant-item${item.read ? "" : " unread"}`}
+                        onClick={() => {
+                          if (!item.read) {
+                            op("inbox_read", { ids: [item.id] });
+                            void closeInboxNotification(item.id);
+                          }
+                          setSelectedInboxId(expanded ? null : item.id);
+                        }}
+                        style={{ cursor: "pointer" }}
+                      >
+                        <div className="assistant-item-head">
+                          {item.read ? null : <span className="chat-mark unread">未读</span>}
+                          <span className="assistant-item-title">{item.title}</span>
+                          <button
+                            type="button"
+                            className="pill"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (!item.read) {
+                                op("inbox_read", { ids: [item.id] });
+                                void closeInboxNotification(item.id);
+                              }
+                              setSelectedInboxId(expanded ? null : item.id);
+                            }}
+                          >
+                            {expanded ? "收起" : "展开"}
+                          </button>
+                        </div>
+                        <div className="loop-meta">{new Date(item.createdAt).toLocaleString()}</div>
+                        {expanded || item.body.length <= 240 ? (
+                          <div className="markdown assistant-markdown" style={{ marginTop: 6 }}>
+                            <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                              {repairReplyText(item.body)}
+                            </MemoMarkdown>
+                          </div>
+                        ) : (
+                          <div className="assistant-item-body">{item.body.slice(0, 240)}…</div>
+                        )}
+                        <div className="loop-actions" style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+                          {onHandoffToAssistant ? (
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={() => {
+                                if (!item.read) {
+                                  op("inbox_read", { ids: [item.id] });
+                                  void closeInboxNotification(item.id);
+                                }
+                                onHandoffToAssistant(
+                                  item.actionPrompt?.trim() ||
+                                    `请帮我处理这条通知：「${item.title}」\n\n${item.body}`,
+                                );
+                              }}
+                            >
+                              交给{name}处理
+                            </button>
+                          ) : null}
+                          {item.chatId ? (
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={() => {
+                                if (!item.read) {
+                                  op("inbox_read", { ids: [item.id] });
+                                  void closeInboxNotification(item.id);
+                                }
+                                onOpenInboxItem(item);
+                              }}
+                            >
+                              打开会话
+                            </button>
+                          ) : null}
+                          {item.delegationId ? (
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={() => {
+                                setSelectedDelegationId(item.delegationId!);
+                                selectTab("overview");
+                              }}
+                            >
+                              查看委派
+                            </button>
+                          ) : null}
+                          {item.scheduleId ? (
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={() => {
+                                setHighlightedScheduleId(item.scheduleId!);
+                                selectTab("overview");
+                              }}
+                            >
+                              查看日程
+                            </button>
+                          ) : null}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
             ) : (
               <Empty>收件箱是空的。提醒、委派结果和待批会出现在这里。</Empty>
             )

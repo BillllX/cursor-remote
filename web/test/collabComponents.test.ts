@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { CollabRunState, CollabTaskStatus } from "@shared/protocol";
-import { indicatorsForRoom, latestRunForRoom, TASK_STATUS } from "../components/collab/collabView";
+import { collabToolLabel, indicatorsForRoom, latestRunForRoom, TASK_STATUS } from "../components/collab/collabView";
 
 const statuses: CollabTaskStatus[] = [
   "pending",
@@ -76,5 +76,14 @@ describe("协作组件视图模型", () => {
     const newer = { runId: "newer", version: 1, status: "running", createdAt: 200, tasks: [] } satisfies CollabRunState;
     const older = { runId: "older", version: 1, status: "failed", createdAt: 100, tasks: [] } satisfies CollabRunState;
     assert.equal(latestRunForRoom([newer, older])?.runId, "newer");
+  });
+
+  test("collabToolLabel 将审批工具标识映射为中文语义标签", () => {
+    assert.equal(collabToolLabel("shell"), "运行终端命令");
+    assert.equal(collabToolLabel("write_file"), "写入文件");
+    assert.equal(collabToolLabel("str_replace"), "修改文件");
+    assert.equal(collabToolLabel("delete_file"), "删除文件");
+    assert.equal(collabToolLabel("create_workspace"), "新建工作区");
+    assert.equal(collabToolLabel("custom_tool"), "custom_tool");
   });
 });

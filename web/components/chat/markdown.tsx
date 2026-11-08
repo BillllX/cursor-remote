@@ -66,6 +66,16 @@ export const REMARK_PLUGINS = [remarkGfm];
 
 export const MemoMarkdown = memo(Markdown);
 
+export const SIMPLE_MD_COMPONENTS: Components = {
+  table({ children }) {
+    return (
+      <div className="md-table">
+        <table>{children}</table>
+      </div>
+    );
+  },
+};
+
 export function markdownComponents(openFile: (path: string, line?: number) => void, findQuery?: string): Components {
   const wrap = (children: ReactNode) => wrapCites(children, openFile, findQuery);
   return {

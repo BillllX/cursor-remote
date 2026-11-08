@@ -192,6 +192,7 @@ export default function FilePreview({
   const [viewMode, setViewMode] = useState<"live" | "source">("live");
   const [canvasError, setCanvasError] = useState<string | null>(null);
   const [versionsOpen, setVersionsOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [full, setFull] = useState(false);
   const nativeFullRef = useRef(false);
 
@@ -211,6 +212,7 @@ export default function FilePreview({
     setViewMode("live");
     setCanvasError(null);
     setVersionsOpen(false);
+    setCopied(false);
     if (!onDraft) {
       setEditingLocal(false);
       setEditDraftLocal("");
@@ -342,6 +344,38 @@ export default function FilePreview({
   function step(delta: number) {
     if (!hits.length) return;
     setHit((index) => (index + delta + hits.length) % hits.length);
+  }
+
+  function downloadFileName() {
+    const base = active.path.split("/").pop() || "file";
+    if (!active.sha) return base;
+    const dot = base.lastIndexOf(".");
+    const shortSha = active.sha.slice(0, 7);
+    return dot > 0 ? `${base.slice(0, dot)}-${shortSha}${base.slice(dot)}` : `${base}-${shortSha}`;
+  }
+
+  function downloadTextContent() {
+    if (active.content == null) return;
+    const blob = new Blob([active.content], {
+      type: active.mime || "text/plain;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = downloadFileName();
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 15_000);
+  }
+
+  function copyFullContent() {
+    if (active.content == null || !navigator.clipboard?.writeText) return;
+    void navigator.clipboard.writeText(active.content).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    });
   }
 
   return (
@@ -516,10 +550,29 @@ export default function FilePreview({
             出错
           </span>
         ) : null}
+        {active.content != null && !editing ? (
+          <button
+            type="button"
+            className="pill pill-text"
+            title="复制全文"
+            onClick={copyFullContent}
+          >
+            {copied ? "已复制" : "复制"}
+          </button>
+        ) : null}
         {downloadHref ? (
-          <a className="pill pill-text" href={downloadHref} download={active.path.split("/").pop()}>
+          <a className="pill pill-text" href={downloadHref} download={downloadFileName()}>
             下载
           </a>
+        ) : active.content != null ? (
+          <button
+            type="button"
+            className="pill pill-text"
+            title="下载当前预览内容"
+            onClick={downloadTextContent}
+          >
+            下载
+          </button>
         ) : null}
         {canvasVisible && !canvasError ? (
           <button
@@ -589,10 +642,18 @@ export default function FilePreview({
         {active.error ? (
           <div className="tree-empty">
             {active.error}
+            {onOpenFile ? (
+              <>
+                {" "}
+                <button type="button" className="pill" onClick={() => onOpenFile(active.path)}>
+                  重试
+                </button>
+              </>
+            ) : null}
             {downloadHref ? (
               <>
                 {" "}
-                <a href={downloadHref} download={active.path.split("/").pop()}>
+                <a href={downloadHref} download={downloadFileName()}>
                   下载
                 </a>
               </>
@@ -659,6 +720,7 @@ export default function FilePreview({
               diff={active.diff}
               size={active.size}
               mime={active.mime}
+              onReload={onOpenFile ? () => onOpenFile(active.path) : undefined}
             />
           ) : (
             <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
@@ -754,6 +816,7 @@ export default function FilePreview({
             diff={active.diff}
             size={active.size}
             mime={active.mime}
+            onReload={onOpenFile ? () => onOpenFile(active.path) : undefined}
           />
         ) : (
           <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />

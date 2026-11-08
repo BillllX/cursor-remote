@@ -60,7 +60,14 @@ export default function CanvasHost({
         setErrorText(null);
         onErrorRef.current?.(null);
       }
-      if (data.type === "canvas:error") onErrorRef.current?.(data.message ?? null);
+      if (data.type === "canvas:error") {
+        const msg = data.message ?? null;
+        if (msg) {
+          setStatus("error");
+          setErrorText(msg);
+        }
+        onErrorRef.current?.(msg);
+      }
       if (data.type === "canvas:action" && data.action) onActionRef.current?.(data.action);
     }
     window.addEventListener("message", onMessage);
@@ -112,7 +119,22 @@ export default function CanvasHost({
     <div className="canvas-host">
       {status !== "ready" ? (
         <div className="canvas-host-status">
-          {status === "error" ? errorText : "正在打开画布…"}
+          <span>{status === "error" ? errorText : "正在打开画布…"}</span>
+          {status === "error" ? (
+            <button
+              type="button"
+              className="pill"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                retriesRef.current = 0;
+                setErrorText(null);
+                onErrorRef.current?.(null);
+                setBoot((n) => n + 1);
+              }}
+            >
+              重新加载
+            </button>
+          ) : null}
         </div>
       ) : null}
       <iframe

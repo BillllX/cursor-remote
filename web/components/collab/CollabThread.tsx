@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import type { ActorRef, CollabAnchorBody, CollabRunState, ImMessage, TurnFile } from "@shared/protocol";
+import { repairReplyText } from "@shared/replyText";
+import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "../chat/markdown";
 import type { CollabTimelineMessage } from "./collabState";
 import { TaskCard } from "./TaskCard";
 import styles from "./collab.module.css";
@@ -69,7 +71,14 @@ export function CollabThread({
     if (!selectedTaskId) return;
     const node = document.getElementById(`collab-task-${selectedTaskId}`);
     const timeline = timelineRef.current;
-    if (node && timeline) timeline.scrollTop = Math.max(0, node.offsetTop - timeline.clientHeight / 2);
+    if (node && timeline) {
+      const top = Math.max(0, node.offsetTop - timeline.clientHeight / 2);
+      if (typeof timeline.scrollTo === "function") {
+        timeline.scrollTo({ top, behavior: "smooth" });
+      } else {
+        timeline.scrollTop = top;
+      }
+    }
     node?.focus({ preventScroll: true });
   }, [runs, selectedTaskId]);
 
@@ -139,7 +148,11 @@ export function CollabThread({
                 key={message.clientId}
               >
                 <span className={styles.author}>{own ? "你" : actor?.displayName || "协作成员"}</span>
-                <p>{text}</p>
+                <div className="markdown">
+                  <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                    {repairReplyText(text)}
+                  </MemoMarkdown>
+                </div>
                 {message.pending ? <span className={styles.pending}>正在发送…</span> : null}
               </article>
             );
@@ -157,13 +170,21 @@ export function CollabThread({
                 </strong>
                 {run ? <span className={styles.status}>{run.status === "completed" ? "已完成" : "已开始"}</span> : null}
               </div>
-              <p>{anchor.summary}</p>
+              <div className="markdown">
+                <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={SIMPLE_MD_COMPONENTS}>
+                  {repairReplyText(anchor.summary)}
+                </MemoMarkdown>
+              </div>
               {anchor.event === "plan" && run ? (
                 <ol className={styles.planTasks}>
                   {run.tasks
                     .filter((task) => anchor.wave === undefined || task.wave === anchor.wave)
                     .map((task) => (
-                      <li key={task.taskId}>
+                      <li
+                        key={task.taskId}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => onSelectTask(run.runId, task.taskId)}
+                      >
                         <strong>{task.title || "协作任务"}</strong>
                         <span>
                           Wave {task.wave ?? 1}

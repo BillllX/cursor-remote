@@ -1,5 +1,5 @@
 import type { CollabRunState } from "@shared/protocol";
-import { TASK_STATUS } from "./collabView";
+import { collabToolLabel, TASK_STATUS } from "./collabView";
 import styles from "./collab.module.css";
 
 export type CollabTask = CollabRunState["tasks"][number];
@@ -47,8 +47,8 @@ export function TaskCard({
       </div>
       <p>{task.summary || (task.status === "queued" ? "等待工作区空闲后开始" : "查看任务当前进展")}</p>
       {task.approval ? (
-        <div className={styles.approvalCard} role="group" aria-label={`${task.approval.tool} 审批`}>
-          <strong>{expired ? "审批已过期" : `请求批准：${task.approval.tool}`}</strong>
+        <div className={styles.approvalCard} role="group" aria-label={`${collabToolLabel(task.approval.tool)} 审批`}>
+          <strong>{expired ? "审批已过期" : `请求批准：${collabToolLabel(task.approval.tool)}`}</strong>
           <p>{task.approval.summary}</p>
           <small>批准或拒绝都不会自动回滚已经产生的文件改动。</small>
         </div>

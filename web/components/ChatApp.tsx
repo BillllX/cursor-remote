@@ -60,12 +60,12 @@ import { useThreadScroll } from "../lib/chat/hooks/useThreadScroll";
 import { useWorkspaceGroups } from "../lib/chat/hooks/useWorkspaceGroups";
 import { filesToImages, fileToBase64, formatUploadMb, isPromptImageFile, MAX_IMAGES, MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES, MAX_UPLOAD_MB, shrinkImageFile, sourceLimit } from "../lib/chat/images";
 import { attachedFiles, isOpenableMention, mentionAt, mentionHits, stripMention } from "../lib/chat/mentions";
-import { appendDraftMention, applyAssistantMessage, applyAssistantSnapshot, applyLoopMessage, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
+import { appendDraftMention, applyAssistantMessage, applyAssistantSnapshot, applyLoopMessage, applyOptimisticAssistantOp, applyReadyRuns, applyServerMessage, applySession, chatsToFlush, commitSync, loopsFromReady, markUnread, patchChatIn, serverChatId, workspaceMover, type ChatReduceContext } from "../lib/chat/reducer";
 import { chatHasContent, chatMeta, isUntitled, landingChat, mergeSlimChats, metaKey, usableDraft } from "../lib/chat/sessions";
 import { clearBrowserChatStore, forgetActiveChat, GROUPS_KEY, MAX_DELETED, pushRecent, readActiveChat, rememberDeleted, TOKEN_KEY, writeActiveChat } from "../lib/chat/storage";
 import { pathFromPayload, shellRows, workspaceShellRows } from "../lib/chat/tools";
 import { cancelTurnBodyRequest, startTurnBodyRequest, type TurnBodyRequest } from "../lib/chat/turnBodyRequest";
-import { deferredPlaceholder, editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnAllowsActions, turnHasOpenTools, uid, withLiveTurns } from "../lib/chat/turns";
+import { deferredPlaceholder, editPathsOf, liveTurn, mergeTurnFileLists, rejectMutatingTools, serverTurn, settleTurn, turnAllowsActions, turnHasOpenTools, uid, withLiveTurns, writesWereRejected } from "../lib/chat/turns";
 import type { BodyState, Chat, ToolCall, Turn } from "../lib/chat/types";
 import { gitLetterOf, inWorkspaceRoot, moveWorkspacePath, normPath, preferChatCwd, relToCwd, sameCwd, sameFile, saveWorkspaceFile, workspaceLabel, workspaceRemovalRecovery } from "../lib/chat/workspace";
 import { isAssistantDomainActive, type WorkspaceNavId } from "../lib/productNavigation";
@@ -143,6 +143,20 @@ export default function ChatApp() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [turnBodyLoads, setTurnBodyLoads] = useState<Record<string, "loading" | "error">>({});
+  const [restoringTurnIds, setRestoringTurnIds] = useState<Record<string, boolean>>({});
+  const restoreWaitsRef = useRef<
+    Map<
+      string,
+      {
+        chatId: string;
+        paths: Set<string>;
+        viaUndo: boolean;
+        remaining: number;
+        hit: boolean;
+        timer: number;
+      }
+    >
+  >(new Map());
   const [draft, setDraft] = useState("");
   const [composerEpoch, setComposerEpoch] = useState(0);
   const [draftCaret, setDraftCaret] = useState<number | null>(null);
@@ -165,6 +179,7 @@ export default function ChatApp() {
   const [assistantInitialView, setAssistantInitialView] = useState<AssistantView>("overview");
   const [assistantMemoryScopeId, setAssistantMemoryScopeId] = useState<string>();
   const [assistantMemorySource, setAssistantMemorySource] = useState<AssistantMemorySource>("assistant");
+  const [assistantDelegationId, setAssistantDelegationId] = useState<string>();
   const [assistantOpenRequest, setAssistantOpenRequest] = useState(0);
   const [assistantName, setAssistantName] = useState(DEFAULT_ASSISTANT_NAME);
   const [assistantChatId, setAssistantChatId] = useState("");
@@ -249,8 +264,10 @@ export default function ChatApp() {
   const [loadingDirs, setLoadingDirs] = useState<Record<string, boolean>>({});
   const [truncatedDirs, setTruncatedDirs] = useState<Record<string, boolean>>({});
   const loadedDirsRef = useRef<Set<string>>(new Set());
+  const lastTreeCwdRef = useRef("");
   const treePathsRef = useRef<string[]>([]);
   treePathsRef.current = treePaths;
+  const mergedTreePathsRef = useRef<string[]>([]);
   const [gitStatus, setGitStatus] = useState<Record<string, string>>({});
   const [recentFiles, setRecentFiles] = useState<string[]>([]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
@@ -472,6 +489,9 @@ export default function ChatApp() {
     turnBodyRequestRef.current?.controller.abort();
     turnBodyRequestRef.current = null;
     setTurnBodyLoads({});
+    for (const wait of restoreWaitsRef.current.values()) window.clearTimeout(wait.timer);
+    restoreWaitsRef.current.clear();
+    setRestoringTurnIds({});
     stateWaitRef.current = 0;
     for (const timer of cacheTimersRef.current.values()) window.clearTimeout(timer);
     cacheTimersRef.current = new Map();
@@ -508,6 +528,13 @@ export default function ChatApp() {
       message.chatId === assistantChatIdRef.current
     ) {
       return;
+    }
+    if (message.type === "assistant_op" && assistantStateRef.current) {
+      const next = applyOptimisticAssistantOp(assistantStateRef.current, message);
+      if (next !== assistantStateRef.current) {
+        assistantStateRef.current = next;
+        setAssistantState(next);
+      }
     }
     if (message.type !== "hello" && !unlockedRef.current) {
       outboxRef.current = [...outboxRef.current, message].slice(-50);
@@ -1081,7 +1108,7 @@ export default function ChatApp() {
             if (mentionQueryRef.current == null || message.query !== mentionQueryRef.current) break;
             setFileHits(
               mentionHits(
-                treePathsRef.current.length ? treePathsRef.current : message.paths,
+                mergedTreePathsRef.current.length ? mergedTreePathsRef.current : message.paths,
                 message.query,
                 message.paths,
               ),
@@ -1303,6 +1330,7 @@ export default function ChatApp() {
             setError(message.message);
             break;
           }
+          settleRestore(chatId, [], message.message, false);
           setError(message.message);
           reduceChats();
           break;
@@ -1386,6 +1414,12 @@ export default function ChatApp() {
           if (!message.error) openFile(message.path);
           break;
         case "undone":
+          settleRestore(
+            message.chatId || activeIdRef.current,
+            message.paths || [],
+            message.error,
+            false,
+          );
           setNotice(
             message.error
               ? message.error
@@ -1431,6 +1465,12 @@ export default function ChatApp() {
             send({ type: "list_files", query: "", chatId: activeIdRef.current });
             break;
           }
+          settleRestore(
+            message.chatId || activeIdRef.current,
+            [],
+            message.error,
+            true,
+          );
           setNotice(
             message.error
               ? message.error
@@ -1615,7 +1655,9 @@ export default function ChatApp() {
               }
             }
             rememberRecent(path);
-            send({ type: "list_files", query: "", chatId: message.chatId || activeIdRef.current });
+            if (!message.chatId || message.chatId === activeIdRef.current) {
+              send({ type: "list_files", query: "", chatId: activeIdRef.current });
+            }
             setNotice(`已添加 ${path}`);
           }
           break;
@@ -1665,6 +1707,8 @@ export default function ChatApp() {
           );
           setWorkspaceCreating(false);
           setWorkspaceNameDraft("");
+          setManagementOpen(false);
+          setExpandedGroups((prev) => new Set([...prev, normPath(message.path)]));
           startChatInRef.current(message.path);
           break;
         case "workspace_renamed": {
@@ -2146,6 +2190,21 @@ export default function ChatApp() {
             ? true
             : Boolean(document.activeElement?.closest(".file-preview"));
         if (inPreview) return;
+        if (assistantOpenRef.current) {
+          event.preventDefault();
+          const memInput = document.querySelector<HTMLInputElement>('[aria-label="搜索记忆"]');
+          if (memInput) {
+            memInput.focus();
+            memInput.select();
+            return;
+          }
+          setAssistantInitialView("memory");
+          setAssistantOpenRequest((n) => n + 1);
+          window.requestAnimationFrame(() => {
+            document.querySelector<HTMLInputElement>('[aria-label="搜索记忆"]')?.focus();
+          });
+          return;
+        }
         event.preventDefault();
         setAssistantOpen(false);
         setSearchOpen(false);
@@ -2176,6 +2235,13 @@ export default function ChatApp() {
     setDirEntriesByDir({});
     setLoadingDirs({});
     setTruncatedDirs({});
+    if (cwd && !sameCwd(lastTreeCwdRef.current, cwd)) {
+      lastTreeCwdRef.current = cwd;
+      setTreePaths([]);
+      setTreeTruncated(false);
+      setGitStatus({});
+      setFileHits([]);
+    }
   }, [activeId, cwd]);
 
   useEffect(() => {
@@ -2493,6 +2559,52 @@ export default function ChatApp() {
     });
   }
 
+  /** 提问卡回答专用发送：不覆盖输入框在写草稿、不误发输入框附图 */
+  function submitQuestionAnswer(raw: string) {
+    const text = raw.trim();
+    if (!text) return;
+    if (!unlockedRef.current) {
+      setNotice("正在登录，稍后再发");
+      return;
+    }
+    scrollThreadToEnd();
+    setError("");
+    setNotice("");
+    lastProgressRef.current[activeIdRef.current] = Date.now();
+    stallNoticedRef.current.delete(activeIdRef.current);
+    const turn: Turn = {
+      id: uid(),
+      user: text,
+      assistant: "",
+      thinking: "",
+      tools: [],
+      running: !busyRef.current,
+      queued: busyRef.current,
+      mode: modeRef.current,
+      model: modelRef.current,
+    };
+    const current = chatsRef.current.find((item) => item.id === activeIdRef.current);
+    patchActive((chat) => ({
+      ...chat,
+      turns: [
+        ...chat.turns.map((item) => (item.pendingTool ? { ...item, pendingTool: undefined } : item)),
+        turn,
+      ],
+    }));
+    send({
+      type: "prompt",
+      text,
+      model: modelRef.current,
+      mode: modeRef.current,
+      chatId: activeIdRef.current,
+      files: attachedFiles(text),
+      confirmWrites: confirmWritesRef.current,
+      policy: policyRef.current,
+      nameChat: isUntitled(current?.title),
+      turnId: turn.id,
+    });
+  }
+
   function submitNewWorkspace() {
     const name = workspaceNameDraft.trim();
     if (!name) return;
@@ -2590,6 +2702,7 @@ export default function ChatApp() {
     autoPickedIdRef.current = "";
     lastWorkspaceChatIdRef.current = chat.id;
     setActiveId(chat.id);
+    setCwd(next);
     if (nextModel) {
       modelRef.current = nextModel;
       setModel(nextModel);
@@ -2604,6 +2717,7 @@ export default function ChatApp() {
     setThreadFindOpen(false);
     setGrepOpen(false);
     send({ type: "new_session", chatId: chat.id, cwd: next });
+    send({ type: "list_files", query: "", chatId: chat.id });
     if (nextModel) send({ type: "set_model", model: nextModel, chatId: chat.id });
   }
   startChatInRef.current = startChatIn;
@@ -2721,8 +2835,86 @@ export default function ChatApp() {
     setAssistantInitialView(view);
     setAssistantMemoryScopeId(undefined);
     setAssistantMemorySource("assistant");
+    setAssistantDelegationId(undefined);
     setAssistantOpenRequest((value) => value + 1);
     setAssistantOpen(true);
+  }
+
+  function openAssistantDelegation(delegationId: string) {
+    prepareAssistantDomain();
+    setAssistantInitialView("overview");
+    setAssistantMemoryScopeId(undefined);
+    setAssistantMemorySource("assistant");
+    setAssistantDelegationId(delegationId);
+    setAssistantOpenRequest((value) => value + 1);
+    setAssistantOpen(true);
+  }
+
+  /**
+   * 「交给小驳处理」无损交接（对齐 iOS Phase 5 Bug 1）：
+   * 切换到小驳主会话并发送交接消息，同时保留小驳输入框里原有的草稿与待发图片。
+   */
+  function submitAssistantHandoffPrompt(promptText: string) {
+    const text = promptText.trim();
+    if (!text) return;
+    if (!unlockedRef.current) {
+      setNotice("正在登录，稍后再试");
+      return;
+    }
+    const home = chatsRef.current.find((row) => isAssistantChat(row.id));
+    if (!home) {
+      setNotice("助理会话还没同步到本机，稍后再试。");
+      return;
+    }
+    const savedDraft = home.id === activeIdRef.current ? draftRef.current : usableDraft(home);
+    const savedImages = imagesRef.current[home.id] || home.draftImages || [];
+    setAssistantOpen(false);
+    clearInboxDeepLink();
+    if (home.id !== activeIdRef.current) {
+      selectChat(home);
+    }
+    const targetId = home.id;
+    const targetBusy = Boolean(
+      chatsRef.current.find((row) => row.id === targetId)?.turns.some((turn) => turn.running),
+    );
+    const turn: Turn = {
+      id: uid(),
+      user: text,
+      assistant: "",
+      thinking: "",
+      tools: [],
+      running: !targetBusy,
+      queued: targetBusy,
+      mode: modeRef.current,
+      model: modelRef.current,
+    };
+    lastProgressRef.current[targetId] = Date.now();
+    stallNoticedRef.current.delete(targetId);
+    patchChat(targetId, (chat) => ({
+      ...chat,
+      draft: savedDraft,
+      draftImages: savedImages,
+      turns: [
+        ...chat.turns.map((item) => (item.pendingTool ? { ...item, pendingTool: undefined } : item)),
+        turn,
+      ],
+    }));
+    syncComposer(savedDraft, savedDraft.length);
+    setImages(savedImages);
+    imagesRef.current[targetId] = savedImages;
+    scrollThreadToEnd();
+    send({
+      type: "prompt",
+      text,
+      model: modelRef.current,
+      mode: modeRef.current,
+      chatId: targetId,
+      files: attachedFiles(text),
+      confirmWrites: Boolean(home.confirmWrites),
+      policy: policyRef.current,
+      nameChat: false,
+      turnId: turn.id,
+    });
   }
 
   function chooseSide(pane: "chats" | "files" | "search" | "git" | "terminal" | "loop" | "assistant") {
@@ -2970,14 +3162,7 @@ export default function ChatApp() {
     const token = `@${path} `;
     rememberRecent(path);
     if (chatId && chatId !== activeIdRef.current) {
-      patchChat(chatId, (chat) => {
-        const draft = chat.draft || "";
-        if (draft.includes(`@${path}`)) return chat;
-        return {
-          ...chat,
-          draft: `${draft}${draft && !draft.endsWith(" ") ? " " : ""}${token}`,
-        };
-      });
+      applyChats((prev) => appendDraftMention(prev, chatId, path));
       return;
     }
     const current = draftRef.current;
@@ -3030,7 +3215,7 @@ export default function ChatApp() {
       }
       return;
     }
-    const hits = mentionHits(treePathsRef.current, mention.query);
+    const hits = mentionHits(mergedTreePathsRef.current, mention.query);
     setFileHits((prev) =>
       prev.length === hits.length && prev.every((item, i) => item === hits[i]) ? prev : hits,
     );
@@ -3202,6 +3387,7 @@ export default function ChatApp() {
     }
     return out;
   }, [dirEntriesByDir, treePaths]);
+  mergedTreePathsRef.current = mergedTreePaths;
 
   function handleExpandTreeDir(dir: string) {
     if (loadedDirsRef.current.has(dir)) return;
@@ -3292,7 +3478,9 @@ export default function ChatApp() {
         path = await uploadComposerFileSocket(chatId, name, buf);
       }
       attachUploadedPath(chatId, path);
-      send({ type: "list_files", query: "", chatId });
+      if (chatId === activeIdRef.current) {
+        send({ type: "list_files", query: "", chatId });
+      }
       setNotice(`已添加 ${path}`);
     } catch (err) {
       setError(`${name}：${err instanceof Error ? err.message : "上传失败"}`);
@@ -3371,6 +3559,7 @@ export default function ChatApp() {
     setPreviewTabs((prev) => {
       const existing = prev.find((tab) => sameFile(tab.path, rel, cwdRef.current));
       if (existing) {
+        const versionChanged = diff !== existing.diff || (sha || "") !== (existing.sha || "");
         return prev.map((tab) =>
           sameFile(tab.path, rel, cwdRef.current)
             ? {
@@ -3380,9 +3569,9 @@ export default function ChatApp() {
                 kind,
                 sha,
                 sourceChatId,
-                content: diff !== tab.diff ? cached : tab.content ?? cached,
-                url: diff !== tab.diff ? undefined : tab.url,
-                headUrl: diff !== tab.diff ? undefined : tab.headUrl,
+                content: versionChanged ? cached : tab.content ?? cached,
+                url: versionChanged ? undefined : tab.url,
+                headUrl: versionChanged ? undefined : tab.headUrl,
                 error: undefined,
               }
             : tab,
@@ -3442,7 +3631,7 @@ export default function ChatApp() {
 
   function togglePreviewDiff(path: string, diff: boolean) {
     const tab = previewTabsRef.current.find((item) => sameFile(item.path, path, cwdRef.current));
-    openFile(path, undefined, diff, undefined, tab?.sourceChatId);
+    openFile(path, undefined, diff, tab?.sha, tab?.sourceChatId);
   }
 
   function revertFile(path: string, silent = false) {
@@ -3726,11 +3915,14 @@ export default function ChatApp() {
     return false;
   }
 
-  function applyToolReviews(turnId: string, reviews: { callId: string; review: "accepted" | "rejected" }[]) {
+  function applyToolReviews(
+    turnId: string,
+    reviews: { callId: string; review: "accepted" | "rejected" }[],
+    targetChatId = activeIdRef.current,
+  ) {
     if (!reviews.length) return;
     const want = new Map(reviews.map((item) => [item.callId, item.review]));
-    const chatId = activeIdRef.current;
-    patchChat(chatId, (chat) => {
+    patchChat(targetChatId, (chat) => {
       const next = {
         ...chat,
         turns: chat.turns.map((item) =>
@@ -3747,7 +3939,97 @@ export default function ChatApp() {
       };
       return next;
     });
-    send({ type: "tool_review", chatId, turnId, reviews });
+    send({ type: "tool_review", chatId: targetChatId, turnId, reviews });
+  }
+
+  function setRestoringTurn(turnId: string, restoring: boolean) {
+    setRestoringTurnIds((prev) => {
+      if (restoring) {
+        return prev[turnId] ? prev : { ...prev, [turnId]: true };
+      }
+      if (!prev[turnId]) return prev;
+      const next = { ...prev };
+      delete next[turnId];
+      return next;
+    });
+  }
+
+  function registerRestoreWait(
+    turnId: string,
+    chatId: string,
+    paths: string[],
+    viaUndo: boolean,
+  ) {
+    const prev = restoreWaitsRef.current.get(turnId);
+    if (prev) window.clearTimeout(prev.timer);
+    setRestoringTurn(turnId, true);
+    const timer = window.setTimeout(() => {
+      if (!restoreWaitsRef.current.has(turnId)) return;
+      restoreWaitsRef.current.delete(turnId);
+      setRestoringTurn(turnId, false);
+      setNotice("还原没有收到回音，看一下文件再决定要不要重试");
+    }, 15_000);
+    restoreWaitsRef.current.set(turnId, {
+      chatId,
+      paths: new Set(paths),
+      viaUndo,
+      remaining: viaUndo ? 1 : Math.max(1, paths.length),
+      hit: false,
+      timer,
+    });
+  }
+
+  function settleRestore(
+    chatId: string,
+    paths: string[],
+    errorText?: string,
+    restoredCheckpoint = false,
+  ) {
+    const entries = [...restoreWaitsRef.current.entries()].filter(([, wait]) => wait.chatId === chatId);
+    if (!entries.length) return;
+    const normalized = paths
+      .map((path) => relToCwd(path, cwdRef.current) || path)
+      .filter(Boolean);
+    const matched = entries.find(([, wait]) =>
+      [...wait.paths].some((waitPath) =>
+        normalized.some((normPathItem) => sameFile(waitPath, normPathItem, cwdRef.current)),
+      ),
+    );
+    const fallback = entries.find(([, wait]) => (restoredCheckpoint ? wait.viaUndo : true));
+    const picked = matched || fallback;
+    if (!picked) return;
+    const [turnId, wait] = picked;
+    const finish = (failure?: string) => {
+      window.clearTimeout(wait.timer);
+      restoreWaitsRef.current.delete(turnId);
+      setRestoringTurn(turnId, false);
+      if (failure) {
+        setNotice(`没能还原：${failure}`);
+        return;
+      }
+      const chat = chatsRef.current.find((item) => item.id === wait.chatId);
+      const turn = chat?.turns.find((item) => item.id === turnId);
+      if (!turn) return;
+      applyToolReviews(
+        turn.id,
+        turn.tools
+          .filter((tool) => mutatingTool(tool.name))
+          .map((tool) => ({ callId: tool.callId, review: "rejected" as const })),
+        wait.chatId,
+      );
+    };
+    if (errorText) {
+      finish(errorText);
+      return;
+    }
+    if (restoredCheckpoint) {
+      finish();
+      return;
+    }
+    wait.remaining -= 1;
+    if (matched || normalized.length > 0) wait.hit = true;
+    if (wait.remaining > 0) return;
+    finish(wait.hit ? undefined : "没有可还原的改动");
   }
 
   function setToolReview(turnId: string, callId: string, review: "accepted" | "rejected") {
@@ -3776,25 +4058,59 @@ export default function ChatApp() {
         .filter((tool) => mutatingTool(tool.name) && !tool.review)
         .map((tool) => ({ callId: tool.callId, review: "accepted" as const })),
     );
-    for (const path of editPathsOf(turn)) keepFile(relToCwd(path, cwdRef.current) || path);
+    for (const path of editPathsOf(turn, cwdRef.current)) keepFile(relToCwd(path, cwdRef.current) || path);
   }
 
   function restoreTurnFiles(turn: Turn) {
-    const paths = editPathsOf(turn).map((path) => relToCwd(path, cwdRef.current) || path);
+    if (restoringTurnIds[turn.id]) return;
+    const paths = editPathsOf(turn, cwdRef.current).map((path) => relToCwd(path, cwdRef.current) || path);
     if (!paths.length) return;
     if (!window.confirm(`还原这一轮的 ${paths.length} 个文件？`)) return;
-    const chat = chatsRef.current.find((item) => item.id === activeIdRef.current);
+    const chatId = activeIdRef.current;
+    const chat = chatsRef.current.find((item) => item.id === chatId);
     const last = [...(chat?.turns || [])].reverse().find((item) => !item.queued);
-    if (last?.id === turn.id) send({ type: "undo", chatId: activeIdRef.current });
+    const viaUndo = last?.id === turn.id;
+    registerRestoreWait(turn.id, chatId, paths, viaUndo);
+    if (viaUndo) send({ type: "undo", chatId });
     else {
       for (const path of paths) revertFile(path, true);
     }
-    applyToolReviews(
-      turn.id,
-      turn.tools
-        .filter((tool) => mutatingTool(tool.name))
-        .map((tool) => ({ callId: tool.callId, review: "rejected" as const })),
-    );
+  }
+
+  function undoLast() {
+    const chatId = activeIdRef.current;
+    const chat = chatsRef.current.find((item) => item.id === chatId);
+    const last = [...(chat?.turns || [])].reverse().find((item) => !item.running && !item.queued);
+    if (
+      last &&
+      !restoringTurnIds[last.id] &&
+      !writesWereRejected(last) &&
+      last.tools.some((tool) => mutatingTool(tool.name) && !tool.review)
+    ) {
+      const paths = editPathsOf(last, cwdRef.current).map((path) => relToCwd(path, cwdRef.current) || path);
+      if (paths.length) {
+        registerRestoreWait(last.id, chatId, paths, true);
+      }
+    }
+    send({ type: "undo", chatId });
+  }
+
+  function restoreCheckpointById(checkpointId: string) {
+    const chatId = activeIdRef.current;
+    const chat = chatsRef.current.find((item) => item.id === chatId);
+    const last = [...(chat?.turns || [])].reverse().find((item) => !item.running && !item.queued);
+    if (
+      last &&
+      !restoringTurnIds[last.id] &&
+      !writesWereRejected(last) &&
+      last.tools.some((tool) => mutatingTool(tool.name) && !tool.review)
+    ) {
+      const paths = editPathsOf(last, cwdRef.current).map((path) => relToCwd(path, cwdRef.current) || path);
+      if (paths.length) {
+        registerRestoreWait(last.id, chatId, paths, true);
+      }
+    }
+    send({ type: "restore", chatId, checkpointId });
   }
 
   function saveFile(path: string, content: string) {
@@ -4362,7 +4678,7 @@ export default function ChatApp() {
     };
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const path of [...recentFiles, ...treePaths]) {
+    for (const path of [...recentFiles, ...mergedTreePaths]) {
       if (seen.has(path) || !match(path)) continue;
       seen.add(path);
       out.push(path);
@@ -4373,7 +4689,7 @@ export default function ChatApp() {
   const grepNameHits = (() => {
     const q = grepQ.trim().toLowerCase();
     if (!q) return [] as string[];
-    return treePaths.filter((path) => path.toLowerCase().includes(q)).slice(0, 40);
+    return mergedTreePaths.filter((path) => path.toLowerCase().includes(q)).slice(0, 40);
   })();
   const grepHi = Math.min(grepIndex, Math.max(0, grepNameHits.length + grepHits.length - 1));
   const threadFindHits =
@@ -4612,6 +4928,7 @@ export default function ChatApp() {
         initialView={assistantInitialView}
         initialMemoryScopeId={assistantMemoryScopeId}
         initialMemorySource={assistantMemorySource}
+        initialDelegationId={assistantDelegationId}
         openRequest={assistantOpenRequest}
         onViewChange={setAssistantInitialView}
         onClose={() => {
@@ -4625,6 +4942,7 @@ export default function ChatApp() {
         basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
         onOpenChat={openChatById}
+        onHandoffToAssistant={submitAssistantHandoffPrompt}
         lastAssistantResult={lastAssistantResult}
         assistantResultTick={assistantResultTick}
       />
@@ -4907,6 +5225,7 @@ export default function ChatApp() {
               busy={busy}
               retryTurn={retryTurn}
               submit={submit}
+              submitQuestionAnswer={submitQuestionAnswer}
               keepTool={keepTool}
               rejectTool={rejectTool}
               mdComponents={mdComponents}
@@ -4916,6 +5235,7 @@ export default function ChatApp() {
               applyPlan={applyPlan}
               keepTurnFiles={keepTurnFiles}
               restoreTurnFiles={restoreTurnFiles}
+              restoringTurnIds={restoringTurnIds}
               turnBodyLoads={turnBodyLoads}
               loadTurnBody={loadTurnBody}
               releaseTurnBody={releaseTurnBody}
@@ -4975,7 +5295,12 @@ export default function ChatApp() {
             onSave={saveFile}
             chatId={activeId}
             onCanvasAction={handleCanvasAction}
-            onOpenFile={openFile}
+            onOpenFile={(targetPath) => {
+              const tab = previewTabsRef.current.find((item) =>
+                sameFile(item.path, targetPath, cwdRef.current),
+              );
+              openFile(targetPath, tab?.line, tab?.diff, tab?.sha, tab?.sourceChatId);
+            }}
             onComposerInsert={(text) => applyDraft(text, text.length)}
             canvasVersions={canvasVersions[relToCwd(previewPath, cwd) || previewPath] || []}
             onCanvasVersions={(path) => send({ type: "canvas_versions", chatId: activeIdRef.current, path })}
@@ -4985,8 +5310,9 @@ export default function ChatApp() {
               if (window.confirm("恢复这个 Canvas 版本？当前文件会被覆盖。")) send({ type: "canvas_restore", chatId: activeIdRef.current, path, sha });
             }}
             canRevert={Boolean(
-              gitLetterOf(previewPath, gitStatus, cwd) ||
-                previewTabs.find((tab) => sameFile(tab.path, previewPath))?.diff,
+              !previewTabs.find((tab) => sameFile(tab.path, previewPath))?.sha &&
+                (gitLetterOf(previewPath, gitStatus, cwd) ||
+                  previewTabs.find((tab) => sameFile(tab.path, previewPath))?.diff),
             )}
             />
             <button
@@ -5012,6 +5338,9 @@ export default function ChatApp() {
               activeId={activeId}
               answerDelegation={answerDelegation}
               openChatById={openChatById}
+              onOpenDelegation={openAssistantDelegation}
+              onUndo={undoLast}
+              onRestoreCheckpoint={restoreCheckpointById}
               active={active}
               resolveApproval={resolveApproval}
               busy={busy}

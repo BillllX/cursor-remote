@@ -22,6 +22,9 @@ type ComposerDockProps = {
   activeId: string;
   answerDelegation: (approval: AssistantApproval, allow: boolean) => void;
   openChatById: (chatId: string) => void;
+  onOpenDelegation?: (delegationId: string) => void;
+  onUndo?: () => void;
+  onRestoreCheckpoint?: (checkpointId: string) => void;
   active: Chat;
   resolveApproval: (allow: boolean) => void;
   busy: boolean;
@@ -68,6 +71,9 @@ export function ComposerDock({
   activeId,
   answerDelegation,
   openChatById,
+  onOpenDelegation,
+  onUndo,
+  onRestoreCheckpoint,
   active,
   resolveApproval,
   busy,
@@ -149,6 +155,11 @@ export function ComposerDock({
                     </button>
                   </>
                 ) : null}
+                {onOpenDelegation ? (
+                  <button type="button" className="pill" onClick={() => onOpenDelegation(row.id)}>
+                    看委派
+                  </button>
+                ) : null}
                 <button type="button" className="pill" onClick={() => openChatById(row.childChatId)}>
                   打开子会话
                 </button>
@@ -218,8 +229,10 @@ export function ComposerDock({
           connected={connected}
           onSubmit={submit}
           onStop={() => stopChat(activeId)}
-          onUndo={() => send({ type: "undo", chatId: activeId })}
-          onRestore={(id) => send({ type: "restore", chatId: activeId, checkpointId: id })}
+          onUndo={() => (onUndo ? onUndo() : send({ type: "undo", chatId: activeId }))}
+          onRestore={(id) =>
+            onRestoreCheckpoint ? onRestoreCheckpoint(id) : send({ type: "restore", chatId: activeId, checkpointId: id })
+          }
           onOpenMenu={() => send({ type: "list_checkpoints", chatId: activeId })}
           checkpoints={checkpoints}
           onAddImages={addImages}

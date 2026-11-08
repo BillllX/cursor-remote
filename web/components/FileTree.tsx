@@ -494,9 +494,16 @@ export default function FileTree({
   }
 
   if (!tree.length && !creating) {
+    const anyTruncated = truncated || Object.keys(truncatedDirs).length > 0;
     return (
       <div className="tree-empty">
-        <div className="tree-empty-copy">{query.trim() ? "没有匹配的文件" : "没有文件列表"}</div>
+        <div className="tree-empty-copy">
+          {query.trim()
+            ? anyTruncated
+              ? "已加载目录中没有匹配项（工作区文件超过 1000 项已截断，可先展开目标子目录或按 ⌘P 全库搜索）"
+              : "没有匹配的文件"
+            : "没有文件列表"}
+        </div>
         {onCreate && !query.trim() ? (
           <button type="button" className="tree-empty-add" onClick={() => startCreate("", "file")}>
             新建文件

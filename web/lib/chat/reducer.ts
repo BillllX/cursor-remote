@@ -1,4 +1,4 @@
-import type { AssistantState, LoopState, ServerMessage } from "@shared/protocol";
+import type { AssistantState, ClientMessage, LoopState, ServerMessage } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import { isUntitled, stopOrphanRuns } from "./sessions";
 import { mergeToolOutput } from "./tools";
@@ -400,6 +400,118 @@ export function applyAssistantMessage(state: AssistantState | null, message: Ser
       const others = state.approvals.filter((row) => row.delegationId !== delegation.id);
       const approvals = delegation.status === "awaiting" && approval ? [...others, approval] : others;
       return { ...state, delegations, approvals };
+    }
+    default:
+      return state;
+  }
+}
+
+/**
+ * 本地发送 assistant_op 时的即时乐观投影（对齐 iOS R04~R06）：
+ * 让待办增删改查、完成/撤销完成、收件箱已读、日程启停与删除在服务端快照返回前立即反映在界面上。
+ */
+export function applyOptimisticAssistantOp(
+  state: AssistantState | null,
+  message: ClientMessage,
+): AssistantState | null {
+  if (!state || message.type !== "assistant_op") return state;
+  const args = (message.args ?? {}) as Record<string, unknown>;
+  switch (message.op) {
+    case "inbox_read": {
+      const ids = Array.isArray(args.ids)
+        ? new Set(args.ids.filter((id): id is string => typeof id === "string"))
+        : null;
+      const changed = state.inbox.some((item) => !item.read && (!ids || ids.has(item.id)));
+      if (!changed) return state;
+      return {
+        ...state,
+        inbox: state.inbox.map((item) => (!ids || ids.has(item.id) ? { ...item, read: true } : item)),
+      };
+    }
+    case "todo_add": {
+      const text = typeof args.text === "string" ? args.text.trim() : "";
+      if (!text) return state;
+      const due = typeof args.due === "string" && args.due.trim() ? args.due.trim() : undefined;
+      const now = Date.now();
+      return {
+        ...state,
+        todos: [
+          {
+            id: `local-todo-${now}`,
+            text,
+            due,
+            done: false,
+            createdAt: now,
+            source: "user",
+          },
+          ...state.todos,
+        ],
+      };
+    }
+    case "todo_done":
+    case "todo_undo": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) return state;
+      const done = message.op === "todo_done";
+      const now = Date.now();
+      return {
+        ...state,
+        todos: state.todos.map((todo) =>
+          todo.id === id ? { ...todo, done, doneAt: done ? now : undefined } : todo,
+        ),
+      };
+    }
+    case "todo_update": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) return state;
+      return {
+        ...state,
+        todos: state.todos.map((todo) => {
+          if (todo.id !== id) return todo;
+          const nextText = typeof args.text === "string" && args.text.trim() ? args.text.trim() : todo.text;
+          const nextDue =
+            typeof args.due === "string"
+              ? args.due.trim() || undefined
+              : todo.due;
+          return { ...todo, text: nextText, due: nextDue };
+        }),
+      };
+    }
+    case "todo_remove": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) return state;
+      return {
+        ...state,
+        todos: state.todos.filter((todo) => todo.id !== id),
+      };
+    }
+    case "schedule_set": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) return state;
+      return {
+        ...state,
+        schedules: state.schedules.map((row) => {
+          if (row.id !== id) return row;
+          const enabled = typeof args.enabled === "boolean" ? args.enabled : row.enabled;
+          const title = typeof args.title === "string" && args.title.trim() ? args.title.trim() : row.title;
+          const cron = typeof args.cron === "string" && args.cron.trim() ? args.cron.trim() : row.cron;
+          return {
+            ...row,
+            enabled,
+            title,
+            cron,
+            pausedReason: enabled ? undefined : row.pausedReason,
+          };
+        }),
+      };
+    }
+    case "schedule_remove": {
+      const id = typeof args.id === "string" ? args.id : "";
+      if (!id) return state;
+      return {
+        ...state,
+        schedules: state.schedules.filter((row) => row.id !== id),
+      };
     }
     default:
       return state;

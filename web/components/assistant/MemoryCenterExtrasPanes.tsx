@@ -20,6 +20,22 @@ const ACTION_LABEL: Record<string, string> = {
   restore: "恢复",
 };
 
+const ACTOR_LABEL: Record<string, string> = {
+  user: "你",
+  assistant: "小驳",
+  agent: "Agent",
+  system: "系统",
+  tidy: "整理",
+  import: "导入",
+  page: "面板",
+};
+
+function formatScopeName(scope: string): string {
+  if (scope === "personal") return "关于我";
+  if (scope === "work_preference") return "工作偏好";
+  return scope;
+}
+
 type ActivityProps = {
   state: MemoryCenterActivityState;
   scopeFilter: string;
@@ -85,9 +101,9 @@ export function MemoryCenterActivityPane({
             <div className={`assistant-item ${MEMORY_CENTER_CSS.rowBtn}`}>
               <div className="assistant-item-head">
                 <span className="assistant-item-title">
-                  {ACTION_LABEL[entry.action] ?? entry.action} · {entry.scope}
+                  {ACTION_LABEL[entry.action] ?? entry.action} · {formatScopeName(entry.scope)}
                 </span>
-                <span className="chat-mark">{entry.actor}</span>
+                <span className="chat-mark">{ACTOR_LABEL[entry.actor] ?? entry.actor}</span>
               </div>
               <div className="assistant-item-body">
                 {entry.before ? (

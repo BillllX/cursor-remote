@@ -4,10 +4,12 @@ import type { ServerMessage } from "@shared/protocol";
 import {
   applyRunSnapshot,
   deferredPlaceholder,
+  editPathsOf,
   formatBodyBytes,
   historyToTurns,
   mergeHistoryTurns,
   preferCompleteTurns,
+  preserveToolReviews,
   serverTurn,
   settleTurn,
   turnAllowsActions,
@@ -376,5 +378,51 @@ describe("mergeHistoryTurns / withLiveTurns / serverTurn", () => {
     assert.equal(out?.user, "");
     assert.equal(out?.running, false);
     assert.deepEqual(out?.todos, [{ id: "0", content: "写测试", status: "pending" }]);
+  });
+
+  test("editPathsOf：同一文件混用绝对路径与相对路径时按归一化路径去重并优先保留相对路径", () => {
+    const sampleTurn = turn({
+      tools: [
+        tool({ callId: "t1", name: "Write", args: { path: "/workspace/proj/web/a.ts" } }),
+        tool({ callId: "t2", name: "Edit", args: { path: "web/a.ts" } }),
+        tool({ callId: "t3", name: "Edit", args: { path: "./web/b.ts" } }),
+        tool({ callId: "t4", name: "Read", args: { path: "web/c.ts" } }),
+      ],
+    });
+    assert.deepEqual(editPathsOf(sampleTurn, "/workspace/proj"), ["web/a.ts", "web/b.ts"]);
+    assert.deepEqual(editPathsOf(sampleTurn), ["web/a.ts", "web/b.ts"]);
+  });
+
+  test("preserveToolReviews / preferCompleteTurns / applyRunSnapshot：保留本地已标记的 tool.review", () => {
+    const localTools = [
+      tool({ callId: "c1", name: "Write", status: "completed", review: "accepted" }),
+      tool({ callId: "c2", name: "Edit", status: "completed", review: "rejected" }),
+    ];
+    const incomingTools = [
+      tool({ callId: "c1", name: "Write", status: "completed" }),
+      tool({ callId: "c2", name: "Edit", status: "completed" }),
+    ];
+    const merged = preserveToolReviews(localTools, incomingTools);
+    assert.equal(merged[0].review, "accepted");
+    assert.equal(merged[1].review, "rejected");
+
+    const localTurn = turn({ id: "t-rev", assistant: "ok", tools: localTools });
+    const serverIncoming = turn({ id: "t-rev", assistant: "ok", tools: incomingTools });
+    const preferred = preferCompleteTurns([localTurn], [serverIncoming], 1);
+    assert.equal(preferred[0].tools[0].review, "accepted");
+    assert.equal(preferred[0].tools[1].review, "rejected");
+
+    const snapUpdated = applyRunSnapshot(
+      [localTurn],
+      snapshot({
+        turnId: "t-rev",
+        phase: "done",
+        status: "finished",
+        assistant: "ok",
+        tools: incomingTools,
+      }),
+    );
+    assert.equal(snapUpdated[0].tools[0].review, "accepted");
+    assert.equal(snapUpdated[0].tools[1].review, "rejected");
   });
 });
