@@ -310,7 +310,9 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
     const csp = pageRes.headers.get("content-security-policy") || "";
     assert.equal(csp.includes("sandbox allow-scripts allow-downloads"), true);
     const pageHtml = await pageRes.text();
-    assert.equal(pageHtml.includes("💬 知识库问答"), true);
+    assert.equal(pageHtml.includes("知识库只读问答"), true);
+    assert.equal(pageHtml.includes("split-workbench"), true);
+    assert.equal(pageHtml.includes("preview-dock-card"), true);
     const ticketMatch = /const PAGE_TICKET = "(pt_[0-9a-f]+)"/.exec(pageHtml);
     assert.equal(Boolean(ticketMatch?.[1]), true);
     const pageTicket = ticketMatch![1];

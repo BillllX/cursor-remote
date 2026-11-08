@@ -272,8 +272,8 @@ function escapeHtml(text: string): string {
 }
 
 /**
- * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts`）的单文件内联知识库协作与投递门户 HTML 页面。
- * 支持验证口令后在「知识库看板（HTML）」与「上传新文档」两个标签页之间无缝切换，点击任意看板即可全宽内联预览。
+ * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts allow-downloads`）的单文件内联知识库协作与投递门户 HTML 页面。
+ * 采用横向双栏设计：左侧集成「资料上传、知识库看板目录、知识库只读问答」三大板块，右侧常驻「看板预览与临时统计文件预览」工作台。
  */
 export function renderDropPortalHtml(tenantId: string, tenantName?: string, pageTicket = ""): string {
   const displayTenant = escapeHtml(tenantName || tenantId);
@@ -312,23 +312,27 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 24px 16px 48px;
+      padding: 18px 20px 36px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
       line-height: 1.5;
     }
-    .container { max-width: 1040px; margin: 0 auto; }
+    .container { max-width: 1680px; margin: 0 auto; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 12px;
-      padding: 22px;
+      padding: 20px;
       margin-bottom: 16px;
+    }
+    .auth-card {
+      max-width: 640px;
+      margin: 24px auto;
     }
     h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
     h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
-    .sub { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
     .badge {
       display: inline-block;
       padding: 2px 10px;
@@ -336,7 +340,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       font-size: 12px;
       background: rgba(59, 130, 246, 0.15);
       color: var(--accent);
-      margin-bottom: 10px;
+      margin-bottom: 8px;
     }
     label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
     input[type="text"], input[type="password"], textarea {
@@ -347,15 +351,15 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       background: var(--bg);
       color: var(--text);
       font-size: 14px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     button {
       background: var(--accent);
       color: #fff;
       border: 0;
       border-radius: 8px;
-      padding: 10px 18px;
-      font-size: 14px;
+      padding: 9px 16px;
+      font-size: 13px;
       font-weight: 500;
       cursor: pointer;
     }
@@ -366,7 +370,12 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       color: var(--text);
       border: 1px solid var(--border);
       padding: 6px 12px;
-      font-size: 13px;
+      font-size: 12px;
+    }
+    .btn-ghost.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
     }
     .btn-rm {
       background: transparent;
@@ -374,49 +383,92 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       padding: 2px 8px;
       font-size: 12px;
       border: 1px solid var(--border);
-      margin-left: 8px;
+      margin-left: 6px;
     }
-    .tabs {
+    .workspace-topbar {
       display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 12px;
-      flex-wrap: wrap;
-      align-items: center;
       justify-content: space-between;
-    }
-    .tab-group { display: flex; gap: 8px; }
-    .tab-btn {
-      background: transparent;
-      color: var(--muted);
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: var(--card);
       border: 1px solid var(--border);
-      padding: 8px 16px;
-      border-radius: 8px;
-      font-size: 14px;
+      border-radius: 12px;
+      padding: 14px 20px;
+      margin-bottom: 16px;
     }
-    .tab-btn.active {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
+    .split-workbench {
+      display: grid;
+      grid-template-columns: minmax(480px, 44%) minmax(520px, 56%);
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1100px) {
+      .split-workbench {
+        grid-template-columns: 1fr;
+      }
+      .right-column {
+        position: static;
+      }
+    }
+    .left-column {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+    .right-column {
+      position: sticky;
+      top: 16px;
+      min-width: 0;
+    }
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .step-pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(59, 130, 246, 0.15);
+      color: var(--accent);
     }
     .board-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: 10px;
+      max-height: 290px;
+      overflow-y: auto;
+      padding-right: 2px;
     }
     .board-card {
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 14px;
+      padding: 12px;
       cursor: pointer;
       text-align: left;
-      transition: border-color 0.15s, transform 0.1s;
+      transition: border-color 0.15s, background 0.15s;
     }
     .board-card:hover, .board-card.active {
       border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.06);
     }
     .board-tag {
       display: inline-block;
@@ -425,42 +477,70 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       border-radius: 999px;
       background: rgba(59, 130, 246, 0.15);
       color: var(--accent);
-      margin-bottom: 6px;
+      margin-bottom: 5px;
     }
-    .board-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
-    .board-meta { font-size: 12px; color: var(--muted); word-break: break-all; }
-    .board-viewer {
+    .board-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
+    .board-meta { font-size: 11px; color: var(--muted); word-break: break-all; }
+    .preview-dock-card {
+      background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 12px;
       overflow: hidden;
-      background: #ffffff;
-      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      min-height: calc(100vh - 150px);
     }
     .board-viewer-bar {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px 14px;
-      background: var(--bg);
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 12px 16px;
+      background: var(--card);
       border-bottom: 1px solid var(--border);
       font-size: 13px;
     }
+    .preview-switch-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .board-viewer {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #ffffff;
+    }
     .board-iframe {
       width: 100%;
-      height: 76vh;
-      min-height: 540px;
+      height: calc(100vh - 215px);
+      min-height: 620px;
       border: 0;
       display: block;
       background: #ffffff;
     }
+    .preview-empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 64px 24px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      min-height: 520px;
+      background: var(--bg);
+    }
     .dropzone {
       border: 2px dashed var(--border);
       border-radius: 10px;
-      padding: 28px 16px;
+      padding: 20px 14px;
       text-align: center;
       cursor: pointer;
       transition: border-color 0.15s;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     .dropzone.dragover { border-color: var(--accent); }
     .rules {
@@ -469,43 +549,43 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       background: rgba(139, 155, 176, 0.08);
       border-radius: 8px;
       padding: 10px 12px;
-      margin-bottom: 14px;
+      margin-top: 10px;
     }
-    .file-list { list-style: none; padding: 0; margin: 0 0 14px; }
+    .file-list { list-style: none; padding: 0; margin: 0 0 12px; }
     .file-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 10px;
+      padding: 7px 10px;
       border: 1px solid var(--border);
       border-radius: 6px;
       margin-bottom: 6px;
-      font-size: 13px;
+      font-size: 12px;
     }
     .file-err { border-color: var(--danger); color: var(--danger); }
     .file-ok { border-color: var(--success); }
     .status-box {
-      padding: 12px;
+      padding: 10px 12px;
       border-radius: 8px;
       border: 1px solid var(--border);
-      font-size: 13px;
-      margin-top: 12px;
+      font-size: 12px;
+      margin-top: 10px;
     }
     .qa-chat-box {
       border: 1px solid var(--border);
       border-radius: 10px;
       background: var(--bg);
-      padding: 14px;
-      min-height: 280px;
-      max-height: 520px;
+      padding: 12px;
+      min-height: 220px;
+      max-height: 380px;
       overflow-y: auto;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     .qa-msg {
-      padding: 12px 14px;
+      padding: 10px 12px;
       border-radius: 10px;
-      margin-bottom: 12px;
-      font-size: 14px;
+      margin-bottom: 10px;
+      font-size: 13px;
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -518,7 +598,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       border: 1px solid var(--border);
     }
     .qa-msg-role {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       color: var(--muted);
       margin-bottom: 4px;
@@ -529,11 +609,11 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       padding: 10px 12px;
       margin-bottom: 12px;
       background: rgba(139, 155, 176, 0.06);
-      font-size: 13px;
+      font-size: 12px;
     }
     .qa-chip-list {
       display: flex;
-      gap: 8px;
+      gap: 6px;
       flex-wrap: wrap;
       margin-top: 8px;
     }
@@ -541,24 +621,24 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
+      padding: 4px 9px;
       border-radius: 6px;
       border: 1px solid var(--border);
       background: var(--card);
       font-size: 12px;
     }
     .qa-preview-box {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      margin-top: 12px;
-      overflow: hidden;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       background: var(--card);
     }
     .qa-preview-pre {
       margin: 0;
-      padding: 14px;
+      padding: 16px;
       font-size: 13px;
-      max-height: 400px;
+      height: calc(100vh - 215px);
+      min-height: 620px;
       overflow: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -570,118 +650,157 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 </head>
 <body>
   <div class="container">
-    <div class="card">
+    <div id="step-auth" class="card auth-card">
       <span class="badge">知识库协作门户 · 自动分类归档与看板查阅</span>
       <h1>工作区资料投递箱 & 知识库看板</h1>
       <p class="sub">输入管理员分配的投递口令，即可在线查阅目标知识库工作区的各层 HTML 汇总看板、通过只读问答助手询问知识库数据并导出临时统计文件，或上传新业务文档由 AI 自动分类归档。</p>
-      <div class="rules">
-        <strong>上传与问答规格说明：</strong><br/>
-        • 单个文件最大 <strong>32 MB</strong>，单批次最多 <strong>${MAX_FILES_PER_BATCH} 个文件</strong>（多文件将自动逐个流式上传）；<br/>
-        • 支持格式：<code>${escapeHtml(allowedListText)}</code>；<br/>
-        • 严禁上传 <code>.exe / .sh / .bat / .js / .html</code> 等可执行脚本；超过 32MB 的巨型底表请先分卷或压缩为 <code>.zip</code>；<br/>
-        • <strong>知识库问答权限隔离</strong>：问答对话框对知识库工作区保持 100% 只读，问答上传的比对附件与 AI 生成的统计表格/看板均存放在工作区外的独立临时目录，空闲 30 分钟后自动物理清理。
-      </div>
-    </div>
-
-    <div id="step-auth" class="card">
-      <h2>第一步：验证工作区口令</h2>
       <label for="submitter">您的称呼 / 部门（必填，便于归档留痕）</label>
       <input id="submitter" type="text" maxlength="40" autocomplete="off" placeholder="例如：张工-财务部" />
       <label for="passcode">工作区投递口令</label>
       <input id="passcode" type="password" maxlength="64" autocomplete="off" placeholder="请输入 6–64 位投递口令" />
-      <button id="btn-auth" type="button">进入知识库看板与投递中心</button>
+      <button id="btn-auth" type="button" style="width:100%;">进入知识库双栏工作台</button>
       <div id="auth-msg" class="status-box hidden"></div>
+      <div class="rules">
+        <strong>上传与问答规格说明：</strong><br/>
+        • 单个文件最大 <strong>32 MB</strong>，单批次最多 <strong>${MAX_FILES_PER_BATCH} 个文件</strong>（多文件将自动逐个流式上传）；<br/>
+        • 支持格式：<code>${escapeHtml(allowedListText)}</code>；严禁上传 <code>.exe / .sh / .bat / .js / .html</code> 等可执行脚本；<br/>
+        • <strong>知识库问答权限隔离</strong>：问答对话框对知识库工作区保持 100% 只读，比对附件与 AI 生成的统计文件均存放在工作区外独立临时目录，空闲 30 分钟自动销毁。
+      </div>
     </div>
 
-    <div id="step-main" class="card hidden">
-      <div class="tabs">
+    <div id="step-main" class="hidden">
+      <div class="workspace-topbar">
         <div>
-          <h2 id="ws-title" style="margin:0 0 4px;">知识库工作区</h2>
-          <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <span class="badge" style="margin:0;">知识库双栏协作台</span>
+            <h2 id="ws-title" style="margin:0;font-size:18px;">知识库工作区</h2>
+          </div>
+          <div id="batch-info" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
         </div>
-        <div class="tab-group">
-          <button id="tab-boards" type="button" class="tab-btn active">📊 知识库看板 (<span id="board-count">0</span>)</button>
-          <button id="tab-qa" type="button" class="tab-btn">💬 知识库问答</button>
-          <button id="tab-upload" type="button" class="tab-btn">📤 上传新文档</button>
+        <div style="font-size:12px;color:var(--muted);">
+          左侧：资料上传、看板索引与 AI 问答 · 右侧：看板与临时统计文件实时预览
         </div>
       </div>
 
-      <!-- 面板 A：知识库 HTML 看板中心 -->
-      <div id="pane-boards">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:13px;color:var(--muted);">点击下方任意知识库卡片即可直接在线查阅全内联 HTML 看板：</span>
-          <button id="btn-refresh-boards" type="button" class="btn-ghost">刷新看板列表</button>
-        </div>
-        <div id="boards-empty" class="status-box hidden">当前知识库暂无已生成的同名 HTML 看板。您可以切换到「上传新文档」投递资料。</div>
-        <div id="boards-grid" class="board-grid"></div>
+      <div class="split-workbench">
+        <!-- 左侧栏：板块一（上传新文档 + 知识库看板列表）+ 板块二（知识库只读问答） -->
+        <div class="left-column">
+          <!-- 板块 1：资料投递上传 -->
+          <div id="pane-upload" class="card" style="margin-bottom:0;">
+            <div class="section-header">
+              <h3 class="section-title">
+                <span class="step-pill">板块 1 · 投递</span>
+                <span>📤 上传新业务文档（AI 自动分类归档）</span>
+              </h3>
+              <span style="font-size:12px;color:var(--muted);">单文件 ≤ 32MB · 单批 ≤ ${MAX_FILES_PER_BATCH} 个</span>
+            </div>
+            <div id="dropzone" class="dropzone">
+              <div>点击选择文件，或将多个文件直接拖拽至此处</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:4px;">支持 ${escapeHtml(allowedListText)} · 选入后立即本地预检体积与格式</div>
+              <input id="file-input" type="file" multiple class="hidden" />
+            </div>
+            <ul id="file-list" class="file-list"></ul>
+            <label for="batch-note">批次补充说明（可选，帮助 AI 更精准分类与提炼摘要）</label>
+            <textarea id="batch-note" rows="2" maxlength="500" placeholder="例如：11月最新三农信代偿台账与洋钱罐风险预估"></textarea>
+            <button id="btn-submit" type="button">上传并提交 AI 自动归档</button>
+            <div id="upload-msg" class="status-box hidden"></div>
+          </div>
 
-        <div id="board-viewer" class="board-viewer hidden">
-          <div class="board-viewer-bar">
-            <strong id="viewer-title">看板预览</strong>
-            <div style="display:flex;gap:8px;">
-              <button id="btn-ask-this-board" type="button" class="btn-ghost">💬 询问此看板数据</button>
-              <button id="btn-close-viewer" type="button" class="btn-ghost">收起预览</button>
+          <!-- 板块 2：知识库看板目录 -->
+          <div id="pane-boards" class="card" style="margin-bottom:0;">
+            <div class="section-header">
+              <h3 class="section-title">
+                <span class="step-pill">板块 2 · 看板</span>
+                <span>📊 知识库 HTML 看板目录 (<span id="board-count">0</span>)</span>
+              </h3>
+              <button id="btn-refresh-boards" type="button" class="btn-ghost">刷新看板列表</button>
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
+              点击下方任意看板卡片，即可在<strong>右侧预览区</strong>实时打开全内联 HTML 看板：
+            </div>
+            <div id="boards-empty" class="status-box hidden">当前知识库暂无已生成的同名 HTML 看板。您可以先在上方投递新文档。</div>
+            <div id="boards-grid" class="board-grid"></div>
+          </div>
+
+          <!-- 板块 3：知识库只读问答与统计生成 -->
+          <div id="pane-qa" class="card" style="margin-bottom:0;">
+            <div class="section-header">
+              <h3 class="section-title">
+                <span class="step-pill">板块 3 · 问答</span>
+                <span>💬 知识库只读问答 & 临时统计文件生成</span>
+              </h3>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button id="btn-qa-attach" type="button" class="btn-ghost">📎 上传比对附件</button>
+                <input id="qa-file-input" type="file" accept=".csv,.md,.txt,.json,.sql" class="hidden" />
+                <button id="btn-qa-clear" type="button" class="btn-ghost">🗑️ 清空对话与临时文件</button>
+              </div>
+            </div>
+
+            <div class="qa-temp-bar">
+              <div>
+                <strong>🔒 临时沙箱隔离</strong>
+                <span style="color:var(--muted);margin-left:4px;">对知识库 100% 零写入 · 生成的 CSV / MD / HTML 统计文件可在右侧直接预览或下载 · 空闲 30 分钟自动销毁</span>
+              </div>
+              <div id="qa-temp-files" class="qa-chip-list"></div>
+            </div>
+
+            <div id="qa-chat-box" class="qa-chat-box">
+              <div id="qa-empty-hint" style="color:var(--muted);font-size:12px;text-align:center;padding:32px 12px;">
+                您可以直接询问知识库中的业务指标、主体台账，或输入：<br/>
+                「帮我统计知识库内各主体的核心指标，生成一份 CSV 表格（或 HTML 汇总看板）给我预览和下载」
+              </div>
+              <div id="qa-messages"></div>
+            </div>
+
+            <label for="qa-input">向知识库提问或要求生成统计文件</label>
+            <textarea id="qa-input" rows="3" maxlength="4000" placeholder="例如：帮我统计当前知识库里所有主体的关键风险与余额指标，并生成一个 CSV 统计文件供我下载"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+              <button id="btn-qa-send" type="button">发送提问</button>
+              <span id="qa-board-hint" style="font-size:12px;color:var(--muted);"></span>
+            </div>
+            <div id="qa-msg-box" class="status-box hidden"></div>
+          </div>
+        </div>
+
+        <!-- 右侧常驻预览栏：统一承载「知识库看板预览」与「AI 生成的临时统计文件预览」 -->
+        <div class="right-column">
+          <div class="preview-dock-card">
+            <div class="board-viewer-bar">
+              <div style="min-width:0;flex:1;">
+                <span id="preview-mode-badge" class="step-pill" style="margin-right:6px;">右侧预览区</span>
+                <strong id="viewer-title">请选择左侧看板或生成的临时统计文件</strong>
+                <strong id="qa-preview-title" class="hidden">临时统计文件预览</strong>
+              </div>
+              <div class="preview-switch-group">
+                <button id="tab-boards" type="button" class="btn-ghost active">📊 看板视图</button>
+                <button id="tab-qa" type="button" class="btn-ghost">📄 临时文件视图</button>
+                <button id="btn-ask-this-board" type="button" class="btn-ghost hidden">💬 询问此看板</button>
+                <button id="btn-download-active-qa" type="button" class="btn-ghost hidden">⬇️ 下载此文件</button>
+                <button id="btn-close-viewer" type="button" class="btn-ghost hidden">关闭预览</button>
+                <button id="btn-close-qa-preview" type="button" class="btn-ghost hidden">关闭预览</button>
+              </div>
+            </div>
+
+            <!-- 空状态占位 -->
+            <div id="preview-empty" class="preview-empty-state">
+              <div style="font-size:32px;margin-bottom:10px;">🖥️</div>
+              <div style="font-weight:600;color:var(--text);margin-bottom:6px;">右侧实时预览工作台</div>
+              <div>• 点击左侧<strong>「📊 知识库 HTML 看板目录」</strong>中的卡片，在此处查阅全内联知识库看板；</div>
+              <div>• 在左侧<strong>「💬 知识库只读问答」</strong>中生成的 CSV / MD / HTML 统计文件，点击「预览」即可在此处直接查看或下载。</div>
+            </div>
+
+            <!-- 视图 1：知识库 HTML 看板预览 -->
+            <div id="board-viewer" class="board-viewer hidden">
+              <iframe id="viewer-frame" class="board-iframe" sandbox="allow-scripts"></iframe>
+            </div>
+
+            <!-- 视图 2：问答生成的临时统计文件预览 -->
+            <div id="qa-file-preview" class="qa-preview-box hidden">
+              <pre id="qa-preview-pre" class="qa-preview-pre hidden"></pre>
+              <iframe id="qa-preview-frame" class="board-iframe hidden" sandbox=""></iframe>
             </div>
           </div>
-          <iframe id="viewer-frame" class="board-iframe" sandbox="allow-scripts"></iframe>
         </div>
-      </div>
-
-      <!-- 面板 C：知识库只读问答与临时统计生成 -->
-      <div id="pane-qa" class="hidden">
-        <div class="qa-temp-bar">
-          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-            <div>
-              <strong>🔒 只读问答与临时统计空间</strong>
-              <span style="color:var(--muted);margin-left:6px;">不修改知识库原文件 · 支持要求 AI 汇总生成 CSV / MD / HTML 统计文件并下载 · 空闲 30 分钟自动销毁</span>
-            </div>
-            <div style="display:flex;gap:8px;">
-              <button id="btn-qa-attach" type="button" class="btn-ghost">📎 上传临时比对附件</button>
-              <input id="qa-file-input" type="file" accept=".csv,.md,.txt,.json,.sql" class="hidden" />
-              <button id="btn-qa-clear" type="button" class="btn-ghost">🗑️ 清空对话与临时文件</button>
-            </div>
-          </div>
-          <div id="qa-temp-files" class="qa-chip-list"></div>
-        </div>
-
-        <div id="qa-chat-box" class="qa-chat-box">
-          <div id="qa-empty-hint" style="color:var(--muted);font-size:13px;text-align:center;padding:42px 12px;">
-            您可以直接询问知识库中的业务指标、主体台账，或输入：<br/>
-            「帮我统计知识库内各主体的核心指标，生成一份 CSV 表格（或 HTML 汇总表）给我下载」
-          </div>
-          <div id="qa-messages"></div>
-        </div>
-
-        <label for="qa-input">向知识库提问或要求生成统计文件</label>
-        <textarea id="qa-input" rows="3" maxlength="4000" placeholder="例如：帮我统计当前知识库里所有主体的关键风险与余额指标，并生成一个 CSV 统计文件供我下载"></textarea>
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
-          <button id="btn-qa-send" type="button">发送提问</button>
-          <span id="qa-board-hint" style="font-size:12px;color:var(--muted);"></span>
-        </div>
-        <div id="qa-msg-box" class="status-box hidden"></div>
-
-        <div id="qa-file-preview" class="qa-preview-box hidden">
-          <div class="board-viewer-bar">
-            <strong id="qa-preview-title">临时统计文件预览</strong>
-            <button id="btn-close-qa-preview" type="button" class="btn-ghost">关闭预览</button>
-          </div>
-          <pre id="qa-preview-pre" class="qa-preview-pre hidden"></pre>
-          <iframe id="qa-preview-frame" class="board-iframe hidden" sandbox=""></iframe>
-        </div>
-      </div>
-
-      <!-- 面板 B：上传新文档 -->
-      <div id="pane-upload" class="hidden">
-        <div id="dropzone" class="dropzone">
-          <div>点击选择文件，或将多个文件直接拖拽至此处</div>
-          <div style="font-size:12px;color:var(--muted);margin-top:4px;">单文件 ≤ 32MB · 单批 ≤ ${MAX_FILES_PER_BATCH} 个文件 · 选入后立即本地预检体积与格式</div>
-          <input id="file-input" type="file" multiple class="hidden" />
-        </div>
-        <ul id="file-list" class="file-list"></ul>
-        <label for="batch-note">批次补充说明（可选，帮助 AI 更精准分类与提炼摘要）</label>
-        <textarea id="batch-note" rows="2" maxlength="500" placeholder="例如：11月最新三农信代偿台账与洋钱罐风险预估"></textarea>
-        <button id="btn-submit" type="button">上传并提交 AI 自动归档</button>
-        <div id="upload-msg" class="status-box hidden"></div>
       </div>
     </div>
   </div>
@@ -701,10 +820,6 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const batchInfo = document.getElementById("batch-info");
       const tabBoards = document.getElementById("tab-boards");
       const tabQa = document.getElementById("tab-qa");
-      const tabUpload = document.getElementById("tab-upload");
-      const paneBoards = document.getElementById("pane-boards");
-      const paneQa = document.getElementById("pane-qa");
-      const paneUpload = document.getElementById("pane-upload");
       const boardCountEl = document.getElementById("board-count");
       const boardsGrid = document.getElementById("boards-grid");
       const boardsEmpty = document.getElementById("boards-empty");
@@ -736,6 +851,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       const qaPreviewPre = document.getElementById("qa-preview-pre");
       const qaPreviewFrame = document.getElementById("qa-preview-frame");
       const btnCloseQaPreview = document.getElementById("btn-close-qa-preview");
+      const previewEmpty = document.getElementById("preview-empty");
+      const previewModeBadge = document.getElementById("preview-mode-badge");
+      const btnDownloadActiveQa = document.getElementById("btn-download-active-qa");
 
       let sessionToken = "";
       let batchId = "";
@@ -745,6 +863,8 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       let pendingFiles = [];
       let boardsList = [];
       let activeBoardPath = "";
+      let activeBoardTitle = "";
+      let activeQaFileName = "";
       let qaTempFiles = [];
 
       function showBox(el, text, isErr) {
@@ -761,24 +881,66 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         }
       }
 
-      function switchTab(tab) {
-        tabBoards.classList.toggle("active", tab === "boards");
-        tabQa.classList.toggle("active", tab === "qa");
-        tabUpload.classList.toggle("active", tab === "upload");
-        paneBoards.classList.toggle("hidden", tab !== "boards");
-        paneQa.classList.toggle("hidden", tab !== "qa");
-        paneUpload.classList.toggle("hidden", tab !== "upload");
-        if (tab === "qa") {
-          updateQaBoardHint();
+      function switchRightPreview(mode) {
+        const hasBoard = Boolean(activeBoardPath);
+        const hasQaFile = Boolean(activeQaFileName);
+        if (mode === "board" && hasBoard) {
+          tabBoards.classList.add("active");
+          tabQa.classList.remove("active");
+          previewModeBadge.textContent = "📊 知识库看板预览";
+          if (activeBoardTitle) {
+            viewerTitle.textContent = activeBoardTitle;
+          }
+          viewerTitle.classList.remove("hidden");
+          qaPreviewTitle.classList.add("hidden");
+          previewEmpty.classList.add("hidden");
+          boardViewer.classList.remove("hidden");
+          qaFilePreview.classList.add("hidden");
+          btnAskThisBoard.classList.remove("hidden");
+          btnCloseViewer.classList.remove("hidden");
+          btnDownloadActiveQa.classList.add("hidden");
+          btnCloseQaPreview.classList.add("hidden");
+        } else if (mode === "qa" && hasQaFile) {
+          tabQa.classList.add("active");
+          tabBoards.classList.remove("active");
+          previewModeBadge.textContent = "📄 临时统计文件预览";
+          viewerTitle.classList.add("hidden");
+          qaPreviewTitle.classList.remove("hidden");
+          previewEmpty.classList.add("hidden");
+          boardViewer.classList.add("hidden");
+          qaFilePreview.classList.remove("hidden");
+          btnAskThisBoard.classList.add("hidden");
+          btnCloseViewer.classList.add("hidden");
+          btnDownloadActiveQa.classList.remove("hidden");
+          btnCloseQaPreview.classList.remove("hidden");
+        } else {
+          tabBoards.classList.toggle("active", mode !== "qa");
+          tabQa.classList.toggle("active", mode === "qa");
+          previewModeBadge.textContent = "右侧预览区";
+          viewerTitle.classList.remove("hidden");
+          viewerTitle.textContent = mode === "qa" ? "暂未选择要预览的临时统计文件" : "请选择左侧看板或生成的临时统计文件";
+          qaPreviewTitle.classList.add("hidden");
+          previewEmpty.classList.remove("hidden");
+          boardViewer.classList.add("hidden");
+          qaFilePreview.classList.add("hidden");
+          btnAskThisBoard.classList.add("hidden");
+          btnCloseViewer.classList.add("hidden");
+          btnDownloadActiveQa.classList.add("hidden");
+          btnCloseQaPreview.classList.add("hidden");
         }
+        updateQaBoardHint();
       }
 
-      tabBoards.addEventListener("click", function() { switchTab("boards"); });
-      tabQa.addEventListener("click", function() { switchTab("qa"); });
-      tabUpload.addEventListener("click", function() { switchTab("upload"); });
+      tabBoards.addEventListener("click", function() { switchRightPreview("board"); });
+      tabQa.addEventListener("click", function() { switchRightPreview("qa"); });
       btnAskThisBoard.addEventListener("click", function() {
-        switchTab("qa");
+        updateQaBoardHint();
         qaInputEl.focus();
+      });
+      btnDownloadActiveQa.addEventListener("click", function() {
+        if (activeQaFileName) {
+          previewOrDownloadQaFile(activeQaFileName, true);
+        }
       });
 
       function renderBoards(boards) {
@@ -815,9 +977,10 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 
       async function openBoardPreview(relPath, title) {
         activeBoardPath = relPath;
+        activeBoardTitle = "正在加载：" + title + " (" + relPath + ")…";
         renderBoards(boardsList);
-        viewerTitle.textContent = "正在加载：" + title + " (" + relPath + ")…";
-        boardViewer.classList.remove("hidden");
+        viewerTitle.textContent = activeBoardTitle;
+        switchRightPreview("board");
         try {
           const u = API_BASE + "/board?path=" + encodeURIComponent(relPath);
           const res = await fetch(u, {
@@ -827,22 +990,32 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             }
           });
           const data = await res.json();
+          if (activeBoardPath !== relPath) return;
           if (!res.ok || !data.ok) {
-            viewerTitle.textContent = "加载失败：" + (data.error || "无法读取该看板");
+            activeBoardTitle = "加载失败：" + (data.error || "无法读取该看板");
+            viewerTitle.textContent = activeBoardTitle;
             return;
           }
-          viewerTitle.textContent = title + " — " + relPath;
+          activeBoardTitle = title + " — " + relPath;
+          viewerTitle.textContent = activeBoardTitle;
           viewerFrame.srcdoc = data.htmlContent || "";
         } catch (e) {
-          viewerTitle.textContent = "网络请求失败，无法加载看板";
+          if (activeBoardPath !== relPath) return;
+          activeBoardTitle = "网络请求失败，无法加载看板";
+          viewerTitle.textContent = activeBoardTitle;
         }
       }
 
       btnCloseViewer.addEventListener("click", function() {
         activeBoardPath = "";
-        boardViewer.classList.add("hidden");
+        activeBoardTitle = "";
         viewerFrame.srcdoc = "";
         renderBoards(boardsList);
+        if (activeQaFileName) {
+          switchRightPreview("qa");
+        } else {
+          switchRightPreview("empty");
+        }
       });
 
       async function refreshBoardsList() {
@@ -897,11 +1070,11 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
           stepAuth.classList.add("hidden");
           stepMain.classList.remove("hidden");
           renderBoards(data.boards || []);
+          updateQaBoardHint();
           if (Array.isArray(data.boards) && data.boards.length > 0) {
-            switchTab("boards");
             openBoardPreview(data.boards[0].relPath, data.boards[0].title);
           } else {
-            switchTab("upload");
+            switchRightPreview("empty");
           }
         } catch (e) {
           showBox(authMsg, "网络请求失败，请重试", true);
@@ -1120,8 +1293,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             return;
           }
           const text = await blob.text();
-          qaPreviewTitle.textContent = "临时统计文件预览：" + fileName;
-          qaFilePreview.classList.remove("hidden");
+          activeQaFileName = fileName;
+          qaPreviewTitle.textContent = fileName;
+          switchRightPreview("qa");
           if (fileName.toLowerCase().endsWith(".html")) {
             qaPreviewPre.classList.add("hidden");
             qaPreviewFrame.classList.remove("hidden");
@@ -1138,9 +1312,14 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       }
 
       btnCloseQaPreview.addEventListener("click", function() {
-        qaFilePreview.classList.add("hidden");
+        activeQaFileName = "";
         qaPreviewPre.textContent = "";
         qaPreviewFrame.srcdoc = "";
+        if (activeBoardPath) {
+          switchRightPreview("board");
+        } else {
+          switchRightPreview("empty");
+        }
       });
 
       function appendQaMessageBubble(role, text, citedPaths, generatedFiles) {
@@ -1267,6 +1446,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             if (Array.isArray(data.tempFiles)) {
               renderQaTempFiles(data.tempFiles);
             }
+            if (Array.isArray(data.generatedFiles) && data.generatedFiles.length > 0) {
+              previewOrDownloadQaFile(data.generatedFiles[0].name, false);
+            }
           }
         } catch (err) {
           showBox(qaMsgBox, "网络请求异常，请重试", true);
@@ -1291,7 +1473,14 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
           if (res.ok && data.ok) {
             qaMessagesEl.innerHTML = "";
             qaEmptyHint.classList.remove("hidden");
-            qaFilePreview.classList.add("hidden");
+            activeQaFileName = "";
+            qaPreviewPre.textContent = "";
+            qaPreviewFrame.srcdoc = "";
+            if (activeBoardPath) {
+              switchRightPreview("board");
+            } else {
+              switchRightPreview("empty");
+            }
             renderQaTempFiles([]);
             showBox(qaMsgBox, "已清空当前问答对话并物理销毁临时目录中的所有文件", false);
           }
