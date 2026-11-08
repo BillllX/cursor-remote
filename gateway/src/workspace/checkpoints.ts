@@ -94,6 +94,25 @@ export function sendCheckpoints(ws: WebSocket, slot: Slot) {
   send(ws, { type: "checkpoints", chatId: slot.chatId, items: publicCheckpoints(slot) });
 }
 
+/** 超过这个大小的文件不进检查点。git add 会把大文件写进临时 pack，15 秒超时杀掉后 pack 留在磁盘上。 */
+export const CHECKPOINT_MAX_FILE_BYTES = 8 * 1024 * 1024;
+
+/** 检查点只暂存普通小文件。路径相对于 git 根。读不到的、目录和大文件都跳过。 */
+export function checkpointFiles(gitRoot: string, paths: string[]): string[] {
+  const kept: string[] = [];
+  for (const path of paths) {
+    if (!path || path.endsWith("/")) continue;
+    try {
+      const st = statSync(resolve(gitRoot, path));
+      if (!st.isFile() || st.size > CHECKPOINT_MAX_FILE_BYTES) continue;
+      kept.push(path);
+    } catch {
+      // 文件在列出之后消失：这一轮不把它算进快照
+    }
+  }
+  return kept;
+}
+
 /** 聊天目录在 git 工作区里的相对路径。根目录本身返回空串。 */
 export function workspacePrefix(root: string, cwd: string): string {
   const rel = relative(resolve(root), resolve(cwd)).replace(/\\/g, "/");
@@ -150,19 +169,18 @@ export function createCheckpoint(cwd: string, label: string): Checkpoint {
   // 子目录只快照自己。add -A 打在仓库根上会把兄弟项目卷进来，还原时再按根路径删文件。
   const prefix = workspacePrefix(ctx.cwd, cwd);
   const empty = !dirHasEntries(cwd);
-  const listed = prefix ? [prefix] : listWorkspaceFiles(cwd, "").paths;
+  const listed = checkpointFiles(
+    ctx.cwd,
+    listWorkspaceFiles(cwd, "").paths.map((path) => (prefix ? `${prefix}/${path}` : path)),
+  );
   try {
-    if (listed.length) {
-      for (let i = 0; i < listed.length; i += 200) {
-        git(ctx.cwd, ["add", "-A", "--", ...listed.slice(i, i + 200)], ctx.env);
-      }
-    } else {
-      git(ctx.cwd, ["add", "-A"], ctx.env);
+    for (let i = 0; i < listed.length; i += 200) {
+      git(ctx.cwd, ["add", "-A", "--", ...listed.slice(i, i + 200)], ctx.env);
     }
     git(ctx.cwd, ["add", "-u", "--", ...(prefix ? [prefix] : ["."])], ctx.env);
-  } catch {
+  } catch (err) {
     if (prefix) throw new Error("子目录检查点没记下，已停止，避免快照整个仓库");
-    git(ctx.cwd, ["add", "-A"], ctx.env);
+    throw err;
   }
   const tree = git(ctx.cwd, ["write-tree"], ctx.env);
   const args = ["commit-tree", tree, "-m", `cursor-remote: ${label}`];

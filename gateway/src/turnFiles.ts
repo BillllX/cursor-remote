@@ -310,7 +310,7 @@ function gitRunner(ctx: GitCtx, index: string, deadline: number): GitRun {
   return (args) => {
     const left = deadline - Date.now();
     if (left <= 0) throw new Error("turn files budget exceeded");
-    return execFileSync("git", ["-c", "core.quotepath=false", ...args], {
+    return execFileSync("git", ["-c", "core.quotepath=false", "-c", "gc.auto=0", ...args], {
       cwd: ctx.cwd,
       encoding: "utf8",
       timeout: Math.min(GIT_TIMEOUT_MS, left),
@@ -335,22 +335,12 @@ function tempIndex() {
   return { index, close };
 }
 
-/** 与 index.ts 的 createCheckpoint 相同的 add 范围：子目录只 add 前缀，根目录按文件清单 */
+/** 与 createCheckpoint 相同的 add 范围。scope 已经去掉大文件；这里不再退成整仓 git add -A。 */
 function stageScope(run: GitRun, prefix: string, scope: string[]) {
-  try {
-    if (scope.length) {
-      for (let i = 0; i < scope.length; i += 200) {
-        run(["add", "-A", "--", ...scope.slice(i, i + 200)]);
-      }
-    } else {
-      run(["add", "-A"]);
-    }
-    run(["add", "-u", "--", ...(prefix ? [prefix] : ["."])]);
-  } catch (err) {
-    // 子目录范围失败时不能退成整仓 add，否则会把兄弟项目算进这一轮
-    if (prefix) throw err;
-    run(["add", "-A"]);
+  for (let i = 0; i < scope.length; i += 200) {
+    run(["add", "-A", "--", ...scope.slice(i, i + 200)]);
   }
+  run(["add", "-u", "--", ...(prefix ? [prefix] : ["."])]);
 }
 
 /**

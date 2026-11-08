@@ -5,7 +5,13 @@ import { slotLog } from "../log.ts";
 import { persistConn } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
 import { snapshotTree, TREE_BASELINE_MAX_FILES } from "../turnFiles.ts";
-import { checkpointGit, createCheckpoint, sendCheckpoints, workspacePrefix } from "../workspace/checkpoints.ts";
+import {
+  checkpointFiles,
+  checkpointGit,
+  createCheckpoint,
+  sendCheckpoints,
+  workspacePrefix,
+} from "../workspace/checkpoints.ts";
 import { listWorkspaceFiles } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 
@@ -45,12 +51,12 @@ export function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
   try {
     const ctx = checkpointGit(cwd);
     const prefix = workspacePrefix(ctx.cwd, cwd);
-    let scope: string[] = [];
-    if (!prefix) {
-      const listed = listWorkspaceFiles(cwd, "");
-      if (listed.truncated || listed.paths.length > TREE_BASELINE_MAX_FILES) return;
-      scope = listed.paths;
-    }
+    const listed = listWorkspaceFiles(cwd, "");
+    if (!prefix && (listed.truncated || listed.paths.length > TREE_BASELINE_MAX_FILES)) return;
+    const scope = checkpointFiles(
+      ctx.cwd,
+      listed.paths.map((path) => (prefix ? `${prefix}/${path}` : path)),
+    );
     base.tree = snapshotTree({ ctx, prefix, scope }) || undefined;
   } catch (err) {
     // 没基线就只用工具路径
