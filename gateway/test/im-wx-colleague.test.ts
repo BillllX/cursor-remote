@@ -27,6 +27,7 @@ import {
   normalizeIlinkAccountId,
   parseIlinkJson,
   sanitizeIlinkBaseUrl,
+  sendIlinkBotTextMessage,
 } from "../src/wx/ilinkClient.ts";
 import {
   bindImSystemReplySender,
@@ -559,5 +560,52 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
     });
     assert.equal(inboundRes.handled, true);
     assert.equal(sentWxMessages.some((m) => m.to === "o9cq_tujie@im.wechat" && m.text.includes("Fintopia 11月核心指标一切正常")), true);
+  });
+
+  test("sendIlinkBotTextMessage 将仅返回 message_id 无 ret 字段的响应判为成功，并拦截缺少标识或非零错误码的假成功", async () => {
+    let mockResponseText = '{"message_id":7525314747002912648}';
+    bindIlinkFetchForTest(async () => ({
+      status: 200,
+      ok: true,
+      text: mockResponseText,
+    }));
+
+    // 1. 实测腾讯 iLink 成功响应：仅含 64 位 message_id，无 ret 字段
+    const okNoRet = await sendIlinkBotTextMessage({
+      accountId: "wxbot_tu-im-bot",
+      botToken: "secret_bot_token_tu",
+      toUserId: "o9cq_tujie@im.wechat",
+      text: "测试无 ret 字段成功返回",
+    });
+    assert.equal(okNoRet.ok, true);
+    if (okNoRet.ok) {
+      assert.equal(okNoRet.serverMessageId, "7525314747002912648");
+    }
+
+    // 2. 含 message_id 但 ret 非零时仍应被拦截为 false_success_blocked
+    mockResponseText = '{"ret":-1,"message_id":7525314747002912648,"errmsg":"invalid"}';
+    const failNonZeroRet = await sendIlinkBotTextMessage({
+      accountId: "wxbot_tu-im-bot",
+      botToken: "secret_bot_token_tu",
+      toUserId: "o9cq_tujie@im.wechat",
+      text: "测试非零 ret",
+    });
+    assert.equal(failNonZeroRet.ok, false);
+    if (!failNonZeroRet.ok) {
+      assert.equal(failNonZeroRet.reason, "false_success_blocked");
+    }
+
+    // 3. 既无 ret === 0 也无非空 message_id 的非空对象应被拦截为 false_success_blocked
+    mockResponseText = '{"foo":"bar"}';
+    const failNoMarker = await sendIlinkBotTextMessage({
+      accountId: "wxbot_tu-im-bot",
+      botToken: "secret_bot_token_tu",
+      toUserId: "o9cq_tujie@im.wechat",
+      text: "测试无成功标识",
+    });
+    assert.equal(failNoMarker.ok, false);
+    if (!failNoMarker.ok) {
+      assert.equal(failNoMarker.reason, "false_success_blocked");
+    }
   });
 });

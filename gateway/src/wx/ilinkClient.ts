@@ -676,8 +676,13 @@ export async function sendIlinkBotTextMessage(params: {
       };
     }
 
-    // 防假成功校验：要求业务层 ret === 0 且无非零 errcode
-    if (parsed.ret !== 0 || (parsed.errcode !== undefined && parsed.errcode !== 0)) {
+    // 防假成功校验：当存在非零 ret 或非零 errcode，或者既没有 ret === 0 也没有非空 message_id 时判为拒绝；
+    // 只要 (parsed.ret === 0 || Boolean(parsed.message_id)) 且无非零 ret/errcode 即视为发送成功（实测腾讯 iLink 成功时可能仅返回 {"message_id":...}）
+    if (
+      (parsed.ret !== undefined && parsed.ret !== 0) ||
+      (parsed.errcode !== undefined && parsed.errcode !== 0) ||
+      (parsed.ret !== 0 && !Boolean(parsed.message_id))
+    ) {
       return {
         ok: false,
         reason: "false_success_blocked",
