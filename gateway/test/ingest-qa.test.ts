@@ -313,6 +313,11 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
     assert.equal(pageHtml.includes("知识库只读问答"), true);
     assert.equal(pageHtml.includes("split-workbench"), true);
     assert.equal(pageHtml.includes("preview-dock-card"), true);
+    // 验证左侧栏板块顺序：1. 提问 (pane-qa) -> 2. 上传 (pane-upload) -> 3. 知识库页面 (pane-boards)
+    const idxQa = pageHtml.indexOf('id="pane-qa"');
+    const idxUpload = pageHtml.indexOf('id="pane-upload"');
+    const idxBoards = pageHtml.indexOf('id="pane-boards"');
+    assert.equal(idxQa > 0 && idxQa < idxUpload && idxUpload < idxBoards, true);
     const ticketMatch = /const PAGE_TICKET = "(pt_[0-9a-f]+)"/.exec(pageHtml);
     assert.equal(Boolean(ticketMatch?.[1]), true);
     const pageTicket = ticketMatch![1];

@@ -274,7 +274,7 @@ function escapeHtml(text: string): string {
 
 /**
  * 生成顶层沙箱隔离（`CSP: sandbox allow-scripts allow-downloads`）的单文件内联知识库协作与投递门户 HTML 页面。
- * 采用横向双栏设计：左侧集成「资料上传、知识库看板目录、知识库只读问答」三大板块，右侧常驻「看板预览与临时统计文件预览」工作台。
+ * 采用横向双栏紧凑设计：左侧按优先级由上至下依次为「知识库只读问答（核心区）→ 资料上传 → 知识库页面目录」，右侧常驻实时预览工作台。
  */
 export function renderDropPortalHtml(tenantId: string, tenantName?: string, pageTicket = ""): string {
   const displayTenant = escapeHtml(tenantName || tenantId);
@@ -313,56 +313,61 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 18px 20px 36px;
+      padding: 12px 16px 24px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
       color: var(--text);
-      line-height: 1.5;
+      line-height: 1.45;
     }
     .container { max-width: 1680px; margin: 0 auto; }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-      margin-bottom: 16px;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .card-qa-primary {
+      border-color: rgba(59, 130, 246, 0.45);
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
     }
     .auth-card {
-      max-width: 640px;
-      margin: 24px auto;
+      max-width: 460px;
+      margin: 40px auto;
+      padding: 20px 22px;
     }
-    h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
-    h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
-    .sub { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+    h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+    h2 { margin: 0; font-size: 16px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
     .badge {
       display: inline-block;
-      padding: 2px 10px;
+      padding: 2px 8px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11px;
       background: rgba(59, 130, 246, 0.15);
       color: var(--accent);
-      margin-bottom: 8px;
     }
-    label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+    label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 4px; color: var(--muted); }
     input[type="text"], input[type="password"], textarea {
       width: 100%;
-      padding: 10px 12px;
+      padding: 8px 10px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--bg);
       color: var(--text);
-      font-size: 14px;
-      margin-bottom: 12px;
+      font-size: 13px;
+      font-family: inherit;
     }
     button {
       background: var(--accent);
       color: #fff;
       border: 0;
       border-radius: 8px;
-      padding: 9px 16px;
+      padding: 8px 14px;
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
+      white-space: nowrap;
     }
     button:hover:not(:disabled) { background: var(--accent-hover); }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -370,7 +375,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       background: transparent;
       color: var(--text);
       border: 1px solid var(--border);
-      padding: 6px 12px;
+      padding: 4px 10px;
       font-size: 12px;
     }
     .btn-ghost.active {
@@ -381,27 +386,27 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     .btn-rm {
       background: transparent;
       color: var(--muted);
-      padding: 2px 8px;
-      font-size: 12px;
+      padding: 2px 7px;
+      font-size: 11px;
       border: 1px solid var(--border);
-      margin-left: 6px;
+      margin-left: 4px;
     }
     .workspace-topbar {
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 12px;
+      gap: 8px;
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 14px 20px;
-      margin-bottom: 16px;
+      border-radius: 10px;
+      padding: 10px 16px;
+      margin-bottom: 12px;
     }
     .split-workbench {
       display: grid;
-      grid-template-columns: minmax(480px, 44%) minmax(520px, 56%);
-      gap: 16px;
+      grid-template-columns: minmax(460px, 43%) minmax(520px, 57%);
+      gap: 12px;
       align-items: start;
     }
     @media (max-width: 1100px) {
@@ -415,12 +420,12 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     .left-column {
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
       min-width: 0;
     }
     .right-column {
       position: sticky;
-      top: 16px;
+      top: 12px;
       min-width: 0;
     }
     .section-header {
@@ -429,67 +434,163 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       align-items: center;
       gap: 8px;
       flex-wrap: wrap;
-      margin-bottom: 12px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--border);
+      margin-bottom: 10px;
     }
     .section-title {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
       margin: 0;
-      font-size: 15px;
+      font-size: 14px;
       font-weight: 600;
     }
     .step-pill {
       display: inline-block;
-      padding: 2px 8px;
-      border-radius: 6px;
+      padding: 1px 7px;
+      border-radius: 5px;
       font-size: 11px;
       font-weight: 600;
       background: rgba(59, 130, 246, 0.15);
       color: var(--accent);
     }
+    .qa-chat-box {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      padding: 10px 12px;
+      min-height: 260px;
+      max-height: 440px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+    }
+    .qa-msg {
+      padding: 8px 11px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .qa-msg:last-child { margin-bottom: 0; }
+    .qa-msg-user {
+      background: rgba(59, 130, 246, 0.14);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+    }
+    .qa-msg-ai {
+      background: var(--card);
+      border: 1px solid var(--border);
+    }
+    .qa-msg-role {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    .qa-composer {
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .qa-composer textarea {
+      flex: 1;
+      resize: vertical;
+      min-height: 58px;
+      margin: 0;
+    }
+    .qa-chip-list {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .qa-file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 11px;
+    }
+    .dropzone {
+      border: 1.5px dashed var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .dropzone.dragover { border-color: var(--accent); }
+    .upload-action-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .upload-action-row input[type="text"] {
+      flex: 1;
+      margin: 0;
+    }
+    .file-list { list-style: none; padding: 0; margin: 0 0 8px; }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+    .file-err { border-color: var(--danger); color: var(--danger); }
+    .file-ok { border-color: var(--success); }
     .board-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-      gap: 10px;
-      max-height: 290px;
+      grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+      gap: 8px;
+      max-height: 240px;
       overflow-y: auto;
       padding-right: 2px;
     }
     .board-card {
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
+      border-radius: 8px;
+      padding: 8px 10px;
       cursor: pointer;
       text-align: left;
       transition: border-color 0.15s, background 0.15s;
     }
     .board-card:hover, .board-card.active {
       border-color: var(--accent);
-      background: rgba(59, 130, 246, 0.06);
+      background: rgba(59, 130, 246, 0.08);
     }
-    .board-tag {
-      display: inline-block;
+    .board-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 2px;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .board-meta {
       font-size: 11px;
-      padding: 1px 7px;
-      border-radius: 999px;
-      background: rgba(59, 130, 246, 0.15);
-      color: var(--accent);
-      margin-bottom: 5px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    .board-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; color: var(--text); }
-    .board-meta { font-size: 11px; color: var(--muted); word-break: break-all; }
     .preview-dock-card {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: 10px;
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      min-height: calc(100vh - 150px);
+      min-height: calc(100vh - 96px);
     }
     .board-viewer-bar {
       display: flex;
@@ -497,10 +598,10 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       align-items: center;
       flex-wrap: wrap;
       gap: 8px;
-      padding: 12px 16px;
+      padding: 8px 12px;
       background: var(--card);
       border-bottom: 1px solid var(--border);
-      font-size: 13px;
+      font-size: 12px;
     }
     .preview-switch-group {
       display: flex;
@@ -515,7 +616,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     }
     .board-iframe {
       width: 100%;
-      height: calc(100vh - 215px);
+      height: calc(100vh - 145px);
       min-height: 620px;
       border: 0;
       display: block;
@@ -527,106 +628,12 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 64px 24px;
+      padding: 40px 20px;
       text-align: center;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
       min-height: 520px;
       background: var(--bg);
-    }
-    .dropzone {
-      border: 2px dashed var(--border);
-      border-radius: 10px;
-      padding: 20px 14px;
-      text-align: center;
-      cursor: pointer;
-      transition: border-color 0.15s;
-      margin-bottom: 12px;
-    }
-    .dropzone.dragover { border-color: var(--accent); }
-    .rules {
-      font-size: 12px;
-      color: var(--muted);
-      background: rgba(139, 155, 176, 0.08);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-top: 10px;
-    }
-    .file-list { list-style: none; padding: 0; margin: 0 0 12px; }
-    .file-item {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 7px 10px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      margin-bottom: 6px;
-      font-size: 12px;
-    }
-    .file-err { border-color: var(--danger); color: var(--danger); }
-    .file-ok { border-color: var(--success); }
-    .status-box {
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      font-size: 12px;
-      margin-top: 10px;
-    }
-    .qa-chat-box {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--bg);
-      padding: 12px;
-      min-height: 220px;
-      max-height: 380px;
-      overflow-y: auto;
-      margin-bottom: 12px;
-    }
-    .qa-msg {
-      padding: 10px 12px;
-      border-radius: 10px;
-      margin-bottom: 10px;
-      font-size: 13px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .qa-msg-user {
-      background: rgba(59, 130, 246, 0.14);
-      border: 1px solid rgba(59, 130, 246, 0.35);
-    }
-    .qa-msg-ai {
-      background: var(--card);
-      border: 1px solid var(--border);
-    }
-    .qa-msg-role {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      margin-bottom: 4px;
-    }
-    .qa-temp-bar {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-bottom: 12px;
-      background: rgba(139, 155, 176, 0.06);
-      font-size: 12px;
-    }
-    .qa-chip-list {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 8px;
-    }
-    .qa-file-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 9px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: var(--card);
-      font-size: 12px;
     }
     .qa-preview-box {
       flex: 1;
@@ -636,9 +643,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
     }
     .qa-preview-pre {
       margin: 0;
-      padding: 16px;
-      font-size: 13px;
-      height: calc(100vh - 215px);
+      padding: 14px;
+      font-size: 12px;
+      height: calc(100vh - 145px);
       min-height: 620px;
       overflow: auto;
       white-space: pre-wrap;
@@ -646,120 +653,106 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
       background: var(--bg);
       color: var(--text);
     }
+    .status-box {
+      padding: 7px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-size: 12px;
+      margin-top: 8px;
+    }
     .hidden { display: none !important; }
   </style>
 </head>
 <body>
   <div class="container">
     <div id="step-auth" class="card auth-card">
-      <span class="badge">知识库协作门户 · 自动分类归档与看板查阅</span>
-      <h1>工作区资料投递箱 & 知识库看板</h1>
-      <p class="sub">输入管理员分配的投递口令，即可在线查阅目标知识库工作区的各层 HTML 汇总看板、通过只读问答助手询问知识库数据并导出临时统计文件，或上传新业务文档由 AI 自动分类归档。</p>
-      <label for="submitter">您的称呼 / 部门（必填，便于归档留痕）</label>
-      <input id="submitter" type="text" maxlength="40" autocomplete="off" placeholder="例如：张工-财务部" />
-      <label for="passcode">工作区投递口令</label>
-      <input id="passcode" type="password" maxlength="64" autocomplete="off" placeholder="请输入 6–64 位投递口令" />
-      <button id="btn-auth" type="button" style="width:100%;">进入知识库双栏工作台</button>
-      <div id="auth-msg" class="status-box hidden"></div>
-      <div class="rules">
-        <strong>上传与问答规格说明：</strong><br/>
-        • 单个文件最大 <strong>32 MB</strong>，单批次最多 <strong>${MAX_FILES_PER_BATCH} 个文件</strong>（多文件将自动逐个流式上传）；<br/>
-        • 支持格式：<code>${escapeHtml(allowedListText)}</code>；严禁上传 <code>.exe / .sh / .bat / .js / .html</code> 等可执行脚本；<br/>
-        • <strong>知识库问答权限隔离</strong>：问答对话框对知识库工作区保持 100% 只读，比对附件与 AI 生成的统计文件均存放在工作区外独立临时目录，空闲 30 分钟自动销毁。
+      <h1>工作区资料投递箱 & 知识库</h1>
+      <p class="sub">输入口令即可向知识库提问、上传归档文档或查阅看板（单文件 ≤ 32 MB）</p>
+      <div style="margin-bottom:10px;">
+        <label for="submitter">您的称呼 / 部门</label>
+        <input id="submitter" type="text" maxlength="40" autocomplete="off" placeholder="例如：张工-财务部" />
       </div>
+      <div style="margin-bottom:14px;">
+        <label for="passcode">工作区口令</label>
+        <input id="passcode" type="password" maxlength="64" autocomplete="off" placeholder="请输入 6–64 位投递口令" />
+      </div>
+      <button id="btn-auth" type="button" style="width:100%;">进入知识库工作台</button>
+      <div id="auth-msg" class="status-box hidden"></div>
     </div>
 
     <div id="step-main" class="hidden">
       <div class="workspace-topbar">
-        <div>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <span class="badge" style="margin:0;">知识库双栏协作台</span>
-            <h2 id="ws-title" style="margin:0;font-size:18px;">知识库工作区</h2>
-          </div>
-          <div id="batch-info" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="badge">知识库</span>
+          <h2 id="ws-title">知识库工作区</h2>
         </div>
-        <div style="font-size:12px;color:var(--muted);">
-          左侧：资料上传、看板索引与 AI 问答 · 右侧：看板与临时统计文件实时预览
-        </div>
+        <div id="batch-info" style="font-size:12px;color:var(--muted);"></div>
       </div>
 
       <div class="split-workbench">
-        <!-- 左侧栏：板块一（上传新文档 + 知识库看板列表）+ 板块二（知识库只读问答） -->
+        <!-- 左侧栏：1. 提问（核心区） -> 2. 上传 -> 3. 知识库页面 -->
         <div class="left-column">
-          <!-- 板块 1：资料投递上传 -->
-          <div id="pane-upload" class="card" style="margin-bottom:0;">
+          <!-- 1. 提问（最上方核心区域：知识库只读问答） -->
+          <div id="pane-qa" class="card card-qa-primary" style="margin-bottom:0;">
             <div class="section-header">
               <h3 class="section-title">
-                <span class="step-pill">板块 1 · 投递</span>
-                <span>📤 上传新业务文档（AI 自动分类归档）</span>
+                <span>💬 知识库提问</span>
+                <span class="step-pill" title="问答仅读取知识库白名单并在临时沙箱生成报表">知识库只读问答</span>
+                <span id="qa-board-hint" style="font-size:11px;font-weight:400;color:var(--muted);"></span>
               </h3>
-              <span style="font-size:12px;color:var(--muted);">单文件 ≤ 32MB · 单批 ≤ ${MAX_FILES_PER_BATCH} 个</span>
-            </div>
-            <div id="dropzone" class="dropzone">
-              <div>点击选择文件，或将多个文件直接拖拽至此处</div>
-              <div style="font-size:12px;color:var(--muted);margin-top:4px;">支持 ${escapeHtml(allowedListText)} · 选入后立即本地预检体积与格式</div>
-              <input id="file-input" type="file" multiple class="hidden" />
-            </div>
-            <ul id="file-list" class="file-list"></ul>
-            <label for="batch-note">批次补充说明（可选，帮助 AI 更精准分类与提炼摘要）</label>
-            <textarea id="batch-note" rows="2" maxlength="500" placeholder="例如：11月最新三农信代偿台账与洋钱罐风险预估"></textarea>
-            <button id="btn-submit" type="button">上传并提交 AI 自动归档</button>
-            <div id="upload-msg" class="status-box hidden"></div>
-          </div>
-
-          <!-- 板块 2：知识库看板目录 -->
-          <div id="pane-boards" class="card" style="margin-bottom:0;">
-            <div class="section-header">
-              <h3 class="section-title">
-                <span class="step-pill">板块 2 · 看板</span>
-                <span>📊 知识库 HTML 看板目录 (<span id="board-count">0</span>)</span>
-              </h3>
-              <button id="btn-refresh-boards" type="button" class="btn-ghost">刷新看板列表</button>
-            </div>
-            <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">
-              点击下方任意看板卡片，即可在<strong>右侧预览区</strong>实时打开全内联 HTML 看板：
-            </div>
-            <div id="boards-empty" class="status-box hidden">当前知识库暂无已生成的同名 HTML 看板。您可以先在上方投递新文档。</div>
-            <div id="boards-grid" class="board-grid"></div>
-          </div>
-
-          <!-- 板块 3：知识库只读问答与统计生成 -->
-          <div id="pane-qa" class="card" style="margin-bottom:0;">
-            <div class="section-header">
-              <h3 class="section-title">
-                <span class="step-pill">板块 3 · 问答</span>
-                <span>💬 知识库只读问答 & 临时统计文件生成</span>
-              </h3>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button id="btn-qa-attach" type="button" class="btn-ghost">📎 上传比对附件</button>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <button id="btn-qa-attach" type="button" class="btn-ghost">📎 比对附件</button>
                 <input id="qa-file-input" type="file" accept=".csv,.md,.txt,.json,.sql" class="hidden" />
-                <button id="btn-qa-clear" type="button" class="btn-ghost">🗑️ 清空对话与临时文件</button>
+                <button id="btn-qa-clear" type="button" class="btn-ghost">清空</button>
               </div>
             </div>
 
-            <div class="qa-temp-bar">
-              <div>
-                <strong>🔒 临时沙箱隔离</strong>
-                <span style="color:var(--muted);margin-left:4px;">对知识库 100% 零写入 · 生成的 CSV / MD / HTML 统计文件可在右侧直接预览或下载 · 空闲 30 分钟自动销毁</span>
-              </div>
-              <div id="qa-temp-files" class="qa-chip-list"></div>
-            </div>
+            <div id="qa-temp-files" class="qa-chip-list hidden"></div>
 
             <div id="qa-chat-box" class="qa-chat-box">
-              <div id="qa-empty-hint" style="color:var(--muted);font-size:12px;text-align:center;padding:32px 12px;">
-                您可以直接询问知识库中的业务指标、主体台账，或输入：<br/>
-                「帮我统计知识库内各主体的核心指标，生成一份 CSV 表格（或 HTML 汇总看板）给我预览和下载」
+              <div id="qa-empty-hint" style="color:var(--muted);font-size:12px;text-align:center;padding:48px 12px;">
+                直接询问业务数据，或让 AI 生成 CSV / HTML 统计表供右侧预览与下载
               </div>
               <div id="qa-messages"></div>
             </div>
 
-            <label for="qa-input">向知识库提问或要求生成统计文件</label>
-            <textarea id="qa-input" rows="3" maxlength="4000" placeholder="例如：帮我统计当前知识库里所有主体的关键风险与余额指标，并生成一个 CSV 统计文件供我下载"></textarea>
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-              <button id="btn-qa-send" type="button">发送提问</button>
-              <span id="qa-board-hint" style="font-size:12px;color:var(--muted);"></span>
+            <div class="qa-composer">
+              <textarea id="qa-input" rows="2" maxlength="4000" placeholder="输入问题或统计指令（Enter 发送，Shift+Enter 换行）…"></textarea>
+              <button id="btn-qa-send" type="button" style="height:58px;padding:0 18px;">发送提问</button>
             </div>
             <div id="qa-msg-box" class="status-box hidden"></div>
+          </div>
+
+          <!-- 2. 上传（紧凑资料投递区） -->
+          <div id="pane-upload" class="card" style="margin-bottom:0;">
+            <div class="section-header" style="margin-bottom:8px;">
+              <h3 class="section-title">
+                <span>📤 上传资料</span>
+              </h3>
+              <span style="font-size:11px;color:var(--muted);">≤ 32MB · 最多 ${MAX_FILES_PER_BATCH} 个 (${escapeHtml(allowedListText)})</span>
+            </div>
+            <div id="dropzone" class="dropzone">
+              <span>点击选择或拖拽文件至此上传</span>
+              <input id="file-input" type="file" multiple class="hidden" />
+            </div>
+            <ul id="file-list" class="file-list"></ul>
+            <div class="upload-action-row">
+              <input id="batch-note" type="text" maxlength="500" placeholder="补充说明（可选，帮助 AI 归档分类）" />
+              <button id="btn-submit" type="button">上传归档</button>
+            </div>
+            <div id="upload-msg" class="status-box hidden"></div>
+          </div>
+
+          <!-- 3. 知识库页面（HTML 看板目录） -->
+          <div id="pane-boards" class="card" style="margin-bottom:0;">
+            <div class="section-header" style="margin-bottom:8px;">
+              <h3 class="section-title">
+                <span>📊 知识库页面 (<span id="board-count">0</span>)</span>
+              </h3>
+              <button id="btn-refresh-boards" type="button" class="btn-ghost">刷新</button>
+            </div>
+            <div id="boards-empty" class="status-box hidden" style="margin-top:0;">暂无已生成的知识库看板页面</div>
+            <div id="boards-grid" class="board-grid"></div>
           </div>
         </div>
 
@@ -767,27 +760,25 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         <div class="right-column">
           <div class="preview-dock-card">
             <div class="board-viewer-bar">
-              <div style="min-width:0;flex:1;">
-                <span id="preview-mode-badge" class="step-pill" style="margin-right:6px;">右侧预览区</span>
-                <strong id="viewer-title">请选择左侧看板或生成的临时统计文件</strong>
+              <div style="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                <span id="preview-mode-badge" class="step-pill" style="margin-right:6px;">预览</span>
+                <strong id="viewer-title">点击左侧知识库页面或问答报表预览</strong>
                 <strong id="qa-preview-title" class="hidden">临时统计文件预览</strong>
               </div>
               <div class="preview-switch-group">
-                <button id="tab-boards" type="button" class="btn-ghost active">📊 看板视图</button>
-                <button id="tab-qa" type="button" class="btn-ghost">📄 临时文件视图</button>
-                <button id="btn-ask-this-board" type="button" class="btn-ghost hidden">💬 询问此看板</button>
-                <button id="btn-download-active-qa" type="button" class="btn-ghost hidden">⬇️ 下载此文件</button>
-                <button id="btn-close-viewer" type="button" class="btn-ghost hidden">关闭预览</button>
-                <button id="btn-close-qa-preview" type="button" class="btn-ghost hidden">关闭预览</button>
+                <button id="tab-boards" type="button" class="btn-ghost active">📊 知识库</button>
+                <button id="tab-qa" type="button" class="btn-ghost">📄 问答报表</button>
+                <button id="btn-ask-this-board" type="button" class="btn-ghost hidden">💬 就此页提问</button>
+                <button id="btn-download-active-qa" type="button" class="btn-ghost hidden">⬇️ 下载</button>
+                <button id="btn-close-viewer" type="button" class="btn-ghost hidden">关闭</button>
+                <button id="btn-close-qa-preview" type="button" class="btn-ghost hidden">关闭</button>
               </div>
             </div>
 
             <!-- 空状态占位 -->
             <div id="preview-empty" class="preview-empty-state">
-              <div style="font-size:32px;margin-bottom:10px;">🖥️</div>
-              <div style="font-weight:600;color:var(--text);margin-bottom:6px;">右侧实时预览工作台</div>
-              <div>• 点击左侧<strong>「📊 知识库 HTML 看板目录」</strong>中的卡片，在此处查阅全内联知识库看板；</div>
-              <div>• 在左侧<strong>「💬 知识库只读问答」</strong>中生成的 CSV / MD / HTML 统计文件，点击「预览」即可在此处直接查看或下载。</div>
+              <div style="font-size:24px;margin-bottom:6px;">🖥️</div>
+              <div>选择左侧「知识库页面」或问答生成的报表在此预览</div>
             </div>
 
             <!-- 视图 1：知识库 HTML 看板预览 -->
@@ -876,9 +867,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 
       function updateQaBoardHint() {
         if (activeBoardPath) {
-          qaBoardHint.textContent = "已关联当前看板上下文：" + activeBoardPath;
+          qaBoardHint.textContent = "· 关联: " + activeBoardPath;
         } else {
-          qaBoardHint.textContent = "检索范围：全知识库白名单目录";
+          qaBoardHint.textContent = "";
         }
       }
 
@@ -888,7 +879,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         if (mode === "board" && hasBoard) {
           tabBoards.classList.add("active");
           tabQa.classList.remove("active");
-          previewModeBadge.textContent = "📊 知识库看板预览";
+          previewModeBadge.textContent = "📊 知识库";
           if (activeBoardTitle) {
             viewerTitle.textContent = activeBoardTitle;
           }
@@ -904,7 +895,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         } else if (mode === "qa" && hasQaFile) {
           tabQa.classList.add("active");
           tabBoards.classList.remove("active");
-          previewModeBadge.textContent = "📄 临时统计文件预览";
+          previewModeBadge.textContent = "📄 报表";
           viewerTitle.classList.add("hidden");
           qaPreviewTitle.classList.remove("hidden");
           previewEmpty.classList.add("hidden");
@@ -917,9 +908,9 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         } else {
           tabBoards.classList.toggle("active", mode !== "qa");
           tabQa.classList.toggle("active", mode === "qa");
-          previewModeBadge.textContent = "右侧预览区";
+          previewModeBadge.textContent = "预览";
           viewerTitle.classList.remove("hidden");
-          viewerTitle.textContent = mode === "qa" ? "暂未选择要预览的临时统计文件" : "请选择左侧看板或生成的临时统计文件";
+          viewerTitle.textContent = mode === "qa" ? "暂未选择问答报表" : "点击左侧知识库页面或问答报表预览";
           qaPreviewTitle.classList.add("hidden");
           previewEmpty.classList.remove("hidden");
           boardViewer.classList.add("hidden");
@@ -956,17 +947,13 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         boardsList.forEach(function(b) {
           const card = document.createElement("div");
           card.className = "board-card" + (activeBoardPath === b.relPath ? " active" : "");
-          const tag = document.createElement("span");
-          tag.className = "board-tag";
-          tag.textContent = b.level === "category" ? ("顶层总览 · " + b.category) : ("专题看板 · " + b.category);
+          card.title = b.relPath;
           const title = document.createElement("div");
           title.className = "board-title";
           title.textContent = b.title;
           const meta = document.createElement("div");
           meta.className = "board-meta";
-          const dt = b.updatedAt ? new Date(b.updatedAt).toLocaleString("zh-CN") : "";
-          meta.textContent = b.relPath + (dt ? " · 更新于 " + dt : "");
-          card.appendChild(tag);
+          meta.textContent = (b.category ? b.category + " · " : "") + b.relPath;
           card.appendChild(title);
           card.appendChild(meta);
           card.addEventListener("click", function() {
@@ -1231,18 +1218,15 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         qaTempFiles = Array.isArray(files) ? files : [];
         qaTempFilesEl.innerHTML = "";
         if (qaTempFiles.length === 0) {
-          const emptySpan = document.createElement("span");
-          emptySpan.style.color = "var(--muted)";
-          emptySpan.style.fontSize = "12px";
-          emptySpan.textContent = "当前会话暂无临时文件（生成的统计文件与上传的比对附件会显示在此处）";
-          qaTempFilesEl.appendChild(emptySpan);
+          qaTempFilesEl.classList.add("hidden");
           return;
         }
+        qaTempFilesEl.classList.remove("hidden");
         qaTempFiles.forEach(function(f) {
           const chip = document.createElement("div");
           chip.className = "qa-file-chip";
           const tag = document.createElement("span");
-          tag.textContent = (f.scope === "outputs" ? "📊 统计生成: " : "📎 临时附件: ") + f.name + " (" + (f.size / 1024).toFixed(1) + " KB)";
+          tag.textContent = (f.scope === "outputs" ? "📊 " : "📎 ") + f.name + " (" + (f.size / 1024).toFixed(1) + "KB)";
           chip.appendChild(tag);
 
           if (f.scope === "outputs") {
@@ -1329,7 +1313,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
         box.className = "qa-msg " + (role === "user" ? "qa-msg-user" : "qa-msg-ai");
         const roleEl = document.createElement("div");
         roleEl.className = "qa-msg-role";
-        roleEl.textContent = role === "user" ? "您的提问" : "知识库 AI 助手（只读权限 · 临时目录输出）";
+        roleEl.textContent = role === "user" ? "提问" : "AI 回答";
         const bodyEl = document.createElement("div");
         bodyEl.textContent = text;
         box.appendChild(roleEl);
@@ -1337,16 +1321,18 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
 
         if (Array.isArray(citedPaths) && citedPaths.length > 0) {
           const citeEl = document.createElement("div");
-          citeEl.style.marginTop = "8px";
-          citeEl.style.fontSize = "12px";
+          citeEl.style.marginTop = "6px";
+          citeEl.style.fontSize = "11px";
           citeEl.style.color = "var(--muted)";
-          citeEl.textContent = "参考知识库路径：" + citedPaths.join(" 、 ");
+          citeEl.textContent = "来源：" + citedPaths.join(" 、 ");
           box.appendChild(citeEl);
         }
 
         if (Array.isArray(generatedFiles) && generatedFiles.length > 0) {
           const genWrap = document.createElement("div");
           genWrap.className = "qa-chip-list";
+          genWrap.style.marginTop = "6px";
+          genWrap.style.marginBottom = "0";
           generatedFiles.forEach(function(gf) {
             const chip = document.createElement("div");
             chip.className = "qa-file-chip";
@@ -1357,7 +1343,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             const pBtn = document.createElement("button");
             pBtn.type = "button";
             pBtn.className = "btn-rm";
-            pBtn.textContent = "在线预览";
+            pBtn.textContent = "预览";
             pBtn.addEventListener("click", function() {
               previewOrDownloadQaFile(gf.name, false);
             });
@@ -1366,7 +1352,7 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
             const dBtn = document.createElement("button");
             dBtn.type = "button";
             dBtn.className = "btn-rm";
-            dBtn.textContent = "下载文件";
+            dBtn.textContent = "下载";
             dBtn.addEventListener("click", function() {
               previewOrDownloadQaFile(gf.name, true);
             });
@@ -1412,6 +1398,22 @@ export function renderDropPortalHtml(tenantId: string, tenantName?: string, page
           showBox(qaMsgBox, "网络异常，上传临时附件失败", true);
         } finally {
           btnQaAttach.disabled = false;
+        }
+      });
+
+      passcodeEl.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !e.isComposing && !btnAuth.disabled) {
+          e.preventDefault();
+          btnAuth.click();
+        }
+      });
+
+      qaInputEl.addEventListener("keydown", function(e) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          if (!btnQaSend.disabled) {
+            btnQaSend.click();
+          }
         }
       });
 
