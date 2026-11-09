@@ -123,6 +123,35 @@ export type ToolHost = {
     overrideEndIso?: string;
     allowConflict?: boolean;
   }) => Promise<unknown> | unknown;
+  /** 企业微信智能机器人（WeCom CLI）：搜索微盘/文档/邮件、管理关注文件、只读检查文件变动、按需同步归档入库 */
+  wecomSearch?: (args: {
+    scope: "recent_files" | "doc_search" | "disk_search" | "mail_search" | "mail_get";
+    keyword?: string;
+    limit?: number;
+    onlyUnread?: boolean;
+    hasAttachments?: boolean;
+    mailId?: string;
+  }) => Promise<unknown> | unknown;
+  wecomWatchManage?: (args: {
+    action: "list" | "add" | "remove" | "auth_status";
+    workspace?: string;
+    title?: string;
+    sourceType?: "sheet" | "smartsheet" | "doc" | "smartpage" | "disk_file";
+    docId?: string;
+    fileId?: string;
+    sheet?: string;
+    range?: string;
+    note?: string;
+    idOrTitle?: string;
+  }) => Promise<unknown> | unknown;
+  wecomWatchCheck?: (args: { workspace?: string; idOrTitle?: string }) => Promise<unknown> | unknown;
+  wecomWatchSync?: (args: {
+    workspace?: string;
+    idOrTitle?: string;
+    forceSync?: boolean;
+    mailId?: string;
+    note?: string;
+  }) => Promise<unknown> | unknown;
 };
 
 /** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
@@ -136,6 +165,10 @@ export type WorkspaceToolHost = {
     note?: string;
     submitterName?: string;
   }) => unknown;
+  wecomSearch?: ToolHost["wecomSearch"];
+  wecomWatchManage?: ToolHost["wecomWatchManage"];
+  wecomWatchCheck?: ToolHost["wecomWatchCheck"];
+  wecomWatchSync?: ToolHost["wecomWatchSync"];
 };
 
 type Args = Record<string, SDKJsonValue>;
@@ -907,6 +940,118 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     );
   }
 
+  if ((role === "chat" || role === "schedule") && host.wecomSearch) {
+    out.wecom_search = tool(
+      "只读检索企业微信（WeCom）中的最近浏览微盘/文档列表（recent_files）、搜索在线文档/表格（doc_search）、搜索微盘文件（disk_search）、搜索企微邮件（mail_search）或读取单封企微邮件详情（mail_get）。",
+      {
+        scope: {
+          type: "string",
+          enum: ["recent_files", "doc_search", "disk_search", "mail_search", "mail_get"],
+          description: "查询范围：recent_files=最近浏览微盘与表格，doc_search=按关键词搜文档/表格，disk_search=按关键词搜微盘，mail_search=搜企微邮件，mail_get=按 mailId 读邮件正文与附件列表",
+        },
+        keyword: S("搜索关键词（doc_search / disk_search 必填，mail_search 可选）"),
+        limit: { type: "number", description: "可选，返回最大条数（默认 10，最大 50）" },
+        onlyUnread: { type: "boolean", description: "可选，mail_search 时是否仅搜索未读邮件" },
+        hasAttachments: { type: "boolean", description: "可选，mail_search 时是否仅搜索含附件的邮件" },
+        mailId: S("mail_get 时必填的企业微信 encode_mail_id"),
+      },
+      ["scope"],
+      (args) =>
+        host.wecomSearch!({
+          scope: str(args.scope) as "recent_files" | "doc_search" | "disk_search" | "mail_search" | "mail_get",
+          keyword: str(args.keyword).trim() || undefined,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+          onlyUnread: typeof args.onlyUnread === "boolean" ? args.onlyUnread : undefined,
+          hasAttachments: typeof args.hasAttachments === "boolean" ? args.hasAttachments : undefined,
+          mailId: str(args.mailId).trim() || undefined,
+        }),
+    );
+  }
+
+  if ((role === "chat" || role === "schedule") && host.wecomWatchCheck) {
+    out.wecom_watch_check = tool(
+      "只读检查知识库工作区已绑定的企业微信关注文件（在线表格 sheet / 智能表格 smartsheet / 在线文档 doc / 微盘文件 disk_file）是否有内容变动。仅对比远端最新修改时间与内容 SHA-256 指纹并返回差异预览，绝不触发写入或归档。",
+      {
+        workspace: S("可选，限定检查的知识库工作区名称（如 Fintopia集团），不传则检查全部关注项"),
+        idOrTitle: S("可选，限定检查某个关注项的 ID（如 ww_xxx）、标题或 docId"),
+      },
+      [],
+      (args) =>
+        host.wecomWatchCheck!({
+          workspace: str(args.workspace).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+        }),
+    );
+  }
+
+  if ((role === "chat" || role === "schedule") && host.wecomWatchSync) {
+    out.wecom_watch_sync = tool(
+      "将企业微信中有变动的关注文件（在线表格/智能表格/在线文档/微盘文件）或指定的企业微信邮件（mailId）拉取并提交进目标知识库工作区的归档队列，自动归档并更新同名 .html 看板。",
+      {
+        workspace: S("可选（归档邮件 mailId 时必填），目标知识库工作区名称，如 Fintopia集团"),
+        idOrTitle: S("可选，指定要同步的关注项 ID（如 ww_xxx）或文件标题；不传则同步该工作区下所有检测到变动的关注项"),
+        forceSync: { type: "boolean", description: "可选，即使内容 SHA-256 未变动也强制重新拉取入库（默认 false，仅同步有变动的项）" },
+        mailId: S("可选，若要直接将某封企业微信邮件（含正文与附件）归档入库，传入其 mail_id"),
+        note: S("可选，归档批次补充说明"),
+      },
+      [],
+      (args) =>
+        host.wecomWatchSync!({
+          workspace: str(args.workspace).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+          forceSync: Boolean(args.forceSync),
+          mailId: str(args.mailId).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+        }),
+    );
+  }
+
+  if (role === "chat" && host.wecomWatchManage) {
+    out.wecom_watch_manage = tool(
+      "管理知识库工作区的企业微信关注文件清单（Watched Files Ledger）及查看企业微信机器人授权状态：支持 list（列出关注项）、add（新增或更新关注文件）、remove（移除关注项）、auth_status（查看 wecom-cli 授权状态）。",
+      {
+        action: {
+          type: "string",
+          enum: ["list", "add", "remove", "auth_status"],
+          description: "操作类型：list=查看关注列表，add=绑定关注文件，remove=移除关注文件，auth_status=查看企微授权状态",
+        },
+        workspace: S("知识库工作区名称（add 必填，list/remove 可选），如 Fintopia集团"),
+        title: S("add 必填：文件显示标题，如 保证金跟进 或 2026退保计划-省力版"),
+        sourceType: {
+          type: "string",
+          enum: ["sheet", "smartsheet", "doc", "smartpage", "disk_file"],
+          description: "add 必填：sheet=企微在线表格，smartsheet=企微智能表格，doc=企微在线文档，smartpage=智能文档，disk_file=微盘普通文件",
+        },
+        docId: S("add 时在线表格/文档必填：企微文档 docid（如 e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y）或文档 URL"),
+        fileId: S("add 时 disk_file 必填：企微微盘 file_id"),
+        sheet: S("可选，指定工作表名称或子表 ID（不传默认读取第一个工作表）"),
+        range: S("可选，指定读取 A1 范围（如 A1:Z300，不传默认读取整表已用区域）"),
+        note: S("可选，同步入库时的默认归档备注说明"),
+        idOrTitle: S("remove 必填：要移除的关注项 ID（如 ww_xxx）或标题"),
+      },
+      ["action"],
+      (args) =>
+        host.wecomWatchManage!({
+          action: str(args.action) as "list" | "add" | "remove" | "auth_status",
+          workspace: str(args.workspace).trim() || undefined,
+          title: str(args.title).trim() || undefined,
+          sourceType: (str(args.sourceType).trim() || undefined) as
+            | "sheet"
+            | "smartsheet"
+            | "doc"
+            | "smartpage"
+            | "disk_file"
+            | undefined,
+          docId: str(args.docId).trim() || undefined,
+          fileId: str(args.fileId).trim() || undefined,
+          sheet: str(args.sheet).trim() || undefined,
+          range: str(args.range).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+        }),
+    );
+  }
+
   if (role === "chat") {
     if (host.calendarEventsList) {
       out.gateway_calendar_events_list = tool(
@@ -1121,6 +1266,112 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
     );
   }
 
+  if (host.wecomSearch) {
+    tools.wecom_search = tool(
+      "只读检索企业微信（WeCom）中的最近浏览微盘/文档列表（recent_files）、搜索在线文档/表格（doc_search）、搜索微盘文件（disk_search）、搜索企微邮件（mail_search）或读取单封企微邮件详情（mail_get）。",
+      {
+        scope: {
+          type: "string",
+          enum: ["recent_files", "doc_search", "disk_search", "mail_search", "mail_get"],
+          description: "查询范围：recent_files / doc_search / disk_search / mail_search / mail_get",
+        },
+        keyword: S("搜索关键词"),
+        limit: { type: "number", description: "可选，返回最大条数（默认 10，最大 50）" },
+        onlyUnread: { type: "boolean", description: "可选，mail_search 时是否仅搜索未读邮件" },
+        hasAttachments: { type: "boolean", description: "可选，mail_search 时是否仅搜索含附件的邮件" },
+        mailId: S("mail_get 时必填的企业微信 encode_mail_id"),
+      },
+      ["scope"],
+      (args) =>
+        host.wecomSearch!({
+          scope: str(args.scope) as "recent_files" | "doc_search" | "disk_search" | "mail_search" | "mail_get",
+          keyword: str(args.keyword).trim() || undefined,
+          limit: typeof args.limit === "number" ? args.limit : undefined,
+          onlyUnread: typeof args.onlyUnread === "boolean" ? args.onlyUnread : undefined,
+          hasAttachments: typeof args.hasAttachments === "boolean" ? args.hasAttachments : undefined,
+          mailId: str(args.mailId).trim() || undefined,
+        }),
+    );
+  }
+
+  if (host.wecomWatchCheck) {
+    tools.wecom_watch_check = tool(
+      "只读检查本知识库工作区已绑定的企业微信关注文件（在线表格/智能表格/文档/微盘文件）是否有内容变动。仅对比远端最新修改时间与内容 SHA-256 指纹并返回差异预览，绝不触发写入或归档。",
+      {
+        idOrTitle: S("可选，限定检查某个关注项的 ID（如 ww_xxx）、标题或 docId；不传则检查本知识库全部关注项"),
+      },
+      [],
+      (args) =>
+        host.wecomWatchCheck!({
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+        }),
+    );
+  }
+
+  if (host.wecomWatchSync) {
+    tools.wecom_watch_sync = tool(
+      "将企业微信中有变动的关注文件（在线表格/智能表格/在线文档/微盘文件）或指定的企业微信邮件（mailId）拉取并提交进本知识库工作区的归档队列，自动归档并更新同名 .html 看板。",
+      {
+        idOrTitle: S("可选，指定要同步的关注项 ID（如 ww_xxx）或文件标题；不传则同步本知识库所有检测到变动的关注项"),
+        forceSync: { type: "boolean", description: "可选，即使内容 SHA-256 未变动也强制重新拉取入库（默认 false）" },
+        mailId: S("可选，若要直接将某封企业微信邮件（含正文与附件）归档入库，传入其 mail_id"),
+        note: S("可选，归档批次补充说明"),
+      },
+      [],
+      (args) =>
+        host.wecomWatchSync!({
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+          forceSync: Boolean(args.forceSync),
+          mailId: str(args.mailId).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+        }),
+    );
+  }
+
+  if (host.wecomWatchManage) {
+    tools.wecom_watch_manage = tool(
+      "管理本知识库工作区的企业微信关注文件清单（list / add / remove / auth_status）。",
+      {
+        action: {
+          type: "string",
+          enum: ["list", "add", "remove", "auth_status"],
+          description: "操作类型：list=查看关注列表，add=绑定关注文件，remove=移除关注文件，auth_status=查看企微授权状态",
+        },
+        title: S("add 必填：文件显示标题，如 保证金跟进"),
+        sourceType: {
+          type: "string",
+          enum: ["sheet", "smartsheet", "doc", "smartpage", "disk_file"],
+          description: "add 必填：sheet / smartsheet / doc / smartpage / disk_file",
+        },
+        docId: S("add 时在线表格/文档必填：企微文档 docid（如 e3_xxx）或文档 URL"),
+        fileId: S("add 时 disk_file 必填：企微微盘 file_id"),
+        sheet: S("可选，指定工作表名称或子表 ID"),
+        range: S("可选，指定读取 A1 范围（如 A1:Z300）"),
+        note: S("可选，同步入库时的默认归档备注说明"),
+        idOrTitle: S("remove 必填：要移除的关注项 ID（如 ww_xxx）或标题"),
+      },
+      ["action"],
+      (args) =>
+        host.wecomWatchManage!({
+          action: str(args.action) as "list" | "add" | "remove" | "auth_status",
+          title: str(args.title).trim() || undefined,
+          sourceType: (str(args.sourceType).trim() || undefined) as
+            | "sheet"
+            | "smartsheet"
+            | "doc"
+            | "smartpage"
+            | "disk_file"
+            | undefined,
+          docId: str(args.docId).trim() || undefined,
+          fileId: str(args.fileId).trim() || undefined,
+          sheet: str(args.sheet).trim() || undefined,
+          range: str(args.range).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+        }),
+    );
+  }
+
   return tools;
 }
 
@@ -1135,6 +1386,8 @@ const WRITE_CATEGORY_ASSISTANT_TOOLS = new Set([
   "drop_token_update",
   "drop_token_revoke",
   "kb_ingest_submit",
+  "wecom_watch_manage",
+  "wecom_watch_sync",
   "gateway_calendar_event_add",
   "gateway_calendar_event_update",
   "colleague_proposal_decide",
