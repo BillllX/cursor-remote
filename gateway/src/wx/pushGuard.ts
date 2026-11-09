@@ -13,16 +13,19 @@ import {
   type ProposalReceiptDelivery,
 } from "../assistant/proposals.ts";
 import { clip } from "../assistant/store.ts";
+import { loadKbWorkspaceConfig } from "../ingest/contract.ts";
 import { buildDropTenantHost, type DropPortalTenant } from "../ingest/http.ts";
 import { runKbQaAsk } from "../ingest/qaRunner.ts";
 import { QA_MAX_QUESTION_CHARS } from "../ingest/qaStorage.ts";
 import {
+  DEFAULT_COLLEAGUE_PERMISSIONS,
   findColleaguePassByChannel,
   getOwnerWxBinding,
   listDropTokens,
   SESSION_TTL_MS,
   setOwnerWxBinding,
   updateDropToken,
+  type AuthorizedWorkspaceGrant,
   type DropSessionGrant,
   type DropTenantHost,
 } from "../ingest/tokens.ts";
@@ -81,6 +84,7 @@ export function isWxAccountPaused(accountId: string, now = Date.now()): boolean 
 export function resetWxPushGuardMemoryForTest() {
   botPausedUntil.clear();
   activeQrSessions.clear();
+  processedWeixinMessageIds.clear();
   stopAllWxMonitorLoops();
 }
 
@@ -888,6 +892,32 @@ function rememberProcessedMsgId(id: string): boolean {
   return false;
 }
 
+function resolveAllTenantKbWorkspaces(host: DropTenantHost): AuthorizedWorkspaceGrant[] {
+  const grants: AuthorizedWorkspaceGrant[] = [];
+  let dirNames: string[] = [];
+  try {
+    dirNames = readdirSync(host.workspaceRoot).sort();
+  } catch {
+    return grants;
+  }
+  for (const name of dirNames) {
+    if (!name || name.startsWith(".")) continue;
+    const wsRef = host.resolveWorkspace(name);
+    if (!wsRef) continue;
+    const kbLoaded = loadKbWorkspaceConfig(wsRef.path, host.workspaceRoot);
+    if (!kbLoaded.ok) continue;
+    if (grants.some((g) => g.workspaceId === wsRef.workspaceId)) continue;
+    grants.push({
+      workspaceId: wsRef.workspaceId,
+      workspaceKey: wsRef.key,
+      workspacePath: kbLoaded.workspaceRealPath,
+      workspaceTitle: kbLoaded.config.title,
+      kbConfig: kbLoaded.config,
+    });
+  }
+  return grants;
+}
+
 /**
  * 处理单条来自微信 `getupdates` 的入站消息（支持直接被单测调用验证完整接待闭环）
  */
@@ -925,21 +955,29 @@ export async function handleInboundWeixinMessage(params: {
 
   const tenantList = params.tenants ?? (registeredTenantsProvider ? registeredTenantsProvider() : []);
 
-  // 1. 优先检查发送方是否为主人本人（ownerWx）且发送了快捷批单指令（「批准 prop_xxx」或「拒绝 prop_xxx」），避免主人同时测试过同事口令时被拦截
+  const ownerCandidates = tenantList
+    .map((t) => {
+      const host = buildDropTenantHost(t);
+      const ownerWx = getOwnerWxBinding(host);
+      return ownerWx && ownerWx.openId === fromOpenId ? { host, ownerWx } : null;
+    })
+    .filter((x): x is NonNullable<typeof x> => x !== null)
+    .sort((a, b) => (b.ownerWx.botId === account.accountId ? 1 : 0) - (a.ownerWx.botId === account.accountId ? 1 : 0));
+
+  // 1. 优先处理主人微信（ownerWx）：既支持快捷批单指令（「批准 prop_xxx」或「拒绝 prop_xxx」），也支持拥有当前租户全部知识库与全开权限的日常对话问答
   const approvalCmdMatch = /^(?:批准|同意|通过|拒绝|驳回)\s*(?:提案\s*)?([a-zA-Z0-9_-]+)?(?:\s+(.+))?$/i.exec(
     rawText.trim(),
   );
-  if (approvalCmdMatch) {
-    const ownerCandidates = tenantList
-      .map((t) => {
-        const host = buildDropTenantHost(t);
-        const ownerWx = getOwnerWxBinding(host);
-        return ownerWx && ownerWx.openId === fromOpenId ? { host, ownerWx } : null;
-      })
-      .filter((x): x is NonNullable<typeof x> => x !== null)
-      .sort((a, b) => (b.ownerWx.botId === account.accountId ? 1 : 0) - (a.ownerWx.botId === account.accountId ? 1 : 0));
+  if (ownerCandidates.length > 0) {
+    const { host, ownerWx } = ownerCandidates[0]!;
+    if (ownerWx.botId !== account.accountId) {
+      setOwnerWxBinding(host, {
+        ...ownerWx,
+        botId: account.accountId,
+      });
+    }
 
-    for (const { host } of ownerCandidates) {
+    if (approvalCmdMatch) {
       const isApprove = /^(?:批准|同意|通过)/i.test(rawText.trim());
       let targetPropId = (approvalCmdMatch[1] || "").trim();
       const decisionNote = (approvalCmdMatch[2] || "").trim() || undefined;
@@ -981,6 +1019,124 @@ export async function handleInboundWeixinMessage(params: {
       });
       return { handled: true, replyText };
     }
+
+    // 主人日常问题/指令：先补发可能挂起的微信回执，再构造拥有当前租户全部知识库工作区与全开权限的会话调用 runKbQaAsk
+    const flushedReceipts = await flushPendingWechatReceiptsForPeer(
+      host,
+      fromOpenId,
+      async (receiptMsg) => {
+        const sendRes = await sendIlinkBotTextMessage({
+          accountId: account.accountId,
+          toUserId: fromOpenId,
+          text: `【小驳·审批回执补达】${receiptMsg}`,
+          contextToken,
+          baseUrl: account.baseUrl,
+          botToken: account.token,
+          accountsDir,
+        });
+        return sendRes.ok;
+      },
+    );
+
+    const kbWorkspaces = resolveAllTenantKbWorkspaces(host);
+    if (kbWorkspaces.length === 0) {
+      const noKbText = "【小驳】当前租户下尚未初始化任何知识库工作区，请先在工作台中开启知识库。";
+      await sendIlinkBotTextMessage({
+        accountId: account.accountId,
+        toUserId: fromOpenId,
+        text: noKbText,
+        contextToken,
+        baseUrl: account.baseUrl,
+        botToken: account.token,
+        accountsDir,
+      });
+      return { handled: true, replyText: noKbText, flushedReceipts };
+    }
+
+    void sendIlinkTypingIndicator({
+      baseUrl: account.baseUrl,
+      botToken: account.token,
+      ilinkUserId: fromOpenId,
+      contextToken,
+      status: 1,
+    });
+
+    const qaSessionHash = createHash("sha256")
+      .update(`wx_ilink_owner:${host.id}:${fromOpenId}`)
+      .digest("hex")
+      .slice(0, 32);
+
+    const buildOwnerGrant = (
+      workspaces: AuthorizedWorkspaceGrant[],
+      nickname?: string,
+    ): DropSessionGrant => {
+      const primaryWs = workspaces[0]!;
+      return {
+        sessionToken: `ds_wx_owner_${qaSessionHash}`,
+        qaSessionId: `qa_${qaSessionHash}`,
+        tokenId: "dt_owner_wx",
+        tenantId: host.id,
+        workspaceId: primaryWs.workspaceId,
+        workspaceKey: primaryWs.workspaceKey,
+        workspacePath: primaryWs.workspacePath,
+        workspaceTitle: primaryWs.workspaceTitle,
+        kbConfig: primaryWs.kbConfig,
+        authorizedWorkspaces: workspaces,
+        permissions: { ...DEFAULT_COLLEAGUE_PERMISSIONS },
+        submitterName: nickname || "主人",
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+        expiresAt: Date.now() + SESSION_TTL_MS,
+      };
+    };
+
+    let askRes: Awaited<ReturnType<typeof runKbQaAsk>>;
+    try {
+      askRes = await runKbQaAsk({
+        host,
+        initialSession: buildOwnerGrant(kbWorkspaces, ownerWx.nickname),
+        question: clip(rawText, QA_MAX_QUESTION_CHARS),
+        sourceChannel: "wechat",
+        sourcePeerId: fromOpenId,
+        reverifySession: () => {
+          const freshOwner = getOwnerWxBinding(host);
+          if (!freshOwner || freshOwner.openId !== fromOpenId) {
+            return { ok: false, status: 403, error: "主人微信绑定已变更或已解绑" };
+          }
+          const freshWorkspaces = resolveAllTenantKbWorkspaces(host);
+          if (freshWorkspaces.length === 0) {
+            return { ok: false, status: 403, error: "当前租户下尚未初始化知识库工作区" };
+          }
+          return { ok: true, session: buildOwnerGrant(freshWorkspaces, freshOwner.nickname) };
+        },
+      });
+    } finally {
+      void sendIlinkTypingIndicator({
+        baseUrl: account.baseUrl,
+        botToken: account.token,
+        ilinkUserId: fromOpenId,
+        contextToken,
+        status: 2,
+      });
+    }
+
+    const replyText = askRes.ok
+      ? `【小驳】${askRes.answer}${
+          askRes.citedPaths.length > 0 ? `\n\n📄 引用来源：${askRes.citedPaths.join("、")}` : ""
+        }`
+      : `【小驳】暂时无法完成查询：${askRes.error}`;
+
+    await sendIlinkBotTextMessage({
+      accountId: account.accountId,
+      toUserId: fromOpenId,
+      text: replyText,
+      contextToken,
+      baseUrl: account.baseUrl,
+      botToken: account.token,
+      accountsDir,
+    });
+
+    return { handled: true, replyText, flushedReceipts };
   }
 
   // 2. 检查发送方是否为某个租户下已绑定且 status === "active" 的同事（优先匹配绑定了当前 botId 的租户）

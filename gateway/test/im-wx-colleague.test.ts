@@ -18,6 +18,7 @@ import { resetQaStorageMemoryForTest } from "../src/ingest/qaStorage.ts";
 import {
   createDropToken,
   resetDropAuthMemoryStateForTest,
+  setOwnerWxBinding,
   updateDropToken,
 } from "../src/ingest/tokens.ts";
 import { loadTenants } from "../src/tenants.ts";
@@ -607,5 +608,168 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
     if (!failNoMarker.ok) {
       assert.equal(failNoMarker.reason, "false_success_blocked");
     }
+  });
+
+  test("主人微信（ownerWx）独立对话：仅绑定 ownerWx（未绑定在同事 items 上）时，发日常问题可跨全租户知识库问答并正常回复", async () => {
+    const base = join(tmpdir(), `wx-owner-qa-test-${Date.now()}`);
+    const tenantsFile = join(base, "tenants.json");
+    const defaultStateDir = join(base, "tenants", "default");
+    const defaultWsRoot = join(defaultStateDir, "workspace");
+    const fintopiaPath = join(defaultWsRoot, "Fintopia集团");
+    const sannongxinPath = join(defaultWsRoot, "sannongxin");
+    const accountsDir = join(base, "openclaw-accounts");
+
+    mkdirSync(defaultStateDir, { recursive: true });
+    mkdirSync(fintopiaPath, { recursive: true });
+    mkdirSync(sannongxinPath, { recursive: true });
+    mkdirSync(accountsDir, { recursive: true });
+    tempDirs.push(base);
+
+    writeFileSync(
+      tenantsFile,
+      JSON.stringify({
+        tenants: [{ id: "default", name: "BillXu", token: "tok_default" }],
+      }),
+      "utf8",
+    );
+    process.env.CURSOR_REMOTE_STATE_DIR = base;
+    process.env.CURSOR_REMOTE_TENANTS_FILE = tenantsFile;
+    loadTenants();
+
+    writeFileSync(join(fintopiaPath, "归档说明.md"), "# 归档说明\n一级分类：资产。\n", "utf8");
+    initKbWorkspaceConfig(fintopiaPath, {
+      title: "Fintopia 集团知识库",
+      allowedCategories: ["资产"],
+    });
+    mkdirSync(join(fintopiaPath, "资产"), { recursive: true });
+    writeFileSync(
+      join(fintopiaPath, "资产", "资产.html"),
+      "<!DOCTYPE html><html><body><h1>Fintopia资产看板</h1><p>洋钱罐11月在贷余额为 42.5 亿元。</p></body></html>",
+      "utf8",
+    );
+
+    writeFileSync(join(sannongxinPath, "归档说明.md"), "# 归档说明\n一级分类：业务。\n", "utf8");
+    initKbWorkspaceConfig(sannongxinPath, {
+      title: "三农信知识库",
+      allowedCategories: ["业务"],
+    });
+
+    const agentFile = readWorkspaceAgentFile({
+      id: "default",
+      stateDir: defaultStateDir,
+      workspaceRoot: defaultWsRoot,
+    } as never);
+    writeFileSync(join(defaultStateDir, "workspace-agent-chats.json"), JSON.stringify(agentFile), "utf8");
+
+    const host = buildDropTenantHost({
+      id: "default",
+      stateDir: defaultStateDir,
+      workspaceRoot: defaultWsRoot,
+      name: "BillXu",
+    });
+
+    // 仅绑定 ownerWx，items 中没有任何绑定该微信的同事通行证
+    const ownerOpenId = "o9cq800vUuOnlOskqpc_WWM258FQ@im.wechat";
+    setOwnerWxBinding(host, {
+      botId: "97f761ef46c7-im-bot",
+      openId: ownerOpenId,
+      nickname: "主人微信",
+      boundAt: Date.now(),
+    });
+
+    const sentWxMessages: Array<{ to: string; text: string }> = [];
+    const typingStatuses: number[] = [];
+
+    bindIlinkFetchForTest(async (url, init) => {
+      if (url.includes("/ilink/bot/sendmessage")) {
+        const bodyObj = JSON.parse(init.body || "{}") as {
+          msg?: { to_user_id?: string; item_list?: Array<{ text_item?: { text?: string } }> };
+        };
+        sentWxMessages.push({
+          to: bodyObj.msg?.to_user_id || "",
+          text: bodyObj.msg?.item_list?.[0]?.text_item?.text || "",
+        });
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ message_id: 7525314747002912999 }),
+        };
+      }
+      if (url.includes("/ilink/bot/getconfig")) {
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ ret: 0, typing_ticket: "tt_owner_123" }),
+        };
+      }
+      if (url.includes("/ilink/bot/sendtyping")) {
+        const bodyObj = JSON.parse(init.body || "{}") as { status?: number };
+        if (typeof bodyObj.status === "number") {
+          typingStatuses.push(bodyObj.status);
+        }
+        return {
+          status: 200,
+          ok: true,
+          text: JSON.stringify({ ret: 0 }),
+        };
+      }
+      return {
+        status: 200,
+        ok: true,
+        text: JSON.stringify({ ret: 0 }),
+      };
+    });
+
+    let capturedPrompt = "";
+    bindQaRunner({
+      apiKey: () => "test-key",
+      listModels: async () => [BACKGROUND_MODEL],
+      sandbox: () => true,
+      prompt: async (promptText, options) => {
+        capturedPrompt = promptText;
+        const custom = options.local?.customTools ?? {};
+        const boardRaw = await custom.kb_qa_read_file.execute(
+          { relPath: "资产/资产.html", workspace: "Fintopia集团" },
+          { toolCallId: "owner_qa_1" },
+        );
+        const board = JSON.parse(String(boardRaw)) as { ok: boolean; content: string };
+        assert.equal(board.ok, true);
+        return {
+          id: "run_wx_owner_qa",
+          status: "finished",
+          result: "主人您好，洋钱罐11月在贷余额为 42.5 亿元。",
+          messages: [],
+        };
+      },
+    });
+
+    const inboundRes = await handleInboundWeixinMessage({
+      account: {
+        accountId: "97f761ef46c7-im-bot",
+        token: "secret_bot_token_owner",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+      },
+      message: {
+        message_id: "88001",
+        from_user_id: ownerOpenId,
+        message_type: 1,
+        context_token: "ctx_owner_live_001",
+        item_list: [{ type: 1, text_item: { text: "帮我查下洋钱罐11月在贷余额是多少？" } }],
+      },
+      tenants: [{ id: "default", stateDir: defaultStateDir, workspaceRoot: defaultWsRoot, name: "BillXu" }],
+      accountsDir,
+    });
+
+    assert.equal(inboundRes.handled, true);
+    assert.equal(inboundRes.replyText?.includes("42.5 亿元"), true);
+    assert.equal(inboundRes.replyText?.includes("资产/资产.html"), true);
+    assert.equal(capturedPrompt.includes("Fintopia集团"), true);
+    assert.equal(capturedPrompt.includes("sannongxin"), true);
+    assert.equal(
+      sentWxMessages.some((m) => m.to === ownerOpenId && m.text.includes("42.5 亿元")),
+      true,
+    );
+    assert.equal(typingStatuses.includes(1), true);
+    assert.equal(typingStatuses.includes(2), true);
   });
 });
