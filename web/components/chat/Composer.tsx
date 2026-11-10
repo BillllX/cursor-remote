@@ -5,6 +5,13 @@ import { isOpenableMention, mentionChips } from "../../lib/chat/mentions";
 import { IconAgent, IconAsk, IconPlan, IconShield, IconWrite } from "../chromeIcons";
 import ModelPicker from "../ModelPicker";
 
+const QUICK_COMPOSER_SKILLS: ReadonlyArray<{ id: string; name: string; readOnly: boolean }> = [
+  { id: "canvas-artifact-builder", name: "交互式画布构建与 SSR 验真", readOnly: true },
+  { id: "jiebo-gateway-arch", name: "Jiebo 网关与双端架构速查", readOnly: true },
+  { id: "ios-swiftui-motion", name: "iOS SwiftUI 规范与契约审查", readOnly: true },
+  { id: "kb-drop-ingest", name: "多源知识库投递与看板归档", readOnly: false },
+];
+
 export function Composer({
   draft,
   epoch,
@@ -96,6 +103,7 @@ export function Composer({
   const sendLockRef = useRef(false);
   const [text, setText] = useState(draft);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [density, setDensity] = useState<"full" | "mid" | "compact" | "tight">("full");
   const modesRef = useRef<HTMLDivElement | null>(null);
   const thumbLive = useRef(false);
@@ -423,8 +431,50 @@ export function Composer({
             <button
               type="button"
               className="pill icon"
+              title="选择要运用的技能（Skill）"
+              aria-label="选择要运用的技能"
+              onClick={() => {
+                setSkillsOpen((open) => !open);
+                setMoreOpen(false);
+              }}
+            >
+              ⚡
+            </button>
+            {skillsOpen ? (
+              <div className="composer-menu" role="menu" aria-label="快捷技能">
+                <div className="composer-menu-label">运用技能（Skill）</div>
+                {QUICK_COMPOSER_SKILLS.filter((sk) => (mode === "ask" || mode === "plan" ? sk.readOnly : true)).map(
+                  (sk) => (
+                    <button
+                      key={sk.id}
+                      type="button"
+                      onClick={() => {
+                        const prefix = `[请运用技能 ${sk.id}（${sk.name}）] `;
+                        const current = inputRef.current ? inputRef.current.value : text;
+                        const nextVal = current.includes(sk.id) ? current : `${prefix}${current}`;
+                        setText(nextVal);
+                        if (inputRef.current) {
+                          inputRef.current.value = nextVal;
+                          inputRef.current.focus();
+                        }
+                        onDraftChange(nextVal, nextVal.length);
+                        setSkillsOpen(false);
+                      }}
+                    >
+                      ⚡ {sk.name}
+                    </button>
+                  ),
+                )}
+              </div>
+            ) : null}
+          </div>
+          <div className="composer-more">
+            <button
+              type="button"
+              className="pill icon"
               title="更多"
               onClick={() => {
+                setSkillsOpen(false);
                 setMoreOpen((open) => {
                   const next = !open;
                   if (next) onOpenMenu?.();

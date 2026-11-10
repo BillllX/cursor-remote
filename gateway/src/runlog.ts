@@ -13,6 +13,7 @@ export type RunTranscript = {
   task?: string;
   model?: string;
   mode?: AgentMode;
+  prewarmedSkills?: Array<{ id: string; name: string }>;
   awaitingApproval?: { callId: string; name: string; args?: unknown };
   status?: string;
   phase: "running" | "done";
@@ -157,6 +158,7 @@ export function applyStreamEvent(transcript: RunTranscript, message: ServerMessa
     case "run_meta":
       if (message.model) transcript.model = message.model;
       if (message.mode) transcript.mode = message.mode;
+      if (message.prewarmedSkills?.length) transcript.prewarmedSkills = message.prewarmedSkills;
       break;
     case "approval":
       transcript.awaitingApproval = {
@@ -245,6 +247,7 @@ export function turnFromTranscript(transcript: RunTranscript): Record<string, un
   if (transcript.task) row.task = transcript.task;
   if (transcript.model) row.model = transcript.model;
   if (transcript.mode) row.mode = transcript.mode;
+  if (transcript.prewarmedSkills?.length) row.prewarmedSkills = transcript.prewarmedSkills;
   if (transcript.error) row.error = transcript.error;
   if (transcript.durationMs != null) row.durationMs = transcript.durationMs;
   row.startedAt =

@@ -42,13 +42,39 @@ struct ActionDock: View {
         let approvals = (store.assistantState?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
         let drafts = uniqueDrafts(store.assistantState?.draftCards ?? [])
         let usesDrafts = store.assistantState?.draftCards != nil
+        let skillProposals = store.memoryCenterSkillProposals.filter { $0.status == "pending" }
         let running = store.runningDelegations
         let finished = recentFinished(now: now)
-        let pendingCount = usesDrafts ? drafts.count : approvals.count
+        let pendingCount = (usesDrafts ? drafts.count : approvals.count) + skillProposals.count
         if pendingCount == 0 && running.isEmpty && finished == nil {
             EmptyView()
         } else {
             VStack(spacing: 6) {
+                ForEach(skillProposals.prefix(1)) { prop in
+                    HStack(spacing: 8) {
+                        Image(systemName: "sparkles")
+                            .font(JieboFont.text(.subheadline, weight: .semibold))
+                            .foregroundStyle(JieboColor.pine)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("新技能待启用：\(prop.name)")
+                                .font(JieboFont.text(.subheadline, weight: .semibold))
+                                .foregroundStyle(JieboColor.ink)
+                                .lineLimit(1)
+                            Text(prop.summary)
+                                .font(JieboFont.text(.caption))
+                                .foregroundStyle(JieboColor.dim)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        ActionButton(title: "批准", kind: .primary) {
+                            store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: true, expectedRev: prop.rev)
+                        }
+                        ActionButton(title: "拒绝", kind: .outline) {
+                            store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: false, expectedRev: prop.rev)
+                        }
+                    }
+                    .dockRow()
+                }
                 if usesDrafts {
                     draftsBlock(drafts)
                 } else {

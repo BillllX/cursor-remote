@@ -3,17 +3,22 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
+import { listInbox } from "../src/assistant/inbox.ts";
 import { saveMemory } from "../src/assistant/memory.ts";
 import { handleOp, workspaceToolsFor } from "../src/assistant/service.ts";
 import {
-   decideSkillProposal,
+  decideSkillProposal,
+  editApprovedDeclarativeSkill,
   listSkillProposals,
   listSkills,
+  listSkillSummaries,
   markSkillUsed,
   MAX_SKILL_USE_CHARS,
   proposeSkillPackage,
   renderSkillsCatalogForPrompt,
+  renderSkillsCatalogWithMeta,
   SKILL_CATALOG_TOKEN_BUDGET,
+  updateSkillMeta,
   useSkill,
   verifySkill,
 } from "../src/assistant/skills.ts";
@@ -331,5 +336,180 @@ describe("Skill 工厂 Phase 1 & Phase 2：四分类注册表、渐进披露预�
     assert.equal(escapeAbs.ok, false);
     const validStatus = await handleOp(tenant, "skill_factory_status", { workspace: "cursorremote" });
     assert.equal(validStatus.ok, true);
+    const statusData = validStatus.data as { skills: Array<{ id: string; body?: string }> };
+    const canvasSkill = statusData.skills.find((s) => s.id === "canvas-artifact-builder");
+    assert.ok(canvasSkill?.body && canvasSkill.body.includes("compileCanvas"), "UI 面板查询应返回完整 SOP body");
+    const llmSummaries = listSkillSummaries(tenant, subWs);
+    assert.equal(
+      llmSummaries.find((s) => s.id === "canvas-artifact-builder")?.body,
+      undefined,
+      "模型工具 skill_list 默认不带 body 以节省上下文",
+    );
+
+    // 校验提案自动投递收件箱提醒，并在审批后自动标为已读
+    const propRes = proposeSkillPackage(tenant, subWs, {
+      id: "inbox-notify-skill",
+      name: "收件箱闭环测试技能",
+      summary: "验证提案生成时写收件箱待批、批准后自动已读",
+      body: "# 步骤\n1. 只读检查",
+      chatId: "chat-ux-test",
+    });
+    assert.equal(propRes.ok, true);
+    if (propRes.ok) {
+      const unreadBefore = listInbox({ id: tenant.id, stateDir: tenant.stateDir }).filter((i) => !i.read);
+      assert.ok(
+        unreadBefore.some((i) => i.key === `skill-proposal:${propRes.proposal.id}:${propRes.proposal.rev}`),
+        "生成技能提案应同步写入收件箱未读提醒",
+      );
+      const decided = decideSkillProposal(tenant, {
+        proposalId: propRes.proposal.id,
+        approve: true,
+        expectedRev: propRes.proposal.rev,
+      });
+      assert.equal(decided.ok, true);
+      const unreadAfter = listInbox({ id: tenant.id, stateDir: tenant.stateDir }).filter((i) => !i.read);
+      assert.equal(
+        unreadAfter.some((i) => i.key?.startsWith(`skill-proposal:${propRes.proposal.id}:`)),
+        false,
+        "批准或拒绝后收件箱对应待批提醒应自动标为已读",
+      );
+    }
+  });
+
+  test("7. v2.2 控权开关（skill_update_meta 全链路拦截 disabled）與已上架声明式技能在线编辑重签（skill_edit_approved CAS + 五道门禁）", async () => {
+    const { tenant, subWs } = makeTenantEnv("t-v22-overrides-and-edit");
+
+    // 1) 拒绝停用平台通道守卫（channel_guard）
+    const guardReject = updateSkillMeta(tenant, subWs, {
+      skillId: "wechat-push-guard",
+      disabled: true,
+    });
+    assert.equal(guardReject.ok, false, "channel_guard 不得允许面板停用");
+
+    // 2) 拒绝对写模式技能（mode=write）开启 autoPrewarm
+    const writePrewarmReject = updateSkillMeta(tenant, subWs, {
+      skillId: "shanghai-deploy-smoke",
+      autoPrewarm: true,
+    });
+    assert.equal(writePrewarmReject.ok, false, "mode=write 技能不得允许开启自动预热");
+
+    // 3) 停用 canvas-artifact-builder 后，listSkills 状态变为 disabled，useSkill 与 markSkillUsed 均强制拒绝，且不再预热
+    const disableRes = await handleOp(tenant, "skill_update_meta", {
+      skillId: "canvas-artifact-builder",
+      disabled: true,
+      workspace: "cursorremote",
+    });
+    assert.equal(disableRes.ok, true);
+
+    const useDisabled = useSkill(tenant, subWs, "canvas-artifact-builder");
+    assert.equal(useDisabled.ok, false, "disabled 技能必须被 useSkill 强制拦截");
+    if (!useDisabled.ok) {
+      assert.equal(useDisabled.health, "disabled");
+    }
+    const markDisabled = markSkillUsed(tenant, subWs, "canvas-artifact-builder");
+    assert.equal(markDisabled.ok, false, "disabled 技能必须被 markSkillUsed 拦截");
+
+    const metaWhenDisabled = renderSkillsCatalogWithMeta(tenant, subWs, {
+      query: "请帮我写一个画布 .canvas.tsx 并用 compileCanvas 验证",
+      files: ["demo.canvas.tsx"],
+      runnerRole: "foreground",
+    });
+    assert.equal(metaWhenDisabled.prewarmedSkills.length, 0, "disabled 技能不得触发 L2 预热");
+    assert.equal(metaWhenDisabled.prompt.includes("canvas-artifact-builder"), false, "disabled 技能不得进入 L1 目录");
+
+    // 恢复启用后，renderSkillsCatalogWithMeta 正常返回结构化 prewarmedSkills
+    await handleOp(tenant, "skill_update_meta", {
+      skillId: "canvas-artifact-builder",
+      disabled: false,
+      workspace: "cursorremote",
+    });
+    const metaWhenEnabled = renderSkillsCatalogWithMeta(tenant, subWs, {
+      query: "请帮我写一个画布 .canvas.tsx 并用 compileCanvas 验证",
+      files: ["demo.canvas.tsx"],
+      runnerRole: "foreground",
+    });
+    assert.deepEqual(metaWhenEnabled.prewarmedSkills, [
+      { id: "canvas-artifact-builder", name: "交互式主题画布构建与一键 SSR 验真" },
+    ]);
+
+    // 4) 声明式技能在线编辑与重签：先上架一个健康声明式技能
+    const proposed = proposeSkillPackage(tenant, subWs, {
+      id: "editable-sop",
+      name: "可在线编辑的标准技能",
+      summary: "初始版本摘要",
+      keywords: ["旧关键词"],
+      requiredTools: ["read"],
+      body: "# 初始步骤\n1. 先读取文件",
+    });
+    assert.equal(proposed.ok, true);
+    if (!proposed.ok) return;
+    const approved = decideSkillProposal(tenant, {
+      proposalId: proposed.proposal.id,
+      approve: true,
+      expectedRev: proposed.proposal.rev,
+    });
+    assert.equal(approved.ok, true);
+
+    const beforeEdit = listSkills(tenant, subWs).find((s) => s.id === "editable-sop");
+    assert.equal(beforeEdit?.health, "healthy");
+    const initialSha = beforeEdit?.sha256 || "";
+    assert.ok(initialSha.length === 64);
+
+    // 拒绝编辑内置技能
+    const builtinEditReject = editApprovedDeclarativeSkill(tenant, subWs, {
+      skillId: "canvas-artifact-builder",
+      entry: "cursor-remote/web/lib/canvas/compile.ts",
+      expectedSha256: initialSha,
+      name: "篡改内置",
+      summary: "摘要",
+      body: "# 正文",
+    });
+    assert.equal(builtinEditReject.ok, false, "内置技能严禁在线编辑");
+
+    // 拦截编辑时混入高危命令
+    const gateEditReject = editApprovedDeclarativeSkill(tenant, subWs, {
+      skillId: "editable-sop",
+      entry: "cursorremote/.jiebo/skills/editable-sop/SKILL.md",
+      expectedSha256: initialSha,
+      name: "可在线编辑的标准技能",
+      summary: "尝试塞入危险命令",
+      body: "sudo rm -rf /",
+    });
+    assert.equal(gateEditReject.ok, false, "在线编辑必须复用五道安全门禁拦截高危命令");
+
+    // 拦截 CAS 哈希不匹配
+    const casReject = editApprovedDeclarativeSkill(tenant, subWs, {
+      skillId: "editable-sop",
+      entry: "cursorremote/.jiebo/skills/editable-sop/SKILL.md",
+      expectedSha256: "0".repeat(64),
+      name: "可在线编辑的标准技能",
+      summary: "CAS 错误",
+      body: "# 安全正文",
+    });
+    assert.equal(casReject.ok, false, "expectedSha256 不匹配必须拒绝覆盖");
+
+    // 正常在线编辑并重签锁
+    const editOk = await handleOp(tenant, "skill_edit_approved", {
+      skillId: "editable-sop",
+      entry: "cursorremote/.jiebo/skills/editable-sop/SKILL.md",
+      expectedSha256: initialSha,
+      name: "可在线编辑的标准技能（v2）",
+      summary: "更新后的摘要",
+      keywords: ["新关键词A", "新关键词B"],
+      requiredTools: ["read", "grep"],
+      body: "# 更新后步骤\n1. 先用 grep 检索\n2. 再用 read 精读",
+      workspace: "cursorremote",
+    });
+    assert.equal(editOk.ok, true, "合法在线编辑应成功并更新 SHA-256 锁");
+
+    const afterEdit = listSkills(tenant, subWs).find((s) => s.id === "editable-sop");
+    assert.equal(afterEdit?.health, "healthy", "在线重签后技能必须保持 healthy 状态");
+    assert.equal(afterEdit?.name, "可在线编辑的标准技能（v2）");
+    assert.notEqual(afterEdit?.sha256, initialSha, "重签后 SHA-256 应更新");
+    const useAfterEdit = useSkill(tenant, subWs, "editable-sop");
+    assert.equal(useAfterEdit.ok, true);
+    if (useAfterEdit.ok) {
+      assert.ok(useAfterEdit.content.includes("先用 grep 检索"));
+    }
   });
 });

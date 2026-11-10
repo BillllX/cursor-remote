@@ -581,6 +581,8 @@ export type SkillFactorySummaryItem = {
   sha256?: string;
   lockedSha256?: string;
   stats: SkillFactoryUsageStats;
+  /** 技能完整 Markdown SOP 手册正文（供技能工厂面板详情直接展示） */
+  body?: string;
 };
 
 export type SkillFactoryProposalItem = {
@@ -608,6 +610,11 @@ export type SkillFactoryProposalItem = {
   updatedAt: string;
   chatId?: string;
   decisionNote?: string;
+};
+
+export type SkillFactoryPrewarmedItem = {
+  id: string;
+  name: string;
 };
 
 export type SkillFactoryStatusData = {
@@ -713,6 +720,27 @@ export type AssistantOpArgsMap = {
     expectedRev?: number;
     decisionNote?: string;
   };
+  skill_update_meta: {
+    skillId: string;
+    entry?: string;
+    pinned?: boolean;
+    autoPrewarm?: boolean;
+    disabled?: boolean;
+    workspace?: string;
+  };
+  skill_edit_approved: {
+    skillId: string;
+    entry: string;
+    expectedSha256: string;
+    name: string;
+    summary: string;
+    keywords?: string[];
+    globs?: string[];
+    requiredTools?: string[];
+    refs?: string[];
+    body: string;
+    workspace?: string;
+  };
 };
 
 export type AssistantOpResultMap = {
@@ -735,6 +763,8 @@ export type AssistantOpResultMap = {
   drop_token_revoke: KbWorkspaceStatusData;
   skill_factory_status: SkillFactoryStatusData;
   skill_proposal_decide: SkillFactoryStatusData;
+  skill_update_meta: SkillFactoryStatusData;
+  skill_edit_approved: SkillFactoryStatusData;
 };
 
 type AssistantResultBranchForOp<K extends AssistantOp> = K extends "memory_center_mutate"
@@ -1021,9 +1051,11 @@ export type AssistantOp =
   | "drop_token_create"
   | "drop_token_update"
   | "drop_token_revoke"
-  /** Skill 工厂：查询已集成的四分类技能列表与待审批提案、批准或拒绝技能提案 */
+  /** Skill 工厂：查询已集成的四分类技能列表与待审批提案、批准或拒绝技能提案、置顶/启停/预热开关与在线编辑重签 */
   | "skill_factory_status"
-  | "skill_proposal_decide";
+  | "skill_proposal_decide"
+  | "skill_update_meta"
+  | "skill_edit_approved";
 
 export type AssistantOpTyped = keyof AssistantOpArgsMap;
 
@@ -1054,6 +1086,8 @@ type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "drop_token_update"
   | "drop_token_revoke"
   | "skill_proposal_decide"
+  | "skill_update_meta"
+  | "skill_edit_approved"
   ? { op: K; args: AssistantOpArgsMap[K] }
   : K extends
       | "memory_center_get"
@@ -1634,7 +1668,15 @@ export type ServerMessage =
    * agentId 为空串 = 这个会话当前没有 agent（客户端清掉本地旧值）
    */
   | { type: "session"; chatId: string; agentId: string; cwd: string }
-  | { type: "run_meta"; chatId: string; model: string; mode?: AgentMode; policy?: PolicyId; dialect?: boolean }
+  | {
+      type: "run_meta";
+      chatId: string;
+      model: string;
+      mode?: AgentMode;
+      policy?: PolicyId;
+      dialect?: boolean;
+      prewarmedSkills?: SkillFactoryPrewarmedItem[];
+    }
   | { type: "text-delta"; chatId: string; text: string }
   | { type: "thinking-delta"; chatId: string; text: string }
   | ({

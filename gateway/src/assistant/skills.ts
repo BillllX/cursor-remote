@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, st
 import { dirname, relative, resolve, sep } from "node:path";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
 import { isInside } from "../pathInside.ts";
+import { listInbox, markInboxRead, postInbox } from "./inbox.ts";
 import { detectSecret, isValid, listMemory, PERSONAL_CORE_FIELDS, readCore, today } from "./memory.ts";
 import * as scopedRead from "./scopedRead.ts";
 import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type TenantRef } from "./store.ts";
@@ -116,7 +117,9 @@ export type SkillManifest = {
   body: string;
 };
 
-export type SkillSummaryItem = Omit<SkillManifest, "body">;
+export type SkillSummaryItem = Omit<SkillManifest, "body"> & {
+  body?: string;
+};
 
 export type SkillProposal = {
   id: string;
@@ -165,6 +168,18 @@ type SkillProposalStore = {
   proposals: SkillProposal[];
 };
 
+export type SkillMetaOverride = {
+  pinned?: boolean;
+  autoPrewarm?: boolean;
+  disabled?: boolean;
+  updatedAt: string;
+};
+
+type SkillOverrideStore = {
+  /** key: builtin:<id> 或声明式技能的 <layer>/.jiebo/skills/<id>/SKILL.md */
+  overrides: Record<string, SkillMetaOverride>;
+};
+
 const posix = (p: string) => p.split(sep).join("/");
 const sha256Hex = (text: string) => createHash("sha256").update(text.trim(), "utf8").digest("hex");
 
@@ -188,6 +203,10 @@ function proposalsFile(ref: TenantRef) {
   return assistantPath(ref, "skill-proposals.json");
 }
 
+function overridesFile(ref: TenantRef) {
+  return assistantPath(ref, "skill-overrides.json");
+}
+
 function readStatsStore(ref: TenantRef): SkillStatsStore {
   const raw = readJson<SkillStatsStore>(statsFile(ref), { items: {} });
   return { items: raw && typeof raw.items === "object" && raw.items ? raw.items : {} };
@@ -204,6 +223,15 @@ function readProposalStore(ref: TenantRef): SkillProposalStore {
     rev: typeof raw?.rev === "number" ? raw.rev : 1,
     proposals: Array.isArray(raw?.proposals) ? raw.proposals : [],
   };
+}
+
+function readOverrideStore(ref: TenantRef): SkillOverrideStore {
+  const raw = readJson<SkillOverrideStore>(overridesFile(ref), { overrides: {} });
+  return { overrides: raw && typeof raw.overrides === "object" && raw.overrides ? raw.overrides : {} };
+}
+
+function overrideKeyOf(kind: SkillKind, id: string, entry: string): string {
+  return kind === "declarative_skill" ? entry : `builtin:${id}`;
 }
 
 function emptyStats(): SkillUsageStats {
@@ -537,6 +565,9 @@ export function formatSkillMarkdown(input: {
   if (input.requiredTools?.length) lines.push(`requiredTools: [${input.requiredTools.join(", ")}]`);
   if (input.refs?.length) lines.push(`refs: [${input.refs.join(", ")}]`);
   if (input.pinned) lines.push("pinned: true");
+  if ((input as { autoPrewarm?: boolean }).autoPrewarm && input.mode === "read") {
+    lines.push("autoPrewarm: true");
+  }
   lines.push("---", "", input.body.trim(), "");
   return lines.join("\n");
 }
@@ -667,6 +698,27 @@ export function runnerAllowsSkill(role: SkillRunnerRole, skill: Pick<SkillManife
   return true;
 }
 
+function applyMetaOverride(manifest: SkillManifest, override?: SkillMetaOverride): SkillManifest {
+  if (!override) return manifest;
+  const pinned = typeof override.pinned === "boolean" ? override.pinned : manifest.pinned;
+  const rawPrewarm = typeof override.autoPrewarm === "boolean" ? override.autoPrewarm : manifest.autoPrewarm;
+  const autoPrewarm = manifest.mode === "read" && manifest.kind !== "channel_guard" ? rawPrewarm : false;
+  let health = manifest.health;
+  let healthReason = manifest.healthReason;
+  // tampered 优先级最高，不允许通过 disabled 掩盖篡改告警；channel_guard 不支持面板停用
+  if (override.disabled === true && manifest.kind !== "channel_guard" && manifest.health !== "tampered") {
+    health = "disabled";
+    healthReason = "已在技能工厂面板手动停用。";
+  }
+  return {
+    ...manifest,
+    pinned,
+    autoPrewarm,
+    health,
+    healthReason,
+  };
+}
+
 export function listSkills(
   tenant: WorkspaceRoot,
   cwd: string,
@@ -683,6 +735,7 @@ export function listSkills(
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
   const statsStore = readStatsStore(ref);
   const lockStore = readLockStore(ref);
+  const overrideStore = readOverrideStore(ref);
   const base = realOr(tenant.workspaceRoot);
   const cwdReal = realOr(cwd);
   if (!isInside(cwdReal, base)) return [];
@@ -691,15 +744,17 @@ export function listSkills(
   const byId = new Map<string, SkillManifest>();
   for (const def of BUILTIN_SKILLS) {
     if (opts.includeChannelGuards === false && def.kind === "channel_guard") continue;
-    const missingRefs = def.refs.filter((r) => !existsSync(resolve(searchRoot, r)) && !existsSync(resolve(base, "cursorremote", r)));
-    const manifest: SkillManifest = {
+    const baseManifest: SkillManifest = {
       ...def,
       layer: def.scope === "platform" ? "platform" : "workspace",
-      missingRefs,
-      health: missingRefs.length > 0 ? "broken_ref" : "healthy",
-      healthReason: missingRefs.length > 0 ? `引用缺失：${missingRefs.join(", ")}` : undefined,
+      missingRefs: [],
+      health: "healthy",
       stats: statsStore.items[def.id] ?? emptyStats(),
     };
+    const manifest = applyMetaOverride(
+      baseManifest,
+      overrideStore.overrides[overrideKeyOf(def.kind, def.id, def.entry)],
+    );
     if (runnerAllowsSkill(role, manifest)) {
       byId.set(manifest.id, manifest);
     }
@@ -717,7 +772,11 @@ export function listSkills(
   }
 
   for (const dir of dirsToScan) {
-    for (const item of scanDeclarativeSkillsInDir(tenant, dir, lockStore, statsStore)) {
+    for (const rawItem of scanDeclarativeSkillsInDir(tenant, dir, lockStore, statsStore)) {
+      const item = applyMetaOverride(
+        rawItem,
+        overrideStore.overrides[overrideKeyOf(rawItem.kind, rawItem.id, rawItem.entry)],
+      );
       if (runnerAllowsSkill(role, item)) {
         byId.set(item.id, item);
       }
@@ -742,9 +801,12 @@ export function listSkills(
 export function listSkillSummaries(
   tenant: WorkspaceRoot,
   cwd: string,
-  opts: Parameters<typeof listSkills>[2] = {},
+  opts: Parameters<typeof listSkills>[2] & { includeBody?: boolean } = {},
 ): SkillSummaryItem[] {
-  return listSkills(tenant, cwd, opts).map(({ body: _body, ...rest }) => rest);
+  const { includeBody, ...listOpts } = opts;
+  return listSkills(tenant, cwd, listOpts).map(({ body, ...rest }) =>
+    includeBody ? { ...rest, body } : rest,
+  );
 }
 
 // ---------- L1 常驻目录与 L2 独立触发匹配器 ----------
@@ -782,13 +844,18 @@ export function matchSkillTriggers(
   return { score, matchedKeywords, matchedFiles };
 }
 
+export type SkillsCatalogRenderResult = {
+  prompt: string;
+  prewarmedSkills: Array<{ id: string; name: string }>;
+};
+
 /**
- * 渲染单次注入给模型的紧凑技能目录（<skills_catalog>）：
+ * 渲染单次注入给模型的紧凑技能目录（<skills_catalog>）并返回命中的 L2 自动预热技能元数据：
  * - 严格剥离 channel_guard（防止模型自调后台通道）与 tampered/disabled 技能；
  * - 最多选 Top-5（pinned > 触发分 > adoptedCount），且总 Token 严格受 SKILL_CATALOG_TOKEN_BUDGET (≤200 tokens) 封顶；
- * - 脱离 16,000 字符规则池，仅在 handlePrompt 中注入一次。
+ * - L2 自动预热仅允许 health === "healthy" 且 mode === "read" 且 autoPrewarm === true 的技能。
  */
-export function renderSkillsCatalogForPrompt(
+export function renderSkillsCatalogWithMeta(
   tenant: WorkspaceRoot,
   cwd: string,
   input: {
@@ -796,14 +863,15 @@ export function renderSkillsCatalogForPrompt(
     files?: string[];
     runnerRole?: SkillRunnerRole;
     budgetTokens?: number;
+    recordPrewarm?: boolean;
   } = {},
-): string {
+): SkillsCatalogRenderResult {
   const role = input.runnerRole ?? "foreground";
-  if (role === "colleague_qa" || role === "ingest") return "";
+  if (role === "colleague_qa" || role === "ingest") return { prompt: "", prewarmedSkills: [] };
   const all = listSkills(tenant, cwd, { runnerRole: role, includeChannelGuards: false }).filter(
     (s) => s.kind !== "channel_guard" && s.health !== "tampered" && s.health !== "disabled",
   );
-  if (!all.length) return "";
+  if (!all.length) return { prompt: "", prewarmedSkills: [] };
 
   const query = input.query ?? "";
   const files = input.files ?? [];
@@ -834,21 +902,29 @@ export function renderSkillsCatalogForPrompt(
     usedTokens += cost;
   }
 
-  if (!lines.length) return "";
+  if (!lines.length) return { prompt: "", prewarmedSkills: [] };
   let out = `${header}\n${lines.join("\n")}\n${footer}`;
+  const prewarmedSkills: Array<{ id: string; name: string }> = [];
 
-  // L2 高置信度自动预热（Auto-Prewarm）：仅对显式允许 autoPrewarm 且 mode=read 的健康技能生效，
+  // L2 高置信度自动预热（Auto-Prewarm）：仅对显式允许 autoPrewarm 且 mode=read 且未停用/未篡改的技能生效，
   // 且只增加 prewarmedCount，绝不增加 viewedCount 或 adoptedCount。
+  // 注：声明式技能若存在 broken_ref 则不触发自动预热；内置技能（BUILTIN_SKILLS）代码内嵌在网关中，不受临时目录缺少引用文件影响。
   const prewarmCandidate = ranked.find(
     (r) =>
       r.skill.autoPrewarm &&
       r.skill.mode === "read" &&
-      (r.skill.health === "healthy" || r.skill.health === "broken_ref") &&
+      (r.skill.health === "healthy" || (r.skill.kind !== "declarative_skill" && r.skill.health === "broken_ref")) &&
       r.score >= 4,
   );
   if (prewarmCandidate) {
-    const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
-    recordStatEvent(ref, prewarmCandidate.skill.id, "prewarm");
+    if (input.recordPrewarm !== false) {
+      const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
+      recordStatEvent(ref, prewarmCandidate.skill.id, "prewarm");
+    }
+    prewarmedSkills.push({
+      id: prewarmCandidate.skill.id,
+      name: prewarmCandidate.skill.name,
+    });
     const rawPrewarm = prewarmCandidate.skill.body.trim();
     const maxPrewarmChars = Math.min(1_000, SKILL_PREWARM_TOKEN_BUDGET * 2);
     const clippedPrewarm =
@@ -856,7 +932,20 @@ export function renderSkillsCatalogForPrompt(
     out += `\n<skill_prewarm id="${prewarmCandidate.skill.id}" trust="reference_only">\n${clippedPrewarm}\n</skill_prewarm>`;
   }
 
-  return out;
+  return { prompt: out, prewarmedSkills };
+}
+
+export function renderSkillsCatalogForPrompt(
+  tenant: WorkspaceRoot,
+  cwd: string,
+  input: {
+    query?: string;
+    files?: string[];
+    runnerRole?: SkillRunnerRole;
+    budgetTokens?: number;
+  } = {},
+): string {
+  return renderSkillsCatalogWithMeta(tenant, cwd, input).prompt;
 }
 
 // ---------- 按需调用 (skill_use)、采用续期 (skill_mark_used) 与健康核验 (skill_verify) ----------
@@ -913,6 +1002,13 @@ export function useSkill(
       health: "tampered",
     };
   }
+  if (found.health === "disabled") {
+    return {
+      ok: false,
+      error: found.healthReason || `技能「${found.name}」（${targetId}）当前已停用，无法调用。`,
+      health: "disabled",
+    };
+  }
 
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
   const stats = recordStatEvent(ref, found.id, "view");
@@ -958,6 +1054,7 @@ export function markSkillUsed(
   const found = all.find((item) => item.id === targetId);
   if (!found) return { ok: false, error: `未找到可标记采用的技能：${targetId}` };
   if (found.health === "tampered") return { ok: false, error: "该技能完整性校验异常，不能续期计数。" };
+  if (found.health === "disabled") return { ok: false, error: "该技能当前已停用，不能续期计数。" };
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
   const stats = recordStatEvent(ref, found.id, "adopt");
   return { ok: true, id: found.id, stats };
@@ -1026,33 +1123,29 @@ function readPersonalNeedlesForSkill(ref: TenantRef) {
   return needles.map((item) => item.trim()).filter((needle) => needle.length >= 8);
 }
 
-export function proposeSkillPackage(
-  tenant: WorkspaceRoot,
-  cwd: string,
-  input: ProposeSkillInput,
-): ProposeSkillResult {
-  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
-  const skillId = (input.id || "").trim();
-  if (!SKILL_ID_RE.test(skillId)) {
-    return { ok: false, error: "技能 ID 格式不合法：必须为 2~48 位小写字母、数字或连字符（如 ios-swiftui-motion）。" };
-  }
-  if (BUILTIN_SKILLS.some((b) => b.id === skillId && b.kind === "channel_guard")) {
-    return { ok: false, error: `不能覆盖平台内置通道守卫技能：${skillId}` };
-  }
-
-  const base = realOr(tenant.workspaceRoot);
-  const cwdReal = realOr(cwd);
-  const targetDir = realOr(resolve(cwdReal, input.path?.trim() || "."));
-  if (!isInside(targetDir, cwdReal) || !isInside(targetDir, base) || targetDir === base) {
-    return {
-      ok: false,
-      error: "声明式技能包只能创建在当前子工作区或其子目录内，严禁写到 USER 根目录或工作区外部。",
-    };
-  }
-  if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) {
-    return { ok: false, error: `目标目录不存在：${input.path || "."}` };
-  }
-
+/**
+ * 提案与在线编辑共用的五道静态安全门禁：
+ * 1) 必填与体积上限；2) 密钥与个人隐私检测；3) 工具白名单校验；4) 危险系统命令拦截；5) 引用路径安全检查
+ */
+export function runSkillStaticGates(
+  ref: TenantRef,
+  input: {
+    name: string;
+    summary: string;
+    body: string;
+    requiredTools?: string[];
+    refs?: string[];
+  },
+):
+  | {
+      ok: true;
+      name: string;
+      summary: string;
+      body: string;
+      requiredTools: string[];
+      refs: string[];
+    }
+  | { ok: false; error: string } {
   const name = (input.name || "").trim();
   const summary = (input.summary || "").trim();
   const body = (input.body || "").trim();
@@ -1090,11 +1183,58 @@ export function proposeSkillPackage(
     };
   }
 
-  // 静态安全门禁 4：引用路径与符号链接检查
+  // 静态安全门禁 4：引用路径检查
   const refs = [...new Set((input.refs ?? []).map((r) => r.trim().replace(/\\/g, "/")).filter(Boolean))];
   if (refs.some((r) => r.includes("..") || r.startsWith("/"))) {
     return { ok: false, error: "静态门禁拦截：refs 引用路径不能为绝对路径或包含 ..。" };
   }
+
+  return {
+    ok: true,
+    name,
+    summary,
+    body,
+    requiredTools,
+    refs,
+  };
+}
+
+export function proposeSkillPackage(
+  tenant: WorkspaceRoot,
+  cwd: string,
+  input: ProposeSkillInput,
+): ProposeSkillResult {
+  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
+  const skillId = (input.id || "").trim();
+  if (!SKILL_ID_RE.test(skillId)) {
+    return { ok: false, error: "技能 ID 格式不合法：必须为 2~48 位小写字母、数字或连字符（如 ios-swiftui-motion）。" };
+  }
+  if (BUILTIN_SKILLS.some((b) => b.id === skillId && b.kind === "channel_guard")) {
+    return { ok: false, error: `不能覆盖平台内置通道守卫技能：${skillId}` };
+  }
+
+  const base = realOr(tenant.workspaceRoot);
+  const cwdReal = realOr(cwd);
+  const targetDir = realOr(resolve(cwdReal, input.path?.trim() || "."));
+  if (!isInside(targetDir, cwdReal) || !isInside(targetDir, base) || targetDir === base) {
+    return {
+      ok: false,
+      error: "声明式技能包只能创建在当前子工作区或其子目录内，严禁写到 USER 根目录或工作区外部。",
+    };
+  }
+  if (!existsSync(targetDir) || !statSync(targetDir).isDirectory()) {
+    return { ok: false, error: `目标目录不存在：${input.path || "."}` };
+  }
+
+  const gate = runSkillStaticGates(ref, {
+    name: input.name,
+    summary: input.summary,
+    body: input.body,
+    requiredTools: input.requiredTools,
+    refs: input.refs,
+  });
+  if (!gate.ok) return gate;
+  const { name, summary, body, requiredTools, refs } = gate;
 
   const jieboDir = resolve(targetDir, ".jiebo");
   const stagingRoot = resolve(jieboDir, "skills-staging");
@@ -1165,6 +1305,14 @@ export function proposeSkillPackage(
     else store.proposals.unshift(item);
     writeJson(pFile, store);
     return item;
+  });
+
+  postInbox(ref, {
+    kind: "approval",
+    title: `新技能待启用：${name}`,
+    body: `${summary}\n作用文件夹：${layer} · 权限：${mode === "write" ? "读写" : "只读"} · 已通过安全门禁（#${sha256.slice(0, 8)}）`,
+    key: `skill-proposal:${proposal.id}:${proposal.rev}`,
+    chatId: input.chatId,
   });
 
   return {
@@ -1292,7 +1440,16 @@ export function decideSkillProposal(
     };
   });
 
-  if (!tx.ok || !input.approve || !tx.proposal.promotedFromMemoryIds.length) return tx;
+  if (!tx.ok) return tx;
+
+  const relatedInboxIds = listInbox(ref, 300)
+    .filter((item) => !item.read && item.key?.startsWith(`skill-proposal:${tx.proposal.id}:`))
+    .map((item) => item.id);
+  if (relatedInboxIds.length > 0) {
+    markInboxRead(ref, relatedInboxIds);
+  }
+
+  if (!input.approve || !tx.proposal.promotedFromMemoryIds.length) return tx;
   const targetDir = resolve(base, tx.proposal.targetDir);
   const promoted = markWorkspaceMemoriesPromoted(tenant, targetDir, tx.proposal.promotedFromMemoryIds);
   return {
@@ -1300,4 +1457,196 @@ export function decideSkillProposal(
     proposal: tx.proposal,
     promotedMemoryIds: promoted.updatedIds,
   };
+}
+
+// ---------- v2.2：技能置顶/启停/预热开关（skill_update_meta）与在线编辑重签（skill_edit_approved） ----------
+
+export function updateSkillMeta(
+  tenant: WorkspaceRoot,
+  cwd: string,
+  input: {
+    skillId: string;
+    entry?: string;
+    pinned?: boolean;
+    autoPrewarm?: boolean;
+    disabled?: boolean;
+    workspaceNames?: string[];
+  },
+): { ok: true; key: string; override: SkillMetaOverride } | { ok: false; error: string } {
+  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
+  const targetId = (input.skillId || "").trim();
+  if (!targetId) return { ok: false, error: "skillId 必填。" };
+
+  const all = listSkills(tenant, cwd, {
+    runnerRole: "foreground",
+    includeChannelGuards: true,
+    workspaceNames: input.workspaceNames,
+  });
+  const found = all.find(
+    (s) => s.id === targetId && (!input.entry?.trim() || s.entry === input.entry.trim()),
+  );
+  if (!found) {
+    return { ok: false, error: `找不到技能：${targetId}` };
+  }
+  if (found.kind === "channel_guard") {
+    return { ok: false, error: "平台后台通道守卫由网关自动运行，不支持手动停用、置顶或预热开关。" };
+  }
+  if (found.health === "tampered") {
+    return { ok: false, error: "该技能未通过 SHA-256 完整性锁校验，请先修复或重新审批后再修改配置。" };
+  }
+  if (input.autoPrewarm === true && found.mode === "write") {
+    return { ok: false, error: "涉及写操作（mode=write）的技能为安全起见不允许开启自动预热。" };
+  }
+
+  const key = overrideKeyOf(found.kind, found.id, found.entry);
+  const oFile = overridesFile(ref);
+  const override = withFileLockSync(oFile, () => {
+    const store = readOverrideStore(ref);
+    const prev = store.overrides[key] ?? { updatedAt: new Date().toISOString() };
+    const next: SkillMetaOverride = {
+      ...prev,
+      updatedAt: new Date().toISOString(),
+    };
+    if (typeof input.pinned === "boolean") next.pinned = input.pinned;
+    if (typeof input.autoPrewarm === "boolean") next.autoPrewarm = input.autoPrewarm;
+    if (typeof input.disabled === "boolean") next.disabled = input.disabled;
+    store.overrides[key] = next;
+    writeJson(oFile, store);
+    return next;
+  });
+
+  return { ok: true, key, override };
+}
+
+export function editApprovedDeclarativeSkill(
+  tenant: WorkspaceRoot,
+  cwd: string,
+  input: {
+    skillId: string;
+    entry: string;
+    expectedSha256: string;
+    name: string;
+    summary: string;
+    keywords?: string[];
+    globs?: string[];
+    requiredTools?: string[];
+    refs?: string[];
+    body: string;
+    workspaceNames?: string[];
+  },
+): { ok: true; sha256: string } | { ok: false; error: string } {
+  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
+  const skillId = (input.skillId || "").trim();
+  const entry = (input.entry || "").trim().replace(/\\/g, "/");
+  const expectedSha = (input.expectedSha256 || "").trim();
+  if (!SKILL_ID_RE.test(skillId) || !entry || !expectedSha) {
+    return { ok: false, error: "skillId、entry 与 expectedSha256 均必填。" };
+  }
+  if (BUILTIN_SKILLS.some((b) => b.id === skillId)) {
+    return { ok: false, error: "内置平台或手册级技能（BUILTIN_SKILLS）为代码常量，不支持在线编辑覆写。" };
+  }
+  const suffix = `/.jiebo/skills/${skillId}/SKILL.md`;
+  if (!entry.endsWith(suffix) || entry.startsWith("/") || entry.includes("..")) {
+    return { ok: false, error: "entry 路径格式不合法，必须为工作区内声明式技能路径。" };
+  }
+
+  const base = realOr(tenant.workspaceRoot);
+  const layer = entry.slice(0, entry.length - suffix.length);
+  if (!layer) return { ok: false, error: "严禁在 USER 根目录下编辑技能。" };
+  const targetDir = realOr(resolve(base, layer));
+  if (!isInside(targetDir, base) || targetDir === base) {
+    return { ok: false, error: "技能目标目录越界。" };
+  }
+
+  const gate = runSkillStaticGates(ref, {
+    name: input.name,
+    summary: input.summary,
+    body: input.body,
+    requiredTools: input.requiredTools,
+    refs: input.refs,
+  });
+  if (!gate.ok) return gate;
+
+  const jieboDir = resolve(targetDir, ".jiebo");
+  const skillsDir = resolve(jieboDir, "skills");
+  const finalSkillDir = resolve(skillsDir, skillId);
+  const finalFile = resolve(finalSkillDir, "SKILL.md");
+  const stagingRoot = resolve(jieboDir, "skills-staging");
+  const stagingSkillDir = resolve(stagingRoot, skillId);
+  const stagingFile = resolve(stagingSkillDir, "SKILL.md");
+  try {
+    for (const p of [jieboDir, skillsDir, finalSkillDir, finalFile, stagingRoot, stagingSkillDir, stagingFile]) {
+      rejectSymlink(p);
+    }
+  } catch (err) {
+    return { ok: false, error: `安全拦截：路径存在符号链接（${err instanceof Error ? err.message : String(err)}）。` };
+  }
+
+  const relSkillPath = `.jiebo/skills/${skillId}/SKILL.md`;
+  const lFile = lockFile(ref);
+  return withFileLockSync(lFile, () => {
+    const locks = readLockStore(ref);
+    const locked = locks.locks[entry];
+    if (!locked) {
+      return { ok: false, error: "该技能缺少审批锁记录（skill-lock.json），禁止直接在线重签未审文件。" };
+    }
+    const readCurrent = scopedRead.readFileAtScope(targetDir, relSkillPath, MAX_SKILL_FILE_BYTES);
+    if (!readCurrent.ok) {
+      return { ok: false, error: `无法读取当前 SKILL.md（${readCurrent.message}）。` };
+    }
+    const currentDiskSha = sha256Hex(readCurrent.text);
+    if (locked.sha256 !== currentDiskSha) {
+      return {
+        ok: false,
+        error: "磁盘上的 SKILL.md 已被未授权篡改（与审批锁不一致），禁止通过在线编辑直接漂白，请重新提交审批。",
+      };
+    }
+    if (currentDiskSha !== expectedSha) {
+      return {
+        ok: false,
+        error: "技能内容已被其他客户端修改（SHA-256 版本冲突），请刷新后重试。",
+      };
+    }
+
+    const parsedCurrent = parseSkillMarkdown(readCurrent.text);
+    const keywords =
+      input.keywords !== undefined
+        ? [...new Set(input.keywords.map((k) => k.trim()).filter(Boolean))]
+        : parsedCurrent.keywords;
+    const globs =
+      input.globs !== undefined
+        ? [...new Set(input.globs.map((g) => g.trim()).filter(Boolean))]
+        : parsedCurrent.globs;
+
+    const formattedMarkdown = formatSkillMarkdown({
+      id: skillId,
+      name: gate.name,
+      summary: gate.summary,
+      scope: parsedCurrent.scope === "repo" ? "repo" : "workspace",
+      mode: parsedCurrent.mode ?? "read",
+      keywords,
+      globs,
+      requiredTools: gate.requiredTools,
+      refs: gate.refs,
+      pinned: parsedCurrent.pinned,
+      body: gate.body,
+    });
+    const nextSha = sha256Hex(formattedMarkdown);
+
+    // 先写入 staging 验证落盘，再在同一把 lockFile 互斥锁内原子替换正式文件并更新锁
+    atomicWriteFileSync(stagingFile, formattedMarkdown, { mkdir: true });
+    atomicWriteFileSync(finalFile, formattedMarkdown, { mkdir: true });
+    rmSync(dirname(stagingFile), { recursive: true, force: true });
+
+    locks.locks[entry] = {
+      skillId,
+      sha256: nextSha,
+      approvedAt: new Date().toISOString(),
+      proposalId: locked.proposalId || "inline-edit",
+      rev: (locked.rev || 1) + 1,
+    };
+    writeJson(lFile, locks);
+
+    return { ok: true, sha256: nextSha };
+  });
 }

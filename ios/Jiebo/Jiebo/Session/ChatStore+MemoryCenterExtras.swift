@@ -79,6 +79,60 @@ extension ChatStore {
         ))
     }
 
+    func memoryCenterUpdateSkillMeta(
+        skillId: String,
+        entry: String,
+        pinned: Bool? = nil,
+        autoPrewarm: Bool? = nil,
+        disabled: Bool? = nil
+    ) {
+        guard memoryCenterCanWrite() else { return }
+        let reqId = UUID().uuidString
+        var next = memoryCenterExtrasStorage
+        next.skillsDecideReqById[skillId] = reqId
+        next.skillsError = nil
+        memoryCenterExtrasStorage = next
+        var args: [String: JSONValue] = [
+            "skillId": .string(skillId),
+            "entry": .string(entry)
+        ]
+        if let pinned { args["pinned"] = .bool(pinned) }
+        if let autoPrewarm { args["autoPrewarm"] = .bool(autoPrewarm) }
+        if let disabled { args["disabled"] = .bool(disabled) }
+        send(.assistantOp(op: "skill_update_meta", args: args, reqId: reqId))
+    }
+
+    func memoryCenterEditApprovedSkill(
+        skill: SkillFactorySummaryRow,
+        name: String,
+        summary: String,
+        keywords: [String],
+        body: String
+    ) {
+        guard memoryCenterCanWrite(), let sha = skill.sha256, !sha.isEmpty else { return }
+        let reqId = UUID().uuidString
+        var next = memoryCenterExtrasStorage
+        next.skillsDecideReqById[skill.id] = reqId
+        next.skillsError = nil
+        memoryCenterExtrasStorage = next
+        send(.assistantOp(
+            op: "skill_edit_approved",
+            args: [
+                "skillId": .string(skill.id),
+                "entry": .string(skill.entry),
+                "expectedSha256": .string(sha),
+                "name": .string(name),
+                "summary": .string(summary),
+                "keywords": .array(keywords.map { .string($0) }),
+                "globs": .array(skill.globs.map { .string($0) }),
+                "requiredTools": .array(skill.requiredTools.map { .string($0) }),
+                "refs": .array(skill.refs.map { .string($0) }),
+                "body": .string(body)
+            ],
+            reqId: reqId
+        ))
+    }
+
     func memoryCenterLoadActivity(scope: String? = nil, action: String? = nil, append: Bool = false) {
         guard connected, unlocked else { return }
         let reqId = UUID().uuidString
@@ -276,7 +330,7 @@ extension ChatStore {
             }
             memoryCenterExtrasStorage = next
             return true
-        case "skill_proposal_decide":
+        case "skill_proposal_decide", "skill_update_meta", "skill_edit_approved":
             var next = memoryCenterExtrasStorage
             next.skillsDecideReqById = next.skillsDecideReqById.filter { $0.value != reqId }
             if ok, let parsed = SkillFactoryStatusData.from(data) {
@@ -284,7 +338,7 @@ extension ChatStore {
                 next.skillProposals = parsed.proposals
                 next.skillsError = nil
             } else {
-                next.skillsError = error ?? (ok ? "数据格式错误" : "技能提案处理失败")
+                next.skillsError = error ?? (ok ? "数据格式错误" : "技能工厂操作失败")
             }
             memoryCenterExtrasStorage = next
             return true

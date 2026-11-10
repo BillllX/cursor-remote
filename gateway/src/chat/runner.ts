@@ -17,7 +17,7 @@ import {
   toolFingerprint,
 } from "../../../shared/policy.ts";
 import type { AgentMode, PolicyId } from "../../../shared/protocol.ts";
-import { clockLine, noteWorkspaceTurnStart, skillsCatalogFor, userRootPreamble } from "../assistant/service.ts";
+import { clockLine, noteWorkspaceTurnStart, skillsCatalogWithMetaFor, userRootPreamble } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
 import { broadcastFileChanged } from "../fileEvents.ts";
 import { log, slotLog } from "../log.ts";
@@ -291,13 +291,18 @@ export async function handlePrompt(
   const fence = workspaceFenceForTenant(conn.tenant);
   const skillRunnerRole = mode === "ask" || mode === "plan" ? ("ask_plan" as const) : ("foreground" as const);
   let skillsBlock = "";
-  if (conn.tenant) {
+  let prewarmedSkills: Array<{ id: string; name: string }> = [];
+  const consumesSkillsPrompt = !externalEarly || Boolean(externalEarly.provider.tools);
+  if (conn.tenant && consumesSkillsPrompt) {
     try {
-      skillsBlock = skillsCatalogFor(conn.tenant, cwd, {
+      const rendered = skillsCatalogWithMetaFor(conn.tenant, cwd, {
         query: userText,
         files,
         runnerRole: skillRunnerRole,
+        recordPrewarm: !autoApprove && !keepTranscript,
       });
+      skillsBlock = rendered.prompt;
+      prewarmedSkills = rendered.prewarmedSkills;
     } catch (err) {
       slotLog(slot).error("skills catalog", err);
     }
@@ -373,6 +378,7 @@ export async function handlePrompt(
       confirmWrites,
       autoApprove,
       assistantBlock: externalEarly ? assistantBlock || undefined : undefined,
+      prewarmedSkills: prewarmedSkills.length ? prewarmedSkills : undefined,
     });
     drainPending(ws, conn, slot, epoch);
     return;
@@ -722,6 +728,7 @@ export async function handlePrompt(
           mode,
           policy: slot.policy,
           dialect: slot.dialect,
+          ...(prewarmedSkills.length ? { prewarmedSkills } : {}),
         });
       } else {
         send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });

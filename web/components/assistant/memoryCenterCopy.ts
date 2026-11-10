@@ -3,6 +3,7 @@ import type { InjectionDiagnostics, MemoryCenterSuggestionEntry, WorkspaceMemory
 export const MEMORY_DESTINATIONS = [
   { id: "me", label: "记得的我" },
   { id: "folder", label: "这个文件夹" },
+  { id: "skills", label: "技能工厂" },
   { id: "review", label: "要你看一眼" },
   { id: "more", label: "更多" },
 ] as const;
@@ -105,11 +106,14 @@ export function folderMenuLabel(menu: FolderMenu): string {
   return FOLDER_MENUS.find((row) => row.id === menu)?.label ?? "会用到的";
 }
 
-/** 打开记忆时：从工作区进来停在这个文件夹，其余停在记得的我。 */
+/** 打开记忆时：从工作区进来停在这个文件夹，指定 skills 时直达技能工厂，其余停在记得的我。 */
 export function openingDestination(initialScopeId?: string): {
   destination: MemoryDestination;
   folderId: string | null;
 } {
+  if (initialScopeId === "skills") {
+    return { destination: "skills", folderId: null };
+  }
   if (
     initialScopeId &&
     initialScopeId !== "personal" &&

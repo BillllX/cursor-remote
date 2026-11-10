@@ -2054,6 +2054,26 @@ export default function ChatApp() {
     .filter((id) => layerOpen[id])
     .join("|");
   useEffect(() => {
+    const onSkillDecide = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { proposalId?: string; approve?: boolean; expectedRev?: number; decisionNote?: string }
+        | undefined;
+      if (!detail?.proposalId) return;
+      send(
+        buildAssistantOpMessage("skill_proposal_decide", {
+          proposalId: detail.proposalId,
+          approve: Boolean(detail.approve),
+          expectedRev: typeof detail.expectedRev === "number" ? detail.expectedRev : undefined,
+          decisionNote: detail.decisionNote,
+        }),
+      );
+      setNotice(detail.approve ? "已批准并启用新技能。" : "已拒绝该技能草案。");
+    };
+    window.addEventListener("jiebo:skill-proposal-decide", onSkillDecide);
+    return () => window.removeEventListener("jiebo:skill-proposal-decide", onSkillDecide);
+  }, [send]);
+
+  useEffect(() => {
     const seqs = layerSeqRef.current;
     const open = new Set(layerOpenKey ? layerOpenKey.split("|") : []);
     let next = Math.max(0, ...Object.values(seqs));

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
   AssistantMemoryEntry,
@@ -10,6 +10,8 @@ import type {
   InjectionDiagnostics,
   MemoryCenterSearchHit,
   RuleFile,
+  SkillFactoryProposalItem,
+  SkillFactorySummaryItem,
   WorkspaceMemoryItem,
 } from "@shared/protocol";
 import styles from "./memoryCenter.module.css";
@@ -55,7 +57,7 @@ import {
 import MemoryCenterWorkspaceEditor from "./MemoryCenterWorkspaceEditor";
 import { MemoryCenterActivityPane, MemoryCenterSuggestionsPane } from "./MemoryCenterExtrasPanes";
 import MemoryCenterImportPane from "./MemoryCenterImportPane";
-import MemoryCenterSkillsPane from "./MemoryCenterSkillsPane";
+import MemoryCenterSkillsPane, { MemoryCenterSkillDetail } from "./MemoryCenterSkillsPane";
 import { useMemoryCenter } from "./useMemoryCenter";
 
 type Props = {
@@ -69,6 +71,7 @@ type Props = {
   lastResult: AssistantResultMessage | null;
   resultTick: number;
   onNotice: (text: string) => void;
+  onHandoffToAssistant?: (prompt: string) => void;
 };
 
 type Tier = "wide" | "mid" | "narrow";
@@ -145,6 +148,7 @@ export default function MemoryCenterPanel({
   lastResult,
   resultTick,
   onNotice,
+  onHandoffToAssistant,
 }: Props) {
   const mc = useMemoryCenter({ active, send, lastResult, resultTick });
   const [tier, setTier] = useState<Tier>("wide");
@@ -155,6 +159,9 @@ export default function MemoryCenterPanel({
   const [switchingFolder, setSwitchingFolder] = useState(false);
   const [composer, setComposer] = useState<"create" | "edit" | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [skillRows, setSkillRows] = useState<SkillFactorySummaryItem[]>([]);
+  const [skillProposals, setSkillProposals] = useState<SkillFactoryProposalItem[]>([]);
+  const [decidingSkillId, setDecidingSkillId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const middleRef = useRef<HTMLDivElement>(null);
@@ -199,7 +206,53 @@ export default function MemoryCenterPanel({
     setSwitchingFolder(false);
     autoSelectedFolder.current = null;
     mc.loadSuggestions();
+    op("skill_factory_status", { workspace: opened.folderId || undefined });
   }, [active, initialScopeId, openRequest]);
+
+  useEffect(() => {
+    if (!lastResult) return;
+    if (
+      lastResult.op !== "skill_factory_status" &&
+      lastResult.op !== "skill_proposal_decide" &&
+      lastResult.op !== "skill_update_meta" &&
+      lastResult.op !== "skill_edit_approved"
+    ) {
+      return;
+    }
+    setDecidingSkillId(null);
+    if (!lastResult.ok) {
+      if (lastResult.error) onNotice(lastResult.error);
+      return;
+    }
+    if (lastResult.data) {
+      setSkillRows(lastResult.data.skills ?? []);
+      setSkillProposals(lastResult.data.proposals ?? []);
+    }
+    if (lastResult.op === "skill_update_meta") {
+      onNotice("技能设置已更新。");
+    } else if (lastResult.op === "skill_edit_approved") {
+      onNotice("技能已保存并重签 SHA-256 完整性锁。");
+    }
+  }, [lastResult, resultTick, onNotice]);
+
+  const handleSkillsDataChange = useCallback(
+    (nextSkills: SkillFactorySummaryItem[], nextProposals: SkillFactoryProposalItem[]) => {
+      setSkillRows(nextSkills);
+      setSkillProposals(nextProposals);
+    },
+    [],
+  );
+
+  const handleUseSkillInChat = useCallback(
+    (sk: SkillFactorySummaryItem) => {
+      if (onHandoffToAssistant) {
+        onHandoffToAssistant(`请调用技能「${sk.name}」（${sk.id}）协助处理当前任务。`);
+      } else {
+        onNotice(`可在对话中输入：请调用技能 ${sk.id}`);
+      }
+    },
+    [onHandoffToAssistant, onNotice],
+  );
 
   useEffect(() => {
     if (!active || !mc.data.overview) return;
@@ -248,6 +301,10 @@ export default function MemoryCenterPanel({
   }, [destination, folderId, folderDetail, composer]);
 
   const reviewCount = mc.activity.suggestions?.entries.length ?? 0;
+  const skillPendingCount = useMemo(
+    () => skillProposals.filter((p) => p.status === "pending").length,
+    [skillProposals],
+  );
 
   function pickDestination(next: MemoryDestination) {
     mc.clearSearch();
@@ -287,9 +344,14 @@ export default function MemoryCenterPanel({
       const entries = memory.entries.filter((entry) => !entry.invalidAt).map((entry) => `entry:${entry.id}`);
       return [...fields, ...entries];
     }
+    if (destination === "skills") {
+      const propKeys = skillProposals.filter((p) => p.status === "pending").map((p) => `prop:${p.id}`);
+      const skKeys = skillRows.map((s) => `skill:${s.id}`);
+      return [...propKeys, ...skKeys];
+    }
     if (destination === "more" && !morePage) return MORE_PAGES.map((page) => `more:${page.id}`);
     return [];
-  }, [searching, mc.data.search, destination, folderItems, memory, morePage]);
+  }, [searching, mc.data.search, destination, folderItems, memory, morePage, skillProposals, skillRows]);
   rowKeys.current = visibleKeys;
 
   useEffect(() => {
@@ -605,6 +667,13 @@ export default function MemoryCenterPanel({
             lastResult={lastResult}
             resultTick={resultTick}
             onNotice={onNotice}
+            selectedKey={mc.ui.selectedKey}
+            onSelectKey={(key) => {
+              selectRow(key);
+              openDetail();
+            }}
+            onDataChange={handleSkillsDataChange}
+            onUseSkillInChat={handleUseSkillInChat}
           />
         ) : null}
         {morePage === "activity" ? (
@@ -666,6 +735,27 @@ export default function MemoryCenterPanel({
     if (searching) return renderSearch();
     if (destination === "me") return renderMe();
     if (destination === "folder") return renderFolder();
+    if (destination === "skills") {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>技能工厂</h2>
+          <MemoryCenterSkillsPane
+            folderId={folderId}
+            op={op}
+            lastResult={lastResult}
+            resultTick={resultTick}
+            onNotice={onNotice}
+            selectedKey={mc.ui.selectedKey}
+            onSelectKey={(key) => {
+              selectRow(key);
+              openDetail();
+            }}
+            onDataChange={handleSkillsDataChange}
+            onUseSkillInChat={handleUseSkillInChat}
+          />
+        </>
+      );
+    }
     if (destination === "review") {
       return (
         <>
@@ -690,6 +780,50 @@ export default function MemoryCenterPanel({
       if (hit) return <HitDetail hit={hit} scopeLabel={resolveScopeLabel(hit.scopeId, scopes)} />;
     }
     if (destination === "me") return renderMeDetail();
+    if (destination === "skills" || (destination === "more" && morePage === "skills")) {
+      return (
+        <MemoryCenterSkillDetail
+          selectedKey={mc.ui.selectedKey}
+          skills={skillRows}
+          proposals={skillProposals}
+          decidingId={decidingSkillId}
+          onDecide={(prop, approve) => {
+            setDecidingSkillId(prop.id);
+            op("skill_proposal_decide", {
+              proposalId: prop.id,
+              approve,
+              expectedRev: prop.rev,
+              decisionNote: approve ? "在技能工厂详情栏批准上架" : "在技能工厂详情栏拒绝",
+            });
+          }}
+          onUseSkillInChat={handleUseSkillInChat}
+          onUpdateMeta={(sk, patch) => {
+            op("skill_update_meta", {
+              skillId: sk.id,
+              entry: sk.entry,
+              ...patch,
+              workspace: folderId || undefined,
+            });
+          }}
+          onEditApproved={(sk, draft) => {
+            if (!sk.sha256) return;
+            op("skill_edit_approved", {
+              skillId: sk.id,
+              entry: sk.entry,
+              expectedSha256: sk.sha256,
+              name: draft.name,
+              summary: draft.summary,
+              keywords: draft.keywords,
+              globs: sk.triggers.globs,
+              requiredTools: sk.requiredTools,
+              refs: sk.refs,
+              body: draft.body,
+              workspace: folderId || undefined,
+            });
+          }}
+        />
+      );
+    }
     if (destination === "more" && morePage === "rules" && mc.ui.selectedKey?.startsWith("rule:")) {
       const rel = mc.ui.selectedKey.slice(5);
       const rule = folderDetail?.rules.find((row) => row.relPath === rel);
@@ -881,6 +1015,7 @@ export default function MemoryCenterPanel({
             >
               {dest.label}
               {dest.id === "review" && reviewCount ? <span className={styles.clayCount}> {reviewCount}</span> : null}
+              {dest.id === "skills" && skillPendingCount ? <span className={styles.clayCount}> {skillPendingCount}</span> : null}
             </button>
           ))}
         </div>
@@ -904,6 +1039,7 @@ export default function MemoryCenterPanel({
                   {dest.id === "folder" && folder ? <span className={styles.subline}> {folder.label}</span> : null}
                 </span>
                 {dest.id === "review" && reviewCount ? <span className={styles.clayCount}>{reviewCount}</span> : null}
+                {dest.id === "skills" && skillPendingCount ? <span className={styles.clayCount}>{skillPendingCount}</span> : null}
               </button>
             ))}
             <TidyControl busy={tidyBusy} note={tidyNote} onTidy={() => { setTidyBusy(true); setTidyNote(null); op("memory_tidy"); }} />

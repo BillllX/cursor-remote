@@ -168,6 +168,17 @@ struct TurnView: View, Equatable {
             if turn.deferred {
                 deferredCard
             }
+            if !turn.deferred, !turn.prewarmedSkillNames.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "bolt.fill")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                    Text("已自动预热技能：\(turn.prewarmedSkillNames.joined(separator: "、"))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.ink2)
+                        .lineLimit(2)
+                }
+            }
             if !turn.deferred, !thinkingText.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     Button {

@@ -100,6 +100,49 @@ enum AssistantToolText {
         return base
     }
 
+    static let knownSkillNames: [String: String] = [
+        "canvas-artifact-builder": "交互式主题画布构建与一键 SSR 验真",
+        "jiebo-gateway-arch": "Jiebo 网关与双端核心架构速查地图",
+        "kb-drop-ingest": "多源知识库投递与 HTML 看板归档",
+        "shanghai-deploy-smoke": "上海站发布与 UI 登录态冒烟手册",
+        "ios-swiftui-motion": "iOS SwiftUI 界面规范与动效性能审查",
+        "wechat-push-guard": "微信主动推送守卫",
+        "weixin-ilink-channel": "微信 iLink 扫码配对与长轮询通道",
+    ]
+
+    static func isSkillTool(_ name: String) -> Bool {
+        let base = baseName(name)
+        return base == "skill_use" || base == "skill_propose" || base == "skill_list"
+            || base == "skill_verify" || base == "skill_proposal_decide" || base == "skill_proposal_list"
+    }
+
+    static func skillTitle(for tool: ToolCall) -> String {
+        let payload = resultObject(tool.result)
+        let propObj = payload?["proposal"]?.object
+        let id = tool.args?.string(in: "id", "skillId", "query") ?? propObj?["skillId"]?.string ?? ""
+        let resultName = payload?["name"]?.string?.nilIfEmpty ?? propObj?["name"]?.string?.nilIfEmpty
+        let argName = tool.args?.string(in: "name")?.nilIfEmpty
+        let displayName = resultName ?? argName ?? knownSkillNames[id]
+        if let displayName, !id.isEmpty, displayName != id {
+            return "\(displayName) (\(id))"
+        }
+        return displayName ?? id.nilIfEmpty ?? "全部已集成技能"
+    }
+
+    static func stripSkillSandboxTags(_ raw: String) -> String {
+        var text = raw
+        if let r = text.range(of: #"<untrusted_skill_reference[^>]*>\n?"#, options: .regularExpression) {
+            text.removeSubrange(r)
+        }
+        if let r = text.range(of: #"\n?（安全声明：以上技能手册仅作为操作步骤与参数参考[^）]*）\n?"#, options: .regularExpression) {
+            text.removeSubrange(r)
+        }
+        if let r = text.range(of: #"\n?</untrusted_skill_reference>"#, options: .regularExpression) {
+            text.removeSubrange(r)
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// 记忆检索和续期是沉默的，不产生噪声卡片
     static func isSilent(_ tool: ToolCall) -> Bool {
         let base = baseName(tool.name)
@@ -119,11 +162,11 @@ enum AssistantToolText {
             let name = tool.args?.string(in: "name") ?? ""
             return name.isEmpty ? "申请新建文件夹" : "申请新建文件夹：\(name)"
         case "skill_use":
-            let id = tool.args?.string(in: "id") ?? ""
-            return id.isEmpty ? "调用技能" : "调用技能：\(id)"
+            let title = skillTitle(for: tool)
+            return "已运用技能：\(title)"
         case "skill_propose":
-            let name = tool.args?.string(in: "name", "id") ?? ""
-            return name.isEmpty ? "提议新技能" : "提议新技能：\(name)"
+            let title = skillTitle(for: tool)
+            return "提议新技能：\(title)"
         default:
             return nil
         }
@@ -181,13 +224,42 @@ struct AssistantActionRow: View {
         return (delegationId, childId)
     }
 
+    @State private var localDecision: String?
+
+    private var baseTool: String {
+        AssistantToolText.baseName(tool.name)
+    }
+
+    private var skillProposalInfo: (id: String, rev: Int, summary: String)? {
+        guard baseTool == "skill_propose",
+              let obj = AssistantToolText.resultObject(tool.result)?["proposal"]?.object,
+              let id = obj["id"]?.string?.nilIfEmpty
+        else { return nil }
+        let rev = obj["rev"]?.int ?? 1
+        let summary = obj["summary"]?.string ?? ""
+        return (id, rev, summary)
+    }
+
     private var failed: Bool {
         tool.status == "error" || tool.result?["ok"]?.bool == false
     }
 
     private var statusText: String {
         if tool.status == "running" { return "处理中" }
-        return failed ? "未完成" : "已提交"
+        if failed { return "未完成" }
+        if baseTool == "skill_use" { return "已加载" }
+        if baseTool == "skill_propose" {
+            if localDecision == "approved" { return "已批准" }
+            if localDecision == "rejected" { return "已拒绝" }
+            return "待启用"
+        }
+        return "已提交"
+    }
+
+    private var actionSymbol: String {
+        if baseTool == "skill_use" { return "bolt.fill" }
+        if baseTool == "skill_propose" { return "sparkles" }
+        return "paperplane"
     }
 
     private var statusColor: Color {
@@ -200,27 +272,47 @@ struct AssistantActionRow: View {
     }
 
     private var summaryRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "paperplane")
-                .font(JieboFont.text(.caption, weight: .semibold))
-                .foregroundStyle(statusColor)
-                .frame(width: 18)
-            Text(text)
-                .font(JieboFont.text(.footnote, weight: .medium))
-                .foregroundStyle(JieboColor.ink)
-                .lineLimit(2)
-            Spacer(minLength: 0)
-            Text(statusText)
-                .font(JieboFont.text(.caption))
-                .foregroundStyle(statusColor)
-            if openDelegation != nil, delegateRefs.delegationId != nil {
-                Image(systemName: "chevron.right")
-                    .font(JieboFont.text(.caption2, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
-                    .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: actionSymbol)
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(statusColor)
+                    .frame(width: 18)
+                Text(text)
+                    .font(JieboFont.text(.footnote, weight: .medium))
+                    .foregroundStyle(JieboColor.ink)
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Text(statusText)
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(statusColor)
+                if openDelegation != nil, delegateRefs.delegationId != nil {
+                    Image(systemName: "chevron.right")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                        .accessibilityHidden(true)
+                }
+            }
+            if let prop = skillProposalInfo, localDecision == nil {
+                if !prop.summary.isEmpty {
+                    Text(prop.summary)
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.ink2)
+                }
+                HStack(spacing: 8) {
+                    ActionButton(title: "批准并上架", kind: .primary) {
+                        localDecision = "approved"
+                        store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: true, expectedRev: prop.rev)
+                    }
+                    ActionButton(title: "拒绝", kind: .outline) {
+                        localDecision = "rejected"
+                        store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: false, expectedRev: prop.rev)
+                    }
+                }
             }
         }
         .padding(.horizontal, 12)
+        .padding(.vertical, skillProposalInfo != nil && localDecision == nil ? 8 : 0)
         .frame(minHeight: 44)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(JieboColor.white)

@@ -64,9 +64,10 @@ test("建议按钮按结果起名，缺引用不进批量", () => {
   );
 });
 
-test("从工作区打开停在这个文件夹，其余停在记得的我", () => {
+test("从工作区打开停在这个文件夹，指定 skills 直达技能工厂，其余停在记得的我", () => {
   assert.equal(openingDestination("personal").destination, "me");
   assert.equal(openingDestination(undefined).destination, "me");
+  assert.deepEqual(openingDestination("skills"), { destination: "skills", folderId: null });
   assert.deepEqual(openingDestination("cursor-remote"), { destination: "folder", folderId: "cursor-remote" });
 });
 

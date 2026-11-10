@@ -57,6 +57,7 @@ export async function runNativeChat(
     autoApprove: boolean;
     /** USER 根目录：个人助理人设 + 记忆块，放进 system，不与 wrapPrompt 重复 */
     assistantBlock?: string;
+    prewarmedSkills?: Array<{ id: string; name: string }>;
   },
 ) {
   const { epoch, cwd, mode } = input;
@@ -71,6 +72,7 @@ export async function runNativeChat(
     mode,
     policy: slot.policy,
     dialect: slot.dialect,
+    ...(input.prewarmedSkills?.length ? { prewarmedSkills: input.prewarmedSkills } : {}),
   });
   if (input.images.length && !ext.provider.vision) {
     send(ws, {

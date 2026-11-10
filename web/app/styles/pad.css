@@ -129,7 +129,7 @@
   .composer-wrap,
   .empty-starters,
   .thread-find,
-  .warn {
+  .warn:not(.chat-mark) {
     width: 100%;
     max-width: 960px;
     min-width: 0;

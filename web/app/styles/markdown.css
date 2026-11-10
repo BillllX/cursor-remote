@@ -367,7 +367,7 @@
   max-width: 100%;
 }
 
-.warn {
+.warn:not(.chat-mark) {
   margin: 0 auto 12px;
   width: calc(100% - 28px);
   max-width: 820px;

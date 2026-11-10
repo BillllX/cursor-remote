@@ -96,6 +96,15 @@ extension ToolCardView {
     static func chineseVerb(_ tool: ToolCall) -> String {
         let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
         if !crew.isEmpty { return crew }
+        switch AssistantToolText.baseName(tool.name) {
+        case "skill_use": return "已运用技能"
+        case "skill_propose": return "提议新技能"
+        case "skill_list": return "查询技能库"
+        case "skill_verify": return "核验技能"
+        case "skill_proposal_decide": return "审批技能"
+        case "skill_proposal_list": return "技能提案列表"
+        default: break
+        }
         switch tool.kind {
         case .shell: return "运行命令"
         case .search: return "搜索"
@@ -112,6 +121,7 @@ extension ToolCardView {
     /// 动词是兜底的「调用工具」：卡片标题行补上原始工具名
     static func isGeneric(_ tool: ToolCall) -> Bool {
         Crew.label(name: tool.name, args: tool.args, agent: tool.agent).isEmpty
+            && !AssistantToolText.isSkillTool(tool.name)
             && tool.kind == .other
             && tool.name.range(of: "task", options: .caseInsensitive) == nil
             && !isImageTool(tool)

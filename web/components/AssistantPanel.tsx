@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
-import type { AssistantDelegation, AssistantResultMessage, AssistantState, ClientMessage } from "@shared/protocol";
+import type {
+  AssistantDelegation,
+  AssistantResultMessage,
+  AssistantState,
+  ClientMessage,
+  SkillFactoryProposalItem,
+} from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
 import { AssistantColleaguesSection } from "./assistant/AssistantColleaguesSection";
@@ -103,10 +109,15 @@ export default function AssistantPanel({
   const [selectedDelegationId, setSelectedDelegationId] = useState<string | null>(null);
   const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null);
   const [highlightedScheduleId, setHighlightedScheduleId] = useState<string | null>(null);
+  const [skillProposals, setSkillProposals] = useState<SkillFactoryProposalItem[]>([]);
   const stateRef = useRef(state);
   stateRef.current = state;
 
   const unread = useMemo(() => state?.inbox.filter((item) => !item.read).length ?? 0, [state?.inbox]);
+  const pendingSkillProposals = useMemo(
+    () => skillProposals.filter((p) => p.status === "pending"),
+    [skillProposals],
+  );
 
   const op = useCallback((...params: Parameters<BuildAssistantOpMessage>) => {
     send(buildAssistantOpMessage(...params));
@@ -121,7 +132,22 @@ export default function AssistantPanel({
       memory: memoryLoaded,
       knownRevision: memoryLoaded && !memoryIsCurrent ? undefined : current?.revision,
     });
-  }, [open, memoryLoaded, send]);
+    op("skill_factory_status");
+  }, [open, memoryLoaded, send, op]);
+
+  useEffect(() => {
+    if (!lastAssistantResult) return;
+    if (
+      lastAssistantResult.op === "skill_factory_status" ||
+      lastAssistantResult.op === "skill_proposal_decide" ||
+      lastAssistantResult.op === "skill_update_meta" ||
+      lastAssistantResult.op === "skill_edit_approved"
+    ) {
+      if (lastAssistantResult.ok && lastAssistantResult.data) {
+        setSkillProposals(lastAssistantResult.data.proposals ?? []);
+      }
+    }
+  }, [lastAssistantResult, assistantResultTick]);
 
   useEffect(() => {
     if (!open || !memoryLoaded) return;
@@ -253,7 +279,12 @@ export default function AssistantPanel({
         >
           {(
             [
-              ["overview", approvals.length ? `总览 · ${approvals.length}` : "总览"],
+              [
+                "overview",
+                approvals.length + pendingSkillProposals.length
+                  ? `总览 · ${approvals.length + pendingSkillProposals.length}`
+                  : "总览",
+              ],
               ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
               ["colleagues", "同事"],
               ["notify", "通知"],
@@ -297,8 +328,57 @@ export default function AssistantPanel({
         >
           {tab === "overview" ? (
             <>
-              {approvals.length ? (
+              {approvals.length || pendingSkillProposals.length ? (
                 <Section title="待批">
+                  {pendingSkillProposals.map((prop) => (
+                    <div key={`skp:${prop.id}`} className="approval-row assistant-approval">
+                      <span>
+                        ✨ 新技能待启用：「{prop.name}」（{prop.targetDir} · {prop.mode === "write" ? "读写" : "只读"}）
+                        {prop.summary ? ` — ${prop.summary}` : ""}
+                      </span>
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={() =>
+                          op("skill_proposal_decide", {
+                            proposalId: prop.id,
+                            approve: true,
+                            expectedRev: prop.rev,
+                            decisionNote: "在助理总览待批一键批准上架",
+                          })
+                        }
+                      >
+                        批准上架
+                      </button>
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={() =>
+                          op("skill_proposal_decide", {
+                            proposalId: prop.id,
+                            approve: false,
+                            expectedRev: prop.rev,
+                            decisionNote: "在助理总览待批一键拒绝",
+                          })
+                        }
+                      >
+                        拒绝
+                      </button>
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={() => {
+                          setMemoryLoaded(true);
+                          setMemoryNavigation((current) =>
+                            openAssistantMemoryNavigation(current, "assistant", "skills"),
+                          );
+                          selectTab("memory");
+                        }}
+                      >
+                        查看手册
+                      </button>
+                    </div>
+                  ))}
                   {approvals.map((item) => {
                     const owner = state?.delegations.find((row) => row.id === item.delegationId);
                     return (
@@ -760,6 +840,25 @@ export default function AssistantPanel({
                               查看日程
                             </button>
                           ) : null}
+                          {item.kind === "approval" && item.title.startsWith("新技能待启用：") ? (
+                            <button
+                              type="button"
+                              className="pill"
+                              onClick={() => {
+                                if (!item.read) {
+                                  op("inbox_read", { ids: [item.id] });
+                                  void closeInboxNotification(item.id);
+                                }
+                                setMemoryLoaded(true);
+                                setMemoryNavigation((current) =>
+                                  openAssistantMemoryNavigation(current, "assistant", "skills"),
+                                );
+                                selectTab("memory");
+                              }}
+                            >
+                              去技能工厂审批
+                            </button>
+                          ) : null}
                         </div>
                       </li>
                     );
@@ -786,6 +885,7 @@ export default function AssistantPanel({
                 lastResult={lastAssistantResult}
                 resultTick={assistantResultTick}
                 onNotice={setNotice}
+                onHandoffToAssistant={onHandoffToAssistant}
               />
             )
           ) : null}

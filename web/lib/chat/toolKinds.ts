@@ -15,6 +15,7 @@ export function field(args: unknown, ...keys: string[]): string {
 
 export function toolKind(name: string, args?: unknown): "read" | "edit" | "write" | "shell" | "search" | "other" {
   const n = name.toLowerCase();
+  if (/(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)/.test(n)) return "other";
   if (/(todo|createplan)/.test(n)) return "other";
   if (/(shell|bash|terminal|command)/.test(n)) return "shell";
   if (/(grep|glob|search|find|ripgrep)/.test(n)) return "search";

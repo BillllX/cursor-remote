@@ -119,14 +119,18 @@ import {
 } from "./workspaceMemory.ts";
 import {
   decideSkillProposal,
+  editApprovedDeclarativeSkill,
   listSkillProposals,
   listSkillSummaries,
   markSkillUsed,
   proposeSkillPackage,
   renderSkillsCatalogForPrompt,
+  renderSkillsCatalogWithMeta,
+  updateSkillMeta,
   useSkill,
   verifySkill,
   type SkillRunnerRole,
+  type SkillsCatalogRenderResult,
 } from "./skills.ts";
 import { memoryCenterActivity } from "./memoryCenterActivity.ts";
 import { memoryCenterGet, memoryCenterSearch } from "./memoryCenter.ts";
@@ -603,7 +607,11 @@ export function workspaceToolsFor(
     skillMarkUsed: ({ id }) => markSkillUsed(tenant, cwd, id, { runnerRole: skillRunnerRole }),
     skillVerify: ({ id }) => verifySkill(tenant, cwd, id),
     skillPropose: !opts.readonly
-      ? (args) => proposeSkillPackage(tenant, cwd, { ...args, chatId })
+      ? (args) => {
+          const res = proposeSkillPackage(tenant, cwd, { ...args, chatId });
+          if (res.ok) void publishState(tenant);
+          return res;
+        }
       : undefined,
     kbIngestSubmit:
       writableKb && dropHost && targetWorkspaceKey
@@ -715,6 +723,15 @@ export function skillsCatalogFor(
   input: { query?: string; files?: string[]; runnerRole?: SkillRunnerRole } = {},
 ) {
   return renderSkillsCatalogForPrompt(tenant, cwd, input);
+}
+
+/** 单次拼装的技能摘要目录与命中的 L2 预热元数据 */
+export function skillsCatalogWithMetaFor(
+  tenant: AssistantTenant,
+  cwd: string,
+  input: { query?: string; files?: string[]; runnerRole?: SkillRunnerRole; recordPrewarm?: boolean } = {},
+): SkillsCatalogRenderResult {
+  return renderSkillsCatalogWithMeta(tenant, cwd, input);
 }
 
 /** 子工作区会话一轮开始：线程又活跃了，先不出确认卡 */
@@ -1545,6 +1562,7 @@ export async function handleOp(
         scope,
         query,
         includeChannelGuards: true,
+        includeBody: true,
         workspaceNames: workspaces,
       });
       const proposals = listSkillProposals(tenant);
@@ -1563,10 +1581,106 @@ export async function handleOp(
         decisionNote,
       });
       if (!decided.ok) return fail(decided.error);
+      void publishState(tenant);
       const workspaces = deps?.workspaces(tenant) ?? [];
       const skills = listSkillSummaries(tenant, tenant.workspaceRoot, {
         runnerRole: "foreground",
         includeChannelGuards: true,
+        includeBody: true,
+        workspaceNames: workspaces,
+      });
+      const proposals = listSkillProposals(tenant);
+      return { ok: true, data: { skills, proposals } };
+    }
+    case "skill_update_meta": {
+      const skillId = str(args.skillId).trim();
+      if (!skillId) return fail("skillId 必填。");
+      const entry = str(args.entry).trim() || undefined;
+      const workspace = str(args.workspace).trim();
+      let targetCwd = tenant.workspaceRoot;
+      if (workspace && workspace !== "personal" && workspace !== "work_preference" && workspace !== "overview") {
+        if (workspace.startsWith("/") || workspace.includes("..") || workspace.includes("\\")) {
+          return fail("workspace 路径越界或不合法。");
+        }
+        const candidate = resolve(tenant.workspaceRoot, workspace);
+        const candidateReal = existsSync(candidate) ? realpathSync(candidate) : candidate;
+        const rootReal = existsSync(tenant.workspaceRoot) ? realpathSync(tenant.workspaceRoot) : resolve(tenant.workspaceRoot);
+        if (!isInside(candidateReal, rootReal) || candidateReal === rootReal) {
+          return fail("workspace 路径越界。");
+        }
+        targetCwd = candidateReal;
+      }
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const updated = updateSkillMeta(tenant, targetCwd, {
+        skillId,
+        entry,
+        pinned: typeof args.pinned === "boolean" ? args.pinned : undefined,
+        autoPrewarm: typeof args.autoPrewarm === "boolean" ? args.autoPrewarm : undefined,
+        disabled: typeof args.disabled === "boolean" ? args.disabled : undefined,
+        workspaceNames: workspaces,
+      });
+      if (!updated.ok) return fail(updated.error);
+      const skills = listSkillSummaries(tenant, targetCwd, {
+        runnerRole: "foreground",
+        includeChannelGuards: true,
+        includeBody: true,
+        workspaceNames: workspaces,
+      });
+      const proposals = listSkillProposals(tenant);
+      return { ok: true, data: { skills, proposals } };
+    }
+    case "skill_edit_approved": {
+      const skillId = str(args.skillId).trim();
+      const entry = str(args.entry).trim();
+      const expectedSha256 = str(args.expectedSha256).trim();
+      const name = str(args.name).trim();
+      const summary = str(args.summary).trim();
+      const body = str(args.body);
+      const keywords = Array.isArray(args.keywords)
+        ? args.keywords.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const globs = Array.isArray(args.globs)
+        ? args.globs.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const requiredTools = Array.isArray(args.requiredTools)
+        ? args.requiredTools.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const refs = Array.isArray(args.refs)
+        ? args.refs.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const workspace = str(args.workspace).trim();
+      let targetCwd = tenant.workspaceRoot;
+      if (workspace && workspace !== "personal" && workspace !== "work_preference" && workspace !== "overview") {
+        if (workspace.startsWith("/") || workspace.includes("..") || workspace.includes("\\")) {
+          return fail("workspace 路径越界或不合法。");
+        }
+        const candidate = resolve(tenant.workspaceRoot, workspace);
+        const candidateReal = existsSync(candidate) ? realpathSync(candidate) : candidate;
+        const rootReal = existsSync(tenant.workspaceRoot) ? realpathSync(tenant.workspaceRoot) : resolve(tenant.workspaceRoot);
+        if (!isInside(candidateReal, rootReal) || candidateReal === rootReal) {
+          return fail("workspace 路径越界。");
+        }
+        targetCwd = candidateReal;
+      }
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const edited = editApprovedDeclarativeSkill(tenant, targetCwd, {
+        skillId,
+        entry,
+        expectedSha256,
+        name,
+        summary,
+        keywords,
+        globs,
+        requiredTools,
+        refs,
+        body,
+        workspaceNames: workspaces,
+      });
+      if (!edited.ok) return fail(edited.error);
+      const skills = listSkillSummaries(tenant, targetCwd, {
+        runnerRole: "foreground",
+        includeChannelGuards: true,
+        includeBody: true,
         workspaceNames: workspaces,
       });
       const proposals = listSkillProposals(tenant);

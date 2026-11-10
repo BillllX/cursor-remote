@@ -171,6 +171,14 @@ struct MemoryCenterDoubleColumnBody: View {
                                 .padding(12)
                         }
                     }
+                } else if navId == "skills", let key = selectedKey {
+                    VStack(alignment: .leading, spacing: 0) {
+                        MemoryCenterInlineBackBar(title: "技能详情") { selectedKey = nil }
+                        ScrollView {
+                            MemoryCenterSkillDetailPane(selectedKey: key)
+                                .padding(12)
+                        }
+                    }
                 } else if let key = selectedKey,
                           let scope = MemoryCenterReducer.scopeIdForNav(navId),
                           scope != "personal"
@@ -409,19 +417,22 @@ struct MemoryCenterNavColumn: View {
         MemoryCenterLabels.currentFolder(scopes: data.overview?.scopes ?? [], cwd: store.cwd, root: store.workspaceRoot)
     }
     private var folderNavId: String { folder?.id ?? "folder-missing" }
+    private var pendingSkillCount: Int {
+        store.memoryCenterSkillProposals.filter { $0.status == "pending" }.count
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 navButton("work_preference", title: "记得的我", symbol: NavigationIconId.account.symbol)
                 navButton(folderNavId, title: "这个文件夹", symbol: "folder", subtitle: folder?.label)
+                navButton("skills", title: "技能工厂", symbol: "sparkles", badge: pendingSkillCount)
                 navButton("suggestions", title: "要你看一眼", symbol: "lightbulb", badge: store.memoryCenterSuggestionRows.count)
                 Text("规则与诊断")
                     .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
-                navButton("skills", title: "技能工厂", symbol: "sparkles")
                 navButton("activity", title: "最近改动", symbol: "clock")
                 navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up")
                 navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft")
@@ -438,7 +449,10 @@ struct MemoryCenterNavColumn: View {
                     .accessibilityLabel("正在加载")
             }
         }
-        .onAppear { store.memoryCenterLoadSuggestions() }
+        .onAppear {
+            store.memoryCenterLoadSuggestions()
+            store.memoryCenterLoadSkills()
+        }
     }
 
     @ViewBuilder
@@ -545,7 +559,7 @@ struct MemoryCenterMiddleColumn: View {
         if searchActive || navId == "search" {
             MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: itemNavigation)
         } else if navId == "skills" {
-            MemoryCenterSkillsPane()
+            MemoryCenterSkillsPane(selectedKey: $selectedKey)
         } else if navId == "activity" {
             MemoryCenterActivityPane()
         } else if navId == "suggestions" {
@@ -615,6 +629,8 @@ struct MemoryCenterDetailColumn: View {
             VStack(alignment: .leading, spacing: 12) {
                 if searchActive || navId == "search" {
                     MemoryCenterSearchDetail(selectedKey: selectedKey)
+                } else if navId == "skills" {
+                    MemoryCenterSkillDetailPane(selectedKey: selectedKey)
                 } else if navId == "personal" || navId == "work_preference" {
                     MemoryCenterRememberDetail(selectedKey: selectedKey)
                 } else if let scope = MemoryCenterReducer.scopeIdForNav(navId), scope != "personal" {
@@ -1960,6 +1976,27 @@ struct MemoryCenterPhoneHome: View {
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
+                    NavigationLink(value: PhoneRoute.memoryPage(.skills)) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("技能工厂")
+                                Text("对话技能 · 操作手册与提案审批")
+                                    .font(JieboFont.text(.caption))
+                                    .foregroundStyle(JieboColor.dim)
+                            }
+                            Spacer()
+                            let pendingSkills = store.memoryCenterSkillProposals.filter { $0.status == "pending" }.count
+                            if pendingSkills > 0 {
+                                Text("\(pendingSkills)")
+                                    .font(JieboFont.text(.caption, weight: .semibold))
+                                    .foregroundStyle(JieboColor.clay)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(JieboColor.clay.opacity(0.16))
+                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            }
+                        }
+                    }
                     NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
                         HStack {
                             Text("要你看一眼")
@@ -1990,9 +2027,6 @@ struct MemoryCenterPhoneHome: View {
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
                     }
-                    NavigationLink(value: PhoneRoute.memoryPage(.skills)) {
-                        Text("技能工厂")
-                    }
                     NavigationLink(value: PhoneRoute.memoryPage(.activity)) {
                         Text("最近改动")
                     }
@@ -2011,6 +2045,7 @@ struct MemoryCenterPhoneHome: View {
         .refreshable {
             store.memoryCenterRefreshOverview()
             store.memoryCenterLoadSuggestions()
+            store.memoryCenterLoadSkills()
         }
         .toolbar {
             if searchActive {
@@ -2023,7 +2058,10 @@ struct MemoryCenterPhoneHome: View {
                 }
             }
         }
-        .onAppear { store.memoryCenterLoadSuggestions() }
+        .onAppear {
+            store.memoryCenterLoadSuggestions()
+            store.memoryCenterLoadSkills()
+        }
         .onChange(of: searchText) { _, value in
             if !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 searchActive = true

@@ -776,6 +776,7 @@ struct SkillFactorySummaryRow: Identifiable, Hashable, Sendable {
     var prewarmedCount: Int
     var viewedCount: Int
     var adoptedCount: Int
+    var body: String?
 
     static func from(_ json: JSONValue) -> SkillFactorySummaryRow? {
         guard let row = json.object,
@@ -820,7 +821,8 @@ struct SkillFactorySummaryRow: Identifiable, Hashable, Sendable {
             lockedSha256: row["lockedSha256"]?.string?.nilIfEmpty,
             prewarmedCount: stats["prewarmedCount"]?.int ?? 0,
             viewedCount: stats["viewedCount"]?.int ?? 0,
-            adoptedCount: stats["adoptedCount"]?.int ?? 0
+            adoptedCount: stats["adoptedCount"]?.int ?? 0,
+            body: row["body"]?.string?.nilIfEmpty
         )
     }
 }
@@ -834,6 +836,8 @@ struct SkillFactoryProposalRow: Identifiable, Hashable, Sendable {
     var mode: String
     var targetDir: String
     var relSkillPath: String
+    var keywords: [String]
+    var requiredTools: [String]
     var promotedFromMemoryIds: [String]
     var formattedMarkdown: String
     var sha256: String
@@ -857,6 +861,9 @@ struct SkillFactoryProposalRow: Identifiable, Hashable, Sendable {
               let rev = mcReqInt(row, "rev"),
               let createdAt = mcReqString(row, "createdAt")
         else { return nil }
+        let triggers = row["triggers"]?.object ?? [:]
+        let keywords = mcReqStringList(triggers["keywords"]) ?? []
+        let requiredTools = mcReqStringList(row["requiredTools"]) ?? []
         let promoted = mcReqStringList(row["promotedFromMemoryIds"]) ?? []
         return SkillFactoryProposalRow(
             id: id,
@@ -867,6 +874,8 @@ struct SkillFactoryProposalRow: Identifiable, Hashable, Sendable {
             mode: mode,
             targetDir: targetDir,
             relSkillPath: relSkillPath,
+            keywords: keywords,
+            requiredTools: requiredTools,
             promotedFromMemoryIds: promoted,
             formattedMarkdown: formattedMarkdown,
             sha256: sha256,

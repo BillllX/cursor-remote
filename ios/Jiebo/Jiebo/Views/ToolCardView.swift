@@ -179,6 +179,9 @@ struct ToolCardView: View {
     }
 
     private var titleLine: String {
+        if AssistantToolText.isSkillTool(tool.name) {
+            return AssistantToolText.skillTitle(for: tool)
+        }
         // 不认识的工具动词统一写「调用工具」，原始工具名挪到这里当说明
         let summary = tool.summary.nilIfEmpty ?? (Self.isGeneric(tool) ? tool.name : "")
         guard let model = tool.model?.nilIfEmpty else { return summary }
@@ -187,13 +190,15 @@ struct ToolCardView: View {
     }
 
     private var kindSymbol: String {
+        if AssistantToolText.baseName(tool.name) == "skill_use" { return "bolt.fill" }
+        if AssistantToolText.isSkillTool(tool.name) { return "sparkles" }
         switch tool.kind {
-        case .search: "magnifyingglass"
-        case .read: "doc.text"
-        case .edit: "pencil"
-        case .write: "square.and.pencil"
-        case .shell: "terminal"
-        case .other: "wrench.and.screwdriver"
+        case .search: return "magnifyingglass"
+        case .read: return "doc.text"
+        case .edit: return "pencil"
+        case .write: return "square.and.pencil"
+        case .shell: return "terminal"
+        case .other: return "wrench.and.screwdriver"
         }
     }
 
@@ -247,16 +252,59 @@ struct ToolCardView: View {
 
 /// 展开后的工具内容：改文件画 diff，命令拆成命令行和输出，其余仍是原文。
 private struct ToolDetail: View {
+    @Environment(ChatStore.self) private var store
     var tool: ToolCall
+    @State private var localSkillDecision: String?
 
     var body: some View {
         let diff = Self.extractDiff(tool)
         let shell = tool.kind == .shell ? Self.extractShell(tool) : nil
+        let baseName = AssistantToolText.baseName(tool.name)
+        let skillPayload = AssistantToolText.isSkillTool(tool.name) ? AssistantToolText.resultObject(tool.result) : nil
         VStack(alignment: .leading, spacing: 6) {
             if tool.result == nil, tool.status == "running", diff.unified.isEmpty, diff.before.isEmpty, diff.after.isEmpty {
                 Text("正在跑…")
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
+            } else if baseName == "skill_use", let rawContent = skillPayload?["content"]?.string?.nilIfEmpty {
+                Text(clip(AssistantToolText.stripSkillSandboxTags(rawContent)))
+                    .font(JieboFont.monoText(.caption))
+                    .foregroundStyle(JieboColor.ink)
+                    .textSelection(.enabled)
+            } else if baseName == "skill_propose",
+                      let propObj = skillPayload?["proposal"]?.object,
+                      let propId = propObj["id"]?.string?.nilIfEmpty
+            {
+                let summary = propObj["summary"]?.string ?? ""
+                let markdown = propObj["formattedMarkdown"]?.string ?? ""
+                let rev = propObj["rev"]?.int ?? 1
+                if !summary.isEmpty {
+                    Text(summary)
+                        .font(JieboFont.text(.footnote))
+                        .foregroundStyle(JieboColor.ink2)
+                }
+                if !markdown.isEmpty {
+                    Text(clip(markdown))
+                        .font(JieboFont.monoText(.caption2))
+                        .foregroundStyle(JieboColor.ink)
+                        .textSelection(.enabled)
+                }
+                if localSkillDecision == nil {
+                    HStack(spacing: 8) {
+                        ActionButton(title: "批准并上架", kind: .primary) {
+                            localSkillDecision = "approved"
+                            store.memoryCenterDecideSkillProposal(proposalId: propId, approve: true, expectedRev: rev)
+                        }
+                        ActionButton(title: "拒绝", kind: .outline) {
+                            localSkillDecision = "rejected"
+                            store.memoryCenterDecideSkillProposal(proposalId: propId, approve: false, expectedRev: rev)
+                        }
+                    }
+                } else {
+                    Text(localSkillDecision == "approved" ? "已批准并启用该技能" : "已拒绝该技能草案")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                }
             } else if !diff.unified.isEmpty {
                 DiffLines(lines: Self.unifiedLines(diff.unified))
             } else if !diff.before.isEmpty || !diff.after.isEmpty {

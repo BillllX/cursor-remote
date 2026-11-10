@@ -306,6 +306,7 @@ export function applyServerMessage(chats: Chat[], message: ServerMessage, ctx: C
         ...turn,
         model: message.model || turn.model,
         mode: message.mode || turn.mode,
+        ...(message.prewarmedSkills?.length ? { prewarmedSkills: message.prewarmedSkills } : {}),
       }));
       return message.policy ? setChatPolicy(next, chatId, message.policy) : next;
     }

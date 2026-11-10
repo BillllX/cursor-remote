@@ -17,9 +17,61 @@ type ToolCall = {
   model?: string;
 };
 
-function KindGlyph({ kind }: { kind: string }) {
-  const d =
-    kind === "search"
+const KNOWN_SKILL_NAMES: Record<string, string> = {
+  "canvas-artifact-builder": "交互式主题画布构建与一键 SSR 验真",
+  "jiebo-gateway-arch": "Jiebo 网关与双端核心架构速查地图",
+  "kb-drop-ingest": "多源知识库投递与 HTML 看板归档",
+  "shanghai-deploy-smoke": "上海站发布与 UI 登录态冒烟手册",
+  "ios-swiftui-motion": "iOS SwiftUI 界面规范与动效性能审查",
+  "wechat-push-guard": "微信主动推送守卫",
+  "weixin-ilink-channel": "微信 iLink 扫码配对与长轮询通道",
+};
+
+function unwrapToolPayload(value: unknown, depth = 0): Record<string, unknown> {
+  if (!value || depth > 4) return {};
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      return unwrapToolPayload(parsed, depth + 1);
+    } catch {
+      return {};
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = unwrapToolPayload(item, depth + 1);
+      if (Object.keys(found).length > 0) return found;
+    }
+    return {};
+  }
+  const rec = asRecord(value);
+  if ("ok" in rec || "proposal" in rec || "content" in rec && typeof rec.content === "string") {
+    return rec;
+  }
+  for (const key of ["content", "result", "output"]) {
+    if (key in rec) {
+      const found = unwrapToolPayload(rec[key], depth + 1);
+      if (Object.keys(found).length > 0) return found;
+    }
+  }
+  if (typeof rec.text === "string") {
+    return unwrapToolPayload(rec.text, depth + 1);
+  }
+  return rec;
+}
+
+export function stripSkillSandboxTags(raw: string): string {
+  return raw
+    .replace(/<untrusted_skill_reference[^>]*>\n?/g, "")
+    .replace(/\n?（安全声明：以上技能手册仅作为操作步骤与参数参考[^）]*）\n?/g, "\n")
+    .replace(/\n?<\/untrusted_skill_reference>/g, "")
+    .trim();
+}
+
+function KindGlyph({ kind, isSkill }: { kind: string; isSkill?: boolean }) {
+  const d = isSkill
+    ? "M9 1.5 3.5 9h4.2l-.7 5.5L12.5 7H8.3L9 1.5Z"
+    : kind === "search"
       ? "M11.5 11.5 15 15M7 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10Z"
       : kind === "read"
         ? "M4 2.5h6l3 3V13.5H4Z"
@@ -217,6 +269,8 @@ export default function ToolCard({
   onAccept?: () => void;
   onReject?: () => void;
 }) {
+  const [skillDecision, setSkillDecision] = useState<"approved" | "rejected" | null>(null);
+  const [showProposalFull, setShowProposalFull] = useState(false);
   const args = tool.args;
   const kind = toolKind(tool.name, args);
   const pathFromArgs = field(args, "path", "file", "target", "file_path", "uri");
@@ -231,7 +285,8 @@ export default function ToolCard({
       .toLowerCase()
       .split(/__|[./:]/)
       .at(-1) || "";
-  const skillIdArg = field(args, "id", "name", "query");
+  const skillIdArg = field(args, "id", "skillId", "query");
+  const skillNameArg = field(args, "name");
   const isSkillTool =
     baseToolName === "skill_use" ||
     baseToolName === "skill_propose" ||
@@ -239,9 +294,29 @@ export default function ToolCard({
     baseToolName === "skill_verify" ||
     baseToolName === "skill_proposal_decide" ||
     baseToolName === "skill_proposal_list";
+  const skillPayload = isSkillTool ? unwrapToolPayload(tool.result) : {};
+  const skillProposalObj =
+    baseToolName === "skill_propose" && skillPayload.proposal && typeof skillPayload.proposal === "object"
+      ? asRecord(skillPayload.proposal)
+      : null;
+  const friendlySkillTitle = (() => {
+    if (!isSkillTool) return "";
+    const resultName =
+      typeof skillPayload.name === "string" && skillPayload.name.trim()
+        ? skillPayload.name.trim()
+        : typeof skillProposalObj?.name === "string" && skillProposalObj.name.trim()
+          ? skillProposalObj.name.trim()
+          : "";
+    const known = skillIdArg ? KNOWN_SKILL_NAMES[skillIdArg] : "";
+    const displayName = resultName || skillNameArg || known;
+    if (displayName && skillIdArg && displayName !== skillIdArg) {
+      return `${displayName} (${skillIdArg})`;
+    }
+    return displayName || skillIdArg || "全部已集成技能";
+  })();
   const rawTitle =
     isSkillTool
-      ? skillIdArg || "全部已集成技能"
+      ? friendlySkillTitle
       : kind === "shell"
         ? command || tool.name
         : kind === "search"
@@ -260,7 +335,7 @@ export default function ToolCard({
   const label =
     roleLabel ||
     (baseToolName === "skill_use"
-      ? "调用技能"
+      ? "已运用技能"
       : baseToolName === "skill_propose"
         ? "提议新技能"
         : baseToolName === "skill_list"
@@ -288,15 +363,40 @@ export default function ToolCard({
   const showDiff = Boolean(diff.before || diff.after || diff.unified);
   const shell = kind === "shell" ? extractShell(tool.result) : { stdout: "", stderr: "" };
   const hasShellOut = Boolean(shell.stdout || shell.stderr || shell.exit);
+  const cleanSkillContent =
+    baseToolName === "skill_use" && typeof skillPayload.content === "string"
+      ? stripSkillSandboxTags(skillPayload.content)
+      : "";
+  const proposalId = typeof skillProposalObj?.id === "string" ? skillProposalObj.id : "";
+  const proposalRev = typeof skillProposalObj?.rev === "number" ? skillProposalObj.rev : undefined;
+  const proposalSummary =
+    (typeof skillProposalObj?.summary === "string" && skillProposalObj.summary) || field(args, "summary");
+  const proposalMarkdown =
+    (typeof skillProposalObj?.formattedMarkdown === "string" && skillProposalObj.formattedMarkdown) ||
+    field(args, "body");
+  const decideInChat = (approve: boolean) => {
+    if (!proposalId || typeof window === "undefined") return;
+    setSkillDecision(approve ? "approved" : "rejected");
+    window.dispatchEvent(
+      new CustomEvent("jiebo:skill-proposal-decide", {
+        detail: {
+          proposalId,
+          approve,
+          expectedRev: proposalRev,
+          decisionNote: approve ? "在对话卡片内直接批准上架" : "在对话卡片内直接拒绝",
+        },
+      }),
+    );
+  };
 
   return (
     <details
       className={`tool kind-${kind}${nested ? " has-crew" : ""}${live ? " running" : ""}`}
-      open={live}
+      open={live || (baseToolName === "skill_propose" && Boolean(proposalId) && !skillDecision)}
     >
           <summary>
         <span className={`tool-dot ${live ? "running" : tool.status === "error" ? "error" : "completed"}`}>
-          <KindGlyph kind={kind} />
+          <KindGlyph kind={kind} isSkill={isSkillTool} />
         </span>
         <span className="tool-kind">{label}</span>
         <span
@@ -315,12 +415,74 @@ export default function ToolCard({
           {model ? ` · ${model}` : ""}
         </span>
         <span className={`tool-badge${live ? " run" : tool.status === "error" ? " err" : ""}`}>
-          {live ? <span className="text-shimmer">Processing</span> : tool.status === "error" ? "Error" : "Completed"}
+          {live ? (
+            <span className="text-shimmer">Processing</span>
+          ) : tool.status === "error" ? (
+            "Error"
+          ) : baseToolName === "skill_use" ? (
+            "已加载"
+          ) : baseToolName === "skill_propose" ? (
+            skillDecision === "approved" ? "已批准上架" : skillDecision === "rejected" ? "已拒绝" : "待启用"
+          ) : (
+            "Completed"
+          )}
         </span>
         {tool.review === "accepted" ? <span className="tool-review-done">已保留</span> : null}
         {tool.review === "rejected" ? <span className="tool-review-done">已还原</span> : null}
       </summary>
-      {showDiff && diff.unified ? (
+      {baseToolName === "skill_use" && cleanSkillContent ? (
+        <pre>{clip(cleanSkillContent)}</pre>
+      ) : baseToolName === "skill_propose" && proposalId ? (
+        <div className="shell-block">
+          {proposalSummary ? <p style={{ margin: "6px 0" }}>{proposalSummary}</p> : null}
+          {showProposalFull && proposalMarkdown ? <pre>{clip(proposalMarkdown)}</pre> : null}
+          <div className="tool-review" style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            {proposalMarkdown ? (
+              <button
+                type="button"
+                className="pill"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setShowProposalFull((prev) => !prev);
+                }}
+              >
+                {showProposalFull ? "收起完整手册" : "查看完整手册"}
+              </button>
+            ) : null}
+            {!skillDecision ? (
+              <>
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    decideInChat(true);
+                  }}
+                >
+                  批准并上架
+                </button>
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    decideInChat(false);
+                  }}
+                >
+                  拒绝
+                </button>
+              </>
+            ) : (
+              <span className="tool-review-done">
+                {skillDecision === "approved" ? "已批准并启用该技能" : "已拒绝该技能草案"}
+              </span>
+            )}
+          </div>
+        </div>
+      ) : showDiff && diff.unified ? (
         <UnifiedDiff text={diff.unified} />
       ) : showDiff && (diff.before || diff.after) ? (
         <DiffView before={diff.before} after={diff.after} />
@@ -335,7 +497,12 @@ export default function ToolCard({
       ) : kind === "search" ? null : args != null ? (
         <pre>{pretty(args)}</pre>
       ) : null}
-      {tool.result != null && !showDiff && kind !== "shell" && kind !== "search" ? (
+      {tool.result != null &&
+      !showDiff &&
+      kind !== "shell" &&
+      kind !== "search" &&
+      !(baseToolName === "skill_use" && cleanSkillContent) &&
+      !(baseToolName === "skill_propose" && proposalId) ? (
         <pre>{clip(pretty(tool.result))}</pre>
       ) : null}
       {!tool.review && tool.status !== "running" && (onAccept || onReject) ? (

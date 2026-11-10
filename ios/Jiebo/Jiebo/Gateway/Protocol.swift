@@ -16,6 +16,23 @@ enum AgentMode: String, Sendable, Hashable, CaseIterable {
     }
 }
 
+enum RunMetaPrewarmStash {
+    private static let lock = NSLock()
+    private static var byChat: [String: JSONValue] = [:]
+
+    static func put(chatId: String, value: JSONValue) {
+        lock.lock()
+        byChat[chatId] = value
+        lock.unlock()
+    }
+
+    static func take(chatId: String) -> JSONValue? {
+        lock.lock()
+        defer { lock.unlock() }
+        return byChat.removeValue(forKey: chatId)
+    }
+}
+
 struct WorkspaceItem: Sendable, Hashable, Identifiable {
     var path: String
     var name: String
@@ -1691,6 +1708,9 @@ enum ServerMessage {
         case "session":
             return .session(chatId: chatId, agentId: object["agentId"]?.string ?? "", cwd: object["cwd"]?.string ?? "")
         case "run_meta":
+            if let arr = object["prewarmedSkills"]?.array, !arr.isEmpty {
+                RunMetaPrewarmStash.put(chatId: chatId, value: .array(arr))
+            }
             return .runMeta(chatId: chatId, model: object["model"]?.string ?? "", mode: object["mode"]?.string.flatMap(AgentMode.init(rawValue:)))
         case "text-delta":
             return .textDelta(chatId: chatId, text: object["text"]?.string ?? "")

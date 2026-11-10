@@ -291,6 +291,11 @@ function TurnRowView({
               )}
             </div>
           ) : null}
+          {turn.prewarmedSkills?.length ? (
+            <div className="loop-meta" style={{ marginBottom: 6 }}>
+              ⚡ 已自动预热技能：{turn.prewarmedSkills.map((s) => s.name || s.id).join("、")}
+            </div>
+          ) : null}
           {thinking && (turn.running || formatDuration(turn.durationMs)) ? (
             <details key={turn.running ? "live" : "done"} className="thinking" open={turn.running || undefined}>
               <summary>

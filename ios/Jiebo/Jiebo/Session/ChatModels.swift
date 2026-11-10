@@ -227,6 +227,13 @@ struct Turn: Identifiable, Hashable {
         return TurnFilesState(source: out.isEmpty ? .none : .provisional, files: out)
     }
 
+    var prewarmedSkillNames: [String] {
+        guard let arr = extra["prewarmedSkills"]?.array else { return [] }
+        return arr.compactMap { item in
+            item.object?["name"]?.string?.nilIfEmpty ?? item.object?["id"]?.string?.nilIfEmpty
+        }
+    }
+
     var cardFiles: [TurnFile] { cardFilesState.files }
 
     /// 权威清单到达时保持已显示顺序并补齐元数据；分页旧副本不能删掉更晚的 turn_files。

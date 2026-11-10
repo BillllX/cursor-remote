@@ -154,19 +154,53 @@ struct MemoryCenterSuggestionsPane: View {
 
 struct MemoryCenterSkillsPane: View {
     @Environment(ChatStore.self) private var store
+    var selectedKey: Binding<String?>? = nil
     @State private var expandedId: String?
+    @State private var scopeFilter = "all"
 
     private var pendingProposals: [SkillFactoryProposalRow] {
         store.memoryCenterSkillProposals.filter { $0.status == "pending" }
     }
 
+    private var visibleSkills: [SkillFactorySummaryRow] {
+        store.memoryCenterSkillRows.filter { scopeFilter == "all" ? true : $0.scope == scopeFilter }
+    }
+
+    private var callableSkills: [SkillFactorySummaryRow] {
+        visibleSkills.filter { $0.kind != "channel_guard" }
+    }
+
+    private var guardSkills: [SkillFactorySummaryRow] {
+        visibleSkills.filter { $0.kind == "channel_guard" }
+    }
+
+    private var activeKey: String? {
+        selectedKey?.wrappedValue ?? expandedId
+    }
+
+    private func pickKey(_ key: String) {
+        if let selectedKey {
+            selectedKey.wrappedValue = (selectedKey.wrappedValue == key) ? nil : key
+        } else {
+            expandedId = (expandedId == key) ? nil : key
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("已集成 \(store.memoryCenterSkillRows.count) 项能力 · 待审批草案 \(pendingProposals.count) 项")
+                Text("对话技能 \(callableSkills.count) 项 · 后台守卫 \(guardSkills.count) 项\(pendingProposals.isEmpty ? "" : " · 待启用 \(pendingProposals.count) 项")")
                     .font(JieboFont.text(.caption))
                     .foregroundStyle(JieboColor.dim)
                 Spacer()
+                Picker("技能范围", selection: $scopeFilter) {
+                    Text("全部范围").tag("all")
+                    Text("平台级").tag("platform")
+                    Text("工作区").tag("workspace")
+                    Text("仓库级").tag("repo")
+                }
+                .pickerStyle(.menu)
+                .font(JieboFont.text(.caption))
                 Button {
                     store.memoryCenterLoadSkills()
                 } label: {
@@ -188,11 +222,12 @@ struct MemoryCenterSkillsPane: View {
             }
 
             if !pendingProposals.isEmpty {
-                Text("待你审批的技能包草案（SHA-256 锁定）")
+                Text("待你确认启用的新技能（\(pendingProposals.count) 项）")
                     .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                 ForEach(pendingProposals) { prop in
-                    let isExpanded = expandedId == "prop:\(prop.id)"
+                    let key = "prop:\(prop.id)"
+                    let isExpanded = activeKey == key
                     let busy = store.memoryCenterExtrasStorage.skillsDecideReqById[prop.id] != nil
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
@@ -204,7 +239,7 @@ struct MemoryCenterSkillsPane: View {
                         Text(prop.summary)
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.ink2)
-                        Text("路径：\(prop.relSkillPath) · 模式：\(prop.mode == "write" ? "读写" : "只读") · SHA-256：\(prop.sha256)")
+                        Text("作用文件夹：\(prop.targetDir) · 权限：\(prop.mode == "write" ? "读写" : "只读") · 已通过安全门禁（#\(String(prop.sha256.prefix(8)))）")
                             .font(JieboFont.text(.caption2))
                             .foregroundStyle(JieboColor.dim)
                         if !prop.promotedFromMemoryIds.isEmpty {
@@ -212,7 +247,10 @@ struct MemoryCenterSkillsPane: View {
                                 .font(JieboFont.text(.caption2))
                                 .foregroundStyle(JieboColor.pine)
                         }
-                        if isExpanded {
+                        if isExpanded && selectedKey == nil {
+                            Text("落盘路径：\(prop.relSkillPath)\nSHA-256：\(prop.sha256)")
+                                .font(JieboFont.text(.caption2))
+                                .foregroundStyle(JieboColor.dim)
                             ScrollView(.horizontal, showsIndicators: true) {
                                 Text(prop.formattedMarkdown)
                                     .font(JieboFont.mono(.caption2))
@@ -223,8 +261,8 @@ struct MemoryCenterSkillsPane: View {
                             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                         }
                         HStack(spacing: 8) {
-                            ActionButton(title: isExpanded ? "收起全文" : "查看全文", kind: .outline) {
-                                expandedId = isExpanded ? nil : "prop:\(prop.id)"
+                            ActionButton(title: isExpanded ? "收起手册" : "预览技能手册", kind: .outline) {
+                                pickKey(key)
                             }
                             ActionButton(title: busy ? "处理中…" : "批准上架", kind: .primary) {
                                 store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: true, expectedRev: prop.rev)
@@ -240,65 +278,99 @@ struct MemoryCenterSkillsPane: View {
                 }
             }
 
-            Text("已集成技能与通道守卫")
+            Text("对话可用技能（可在聊天中调用）")
                 .font(JieboFont.text(.caption, weight: .semibold))
                 .foregroundStyle(JieboColor.dim)
 
-            ForEach(store.memoryCenterSkillRows) { sk in
-                let isExpanded = expandedId == "skill:\(sk.id)"
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(sk.name)
-                            .font(JieboFont.text(.subheadline, weight: .semibold))
-                        Spacer()
-                        StatusTag(
-                            text: Self.healthLabel(sk.health),
-                            fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.errFg : JieboColor.warnFg),
-                            bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.errBg : JieboColor.warnBg)
-                        )
-                    }
-                    Text(sk.summary)
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.ink2)
-                    HStack(spacing: 6) {
-                        StatusTag(text: Self.kindLabel(sk.kind), fg: JieboColor.ink2, bg: JieboColor.mist)
-                        StatusTag(text: Self.scopeLabel(sk.scope), fg: JieboColor.ink2, bg: JieboColor.mist)
-                        if sk.pinned {
-                            StatusTag(text: "常驻摘要", fg: JieboColor.pine, bg: JieboColor.pine.opacity(0.12))
-                        }
-                        Spacer()
-                        Text("采用 \(sk.adoptedCount) · 查阅 \(sk.viewedCount) · 预热 \(sk.prewarmedCount)")
-                            .font(JieboFont.text(.caption2))
-                            .foregroundStyle(JieboColor.dim)
-                    }
-                    if isExpanded {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("技能 ID：\(sk.id)").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
-                            Text("入口：\(sk.entry)").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
-                            if !sk.keywords.isEmpty {
-                                Text("触发词：\(sk.keywords.joined(separator: "、"))").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
-                            }
-                            if !sk.requiredTools.isEmpty {
-                                Text("关联工具：\(sk.requiredTools.joined(separator: ", "))").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
-                            }
-                            if let reason = sk.healthReason, !reason.isEmpty {
-                                Text(reason).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warnFg)
-                            }
-                        }
-                        .padding(.top, 4)
-                    }
-                }
-                .assistantCard()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    expandedId = isExpanded ? nil : "skill:\(sk.id)"
+            ForEach(callableSkills) { sk in
+                skillRowView(sk)
+            }
+
+            if !guardSkills.isEmpty {
+                Text("系统后台守卫（网关自动运行）")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                ForEach(guardSkills) { sk in
+                    skillRowView(sk)
                 }
             }
         }
         .onAppear { store.memoryCenterLoadSkills() }
     }
 
-    private static func kindLabel(_ kind: String) -> String {
+    @ViewBuilder
+    private func skillRowView(_ sk: SkillFactorySummaryRow) -> some View {
+        let key = "skill:\(sk.id)"
+        let isSelected = activeKey == key
+        let isInlineExpanded = selectedKey == nil && expandedId == key
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(sk.name)
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                Spacer()
+                StatusTag(
+                    text: Self.healthLabel(sk.health),
+                    fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.errFg : JieboColor.warnFg),
+                    bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.errBg : JieboColor.warnBg)
+                )
+            }
+            Text(sk.summary)
+                .font(JieboFont.text(.footnote))
+                .foregroundStyle(JieboColor.ink2)
+            HStack(spacing: 6) {
+                StatusTag(text: Self.kindLabel(sk.kind), fg: JieboColor.ink2, bg: JieboColor.mist)
+                StatusTag(text: Self.scopeLabel(sk.scope), fg: JieboColor.ink2, bg: JieboColor.mist)
+                if sk.pinned {
+                    StatusTag(text: "常驻推荐", fg: JieboColor.pine, bg: JieboColor.pine.opacity(0.12))
+                }
+                if sk.autoPrewarm {
+                    StatusTag(text: "自动预热", fg: JieboColor.pine, bg: JieboColor.pine.opacity(0.12))
+                }
+                Spacer()
+                Text("采用 \(sk.adoptedCount) · 查阅 \(sk.viewedCount) · 预热 \(sk.prewarmedCount)")
+                    .font(JieboFont.text(.caption2))
+                    .foregroundStyle(JieboColor.dim)
+            }
+            if isInlineExpanded {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !sk.keywords.isEmpty {
+                        Text("触发词：\(sk.keywords.joined(separator: "、"))").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
+                    }
+                    if !sk.requiredTools.isEmpty {
+                        Text("关联工具：\(sk.requiredTools.joined(separator: ", "))").font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.dim)
+                    }
+                    if let reason = sk.healthReason, !reason.isEmpty {
+                        Text(reason).font(JieboFont.text(.caption2)).foregroundStyle(JieboColor.warnFg)
+                    }
+                    if let body = sk.body, !body.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: true) {
+                            Text(body)
+                                .font(JieboFont.mono(.caption2))
+                                .foregroundStyle(JieboColor.ink)
+                                .padding(8)
+                        }
+                        .background(JieboColor.mist)
+                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                    }
+                    Text("技能 ID：\(sk.id) · 入口：\(sk.entry)")
+                        .font(JieboFont.text(.caption2))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .assistantCard()
+        .overlay(
+            RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
+                .stroke(isSelected ? JieboColor.pine.opacity(0.45) : Color.clear, lineWidth: 1.5)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            pickKey(key)
+        }
+    }
+
+    static func kindLabel(_ kind: String) -> String {
         switch kind {
         case "channel_guard": return "后台守卫"
         case "native_tool": return "原生工具"
@@ -308,7 +380,7 @@ struct MemoryCenterSkillsPane: View {
         }
     }
 
-    private static func scopeLabel(_ scope: String) -> String {
+    static func scopeLabel(_ scope: String) -> String {
         switch scope {
         case "platform": return "平台级"
         case "workspace": return "工作区"
@@ -317,7 +389,7 @@ struct MemoryCenterSkillsPane: View {
         }
     }
 
-    private static func healthLabel(_ health: String) -> String {
+    static func healthLabel(_ health: String) -> String {
         switch health {
         case "healthy": return "正常"
         case "tampered": return "哈希篡改/未锁"
@@ -325,6 +397,239 @@ struct MemoryCenterSkillsPane: View {
         case "degraded": return "降级运行"
         case "disabled": return "已停用"
         default: return health
+        }
+    }
+}
+
+struct MemoryCenterSkillDetailPane: View {
+    @Environment(ChatStore.self) private var store
+    let selectedKey: String?
+    @State private var editingSkillId: String?
+    @State private var editName = ""
+    @State private var editSummary = ""
+    @State private var editKeywords = ""
+    @State private var editBody = ""
+
+    private var pendingProposals: [SkillFactoryProposalRow] {
+        store.memoryCenterSkillProposals.filter { $0.status == "pending" }
+    }
+
+    private var activeProposal: SkillFactoryProposalRow? {
+        if let key = selectedKey, key.hasPrefix("prop:") {
+            let id = String(key.dropFirst(5))
+            return store.memoryCenterSkillProposals.first { $0.id == id }
+        }
+        if selectedKey == nil, let first = pendingProposals.first {
+            return first
+        }
+        return nil
+    }
+
+    private var activeSkill: SkillFactorySummaryRow? {
+        if let key = selectedKey, key.hasPrefix("skill:") {
+            let id = String(key.dropFirst(6))
+            return store.memoryCenterSkillRows.first { $0.id == id }
+        }
+        return store.memoryCenterSkillRows.first { $0.kind != "channel_guard" } ?? store.memoryCenterSkillRows.first
+    }
+
+    var body: some View {
+        if let prop = activeProposal {
+            let busy = store.memoryCenterExtrasStorage.skillsDecideReqById[prop.id] != nil
+            VStack(alignment: .leading, spacing: 10) {
+                Text("待启用技能草案")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                HStack {
+                    Text("\(prop.name) (\(prop.skillId))")
+                        .font(JieboFont.text(.headline, weight: .semibold))
+                    Spacer()
+                    StatusTag(text: "待批准", fg: JieboColor.warnFg, bg: JieboColor.warnBg)
+                }
+                Text(prop.summary)
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+                Text("作用文件夹：\(prop.targetDir) · 权限：\(prop.mode == "write" ? "读写" : "只读")")
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+                if !prop.keywords.isEmpty {
+                    Text("触发词：\(prop.keywords.joined(separator: "、"))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if !prop.requiredTools.isEmpty {
+                    Text("关联工具：\(prop.requiredTools.joined(separator: ", "))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if prop.status == "pending" {
+                    HStack(spacing: 8) {
+                        ActionButton(title: busy ? "处理中…" : "批准上架", kind: .primary) {
+                            store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: true, expectedRev: prop.rev)
+                        }
+                        .disabled(busy)
+                        ActionButton(title: "拒绝", kind: .outline) {
+                            store.memoryCenterDecideSkillProposal(proposalId: prop.id, approve: false, expectedRev: prop.rev)
+                        }
+                        .disabled(busy)
+                    }
+                }
+                Text("技能手册全文（SKILL.md）")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                Text(prop.formattedMarkdown)
+                    .font(JieboFont.mono(.caption2))
+                    .foregroundStyle(JieboColor.ink)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(JieboColor.mist)
+                    .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                    .textSelection(.enabled)
+                DisclosureGroup("底层安全锁信息（#\(String(prop.sha256.prefix(8)))）") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("落盘路径：\(prop.relSkillPath)")
+                        Text("SHA-256：\(prop.sha256)")
+                    }
+                    .font(JieboFont.text(.caption2))
+                    .foregroundStyle(JieboColor.dim)
+                }
+                .font(JieboFont.text(.caption))
+            }
+        } else if let sk = activeSkill {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(sk.kind == "channel_guard" ? "平台后台守卫（系统自动运行）" : "技能详情与操作手册")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                HStack {
+                    Text(sk.name)
+                        .font(JieboFont.text(.headline, weight: .semibold))
+                    Spacer()
+                    StatusTag(
+                        text: MemoryCenterSkillsPane.healthLabel(sk.health),
+                        fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.errFg : JieboColor.warnFg),
+                        bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.errBg : JieboColor.warnBg)
+                    )
+                }
+                Text(sk.summary)
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+                HStack(spacing: 6) {
+                    StatusTag(text: MemoryCenterSkillsPane.kindLabel(sk.kind), fg: JieboColor.ink2, bg: JieboColor.mist)
+                    StatusTag(text: MemoryCenterSkillsPane.scopeLabel(sk.scope), fg: JieboColor.ink2, bg: JieboColor.mist)
+                    if sk.pinned {
+                        StatusTag(text: "常驻推荐", fg: JieboColor.pine, bg: JieboColor.pine.opacity(0.12))
+                    }
+                }
+                Text("被采用 \(sk.adoptedCount) 次 · 查阅 \(sk.viewedCount) 次 · 自动预热 \(sk.prewarmedCount) 次")
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+                if !sk.keywords.isEmpty {
+                    Text("触发词：\(sk.keywords.joined(separator: "、"))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if !sk.globs.isEmpty {
+                    Text("匹配文件：\(sk.globs.joined(separator: "、"))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if !sk.requiredTools.isEmpty {
+                    Text("关联工具：\(sk.requiredTools.joined(separator: ", "))")
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.dim)
+                }
+                if let reason = sk.healthReason, !reason.isEmpty {
+                    Text(reason)
+                        .font(JieboFont.text(.caption))
+                        .foregroundStyle(JieboColor.warnFg)
+                }
+                if sk.kind != "channel_guard", sk.health != "tampered" {
+                    HStack(spacing: 8) {
+                        ActionButton(title: sk.pinned ? "取消常驻" : "设为常驻", kind: .outline) {
+                            store.memoryCenterUpdateSkillMeta(skillId: sk.id, entry: sk.entry, pinned: !sk.pinned)
+                        }
+                        if sk.mode == "read" {
+                            ActionButton(title: sk.autoPrewarm ? "关闭预热" : "开启预热", kind: .outline) {
+                                store.memoryCenterUpdateSkillMeta(skillId: sk.id, entry: sk.entry, autoPrewarm: !sk.autoPrewarm)
+                            }
+                        }
+                        ActionButton(title: sk.health == "disabled" ? "恢复启用" : "停用", kind: .outline) {
+                            store.memoryCenterUpdateSkillMeta(skillId: sk.id, entry: sk.entry, disabled: sk.health != "disabled")
+                        }
+                    }
+                }
+                let canEdit = sk.kind == "declarative_skill" && sk.health == "healthy" && (sk.sha256?.isEmpty == false)
+                if canEdit, editingSkillId != sk.id {
+                    ActionButton(title: "编辑手册与触发词", kind: .outline) {
+                        editingSkillId = sk.id
+                        editName = sk.name
+                        editSummary = sk.summary
+                        editKeywords = sk.keywords.joined(separator: ", ")
+                        editBody = sk.body ?? ""
+                    }
+                }
+                if canEdit, editingSkillId == sk.id {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("在线编辑技能包（保存自动复检五道安全门禁并重签 SHA-256）")
+                            .font(JieboFont.text(.caption, weight: .semibold))
+                            .foregroundStyle(JieboColor.dim)
+                        TextField("技能名称", text: $editName)
+                        TextField("一句话摘要", text: $editSummary)
+                        TextField("触发关键词（逗号分隔）", text: $editKeywords)
+                        TextField("SOP 正文", text: $editBody, axis: .vertical)
+                            .lineLimit(6...14)
+                        HStack(spacing: 8) {
+                            ActionButton(title: "保存并重签锁", kind: .primary) {
+                                let kws = editKeywords
+                                    .components(separatedBy: CharacterSet(charactersIn: ",，、"))
+                                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                    .filter { !$0.isEmpty }
+                                store.memoryCenterEditApprovedSkill(
+                                    skill: sk,
+                                    name: editName,
+                                    summary: editSummary,
+                                    keywords: kws,
+                                    body: editBody
+                                )
+                                editingSkillId = nil
+                            }
+                            .disabled(editName.trimmingCharacters(in: .whitespaces).isEmpty || editSummary.trimmingCharacters(in: .whitespaces).isEmpty || editBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            ActionButton(title: "取消", kind: .outline) {
+                                editingSkillId = nil
+                            }
+                        }
+                    }
+                    .assistantCard()
+                } else {
+                    Text("操作手册（SOP 正文）")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                    Text(sk.body ?? "（该能力未附带独立正文）")
+                        .font(JieboFont.mono(.caption2))
+                        .foregroundStyle(JieboColor.ink)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(JieboColor.mist)
+                        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
+                        .textSelection(.enabled)
+                }
+                DisclosureGroup("底层技术信息（\(sk.id)）") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("技能 ID：\(sk.id)")
+                        Text("代码/文件入口：\(sk.entry)")
+                        if let sha = sk.sha256, !sha.isEmpty {
+                            Text("SHA-256：\(sha)")
+                        }
+                    }
+                    .font(JieboFont.text(.caption2))
+                    .foregroundStyle(JieboColor.dim)
+                }
+                .font(JieboFont.text(.caption))
+            }
+        } else {
+            Text("在左侧点选一项技能或提案，查看完整操作手册（SOP）。")
+                .font(JieboFont.text(.caption))
+                .foregroundStyle(JieboColor.dim)
         }
     }
 }

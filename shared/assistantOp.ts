@@ -23,6 +23,8 @@ export type AssistantOpMessageRest<O extends AssistantOp> = O extends "memory_ce
           | "drop_token_update"
           | "drop_token_revoke"
           | "skill_proposal_decide"
+          | "skill_update_meta"
+          | "skill_edit_approved"
       ? [args: AssistantOpArgsMap[O]]
       : O extends
             | "memory_center_get"
@@ -110,6 +112,14 @@ export type BuildAssistantOpMessage = {
     operation: "skill_proposal_decide",
     args: AssistantOpArgsMap["skill_proposal_decide"],
   ): AssistantOpMessageOf<"skill_proposal_decide">;
+  (
+    operation: "skill_update_meta",
+    args: AssistantOpArgsMap["skill_update_meta"],
+  ): AssistantOpMessageOf<"skill_update_meta">;
+  (
+    operation: "skill_edit_approved",
+    args: AssistantOpArgsMap["skill_edit_approved"],
+  ): AssistantOpMessageOf<"skill_edit_approved">;
   (operation: AssistantOpNoArgs): AssistantOpMessageOf<AssistantOpNoArgs>;
   (
     operation: Exclude<
@@ -132,6 +142,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_revoke"
       | "skill_factory_status"
       | "skill_proposal_decide"
+      | "skill_update_meta"
+      | "skill_edit_approved"
       | AssistantOpNoArgs
     >,
     args?: Record<string, unknown>,
@@ -156,6 +168,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_revoke"
       | "skill_factory_status"
       | "skill_proposal_decide"
+      | "skill_update_meta"
+      | "skill_edit_approved"
       | AssistantOpNoArgs
     >
   >;
@@ -218,6 +232,12 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   }
   if (operation === "skill_proposal_decide") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["skill_proposal_decide"] };
+  }
+  if (operation === "skill_update_meta") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["skill_update_meta"] };
+  }
+  if (operation === "skill_edit_approved") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["skill_edit_approved"] };
   }
   if (operation === "memory_export" || operation === "memory_tidy" || operation === "push_test") {
     return { ...base, op: operation };

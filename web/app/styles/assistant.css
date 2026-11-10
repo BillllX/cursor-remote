@@ -76,9 +76,16 @@
 }
 
 .assistant-pre {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
   white-space: pre-wrap;
-  font-size: var(--fs-md);
-  line-height: 1.5;
+  word-break: break-word;
+  overflow-x: auto;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
   color: var(--text);
 }
 
@@ -87,18 +94,19 @@
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .assistant-item {
   display: grid;
-  gap: 4px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
   color: var(--text);
   font-size: var(--fs-md);
+  min-width: 0;
 }
 
 .assistant-item.muted {
@@ -110,11 +118,18 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  outline: none;
+  box-sizing: border-box;
   transition: background 160ms var(--ease-out), border-color 160ms var(--ease-out);
 }
 
 .assistant-item-btn:hover {
   background: var(--hover);
+}
+
+.assistant-item-btn:focus-visible {
+  border-color: var(--accent-line);
+  box-shadow: var(--focus);
 }
 
 .assistant-item-btn.unread {
@@ -123,8 +138,9 @@
 
 .assistant-item-head {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -132,8 +148,8 @@
   flex: 1;
   min-width: 0;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  line-height: 1.4;
+  word-break: break-word;
 }
 
 .assistant-item-btn.unread .assistant-item-title {
@@ -182,7 +198,23 @@
   margin-bottom: 0;
 }
 
-/* chat-mark 的色调变体：只用主题里的 ok / danger / warn 三组 */
+/* chat-mark 的色调变体：只用主题里的 ok / danger / warn 三组，并显式隔离全局 .warn 横幅宽度 */
+.chat-mark,
+.chat-mark.ok,
+.chat-mark.danger,
+.chat-mark.warn {
+  flex: none;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-2xs);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
 .chat-mark.ok {
   background: var(--ok-bg);
   color: var(--ok-fg);

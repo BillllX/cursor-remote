@@ -389,10 +389,12 @@ extension ChatStore {
             }
             if target == activeId, !sessionCwd.isEmpty { cwd = sessionCwd }
         case .runMeta(let id, let runModel, let runMode):
+            let prewarmed = RunMetaPrewarmStash.take(chatId: id)
             patchRunning(id) { turn in
                 var next = turn
                 if !runModel.isEmpty { next.model = runModel }
                 if let runMode { next.mode = runMode }
+                if let prewarmed { next.extra["prewarmedSkills"] = prewarmed }
                 return next
             }
         case .textDelta(let id, let text):
