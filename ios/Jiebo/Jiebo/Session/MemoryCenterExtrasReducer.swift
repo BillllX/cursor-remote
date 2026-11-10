@@ -27,6 +27,12 @@ struct MemoryCenterExtrasDataState: Sendable, Hashable {
     var importResolutions: [String: MemoryCenterImportResolution] = [:]
     var importLastImportId: String?
     var importError: String?
+    var skillRows: [SkillFactorySummaryRow] = []
+    var skillProposals: [SkillFactoryProposalRow] = []
+    var skillsLoading = false
+    var skillsLoadReqId: String?
+    var skillsDecideReqById: [String: String] = [:]
+    var skillsError: String?
 
     static var initial: MemoryCenterExtrasDataState { MemoryCenterExtrasDataState() }
 }

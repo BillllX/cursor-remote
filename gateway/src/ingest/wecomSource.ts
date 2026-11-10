@@ -490,8 +490,25 @@ export function addOrUpdateWecomWatchItem(
     return { ok: false, error: `不支持的 sourceType: ${String(input.sourceType)}` };
   }
 
-  const docId = input.docId?.trim() || undefined;
+  let docId = input.docId?.trim() || undefined;
   const fileId = input.fileId?.trim() || undefined;
+  let extractedTabSheet: string | undefined;
+  if (docId && /^https?:\/\//i.test(docId)) {
+    try {
+      const parsedUrl = new URL(docId);
+      const tabParam = (parsedUrl.searchParams.get("tab") || parsedUrl.searchParams.get("sheet") || "").trim();
+      if (tabParam && !tabParam.startsWith("-") && !hasControlChars(tabParam)) {
+        extractedTabSheet = tabParam;
+      }
+      const pathSegs = parsedUrl.pathname.split("/").filter(Boolean);
+      const lastSeg = pathSegs[pathSegs.length - 1] || "";
+      if (/^e3_[A-Za-z0-9_-]+$/.test(lastSeg)) {
+        docId = lastSeg;
+      }
+    } catch {
+      // keep raw docId
+    }
+  }
   if (docId && !isValidWecomResourceId(docId, 500)) {
     return { ok: false, error: "docId 格式不合法（不可含空白/控制字符或以 - 开头）" };
   }
@@ -505,7 +522,7 @@ export function addOrUpdateWecomWatchItem(
     return { ok: false, error: `${input.sourceType} 类型必须提供 docId（如 e3_xxx 或在线文档链接）` };
   }
 
-  const cleanSheet = input.sheet?.trim() || undefined;
+  const cleanSheet = input.sheet?.trim() || extractedTabSheet || undefined;
   if (cleanSheet && (cleanSheet.length > 120 || hasControlChars(cleanSheet) || cleanSheet.startsWith("-"))) {
     return { ok: false, error: "sheet 名称不合法" };
   }
@@ -533,7 +550,7 @@ export function addOrUpdateWecomWatchItem(
       const prev = file.items[existingIdx];
       const nextDocId = input.sourceType === "disk_file" ? docId : (docId ?? prev.docId);
       const nextFileId = input.sourceType === "disk_file" ? (fileId ?? prev.fileId) : undefined;
-      const nextSheet = input.sheet !== undefined ? cleanSheet : prev.sheet;
+      const nextSheet = (input.sheet !== undefined || extractedTabSheet !== undefined) ? cleanSheet : prev.sheet;
       const nextRange = input.range !== undefined ? cleanRange : prev.range;
       const coordsChanged =
         prev.sourceType !== input.sourceType ||

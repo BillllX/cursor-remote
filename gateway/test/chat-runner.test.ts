@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { WebSocket } from "ws";
 import {
+  ASSISTANT_ROLL_TURNS,
+  buildPromptSeedKey,
   drainPending,
   handlePrompt,
   isTransientSdkError,
@@ -12,9 +14,20 @@ import {
   promptModel,
   RUN_QUIET_AFTER_TURN_ENDED_MS,
   sdkRetryDelayMs,
+  SESSION_ROLL_CONTEXT_CHARS,
   shouldArmRunWatchQuiet,
+  shouldRollSdkSession,
   waitWithSlotCheck,
+  WORKSPACE_ROLL_TURNS,
 } from "../src/chat/runner.ts";
+import { diskChatContextStats } from "../src/chat/history.ts";
+import {
+  loadDynamicMemoryContext,
+  loadStaticRulesFingerprint,
+  loadWorkspaceRules,
+  wrapFollowupPrompt,
+  wrapPrompt,
+} from "../src/chat/prompt.ts";
 import { retryable } from "../src/native/loop.ts";
 import { isSlotActive, pruneDroppedSlots, runningChatIds } from "../src/runtime/slots.ts";
 import { gatewayState, liveSlotsOf } from "../src/runtime/state.ts";
@@ -283,3 +296,163 @@ describe("任务防中断加固：瞬时错误识别、静默看门狗与活跃�
     }
   });
 });
+
+describe("对话提速：第一步（子工作区按轮数/体积自动无感换壳）与第二步（同会话重复 Prompt 瘦身）", () => {
+  test("shouldRollSdkSession 与 diskChatContextStats：子工作区满 15 轮或累计工具上下文达 800KB 即触发换壳，审批续跑期间不换壳", () => {
+    assert.equal(ASSISTANT_ROLL_TURNS, 40);
+    assert.equal(WORKSPACE_ROLL_TURNS, 15);
+    assert.equal(SESSION_ROLL_CONTEXT_CHARS, 800_000);
+
+    // 1. 子工作区未满 15 轮且体积未超 800KB 时不换壳
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        turns: 14,
+        lastRolledTurn: 0,
+        contextCharsSinceRoll: 120_000,
+      }),
+      false,
+    );
+
+    // 2. 子工作区满 15 轮自动换壳
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        turns: 15,
+        lastRolledTurn: 0,
+        contextCharsSinceRoll: 120_000,
+      }),
+      true,
+    );
+
+    // 3. 刚在 15 轮换过壳，第 15 轮不再重复换，到 30 轮再次换壳
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        turns: 15,
+        lastRolledTurn: 15,
+        contextCharsSinceRoll: 0,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        turns: 30,
+        lastRolledTurn: 15,
+        contextCharsSinceRoll: 50_000,
+      }),
+      true,
+    );
+
+    // 4. 轮数虽只有 3 轮，但单轮重度工具输出累计达 800KB 时提前换壳
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        turns: 3,
+        lastRolledTurn: 0,
+        contextCharsSinceRoll: 850_000,
+      }),
+      true,
+    );
+
+    // 5. autoApprove 或 keepTranscript 期间绝不打断换壳
+    assert.equal(
+      shouldRollSdkSession({
+        isAssistant: false,
+        hasAgent: true,
+        autoApprove: true,
+        turns: 20,
+        lastRolledTurn: 0,
+        contextCharsSinceRoll: 900_000,
+      }),
+      false,
+    );
+
+    // 6. diskChatContextStats 按 sinceTurn 精确统计增量轮数与工具体积
+    const tenant = allTenants()[0];
+    const bigToolOutput = "x".repeat(300_000);
+    tenant.disk.chats = [
+      {
+        id: "chat-heavy",
+        turns: [
+          { id: "t1", user: "第一轮", assistant: "完成1", tools: [{ callId: "1", name: "read", result: bigToolOutput }] },
+          { id: "t2", user: "第二轮", assistant: "完成2", tools: [{ callId: "2", name: "shell", result: bigToolOutput }] },
+          { id: "t3", user: "第三轮", assistant: "完成3", tools: [{ callId: "3", name: "read", result: bigToolOutput }] },
+        ],
+      },
+    ];
+    try {
+      const fromZero = diskChatContextStats(tenant, "chat-heavy", 0);
+      assert.equal(fromZero.turns, 3);
+      assert.equal(fromZero.turnsSinceRoll, 3);
+      assert.equal(fromZero.toolCallsSinceRoll, 3);
+      assert.ok(fromZero.contextCharsSinceRoll >= 900_000);
+
+      const fromTwo = diskChatContextStats(tenant, "chat-heavy", 2);
+      assert.equal(fromTwo.turns, 3);
+      assert.equal(fromTwo.turnsSinceRoll, 1);
+      assert.equal(fromTwo.toolCallsSinceRoll, 1);
+      assert.ok(fromTwo.contextCharsSinceRoll >= 300_000 && fromTwo.contextCharsSinceRoll < 350_000);
+    } finally {
+      tenant.disk.chats = [];
+    }
+  });
+
+  test("wrapFollowupPrompt 与 buildPromptSeedKey：同 agentId 后续轮次剔除重复静态 AGENTS.md 与固定长模板，体积缩减 >75%，规则或模式变更时指纹自动失效", () => {
+    const tenant = allTenants()[0];
+    const subWs = join(tenant.workspaceRoot, "proj-speed");
+    mkdirSync(join(subWs, ".jiebo"), { recursive: true });
+    writeFileSync(
+      join(subWs, "AGENTS.md"),
+      "# 项目硬约束\n" + "- 静态长规则条目，首轮已注入后无需每轮重复发送。\n".repeat(80),
+      "utf8",
+    );
+    writeFileSync(
+      join(subWs, ".jiebo", "memory.md"),
+      "# 工作区记忆\n\n## 命令\n- 构建命令使用 npm run build <!-- id=wm1 at=2026-11-09 -->\n",
+      "utf8",
+    );
+
+    const fullRules = loadWorkspaceRules(subWs, tenant, "构建命令");
+    const fullPrompt = wrapPrompt("继续吧", "agent", undefined, fullRules, subWs, [], false, true);
+    const dynMemory = loadDynamicMemoryContext(subWs, tenant, "构建命令");
+    const compact = wrapFollowupPrompt("继续吧", "agent", undefined, dynMemory, subWs, true);
+
+    assert.ok(fullPrompt.length > 2500, `完整 Prompt 应包含全部静态规则（实际 ${fullPrompt.length}）`);
+    assert.ok(compact.length < fullPrompt.length * 0.25, `紧凑续接 Prompt 应缩减 75% 以上（实际 ${compact.length} vs ${fullPrompt.length}）`);
+    assert.ok(compact.includes("npm run build"), "紧凑续接 Prompt 仍须保留当前轮次动态匹配的 .jiebo/memory.md");
+    assert.ok(compact.includes("继续吧"), "紧凑续接 Prompt 包含用户本轮输入");
+
+    const hash1 = loadStaticRulesFingerprint(subWs, tenant);
+    const key1 = buildPromptSeedKey({
+      agentId: "agent-1",
+      cwd: subWs,
+      mode: "agent",
+      staticRulesHash: hash1,
+      assistantBlock: "",
+      dialect: true,
+      panelKey: "",
+    });
+    // 修改 AGENTS.md 后静态指纹立刻变化，触发重新发送完整 Prompt
+    writeFileSync(join(subWs, "AGENTS.md"), "# 项目硬约束（已更新）\n- 新规则\n", "utf8");
+    const hash2 = loadStaticRulesFingerprint(subWs, tenant);
+    assert.notEqual(hash1, hash2, "AGENTS.md 变更后静态规则哈希必须立即更新");
+    const key2 = buildPromptSeedKey({
+      agentId: "agent-1",
+      cwd: subWs,
+      mode: "agent",
+      staticRulesHash: hash2,
+      assistantBlock: "",
+      dialect: true,
+      panelKey: "",
+    });
+    assert.notEqual(key1, key2);
+  });
+});
+

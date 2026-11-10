@@ -226,35 +226,64 @@ export default function ToolCard({
   const path = diff.path || pathFromArgs;
   const roleLabel = crewLabel(tool.name, args, tool.agent);
   const model = tool.model ? modelLabel(tool.model) : "";
+  const baseToolName =
+    tool.name
+      .toLowerCase()
+      .split(/__|[./:]/)
+      .at(-1) || "";
+  const skillIdArg = field(args, "id", "name", "query");
+  const isSkillTool =
+    baseToolName === "skill_use" ||
+    baseToolName === "skill_propose" ||
+    baseToolName === "skill_list" ||
+    baseToolName === "skill_verify" ||
+    baseToolName === "skill_proposal_decide" ||
+    baseToolName === "skill_proposal_list";
   const rawTitle =
-    kind === "shell"
-      ? command || tool.name
-      : kind === "search"
-        ? pattern || tool.name
-        : roleLabel || /task|todo|agent|explore|builder|reviewer/i.test(tool.name)
-          ? field(args, "content", "description", "title") || ""
-          : path || (tool.name === "tool" ? pattern : tool.name);
+    isSkillTool
+      ? skillIdArg || "全部已集成技能"
+      : kind === "shell"
+        ? command || tool.name
+        : kind === "search"
+          ? pattern || tool.name
+          : roleLabel || /task|todo|agent|explore|builder|reviewer/i.test(tool.name)
+            ? field(args, "content", "description", "title") || ""
+            : path || (tool.name === "tool" ? pattern : tool.name);
   const title =
-    kind === "read" || kind === "edit" || kind === "write"
-      ? shortPath(path || rawTitle)
-      : kind === "search" || kind === "shell"
-        ? shortPath(rawTitle)
-        : rawTitle;
+    isSkillTool
+      ? rawTitle
+      : kind === "read" || kind === "edit" || kind === "write"
+        ? shortPath(path || rawTitle)
+        : kind === "search" || kind === "shell"
+          ? shortPath(rawTitle)
+          : rawTitle;
   const label =
     roleLabel ||
-    (kind === "shell"
-      ? "Ran"
-      : kind === "search"
-        ? "Searched"
-        : kind === "edit"
-          ? "Edited"
-          : kind === "write"
-            ? "Wrote"
-            : kind === "read"
-              ? "Read"
-              : /task/i.test(tool.name)
-                ? "Task"
-                : tool.name);
+    (baseToolName === "skill_use"
+      ? "调用技能"
+      : baseToolName === "skill_propose"
+        ? "提议新技能"
+        : baseToolName === "skill_list"
+          ? "查询技能库"
+          : baseToolName === "skill_verify"
+            ? "核验技能"
+            : baseToolName === "skill_proposal_decide"
+              ? "审批技能"
+              : baseToolName === "skill_proposal_list"
+                ? "技能提案列表"
+                : kind === "shell"
+                  ? "Ran"
+                  : kind === "search"
+                    ? "Searched"
+                    : kind === "edit"
+                      ? "Edited"
+                      : kind === "write"
+                        ? "Wrote"
+                        : kind === "read"
+                          ? "Read"
+                          : /task/i.test(tool.name)
+                            ? "Task"
+                            : tool.name);
   const live = (tool.status === "running" && !settled) || Boolean(nestedLive);
   const showDiff = Boolean(diff.before || diff.after || diff.unified);
   const shell = kind === "shell" ? extractShell(tool.result) : { stdout: "", stderr: "" };

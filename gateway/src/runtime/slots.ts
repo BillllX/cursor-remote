@@ -60,6 +60,7 @@ export function persistTenant(tenant: Tenant, slots = liveSlotsOf(tenant)) {
       edited: slot.edited,
       checkpoints: slot.checkpoints,
       reviewRoster: slot.reviewRoster,
+      rolledAtTurn: slot.rolledAtTurn,
     });
   }
   tenant.disk.slots = [...byId.values()];
@@ -163,6 +164,7 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     runStats: { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 },
     dialect: true,
     reviewRoster: rosterFromDisk(saved?.reviewRoster),
+    rolledAtTurn: typeof saved?.rolledAtTurn === "number" ? saved.rolledAtTurn : undefined,
   };
 }
 

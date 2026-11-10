@@ -44,6 +44,7 @@ export function silentAssistantTool(name: string) {
     base === "workspace_memory_read" ||
     base === "workspace_memory_search" ||
     base === "workspace_memory_mark_used" ||
+    base === "skill_mark_used" ||
     base === "chat_search"
   );
 }

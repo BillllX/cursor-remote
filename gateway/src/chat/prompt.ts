@@ -1,10 +1,11 @@
 // 提示词组装：工作区规则与用户消息包装
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { type ReviewBinding, reviewPanelPrompt, workspaceConfinePrompt } from "../../../shared/crew.ts";
 import type { AgentMode } from "../../../shared/protocol.ts";
 import { PUBLISH_AGENT_PROMPT, PUBLISH_DENIED_PROMPT, PUBLISH_OWNER_PROMPT } from "../../../shared/publishPrompt.ts";
-import { workspaceContextFor } from "../assistant/service.ts";
+import { workspaceContextFor, workspaceDynamicMemoryFor, workspaceStaticRulesFor } from "../assistant/service.ts";
 import { log } from "../log.ts";
 import type { Tenant } from "../tenants.ts";
 import { expandAttachments } from "./attachments.ts";
@@ -45,6 +46,55 @@ export function loadWorkspaceRules(cwd: string, tenant?: Tenant | null, query = 
     log.debug("规则目录读不了", dir, err instanceof Error ? err.message : err);
   }
   return chunks.join("\n\n").slice(0, 16_000);
+}
+
+/** 计算当前 cwd 下工作偏好 + 各层静态规则文件（AGENTS.md/.cursorrules/.cursor/rules/*）的哈希指纹 */
+export function loadStaticRulesFingerprint(cwd: string, tenant?: Tenant | null): string {
+  const raw = tenant ? workspaceStaticRulesFor(tenant, cwd) : loadWorkspaceRules(cwd, null, "");
+  return createHash("sha1").update(raw, "utf8").digest("hex");
+}
+
+/** 仅提取当前轮次 query 相关的动态 .jiebo/memory.md 记忆片段（供同 agentId 会话后续轮次免重复注入静态大文件） */
+export function loadDynamicMemoryContext(cwd: string, tenant?: Tenant | null, query = ""): string {
+  if (!tenant) return "";
+  try {
+    return workspaceDynamicMemoryFor(tenant, cwd, query);
+  } catch (err) {
+    log.with({ tenant: tenant.id }).error("workspace dynamic memory", err);
+    return "";
+  }
+}
+
+/**
+ * 同一 SDK agentId 会话在首轮已注入完整 wrapPrompt 与静态规则（AGENTS.md 等）且未发生变化时，
+ * 后续轮次使用的紧凑续接包装：省去每轮重复发送 ~5,000 字符的相同静态说明，仅保留核心模式守卫与本轮动态记忆。
+ */
+export function wrapFollowupPrompt(
+  text: string,
+  mode: AgentMode,
+  files?: string[],
+  dynamicMemory?: string,
+  cwd?: string,
+  confine = true,
+): string {
+  let body = text;
+  if (files?.length) {
+    const expanded = cwd ? expandAttachments(cwd, files) : "";
+    body = `The user attached these workspace files as context:\n${files
+      .map((file) => `- ${file}`)
+      .join("\n")}${expanded ? `\n\n${expanded}` : ""}\n\n${text}`;
+  }
+  if (dynamicMemory?.trim()) {
+    body = `Workspace memory for this turn:\n${dynamicMemory.trim()}\n\n${body}`;
+  }
+  const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n` : "";
+  if (mode === "ask") {
+    return `${bound}[ASK MODE (read-only)：沿用本会话首轮规则，严禁修改任何文件、严禁执行写命令或 jiebo-publish，仅用中文文字回答。]\n\n${body}`;
+  }
+  if (mode === "plan") {
+    return `${bound}[Plan mode：沿用本会话首轮规则，只出中文分步方案，不要改文件或跑写命令；可派 explore，不要派 builder。]\n\n${body}`;
+  }
+  return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写 .cursor-remote/canvases/<kebab>.canvas.tsx 并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；超 30s 命令显式传 block_until_ms: 120000）。]\n\n${body}`;
 }
 
 export function wrapPrompt(

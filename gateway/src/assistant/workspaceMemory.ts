@@ -1128,9 +1128,72 @@ export function markWorkspaceMemoryUsed(tenant: WorkspaceRoot, cwd: string, id: 
   });
 }
 
+/**
+ * 记忆晋升为 Skill 并经批准上架后调用：将指定稳定 id 的工作区记忆行标为 state=done，
+ * 使其退出每轮常驻渲染预算，但仍保留在 .jiebo/memory.md 中供历史检索与追溯。
+ */
+export function markWorkspaceMemoriesPromoted(
+  tenant: WorkspaceRoot,
+  cwd: string,
+  ids: string[],
+  day = today(),
+): { updatedIds: string[]; skippedIds: string[] } {
+  const uniqueIds = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+  if (!uniqueIds.length) return { updatedIds: [], skippedIds: [] };
+  const base = realOr(tenant.workspaceRoot);
+  const updatedIds: string[] = [];
+  const skippedIds: string[] = [];
+  for (const id of uniqueIds) {
+    let updatedOne = false;
+    for (const dir of searchableDirs(tenant, cwd)) {
+      let paths: SafeMemoryPaths;
+      try {
+        paths = safeMemoryPaths(dir, base);
+      } catch {
+        continue;
+      }
+      if (!existsSync(paths.memory)) continue;
+      const doneInDir = withFileLockSync(paths.lockTarget, () => {
+        try {
+          safeMemoryPaths(dir, base);
+        } catch {
+          return false;
+        }
+        let text = "";
+        try {
+          text = readFileSync(paths.memory, "utf8");
+        } catch {
+          return false;
+        }
+        const raw = text.split("\n");
+        const hits = raw
+          .map((line, row) => ({ row, line: parseMemoryFile(`## 约定\n${line}`)[0] }))
+          .filter((item) => item.line?.id === id);
+        if (hits.length !== 1) return false;
+        const targetRow = hits[0]!.row;
+        const comment = /<!--([\s\S]*?)-->(\s*)$/.exec(raw[targetRow]!);
+        if (!comment || comment.index === undefined) return false;
+        let inner = setMetaValue(comment[1]!, "state", "done");
+        inner = setMetaValue(inner, "used", day);
+        raw[targetRow] = `${raw[targetRow]!.slice(0, comment.index)}<!--${inner}-->${comment[2]}`;
+        writeTextAtomic(paths.memory, raw.join("\n"));
+        sweepStaleTmp(dirname(paths.memory), { patterns: [MEMORY_TMP_RE] });
+        return true;
+      });
+      if (doneInDir) {
+        updatedOne = true;
+        break;
+      }
+    }
+    if (updatedOne) updatedIds.push(id);
+    else skippedIds.push(id);
+  }
+  return { updatedIds, skippedIds };
+}
+
 // ---------- 分层规则 ----------
 
-function layerText(dir: string, depth: number, query = "", allowedRoot = dir) {
+function layerStaticRulesText(dir: string) {
   const chunks: string[] = [];
   const take = (rel: string) => {
     const text = readText(resolve(dir, rel));
@@ -1148,9 +1211,49 @@ function layerText(dir: string, depth: number, query = "", allowedRoot = dir) {
       // no rules directory
     }
   }
+  return chunks.join("\n\n");
+}
+
+function layerText(dir: string, depth: number, query = "", allowedRoot = dir) {
+  const chunks: string[] = [];
+  const staticText = layerStaticRulesText(dir);
+  if (staticText) chunks.push(staticText);
   const memory = renderMemoryFile(dir, depth <= 1 ? LAYER_TOKEN_BUDGET.workspace : LAYER_TOKEN_BUDGET.repo, query, allowedRoot);
   if (memory) chunks.push(`### ${MEMORY_FILE}\n${memory}`);
   return chunks.join("\n\n");
+}
+
+/** 仅提取工作偏好 + 各层静态规则文件（不含随 query 变化的 .jiebo/memory.md），用于同会话静态规则指纹比对 */
+export function workspaceStaticRulesOnly(tenant: WorkspaceRoot, cwd: string) {
+  const ref = { id: tenant.id, stateDir: tenant.stateDir };
+  const base = realOr(tenant.workspaceRoot);
+  const dirs = layerDirs(tenant.workspaceRoot, cwd);
+  const staticLayers = dirs
+    .map((dir) => {
+      const text = layerStaticRulesText(dir);
+      const label = dir === base ? "USER 根目录" : posix(relative(base, dir));
+      return text ? `## 层：${label}\n${text}` : "";
+    })
+    .filter(Boolean);
+  return [renderWorkPreferences(ref), ...staticLayers].filter(Boolean).join("\n\n");
+}
+
+/** 仅提取各层动态 .jiebo/memory.md 针对本轮 query 的筛选结果（供同 agentId 续接轮次轻量化注入） */
+export function workspaceDynamicMemoryOnly(tenant: WorkspaceRoot, cwd: string, query = "") {
+  const base = realOr(tenant.workspaceRoot);
+  const dirs = layerDirs(tenant.workspaceRoot, cwd);
+  if (!dirs.length) return "";
+  const single = dirs.length === 1;
+  const blocks: string[] = [];
+  for (let i = 0; i < dirs.length; i += 1) {
+    const dir = dirs[i]!;
+    const depth = dir === base ? 0 : i + 1;
+    const memory = renderMemoryFile(dir, depth <= 1 ? LAYER_TOKEN_BUDGET.workspace : LAYER_TOKEN_BUDGET.repo, query, base);
+    if (!memory) continue;
+    const label = dir === base ? "USER 根目录" : posix(relative(base, dir));
+    blocks.push(single ? `### ${MEMORY_FILE}\n${memory}` : `## 层：${label}\n### ${MEMORY_FILE}\n${memory}`);
+  }
+  return blocks.join("\n\n");
 }
 
 /**

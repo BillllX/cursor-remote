@@ -44,6 +44,10 @@ describe("toolKind", () => {
     assert.equal(silentAssistantTool("workspace_memory_search"), true);
     assert.equal(silentAssistantTool("mcp__jiebo__workspace_memory_mark_used"), true);
     assert.equal(silentAssistantTool("workspace_memory_propose"), false);
+    assert.equal(silentAssistantTool("skill_mark_used"), true);
+    assert.equal(silentAssistantTool("mcp__custom-user-tools__skill_mark_used"), true);
+    assert.equal(silentAssistantTool("skill_use"), false);
+    assert.equal(silentAssistantTool("skill_propose"), false);
   });
 
   test("shellRows 提取 stdout/stderr/exitCode、失败态、执行目录与轮次元数据", () => {

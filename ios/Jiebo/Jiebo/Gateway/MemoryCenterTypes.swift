@@ -751,6 +751,145 @@ struct MemoryCenterSuggestionRow: Identifiable, Hashable, Sendable {
     }
 }
 
+// MARK: - Skill 工厂（对齐 shared/protocol.ts 的 SkillFactoryStatusData）
+
+struct SkillFactorySummaryRow: Identifiable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var summary: String
+    var kind: String
+    var scope: String
+    var mode: String
+    var layer: String
+    var entry: String
+    var keywords: [String]
+    var globs: [String]
+    var requiredTools: [String]
+    var refs: [String]
+    var missingRefs: [String]
+    var pinned: Bool
+    var autoPrewarm: Bool
+    var health: String
+    var healthReason: String?
+    var sha256: String?
+    var lockedSha256: String?
+    var prewarmedCount: Int
+    var viewedCount: Int
+    var adoptedCount: Int
+
+    static func from(_ json: JSONValue) -> SkillFactorySummaryRow? {
+        guard let row = json.object,
+              let id = mcReqString(row, "id"),
+              let name = mcReqString(row, "name"),
+              let summary = mcReqString(row, "summary"),
+              let kind = mcReqString(row, "kind"),
+              let scope = mcReqString(row, "scope"),
+              let mode = mcReqString(row, "mode"),
+              let layer = mcReqString(row, "layer"),
+              let entry = mcReqString(row, "entry"),
+              let health = mcReqString(row, "health"),
+              let pinned = mcOptNonNullBool(row, "pinned", default: false),
+              let autoPrewarm = mcOptNonNullBool(row, "autoPrewarm", default: false)
+        else { return nil }
+        let triggers = row["triggers"]?.object ?? [:]
+        let keywords = mcReqStringList(triggers["keywords"]) ?? []
+        let globs = mcReqStringList(triggers["globs"]) ?? []
+        let requiredTools = mcReqStringList(row["requiredTools"]) ?? []
+        let refs = mcReqStringList(row["refs"]) ?? []
+        let missingRefs = mcReqStringList(row["missingRefs"]) ?? []
+        let stats = row["stats"]?.object ?? [:]
+        return SkillFactorySummaryRow(
+            id: id,
+            name: name,
+            summary: summary,
+            kind: kind,
+            scope: scope,
+            mode: mode,
+            layer: layer,
+            entry: entry,
+            keywords: keywords,
+            globs: globs,
+            requiredTools: requiredTools,
+            refs: refs,
+            missingRefs: missingRefs,
+            pinned: pinned,
+            autoPrewarm: autoPrewarm,
+            health: health,
+            healthReason: row["healthReason"]?.string?.nilIfEmpty,
+            sha256: row["sha256"]?.string?.nilIfEmpty,
+            lockedSha256: row["lockedSha256"]?.string?.nilIfEmpty,
+            prewarmedCount: stats["prewarmedCount"]?.int ?? 0,
+            viewedCount: stats["viewedCount"]?.int ?? 0,
+            adoptedCount: stats["adoptedCount"]?.int ?? 0
+        )
+    }
+}
+
+struct SkillFactoryProposalRow: Identifiable, Hashable, Sendable {
+    var id: String
+    var skillId: String
+    var name: String
+    var summary: String
+    var scope: String
+    var mode: String
+    var targetDir: String
+    var relSkillPath: String
+    var promotedFromMemoryIds: [String]
+    var formattedMarkdown: String
+    var sha256: String
+    var status: String
+    var rev: Int
+    var createdAt: String
+
+    static func from(_ json: JSONValue) -> SkillFactoryProposalRow? {
+        guard let row = json.object,
+              let id = mcReqString(row, "id"),
+              let skillId = mcReqString(row, "skillId"),
+              let name = mcReqString(row, "name"),
+              let summary = mcReqString(row, "summary"),
+              let scope = mcReqString(row, "scope"),
+              let mode = mcReqString(row, "mode"),
+              let targetDir = mcReqString(row, "targetDir"),
+              let relSkillPath = mcReqString(row, "relSkillPath"),
+              let formattedMarkdown = mcReqString(row, "formattedMarkdown"),
+              let sha256 = mcReqString(row, "sha256"),
+              let status = mcReqString(row, "status"),
+              let rev = mcReqInt(row, "rev"),
+              let createdAt = mcReqString(row, "createdAt")
+        else { return nil }
+        let promoted = mcReqStringList(row["promotedFromMemoryIds"]) ?? []
+        return SkillFactoryProposalRow(
+            id: id,
+            skillId: skillId,
+            name: name,
+            summary: summary,
+            scope: scope,
+            mode: mode,
+            targetDir: targetDir,
+            relSkillPath: relSkillPath,
+            promotedFromMemoryIds: promoted,
+            formattedMarkdown: formattedMarkdown,
+            sha256: sha256,
+            status: status,
+            rev: rev,
+            createdAt: createdAt
+        )
+    }
+}
+
+struct SkillFactoryStatusData: Sendable, Hashable {
+    var skills: [SkillFactorySummaryRow]
+    var proposals: [SkillFactoryProposalRow]
+
+    static func from(_ value: JSONValue?) -> SkillFactoryStatusData? {
+        guard let object = value?.object,
+              let skills = mcDecodeArray(object["skills"], SkillFactorySummaryRow.from),
+              let proposals = mcDecodeArray(object["proposals"], SkillFactoryProposalRow.from)
+        else { return nil }
+        return SkillFactoryStatusData(skills: skills, proposals: proposals)
+    }
+}
+
 // MARK: - 严格 JSON 解码辅助
 
 private func mcReqString(_ row: [String: JSONValue], _ key: String) -> String? {

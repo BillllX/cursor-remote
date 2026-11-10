@@ -219,7 +219,7 @@ export function isMutatingTool(name: string, args: unknown): boolean {
     return rec.action === "add" || rec.action === "remove";
   }
   if (
-    /(kb_workspace_init|drop_token_create|drop_token_update|drop_token_revoke|kb_ingest_submit|wecom_watch_sync|gateway_calendar_event_add|gateway_calendar_event_update|colleague_proposal_decide)/.test(
+    /(kb_workspace_init|drop_token_create|drop_token_update|drop_token_revoke|kb_ingest_submit|wecom_watch_sync|gateway_calendar_event_add|gateway_calendar_event_update|colleague_proposal_decide|skill_propose|skill_proposal_decide)/.test(
       n,
     )
   ) {

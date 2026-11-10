@@ -544,6 +544,77 @@ export type WxQrCodeStatusData = {
   message: string;
 };
 
+/** Skill 工厂（v2）：四分类模型、健康度、使用计数与提案审批 */
+export type SkillFactoryKind = "channel_guard" | "native_tool" | "manual_runbook" | "declarative_skill";
+export type SkillFactoryScope = "platform" | "workspace" | "repo";
+export type SkillFactoryMode = "read" | "write";
+export type SkillFactoryHealthStatus = "healthy" | "degraded" | "broken_ref" | "tampered" | "disabled";
+
+export type SkillFactoryUsageStats = {
+  prewarmedCount: number;
+  viewedCount: number;
+  adoptedCount: number;
+  lastViewedAt?: string;
+  lastAdoptedAt?: string;
+};
+
+export type SkillFactorySummaryItem = {
+  id: string;
+  name: string;
+  summary: string;
+  kind: SkillFactoryKind;
+  scope: SkillFactoryScope;
+  mode: SkillFactoryMode;
+  layer: string;
+  entry: string;
+  triggers: {
+    keywords: string[];
+    globs: string[];
+  };
+  requiredTools: string[];
+  refs: string[];
+  missingRefs: string[];
+  pinned: boolean;
+  autoPrewarm: boolean;
+  health: SkillFactoryHealthStatus;
+  healthReason?: string;
+  sha256?: string;
+  lockedSha256?: string;
+  stats: SkillFactoryUsageStats;
+};
+
+export type SkillFactoryProposalItem = {
+  id: string;
+  skillId: string;
+  name: string;
+  summary: string;
+  scope: "workspace" | "repo";
+  mode: SkillFactoryMode;
+  targetDir: string;
+  relSkillPath: string;
+  triggers: {
+    keywords: string[];
+    globs: string[];
+  };
+  requiredTools: string[];
+  refs: string[];
+  promotedFromMemoryIds: string[];
+  body: string;
+  formattedMarkdown: string;
+  sha256: string;
+  status: "pending" | "approved" | "rejected";
+  rev: number;
+  createdAt: string;
+  updatedAt: string;
+  chatId?: string;
+  decisionNote?: string;
+};
+
+export type SkillFactoryStatusData = {
+  skills: SkillFactorySummaryItem[];
+  proposals: SkillFactoryProposalItem[];
+};
+
 export type KbWorkspaceStatusData = {
   workspaceKey: string;
   workspaceId: string;
@@ -635,6 +706,13 @@ export type AssistantOpArgsMap = {
     };
   };
   drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };
+  skill_factory_status: { scope?: SkillFactoryScope; query?: string; workspace?: string };
+  skill_proposal_decide: {
+    proposalId: string;
+    approve: boolean;
+    expectedRev?: number;
+    decisionNote?: string;
+  };
 };
 
 export type AssistantOpResultMap = {
@@ -655,6 +733,8 @@ export type AssistantOpResultMap = {
   drop_token_create: KbWorkspaceStatusData;
   drop_token_update: KbWorkspaceStatusData;
   drop_token_revoke: KbWorkspaceStatusData;
+  skill_factory_status: SkillFactoryStatusData;
+  skill_proposal_decide: SkillFactoryStatusData;
 };
 
 type AssistantResultBranchForOp<K extends AssistantOp> = K extends "memory_center_mutate"
@@ -940,7 +1020,10 @@ export type AssistantOp =
   | "kb_workspace_init"
   | "drop_token_create"
   | "drop_token_update"
-  | "drop_token_revoke";
+  | "drop_token_revoke"
+  /** Skill 工厂：查询已集成的四分类技能列表与待审批提案、批准或拒绝技能提案 */
+  | "skill_factory_status"
+  | "skill_proposal_decide";
 
 export type AssistantOpTyped = keyof AssistantOpArgsMap;
 
@@ -970,8 +1053,14 @@ type AssistantOpClientBranch<K extends AssistantOp> = K extends
   | "drop_token_create"
   | "drop_token_update"
   | "drop_token_revoke"
+  | "skill_proposal_decide"
   ? { op: K; args: AssistantOpArgsMap[K] }
-  : K extends "memory_center_get" | "memory_center_activity" | "memory_center_suggestions_get" | "memory_center_export"
+  : K extends
+      | "memory_center_get"
+      | "memory_center_activity"
+      | "memory_center_suggestions_get"
+      | "memory_center_export"
+      | "skill_factory_status"
     ? { op: K; args?: AssistantOpArgsMap[K] }
     : K extends AssistantOpNoArgs
       ? { op: K; args?: undefined }

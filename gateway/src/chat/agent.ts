@@ -40,11 +40,13 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
     cwd,
     sandboxOptions: { enabled: sandbox },
   };
-  // 助理工具只挂在唯一的助理会话上；其他会话没有个人记忆工具，只能提议写工作区记忆
+  // 助理工具只挂在唯一的助理会话上；其他会话没有个人记忆工具，只能提议写工作区记忆。
+  // Ask / Plan 只读模式下传入 readonly: true，直接从 SDK customTools 层面剥离写操作与技能上架工具。
+  const readonlyMode = slot.mode === "ask" || slot.mode === "plan";
   if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
-    local.customTools = foregroundTools(conn.tenant, slot.chatId);
+    local.customTools = foregroundTools(conn.tenant, slot.chatId, { readonly: readonlyMode });
   } else if (conn.tenant) {
-    local.customTools = workspaceToolsFor(conn.tenant, slot.chatId, cwd);
+    local.customTools = workspaceToolsFor(conn.tenant, slot.chatId, cwd, { readonly: readonlyMode });
   }
   const base = { apiKey, model: { id: modelId }, local };
   const overlay = slot.dialect === false ? undefined : dialectOverlay;

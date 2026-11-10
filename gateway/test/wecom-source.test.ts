@@ -299,17 +299,19 @@ describe("企业微信 (WeCom CLI) 关注文件变动巡检、按需同步与邮
       assert.equal(syncAfterEdit.syncedCount, 1);
       assert.equal(listIngestQueue(host).length, 2);
 
-      // 6. 修改该关注项的 range 坐标 -> 验证 lastSyncedSha256 基线被自动重置
+      // 6. 修改该关注项的 range 坐标，并支持直接传带 ?tab=xxx 的企微表格 URL 自动提取 docId 与 sheet
       const updatedCoords = addOrUpdateWecomWatchItem(host, {
         workspace: "Fintopia集团",
         title: "保证金跟进",
         sourceType: "sheet",
-        docId: "e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y",
+        docId: "https://doc.weixin.qq.com/sheet/e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y?scode=ANYA2wedAAYM8l03IKAYIABgY8AF0&tab=z4j6dz",
         range: "A1:C10",
       });
       assert.equal(updatedCoords.ok, true);
       if (updatedCoords.ok) {
         assert.equal(updatedCoords.created, false);
+        assert.equal(updatedCoords.item.docId, "e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y");
+        assert.equal(updatedCoords.item.sheet, "z4j6dz");
         assert.equal(updatedCoords.item.lastSyncedSha256, undefined);
       }
 

@@ -29,6 +29,56 @@ extension ChatStore {
         set { memoryCenterExtrasStorage.suggestionsError = newValue }
     }
 
+    var memoryCenterSkillRows: [SkillFactorySummaryRow] {
+        memoryCenterExtrasStorage.skillRows
+    }
+
+    var memoryCenterSkillProposals: [SkillFactoryProposalRow] {
+        memoryCenterExtrasStorage.skillProposals
+    }
+
+    var memoryCenterSkillsLoading: Bool {
+        memoryCenterExtrasStorage.skillsLoading
+    }
+
+    var memoryCenterSkillsError: String? {
+        memoryCenterExtrasStorage.skillsError
+    }
+
+    func memoryCenterLoadSkills(workspace: String? = nil) {
+        guard connected, unlocked else { return }
+        let reqId = UUID().uuidString
+        var next = memoryCenterExtrasStorage
+        next.skillsLoading = true
+        next.skillsLoadReqId = reqId
+        next.skillsError = nil
+        memoryCenterExtrasStorage = next
+        var args: [String: JSONValue] = [:]
+        if let workspace, !workspace.isEmpty, workspace != "folder-missing" {
+            args["workspace"] = .string(workspace)
+        }
+        send(.assistantOp(op: "skill_factory_status", args: args, reqId: reqId))
+    }
+
+    func memoryCenterDecideSkillProposal(proposalId: String, approve: Bool, expectedRev: Int) {
+        guard memoryCenterCanWrite() else { return }
+        let reqId = UUID().uuidString
+        var next = memoryCenterExtrasStorage
+        next.skillsDecideReqById[proposalId] = reqId
+        next.skillsError = nil
+        memoryCenterExtrasStorage = next
+        send(.assistantOp(
+            op: "skill_proposal_decide",
+            args: [
+                "proposalId": .string(proposalId),
+                "approve": .bool(approve),
+                "expectedRev": .number(Double(expectedRev)),
+                "decisionNote": .string(approve ? "在 iOS 技能工厂面板批准上架" : "在 iOS 技能工厂面板拒绝")
+            ],
+            reqId: reqId
+        ))
+    }
+
     func memoryCenterLoadActivity(scope: String? = nil, action: String? = nil, append: Bool = false) {
         guard connected, unlocked else { return }
         let reqId = UUID().uuidString
@@ -209,6 +259,32 @@ extension ChatStore {
                 next.importError = nil
             } else {
                 next.importError = error ?? "回滚失败"
+            }
+            memoryCenterExtrasStorage = next
+            return true
+        case "skill_factory_status":
+            guard reqId == memoryCenterExtrasStorage.skillsLoadReqId else { return true }
+            var next = memoryCenterExtrasStorage
+            next.skillsLoading = false
+            next.skillsLoadReqId = nil
+            if ok, let parsed = SkillFactoryStatusData.from(data) {
+                next.skillRows = parsed.skills
+                next.skillProposals = parsed.proposals
+                next.skillsError = nil
+            } else {
+                next.skillsError = error ?? "技能工厂加载失败"
+            }
+            memoryCenterExtrasStorage = next
+            return true
+        case "skill_proposal_decide":
+            var next = memoryCenterExtrasStorage
+            next.skillsDecideReqById = next.skillsDecideReqById.filter { $0.value != reqId }
+            if ok, let parsed = SkillFactoryStatusData.from(data) {
+                next.skillRows = parsed.skills
+                next.skillProposals = parsed.proposals
+                next.skillsError = nil
+            } else {
+                next.skillsError = error ?? (ok ? "数据格式错误" : "技能提案处理失败")
             }
             memoryCenterExtrasStorage = next
             return true

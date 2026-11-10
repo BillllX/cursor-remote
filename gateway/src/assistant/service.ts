@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SDKCustomTool } from "@cursor/sdk";
 import type { WebSocket } from "ws";
@@ -63,6 +63,7 @@ import { assistantTools, workspaceSessionTools, type ToolHost, type ToolRole } f
 import { assistantNameFor } from "./name.ts";
 import { errText, log } from "../log.ts";
 import { send } from "../ws/send.ts";
+import { isInside } from "../pathInside.ts";
 import { workspaceAgentById, readWorkspaceAgentFile, workspaceAgentDirectories, workspaceUnread } from "../workspace/agents.ts";
 import { getTenant } from "../tenants.ts";
 import {
@@ -113,7 +114,20 @@ import {
   searchWorkspaceMemory,
   scrubWorkspaceIndex,
   workspaceContext,
+  workspaceDynamicMemoryOnly,
+  workspaceStaticRulesOnly,
 } from "./workspaceMemory.ts";
+import {
+  decideSkillProposal,
+  listSkillProposals,
+  listSkillSummaries,
+  markSkillUsed,
+  proposeSkillPackage,
+  renderSkillsCatalogForPrompt,
+  useSkill,
+  verifySkill,
+  type SkillRunnerRole,
+} from "./skills.ts";
 import { memoryCenterActivity } from "./memoryCenterActivity.ts";
 import { memoryCenterGet, memoryCenterSearch } from "./memoryCenter.ts";
 import { memoryCenterMutate, parseMemoryCenterMutateArgs } from "./memoryCenterMutate.ts";
@@ -228,7 +242,12 @@ function dropHostFor(tenant: AssistantTenant): DropTenantHost {
   };
 }
 
-function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): ToolHost {
+function toolHost(
+  tenant: AssistantTenant,
+  role: ToolRole,
+  chatId?: string,
+  opts?: { readonly?: boolean },
+): ToolHost {
   const ref = refOf(tenant);
   const dropHost = role === "chat" || role === "schedule" ? dropHostFor(tenant) : undefined;
   return {
@@ -500,6 +519,49 @@ function toolHost(tenant: AssistantTenant, role: ToolRole, chatId?: string): Too
             }
           }
         : undefined,
+    skillList:
+      role === "chat" || role === "schedule"
+        ? (args) =>
+            listSkillSummaries(tenant, tenant.workspaceRoot, {
+              runnerRole: role === "chat" ? "foreground" : "loop",
+              scope: args.scope,
+              query: args.query,
+              includeChannelGuards: true,
+              workspaceNames: deps?.workspaces(tenant) ?? [],
+            })
+        : undefined,
+    skillUse:
+      role === "chat" || role === "schedule"
+        ? ({ id }) =>
+            useSkill(tenant, tenant.workspaceRoot, id, {
+              runnerRole: role === "chat" ? "foreground" : "loop",
+              workspaceNames: deps?.workspaces(tenant) ?? [],
+            })
+        : undefined,
+    skillMarkUsed:
+      role === "chat" || role === "schedule"
+        ? ({ id }) =>
+            markSkillUsed(tenant, tenant.workspaceRoot, id, {
+              runnerRole: role === "chat" ? "foreground" : "loop",
+              workspaceNames: deps?.workspaces(tenant) ?? [],
+            })
+        : undefined,
+    skillVerify:
+      role === "chat"
+        ? ({ id }) => verifySkill(tenant, tenant.workspaceRoot, id, { workspaceNames: deps?.workspaces(tenant) ?? [] })
+        : undefined,
+    skillProposalList:
+      role === "chat"
+        ? ({ status }) => listSkillProposals(tenant, status)
+        : undefined,
+    skillProposalDecide:
+      role === "chat" && !opts?.readonly
+        ? (args) => {
+            const res = decideSkillProposal(tenant, args);
+            if (res.ok) void publishState(tenant);
+            return res;
+          }
+        : undefined,
   };
 }
 
@@ -525,10 +587,24 @@ export function workspaceToolsFor(
     }
   }
   const writableKb = !opts.readonly && anyKbLoaded.ok;
+  const skillRunnerRole: SkillRunnerRole = opts.readonly ? "delegate_readonly" : "foreground";
   return workspaceSessionTools({
     propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }, { confirm: memoryNeedsConfirm() }),
     search: ({ query }) => searchWorkspaceMemory(tenant, cwd, query),
     markUsed: ({ id }) => markWorkspaceMemoryUsed(tenant, cwd, id),
+    skillList: (args) =>
+      listSkillSummaries(tenant, cwd, {
+        runnerRole: skillRunnerRole,
+        scope: args.scope,
+        query: args.query,
+        includeChannelGuards: true,
+      }),
+    skillUse: ({ id }) => useSkill(tenant, cwd, id, { runnerRole: skillRunnerRole }),
+    skillMarkUsed: ({ id }) => markSkillUsed(tenant, cwd, id, { runnerRole: skillRunnerRole }),
+    skillVerify: ({ id }) => verifySkill(tenant, cwd, id),
+    skillPropose: !opts.readonly
+      ? (args) => proposeSkillPackage(tenant, cwd, { ...args, chatId })
+      : undefined,
     kbIngestSubmit:
       writableKb && dropHost && targetWorkspaceKey
         ? (args) => {
@@ -622,6 +698,25 @@ export function workspaceContextFor(tenant: AssistantTenant, cwd: string, query 
   return workspaceContext(tenant, cwd, query);
 }
 
+/** 仅提取工作偏好 + 各层静态规则文件（不含随 query 变化的 .jiebo/memory.md） */
+export function workspaceStaticRulesFor(tenant: AssistantTenant, cwd: string) {
+  return workspaceStaticRulesOnly(tenant, cwd);
+}
+
+/** 仅提取各层动态 .jiebo/memory.md 针对本轮 query 的筛选结果 */
+export function workspaceDynamicMemoryFor(tenant: AssistantTenant, cwd: string, query = "") {
+  return workspaceDynamicMemoryOnly(tenant, cwd, query);
+}
+
+/** 单次拼装的技能摘要目录（≤200 tokens，脱离 16,000 字符规则裁剪池） */
+export function skillsCatalogFor(
+  tenant: AssistantTenant,
+  cwd: string,
+  input: { query?: string; files?: string[]; runnerRole?: SkillRunnerRole } = {},
+) {
+  return renderSkillsCatalogForPrompt(tenant, cwd, input);
+}
+
 /** 子工作区会话一轮开始：线程又活跃了，先不出确认卡 */
 export function noteWorkspaceTurnStart(tenant: AssistantTenant, chatId: string) {
   cancelFlush(refOf(tenant), chatId);
@@ -655,13 +750,21 @@ export function answerMemoryCard(tenant: AssistantTenant, chatId: string, callId
 }
 
 /** USER 前台会话挂的助理工具（SDK customTools） */
-export function foregroundTools(tenant: AssistantTenant, chatId: string): Record<string, SDKCustomTool> {
-  return assistantTools(toolHost(tenant, "chat", chatId));
+export function foregroundTools(
+  tenant: AssistantTenant,
+  chatId: string,
+  opts?: { readonly?: boolean },
+): Record<string, SDKCustomTool> {
+  return assistantTools(toolHost(tenant, "chat", chatId, opts));
 }
 
 /** 自研 Agent 路径用的 ToolHost（与 foregroundTools 同一套回调） */
-export function chatToolHost(tenant: AssistantTenant, chatId: string): ToolHost {
-  return toolHost(tenant, "chat", chatId);
+export function chatToolHost(
+  tenant: AssistantTenant,
+  chatId: string,
+  opts?: { readonly?: boolean },
+): ToolHost {
+  return toolHost(tenant, "chat", chatId, opts);
 }
 
 /** 用户那边的时钟：时区取客户端系统时区，skew 是客户端时间减网关时间（排队后才跑的轮次也按跑的那一刻算） */
@@ -743,12 +846,17 @@ function runnerFor(tenant: AssistantTenant): JobRunner {
 /** Loop 没人在线时走后台策略：只读工具 + inbox_post，模型固定 grok-4.7 */
 export async function runLoopInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; text: string; label: string }) {
   const context = workspaceContext(tenant, input.cwd, input.text);
+  const skillsBlock = skillsCatalogFor(tenant, input.cwd, {
+    query: input.text,
+    runnerRole: "loop",
+  });
+  const basePrompt = context ? `工作区规则（照着做）：\n${context}\n\n${input.text}` : input.text;
   return runBackground(refOf(tenant), {
     origin: "loop",
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: context ? `工作区规则（照着做）：\n${context}\n\n${input.text}` : input.text,
+    prompt: skillsBlock ? `${skillsBlock}\n\n${basePrompt}` : basePrompt,
     customTools: assistantTools(toolHost(tenant, "loop", input.chatId)),
   });
 }
@@ -756,12 +864,17 @@ export async function runLoopInBackground(tenant: AssistantTenant, input: { chat
 /** 后台委派：子工作区里只读分析，产出改动方案；没有记忆工具和写工具 */
 export async function runDelegateInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; task: string; label: string }) {
   const context = workspaceContext(tenant, input.cwd, input.task);
+  const skillsBlock = skillsCatalogFor(tenant, input.cwd, {
+    query: input.task,
+    runnerRole: "delegate_readonly",
+  });
+  const bodyPrompt = `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；只有确实采用结果时才用 workspace_memory_mark_used。读代码时发现以后还用得上的约定、命令、坑，可以用 workspace_memory_propose 提议。`;
   return runBackground(refOf(tenant), {
     origin: "delegate",
     label: input.label,
     cwd: input.cwd,
     chatId: input.chatId,
-    prompt: `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；只有确实采用结果时才用 workspace_memory_mark_used。读代码时发现以后还用得上的约定、命令、坑，可以用 workspace_memory_propose 提议。`,
+    prompt: skillsBlock ? `${skillsBlock}\n\n${bodyPrompt}` : bodyPrompt,
     customTools: {
       ...assistantTools(toolHost(tenant, "loop", input.chatId)),
       ...workspaceToolsFor(tenant, input.chatId, input.cwd, { readonly: true }),
@@ -1406,6 +1519,58 @@ export async function handleOp(
       const globalRevoke = typeof args.globalRevoke === "boolean" ? args.globalRevoke : undefined;
       const res = revokeDropTokenFromUi(dropHostFor(tenant), { workspace, idOrLabel, globalRevoke });
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
+    }
+    case "skill_factory_status": {
+      const scopeRaw = str(args.scope);
+      const scope =
+        scopeRaw === "platform" || scopeRaw === "workspace" || scopeRaw === "repo" ? scopeRaw : undefined;
+      const query = str(args.query).trim() || undefined;
+      const workspace = str(args.workspace).trim();
+      let targetCwd = tenant.workspaceRoot;
+      if (workspace && workspace !== "personal" && workspace !== "work_preference" && workspace !== "overview") {
+        if (workspace.startsWith("/") || workspace.includes("..") || workspace.includes("\\")) {
+          return fail("workspace 路径越界或不合法。");
+        }
+        const candidate = resolve(tenant.workspaceRoot, workspace);
+    const candidateReal = existsSync(candidate) ? realpathSync(candidate) : candidate;
+        const rootReal = existsSync(tenant.workspaceRoot) ? realpathSync(tenant.workspaceRoot) : resolve(tenant.workspaceRoot);
+        if (!isInside(candidateReal, rootReal) || candidateReal === rootReal) {
+          return fail("workspace 路径越界。");
+        }
+        targetCwd = candidateReal;
+      }
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const skills = listSkillSummaries(tenant, targetCwd, {
+        runnerRole: "foreground",
+        scope,
+        query,
+        includeChannelGuards: true,
+        workspaceNames: workspaces,
+      });
+      const proposals = listSkillProposals(tenant);
+      return { ok: true, data: { skills, proposals } };
+    }
+    case "skill_proposal_decide": {
+      const proposalId = str(args.proposalId).trim();
+      if (!proposalId) return fail("proposalId 必填。");
+      const approve = Boolean(args.approve);
+      const expectedRev = typeof args.expectedRev === "number" ? args.expectedRev : undefined;
+      const decisionNote = str(args.decisionNote).trim() || undefined;
+      const decided = decideSkillProposal(tenant, {
+        proposalId,
+        approve,
+        expectedRev,
+        decisionNote,
+      });
+      if (!decided.ok) return fail(decided.error);
+      const workspaces = deps?.workspaces(tenant) ?? [];
+      const skills = listSkillSummaries(tenant, tenant.workspaceRoot, {
+        runnerRole: "foreground",
+        includeChannelGuards: true,
+        workspaceNames: workspaces,
+      });
+      const proposals = listSkillProposals(tenant);
+      return { ok: true, data: { skills, proposals } };
     }
     default:
       return fail(`不认识的操作：${String(op)}`);

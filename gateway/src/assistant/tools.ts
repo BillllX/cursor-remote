@@ -152,6 +152,32 @@ export type ToolHost = {
     mailId?: string;
     note?: string;
   }) => Promise<unknown> | unknown;
+  /** Skill 工厂与智能技能调度工具集（可选挂载，保持既有单元测试对基础 host 的精确键断言） */
+  skillList?: (args: { scope?: "platform" | "workspace" | "repo"; query?: string }) => unknown;
+  skillUse?: (args: { id: string }) => unknown;
+  skillMarkUsed?: (args: { id: string }) => unknown;
+  skillVerify?: (args: { id: string }) => unknown;
+  skillProposalList?: (args: { status?: "pending" | "approved" | "rejected" }) => unknown;
+  skillProposalDecide?: (args: {
+    proposalId: string;
+    approve: boolean;
+    expectedRev?: number;
+    decisionNote?: string;
+  }) => unknown;
+  skillPropose?: (args: {
+    id: string;
+    name: string;
+    summary: string;
+    scope?: "workspace" | "repo";
+    mode?: "read" | "write";
+    path?: string;
+    keywords?: string[];
+    globs?: string[];
+    requiredTools?: string[];
+    refs?: string[];
+    promotedFromMemoryIds?: string[];
+    body: string;
+  }) => unknown;
 };
 
 /** 子工作区会话（含委派子会话）挂的工具：工作区记忆可提议、检索、采用后续期，没有个人记忆工具 */
@@ -169,6 +195,11 @@ export type WorkspaceToolHost = {
   wecomWatchManage?: ToolHost["wecomWatchManage"];
   wecomWatchCheck?: ToolHost["wecomWatchCheck"];
   wecomWatchSync?: ToolHost["wecomWatchSync"];
+  skillList?: ToolHost["skillList"];
+  skillUse?: ToolHost["skillUse"];
+  skillMarkUsed?: ToolHost["skillMarkUsed"];
+  skillVerify?: ToolHost["skillVerify"];
+  skillPropose?: ToolHost["skillPropose"];
 };
 
 type Args = Record<string, SDKJsonValue>;
@@ -1193,7 +1224,158 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     }
   }
 
+  mountSkillTools(out, host);
+
   return out;
+}
+
+function mountSkillTools(
+  target: Record<string, SDKCustomTool>,
+  host: Pick<
+    ToolHost,
+    | "skillList"
+    | "skillUse"
+    | "skillMarkUsed"
+    | "skillVerify"
+    | "skillProposalList"
+    | "skillProposalDecide"
+    | "skillPropose"
+  >,
+) {
+  if (host.skillList) {
+    target.skill_list = tool(
+      "列出当前工作区已集成的技能（含平台通道守卫、原生工具能力、受控操作手册与工作区 .jiebo/skills/ 技能包），返回 ID、分类、健康状态与历史采用统计。",
+      {
+        scope: {
+          type: "string",
+          enum: ["platform", "workspace", "repo"],
+          description: "可选，按作用域筛选：platform / workspace / repo",
+        },
+        query: S("可选，按名称、ID 或触发关键词过滤"),
+      },
+      [],
+      (args) =>
+        host.skillList!({
+          scope:
+            args.scope === "platform" || args.scope === "workspace" || args.scope === "repo"
+              ? args.scope
+              : undefined,
+          query: str(args.query).trim() || undefined,
+        }),
+    );
+  }
+  if (host.skillUse) {
+    target.skill_use = tool(
+      "按需查阅指定技能（Skill）的完整 SOP 手册、组件契约或受控验证命令。查阅本身仅记 viewedCount；当你确实采用该技能完成任务后，请调用 skill_mark_used(id) 记录真实采用。",
+      {
+        id: S("要查阅的技能 ID（如 canvas-artifact-builder、jiebo-gateway-arch、ios-swiftui-motion）"),
+      },
+      ["id"],
+      (args) => host.skillUse!({ id: str(args.id).trim() }),
+    );
+  }
+  if (host.skillMarkUsed) {
+    target.skill_mark_used = tool(
+      "仅在确实采用某个已集成技能（Skill）的 SOP 或规范完成分析/实现后调用，按稳定 ID 更新 adoptedCount 与 lastAdoptedAt。仅仅看过但未采用时不要调用。",
+      {
+        id: S("已采用的技能 ID"),
+      },
+      ["id"],
+      (args) => host.skillMarkUsed!({ id: str(args.id).trim() }),
+    );
+  }
+  if (host.skillVerify) {
+    target.skill_verify = tool(
+      "核验指定技能的健康状态（检查 SKILL.md 的 SHA-256 审批锁完整性、requiredTools 白名单合规性及 refs 引用文件是否存在）。",
+      {
+        id: S("要核验的技能 ID"),
+      },
+      ["id"],
+      (args) => host.skillVerify!({ id: str(args.id).trim() }),
+    );
+  }
+  if (host.skillProposalList) {
+    target.skill_proposal_list = tool(
+      "列出当前租户下通过 Skill 工厂（skill_propose）提交的技能包草案列表（含待审批 pending、已上架 approved、已拒绝 rejected）。",
+      {
+        status: {
+          type: "string",
+          enum: ["pending", "approved", "rejected"],
+          description: "可选，按状态筛选（默认返回全部）",
+        },
+      },
+      [],
+      (args) =>
+        host.skillProposalList!({
+          status:
+            args.status === "pending" || args.status === "approved" || args.status === "rejected"
+              ? args.status
+              : undefined,
+        }),
+    );
+  }
+  if (host.skillProposalDecide) {
+    target.skill_proposal_decide = tool(
+      "批准或拒绝一条技能上架提案（approve=true 时校验隔离区 SHA-256 指纹、原子落盘至 .jiebo/skills/<id>/SKILL.md、写入 skill-lock.json 并将关联的工作区记忆标为 done）。",
+      {
+        proposalId: S("技能提案 ID（如 skp_xxx）"),
+        approve: { type: "boolean", description: "true 为批准上架，false 为拒绝并清理隔离区草案" },
+        expectedRev: { type: "number", description: "可选，CAS 乐观锁版本号" },
+        decisionNote: S("可选，审批备注说明"),
+      },
+      ["proposalId", "approve"],
+      (args) =>
+        host.skillProposalDecide!({
+          proposalId: str(args.proposalId).trim(),
+          approve: Boolean(args.approve),
+          expectedRev: typeof args.expectedRev === "number" ? args.expectedRev : undefined,
+          decisionNote: str(args.decisionNote).trim() || undefined,
+        }),
+    );
+  }
+  if (host.skillPropose) {
+    target.skill_propose = tool(
+      "Skill 工厂生产工具：提议在当前子工作区内创建或升级一个声明式技能包（.jiebo/skills/<id>/SKILL.md）。会经过密钥、个人隐私、工具白名单、危险命令与路径围栏静态校验，写入隔离区等待用户批准上架。",
+      {
+        id: S("技能 ID（2~48 位小写字母、数字或连字符，如 kb-archive-batch）"),
+        name: S("技能中文名称"),
+        summary: S("一句话职责与适用时机摘要（≤100字）"),
+        scope: { type: "string", enum: ["workspace", "repo"], description: "可选，默认 workspace" },
+        mode: { type: "string", enum: ["read", "write"], description: "可选，read（只读参考）或 write（涉及写操作），默认 read" },
+        path: S("可选，目标子目录（相对当前工作区），默认当前目录；严禁指向 USER 根目录"),
+        keywords: S("可选，触发关键词，逗号分隔"),
+        globs: S("可选，匹配的文件后缀或路径 glob，逗号分隔（如 *.swift, *.canvas.tsx）"),
+        requiredTools: S("可选，依赖的服务端既有工具名，逗号分隔（必须属于服务端白名单）"),
+        refs: S("可选，关联校验的相对文件路径，逗号分隔"),
+        promotedFromMemoryIds: S("可选，由哪些工作区记忆 ID 晋升而来（逗号分隔，批准上架后原记忆自动标为 done）"),
+        body: S("技能完整 Markdown SOP 正文（分步准则、防坑守卫与验证命令）"),
+      },
+      ["id", "name", "summary", "body"],
+      (args) => {
+        const splitCsv = (raw: string) =>
+          raw
+            .split(/[,，]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+        return host.skillPropose!({
+          id: str(args.id).trim(),
+          name: str(args.name).trim(),
+          summary: str(args.summary).trim(),
+          scope: str(args.scope) === "repo" ? "repo" : "workspace",
+          mode: str(args.mode) === "write" ? "write" : "read",
+          path: str(args.path).trim() || undefined,
+          keywords: str(args.keywords) ? splitCsv(str(args.keywords)) : undefined,
+          globs: str(args.globs) ? splitCsv(str(args.globs)) : undefined,
+          requiredTools: str(args.requiredTools) ? splitCsv(str(args.requiredTools)) : undefined,
+          refs: str(args.refs) ? splitCsv(str(args.refs)) : undefined,
+          promotedFromMemoryIds: str(args.promotedFromMemoryIds)
+            ? splitCsv(str(args.promotedFromMemoryIds))
+            : undefined,
+          body: str(args.body),
+        });
+      },
+    );
+  }
 }
 
 export function assistantToolNames(host: ToolHost) {
@@ -1372,6 +1554,8 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
     );
   }
 
+  mountSkillTools(tools, host);
+
   return tools;
 }
 
@@ -1391,6 +1575,8 @@ const WRITE_CATEGORY_ASSISTANT_TOOLS = new Set([
   "gateway_calendar_event_add",
   "gateway_calendar_event_update",
   "colleague_proposal_decide",
+  "skill_propose",
+  "skill_proposal_decide",
 ]);
 
 export function toolSpecs(defs: Record<string, SDKCustomTool>): ToolSpec[] {

@@ -26,6 +26,14 @@ const validDropToken: ClientMessage = buildAssistantOpMessage("drop_token_create
   passcode: "fintopia-2026",
   expiresInDays: 90,
 });
+const validSkillStatus: ClientMessage = buildAssistantOpMessage("skill_factory_status", {
+  scope: "workspace",
+});
+const validSkillDecide: ClientMessage = buildAssistantOpMessage("skill_proposal_decide", {
+  proposalId: "skp_1",
+  approve: true,
+  expectedRev: 2,
+});
 
 void validSearch;
 void validGetBare;
@@ -37,6 +45,11 @@ void validHelperLegacy;
 void validHelperNoArgs;
 void validKbStatus;
 void validDropToken;
+void validSkillStatus;
+void validSkillDecide;
+
+// @ts-expect-error skill_proposal_decide 缺必填 proposalId / approve
+buildAssistantOpMessage("skill_proposal_decide", {});
 
 // @ts-expect-error memory_center_search 缺 query
 const badSearchNoQuery: ClientMessage = { type: "assistant_op", op: "memory_center_search", args: { scope: "x" } };

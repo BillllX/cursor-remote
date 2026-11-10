@@ -20,6 +20,7 @@ export const FOLDER_MENUS = [
 export type FolderMenu = (typeof FOLDER_MENUS)[number]["id"];
 
 export const MORE_PAGES = [
+  { id: "skills", label: "技能工厂" },
   { id: "activity", label: "最近改动" },
   { id: "transfer", label: "导出与导入" },
   { id: "diagnostics", label: "上一轮怎么选的" },

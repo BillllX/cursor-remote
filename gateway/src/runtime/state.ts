@@ -19,6 +19,8 @@ export type GatewayState = {
   /** 连接登出后，它发起的那一轮还会继续往这个 ws 发事件：归属不随 detachConn 清掉。 */
   wsTenant: WeakMap<WebSocket, string>;
   assistantRolledAt: WeakMap<Slot, number>;
+  /** 记录当前 Slot 的 agentId 是否已完成首轮完整静态规则与 wrapPrompt 注入（key = agentId + 静态规则/模式指纹） */
+  promptSeedBySlot: WeakMap<Slot, string>;
 };
 
 /** 新建一份空状态；生产只用 gatewayState，测试用它造互不干扰的状态 */
@@ -31,6 +33,7 @@ export function createGatewayState(): GatewayState {
     loginHits: new Map(),
     wsTenant: new WeakMap(),
     assistantRolledAt: new WeakMap(),
+    promptSeedBySlot: new WeakMap(),
   };
 }
 

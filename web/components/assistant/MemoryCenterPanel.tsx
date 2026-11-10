@@ -55,6 +55,7 @@ import {
 import MemoryCenterWorkspaceEditor from "./MemoryCenterWorkspaceEditor";
 import { MemoryCenterActivityPane, MemoryCenterSuggestionsPane } from "./MemoryCenterExtrasPanes";
 import MemoryCenterImportPane from "./MemoryCenterImportPane";
+import MemoryCenterSkillsPane from "./MemoryCenterSkillsPane";
 import { useMemoryCenter } from "./useMemoryCenter";
 
 type Props = {
@@ -597,6 +598,15 @@ export default function MemoryCenterPanel({
           返回
         </button>
         <h2 className={styles.paneTitle}>{MORE_PAGES.find((page) => page.id === morePage)?.label}</h2>
+        {morePage === "skills" ? (
+          <MemoryCenterSkillsPane
+            folderId={folderId}
+            op={op}
+            lastResult={lastResult}
+            resultTick={resultTick}
+            onNotice={onNotice}
+          />
+        ) : null}
         {morePage === "activity" ? (
           <MemoryCenterActivityPane
             state={mc.activity}

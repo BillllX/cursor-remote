@@ -17,7 +17,7 @@ import {
   toolFingerprint,
 } from "../../../shared/policy.ts";
 import type { AgentMode, PolicyId } from "../../../shared/protocol.ts";
-import { clockLine, noteWorkspaceTurnStart, userRootPreamble } from "../assistant/service.ts";
+import { clockLine, noteWorkspaceTurnStart, skillsCatalogFor, userRootPreamble } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
 import { broadcastFileChanged } from "../fileEvents.ts";
 import { log, slotLog } from "../log.ts";
@@ -42,9 +42,15 @@ import { sanitizeImages } from "./attachments.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
 import { runExternalChat } from "./external.ts";
 import { finishRun } from "./finish.ts";
-import { attachReseedContext, diskChatTurns } from "./history.ts";
+import { attachReseedContext, diskChatContextStats } from "./history.ts";
 import { runNativeChat } from "./native.ts";
-import { loadWorkspaceRules, wrapPrompt } from "./prompt.ts";
+import {
+  loadDynamicMemoryContext,
+  loadStaticRulesFingerprint,
+  loadWorkspaceRules,
+  wrapFollowupPrompt,
+  wrapPrompt,
+} from "./prompt.ts";
 import { runReviewPanel, syncReviewRoster } from "./review.ts";
 import {
   emitToolOutput,
@@ -61,7 +67,56 @@ import {
 } from "./tools.ts";
 
 /** 助理会话不分段新建：每满这么多轮换一个新的模型会话，靠记忆块 + 最近摘录续上 */
-const ASSISTANT_ROLL_TURNS = 40;
+export const ASSISTANT_ROLL_TURNS = 40;
+
+/** 子工作区会话自动换壳轮数上限：满 15 轮自动换新 Agent 并靠 attachReseedContext + .jiebo/memory.md 轻装续接 */
+export const WORKSPACE_ROLL_TURNS = 15;
+
+/** 任意会话自上次换壳以来累计产生的工具参数+输出与思考上下文达 800KB 时，提前触发无感自动换壳 */
+export const SESSION_ROLL_CONTEXT_CHARS = 800_000;
+
+/** 判断当前 SDK 会话是否应触发无感滚动换壳（丢弃数 MB 历史工具垃圾，保留最近 10 轮纯文本摘录与工作区记忆） */
+export function shouldRollSdkSession(input: {
+  isAssistant: boolean;
+  hasAgent: boolean;
+  autoApprove?: boolean;
+  keepTranscript?: boolean;
+  turns: number;
+  lastRolledTurn?: number;
+  contextCharsSinceRoll: number;
+}): boolean {
+  if (!input.hasAgent || input.autoApprove || input.keepTranscript) return false;
+  const last = Math.max(0, input.lastRolledTurn ?? 0);
+  const turnsSinceRoll = input.turns - last;
+  if (turnsSinceRoll <= 0) return false;
+  const turnLimit = input.isAssistant ? ASSISTANT_ROLL_TURNS : WORKSPACE_ROLL_TURNS;
+  if (turnsSinceRoll >= turnLimit) return true;
+  if (input.contextCharsSinceRoll >= SESSION_ROLL_CONTEXT_CHARS) return true;
+  return false;
+}
+
+/** 生成同一 SDK agentId 会话的静态规则与模式指纹：若指纹未变，后续轮次可发送紧凑续接提示词 */
+export function buildPromptSeedKey(input: {
+  agentId: string;
+  cwd: string;
+  mode: AgentMode;
+  staticRulesHash: string;
+  assistantBlock: string;
+  dialect: boolean;
+  panelKey: string;
+}): string {
+  return [
+    input.agentId,
+    input.cwd,
+    input.mode,
+    input.staticRulesHash,
+    input.dialect ? "1" : "0",
+    input.panelKey,
+    input.assistantBlock
+      ? `${input.assistantBlock.length}:${input.assistantBlock.slice(0, 64)}:${input.assistantBlock.slice(-64)}`
+      : "",
+  ].join("|");
+}
 
 /** 模型已发出 turn-ended 且没有任何未完成工具时，等待流自然关闭的静默宽限窗口（毫秒） */
 export const RUN_QUIET_AFTER_TURN_ENDED_MS = 20_000;
@@ -161,6 +216,10 @@ export async function handlePrompt(
     slot.lastShellCallId = null;
     slot.pending = [];
     slot.openTools.clear();
+    gatewayState.promptSeedBySlot.delete(slot);
+    const freshTurns = diskChatContextStats(conn.tenant, slot.chatId, 0).turns;
+    slot.rolledAtTurn = freshTurns;
+    gatewayState.assistantRolledAt.set(slot, freshTurns);
   }
   if (slot.run || slot.externalAbort || !slot.finished) {
     if (!enqueue) return "busy";
@@ -206,10 +265,11 @@ export async function handlePrompt(
   const cwd = cwdOf(conn, slot);
   const userText = text.trim() || (safeImages.length ? "请看附图。" : "");
   const usedModel = promptModel(model, slot, conn);
-  if (slot.policy !== nextPolicy || slot.dialect !== nextDialect) {
+  if (slot.policy !== nextPolicy || slot.dialect !== nextDialect || slot.mode !== mode) {
     await disposeSlot(slot);
     slot.agentId = null;
     slot.reseed = true;
+    gatewayState.promptSeedBySlot.delete(slot);
   }
   slot.policy = nextPolicy;
   conn.policy = nextPolicy;
@@ -228,6 +288,20 @@ export async function handlePrompt(
       slotLog(slot).error("assistant preamble", err);
     }
   }
+  const fence = workspaceFenceForTenant(conn.tenant);
+  const skillRunnerRole = mode === "ask" || mode === "plan" ? ("ask_plan" as const) : ("foreground" as const);
+  let skillsBlock = "";
+  if (conn.tenant) {
+    try {
+      skillsBlock = skillsCatalogFor(conn.tenant, cwd, {
+        query: userText,
+        files,
+        runnerRole: skillRunnerRole,
+      });
+    } catch (err) {
+      slotLog(slot).error("skills catalog", err);
+    }
+  }
   let prompt = wrapPrompt(
     userText,
     mode,
@@ -236,8 +310,9 @@ export async function handlePrompt(
     cwd,
     slot.reviewRoster || [],
     atUserRoot,
-    workspaceFenceForTenant(conn.tenant),
+    fence,
   );
+  if (skillsBlock) prompt = `${skillsBlock}\n\n${prompt}`;
   const extra = nextDialect ? dialectOverlay(usedModel) : "";
   if (extra) prompt = `${prompt}\n\n${extra}`;
   // Cursor SDK 路径：人设进 user 包装；第三方自研 Agent 路径改由 runNativeChat 写进 system。
@@ -248,6 +323,17 @@ export async function handlePrompt(
     prompt = `${assistantBlock}\n\n${prompt}`;
   }
   if (!prompt) return;
+
+  let compactPrompt = wrapFollowupPrompt(
+    userText,
+    mode,
+    files,
+    loadDynamicMemoryContext(cwd, conn.tenant, userText),
+    cwd,
+    fence,
+  );
+  if (skillsBlock) compactPrompt = `${skillsBlock}\n\n${compactPrompt}`;
+  if (clock) compactPrompt = `${clock}\n\n${compactPrompt}`;
 
   const epoch = ++slot.epoch;
   if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
@@ -557,6 +643,7 @@ export async function handlePrompt(
   };
 
   try {
+    let reviewAppended = false;
     if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
       const panel = slot.reviewRoster || [];
       const apiKey = gatewayEnv.cursorApiKey();
@@ -567,28 +654,60 @@ export async function handlePrompt(
           text: "目录里除了当前模型，没有足够的其他模型可以并行评审。\n\n",
         });
         prompt += "\n\n目录里除了当前模型，没有足够的其他模型可以并行评审。直接告诉用户，不要用同一个模型假装多家。";
+        reviewAppended = true;
       } else if (apiKey) {
         prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch, { files });
+        reviewAppended = true;
         if (slot.finished || slot.epoch !== epoch) return;
       }
     }
-    if (isAssistantChat(conn.tenant, slot.chatId) && (slot.agent || slot.agentId)) {
-      const turns = diskChatTurns(conn.tenant, slot.chatId).length;
-      if (turns > 0 && turns % ASSISTANT_ROLL_TURNS === 0 && gatewayState.assistantRolledAt.get(slot) !== turns) {
-        gatewayState.assistantRolledAt.set(slot, turns);
+    if (conn.tenant && (slot.agent || slot.agentId) && !autoApprove && !keepTranscript) {
+      const lastRolledTurn = slot.rolledAtTurn ?? gatewayState.assistantRolledAt.get(slot) ?? 0;
+      const ctxStats = diskChatContextStats(conn.tenant, slot.chatId, lastRolledTurn);
+      if (
+        shouldRollSdkSession({
+          isAssistant: isAssistantChat(conn.tenant, slot.chatId),
+          hasAgent: true,
+          autoApprove,
+          keepTranscript,
+          turns: ctxStats.turns,
+          lastRolledTurn,
+          contextCharsSinceRoll: ctxStats.contextCharsSinceRoll,
+        })
+      ) {
+        slot.rolledAtTurn = ctxStats.turns;
+        gatewayState.assistantRolledAt.set(slot, ctxStats.turns);
+        gatewayState.promptSeedBySlot.delete(slot);
         if (slot.agent) await disposeSlot(slot);
         slot.agentId = null;
         slot.reseed = true;
       }
     }
+    const baseFullPrompt = prompt;
+    const staticRulesHash = loadStaticRulesFingerprint(cwd, conn.tenant);
+    const panelKey = (slot.reviewRoster || []).map((r) => `${r.name}:${r.modelId}`).join(",");
     let turnProgressed = false;
     for (let sdkAttempt = 0; ; sdkAttempt += 1) {
       const prevAgentId = slot.agentId;
       const agent = await ensureAgent(conn, slot);
-      if (slot.reseed || (prevAgentId && agent.agentId !== prevAgentId)) {
-        prompt = attachReseedContext(conn.tenant, slot.chatId, userText, prompt);
+      const reseededNow = Boolean(slot.reseed || (prevAgentId && agent.agentId !== prevAgentId));
+      const seedKey = buildPromptSeedKey({
+        agentId: agent.agentId,
+        cwd,
+        mode,
+        staticRulesHash,
+        assistantBlock,
+        dialect: nextDialect,
+        panelKey,
+      });
+      if (reseededNow) {
+        prompt = attachReseedContext(conn.tenant, slot.chatId, userText, baseFullPrompt);
         slot.reseed = false;
         turnProgressed = false;
+      } else if (!reviewAppended && gatewayState.promptSeedBySlot.get(slot) === seedKey) {
+        prompt = compactPrompt;
+      } else {
+        prompt = baseFullPrompt;
       }
       const initialPayload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
       const payload = sdkAttempt > 0 && turnProgressed ? SDK_CONTINUATION_PROMPT : initialPayload;
@@ -791,6 +910,7 @@ export async function handlePrompt(
           const { disallowedTools: _drop, ...rest } = sendOpts;
           run = await startSend(rest);
         }
+        gatewayState.promptSeedBySlot.set(slot, seedKey);
 
         if (slot.epoch !== epoch || slot.finished) {
           attemptClosed = true;

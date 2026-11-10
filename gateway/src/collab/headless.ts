@@ -1,6 +1,7 @@
 import type { AgentOptions, Run, RunResult, SDKAgent } from "@cursor/sdk";
 import { isPlane, parsePolicy, toolFingerprint } from "../../../shared/policy.ts";
 import type { ApprovalRef, HistoryTurn, PolicyId, TurnFile } from "../../../shared/protocol.ts";
+import { renderSkillsCatalogForPrompt } from "../assistant/skills.ts";
 import { isMutatingTool, toolEscapesWorkspace } from "../chat/tools.ts";
 import { computeTurnFiles } from "../turnFiles.ts";
 import { confinedCwd, sandboxEnabledForTenant, type Tenant } from "../tenants.ts";
@@ -201,9 +202,14 @@ export async function runHeadless(context: RunContext, task: string, observer: R
   context.signal?.addEventListener("abort", cancel, { once: true });
   try {
     let result: RunResult;
+    const skillsBlock = renderSkillsCatalogForPrompt(context.tenant, cwd, {
+      query: task,
+      runnerRole: "collab_headless",
+    });
+    const fullTaskPrompt = skillsBlock ? `${PREAMBLE}\n\n${skillsBlock}\n\n${task}` : `${PREAMBLE}\n\n${task}`;
     if (deps.create) {
       agent = await deps.create(options);
-      run = await agent.send(`${PREAMBLE}\n\n${task}`, {
+      run = await agent.send(fullTaskPrompt, {
         mode: "agent",
         model: { id: context.model },
         local: { force: true },
@@ -255,7 +261,7 @@ export async function runHeadless(context: RunContext, task: string, observer: R
       if (context.signal?.aborted || denied || pendingApproval) cancel();
       result = await run.wait();
     } else if (deps.prompt) {
-      result = await deps.prompt(`${PREAMBLE}\n\n${task}`, options);
+      result = await deps.prompt(fullTaskPrompt, options);
     } else {
       throw new Error("Headless Run Host 没有 SDK create/prompt 实现");
     }

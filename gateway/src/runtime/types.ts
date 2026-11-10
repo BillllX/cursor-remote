@@ -92,6 +92,8 @@ export type Slot = {
   dialect: boolean;
   /** 已登记、且彼此模型不同的评审子代理。undefined 表示还没跟目录对齐过。 */
   reviewRoster?: ReviewBinding[];
+  /** 上次触发自动换壳（reseed）时的有效历史轮数下标 */
+  rolledAtTurn?: number;
   /** 这一轮还没被客户端确认的正文。断线后靠它补快照 */
   transcript?: RunTranscript;
   runFlush?: ReturnType<typeof setTimeout>;

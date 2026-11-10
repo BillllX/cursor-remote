@@ -38,6 +38,65 @@ export function diskChatTurns(tenant: Tenant | null | undefined, chatId: string)
   return out;
 }
 
+export type DiskChatContextStats = {
+  /** 有效历史轮数 */
+  turns: number;
+  /** 自上次自动换壳（sinceTurn）以来新增的有效轮数 */
+  turnsSinceRoll: number;
+  /** 自上次自动换壳以来累计产生的工具参数+输出、thinking 与问答正文字符数 */
+  contextCharsSinceRoll: number;
+  /** 自上次自动换壳以来累计的工具调用次数 */
+  toolCallsSinceRoll: number;
+};
+
+export function diskChatContextStats(
+  tenant: Tenant | null | undefined,
+  chatId: string,
+  sinceTurn = 0,
+): DiskChatContextStats {
+  if (!tenant || !chatId) {
+    return { turns: 0, turnsSinceRoll: 0, contextCharsSinceRoll: 0, toolCallsSinceRoll: 0 };
+  }
+  const chat = tenant.disk.chats.find((item) => chatIdOf(item) === chatId);
+  if (!isRecord(chat) || !Array.isArray(chat.turns)) {
+    return { turns: 0, turnsSinceRoll: 0, contextCharsSinceRoll: 0, toolCallsSinceRoll: 0 };
+  }
+  let validIdx = 0;
+  let contextCharsSinceRoll = 0;
+  let toolCallsSinceRoll = 0;
+  const safeSince = Math.max(0, sinceTurn);
+  for (const raw of chat.turns) {
+    if (!isRecord(raw)) continue;
+    const error = typeof raw.error === "string" ? raw.error : "";
+    if (/agent[-_ ].*not found/i.test(error)) continue;
+    const user = typeof raw.user === "string" ? raw.user.trim() : "";
+    const assistant = typeof raw.assistant === "string" ? raw.assistant.trim() : "";
+    const tools = Array.isArray(raw.tools) ? raw.tools : [];
+    if (!user && !assistant && !tools.length) continue;
+    if (validIdx >= safeSince) {
+      const thinking = typeof raw.thinking === "string" ? raw.thinking : "";
+      contextCharsSinceRoll += user.length + assistant.length + thinking.length;
+      toolCallsSinceRoll += tools.length;
+      for (const tl of tools) {
+        if (!isRecord(tl)) continue;
+        if (tl.args !== undefined) {
+          contextCharsSinceRoll += typeof tl.args === "string" ? tl.args.length : JSON.stringify(tl.args).length;
+        }
+        if (tl.result !== undefined) {
+          contextCharsSinceRoll += typeof tl.result === "string" ? tl.result.length : JSON.stringify(tl.result).length;
+        }
+      }
+    }
+    validIdx += 1;
+  }
+  return {
+    turns: validIdx,
+    turnsSinceRoll: Math.max(0, validIdx - safeSince),
+    contextCharsSinceRoll,
+    toolCallsSinceRoll,
+  };
+}
+
 export function attachReseedContext(
   tenant: Tenant | null | undefined,
   chatId: string,

@@ -421,6 +421,7 @@ struct MemoryCenterNavColumn: View {
                     .foregroundStyle(JieboColor.dim)
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
+                navButton("skills", title: "技能工厂", symbol: "sparkles")
                 navButton("activity", title: "最近改动", symbol: "clock")
                 navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up")
                 navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft")
@@ -543,6 +544,8 @@ struct MemoryCenterMiddleColumn: View {
     private var content: some View {
         if searchActive || navId == "search" {
             MemoryCenterSearchList(selectedKey: $selectedKey, itemNavigation: itemNavigation)
+        } else if navId == "skills" {
+            MemoryCenterSkillsPane()
         } else if navId == "activity" {
             MemoryCenterActivityPane()
         } else if navId == "suggestions" {
@@ -590,6 +593,8 @@ struct MemoryCenterMiddleColumn: View {
             )
         } else if navId == "overview" {
             store.memoryCenterRefreshOverview()
+        } else if navId == "skills" {
+            store.memoryCenterLoadSkills()
         } else if let scope = MemoryCenterReducer.scopeIdForNav(navId) {
             store.memoryCenterRefreshScope(scope)
         }
@@ -1330,6 +1335,7 @@ enum MemoryCenterPhoneRoute: Hashable {
     case scope(id: String, label: String)
     case diagnostics(scopeId: String)
     case rules(scopeId: String)
+    case skills
     case suggestions
     case activity
     case search
@@ -1865,6 +1871,11 @@ struct MemoryCenterPhonePage: View {
             }
         case .suggestions:
             MemoryCenterPhoneSuggestions()
+        case .skills:
+            ScrollView { MemoryCenterSkillsPane().padding(12) }
+                .background(JieboColor.paper)
+                .navigationTitle("技能工厂")
+                .navigationBarTitleDisplayMode(.inline)
         case .activity:
             MemoryCenterPhoneActivity()
         case .search:
@@ -1978,6 +1989,9 @@ struct MemoryCenterPhoneHome: View {
                         Text("先打开一个文件夹，才能看规则和上一轮怎么选的。")
                             .font(JieboFont.text(.footnote))
                             .foregroundStyle(JieboColor.dim)
+                    }
+                    NavigationLink(value: PhoneRoute.memoryPage(.skills)) {
+                        Text("技能工厂")
                     }
                     NavigationLink(value: PhoneRoute.memoryPage(.activity)) {
                         Text("最近改动")

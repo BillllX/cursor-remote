@@ -105,7 +105,7 @@ enum AssistantToolText {
         let base = baseName(tool.name)
         return base.hasPrefix("memory_") || base.hasPrefix("work_preference_") ||
             base == "workspace_memory_read" || base == "workspace_memory_search" ||
-            base == "workspace_memory_mark_used" || base == "chat_search"
+            base == "workspace_memory_mark_used" || base == "skill_mark_used" || base == "chat_search"
     }
 
     static func friendly(_ tool: ToolCall) -> String? {
@@ -118,6 +118,12 @@ enum AssistantToolText {
         case "create_workspace":
             let name = tool.args?.string(in: "name") ?? ""
             return name.isEmpty ? "申请新建文件夹" : "申请新建文件夹：\(name)"
+        case "skill_use":
+            let id = tool.args?.string(in: "id") ?? ""
+            return id.isEmpty ? "调用技能" : "调用技能：\(id)"
+        case "skill_propose":
+            let name = tool.args?.string(in: "name", "id") ?? ""
+            return name.isEmpty ? "提议新技能" : "提议新技能：\(name)"
         default:
             return nil
         }

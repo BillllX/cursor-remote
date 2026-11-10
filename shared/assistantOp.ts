@@ -22,12 +22,14 @@ export type AssistantOpMessageRest<O extends AssistantOp> = O extends "memory_ce
           | "drop_token_create"
           | "drop_token_update"
           | "drop_token_revoke"
+          | "skill_proposal_decide"
       ? [args: AssistantOpArgsMap[O]]
       : O extends
             | "memory_center_get"
             | "memory_center_activity"
             | "memory_center_suggestions_get"
             | "memory_center_export"
+            | "skill_factory_status"
         ? [args?: AssistantOpArgsMap[O]]
         : O extends AssistantOpNoArgs
           ? []
@@ -100,6 +102,14 @@ export type BuildAssistantOpMessage = {
     operation: "drop_token_revoke",
     args: AssistantOpArgsMap["drop_token_revoke"],
   ): AssistantOpMessageOf<"drop_token_revoke">;
+  (
+    operation: "skill_factory_status",
+    args?: AssistantOpArgsMap["skill_factory_status"],
+  ): AssistantOpMessageOf<"skill_factory_status">;
+  (
+    operation: "skill_proposal_decide",
+    args: AssistantOpArgsMap["skill_proposal_decide"],
+  ): AssistantOpMessageOf<"skill_proposal_decide">;
   (operation: AssistantOpNoArgs): AssistantOpMessageOf<AssistantOpNoArgs>;
   (
     operation: Exclude<
@@ -120,6 +130,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_create"
       | "drop_token_update"
       | "drop_token_revoke"
+      | "skill_factory_status"
+      | "skill_proposal_decide"
       | AssistantOpNoArgs
     >,
     args?: Record<string, unknown>,
@@ -142,6 +154,8 @@ export type BuildAssistantOpMessage = {
       | "drop_token_create"
       | "drop_token_update"
       | "drop_token_revoke"
+      | "skill_factory_status"
+      | "skill_proposal_decide"
       | AssistantOpNoArgs
     >
   >;
@@ -198,6 +212,12 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   }
   if (operation === "drop_token_revoke") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["drop_token_revoke"] };
+  }
+  if (operation === "skill_factory_status") {
+    return args === undefined ? { ...base, op: operation } : { ...base, op: operation, args };
+  }
+  if (operation === "skill_proposal_decide") {
+    return { ...base, op: operation, args: args as AssistantOpArgsMap["skill_proposal_decide"] };
   }
   if (operation === "memory_export" || operation === "memory_tidy" || operation === "push_test") {
     return { ...base, op: operation };
