@@ -212,10 +212,7 @@ describe("任务防中断加固：瞬时错误识别、静默看门狗与活跃�
       assert.equal(live.has("running-keep"), true, "运行中的槽位必须保留");
       assert.equal(live.has("queued-keep"), true, "有排队消息的槽位必须保留");
       assert.equal(live.has("explicit-keep"), true);
-      assert.deepEqual(
-        tenant.disk.slots.map((s) => s.chatId).sort(),
-        ["explicit-keep", "queued-keep", "running-keep"],
-      );
+      assert.deepEqual(tenant.disk.slots.map((s) => s.chatId).sort(), ["explicit-keep", "queued-keep", "running-keep"]);
     } finally {
       live.clear();
       tenant.disk.slots = [];
@@ -253,7 +250,11 @@ describe("任务防中断加固：瞬时错误识别、静默看门狗与活跃�
     tenant.disk.rev = 1;
     tenant.disk.deletedIds = [];
     tenant.disk.chats = [
-      { id: "chat-running-backoff", title: "运行中任务", turns: [{ id: "t-1", user: "继续构建", assistant: "正在执行…" }] },
+      {
+        id: "chat-running-backoff",
+        title: "运行中任务",
+        turns: [{ id: "t-1", user: "继续构建", assistant: "正在执行…" }],
+      },
       { id: "chat-idle-dropped", title: "旧空闲会话", turns: [] },
       { id: "chat-kept", title: "保留会话", turns: [] },
     ];
@@ -381,9 +382,24 @@ describe("对话提速：第一步（子工作区按轮数/体积自动无感换
       {
         id: "chat-heavy",
         turns: [
-          { id: "t1", user: "第一轮", assistant: "完成1", tools: [{ callId: "1", name: "read", result: bigToolOutput }] },
-          { id: "t2", user: "第二轮", assistant: "完成2", tools: [{ callId: "2", name: "shell", result: bigToolOutput }] },
-          { id: "t3", user: "第三轮", assistant: "完成3", tools: [{ callId: "3", name: "read", result: bigToolOutput }] },
+          {
+            id: "t1",
+            user: "第一轮",
+            assistant: "完成1",
+            tools: [{ callId: "1", name: "read", result: bigToolOutput }],
+          },
+          {
+            id: "t2",
+            user: "第二轮",
+            assistant: "完成2",
+            tools: [{ callId: "2", name: "shell", result: bigToolOutput }],
+          },
+          {
+            id: "t3",
+            user: "第三轮",
+            assistant: "完成3",
+            tools: [{ callId: "3", name: "read", result: bigToolOutput }],
+          },
         ],
       },
     ];
@@ -425,7 +441,10 @@ describe("对话提速：第一步（子工作区按轮数/体积自动无感换
     const compact = wrapFollowupPrompt("继续吧", "agent", undefined, dynMemory, subWs, true);
 
     assert.ok(fullPrompt.length > 2500, `完整 Prompt 应包含全部静态规则（实际 ${fullPrompt.length}）`);
-    assert.ok(compact.length < fullPrompt.length * 0.25, `紧凑续接 Prompt 应缩减 75% 以上（实际 ${compact.length} vs ${fullPrompt.length}）`);
+    assert.ok(
+      compact.length < fullPrompt.length * 0.25,
+      `紧凑续接 Prompt 应缩减 75% 以上（实际 ${compact.length} vs ${fullPrompt.length}）`,
+    );
     assert.ok(compact.includes("npm run build"), "紧凑续接 Prompt 仍须保留当前轮次动态匹配的 .jiebo/memory.md");
     assert.ok(compact.includes("继续吧"), "紧凑续接 Prompt 包含用户本轮输入");
 
@@ -455,4 +474,3 @@ describe("对话提速：第一步（子工作区按轮数/体积自动无感换
     assert.notEqual(key1, key2);
   });
 });
-

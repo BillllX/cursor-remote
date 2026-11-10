@@ -36,13 +36,7 @@ export type SkillScope = "platform" | "workspace" | "repo";
 export type SkillMode = "read" | "write";
 export type SkillHealthStatus = "healthy" | "degraded" | "broken_ref" | "tampered" | "disabled";
 export type SkillRunnerRole =
-  | "foreground"
-  | "ask_plan"
-  | "delegate_readonly"
-  | "loop"
-  | "colleague_qa"
-  | "ingest"
-  | "collab_headless";
+  "foreground" | "ask_plan" | "delegate_readonly" | "loop" | "colleague_qa" | "ingest" | "collab_headless";
 
 export const SKILL_CATALOG_TOKEN_BUDGET = 200;
 export const SKILL_PREWARM_TOKEN_BUDGET = 450;
@@ -238,7 +232,12 @@ function emptyStats(): SkillUsageStats {
   return { prewarmedCount: 0, viewedCount: 0, adoptedCount: 0 };
 }
 
-function recordStatEvent(ref: TenantRef, skillId: string, kind: "prewarm" | "view" | "adopt", day = today()): SkillUsageStats {
+function recordStatEvent(
+  ref: TenantRef,
+  skillId: string,
+  kind: "prewarm" | "view" | "adopt",
+  day = today(),
+): SkillUsageStats {
   const file = statsFile(ref);
   return withFileLockSync(file, () => {
     const store = readStatsStore(ref);
@@ -426,7 +425,11 @@ const BUILTIN_SKILLS: readonly BuiltinSkillDef[] = [
       globs: [".cursor-remote/deploy/*.sh", "docs/shanghai-deploy-runbook.md"],
     },
     requiredTools: ["shell", "read"],
-    refs: [".cursor-remote/deploy/deploy-gateway.sh", ".cursor-remote/deploy/deploy-web.sh", ".cursor-remote/deploy/remote-test.sh"],
+    refs: [
+      ".cursor-remote/deploy/deploy-gateway.sh",
+      ".cursor-remote/deploy/deploy-web.sh",
+      ".cursor-remote/deploy/remote-test.sh",
+    ],
     pinned: false,
     autoPrewarm: false,
     body: [
@@ -443,7 +446,8 @@ const BUILTIN_SKILLS: readonly BuiltinSkillDef[] = [
   {
     id: "ios-swiftui-motion",
     name: "iOS SwiftUI 界面规范与动效性能审查",
-    summary: "Jiebo iOS 17 基线下的 SwiftUI 视图层级、弹簧动效 token、Reduce Motion 降级、VoiceOver 无障碍与协议契约守卫",
+    summary:
+      "Jiebo iOS 17 基线下的 SwiftUI 视图层级、弹簧动效 token、Reduce Motion 降级、VoiceOver 无障碍与协议契约守卫",
     kind: "manual_runbook",
     scope: "repo",
     mode: "read",
@@ -804,9 +808,7 @@ export function listSkillSummaries(
   opts: Parameters<typeof listSkills>[2] & { includeBody?: boolean } = {},
 ): SkillSummaryItem[] {
   const { includeBody, ...listOpts } = opts;
-  return listSkills(tenant, cwd, listOpts).map(({ body, ...rest }) =>
-    includeBody ? { ...rest, body } : rest,
-  );
+  return listSkills(tenant, cwd, listOpts).map(({ body, ...rest }) => (includeBody ? { ...rest, body } : rest));
 }
 
 // ---------- L1 常驻目录与 L2 独立触发匹配器 ----------
@@ -836,9 +838,7 @@ export function matchSkillTriggers(
   const matchedKeywords = skill.triggers.keywords.filter(
     (kw) => kw.trim().length >= 2 && qLower.includes(kw.trim().toLowerCase()),
   );
-  const matchedFiles = attachedFiles.filter((file) =>
-    skill.triggers.globs.some((g) => globMatchesFile(g, file)),
-  );
+  const matchedFiles = attachedFiles.filter((file) => skill.triggers.globs.some((g) => globMatchesFile(g, file)));
   const idHit = qLower.includes(skill.id.toLowerCase()) ? 4 : 0;
   const score = idHit + matchedKeywords.length * 3 + matchedFiles.length * 4;
   return { score, matchedKeywords, matchedFiles };
@@ -889,7 +889,8 @@ export function renderSkillsCatalogWithMeta(
     );
 
   const budget = input.budgetTokens ?? SKILL_CATALOG_TOKEN_BUDGET;
-  const header = "<skills_catalog>\n已集成技能摘要（遇到匹配任务可调 skill_use(id) 查阅完整 SOP，采用后调 skill_mark_used(id)）：";
+  const header =
+    "<skills_catalog>\n已集成技能摘要（遇到匹配任务可调 skill_use(id) 查阅完整 SOP，采用后调 skill_mark_used(id)）：";
   const footer = "</skills_catalog>";
   let usedTokens = estimateTokens(`${header}\n${footer}`);
   const lines: string[] = [];
@@ -986,7 +987,10 @@ export function useSkill(
   });
   const found = all.find((item) => item.id === targetId);
   if (!found) {
-    return { ok: false, error: `未找到技能「${targetId}」，或当前模式（${role}）无权调用该技能。可先调用 skill_list 查看可用清单。` };
+    return {
+      ok: false,
+      error: `未找到技能「${targetId}」，或当前模式（${role}）无权调用该技能。可先调用 skill_list 查看可用清单。`,
+    };
   }
   if (found.kind === "channel_guard") {
     return {
@@ -1060,12 +1064,7 @@ export function markSkillUsed(
   return { ok: true, id: found.id, stats };
 }
 
-export function verifySkill(
-  tenant: WorkspaceRoot,
-  cwd: string,
-  id: string,
-  opts: { workspaceNames?: string[] } = {},
-) {
+export function verifySkill(tenant: WorkspaceRoot, cwd: string, id: string, opts: { workspaceNames?: string[] } = {}) {
   const targetId = id.trim();
   const all = listSkills(tenant, cwd, { includeChannelGuards: true, workspaceNames: opts.workspaceNames });
   const found = all.find((item) => item.id === targetId);
@@ -1199,11 +1198,7 @@ export function runSkillStaticGates(
   };
 }
 
-export function proposeSkillPackage(
-  tenant: WorkspaceRoot,
-  cwd: string,
-  input: ProposeSkillInput,
-): ProposeSkillResult {
+export function proposeSkillPackage(tenant: WorkspaceRoot, cwd: string, input: ProposeSkillInput): ProposeSkillResult {
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
   const skillId = (input.id || "").trim();
   if (!SKILL_ID_RE.test(skillId)) {
@@ -1243,7 +1238,10 @@ export function proposeSkillPackage(
   try {
     for (const p of [jieboDir, stagingRoot, stagingSkillDir, stagingFile]) rejectSymlink(p);
   } catch (err) {
-    return { ok: false, error: `静态门禁拦截：技能目录存在不安全的符号链接（${err instanceof Error ? err.message : String(err)}）。` };
+    return {
+      ok: false,
+      error: `静态门禁拦截：技能目录存在不安全的符号链接（${err instanceof Error ? err.message : String(err)}）。`,
+    };
   }
 
   const scope = input.scope === "repo" ? "repo" : "workspace";
@@ -1274,9 +1272,7 @@ export function proposeSkillPackage(
   const proposal = withFileLockSync(pFile, () => {
     const store = readProposalStore(ref);
     const now = new Date().toISOString();
-    const existingIdx = store.proposals.findIndex(
-      (p) => p.relSkillPath === relSkillPath && p.status === "pending",
-    );
+    const existingIdx = store.proposals.findIndex((p) => p.relSkillPath === relSkillPath && p.status === "pending");
     const nextRev = store.rev + 1;
     store.rev = nextRev;
     const item: SkillProposal = {
@@ -1322,7 +1318,10 @@ export function proposeSkillPackage(
   };
 }
 
-export function listSkillProposals(tenant: WorkspaceRoot, status?: "pending" | "approved" | "rejected"): SkillProposal[] {
+export function listSkillProposals(
+  tenant: WorkspaceRoot,
+  status?: "pending" | "approved" | "rejected",
+): SkillProposal[] {
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
   const store = readProposalStore(ref);
   return status ? store.proposals.filter((p) => p.status === status) : store.proposals;
@@ -1364,7 +1363,10 @@ export function decideSkillProposal(
       return { ok: false, error: `该提案已处于 ${prop.status} 状态，不能重复审批。` };
     }
     if (input.expectedRev !== undefined && prop.rev !== input.expectedRev) {
-      return { ok: false, error: `提案版本已变化（当前 rev=${prop.rev}，期望=${input.expectedRev}），请刷新后重新确认。` };
+      return {
+        ok: false,
+        error: `提案版本已变化（当前 rev=${prop.rev}，期望=${input.expectedRev}），请刷新后重新确认。`,
+      };
     }
 
     const targetDir = resolve(base, prop.targetDir);
@@ -1388,7 +1390,10 @@ export function decideSkillProposal(
           rejectSymlink(p);
         }
       } catch (err) {
-        return { ok: false, error: `审批中止：路径存在符号链接（${err instanceof Error ? err.message : String(err)}）` };
+        return {
+          ok: false,
+          error: `审批中止：路径存在符号链接（${err instanceof Error ? err.message : String(err)}）`,
+        };
       }
 
       if (existsSync(stagingFile)) {
@@ -1482,9 +1487,7 @@ export function updateSkillMeta(
     includeChannelGuards: true,
     workspaceNames: input.workspaceNames,
   });
-  const found = all.find(
-    (s) => s.id === targetId && (!input.entry?.trim() || s.entry === input.entry.trim()),
-  );
+  const found = all.find((s) => s.id === targetId && (!input.entry?.trim() || s.entry === input.entry.trim()));
   if (!found) {
     return { ok: false, error: `找不到技能：${targetId}` };
   }
@@ -1614,9 +1617,7 @@ export function editApprovedDeclarativeSkill(
         ? [...new Set(input.keywords.map((k) => k.trim()).filter(Boolean))]
         : parsedCurrent.keywords;
     const globs =
-      input.globs !== undefined
-        ? [...new Set(input.globs.map((g) => g.trim()).filter(Boolean))]
-        : parsedCurrent.globs;
+      input.globs !== undefined ? [...new Set(input.globs.map((g) => g.trim()).filter(Boolean))] : parsedCurrent.globs;
 
     const formattedMarkdown = formatSkillMarkdown({
       id: skillId,

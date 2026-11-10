@@ -4,6 +4,8 @@ import type {
   ColleaguePermissions,
   KbColleagueProposalItem,
   KbHtmlBoardItem,
+  KbWecomWatchedItemSummary,
+  KbWorkspaceIngestLogItem,
   KbWorkspaceStatusData,
   KbWorkspaceSummaryItem,
 } from "../../../shared/protocol.ts";
@@ -14,6 +16,8 @@ import {
   safeReadWorkspaceTextFileSync,
   type KbWorkspaceConfig,
 } from "./contract.ts";
+import { readWorkspaceIngestLogs } from "./notify.ts";
+import { listIngestQueue } from "./queue.ts";
 import {
   createDropToken,
   getOwnerWxBinding,
@@ -23,6 +27,7 @@ import {
   updateDropToken,
   type DropTenantHost,
 } from "./tokens.ts";
+import { listWecomWatchItems } from "./wecomSource.ts";
 
 /** 从 HTML 头部注释 `<!-- JIEBO_KB_META: {...} -->` 或文件 mtime 提取更新时间 */
 function extractHtmlUpdatedAt(workspaceDir: string, relPath: string, fallbackMtimeMs: number): number {
@@ -152,6 +157,89 @@ function buildTenantProposalsSummary(host: DropTenantHost): KbColleagueProposalI
   }));
 }
 
+function buildWorkspaceWecomWatchItemsForUi(host: DropTenantHost, workspaceKey?: string): KbWecomWatchedItemSummary[] {
+  const res = listWecomWatchItems(host, workspaceKey ? { workspace: workspaceKey } : undefined);
+  if (!res.ok) return [];
+  return res.items.map((item) => {
+    const hasSynced = Boolean(item.lastSyncedSha256);
+    const hasChanged =
+      item.lastCheckHasChanged !== undefined ? item.lastCheckHasChanged : hasSynced ? false : undefined;
+    return {
+      id: item.id,
+      workspaceId: item.workspaceId,
+      workspaceKey: item.workspaceKeySnapshot,
+      title: item.title,
+      sourceType: item.sourceType,
+      ...(item.docId ? { docId: item.docId } : {}),
+      ...(item.fileId ? { fileId: item.fileId } : {}),
+      ...(item.sheet ? { sheet: item.sheet } : {}),
+      ...(item.range ? { range: item.range } : {}),
+      ...(item.note ? { note: item.note } : {}),
+      ...(item.lastSyncedUpdateTime ? { lastSyncedUpdateTime: item.lastSyncedUpdateTime } : {}),
+      ...(item.lastSyncedSha256 ? { lastSyncedSha256: item.lastSyncedSha256 } : {}),
+      ...(item.lastSnapshotPreview ? { lastSnapshotPreview: item.lastSnapshotPreview } : {}),
+      ...(item.lastBatchId ? { lastBatchId: item.lastBatchId } : {}),
+      ...(item.lastCheckedAt ? { lastCheckedAt: item.lastCheckedAt } : {}),
+      ...(item.lastSyncedAt ? { lastSyncedAt: item.lastSyncedAt } : {}),
+      ...(item.lastCheckedUpdateTime || item.lastSyncedUpdateTime
+        ? { lastCheckedUpdateTime: item.lastCheckedUpdateTime ?? item.lastSyncedUpdateTime }
+        : {}),
+      ...(item.lastCheckedSha256 || item.lastSyncedSha256
+        ? { lastCheckedSha256: item.lastCheckedSha256 ?? item.lastSyncedSha256 }
+        : {}),
+      ...(hasChanged !== undefined ? { lastCheckHasChanged: hasChanged } : {}),
+      ...(item.lastCheckSummary ? { lastCheckSummary: item.lastCheckSummary } : {}),
+      ...(item.lastCheckDiffHint ? { lastCheckDiffHint: item.lastCheckDiffHint } : {}),
+      ...(item.lastCheckPreview || item.lastSnapshotPreview
+        ? { lastCheckPreview: item.lastCheckPreview ?? item.lastSnapshotPreview }
+        : {}),
+      ...(item.lastCheckError ? { lastCheckError: item.lastCheckError } : {}),
+      createdAt: item.createdAt,
+    };
+  });
+}
+
+function buildWorkspaceIngestLogsForUi(
+  host: DropTenantHost,
+  workspaceId: string,
+  workspaceDir: string,
+  limit = 25,
+): KbWorkspaceIngestLogItem[] {
+  const historyLogs = readWorkspaceIngestLogs(workspaceDir, limit);
+  const seenBatchIds = new Set(historyLogs.map((l) => l.batchId));
+  const queueEntries = listIngestQueue(host).filter(
+    (entry) => entry.workspaceId === workspaceId && !seenBatchIds.has(entry.batchId),
+  );
+  const activeItems: KbWorkspaceIngestLogItem[] = [];
+  const finishedFallbackItems: KbWorkspaceIngestLogItem[] = [];
+
+  for (const entry of queueEntries) {
+    const isRunning = entry.status === "queued" || entry.status === "processing";
+    const mapped: KbWorkspaceIngestLogItem = {
+      batchId: entry.batchId,
+      timestamp: entry.finishedAt ?? entry.startedAt ?? entry.queuedAt,
+      status: entry.status,
+      submitterName: entry.submitterName,
+      note: entry.note,
+      movedFiles: [],
+      updatedHtmls: [],
+      summary: isRunning
+        ? entry.status === "processing"
+          ? "正在后台分析归档并同步更新 HTML 看板…"
+          : "已在归档队列中排队等待处理…"
+        : "",
+      ...(entry.errorReason ? { errorReason: entry.errorReason } : {}),
+    };
+    if (isRunning) activeItems.push(mapped);
+    else finishedFallbackItems.push(mapped);
+  }
+
+  activeItems.sort((a, b) => b.timestamp - a.timestamp);
+  const mergedFinished = [...historyLogs, ...finishedFallbackItems].sort((a, b) => b.timestamp - a.timestamp);
+
+  return [...activeItems, ...mergedFinished].slice(0, limit);
+}
+
 /**
  * 获取指定子工作区（或传 `""` / `"__all__"` 获取小驳全局跨工作区）的知识库状态、HTML 看板列表、同事通行证列表及待批提案（供 Web / iOS 前端展示）
  */
@@ -168,6 +256,7 @@ export function getKbWorkspaceStatusForUi(
   // 小驳全局跨工作区同事管理视图（workspace 传 "" 或 "__all__"）
   if (!raw || raw === "__all__") {
     const allTokens = listDropTokens(host, { includeRevoked: false });
+    const wecomWatchItems = buildWorkspaceWecomWatchItemsForUi(host);
     return {
       ok: true,
       data: {
@@ -180,6 +269,7 @@ export function getKbWorkspaceStatusForUi(
         tokens: allTokens,
         kbWorkspaces,
         proposals,
+        wecomWatchItems,
         ...(ownerWx ? { ownerWx } : {}),
         dropPortalPath,
       },
@@ -245,9 +335,7 @@ export function getKbWorkspaceStatusForUi(
   const boards = scanWorkspaceKbHtmlBoards(kbLoaded.workspaceRealPath, kbLoaded.config);
   const allTokens = listDropTokens(host, { includeRevoked: false });
   const wsTokens = allTokens.filter((t) =>
-    t.workspaces
-      ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId)
-      : t.workspaceId === wsRef.workspaceId,
+    t.workspaces ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId) : t.workspaceId === wsRef.workspaceId,
   );
   const otherTokens = allTokens.filter(
     (t) =>
@@ -256,6 +344,8 @@ export function getKbWorkspaceStatusForUi(
         ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId)
         : t.workspaceId === wsRef.workspaceId),
   );
+  const wecomWatchItems = buildWorkspaceWecomWatchItemsForUi(host, wsRef.key);
+  const ingestLogs = buildWorkspaceIngestLogsForUi(host, wsRef.workspaceId, kbLoaded.workspaceRealPath);
 
   return {
     ok: true,
@@ -271,6 +361,8 @@ export function getKbWorkspaceStatusForUi(
       otherTokens,
       kbWorkspaces,
       proposals,
+      wecomWatchItems,
+      ingestLogs,
       ...(ownerWx ? { ownerWx } : {}),
       dropPortalPath,
     },

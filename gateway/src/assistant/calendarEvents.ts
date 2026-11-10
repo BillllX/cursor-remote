@@ -260,10 +260,7 @@ export function addCalendarEvent(
       };
     }
 
-    const triggerMs =
-      remindMinutesBefore !== undefined
-        ? timeParsed.startAt - remindMinutesBefore * 60_000
-        : undefined;
+    const triggerMs = remindMinutesBefore !== undefined ? timeParsed.startAt - remindMinutesBefore * 60_000 : undefined;
 
     const event: CalendarEvent = {
       id: newId("ev"),
@@ -277,7 +274,12 @@ export function addCalendarEvent(
       ...(input.location?.trim() ? { location: clip(input.location.trim(), 120) } : {}),
       ...(input.notes?.trim() ? { notes: clip(input.notes.trim(), 1000) } : {}),
       ...(Array.isArray(input.attendees) && input.attendees.length > 0
-        ? { attendees: input.attendees.map((a) => clip(String(a).trim(), 60)).filter(Boolean).slice(0, 20) }
+        ? {
+            attendees: input.attendees
+              .map((a) => clip(String(a).trim(), 60))
+              .filter(Boolean)
+              .slice(0, 20),
+          }
         : {}),
       visibility: input.visibility === "public" ? "public" : "private",
       busy: input.busy === "free" ? "free" : "busy",

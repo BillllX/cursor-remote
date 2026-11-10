@@ -76,10 +76,7 @@ export function FilesOverlay({
 
   const kbBoards = useMemo(() => extractKbBoardShortcuts(treePaths, filesQuery), [treePaths, filesQuery]);
 
-  const gitEntries = useMemo(
-    () => Object.entries(gitStatus).sort(([a], [b]) => a.localeCompare(b)),
-    [gitStatus],
-  );
+  const gitEntries = useMemo(() => Object.entries(gitStatus).sort(([a], [b]) => a.localeCompare(b)), [gitStatus]);
 
   const gitCounts = useMemo(() => {
     let modified = 0;
@@ -116,10 +113,7 @@ export function FilesOverlay({
   }
 
   return (
-    <div
-      className={`files-overlay${filesOpen ? " open" : ""}`}
-      onClick={() => closeFiles()}
-    >
+    <div className={`files-overlay${filesOpen ? " open" : ""}`} onClick={() => closeFiles()}>
       <div
         ref={filesTrap}
         className="files-browser workspace-modal-box"
@@ -131,9 +125,7 @@ export function FilesOverlay({
         <div className="files-browser-head workspace-modal-head">
           <div className="workspace-modal-heading">
             <div className="workspace-modal-title-row">
-              <span className="loop-title workspace-modal-title">
-                {isGitMode ? "源代码管理" : "文件"}
-              </span>
+              <span className="loop-title workspace-modal-title">{isGitMode ? "源代码管理" : "文件"}</span>
               <span className="workspace-modal-badge">
                 {isGitMode ? `${gitCounts.total} 项改动` : `${treePaths.length}${treeTruncated ? "+" : ""} 个文件`}
               </span>
@@ -229,7 +221,10 @@ export function FilesOverlay({
                           <span className={styles.gitFileName}>{fileName}</span>
                           <span className={styles.gitFilePath}>{dirPath === "." ? path : `${dirPath} · ${path}`}</span>
                         </span>
-                        <span className={`git-mark ${letter} ${styles.gitStatusTag}`} title={GIT_LABEL[letter] || letter}>
+                        <span
+                          className={`git-mark ${letter} ${styles.gitStatusTag}`}
+                          title={GIT_LABEL[letter] || letter}
+                        >
                           {letter} · {GIT_LABEL[letter] || letter}
                         </span>
                       </button>
@@ -265,11 +260,7 @@ export function FilesOverlay({
                         >
                           @引用
                         </button>
-                        <button
-                          type="button"
-                          className={styles.gitActionBtn}
-                          onClick={() => copyPathText(path)}
-                        >
+                        <button type="button" className={styles.gitActionBtn} onClick={() => copyPathText(path)}>
                           复制路径
                         </button>
                       </div>
@@ -300,11 +291,7 @@ export function FilesOverlay({
                 <div className="loop-meta">当工作区文件被修改、新增或删除时，会在这里实时列出并支持对比 Diff。</div>
                 {onSwitchMode ? (
                   <div>
-                    <button
-                      type="button"
-                      className="new-chat primary"
-                      onClick={() => onSwitchMode("files")}
-                    >
+                    <button type="button" className="new-chat primary" onClick={() => onSwitchMode("files")}>
                       浏览工作区全部文件
                     </button>
                   </div>
@@ -334,7 +321,9 @@ export function FilesOverlay({
                         <span className="tree-file-name">{board.title}</span>
                         <span className="tree-file-path">{board.path}</span>
                       </span>
-                      <span className={styles.kbBoardBadge}>{board.level === "category" ? "顶层" : board.category}</span>
+                      <span className={styles.kbBoardBadge}>
+                        {board.level === "category" ? "顶层" : board.category}
+                      </span>
                     </button>
                   ))}
                 </div>

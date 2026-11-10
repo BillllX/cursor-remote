@@ -190,9 +190,8 @@ function writeTokenFileUnlocked(ref: TenantRef, data: DropTokenFile) {
 function readPersistentSessionsUnlocked(ref: TenantRef): PersistedDropSessionFile {
   const raw = readJson<Partial<PersistedDropSessionFile>>(persistentSessionStorePath(ref), { version: 1, items: [] });
   const items = Array.isArray(raw.items)
-    ? raw.items.filter(
-        (r): r is PersistedDropSessionRecord =>
-          Boolean(r && typeof r.sessionTokenHash === "string" && typeof r.tokenId === "string"),
+    ? raw.items.filter((r): r is PersistedDropSessionRecord =>
+        Boolean(r && typeof r.sessionTokenHash === "string" && typeof r.tokenId === "string"),
       )
     : [];
   return { version: 1, items };
@@ -220,7 +219,9 @@ export function normalizeColleaguePermissions(raw?: Partial<ColleaguePermissions
     kbDrop: raw?.kbDrop !== undefined ? Boolean(raw.kbDrop) : DEFAULT_COLLEAGUE_PERMISSIONS.kbDrop,
     kbPropose: raw?.kbPropose !== undefined ? Boolean(raw.kbPropose) : DEFAULT_COLLEAGUE_PERMISSIONS.kbPropose,
     calendarFreeBusy:
-      raw?.calendarFreeBusy !== undefined ? Boolean(raw.calendarFreeBusy) : DEFAULT_COLLEAGUE_PERMISSIONS.calendarFreeBusy,
+      raw?.calendarFreeBusy !== undefined
+        ? Boolean(raw.calendarFreeBusy)
+        : DEFAULT_COLLEAGUE_PERMISSIONS.calendarFreeBusy,
     calendarPropose:
       raw?.calendarPropose !== undefined ? Boolean(raw.calendarPropose) : DEFAULT_COLLEAGUE_PERMISSIONS.calendarPropose,
   };
@@ -230,9 +231,10 @@ export function normalizeColleaguePermissions(raw?: Partial<ColleaguePermissions
 export function getTokenWorkspaceBindings(record: DropTokenRecord): DropTokenWorkspaceBinding[] {
   const seen = new Set<string>();
   const result: DropTokenWorkspaceBinding[] = [];
-  const rawList = Array.isArray(record.workspaces) && record.workspaces.length > 0
-    ? record.workspaces
-    : [{ workspaceId: record.workspaceId, workspaceKeySnapshot: record.workspaceKeySnapshot }];
+  const rawList =
+    Array.isArray(record.workspaces) && record.workspaces.length > 0
+      ? record.workspaces
+      : [{ workspaceId: record.workspaceId, workspaceKeySnapshot: record.workspaceKeySnapshot }];
   for (const item of rawList) {
     if (!item || typeof item.workspaceId !== "string" || !item.workspaceId.trim()) continue;
     const id = item.workspaceId.trim();
@@ -465,10 +467,9 @@ export function createDropToken(
   const passCheck = isValidPasscodeFormat(input.passcode);
   if (!passCheck.ok) return passCheck;
 
-  const requestedWsList = [
-    input.workspace,
-    ...(Array.isArray(input.workspaces) ? input.workspaces : []),
-  ].filter((x): x is string => typeof x === "string" && Boolean(x.trim()));
+  const requestedWsList = [input.workspace, ...(Array.isArray(input.workspaces) ? input.workspaces : [])].filter(
+    (x): x is string => typeof x === "string" && Boolean(x.trim()),
+  );
 
   const wsResolved = validateAndResolveWorkspaces(host, requestedWsList);
   if (!wsResolved.ok) return wsResolved;
@@ -600,9 +601,7 @@ export function updateDropToken(
 
     let bindings = getTokenWorkspaceBindings(record);
     if (removeSet.size > 0) {
-      bindings = bindings.filter(
-        (b) => !removeSet.has(b.workspaceId) && !removeSet.has(b.workspaceKeySnapshot),
-      );
+      bindings = bindings.filter((b) => !removeSet.has(b.workspaceId) && !removeSet.has(b.workspaceKeySnapshot));
     }
     for (const add of toAddBindings) {
       if (!bindings.some((b) => b.workspaceId === add.workspaceId)) {
@@ -680,7 +679,11 @@ export function updateDropToken(
 
     if (input.neverExpire === true) {
       delete record.expiresAt;
-    } else if (typeof input.expiresInDays === "number" && Number.isFinite(input.expiresInDays) && input.expiresInDays > 0) {
+    } else if (
+      typeof input.expiresInDays === "number" &&
+      Number.isFinite(input.expiresInDays) &&
+      input.expiresInDays > 0
+    ) {
       record.expiresAt = now + Math.floor(Math.min(3650, input.expiresInDays) * 86_400_000);
     }
 
@@ -718,9 +721,9 @@ export function findColleaguePassByChannel(
     const matchedIm = Boolean(query.imTenantId && item.imTenantId && item.imTenantId === query.imTenantId.trim());
     const matchedWx = Boolean(
       query.wxOpenId &&
-        item.wxBinding?.status === "active" &&
-        item.wxBinding.openId &&
-        item.wxBinding.openId === query.wxOpenId.trim(),
+      item.wxBinding?.status === "active" &&
+      item.wxBinding.openId &&
+      item.wxBinding.openId === query.wxOpenId.trim(),
     );
     if (!matchedIm && !matchedWx) continue;
     const workspaces = resolveAuthorizedWorkspacesForToken(host, item);
@@ -752,8 +755,7 @@ export function listDropTokens(
         };
       });
       const validGrants = resolveAuthorizedWorkspacesForToken(host, item);
-      const primaryResolved =
-        validGrants[0] ??
+      const primaryResolved = validGrants[0] ??
         workspaces[0] ?? {
           workspaceId: item.workspaceId,
           workspaceKey: item.workspaceKeySnapshot,
@@ -1027,13 +1029,9 @@ export function verifyDropPasscodeAndCreateSession(
           lastActiveAt: now,
         });
         // 同步执行每个 token 最多 MAX_SESSIONS_PER_TOKEN 与每个租户最多 MAX_SESSIONS_PER_TENANT 的淘汰上限
-        let sameTokenCount = pData.items.filter(
-          (x) => x.tenantId === host.id && x.tokenId === matchedRecord.id,
-        ).length;
+        let sameTokenCount = pData.items.filter((x) => x.tenantId === host.id && x.tokenId === matchedRecord.id).length;
         while (sameTokenCount > MAX_SESSIONS_PER_TOKEN) {
-          const oldestIdx = pData.items.findIndex(
-            (x) => x.tenantId === host.id && x.tokenId === matchedRecord.id,
-          );
+          const oldestIdx = pData.items.findIndex((x) => x.tenantId === host.id && x.tokenId === matchedRecord.id);
           if (oldestIdx < 0) break;
           pData.items.splice(oldestIdx, 1);
           sameTokenCount -= 1;
@@ -1079,8 +1077,7 @@ export function verifyDropSessionToken(
         const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, tokenRecord);
         if (authorizedWorkspaces.length > 0) {
           const activeWs =
-            authorizedWorkspaces.find((w) => w.workspaceId === persisted.activeWorkspaceId) ??
-            authorizedWorkspaces[0]!;
+            authorizedWorkspaces.find((w) => w.workspaceId === persisted.activeWorkspaceId) ?? authorizedWorkspaces[0]!;
           sess = {
             sessionToken: token,
             qaSessionId: persisted.qaSessionId,
@@ -1149,8 +1146,7 @@ export function verifyDropSessionToken(
     return { ok: false, status: 403, error: "目标工作区已不存在或知识库配置已失效" };
   }
 
-  const activeWs =
-    authorizedWorkspaces.find((w) => w.workspaceId === sess!.workspaceId) ?? authorizedWorkspaces[0]!;
+  const activeWs = authorizedWorkspaces.find((w) => w.workspaceId === sess!.workspaceId) ?? authorizedWorkspaces[0]!;
 
   // 若原激活工作区已被解绑或失效导致自动回落到另一个工作区，必须清除旧工作区绑定的 batchId 与 receiptHash，防止跨库误投
   if (sess.workspaceId !== activeWs.workspaceId) {
@@ -1167,10 +1163,7 @@ export function verifyDropSessionToken(
   sess.permissions = normalizeColleaguePermissions(tokenRecord.permissions);
   sess.lastActiveAt = now;
   const maxLifetimeDeadline = sess.createdAt + maxLife;
-  sess.expiresAt = Math.min(
-    maxLifetimeDeadline,
-    now + (sess.persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_TTL_MS),
-  );
+  sess.expiresAt = Math.min(maxLifetimeDeadline, now + (sess.persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_TTL_MS));
   activeDropSessions.delete(key);
   activeDropSessions.set(key, sess);
 
@@ -1213,7 +1206,8 @@ export function switchDropSessionWorkspace(
 
   const authorized = sess.authorizedWorkspaces ?? [];
   const matched = authorized.find(
-    (w) => w.workspaceId === target || w.workspaceKey === target || w.workspaceKey.toLowerCase() === target.toLowerCase(),
+    (w) =>
+      w.workspaceId === target || w.workspaceKey === target || w.workspaceKey.toLowerCase() === target.toLowerCase(),
   );
   if (!matched) {
     return { ok: false, status: 403, error: `您的通行证未获权访问知识库：${target}` };

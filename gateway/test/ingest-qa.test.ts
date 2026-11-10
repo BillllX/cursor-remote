@@ -1,15 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import {
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  utimesSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -50,11 +41,7 @@ async function makeQaTestEnv(opts: { overlapStateAndWorkspace?: boolean } = {}) 
   mkdirSync(wsPath, { recursive: true });
   tempDirs.push(base);
 
-  writeFileSync(
-    join(wsPath, "归档说明.md"),
-    "# Fintopia 集团归档说明\n一级分类：资金、资产、牌照。\n",
-    "utf8",
-  );
+  writeFileSync(join(wsPath, "归档说明.md"), "# Fintopia 集团归档说明\n一级分类：资金、资产、牌照。\n", "utf8");
   mkdirSync(join(wsPath, ".jiebo"), { recursive: true });
   writeFileSync(join(wsPath, ".jiebo", "memory.md"), "机密工作区记忆：严禁被外部访客问答读取\n", "utf8");
   writeFileSync(join(wsPath, "AGENTS.md"), "机密系统代理规则：严禁被外部访客问答读取\n", "utf8");
@@ -78,11 +65,7 @@ async function makeQaTestEnv(opts: { overlapStateAndWorkspace?: boolean } = {}) 
     "<!DOCTYPE html><html><head><style>.red{color:red}</style></head><body><h1>资产总览看板</h1><table><tr><th>主体</th><th>在贷余额(亿)</th><th>代偿率</th></tr><tr><td>洋钱罐</td><td>45.2</td><td>1.85%</td></tr><tr><td>三农信</td><td>12.8</td><td>2.10%</td></tr></table></body></html>",
     "utf8",
   );
-  writeFileSync(
-    join(wsPath, "资产", "洋钱罐", "202611_洋钱罐底表.xlsx"),
-    "binary-xlsx-content",
-    "utf8",
-  );
+  writeFileSync(join(wsPath, "资产", "洋钱罐", "202611_洋钱罐底表.xlsx"), "binary-xlsx-content", "utf8");
 
   // 在分类目录内故意放一个隐藏目录，验证白名单能拦截分类内的隐藏段
   mkdirSync(join(wsPath, "资产", ".hidden_secret"), { recursive: true });
@@ -175,12 +158,20 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
     assert.equal(validateKbQaReadableRelPath(wsPath, kbConfig, ".jiebo/memory.md", "file").ok, false);
     assert.equal(validateKbQaReadableRelPath(wsPath, kbConfig, ".jiebo/kb.json", "file").ok, false);
     assert.equal(
-      validateKbQaReadableRelPath(wsPath, kbConfig, ".cursor-remote/uploads/inbox/b_secret999/未归档绝密底表.csv", "file").ok,
+      validateKbQaReadableRelPath(
+        wsPath,
+        kbConfig,
+        ".cursor-remote/uploads/inbox/b_secret999/未归档绝密底表.csv",
+        "file",
+      ).ok,
       false,
     );
     assert.equal(validateKbQaReadableRelPath(wsPath, kbConfig, "AGENTS.md", "file").ok, false);
     assert.equal(validateKbQaReadableRelPath(wsPath, kbConfig, "资产/.hidden_secret/leak.txt", "file").ok, false);
-    assert.equal(validateKbQaReadableRelPath(wsPath, kbConfig, "../state/assistant/drop-tokens.json", "file").ok, false);
+    assert.equal(
+      validateKbQaReadableRelPath(wsPath, kbConfig, "../state/assistant/drop-tokens.json", "file").ok,
+      false,
+    );
   });
 
   test("完整 HTTP 问答与统计文件生成闭环：/api/auth 对工作区 0 写入 -> 上传临时比对附件 -> 询问并生成带 UTF-8 BOM 的 CSV 与安全静态 HTML 统计文件 -> 下载与预览 -> 主动清空", async () => {
@@ -212,7 +203,10 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
           };
           assert.equal(listed.ok, true);
           assert.equal(
-            listed.files.some((f) => f.relPath.includes(".jiebo") || f.relPath.includes(".hidden_secret") || f.relPath.includes("AGENTS.md")),
+            listed.files.some(
+              (f) =>
+                f.relPath.includes(".jiebo") || f.relPath.includes(".hidden_secret") || f.relPath.includes("AGENTS.md"),
+            ),
             false,
           );
 
@@ -234,16 +228,16 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
           assert.equal(Boolean(binRead.suggestedBoardPath), true);
 
           // 4. 模型调用 kb_qa_search 搜索“洋钱罐”
-          const searchRaw = await custom.kb_qa_search.execute(
-            { query: "洋钱罐 代偿率" },
-            { toolCallId: "qa_4" },
-          );
+          const searchRaw = await custom.kb_qa_search.execute({ query: "洋钱罐 代偿率" }, { toolCallId: "qa_4" });
           const searched = JSON.parse(String(searchRaw)) as {
             ok: boolean;
             matches: Array<{ relPath: string; snippet: string }>;
           };
           assert.equal(searched.ok, true);
-          assert.equal(searched.matches.some((m) => m.relPath === "资产/资产.html"), true);
+          assert.equal(
+            searched.matches.some((m) => m.relPath === "资产/资产.html"),
+            true,
+          );
 
           // 5. 模型调用 kb_qa_read_file 读取 资产/资产.html
           const boardReadRaw = await custom.kb_qa_read_file.execute(
@@ -297,7 +291,8 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
           return {
             id: "run_qa_1",
             status: "finished",
-            result: "统计完成：当前知识库共 2 家主体，总在贷余额 58.0 亿。已为您生成 CSV 统计表与 HTML 对比看板，可直接在下方预览或下载。",
+            result:
+              "统计完成：当前知识库共 2 家主体，总在贷余额 58.0 亿。已为您生成 CSV 统计表与 HTML 对比看板，可直接在下方预览或下载。",
             messages: [],
           };
         },
@@ -566,13 +561,7 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
     assert.equal(ensured.ok, true);
     if (!ensured.ok) return;
 
-    const writeOut = writeQaTempOutputFileSync(
-      host,
-      newSessionRes.session,
-      "待清理统计表.csv",
-      "col1,col2\n1,2\n",
-      t0,
-    );
+    const writeOut = writeQaTempOutputFileSync(host, newSessionRes.session, "待清理统计表.csv", "col1,col2\n1,2\n", t0);
     assert.equal(writeOut.ok, true);
     assert.equal(existsSync(ensured.sessionDir), true);
 
@@ -584,7 +573,7 @@ describe("知识库 Drop 页面只读问答对话框与临时目录隔离定期�
     const orphanDir = join(rootRes.rootRealPath, wsRef.workspaceId, "qa_orphan_000000000000000000000000");
     mkdirSync(orphanDir, { recursive: true });
     symlinkSync(victimFile, join(orphanDir, "sym.txt"));
-    const oldDate = new Date((t0 - 10 * 60 * 1000));
+    const oldDate = new Date(t0 - 10 * 60 * 1000);
     utimesSync(orphanDir, oldDate, oldDate);
 
     // 在 t0 + 10 分钟扫描：活跃会话未满 30m 保留，孤儿目录（mtime > 5m）被删除且不穿透删除外部 victimFile

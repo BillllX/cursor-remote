@@ -55,9 +55,7 @@ export function GrepOverlay({
             <div className="workspace-modal-title-row">
               <span className="loop-title workspace-modal-title">工作区搜索</span>
               {grepQ.trim() ? (
-                <span className="workspace-modal-badge">
-                  {grepWait ? "搜索中…" : `${totalHits} 条结果`}
-                </span>
+                <span className="workspace-modal-badge">{grepWait ? "搜索中…" : `${totalHits} 条结果`}</span>
               ) : null}
             </div>
             <div className="workspace-modal-sub">{workspaceName} · 搜索文件名或代码全文内容</div>

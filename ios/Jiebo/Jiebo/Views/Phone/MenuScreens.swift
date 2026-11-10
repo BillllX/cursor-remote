@@ -1178,6 +1178,69 @@ struct KbDropToken: Identifiable, Hashable {
     }
 }
 
+struct KbWecomWatchedItem: Identifiable, Hashable {
+    var id: String
+    var workspaceKey: String
+    var title: String
+    var sourceType: String
+    var sheet: String?
+    var lastCheckedUpdateTime: String?
+    var lastSyncedUpdateTime: String?
+    var lastCheckedAt: Double?
+    var lastSyncedAt: Double?
+    var lastSyncedSha256: String?
+    var lastCheckHasChanged: Bool?
+    var lastCheckSummary: String?
+    var lastCheckDiffHint: String?
+    var lastCheckError: String?
+
+    static func parse(_ item: JSONValue) -> KbWecomWatchedItem? {
+        guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return KbWecomWatchedItem(
+            id: id,
+            workspaceKey: row["workspaceKey"]?.string ?? "",
+            title: row["title"]?.string?.nilIfEmpty ?? id,
+            sourceType: row["sourceType"]?.string ?? "sheet",
+            sheet: row["sheet"]?.string?.nilIfEmpty,
+            lastCheckedUpdateTime: row["lastCheckedUpdateTime"]?.string?.nilIfEmpty,
+            lastSyncedUpdateTime: row["lastSyncedUpdateTime"]?.string?.nilIfEmpty,
+            lastCheckedAt: row["lastCheckedAt"]?.number,
+            lastSyncedAt: row["lastSyncedAt"]?.number,
+            lastSyncedSha256: row["lastSyncedSha256"]?.string?.nilIfEmpty,
+            lastCheckHasChanged: row["lastCheckHasChanged"]?.bool,
+            lastCheckSummary: row["lastCheckSummary"]?.string?.nilIfEmpty,
+            lastCheckDiffHint: row["lastCheckDiffHint"]?.string?.nilIfEmpty,
+            lastCheckError: row["lastCheckError"]?.string?.nilIfEmpty
+        )
+    }
+}
+
+struct KbWorkspaceIngestLog: Identifiable, Hashable {
+    var batchId: String
+    var timestamp: Double
+    var status: String
+    var submitterName: String
+    var note: String
+    var updatedHtmls: [String]
+    var summary: String
+    var errorReason: String?
+    var id: String { batchId }
+
+    static func parse(_ item: JSONValue) -> KbWorkspaceIngestLog? {
+        guard let row = item.object, let batchId = row["batchId"]?.string, !batchId.isEmpty else { return nil }
+        return KbWorkspaceIngestLog(
+            batchId: batchId,
+            timestamp: row["timestamp"]?.number ?? 0,
+            status: row["status"]?.string ?? "completed",
+            submitterName: row["submitterName"]?.string?.nilIfEmpty ?? "系统归档",
+            note: row["note"]?.string ?? "",
+            updatedHtmls: row["updatedHtmls"]?.array?.compactMap(\.string) ?? [],
+            summary: row["summary"]?.string ?? "",
+            errorReason: row["errorReason"]?.string?.nilIfEmpty
+        )
+    }
+}
+
 struct KbWorkspaceStatus: Hashable {
     var workspaceKey: String
     var isKnowledgeBase: Bool
@@ -1188,6 +1251,9 @@ struct KbWorkspaceStatus: Hashable {
     var otherTokens: [KbDropToken]
     var kbWorkspaces: [KbWorkspaceSummary]
     var proposals: [KbColleagueProposal]
+    var wecomWatchItems: [KbWecomWatchedItem]
+    var ingestLogs: [KbWorkspaceIngestLog]
+    var wecomWatchMessage: String?
     var dropPortalPath: String
 
     static func parse(_ value: JSONValue?) -> KbWorkspaceStatus? {
@@ -1227,6 +1293,9 @@ struct KbWorkspaceStatus: Hashable {
                 createdAt: row["createdAt"]?.number ?? 0
             )
         } ?? []
+        let wecomWatchItems = object["wecomWatchItems"]?.array?.compactMap(KbWecomWatchedItem.parse) ?? []
+        let ingestLogs = object["ingestLogs"]?.array?.compactMap(KbWorkspaceIngestLog.parse) ?? []
+        let wecomWatchMessage = object["wecomWatchResult"]?.object?["message"]?.string?.nilIfEmpty
         return KbWorkspaceStatus(
             workspaceKey: object["workspaceKey"]?.string ?? "",
             isKnowledgeBase: object["isKnowledgeBase"]?.bool ?? false,
@@ -1237,6 +1306,9 @@ struct KbWorkspaceStatus: Hashable {
             otherTokens: otherTokens,
             kbWorkspaces: kbWorkspaces,
             proposals: proposals,
+            wecomWatchItems: wecomWatchItems,
+            ingestLogs: ingestLogs,
+            wecomWatchMessage: wecomWatchMessage,
             dropPortalPath: object["dropPortalPath"]?.string ?? ""
         )
     }
@@ -1791,6 +1863,9 @@ struct KbWorkspaceSheet: View {
         guard let path = status?.dropPortalPath.nilIfEmpty else { return nil }
         return GatewayConfig.pageURL(path: path)
     }
+    private var hasActiveIngestJob: Bool {
+        status?.ingestLogs.contains(where: { $0.status == "queued" || $0.status == "processing" }) == true
+    }
 
     var body: some View {
         NavigationStack {
@@ -1807,6 +1882,12 @@ struct KbWorkspaceSheet: View {
                         .listRowBackground(JieboColor.white)
                     boardSection
                         .listRowBackground(JieboColor.white)
+                    if status?.isKnowledgeBase == true {
+                        wecomWatchSection
+                            .listRowBackground(JieboColor.white)
+                        ingestLogSection
+                            .listRowBackground(JieboColor.white)
+                    }
                     tokenSection
                         .listRowBackground(JieboColor.white)
                 }
@@ -1821,8 +1902,20 @@ struct KbWorkspaceSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
+            .refreshable {
+                await reload()
+            }
         }
         .task(id: workspacePath + "|" + store.workspaceRoot) { await reload() }
+        .task(id: hasActiveIngestJob) {
+            guard hasActiveIngestJob else { return }
+            while !Task.isCancelled && hasActiveIngestJob {
+                try? await Task.sleep(for: .seconds(4))
+                guard !Task.isCancelled, !blocked else { break }
+                let reply = await store.assistantOpData("kb_workspace_status", args: ["workspace": .string(workspaceKey)])
+                apply(reply)
+            }
+        }
         .confirmationDialog(
             "吊销这个投递口令？",
             isPresented: Binding(get: { revokeTarget != nil }, set: { if !$0 { revokeTarget = nil } }),
@@ -1896,6 +1989,131 @@ struct KbWorkspaceSheet: View {
             }
         } header: {
             JieboListHeader("看板")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var wecomWatchSection: some View {
+        Section {
+            if let items = status?.wecomWatchItems, !items.isEmpty {
+                HStack(spacing: 16) {
+                    Button("检查全部变动") {
+                        Task { await runWecomWatchAction(kind: "check") }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(JieboColor.pine)
+                    Button("同步有变动项") {
+                        Task { await runWecomWatchAction(kind: "sync") }
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(JieboColor.pine)
+                }
+                .font(JieboFont.text(.subheadline, weight: .medium))
+                .disabled(busy)
+
+                ForEach(items) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(item.title)
+                                .font(JieboFont.text(.body, weight: .medium))
+                                .foregroundStyle(JieboColor.ink)
+                            Spacer()
+                            Text(watchStatusLabel(item))
+                                .font(JieboFont.text(.caption2, weight: .medium))
+                                .foregroundStyle(
+                                    (item.lastCheckError != nil || item.lastCheckHasChanged == true || item.lastSyncedSha256 == nil)
+                                        ? JieboColor.danger
+                                        : JieboColor.pine
+                                )
+                        }
+                        Text(watchMetaLine(item))
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink2)
+                        if let diff = item.lastCheckDiffHint ?? item.lastCheckError, !diff.isEmpty {
+                            Text(diff)
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(item.lastCheckError != nil ? JieboColor.danger : JieboColor.ink2)
+                                .lineLimit(3)
+                        }
+                        HStack(spacing: 14) {
+                            Button("检查") {
+                                Task { await runWecomWatchAction(kind: "check", idOrTitle: item.id) }
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(JieboColor.pine)
+                            Button(item.lastCheckHasChanged == true || item.lastSyncedSha256 == nil ? "同步入库" : "重新同步") {
+                                Task {
+                                    let force = !(item.lastCheckHasChanged == true || item.lastSyncedSha256 == nil)
+                                    await runWecomWatchAction(kind: "sync", idOrTitle: item.id, forceSync: force)
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(JieboColor.pine)
+                        }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                        .disabled(busy)
+                    }
+                    .padding(.vertical, 2)
+                }
+            } else {
+                Text("还没有绑定关注的企微文件。对小驳说一句即可添加关注。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            }
+        } header: {
+            JieboListHeader("关注的企微文件")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var ingestLogSection: some View {
+        Section {
+            if let logs = status?.ingestLogs, !logs.isEmpty {
+                ForEach(logs) { log in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("\(shortTimeText(log.timestamp)) · \(log.submitterName)")
+                                .font(JieboFont.text(.subheadline, weight: .medium))
+                                .foregroundStyle(JieboColor.ink)
+                            Spacer()
+                            Text(ingestStatusLabel(log.status))
+                                .font(JieboFont.text(.caption2, weight: .medium))
+                                .foregroundStyle(log.status == "failed" ? JieboColor.danger : JieboColor.pine)
+                        }
+                        if !log.note.isEmpty {
+                            Text(log.note)
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(JieboColor.ink2)
+                        }
+                        let bodyText = log.summary.nilIfEmpty ?? log.errorReason ?? ""
+                        if !bodyText.isEmpty {
+                            Text(bodyText)
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(log.status == "failed" && log.summary.isEmpty ? JieboColor.danger : JieboColor.ink)
+                                .lineLimit(4)
+                        }
+                        if !log.updatedHtmls.isEmpty {
+                            ForEach(log.updatedHtmls, id: \.self) { htmlRel in
+                                Button("打开看板：\(htmlRel)") {
+                                    openBoard(KbHtmlBoard(relPath: htmlRel, title: htmlRel, category: ""))
+                                }
+                                .buttonStyle(.borderless)
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.pine)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            } else {
+                Text("还没有工作区归档更新记录。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            }
+        } header: {
+            JieboListHeader("工作区更新记录")
         }
         .listRowBackground(JieboColor.white)
     }
@@ -2072,6 +2290,61 @@ struct KbWorkspaceSheet: View {
         ])
         busy = false
         if apply(reply), reply.ok { store.flash("已吊销") }
+    }
+
+    private func runWecomWatchAction(kind: String, idOrTitle: String? = nil, forceSync: Bool = false) async {
+        busy = true
+        errorText = ""
+        var actionObj: [String: JSONValue] = ["kind": .string(kind)]
+        if let idOrTitle, !idOrTitle.isEmpty { actionObj["idOrTitle"] = .string(idOrTitle) }
+        if forceSync { actionObj["forceSync"] = .bool(true) }
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(workspaceKey),
+            "wecomWatchAction": .object(actionObj),
+        ])
+        busy = false
+        if apply(reply), reply.ok {
+            store.flash(status?.wecomWatchMessage ?? (kind == "sync" ? "已提交同步入库" : "已完成检查"))
+        }
+    }
+
+    private func watchStatusLabel(_ item: KbWecomWatchedItem) -> String {
+        if item.lastCheckError != nil { return "检查异常" }
+        if item.lastSyncedSha256 == nil { return "待首次入库" }
+        if item.lastCheckHasChanged == true { return "有新变动" }
+        return "已同步最新"
+    }
+
+    private func watchMetaLine(_ item: KbWecomWatchedItem) -> String {
+        var parts: [String] = []
+        if let remoteTime = item.lastCheckedUpdateTime ?? item.lastSyncedUpdateTime {
+            parts.append("企微修改：\(remoteTime)")
+        }
+        if let checked = item.lastCheckedAt {
+            parts.append("检查于 \(shortTimeText(checked))")
+        }
+        if let synced = item.lastSyncedAt {
+            parts.append("入库于 \(shortTimeText(synced))")
+        } else {
+            parts.append("尚未入库")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func ingestStatusLabel(_ raw: String) -> String {
+        switch raw {
+        case "queued": return "排队中"
+        case "processing": return "正在归档"
+        case "partial": return "部分归档"
+        case "failed": return "归档未完成"
+        default: return "已更新入库"
+        }
+    }
+
+    private func shortTimeText(_ ms: Double) -> String {
+        guard ms > 0 else { return "—" }
+        let date = Date(timeIntervalSince1970: ms / 1000)
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 
     @discardableResult

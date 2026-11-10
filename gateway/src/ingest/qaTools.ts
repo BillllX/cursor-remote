@@ -30,14 +30,7 @@ import {
 import type { DropSessionGrant, DropTenantHost } from "./tokens.ts";
 import { MAX_KB_HTML_BYTES } from "./tools.ts";
 
-export const QA_READABLE_TEXT_EXTS = new Set([
-  ".html",
-  ".md",
-  ".txt",
-  ".csv",
-  ".json",
-  ".sql",
-]);
+export const QA_READABLE_TEXT_EXTS = new Set([".html", ".md", ".txt", ".csv", ".json", ".sql"]);
 
 export const QA_MAX_READ_RETURN_BYTES = 64 * 1024;
 export const QA_MAX_SEARCH_SCAN_BYTES = 16 * 1024 * 1024;
@@ -72,7 +65,7 @@ export function extractReadableTextFromHtml(htmlContent: string): string {
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, "\"")
+    .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
@@ -234,11 +227,7 @@ export function executeKbQaSearch(
   const listed = executeKbQaListFiles(workspaceDir, config, categoryFilter, { onlyReadableText: true });
   if (!listed.ok) return listed;
 
-  const keywords = cleanQuery
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 6);
+  const keywords = cleanQuery.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
 
   const matches: Array<{ relPath: string; line: number; snippet: string }> = [];
   let scannedBytes = 0;
@@ -261,8 +250,7 @@ export function executeKbQaSearch(
     scannedFiles += 1;
     scannedBytes += Buffer.byteLength(readRes.text, "utf8");
 
-    const searchableText =
-      item.ext === ".html" ? extractReadableTextFromHtml(readRes.text) : readRes.text;
+    const searchableText = item.ext === ".html" ? extractReadableTextFromHtml(readRes.text) : readRes.text;
     const lines = searchableText.split(/\r?\n/);
 
     for (let i = 0; i < lines.length; i++) {
@@ -332,10 +320,7 @@ export function executeKbQaReadFile(
   const readRes = safeReadWorkspaceTextFileSync(workspaceDir, pathCheck.normalizedRel, maxReadBytes);
   if (!readRes.ok) return readRes;
 
-  const fullText =
-    ext === ".html" && !opts.rawHtml
-      ? extractReadableTextFromHtml(readRes.text)
-      : readRes.text;
+  const fullText = ext === ".html" && !opts.rawHtml ? extractReadableTextFromHtml(readRes.text) : readRes.text;
 
   const allLines = fullText.split(/\r?\n/);
   const totalLines = allLines.length;
@@ -450,7 +435,9 @@ export function buildQaCustomTools(ctx: {
   const resolveWorkspaceForTool = (
     active: { session: DropSessionGrant; workspaceDir: string; config: KbWorkspaceConfig },
     requestedWorkspace?: string,
-  ): { ok: true; workspaceKey: string; workspaceDir: string; config: KbWorkspaceConfig } | { ok: false; error: string } => {
+  ):
+    | { ok: true; workspaceKey: string; workspaceDir: string; config: KbWorkspaceConfig }
+    | { ok: false; error: string } => {
     const reqWs = (requestedWorkspace || "").trim();
     if (!reqWs) {
       return {
@@ -463,9 +450,7 @@ export function buildQaCustomTools(ctx: {
     const authorized = active.session.authorizedWorkspaces ?? [];
     const matched = authorized.find(
       (w) =>
-        w.workspaceId === reqWs ||
-        w.workspaceKey === reqWs ||
-        w.workspaceKey.toLowerCase() === reqWs.toLowerCase(),
+        w.workspaceId === reqWs || w.workspaceKey === reqWs || w.workspaceKey.toLowerCase() === reqWs.toLowerCase(),
     );
     if (!matched) {
       return {
@@ -497,11 +482,13 @@ export function buildQaCustomTools(ctx: {
       {
         workspace: {
           type: "string",
-          description: "可选，指定要查看的获权知识库工作区名称（如 'Fintopia集团' 或 'sannongxin'），留空则查看当前激活知识库。",
+          description:
+            "可选，指定要查看的获权知识库工作区名称（如 'Fintopia集团' 或 'sannongxin'），留空则查看当前激活知识库。",
         },
         categoryOrDir: {
           type: "string",
-          description: "可选，指定要查看的一级分类名或子目录相对路径（如 '资产' 或 '资产/洋钱罐（锋泰、瓴岳）'），留空则列出全部白名单分类。",
+          description:
+            "可选，指定要查看的一级分类名或子目录相对路径（如 '资产' 或 '资产/洋钱罐（锋泰、瓴岳）'），留空则列出全部白名单分类。",
         },
       },
       [],
@@ -622,11 +609,7 @@ export function buildQaCustomTools(ctx: {
         const ensured = ensureQaSessionStorageSync(host, active.session);
         if (!ensured.ok) return { ok: false, error: ensured.error };
 
-        const readRes = safeReadQaFileSync(
-          ensured.sessionDir,
-          `${scope}/${nameCheck.cleanName}`,
-          QA_MAX_FILE_BYTES,
-        );
+        const readRes = safeReadQaFileSync(ensured.sessionDir, `${scope}/${nameCheck.cleanName}`, QA_MAX_FILE_BYTES);
         if (!readRes.ok) return readRes;
 
         const fullText = readRes.buffer.toString("utf8");
@@ -665,7 +648,8 @@ export function buildQaCustomTools(ctx: {
       {
         fileName: {
           type: "string",
-          description: "要生成的临时文件名（不含路径斜杠），如 '知识库核心指标统计.csv'、'各主体风险对比报告.md' 或 '统计总览看板.html'",
+          description:
+            "要生成的临时文件名（不含路径斜杠），如 '知识库核心指标统计.csv'、'各主体风险对比报告.md' 或 '统计总览看板.html'",
         },
         content: {
           type: "string",
@@ -674,12 +658,7 @@ export function buildQaCustomTools(ctx: {
       },
       ["fileName", "content"],
       (active, args) => {
-        const writeRes = writeQaTempOutputFileSync(
-          host,
-          active.session,
-          str(args.fileName),
-          str(args.content),
-        );
+        const writeRes = writeQaTempOutputFileSync(host, active.session, str(args.fileName), str(args.content));
         if (!writeRes.ok) return writeRes;
 
         const idx = executionLog.generatedFiles.findIndex((f) => f.name === writeRes.file.name);

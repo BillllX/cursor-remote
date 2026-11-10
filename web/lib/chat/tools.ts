@@ -118,10 +118,7 @@ export type ShellRow = {
   chatTitle?: string;
 };
 
-export function shellRows(
-  turns: Turn[],
-  chatMeta?: { chatId?: string; chatTitle?: string },
-): ShellRow[] {
+export function shellRows(turns: Turn[], chatMeta?: { chatId?: string; chatTitle?: string }): ShellRow[] {
   const rows: ShellRow[] = [];
   for (let i = 0; i < turns.length; i += 1) {
     const turn = turns[i];
@@ -177,26 +174,14 @@ export function workspaceShellRows(
   return rows;
 }
 
-export function filterShellRows(
-  rows: ShellRow[],
-  statusFilter: ShellStatusFilter,
-  query: string,
-): ShellRow[] {
+export function filterShellRows(rows: ShellRow[], statusFilter: ShellStatusFilter, query: string): ShellRow[] {
   const q = query.trim().toLowerCase();
   return rows.filter((row) => {
     if (statusFilter === "running" && !row.running) return false;
     if (statusFilter === "failed" && !row.failed) return false;
     if (statusFilter === "succeeded" && (row.running || row.failed)) return false;
     if (!q) return true;
-    const haystacks = [
-      row.command,
-      row.description,
-      row.cwd,
-      row.stdout,
-      row.stderr,
-      row.chatTitle,
-      row.turnPrompt,
-    ];
+    const haystacks = [row.command, row.description, row.cwd, row.stdout, row.stderr, row.chatTitle, row.turnPrompt];
     return haystacks.some((text) => text && text.toLowerCase().includes(q));
   });
 }

@@ -6,12 +6,7 @@ import { basename, extname, join, resolve } from "node:path";
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
 import { isInside } from "../pathInside.ts";
-import {
-  DEFAULT_MAX_FILE_BYTES,
-  hasControlChars,
-  isAllowedUploadFileName,
-  loadKbWorkspaceConfig,
-} from "./contract.ts";
+import { DEFAULT_MAX_FILE_BYTES, hasControlChars, isAllowedUploadFileName, loadKbWorkspaceConfig } from "./contract.ts";
 import { submitDirectIngestBatch } from "./queue.ts";
 import { MAX_FILES_PER_BATCH } from "./staging.ts";
 import type { DropTenantHost } from "./tokens.ts";
@@ -46,6 +41,20 @@ export type WecomWatchedItem = {
   lastCheckedAt?: number;
   /** 上次同步入库时间戳（ms） */
   lastSyncedAt?: number;
+  /** 最近一次巡检探测到的远端修改时间 */
+  lastCheckedUpdateTime?: string;
+  /** 最近一次巡检算出的内容 SHA-256 */
+  lastCheckedSha256?: string;
+  /** 最近一次巡检是否检测到相对已入库基线有变动（或首次尚未入库） */
+  lastCheckHasChanged?: boolean;
+  /** 最近一次巡检的内容规模摘要 */
+  lastCheckSummary?: string;
+  /** 最近一次巡检计算出的变动差异提示（diffHint） */
+  lastCheckDiffHint?: string;
+  /** 最近一次巡检拉取的内容预览 */
+  lastCheckPreview?: string;
+  /** 最近一次巡检若报错的错误原因 */
+  lastCheckError?: string;
   createdAt: number;
 };
 
@@ -125,7 +134,9 @@ export function isValidWecomResourceId(raw: string, maxLen = 512): boolean {
 
 /** 清理搜索词或名称参数，防前导 `-` 被识别为 CLI 开关 */
 function sanitizeCliOptionValue(raw: string, maxLen = 200): string {
-  const trimmed = raw.replace(/[\x00-\x1f\x7f]/g, " ").trim().slice(0, maxLen);
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[\x00-\x1f\x7f]/g, " ");
+  const trimmed = cleaned.trim().slice(0, maxLen);
   return trimmed.replace(/^-+/, "").trim();
 }
 
@@ -550,7 +561,7 @@ export function addOrUpdateWecomWatchItem(
       const prev = file.items[existingIdx];
       const nextDocId = input.sourceType === "disk_file" ? docId : (docId ?? prev.docId);
       const nextFileId = input.sourceType === "disk_file" ? (fileId ?? prev.fileId) : undefined;
-      const nextSheet = (input.sheet !== undefined || extractedTabSheet !== undefined) ? cleanSheet : prev.sheet;
+      const nextSheet = input.sheet !== undefined || extractedTabSheet !== undefined ? cleanSheet : prev.sheet;
       const nextRange = input.range !== undefined ? cleanRange : prev.range;
       const coordsChanged =
         prev.sourceType !== input.sourceType ||
@@ -574,6 +585,16 @@ export function addOrUpdateWecomWatchItem(
               lastSyncedUpdateTime: undefined,
               lastSyncedSha256: undefined,
               lastSnapshotPreview: undefined,
+              lastBatchId: undefined,
+              lastCheckedAt: undefined,
+              lastSyncedAt: undefined,
+              lastCheckedUpdateTime: undefined,
+              lastCheckedSha256: undefined,
+              lastCheckHasChanged: undefined,
+              lastCheckSummary: undefined,
+              lastCheckDiffHint: undefined,
+              lastCheckPreview: undefined,
+              lastCheckError: undefined,
             }
           : {}),
       };
@@ -659,9 +680,10 @@ export type WecomFetchedSnapshot = {
 };
 
 function sanitizeFileNameSegment(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = raw.replace(/[/\\:*?"<>|\x00-\x1f]/g, "_");
   return (
-    raw
-      .replace(/[\/\\:*?"<>|\x00-\x1f]/g, "_")
+    cleaned
       .replace(/\s+/g, "_")
       .replace(/^_+|_+$/g, "")
       .slice(0, 80) || "企微数据"
@@ -930,8 +952,103 @@ export type WecomChangeCheckItemResult = {
   error?: string;
 };
 
+export const WECOM_SYNC_MAX_FILES_PER_BATCH = 10;
+
+type PendingWecomSyncEntry = {
+  item: WecomWatchedItem;
+  snap: WecomFetchedSnapshot;
+  now: number;
+  diffHint: string;
+  rowResult: WecomChangeCheckItemResult & {
+    synced?: boolean;
+    batchId?: string;
+    syncError?: string;
+  };
+};
+
+function buildWecomSyncBatchNote(chunk: Array<{ item: WecomWatchedItem; snap: WecomFetchedSnapshot }>): string {
+  if (chunk.length === 1) {
+    const { item, snap } = chunk[0];
+    return (
+      item.note ||
+      `企业微信《${item.title}》(${item.sourceType}) 增量同步${snap.remoteUpdateTime ? ` · 修改于 ${snap.remoteUpdateTime}` : ""}`
+    );
+  }
+  const titles = chunk.map((x) => `《${x.item.title}》`).join("、");
+  const itemNotes = chunk
+    .map((x) => (x.item.note ? `${x.item.title}: ${x.item.note}` : ""))
+    .filter(Boolean)
+    .join("；");
+  const header = `企业微信关注表合并同步（共 ${chunk.length} 份：${titles}）`;
+  const combined = itemNotes ? `${header} · ${itemNotes}` : header;
+  return combined.length > 480 ? `${combined.slice(0, 479)}…` : combined;
+}
+
+/**
+ * 当后台归档批次执行失败（status === "failed"）时，回滚该批次关联的企微关注项同步基线（lastSyncedSha256），
+ * 标记 lastCheckHasChanged = true 并记录 lastCheckError，避免因入队时提前写入哈希导致失败后无法自动重跑。
+ */
+export function rollbackWecomWatchLedgerOnBatchFailed(host: TenantRef, batchId: string, errorReason?: string): number {
+  if (!batchId) return 0;
+  return withFileLockSync(lockFilePath(host), () => {
+    const ledger = readWatchLedger(host);
+    let rolledBack = 0;
+    for (let i = 0; i < ledger.items.length; i++) {
+      const cur = ledger.items[i];
+      if (cur.lastBatchId === batchId) {
+        ledger.items[i] = {
+          ...cur,
+          lastSyncedSha256: undefined,
+          lastSyncedUpdateTime: undefined,
+          lastSyncedAt: undefined,
+          lastCheckHasChanged: true,
+          lastCheckDiffHint: "上次后台归档未完成，待重新同步入库",
+          lastCheckError: errorReason
+            ? `归档批次 ${batchId} 失败：${errorReason.slice(0, 200)}`
+            : `归档批次 ${batchId} 失败`,
+        };
+        rolledBack += 1;
+      }
+    }
+    if (rolledBack > 0) {
+      writeWatchLedger(host, ledger);
+    }
+    return rolledBack;
+  });
+}
+
+function recordSyncFailureOnLedgerItem(
+  host: TenantRef,
+  itemId: string,
+  snap: WecomFetchedSnapshot,
+  now: number,
+  diffHint: string,
+  errorMsg: string,
+): void {
+  withFileLockSync(lockFilePath(host), () => {
+    const ledger = readWatchLedger(host);
+    const idx = ledger.items.findIndex((x) => x.id === itemId);
+    if (idx >= 0) {
+      const cur = ledger.items[idx];
+      ledger.items[idx] = {
+        ...cur,
+        lastCheckedAt: now,
+        lastCheckedUpdateTime: snap.remoteUpdateTime ?? cur.lastCheckedUpdateTime ?? cur.lastSyncedUpdateTime,
+        lastCheckedSha256: snap.sha256,
+        lastCheckHasChanged: !cur.lastSyncedSha256 || cur.lastSyncedSha256 !== snap.sha256,
+        lastCheckSummary: snap.summary,
+        lastCheckDiffHint: diffHint,
+        lastCheckPreview: snap.previewText,
+        lastCheckError: errorMsg,
+      };
+      writeWatchLedger(host, ledger);
+    }
+  });
+}
+
 /**
  * 只读检查关注的企业微信文件是否有变动（不触发归档写入，除非显式传 syncIfChanged=true）
+ * 当同一工作区在单次同步中有多个关注项需要入库时，按工作区分组并将文件合并提交（每批最多 10 个文件）。
  */
 export async function checkAndOptionallySyncWecomItems(
   host: DropTenantHost,
@@ -956,7 +1073,8 @@ export async function checkAndOptionallySyncWecomItems(
   error?: string;
 }> {
   const listed = listWecomWatchItems(host, { workspace: input.workspace });
-  if (!listed.ok) return { ok: false, checkedCount: 0, changedCount: 0, syncedCount: 0, results: [], error: listed.error };
+  if (!listed.ok)
+    return { ok: false, checkedCount: 0, changedCount: 0, syncedCount: 0, results: [], error: listed.error };
 
   let targets = listed.items;
   if (input.idOrTitle?.trim()) {
@@ -998,145 +1116,263 @@ export async function checkAndOptionallySyncWecomItems(
   > = [];
   let changedCount = 0;
   let syncedCount = 0;
+  const pendingSyncByWorkspace = new Map<string, PendingWecomSyncEntry[]>();
+  const lockedItemIds: string[] = [];
 
-  for (const item of targets) {
-    const wsCheck = resolveKbWorkspaceStrict(host, item.workspaceId);
-    const maxBytes = wsCheck.ok ? wsCheck.maxFileBytes : DEFAULT_MAX_FILE_BYTES;
-    const fetched = await fetchWecomItemSnapshot(host, item, maxBytes);
-    const now = Date.now();
-    if (!fetched.ok) {
-      results.push({
+  try {
+    for (const item of targets) {
+      const wsCheck = resolveKbWorkspaceStrict(host, item.workspaceId);
+      const maxBytes = wsCheck.ok ? wsCheck.maxFileBytes : DEFAULT_MAX_FILE_BYTES;
+      const fetched = await fetchWecomItemSnapshot(host, item, maxBytes);
+      const now = Date.now();
+      if (!fetched.ok) {
+        withFileLockSync(lockFilePath(host), () => {
+          const ledger = readWatchLedger(host);
+          const idx = ledger.items.findIndex((x) => x.id === item.id);
+          if (idx >= 0) {
+            ledger.items[idx] = {
+              ...ledger.items[idx],
+              lastCheckedAt: now,
+              lastCheckError: fetched.error,
+            };
+            writeWatchLedger(host, ledger);
+          }
+        });
+        results.push({
+          id: item.id,
+          workspaceKey: item.workspaceKeySnapshot,
+          title: item.title,
+          sourceType: item.sourceType,
+          ok: false,
+          hasChanged: false,
+          firstCheck: !item.lastSyncedSha256,
+          error: fetched.error,
+        });
+        continue;
+      }
+
+      const snap = fetched.snapshot;
+      const firstCheck = !item.lastSyncedSha256;
+      const hasChanged = firstCheck || item.lastSyncedSha256 !== snap.sha256;
+      if (hasChanged) changedCount += 1;
+
+      const diffHint = hasChanged
+        ? summarizeTextDiff(item.lastSnapshotPreview, snap.previewText)
+        : "内容哈希与上次同步完全一致，无变动";
+
+      const rowResult: WecomChangeCheckItemResult & {
+        synced?: boolean;
+        batchId?: string;
+        syncError?: string;
+      } = {
         id: item.id,
         workspaceKey: item.workspaceKeySnapshot,
         title: item.title,
         sourceType: item.sourceType,
-        ok: false,
-        hasChanged: false,
-        firstCheck: !item.lastSyncedSha256,
-        error: fetched.error,
-      });
-      continue;
-    }
+        ok: true,
+        hasChanged,
+        firstCheck,
+        remoteUpdateTime: snap.remoteUpdateTime,
+        previousUpdateTime: item.lastSyncedUpdateTime,
+        currentSha256: snap.sha256,
+        previousSha256: item.lastSyncedSha256,
+        summary: snap.summary,
+        diffHint,
+        previewText: snap.previewText,
+      };
+      results.push(rowResult);
 
-    const snap = fetched.snapshot;
-    const firstCheck = !item.lastSyncedSha256;
-    const hasChanged = firstCheck || item.lastSyncedSha256 !== snap.sha256;
-    if (hasChanged) changedCount += 1;
+      const shouldSync = Boolean(input.forceSync || (input.syncIfChanged && hasChanged));
+      if (!shouldSync) {
+        withFileLockSync(lockFilePath(host), () => {
+          const ledger = readWatchLedger(host);
+          const idx = ledger.items.findIndex((x) => x.id === item.id);
+          if (idx >= 0) {
+            const cur = ledger.items[idx];
+            const coordsStillSame =
+              cur.sourceType === item.sourceType &&
+              cur.docId === item.docId &&
+              cur.fileId === item.fileId &&
+              (cur.sheet || "") === (item.sheet || "") &&
+              (cur.range || "") === (item.range || "");
+            if (coordsStillSame) {
+              const latestChanged = !cur.lastSyncedSha256 || cur.lastSyncedSha256 !== snap.sha256;
+              const latestDiffHint = latestChanged
+                ? summarizeTextDiff(cur.lastSnapshotPreview, snap.previewText)
+                : "内容哈希与上次同步完全一致，无变动";
+              ledger.items[idx] = {
+                ...cur,
+                lastCheckedAt: now,
+                lastCheckedUpdateTime: snap.remoteUpdateTime ?? cur.lastCheckedUpdateTime ?? cur.lastSyncedUpdateTime,
+                lastCheckedSha256: snap.sha256,
+                lastCheckHasChanged: latestChanged,
+                lastCheckSummary: snap.summary,
+                lastCheckDiffHint: latestDiffHint,
+                lastCheckPreview: snap.previewText,
+                lastCheckError: undefined,
+              };
+              writeWatchLedger(host, ledger);
+            }
+          }
+        });
+        continue;
+      }
 
-    const diffHint = hasChanged
-      ? summarizeTextDiff(item.lastSnapshotPreview, snap.previewText)
-      : "内容哈希与上次同步完全一致，无变动";
+      if (!wsCheck.ok) {
+        rowResult.synced = false;
+        rowResult.syncError = wsCheck.error;
+        recordSyncFailureOnLedgerItem(host, item.id, snap, now, diffHint, wsCheck.error);
+        continue;
+      }
+      const kbLoaded = loadKbWorkspaceConfig(wsCheck.path, host.workspaceRoot);
+      if (!kbLoaded.ok) {
+        rowResult.synced = false;
+        rowResult.syncError = kbLoaded.error;
+        recordSyncFailureOnLedgerItem(host, item.id, snap, now, diffHint, kbLoaded.error);
+        continue;
+      }
+      const nameCheck = isAllowedUploadFileName(snap.fileName, kbLoaded.config);
+      if (!nameCheck.ok) {
+        rowResult.synced = false;
+        rowResult.syncError = nameCheck.error;
+        recordSyncFailureOnLedgerItem(host, item.id, snap, now, diffHint, nameCheck.error);
+        continue;
+      }
 
-    const rowResult: WecomChangeCheckItemResult & {
-      synced?: boolean;
-      batchId?: string;
-      syncError?: string;
-    } = {
-      id: item.id,
-      workspaceKey: item.workspaceKeySnapshot,
-      title: item.title,
-      sourceType: item.sourceType,
-      ok: true,
-      hasChanged,
-      firstCheck,
-      remoteUpdateTime: snap.remoteUpdateTime,
-      previousUpdateTime: item.lastSyncedUpdateTime,
-      currentSha256: snap.sha256,
-      previousSha256: item.lastSyncedSha256,
-      summary: snap.summary,
-      diffHint,
-      previewText: snap.previewText,
-    };
-
-    const shouldSync = Boolean(input.forceSync || (input.syncIfChanged && hasChanged));
-    if (shouldSync) {
       if (inFlightItemSync.has(item.id)) {
         rowResult.synced = false;
         rowResult.syncError = "该关注项正在同步中，已跳过并发重复提交";
-        results.push(rowResult);
         continue;
       }
       inFlightItemSync.add(item.id);
-      try {
-        // 提交前在锁内复核账本最新状态，防止并发协程已同步相同 SHA 或配置已被修改
-        const precheck = withFileLockSync(lockFilePath(host), () => {
+      lockedItemIds.push(item.id);
+
+      const precheck = withFileLockSync(lockFilePath(host), () => {
+        const ledger = readWatchLedger(host);
+        const latest = ledger.items.find((x) => x.id === item.id);
+        if (!latest) return { proceed: false, reason: "关注项已被移除" };
+        if (
+          latest.sourceType !== item.sourceType ||
+          latest.docId !== item.docId ||
+          latest.fileId !== item.fileId ||
+          (latest.sheet || "") !== (item.sheet || "") ||
+          (latest.range || "") !== (item.range || "")
+        ) {
+          return { proceed: false, reason: "关注项配置在拉取期间已变更，请重新检查" };
+        }
+        if (!input.forceSync && latest.lastSyncedSha256 === snap.sha256) {
+          return { proceed: false, reason: "已被并发请求同步完成" };
+        }
+        return { proceed: true, reason: "" };
+      });
+
+      if (!precheck.proceed) {
+        rowResult.synced = false;
+        rowResult.syncError = precheck.reason;
+        continue;
+      }
+
+      const wsGroup = pendingSyncByWorkspace.get(item.workspaceId) ?? [];
+      wsGroup.push({ item, snap, now, diffHint, rowResult });
+      pendingSyncByWorkspace.set(item.workspaceId, wsGroup);
+    }
+
+    const batchLimit = Math.min(WECOM_SYNC_MAX_FILES_PER_BATCH, MAX_FILES_PER_BATCH);
+    for (const [workspaceId, entries] of pendingSyncByWorkspace.entries()) {
+      for (let offset = 0; offset < entries.length; offset += batchLimit) {
+        const rawChunk = entries.slice(offset, offset + batchLimit);
+        const activeChunk = withFileLockSync(lockFilePath(host), () => {
           const ledger = readWatchLedger(host);
-          const latest = ledger.items.find((x) => x.id === item.id);
-          if (!latest) return { proceed: false, reason: "关注项已被移除" };
-          if (
-            latest.sourceType !== item.sourceType ||
-            latest.docId !== item.docId ||
-            latest.fileId !== item.fileId ||
-            (latest.sheet || "") !== (item.sheet || "") ||
-            (latest.range || "") !== (item.range || "")
-          ) {
-            return { proceed: false, reason: "关注项配置在拉取期间已变更，请重新检查" };
+          const valid: PendingWecomSyncEntry[] = [];
+          for (const entry of rawChunk) {
+            const latest = ledger.items.find((x) => x.id === entry.item.id);
+            if (!latest) {
+              entry.rowResult.synced = false;
+              entry.rowResult.syncError = "关注项已被移除";
+              continue;
+            }
+            if (
+              latest.sourceType !== entry.item.sourceType ||
+              latest.docId !== entry.item.docId ||
+              latest.fileId !== entry.item.fileId ||
+              (latest.sheet || "") !== (entry.item.sheet || "") ||
+              (latest.range || "") !== (entry.item.range || "")
+            ) {
+              entry.rowResult.synced = false;
+              entry.rowResult.syncError = "关注项配置在拉取期间已变更，请重新检查";
+              continue;
+            }
+            if (!input.forceSync && latest.lastSyncedSha256 === entry.snap.sha256) {
+              entry.rowResult.synced = false;
+              entry.rowResult.syncError = "已被并发请求同步完成";
+              continue;
+            }
+            valid.push(entry);
           }
-          if (!input.forceSync && latest.lastSyncedSha256 === snap.sha256) {
-            return { proceed: false, reason: "已被并发请求同步完成" };
-          }
-          return { proceed: true, reason: "" };
+          return valid;
         });
 
-        if (!precheck.proceed) {
-          rowResult.synced = false;
-          rowResult.syncError = precheck.reason;
-          results.push(rowResult);
-          continue;
-        }
+        if (activeChunk.length === 0) continue;
 
         const submitted = submitDirectIngestBatch(host, {
-          workspaceKeyOrId: item.workspaceId,
+          workspaceKeyOrId: workspaceId,
           tokenId: "dt_wecom_watch_sync",
           submitterName: "企业微信同步",
-          note:
-            item.note ||
-            `企业微信《${item.title}》(${item.sourceType}) 增量同步${snap.remoteUpdateTime ? ` · 修改于 ${snap.remoteUpdateTime}` : ""}`,
-          files: [{ fileName: snap.fileName, data: snap.data }],
+          note: buildWecomSyncBatchNote(activeChunk),
+          files: activeChunk.map((x) => ({ fileName: x.snap.fileName, data: x.snap.data })),
         });
+
         if (!submitted.ok) {
-          rowResult.synced = false;
-          rowResult.syncError = submitted.error;
+          for (const entry of activeChunk) {
+            entry.rowResult.synced = false;
+            entry.rowResult.syncError = submitted.error;
+            recordSyncFailureOnLedgerItem(host, entry.item.id, entry.snap, entry.now, entry.diffHint, submitted.error);
+          }
         } else {
-          rowResult.synced = true;
-          rowResult.batchId = submitted.batchId;
-          syncedCount += 1;
+          for (const entry of activeChunk) {
+            entry.rowResult.synced = true;
+            entry.rowResult.batchId = submitted.batchId;
+            syncedCount += 1;
+          }
           withFileLockSync(lockFilePath(host), () => {
             const ledger = readWatchLedger(host);
-            const idx = ledger.items.findIndex((x) => x.id === item.id);
-            if (idx >= 0) {
-              ledger.items[idx] = {
-                ...ledger.items[idx],
-                workspaceKeySnapshot: submitted.workspaceKey,
-                lastSyncedUpdateTime: snap.remoteUpdateTime ?? ledger.items[idx].lastSyncedUpdateTime,
-                lastSyncedSha256: snap.sha256,
-                lastSnapshotPreview: snap.previewText,
-                lastBatchId: submitted.batchId,
-                lastCheckedAt: now,
-                lastSyncedAt: now,
-              };
+            let mutated = false;
+            for (const entry of activeChunk) {
+              const idx = ledger.items.findIndex((x) => x.id === entry.item.id);
+              if (idx >= 0) {
+                const cur = ledger.items[idx];
+                ledger.items[idx] = {
+                  ...cur,
+                  workspaceKeySnapshot: submitted.workspaceKey,
+                  lastSyncedUpdateTime: entry.snap.remoteUpdateTime ?? cur.lastSyncedUpdateTime,
+                  lastSyncedSha256: entry.snap.sha256,
+                  lastSnapshotPreview: entry.snap.previewText,
+                  lastBatchId: submitted.batchId,
+                  lastCheckedAt: entry.now,
+                  lastSyncedAt: entry.now,
+                  lastCheckedUpdateTime:
+                    entry.snap.remoteUpdateTime ?? cur.lastCheckedUpdateTime ?? cur.lastSyncedUpdateTime,
+                  lastCheckedSha256: entry.snap.sha256,
+                  lastCheckHasChanged: false,
+                  lastCheckSummary: entry.snap.summary,
+                  lastCheckDiffHint: "内容哈希与上次同步完全一致，无变动",
+                  lastCheckPreview: entry.snap.previewText,
+                  lastCheckError: undefined,
+                };
+                mutated = true;
+              }
+            }
+            if (mutated) {
               writeWatchLedger(host, ledger);
             }
           });
         }
-      } finally {
-        inFlightItemSync.delete(item.id);
       }
-    } else {
-      withFileLockSync(lockFilePath(host), () => {
-        const ledger = readWatchLedger(host);
-        const idx = ledger.items.findIndex((x) => x.id === item.id);
-        if (idx >= 0) {
-          ledger.items[idx] = {
-            ...ledger.items[idx],
-            lastCheckedAt: now,
-          };
-          writeWatchLedger(host, ledger);
-        }
-      });
     }
-
-    results.push(rowResult);
+  } finally {
+    for (const id of lockedItemIds) {
+      inFlightItemSync.delete(id);
+    }
   }
 
   return {
@@ -1205,11 +1441,7 @@ export async function ingestWecomMailToKb(
 
     let bodyContent = typeof mailItem.content === "string" ? mailItem.content : "";
     if (!bodyContent && typeof mailItem.file_path === "string" && mailItem.file_path.trim()) {
-      const safeBody = readSafeDownloadedFileSync(
-        mailTempDir,
-        mailItem.file_path,
-        kbLoaded.config.maxFileBytes,
-      );
+      const safeBody = readSafeDownloadedFileSync(mailTempDir, mailItem.file_path, kbLoaded.config.maxFileBytes);
       if (safeBody.ok) {
         bodyContent = safeBody.data.toString("utf8");
       }

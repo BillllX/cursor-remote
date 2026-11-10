@@ -102,7 +102,8 @@ export function MemoryCenterSkillDetail({
         </div>
         <div className="assistant-item-body">{activeProposal.summary}</div>
         <p className="loop-meta">
-          作用文件夹：{activeProposal.targetDir} · 权限：{activeProposal.mode === "write" ? "读写（允许改文件与跑脚本）" : "只读参考"}
+          作用文件夹：{activeProposal.targetDir} · 权限：
+          {activeProposal.mode === "write" ? "读写（允许改文件与跑脚本）" : "只读参考"}
         </p>
         {activeProposal.triggers.keywords.length > 0 ? (
           <p className="loop-meta">触发关键词：{activeProposal.triggers.keywords.join("、")}</p>
@@ -128,12 +129,7 @@ export function MemoryCenterSkillDetail({
             >
               {busy ? "处理中…" : "批准上架"}
             </button>
-            <button
-              type="button"
-              className="pill"
-              disabled={busy}
-              onClick={() => onDecide(activeProposal, false)}
-            >
+            <button type="button" className="pill" disabled={busy} onClick={() => onDecide(activeProposal, false)}>
               拒绝
             </button>
           </div>
@@ -193,15 +189,12 @@ export function MemoryCenterSkillDetail({
         <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>
           {SCOPE_LABEL[activeSkill.scope] ?? activeSkill.scope}
         </span>
-        {activeSkill.pinned ? (
-          <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>常驻推荐</span>
-        ) : null}
-        {activeSkill.autoPrewarm ? (
-          <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>自动预热</span>
-        ) : null}
+        {activeSkill.pinned ? <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>常驻推荐</span> : null}
+        {activeSkill.autoPrewarm ? <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>自动预热</span> : null}
       </div>
       <p className="loop-meta">
-        被采用 {activeSkill.stats.adoptedCount} 次 · 查阅 {activeSkill.stats.viewedCount} 次 · 自动预热 {activeSkill.stats.prewarmedCount} 次
+        被采用 {activeSkill.stats.adoptedCount} 次 · 查阅 {activeSkill.stats.viewedCount} 次 · 自动预热{" "}
+        {activeSkill.stats.prewarmedCount} 次
       </p>
       {activeSkill.triggers.keywords.length > 0 ? (
         <p className="loop-meta">触发词：{activeSkill.triggers.keywords.join("、")}</p>
@@ -212,18 +205,12 @@ export function MemoryCenterSkillDetail({
       {activeSkill.requiredTools.length > 0 ? (
         <p className="loop-meta">关联工具：{activeSkill.requiredTools.join(", ")}</p>
       ) : null}
-      {activeSkill.healthReason ? (
-        <p className={styles.clayText}>{activeSkill.healthReason}</p>
-      ) : null}
+      {activeSkill.healthReason ? <p className={styles.clayText}>{activeSkill.healthReason}</p> : null}
 
       {activeSkill.kind !== "channel_guard" && activeSkill.health !== "tampered" ? (
         <div className={styles.rowMeta}>
           {activeSkill.health !== "disabled" && onUseSkillInChat ? (
-            <button
-              type="button"
-              className={styles.pineBtn}
-              onClick={() => onUseSkillInChat(activeSkill)}
-            >
+            <button type="button" className={styles.pineBtn} onClick={() => onUseSkillInChat(activeSkill)}>
               在对话中使用
             </button>
           ) : null}
@@ -322,9 +309,7 @@ export function MemoryCenterSkillDetail({
       ) : (
         <>
           <div className="side-label">操作手册（SOP 正文）</div>
-          <pre className="assistant-pre">
-            {activeSkill.body?.trim() || "（该能力未附带独立正文）"}
-          </pre>
+          <pre className="assistant-pre">{activeSkill.body?.trim() || "（该能力未附带独立正文）"}</pre>
         </>
       )}
 
@@ -456,24 +441,14 @@ export default function MemoryCenterSkillsPane({
         >
           <div className="assistant-item-head">
             <span className="assistant-item-title">{sk.name}</span>
-            <span className={`chat-mark ${healthTone} ${MEMORY_CENTER_CSS.badge}`}>
-              {healthText}
-            </span>
+            <span className={`chat-mark ${healthTone} ${MEMORY_CENTER_CSS.badge}`}>{healthText}</span>
           </div>
           <div className="assistant-item-body">{sk.summary}</div>
           <div className={styles.rowMeta}>
-            <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>
-              {KIND_LABEL[sk.kind] ?? sk.kind}
-            </span>
-            <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>
-              {SCOPE_LABEL[sk.scope] ?? sk.scope}
-            </span>
-            {sk.pinned ? (
-              <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>常驻推荐</span>
-            ) : null}
-            {sk.autoPrewarm ? (
-              <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>自动预热</span>
-            ) : null}
+            <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>{KIND_LABEL[sk.kind] ?? sk.kind}</span>
+            <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>{SCOPE_LABEL[sk.scope] ?? sk.scope}</span>
+            {sk.pinned ? <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>常驻推荐</span> : null}
+            {sk.autoPrewarm ? <span className={`chat-mark ${MEMORY_CENTER_CSS.badge}`}>自动预热</span> : null}
             <span className="loop-meta">
               采用 {sk.stats.adoptedCount} · 查阅 {sk.stats.viewedCount} · 预热 {sk.stats.prewarmedCount}
             </span>
@@ -491,16 +466,10 @@ export default function MemoryCenterSkillsPane({
               {sk.requiredTools.length > 0 ? (
                 <p className="loop-meta">关联工具：{sk.requiredTools.join(", ")}</p>
               ) : null}
-              {sk.healthReason ? (
-                <p className={styles.clayText}>{sk.healthReason}</p>
-              ) : null}
+              {sk.healthReason ? <p className={styles.clayText}>{sk.healthReason}</p> : null}
               {sk.kind !== "channel_guard" && sk.health !== "tampered" ? (
                 <div className={styles.rowMeta}>
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={() => updateMeta(sk, { pinned: !sk.pinned })}
-                  >
+                  <button type="button" className="pill" onClick={() => updateMeta(sk, { pinned: !sk.pinned })}>
                     {sk.pinned ? "取消常驻推荐" : "设为常驻推荐"}
                   </button>
                   {sk.mode === "read" ? (
@@ -520,11 +489,7 @@ export default function MemoryCenterSkillsPane({
                     {sk.health === "disabled" ? "恢复启用" : "停用此技能"}
                   </button>
                   {sk.health !== "disabled" && onUseSkillInChat ? (
-                    <button
-                      type="button"
-                      className={styles.pineBtn}
-                      onClick={() => onUseSkillInChat(sk)}
-                    >
+                    <button type="button" className={styles.pineBtn} onClick={() => onUseSkillInChat(sk)}>
                       在对话中使用
                     </button>
                   ) : null}
@@ -572,9 +537,7 @@ export default function MemoryCenterSkillsPane({
         </div>
       ) : null}
 
-      {loading && !skills.length ? (
-        <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载技能工厂…</div>
-      ) : null}
+      {loading && !skills.length ? <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载技能工厂…</div> : null}
 
       {pendingProposals.length > 0 ? (
         <div>
@@ -595,7 +558,8 @@ export default function MemoryCenterSkillsPane({
                   <div className="assistant-item-body">{prop.summary}</div>
                   <div className={styles.rowMeta}>
                     <span className="loop-meta">
-                      作用文件夹：{prop.targetDir} · 权限：{prop.mode === "write" ? "读写" : "只读"} · 已通过安全门禁（#{prop.sha256.slice(0, 8)}）
+                      作用文件夹：{prop.targetDir} · 权限：{prop.mode === "write" ? "读写" : "只读"} · 已通过安全门禁（#
+                      {prop.sha256.slice(0, 8)}）
                     </span>
                   </div>
                   {prop.promotedFromMemoryIds.length > 0 ? (
@@ -612,27 +576,13 @@ export default function MemoryCenterSkillsPane({
                     </div>
                   ) : null}
                   <div className={styles.rowMeta}>
-                    <button
-                      type="button"
-                      className="pill"
-                      onClick={() => pickKey(key)}
-                    >
+                    <button type="button" className="pill" onClick={() => pickKey(key)}>
                       {isExpanded ? "收起技能手册" : "预览技能手册"}
                     </button>
-                    <button
-                      type="button"
-                      className={styles.pineBtn}
-                      disabled={busy}
-                      onClick={() => decide(prop, true)}
-                    >
+                    <button type="button" className={styles.pineBtn} disabled={busy} onClick={() => decide(prop, true)}>
                       {busy ? "处理中…" : "批准上架"}
                     </button>
-                    <button
-                      type="button"
-                      className="pill"
-                      disabled={busy}
-                      onClick={() => decide(prop, false)}
-                    >
+                    <button type="button" className="pill" disabled={busy} onClick={() => decide(prop, false)}>
                       拒绝
                     </button>
                   </div>
@@ -644,16 +594,12 @@ export default function MemoryCenterSkillsPane({
       ) : null}
 
       <div className="side-label">对话可用技能（可在聊天中调用）</div>
-      <ul className="assistant-list">
-        {callableSkills.map(renderSkillRow)}
-      </ul>
+      <ul className="assistant-list">{callableSkills.map(renderSkillRow)}</ul>
 
       {guardSkills.length > 0 ? (
         <>
           <div className="side-label">系统后台守卫（网关自动运行）</div>
-          <ul className="assistant-list">
-            {guardSkills.map(renderSkillRow)}
-          </ul>
+          <ul className="assistant-list">{guardSkills.map(renderSkillRow)}</ul>
         </>
       ) : null}
     </div>

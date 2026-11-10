@@ -181,21 +181,11 @@ export function AssistantColleaguesSection({
     } else if (op === "drop_token_revoke") {
       onNotice("已吊销同事通行证");
     }
-  }, [
-    lastResult,
-    resultTick,
-    onNotice,
-    selectedWorkspaces.length,
-    clearPollTimer,
-    pollQrStatus,
-    qrModalOpen,
-  ]);
+  }, [lastResult, resultTick, onNotice, selectedWorkspaces.length, clearPollTimer, pollQrStatus, qrModalOpen]);
 
   const kbWorkspaces: KbWorkspaceSummaryItem[] = status?.kbWorkspaces || [];
   const tokens: KbDropTokenItem[] = status?.tokens || [];
-  const pendingProposals: KbColleagueProposalItem[] = (status?.proposals || []).filter(
-    (p) => p.status === "pending",
-  );
+  const pendingProposals: KbColleagueProposalItem[] = (status?.proposals || []).filter((p) => p.status === "pending");
   const ownerWx = status?.ownerWx;
 
   function openWechatQrModal(mode: "owner_colleague" | "owner_self", tok?: KbDropTokenItem) {
@@ -257,9 +247,7 @@ export function AssistantColleaguesSection({
   }
 
   function toggleNewWorkspaceSelection(wsKey: string) {
-    setSelectedWorkspaces((prev) =>
-      prev.includes(wsKey) ? prev.filter((x) => x !== wsKey) : [...prev, wsKey],
-    );
+    setSelectedWorkspaces((prev) => (prev.includes(wsKey) ? prev.filter((x) => x !== wsKey) : [...prev, wsKey]));
   }
 
   function handleCreateColleague(e: React.FormEvent) {
@@ -270,11 +258,7 @@ export function AssistantColleaguesSection({
       return;
     }
     const targetWorkspaces =
-      selectedWorkspaces.length > 0
-        ? selectedWorkspaces
-        : kbWorkspaces[0]
-          ? [kbWorkspaces[0].workspaceKey]
-          : [];
+      selectedWorkspaces.length > 0 ? selectedWorkspaces : kbWorkspaces[0] ? [kbWorkspaces[0].workspaceKey] : [];
     if (targetWorkspaces.length === 0) {
       setErrorText("请先在任意子工作区开启至少一个知识库，再创建同事通行证");
       return;
@@ -313,9 +297,7 @@ export function AssistantColleaguesSection({
       tok.workspaces && tok.workspaces.length > 0
         ? tok.workspaces
         : [{ workspaceId: tok.workspaceId, workspaceKey: tok.workspaceKey }];
-    const hasWs = currentList.some(
-      (w) => w.workspaceId === ws.workspaceId || w.workspaceKey === ws.workspaceKey,
-    );
+    const hasWs = currentList.some((w) => w.workspaceId === ws.workspaceId || w.workspaceKey === ws.workspaceKey);
     if (hasWs && currentList.length <= 1) {
       setErrorText("至少需保留 1 个关联的知识库工作区（如需停用请点吊销）");
       return;
@@ -376,11 +358,7 @@ export function AssistantColleaguesSection({
   }
 
   function handleGlobalRevoke(tok: KbDropTokenItem) {
-    if (
-      !window.confirm(
-        `确定全局吊销同事「${tok.label}」的通行证吗？吊销后其网页免登、IM 与微信权限将立即失效。`,
-      )
-    ) {
+    if (!window.confirm(`确定全局吊销同事「${tok.label}」的通行证吗？吊销后其网页免登、IM 与微信权限将立即失效。`)) {
       return;
     }
     dispatchOp(
@@ -440,12 +418,7 @@ export function AssistantColleaguesSection({
                 解绑主人微信
               </button>
             ) : null}
-            <button
-              type="button"
-              className="pill"
-              disabled={!status?.dropPortalPath}
-              onClick={copyPortalUrl}
-            >
+            <button type="button" className="pill" disabled={!status?.dropPortalPath} onClick={copyPortalUrl}>
               复制门户链接
             </button>
             {status?.dropPortalPath ? (
@@ -465,7 +438,8 @@ export function AssistantColleaguesSection({
           </div>
         </div>
         <div className="loop-meta">
-          同事可打开 <code>{status?.dropPortalPath || "门户链接"}</code> 免登问答，或点击下方卡片的「📲 生成微信绑定码」直接用微信扫码与小驳直连收发消息。
+          同事可打开 <code>{status?.dropPortalPath || "门户链接"}</code> 免登问答，或点击下方卡片的「📲
+          生成微信绑定码」直接用微信扫码与小驳直连收发消息。
           {ownerWx?.openId ? (
             <span>
               {" "}
@@ -487,9 +461,7 @@ export function AssistantColleaguesSection({
           }}
         >
           <div className="assistant-item-head" style={{ marginBottom: 8 }}>
-            <span className="assistant-item-title">
-              📲 微信官方 iLink 扫码绑定 · {qrTargetLabel}
-            </span>
+            <span className="assistant-item-title">📲 微信官方 iLink 扫码绑定 · {qrTargetLabel}</span>
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 type="button"
@@ -598,9 +570,7 @@ export function AssistantColleaguesSection({
             {pendingProposals.map((prop) => (
               <li key={prop.id} className="assistant-item unread">
                 <div className="assistant-item-head">
-                  <span className="chat-mark warn">
-                    {prop.kind === "knowledge_update" ? "知识库更新" : "日历预约"}
-                  </span>
+                  <span className="chat-mark warn">{prop.kind === "knowledge_update" ? "知识库更新" : "日历预约"}</span>
                   <span className="assistant-item-title">
                     {prop.proposerName}：{prop.summary}
                   </span>
@@ -657,9 +627,7 @@ export function AssistantColleaguesSection({
                           ? `${new Date(tok.expiresAt).toLocaleDateString("zh-CN")} 到期`
                           : "永久有效"}
                     </span>
-                    <span className="chat-mark">
-                      {calAllowed ? "可查日历忙闲" : "仅知识库"}
-                    </span>
+                    <span className="chat-mark">{calAllowed ? "可查日历忙闲" : "仅知识库"}</span>
                     {tok.imTenantId ? <span className="chat-mark">IM:{tok.imTenantId}</span> : null}
                     {tok.wxBinding?.status === "active" ? (
                       <span className="chat-mark ok" title={tok.wxBinding.openId || ""}>
@@ -709,12 +677,7 @@ export function AssistantColleaguesSection({
                     >
                       {isEditing ? "收起" : "配置权限"}
                     </button>
-                    <button
-                      type="button"
-                      className="pill"
-                      disabled={loading}
-                      onClick={() => handleGlobalRevoke(tok)}
-                    >
+                    <button type="button" className="pill" disabled={loading} onClick={() => handleGlobalRevoke(tok)}>
                       吊销
                     </button>
                   </div>
@@ -742,8 +705,7 @@ export function AssistantColleaguesSection({
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                           {kbWorkspaces.map((ws) => {
                             const checked = wsList.some(
-                              (w) =>
-                                w.workspaceId === ws.workspaceId || w.workspaceKey === ws.workspaceKey,
+                              (w) => w.workspaceId === ws.workspaceId || w.workspaceKey === ws.workspaceKey,
                             );
                             return (
                               <button

@@ -78,13 +78,7 @@ export function chatIdsFrom(chats: unknown[]): Set<string> {
 }
 
 export function isSlotActive(slot: Slot): boolean {
-  return Boolean(
-    !slot.finished ||
-      slot.run ||
-      slot.externalAbort ||
-      slot.awaitingApproval ||
-      slot.pending.length > 0,
-  );
+  return Boolean(!slot.finished || slot.run || slot.externalAbort || slot.awaitingApproval || slot.pending.length > 0);
 }
 
 export function activeSlotChatIds(tenant: Tenant): Set<string> {

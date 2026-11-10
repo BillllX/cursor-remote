@@ -127,11 +127,7 @@ export function WorkspaceManagementOverlay({
                       重命名工作区…
                     </button>
                   ) : null}
-                  <button
-                    type="button"
-                    className="new-chat"
-                    onClick={() => copyPath(currentGroup.path)}
-                  >
+                  <button type="button" className="new-chat" onClick={() => copyPath(currentGroup.path)}>
                     复制路径
                   </button>
                   <button

@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import { assistantToolSpecs } from "../src/assistant/tools.ts";
 import { isMutatingTool, summarizeToolArgs } from "../src/chat/tools.ts";
+import { getKbWorkspaceStatusForUi } from "../src/ingest/hub.ts";
+import { appendWorkspaceIngestLog } from "../src/ingest/notify.ts";
 import { listIngestQueue } from "../src/ingest/queue.ts";
 import { setupKbWorkspaceForTenant, type DropTenantHost } from "../src/ingest/tokens.ts";
 import {
@@ -16,9 +18,11 @@ import {
   listWecomWatchItems,
   readSafeDownloadedFileSync,
   removeWecomWatchItem,
+  rollbackWecomWatchLedgerOnBatchFailed,
   sanitizeWecomCliPayload,
   searchWecomResources,
   setWecomCliRunnerForTest,
+  WECOM_SYNC_MAX_FILES_PER_BATCH,
 } from "../src/ingest/wecomSource.ts";
 
 function makeTestEnv(): {
@@ -142,7 +146,7 @@ describe("企业微信 (WeCom CLI) 关注文件变动巡检、按需同步与邮
   });
 
   test("管理关注文件账本 (add / list / remove / 坐标修改重置基线) + 两段式变动检查 (check -> sync -> 幂等防重)", async () => {
-    const { dir, host } = makeTestEnv();
+    const { dir, host, wsPath } = makeTestEnv();
     let sheetCsvContent = "分类,资方,截止目前保证金\n已结束,青岛银行,26229578\n";
     let remoteModifyTime = "2026-11-09 15:52:20";
 
@@ -304,7 +308,8 @@ describe("企业微信 (WeCom CLI) 关注文件变动巡检、按需同步与邮
         workspace: "Fintopia集团",
         title: "保证金跟进",
         sourceType: "sheet",
-        docId: "https://doc.weixin.qq.com/sheet/e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y?scode=ANYA2wedAAYM8l03IKAYIABgY8AF0&tab=z4j6dz",
+        docId:
+          "https://doc.weixin.qq.com/sheet/e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y?scode=ANYA2wedAAYM8l03IKAYIABgY8AF0&tab=z4j6dz",
         range: "A1:C10",
       });
       assert.equal(updatedCoords.ok, true);
@@ -326,7 +331,42 @@ describe("企业微信 (WeCom CLI) 关注文件变动巡检、按需同步与邮
       assert.equal(mailRes.skippedAttachments?.[0].includes("恶意脚本.sh"), true);
       assert.equal(listIngestQueue(host).length, 3);
 
-      // 8. 移除关注项
+      // 8. 验证 getKbWorkspaceStatusForUi 聚合返回关注文件状态（wecomWatchItems）与工作区更新记录（ingestLogs）
+      appendWorkspaceIngestLog(wsPath, {
+        batchId: "b_test_log_1",
+        timestamp: 1794280000000,
+        status: "completed",
+        submitterName: "企业微信同步",
+        note: "企业微信《保证金跟进》增量同步",
+        movedFiles: [
+          {
+            from: ".cursor-remote/uploads/inbox/b_test_log_1/保证金跟进.csv",
+            to: "资金/洋钱罐/保证金跟进.csv",
+            category: "资金",
+          },
+        ],
+        updatedHtmls: ["资金/资金.html"],
+        summary: "已同步更新青岛银行、富民银行保证金退保进度。",
+      });
+      await checkAndOptionallySyncWecomItems(host, {
+        workspace: "Fintopia集团",
+        syncIfChanged: false,
+      });
+      const uiStatus = getKbWorkspaceStatusForUi(host, "Fintopia集团");
+      assert.equal(uiStatus.ok, true);
+      if (uiStatus.ok) {
+        assert.equal(uiStatus.data.wecomWatchItems?.length, 1);
+        assert.equal(uiStatus.data.wecomWatchItems?.[0]?.title, "保证金跟进");
+        assert.equal(uiStatus.data.wecomWatchItems?.[0]?.lastCheckHasChanged, true);
+        assert.equal(Boolean(uiStatus.data.wecomWatchItems?.[0]?.lastCheckSummary?.includes("在线表格")), true);
+        assert.equal((uiStatus.data.ingestLogs?.length ?? 0) >= 2, true);
+        const completedLog = uiStatus.data.ingestLogs?.find((l) => l.batchId === "b_test_log_1");
+        assert.equal(completedLog?.submitterName, "企业微信同步");
+        assert.equal(completedLog?.summary.includes("青岛银行"), true);
+        assert.deepEqual(completedLog?.updatedHtmls, ["资金/资金.html"]);
+      }
+
+      // 9. 移除关注项
       const rmRes = removeWecomWatchItem(host, added.item.id, "Fintopia集团");
       assert.equal(rmRes.ok, true);
       const afterRm = listWecomWatchItems(host, { workspace: "Fintopia集团" });
@@ -378,6 +418,91 @@ describe("企业微信 (WeCom CLI) 关注文件变动巡检、按需同步与邮
       assert.equal(summarized.sourceType, "sheet");
       assert.equal(summarized.docId, "e3_AYIABgY8AF0CNssDQp48cSWi9Ne2Y");
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("多关注项同步按工作区分组合并提交（每批最多 10 个文件）与后台归档失败回滚", async () => {
+    const { dir, host } = makeTestEnv();
+    setWecomCliRunnerForTest(async (args) => {
+      if (args[0] === "sheet" && args[1] === "cells" && args[2] === "get") {
+        const req = JSON.parse(args[4] || "{}") as { sheet?: string };
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: "{}",
+          stderr: "",
+          parsed: {
+            csv_data: `子表,状态\n${req.sheet || "default"},已更新\n`,
+            actual_range: "A1:B2",
+            errcode: 0,
+          },
+        };
+      }
+      return { ok: true, exitCode: 0, stdout: "{}", stderr: "", parsed: {} };
+    });
+
+    try {
+      assert.equal(WECOM_SYNC_MAX_FILES_PER_BATCH, 10);
+      // 连续注册 12 张子表
+      for (let i = 1; i <= 12; i++) {
+        const added = addOrUpdateWecomWatchItem(host, {
+          workspace: "Fintopia集团",
+          title: `三农信投诉台账-子表${i}`,
+          sourceType: "sheet",
+          docId: "e3_AQgAWAYPAOMCN2i2wXwCNQfumOxtv",
+          sheet: `tab_${i}`,
+          note: `三农信子表${i}`,
+        });
+        assert.equal(added.ok, true);
+      }
+
+      const syncRes = await checkAndOptionallySyncWecomItems(host, {
+        workspace: "Fintopia集团",
+        syncIfChanged: true,
+      });
+      assert.equal(syncRes.ok, true);
+      assert.equal(syncRes.checkedCount, 12);
+      assert.equal(syncRes.changedCount, 12);
+      assert.equal(syncRes.syncedCount, 12);
+
+      // 12 个文件按每批最多 10 个文件合并为 2 个归档批次（10 + 2），避免产生 12 个独立批次风暴
+      const queueItems = listIngestQueue(host);
+      assert.equal(queueItems.length, 2);
+      assert.equal(queueItems[0].note.includes("企业微信关注表合并同步（共 10 份"), true);
+      assert.equal(queueItems[1].note.includes("企业微信关注表合并同步（共 2 份"), true);
+
+      const distinctBatchIds = new Set(syncRes.results.map((r) => r.batchId));
+      assert.equal(distinctBatchIds.size, 2);
+
+      // 模拟第 2 个批次（2 个关注项）在后台归档执行时失败，验证回滚后可重新触发同步
+      const failedBatchId = queueItems[1].batchId;
+      const rolled = rollbackWecomWatchLedgerOnBatchFailed(host, failedBatchId, "Sandboxing not supported");
+      assert.equal(rolled, 2);
+
+      const listedAfterRollback = listWecomWatchItems(host, { workspace: "Fintopia集团" });
+      assert.equal(listedAfterRollback.ok, true);
+      if (listedAfterRollback.ok) {
+        const rolledItems = listedAfterRollback.items.filter((x) => x.lastBatchId === failedBatchId);
+        assert.equal(rolledItems.length, 2);
+        for (const ri of rolledItems) {
+          assert.equal(ri.lastSyncedSha256, undefined);
+          assert.equal(ri.lastCheckHasChanged, true);
+          assert.equal(Boolean(ri.lastCheckError?.includes("Sandboxing not supported")), true);
+        }
+      }
+
+      // 再次调用 syncIfChanged: true 时，仅刚才失败回滚的 2 个关注项会被重新合并入队
+      const resync = await checkAndOptionallySyncWecomItems(host, {
+        workspace: "Fintopia集团",
+        syncIfChanged: true,
+      });
+      assert.equal(resync.ok, true);
+      assert.equal(resync.changedCount, 2);
+      assert.equal(resync.syncedCount, 2);
+      assert.equal(listIngestQueue(host).length, 3);
+    } finally {
+      setWecomCliRunnerForTest(null);
       rmSync(dir, { recursive: true, force: true });
     }
   });

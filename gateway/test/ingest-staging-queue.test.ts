@@ -138,7 +138,8 @@ describe("Step 3: Inbox 批次 Staging 与持久化任务队列 (staging.ts + qu
     // 校验源路径合法性检查
     assert.equal(validateBatchSourceFile(wsPath, batchRes.batchId, s1.file.relPath).ok, true);
     assert.equal(
-      validateBatchSourceFile(wsPath, batchRes.batchId, `.cursor-remote/uploads/inbox/${batchRes.batchId}/meta.json`).ok,
+      validateBatchSourceFile(wsPath, batchRes.batchId, `.cursor-remote/uploads/inbox/${batchRes.batchId}/meta.json`)
+        .ok,
       false,
     );
 
@@ -306,6 +307,6 @@ describe("Step 3: Inbox 批次 Staging 与持久化任务队列 (staging.ts + qu
     }
 
     // 确认失败批次的原文件仍然完好保留在 inbox 批次目录中
-    assert.equal(existsSync( join(wsPath, sDead.file.relPath) ), true);
+    assert.equal(existsSync(join(wsPath, sDead.file.relPath)), true);
   });
 });

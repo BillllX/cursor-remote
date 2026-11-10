@@ -141,11 +141,7 @@ export function detectActiveWechatAccount(
     // 兜底检查刚通过扫码绑定落盘的 <botId>.json (userId 匹配且存在有效 token)
     const boundMatches: Array<{ syncMtime: number; botId: string }> = [];
     for (const f of files) {
-      if (
-        !f.endsWith("-im-bot.json") ||
-        f.endsWith(".sync.json") ||
-        f.endsWith(".context-tokens.json")
-      ) {
+      if (!f.endsWith("-im-bot.json") || f.endsWith(".sync.json") || f.endsWith(".context-tokens.json")) {
         continue;
       }
       const botId = f.slice(0, -".json".length);
@@ -208,18 +204,11 @@ export type WechatPushResult =
   | { ok: true; account: string; detail: string }
   | {
       ok: false;
-      reason:
-        | "session_expired"
-        | "no_account"
-        | "cli_unavailable"
-        | "false_success_blocked"
-        | "send_error";
+      reason: "session_expired" | "no_account" | "cli_unavailable" | "false_success_blocked" | "send_error";
       error: string;
     };
 
-export type OpenClawCliExecutor = (
-  args: string[],
-) => Promise<{ code: number; stdout: string; stderr: string }>;
+export type OpenClawCliExecutor = (args: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 let customCliExecutor: OpenClawCliExecutor | null = null;
 
@@ -227,9 +216,7 @@ export function bindOpenClawCliExecutorForTest(next: OpenClawCliExecutor | null)
   customCliExecutor = next;
 }
 
-async function defaultRunOpenClawCli(
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
+async function defaultRunOpenClawCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   if (customCliExecutor) return customCliExecutor(args);
   return new Promise((resolveRun) => {
     let stdout = "";
@@ -288,9 +275,7 @@ export async function sendProactiveWechatMessage(input: {
     return { ok: false, reason: "send_error", error: "目标 openid 或消息内容为空" };
   }
 
-  const account = normalizeWxAccount(
-    input.account || detectActiveWechatAccount(target, input.accountsDir),
-  );
+  const account = normalizeWxAccount(input.account || detectActiveWechatAccount(target, input.accountsDir));
   if (!account) {
     return {
       ok: false,
@@ -527,7 +512,12 @@ export async function startWechatQrBindingSession(
           t.unref?.();
         });
         const curr = activeQrSessions.get(qrSessionId);
-        if (!curr || curr.status === "confirmed" || curr.status === "expired" || curr.status === "verify_code_blocked") {
+        if (
+          !curr ||
+          curr.status === "confirmed" ||
+          curr.status === "expired" ||
+          curr.status === "verify_code_blocked"
+        ) {
           break;
         }
         if (curr.status === "need_verifycode") {
@@ -608,9 +598,7 @@ export async function checkWechatQrBindingStatus(
     return existingPoll;
   }
 
-  const runPoll = (async (): Promise<
-    { ok: true; data: WxQrCodeStatusData } | { ok: false; error: string }
-  > => {
+  const runPoll = (async (): Promise<{ ok: true; data: WxQrCodeStatusData } | { ok: false; error: string }> => {
     if (sess.expiresAt <= now) {
       sess.status = "expired";
       return {
@@ -1021,22 +1009,18 @@ export async function handleInboundWeixinMessage(params: {
     }
 
     // 主人日常问题/指令：先补发可能挂起的微信回执，再构造拥有当前租户全部知识库工作区与全开权限的会话调用 runKbQaAsk
-    const flushedReceipts = await flushPendingWechatReceiptsForPeer(
-      host,
-      fromOpenId,
-      async (receiptMsg) => {
-        const sendRes = await sendIlinkBotTextMessage({
-          accountId: account.accountId,
-          toUserId: fromOpenId,
-          text: `【小驳·审批回执补达】${receiptMsg}`,
-          contextToken,
-          baseUrl: account.baseUrl,
-          botToken: account.token,
-          accountsDir,
-        });
-        return sendRes.ok;
-      },
-    );
+    const flushedReceipts = await flushPendingWechatReceiptsForPeer(host, fromOpenId, async (receiptMsg) => {
+      const sendRes = await sendIlinkBotTextMessage({
+        accountId: account.accountId,
+        toUserId: fromOpenId,
+        text: `【小驳·审批回执补达】${receiptMsg}`,
+        contextToken,
+        baseUrl: account.baseUrl,
+        botToken: account.token,
+        accountsDir,
+      });
+      return sendRes.ok;
+    });
 
     const kbWorkspaces = resolveAllTenantKbWorkspaces(host);
     if (kbWorkspaces.length === 0) {
@@ -1066,10 +1050,7 @@ export async function handleInboundWeixinMessage(params: {
       .digest("hex")
       .slice(0, 32);
 
-    const buildOwnerGrant = (
-      workspaces: AuthorizedWorkspaceGrant[],
-      nickname?: string,
-    ): DropSessionGrant => {
+    const buildOwnerGrant = (workspaces: AuthorizedWorkspaceGrant[], nickname?: string): DropSessionGrant => {
       const primaryWs = workspaces[0]!;
       return {
         sessionToken: `ds_wx_owner_${qaSessionHash}`,
@@ -1167,22 +1148,18 @@ export async function handleInboundWeixinMessage(params: {
     }
 
     // 2a. 先触发待补投回执队列（同事发消息瞬间恢复了 24h context_token 窗口，0 延迟先补发之前挂起的审批回执）
-    const flushedReceipts = await flushPendingWechatReceiptsForPeer(
-      host,
-      fromOpenId,
-      async (receiptMsg) => {
-        const sendRes = await sendIlinkBotTextMessage({
-          accountId: account.accountId,
-          toUserId: fromOpenId,
-          text: `【小驳·审批回执补达】${receiptMsg}`,
-          contextToken,
-          baseUrl: account.baseUrl,
-          botToken: account.token,
-          accountsDir,
-        });
-        return sendRes.ok;
-      },
-    );
+    const flushedReceipts = await flushPendingWechatReceiptsForPeer(host, fromOpenId, async (receiptMsg) => {
+      const sendRes = await sendIlinkBotTextMessage({
+        accountId: account.accountId,
+        toUserId: fromOpenId,
+        text: `【小驳·审批回执补达】${receiptMsg}`,
+        contextToken,
+        baseUrl: account.baseUrl,
+        botToken: account.token,
+        accountsDir,
+      });
+      return sendRes.ok;
+    });
 
     if (colleaguePass.workspaces.length === 0 || colleaguePass.permissions.kbAsk === false) {
       const denyText = "【小驳·数字分身】您的通行证当前未开启知识库与助理问答权限。";
@@ -1212,9 +1189,7 @@ export async function handleInboundWeixinMessage(params: {
       .digest("hex")
       .slice(0, 32);
 
-    const buildGrantFromPass = (
-      pass: NonNullable<ReturnType<typeof findColleaguePassByChannel>>,
-    ): DropSessionGrant => {
+    const buildGrantFromPass = (pass: NonNullable<ReturnType<typeof findColleaguePassByChannel>>): DropSessionGrant => {
       const primaryWs = pass.workspaces[0]!;
       return {
         sessionToken: `ds_wx_${qaSessionHash}`,
@@ -1332,8 +1307,7 @@ export function ensureWxAccountMonitorLoop(
         }
 
         const isError =
-          (resp.ret !== undefined && resp.ret !== 0) ||
-          (resp.errcode !== undefined && resp.errcode !== 0);
+          (resp.ret !== undefined && resp.ret !== 0) || (resp.errcode !== undefined && resp.errcode !== 0);
         if (isError) {
           if (resp.errcode === SESSION_EXPIRED_ERRCODE || resp.ret === SESSION_EXPIRED_ERRCODE) {
             markWxAccountPaused(normId, SESSION_PAUSE_DURATION_MS);
@@ -1351,9 +1325,7 @@ export function ensureWxAccountMonitorLoop(
         consecutiveFailures = 0;
         // 每次成功轮询都更新 sync.json（即使 buf 未变也刷新 mtime，供 detectActiveWechatAccount 判定活跃）
         const nextBuf =
-          resp.get_updates_buf !== undefined && resp.get_updates_buf !== ""
-            ? resp.get_updates_buf
-            : getUpdatesBuf;
+          resp.get_updates_buf !== undefined && resp.get_updates_buf !== "" ? resp.get_updates_buf : getUpdatesBuf;
         getUpdatesBuf = nextBuf;
         saveAccountSyncBuf(normId, getUpdatesBuf, customAccountsDir);
 
@@ -1416,10 +1388,7 @@ export function stopAllWxMonitorLoops(): void {
 /**
  * 网关启动时自动恢复 `~/.openclaw/openclaw-weixin/accounts/` 下所有已绑定微信 Bot 的长轮询协程
  */
-export function startWeixinIlinkRuntime(opts: {
-  tenants: () => DropPortalTenant[];
-  accountsDir?: string;
-}): number {
+export function startWeixinIlinkRuntime(opts: { tenants: () => DropPortalTenant[]; accountsDir?: string }): number {
   registeredTenantsProvider = opts.tenants;
   const accounts = listPersistedWeixinAccounts(opts.accountsDir);
   for (const acc of accounts) {
@@ -1431,19 +1400,13 @@ export function startWeixinIlinkRuntime(opts: {
 /**
  * 判断一条站内 1v1 单聊消息是否在呼叫对方的小驳数字分身（如 `@小驳 ...` 或 `小驳，...`），并对问题长度做安全截断
  */
-export function extractDmAssistantQuestion(
-  rawText: string,
-  assistantDisplayName = "小驳",
-): string | null {
+export function extractDmAssistantQuestion(rawText: string, assistantDisplayName = "小驳"): string | null {
   const clean = (rawText || "").trim();
   if (!clean) return null;
   if (clean.startsWith("【小驳·数字分身") || clean.startsWith("🤖 【")) return null;
 
   const escapedName = assistantDisplayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(
-    `^(?:@${escapedName}|@小驳|${escapedName}[，,:：\\s])[\\s,，:：]*(.+)$`,
-    "is",
-  );
+  const re = new RegExp(`^(?:@${escapedName}|@小驳|${escapedName}[，,:：\\s])[\\s,，:：]*(.+)$`, "is");
   const match = re.exec(clean);
   if (!match?.[1]?.trim()) return null;
   return clip(match[1].trim(), QA_MAX_QUESTION_CHARS);
@@ -1511,9 +1474,7 @@ export async function handleColleagueDmMention(input: {
     .slice(0, 32);
 
   // 根据传入的最新 pass 对象动态构造 in-process QA 会话快照（不外溢到 HTTP）
-  const buildGrantFromPass = (
-    pass: NonNullable<ReturnType<typeof findColleaguePassByChannel>>,
-  ): DropSessionGrant => {
+  const buildGrantFromPass = (pass: NonNullable<ReturnType<typeof findColleaguePassByChannel>>): DropSessionGrant => {
     const primaryWs = pass.workspaces[0]!;
     return {
       sessionToken: `ds_im_${qaSessionHash}`,
@@ -1586,8 +1547,7 @@ export async function dispatchProposalReceiptOutbox(
     }
     const hashIdx = delivery.targetId.indexOf("#");
     const convIdPart = hashIdx >= 0 ? delivery.targetId.slice(0, hashIdx).trim() : "";
-    const peerTenantId =
-      hashIdx >= 0 ? delivery.targetId.slice(hashIdx + 1).trim() : delivery.targetId.trim();
+    const peerTenantId = hashIdx >= 0 ? delivery.targetId.slice(hashIdx + 1).trim() : delivery.targetId.trim();
     if (!peerTenantId) {
       return { status: "failed", error: "无效的 IM 目标租户 ID" };
     }

@@ -1495,6 +1495,153 @@ export async function handleOp(
         }
         return fail("未知的 wxQrAction 操作类型");
       }
+      if (args.wecomWatchAction && typeof args.wecomWatchAction === "object") {
+        const wwa = args.wecomWatchAction as Record<string, unknown>;
+        const kind = typeof wwa.kind === "string" ? wwa.kind : "";
+        const scopedWorkspace = !workspace || workspace === "__all__" ? undefined : workspace;
+        if (kind === "check") {
+          const idOrTitle = typeof wwa.idOrTitle === "string" ? wwa.idOrTitle.trim() : undefined;
+          const checkRes = await checkAndOptionallySyncWecomItems(host, {
+            workspace: scopedWorkspace,
+            idOrTitle: idOrTitle || undefined,
+            syncIfChanged: false,
+          });
+          if (!checkRes.ok) return fail(checkRes.error || "企微关注文件巡检失败");
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          const failedItems = checkRes.results.filter((r) => !r.ok);
+          let msg: string;
+          if (checkRes.checkedCount === 0) {
+            msg = "当前没有匹配的企微关注文件";
+          } else if (failedItems.length > 0 && checkRes.changedCount === 0) {
+            msg = `已检查 ${checkRes.checkedCount} 个文件，其中 ${failedItems.length} 项检查异常（${failedItems[0]?.error || "未知原因"}）`;
+          } else if (checkRes.changedCount > 0) {
+            msg = `已检查 ${checkRes.checkedCount} 个文件，检测到 ${checkRes.changedCount} 个文件有新变动（待同步）${failedItems.length > 0 ? `，另有 ${failedItems.length} 项检查异常` : ""}`;
+          } else {
+            msg = `已检查 ${checkRes.checkedCount} 个文件，均与上次入库一致（无变动）`;
+          }
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wecomWatchResult: {
+                action: "check",
+                checkedCount: checkRes.checkedCount,
+                changedCount: checkRes.changedCount,
+                syncedCount: 0,
+                message: msg,
+              },
+            },
+          };
+        }
+        if (kind === "sync") {
+          const idOrTitle = typeof wwa.idOrTitle === "string" ? wwa.idOrTitle.trim() : undefined;
+          const forceSync = Boolean(wwa.forceSync);
+          const syncRes = await checkAndOptionallySyncWecomItems(host, {
+            workspace: scopedWorkspace,
+            idOrTitle: idOrTitle || undefined,
+            syncIfChanged: true,
+            forceSync,
+          });
+          if (!syncRes.ok) return fail(syncRes.error || "企微关注文件同步入库失败");
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          const failedItems = syncRes.results.filter((r) => !r.ok || Boolean(r.syncError));
+          const firstErr = failedItems[0]?.syncError || failedItems[0]?.error || "同步失败";
+          let msg: string;
+          if (syncRes.syncedCount > 0) {
+            msg = `已将 ${syncRes.syncedCount} 个企微文件送入后台归档队列（即将自动更新知识库与 HTML 看板）${failedItems.length > 0 ? `；另有 ${failedItems.length} 项未同步（${firstErr}）` : ""}`;
+          } else if (syncRes.checkedCount === 0) {
+            msg = "当前没有匹配的企微关注文件";
+          } else if (failedItems.length > 0) {
+            msg = `同步未完成（共 ${failedItems.length} 项失败：${firstErr}）`;
+          } else {
+            msg = "所有关注文件均与上次入库一致，无需重复同步";
+          }
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wecomWatchResult: {
+                action: "sync",
+                checkedCount: syncRes.checkedCount,
+                changedCount: syncRes.changedCount,
+                syncedCount: syncRes.syncedCount,
+                message: msg,
+              },
+            },
+          };
+        }
+        if (kind === "add") {
+          const title = typeof wwa.title === "string" ? wwa.title.trim() : "";
+          const docId = typeof wwa.docId === "string" ? wwa.docId.trim() : undefined;
+          const fileId = typeof wwa.fileId === "string" ? wwa.fileId.trim() : undefined;
+          const sheet = typeof wwa.sheet === "string" ? wwa.sheet.trim() : undefined;
+          const range = typeof wwa.range === "string" ? wwa.range.trim() : undefined;
+          const note = typeof wwa.note === "string" ? wwa.note.trim() : undefined;
+          let sourceType: "sheet" | "smartsheet" | "doc" | "smartpage" | "disk_file" | undefined =
+            wwa.sourceType === "sheet" ||
+            wwa.sourceType === "smartsheet" ||
+            wwa.sourceType === "doc" ||
+            wwa.sourceType === "smartpage" ||
+            wwa.sourceType === "disk_file"
+              ? wwa.sourceType
+              : undefined;
+          if (!sourceType) {
+            if (fileId && !docId) sourceType = "disk_file";
+            else if (docId && /\/smartsheet\//i.test(docId)) sourceType = "smartsheet";
+            else if (docId && /\/smartpage\//i.test(docId)) sourceType = "smartpage";
+            else if (docId && /\/doc\//i.test(docId)) sourceType = "doc";
+            else sourceType = "sheet";
+          }
+          const addRes = addOrUpdateWecomWatchItem(host, {
+            workspace: scopedWorkspace || "",
+            title,
+            sourceType,
+            docId,
+            fileId,
+            sheet,
+            range,
+            note,
+          });
+          if (!addRes.ok) return fail(addRes.error);
+          await checkAndOptionallySyncWecomItems(host, {
+            workspace: scopedWorkspace,
+            idOrTitle: addRes.item.id,
+            syncIfChanged: false,
+          }).catch(() => null);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wecomWatchResult: {
+                action: "add",
+                message: `${addRes.created ? "已添加" : "已更新"}企微关注文件《${addRes.item.title}》`,
+              },
+            },
+          };
+        }
+        if (kind === "remove") {
+          const idOrTitle = typeof wwa.idOrTitle === "string" ? wwa.idOrTitle.trim() : "";
+          const remRes = removeWecomWatchItem(host, idOrTitle, scopedWorkspace);
+          if (!remRes.ok) return fail(remRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              wecomWatchResult: {
+                action: "remove",
+                message: `已移除企微关注文件《${remRes.removed.title}》`,
+              },
+            },
+          };
+        }
+        return fail("未知的 wecomWatchAction 操作类型");
+      }
       const tokenId = str(args.tokenId);
       const label = args.label !== undefined ? str(args.label) : undefined;
       const addWorkspaces = Array.isArray(args.addWorkspaces)

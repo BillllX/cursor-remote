@@ -70,7 +70,7 @@ export function buildIngestPrompt(meta: DropBatchMeta, config: KbWorkspaceConfig
 
 /**
  * 执行单批次受限可写归档任务（作为 `queue.ts` 的 `IngestBatchWorker` 运行）：
- * 1. 仅开放 `BACKGROUND_TOOLS`（只读 `read/grep/glob/ls/mcp`）+ 3 个网关强校验的 `customTools`，且强制开启沙箱（`sandboxOptions: { enabled: true }`）；
+ * 1. 仅开放 `BACKGROUND_TOOLS`（只读 `read/grep/glob/ls/mcp`）+ 3 个网关强校验的 `customTools`，且按租户配置启用沙箱（默认 `true`）；
  * 2. 一旦超时或结束，立即将 `runClosed` 置为 `true` 锁死 customTools，防止超时残留回调继续写盘；
  * 3. 严格检查 `result.status === "finished"` 并逐个比对 `meta.files` 清单是否均已被移入归档目录；
  * 4. 闭合 `endRunRecord(host, runRecord.runId, ...)`，并安全调用 `onBatchCompleted`（捕获回调异常，绝不二次触发）。
@@ -142,14 +142,15 @@ export async function runIngestBatchJob(
     isClosed: () => runClosed,
   });
 
-  // 处理外部不可信文档时始终强制开启沙箱隔离
+  // 默认启用 SDK 沙箱隔离；对于显式配置 sandbox: false 的受信宿主环境（如不支持 Linux bwrap 的服务器），跟随租户级 sandbox 配置，同时始终保持只读工具集与 customTools 强路径围栏
+  const sandboxEnabled = runnerDeps.sandbox ? runnerDeps.sandbox(host.id) : true;
   const options: AgentOptions = {
     apiKey,
     model: { id: BACKGROUND_MODEL },
     tools: [...BACKGROUND_TOOLS],
     local: {
       cwd: workspacePath,
-      sandboxOptions: { enabled: true },
+      sandboxOptions: { enabled: sandboxEnabled },
       settingSources: [],
       customTools,
     },

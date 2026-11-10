@@ -231,7 +231,9 @@ export function ComposerDock({
           onStop={() => stopChat(activeId)}
           onUndo={() => (onUndo ? onUndo() : send({ type: "undo", chatId: activeId }))}
           onRestore={(id) =>
-            onRestoreCheckpoint ? onRestoreCheckpoint(id) : send({ type: "restore", chatId: activeId, checkpointId: id })
+            onRestoreCheckpoint
+              ? onRestoreCheckpoint(id)
+              : send({ type: "restore", chatId: activeId, checkpointId: id })
           }
           onOpenMenu={() => send({ type: "list_checkpoints", chatId: activeId })}
           checkpoints={checkpoints}

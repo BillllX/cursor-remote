@@ -46,10 +46,7 @@ export function LoopOverlay({
   const isRunning = activeLoop && activeLoop.status !== "stopped" && activeLoop.status !== "idle";
 
   return (
-    <div
-      className="search-overlay workspace-modal-overlay open"
-      onClick={() => setLoopOpen(false)}
-    >
+    <div className="search-overlay workspace-modal-overlay open" onClick={() => setLoopOpen(false)}>
       <form
         ref={loopTrap}
         className="search-box loop-box workspace-modal-box"
@@ -148,22 +145,14 @@ export function LoopOverlay({
                     ? "已停止"
                     : "空闲"}
               {" · "}第 {activeLoop.tick} 拍{activeLoop.maxTicks ? ` / ${activeLoop.maxTicks}` : ""}
-              {activeLoop.tickStatus === "skipped"
-                ? " · 顺延"
-                : activeLoop.tickStatus === "error"
-                  ? " · 出错"
-                  : ""}
+              {activeLoop.tickStatus === "skipped" ? " · 顺延" : activeLoop.tickStatus === "error" ? " · 出错" : ""}
               {activeLoop.lastSummary ? ` · ${activeLoop.lastSummary}` : ""}
             </div>
           ) : (
             <div className="loop-meta">还没开始。关上网页也会继续，重新打开后状态还在。</div>
           )}
           <div className="loop-actions">
-            <button
-              className="new-chat primary"
-              type="submit"
-              disabled={Boolean(isRunning)}
-            >
+            <button className="new-chat primary" type="submit" disabled={Boolean(isRunning)}>
               开始
             </button>
             <button

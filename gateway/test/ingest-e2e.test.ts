@@ -10,7 +10,7 @@ import { listInbox, PUSH_KINDS } from "../src/assistant/inbox.ts";
 import { initKbWorkspaceConfig, KB_INGEST_LOG_REL_PATH } from "../src/ingest/contract.ts";
 import { buildDropTenantHost } from "../src/ingest/http.ts";
 import { getKbWorkspaceStatusForUi } from "../src/ingest/hub.ts";
-import { appendWorkspaceIngestLog, startIngestRuntime } from "../src/ingest/notify.ts";
+import { appendWorkspaceIngestLog, startIngestRuntime, stopIngestQaSweepTimer } from "../src/ingest/notify.ts";
 import {
   bindIngestBatchWorker,
   commitDropBatchAndEnqueue,
@@ -192,6 +192,7 @@ async function makeE2eEnv() {
 }
 
 afterEach(async () => {
+  stopIngestQaSweepTimer();
   bindIngestBatchWorker(null);
   bindIngestRunner(null);
   resetDropAuthMemoryStateForTest();

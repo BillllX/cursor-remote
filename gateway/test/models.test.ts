@@ -40,7 +40,8 @@ describe("multi-model review (review.ts & crew.ts)", () => {
       recentTurns: [
         {
           user: "因为方案里面是希望共用这个文件作为同事的配置文件, 所以是否我们应该一并整合设计一下这里",
-          assistant: "👉 [drop-tokens.json 统一升级方案](.cursor-remote/canvases/drop-tokens-unified-schema-plan.canvas.tsx)",
+          assistant:
+            "👉 [drop-tokens.json 统一升级方案](.cursor-remote/canvases/drop-tokens-unified-schema-plan.canvas.tsx)",
         },
       ],
     });

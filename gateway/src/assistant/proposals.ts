@@ -2,7 +2,12 @@ import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
 import { hasControlChars, isAllowedUploadFileName, loadKbWorkspaceConfig } from "../ingest/contract.ts";
 import { submitDirectIngestBatch } from "../ingest/queue.ts";
 import type { DropTenantHost } from "../ingest/tokens.ts";
-import { addCalendarEvent, checkCalendarConflicts, parseEventTimeInput, updateCalendarEvent } from "./calendarEvents.ts";
+import {
+  addCalendarEvent,
+  checkCalendarConflicts,
+  parseEventTimeInput,
+  updateCalendarEvent,
+} from "./calendarEvents.ts";
 import { postInbox } from "./inbox.ts";
 import { assistantPath, clip, newId, readJson, type TenantRef } from "./store.ts";
 
@@ -105,10 +110,7 @@ function trimProposalsPreservingPending(items: ColleagueProposal[]): ColleaguePr
   const pendingOrApplying = items.filter((x) => x.status === "pending" || x.status === "applying");
   const decided = items.filter((x) => x.status !== "pending" && x.status !== "applying");
   const keepDecidedCount = Math.max(0, MAX_STORED_PROPOSALS - pendingOrApplying.length);
-  const keptSet = new Set([
-    ...pendingOrApplying.slice(-MAX_STORED_PROPOSALS),
-    ...decided.slice(-keepDecidedCount),
-  ]);
+  const keptSet = new Set([...pendingOrApplying.slice(-MAX_STORED_PROPOSALS), ...decided.slice(-keepDecidedCount)]);
   return items.filter((x) => keptSet.has(x));
 }
 
@@ -171,12 +173,7 @@ export function createCalendarProposal(
   const parsedTime = parseEventTimeInput(input.startIso, input.endIso);
   if (!parsedTime.ok) return parsedTime;
 
-  const conflicts = checkCalendarConflicts(
-    host,
-    parsedTime.startAt,
-    parsedTime.endAt,
-    input.targetEventId,
-  );
+  const conflicts = checkCalendarConflicts(host, parsedTime.startAt, parsedTime.endAt, input.targetEventId);
   const conflictWarning =
     conflicts.length > 0
       ? `注意：该时段主人已有其他安排（${conflicts.map((c) => `${c.startIso}~${c.endIso}`).join("、")}），仍已为您提交申请供主人协调`
@@ -374,10 +371,7 @@ export async function decideColleagueProposal(
     if (!target) {
       return { kind: "error" as const, error: `找不到提案：${targetId}` };
     }
-    if (
-      (input.approve && target.status === "approved") ||
-      (!input.approve && target.status === "rejected")
-    ) {
+    if ((input.approve && target.status === "approved") || (!input.approve && target.status === "rejected")) {
       return { kind: "idempotent" as const, proposal: { ...target, receiptOutbox: [...target.receiptOutbox] } };
     }
     if (target.status !== "pending") {
@@ -586,8 +580,7 @@ export async function flushProposalReceiptOutbox(host: DropTenantHost, onlyPropo
         const p = fresh.items.find((x) => x.id === proposal.id);
         const d = p?.receiptOutbox[idx];
         if (!d) return null;
-        const canClaim =
-          d.status === "queued" || (d.status === "sending" && now - d.updatedAt > 60_000);
+        const canClaim = d.status === "queued" || (d.status === "sending" && now - d.updatedAt > 60_000);
         if (!canClaim) return null;
         if (d.channel === "drop_portal") {
           d.status = "delivered";

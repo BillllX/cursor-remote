@@ -422,8 +422,7 @@ export function buildQrMatrix(text: string): boolean[][] {
         if (modules[row]![col] !== null) continue;
         for (let r = -2; r <= 2; r++) {
           for (let c = -2; c <= 2; c++) {
-            modules[row + r]![col + c] =
-              Math.abs(r) === 2 || Math.abs(c) === 2 || (r === 0 && c === 0);
+            modules[row + r]![col + c] = Math.abs(r) === 2 || Math.abs(c) === 2 || (r === 0 && c === 0);
           }
         }
       }

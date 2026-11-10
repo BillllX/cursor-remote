@@ -181,11 +181,18 @@ describe("Step 2: 双轨日历引擎 (calendarEvents.ts + calendar.ts) 与提案
 
     // 未批准前，日历事件表为空（零未授权写入）
     assert.equal(listCalendarEvents(host).length, 0);
-    assert.equal(checkCalendarConflicts(host, Date.parse("2026-11-12T15:00:00+08:00"), Date.parse("2026-11-12T16:00:00+08:00")).length, 0);
+    assert.equal(
+      checkCalendarConflicts(host, Date.parse("2026-11-12T15:00:00+08:00"), Date.parse("2026-11-12T16:00:00+08:00"))
+        .length,
+      0,
+    );
 
     // 主人收件箱已收到 approval 卡片
     const inbox = listInbox(host, 10);
-    assert.equal(inbox.some((i) => i.key === `proposal:${calPropRes.proposal.id}` && i.kind === "approval"), true);
+    assert.equal(
+      inbox.some((i) => i.key === `proposal:${calPropRes.proposal.id}` && i.kind === "approval"),
+      true,
+    );
 
     // 模拟微信此时处于超过 24 小时窗口（Outbox Dispatcher 返回 pending_wx_window）
     bindProposalOutboxDispatcher(async () => ({

@@ -120,9 +120,7 @@ export function buildQaPrompt(ctx: {
 
   const tempFileLines =
     tempFiles.length > 0
-      ? tempFiles
-          .map((f) => `- [${f.scope}] ${f.name} (${f.size} bytes)`)
-          .join("\n")
+      ? tempFiles.map((f) => `- [${f.scope}] ${f.name} (${f.size} bytes)`).join("\n")
       : "（当前会话暂无临时文件）";
 
   const cleanBoardHint =
@@ -393,7 +391,11 @@ export async function runKbQaAsk(
     if (!rechecked.ok) {
       return rechecked;
     }
-    if (lease.closed || lease.generation !== runGeneration || isQaSessionClosed(initialSession.qaSessionId, runGeneration)) {
+    if (
+      lease.closed ||
+      lease.generation !== runGeneration ||
+      isQaSessionClosed(initialSession.qaSessionId, runGeneration)
+    ) {
       return { ok: false, status: 403, error: "当前问答会话已关闭或已重置" };
     }
 
@@ -427,7 +429,11 @@ export async function runKbQaAsk(
     };
   } catch (err) {
     runClosed = true;
-    if (lease.closed || lease.generation !== runGeneration || isQaSessionClosed(initialSession.qaSessionId, runGeneration)) {
+    if (
+      lease.closed ||
+      lease.generation !== runGeneration ||
+      isQaSessionClosed(initialSession.qaSessionId, runGeneration)
+    ) {
       return { ok: false, status: 403, error: "当前问答已被取消或口令已吊销" };
     }
     const msg = (err instanceof Error ? err.message : String(err)).replace(/cursor_[A-Za-z0-9_-]+/g, "cursor_…");

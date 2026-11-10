@@ -117,11 +117,7 @@ export const BLOCKED_EXECUTABLE_EXTS = new Set([
 ]);
 
 /** 保留的特殊文件名（不区分大小写，禁止作为普通归档文件写入任意目录） */
-export const RESERVED_ARCHIVE_FILE_NAMES = new Set([
-  "归档说明.md",
-  "agents.md",
-  "claude.md",
-]);
+export const RESERVED_ARCHIVE_FILE_NAMES = new Set(["归档说明.md", "agents.md", "claude.md"]);
 
 export type KbWorkspaceConfig = {
   version: 1;
@@ -133,8 +129,7 @@ export type KbWorkspaceConfig = {
 };
 
 export type KbValidationResult =
-  | { ok: true; config: KbWorkspaceConfig; workspaceRealPath: string }
-  | { ok: false; error: string };
+  { ok: true; config: KbWorkspaceConfig; workspaceRealPath: string } | { ok: false; error: string };
 
 /** 检查字符串是否包含控制字符（0x00-0x1F, 0x7F） */
 export function hasControlChars(text: string): boolean {
@@ -542,7 +537,9 @@ const ALLOWED_KB_CONFIG_KEYS = new Set([
 ]);
 
 /** 解析并严格校验 KbWorkspaceConfig 对象（显式传入非法字段或未知字段一律拒绝，不静默回退） */
-export function parseKbWorkspaceConfig(raw: unknown): { ok: true; config: KbWorkspaceConfig } | { ok: false; error: string } {
+export function parseKbWorkspaceConfig(
+  raw: unknown,
+): { ok: true; config: KbWorkspaceConfig } | { ok: false; error: string } {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { ok: false, error: "kb.json 必须是 JSON 对象" };
   }
@@ -562,7 +559,11 @@ export function parseKbWorkspaceConfig(raw: unknown): { ok: true; config: KbWork
   if (!title || title.length > 120 || hasControlChars(title)) {
     return { ok: false, error: "kb.json title 必须为 1–120 字符且不含控制字符的非空字符串" };
   }
-  if (!Array.isArray(obj.allowedCategories) || obj.allowedCategories.length === 0 || obj.allowedCategories.length > 50) {
+  if (
+    !Array.isArray(obj.allowedCategories) ||
+    obj.allowedCategories.length === 0 ||
+    obj.allowedCategories.length > 50
+  ) {
     return { ok: false, error: "kb.json allowedCategories 必须是非空分类数组（1–50 项）" };
   }
   const categories: string[] = [];

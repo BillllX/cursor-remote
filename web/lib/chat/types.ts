@@ -1,5 +1,12 @@
 // 会话与回合的数据形状（网页本地状态）
-import type { AgentMode, CheckpointInfo, PolicyId, PromptImage, SkillFactoryPrewarmedItem, TurnFile } from "@shared/protocol";
+import type {
+  AgentMode,
+  CheckpointInfo,
+  PolicyId,
+  PromptImage,
+  SkillFactoryPrewarmedItem,
+  TurnFile,
+} from "@shared/protocol";
 
 export type ToolCall = {
   callId: string;

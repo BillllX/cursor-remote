@@ -501,7 +501,12 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
 
     // 5. 模拟网关进程重启（清空内存 activeDropSessions）且王明切换了网络 IP -> 仍能从 drop-sessions.json 自动无缝恢复会话
     resetDropAuthMemoryStateForTest();
-    const recovered = verifyDropSessionToken(host, authRes.session.sessionToken, Date.now() + 7 * 86_400_000, "172.16.0.99");
+    const recovered = verifyDropSessionToken(
+      host,
+      authRes.session.sessionToken,
+      Date.now() + 7 * 86_400_000,
+      "172.16.0.99",
+    );
     assert.equal(recovered.ok, true, "跨重启且过 7 天、换 IP 后，记住登录会话仍应无缝恢复");
     if (!recovered.ok) return;
     assert.equal(recovered.session.submitterName, "王明");

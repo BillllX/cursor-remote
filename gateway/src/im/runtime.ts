@@ -10,11 +10,7 @@ import { log } from "../log.ts";
 import { gatewayState } from "../runtime/state.ts";
 import { allTenants, getTenant, mediaSecret, stateDir } from "../tenants.ts";
 import { reply } from "../ws/frame.ts";
-import {
-  bindImSystemReplySender,
-  dispatchProposalReceiptOutbox,
-  handleColleagueDmMention,
-} from "../wx/pushGuard.ts";
+import { bindImSystemReplySender, dispatchProposalReceiptOutbox, handleColleagueDmMention } from "../wx/pushGuard.ts";
 import { ImService, type ImLiveConn } from "./service.ts";
 import { ImStore } from "./store.ts";
 import { workspaceUnread } from "../workspace/agents.ts";

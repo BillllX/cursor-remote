@@ -13,24 +13,13 @@ import {
   type KbWorkspaceConfig,
 } from "./contract.ts";
 import { buildDropTenantHost, type DropPortalTenant } from "./http.ts";
-import {
-  bindIngestBatchWorker,
-  recoverInterruptedIngestQueue,
-  type IngestQueueEntry,
-} from "./queue.ts";
+import { bindIngestBatchWorker, recoverInterruptedIngestQueue, type IngestQueueEntry } from "./queue.ts";
 import { bindQaRunner, type QaRunnerDeps } from "./qaRunner.ts";
-import {
-  clearQaSessionStorageSync,
-  purgeQaSessionsByTokenIdsSync,
-  sweepTenantQaTempStorageSync,
-} from "./qaStorage.ts";
+import { clearQaSessionStorageSync, purgeQaSessionsByTokenIdsSync, sweepTenantQaTempStorageSync } from "./qaStorage.ts";
 import { bindIngestRunner, runIngestBatchJob, type IngestRunnerDeps } from "./runner.ts";
 import type { DropBatchMeta } from "./staging.ts";
-import {
-  onDropSessionEvicted,
-  onDropTokensRevoked,
-  type DropTenantHost,
-} from "./tokens.ts";
+import { onDropSessionEvicted, onDropTokensRevoked, type DropTenantHost } from "./tokens.ts";
+import { rollbackWecomWatchLedgerOnBatchFailed } from "./wecomSource.ts";
 import { startWeixinIlinkRuntime, stopAllWxMonitorLoops } from "../wx/pushGuard.ts";
 import type { IngestToolExecutionLog } from "./tools.ts";
 
@@ -88,6 +77,49 @@ export function appendWorkspaceIngestLog(
   const writeRes = safeWriteWorkspaceFileSync(workspaceDir, KB_INGEST_LOG_REL_PATH, `${baseText}${line}`);
   if (!writeRes.ok) return writeRes;
   return { ok: true };
+}
+
+/**
+ * 读取工作区 `.jiebo/ingest-log.jsonl` 的最近归档更新记录（按时间倒序返回，供知识库面板展示更新时间与更新内容）
+ */
+export function readWorkspaceIngestLogs(workspaceDir: string, limit = 30): IngestLogRecord[] {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit || 30)));
+  const existingRead = safeReadWorkspaceTextFileSync(workspaceDir, KB_INGEST_LOG_REL_PATH, MAX_INGEST_LOG_READ_BYTES);
+  if (!existingRead.ok || !existingRead.text.trim()) return [];
+  const lines = existingRead.text.split("\n").filter((l) => l.trim().length > 0);
+  const parsed: IngestLogRecord[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const obj = JSON.parse(lines[i]) as Partial<IngestLogRecord>;
+      if (obj && typeof obj.batchId === "string" && typeof obj.timestamp === "number") {
+        parsed.push({
+          batchId: obj.batchId,
+          timestamp: obj.timestamp,
+          status:
+            obj.status === "completed" || obj.status === "partial" || obj.status === "failed"
+              ? obj.status
+              : "completed",
+          submitterName: typeof obj.submitterName === "string" ? obj.submitterName : "系统归档",
+          note: typeof obj.note === "string" ? obj.note : "",
+          movedFiles: Array.isArray(obj.movedFiles)
+            ? obj.movedFiles.filter((m): m is { from: string; to: string; category: string } =>
+                Boolean(m && typeof m.from === "string" && typeof m.to === "string" && typeof m.category === "string"),
+              )
+            : [],
+          updatedHtmls: Array.isArray(obj.updatedHtmls)
+            ? obj.updatedHtmls.filter((h): h is string => typeof h === "string")
+            : [],
+          summary: typeof obj.summary === "string" ? obj.summary : "",
+          ...(typeof obj.errorReason === "string" && obj.errorReason ? { errorReason: obj.errorReason } : {}),
+        });
+      }
+    } catch {
+      // 忽略损坏行
+    }
+    if (parsed.length >= safeLimit * 2) break;
+  }
+  parsed.sort((a, b) => b.timestamp - a.timestamp);
+  return parsed.slice(0, safeLimit);
 }
 
 /**
@@ -158,7 +190,12 @@ export function formatIngestBriefNotification(ctx: {
  * 1. 若全局租户已加载，调用 `openWorkspaceAgent` 打开/创建真实主会话并更新注意序号；
  * 2. 若在未加载完整租户的轻量/独立环境中，仅从 `workspace-agent-chats.json` 读取已存在的真实 `mainChatId`（绝不将 `wsa_xxx` 工作区 ID 伪造成 `chatId`）。
  */
-function resolveWorkspaceMainChatId(host: DropTenantHost, workspacePath: string, batchId: string, status: "completed" | "partial" | "failed"): string | undefined {
+function resolveWorkspaceMainChatId(
+  host: DropTenantHost,
+  workspacePath: string,
+  batchId: string,
+  status: "completed" | "partial" | "failed",
+): string | undefined {
   const fullTenant = getTenant(host.id);
   if (fullTenant && fullTenant.workspaceRoot === host.workspaceRoot) {
     try {
@@ -211,6 +248,14 @@ export function handleIngestBatchCompleted(ctx: {
   errorReason?: string;
 }): { inboxItemId: string; chatId?: string; logWritten: boolean } {
   const { host, workspacePath, meta, executionLog, summaryText, status, errorReason } = ctx;
+
+  if (status === "failed") {
+    try {
+      rollbackWecomWatchLedgerOnBatchFailed(host, meta.batchId, errorReason);
+    } catch {
+      // ignore ledger rollback error
+    }
+  }
 
   const logRes = appendWorkspaceIngestLog(workspacePath, {
     batchId: meta.batchId,

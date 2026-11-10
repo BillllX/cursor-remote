@@ -71,9 +71,7 @@ export function sanitizeIlinkBaseUrl(rawUrl?: string): string {
     if (parsed.username || parsed.password || parsed.port) return DEFAULT_ILINK_BASE_URL;
     const host = parsed.hostname.toLowerCase();
     const isTrustedWeixinHost =
-      host === "ilinkai.weixin.qq.com" ||
-      host.endsWith(".weixin.qq.com") ||
-      host.endsWith(".wechat.com");
+      host === "ilinkai.weixin.qq.com" || host.endsWith(".weixin.qq.com") || host.endsWith(".wechat.com");
     if (!isTrustedWeixinHost) return DEFAULT_ILINK_BASE_URL;
     return parsed.origin;
   } catch {
@@ -82,7 +80,10 @@ export function sanitizeIlinkBaseUrl(rawUrl?: string): string {
 }
 
 export function normalizeIlinkAccountId(rawId: string): string {
-  const clean = (rawId || "").trim().replace(/@im\.bot$/i, "-im-bot").replace(/@im\.wechat$/i, "-im-wechat");
+  const clean = (rawId || "")
+    .trim()
+    .replace(/@im\.bot$/i, "-im-bot")
+    .replace(/@im\.wechat$/i, "-im-wechat");
   if (!clean) return "";
   const candidate = clean.endsWith("-im-bot") ? clean : `${clean}-im-bot`;
   if (candidate.includes("..") || !/^[a-zA-Z0-9._-]{1,120}$/.test(candidate)) {
@@ -96,8 +97,7 @@ export function resolveOpenClawWeixinDir(customAccountsDir?: string): {
   accountsDir: string;
   accountsIndexPath: string;
 } {
-  const accountsDir =
-    customAccountsDir?.trim() || join(homedir(), ".openclaw", "openclaw-weixin", "accounts");
+  const accountsDir = customAccountsDir?.trim() || join(homedir(), ".openclaw", "openclaw-weixin", "accounts");
   const weixinDir = join(accountsDir, "..");
   return {
     weixinDir,
@@ -139,11 +139,7 @@ export function listPersistedWeixinAccounts(customAccountsDir?: string): Persist
 
   try {
     for (const f of readdirSync(accountsDir)) {
-      if (
-        f.endsWith("-im-bot.json") &&
-        !f.endsWith(".sync.json") &&
-        !f.endsWith(".context-tokens.json")
-      ) {
+      if (f.endsWith("-im-bot.json") && !f.endsWith(".sync.json") && !f.endsWith(".context-tokens.json")) {
         candidateIds.add(f.slice(0, -".json".length));
       }
     }
@@ -276,10 +272,7 @@ export function savePersistedWeixinAccount(
 /**
  * 读取或更新 `<botId>.context-tokens.json`（与 `pushGuard.ts` 的 `detectActiveWechatAccount` 100% 兼容）
  */
-export function loadAccountContextTokens(
-  accountId: string,
-  customAccountsDir?: string,
-): Record<string, string> {
+export function loadAccountContextTokens(accountId: string, customAccountsDir?: string): Record<string, string> {
   const normId = normalizeIlinkAccountId(accountId);
   if (!normId) return {};
   const { accountsDir } = resolveOpenClawWeixinDir(customAccountsDir);
@@ -339,11 +332,7 @@ export function loadAccountSyncBuf(accountId: string, customAccountsDir?: string
   }
 }
 
-export function saveAccountSyncBuf(
-  accountId: string,
-  getUpdatesBuf: string,
-  customAccountsDir?: string,
-): void {
+export function saveAccountSyncBuf(accountId: string, getUpdatesBuf: string, customAccountsDir?: string): void {
   const normId = normalizeIlinkAccountId(accountId);
   if (!normId) return;
   const { accountsDir } = resolveOpenClawWeixinDir(customAccountsDir);
@@ -400,8 +389,7 @@ async function executeIlinkHttp(params: {
   const sanitizedBase = sanitizeIlinkBaseUrl(params.baseUrl);
   const base = sanitizedBase.endsWith("/") ? sanitizedBase : `${sanitizedBase}/`;
   const fullUrl = new URL(params.endpoint, base).toString();
-  const headers =
-    params.method === "GET" ? buildIlinkCommonHeaders() : buildIlinkPostHeaders(params.token);
+  const headers = params.method === "GET" ? buildIlinkCommonHeaders() : buildIlinkPostHeaders(params.token);
 
   const controller = new AbortController();
   const timeoutMs = params.timeoutMs ?? 15_000;
@@ -441,9 +429,8 @@ async function executeIlinkHttp(params: {
 
 /** 将响应 JSON 中的顶层/非转义 uint64 message_id / msg_id / svr_id 无损转为字符串再 parse */
 export function parseIlinkJson<T>(rawText: string): T {
-  const safe = rawText.replace(
-    /(?<!\\)"(message_id|msg_id|svr_id)"\s*:\s*(-?\d+)/g,
-    (_, key: string, num: string) => (LOSSLESS_ID_FIELDS.has(key) ? `"${key}":"${num}"` : `"${key}":${num}`),
+  const safe = rawText.replace(/(?<!\\)"(message_id|msg_id|svr_id)"\s*:\s*(-?\d+)/g, (_, key: string, num: string) =>
+    LOSSLESS_ID_FIELDS.has(key) ? `"${key}":"${num}"` : `"${key}":${num}`,
   );
   try {
     return JSON.parse(safe) as T;
@@ -664,11 +651,7 @@ export async function sendIlinkBotTextMessage(params: {
       message_id?: string;
     }>(trimmed);
 
-    if (
-      parsed.errcode === -14 ||
-      parsed.ret === -14 ||
-      /session\s+timeout/i.test(parsed.errmsg || "")
-    ) {
+    if (parsed.errcode === -14 || parsed.ret === -14 || /session\s+timeout/i.test(parsed.errmsg || "")) {
       return {
         ok: false,
         reason: "session_expired",
@@ -829,8 +812,7 @@ export function extractTextFromIlinkMessage(msg: IlinkInboundMessage): string {
     if (item.ref_msg) {
       const refTitle = item.ref_msg.title?.trim();
       const refBody =
-        item.ref_msg.message_item?.text_item?.text?.trim() ||
-        item.ref_msg.message_item?.voice_item?.text?.trim();
+        item.ref_msg.message_item?.text_item?.text?.trim() || item.ref_msg.message_item?.voice_item?.text?.trim();
       if (refTitle || refBody) {
         parts.push(`[引用：${[refTitle, refBody].filter(Boolean).join(" | ")}]`);
       }

@@ -249,10 +249,7 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
       sandbox: () => true,
       prompt: async (_promptText, options) => {
         const custom = options.local?.customTools ?? {};
-        const boardRaw = await custom.kb_qa_read_file.execute(
-          { relPath: "资产/资产.html" },
-          { toolCallId: "im_qa_1" },
-        );
+        const boardRaw = await custom.kb_qa_read_file.execute({ relPath: "资产/资产.html" }, { toolCallId: "im_qa_1" });
         const board = JSON.parse(String(boardRaw)) as { ok: boolean; content: string };
         assert.equal(board.ok, true);
 
@@ -289,7 +286,10 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
 
     // 1. 普通聊天不带 @小驳 时不触发分身
     assert.equal(extractDmAssistantQuestion("你好，在吗？"), null);
-    assert.equal(extractDmAssistantQuestion("@小驳 洋钱罐在贷余额是多少？周四下午能约会吗？"), "洋钱罐在贷余额是多少？周四下午能约会吗？");
+    assert.equal(
+      extractDmAssistantQuestion("@小驳 洋钱罐在贷余额是多少？周四下午能约会吗？"),
+      "洋钱罐在贷余额是多少？周四下午能约会吗？",
+    );
 
     // 2. 王明在站内单聊向 default 发送 @小驳 提问
     const dmRes = await handleColleagueDmMention({
@@ -334,21 +334,20 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
     // 微信因 -14 进入 pending_wx_window，但站内 IM 已自动收到兜底回执！
     assert.equal(decided.proposal.receiptOutbox[0]?.status, "pending_wx_window");
     assert.equal(
-      imReplies.some((r) => r.to === "wangming" && r.text.includes("微信超时自动转站内IM") && r.text.includes("微信发起的周五复盘会")),
+      imReplies.some(
+        (r) =>
+          r.to === "wangming" && r.text.includes("微信超时自动转站内IM") && r.text.includes("微信发起的周五复盘会"),
+      ),
       true,
     );
     assert.equal(listCalendarEvents(host).length, 2);
 
     // 当王明稍后在微信说话恢复窗口时，flushPendingWechatReceiptsForPeer 真实投递成功后才标为 delivered
     const deliveredToWx: string[] = [];
-    const flushed = await flushPendingWechatReceiptsForPeer(
-      host,
-      "o9cq_wang@im.wechat",
-      async (msg) => {
-        deliveredToWx.push(msg);
-        return true;
-      },
-    );
+    const flushed = await flushPendingWechatReceiptsForPeer(host, "o9cq_wang@im.wechat", async (msg) => {
+      deliveredToWx.push(msg);
+      return true;
+    });
     assert.equal(flushed.length, 1);
     assert.equal(deliveredToWx.length, 1);
 
@@ -560,7 +559,10 @@ describe("Step 3: 平台原生 IM (@小驳) 融合与 wechat-push-skill 主动�
       accountsDir,
     });
     assert.equal(inboundRes.handled, true);
-    assert.equal(sentWxMessages.some((m) => m.to === "o9cq_tujie@im.wechat" && m.text.includes("Fintopia 11月核心指标一切正常")), true);
+    assert.equal(
+      sentWxMessages.some((m) => m.to === "o9cq_tujie@im.wechat" && m.text.includes("Fintopia 11月核心指标一切正常")),
+      true,
+    );
   });
 
   test("sendIlinkBotTextMessage 将仅返回 message_id 无 ret 字段的响应判为成功，并拦截缺少标识或非零错误码的假成功", async () => {

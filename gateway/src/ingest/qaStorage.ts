@@ -22,17 +22,8 @@ import { dirname, resolve } from "node:path";
 import { assistantPath, readJson, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
 import { isInside } from "../pathInside.ts";
-import {
-  BLOCKED_EXECUTABLE_EXTS,
-  fileExtension,
-  isValidPathSegment,
-} from "./contract.ts";
-import {
-  SESSION_MAX_LIFETIME_MS,
-  SESSION_TTL_MS,
-  type DropSessionGrant,
-  type DropTenantHost,
-} from "./tokens.ts";
+import { BLOCKED_EXECUTABLE_EXTS, fileExtension, isValidPathSegment } from "./contract.ts";
+import { SESSION_MAX_LIFETIME_MS, SESSION_TTL_MS, type DropSessionGrant, type DropTenantHost } from "./tokens.ts";
 import { validateKbHtmlContentSafety } from "./tools.ts";
 
 export const QA_MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -50,23 +41,10 @@ const QA_SESSION_ID_RE = /^qa_[0-9a-f]{24,64}$/;
 const SAFE_ID_SEGMENT_RE = /^[A-Za-z0-9_-]{1,80}$/;
 
 /** 允许上传到问答临时目录 uploads/ 的纯文本/轻量数据文件后缀 */
-export const QA_UPLOAD_ALLOWED_EXTS = new Set([
-  ".md",
-  ".txt",
-  ".csv",
-  ".json",
-  ".sql",
-]);
+export const QA_UPLOAD_ALLOWED_EXTS = new Set([".md", ".txt", ".csv", ".json", ".sql"]);
 
 /** 允许 AI 通过 kb_qa_temp_write 生成到 outputs/ 的临时文件后缀（含经过安全静态检查的 .html 统计页） */
-export const QA_OUTPUT_ALLOWED_EXTS = new Set([
-  ".md",
-  ".txt",
-  ".csv",
-  ".json",
-  ".sql",
-  ".html",
-]);
+export const QA_OUTPUT_ALLOWED_EXTS = new Set([".md", ".txt", ".csv", ".json", ".sql", ".html"]);
 
 export type QaTempFileItem = {
   scope: "uploads" | "outputs";
@@ -148,9 +126,8 @@ function qaRegistryFilePath(ref: TenantRef): string {
 function readQaRegistryUnlocked(ref: TenantRef): QaRegistryFile {
   const raw = readJson<Partial<QaRegistryFile>>(qaRegistryFilePath(ref), { version: 1, items: [] });
   const items = Array.isArray(raw.items)
-    ? raw.items.filter(
-        (x): x is QaRegistryEntry =>
-          Boolean(x && typeof x.qaSessionId === "string" && isValidQaSessionId(x.qaSessionId)),
+    ? raw.items.filter((x): x is QaRegistryEntry =>
+        Boolean(x && typeof x.qaSessionId === "string" && isValidQaSessionId(x.qaSessionId)),
       )
     : [];
   return { version: 1, items };
@@ -184,16 +161,16 @@ function ensureDirMode0700Sync(absDir: string) {
  * 3. 若因 `stateDir` 配置在 `workspaceRoot` 内导致重叠，则自动切换到系统级隔离目录 `os.tmpdir()/cursor-remote-drop-qa/<tenantId>` 并再次双向复核；
  * 4. 确保根目录权限为 `0o700`。
  */
-export function resolveSafeQaTenantRootSync(host: DropTenantHost): { ok: true; rootRealPath: string } | { ok: false; error: string } {
+export function resolveSafeQaTenantRootSync(
+  host: DropTenantHost,
+): { ok: true; rootRealPath: string } | { ok: false; error: string } {
   try {
     const wsRootAbs = resolve(host.workspaceRoot);
     mkdirSync(wsRootAbs, { recursive: true });
     const wsRootReal = realpathSync(wsRootAbs);
 
     const envRoot = (process.env.CURSOR_REMOTE_QA_TMP_ROOT || "").trim();
-    const primaryCandidate = envRoot
-      ? resolve(envRoot, host.id)
-      : assistantPath(host, "drop-qa-tmp");
+    const primaryCandidate = envRoot ? resolve(envRoot, host.id) : assistantPath(host, "drop-qa-tmp");
 
     const tryCandidate = (candidateAbs: string): string | null => {
       try {
@@ -285,10 +262,7 @@ export function tombstoneDeleteSessionDirSync(sessionDirAbs: string, allowedRoot
     }
     const parentDir = dirname(realTarget);
     const baseName = realTarget.split(/[/\\]/).pop() || "session";
-    const tombstoneAbs = resolve(
-      parentDir,
-      `.deleting-${baseName}-${Date.now()}-${randomBytes(4).toString("hex")}`,
-    );
+    const tombstoneAbs = resolve(parentDir, `.deleting-${baseName}-${Date.now()}-${randomBytes(4).toString("hex")}`);
     try {
       renameSync(realTarget, tombstoneAbs);
       safeRemoveTreeNoFollowSync(tombstoneAbs);
@@ -300,7 +274,9 @@ export function tombstoneDeleteSessionDirSync(sessionDirAbs: string, allowedRoot
   }
 }
 
-export function getOrCreateQaRuntimeLease(session: Pick<DropSessionGrant, "qaSessionId" | "tenantId" | "tokenId" | "workspaceId">): QaRuntimeLease {
+export function getOrCreateQaRuntimeLease(
+  session: Pick<DropSessionGrant, "qaSessionId" | "tenantId" | "tokenId" | "workspaceId">,
+): QaRuntimeLease {
   let lease = runtimeLeases.get(session.qaSessionId);
   if (!lease) {
     lease = {
@@ -466,10 +442,7 @@ function safeWriteQaFile0600Sync(
       }
     }
 
-    const tmpAbs = resolve(
-      parentReal,
-      `.tmp-${process.pid}-${Date.now()}-${randomBytes(6).toString("hex")}`,
-    );
+    const tmpAbs = resolve(parentReal, `.tmp-${process.pid}-${Date.now()}-${randomBytes(6).toString("hex")}`);
     const flags =
       constants.O_WRONLY |
       constants.O_CREAT |
@@ -817,11 +790,7 @@ export function ensureQaSessionStorageSync(
       }
     }
 
-    const writeMetaRes = safeWriteQaFile0600Sync(
-      sessDirReal,
-      "session.json",
-      `${JSON.stringify(meta, null, 2)}\n`,
-    );
+    const writeMetaRes = safeWriteQaFile0600Sync(sessDirReal, "session.json", `${JSON.stringify(meta, null, 2)}\n`);
     if (!writeMetaRes.ok) {
       return { ok: false as const, status: 400 as const, error: writeMetaRes.error };
     }
@@ -925,9 +894,7 @@ export function writeQaTempOutputFileSync(
     }
 
     const currentUsage = measureQaSessionDiskUsageSync(ensured.sessionDir);
-    const existingSameName = currentUsage.files.find(
-      (f) => f.scope === "outputs" && f.name === nameCheck.cleanName,
-    );
+    const existingSameName = currentUsage.files.find((f) => f.scope === "outputs" && f.name === nameCheck.cleanName);
     const nextFileCount = existingSameName ? currentUsage.fileCount : currentUsage.fileCount + 1;
     const netAddedBytes = buf.length - (existingSameName?.size ?? 0);
 
@@ -959,11 +926,7 @@ export function writeQaTempOutputFileSync(
       };
     }
 
-    const written = safeWriteQaFile0600Sync(
-      ensured.sessionDir,
-      `outputs/${nameCheck.cleanName}`,
-      buf,
-    );
+    const written = safeWriteQaFile0600Sync(ensured.sessionDir, `outputs/${nameCheck.cleanName}`, buf);
     if (!written.ok) return written;
 
     const sha256 = createHash("sha256").update(buf).digest("hex");
@@ -1129,7 +1092,11 @@ export async function streamUploadQaTempFile(
       const usageBefore = measureQaSessionDiskUsageSync(ensured.sessionDir);
       const baseBytes = Math.max(0, usageBefore.totalBytes - totalBytes);
       if (usageBefore.fileCount >= QA_MAX_SESSION_FILES) {
-        return { ok: false as const, status: 400 as const, error: `单问答会话最多允许 ${QA_MAX_SESSION_FILES} 个临时文件` };
+        return {
+          ok: false as const,
+          status: 400 as const,
+          error: `单问答会话最多允许 ${QA_MAX_SESSION_FILES} 个临时文件`,
+        };
       }
       if (baseBytes + totalBytes > QA_MAX_SESSION_BYTES) {
         return { ok: false as const, status: 413 as const, error: "当前问答会话临时空间已达 32MB 上限" };
@@ -1256,17 +1223,11 @@ export function appendQaHistoryTurnSync(
       timestamp: now,
     };
 
-    const nextTurns = [...(Array.isArray(meta.turns) ? meta.turns : []), sanitizedTurn].slice(
-      -QA_MAX_HISTORY_TURNS,
-    );
+    const nextTurns = [...(Array.isArray(meta.turns) ? meta.turns : []), sanitizedTurn].slice(-QA_MAX_HISTORY_TURNS);
     meta.turns = nextTurns;
     meta.lastActiveAt = now;
 
-    const writeRes = safeWriteQaFile0600Sync(
-      sessDirReal,
-      "session.json",
-      `${JSON.stringify(meta, null, 2)}\n`,
-    );
+    const writeRes = safeWriteQaFile0600Sync(sessDirReal, "session.json", `${JSON.stringify(meta, null, 2)}\n`);
     if (!writeRes.ok) return writeRes;
 
     const usage = measureQaSessionDiskUsageSync(sessDirReal);

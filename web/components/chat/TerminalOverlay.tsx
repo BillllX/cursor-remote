@@ -76,10 +76,7 @@ export function TerminalOverlay({
     return { total: baseRows.length, running, failed, succeeded };
   }, [baseRows]);
 
-  const filteredRows = useMemo(
-    () => filterShellRows(baseRows, statusFilter, query),
-    [baseRows, statusFilter, query],
-  );
+  const filteredRows = useMemo(() => filterShellRows(baseRows, statusFilter, query), [baseRows, statusFilter, query]);
 
   function copyText(text: string, label: string) {
     const clip = navigator.clipboard;
@@ -165,11 +162,7 @@ export function TerminalOverlay({
           <div className="workspace-modal-actions">
             {filteredRows.length > 0 ? (
               <>
-                <button
-                  type="button"
-                  className="workspace-modal-btn"
-                  onClick={() => setExpandAll((prev) => !prev)}
-                >
+                <button type="button" className="workspace-modal-btn" onClick={() => setExpandAll((prev) => !prev)}>
                   {expandAll ? "智能折叠" : "全部展开"}
                 </button>
                 <button type="button" className="workspace-modal-btn" onClick={scrollToBottom}>
@@ -243,12 +236,7 @@ export function TerminalOverlay({
               onChange={(event) => setQuery(event.target.value)}
             />
             {query ? (
-              <button
-                type="button"
-                className={styles.clearBtn}
-                aria-label="清空终端搜索"
-                onClick={() => setQuery("")}
-              >
+              <button type="button" className={styles.clearBtn} aria-label="清空终端搜索" onClick={() => setQuery("")}>
                 ×
               </button>
             ) : null}
@@ -299,7 +287,9 @@ export function TerminalOverlay({
                             }))
                           }
                         >
-                          {isExpanded ? "折叠长输出" : `展开全部 (${stdoutView.totalLines + (row.stderr ? stderrView.totalLines : 0)} 行)`}
+                          {isExpanded
+                            ? "折叠长输出"
+                            : `展开全部 (${stdoutView.totalLines + (row.stderr ? stderrView.totalLines : 0)} 行)`}
                         </button>
                       ) : null}
                       <button
@@ -381,9 +371,7 @@ export function TerminalOverlay({
             {baseRows.length > 0 ? (
               <>
                 <div className={styles.emptyTitle}>没有匹配筛选条件的终端记录</div>
-                <div className="loop-meta">
-                  当前共有 {baseRows.length} 条命令记录，可尝试清空搜索词或切换状态筛选。
-                </div>
+                <div className="loop-meta">当前共有 {baseRows.length} 条命令记录，可尝试清空搜索词或切换状态筛选。</div>
                 <div className={styles.quickPresets}>
                   <button
                     type="button"
@@ -407,11 +395,7 @@ export function TerminalOverlay({
                 </div>
                 {scope === "session" && allWorkspaceRows.length > 0 ? (
                   <div className={styles.quickPresets}>
-                    <button
-                      type="button"
-                      className="new-chat primary"
-                      onClick={() => setScope("workspace")}
-                    >
+                    <button type="button" className="new-chat primary" onClick={() => setScope("workspace")}>
                       查看本工作区其它会话的 {allWorkspaceRows.length} 条终端记录
                     </button>
                   </div>

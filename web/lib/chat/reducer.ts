@@ -457,9 +457,7 @@ export function applyOptimisticAssistantOp(
       const now = Date.now();
       return {
         ...state,
-        todos: state.todos.map((todo) =>
-          todo.id === id ? { ...todo, done, doneAt: done ? now : undefined } : todo,
-        ),
+        todos: state.todos.map((todo) => (todo.id === id ? { ...todo, done, doneAt: done ? now : undefined } : todo)),
       };
     }
     case "todo_update": {
@@ -470,10 +468,7 @@ export function applyOptimisticAssistantOp(
         todos: state.todos.map((todo) => {
           if (todo.id !== id) return todo;
           const nextText = typeof args.text === "string" && args.text.trim() ? args.text.trim() : todo.text;
-          const nextDue =
-            typeof args.due === "string"
-              ? args.due.trim() || undefined
-              : todo.due;
+          const nextDue = typeof args.due === "string" ? args.due.trim() || undefined : todo.due;
           return { ...todo, text: nextText, due: nextDue };
         }),
       };

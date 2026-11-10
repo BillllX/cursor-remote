@@ -47,10 +47,7 @@ import {
 } from "./tokens.ts";
 import { postInbox } from "../assistant/inbox.ts";
 import { listColleagueProposals } from "../assistant/proposals.ts";
-import {
-  checkWechatQrBindingStatus,
-  startWechatQrBindingSession,
-} from "../wx/pushGuard.ts";
+import { checkWechatQrBindingStatus, startWechatQrBindingSession } from "../wx/pushGuard.ts";
 import { MAX_KB_HTML_BYTES } from "./tools.ts";
 
 export type DropPortalTenant = {
@@ -84,18 +81,15 @@ function extractDropSessionCookie(req: IncomingMessage, tenantId: string): strin
 }
 
 function isSecureRequest(req: IncomingMessage): boolean {
-  const proto = String(req.headers["x-forwarded-proto"] || "").trim().toLowerCase();
+  const proto = String(req.headers["x-forwarded-proto"] || "")
+    .trim()
+    .toLowerCase();
   if (proto === "https") return true;
   if ((req.socket as { encrypted?: boolean })?.encrypted) return true;
   return Boolean(process.env.CURSOR_REMOTE_HTTPS === "1" || process.env.CURSOR_REMOTE_HTTPS === "true");
 }
 
-function buildDropSessionSetCookie(
-  tenantId: string,
-  sessionToken: string,
-  clear = false,
-  secure = false,
-): string {
+function buildDropSessionSetCookie(tenantId: string, sessionToken: string, clear = false, secure = false): string {
   const name = dropSessionCookieName(tenantId);
   const path = `/p/${tenantId}/drop`;
   const secureFlag = secure ? "; Secure" : "";
@@ -1888,17 +1882,22 @@ export function renderDropPortalHtml(
 </html>`;
 }
 
-function buildPortalSessionResponsePayload(session: DropSessionGrant, batchId: string, receiptToken: string): DropPortalPreloadedSession {
+function buildPortalSessionResponsePayload(
+  session: DropSessionGrant,
+  batchId: string,
+  receiptToken: string,
+): DropPortalPreloadedSession {
   const boards = scanWorkspaceKbHtmlBoards(session.workspacePath, session.kbConfig);
-  const authorizedWorkspaces = (session.authorizedWorkspaces && session.authorizedWorkspaces.length > 0
-    ? session.authorizedWorkspaces
-    : [
-        {
-          workspaceId: session.workspaceId,
-          workspaceKey: session.workspaceKey,
-          workspaceTitle: session.workspaceTitle,
-        },
-      ]
+  const authorizedWorkspaces = (
+    session.authorizedWorkspaces && session.authorizedWorkspaces.length > 0
+      ? session.authorizedWorkspaces
+      : [
+          {
+            workspaceId: session.workspaceId,
+            workspaceKey: session.workspaceKey,
+            workspaceTitle: session.workspaceTitle,
+          },
+        ]
   ).map((w) => ({
     workspaceId: w.workspaceId,
     workspaceKey: w.workspaceKey,
@@ -2005,8 +2004,7 @@ export function handleDropPortalHttp(
       const passcode = typeof parsed.data.passcode === "string" ? parsed.data.passcode : "";
       const submitterName = typeof parsed.data.submitterName === "string" ? parsed.data.submitterName : "";
       const remember = parsed.data.remember !== false;
-      const preferredWorkspace =
-        typeof parsed.data.workspace === "string" ? parsed.data.workspace : undefined;
+      const preferredWorkspace = typeof parsed.data.workspace === "string" ? parsed.data.workspace : undefined;
 
       const authRes = verifyDropPasscodeAndCreateSession(host, {
         passcode,

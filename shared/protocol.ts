@@ -622,6 +622,53 @@ export type SkillFactoryStatusData = {
   proposals: SkillFactoryProposalItem[];
 };
 
+export type KbWecomWatchedItemSummary = {
+  id: string;
+  workspaceId: string;
+  workspaceKey: string;
+  title: string;
+  sourceType: "sheet" | "smartsheet" | "doc" | "smartpage" | "disk_file";
+  docId?: string;
+  fileId?: string;
+  sheet?: string;
+  range?: string;
+  note?: string;
+  lastSyncedUpdateTime?: string;
+  lastSyncedSha256?: string;
+  lastSnapshotPreview?: string;
+  lastBatchId?: string;
+  lastCheckedAt?: number;
+  lastSyncedAt?: number;
+  lastCheckedUpdateTime?: string;
+  lastCheckedSha256?: string;
+  lastCheckHasChanged?: boolean;
+  lastCheckSummary?: string;
+  lastCheckDiffHint?: string;
+  lastCheckPreview?: string;
+  lastCheckError?: string;
+  createdAt: number;
+};
+
+export type KbWorkspaceIngestLogItem = {
+  batchId: string;
+  timestamp: number;
+  status: "queued" | "processing" | "completed" | "partial" | "failed";
+  submitterName: string;
+  note: string;
+  movedFiles: Array<{ from: string; to: string; category: string }>;
+  updatedHtmls: string[];
+  summary: string;
+  errorReason?: string;
+};
+
+export type KbWecomWatchActionResult = {
+  action: "check" | "sync" | "add" | "remove";
+  checkedCount?: number;
+  changedCount?: number;
+  syncedCount?: number;
+  message: string;
+};
+
 export type KbWorkspaceStatusData = {
   workspaceKey: string;
   workspaceId: string;
@@ -637,6 +684,12 @@ export type KbWorkspaceStatusData = {
   kbWorkspaces?: KbWorkspaceSummaryItem[];
   /** 同事提交的日历预约/知识库更新提案列表（供小驳界面一键批准或拒绝） */
   proposals?: KbColleagueProposalItem[];
+  /** 当前工作区（或小驳跨工作区）绑定的企业微信关注文件清单与最新巡检/同步状态 */
+  wecomWatchItems?: KbWecomWatchedItemSummary[];
+  /** 当前工作区的更新历史与进行中归档记录（按时间倒序，含更新时间、触发来源、更新内容摘要、归档文件与刷新的 HTML 看板） */
+  ingestLogs?: KbWorkspaceIngestLogItem[];
+  /** 当触发 wecomWatchAction 时返回的即时执行结果摘要 */
+  wecomWatchResult?: KbWecomWatchActionResult;
   /** 主人自己绑定的个人微信通知通道（用于接收同事提案审批通知） */
   ownerWx?: {
     botId: string;
@@ -689,7 +742,7 @@ export type AssistantOpArgsMap = {
   };
   drop_token_update: {
     workspace: string;
-    tokenId: string;
+    tokenId?: string;
     label?: string;
     addWorkspaces?: string[];
     removeWorkspaces?: string[];
@@ -710,6 +763,18 @@ export type AssistantOpArgsMap = {
       tokenId?: string;
       qrSessionId?: string;
       verifyCode?: string;
+    };
+    wecomWatchAction?: {
+      kind: "check" | "sync" | "add" | "remove";
+      idOrTitle?: string;
+      forceSync?: boolean;
+      title?: string;
+      sourceType?: "sheet" | "smartsheet" | "doc" | "smartpage" | "disk_file";
+      docId?: string;
+      fileId?: string;
+      sheet?: string;
+      range?: string;
+      note?: string;
     };
   };
   drop_token_revoke: { workspace: string; idOrLabel: string; globalRevoke?: boolean };

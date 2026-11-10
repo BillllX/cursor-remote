@@ -37,7 +37,7 @@ function decodeHtmlAndCssEscapesCompact(raw: string): string {
       const code = Number.parseInt(dec, 10);
       return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "";
     })
-    .replace(/&quot;?/gi, "\"")
+    .replace(/&quot;?/gi, '"')
     .replace(/&apos;?/gi, "'")
     .replace(/&amp;?/gi, "&")
     .replace(/&lt;?/gi, "<")
@@ -71,7 +71,9 @@ function decodeHtmlAndCssEscapesCompact(raw: string): string {
  *    - `data:` URI 仅允许 `data:image/(png|jpeg|jpg|gif|webp);base64,`（严禁 `data:text/html`、`data:application/xhtml+xml`、`data:image/svg+xml` 等可执行或主动载荷）；
  *    - 严禁在标签属性（`src`/`href`/`srcset`/`action`/`formaction`/`poster`/`background`）或 CSS `url(...)` 中出现任何 `http:`、`https:` 或 `//` 协议相对外链。
  */
-export function validateKbHtmlContentSafety(htmlContent: string): { ok: true; byteLength: number } | { ok: false; error: string } {
+export function validateKbHtmlContentSafety(
+  htmlContent: string,
+): { ok: true; byteLength: number } | { ok: false; error: string } {
   const trimmed = htmlContent.trim();
   if (!trimmed) {
     return { ok: false, error: "HTML 内容不能为空" };
@@ -83,10 +85,15 @@ export function validateKbHtmlContentSafety(htmlContent: string): { ok: true; by
   if (!/(<!doctype\s+html|<html\b|<body\b)/i.test(trimmed)) {
     return { ok: false, error: "HTML 内容缺少基本的文档结构标签（<html> 或 <body>）" };
   }
-  if (/<\s*\/?\s*(script|iframe|frame|frameset|object|embed|applet|base|form|link|audio|video|source|set|animate|animateTransform|animateMotion|foreignObject)\b/i.test(htmlContent)) {
+  if (
+    /<\s*\/?\s*(script|iframe|frame|frameset|object|embed|applet|base|form|link|audio|video|source|set|animate|animateTransform|animateMotion|foreignObject)\b/i.test(
+      htmlContent,
+    )
+  ) {
     return {
       ok: false,
-      error: "知识库 HTML 为纯静态内联看板，严禁包含 <script>、<iframe>、<object>、<embed>、<base>、<form>、<link> 或 SVG <set>/<animate> 动画标签",
+      error:
+        "知识库 HTML 为纯静态内联看板，严禁包含 <script>、<iframe>、<object>、<embed>、<base>、<form>、<link> 或 SVG <set>/<animate> 动画标签",
     };
   }
   if (/[\s"'/<]on[a-z]{2,32}\s*=/i.test(htmlContent)) {
@@ -111,8 +118,15 @@ export function validateKbHtmlContentSafety(htmlContent: string): { ok: true; by
       return { ok: false, error: `知识库 HTML 严禁包含非位图 data: URI（检测到 data:${mime}）` };
     }
   }
-  if (/(?:src|href|srcset|action|formaction|poster|background|cite|data|to|from|values)\s*=\s*["']?(?:https?:|\/\/)/i.test(decodedCompact)) {
-    return { ok: false, error: "知识库 HTML 必须为单文件全内联，严禁在 src/href 等属性中引用外部 http(s):// 或 // 资源" };
+  if (
+    /(?:src|href|srcset|action|formaction|poster|background|cite|data|to|from|values)\s*=\s*["']?(?:https?:|\/\/)/i.test(
+      decodedCompact,
+    )
+  ) {
+    return {
+      ok: false,
+      error: "知识库 HTML 必须为单文件全内联，严禁在 src/href 等属性中引用外部 http(s):// 或 // 资源",
+    };
   }
   // 在原始 htmlContent 上提取所有属性原始值（不限属性名），单独解码检查，严禁在任何 HTML/SVG 属性值中出现 http(s): 或 // 外链
   for (const m of htmlContent.matchAll(/\b([a-z][a-z0-9:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
@@ -280,7 +294,11 @@ export function executeIngestUpdateHtml(
 
   let previousHtmlSnapshot: string | null = null;
   if (existsSync(pathCheck.absPath)) {
-    const prevRead = safeReadWorkspaceTextFileSync(workspaceDir, pathCheck.normalizedRel, MAX_KB_HTML_BYTES + 64 * 1024);
+    const prevRead = safeReadWorkspaceTextFileSync(
+      workspaceDir,
+      pathCheck.normalizedRel,
+      MAX_KB_HTML_BYTES + 64 * 1024,
+    );
     if (!prevRead.ok) {
       return { ok: false, error: `读取现有知识库 HTML 失败（${prevRead.error}），已中止更新以保护原文件` };
     }
@@ -341,7 +359,12 @@ export function buildIngestCustomTools(ctx: {
     execute: async (args, _context: SDKCustomToolContext) => {
       if (isClosed?.()) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ ok: false, error: "当前归档批次运行已结束或超时，禁止继续执行工具" }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ ok: false, error: "当前归档批次运行已结束或超时，禁止继续执行工具" }),
+            },
+          ],
           isError: true,
         };
       }
@@ -377,7 +400,9 @@ export function buildIngestCustomTools(ctx: {
             relPath: f.relPath,
             size: f.size,
           })),
-          archivePolicyMarkdown: policyRead.ok ? policyRead.text : "（本工作区未提供 归档说明.md，请按 allowedCategories 分类目录归档）",
+          archivePolicyMarkdown: policyRead.ok
+            ? policyRead.text
+            : "（本工作区未提供 归档说明.md，请按 allowedCategories 分类目录归档）",
         };
       },
     ),
@@ -418,7 +443,8 @@ export function buildIngestCustomTools(ctx: {
       {
         htmlRelPath: {
           type: "string",
-          description: "同名知识库 HTML 的相对路径，如 资产/资产.html 或 资产/黑龙江三农信融资担保/黑龙江三农信融资担保.html",
+          description:
+            "同名知识库 HTML 的相对路径，如 资产/资产.html 或 资产/黑龙江三农信融资担保/黑龙江三农信融资担保.html",
         },
         htmlContent: {
           type: "string",
@@ -427,13 +453,7 @@ export function buildIngestCustomTools(ctx: {
       },
       ["htmlRelPath", "htmlContent"],
       (args) =>
-        executeIngestUpdateHtml(
-          workspaceDir,
-          config,
-          str(args.htmlRelPath),
-          str(args.htmlContent),
-          executionLog,
-        ),
+        executeIngestUpdateHtml(workspaceDir, config, str(args.htmlRelPath), str(args.htmlContent), executionLog),
     ),
   };
 }

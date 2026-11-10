@@ -406,9 +406,7 @@ export function applyRunSnapshot(
               ? cur.thinking
               : message.thinking || "",
           tools:
-            snapshotIncomplete || tools.length < cur.tools.length
-              ? cur.tools
-              : preserveToolReviews(cur.tools, tools),
+            snapshotIncomplete || tools.length < cur.tools.length ? cur.tools : preserveToolReviews(cur.tools, tools),
           clipped: keepComplete ? cur.clipped : message.clipped || undefined,
           deferred: keepComplete ? cur.deferred : snapshotMeta.deferred || undefined,
           bodyBytes: snapshotMeta.bodyBytes ?? cur.bodyBytes,
