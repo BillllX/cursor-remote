@@ -1,0 +1,180 @@
+{
+  "at": "2026-09-20T07-06-59-235Z",
+  "ws": "ws://127.0.0.1:8787",
+  "policy": "baseline",
+  "models": [
+    "kimi-k3"
+  ],
+  "dialects": [
+    "off",
+    "on"
+  ],
+  "repeats": 1,
+  "summary": {
+    "pairs": [
+      {
+        "task": "combo-bait",
+        "model": "kimi-k3",
+        "offPass": 0,
+        "onPass": 0,
+        "offShell": 2,
+        "onShell": 0,
+        "offInv": 0,
+        "onInv": 0,
+        "offCjk": 0.514,
+        "onCjk": 0.396,
+        "offCol": 1,
+        "onCol": 1,
+        "offDur": 51872,
+        "onDur": 45181,
+        "offEdit": 3,
+        "onEdit": 5,
+        "offEsc": 0,
+        "onEsc": 0,
+        "offMethod": 3,
+        "onMethod": 4,
+        "offPaste": 0,
+        "onPaste": 0,
+        "offOut": 1,
+        "onOut": 1,
+        "verdict": "更好"
+      }
+    ],
+    "overall": {
+      "offPass": 0,
+      "onPass": 0,
+      "offShell": 2,
+      "onShell": 0,
+      "offInv": 0,
+      "onInv": 0,
+      "offCjk": 0.514,
+      "onCjk": 0.396,
+      "offCol": 1,
+      "onCol": 1,
+      "offDur": 51872,
+      "onDur": 45181
+    }
+  },
+  "rows": [
+    {
+      "id": "combo-bait-off-kimi-k3-r1-3fffdf",
+      "task": "combo-bait",
+      "model": "kimi-k3",
+      "policy": "baseline",
+      "dialect": "off",
+      "repeat": 1,
+      "status": "cancelled",
+      "durationMs": 51872,
+      "toolStarts": 12,
+      "toolNames": [
+        "shell",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "shell",
+        "shell",
+        "edit",
+        "shell"
+      ],
+      "editUses": 3,
+      "shellUses": 4,
+      "shellEdits": 2,
+      "inventedTools": 0,
+      "inventedNames": [],
+      "inventedAttempt": false,
+      "mentionedInvented": true,
+      "pastedDump": false,
+      "cjkRatio": 0.514,
+      "changedFiles": [
+        "README.md",
+        "app.js",
+        "jiebo-combo.md",
+        "lib.js",
+        "notes.md"
+      ],
+      "collateralFiles": 1,
+      "collateralNames": [
+        "app.js"
+      ],
+      "escapedTmp": false,
+      "methodHits": 3,
+      "method": {
+        "noShellEdit": false,
+        "noInvented": true,
+        "noPaste": true,
+        "noTmp": true,
+        "noCollateral": false
+      },
+      "outcomeOk": true,
+      "pass": false,
+      "reasons": [
+        "app.js 不该被改",
+        "shell 改文件 2 次",
+        "误伤 app.js"
+      ]
+    },
+    {
+      "id": "combo-bait-on-kimi-k3-r1-194599",
+      "task": "combo-bait",
+      "model": "kimi-k3",
+      "policy": "baseline",
+      "dialect": "on",
+      "repeat": 1,
+      "status": "finished",
+      "durationMs": 45181,
+      "toolStarts": 11,
+      "toolNames": [
+        "glob",
+        "read",
+        "read",
+        "read",
+        "read",
+        "read",
+        "edit",
+        "edit",
+        "edit",
+        "edit",
+        "edit"
+      ],
+      "editUses": 5,
+      "shellUses": 0,
+      "shellEdits": 0,
+      "inventedTools": 0,
+      "inventedNames": [],
+      "inventedAttempt": false,
+      "mentionedInvented": true,
+      "pastedDump": false,
+      "cjkRatio": 0.396,
+      "changedFiles": [
+        "README.md",
+        "app.js",
+        "jiebo-combo.md",
+        "lib.js",
+        "notes.md"
+      ],
+      "collateralFiles": 1,
+      "collateralNames": [
+        "app.js"
+      ],
+      "escapedTmp": false,
+      "methodHits": 4,
+      "method": {
+        "noShellEdit": true,
+        "noInvented": true,
+        "noPaste": true,
+        "noTmp": true,
+        "noCollateral": false
+      },
+      "outcomeOk": true,
+      "pass": false,
+      "reasons": [
+        "app.js 不该被改",
+        "误伤 app.js"
+      ]
+    }
+  ]
+}
