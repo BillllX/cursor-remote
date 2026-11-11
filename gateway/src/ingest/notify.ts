@@ -20,6 +20,12 @@ import { bindIngestRunner, runIngestBatchJob, type IngestRunnerDeps } from "./ru
 import type { DropBatchMeta } from "./staging.ts";
 import { onDropSessionEvicted, onDropTokensRevoked, type DropTenantHost } from "./tokens.ts";
 import { rollbackWecomWatchLedgerOnBatchFailed } from "./wecomSource.ts";
+import {
+  bindWorkspaceScheduleAgentPromptDeps,
+  notifyWorkspaceSchedulesOnBatchCompleted,
+  startWorkspaceScheduleLoop,
+  stopWorkspaceScheduleLoop,
+} from "./workspaceSchedules.ts";
 import { startWeixinIlinkRuntime, stopAllWxMonitorLoops } from "../wx/pushGuard.ts";
 import type { IngestToolExecutionLog } from "./tools.ts";
 
@@ -257,6 +263,20 @@ export function handleIngestBatchCompleted(ctx: {
     }
   }
 
+  try {
+    notifyWorkspaceSchedulesOnBatchCompleted({
+      host,
+      batchId: meta.batchId,
+      status,
+      summaryText,
+      movedFiles: executionLog.movedFiles,
+      updatedHtmls: executionLog.updatedHtmls,
+      errorReason,
+    });
+  } catch {
+    // ignore schedule settlement error
+  }
+
   const logRes = appendWorkspaceIngestLog(workspacePath, {
     batchId: meta.batchId,
     timestamp: Date.now(),
@@ -310,6 +330,7 @@ export function stopIngestQaSweepTimer() {
     activeEvictUnsub();
     activeEvictUnsub = null;
   }
+  stopWorkspaceScheduleLoop();
   stopAllWxMonitorLoops();
 }
 
@@ -349,6 +370,12 @@ export function startIngestRuntime(opts: {
     listModels: opts.qaRunnerOverrides?.listModels ?? listModelsFn,
     prompt: opts.qaRunnerOverrides?.prompt ?? promptFn,
     sandbox: opts.qaRunnerOverrides?.sandbox ?? sandboxFn,
+  });
+
+  bindWorkspaceScheduleAgentPromptDeps({
+    apiKey: apiKeyFn,
+    prompt: promptFn,
+    sandbox: sandboxFn,
   });
 
   stopIngestQaSweepTimer();
@@ -409,6 +436,9 @@ export function startIngestRuntime(opts: {
     }, intervalMs);
     activeQaSweepTimer.unref?.();
   }
+
+  // 启动工作区通用定时任务常驻扫描引擎（每 15s 巡检到期任务并维护两阶段单飞锁）
+  startWorkspaceScheduleLoop({ tenants: opts.tenants });
 
   // 启动微信 iLink 长轮询监控协程（自动恢复 ~/.openclaw/openclaw-weixin/accounts/ 下所有已绑定 Bot 通道）
   startWeixinIlinkRuntime({ tenants: opts.tenants });

@@ -7,6 +7,7 @@ const MAX_BYTES = 1_000_000;
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 10_000;
 const ALLOWED_TYPES = new Set(["text/html", "application/xhtml+xml", "text/plain"]);
+const DATA_TYPES = new Set(["application/json", "text/csv", "text/markdown", "application/xml", "text/xml"]);
 
 export class ControlledWebError extends Error {}
 
@@ -130,6 +131,8 @@ export type ControlledWebDeps = {
   ) => Promise<WebStep>;
   /** 仅供定向测试缩短总截止；生产固定为 10 秒。 */
   wallClockTimeoutMs?: number;
+  /** 允许读取 JSON / CSV / Markdown / XML 等结构化接口文本（供受控 HTTP/API 定时任务使用） */
+  allowDataTypes?: boolean;
 };
 
 async function resolvePublic(
@@ -242,20 +245,23 @@ async function readControlledWebWithinDeadline(rawURL: string, deps: ControlledW
       throw new ControlledWebError(`网页返回 HTTP ${response.status}。`);
     }
     const contentType = (response.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
-    if (!ALLOWED_TYPES.has(contentType)) throw new ControlledWebError("网页内容类型不受支持。");
+    const isDataContent = Boolean(deps.allowDataTypes && DATA_TYPES.has(contentType));
+    if (!ALLOWED_TYPES.has(contentType) && !isDataContent) {
+      throw new ControlledWebError("网页内容类型不受支持。");
+    }
     if (response.body.length > MAX_BYTES) throw new ControlledWebError("网页超过 1 MB 限制。");
     const source = response.body.toString("utf8");
-    const title =
-      contentType === "text/plain"
-        ? undefined
-        : decodeEntities(source.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 300) || undefined;
+    const isPlainOrData = contentType === "text/plain" || isDataContent;
+    const title = isPlainOrData
+      ? undefined
+      : decodeEntities(source.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i)?.[1] ?? "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 300) || undefined;
     return {
       url: url.toString(),
       title,
-      text: extractText(source, contentType !== "text/plain").slice(0, 80_000),
+      text: extractText(source, !isPlainOrData).slice(0, 80_000),
       truncated: source.length > 80_000,
     };
   }

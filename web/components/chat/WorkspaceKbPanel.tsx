@@ -11,6 +11,7 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { FileGlyph } from "../FileTree";
+import { WorkspaceScheduleSection } from "./WorkspaceScheduleSection";
 
 const WECOM_SOURCE_TYPE_LABELS: Record<KbWecomWatchedItemSummary["sourceType"], string> = {
   sheet: "在线表格",
@@ -83,6 +84,7 @@ export function WorkspaceKbPanel({
   const [expandedLogBatchIds, setExpandedLogBatchIds] = useState<Record<string, boolean>>({});
 
   const pendingReqIdsRef = useRef(new Set<string>());
+  const silentReqIdsRef = useRef(new Set<string>());
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeQrSessionIdRef = useRef<string>("");
 
@@ -103,8 +105,10 @@ export function WorkspaceKbPanel({
   const sendKbOperation = useCallback(
     (message: ClientMessage, silent = false) => {
       if (message.type !== "assistant_op" || !message.reqId) return;
-      pendingReqIdsRef.current.add(message.reqId);
-      if (!silent) {
+      if (silent) {
+        silentReqIdsRef.current.add(message.reqId);
+      } else {
+        pendingReqIdsRef.current.add(message.reqId);
         setLoading(true);
         setErrorText("");
       }
@@ -156,8 +160,10 @@ export function WorkspaceKbPanel({
   useEffect(() => {
     let consumed = false;
     for (const result of assistantResults) {
-      if (!result.reqId || !pendingReqIdsRef.current.delete(result.reqId)) continue;
-      consumed = true;
+      const isSilent = Boolean(result.reqId && silentReqIdsRef.current.delete(result.reqId));
+      const isExplicit = Boolean(result.reqId && pendingReqIdsRef.current.delete(result.reqId));
+      if (!isSilent && !isExplicit) continue;
+      if (isExplicit) consumed = true;
       const op = result.op;
       if (
         op !== "kb_workspace_status" &&
@@ -169,15 +175,17 @@ export function WorkspaceKbPanel({
         continue;
       }
       if (!result.ok) {
-        setErrorText(result.error || "操作失败");
+        if (!isSilent) setErrorText(result.error || "操作失败");
         continue;
       }
       const data = result.data as KbWorkspaceStatusData | undefined;
       if (!data || data.workspaceKey !== workspaceKey) continue;
       setStatus(data);
-      setErrorText("");
-      setKbTitleDraft(data.title || `${workspaceName} 知识库`);
-      setKbCategoriesDraft((data.allowedCategories || ["资金", "资产", "牌照"]).join("、"));
+      if (!isSilent) setErrorText("");
+      if (!editingKb) {
+        setKbTitleDraft(data.title || `${workspaceName} 知识库`);
+        setKbCategoriesDraft((data.allowedCategories || ["资金", "资产", "牌照"]).join("、"));
+      }
 
       if (data.wxQrStart) {
         if (!qrModalOpen) continue;
@@ -223,7 +231,9 @@ export function WorkspaceKbPanel({
         setImTenantIdDraft("");
         setNotice("已创建同事通行口令（默认永久有效）");
       } else if (op === "drop_token_update") {
-        if (data.wecomWatchResult) {
+        if (data.workspaceScheduleResult) {
+          setNotice(data.workspaceScheduleResult.message);
+        } else if (data.wecomWatchResult) {
           setNotice(data.wecomWatchResult.message);
           if (data.wecomWatchResult.action === "add") {
             setAddingWatch(false);
@@ -240,10 +250,11 @@ export function WorkspaceKbPanel({
       }
     }
     if (consumed) setLoading(pendingReqIdsRef.current.size > 0);
-  }, [assistantResults, workspaceKey, workspaceName, setNotice, clearPollTimer, pollQrStatus, qrModalOpen]);
+  }, [assistantResults, workspaceKey, workspaceName, setNotice, clearPollTimer, pollQrStatus, qrModalOpen, editingKb]);
 
   const hasActiveIngestJob = Boolean(
-    status?.ingestLogs?.some((item) => item.status === "queued" || item.status === "processing"),
+    status?.ingestLogs?.some((item) => item.status === "queued" || item.status === "processing") ||
+      status?.workspaceSchedules?.some((item) => item.state !== "idle"),
   );
 
   // 当存在排队或正在后台归档的任务时，每 3.5 秒静默刷新一次面板状态，以便实时看到归档完成后的更新内容与看板
@@ -1228,6 +1239,20 @@ export function WorkspaceKbPanel({
             </div>
           )}
         </div>
+      ) : null}
+
+      {/* 通用工程级定时任务（无论是否开启知识库均支持配置） */}
+      {status ? (
+        <WorkspaceScheduleSection
+          workspaceKey={workspaceKey}
+          schedules={status.workspaceSchedules ?? []}
+          runs={status.workspaceScheduleRuns ?? []}
+          loading={loading}
+          lastScheduleResult={status.workspaceScheduleResult}
+          sendKbOperation={sendKbOperation}
+          onOpenBoard={onOpenBoard}
+          setErrorText={setErrorText}
+        />
       ) : null}
 
       {/* 3. 外部同事投递门户链接与投递密钥管理 */}

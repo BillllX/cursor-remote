@@ -8,6 +8,8 @@ import type {
   KbWorkspaceIngestLogItem,
   KbWorkspaceStatusData,
   KbWorkspaceSummaryItem,
+  WorkspaceScheduleRunSummaryItem,
+  WorkspaceScheduleSummaryItem,
 } from "../../../shared/protocol.ts";
 import { listColleagueProposals } from "../assistant/proposals.ts";
 import {
@@ -28,6 +30,11 @@ import {
   type DropTenantHost,
 } from "./tokens.ts";
 import { listWecomWatchItems } from "./wecomSource.ts";
+import {
+  listWorkspaceScheduleRuns,
+  listWorkspaceSchedules,
+  type WorkspaceScheduleRecord,
+} from "./workspaceSchedules.ts";
 
 /** 从 HTML 头部注释 `<!-- JIEBO_KB_META: {...} -->` 或文件 mtime 提取更新时间 */
 function extractHtmlUpdatedAt(workspaceDir: string, relPath: string, fallbackMtimeMs: number): number {
@@ -240,6 +247,81 @@ function buildWorkspaceIngestLogsForUi(
   return [...activeItems, ...mergedFinished].slice(0, limit);
 }
 
+function summarizeSchedulePayload(rec: WorkspaceScheduleRecord): string {
+  const p = rec.payload;
+  if (rec.executorKind === "wecom_watch_sync") {
+    const scope =
+      Array.isArray(p.watchItemIds) && p.watchItemIds.length > 0
+        ? `指定 ${p.watchItemIds.length} 项`
+        : "全部关注文件";
+    return `企微关注表巡检（${scope} · 静默防抖 ${p.quietPeriodMinutes ?? 3} 分钟）`;
+  }
+  if (rec.executorKind === "wecom_mail_poll") {
+    return `企微邮箱拉取${p.mailKeyword ? `（关键词：${p.mailKeyword}）` : "（全部新邮件）"}${p.onlyWithAttachments ? " · 仅含附件" : ""}`;
+  }
+  if (rec.executorKind === "http_api_ingest") {
+    return `接口/网页抓取：${p.url || "未配置 URL"}`;
+  }
+  if (rec.executorKind === "workspace_script") {
+    return `受控脚本：${p.runner ?? "python3"} ${p.scriptRelPath || ""}`;
+  }
+  return `AI 定时分析：${(p.prompt || "").slice(0, 60)}`;
+}
+
+function buildWorkspaceSchedulesForUi(host: DropTenantHost, workspaceKey?: string): WorkspaceScheduleSummaryItem[] {
+  return listWorkspaceSchedules(host, workspaceKey ? { workspace: workspaceKey } : undefined).map((s) => ({
+    id: s.id,
+    workspaceId: s.workspaceId,
+    workspaceKey: s.workspaceKeySnapshot,
+    title: s.title,
+    enabled: s.enabled,
+    executorKind: s.executorKind,
+    scheduleMode: s.scheduleMode,
+    intervalMinutes: s.intervalMinutes,
+    ...(s.dailyTimes?.length ? { dailyTimes: s.dailyTimes } : {}),
+    ...(s.activeHours ? { activeHours: s.activeHours } : {}),
+    tz: s.tz,
+    state: s.state,
+    ...(s.activeRunId ? { activeRunId: s.activeRunId } : {}),
+    ...(s.activeStartedAt ? { activeStartedAt: s.activeStartedAt } : {}),
+    ...(s.activeBatchIds?.length ? { activeBatchIds: s.activeBatchIds } : {}),
+    nextRunAt: s.nextRunAt,
+    ...(s.lastStartedAt ? { lastStartedAt: s.lastStartedAt } : {}),
+    ...(s.lastFinishedAt ? { lastFinishedAt: s.lastFinishedAt } : {}),
+    ...(s.lastStatus ? { lastStatus: s.lastStatus } : {}),
+    ...(s.lastSummary ? { lastSummary: s.lastSummary } : {}),
+    ...(s.lastUpdatedFiles?.length ? { lastUpdatedFiles: s.lastUpdatedFiles } : {}),
+    ...(s.lastError ? { lastError: s.lastError } : {}),
+    consecutiveFailures: s.consecutiveFailures ?? 0,
+    payloadSummary: summarizeSchedulePayload(s),
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  }));
+}
+
+function buildWorkspaceScheduleRunsForUi(
+  host: DropTenantHost,
+  workspaceKey?: string,
+  limit = 20,
+): WorkspaceScheduleRunSummaryItem[] {
+  return listWorkspaceScheduleRuns(host, { workspace: workspaceKey, limit }).map((r) => ({
+    runId: r.runId,
+    scheduleId: r.scheduleId,
+    workspaceKey: r.workspaceKey,
+    title: r.title,
+    executorKind: r.executorKind,
+    trigger: r.trigger,
+    startedAt: r.startedAt,
+    finishedAt: r.finishedAt,
+    durationMs: r.durationMs,
+    status: r.status,
+    summary: r.summary,
+    ...(r.batchIds?.length ? { batchIds: r.batchIds } : {}),
+    ...(r.updatedFiles?.length ? { updatedFiles: r.updatedFiles } : {}),
+    ...(r.error ? { error: r.error } : {}),
+  }));
+}
+
 /**
  * 获取指定子工作区（或传 `""` / `"__all__"` 获取小驳全局跨工作区）的知识库状态、HTML 看板列表、同事通行证列表及待批提案（供 Web / iOS 前端展示）
  */
@@ -257,6 +339,8 @@ export function getKbWorkspaceStatusForUi(
   if (!raw || raw === "__all__") {
     const allTokens = listDropTokens(host, { includeRevoked: false });
     const wecomWatchItems = buildWorkspaceWecomWatchItemsForUi(host);
+    const workspaceSchedules = buildWorkspaceSchedulesForUi(host);
+    const workspaceScheduleRuns = buildWorkspaceScheduleRunsForUi(host);
     return {
       ok: true,
       data: {
@@ -270,6 +354,8 @@ export function getKbWorkspaceStatusForUi(
         kbWorkspaces,
         proposals,
         wecomWatchItems,
+        workspaceSchedules,
+        workspaceScheduleRuns,
         ...(ownerWx ? { ownerWx } : {}),
         dropPortalPath,
       },
@@ -315,6 +401,8 @@ export function getKbWorkspaceStatusForUi(
   }
 
   if (!kbLoaded.ok) {
+    const workspaceSchedules = buildWorkspaceSchedulesForUi(host, wsRef.key);
+    const workspaceScheduleRuns = buildWorkspaceScheduleRunsForUi(host, wsRef.key);
     return {
       ok: true,
       data: {
@@ -327,6 +415,8 @@ export function getKbWorkspaceStatusForUi(
         tokens: [],
         kbWorkspaces,
         proposals,
+        workspaceSchedules,
+        workspaceScheduleRuns,
         dropPortalPath,
       },
     };
@@ -346,6 +436,8 @@ export function getKbWorkspaceStatusForUi(
   );
   const wecomWatchItems = buildWorkspaceWecomWatchItemsForUi(host, wsRef.key);
   const ingestLogs = buildWorkspaceIngestLogsForUi(host, wsRef.workspaceId, kbLoaded.workspaceRealPath);
+  const workspaceSchedules = buildWorkspaceSchedulesForUi(host, wsRef.key);
+  const workspaceScheduleRuns = buildWorkspaceScheduleRunsForUi(host, wsRef.key);
 
   return {
     ok: true,
@@ -363,6 +455,8 @@ export function getKbWorkspaceStatusForUi(
       proposals,
       wecomWatchItems,
       ingestLogs,
+      workspaceSchedules,
+      workspaceScheduleRuns,
       ...(ownerWx ? { ownerWx } : {}),
       dropPortalPath,
     },

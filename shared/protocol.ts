@@ -669,6 +669,64 @@ export type KbWecomWatchActionResult = {
   message: string;
 };
 
+export type WorkspaceScheduleExecutorKind =
+  | "wecom_watch_sync"
+  | "wecom_mail_poll"
+  | "http_api_ingest"
+  | "workspace_script"
+  | "agent_prompt";
+
+export type WorkspaceScheduleSummaryItem = {
+  id: string;
+  workspaceId: string;
+  workspaceKey: string;
+  title: string;
+  enabled: boolean;
+  executorKind: WorkspaceScheduleExecutorKind;
+  scheduleMode: "interval" | "daily_times";
+  intervalMinutes: number;
+  dailyTimes?: string[];
+  activeHours?: { start: string; end: string };
+  tz: string;
+  state: "idle" | "running_step1" | "running_step2";
+  activeRunId?: string;
+  activeStartedAt?: number;
+  activeBatchIds?: string[];
+  nextRunAt: number | null;
+  lastStartedAt?: number;
+  lastFinishedAt?: number;
+  lastStatus?: "succeeded" | "no_change" | "partial" | "failed";
+  lastSummary?: string;
+  lastUpdatedFiles?: string[];
+  lastError?: string;
+  consecutiveFailures: number;
+  payloadSummary: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type WorkspaceScheduleRunSummaryItem = {
+  runId: string;
+  scheduleId: string;
+  workspaceKey: string;
+  title: string;
+  executorKind: WorkspaceScheduleExecutorKind;
+  trigger: "scheduled" | "manual";
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  status: "succeeded" | "no_change" | "partial" | "failed";
+  summary: string;
+  batchIds?: string[];
+  updatedFiles?: string[];
+  error?: string;
+};
+
+export type WorkspaceScheduleActionResult = {
+  action: "upsert" | "toggle" | "run_now" | "remove";
+  message: string;
+};
+
 export type KbWorkspaceStatusData = {
   workspaceKey: string;
   workspaceId: string;
@@ -690,6 +748,12 @@ export type KbWorkspaceStatusData = {
   ingestLogs?: KbWorkspaceIngestLogItem[];
   /** 当触发 wecomWatchAction 时返回的即时执行结果摘要 */
   wecomWatchResult?: KbWecomWatchActionResult;
+  /** 当前工作区（或跨工作区）已配置的通用工程级定时任务列表 */
+  workspaceSchedules?: WorkspaceScheduleSummaryItem[];
+  /** 当前工作区的通用定时任务历史运行记录（按时间倒序） */
+  workspaceScheduleRuns?: WorkspaceScheduleRunSummaryItem[];
+  /** 当触发 workspaceScheduleAction 时返回的即时结果 */
+  workspaceScheduleResult?: WorkspaceScheduleActionResult;
   /** 主人自己绑定的个人微信通知通道（用于接收同事提案审批通知） */
   ownerWx?: {
     botId: string;
@@ -774,6 +838,35 @@ export type AssistantOpArgsMap = {
       fileId?: string;
       sheet?: string;
       range?: string;
+      note?: string;
+    };
+    workspaceScheduleAction?: {
+      kind: "upsert" | "toggle" | "run_now" | "remove";
+      targetWorkspace?: string;
+      id?: string;
+      idOrTitle?: string;
+      title?: string;
+      enabled?: boolean;
+      executorKind?: WorkspaceScheduleExecutorKind;
+      scheduleMode?: "interval" | "daily_times";
+      intervalMinutes?: number;
+      dailyTimes?: string[];
+      activeHours?: { start: string; end: string } | null;
+      tz?: string;
+      watchItemIds?: "all" | string[];
+      quietPeriodMinutes?: number;
+      mailKeyword?: string;
+      onlyWithAttachments?: boolean;
+      mailLimit?: number;
+      url?: string;
+      targetFileName?: string;
+      runner?: "python3" | "node" | "bash";
+      scriptRelPath?: string;
+      args?: string[];
+      outputRelPath?: string;
+      ingestToKb?: boolean;
+      timeoutSeconds?: number;
+      prompt?: string;
       note?: string;
     };
   };

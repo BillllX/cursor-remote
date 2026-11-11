@@ -1241,6 +1241,41 @@ struct KbWorkspaceIngestLog: Identifiable, Hashable {
     }
 }
 
+struct KbWorkspaceScheduleItem: Identifiable, Hashable {
+    var id: String
+    var workspaceKey: String
+    var title: String
+    var enabled: Bool
+    var executorKind: String
+    var scheduleMode: String
+    var intervalMinutes: Int
+    var state: String
+    var nextRunAt: Double?
+    var lastFinishedAt: Double?
+    var lastStatus: String?
+    var lastSummary: String?
+    var payloadSummary: String
+
+    static func parse(_ item: JSONValue) -> KbWorkspaceScheduleItem? {
+        guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
+        return KbWorkspaceScheduleItem(
+            id: id,
+            workspaceKey: row["workspaceKey"]?.string ?? "",
+            title: row["title"]?.string?.nilIfEmpty ?? id,
+            enabled: row["enabled"]?.bool ?? true,
+            executorKind: row["executorKind"]?.string ?? "wecom_watch_sync",
+            scheduleMode: row["scheduleMode"]?.string ?? "interval",
+            intervalMinutes: Int(row["intervalMinutes"]?.number ?? 60),
+            state: row["state"]?.string ?? "idle",
+            nextRunAt: row["nextRunAt"]?.number,
+            lastFinishedAt: row["lastFinishedAt"]?.number,
+            lastStatus: row["lastStatus"]?.string?.nilIfEmpty,
+            lastSummary: row["lastSummary"]?.string?.nilIfEmpty,
+            payloadSummary: row["payloadSummary"]?.string ?? ""
+        )
+    }
+}
+
 struct KbWorkspaceStatus: Hashable {
     var workspaceKey: String
     var isKnowledgeBase: Bool
@@ -1253,7 +1288,9 @@ struct KbWorkspaceStatus: Hashable {
     var proposals: [KbColleagueProposal]
     var wecomWatchItems: [KbWecomWatchedItem]
     var ingestLogs: [KbWorkspaceIngestLog]
+    var workspaceSchedules: [KbWorkspaceScheduleItem]
     var wecomWatchMessage: String?
+    var workspaceScheduleMessage: String?
     var dropPortalPath: String
 
     static func parse(_ value: JSONValue?) -> KbWorkspaceStatus? {
@@ -1295,7 +1332,9 @@ struct KbWorkspaceStatus: Hashable {
         } ?? []
         let wecomWatchItems = object["wecomWatchItems"]?.array?.compactMap(KbWecomWatchedItem.parse) ?? []
         let ingestLogs = object["ingestLogs"]?.array?.compactMap(KbWorkspaceIngestLog.parse) ?? []
+        let workspaceSchedules = object["workspaceSchedules"]?.array?.compactMap(KbWorkspaceScheduleItem.parse) ?? []
         let wecomWatchMessage = object["wecomWatchResult"]?.object?["message"]?.string?.nilIfEmpty
+        let workspaceScheduleMessage = object["workspaceScheduleResult"]?.object?["message"]?.string?.nilIfEmpty
         return KbWorkspaceStatus(
             workspaceKey: object["workspaceKey"]?.string ?? "",
             isKnowledgeBase: object["isKnowledgeBase"]?.bool ?? false,
@@ -1308,7 +1347,9 @@ struct KbWorkspaceStatus: Hashable {
             proposals: proposals,
             wecomWatchItems: wecomWatchItems,
             ingestLogs: ingestLogs,
+            workspaceSchedules: workspaceSchedules,
             wecomWatchMessage: wecomWatchMessage,
+            workspaceScheduleMessage: workspaceScheduleMessage,
             dropPortalPath: object["dropPortalPath"]?.string ?? ""
         )
     }
@@ -1864,7 +1905,8 @@ struct KbWorkspaceSheet: View {
         return GatewayConfig.pageURL(path: path)
     }
     private var hasActiveIngestJob: Bool {
-        status?.ingestLogs.contains(where: { $0.status == "queued" || $0.status == "processing" }) == true
+        status?.ingestLogs.contains(where: { $0.status == "queued" || $0.status == "processing" }) == true ||
+            status?.workspaceSchedules.contains(where: { $0.state != "idle" }) == true
     }
 
     var body: some View {
@@ -1881,6 +1923,8 @@ struct KbWorkspaceSheet: View {
                     configSection
                         .listRowBackground(JieboColor.white)
                     boardSection
+                        .listRowBackground(JieboColor.white)
+                    workspaceScheduleSection
                         .listRowBackground(JieboColor.white)
                     if status?.isKnowledgeBase == true {
                         wecomWatchSection
@@ -1913,7 +1957,7 @@ struct KbWorkspaceSheet: View {
                 try? await Task.sleep(for: .seconds(4))
                 guard !Task.isCancelled, !blocked else { break }
                 let reply = await store.assistantOpData("kb_workspace_status", args: ["workspace": .string(workspaceKey)])
-                apply(reply)
+                apply(reply, silent: true)
             }
         }
         .confirmationDialog(
@@ -1989,6 +2033,69 @@ struct KbWorkspaceSheet: View {
             }
         } header: {
             JieboListHeader("看板")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    @ViewBuilder
+    private var workspaceScheduleSection: some View {
+        Section {
+            if let schedules = status?.workspaceSchedules, !schedules.isEmpty {
+                ForEach(schedules) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(item.title)
+                                .font(JieboFont.text(.body, weight: .medium))
+                                .foregroundStyle(JieboColor.ink)
+                            Spacer()
+                            Text(scheduleStateLabel(item))
+                                .font(JieboFont.text(.caption2, weight: .medium))
+                                .foregroundStyle(
+                                    (item.state != "idle" || item.lastStatus == "failed")
+                                        ? JieboColor.danger
+                                        : JieboColor.pine
+                                )
+                        }
+                        Text("\(item.payloadSummary) · 上次：\(shortTimeText(item.lastFinishedAt ?? 0))")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.ink2)
+                        if let summary = item.lastSummary, !summary.isEmpty {
+                            Text(summary)
+                                .font(JieboFont.text(.footnote))
+                                .foregroundStyle(item.lastStatus == "failed" ? JieboColor.danger : JieboColor.ink)
+                                .lineLimit(3)
+                        }
+                        HStack(spacing: 14) {
+                            Button(item.state == "idle" ? "立即执行" : "运行锁定中") {
+                                Task { await runWorkspaceScheduleAction(kind: "run_now", idOrTitle: item.id) }
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(JieboColor.pine)
+                            .disabled(busy || item.state != "idle")
+                            Button(item.enabled ? "暂停" : "启用") {
+                                Task { await runWorkspaceScheduleAction(kind: "toggle", idOrTitle: item.id, enabled: !item.enabled) }
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(JieboColor.pine)
+                            .disabled(busy)
+                            Button("删除") {
+                                Task { await runWorkspaceScheduleAction(kind: "remove", idOrTitle: item.id) }
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(JieboColor.danger)
+                            .disabled(busy || item.state != "idle")
+                        }
+                        .font(JieboFont.text(.footnote, weight: .medium))
+                    }
+                    .padding(.vertical, 2)
+                }
+            } else {
+                Text("还没有配置定时任务。可对小驳说「每小时自动检查同步企微关注文件」直接创建。")
+                    .font(JieboFont.text(.subheadline))
+                    .foregroundStyle(JieboColor.ink2)
+            }
+        } header: {
+            JieboListHeader("通用定时任务")
         }
         .listRowBackground(JieboColor.white)
     }
@@ -2308,6 +2415,32 @@ struct KbWorkspaceSheet: View {
         }
     }
 
+    private func runWorkspaceScheduleAction(kind: String, idOrTitle: String, enabled: Bool? = nil) async {
+        busy = true
+        errorText = ""
+        var actionObj: [String: JSONValue] = [
+            "kind": .string(kind),
+            "idOrTitle": .string(idOrTitle),
+        ]
+        if let enabled { actionObj["enabled"] = .bool(enabled) }
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(workspaceKey),
+            "workspaceScheduleAction": .object(actionObj),
+        ])
+        busy = false
+        if apply(reply), reply.ok {
+            store.flash(status?.workspaceScheduleMessage ?? "已更新定时任务")
+        }
+    }
+
+    private func scheduleStateLabel(_ item: KbWorkspaceScheduleItem) -> String {
+        if item.state == "running_step1" { return "正在执行" }
+        if item.state == "running_step2" { return "归档更新中" }
+        if !item.enabled { return "已暂停" }
+        if item.lastStatus == "failed" { return "上次异常" }
+        return "待命运行中"
+    }
+
     private func watchStatusLabel(_ item: KbWecomWatchedItem) -> String {
         if item.lastCheckError != nil { return "检查异常" }
         if item.lastSyncedSha256 == nil { return "待首次入库" }
@@ -2348,16 +2481,16 @@ struct KbWorkspaceSheet: View {
     }
 
     @discardableResult
-    private func apply(_ reply: (ok: Bool, error: String?, data: JSONValue?)) -> Bool {
+    private func apply(_ reply: (ok: Bool, error: String?, data: JSONValue?), silent: Bool = false) -> Bool {
         if let parsed = KbWorkspaceStatus.parse(reply.data) {
             status = parsed
-            if !editing || reply.ok {
+            if !editing {
                 titleDraft = parsed.title
                 categoriesDraft = parsed.allowedCategories.joined(separator: "、")
             }
-            if reply.ok { editing = false }
+            if !silent && reply.ok { editing = false }
         }
-        if !reply.ok {
+        if !silent && !reply.ok {
             errorText = reply.error?.nilIfEmpty ?? "没有完成"
         }
         return reply.ok

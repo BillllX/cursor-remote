@@ -152,6 +152,35 @@ export type ToolHost = {
     mailId?: string;
     note?: string;
   }) => Promise<unknown> | unknown;
+  workspaceScheduleManage?: (args: {
+    action: "list" | "upsert" | "toggle" | "run_now" | "remove" | "runs";
+    workspace?: string;
+    id?: string;
+    idOrTitle?: string;
+    title?: string;
+    enabled?: boolean;
+    executorKind?: "wecom_watch_sync" | "wecom_mail_poll" | "http_api_ingest" | "workspace_script" | "agent_prompt";
+    scheduleMode?: "interval" | "daily_times";
+    intervalMinutes?: number;
+    dailyTimes?: string[];
+    activeHours?: { start: string; end: string } | null;
+    tz?: string;
+    watchItemIds?: "all" | string[];
+    quietPeriodMinutes?: number;
+    mailKeyword?: string;
+    onlyWithAttachments?: boolean;
+    mailLimit?: number;
+    url?: string;
+    targetFileName?: string;
+    runner?: "python3" | "node" | "bash";
+    scriptRelPath?: string;
+    args?: string[];
+    outputRelPath?: string;
+    ingestToKb?: boolean;
+    timeoutSeconds?: number;
+    prompt?: string;
+    note?: string;
+  }) => Promise<unknown> | unknown;
   /** Skill 工厂与智能技能调度工具集（可选挂载，保持既有单元测试对基础 host 的精确键断言） */
   skillList?: (args: { scope?: "platform" | "workspace" | "repo"; query?: string }) => unknown;
   skillUse?: (args: { id: string }) => unknown;
@@ -195,6 +224,7 @@ export type WorkspaceToolHost = {
   wecomWatchManage?: ToolHost["wecomWatchManage"];
   wecomWatchCheck?: ToolHost["wecomWatchCheck"];
   wecomWatchSync?: ToolHost["wecomWatchSync"];
+  workspaceScheduleManage?: ToolHost["workspaceScheduleManage"];
   skillList?: ToolHost["skillList"];
   skillUse?: ToolHost["skillUse"];
   skillMarkUsed?: ToolHost["skillMarkUsed"];
@@ -1224,6 +1254,112 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     }
   }
 
+  if (role === "chat" && host.workspaceScheduleManage) {
+    out.workspace_schedule_manage = tool(
+      "管理工作区的通用工程级定时任务（支持 5 类执行器：wecom_watch_sync=企微关注文件巡检同步，wecom_mail_poll=企微邮箱增量拉取，http_api_ingest=受控接口/网页抓取，workspace_script=工作区受控脚本，agent_prompt=AI 定时分析；内置两阶段单飞互斥锁，任务跑完且归档更新完成后才解锁并更新状态）。",
+      {
+        action: {
+          type: "string",
+          enum: ["list", "upsert", "toggle", "run_now", "remove", "runs"],
+          description: "list=查看定时任务，upsert=新建或修改，toggle=启停，run_now=立即触发一次，remove=删除，runs=查看运行历史",
+        },
+        workspace: S("目标工作区名称（upsert 必填，list/runs 可选），如 Fintopia集团"),
+        id: S("可选，修改指定任务时传入任务 ID（如 wsched_xxx）"),
+        idOrTitle: S("toggle / run_now / remove 时传入任务 ID 或标题"),
+        title: S("upsert 必填：定时任务名称，如 企微关注表每小时同步"),
+        enabled: { type: "boolean", description: "是否启用" },
+        executorKind: {
+          type: "string",
+          enum: ["wecom_watch_sync", "wecom_mail_poll", "http_api_ingest", "workspace_script", "agent_prompt"],
+          description: "upsert 必填：任务执行器类型",
+        },
+        scheduleMode: {
+          type: "string",
+          enum: ["interval", "daily_times"],
+          description: "调度模式：interval=按固定间隔分钟数（跑完后算下次），daily_times=每日固定时刻列表",
+        },
+        intervalMinutes: { type: "number", description: "interval 模式的间隔分钟数（5~10080，默认 60）" },
+        dailyTimes: {
+          type: "array",
+          items: { type: "string" },
+          description: "daily_times 模式的时刻列表，如 [\"08:45\", \"18:30\"]",
+        },
+        activeHours: {
+          type: "object",
+          properties: { start: S("开始时刻 HH:MM"), end: S("结束时刻 HH:MM") },
+          description: "可选，允许运行的时间窗（如 { start: \"08:00\", end: \"22:00\" }）",
+        },
+        tz: S("可选，IANA 时区（默认 Asia/Shanghai）"),
+        watchItemIds: {
+          type: "array",
+          items: { type: "string" },
+          description: "可选，wecom_watch_sync 指定关注项 ID 列表（不传默认检查全部）",
+        },
+        quietPeriodMinutes: { type: "number", description: "wecom_watch_sync 静默防抖分钟数（默认 3）" },
+        mailKeyword: S("wecom_mail_poll 可选邮件过滤关键词"),
+        onlyWithAttachments: { type: "boolean", description: "wecom_mail_poll 是否只拉带附件邮件" },
+        mailLimit: { type: "number", description: "wecom_mail_poll 单次最大拉取邮件数（默认 5）" },
+        url: S("http_api_ingest 必填：公开 http/https URL"),
+        targetFileName: S("http_api_ingest 可选保存文件名"),
+        runner: { type: "string", enum: ["python3", "node", "bash"], description: "workspace_script 解释器" },
+        scriptRelPath: S("workspace_script 必填：工作区内脚本相对路径"),
+        args: { type: "array", items: { type: "string" }, description: "workspace_script 可选脚本参数数组" },
+        outputRelPath: S("workspace_script 可选产出文件相对路径"),
+        ingestToKb: { type: "boolean", description: "是否将产物投入知识库归档队列刷新看板（默认 true）" },
+        timeoutSeconds: { type: "number", description: "脚本或 AI 任务超时秒数（默认 60）" },
+        prompt: S("agent_prompt 必填：定时执行的 AI 分析指令"),
+        note: S("可选，归档备注"),
+      },
+      ["action"],
+      (args) =>
+        host.workspaceScheduleManage!({
+          action: str(args.action) as "list" | "upsert" | "toggle" | "run_now" | "remove" | "runs",
+          workspace: str(args.workspace).trim() || undefined,
+          id: str(args.id).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+          title: str(args.title).trim() || undefined,
+          enabled: typeof args.enabled === "boolean" ? args.enabled : undefined,
+          executorKind: (str(args.executorKind).trim() || undefined) as
+            | "wecom_watch_sync"
+            | "wecom_mail_poll"
+            | "http_api_ingest"
+            | "workspace_script"
+            | "agent_prompt"
+            | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | undefined,
+          intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
+          dailyTimes: Array.isArray(args.dailyTimes)
+            ? args.dailyTimes.filter((x): x is string => typeof x === "string")
+            : undefined,
+          activeHours:
+            args.activeHours && typeof args.activeHours === "object" && !Array.isArray(args.activeHours)
+              ? {
+                  start: str((args.activeHours as Record<string, SDKJsonValue>).start),
+                  end: str((args.activeHours as Record<string, SDKJsonValue>).end),
+                }
+              : undefined,
+          tz: str(args.tz).trim() || undefined,
+          watchItemIds: Array.isArray(args.watchItemIds)
+            ? args.watchItemIds.filter((x): x is string => typeof x === "string")
+            : undefined,
+          quietPeriodMinutes: typeof args.quietPeriodMinutes === "number" ? args.quietPeriodMinutes : undefined,
+          mailKeyword: str(args.mailKeyword).trim() || undefined,
+          onlyWithAttachments: typeof args.onlyWithAttachments === "boolean" ? args.onlyWithAttachments : undefined,
+          mailLimit: typeof args.mailLimit === "number" ? args.mailLimit : undefined,
+          url: str(args.url).trim() || undefined,
+          targetFileName: str(args.targetFileName).trim() || undefined,
+          runner: (str(args.runner).trim() || undefined) as "python3" | "node" | "bash" | undefined,
+          scriptRelPath: str(args.scriptRelPath).trim() || undefined,
+          args: Array.isArray(args.args) ? args.args.filter((x): x is string => typeof x === "string") : undefined,
+          outputRelPath: str(args.outputRelPath).trim() || undefined,
+          ingestToKb: typeof args.ingestToKb === "boolean" ? args.ingestToKb : undefined,
+          timeoutSeconds: typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined,
+          prompt: str(args.prompt).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+        }),
+    );
+  }
+
   mountSkillTools(out, host);
 
   return out;
@@ -1554,6 +1690,97 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
     );
   }
 
+  if (host.workspaceScheduleManage) {
+    tools.workspace_schedule_manage = tool(
+      "管理本工作区的通用工程级定时任务（list / upsert / toggle / run_now / remove / runs；支持企微关注表同步、企微邮件拉取、HTTP接口抓取、本地受控脚本、AI定时分析）。",
+      {
+        action: {
+          type: "string",
+          enum: ["list", "upsert", "toggle", "run_now", "remove", "runs"],
+          description: "list / upsert / toggle / run_now / remove / runs",
+        },
+        id: S("可选，任务 ID"),
+        idOrTitle: S("toggle / run_now / remove 时传入任务 ID 或标题"),
+        title: S("upsert 必填：任务名称"),
+        enabled: { type: "boolean", description: "是否启用" },
+        executorKind: {
+          type: "string",
+          enum: ["wecom_watch_sync", "wecom_mail_poll", "http_api_ingest", "workspace_script", "agent_prompt"],
+        },
+        scheduleMode: { type: "string", enum: ["interval", "daily_times"] },
+        intervalMinutes: { type: "number", description: "间隔分钟数（默认 60）" },
+        dailyTimes: { type: "array", items: { type: "string" }, description: "每日固定时刻列表，如 [\"08:45\", \"18:30\"]" },
+        activeHours: {
+          type: "object",
+          properties: { start: S("开始时刻 HH:MM"), end: S("结束时刻 HH:MM") },
+          description: "可选，允许运行的时间窗",
+        },
+        tz: S("可选，IANA 时区"),
+        watchItemIds: { type: "array", items: { type: "string" }, description: "可选，指定企微关注项 ID 列表" },
+        quietPeriodMinutes: { type: "number", description: "企微静默防抖分钟数（默认 3）" },
+        mailKeyword: S("企微邮件搜索关键词"),
+        onlyWithAttachments: { type: "boolean" },
+        mailLimit: { type: "number" },
+        url: S("http_api_ingest 公开 URL"),
+        targetFileName: S("保存文件名"),
+        runner: { type: "string", enum: ["python3", "node", "bash"] },
+        scriptRelPath: S("工作区内脚本相对路径"),
+        args: { type: "array", items: { type: "string" } },
+        outputRelPath: S("脚本产出文件相对路径"),
+        ingestToKb: { type: "boolean" },
+        timeoutSeconds: { type: "number" },
+        prompt: S("agent_prompt AI 分析指令"),
+        note: S("归档备注"),
+      },
+      ["action"],
+      (args) =>
+        host.workspaceScheduleManage!({
+          action: str(args.action) as "list" | "upsert" | "toggle" | "run_now" | "remove" | "runs",
+          id: str(args.id).trim() || undefined,
+          idOrTitle: str(args.idOrTitle).trim() || undefined,
+          title: str(args.title).trim() || undefined,
+          enabled: typeof args.enabled === "boolean" ? args.enabled : undefined,
+          executorKind: (str(args.executorKind).trim() || undefined) as
+            | "wecom_watch_sync"
+            | "wecom_mail_poll"
+            | "http_api_ingest"
+            | "workspace_script"
+            | "agent_prompt"
+            | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | undefined,
+          intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
+          dailyTimes: Array.isArray(args.dailyTimes)
+            ? args.dailyTimes.filter((x): x is string => typeof x === "string")
+            : undefined,
+          activeHours:
+            args.activeHours && typeof args.activeHours === "object" && !Array.isArray(args.activeHours)
+              ? {
+                  start: str((args.activeHours as Record<string, SDKJsonValue>).start),
+                  end: str((args.activeHours as Record<string, SDKJsonValue>).end),
+                }
+              : undefined,
+          tz: str(args.tz).trim() || undefined,
+          watchItemIds: Array.isArray(args.watchItemIds)
+            ? args.watchItemIds.filter((x): x is string => typeof x === "string")
+            : undefined,
+          quietPeriodMinutes: typeof args.quietPeriodMinutes === "number" ? args.quietPeriodMinutes : undefined,
+          mailKeyword: str(args.mailKeyword).trim() || undefined,
+          onlyWithAttachments: typeof args.onlyWithAttachments === "boolean" ? args.onlyWithAttachments : undefined,
+          mailLimit: typeof args.mailLimit === "number" ? args.mailLimit : undefined,
+          url: str(args.url).trim() || undefined,
+          targetFileName: str(args.targetFileName).trim() || undefined,
+          runner: (str(args.runner).trim() || undefined) as "python3" | "node" | "bash" | undefined,
+          scriptRelPath: str(args.scriptRelPath).trim() || undefined,
+          args: Array.isArray(args.args) ? args.args.filter((x): x is string => typeof x === "string") : undefined,
+          outputRelPath: str(args.outputRelPath).trim() || undefined,
+          ingestToKb: typeof args.ingestToKb === "boolean" ? args.ingestToKb : undefined,
+          timeoutSeconds: typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined,
+          prompt: str(args.prompt).trim() || undefined,
+          note: str(args.note).trim() || undefined,
+        }),
+    );
+  }
+
   mountSkillTools(tools, host);
 
   return tools;
@@ -1572,6 +1799,7 @@ const WRITE_CATEGORY_ASSISTANT_TOOLS = new Set([
   "kb_ingest_submit",
   "wecom_watch_manage",
   "wecom_watch_sync",
+  "workspace_schedule_manage",
   "gateway_calendar_event_add",
   "gateway_calendar_event_update",
   "colleague_proposal_decide",

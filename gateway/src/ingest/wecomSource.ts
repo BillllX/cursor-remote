@@ -1046,6 +1046,19 @@ function recordSyncFailureOnLedgerItem(
   });
 }
 
+export function parseWecomRemoteUpdateTimeMs(raw?: string): number | null {
+  if (!raw || typeof raw !== "string") return null;
+  const s = raw.trim();
+  if (!s) return null;
+  if (/^\d{10}$/.test(s)) return Number(s) * 1000;
+  if (/^\d{13}$/.test(s)) return Number(s);
+  const normalized = /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(s)
+    ? `${s.replace(/\s+/, "T")}${s.split(":").length === 2 ? ":00" : ""}+08:00`
+    : s;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 /**
  * 只读检查关注的企业微信文件是否有变动（不触发归档写入，除非显式传 syncIfChanged=true）
  * 当同一工作区在单次同步中有多个关注项需要入库时，按工作区分组并将文件合并提交（每批最多 10 个文件）。
@@ -1055,6 +1068,8 @@ export async function checkAndOptionallySyncWecomItems(
   input: {
     workspace?: string;
     idOrTitle?: string;
+    itemIds?: string[];
+    quietPeriodMinutes?: number;
     syncIfChanged?: boolean;
     forceSync?: boolean;
   },
@@ -1063,11 +1078,13 @@ export async function checkAndOptionallySyncWecomItems(
   checkedCount: number;
   changedCount: number;
   syncedCount: number;
+  deferredCount?: number;
   results: Array<
     WecomChangeCheckItemResult & {
       synced?: boolean;
       batchId?: string;
       syncError?: string;
+      deferredByQuietPeriod?: boolean;
     }
   >;
   error?: string;
@@ -1077,6 +1094,12 @@ export async function checkAndOptionallySyncWecomItems(
     return { ok: false, checkedCount: 0, changedCount: 0, syncedCount: 0, results: [], error: listed.error };
 
   let targets = listed.items;
+  if (Array.isArray(input.itemIds) && input.itemIds.length > 0) {
+    const allowedSet = new Set(input.itemIds.map((x) => x.trim()).filter(Boolean));
+    if (allowedSet.size > 0) {
+      targets = targets.filter((x) => allowedSet.has(x.id) || allowedSet.has(x.title));
+    }
+  }
   if (input.idOrTitle?.trim()) {
     const q = input.idOrTitle.trim();
     const exact = targets.filter((x) => x.id === q || x.title === q || x.docId === q || x.fileId === q);
@@ -1112,10 +1135,16 @@ export async function checkAndOptionallySyncWecomItems(
       synced?: boolean;
       batchId?: string;
       syncError?: string;
+      deferredByQuietPeriod?: boolean;
     }
   > = [];
   let changedCount = 0;
   let syncedCount = 0;
+  let deferredCount = 0;
+  const quietPeriodMs =
+    typeof input.quietPeriodMinutes === "number" && Number.isFinite(input.quietPeriodMinutes) && input.quietPeriodMinutes > 0
+      ? Math.floor(input.quietPeriodMinutes * 60_000)
+      : 0;
   const pendingSyncByWorkspace = new Map<string, PendingWecomSyncEntry[]>();
   const lockedItemIds: string[] = [];
 
@@ -1164,6 +1193,7 @@ export async function checkAndOptionallySyncWecomItems(
         synced?: boolean;
         batchId?: string;
         syncError?: string;
+        deferredByQuietPeriod?: boolean;
       } = {
         id: item.id,
         workspaceKey: item.workspaceKeySnapshot,
@@ -1182,7 +1212,21 @@ export async function checkAndOptionallySyncWecomItems(
       };
       results.push(rowResult);
 
-      const shouldSync = Boolean(input.forceSync || (input.syncIfChanged && hasChanged));
+      const remoteUpdateMs = parseWecomRemoteUpdateTimeMs(snap.remoteUpdateTime);
+      const isQuietDeferred =
+        Boolean(input.syncIfChanged && !input.forceSync && hasChanged && quietPeriodMs > 0) &&
+        remoteUpdateMs !== null &&
+        now >= remoteUpdateMs &&
+        now - remoteUpdateMs < quietPeriodMs;
+
+      if (isQuietDeferred) {
+        rowResult.synced = false;
+        rowResult.deferredByQuietPeriod = true;
+        rowResult.diffHint = `远端刚刚修改（静默防抖等待满 ${input.quietPeriodMinutes} 分钟后再同步）· ${diffHint}`;
+        deferredCount += 1;
+      }
+
+      const shouldSync = Boolean(!isQuietDeferred && (input.forceSync || (input.syncIfChanged && hasChanged)));
       if (!shouldSync) {
         withFileLockSync(lockFilePath(host), () => {
           const ledger = readWatchLedger(host);
@@ -1197,9 +1241,13 @@ export async function checkAndOptionallySyncWecomItems(
               (cur.range || "") === (item.range || "");
             if (coordsStillSame) {
               const latestChanged = !cur.lastSyncedSha256 || cur.lastSyncedSha256 !== snap.sha256;
-              const latestDiffHint = latestChanged
+              const baseDiffHint = latestChanged
                 ? summarizeTextDiff(cur.lastSnapshotPreview, snap.previewText)
                 : "内容哈希与上次同步完全一致，无变动";
+              const latestDiffHint =
+                isQuietDeferred && latestChanged
+                  ? `远端刚刚修改（静默防抖等待满 ${input.quietPeriodMinutes} 分钟后再同步）· ${baseDiffHint}`
+                  : baseDiffHint;
               ledger.items[idx] = {
                 ...cur,
                 lastCheckedAt: now,
@@ -1380,6 +1428,7 @@ export async function checkAndOptionallySyncWecomItems(
     checkedCount: targets.length,
     changedCount,
     syncedCount,
+    ...(deferredCount > 0 ? { deferredCount } : {}),
     results,
   };
 }

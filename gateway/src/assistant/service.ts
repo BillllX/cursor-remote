@@ -97,6 +97,15 @@ import {
   removeWecomWatchItem,
   searchWecomResources,
 } from "../ingest/wecomSource.ts";
+import {
+  listWorkspaceScheduleRuns,
+  listWorkspaceSchedules,
+  removeWorkspaceSchedule,
+  toggleWorkspaceSchedule,
+  triggerWorkspaceScheduleNow,
+  upsertWorkspaceSchedule,
+  type WorkspaceScheduleExecutorKind,
+} from "../ingest/workspaceSchedules.ts";
 import { migrateMemory } from "./migrate.ts";
 import {
   answerCard,
@@ -498,6 +507,69 @@ function toolHost(
             return { ok: false, error: `未知的 action: ${String(args.action)}` };
           }
         : undefined,
+    workspaceScheduleManage:
+      role === "chat" && dropHost && !opts?.readonly
+        ? async (args) => {
+            if (args.action === "list") {
+              return { ok: true, items: listWorkspaceSchedules(dropHost, { workspace: args.workspace }) };
+            }
+            if (args.action === "runs") {
+              return { ok: true, runs: listWorkspaceScheduleRuns(dropHost, { workspace: args.workspace }) };
+            }
+            if (args.action === "remove") {
+              return removeWorkspaceSchedule(dropHost, args.idOrTitle || args.id || args.title || "", args.workspace);
+            }
+            if (args.action === "toggle") {
+              return toggleWorkspaceSchedule(
+                dropHost,
+                args.idOrTitle || args.id || args.title || "",
+                args.enabled ?? true,
+                args.workspace,
+              );
+            }
+            if (args.action === "run_now") {
+              return await triggerWorkspaceScheduleNow(dropHost, args.idOrTitle || args.id || args.title || "", {
+                trigger: "manual",
+                workspace: args.workspace,
+              });
+            }
+            if (args.action === "upsert") {
+              if (!args.workspace || !args.title || !args.executorKind) {
+                return { ok: false, error: "upsert 操作必须提供 workspace、title 与 executorKind" };
+              }
+              return upsertWorkspaceSchedule(dropHost, {
+                id: args.id,
+                workspace: args.workspace,
+                title: args.title,
+                enabled: args.enabled,
+                executorKind: args.executorKind,
+                scheduleMode: args.scheduleMode,
+                intervalMinutes: args.intervalMinutes,
+                dailyTimes: args.dailyTimes,
+                activeHours: args.activeHours,
+                tz: args.tz,
+                payload: {
+                  watchItemIds: args.watchItemIds,
+                  quietPeriodMinutes: args.quietPeriodMinutes,
+                  mailKeyword: args.mailKeyword,
+                  onlyWithAttachments: args.onlyWithAttachments,
+                  mailLimit: args.mailLimit,
+                  url: args.url,
+                  targetFileName: args.targetFileName,
+                  runner: args.runner,
+                  scriptRelPath: args.scriptRelPath,
+                  args: args.args,
+                  outputRelPath: args.outputRelPath,
+                  ingestToKb: args.ingestToKb,
+                  timeoutSeconds: args.timeoutSeconds,
+                  prompt: args.prompt,
+                  note: args.note,
+                },
+              });
+            }
+            return { ok: false, error: `未知的 action: ${String(args.action)}` };
+          }
+        : undefined,
     deviceInvoke:
       role === "chat" && deps?.deviceInvoke
         ? async (input) => {
@@ -693,6 +765,73 @@ export function workspaceToolsFor(
                 sheet: args.sheet,
                 range: args.range,
                 note: args.note,
+              });
+            }
+            return { ok: false, error: `未知的 action: ${String(args.action)}` };
+          }
+        : undefined,
+    workspaceScheduleManage:
+      writableKb && dropHost && targetWorkspaceKey
+        ? async (args) => {
+            if (args.action === "list") {
+              return { ok: true, items: listWorkspaceSchedules(dropHost, { workspace: targetWorkspaceKey }) };
+            }
+            if (args.action === "runs") {
+              return { ok: true, runs: listWorkspaceScheduleRuns(dropHost, { workspace: targetWorkspaceKey }) };
+            }
+            if (args.action === "remove") {
+              return removeWorkspaceSchedule(
+                dropHost,
+                args.idOrTitle || args.id || args.title || "",
+                targetWorkspaceKey,
+              );
+            }
+            if (args.action === "toggle") {
+              return toggleWorkspaceSchedule(
+                dropHost,
+                args.idOrTitle || args.id || args.title || "",
+                args.enabled ?? true,
+                targetWorkspaceKey,
+              );
+            }
+            if (args.action === "run_now") {
+              return await triggerWorkspaceScheduleNow(dropHost, args.idOrTitle || args.id || args.title || "", {
+                trigger: "manual",
+                workspace: targetWorkspaceKey,
+              });
+            }
+            if (args.action === "upsert") {
+              if (!args.title || !args.executorKind) {
+                return { ok: false, error: "upsert 操作必须提供 title 与 executorKind" };
+              }
+              return upsertWorkspaceSchedule(dropHost, {
+                id: args.id,
+                workspace: targetWorkspaceKey,
+                title: args.title,
+                enabled: args.enabled,
+                executorKind: args.executorKind,
+                scheduleMode: args.scheduleMode,
+                intervalMinutes: args.intervalMinutes,
+                dailyTimes: args.dailyTimes,
+                activeHours: args.activeHours,
+                tz: args.tz,
+                payload: {
+                  watchItemIds: args.watchItemIds,
+                  quietPeriodMinutes: args.quietPeriodMinutes,
+                  mailKeyword: args.mailKeyword,
+                  onlyWithAttachments: args.onlyWithAttachments,
+                  mailLimit: args.mailLimit,
+                  url: args.url,
+                  targetFileName: args.targetFileName,
+                  runner: args.runner,
+                  scriptRelPath: args.scriptRelPath,
+                  args: args.args,
+                  outputRelPath: args.outputRelPath,
+                  ingestToKb: args.ingestToKb,
+                  timeoutSeconds: args.timeoutSeconds,
+                  prompt: args.prompt,
+                  note: args.note,
+                },
               });
             }
             return { ok: false, error: `未知的 action: ${String(args.action)}` };
@@ -1641,6 +1780,155 @@ export async function handleOp(
           };
         }
         return fail("未知的 wecomWatchAction 操作类型");
+      }
+      if (args.workspaceScheduleAction && typeof args.workspaceScheduleAction === "object") {
+        const wsa = args.workspaceScheduleAction as Record<string, unknown>;
+        const kind = typeof wsa.kind === "string" ? wsa.kind : "";
+        const scopedWorkspace = !workspace || workspace === "__all__" ? undefined : workspace;
+        const idOrTitle =
+          typeof wsa.idOrTitle === "string" && wsa.idOrTitle.trim()
+            ? wsa.idOrTitle.trim()
+            : typeof wsa.id === "string"
+              ? wsa.id.trim()
+              : "";
+
+        if (kind === "upsert") {
+          const targetWs =
+            scopedWorkspace ||
+            (typeof wsa.targetWorkspace === "string" ? wsa.targetWorkspace.trim() : "") ||
+            (typeof wsa.workspace === "string" ? wsa.workspace.trim() : "");
+          const title = typeof wsa.title === "string" ? wsa.title.trim() : "";
+          const executorKind = (typeof wsa.executorKind === "string"
+            ? wsa.executorKind
+            : "wecom_watch_sync") as WorkspaceScheduleExecutorKind;
+          const scheduleMode =
+            wsa.scheduleMode === "daily_times"
+              ? "daily_times"
+              : wsa.scheduleMode === "interval"
+                ? "interval"
+                : undefined;
+          const intervalMinutes = typeof wsa.intervalMinutes === "number" ? wsa.intervalMinutes : undefined;
+          const dailyTimes = Array.isArray(wsa.dailyTimes)
+            ? wsa.dailyTimes.filter((x): x is string => typeof x === "string")
+            : undefined;
+          const activeHours =
+            wsa.activeHours === null
+              ? null
+              : wsa.activeHours && typeof wsa.activeHours === "object"
+                ? {
+                    start: String((wsa.activeHours as Record<string, unknown>).start ?? ""),
+                    end: String((wsa.activeHours as Record<string, unknown>).end ?? ""),
+                  }
+                : undefined;
+          const tz = typeof wsa.tz === "string" && wsa.tz.trim() ? wsa.tz.trim() : undefined;
+          const watchItemIds =
+            wsa.watchItemIds === "all"
+              ? "all"
+              : Array.isArray(wsa.watchItemIds)
+                ? wsa.watchItemIds.filter((x): x is string => typeof x === "string")
+                : undefined;
+          const upRes = upsertWorkspaceSchedule(host, {
+            id: typeof wsa.id === "string" ? wsa.id.trim() || undefined : undefined,
+            workspace: targetWs,
+            title,
+            enabled: typeof wsa.enabled === "boolean" ? wsa.enabled : undefined,
+            executorKind,
+            scheduleMode,
+            intervalMinutes,
+            dailyTimes,
+            activeHours,
+            tz,
+            payload: {
+              watchItemIds,
+              quietPeriodMinutes: typeof wsa.quietPeriodMinutes === "number" ? wsa.quietPeriodMinutes : undefined,
+              mailKeyword: typeof wsa.mailKeyword === "string" ? wsa.mailKeyword.trim() || undefined : undefined,
+              onlyWithAttachments: typeof wsa.onlyWithAttachments === "boolean" ? wsa.onlyWithAttachments : undefined,
+              mailLimit: typeof wsa.mailLimit === "number" ? wsa.mailLimit : undefined,
+              url: typeof wsa.url === "string" ? wsa.url.trim() || undefined : undefined,
+              targetFileName:
+                typeof wsa.targetFileName === "string" ? wsa.targetFileName.trim() || undefined : undefined,
+              runner:
+                wsa.runner === "node" || wsa.runner === "bash" || wsa.runner === "python3" ? wsa.runner : undefined,
+              scriptRelPath: typeof wsa.scriptRelPath === "string" ? wsa.scriptRelPath.trim() || undefined : undefined,
+              args: Array.isArray(wsa.args) ? wsa.args.filter((x): x is string => typeof x === "string") : undefined,
+              outputRelPath: typeof wsa.outputRelPath === "string" ? wsa.outputRelPath.trim() || undefined : undefined,
+              ingestToKb: typeof wsa.ingestToKb === "boolean" ? wsa.ingestToKb : undefined,
+              timeoutSeconds: typeof wsa.timeoutSeconds === "number" ? wsa.timeoutSeconds : undefined,
+              prompt: typeof wsa.prompt === "string" ? wsa.prompt.trim() || undefined : undefined,
+              note: typeof wsa.note === "string" ? wsa.note.trim() || undefined : undefined,
+            },
+          });
+          if (!upRes.ok) return fail(upRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              workspaceScheduleResult: {
+                action: "upsert",
+                message: `${upRes.created ? "已创建" : "已更新"}定时任务《${upRes.item.title}》`,
+              },
+            },
+          };
+        }
+
+        if (kind === "toggle") {
+          if (typeof wsa.enabled !== "boolean") return fail("toggle 操作必须显式传入布尔值 enabled");
+          const enabled = wsa.enabled;
+          const togRes = toggleWorkspaceSchedule(host, idOrTitle, enabled, scopedWorkspace);
+          if (!togRes.ok) return fail(togRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              workspaceScheduleResult: {
+                action: "toggle",
+                message: `已${enabled ? "启用" : "暂停"}定时任务《${togRes.item.title}》`,
+              },
+            },
+          };
+        }
+
+        if (kind === "run_now") {
+          const runRes = await triggerWorkspaceScheduleNow(host, idOrTitle, {
+            trigger: "manual",
+            workspace: scopedWorkspace,
+          });
+          if (!runRes.ok) return fail(runRes.error || runRes.message);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              workspaceScheduleResult: {
+                action: "run_now",
+                message: runRes.message,
+              },
+            },
+          };
+        }
+
+        if (kind === "remove") {
+          const remRes = removeWorkspaceSchedule(host, idOrTitle, scopedWorkspace);
+          if (!remRes.ok) return fail(remRes.error);
+          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          if (!statusRes.ok) return fail(statusRes.error);
+          return {
+            ok: true,
+            data: {
+              ...statusRes.data,
+              workspaceScheduleResult: {
+                action: "remove",
+                message: `已删除定时任务《${remRes.removed.title}》`,
+              },
+            },
+          };
+        }
+        return fail("未知的 workspaceScheduleAction 操作类型");
       }
       const tokenId = str(args.tokenId);
       const label = args.label !== undefined ? str(args.label) : undefined;
