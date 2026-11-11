@@ -216,6 +216,7 @@ struct ChatListView: View {
     var openSettings: () -> Void
     @State private var query = ""
     @State private var searchPresented = false
+    @State private var colleaguesOpen = false
 
     var body: some View {
         let rows = im.directory(query: query)
@@ -276,7 +277,7 @@ struct ChatListView: View {
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
-                    Text("聊天")
+                    Text("聊天与协作")
                         .font(JieboFont.text(.headline))
                         .foregroundStyle(JieboColor.ink)
                     if !im.online {
@@ -286,6 +287,26 @@ struct ChatListView: View {
                     }
                 }
                 .accessibilityElement(children: .combine)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    colleaguesOpen = true
+                } label: {
+                    Image(systemName: "person.badge.key")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink2)
+                }
+                .accessibilityLabel("同事通行证与外部通道")
+            }
+        }
+        .sheet(isPresented: $colleaguesOpen) {
+            NavigationStack {
+                AssistantColleaguesScreen()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("完成") { colleaguesOpen = false }
+                        }
+                    }
             }
         }
     }

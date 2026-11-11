@@ -62,13 +62,21 @@ struct InboxHome: View {
         .task { store.requestAssistant() }
     }
 
+    private var isWorkLane: Bool {
+        if case .work = router.inboxLane { return true }
+        return false
+    }
+
+    private var activeWorkColumn: AssistantWorkColumn {
+        if case .work(let col) = router.inboxLane { return col }
+        return .todo
+    }
+
     private var laneBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                laneChip("通知", .notices)
-                laneChip("待办", .work(.todo))
-                laneChip("计划", .work(.plan))
-                laneChip("委派", .work(.delegation))
+                laneChip("待处理", .notices)
+                laneChip("任务与委派", .work(activeWorkColumn), isSelectedOverride: isWorkLane)
                 laneChip("产物", .artifacts)
                 laneChip("同事", .colleagues)
             }
@@ -78,8 +86,8 @@ struct InboxHome: View {
         .accessibilityLabel("助理中心栏目")
     }
 
-    private func laneChip(_ title: String, _ lane: InboxLane) -> some View {
-        let selected = router.inboxLane == lane
+    private func laneChip(_ title: String, _ lane: InboxLane, isSelectedOverride: Bool? = nil) -> some View {
+        let selected = isSelectedOverride ?? (router.inboxLane == lane)
         return Button {
             router.inboxLane = lane
         } label: {

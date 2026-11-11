@@ -14,17 +14,48 @@ type Props = {
   onSessionTool: (id: "loop" | "terminal") => void;
 };
 
+export function SessionToolsBar({
+  loopLive,
+  activeSessionTool,
+  onSessionTool,
+}: {
+  loopLive: boolean;
+  activeSessionTool?: "loop" | "terminal";
+  onSessionTool: (id: "loop" | "terminal") => void;
+}) {
+  return (
+    <div className="session-tools" role="toolbar" aria-label="当前会话工具">
+      <span className="side-label">开发运行工具</span>
+      <div className="session-tools-row">
+        {SESSION_TOOLS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`workspace-nav-item${activeSessionTool === item.id ? " on" : ""}`}
+            aria-label={item.id === "loop" && loopLive ? `${item.label}，运行中` : item.label}
+            aria-pressed={activeSessionTool === item.id}
+            onClick={() => onSessionTool(item.id)}
+          >
+            <span className="side-tool-icon">
+              <IconRail name={item.icon} size={14} />
+              {item.id === "loop" && loopLive ? <span className="loop-live" aria-label="运行中" /> : null}
+            </span>
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function WorkspaceNavigation({
   workspaceName,
   workspacePath,
   active,
-  loopLive,
-  activeSessionTool,
   managementDisabled,
   managementHint,
   onSwitchWorkspace,
   onNavigate,
-  onSessionTool,
 }: Props) {
   return (
     <>
@@ -43,43 +74,27 @@ export function WorkspaceNavigation({
         </span>
       </button>
       <nav className="workspace-nav" aria-label="工作区功能">
-        {WORKSPACE_NAV.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`workspace-nav-item${active === item.id ? " on" : ""}`}
-            aria-current={active === item.id ? "page" : undefined}
-            aria-label={item.label}
-            disabled={item.id === "management" && managementDisabled}
-            title={item.id === "management" && managementDisabled ? managementHint : undefined}
-            onClick={() => onNavigate(item.id)}
-          >
-            <IconRail name={item.icon} size={14} />
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </nav>
-      <div className="session-tools" role="toolbar" aria-label="当前会话工具">
-        <span className="side-label">当前会话工具</span>
-        <div className="session-tools-row">
-          {SESSION_TOOLS.map((item) => (
+        {WORKSPACE_NAV.map((item) => {
+          const needsSubWorkspace =
+            item.id === "kb" || item.id === "schedules" || item.id === "management";
+          const isDisabled = needsSubWorkspace && managementDisabled;
+          return (
             <button
               key={item.id}
               type="button"
-              className={`workspace-nav-item${activeSessionTool === item.id ? " on" : ""}`}
-              aria-label={item.id === "loop" && loopLive ? `${item.label}，运行中` : item.label}
-              aria-pressed={activeSessionTool === item.id}
-              onClick={() => onSessionTool(item.id)}
+              className={`workspace-nav-item${active === item.id ? " on" : ""}`}
+              aria-current={active === item.id ? "page" : undefined}
+              aria-label={item.label}
+              disabled={isDisabled}
+              title={isDisabled ? managementHint : undefined}
+              onClick={() => onNavigate(item.id)}
             >
-              <span className="side-tool-icon">
-                <IconRail name={item.icon} size={14} />
-                {item.id === "loop" && loopLive ? <span className="loop-live" aria-label="运行中" /> : null}
-              </span>
+              <IconRail name={item.icon} size={14} />
               <span>{item.label}</span>
             </button>
-          ))}
-        </div>
-      </div>
+          );
+        })}
+      </nav>
     </>
   );
 }

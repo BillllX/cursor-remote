@@ -23,25 +23,50 @@ struct PadAssistantShell: View {
             columnVisibility: $columnVisibility,
             preferredCompactColumn: $preferredCompactColumn
         ) {
-            List(PadAssistantSection.allCases) { section in
-                PadSectionNavigationRow(
-                    section: section,
-                    selected: router.assistantSection == section,
-                    onOpen: {
-                        router.openAssistant(
+            List {
+                Section("核心日常") {
+                    ForEach([PadAssistantSection.today, .inbox, .todos, .memory]) { section in
+                        let isTaskGroup = section == .todos && (router.assistantSection == .todos || router.assistantSection == .delegations || router.assistantSection == .plans)
+                        let selected = router.assistantSection == section || isTaskGroup
+                        PadSectionNavigationRow(
                             section: section,
-                            selection: section == .today ? .assistantChat : nil
+                            selected: selected,
+                            onOpen: {
+                                router.openAssistant(
+                                    section: isTaskGroup ? router.assistantSection : section,
+                                    selection: section == .today ? .assistantChat : nil
+                                )
+                                showDetailIfCompact()
+                            },
+                            onDrop: { transfers in handleNavigationDrop(transfers, section: section) }
                         )
-                        showDetailIfCompact()
-                    },
-                    onDrop: { transfers in handleNavigationDrop(transfers, section: section) }
-                )
-                .listRowBackground(
-                    router.assistantSection == section
-                        ? JieboColor.pine.opacity(0.1)
-                        : JieboColor.paper
-                )
-                .accessibilityAddTraits(router.assistantSection == section ? .isSelected : [])
+                        .listRowBackground(
+                            selected
+                                ? JieboColor.pine.opacity(0.1)
+                                : JieboColor.paper
+                        )
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                }
+                Section("归档与外部通道") {
+                    ForEach([PadAssistantSection.artifacts, .colleagues]) { section in
+                        PadSectionNavigationRow(
+                            section: section,
+                            selected: router.assistantSection == section,
+                            onOpen: {
+                                router.openAssistant(section: section, selection: nil)
+                                showDetailIfCompact()
+                            },
+                            onDrop: { transfers in handleNavigationDrop(transfers, section: section) }
+                        )
+                        .listRowBackground(
+                            router.assistantSection == section
+                                ? JieboColor.pine.opacity(0.1)
+                                : JieboColor.paper
+                        )
+                        .accessibilityAddTraits(router.assistantSection == section ? .isSelected : [])
+                    }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)

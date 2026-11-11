@@ -1,14 +1,17 @@
-// 工作区管理浮窗（管理当前工作区基础操作、知识库配置、HTML 看板与外部投递口令）
+// 工作区专项浮窗（按 modalMode 分别承载独立的「知识库与看板」「定时与自动化」「工作区设置」浮层）
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { AssistantResultMessage, ClientMessage } from "@shared/protocol";
 import type { Chat } from "../../lib/chat/types";
 import { relToCwd } from "../../lib/chat/workspace";
 import { WorkspaceKbPanel } from "./WorkspaceKbPanel";
 
+export type WorkspaceModalMode = "kb" | "schedules" | "management";
+
 type WorkspaceManagementOverlayProps = {
   managementOpen: boolean;
   setManagementOpen: Dispatch<SetStateAction<boolean>>;
   managementTrap: RefObject<HTMLDivElement | null>;
+  modalMode?: WorkspaceModalMode;
   currentGroup?: {
     user: boolean;
     touched: number;
@@ -35,6 +38,7 @@ export function WorkspaceManagementOverlay({
   managementOpen,
   setManagementOpen,
   managementTrap,
+  modalMode = "kb",
   currentGroup,
   workspaceRoot,
   canManageWorkspace,
@@ -54,6 +58,22 @@ export function WorkspaceManagementOverlay({
   const chatCount = currentGroup?.chats.length ?? 0;
   const topLevel = currentGroup ? isTopLevelWorkspace(currentGroup.path) : false;
 
+  const title =
+    modalMode === "kb"
+      ? "知识库与看板"
+      : modalMode === "schedules"
+        ? "定时与自动化"
+        : "工作区设置";
+
+  const subtitle =
+    modalMode === "kb"
+      ? "管理本工作区 HTML 业务看板、企微关注文档巡检与同步、归档更新记录与知识库分类"
+      : modalMode === "schedules"
+        ? "管理本工作区企微关注表巡检、企微邮箱拉取、HTTP抓取、受控脚本与 AI 定时分析指令"
+        : canManageWorkspace && currentGroup
+          ? `目录：${relPath} · 共 ${chatCount} 个对话 · 目录操作与本库同事通行证授权`
+          : "管理当前工作区名称、路径、清空对话、删除工作区与本库同事访问权限";
+
   return (
     <div
       className={`search-overlay workspace-modal-overlay${managementOpen ? " open" : ""}`}
@@ -64,19 +84,17 @@ export function WorkspaceManagementOverlay({
         className="search-box management-box workspace-modal-box"
         role="dialog"
         aria-modal="true"
-        aria-label="工作区管理"
+        aria-label={title}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="workspace-modal-head">
           <div className="workspace-modal-heading">
             <div className="workspace-modal-title-row">
-              <span className="loop-title workspace-modal-title">工作区管理</span>
+              <span className="loop-title workspace-modal-title">{title}</span>
               {currentGroup ? <span className="workspace-modal-badge">{currentGroup.name}</span> : null}
             </div>
             <div className="workspace-modal-sub" title={currentGroup?.path || workspaceRoot}>
-              {canManageWorkspace && currentGroup
-                ? `目录：${relPath} · 共 ${chatCount} 个对话`
-                : "管理子工作区名称、会话、知识库分类与外部投递口令"}
+              {subtitle}
             </div>
           </div>
           <div className="workspace-modal-actions">
@@ -93,7 +111,7 @@ export function WorkspaceManagementOverlay({
             <button
               type="button"
               className="files-browser-close workspace-modal-close"
-              aria-label="关闭工作区管理"
+              aria-label={`关闭${title}`}
               title="关闭 (Esc)"
               onClick={() => setManagementOpen(false)}
             >
@@ -105,60 +123,62 @@ export function WorkspaceManagementOverlay({
         <div className="workspace-modal-body">
           {canManageWorkspace && currentGroup ? (
             <>
-              <section className="workspace-modal-section" aria-label="工作区常规操作">
-                <div className="side-label">常规操作</div>
-                <div className="workspace-manage-actions">
-                  <button
-                    type="button"
-                    className="new-chat primary"
-                    onClick={() => {
-                      setManagementOpen(false);
-                      startChatIn(currentGroup.path);
-                    }}
-                  >
-                    + 新建对话
-                  </button>
-                  {topLevel ? (
+              {modalMode === "management" ? (
+                <section className="workspace-modal-section" aria-label="工作区常规操作" style={{ marginBottom: 14 }}>
+                  <div className="side-label">目录与会话管理</div>
+                  <div className="workspace-manage-actions">
                     <button
                       type="button"
-                      className="new-chat"
-                      onClick={() => renameWorkspacePrompt(currentGroup.path, currentGroup.name)}
+                      className="new-chat primary"
+                      onClick={() => {
+                        setManagementOpen(false);
+                        startChatIn(currentGroup.path);
+                      }}
                     >
-                      重命名工作区…
+                      + 新建对话
                     </button>
-                  ) : null}
-                  <button type="button" className="new-chat" onClick={() => copyPath(currentGroup.path)}>
-                    复制路径
-                  </button>
-                  <button
-                    type="button"
-                    className="new-chat danger-btn"
-                    disabled={!chatCount}
-                    onClick={() => clearWorkspaceChats(currentGroup.path, currentGroup.name)}
-                  >
-                    清空对话{chatCount ? `（${chatCount}）` : ""}
-                  </button>
-                  {topLevel ? (
+                    {topLevel ? (
+                      <button
+                        type="button"
+                        className="new-chat"
+                        onClick={() => renameWorkspacePrompt(currentGroup.path, currentGroup.name)}
+                      >
+                        重命名工作区…
+                      </button>
+                    ) : null}
+                    <button type="button" className="new-chat" onClick={() => copyPath(currentGroup.path)}>
+                      复制路径
+                    </button>
                     <button
                       type="button"
                       className="new-chat danger-btn"
-                      disabled={chatCount > 0}
-                      title={chatCount > 0 ? "里面还有对话，请先清空对话" : "空目录直接删除，有文件的只从列表隐藏"}
-                      onClick={() => {
-                        setManagementOpen(false);
-                        deleteWorkspaceConfirm(currentGroup.path, currentGroup.name);
-                      }}
+                      disabled={!chatCount}
+                      onClick={() => clearWorkspaceChats(currentGroup.path, currentGroup.name)}
                     >
-                      删除工作区…
+                      清空对话{chatCount ? `（${chatCount}）` : ""}
                     </button>
-                  ) : null}
-                </div>
-                {chatCount > 0 && topLevel ? (
-                  <div className="loop-meta">
-                    提示：如需移除该工作区，请先清空其中的 {chatCount} 个对话（磁盘上的文件不会被删除）。
+                    {topLevel ? (
+                      <button
+                        type="button"
+                        className="new-chat danger-btn"
+                        disabled={chatCount > 0}
+                        title={chatCount > 0 ? "里面还有对话，请先清空对话" : "空目录直接删除，有文件的只从列表隐藏"}
+                        onClick={() => {
+                          setManagementOpen(false);
+                          deleteWorkspaceConfirm(currentGroup.path, currentGroup.name);
+                        }}
+                      >
+                        删除工作区…
+                      </button>
+                    ) : null}
                   </div>
-                ) : null}
-              </section>
+                  {chatCount > 0 && topLevel ? (
+                    <div className="loop-meta" style={{ marginTop: 6 }}>
+                      提示：如需移除该工作区，请先清空其中的 {chatCount} 个对话（磁盘上的文件不会被删除）。
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
 
               <WorkspaceKbPanel
                 workspaceKey={relPath}
@@ -166,6 +186,7 @@ export function WorkspaceManagementOverlay({
                 workspacePath={currentGroup.path}
                 send={send}
                 assistantResults={assistantResults}
+                viewMode={modalMode === "kb" ? "kb" : modalMode === "schedules" ? "schedules" : "tokens"}
                 onOpenBoard={(boardRelPath) => {
                   openFile(boardRelPath);
                   setManagementOpen(false);
@@ -175,9 +196,9 @@ export function WorkspaceManagementOverlay({
             </>
           ) : (
             <div className="terminal-empty" style={{ padding: "32px 16px", textAlign: "center" }}>
-              <div>当前处于根工作区，无可管理的子工作区</div>
+              <div>当前处于根工作区，请先选择一个子工作区</div>
               <div className="loop-meta">
-                USER 根目录不能重命名、移除或配置为独立知识库；请先切换或新建一个子工作区。
+                请先切换或新建一个子工作区（如 Fintopia集团），再管理其知识库看板、定时任务或目录设置。
               </div>
               <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 8 }}>
                 <button

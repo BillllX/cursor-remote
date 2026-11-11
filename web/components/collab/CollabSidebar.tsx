@@ -11,12 +11,14 @@ export function CollabSidebar({
   runsForRoom,
   onSelect,
   onCreate,
+  onOpenColleagues,
 }: {
   rooms: CollabRoom[];
   selectedConvId?: string;
   runsForRoom: (convId: string) => CollabRunState[];
   onSelect: (convId: string) => void;
   onCreate: () => void;
+  onOpenColleagues?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => {
@@ -31,10 +33,17 @@ export function CollabSidebar({
   return (
     <aside className={styles.sidebar} aria-label="协作群列表">
       <div className={styles.sidebarTitle}>
-        <strong>协作</strong>
-        <button type="button" onClick={onCreate} aria-label="创建项目协作群">
-          ＋ 新建
-        </button>
+        <strong>协作与门户</strong>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {onOpenColleagues ? (
+            <button type="button" onClick={onOpenColleagues} aria-label="同事通行证与外部通道">
+              通行证
+            </button>
+          ) : null}
+          <button type="button" onClick={onCreate} aria-label="创建项目协作群">
+            ＋ 新建
+          </button>
+        </div>
       </div>
       <label className={styles.search}>
         <span className="sr-only">搜索群、Agent、任务</span>

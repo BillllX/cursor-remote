@@ -1,11 +1,28 @@
 import type { InjectionDiagnostics, MemoryCenterSuggestionEntry, WorkspaceMemoryItem } from "@shared/protocol";
 
+export const PERSONAL_MEMORY_DESTINATIONS = [
+  { id: "me", label: "记得的我", layer: "L1", hint: "关于我 · 通用工作偏好" },
+  { id: "review", label: "待你确认", layer: "", hint: "重复或失效建议" },
+  { id: "activity", label: "最近改动", layer: "", hint: "历史修改与恢复" },
+  { id: "transfer", label: "导出与导入", layer: "", hint: "记忆快照备份" },
+] as const;
+
+export const WORKSPACE_MEMORY_DESTINATIONS = [
+  { id: "folder", label: "项目记忆", layer: "L2", hint: ".jiebo/memory.md" },
+  { id: "rules", label: "文件夹规则", layer: "L0", hint: "AGENTS.md / .cursor/rules" },
+  { id: "diagnostics", label: "上一轮怎么选的", layer: "", hint: "上下文注入诊断" },
+  { id: "review", label: "待你确认", layer: "", hint: "失效引用与整理建议" },
+  { id: "activity", label: "最近改动", layer: "", hint: "历史修改与恢复" },
+] as const;
+
 export const MEMORY_DESTINATIONS = [
-  { id: "me", label: "记得的我" },
-  { id: "folder", label: "这个文件夹" },
-  { id: "skills", label: "技能工厂" },
-  { id: "review", label: "要你看一眼" },
-  { id: "more", label: "更多" },
+  { id: "me", label: "记得的我", layer: "L1", hint: "关于我 · 通用工作偏好" },
+  { id: "folder", label: "这个文件夹", layer: "L2", hint: ".jiebo/memory.md" },
+  { id: "rules", label: "文件夹规则", layer: "L0", hint: "AGENTS.md / .cursor/rules" },
+  { id: "diagnostics", label: "上一轮怎么选的", layer: "", hint: "上下文注入诊断" },
+  { id: "review", label: "待你确认", layer: "", hint: "重复与失效引用建议" },
+  { id: "activity", label: "最近改动", layer: "", hint: "历史修改与恢复" },
+  { id: "transfer", label: "导出与导入", layer: "", hint: "记忆快照备份" },
 ] as const;
 
 export type MemoryDestination = (typeof MEMORY_DESTINATIONS)[number]["id"];
@@ -21,11 +38,10 @@ export const FOLDER_MENUS = [
 export type FolderMenu = (typeof FOLDER_MENUS)[number]["id"];
 
 export const MORE_PAGES = [
-  { id: "skills", label: "技能工厂" },
+  { id: "rules", label: "文件夹规则 (L0)" },
+  { id: "diagnostics", label: "上一轮怎么选的" },
   { id: "activity", label: "最近改动" },
   { id: "transfer", label: "导出与导入" },
-  { id: "diagnostics", label: "上一轮怎么选的" },
-  { id: "rules", label: "文件夹规则" },
 ] as const;
 
 export type MorePage = (typeof MORE_PAGES)[number]["id"];
@@ -106,14 +122,11 @@ export function folderMenuLabel(menu: FolderMenu): string {
   return FOLDER_MENUS.find((row) => row.id === menu)?.label ?? "会用到的";
 }
 
-/** 打开记忆时：从工作区进来停在这个文件夹，指定 skills 时直达技能工厂，其余停在记得的我。 */
+/** 打开记忆时：从工作区进来停在这个文件夹，从个人助理进来停在记得的我。技能工厂已独立，不再混入记忆中心。 */
 export function openingDestination(initialScopeId?: string): {
   destination: MemoryDestination;
   folderId: string | null;
 } {
-  if (initialScopeId === "skills") {
-    return { destination: "skills", folderId: null };
-  }
   if (
     initialScopeId &&
     initialScopeId !== "personal" &&

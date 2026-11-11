@@ -10,7 +10,7 @@ import { JieboMark as Mark } from "../JieboMark";
 import { AssistantNavigation, type AssistantSidebarView } from "./AssistantNavigation";
 import { ChatList } from "./sidebar/ChatList";
 import { SideFoot } from "./sidebar/SideFoot";
-import { WorkspaceNavigation } from "./WorkspaceNavigation";
+import { SessionToolsBar, WorkspaceNavigation } from "./WorkspaceNavigation";
 import styles from "./Sidebar.module.css";
 
 type SidebarProps = {
@@ -26,13 +26,16 @@ type SidebarProps = {
   assistantView: AssistantSidebarView;
   openAssistantDomain: () => void;
   openCollabDomain: () => void;
-  openAssistantView: (view: Exclude<AssistantSidebarView, "chat">) => void;
+  openAssistantView: (view: Exclude<AssistantSidebarView, "chat" | "skills">) => void;
   assistantInboxBadge: number;
   assistantApprovalBadge: number;
   workspaceMenuOpen: boolean;
   workspaceSection: WorkspaceNavId;
   openWorkspaceDomain: () => void;
   openWorkspaceSwitcher: () => void;
+  openWorkspaceKb: () => void;
+  openWorkspaceSchedules: () => void;
+  openWorkspaceSkills: () => void;
   openWorkspaceMemory: () => void;
   openWorkspaceManagement: () => void;
   newChat: () => void;
@@ -123,6 +126,9 @@ export function Sidebar({
   workspaceSection,
   openWorkspaceDomain,
   openWorkspaceSwitcher,
+  openWorkspaceKb,
+  openWorkspaceSchedules,
+  openWorkspaceSkills,
   openWorkspaceMemory,
   openWorkspaceManagement,
   newChat,
@@ -212,6 +218,7 @@ export function Sidebar({
           overviewBadge={assistantApprovalBadge}
           onNavigate={(view) => {
             if (view === "chat") openAssistantDomain();
+            else if (view === "skills") openWorkspaceSkills();
             else openAssistantView(view);
           }}
         />
@@ -227,7 +234,10 @@ export function Sidebar({
             managementHint="当前没有可管理的子工作区；请先切换或新建工作区。"
             onSwitchWorkspace={openWorkspaceSwitcher}
             onNavigate={(id) => {
-              if (id === "files") chooseSide("files");
+              if (id === "kb") openWorkspaceKb();
+              else if (id === "schedules") openWorkspaceSchedules();
+              else if (id === "skills") openWorkspaceSkills();
+              else if (id === "files") chooseSide("files");
               else if (id === "search") chooseSide("search");
               else if (id === "git") chooseSide("git");
               else if (id === "memory") openWorkspaceMemory();
@@ -263,6 +273,11 @@ export function Sidebar({
             moreOpen={moreOpen}
             setMoreOpen={setMoreOpen}
             openNewChatMenu={openNewChatMenu}
+          />
+          <SessionToolsBar
+            loopLive={loopLive}
+            activeSessionTool={loopOpen ? "loop" : terminalOpen ? "terminal" : undefined}
+            onSessionTool={(id) => chooseSide(id)}
           />
         </>
       )}

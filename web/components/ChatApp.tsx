@@ -81,10 +81,12 @@ import { markdownComponents } from "./chat/markdown";
 import { PadBar } from "./chat/PadBar";
 import { PaletteOverlay } from "./chat/PaletteOverlay";
 import { SearchOverlay } from "./chat/SearchOverlay";
+import { SettingsOverlay } from "./chat/SettingsOverlay";
 import { Sidebar } from "./chat/Sidebar";
+import { SkillsOverlay } from "./chat/SkillsOverlay";
 import { TerminalOverlay } from "./chat/TerminalOverlay";
 import { Thread } from "./chat/Thread";
-import { WorkspaceManagementOverlay } from "./chat/WorkspaceManagementOverlay";
+import { WorkspaceManagementOverlay, type WorkspaceModalMode } from "./chat/WorkspaceManagementOverlay";
 import { WorkspaceOverlay } from "./chat/WorkspaceOverlay";
 import { CollabShell } from "./collab/CollabShell";
 import { readCollabRoute, replaceCollabRoute } from "./collab/collabNavigation";
@@ -233,7 +235,11 @@ export default function ChatApp() {
   const [filesOpen, setFilesOpen] = useState(false);
   const filesShown = useHeldOpen(filesOpen);
   const [managementOpen, setManagementOpen] = useState(false);
+  const [managementMode, setManagementMode] = useState<WorkspaceModalMode>("kb");
   const managementShown = useHeldOpen(managementOpen);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const skillsOpenRef = useRef(false);
+  skillsOpenRef.current = skillsOpen;
   const [filesQuery, setFilesQuery] = useState("");
   const [grepHits, setGrepHits] = useState<SearchHit[]>([]);
 
@@ -241,8 +247,14 @@ export default function ChatApp() {
     if ((workspaceSection === "files" || workspaceSection === "git") && !filesOpen) setWorkspaceSection("chats");
     if (workspaceSection === "search" && !grepOpen) setWorkspaceSection("chats");
     if (workspaceSection === "memory" && !assistantOpen) setWorkspaceSection("chats");
-    if (workspaceSection === "management" && !managementOpen) setWorkspaceSection("chats");
-  }, [assistantOpen, filesOpen, grepOpen, managementOpen, workspaceSection]);
+    if (workspaceSection === "skills" && !skillsOpen) setWorkspaceSection("chats");
+    if (
+      (workspaceSection === "management" || workspaceSection === "kb" || workspaceSection === "schedules") &&
+      !managementOpen
+    ) {
+      setWorkspaceSection("chats");
+    }
+  }, [assistantOpen, filesOpen, grepOpen, managementOpen, skillsOpen, workspaceSection]);
   const [grepIndex, setGrepIndex] = useState(0);
   const [grepWait, setGrepWait] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
@@ -291,6 +303,8 @@ export default function ChatApp() {
     }
   }, [loopOpen, activeId]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenRef = useRef(false);
+  settingsOpenRef.current = settingsOpen;
   const [themeChoice, setThemeChoice] = useState<{ palette: PaletteId; appearance: AppearanceId } | null>(null);
   const [navOpen, setNavOpen] = useState(false);
   const [navReady, setNavReady] = useState(false);
@@ -2037,6 +2051,8 @@ export default function ChatApp() {
   const layerSeqRef = useRef<Record<string, number>>({});
   const layerOpen: Record<string, boolean> = {
     assistant: assistantOpen,
+    skills: skillsOpen,
+    settings: settingsOpen,
     management: managementOpen,
     groupMenu: groupMenu != null,
     admin: adminOpen,
@@ -2088,6 +2104,8 @@ export default function ChatApp() {
       if (event.key === "Escape") {
         // 同时开着几层时先关最后打开的那层；打开时间一样时按这里的先后
         const layers: [string, boolean, () => void][] = [
+          ["skills", skillsOpenRef.current, () => setSkillsOpen(false)],
+          ["settings", settingsOpenRef.current, () => setSettingsOpen(false)],
           ["assistant", assistantOpenRef.current, () => setAssistantOpen(false)],
           ["management", managementOpenRef.current, () => setManagementOpen(false)],
           [
@@ -2955,6 +2973,8 @@ export default function ChatApp() {
     setPaletteOpen(false);
     setThreadFindOpen(false);
     setManagementOpen(false);
+    setSkillsOpen(false);
+    setSettingsOpen(false);
     setAssistantOpen(false);
     setFilesOpen(pane === "files" || pane === "git");
     setGrepOpen(pane === "search");
@@ -3032,6 +3052,8 @@ export default function ChatApp() {
     setLoopOpen(false);
     setTerminalOpen(false);
     setManagementOpen(false);
+    setSkillsOpen(false);
+    setSettingsOpen(false);
     setSidePane("chats");
     setWorkspaceSection("memory");
     setAssistantInitialView("memory");
@@ -3041,6 +3063,52 @@ export default function ChatApp() {
     setAssistantOpen(true);
   }
 
+  function openWorkspaceSkills() {
+    setNavOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setManagementOpen(false);
+    setAssistantOpen(false);
+    setSettingsOpen(false);
+    setSidePane("chats");
+    setWorkspaceSection("skills");
+    setSkillsOpen(true);
+  }
+
+  function openWorkspaceKb() {
+    setNavOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setAssistantOpen(false);
+    setSkillsOpen(false);
+    setSettingsOpen(false);
+    setSidePane("chats");
+    setWorkspaceSection("kb");
+    setGroupMenu(null);
+    setManagementMode("kb");
+    setManagementOpen(true);
+  }
+
+  function openWorkspaceSchedules() {
+    setNavOpen(false);
+    setFilesOpen(false);
+    setGrepOpen(false);
+    setLoopOpen(false);
+    setTerminalOpen(false);
+    setAssistantOpen(false);
+    setSkillsOpen(false);
+    setSettingsOpen(false);
+    setSidePane("chats");
+    setWorkspaceSection("schedules");
+    setGroupMenu(null);
+    setManagementMode("schedules");
+    setManagementOpen(true);
+  }
+
   function openWorkspaceManagement() {
     setNavOpen(false);
     setFilesOpen(false);
@@ -3048,9 +3116,12 @@ export default function ChatApp() {
     setLoopOpen(false);
     setTerminalOpen(false);
     setAssistantOpen(false);
+    setSkillsOpen(false);
+    setSettingsOpen(false);
     setSidePane("chats");
     setWorkspaceSection("management");
     setGroupMenu(null);
+    setManagementMode("management");
     setManagementOpen(true);
   }
 
@@ -4754,6 +4825,8 @@ export default function ChatApp() {
   const workspaceTrap = useFocusTrap<HTMLDivElement>(workspaceMenuOpen);
   const assistantTrap = useFocusTrap<HTMLDivElement>(assistantOpen);
   const managementTrap = useFocusTrap<HTMLDivElement>(managementOpen);
+  const skillsTrap = useFocusTrap<HTMLDivElement>(skillsOpen);
+  const settingsTrap = useFocusTrap<HTMLDivElement>(settingsOpen);
   useEffect(() => {
     if (!workspaceMenuOpen) return;
     document.getElementById(`workspace-choice-${workspacePick}`)?.scrollIntoView({ block: "nearest" });
@@ -4876,20 +4949,51 @@ export default function ChatApp() {
         </button>
         <button
           type="button"
-          className="activity-account"
+          className={`activity-account${settingsOpen ? " on" : ""}`}
+          aria-pressed={settingsOpen}
           aria-label="账户与设置"
           title="账户与设置"
-          onClick={() => {
-            setCollabOpen(false);
-            replaceCollabRoute({ active: false });
-            setAssistantOpen(false);
-            chooseSide("chats");
-            setSettingsOpen(true);
-          }}
+          onClick={() => setSettingsOpen((open) => !open)}
         >
           <IconRail name="account" />
         </button>
       </nav>
+      <SettingsOverlay
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        dialogRef={settingsTrap}
+        themeChoice={themeChoice}
+        setThemeChoice={setThemeChoice}
+        cwd={workspaceContextCwd || cwd}
+        workspaceRoot={workspaceRoot}
+        isAdmin={isAdmin}
+        openAdminStats={openAdminStats}
+        logout={logout}
+        assistantState={assistantState}
+        send={send}
+        basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
+        lastAssistantResult={lastAssistantResult}
+        assistantResultTick={assistantResultTick}
+        setNotice={setNotice}
+      />
+      <SkillsOverlay
+        open={skillsOpen}
+        onClose={() => setSkillsOpen(false)}
+        dialogRef={skillsTrap}
+        workspaceKey={relToCwd(workspaceContextCwd || "", workspaceRoot)}
+        workspaceName={currentWorkspaceName}
+        send={send}
+        lastAssistantResult={lastAssistantResult}
+        assistantResultTick={assistantResultTick}
+        setNotice={setNotice}
+        onUseSkillInChat={(promptText) => {
+          applyDraft(promptText);
+          setNotice("已填入技能调用指令");
+          window.requestAnimationFrame(() => {
+            document.querySelector<HTMLTextAreaElement>(".composer-input")?.focus();
+          });
+        }}
+      />
       {adminOpen ? <AdminOverlay
         setAdminOpen={setAdminOpen}
         adminTrap={adminTrap}
@@ -4964,6 +5068,8 @@ export default function ChatApp() {
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
         onOpenChat={openChatById}
         onHandoffToAssistant={submitAssistantHandoffPrompt}
+        onOpenFile={(relPath) => openFile(relPath)}
+        onOpenSkills={openWorkspaceSkills}
         lastAssistantResult={lastAssistantResult}
         assistantResultTick={assistantResultTick}
       />
@@ -4972,6 +5078,7 @@ export default function ChatApp() {
           managementOpen={managementOpen}
           setManagementOpen={setManagementOpen}
           managementTrap={managementTrap}
+          modalMode={managementMode}
           currentGroup={currentWorkspaceGroup}
           workspaceRoot={workspaceRoot}
           canManageWorkspace={canManageCurrentWorkspace}
@@ -5052,6 +5159,10 @@ export default function ChatApp() {
         wideIDERef={wideIDERef}
         grepWait={grepWait}
         workspaceName={currentWorkspaceName}
+        onSwitchMode={(nextMode) => {
+          setGrepOpen(false);
+          chooseSide(nextMode);
+        }}
       /> : null}
       {filesShown ? <FilesOverlay
         filesOpen={filesOpen}
@@ -5079,6 +5190,11 @@ export default function ChatApp() {
         handleTreeRename={handleTreeRename}
         handleTreeDelete={handleTreeDelete}
         onSwitchMode={(nextMode) => {
+          if (nextMode === "search") {
+            setFilesOpen(false);
+            chooseSide("search");
+            return;
+          }
           setSidePane(nextMode);
           setWorkspaceSection(nextMode);
         }}
@@ -5114,6 +5230,7 @@ export default function ChatApp() {
           }}
           onOpenAssistant={openAssistantFromRail}
           onOpenWorkspace={openWorkspaceDomain}
+          onOpenColleagues={() => openAssistantView("colleagues")}
         />
       ) : (
         <>
@@ -5135,7 +5252,13 @@ export default function ChatApp() {
         assistantName={assistantName}
         assistantDomainActive={assistantDomainActive}
         collabDomainActive={collabOpen}
-        assistantView={assistantOpen && assistantMemorySource === "assistant" ? assistantInitialView : "chat"}
+        assistantView={
+          skillsOpen
+            ? "skills"
+            : assistantOpen && assistantMemorySource === "assistant"
+              ? assistantInitialView
+              : "chat"
+        }
         openAssistantDomain={openAssistantFromRail}
         openCollabDomain={openCollabDomain}
         openAssistantView={openAssistantView}
@@ -5145,6 +5268,9 @@ export default function ChatApp() {
         workspaceSection={workspaceSection}
         openWorkspaceDomain={openWorkspaceDomain}
         openWorkspaceSwitcher={openWorkspaceSwitcher}
+        openWorkspaceKb={openWorkspaceKb}
+        openWorkspaceSchedules={openWorkspaceSchedules}
+        openWorkspaceSkills={openWorkspaceSkills}
         openWorkspaceMemory={openWorkspaceMemory}
         openWorkspaceManagement={openWorkspaceManagement}
         newChat={newChat}

@@ -424,19 +424,24 @@ struct MemoryCenterNavColumn: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                navButton("work_preference", title: "记得的我", symbol: NavigationIconId.account.symbol)
-                navButton(folderNavId, title: "这个文件夹", symbol: "folder", subtitle: folder?.label)
-                navButton("skills", title: "技能工厂", symbol: "sparkles", badge: pendingSkillCount)
-                navButton("suggestions", title: "要你看一眼", symbol: "lightbulb", badge: store.memoryCenterSuggestionRows.count)
-                Text("规则与诊断")
+                Text("L0~L2 规则与记忆")
+                    .font(JieboFont.text(.caption, weight: .semibold))
+                    .foregroundStyle(JieboColor.dim)
+                    .padding(.horizontal, 8)
+                navButton("work_preference", title: "L1 · 记得的我", symbol: NavigationIconId.account.symbol, subtitle: "关于我 · 工作偏好")
+                navButton(folderNavId, title: "L0+L2 · 这个文件夹", symbol: "folder", subtitle: folder?.label ?? "硬规则与项目记忆")
+                if !store.memoryCenterSuggestionRows.isEmpty || navId == "suggestions" {
+                    navButton("suggestions", title: "待你确认", symbol: "lightbulb", badge: store.memoryCenterSuggestionRows.count)
+                }
+                Text("诊断与备份")
                     .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
+                navButton("rules", title: "文件夹规则 (L0)", symbol: "doc.text")
+                navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft")
                 navButton("activity", title: "最近改动", symbol: "clock")
                 navButton("settings", title: "导出与导入", symbol: "square.and.arrow.up")
-                navButton("diagnostics", title: "上一轮怎么选的", symbol: "text.alignleft")
-                navButton("rules", title: "文件夹规则", symbol: "doc.text")
                 Divider().padding(.vertical, 6)
                 MemoryTidyButton()
             }
@@ -451,7 +456,6 @@ struct MemoryCenterNavColumn: View {
         }
         .onAppear {
             store.memoryCenterLoadSuggestions()
-            store.memoryCenterLoadSkills()
         }
     }
 
@@ -923,7 +927,7 @@ struct MemoryCenterScopeItemsContent: View {
                 }
                 if detail.scope.kind == "workspace_memory" {
                     HStack {
-                        Text(detail.items.isEmpty ? "这个文件夹还没有记忆" : detail.scope.label)
+                        Text(detail.items.isEmpty ? "这个文件夹还没有记忆" : "\(detail.scope.label) · 规则与记忆")
                             .font(JieboFont.display(22))
                             .foregroundStyle(JieboColor.ink)
                         Spacer(minLength: 8)
@@ -936,6 +940,28 @@ struct MemoryCenterScopeItemsContent: View {
                         ActionButton(title: "记一条", kind: .primary) { showCreate = true }
                             .disabled(store.memoryCenterData.mutating)
                     }
+                    if !store.memoryCenterSuggestionRows.isEmpty {
+                        MemoryCenterBanner(
+                            text: "待你确认 · 有 \(store.memoryCenterSuggestionRows.count) 条重复或失效引用建议可处理",
+                            tone: .warn
+                        )
+                    }
+                    DisclosureGroup("L0 · 文件夹硬规则（AGENTS.md / .cursor/rules · \(detail.rules.count) 项 · 最高优先级）") {
+                        MemoryCenterRulesList(
+                            rules: detail.rules,
+                            truncated: detail.rulesTruncated || detail.rulesPayloadTruncated
+                        )
+                        .padding(.top, 6)
+                    }
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink)
+                    .tint(JieboColor.pine)
+
+                    Text("L2 · 项目记忆（.jiebo/memory.md · 按生命周期动态注入）")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.dim)
+                        .padding(.top, 4)
+
                     if detail.items.isEmpty {
                         Text("记一条，下次在这个文件夹里就会记得。")
                             .font(JieboFont.text(.footnote))
@@ -965,6 +991,16 @@ struct MemoryCenterScopeItemsContent: View {
                 }
                 if detail.itemsTruncated {
                     MemoryCenterBanner(text: "有一部分没列全", tone: .warn)
+                }
+                if detail.scope.kind == "workspace_memory" {
+                    DisclosureGroup("上一轮怎么选的（注入诊断）") {
+                        MemoryCenterDiagnosticsBlock(diagnostics: detail.diagnostics)
+                            .padding(.top, 6)
+                    }
+                    .font(JieboFont.text(.subheadline, weight: .semibold))
+                    .foregroundStyle(JieboColor.ink2)
+                    .tint(JieboColor.pine)
+                    .padding(.top, 4)
                 }
             }
             .sheet(isPresented: $showCreate) {
@@ -1959,49 +1995,28 @@ struct MemoryCenterPhoneHome: View {
                 }
                 .listRowBackground(JieboColor.white)
             } else {
-                Section("核心与文件夹") {
+                Section("L0 ~ L2 规则与记忆体系") {
                     NavigationLink(value: PhoneRoute.memoryPage(.me)) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("记得的我")
-                            Text("关于我 · 工作偏好")
+                            Text("L1 · 记得的我")
+                            Text("关于我 · 通用工作偏好（跨所有工作区生效）")
                                 .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
                     NavigationLink(value: PhoneRoute.memoryPage(.scope(id: folder?.id ?? "folder-missing", label: folder?.label ?? "这个文件夹"))) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("这个文件夹")
-                            Text(folder?.label ?? "还没打开文件夹")
+                            Text("L0+L2 · 这个文件夹")
+                            Text("\(folder?.label ?? "还没打开文件夹") · AGENTS.md 硬规则与项目记忆")
                                 .font(JieboFont.text(.caption))
                                 .foregroundStyle(JieboColor.dim)
                         }
                     }
-                    NavigationLink(value: PhoneRoute.memoryPage(.skills)) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("技能工厂")
-                                Text("对话技能 · 操作手册与提案审批")
-                                    .font(JieboFont.text(.caption))
-                                    .foregroundStyle(JieboColor.dim)
-                            }
-                            Spacer()
-                            let pendingSkills = store.memoryCenterSkillProposals.filter { $0.status == "pending" }.count
-                            if pendingSkills > 0 {
-                                Text("\(pendingSkills)")
-                                    .font(JieboFont.text(.caption, weight: .semibold))
-                                    .foregroundStyle(JieboColor.clay)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(JieboColor.clay.opacity(0.16))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            }
-                        }
-                    }
-                    NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
-                        HStack {
-                            Text("要你看一眼")
-                            Spacer()
-                            if !store.memoryCenterSuggestionRows.isEmpty {
+                    if !store.memoryCenterSuggestionRows.isEmpty {
+                        NavigationLink(value: PhoneRoute.memoryPage(.suggestions)) {
+                            HStack {
+                                Text("待你确认建议")
+                                Spacer()
                                 Text("\(store.memoryCenterSuggestionRows.count)")
                                     .font(JieboFont.text(.caption, weight: .semibold))
                                     .foregroundStyle(JieboColor.clay)
@@ -2014,10 +2029,10 @@ struct MemoryCenterPhoneHome: View {
                     }
                 }
                 .listRowBackground(JieboColor.white)
-                Section("规则与诊断") {
+                Section("规则、诊断与备份") {
                     if let folder {
                         NavigationLink(value: PhoneRoute.memoryPage(.rules(scopeId: folder.id))) {
-                            Text("文件夹规则")
+                            Text("L0 · 文件夹规则")
                         }
                         NavigationLink(value: PhoneRoute.memoryPage(.diagnostics(scopeId: folder.id))) {
                             Text("上一轮怎么选的")

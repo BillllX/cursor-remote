@@ -13,6 +13,7 @@ struct SidebarView: View {
     @State private var settingsOpen = false
     @State private var memoryOpen = false
     @State private var kbOpen = false
+    @State private var skillsOpen = false
 
     var body: some View {
         @Bindable var store = store
@@ -22,12 +23,12 @@ struct SidebarView: View {
             workspaceCard
                 .padding(.horizontal, 12)
 
-            toolStrip
-                .padding(.horizontal, 8)
-                .padding(.top, 6)
+            workspacePrimaryActions
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
 
             chatsHeader
-                .padding(.top, 14)
+                .padding(.top, 10)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
@@ -45,6 +46,13 @@ struct SidebarView: View {
                 }
                 .padding(.bottom, 12)
             }
+
+            toolStrip
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(JieboColor.line).frame(height: 1)
+                }
 
             footer
         }
@@ -84,6 +92,9 @@ struct SidebarView: View {
                 workspaceName: store.workspaceTitle(anchoredTo: sceneSession?.workbenchChatId),
                 chatId: store.preferredWorkspaceChatId(anchoredTo: sceneSession?.workbenchChatId)
             )
+        }
+        .sheet(isPresented: $skillsOpen) {
+            SkillsWorkspaceSheet()
         }
         .chatActionAlerts($chatActions)
         .onAppear { adoptWorkbenchChatIfNeeded() }
@@ -211,6 +222,88 @@ struct SidebarView: View {
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel("当前文件夹，\(workspaceTitle)")
         .accessibilityHint("换一个文件夹")
+    }
+
+    private var workspacePrimaryActions: some View {
+        HStack(spacing: 6) {
+            Button {
+                kbOpen = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "books.vertical")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                    Text("看板")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                        .fill(JieboColor.white.opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+            .accessibilityLabel("看板与知识库")
+
+            Button {
+                memoryOpen = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: NavigationIconId.memory.symbol)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                    Text("规则与记忆")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                        .fill(JieboColor.white.opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+            .accessibilityLabel("规则与记忆")
+
+            Button {
+                skillsOpen = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(JieboColor.pine)
+                    Text("技能工厂")
+                        .font(JieboFont.text(.caption, weight: .semibold))
+                        .foregroundStyle(JieboColor.ink)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, minHeight: 38)
+                .background(
+                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                        .fill(JieboColor.white.opacity(0.6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
+                                .stroke(JieboColor.line, lineWidth: 1)
+                        )
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
+            .accessibilityLabel("技能工厂")
+        }
     }
 
     private var toolStrip: some View {

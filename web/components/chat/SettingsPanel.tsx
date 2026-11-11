@@ -17,9 +17,19 @@ type SettingsPanelProps = {
   cwd: string;
   workspaceRoot: string;
   logout: () => void;
+  onOpenPushSettings?: () => void;
+  onOpenMemoryBackup?: () => void;
 };
 
-export function SettingsPanel({ themeChoice, setThemeChoice, cwd, workspaceRoot, logout }: SettingsPanelProps) {
+export function SettingsPanel({
+  themeChoice,
+  setThemeChoice,
+  cwd,
+  workspaceRoot,
+  logout,
+  onOpenPushSettings,
+  onOpenMemoryBackup,
+}: SettingsPanelProps) {
   return (
     <div className="side-settings">
       <div className="theme-settings">
@@ -94,6 +104,16 @@ export function SettingsPanel({ themeChoice, setThemeChoice, cwd, workspaceRoot,
       <div className={styles.workspacePath} title={cwd}>
         {cwd || workspaceRoot || "工作区"}
       </div>
+      {onOpenPushSettings ? (
+        <button type="button" className="side-foot-btn" onClick={onOpenPushSettings}>
+          通知与浏览器推送…
+        </button>
+      ) : null}
+      {onOpenMemoryBackup ? (
+        <button type="button" className="side-foot-btn" onClick={onOpenMemoryBackup}>
+          记忆导出与导入备份…
+        </button>
+      ) : null}
       <button type="button" className="logout-btn" onClick={logout}>
         退出登录
       </button>

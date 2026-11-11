@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
   AssistantMemoryEntry,
@@ -10,8 +10,6 @@ import type {
   InjectionDiagnostics,
   MemoryCenterSearchHit,
   RuleFile,
-  SkillFactoryProposalItem,
-  SkillFactorySummaryItem,
   WorkspaceMemoryItem,
 } from "@shared/protocol";
 import styles from "./memoryCenter.module.css";
@@ -29,8 +27,8 @@ import {
 import {
   CORE_FIELD_ORDER,
   FOLDER_MENUS,
-  MEMORY_DESTINATIONS,
-  MORE_PAGES,
+  PERSONAL_MEMORY_DESTINATIONS,
+  WORKSPACE_MEMORY_DESTINATIONS,
   basisLabel,
   diagnosticsSummary,
   filterFolderItems,
@@ -44,7 +42,6 @@ import {
   wasUsedLastRound,
   type FolderMenu,
   type MemoryDestination,
-  type MorePage,
 } from "./memoryCenterCopy";
 import {
   buildScopeTreeRows,
@@ -57,7 +54,6 @@ import {
 import MemoryCenterWorkspaceEditor from "./MemoryCenterWorkspaceEditor";
 import { MemoryCenterActivityPane, MemoryCenterSuggestionsPane } from "./MemoryCenterExtrasPanes";
 import MemoryCenterImportPane from "./MemoryCenterImportPane";
-import MemoryCenterSkillsPane, { MemoryCenterSkillDetail } from "./MemoryCenterSkillsPane";
 import { useMemoryCenter } from "./useMemoryCenter";
 
 type Props = {
@@ -72,6 +68,7 @@ type Props = {
   resultTick: number;
   onNotice: (text: string) => void;
   onHandoffToAssistant?: (prompt: string) => void;
+  onOpenFile?: (path: string) => void;
 };
 
 type Tier = "wide" | "mid" | "narrow";
@@ -148,20 +145,16 @@ export default function MemoryCenterPanel({
   lastResult,
   resultTick,
   onNotice,
-  onHandoffToAssistant,
+  onOpenFile,
 }: Props) {
   const mc = useMemoryCenter({ active, send, lastResult, resultTick });
   const [tier, setTier] = useState<Tier>("wide");
   const [destination, setDestination] = useState<MemoryDestination>("me");
   const [folderId, setFolderId] = useState<string | null>(null);
   const [folderMenu, setFolderMenu] = useState<FolderMenu>("useful");
-  const [morePage, setMorePage] = useState<MorePage | null>(null);
   const [switchingFolder, setSwitchingFolder] = useState(false);
   const [composer, setComposer] = useState<"create" | "edit" | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [skillRows, setSkillRows] = useState<SkillFactorySummaryItem[]>([]);
-  const [skillProposals, setSkillProposals] = useState<SkillFactoryProposalItem[]>([]);
-  const [decidingSkillId, setDecidingSkillId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const middleRef = useRef<HTMLDivElement>(null);
@@ -170,6 +163,16 @@ export default function MemoryCenterPanel({
   const rowKeys = useRef<string[]>([]);
   const [tidyBusy, setTidyBusy] = useState(false);
   const [tidyNote, setTidyNote] = useState<string | null>(null);
+
+  const isWorkspaceScoped = Boolean(
+    initialScopeId &&
+      initialScopeId !== "personal" &&
+      initialScopeId !== "overview" &&
+      initialScopeId !== "work_preference",
+  );
+  const activeDestinations = isWorkspaceScoped
+    ? WORKSPACE_MEMORY_DESTINATIONS
+    : PERSONAL_MEMORY_DESTINATIONS;
 
   useEffect(() => {
     const wide = window.matchMedia("(min-width: 1200px)");
@@ -201,58 +204,11 @@ export default function MemoryCenterPanel({
     const opened = openingDestination(initialScopeId);
     setDestination(opened.destination);
     setFolderId(opened.folderId);
-    setMorePage(null);
     setComposer(null);
     setSwitchingFolder(false);
     autoSelectedFolder.current = null;
     mc.loadSuggestions();
-    op("skill_factory_status", { workspace: opened.folderId || undefined });
   }, [active, initialScopeId, openRequest]);
-
-  useEffect(() => {
-    if (!lastResult) return;
-    if (
-      lastResult.op !== "skill_factory_status" &&
-      lastResult.op !== "skill_proposal_decide" &&
-      lastResult.op !== "skill_update_meta" &&
-      lastResult.op !== "skill_edit_approved"
-    ) {
-      return;
-    }
-    setDecidingSkillId(null);
-    if (!lastResult.ok) {
-      if (lastResult.error) onNotice(lastResult.error);
-      return;
-    }
-    if (lastResult.data) {
-      setSkillRows(lastResult.data.skills ?? []);
-      setSkillProposals(lastResult.data.proposals ?? []);
-    }
-    if (lastResult.op === "skill_update_meta") {
-      onNotice("技能设置已更新。");
-    } else if (lastResult.op === "skill_edit_approved") {
-      onNotice("技能已保存并重签 SHA-256 完整性锁。");
-    }
-  }, [lastResult, resultTick, onNotice]);
-
-  const handleSkillsDataChange = useCallback(
-    (nextSkills: SkillFactorySummaryItem[], nextProposals: SkillFactoryProposalItem[]) => {
-      setSkillRows(nextSkills);
-      setSkillProposals(nextProposals);
-    },
-    [],
-  );
-
-  const handleUseSkillInChat = useCallback(
-    (sk: SkillFactorySummaryItem) => {
-      if (onHandoffToAssistant) {
-        onHandoffToAssistant(`请调用技能「${sk.name}」（${sk.id}）协助处理当前任务。`);
-      } else {
-        onNotice(`可在对话中输入：请调用技能 ${sk.id}`);
-      }
-    },
-    [onHandoffToAssistant, onNotice],
-  );
 
   useEffect(() => {
     if (!active || !mc.data.overview) return;
@@ -261,10 +217,11 @@ export default function MemoryCenterPanel({
 
   const navForDestination = (): McNavId => {
     if (destination === "me") return "work_preference";
-    if (destination === "folder") return folderId || "overview";
+    if (destination === "folder" || destination === "rules" || destination === "diagnostics") {
+      return folderId || "overview";
+    }
     if (destination === "review") return "suggestions";
-    if (morePage === "activity") return "activity";
-    if ((morePage === "diagnostics" || morePage === "rules") && folderId) return folderId;
+    if (destination === "activity") return "activity";
     return "overview";
   };
 
@@ -272,7 +229,7 @@ export default function MemoryCenterPanel({
     if (!active || mc.ui.searchActive) return;
     const nav = navForDestination();
     if (mc.ui.navId !== nav) mc.dispatchUi({ type: "set_nav", navId: nav });
-  }, [active, destination, folderId, morePage, mc.ui.searchActive, mc.ui.navId]);
+  }, [active, destination, folderId, mc.ui.searchActive, mc.ui.navId]);
 
   const scopes = mc.data.overview?.scopes ?? [];
   const folders = useMemo(() => {
@@ -301,15 +258,10 @@ export default function MemoryCenterPanel({
   }, [destination, folderId, folderDetail, composer]);
 
   const reviewCount = mc.activity.suggestions?.entries.length ?? 0;
-  const skillPendingCount = useMemo(
-    () => skillProposals.filter((p) => p.status === "pending").length,
-    [skillProposals],
-  );
 
   function pickDestination(next: MemoryDestination) {
     mc.clearSearch();
     setComposer(null);
-    setMorePage(null);
     setDestination(next);
   }
 
@@ -339,19 +291,14 @@ export default function MemoryCenterPanel({
   const visibleKeys = useMemo(() => {
     if (searching && mc.data.search) return mc.data.search.hits.map((hit, index) => itemKey(hit, index));
     if (destination === "folder") return folderItems.map((item, index) => itemKey(item, index));
+    if (destination === "rules") return (folderDetail?.rules ?? []).map((rule) => `rule:${rule.relPath}`);
     if (destination === "me" && memory) {
       const fields = CORE_FIELD_ORDER.map((field) => `core:${field}`);
       const entries = memory.entries.filter((entry) => !entry.invalidAt).map((entry) => `entry:${entry.id}`);
       return [...fields, ...entries];
     }
-    if (destination === "skills") {
-      const propKeys = skillProposals.filter((p) => p.status === "pending").map((p) => `prop:${p.id}`);
-      const skKeys = skillRows.map((s) => `skill:${s.id}`);
-      return [...propKeys, ...skKeys];
-    }
-    if (destination === "more" && !morePage) return MORE_PAGES.map((page) => `more:${page.id}`);
     return [];
-  }, [searching, mc.data.search, destination, folderItems, memory, morePage, skillProposals, skillRows]);
+  }, [searching, mc.data.search, destination, folderItems, folderDetail?.rules, memory]);
   rowKeys.current = visibleKeys;
 
   useEffect(() => {
@@ -373,10 +320,6 @@ export default function MemoryCenterPanel({
         const current = mc.ui.selectedKey;
         const index = Math.max(0, keys.indexOf(current ?? ""));
         const next = keys[Math.min(keys.length - 1, Math.max(0, index + (event.key === "ArrowDown" ? 1 : -1)))] ?? keys[0];
-        if (next?.startsWith("more:")) {
-          setMorePage(next.slice(5) as MorePage);
-          return;
-        }
         selectRow(next);
         return;
       }
@@ -476,16 +419,45 @@ export default function MemoryCenterPanel({
     );
   }
 
+  function renderReviewInlineBanner() {
+    if (!reviewCount) return null;
+    return (
+      <div
+        className="assistant-item"
+        style={{
+          marginBottom: 10,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span className={styles.subline}>
+          <Mark tone="warn">待你确认 · {reviewCount}</Mark> 有 {reviewCount} 条重复或失效引用建议需要确认
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button type="button" className="pill" onClick={() => pickDestination("review")}>
+            查看建议
+          </button>
+          <button type="button" className="pill" onClick={() => mc.acceptAllLowRisk()}>
+            一键处理低风险
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   function renderMe() {
     if (!memory) return <div className={MEMORY_CENTER_CSS.statusLoading}>正在加载记忆…</div>;
     const paused = memory.settings.paused
       ? "记忆已暂停"
-      : "关于我和工作偏好每次都会带上。标了「不在这一轮」的句子还在，也能搜到。";
+      : "L1 全局生效：关于我和工作偏好每次都会带上（仅在与文件夹 L0 规则冲突时服从 L0）。";
     const entries = memory.entries.filter((entry) => !entry.invalidAt);
     return (
       <>
         <div className={styles.headRow}>
-          <h2 className={styles.paneTitle}>记得的我</h2>
+          <h2 className={styles.paneTitle}>L1 · 记得的我（个人记忆与通用习惯）</h2>
           {composer || mc.ui.selectedKey?.startsWith("core:") || mc.ui.selectedKey?.startsWith("entry:") ? null : (
             <button type="button" className={styles.pineBtn} onClick={() => { setComposer("create"); openDetail(); }}>
               记一条
@@ -496,6 +468,8 @@ export default function MemoryCenterPanel({
           {name ? `${name} · ` : ""}
           {paused}
         </p>
+        {renderReviewInlineBanner()}
+        <div className="side-label" style={{ marginTop: 6 }}>核心画像与通用工作习惯（每次必带）</div>
         <ul className="assistant-list">
           {CORE_FIELD_ORDER.map((field) => {
             const value = memory.core.fields[field]?.trim() ?? "";
@@ -509,47 +483,56 @@ export default function MemoryCenterPanel({
               />
             );
           })}
-          {entries.map((entry) => (
-            <ItemRow
-              key={entry.id}
-              title={entry.topic || "一条记忆"}
-              body={entry.text}
-              meta={
-                <>
-                  {basisLabel(entry.basis) ? <Mark>{basisLabel(entry.basis)}</Mark> : null}
-                  {entry.resident === false ? <Mark>不在这一轮</Mark> : null}
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      selectRow(`entry:${entry.id}`);
-                      setComposer("edit");
-                    }}
-                  >
-                    改
-                  </button>
-                  <button
-                    type="button"
-                    className="pill"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (window.confirm(`删掉「${entry.topic || "这条记忆"}」？`)) op("memory_purge", { id: entry.id });
-                    }}
-                  >
-                    删
-                  </button>
-                </>
-              }
-              selected={mc.ui.selectedKey === `entry:${entry.id}`}
-              onSelect={() => selectRow(`entry:${entry.id}`)}
-            />
-          ))}
         </ul>
-        {prefDetail?.items.length ? (
+        {entries.length ? (
           <>
-            <div className="side-label">工作偏好里的原话</div>
+            <div className="side-label" style={{ marginTop: 10 }}>个人记忆条目（{entries.length} 条）</div>
             <ul className="assistant-list">
+              {entries.map((entry) => (
+                <ItemRow
+                  key={entry.id}
+                  title={entry.topic || "一条记忆"}
+                  body={entry.text}
+                  meta={
+                    <>
+                      {basisLabel(entry.basis) ? <Mark>{basisLabel(entry.basis)}</Mark> : null}
+                      {entry.resident === false ? <Mark>不在这一轮</Mark> : null}
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          selectRow(`entry:${entry.id}`);
+                          setComposer("edit");
+                        }}
+                      >
+                        改
+                      </button>
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (window.confirm(`删掉「${entry.topic || "这条记忆"}」？`)) op("memory_purge", { id: entry.id });
+                        }}
+                      >
+                        删
+                      </button>
+                    </>
+                  }
+                  selected={mc.ui.selectedKey === `entry:${entry.id}`}
+                  onSelect={() => selectRow(`entry:${entry.id}`)}
+                />
+              ))}
+            </ul>
+          </>
+        ) : null}
+        {prefDetail?.items.length ? (
+          <details style={{ marginTop: 10 }}>
+            <summary className="side-label" style={{ cursor: "pointer", userSelect: "none" }}>
+              工作偏好里的原话（{prefDetail.items.length} 条）
+            </summary>
+            <ul className="assistant-list" style={{ marginTop: 6 }}>
               {prefDetail.items.map((item, index) => (
                 <ItemRow
                   key={itemKey(item, index)}
@@ -561,7 +544,7 @@ export default function MemoryCenterPanel({
                 />
               ))}
             </ul>
-          </>
+          </details>
         ) : null}
       </>
     );
@@ -570,11 +553,13 @@ export default function MemoryCenterPanel({
   function renderFolder() {
     const title = folder?.label || "这个文件夹";
     const items = folderDetail?.items ?? [];
+    const rules = folderDetail?.rules ?? [];
     const emptyFile = items.length === 0 && !mc.data.loadingScope && !mc.data.scopeError;
+    const diagLines = diagnosticsSummary(folderDetail?.diagnostics ?? null);
     return (
       <>
         <div className={styles.headRow}>
-          <h2 className={styles.paneTitle}>{emptyFile ? "这个文件夹还没有记忆" : title}</h2>
+          <h2 className={styles.paneTitle}>{title} · 规则与项目记忆</h2>
           <button type="button" className={styles.folderMenu} onClick={() => setSwitchingFolder((open) => !open)}>
             换文件夹
           </button>
@@ -592,6 +577,56 @@ export default function MemoryCenterPanel({
             ))}
           </ul>
         ) : null}
+
+        {renderReviewInlineBanner()}
+
+        {/* L0 文件夹硬规则层（置顶第一优先级） */}
+        <details open={rules.length > 0} style={{ marginBottom: 12 }}>
+          <summary className="side-label" style={{ cursor: "pointer", userSelect: "none" }}>
+            L0 · 文件夹硬规则（AGENTS.md / .cursor/rules · {rules.length} 项 · 最高优先级强制注入）
+          </summary>
+          {rules.length > 0 ? (
+            <ul className="assistant-list" style={{ marginTop: 6 }}>
+              {rules.map((rule) => (
+                <ItemRow
+                  key={rule.relPath}
+                  title={rule.relPath}
+                  body={rule.body.slice(0, 120)}
+                  meta={
+                    <>
+                      <Mark tone="ok">L0 硬规则</Mark>
+                      <span className={styles.subline}>{rule.chars} 字</span>
+                      {onOpenFile ? (
+                        <button
+                          type="button"
+                          className="pill"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onOpenFile(rule.relPath);
+                          }}
+                        >
+                          在右侧打开编辑
+                        </button>
+                      ) : null}
+                    </>
+                  }
+                  selected={mc.ui.selectedKey === `rule:${rule.relPath}`}
+                  onSelect={() => {
+                    selectRow(`rule:${rule.relPath}`);
+                    openDetail();
+                  }}
+                />
+              ))}
+            </ul>
+          ) : (
+            <p className={styles.subline} style={{ marginTop: 4 }}>
+              当前文件夹暂无 AGENTS.md 或 .cursor/rules 硬规则文件。
+            </p>
+          )}
+        </details>
+
+        {/* L2 当前项目记忆层 */}
+        <div className="side-label">L2 · 项目记忆（.jiebo/memory.md · 按生命周期动态注入）</div>
         <div className={styles.headRow}>
           <p className={styles.subline}>
             {emptyFile ? "记一条，下次在这个文件夹里就会记得。" : `${folderMenuLabel(folderMenu)} ${folderItems.length} 条`}
@@ -637,46 +672,100 @@ export default function MemoryCenterPanel({
           ))}
         </ul>
         {!emptyFile && folderDetail && !folderItems.length ? <p className={styles.subline}>这个筛选里没有。换一个，或看全部。</p> : null}
+
+        {/* 底部折叠：上一轮注入诊断与审计快捷入口 */}
+        <details style={{ marginTop: 14 }}>
+          <summary className="side-label" style={{ cursor: "pointer", userSelect: "none" }}>
+            上一轮怎么选的（上下文注入诊断）
+          </summary>
+          <div style={{ marginTop: 6 }}>
+            {diagLines.map((line) => (
+              <p key={line} className="loop-meta">
+                {line}
+              </p>
+            ))}
+            <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="pill"
+                onClick={() => pickDestination("activity")}
+              >
+                查看最近改动
+              </button>
+            </div>
+          </div>
+        </details>
       </>
     );
   }
 
-  function renderMore() {
-    if (!morePage) {
+  function renderMiddle() {
+    if (searching) return renderSearch();
+    if (destination === "me") return renderMe();
+    if (destination === "folder") return renderFolder();
+    if (destination === "rules") {
+      const rules = folderDetail?.rules ?? [];
       return (
         <>
-          <h2 className={styles.paneTitle}>更多</h2>
+          <h2 className={styles.paneTitle}>L0 · 文件夹硬规则（{folder?.label || "当前文件夹"}）</h2>
+          <p className={styles.subline}>
+            最高优先级 100% 强制注入上下文。点击规则可在右侧查看全文或直接在编辑器中修改。
+          </p>
           <ul className="assistant-list">
-            {MORE_PAGES.map((page) => (
-              <ItemRow key={page.id} title={page.label} body="" selected={false} onSelect={() => setMorePage(page.id)} />
+            {rules.map((rule) => (
+              <ItemRow
+                key={rule.relPath}
+                title={rule.relPath}
+                body={rule.body.slice(0, 120)}
+                meta={
+                  <>
+                    <Mark tone="ok">L0 硬规则</Mark>
+                    <span className={styles.subline}>{rule.chars} 字</span>
+                    {onOpenFile ? (
+                      <button
+                        type="button"
+                        className="pill"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenFile(rule.relPath);
+                        }}
+                      >
+                        在右侧打开编辑
+                      </button>
+                    ) : null}
+                  </>
+                }
+                selected={mc.ui.selectedKey === `rule:${rule.relPath}`}
+                onSelect={() => {
+                  selectRow(`rule:${rule.relPath}`);
+                  openDetail();
+                }}
+              />
             ))}
+            {!rules.length ? <li className={styles.subline}>这个文件夹暂无 AGENTS.md 或 .cursor/rules 规则。</li> : null}
           </ul>
         </>
       );
     }
-    return (
-      <>
-        <button type="button" className={`pill ${styles.drillBack}`} onClick={() => setMorePage(null)}>
-          返回
-        </button>
-        <h2 className={styles.paneTitle}>{MORE_PAGES.find((page) => page.id === morePage)?.label}</h2>
-        {morePage === "skills" ? (
-          <MemoryCenterSkillsPane
-            folderId={folderId}
-            op={op}
-            lastResult={lastResult}
-            resultTick={resultTick}
-            onNotice={onNotice}
-            selectedKey={mc.ui.selectedKey}
-            onSelectKey={(key) => {
-              selectRow(key);
-              openDetail();
-            }}
-            onDataChange={handleSkillsDataChange}
-            onUseSkillInChat={handleUseSkillInChat}
-          />
-        ) : null}
-        {morePage === "activity" ? (
+    if (destination === "diagnostics") {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>上一轮怎么选的（注入诊断）</h2>
+          <p className={styles.subline}>{folder?.label || "当前文件夹"} · 上一轮对话上下文记忆筛选详情</p>
+          <div>
+            {diagnosticsSummary(folderDetail?.diagnostics ?? null).map((line) => (
+              <p key={line} className="loop-meta">
+                {line}
+              </p>
+            ))}
+          </div>
+        </>
+      );
+    }
+    if (destination === "activity") {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>最近改动</h2>
           <MemoryCenterActivityPane
             state={mc.activity}
             scopeFilter={mc.activityScopeFilter}
@@ -694,8 +783,13 @@ export default function MemoryCenterPanel({
               pickFolder(scopeId);
             }}
           />
-        ) : null}
-        {morePage === "transfer" ? (
+        </>
+      );
+    }
+    if (destination === "transfer") {
+      return (
+        <>
+          <h2 className={styles.paneTitle}>导出与导入</h2>
           <MemoryCenterImportPane
             op={op}
             lastResult={lastResult}
@@ -703,63 +797,13 @@ export default function MemoryCenterPanel({
             onNotice={onNotice}
             overviewScopes={scopes}
           />
-        ) : null}
-        {morePage === "diagnostics" ? (
-          <div>
-            {diagnosticsSummary(folderDetail?.diagnostics ?? null).map((line) => (
-              <p key={line} className="loop-meta">
-                {line}
-              </p>
-            ))}
-          </div>
-        ) : null}
-        {morePage === "rules" ? (
-          <ul className="assistant-list">
-            {(folderDetail?.rules ?? []).map((rule) => (
-              <ItemRow
-                key={rule.relPath}
-                title={rule.relPath}
-                body={rule.body.slice(0, 120)}
-                selected={mc.ui.selectedKey === `rule:${rule.relPath}`}
-                onSelect={() => selectRow(`rule:${rule.relPath}`)}
-              />
-            ))}
-            {!folderDetail?.rules.length ? <li className={styles.subline}>这个文件夹没有规则。</li> : null}
-          </ul>
-        ) : null}
-      </>
-    );
-  }
-
-  function renderMiddle() {
-    if (searching) return renderSearch();
-    if (destination === "me") return renderMe();
-    if (destination === "folder") return renderFolder();
-    if (destination === "skills") {
-      return (
-        <>
-          <h2 className={styles.paneTitle}>技能工厂</h2>
-          <MemoryCenterSkillsPane
-            folderId={folderId}
-            op={op}
-            lastResult={lastResult}
-            resultTick={resultTick}
-            onNotice={onNotice}
-            selectedKey={mc.ui.selectedKey}
-            onSelectKey={(key) => {
-              selectRow(key);
-              openDetail();
-            }}
-            onDataChange={handleSkillsDataChange}
-            onUseSkillInChat={handleUseSkillInChat}
-          />
         </>
       );
     }
     if (destination === "review") {
       return (
         <>
-          <h2 className={styles.paneTitle}>要你看一眼</h2>
+          <h2 className={styles.paneTitle}>待你确认</h2>
           <p className={styles.subline}>{reviewCount ? `${reviewCount} 条待看` : "都处理完了"}</p>
           <p className={styles.subline}>重复、日期和搬家后的文件，用「梳理一遍」处理。这里的卡片可以不点。</p>
           <MemoryCenterSuggestionsPane
@@ -771,7 +815,7 @@ export default function MemoryCenterPanel({
         </>
       );
     }
-    return renderMore();
+    return isWorkspaceScoped ? renderFolder() : renderMe();
   }
 
   function renderDetail() {
@@ -780,54 +824,10 @@ export default function MemoryCenterPanel({
       if (hit) return <HitDetail hit={hit} scopeLabel={resolveScopeLabel(hit.scopeId, scopes)} />;
     }
     if (destination === "me") return renderMeDetail();
-    if (destination === "skills" || (destination === "more" && morePage === "skills")) {
-      return (
-        <MemoryCenterSkillDetail
-          selectedKey={mc.ui.selectedKey}
-          skills={skillRows}
-          proposals={skillProposals}
-          decidingId={decidingSkillId}
-          onDecide={(prop, approve) => {
-            setDecidingSkillId(prop.id);
-            op("skill_proposal_decide", {
-              proposalId: prop.id,
-              approve,
-              expectedRev: prop.rev,
-              decisionNote: approve ? "在技能工厂详情栏批准上架" : "在技能工厂详情栏拒绝",
-            });
-          }}
-          onUseSkillInChat={handleUseSkillInChat}
-          onUpdateMeta={(sk, patch) => {
-            op("skill_update_meta", {
-              skillId: sk.id,
-              entry: sk.entry,
-              ...patch,
-              workspace: folderId || undefined,
-            });
-          }}
-          onEditApproved={(sk, draft) => {
-            if (!sk.sha256) return;
-            op("skill_edit_approved", {
-              skillId: sk.id,
-              entry: sk.entry,
-              expectedSha256: sk.sha256,
-              name: draft.name,
-              summary: draft.summary,
-              keywords: draft.keywords,
-              globs: sk.triggers.globs,
-              requiredTools: sk.requiredTools,
-              refs: sk.refs,
-              body: draft.body,
-              workspace: folderId || undefined,
-            });
-          }}
-        />
-      );
-    }
-    if (destination === "more" && morePage === "rules" && mc.ui.selectedKey?.startsWith("rule:")) {
+    if (mc.ui.selectedKey?.startsWith("rule:")) {
       const rel = mc.ui.selectedKey.slice(5);
       const rule = folderDetail?.rules.find((row) => row.relPath === rel);
-      if (rule) return <RuleDetail rule={rule} />;
+      if (rule) return <RuleDetail rule={rule} onOpenFile={onOpenFile} />;
     }
     if (composer === "create" && destination === "folder" && folderId) {
       return (
@@ -1004,7 +1004,7 @@ export default function MemoryCenterPanel({
         <>
         <TidyControl busy={tidyBusy} note={tidyNote} onTidy={() => { setTidyBusy(true); setTidyNote(null); op("memory_tidy"); }} />
         <div className={styles.destTabs} role="tablist" aria-label="记忆">
-          {MEMORY_DESTINATIONS.map((dest) => (
+          {activeDestinations.filter((dest) => dest.id !== "review" || reviewCount > 0 || destination === "review").map((dest) => (
             <button
               key={dest.id}
               type="button"
@@ -1013,9 +1013,8 @@ export default function MemoryCenterPanel({
               className={`${styles.destTab}${destination === dest.id ? ` ${styles.destTabOn}` : ""}`}
               onClick={() => pickDestination(dest.id)}
             >
-              {dest.label}
+              {dest.layer ? `${dest.layer} · ${dest.label}` : dest.label}
               {dest.id === "review" && reviewCount ? <span className={styles.clayCount}> {reviewCount}</span> : null}
-              {dest.id === "skills" && skillPendingCount ? <span className={styles.clayCount}> {skillPendingCount}</span> : null}
             </button>
           ))}
         </div>
@@ -1025,8 +1024,10 @@ export default function MemoryCenterPanel({
       <div className={`${styles.layout} ${MEMORY_CENTER_CSS.layout} ${layoutClass}`}>
         {showNav ? (
           <nav className={`${styles.nav} ${MEMORY_CENTER_CSS.nav}`} aria-label="记忆">
-            <h2 className={`${styles.paneTitle} ${MEMORY_CENTER_FOCUS.navTitle}`}>记忆</h2>
-            {MEMORY_DESTINATIONS.map((dest) => (
+            <h2 className={`${styles.paneTitle} ${MEMORY_CENTER_FOCUS.navTitle}`}>
+              {isWorkspaceScoped ? "规则与项目记忆" : "个人记忆"}
+            </h2>
+            {activeDestinations.filter((dest) => dest.id !== "review" || reviewCount > 0 || destination === "review").map((dest) => (
               <button
                 key={dest.id}
                 type="button"
@@ -1035,11 +1036,14 @@ export default function MemoryCenterPanel({
                 onClick={() => pickDestination(dest.id)}
               >
                 <span className={styles.navLabel}>
-                  {dest.label}
-                  {dest.id === "folder" && folder ? <span className={styles.subline}> {folder.label}</span> : null}
+                  {dest.layer ? `${dest.layer} · ${dest.label}` : dest.label}
+                  {dest.id === "folder" && folder ? (
+                    <span className={styles.subline}> {folder.label}</span>
+                  ) : dest.hint ? (
+                    <span className={styles.subline}> {dest.hint}</span>
+                  ) : null}
                 </span>
                 {dest.id === "review" && reviewCount ? <span className={styles.clayCount}>{reviewCount}</span> : null}
-                {dest.id === "skills" && skillPendingCount ? <span className={styles.clayCount}>{skillPendingCount}</span> : null}
               </button>
             ))}
             <TidyControl busy={tidyBusy} note={tidyNote} onTidy={() => { setTidyBusy(true); setTidyNote(null); op("memory_tidy"); }} />
@@ -1121,10 +1125,20 @@ function HitDetail({ hit, scopeLabel }: { hit: MemoryCenterSearchHit; scopeLabel
   );
 }
 
-function RuleDetail({ rule }: { rule: RuleFile }) {
+function RuleDetail({ rule, onOpenFile }: { rule: RuleFile; onOpenFile?: (path: string) => void }) {
   return (
     <div className={styles.detailBody}>
-      <div className="side-label">{rule.relPath}</div>
+      <div className={styles.headRow}>
+        <div className="side-label">L0 硬规则 · {rule.relPath}</div>
+        {onOpenFile ? (
+          <button type="button" className="pill" onClick={() => onOpenFile(rule.relPath)}>
+            在右侧预览中打开编辑
+          </button>
+        ) : null}
+      </div>
+      <p className="loop-meta">
+        作用于目录：{rule.appliesDir || "."} · 共 {rule.chars} 字（最高优先级强制生效）
+      </p>
       <pre className="assistant-pre">{rule.body}</pre>
     </div>
   );

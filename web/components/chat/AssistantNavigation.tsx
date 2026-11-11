@@ -2,7 +2,7 @@ import type { AssistantView } from "../AssistantPanel";
 import { ASSISTANT_SIDEBAR_NAV } from "../../lib/productNavigation";
 import { IconRail } from "../chromeIcons";
 
-export type AssistantSidebarView = "chat" | AssistantView;
+export type AssistantSidebarView = "chat" | AssistantView | "skills";
 
 type Props = {
   assistantName: string;

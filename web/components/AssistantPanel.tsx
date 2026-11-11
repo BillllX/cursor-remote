@@ -13,7 +13,6 @@ import { repairReplyText } from "@shared/replyText";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
 import { AssistantColleaguesSection } from "./assistant/AssistantColleaguesSection";
 import {
-  assistantMemoryEntryText,
   initialAssistantMemoryNavigation,
   openAssistantMemoryNavigation,
   revisitAssistantMemoryNavigation,
@@ -54,6 +53,8 @@ type Props = {
   onOpenInboxItem: (item: { chatId?: string; id: string }) => void;
   onOpenChat: (chatId: string) => void;
   onHandoffToAssistant?: (prompt: string) => void;
+  onOpenFile?: (path: string) => void;
+  onOpenSkills?: () => void;
   initialInboxId?: string;
   initialDelegationId?: string;
   basePath: string;
@@ -89,6 +90,8 @@ export default function AssistantPanel({
   onOpenInboxItem,
   onOpenChat,
   onHandoffToAssistant,
+  onOpenFile,
+  onOpenSkills,
   initialInboxId,
   initialDelegationId,
   basePath,
@@ -220,9 +223,27 @@ export default function AssistantPanel({
   const todosOpen = (state?.todos || []).filter((t) => !t.done);
   const todosDone = (state?.todos || []).filter((t) => t.done);
   const brief = state?.brief?.text?.trim();
-  const memoryEntry = assistantMemoryEntryText(memoryNavigation);
 
   const isWorkspaceMemoryMode = memoryNavigation.source === "workspace" && tab === "memory";
+  const isPersonalMemoryMode = memoryNavigation.source !== "workspace" && tab === "memory";
+  const isColleaguesMode = tab === "colleagues";
+  const isFocusedSingleOverlay = isWorkspaceMemoryMode || isPersonalMemoryMode || isColleaguesMode;
+
+  const modalTitle = isWorkspaceMemoryMode
+    ? "规则与记忆"
+    : isPersonalMemoryMode
+      ? `${name} · 个人记忆`
+      : isColleaguesMode
+        ? "同事与通行证"
+        : `${name} · 助理`;
+
+  const modalSubtitle = isWorkspaceMemoryMode
+    ? "管理当前工作区的文件夹硬规则（AGENTS.md / .cursor/rules）、项目记忆（.jiebo/memory.md）与注入诊断"
+    : isPersonalMemoryMode
+      ? "管理跨所有工作区生效的个人记忆（关于我 / 偏好 / 近况 / 人物 / 通用工作偏好）"
+      : isColleaguesMode
+        ? "统一管理跨工作区同事通行证、对外免登门户链接、微信扫码绑定与日历忙闲权限"
+        : `后台 ${state?.background.model || "grok-4.7"} · ${backgroundOk ? "就绪" : state?.background.reason || "未就绪"}`;
 
   return (
     <div className="search-overlay workspace-modal-overlay open assistant-overlay" onClick={onClose}>
@@ -232,92 +253,79 @@ export default function AssistantPanel({
         onClick={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label={`${name} · 助理`}
+        aria-label={modalTitle}
       >
         <div className="assistant-head workspace-modal-head">
           <div className="assistant-head-text workspace-modal-heading">
             <div className="workspace-modal-title-row">
-              <div className="loop-title workspace-modal-title">
-                {isWorkspaceMemoryMode ? "记忆与规则" : `${name} · 助理`}
-              </div>
+              <div className="loop-title workspace-modal-title">{modalTitle}</div>
               {isWorkspaceMemoryMode ? (
                 <span className="workspace-modal-badge">
                   {memoryNavigation.target === "personal" ? "当前工作区" : memoryNavigation.target}
                 </span>
               ) : null}
             </div>
-            <div className="loop-meta workspace-modal-sub">
-              {isWorkspaceMemoryMode
-                ? `管理当前工作区记忆（.jiebo/memory.md）、规则（AGENTS.md / .cursor/rules）与个人偏好 · ${name}`
-                : `后台 ${state?.background.model || "grok-4.7"} · ${backgroundOk ? "就绪" : state?.background.reason || "未就绪"}`}
-            </div>
+            <div className="loop-meta workspace-modal-sub">{modalSubtitle}</div>
           </div>
           <div className="workspace-modal-actions">
-            <button type="button" className="logout-btn" onClick={onClose}>
-              关闭
+            <button
+              type="button"
+              className="files-browser-close workspace-modal-close"
+              aria-label={`关闭${modalTitle}`}
+              title="关闭 (Esc)"
+              onClick={onClose}
+            >
+              ×
             </button>
           </div>
         </div>
-        <div
-          className="assistant-tabs"
-          role="tablist"
-          aria-label="助理功能"
-          onKeyDown={(event) => {
-            const tabs: AssistantView[] = ["overview", "inbox", "colleagues", "notify", "memory"];
-            const index = tabs.indexOf(tab);
-            let next = index;
-            if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
-            else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
-            else if (event.key === "Home") next = 0;
-            else if (event.key === "End") next = tabs.length - 1;
-            else return;
-            event.preventDefault();
-            const nextTab = tabs[next] ?? "overview";
-            selectTab(nextTab);
-            requestAnimationFrame(() => document.getElementById(`assistant-tab-${nextTab}`)?.focus());
-          }}
-        >
-          {(
-            [
-              [
-                "overview",
-                approvals.length + pendingSkillProposals.length
-                  ? `总览 · ${approvals.length + pendingSkillProposals.length}`
-                  : "总览",
-              ],
-              ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
-              ["colleagues", "同事"],
-              ["notify", "通知"],
-            ] as const
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              id={`assistant-tab-${id}`}
-              role="tab"
-              aria-controls="assistant-tabpanel"
-              aria-selected={tab === id}
-              tabIndex={tab === id ? 0 : -1}
-              className={`pill${tab === id ? " on" : ""}`}
-              onClick={() => selectTab(id)}
-            >
-              {label}
-            </button>
-          ))}
-          <button
-            type="button"
-            id="assistant-tab-memory"
-            role="tab"
-            aria-controls="assistant-tabpanel"
-            aria-selected={tab === "memory"}
-            tabIndex={tab === "memory" ? 0 : -1}
-            className={`pill assistant-memory-entry${tab === "memory" ? " on" : ""}`}
-            aria-label={memoryEntry.ariaLabel}
-            onClick={() => selectTab("memory")}
+        {!isFocusedSingleOverlay ? (
+          <div
+            className="assistant-tabs"
+            role="tablist"
+            aria-label="助理功能"
+            onKeyDown={(event) => {
+              const tabs: AssistantView[] = ["overview", "inbox"];
+              const index = tabs.indexOf(tab);
+              let next = index;
+              if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
+              else if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
+              else if (event.key === "Home") next = 0;
+              else if (event.key === "End") next = tabs.length - 1;
+              else return;
+              event.preventDefault();
+              const nextTab = tabs[next] ?? "overview";
+              selectTab(nextTab);
+              requestAnimationFrame(() => document.getElementById(`assistant-tab-${nextTab}`)?.focus());
+            }}
           >
-            {memoryEntry.label}
-          </button>
-        </div>
+            {(
+              [
+                [
+                  "overview",
+                  approvals.length + pendingSkillProposals.length
+                    ? `今日与待办 · ${approvals.length + pendingSkillProposals.length}`
+                    : "今日与待办",
+                ],
+                ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                id={`assistant-tab-${id}`}
+                role="tab"
+                aria-controls="assistant-tabpanel"
+                aria-selected={tab === id}
+                tabIndex={tab === id ? 0 : -1}
+                className={`pill${tab === id ? " on" : ""}`}
+                onClick={() => selectTab(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {notice ? <div className="loop-meta assistant-notice">{notice}</div> : null}
 
         <div
@@ -368,14 +376,13 @@ export default function AssistantPanel({
                         type="button"
                         className="pill"
                         onClick={() => {
-                          setMemoryLoaded(true);
-                          setMemoryNavigation((current) =>
-                            openAssistantMemoryNavigation(current, "assistant", "skills"),
-                          );
-                          selectTab("memory");
+                          if (onOpenSkills) {
+                            onClose();
+                            onOpenSkills();
+                          }
                         }}
                       >
-                        查看手册
+                        去技能工厂查看
                       </button>
                     </div>
                   ))}
@@ -569,7 +576,7 @@ export default function AssistantPanel({
                   </details>
                 ) : null}
               </Section>
-              <Section title="日程">
+              <Section title="个人提醒与简报">
                 {state?.schedules?.length ? (
                   <ul className="assistant-list">
                     {state.schedules.map((row) => (
@@ -591,7 +598,7 @@ export default function AssistantPanel({
                             type="button"
                             className="pill"
                             onClick={() => {
-                              if (window.confirm(`删除日程「${row.title}」？`)) {
+                              if (window.confirm(`删除提醒「${row.title}」？`)) {
                                 op("schedule_remove", { id: row.id });
                               }
                             }}
@@ -608,7 +615,7 @@ export default function AssistantPanel({
                     ))}
                   </ul>
                 ) : (
-                  <Empty>还没有日程。</Empty>
+                  <Empty>还没有个人提醒或每日简报日程。</Empty>
                 )}
               </Section>
               <Section title="委派">
@@ -694,19 +701,6 @@ export default function AssistantPanel({
                 ) : (
                   <Empty>还没有委派。在助理会话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
                 )}
-              </Section>
-              <Section title="同事与通行证">
-                <div className="assistant-item">
-                  <div className="assistant-item-head">
-                    <span className="assistant-item-title">跨工作区同事权限与门户管理</span>
-                    <button type="button" className="pill" onClick={() => selectTab("colleagues")}>
-                      管理同事
-                    </button>
-                  </div>
-                  <div className="loop-meta">
-                    统一分配同事可访问的多个知识库工作区、脱敏日历忙闲查询、站内 IM 与微信绑定，以及审批同事提交的日历/知识库变更提案。
-                  </div>
-                </div>
               </Section>
             </>
           ) : null}
@@ -849,11 +843,10 @@ export default function AssistantPanel({
                                   op("inbox_read", { ids: [item.id] });
                                   void closeInboxNotification(item.id);
                                 }
-                                setMemoryLoaded(true);
-                                setMemoryNavigation((current) =>
-                                  openAssistantMemoryNavigation(current, "assistant", "skills"),
-                                );
-                                selectTab("memory");
+                                if (onOpenSkills) {
+                                  onClose();
+                                  onOpenSkills();
+                                }
                               }}
                             >
                               去技能工厂审批
@@ -886,6 +879,14 @@ export default function AssistantPanel({
                 resultTick={assistantResultTick}
                 onNotice={setNotice}
                 onHandoffToAssistant={onHandoffToAssistant}
+                onOpenFile={
+                  onOpenFile
+                    ? (relPath) => {
+                        onOpenFile(relPath);
+                        onClose();
+                      }
+                    : undefined
+                }
               />
             )
           ) : null}

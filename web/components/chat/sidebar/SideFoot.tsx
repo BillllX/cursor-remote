@@ -1,8 +1,7 @@
-// 侧栏底部：使用统计、连接状态与设置面板
+// 侧栏底部：使用统计、连接状态与设置浮层入口
 import type { Dispatch, SetStateAction } from "react";
 import { workspaceLabel } from "../../../lib/chat/workspace";
 import type { AppearanceId, PaletteId } from "../../../lib/theme";
-import { SettingsPanel } from "../SettingsPanel";
 
 type SideFootProps = {
   isAdmin: boolean;
@@ -15,17 +14,17 @@ type SideFootProps = {
   workspaceRoot: string;
   assistantName: string;
   settingsOpen: boolean;
-  themeChoice: {
+  themeChoice?: {
     palette: PaletteId;
     appearance: AppearanceId;
   } | null;
-  setThemeChoice: Dispatch<
+  setThemeChoice?: Dispatch<
     SetStateAction<{
       palette: PaletteId;
       appearance: AppearanceId;
     } | null>
   >;
-  logout: () => void;
+  logout?: () => void;
 };
 
 export function SideFoot({
@@ -39,9 +38,6 @@ export function SideFoot({
   workspaceRoot,
   assistantName,
   settingsOpen,
-  themeChoice,
-  setThemeChoice,
-  logout,
 }: SideFootProps) {
   return (
     <div className="side-foot">
@@ -52,9 +48,10 @@ export function SideFoot({
       ) : null}
       <button
         type="button"
-        className="side-foot-btn"
+        className={`side-foot-btn${settingsOpen ? " on" : ""}`}
+        aria-pressed={settingsOpen}
         onClick={() => setSettingsOpen((open) => !open)}
-        title={cwd || "工作目录"}
+        title={cwd || "账户与设置"}
       >
         <span className={`dot ${connected && unlocked ? (busy ? "busy" : "on") : "off"}`} />
         <span className="side-foot-cwd">
@@ -63,19 +60,10 @@ export function SideFoot({
               ? "正在登录…"
               : busy
                 ? "服务器正在干活"
-                : workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)
-            : "没连上"}
+                : `${workspaceLabel(cwd || workspaceRoot, workspaceRoot, assistantName)} · 设置`
+            : "没连上 · 设置"}
         </span>
       </button>
-      {settingsOpen ? (
-        <SettingsPanel
-          themeChoice={themeChoice}
-          setThemeChoice={setThemeChoice}
-          cwd={cwd}
-          workspaceRoot={workspaceRoot}
-          logout={logout}
-        />
-      ) : null}
     </div>
   );
 }

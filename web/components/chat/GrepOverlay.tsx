@@ -19,6 +19,7 @@ type GrepOverlayProps = {
   wideIDERef?: RefObject<boolean>;
   grepWait: boolean;
   workspaceName?: string;
+  onSwitchMode?: (mode: "files" | "git") => void;
 };
 
 export function GrepOverlay({
@@ -34,6 +35,7 @@ export function GrepOverlay({
   openFile,
   grepWait,
   workspaceName = "工作区",
+  onSwitchMode,
 }: GrepOverlayProps) {
   const totalHits = grepNameHits.length + grepHits.length;
 
@@ -61,6 +63,24 @@ export function GrepOverlay({
             <div className="workspace-modal-sub">{workspaceName} · 搜索文件名或代码全文内容</div>
           </div>
           <div className="workspace-modal-actions">
+            {onSwitchMode ? (
+              <>
+                <button
+                  type="button"
+                  className="workspace-modal-btn"
+                  onClick={() => onSwitchMode("files")}
+                >
+                  浏览文件
+                </button>
+                <button
+                  type="button"
+                  className="workspace-modal-btn"
+                  onClick={() => onSwitchMode("git")}
+                >
+                  源代码管理
+                </button>
+              </>
+            ) : null}
             {grepQ ? (
               <button
                 type="button"

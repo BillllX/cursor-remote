@@ -23,6 +23,7 @@ export function CollabShell({
   onOpenFile,
   onOpenAssistant,
   onOpenWorkspace,
+  onOpenColleagues,
 }: {
   state: CollabUiState;
   dispatch: (action: CollabAction) => void;
@@ -42,6 +43,7 @@ export function CollabShell({
   onOpenFile: (file: TurnFile) => void;
   onOpenAssistant: () => void;
   onOpenWorkspace: () => void;
+  onOpenColleagues?: () => void;
 }) {
   const [mobileList, setMobileList] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(Boolean(state.selectedTaskId));
@@ -123,6 +125,7 @@ export function CollabShell({
             );
           }
         }}
+        onOpenColleagues={onOpenColleagues}
       />
       {room ? (
         <div className={styles.center}>

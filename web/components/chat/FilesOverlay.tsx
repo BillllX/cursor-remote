@@ -31,7 +31,7 @@ type FilesOverlayProps = {
   handleTreeCreate: (path: string, kind: "file" | "dir") => void;
   handleTreeRename: (from: string, to: string) => void;
   handleTreeDelete: (path: string, dir: boolean) => void;
-  onSwitchMode?: (mode: "files" | "git") => void;
+  onSwitchMode?: (mode: "files" | "git" | "search") => void;
   onRefresh?: () => void;
 };
 
@@ -137,13 +137,22 @@ export function FilesOverlay({
 
           <div className="workspace-modal-actions">
             {onSwitchMode ? (
-              <button
-                type="button"
-                className="workspace-modal-btn"
-                onClick={() => onSwitchMode(isGitMode ? "files" : "git")}
-              >
-                {isGitMode ? "浏览全部文件" : `源代码管理 (${gitCounts.total})`}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="workspace-modal-btn"
+                  onClick={() => onSwitchMode(isGitMode ? "files" : "git")}
+                >
+                  {isGitMode ? "浏览全部文件" : `源代码管理 (${gitCounts.total})`}
+                </button>
+                <button
+                  type="button"
+                  className="workspace-modal-btn"
+                  onClick={() => onSwitchMode("search")}
+                >
+                  工作区搜索
+                </button>
+              </>
             ) : null}
             {onRefresh ? (
               <button type="button" className="workspace-modal-btn" onClick={onRefresh}>

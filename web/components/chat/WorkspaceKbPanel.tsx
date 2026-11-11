@@ -40,6 +40,7 @@ type WorkspaceKbPanelProps = {
   assistantResults: AssistantResultMessage[];
   onOpenBoard: (relPath: string) => void;
   setNotice: (msg: string) => void;
+  viewMode?: "kb" | "schedules" | "tokens" | "all";
 };
 
 export function WorkspaceKbPanel({
@@ -50,6 +51,7 @@ export function WorkspaceKbPanel({
   assistantResults,
   onOpenBoard,
   setNotice,
+  viewMode = "all",
 }: WorkspaceKbPanelProps) {
   const [status, setStatus] = useState<KbWorkspaceStatusData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -456,41 +458,44 @@ export function WorkspaceKbPanel({
     }
   }
 
+  const showKbSection = viewMode === "all" || viewMode === "kb";
+  const showSchedulesSection = viewMode === "all" || viewMode === "schedules";
+  const showTokensSection = viewMode === "all" || viewMode === "tokens";
+
   return (
     <div
       className="workspace-kb-panel"
       style={{
-        marginTop: 12,
-        paddingTop: 12,
-        borderTop: "1px solid var(--line)",
         display: "flex",
         flexDirection: "column",
         gap: 12,
       }}
-      aria-label="知识库与外部投递配置"
+      aria-label="知识库与自动化配置"
       data-workspace-path={workspacePath}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <span className="side-label" style={{ margin: 0 }}>
-          知识库与投递门户
-        </span>
-        {status?.isKnowledgeBase ? (
-          <span
-            style={{
-              fontSize: 11,
-              padding: "1px 7px",
-              borderRadius: 999,
-              background: "rgba(47, 107, 82, 0.16)",
-              color: "var(--accent, #2f6b52)",
-              fontWeight: 600,
-            }}
-          >
-            已标记为知识库
+      {showKbSection ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <span className="side-label" style={{ margin: 0 }}>
+            知识库与业务看板
           </span>
-        ) : (
-          <span style={{ fontSize: 11, color: "var(--muted)" }}>普通工作区</span>
-        )}
-      </div>
+          {status?.isKnowledgeBase ? (
+            <span
+              style={{
+                fontSize: 11,
+                padding: "1px 7px",
+                borderRadius: 999,
+                background: "rgba(47, 107, 82, 0.16)",
+                color: "var(--accent, #2f6b52)",
+                fontWeight: 600,
+              }}
+            >
+              已标记为知识库
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, color: "var(--muted)" }}>普通工作区</span>
+          )}
+        </div>
+      ) : null}
 
       {errorText ? (
         <div
@@ -507,7 +512,7 @@ export function WorkspaceKbPanel({
       ) : null}
 
       {/* 1. 转为知识库工作区 / 编辑分类白名单 */}
-      {!status?.isKnowledgeBase || editingKb ? (
+      {showKbSection && (!status?.isKnowledgeBase || editingKb) ? (
         <div
           style={{
             display: "flex",
@@ -566,7 +571,7 @@ export function WorkspaceKbPanel({
             ) : null}
           </div>
         </div>
-      ) : (
+      ) : showKbSection && status ? (
         <div
           style={{
             display: "flex",
@@ -597,10 +602,10 @@ export function WorkspaceKbPanel({
           </div>
           <div style={{ color: "var(--muted)", fontSize: 11 }}>一级分类：{status.allowedCategories.join(" / ")}</div>
         </div>
-      )}
+      ) : null}
 
       {/* 2. 知识库 HTML 看板列表（直接点击打开右侧预览） */}
-      {status?.isKnowledgeBase ? (
+      {showKbSection && status?.isKnowledgeBase ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <div className="side-label" style={{ margin: 0 }}>
             知识库 HTML 看板（{status.boards.length}）
@@ -636,7 +641,7 @@ export function WorkspaceKbPanel({
       ) : null}
 
       {/* 2.5 关注的企微文件与变动巡检 */}
-      {status?.isKnowledgeBase ? (
+      {showKbSection && status?.isKnowledgeBase ? (
         <div
           style={{
             display: "flex",
@@ -1034,7 +1039,7 @@ export function WorkspaceKbPanel({
       ) : null}
 
       {/* 2.8 工作区更新记录（更新时间 & 更新内容摘要） */}
-      {status?.isKnowledgeBase ? (
+      {showKbSection && status?.isKnowledgeBase ? (
         <div
           style={{
             display: "flex",
@@ -1242,7 +1247,7 @@ export function WorkspaceKbPanel({
       ) : null}
 
       {/* 通用工程级定时任务（无论是否开启知识库均支持配置） */}
-      {status ? (
+      {showSchedulesSection && status ? (
         <WorkspaceScheduleSection
           workspaceKey={workspaceKey}
           schedules={status.workspaceSchedules ?? []}
@@ -1256,7 +1261,7 @@ export function WorkspaceKbPanel({
       ) : null}
 
       {/* 3. 外部同事投递门户链接与投递密钥管理 */}
-      {status?.isKnowledgeBase ? (
+      {showTokensSection && status?.isKnowledgeBase ? (
         <div
           style={{
             display: "flex",

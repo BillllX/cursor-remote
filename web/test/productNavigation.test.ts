@@ -28,16 +28,20 @@ describe("Web 产品信息架构", () => {
     assert.ok(HELLO_CLIENT.caps?.includes("im_collab"));
   });
 
-  test("工作区承载会话、文件、搜索、Git、记忆和管理", () => {
+  test("工作区按竖向层级承载会话及独立浮层功能（知识库看板、定时自动化、技能工厂、规则记忆、文件、搜索、Git、工作区设置）", () => {
     assert.deepEqual(
       WORKSPACE_NAV.map((item) => item.id),
-      ["chats", "files", "search", "git", "memory", "management"],
+      ["chats", "kb", "schedules", "skills", "memory", "files", "search", "git", "management"],
     );
     assert.equal(WORKSPACE_NAV[0]?.id, "chats");
     assert.equal(
       WORKSPACE_NAV.some((item) => (item.id as string) === "overview"),
       false,
     );
+    assert.equal(WORKSPACE_NAV.find((item) => item.id === "kb")?.label, "知识库与看板");
+    assert.equal(WORKSPACE_NAV.find((item) => item.id === "schedules")?.label, "定时与自动化");
+    assert.equal(WORKSPACE_NAV.find((item) => item.id === "skills")?.label, "技能工厂");
+    assert.equal(WORKSPACE_NAV.find((item) => item.id === "memory")?.label, "规则与记忆");
     assert.equal(WORKSPACE_NAV.find((item) => item.id === "search")?.label, "工作区搜索");
   });
 
@@ -52,21 +56,21 @@ describe("Web 产品信息架构", () => {
     );
   });
 
-  test("助理主导航不把记忆伪装成普通 Tab", () => {
+  test("助理主导航聚焦日常总览与收件箱，不把记忆与一次性通知开关混入普通 Tab", () => {
     assert.deepEqual(
       ASSISTANT_NAV.map((item) => item.id),
-      ["overview", "inbox", "notify"],
+      ["overview", "inbox"],
     );
   });
 
-  test("助理侧栏只承载个人助理功能", () => {
+  test("助理侧栏按竖向承载对话、今日待办、收件箱、个人记忆与独立技能工厂", () => {
     assert.deepEqual(
       ASSISTANT_SIDEBAR_NAV.map((item) => item.id),
-      ["chat", "overview", "inbox", "notify", "memory"],
+      ["chat", "overview", "inbox", "memory", "skills"],
     );
     assert.equal(
       ASSISTANT_SIDEBAR_NAV.some((item) =>
-        ["files", "search", "git", "management", "loop", "terminal"].includes(item.id),
+        ["files", "search", "git", "management", "loop", "terminal", "notify"].includes(item.id),
       ),
       false,
     );

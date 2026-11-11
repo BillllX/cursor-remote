@@ -40,6 +40,25 @@ struct DelegationListScreen: View {
 
     var body: some View {
         List {
+            Section {
+                Picker("任务栏目", selection: Binding(
+                    get: { column },
+                    set: { next in
+                        if embeddedInInbox {
+                            router.inboxLane = .work(next)
+                        } else {
+                            router.go(.worklist(next))
+                        }
+                    }
+                )) {
+                    Text("待办").tag(AssistantWorkColumn.todo)
+                    Text("委派").tag(AssistantWorkColumn.delegation)
+                    Text("提醒计划").tag(AssistantWorkColumn.plan)
+                }
+                .pickerStyle(.segmented)
+                .listRowBackground(JieboColor.paper)
+                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            }
             if column == .todo {
                 Section {
                     HStack(spacing: 8) {
@@ -1079,6 +1098,32 @@ struct MemoryCenterSheet: View {
                 .navigationDestination(for: PhoneRoute.self) { route in
                     PhoneSettingsDestination(route: route)
                 }
+        }
+    }
+}
+
+/// 独立技能工厂弹窗（从记忆与规则中彻底剥离，供工作台与小驳独立调用）
+struct SkillsWorkspaceSheet: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                MemoryCenterSkillsPane()
+                    .padding(12)
+            }
+            .background(JieboColor.paper)
+            .navigationTitle("技能工厂")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+            .onAppear {
+                store.memoryCenterLoadSkills()
+            }
         }
     }
 }

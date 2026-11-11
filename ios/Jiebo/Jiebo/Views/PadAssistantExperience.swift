@@ -462,66 +462,83 @@ struct PadTaskExperience: View {
     }
 
     var body: some View {
-        List {
-            if !projection.personalTasksAvailable, !projection.personalTasks.isEmpty {
-                Section {
-                    Label("当前为兼容模式，这个栏目仍可处理。", systemImage: "info.circle")
-                        .font(JieboFont.text(.footnote))
-                        .foregroundStyle(JieboColor.dim)
+        VStack(spacing: 0) {
+            Picker("任务栏目", selection: Binding(
+                get: { column },
+                set: { next in
+                    router.openAssistant(section: next.section, selection: nil)
                 }
-                .listRowBackground(JieboColor.white)
+            )) {
+                Text("待办").tag(AssistantWorkColumn.todo)
+                Text("委派").tag(AssistantWorkColumn.delegation)
+                Text("提醒计划").tag(AssistantWorkColumn.plan)
             }
-            ForEach(visiblePhases, id: \.self) { phase in
-                let rows = tasks.filter { $0.phase == phase }
-                if !rows.isEmpty {
-                    Section(padTaskPhaseTitle(phase)) {
-                        ForEach(rows) { task in
-                            Button {
-                                router.select(.task(task.id))
-                            } label: {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: padTaskSymbol(task))
-                                        .foregroundStyle(task.priority == "high" ? JieboColor.warnFg : JieboColor.pine)
-                                        .frame(width: 22)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(task.title.nilIfEmpty ?? "未命名任务")
-                                            .font(JieboFont.text(.subheadline, weight: .semibold))
-                                            .foregroundStyle(JieboColor.ink)
-                                        Text(taskLine(task))
-                                            .font(JieboFont.text(.footnote))
-                                            .foregroundStyle(JieboColor.dim)
-                                            .lineLimit(2)
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(JieboColor.paper)
+
+            List {
+                if !projection.personalTasksAvailable, !projection.personalTasks.isEmpty {
+                    Section {
+                        Label("当前为兼容模式，这个栏目仍可处理。", systemImage: "info.circle")
+                            .font(JieboFont.text(.footnote))
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    .listRowBackground(JieboColor.white)
+                }
+                ForEach(visiblePhases, id: \.self) { phase in
+                    let rows = tasks.filter { $0.phase == phase }
+                    if !rows.isEmpty {
+                        Section(padTaskPhaseTitle(phase)) {
+                            ForEach(rows) { task in
+                                Button {
+                                    router.select(.task(task.id))
+                                } label: {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Image(systemName: padTaskSymbol(task))
+                                            .foregroundStyle(task.priority == "high" ? JieboColor.warnFg : JieboColor.pine)
+                                            .frame(width: 22)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(task.title.nilIfEmpty ?? "未命名任务")
+                                                .font(JieboFont.text(.subheadline, weight: .semibold))
+                                                .foregroundStyle(JieboColor.ink)
+                                            Text(taskLine(task))
+                                                .font(JieboFont.text(.footnote))
+                                                .foregroundStyle(JieboColor.dim)
+                                                .lineLimit(2)
+                                        }
+                                        Spacer(minLength: 0)
                                     }
-                                    Spacer(minLength: 0)
+                                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                    .contentShape(Rectangle())
                                 }
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
+                                .listRowBackground(JieboColor.white)
+                                .padSemanticDraggable(PadSemanticTransfer(
+                                    kind: .task,
+                                    stableID: task.id,
+                                    title: task.title.nilIfEmpty ?? "未命名任务"
+                                ))
                             }
-                            .buttonStyle(.plain)
-                            .listRowBackground(JieboColor.white)
-                            .padSemanticDraggable(PadSemanticTransfer(
-                                kind: .task,
-                                stableID: task.id,
-                                title: task.title.nilIfEmpty ?? "未命名任务"
-                            ))
                         }
                     }
                 }
             }
-        }
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .background(JieboColor.paper)
-        .overlay {
-            if tasks.isEmpty {
-                ContentUnavailableView(
-                    (!projection.personalTasksAvailable && projection.personalTasks.isEmpty) ? "\(column.title)暂时不可用" : "还没有\(column.title)",
-                    systemImage: column.symbol,
-                    description: Text(column.emptyDetail)
-                )
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
+            .overlay {
+                if tasks.isEmpty {
+                    ContentUnavailableView(
+                        (!projection.personalTasksAvailable && projection.personalTasks.isEmpty) ? "\(column.title)暂时不可用" : "还没有\(column.title)",
+                        systemImage: column.symbol,
+                        description: Text(column.emptyDetail)
+                    )
+                }
             }
+            .refreshable { store.requestAssistant(force: true) }
         }
-        .refreshable { store.requestAssistant(force: true) }
     }
 }
 

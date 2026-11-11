@@ -7,11 +7,14 @@ export const PRIMARY_NAV = [
 
 export const WORKSPACE_NAV = [
   { id: "chats", label: "会话", icon: "chats" },
+  { id: "kb", label: "知识库与看板", icon: "kb" },
+  { id: "schedules", label: "定时与自动化", icon: "schedules" },
+  { id: "skills", label: "技能工厂", icon: "skills" },
+  { id: "memory", label: "规则与记忆", icon: "memory" },
   { id: "files", label: "文件", icon: "files" },
   { id: "search", label: "工作区搜索", icon: "search" },
   { id: "git", label: "源代码管理", icon: "git" },
-  { id: "memory", label: "记忆与规则", icon: "memory" },
-  { id: "management", label: "管理", icon: "workspace" },
+  { id: "management", label: "工作区设置", icon: "settings" },
 ] as const;
 
 export const SESSION_TOOLS = [
@@ -20,17 +23,16 @@ export const SESSION_TOOLS = [
 ] as const;
 
 export const ASSISTANT_NAV = [
-  { id: "overview", label: "总览" },
+  { id: "overview", label: "今日与待办" },
   { id: "inbox", label: "收件箱" },
-  { id: "notify", label: "通知" },
 ] as const;
 
 export const ASSISTANT_SIDEBAR_NAV = [
   { id: "chat", label: "对话", glyph: "chats" },
-  { id: "overview", label: "今日总览", glyph: "overview" },
+  { id: "overview", label: "今日与待办", glyph: "overview" },
   { id: "inbox", label: "收件箱", glyph: "chats" },
-  { id: "notify", label: "通知", glyph: "assistant" },
   { id: "memory", label: "个人记忆", glyph: "memory" },
+  { id: "skills", label: "技能工厂", glyph: "skills" },
 ] as const;
 
 export const ASSISTANT_SURFACE = {
