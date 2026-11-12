@@ -8,7 +8,7 @@ import type { DropBatchMeta } from "./staging.ts";
 import type { DropTenantHost } from "./tokens.ts";
 import { buildIngestCustomTools, type IngestToolExecutionLog } from "./tools.ts";
 
-export const INGEST_RUNNER_MAX_MS = 15 * 60_000;
+export const INGEST_RUNNER_MAX_MS = 30 * 60_000;
 
 export type IngestRunnerDeps = {
   apiKey: () => string;

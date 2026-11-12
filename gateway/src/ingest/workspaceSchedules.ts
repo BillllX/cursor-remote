@@ -30,7 +30,7 @@ const RUNS_FILENAME = "workspace-schedule-runs.jsonl";
 const MAX_SCHEDULES_PER_TENANT = 100;
 const MAX_RUN_HISTORY = 500;
 const STEP1_LEASE_MS = 10 * 60_000;
-const STEP2_LEASE_MS = 25 * 60_000;
+const STEP2_LEASE_MS = 40 * 60_000;
 export const WORKSPACE_SCHEDULER_TICK_MS = 15_000;
 
 type SchedulesFile = {

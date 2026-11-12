@@ -9,7 +9,7 @@ export const BACKGROUND_MODEL = "grok-4.7";
 /** 后台运行可用的内置工具：只读，加上挂 customTools 用的 mcp。没有 edit、delete、shell、task */
 export const BACKGROUND_TOOLS = ["read", "grep", "glob", "ls", "mcp"] as const;
 
-export const BACKGROUND_MAX_MS = 20 * 60_000;
+export const BACKGROUND_MAX_MS = 30 * 60_000;
 export const BACKGROUND_MAX_PER_TENANT = 2;
 
 export type BackgroundDeps = {
