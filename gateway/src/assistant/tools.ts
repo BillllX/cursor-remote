@@ -1306,7 +1306,10 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         args: { type: "array", items: { type: "string" }, description: "workspace_script 可选脚本参数数组" },
         outputRelPath: S("workspace_script 可选产出文件相对路径"),
         ingestToKb: { type: "boolean", description: "是否将产物投入知识库归档队列刷新看板（默认 true）" },
-        timeoutSeconds: { type: "number", description: "脚本或 AI 任务超时秒数（默认 60）" },
+        timeoutSeconds: {
+          type: "number",
+          description: "脚本或 AI 任务超时秒数（脚本默认 60s/上限 300s；AI 分析默认 1200s 即 20 分钟 / 上限 3600s 即 60 分钟）",
+        },
         prompt: S("agent_prompt 必填：定时执行的 AI 分析指令"),
         note: S("可选，归档备注"),
       },

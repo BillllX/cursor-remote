@@ -40,7 +40,7 @@ export type WorkspaceSchedulePayload = {
   outputRelPath?: string;
   /** workspace_script / agent_prompt: 是否将产物投入知识库归档队列刷新 HTML 看板（默认 true） */
   ingestToKb?: boolean;
-  /** workspace_script / agent_prompt: 超时秒数（默认 60s） */
+  /** workspace_script / agent_prompt: 超时秒数（脚本默认 60s；AI 定时分析默认 1200s 即 20 分钟，最大 3600s 即 60 分钟） */
   timeoutSeconds?: number;
   /** agent_prompt: 定时执行的 AI 分析/汇总指令 */
   prompt?: string;

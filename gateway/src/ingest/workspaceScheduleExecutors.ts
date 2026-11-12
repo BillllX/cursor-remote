@@ -439,7 +439,7 @@ const executeAgentPrompt: WorkspaceTaskExecutor = async ({ host, schedule, works
     promptText,
   ].join("\n\n");
 
-  const timeoutMs = Math.max(10, Math.min(600, Math.floor(schedule.payload.timeoutSeconds ?? 180))) * 1000;
+  const timeoutMs = Math.max(10, Math.min(3600, Math.floor(schedule.payload.timeoutSeconds ?? 1200))) * 1000;
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
     const res = await Promise.race([
