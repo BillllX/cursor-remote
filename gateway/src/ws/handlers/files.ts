@@ -5,6 +5,7 @@ import { readSnapshotDiff, readSnapshotFile } from "../../turnFiles.ts";
 import { cwdOf, slotOf } from "../../runtime/slots.ts";
 import type { WorkspaceFile } from "../../runtime/types.ts";
 import {
+  extractSafeCanvasRel,
   filesMessage,
   listWorkspaceDirForClientAsync,
   listWorkspaceFilesForClientAsync,
@@ -13,6 +14,7 @@ import {
   pushWorkspace,
   readWorkspaceDiffAsync,
   readWorkspaceFileAsync,
+  resolveCanvasFallback,
   runFsOp,
   searchWorkspaceAsync,
   uniqueUploadPath,
@@ -129,16 +131,33 @@ function canvasPath(ctx: WsCtx, chatId: string, raw: string) {
     ctx.tenant.workspaceRoot,
   );
   if (!cwd) return null;
-  const path = workspacePath(cwd, raw);
-  const key = path ? workspacePath(ctx.tenant.workspaceRoot, resolve(cwd, path)) : null;
+  let path = workspacePath(cwd, raw);
+  let baseDir = cwd;
+  let hasLocalFile = false;
+  if (path) {
+    try {
+      const st = lstatSync(resolve(cwd, path));
+      hasLocalFile = st.isFile() && !st.isSymbolicLink();
+    } catch {
+      hasLocalFile = false;
+    }
+  }
+  if (!path || !hasLocalFile) {
+    const fallback = resolveCanvasFallback(cwd, raw, ctx.tenant.workspaceRoot);
+    if (fallback) {
+      path = fallback.path;
+      baseDir = fallback.abs === resolve(cwd, fallback.path) ? cwd : ctx.tenant.workspaceRoot;
+    }
+  }
+  const key = path ? workspacePath(ctx.tenant.workspaceRoot, resolve(baseDir, path)) : null;
   if (!path || !key || !isCanvasPath(path)) return null;
   try {
-    const root = realpathSync(cwd);
+    const root = realpathSync(baseDir);
     const expected = resolve(root, path);
     const diskPath = realpathSync(expected);
     if (diskPath !== expected || (!diskPath.startsWith(`${root}${sep}`) && diskPath !== root)) return null;
     if (!lstatSync(expected).isFile() || lstatSync(expected).isSymbolicLink()) return null;
-    return { cwd, path, key, diskPath };
+    return { cwd: baseDir, path, key, diskPath };
   } catch {
     return null;
   }
@@ -293,7 +312,10 @@ export async function onReadFile({ ws, conn, tenant }: WsCtx, message: MessageOf
   let file: WorkspaceFile;
   if (echo.sha != null) {
     // 快照只按 sha 寻址，path 只用来定 kind 和显示名
-    const rel = workspacePath(cwd, message.path) || message.path;
+    const rel =
+      workspacePath(cwd, message.path) ||
+      extractSafeCanvasRel(message.path, tenant.workspaceRoot) ||
+      message.path;
     file = message.diff
       ? readSnapshotDiff(tenant.stateDir, rel, echo.sha)
       : readSnapshotFile(tenant.stateDir, rel, echo.sha);

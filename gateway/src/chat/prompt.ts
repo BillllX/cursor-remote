@@ -94,7 +94,7 @@ export function wrapFollowupPrompt(
   if (mode === "plan") {
     return `${bound}[Plan mode：沿用本会话首轮规则，只出中文分步方案，不要改文件或跑写命令；可派 explore，不要派 builder。]\n\n${body}`;
   }
-  return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写 .cursor-remote/canvases/<kebab>.canvas.tsx 并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；超 30s 命令显式传 block_until_ms: 120000）。]\n\n${body}`;
+  return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写当前工作区相对路径 .cursor-remote/canvases/<kebab>.canvas.tsx，严禁加 ../ 前缀或写到父目录，并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；生成超 15KB/300 行的数据报表或长画布时严禁单次 Write 硬塞大字符串，优先用短脚本从磁盘读取数据生成或分块写入；超 30s 命令显式传 block_until_ms: 120000）。]\n\n${body}`;
 }
 
 export function wrapPrompt(
@@ -145,10 +145,15 @@ ${reviewPanelPrompt(panel)}
 
 ${body}`;
   }
-  return `${bound}CANVAS: If this turn's deliverable is a standalone analytical artifact (table, chart, review, metrics, timeline, architecture comparison), write exactly one file at .cursor-remote/canvases/<kebab-name>.canvas.tsx.
+  const canvasCwdHint = cwd
+    ? ` (relative to the current session workspace root ${cwd}; never prefix with ../ or write to a parent directory's .cursor-remote/canvases/)`
+    : " (relative to the current session workspace root; never prefix with ../ or write to a parent directory)";
+  return `${bound}CANVAS: If this turn's deliverable is a standalone analytical artifact (table, chart, review, metrics, timeline, architecture comparison), write exactly one file at .cursor-remote/canvases/<kebab-name>.canvas.tsx${canvasCwdHint}.
 Import only from "cursor/canvas". Default-export one React component. Embed data inline. No fetch(), no relative imports, no npm packages.
-Link that file in the reply, e.g. [仓库概览](.cursor-remote/canvases/repo-overview.canvas.tsx). Do not write a canvas for ordinary Q&A or a pure code edit.
+Link that file in the reply using the exact workspace-relative path, e.g. [仓库概览](.cursor-remote/canvases/repo-overview.canvas.tsx) (do not add ../ prefixes). Do not write a canvas for ordinary Q&A or a pure code edit.
 画布颜色跟应用主题走：只用 cursor/canvas 组件和 useHostTheme() 上色，不要写死 hex、rgb、hsl，也不要另做一套深浅色。宿主会套上用户当前的配色。
+
+大文件生成防呆守卫：当需要生成超过 15KB / 300 行的数据报表、看板或长画布（如内嵌大量台账数据的 .html 或 .canvas.tsx）时，严禁在单次 Write 工具参数里硬塞数万字静态字符串（会导致工具 JSON 参数流式拼装过久触发上游断流重试死循环），应优先通过短小的 Python/Node 脚本从磁盘 CSV/JSON/Markdown 读取数据并渲染落盘，或采用小步分块写入。
 
 命令或工具失败时不要结束整个任务。同一件事最多再试 2 次，每次换一种做法，不要原样重复。仍失败就把这一步记下来；后面不依赖它的步骤继续做。全部做完再说明哪一步没成。执行构建、打包或全量测试等预计超过 30 秒的命令时，请显式将超时参数（Shell 的 block_until_ms 或 run_shell 的 timeout_ms）设为 120000 或更大，避免 30 秒转入后台后连续重复读取同一个终端文件触发死循环或无进展熔断。
 

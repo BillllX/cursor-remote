@@ -1,4 +1,5 @@
 // HTTP 路由处理：上传、媒体、已存状态，以及 agent websocket 路径判断（createServer 与 listen 留在 index.ts）
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
@@ -9,7 +10,13 @@ import { chatOwnedByOther, cwdForChat, runningChatIds } from "../runtime/slots.t
 import { storedStatePayload } from "../sync/storedState.ts";
 import { allTenants, getTenant, hasAuth, mediaSecret, resolveTenant, settlePersistedChats } from "../tenants.ts";
 import { isSha, readArtifact, SNAPSHOT_GONE } from "../turnFiles.ts";
-import { MAX_UPLOAD_BYTES, uniqueUploadPath, workspacePath, writeWorkspaceBytes } from "../workspace/files.ts";
+import {
+  MAX_UPLOAD_BYTES,
+  resolveCanvasFallback,
+  uniqueUploadPath,
+  workspacePath,
+  writeWorkspaceBytes,
+} from "../workspace/files.ts";
 import { gitBytes, gitRoot, shadowGitEnv } from "../workspace/git.ts";
 
 export function agentSocketPath(url = "/") {
@@ -233,7 +240,15 @@ export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL)
     return;
   }
   const cwd = cwdForChat(tenant, chatId);
-  const path = workspacePath(cwd, raw);
+  let path = workspacePath(cwd, raw);
+  let abs = path ? resolve(cwd, path) : "";
+  if (!path || !existsSync(abs)) {
+    const fallback = resolveCanvasFallback(cwd, raw, tenant.workspaceRoot);
+    if (fallback) {
+      path = fallback.path;
+      abs = fallback.abs;
+    }
+  }
   if (!path) {
     res.writeHead(403).end("path");
     return;
@@ -255,7 +270,7 @@ export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL)
     }
     return;
   }
-  sendMediaFile(req, res, resolve(cwd, path), path, kind);
+  sendMediaFile(req, res, abs, path, kind);
 }
 
 /// GET /state：stored_state 的 HTTP 版，给收不了超大 WS 消息的客户端（iOS 约 1MiB 上限）

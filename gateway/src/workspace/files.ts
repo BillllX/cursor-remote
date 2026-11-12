@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import {
   constants,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -46,6 +47,70 @@ export function workspacePath(cwd: string, raw: string): string | null {
   const rel = relative(cwd, abs);
   if (!rel || relEscapes(rel)) return null;
   return rel;
+}
+
+const SAFE_CANVAS_FILE_RE = /^[A-Za-z0-9\u4e00-\u9fa5][A-Za-z0-9._\u4e00-\u9fa5-]*\.canvas\.tsx$/i;
+
+/**
+ * 识别并归一化安全的画布相对路径（仅限 .cursor-remote/canvases/<name>.canvas.tsx 白名单目录，且文件名无 .. 穿越）。
+ * 兼容子工作区模型误写的 ../.cursor-remote/canvases/<name>.canvas.tsx 或租户根绝对路径。
+ */
+export function extractSafeCanvasRel(raw: string, tenantRoot?: string): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  let norm = raw.trim().replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+  if (tenantRoot) {
+    const rootNorm = tenantRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (rootNorm && norm.startsWith(`${rootNorm}/`)) {
+      norm = norm.slice(rootNorm.length + 1);
+    }
+  }
+  while (norm.startsWith("../")) {
+    norm = norm.slice(3);
+  }
+  const prefix = ".cursor-remote/canvases/";
+  if (!norm.startsWith(prefix)) return null;
+  const fileName = norm.slice(prefix.length);
+  if (
+    !fileName ||
+    fileName.includes("/") ||
+    fileName.includes("\\") ||
+    fileName.includes("..") ||
+    !SAFE_CANVAS_FILE_RE.test(fileName)
+  ) {
+    return null;
+  }
+  return `${prefix}${fileName}`;
+}
+
+/**
+ * 解析画布文件的磁盘路径：优先取当前工作区 cwd 下的 .cursor-remote/canvases/<name>.canvas.tsx；
+ * 若当前为子工作区且文件不存在（或传入了 ../ 跨级画布路径），安全回退到租户根工作区 tenant.workspaceRoot/.cursor-remote/canvases/<name>.canvas.tsx。
+ */
+export function resolveCanvasFallback(cwd: string, raw: string, tenantRoot?: string): { path: string; abs: string } | null {
+  const root = tenantRoot || tenantForCwd(cwd)?.workspaceRoot;
+  const canvasRel = extractSafeCanvasRel(raw, root);
+  if (!canvasRel) return null;
+  const localAbs = resolve(cwd, canvasRel);
+  try {
+    const st = lstatSync(localAbs);
+    if (st.isFile() && !st.isSymbolicLink()) {
+      return { path: canvasRel, abs: localAbs };
+    }
+  } catch {
+    // 当前工作区下不存在，尝试租户根工作区回退
+  }
+  if (root && resolve(cwd) !== resolve(root)) {
+    const rootAbs = resolve(root, canvasRel);
+    try {
+      const st = lstatSync(rootAbs);
+      if (st.isFile() && !st.isSymbolicLink()) {
+        return { path: canvasRel, abs: rootAbs };
+      }
+    } catch {
+      // 租户根工作区下亦不存在
+    }
+  }
+  return null;
 }
 
 /** 每个连接上待执行 / 执行中的推送链：保证同一连接的推送按调用顺序一条条发 */
@@ -134,9 +199,19 @@ async function runPush(ws: WebSocket, slot: Slot, conn: Conn, cwd: string, tenan
  * 也是单测里“异步版行为一致”的对照基准。WS 请求处理一律用 *Async 版本。
  */
 export function readWorkspaceFile(cwd: string, raw: string): WorkspaceFile {
-  const path = workspacePath(cwd, raw);
-  if (!path) return { path: raw, error: "路径不在工作区里" };
-  const abs = resolve(cwd, path);
+  let path = workspacePath(cwd, raw);
+  let abs = path ? resolve(cwd, path) : "";
+  if (!path || (!existsSync(abs) && extractSafeCanvasRel(raw, tenantForCwd(cwd)?.workspaceRoot))) {
+    const fallback = resolveCanvasFallback(cwd, raw);
+    if (fallback) {
+      path = fallback.path;
+      abs = fallback.abs;
+    } else if (!path) {
+      const safeCanvas = extractSafeCanvasRel(raw, tenantForCwd(cwd)?.workspaceRoot);
+      if (safeCanvas) return { path: safeCanvas, error: "读不了这个文件" };
+      return { path: raw, error: "路径不在工作区里" };
+    }
+  }
   try {
     const st = statSync(abs);
     if (!st.isFile()) return { path, error: "这不是文件" };
@@ -1148,13 +1223,33 @@ async function readUpTo(fh: FileHandle, cap: number, signal: AbortSignal | undef
  * 并按 fstat 的大小有界读取，stat 与读取之间文件被替换或追加也不会读出超限内容。
  */
 export async function readWorkspaceFileAsync(cwd: string, raw: string, opt: AsyncOpt = {}): Promise<WorkspaceFile> {
-  const path = workspacePath(cwd, raw);
-  if (!path) return { path: raw, error: "路径不在工作区里" };
-  const abs = resolve(cwd, path);
+  let path = workspacePath(cwd, raw);
+  let abs = path ? resolve(cwd, path) : "";
+  if (!path) {
+    const fallback = resolveCanvasFallback(cwd, raw);
+    if (fallback) {
+      path = fallback.path;
+      abs = fallback.abs;
+    } else {
+      const safeCanvas = extractSafeCanvasRel(raw, tenantForCwd(cwd)?.workspaceRoot);
+      if (safeCanvas) return { path: safeCanvas, error: "读不了这个文件" };
+      return { path: raw, error: "路径不在工作区里" };
+    }
+  }
   let fh: FileHandle | undefined;
   try {
     throwIfAborted(opt.signal);
-    const early = planFileRead(path, await fsStat(abs));
+    let stEarly = await fsStat(abs).catch(() => null);
+    if (!stEarly) {
+      const fallback = resolveCanvasFallback(cwd, raw);
+      if (fallback && fallback.abs !== abs) {
+        path = fallback.path;
+        abs = fallback.abs;
+        stEarly = await fsStat(abs).catch(() => null);
+      }
+    }
+    if (!stEarly) return { path, error: "读不了这个文件" };
+    const early = planFileRead(path, stEarly);
     if ("done" in early) return early.done;
     fh = await fsOpen(abs, constants.O_RDONLY | constants.O_NONBLOCK);
     const st = await fh.stat();

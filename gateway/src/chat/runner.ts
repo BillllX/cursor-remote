@@ -124,8 +124,18 @@ export const RUN_QUIET_AFTER_TURN_ENDED_MS = 20_000;
 /** Cursor SDK 流内遇到瞬时限流（resource_exhausted / 429）或网络闪断时的最大自动续跑次数 */
 export const MAX_SDK_TRANSIENT_RETRIES = 2;
 
-const SDK_CONTINUATION_PROMPT =
+export const SDK_CONTINUATION_PROMPT =
   "刚才的运行因上游限流或连接瞬断中断，请直接从中断处继续完成剩余任务，不要重复已完成的步骤。";
+
+export const SDK_LARGE_WRITE_CONTINUATION_HINT =
+  "若刚才因单次写入内容过大导致流中断，请改用小步分块写入或用短脚本直接读取磁盘文件生成，避免单次工具参数过大。";
+
+/** 构造自动续跑提示词：若上次中断发生在仅有 thinking/工具参数拼装但尚未成功发出 tool_call 时，追加大文件拆分提醒 */
+export function buildSdkContinuationPrompt(interruptedBeforeToolCall = false): string {
+  return interruptedBeforeToolCall
+    ? `${SDK_CONTINUATION_PROMPT}${SDK_LARGE_WRITE_CONTINUATION_HINT}`
+    : SDK_CONTINUATION_PROMPT;
+}
 
 /** 判断是否应在收到 turn-ended 后启动静默收尾定时器：只要还有工具或子代理在运行，绝不提前断流 */
 export function shouldArmRunWatchQuiet(turnEnded: boolean, openToolsSize: number): boolean {
@@ -693,6 +703,7 @@ export async function handlePrompt(
     const staticRulesHash = loadStaticRulesFingerprint(cwd, conn.tenant);
     const panelKey = (slot.reviewRoster || []).map((r) => `${r.name}:${r.modelId}`).join(",");
     let turnProgressed = false;
+    let lastAttemptInterruptedBeforeTool = false;
     for (let sdkAttempt = 0; ; sdkAttempt += 1) {
       const prevAgentId = slot.agentId;
       const agent = await ensureAgent(conn, slot);
@@ -710,13 +721,20 @@ export async function handlePrompt(
         prompt = attachReseedContext(conn.tenant, slot.chatId, userText, baseFullPrompt);
         slot.reseed = false;
         turnProgressed = false;
+        lastAttemptInterruptedBeforeTool = false;
       } else if (!reviewAppended && gatewayState.promptSeedBySlot.get(slot) === seedKey) {
         prompt = compactPrompt;
       } else {
         prompt = baseFullPrompt;
       }
       const initialPayload = safeImages.length ? { text: prompt, images: safeImages } : prompt;
-      const payload = sdkAttempt > 0 && turnProgressed ? SDK_CONTINUATION_PROMPT : initialPayload;
+      const payload =
+        sdkAttempt > 0 && turnProgressed
+          ? buildSdkContinuationPrompt(lastAttemptInterruptedBeforeTool)
+          : initialPayload;
+      let attemptSawThinking = false;
+      let attemptSawToolCall = false;
+      let pendingThinkingBeforeTool = false;
       slot.agentId = agent.agentId;
       if (sdkAttempt === 0) {
         send(ws, { type: "session", chatId: slot.chatId, agentId: agent.agentId, cwd });
@@ -815,6 +833,8 @@ export async function handlePrompt(
             break;
           case "thinking-delta":
             turnProgressed = true;
+            attemptSawThinking = true;
+            pendingThinkingBeforeTool = true;
             noteRunActivity(true);
             if (rec.text) {
               send(ws, { type: "thinking-delta", chatId: slot.chatId, text: rec.text });
@@ -825,16 +845,22 @@ export async function handlePrompt(
           case "step-started":
           case "token-delta":
             turnProgressed = true;
+            attemptSawThinking = true;
+            pendingThinkingBeforeTool = true;
             noteRunActivity(true);
             break;
           case "step-completed":
           case "thinking-completed":
           case "summary":
             turnProgressed = true;
+            attemptSawThinking = true;
+            pendingThinkingBeforeTool = true;
             noteRunActivity(false);
             break;
           case "tool-call-started":
             turnProgressed = true;
+            attemptSawToolCall = true;
+            pendingThinkingBeforeTool = false;
             startTool(rec.callId || "", toolName(rec.toolCall), rec.toolCall?.args);
             noteRunActivity(false);
             break;
@@ -1016,6 +1042,8 @@ export async function handlePrompt(
               }
               if (event.type === "tool_call" && event.status === "running") {
                 turnProgressed = true;
+                attemptSawToolCall = true;
+                pendingThinkingBeforeTool = false;
                 startTool(event.call_id, event.name, event.args);
                 noteRunActivity(false);
                 const snap = snapshotFromResult(event.result);
@@ -1167,6 +1195,8 @@ export async function handlePrompt(
           slot.openTools.clear();
         }
         startedCalls.clear();
+        lastAttemptInterruptedBeforeTool =
+          (attemptSawThinking && !attemptSawToolCall) || pendingThinkingBeforeTool;
         const reason = err instanceof Error ? err.message : String(err);
         const isNoProgressResume = /repeated resume attempts made no progress/i.test(reason);
         const isMissingAgent = /agent[-_ ].*not found/i.test(reason);

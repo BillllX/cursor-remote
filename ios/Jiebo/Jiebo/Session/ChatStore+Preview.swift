@@ -153,14 +153,56 @@ extension ChatStore {
         var p = path.replacingOccurrences(of: "\\", with: "/")
         while p.hasSuffix("/") { p.removeLast() }
         if p.hasPrefix("./") { p.removeFirst(2) }
-        guard let cwdRaw = cwdRoot else { return p }
+        guard let cwdRaw = cwdRoot else {
+            return Self.normalizeCrossWorkspaceCanvasRel(p, root: nil) ?? p
+        }
         var root = cwdRaw.replacingOccurrences(of: "\\", with: "/")
         while root.hasSuffix("/") { root.removeLast() }
         if p == root { return "" }
         if !root.isEmpty, p.hasPrefix(root + "/") {
             return String(p.dropFirst(root.count + 1))
         }
+        if let canvasRel = Self.normalizeCrossWorkspaceCanvasRel(p, root: root) {
+            return canvasRel
+        }
         return p
+    }
+
+    /// 兼容子工作区下模型误写的 ../../.cursor-remote/canvases/<name>.canvas.tsx 或父工作区绝对路径
+    private static func normalizeCrossWorkspaceCanvasRel(_ path: String, root: String?) -> String? {
+        var norm = path
+        while norm.hasPrefix("../") {
+            norm.removeFirst(3)
+        }
+        let prefix = ".cursor-remote/canvases/"
+        if norm != path, norm.hasPrefix(prefix) {
+            let fileName = String(norm.dropFirst(prefix.count))
+            if isSafeCanvasFileName(fileName) {
+                return prefix + fileName
+            }
+        }
+        if let root, !root.isEmpty, path.hasPrefix("/") {
+            let marker = "/.cursor-remote/canvases/"
+            if let range = path.range(of: marker, options: .backwards) {
+                let ancestor = String(path[..<range.lowerBound])
+                let fileName = String(path[range.upperBound...])
+                if (root == ancestor || root.hasPrefix(ancestor + "/")), isSafeCanvasFileName(fileName) {
+                    return prefix + fileName
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func isSafeCanvasFileName(_ name: String) -> Bool {
+        guard !name.isEmpty,
+              !name.hasPrefix("."),
+              !name.contains("/"),
+              !name.contains("\\"),
+              !name.contains(".."),
+              name.lowercased().hasSuffix(".canvas.tsx")
+        else { return false }
+        return true
     }
 
     // MARK: P5 - 预览面板

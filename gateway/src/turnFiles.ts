@@ -642,6 +642,7 @@ function capDiff(text: string): string {
 export type TurnFilesInput = {
   cwd: string;
   stateDir: string;
+  tenantRoot?: string;
   tools: RunTool[];
   baseline?: TurnBaseline | null;
   /** 助理正文：其中的 canvas 链接/提及会追加到清单（在工具与 git 变更之后，避免挤掉真实改动） */
@@ -653,8 +654,37 @@ export type TurnFilesInput = {
   budgetMs?: number;
 };
 
+const SAFE_CANVAS_NAME_RE = /^[A-Za-z0-9\u4e00-\u9fa5][A-Za-z0-9._\u4e00-\u9fa5-]*\.canvas\.tsx$/i;
+
+function normalizeTurnCanvasRel(raw: string, tenantRoot?: string): string | null {
+  if (!raw || typeof raw !== "string") return null;
+  let norm = raw.trim().replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
+  if (tenantRoot) {
+    const rootNorm = tenantRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+    if (rootNorm && norm.startsWith(`${rootNorm}/`)) {
+      norm = norm.slice(rootNorm.length + 1);
+    }
+  }
+  while (norm.startsWith("../")) {
+    norm = norm.slice(3);
+  }
+  const prefix = ".cursor-remote/canvases/";
+  if (!norm.startsWith(prefix)) return null;
+  const fileName = norm.slice(prefix.length);
+  if (
+    !fileName ||
+    fileName.includes("/") ||
+    fileName.includes("\\") ||
+    fileName.includes("..") ||
+    !SAFE_CANVAS_NAME_RE.test(fileName)
+  ) {
+    return null;
+  }
+  return `${prefix}${fileName}`;
+}
+
 export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
-  const { cwd, stateDir } = input;
+  const { cwd, stateDir, tenantRoot } = input;
   const deadline = Date.now() + (input.budgetMs ?? TURN_BUDGET_MS);
   const overBudget = () => Date.now() >= deadline;
   const ordered: string[] = [];
@@ -664,23 +694,38 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
     seen.add(rel);
     ordered.push(rel);
   };
-  for (const raw of toolPaths(input.tools)) add(workspaceRel(cwd, raw));
+  for (const raw of toolPaths(input.tools)) add(workspaceRel(cwd, raw) || normalizeTurnCanvasRel(raw, tenantRoot));
   const base = input.baseline && !overBudget() ? openBaseline(input.baseline, deadline) : null;
   try {
     if (base) for (const rel of base.changes.keys()) add(workspaceRel(cwd, rel));
     if (input.assistantBody) {
-      for (const raw of canvasPathsFromAssistant(input.assistantBody)) add(workspaceRel(cwd, raw));
+      for (const raw of canvasPathsFromAssistant(input.assistantBody)) {
+        add(workspaceRel(cwd, raw) || normalizeTurnCanvasRel(raw, tenantRoot));
+      }
     }
     const picked: Array<{ rel: string; abs: string; size: number; kind: PreviewKind }> = [];
     for (const rel of ordered) {
       if (picked.length >= MAX_TURN_FILES) break;
       const abs = resolve(cwd, rel);
+      let foundFile = false;
       try {
         // lstat：符号链接不算，免得把工作区外的内容收进快照
         const st = lstatSync(abs);
-        if (st.isFile()) picked.push({ rel, abs, size: st.size, kind: kindFromPath(rel) });
+        if (st.isFile()) {
+          picked.push({ rel, abs, size: st.size, kind: kindFromPath(rel) });
+          foundFile = true;
+        }
       } catch {
         // 结束时已不存在
+      }
+      if (!foundFile && tenantRoot && resolve(cwd) !== resolve(tenantRoot) && normalizeTurnCanvasRel(rel, tenantRoot)) {
+        const rootAbs = resolve(tenantRoot, rel);
+        try {
+          const st = lstatSync(rootAbs);
+          if (st.isFile()) picked.push({ rel, abs: rootAbs, size: st.size, kind: kindFromPath(rel) });
+        } catch {
+          // 租户根工作区下亦不存在
+        }
       }
     }
     // 对照文本和「基线里有没有」各一次 git 批量拿，不按文件起子进程

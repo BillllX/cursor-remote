@@ -16,11 +16,36 @@ export function sameFile(a: string, b: string, cwd = "") {
   return false;
 }
 
+const SAFE_REL_CANVAS_RE =
+  /^(?:\.\.\/)+(\.cursor-remote\/canvases\/([A-Za-z0-9\u4e00-\u9fa5][A-Za-z0-9._\u4e00-\u9fa5-]*\.canvas\.tsx))$/i;
+
 export function relToCwd(path: string, cwd = "") {
   const p = path.replace(/\\/g, "/").replace(/\/+$/, "").replace(/^\.\//, "");
   const root = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
   if (root && (p === root || p.startsWith(`${root}/`))) {
     return p === root ? "" : p.slice(root.length + 1);
+  }
+  const canvasMatch = SAFE_REL_CANVAS_RE.exec(p);
+  if (canvasMatch && !canvasMatch[2].includes("..")) {
+    return canvasMatch[1];
+  }
+  if (root && p.startsWith("/")) {
+    const canvasMarker = "/.cursor-remote/canvases/";
+    const idx = p.lastIndexOf(canvasMarker);
+    if (idx > 0) {
+      const ancestor = p.slice(0, idx);
+      const fileName = p.slice(idx + canvasMarker.length);
+      if (
+        (root === ancestor || root.startsWith(`${ancestor}/`)) &&
+        fileName &&
+        !fileName.includes("/") &&
+        !fileName.includes("..") &&
+        !fileName.startsWith(".") &&
+        /\.canvas\.tsx$/i.test(fileName)
+      ) {
+        return `.cursor-remote/canvases/${fileName}`;
+      }
+    }
   }
   return p;
 }

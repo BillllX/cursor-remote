@@ -68,12 +68,21 @@ describe("工作区归属", () => {
 });
 
 describe("文件路径", () => {
-  test("relToCwd：工作区内转相对路径，根本身为空串", () => {
+  test("relToCwd：工作区内转相对路径，根本身为空串，子工作区跨级 .cursor-remote/canvases/ 自动归一", () => {
     assert.equal(relToCwd("/r/a/b.ts", "/r"), "a/b.ts");
     assert.equal(relToCwd("/r", "/r/"), "");
     assert.equal(relToCwd("./a/", ""), "a");
     assert.equal(relToCwd("x\\y", ""), "x/y");
     assert.equal(relToCwd("/other/a.ts", "/r"), "/other/a.ts");
+    assert.equal(
+      relToCwd("../../.cursor-remote/canvases/sannongxin-business-diagnosis.canvas.tsx", "/r/Fintopia集团"),
+      ".cursor-remote/canvases/sannongxin-business-diagnosis.canvas.tsx",
+    );
+    assert.equal(
+      relToCwd("/r/.cursor-remote/canvases/sannongxin-business-diagnosis.canvas.tsx", "/r/Fintopia集团"),
+      ".cursor-remote/canvases/sannongxin-business-diagnosis.canvas.tsx",
+    );
+    assert.equal(relToCwd("../../outside/secret.txt", "/r/Fintopia集团"), "../../outside/secret.txt");
   });
 
   test("sameFile：绝对路径与相对路径按后缀整段匹配", () => {

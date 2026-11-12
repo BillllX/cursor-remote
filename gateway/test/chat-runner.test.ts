@@ -7,12 +7,15 @@ import { WebSocket } from "ws";
 import {
   ASSISTANT_ROLL_TURNS,
   buildPromptSeedKey,
+  buildSdkContinuationPrompt,
   drainPending,
   handlePrompt,
   isTransientSdkError,
   MAX_SDK_TRANSIENT_RETRIES,
   promptModel,
   RUN_QUIET_AFTER_TURN_ENDED_MS,
+  SDK_CONTINUATION_PROMPT,
+  SDK_LARGE_WRITE_CONTINUATION_HINT,
   sdkRetryDelayMs,
   SESSION_ROLL_CONTEXT_CHARS,
   shouldArmRunWatchQuiet,
@@ -20,6 +23,12 @@ import {
   waitWithSlotCheck,
   WORKSPACE_ROLL_TURNS,
 } from "../src/chat/runner.ts";
+import {
+  extractSafeCanvasRel,
+  readWorkspaceFile,
+  readWorkspaceFileAsync,
+  resolveCanvasFallback,
+} from "../src/workspace/files.ts";
 import { diskChatContextStats } from "../src/chat/history.ts";
 import {
   loadDynamicMemoryContext,
@@ -472,5 +481,60 @@ describe("对话提速：第一步（子工作区按轮数/体积自动无感换
       panelKey: "",
     });
     assert.notEqual(key1, key2);
+  });
+
+  test("大文件生成防呆守卫与自动续跑提示词：thinking 后未成功发出 tool_call 中断时自动追加小步/脚本生成提醒", () => {
+    assert.equal(buildSdkContinuationPrompt(false), SDK_CONTINUATION_PROMPT);
+    assert.equal(
+      buildSdkContinuationPrompt(true),
+      `${SDK_CONTINUATION_PROMPT}${SDK_LARGE_WRITE_CONTINUATION_HINT}`,
+    );
+    assert.ok(buildSdkContinuationPrompt(true).includes("若刚才因单次写入内容过大导致流中断"));
+
+    const wrapped = wrapPrompt("生成三农信台账", "agent", undefined, "", "/tmp/ws/Fintopia集团", [], false, false);
+    assert.ok(wrapped.includes("大文件生成防呆守卫"), "wrapPrompt 应包含大文件生成防呆守卫");
+    assert.ok(wrapped.includes("15KB / 300 行"), "wrapPrompt 应指明 15KB / 300 行阈值");
+    assert.ok(wrapped.includes("never prefix with ../"), "wrapPrompt 应明确禁止 ../ 前缀画布路径");
+  });
+
+  test("子工作区画布路径归一化与根工作区安全回退：支持 ../../.cursor-remote/canvases/ 与租户根回退，同时拒绝越界目录穿越", async () => {
+    const tenant = allTenants()[0];
+    const rootWs = tenant.workspaceRoot;
+    const subWs = join(rootWs, "Fintopia集团");
+    mkdirSync(join(rootWs, ".cursor-remote", "canvases"), { recursive: true });
+    mkdirSync(subWs, { recursive: true });
+    const rootCanvasAbs = join(rootWs, ".cursor-remote", "canvases", "sannongxin-demo.canvas.tsx");
+    writeFileSync(rootCanvasAbs, "export default function Demo() { return null; }\n", "utf8");
+
+    try {
+      assert.equal(
+        extractSafeCanvasRel("../../.cursor-remote/canvases/sannongxin-demo.canvas.tsx", rootWs),
+        ".cursor-remote/canvases/sannongxin-demo.canvas.tsx",
+      );
+      assert.equal(
+        extractSafeCanvasRel(`${rootWs}/.cursor-remote/canvases/sannongxin-demo.canvas.tsx`, rootWs),
+        ".cursor-remote/canvases/sannongxin-demo.canvas.tsx",
+      );
+      // 严禁利用画布白名单穿透其他文件或子目录
+      assert.equal(extractSafeCanvasRel("../../.cursor-remote/canvases/../secret.txt", rootWs), null);
+      assert.equal(extractSafeCanvasRel("../../etc/passwd", rootWs), null);
+
+      const resolved = resolveCanvasFallback(subWs, "../../.cursor-remote/canvases/sannongxin-demo.canvas.tsx", rootWs);
+      assert.ok(resolved);
+      assert.equal(resolved.path, ".cursor-remote/canvases/sannongxin-demo.canvas.tsx");
+      assert.equal(resolved.abs, rootCanvasAbs);
+
+      const syncRead = readWorkspaceFile(subWs, ".cursor-remote/canvases/sannongxin-demo.canvas.tsx");
+      assert.equal(syncRead.error, undefined);
+      assert.equal(syncRead.path, ".cursor-remote/canvases/sannongxin-demo.canvas.tsx");
+      assert.ok(syncRead.content?.includes("export default function Demo"));
+
+      const asyncRead = await readWorkspaceFileAsync(subWs, "../../.cursor-remote/canvases/sannongxin-demo.canvas.tsx");
+      assert.equal(asyncRead.error, undefined);
+      assert.equal(asyncRead.path, ".cursor-remote/canvases/sannongxin-demo.canvas.tsx");
+      assert.ok(asyncRead.content?.includes("export default function Demo"));
+    } finally {
+      rmSync(rootCanvasAbs, { force: true });
+    }
   });
 });

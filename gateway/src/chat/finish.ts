@@ -116,6 +116,7 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
     const files = computeTurnFiles({
       cwd,
       stateDir: tenant.stateDir,
+      tenantRoot: tenant.workspaceRoot,
       tools: transcript.tools,
       baseline,
       assistantBody: transcript.assistant,
