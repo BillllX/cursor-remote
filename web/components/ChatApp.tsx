@@ -1244,7 +1244,12 @@ export default function ChatApp() {
               const path = relToCwd(pathFromPayload(message.args), cwdRef.current);
               const kind = path ? kindFromPath(path) : "text";
               const skipDiff =
-                kind === "canvas" || kind === "markdown" || kind === "html" || kind === "pdf" || kind === "audio";
+                kind === "canvas" ||
+                kind === "markdown" ||
+                kind === "html" ||
+                kind === "pdf" ||
+                kind === "audio" ||
+                kind === "binary";
               const existing = path
                 ? previewTabsRef.current.find((tab) => sameFile(tab.path, path, cwdRef.current))
                 : undefined;
@@ -1288,7 +1293,8 @@ export default function ChatApp() {
                 kind === "markdown" ||
                 kind === "html" ||
                 kind === "pdf" ||
-                kind === "audio";
+                kind === "audio" ||
+                kind === "binary";
               const tab = previewTabsRef.current.find((item) => sameFile(item.path, path, cwdRef.current));
               if (tab) {
                 if (!tab.sha) {
@@ -1805,7 +1811,7 @@ export default function ChatApp() {
     const pending = previewTabs.filter((tab) => {
       if (tab.error || tab.content != null) return false;
       const kind = tabKind(tab.path, tab.kind);
-      if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video") return false;
+      if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video" || kind === "binary") return false;
       if (kind === "svg" && tab.url) return false;
       return true;
     });

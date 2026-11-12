@@ -66,7 +66,7 @@ extension ChatStore {
         try Task.checkCancellation()
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(code) else { throw PreviewError.http(code) }
-        guard data.count <= 32 * 1024 * 1024 else { throw PreviewError.tooLarge }
+        guard data.count <= 40 * 1024 * 1024 else { throw PreviewError.tooLarge }
         return data
     }
 

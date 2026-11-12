@@ -206,6 +206,18 @@ export default function MediaPreview({
   }
 
   return (
-    <div className="tree-empty">这类文件还不能预览，请下载查看。</div>
+    <div className="tree-empty">
+      <div>
+        {name}
+        {mime && mime !== "application/octet-stream" ? ` · ${mime}` : ""}
+        {size != null ? ` · ${formatBytes(size)}` : ""}
+      </div>
+      <div style={{ marginTop: 6 }}>这类文件不支持在线直接预览，请下载到本地用对应软件打开。</div>
+      <div style={{ marginTop: 12 }}>
+        <a className="pill on" href={src} download={name}>
+          下载 {name}
+        </a>
+      </div>
+    </div>
   );
 }

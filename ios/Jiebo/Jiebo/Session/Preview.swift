@@ -17,7 +17,7 @@ enum PreviewKind: String, Sendable, Hashable, CaseIterable {
     /// 这类内容走 /media 票据下载，不内联 content（对齐网页 needsMediaUrl）
     var needsMediaURL: Bool {
         switch self {
-        case .image, .svg, .pdf, .audio, .video: return true
+        case .image, .svg, .pdf, .audio, .video, .binary: return true
         default: return false
         }
     }
@@ -36,6 +36,13 @@ private let audioExts: Set<String> = ["mp3", "wav", "ogg", "m4a", "aac", "flac"]
 private let videoExts: Set<String> = ["mp4", "webm"]
 private let markdownExts: Set<String> = ["md", "mdx", "markdown"]
 private let htmlExts: Set<String> = ["html", "htm"]
+private let binaryExts: Set<String> = [
+    "ppt", "pptx", "key", "odp",
+    "doc", "docx", "pages", "odt", "rtf",
+    "xls", "xlsx", "numbers", "ods",
+    "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar",
+    "dmg", "pkg", "wasm", "sqlite", "db", "parquet",
+]
 
 /// 对齐网页 formatBytes
 func formatBytes(_ size: Double) -> String {
@@ -57,6 +64,7 @@ func previewKind(of path: String) -> PreviewKind {
     if ext == "pdf" { return .pdf }
     if audioExts.contains(ext) { return .audio }
     if videoExts.contains(ext) { return .video }
+    if binaryExts.contains(ext) { return .binary }
     return .text
 }
 

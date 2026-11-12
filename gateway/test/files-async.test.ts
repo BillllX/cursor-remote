@@ -375,6 +375,8 @@ describe("异步版与旧同步版行为一致", () => {
     writeFileSync(join(dir, "mid.md"), "m".repeat(500_000));
     writeFileSync(join(dir, "small.md"), "# hi\n");
     writeFileSync(join(dir, "p.png"), Buffer.from([137, 80, 78, 71]));
+    writeFileSync(join(dir, "deck.pptx"), Buffer.alloc(300_000, 0x50));
+    writeFileSync(join(dir, "slides.ppt"), Buffer.alloc(250_000, 0xd0));
     writeFileSync(join(dir, "empty.txt"), "");
     mkdirSync(join(dir, "sub"));
     for (const path of [
@@ -384,6 +386,8 @@ describe("异步版与旧同步版行为一致", () => {
       "mid.md",
       "small.md",
       "p.png",
+      "deck.pptx",
+      "slides.ppt",
       "empty.txt",
       "sub",
       "missing.txt",
@@ -393,6 +397,15 @@ describe("异步版与旧同步版行为一致", () => {
     ]) {
       assert.deepEqual(await readWorkspaceFileAsync(dir, path), readWorkspaceFile(dir, path), path);
     }
+    const pptxRes = await readWorkspaceFileAsync(dir, "deck.pptx");
+    assert.equal(pptxRes.kind, "binary");
+    assert.equal(pptxRes.error, undefined);
+    assert.equal(pptxRes.size, 300_000);
+    assert.equal(pptxRes.mime, "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+    const pptRes = await readWorkspaceFileAsync(dir, "slides.ppt");
+    assert.equal(pptRes.kind, "binary");
+    assert.equal(pptRes.error, undefined);
+    assert.equal(pptRes.mime, "application/vnd.ms-powerpoint");
   });
 
   test("readWorkspaceFileAsync：取消时抛 AbortError，而不是当成“读不了”", async () => {

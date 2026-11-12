@@ -316,7 +316,8 @@ export default function FilePreview({
     : tabs.find(
         (tab) => tabKind(tab.path, tab.kind) === "canvas" && tab.content != null && !tab.error,
       );
-  const mediaKind = kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video";
+  const mediaKind =
+    kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video" || kind === "binary";
   const showSource = !live && !(mediaKind && kind !== "svg");
   const savedText = active.content ?? "";
   const draftDirty = editing && editDraft !== savedText;
@@ -708,7 +709,7 @@ export default function FilePreview({
           ) : (
             <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )
-        ) : (kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video") &&
+        ) : (kind === "image" || kind === "svg" || kind === "pdf" || kind === "audio" || kind === "video" || kind === "binary") &&
           (kind !== "svg" || live || active.diff) &&
           !editing ? (
           active.url ? (

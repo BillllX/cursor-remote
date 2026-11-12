@@ -352,6 +352,10 @@ describe("快照存储", () => {
     });
     assert.equal(readSnapshotFile(stateDir, "b.dat", bin).kind, "binary");
     assert.equal(readSnapshotFile(stateDir, "b.dat", bin).error, "二进制文件，没法预览");
+    const pptxSnap = readSnapshotFile(stateDir, "report.pptx", bin);
+    assert.equal(pptxSnap.kind, "binary");
+    assert.equal(pptxSnap.error, undefined);
+    assert.equal(pptxSnap.mime, "application/vnd.openxmlformats-officedocument.presentationml.presentation");
   });
 
   test("readSnapshotFile：sha 非法、快照已清理、文件超限分别报错", () => {

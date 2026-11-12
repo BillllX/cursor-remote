@@ -5,6 +5,36 @@ const AUDIO_EXT = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac"]);
 const VIDEO_EXT = new Set(["mp4", "webm"]);
 const MARKDOWN_EXT = new Set(["md", "mdx", "markdown"]);
 const HTML_EXT = new Set(["html", "htm"]);
+/** 已知的二进制办公文档与归档包后缀：直接判定为 binary，走 /media 流式下载或系统预览，不读全量文本进内存 */
+const BINARY_EXT = new Set([
+  "ppt",
+  "pptx",
+  "key",
+  "odp",
+  "doc",
+  "docx",
+  "pages",
+  "odt",
+  "rtf",
+  "xls",
+  "xlsx",
+  "numbers",
+  "ods",
+  "zip",
+  "tar",
+  "gz",
+  "tgz",
+  "bz2",
+  "xz",
+  "7z",
+  "rar",
+  "dmg",
+  "pkg",
+  "wasm",
+  "sqlite",
+  "db",
+  "parquet",
+]);
 
 const MIME: Record<string, string> = {
   png: "image/png",
@@ -29,6 +59,13 @@ const MIME: Record<string, string> = {
   md: "text/markdown; charset=utf-8",
   mdx: "text/markdown; charset=utf-8",
   markdown: "text/markdown; charset=utf-8",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  zip: "application/zip",
 };
 
 export function fileExt(path: string) {
@@ -48,6 +85,7 @@ export function kindFromPath(path: string): PreviewKind {
   if (ext === "pdf") return "pdf";
   if (AUDIO_EXT.has(ext)) return "audio";
   if (VIDEO_EXT.has(ext)) return "video";
+  if (BINARY_EXT.has(ext)) return "binary";
   return "text";
 }
 
@@ -64,13 +102,13 @@ export function sizeLimit(kind: PreviewKind) {
   if (kind === "canvas" || kind === "markdown") return 800_000;
   if (kind === "html" || kind === "svg") return 2_000_000;
   if (kind === "image") return 20 * 1024 * 1024;
-  if (kind === "pdf" || kind === "audio") return 40 * 1024 * 1024;
+  if (kind === "pdf" || kind === "audio" || kind === "binary") return 40 * 1024 * 1024;
   if (kind === "video") return 80 * 1024 * 1024;
   return 200_000;
 }
 
 export function isByteKind(kind: PreviewKind) {
-  return kind === "image" || kind === "pdf" || kind === "audio" || kind === "video";
+  return kind === "image" || kind === "pdf" || kind === "audio" || kind === "video" || kind === "binary";
 }
 
 export function needsMediaUrl(kind: PreviewKind) {

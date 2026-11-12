@@ -112,7 +112,7 @@ export async function saveWorkspaceFile(path: string, href: string, notify: (tex
     if (!res.ok) {
       notify(
         res.status === 413
-          ? `${name} 太大，网页端下载上限：普通文件 2MB、图片 20MB、PDF/音频 40MB、视频 80MB`
+          ? `${name} 太大，网页端下载上限：普通文本 2MB、图片 20MB、文档/PPT/PDF/音频 40MB、视频 80MB`
           : res.status === 404
             ? `${name} 已不在工作区`
             : `下载失败（${res.status}）`,

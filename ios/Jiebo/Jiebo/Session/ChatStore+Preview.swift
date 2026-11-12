@@ -105,7 +105,7 @@ extension ChatStore {
         let path = chatId.map { relToCwd(rawPath, chatId: $0) } ?? relToCwd(rawPath)
         guard !path.isEmpty else { return }
         switch previewKind(of: path) {
-        case .canvas, .markdown, .html, .pdf, .audio, .video:
+        case .canvas, .markdown, .html, .pdf, .audio, .video, .binary:
             openPreview(path, chatId: chatId)
         default:
             openPreview(path, diff: true, chatId: chatId)

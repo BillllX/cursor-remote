@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { basename, extname } from "node:path";
+import { basename } from "node:path";
+import { kindFromPath } from "../../../shared/preview.ts";
 import type { Artifact, PreviewKind, TurnFile } from "../../../shared/protocol.ts";
 import type { Delegation } from "./delegations.ts";
 import type { InboxItem } from "./inbox.ts";
@@ -57,15 +58,9 @@ function stableId(parts: string[]) {
 function previewKind(path: string): PreviewKind {
   const lower = path.toLowerCase();
   if (lower.endsWith(".canvas.tsx") || lower.endsWith(".canvas.jsx")) return "canvas";
-  const extension = extname(path).toLowerCase();
-  if (extension === ".md" || extension === ".mdx") return "markdown";
-  if (extension === ".html" || extension === ".htm") return "html";
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif"].includes(extension)) return "image";
-  if (extension === ".svg") return "svg";
-  if (extension === ".pdf") return "pdf";
-  if ([".mp3", ".m4a", ".wav", ".aac", ".ogg"].includes(extension)) return "audio";
-  if ([".mp4", ".mov", ".m4v", ".webm"].includes(extension)) return "video";
-  return "text";
+  if (lower.endsWith(".heic") || lower.endsWith(".avif")) return "image";
+  if (lower.endsWith(".mov") || lower.endsWith(".m4v")) return "video";
+  return kindFromPath(path);
 }
 
 function turnFile(value: unknown): TurnFile | null {
