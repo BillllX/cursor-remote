@@ -10,6 +10,7 @@ import {
   validateKbHtmlRelPath,
   type KbWorkspaceConfig,
 } from "./contract.ts";
+import { extractWorkspaceOfficePreviewSync } from "./officePreview.ts";
 import { validateBatchSourceFile, type DropBatchMeta } from "./staging.ts";
 
 export const MAX_KB_HTML_BYTES = 2 * 1024 * 1024;
@@ -267,26 +268,30 @@ export function executeIngestMoveFile(
   };
 }
 
+export type IngestHtmlPatch = {
+  oldText: string;
+  newText: string;
+};
+
 /**
- * 执行受限的知识库同名 HTML 更新：
+ * 执行受限的知识库同名 HTML 更新（支持整页写入 `htmlContent` 或局部增量替换 `patches`）：
  * 1. 目标路径必须满足 `<category>/<category>.html` 或 `<category>/<sub>/<sub>.html`；
- * 2. 校验 HTML 内容安全性；
- * 3. 若原 HTML 已存在，先通过 `safeReadWorkspaceTextFileSync` 将旧文件内容读入内存快照；
- * 4. 通过 `safeWriteWorkspaceFileSync` 写入新内容，若失败则用内存快照恢复并校验恢复结果。
+ * 2. 若原 HTML 已存在，先通过 `safeReadWorkspaceTextFileSync` 将旧文件内容读入内存快照；
+ * 3. 若传入 `patches`，在原 HTML 文本上按序精确替换每个 `oldText -> newText`（避免模型每次重新生成数万字完整 HTML 导致超时）；
+ * 4. 对最终完整 HTML 执行 `validateKbHtmlContentSafety` 安全校验；
+ * 5. 通过 `safeWriteWorkspaceFileSync` 写入新内容，若失败则用内存快照恢复并校验恢复结果。
  */
 export function executeIngestUpdateHtml(
   workspaceDir: string,
   config: KbWorkspaceConfig,
   htmlRelPath: string,
-  htmlContent: string,
+  htmlContent?: string,
   log?: IngestToolExecutionLog,
   now = Date.now(),
-): { ok: true; path: string; bytes: number; backedUp: boolean } | { ok: false; error: string } {
+  patches?: IngestHtmlPatch[],
+): { ok: true; path: string; bytes: number; backedUp: boolean; mode: "full" | "patch" } | { ok: false; error: string } {
   const pathCheck = validateKbHtmlRelPath(workspaceDir, config, htmlRelPath);
   if (!pathCheck.ok) return pathCheck;
-
-  const contentCheck = validateKbHtmlContentSafety(htmlContent);
-  if (!contentCheck.ok) return contentCheck;
 
   const parentRel = dirname(pathCheck.normalizedRel).replace(/\\/g, "/");
   const mkdirRes = safeMkdirInWorkspaceSync(workspaceDir, parentRel);
@@ -305,8 +310,49 @@ export function executeIngestUpdateHtml(
     previousHtmlSnapshot = prevRead.text;
   }
 
+  let candidateHtml = "";
+  let mode: "full" | "patch" = "full";
+
+  if (Array.isArray(patches) && patches.length > 0) {
+    mode = "patch";
+    if (previousHtmlSnapshot === null) {
+      return {
+        ok: false,
+        error: `目标知识库 HTML（${pathCheck.normalizedRel}）尚不存在，无法使用 patches 增量替换，请传入完整的 htmlContent 创建页面`,
+      };
+    }
+    let working = previousHtmlSnapshot;
+    for (let i = 0; i < patches.length; i++) {
+      const p = patches[i];
+      const oldText = typeof p?.oldText === "string" ? p.oldText : "";
+      const newText = typeof p?.newText === "string" ? p.newText : "";
+      if (!oldText) {
+        return { ok: false, error: `patches[${i}].oldText 不能为空` };
+      }
+      const idx = working.indexOf(oldText);
+      if (idx === -1) {
+        return {
+          ok: false,
+          error: `patches[${i}].oldText 在现有 ${pathCheck.normalizedRel} 中未找到匹配片段（请确认与 read 读取的原文完全一致）`,
+        };
+      }
+      working = `${working.slice(0, idx)}${newText}${working.slice(idx + oldText.length)}`;
+    }
+    candidateHtml = working;
+  } else if (typeof htmlContent === "string" && htmlContent.trim()) {
+    candidateHtml = htmlContent;
+  } else {
+    return {
+      ok: false,
+      error: "请提供非空的 htmlContent（整页 HTML）或 patches（增量替换片段数组）",
+    };
+  }
+
+  const contentCheck = validateKbHtmlContentSafety(candidateHtml);
+  if (!contentCheck.ok) return contentCheck;
+
   const metaComment = `<!-- JIEBO_KB_META: ${JSON.stringify({ updatedAt: now, path: pathCheck.normalizedRel })} -->`;
-  const cleanedHtml = htmlContent.replace(/^<!--\s*JIEBO_KB_META:[\s\S]*?-->\r?\n?/i, "");
+  const cleanedHtml = candidateHtml.replace(/^<!--\s*JIEBO_KB_META:[\s\S]*?-->\r?\n?/i, "");
   const finalHtml = `${metaComment}\n${cleanedHtml}`;
 
   const writeRes = safeWriteWorkspaceFileSync(workspaceDir, pathCheck.normalizedRel, finalHtml);
@@ -332,6 +378,7 @@ export function executeIngestUpdateHtml(
     path: pathCheck.normalizedRel,
     bytes: writeRes.size,
     backedUp: previousHtmlSnapshot !== null,
+    mode,
   };
 }
 
@@ -382,7 +429,7 @@ export function buildIngestCustomTools(ctx: {
 
   return {
     ingest_batch_info: makeTool(
-      "读取本次待归档批次的完整文件清单、提交人备注、允许的一级分类目录白名单以及本工作区的《归档说明.md》全文。",
+      "读取本次待归档批次的完整文件清单（对 .xlsx/.docx/.pptx 自动附带服务端解析的单元格/正文纯文本预览 extractedPreview，免调用 Read 工具）、提交人备注、允许的一级分类目录白名单以及本工作区的《归档说明.md》全文。",
       {},
       [],
       () => {
@@ -394,12 +441,22 @@ export function buildIngestCustomTools(ctx: {
           allowedCategories: config.allowedCategories,
           submitterName: meta.submitterName,
           note: meta.note,
-          files: meta.files.map((f) => ({
-            storedName: f.storedName,
-            originalName: f.originalName,
-            relPath: f.relPath,
-            size: f.size,
-          })),
+          files: meta.files.map((f) => {
+            const officePreview = extractWorkspaceOfficePreviewSync(workspaceDir, f.relPath, 16 * 1024);
+            return {
+              storedName: f.storedName,
+              originalName: f.originalName,
+              relPath: f.relPath,
+              size: f.size,
+              ...(officePreview
+                ? {
+                    extractedFormat: officePreview.format,
+                    extractedPreview: officePreview.text,
+                    extractedTruncated: officePreview.truncated,
+                  }
+                : {}),
+            };
+          }),
           archivePolicyMarkdown: policyRead.ok
             ? policyRead.text
             : "（本工作区未提供 归档说明.md，请按 allowedCategories 分类目录归档）",
@@ -438,7 +495,8 @@ export function buildIngestCustomTools(ctx: {
     ingest_update_html: makeTool(
       [
         "更新受影响目录顶层的同名全内联 HTML 知识库页面（路径格式必须为 <分类>/<分类>.html 或 <分类>/<子目录>/<子目录>.html）。",
-        "安全约束：1) 必须为纯静态单文件全内联 HTML+CSS（严禁任何 <script>、<iframe>、on* 事件属性、@import、外链资源或 javascript: 链接）；2) 更新前请先用 read 工具读取原 HTML，在保留原有 CSS 样式与历史数据的基础上增量合入新文档的核心结论与文件索引。",
+        "支持两种高效模式：1) 【强烈推荐用于已有大体积 HTML】传入 patches 数组（[{ oldText, newText }]），只替换或插入变更片段，免去整页重写数万字 HTML 耗时；2) 传入 htmlContent 整页 HTML（用于新建尚不存在的看板或重写小体积看板）。",
+        "安全约束：最终 HTML 必须为纯静态单文件全内联 HTML+CSS（严禁任何 <script>、<iframe>、on* 事件属性、@import、外链资源或 javascript: 链接）。",
       ].join(""),
       {
         htmlRelPath: {
@@ -446,14 +504,53 @@ export function buildIngestCustomTools(ctx: {
           description:
             "同名知识库 HTML 的相对路径，如 资产/资产.html 或 资产/黑龙江三农信融资担保/黑龙江三农信融资担保.html",
         },
+        patches: {
+          type: "array",
+          description:
+            "推荐：针对已有 HTML 看板的局部增量替换列表（按顺序将 oldText 替换为 newText），避免重新输出整页数万字 HTML",
+          items: {
+            type: "object",
+            properties: {
+              oldText: {
+                type: "string",
+                description: "原 HTML 中要被替换的精确原文片段（需包含足够的上下文以唯一匹配）",
+              },
+              newText: {
+                type: "string",
+                description: "替换后的新 HTML 片段",
+              },
+            },
+            required: ["oldText", "newText"],
+            additionalProperties: false,
+          },
+        },
         htmlContent: {
           type: "string",
-          description: "完整的单文件内联 HTML 源码字符串（必须包含 <!DOCTYPE html> 或 <html>，不含任何 <script>）",
+          description:
+            "可选（当目标 HTML 尚不存在或不使用 patches 时提供）：完整的单文件内联 HTML 源码字符串（必须包含 <!DOCTYPE html> 或 <html>，不含任何 <script>）",
         },
       },
-      ["htmlRelPath", "htmlContent"],
-      (args) =>
-        executeIngestUpdateHtml(workspaceDir, config, str(args.htmlRelPath), str(args.htmlContent), executionLog),
+      ["htmlRelPath"],
+      (args) => {
+        const rawPatches = Array.isArray(args.patches) ? args.patches : undefined;
+        const parsedPatches: IngestHtmlPatch[] | undefined = rawPatches
+          ? rawPatches
+              .filter((item): item is Record<string, SDKJsonValue> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+              .map((item) => ({
+                oldText: str(item.oldText),
+                newText: str(item.newText),
+              }))
+          : undefined;
+        return executeIngestUpdateHtml(
+          workspaceDir,
+          config,
+          str(args.htmlRelPath),
+          typeof args.htmlContent === "string" ? args.htmlContent : undefined,
+          executionLog,
+          Date.now(),
+          parsedPatches,
+        );
+      },
     ),
   };
 }

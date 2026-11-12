@@ -21,6 +21,7 @@ import {
   validateKbHtmlContentSafety,
   type IngestToolExecutionLog,
 } from "../src/ingest/tools.ts";
+import { extractWorkspaceOfficePreviewSync } from "../src/ingest/officePreview.ts";
 
 const tempDirs: string[] = [];
 
@@ -247,6 +248,30 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
       ).ok,
       true,
     );
+
+    // 验证 patches 局部增量替换模式：免整页重写即可更新现有大体积 HTML，且仍然拦截恶意补丁
+    const patchOk = executeIngestUpdateHtml(
+      wsPath,
+      config,
+      "资产/资产.html",
+      undefined,
+      undefined,
+      1793800001000,
+      [{ oldText: "<h1>更新后的资产看板</h1>", newText: "<h1>增量补丁更新后的资产看板</h1><p>新增9月月报</p>" }],
+    );
+    assert.equal(patchOk.ok, true);
+    if (patchOk.ok) {
+      assert.equal(patchOk.mode, "patch");
+    }
+    const patchedContent = readFileSync(join(wsPath, "资产", "资产.html"), "utf8");
+    assert.equal(patchedContent.includes("增量补丁更新后的资产看板"), true);
+
+    // 若补丁试图注入 <script>，必须被拦截且原 HTML 保持不变
+    const badPatch = executeIngestUpdateHtml(wsPath, config, "资产/资产.html", undefined, undefined, 1793800002000, [
+      { oldText: "<p>新增9月月报</p>", newText: "<script>alert(1)</script>" },
+    ]);
+    assert.equal(badPatch.ok, false);
+    assert.equal(readFileSync(join(wsPath, "资产", "资产.html"), "utf8").includes("<script>"), false);
   });
 
   test("runIngestBatchJob 完整调度：正确读取 result.result、闭合 runRecord、按租户遵循沙箱配置（默认启用），且超时后锁死写工具防止残留并发写盘", async () => {
@@ -375,5 +400,153 @@ describe("Step 5: 受限可写 Ingest Runner 与安全工具围栏 (tools.ts + r
       { toolCallId: "late1" },
     );
     assert.equal(typeof lateCallOut === "object" && lateCallOut.isError === true, true);
+  });
+
+  test("officePreview 与超时收尾保护：支持免 Read 提取真实 .xlsx 单元格预览，且当全部文件已移入归档并已更新至少一个 HTML 时超时不误标为 partial", async () => {
+    const { wsPath, host } = makeRunnerTestEnv();
+
+    // 构造一个最小合法的 Stored (method=0) ZIP 格式 .xlsx Buffer
+    function makeStoredZip(files: Array<{ name: string; content: string }>): Buffer {
+      const localParts: Buffer[] = [];
+      const cdParts: Buffer[] = [];
+      let offset = 0;
+      for (const f of files) {
+        const nameBuf = Buffer.from(f.name, "utf8");
+        const dataBuf = Buffer.from(f.content, "utf8");
+        const lh = Buffer.alloc(30);
+        lh.writeUInt32LE(0x04034b50, 0);
+        lh.writeUInt16LE(20, 4);
+        lh.writeUInt16LE(0, 6);
+        lh.writeUInt16LE(0, 8);
+        lh.writeUInt32LE(0, 10);
+        lh.writeUInt32LE(0, 14);
+        lh.writeUInt32LE(dataBuf.length, 18);
+        lh.writeUInt32LE(dataBuf.length, 22);
+        lh.writeUInt16LE(nameBuf.length, 26);
+        lh.writeUInt16LE(0, 28);
+        localParts.push(lh, nameBuf, dataBuf);
+
+        const cd = Buffer.alloc(46);
+        cd.writeUInt32LE(0x02014b50, 0);
+        cd.writeUInt16LE(20, 4);
+        cd.writeUInt16LE(20, 6);
+        cd.writeUInt16LE(0, 8);
+        cd.writeUInt16LE(0, 10);
+        cd.writeUInt32LE(0, 12);
+        cd.writeUInt32LE(0, 16);
+        cd.writeUInt32LE(dataBuf.length, 20);
+        cd.writeUInt32LE(dataBuf.length, 24);
+        cd.writeUInt16LE(nameBuf.length, 28);
+        cd.writeUInt16LE(0, 30);
+        cd.writeUInt16LE(0, 32);
+        cd.writeUInt16LE(0, 34);
+        cd.writeUInt16LE(0, 36);
+        cd.writeUInt32LE(0, 38);
+        cd.writeUInt32LE(offset, 42);
+        cdParts.push(cd, nameBuf);
+
+        offset += 30 + nameBuf.length + dataBuf.length;
+      }
+      const cdBuf = Buffer.concat(cdParts);
+      const eocd = Buffer.alloc(22);
+      eocd.writeUInt32LE(0x06054b50, 0);
+      eocd.writeUInt16LE(0, 4);
+      eocd.writeUInt16LE(0, 6);
+      eocd.writeUInt16LE(files.length, 8);
+      eocd.writeUInt16LE(files.length, 10);
+      eocd.writeUInt32LE(cdBuf.length, 12);
+      eocd.writeUInt32LE(offset, 16);
+      eocd.writeUInt16LE(0, 20);
+      return Buffer.concat([...localParts, cdBuf, eocd]);
+    }
+
+    const xlsxBuf = makeStoredZip([
+      {
+        name: "xl/sharedStrings.xml",
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><sst><si><t>黑龙江三农信融资担保有限公司</t></si><si><t>月末在保余额</t></si></sst>',
+      },
+      {
+        name: "xl/workbook.xml",
+        content: '<?xml version="1.0" encoding="UTF-8"?><workbook><sheets><sheet name="9月快报" r:id="rId1"/></sheets></workbook>',
+      },
+      {
+        name: "xl/worksheets/sheet1.xml",
+        content:
+          '<?xml version="1.0" encoding="UTF-8"?><worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><v>608657</v></c></row></sheetData></worksheet>',
+      },
+    ]);
+
+    const authRes = verifyDropPasscodeAndCreateSession(host, {
+      passcode: "fintopia-2026",
+      submitterName: "tuyanyan",
+      clientIp: "10.0.0.2",
+    });
+    assert.equal(authRes.ok, true);
+    if (!authRes.ok) return;
+    const batchRes = createDropBatch(host, authRes.session);
+    assert.equal(batchRes.ok, true);
+    if (!batchRes.ok) return;
+    const staged = stageFileIntoBatch(host, authRes.session, {
+      batchId: batchRes.batchId,
+      fileName: "基础数据快报.xlsx",
+      data: xlsxBuf,
+    });
+    assert.equal(staged.ok, true);
+    if (!staged.ok) return;
+
+    const preview = extractWorkspaceOfficePreviewSync(wsPath, staged.file.relPath);
+    assert.equal(preview?.ok, true);
+    assert.equal(preview?.text.includes("黑龙江三农信融资担保有限公司"), true);
+    assert.equal(preview?.text.includes("608657"), true);
+
+    // 验证当模型已完成所有文件移动并更新了主体 HTML，但在最后收尾时超时，批次状态记为 completed 而非 partial
+    bindIngestRunner({
+      apiKey: () => "test-api-key",
+      listModels: async () => [BACKGROUND_MODEL],
+      prompt: async (_m, options) => {
+        const custom = options.local?.customTools ?? {};
+        const infoRaw = await custom.ingest_batch_info.execute({}, { toolCallId: "info1" });
+        assert.equal(typeof infoRaw === "string" && infoRaw.includes("608657"), true);
+        await custom.ingest_move_file.execute(
+          {
+            fromRelPath: staged.file.relPath,
+            toRelPath: "牌照/黑龙江三农信融资担保/基础数据快报.xlsx",
+          },
+          { toolCallId: "mv1" },
+        );
+        await custom.ingest_update_html.execute(
+          {
+            htmlRelPath: "资产/资产.html",
+            patches: [{ oldText: "<h1>原始资产看板</h1>", newText: "<h1>已更新9月快报 608657 万元</h1>" }],
+          },
+          { toolCallId: "up1" },
+        );
+        await new Promise((r) => setTimeout(r, 120));
+        return { id: "run_late_finish", status: "finished", result: "done", messages: [] };
+      },
+    });
+
+    const res = await runIngestBatchJob(
+      {
+        host,
+        entry: {
+          batchId: staged.meta.batchId,
+          tenantId: host.id,
+          workspaceId: staged.meta.workspaceId,
+          workspaceKeySnapshot: staged.meta.workspaceKey,
+          submitterName: staged.meta.submitterName,
+          note: "9月月报",
+          status: "processing",
+          attempts: 1,
+          queuedAt: Date.now(),
+        },
+        workspacePath: wsPath,
+        meta: staged.meta,
+      },
+      { timeoutMs: 30 },
+    );
+    assert.equal(res.status, "completed");
+    assert.equal(res.errorReason, undefined);
   });
 });

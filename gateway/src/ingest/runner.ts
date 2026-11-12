@@ -42,10 +42,12 @@ const INGEST_SECURITY_PREAMBLE = [
   "3. 严禁修改 归档说明.md、.jiebo/memory.md、AGENTS.md 或任何代码文件。",
   "",
   "【标准归档执行步骤（SOP）】",
-  "第一步：调用 ingest_batch_info 获取本批次待归档文件列表、允许的一级分类目录（allowedCategories）以及本工作区的《归档说明.md》。",
-  "第二步：用 read 工具读取本批次文件的内容（若为二进制/Excel/PDF 可结合文件名、备注及可读文本识别所属主体与业务性质），提取关键业务指标与核心结论。",
+  "第一步：调用 ingest_batch_info 获取本批次待归档文件列表、允许的一级分类目录（allowedCategories）以及本工作区的《归档说明.md》。注意：对于 .xlsx / .docx / .pptx 文件，ingest_batch_info 已直接在返回值的 extractedPreview 字段中提供了解析好的工作表单元格或正文纯文本摘要，请直接使用该内容，切勿再对 .xlsx/.docx/.pptx/.zip/.pdf 等二进制文件调用内置 read 工具（内置 read 不支持二进制格式）。",
+  "第二步：若文件为纯文本格式（.md / .csv / .txt / .sql）则用 read 工具读取内容；若为办公文档则直接结合 ingest_batch_info 返回的 extractedPreview 提取关键业务指标与核心结论。",
   "第三步：对每个待归档文件调用 ingest_move_file，将其从 .cursor-remote/uploads/inbox/<batchId>/ 移动到符合《归档说明.md》的目标分类目录（如 <一级分类>/<所属主体>/<文件名>）。",
-  "第四步：先用 read 读取受影响目录现有的同名知识库 HTML（如 <主体>/<主体>.html 和顶层 <一级分类>/<一级分类>.html）；若尚不存在则参考同工作区已有 HTML 的内联样式结构，调用 ingest_update_html 将新文件的核心数据、摘要结论与文件索引增量更新进 HTML 中（必须保持纯静态单文件全内联 HTML+CSS，严禁任何 <script>、<iframe> 或外链资源）。",
+  "第四步：更新受影响目录的同名知识库 HTML（如 <一级分类>/<所属主体>/<所属主体>.html 和顶层 <一级分类>/<一级分类>.html，注意仅允许 2 层或 3 层路径，不要创建第 4 层子目录 HTML）：",
+  "  - 若目标 HTML 已存在且体积较大：先用 grep 定位要修改的标题/表格/统计卡片位置，再用 read（带 offset 和 limit）读取局部上下文，然后优先使用 ingest_update_html 的 patches 参数（[{ oldText, newText }]）做局部增量替换，严禁把几万字的整页 HTML 重新完整生成一遍（避免耗时超限）！",
+  "  - 若目标 HTML 尚不存在：参考同工作区已有 HTML 的内联样式结构，调用 ingest_update_html 传入 htmlContent 创建纯静态单文件全内联 HTML+CSS（严禁任何 <script>、<iframe> 或外链资源）。",
   "第五步：用中文输出一份简明扼要的归档总结汇报（包含：核心数据摘要、每个文件的归档目标路径、已更新的 HTML 知识库路径）。",
 ].join("\n");
 
@@ -205,13 +207,25 @@ export async function runIngestBatchJob(
     const msg = (err instanceof Error ? err.message : String(err)).replace(/cursor_[A-Za-z0-9_-]+/g, "cursor_…");
     const movedFromSet = new Set(executionLog.movedFiles.map((m) => m.from));
     const movedManifestCount = meta.files.filter((f) => movedFromSet.has(f.relPath)).length;
-    status = movedManifestCount > 0 ? "partial" : "failed";
-    errorReason = msg;
+    const totalCount = meta.files.length;
 
-    endRunRecord(host, runRecord.runId, {
-      status: "failed",
-      error: clip(msg, 240),
-    });
+    if (movedManifestCount === totalCount && totalCount > 0 && executionLog.updatedHtmls.length > 0) {
+      status = "completed";
+      summaryText =
+        summaryText ||
+        `已完成全部 ${totalCount} 份文件的分类归档（${executionLog.movedFiles.map((m) => m.to).join("、")}），并同步更新知识库看板（${executionLog.updatedHtmls.join("、")}）。`;
+      endRunRecord(host, runRecord.runId, {
+        status: "done",
+        summary: clip(summaryText, 280),
+      });
+    } else {
+      status = movedManifestCount > 0 ? "partial" : "failed";
+      errorReason = msg;
+      endRunRecord(host, runRecord.runId, {
+        status: "failed",
+        error: clip(msg, 240),
+      });
+    }
   } finally {
     runClosed = true;
     if (timer) clearTimeout(timer);

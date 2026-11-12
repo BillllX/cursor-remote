@@ -17,6 +17,7 @@ import {
   type KbWorkspaceConfig,
 } from "./contract.ts";
 import { scanWorkspaceKbHtmlBoards } from "./hub.ts";
+import { extractWorkspaceOfficePreviewSync } from "./officePreview.ts";
 import {
   ensureQaSessionStorageSync,
   isQaSessionClosed,
@@ -305,6 +306,25 @@ export function executeKbQaReadFile(
 
   const ext = fileExtension(pathCheck.normalizedRel);
   if (!QA_READABLE_TEXT_EXTS.has(ext)) {
+    const officePreview = extractWorkspaceOfficePreviewSync(workspaceDir, pathCheck.normalizedRel, QA_MAX_READ_RETURN_BYTES);
+    if (officePreview) {
+      if (log) {
+        const citedItem = opts.citePrefix ? `${opts.citePrefix}:${pathCheck.normalizedRel}` : pathCheck.normalizedRel;
+        if (!log.citedPaths.includes(citedItem)) {
+          log.citedPaths.push(citedItem);
+        }
+      }
+      const lines = officePreview.text.split(/\r?\n/);
+      return {
+        ok: true,
+        relPath: pathCheck.normalizedRel,
+        totalLines: lines.length,
+        startLine: 1,
+        endLine: lines.length,
+        truncated: officePreview.truncated,
+        content: officePreview.text,
+      };
+    }
     const parts = pathCheck.normalizedRel.split("/");
     const parentDir = parts.length >= 2 ? parts.slice(0, -1).join("/") : parts[0];
     const dirName = parts.length >= 2 ? parts[parts.length - 2] : parts[0];
