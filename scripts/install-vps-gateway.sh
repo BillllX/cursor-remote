@@ -15,6 +15,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+sh "${ROOT}/scripts/install-ppt-preview.sh"
+
 id cursor-remote >/dev/null 2>&1 || useradd --system --home "$DATA_ROOT" --shell /usr/sbin/nologin cursor-remote
 mkdir -p "$DATA_ROOT/workspace" "$DATA_ROOT/tenants" "$DATA_ROOT/.local/bin" "$DATA_ROOT/.codex" /etc/cursor-remote "$APP_ROOT"
 chmod 700 "$DATA_ROOT/.codex"

@@ -30,7 +30,7 @@ async function proxyMedia(req: NextRequest) {
     method: req.method,
     headers,
     cache: "no-store",
-    signal: AbortSignal.timeout(12_000),
+    signal: AbortSignal.timeout(req.nextUrl.searchParams.get("preview") === "pdf" ? 75_000 : 12_000),
   });
   const out = new Headers();
   incoming.headers.forEach((value, key) => {

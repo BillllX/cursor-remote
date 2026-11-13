@@ -5,6 +5,11 @@ const AUDIO_EXT = new Set(["mp3", "wav", "ogg", "m4a", "aac", "flac"]);
 const VIDEO_EXT = new Set(["mp4", "webm"]);
 const MARKDOWN_EXT = new Set(["md", "mdx", "markdown"]);
 const HTML_EXT = new Set(["html", "htm"]);
+
+/** 演示文稿仍按 binary 传输；网页通过受鉴权的 PDF 转换接口预览，原件下载不变。 */
+export function isPresentationPath(path: string) {
+  return /\.(ppt|pptx)$/i.test(path);
+}
 /** 已知的二进制办公文档与归档包后缀：直接判定为 binary，走 /media 流式下载或系统预览，不读全量文本进内存 */
 const BINARY_EXT = new Set([
   "ppt",

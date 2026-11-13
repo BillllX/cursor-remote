@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolve } from "node:path";
-import { isByteKind, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
+import { isByteKind, isPresentationPath, kindFromPath, mimeOf, sizeLimit } from "../../../shared/preview.ts";
+import { presentationConverter, PresentationPreviewError, readPresentation } from "../presentationPreview.ts";
 import { log } from "../log.ts";
 import { matchMediaTenant, sendMediaBuffer, sendMediaFile } from "../media.ts";
 import { chatIdOf } from "../runtime/chats.ts";
@@ -195,7 +196,7 @@ export async function handleUpload(req: IncomingMessage, res: ServerResponse, ur
     .end(JSON.stringify({ path: written.path, size: written.size, name }));
 }
 
-export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
+export async function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL) {
   const chatId = url.searchParams.get("chatId") || "";
   const raw = url.searchParams.get("path") || "";
   const exp = url.searchParams.get("exp") || "";
@@ -224,6 +225,24 @@ export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL)
     res.writeHead(400).end("missing path");
     return;
   }
+  const presentation = url.searchParams.get("preview") === "pdf";
+  if (presentation && !isPresentationPath(raw)) {
+    res.writeHead(400).end("仅支持 PPT 和 PPTX 预览");
+    return;
+  }
+  const sendPresentation = async (input: Buffer) => {
+    try {
+      const pdf = await presentationConverter.convert(tenant.id, raw, input);
+      if (!res.destroyed) sendMediaBuffer(req, res, pdf, raw.replace(/\.pptx?$/i, ".pdf"), "application/pdf");
+    } catch (error) {
+      if (res.destroyed) return;
+      const status = error instanceof PresentationPreviewError ? error.status : 500;
+      const message = error instanceof PresentationPreviewError ? error.message : "PPT 预览失败，请重试";
+      res
+        .writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" })
+        .end(message);
+    }
+  };
   if (rev.startsWith("sha:")) {
     // 回合快照只从本租户 artifacts 目录取，path 只决定 mime 和文件名
     const sha = rev.slice(4);
@@ -236,7 +255,8 @@ export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL)
       res.writeHead(404, { "cache-control": "private, no-store" }).end(SNAPSHOT_GONE);
       return;
     }
-    sendMediaBuffer(req, res, buf, raw, mimeOf(raw, kindFromPath(raw)));
+    if (presentation) await sendPresentation(buf);
+    else sendMediaBuffer(req, res, buf, raw, mimeOf(raw, kindFromPath(raw)));
     return;
   }
   const cwd = cwdForChat(tenant, chatId);
@@ -264,9 +284,21 @@ export function handleMedia(req: IncomingMessage, res: ServerResponse, url: URL)
         res.writeHead(413).end("too large");
         return;
       }
-      sendMediaBuffer(req, res, buf, path, mime);
+      if (presentation) await sendPresentation(buf);
+      else sendMediaBuffer(req, res, buf, path, mime);
     } catch {
       res.writeHead(404).end("not in HEAD");
+    }
+    return;
+  }
+  if (presentation) {
+    try {
+      await sendPresentation(await readPresentation(cwd, path));
+    } catch (error) {
+      const status = error instanceof PresentationPreviewError ? error.status : 404;
+      res
+        .writeHead(status, { "content-type": "text/plain; charset=utf-8", "cache-control": "private, no-store" })
+        .end(error instanceof PresentationPreviewError ? error.message : "PPT 文件不存在或无法读取");
     }
     return;
   }

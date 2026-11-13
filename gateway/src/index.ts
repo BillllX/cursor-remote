@@ -141,13 +141,11 @@ const httpServer = createServer((req, res) => {
     return;
   }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media") {
-    try {
-      handleMedia(req, res, url);
-    } catch (err) {
+    void handleMedia(req, res, url).catch((err) => {
       log.error("media", err instanceof Error ? err.message : err);
       if (!res.headersSent) res.writeHead(500).end("media failed");
       else res.destroy();
-    }
+    });
     return;
   }
   if (req.method === "GET" && url.pathname === "/state/turn") {

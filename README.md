@@ -132,6 +132,16 @@ npm run dev
 | web（VPS）     | 3020 → `/cursor-remote` | 公网聊天界面                      |
 | gateway（VPS） | 8787                    | 收动作、调 Cursor SDK、读写工作区 |
 
+## PPT 文档预览
+
+网页文件预览面板支持打开 `.ppt`、`.pptx`（含大写后缀），通过本机 LibreOffice Impress 转成 PDF 后逐页查看、缩放及全屏，保留原始 PPT 下载。当前文件、Git HEAD 和回合文件快照均可预览；iOS 继续使用已有的系统 Quick Look。静态预览不播放动画、音频和视频，特殊字体缺失时排版可能变化。
+
+新装 VPS 时 `scripts/install-vps-gateway.sh` 自动安装组件；已有服务器升级时先运行 `sudo sh scripts/install-ppt-preview.sh`，再按现有流程更新网关和网页。Debian/Ubuntu 安装 `libreoffice-impress fonts-noto-cjk`；支持 dnf 的系统安装 `libreoffice-impress`，并另装系统仓库内的 Noto CJK 字体包。macOS 使用 `brew install --cask libreoffice`。网关服务的 PATH 必须能找到 `libreoffice`（macOS 也支持默认应用路径）。
+
+转换通过现有 `/media?...&preview=pdf` 鉴权入口完成，使用相同的租户边界和媒体票据，不向第三方上传文档。原下载地址不带 `preview=pdf`，仍返回原文件。限制：原文件及输出均不超过 40MB；转换超时 60 秒；最多同时转换两份文档，相同请求合并；按租户、文件后缀和内容哈希缓存至多 8 份 PDF、总计不超过 64MB，修改文件即重新转换。转换临时目录结束后删除，宏禁用。服务缺组件、文件加密/损坏或繁忙时，预览页显示中文说明，支持重试和下载原件。
+
+转换参数参考 [LibreOffice 官方命令行说明](https://help.libreoffice.org/latest/en-US/text/shared/guide/start_parameters.html)。
+
 ## 对外预览
 
 每个租户一条路径，挂在这台机器已经有证书的主机名上。东京是 `https://jiebo.aiagentswitcher.com/p/<id>/`，上海是 `https://aiagentswitcher.com/p/<id>/`。网页和 iPad 不用改。Agent 在工作区里执行：

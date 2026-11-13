@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type PointerEvent, type WheelEvent } from "react";
 import { formatBytes, previewSrc } from "../lib/preview";
 import type { PreviewKind } from "@shared/protocol";
+import { isPresentationPath } from "@shared/preview";
+import PresentationPreview from "./PresentationPreview";
 
 export default function MediaPreview({
   kind,
@@ -119,6 +121,10 @@ export default function MediaPreview({
     return (
       <iframe className="pdf-frame" title={name} src={src} />
     );
+  }
+
+  if (kind === "binary" && isPresentationPath(path)) {
+    return <PresentationPreview key={src} src={src} name={name} onReload={onReload} />;
   }
 
   if ((kind === "image" || kind === "svg") && diff) {

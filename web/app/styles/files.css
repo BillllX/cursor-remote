@@ -654,6 +654,24 @@
   flex-direction: column;
 }
 
+.presentation-preview {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+
+.presentation-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
 .html-preview-tools {
   display: flex;
   align-items: center;

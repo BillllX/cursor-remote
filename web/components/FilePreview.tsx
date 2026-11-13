@@ -10,6 +10,7 @@ import { canvasFrameHtml, exportCanvasFrame } from "../lib/canvas/exportHtml";
 import type { CanvasAction } from "../lib/canvas/host";
 import type { CanvasVersion, MediaTicket, PreviewKind } from "@shared/protocol";
 import { isLiveKind, previewSrc, tabKind } from "../lib/preview";
+import { isPresentationPath } from "@shared/preview";
 import {
   IconClose,
   IconCode,
@@ -330,7 +331,7 @@ export default function FilePreview({
   const bodyClass = [
     "file-preview-body",
     live && (kind === "canvas" || kind === "html") ? "canvas-live" : "",
-    (kind === "pdf" ||
+    ((kind === "binary" && isPresentationPath(active.path)) || kind === "pdf" ||
       kind === "audio" ||
       kind === "video" ||
       kind === "image" ||

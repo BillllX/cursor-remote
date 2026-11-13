@@ -32,6 +32,13 @@ export function previewSrc(url?: string) {
   return `${originBase()}${path}`;
 }
 
+/** 保留原始票据、快照版本和部署前缀，只为预览请求增加转换参数。 */
+export function presentationPreviewSrc(src: string) {
+  const hashAt = src.indexOf("#");
+  const clean = hashAt >= 0 ? src.slice(0, hashAt) : src;
+  return `${clean}${clean.includes("?") ? "&" : "?"}preview=pdf`;
+}
+
 export function mediaSrc(path: string, chatId: string, media?: MediaTicket, rev?: string) {
   if (!path || !chatId || !media) return "";
   const q = new URLSearchParams({
