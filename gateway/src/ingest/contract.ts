@@ -126,6 +126,8 @@ export type KbWorkspaceConfig = {
   allowedCategories: string[];
   maxFileBytes: number;
   allowedExts: string[];
+  /** 在同事 Drop 门户页面隐藏（不展示、不可预览）的知识库 HTML 看板相对路径列表（默认空数组表示全部展示） */
+  hiddenDropBoards?: string[];
 };
 
 export type KbValidationResult =
@@ -534,7 +536,22 @@ const ALLOWED_KB_CONFIG_KEYS = new Set([
   "allowedCategories",
   "maxFileBytes",
   "allowedExts",
+  "hiddenDropBoards",
 ]);
+
+/** 校验并规范化知识库看板相对路径（<分类>/<分类>.html 或 <分类>/<子目录>/<子目录>.html） */
+export function normalizeKbBoardRelPath(raw: string): string | null {
+  if (typeof raw !== "string" || hasControlChars(raw) || raw !== raw.trim()) return null;
+  const clean = raw.replace(/\\/g, "/");
+  if (!clean || clean.startsWith("/")) return null;
+  const parts = clean.split("/");
+  if (parts.length !== 2 && parts.length !== 3) return null;
+  if (parts.some((p) => !p || p.startsWith(".") || !isValidPathSegment(p))) return null;
+  const parentDir = parts[parts.length - 2];
+  const fileName = parts[parts.length - 1];
+  if (fileName !== `${parentDir}.html`) return null;
+  return parts.join("/");
+}
 
 /** 解析并严格校验 KbWorkspaceConfig 对象（显式传入非法字段或未知字段一律拒绝，不静默回退） */
 export function parseKbWorkspaceConfig(
@@ -618,6 +635,29 @@ export function parseKbWorkspaceConfig(
     allowedExts = parsedExts;
   }
 
+  let hiddenDropBoards: string[] | undefined;
+  if (obj.hiddenDropBoards !== undefined) {
+    if (!Array.isArray(obj.hiddenDropBoards) || obj.hiddenDropBoards.length > 200) {
+      return { ok: false, error: "kb.json hiddenDropBoards 若提供则必须是字符串数组（最多 200 项）" };
+    }
+    const parsedHidden: string[] = [];
+    const seenHidden = new Set<string>();
+    for (const rawBoard of obj.hiddenDropBoards) {
+      if (typeof rawBoard !== "string") {
+        return { ok: false, error: "hiddenDropBoards 必须为字符串数组" };
+      }
+      const normBoard = normalizeKbBoardRelPath(rawBoard);
+      if (!normBoard) {
+        return { ok: false, error: `hiddenDropBoards 包含非法的看板路径：${rawBoard}` };
+      }
+      if (!seenHidden.has(normBoard)) {
+        seenHidden.add(normBoard);
+        parsedHidden.push(normBoard);
+      }
+    }
+    hiddenDropBoards = parsedHidden;
+  }
+
   return {
     ok: true,
     config: {
@@ -627,6 +667,7 @@ export function parseKbWorkspaceConfig(
       allowedCategories: categories,
       maxFileBytes,
       allowedExts,
+      ...(hiddenDropBoards !== undefined ? { hiddenDropBoards } : {}),
     },
   };
 }
@@ -773,15 +814,24 @@ export function initKbWorkspaceConfig(
     allowedCategories: string[];
     maxFileBytes?: number;
     allowedExts?: string[];
+    hiddenDropBoards?: string[];
   },
 ): KbValidationResult {
+  const existing = loadKbWorkspaceConfig(workspaceDir);
+  const prevConfig = existing.ok ? existing.config : undefined;
+  const maxFileBytes = input.maxFileBytes !== undefined ? input.maxFileBytes : prevConfig?.maxFileBytes;
+  const allowedExts = input.allowedExts !== undefined ? input.allowedExts : prevConfig?.allowedExts;
+  const hiddenDropBoards =
+    input.hiddenDropBoards !== undefined ? input.hiddenDropBoards : prevConfig?.hiddenDropBoards;
+
   const candidate = {
     version: 1 as const,
     kind: "knowledge_base" as const,
     title: input.title,
     allowedCategories: input.allowedCategories,
-    ...(input.maxFileBytes !== undefined ? { maxFileBytes: input.maxFileBytes } : {}),
-    ...(input.allowedExts !== undefined ? { allowedExts: input.allowedExts } : {}),
+    ...(maxFileBytes !== undefined ? { maxFileBytes } : {}),
+    ...(allowedExts !== undefined ? { allowedExts } : {}),
+    ...(hiddenDropBoards !== undefined ? { hiddenDropBoards } : {}),
   };
   const validated = parseKbWorkspaceConfig(candidate);
   if (!validated.ok) return validated;
@@ -803,6 +853,52 @@ export function initKbWorkspaceConfig(
     config: validated.config,
     workspaceRealPath: realpathSync(workspaceDir),
   };
+}
+
+/** 更新知识库工作区在 Drop 门户中隐藏的看板列表 */
+export function updateKbWorkspaceDropBoardVisibility(
+  workspaceDir: string,
+  input: {
+    hiddenDropBoards?: string[];
+    toggleBoardRelPath?: string;
+    showOnDrop?: boolean;
+  },
+  tenantWorkspaceRoot?: string,
+): KbValidationResult {
+  const loaded = loadKbWorkspaceConfig(workspaceDir, tenantWorkspaceRoot);
+  if (!loaded.ok) return loaded;
+
+  let nextHidden = new Set(loaded.config.hiddenDropBoards ?? []);
+  if (Array.isArray(input.hiddenDropBoards)) {
+    nextHidden = new Set(input.hiddenDropBoards);
+  }
+  if (input.toggleBoardRelPath !== undefined) {
+    const norm = normalizeKbBoardRelPath(input.toggleBoardRelPath.trim());
+    if (!norm) {
+      return { ok: false, error: `非法的知识库看板路径：${input.toggleBoardRelPath}` };
+    }
+    const shouldShow = input.showOnDrop !== undefined ? Boolean(input.showOnDrop) : nextHidden.has(norm);
+    if (shouldShow) {
+      nextHidden.delete(norm);
+    } else {
+      nextHidden.add(norm);
+    }
+  }
+
+  return initKbWorkspaceConfig(workspaceDir, {
+    title: loaded.config.title,
+    allowedCategories: loaded.config.allowedCategories,
+    maxFileBytes: loaded.config.maxFileBytes,
+    allowedExts: loaded.config.allowedExts,
+    hiddenDropBoards: [...nextHidden],
+  });
+}
+
+/** 判断某个知识库看板是否允许在 Drop 页面向外部访客展示 */
+export function isKbBoardVisibleOnDrop(config: KbWorkspaceConfig, boardRelPath: string): boolean {
+  if (!config.hiddenDropBoards || config.hiddenDropBoards.length === 0) return true;
+  const norm = normalizeKbBoardRelPath(boardRelPath.trim()) || boardRelPath.trim();
+  return !config.hiddenDropBoards.includes(norm);
 }
 
 /**

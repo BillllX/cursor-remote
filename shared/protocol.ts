@@ -465,6 +465,8 @@ export type KbHtmlBoardItem = {
   updatedAt: number;
   /** 文件大小（字节） */
   size: number;
+  /** 是否在同事 Drop 投递门户页面中展示（默认 true） */
+  showOnDrop?: boolean;
 };
 
 export type ColleaguePermissions = {
@@ -794,7 +796,12 @@ export type AssistantOpArgsMap = {
   };
   memory_center_import_rollback: { importId: string };
   kb_workspace_status: { workspace: string };
-  kb_workspace_init: { workspace: string; title: string; categories: string[] };
+  kb_workspace_init: {
+    workspace: string;
+    title: string;
+    categories: string[];
+    hiddenDropBoards?: string[];
+  };
   drop_token_create: {
     workspace: string;
     passcode: string;
@@ -816,6 +823,12 @@ export type AssistantOpArgsMap = {
     wxStatus?: "pending_owner" | "active" | "revoked";
     neverExpire?: boolean;
     expiresInDays?: number;
+    dropBoardsAction?: {
+      kind: "set_visibility";
+      boardRelPath?: string;
+      showOnDrop?: boolean;
+      hiddenDropBoards?: string[];
+    };
     decideProposal?: {
       proposalId: string;
       approve: boolean;

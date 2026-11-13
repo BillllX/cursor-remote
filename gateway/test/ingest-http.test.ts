@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { initKbWorkspaceConfig } from "../src/ingest/contract.ts";
+import { getKbWorkspaceStatusForUi, updateKbDropBoardVisibilityFromUi } from "../src/ingest/hub.ts";
 import { buildDropTenantHost } from "../src/ingest/http.ts";
 import { bindIngestBatchWorker, drainWorkspaceIngestQueue } from "../src/ingest/queue.ts";
 import { normalizeWebhookUrl, scanWatchFolderOnce } from "../src/ingest/watchFolder.ts";
@@ -584,5 +585,102 @@ describe("Step 4: 网关内置 /p/<tenant>/drop 盲投页面与流式 API (http.
     });
     const afterLogoutHtml = await afterLogoutRes.text();
     assert.equal(afterLogoutHtml.includes("const PRELOADED_SESSION = null;"), true);
+  });
+
+  test("单口令免填称呼自动回退绑定称呼 + 刷新页面续期 Path=/ Cookie + 工作区管理选择哪些知识库看板在 Drop 页面展示", async () => {
+    const { baseUrl, host, wsPath } = await makeHttpTestEnv();
+
+    // 在工作区下创建两个合法的同名 HTML 看板：资金/资金.html 与 资产/资产.html
+    mkdirSync(join(wsPath, "资金"), { recursive: true });
+    mkdirSync(join(wsPath, "资产"), { recursive: true });
+    writeFileSync(join(wsPath, "资金", "资金.html"), "<!DOCTYPE html><html><body>资金看板</body></html>", "utf8");
+    writeFileSync(join(wsPath, "资产", "资产.html"), "<!DOCTYPE html><html><body>资产看板</body></html>", "utf8");
+
+    // 1. 不填 submitterName 仅凭 passcode 登录，自动使用口令的 label（Fintopia集团 投递码），且 Cookie Path=/
+    const authRes = await fetch(`${baseUrl}/p/default/drop/api/auth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ passcode: "fintopia-2026" }),
+    });
+    assert.equal(authRes.status, 200);
+    const setCookie = authRes.headers.get("set-cookie") || "";
+    assert.equal(setCookie.includes("Path=/;"), true);
+    const cookiePair = setCookie.split(";")[0]!;
+
+    const authJson = (await authRes.json()) as {
+      dropSessionToken: string;
+      submitterName: string;
+      boards: Array<{ relPath: string }>;
+    };
+    assert.equal(authJson.submitterName, "Fintopia集团 投递码");
+    assert.equal(authJson.boards.length, 2, "默认全部看板在 Drop 页展示");
+
+    // 2. 在工作区知识库与看板管理中，将「资产/资产.html」设为不在 Drop 页面展示
+    const visRes = updateKbDropBoardVisibilityFromUi(host, {
+      workspace: "Fintopia集团",
+      toggleBoardRelPath: "资产/资产.html",
+      showOnDrop: false,
+    });
+    assert.equal(visRes.ok, true);
+    if (visRes.ok) {
+      assert.equal(visRes.data.boards.length, 2, "工作区管理面板仍能看到全部 2 个看板");
+      const assetBoard = visRes.data.boards.find((b) => b.relPath === "资产/资产.html");
+      const fundBoard = visRes.data.boards.find((b) => b.relPath === "资金/资金.html");
+      assert.equal(assetBoard?.showOnDrop, false);
+      assert.equal(fundBoard?.showOnDrop, true);
+    }
+
+    // 3. 刷新 Drop 页面（GET /p/default/drop 带 Cookie）：直接免登进入，且 PRELOADED_SESSION 只包含允许展示的「资金/资金.html」
+    const refreshPageRes = await fetch(`${baseUrl}/p/default/drop`, {
+      headers: { cookie: cookiePair },
+    });
+    assert.equal(refreshPageRes.status, 200);
+    assert.equal((refreshPageRes.headers.get("set-cookie") || "").includes("Path=/;"), true);
+    const refreshHtml = await refreshPageRes.text();
+    assert.equal(refreshHtml.includes("资金/资金.html"), true);
+    assert.equal(refreshHtml.includes("资产/资产.html"), false);
+
+    // 4. 调用 /api/boards 也仅返回未隐藏的看板；直接请求隐藏看板 /api/board?path=资产/资产.html 返回 403
+    const boardsRes = await fetch(`${baseUrl}/p/default/drop/api/boards`, {
+      headers: { authorization: `Bearer ${authJson.dropSessionToken}` },
+    });
+    const boardsJson = (await boardsRes.json()) as { ok: boolean; boards: Array<{ relPath: string }> };
+    assert.equal(boardsJson.ok, true);
+    assert.deepEqual(
+      boardsJson.boards.map((b) => b.relPath),
+      ["资金/资金.html"],
+    );
+
+    const hiddenBoardRes = await fetch(
+      `${baseUrl}/p/default/drop/api/board?path=${encodeURIComponent("资产/资产.html")}`,
+      {
+        headers: { authorization: `Bearer ${authJson.dropSessionToken}` },
+      },
+    );
+    assert.equal(hiddenBoardRes.status, 403);
+
+    const visibleBoardRes = await fetch(
+      `${baseUrl}/p/default/drop/api/board?path=${encodeURIComponent("资金/资金.html")}`,
+      {
+        headers: { authorization: `Bearer ${authJson.dropSessionToken}` },
+      },
+    );
+    assert.equal(visibleBoardRes.status, 200);
+
+    // 5. 重新在管理端开启「资产/资产.html」在 Drop 页展示
+    const restoreRes = updateKbDropBoardVisibilityFromUi(host, {
+      workspace: "Fintopia集团",
+      toggleBoardRelPath: "资产/资产.html",
+      showOnDrop: true,
+    });
+    assert.equal(restoreRes.ok, true);
+    const statusAfterRestore = getKbWorkspaceStatusForUi(host, "Fintopia集团");
+    assert.equal(statusAfterRestore.ok, true);
+    if (statusAfterRestore.ok) {
+      assert.equal(
+        statusAfterRestore.data.boards.every((b) => b.showOnDrop !== false),
+        true,
+      );
+    }
   });
 });

@@ -7,6 +7,7 @@ import {
   DEFAULT_MAX_FILE_BYTES,
   hasControlChars,
   isAllowedUploadFileName,
+  isKbBoardVisibleOnDrop,
   safeReadWorkspaceTextFileSync,
   validateKbHtmlRelPath,
 } from "./contract.ts";
@@ -91,13 +92,22 @@ function isSecureRequest(req: IncomingMessage): boolean {
 
 function buildDropSessionSetCookie(tenantId: string, sessionToken: string, clear = false, secure = false): string {
   const name = dropSessionCookieName(tenantId);
-  const path = `/p/${tenantId}/drop`;
+  const path = "/";
   const secureFlag = secure ? "; Secure" : "";
   if (clear) {
     return `${name}=; Path=${path}; Max-Age=0; HttpOnly; SameSite=Lax${secureFlag}`;
   }
   const maxAgeSec = Math.floor(PERSISTENT_SESSION_TTL_MS / 1000);
   return `${name}=${sessionToken}; Path=${path}; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax${secureFlag}`;
+}
+
+function buildDropSessionCookieClearHeaders(tenantId: string, secure = false): string[] {
+  const name = dropSessionCookieName(tenantId);
+  const secureFlag = secure ? "; Secure" : "";
+  return [
+    `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secureFlag}`,
+    `${name}=; Path=/p/${tenantId}/drop; Max-Age=0; HttpOnly; SameSite=Lax${secureFlag}`,
+  ];
 }
 
 export type DropPortalPreloadedSession = {
@@ -206,7 +216,7 @@ function sendJson(
   res: ServerResponse,
   status: number,
   body: Record<string, unknown>,
-  extraHeaders: Record<string, string> = {},
+  extraHeaders: Record<string, string | string[]> = {},
 ) {
   if (res.headersSent || res.writableEnded) return;
   applySandboxedApiCors(res);
@@ -223,12 +233,18 @@ function sendJson(
 }
 
 /**
- * 顶层文档启用 `CSP: sandbox allow-scripts`（不带 `allow-same-origin`）：
+ * 顶层文档启用 `CSP: sandbox allow-scripts allow-downloads`：
  * 1. 使顶层文档直接处于唯一的不透明源（opaque origin），彻底隔绝同域名下其他 `/p/<租户>` 页面通过 `window.open` 访问本页 `window`、DOM 或脚本上下文；
  * 2. `connect-src *` 允许沙箱内脚本直接 `fetch` 调用 `/p/<tenant>/drop/api/*`，并携带服务端直出内嵌的 `X-Drop-Page-Ticket` 票据完成请求；
  * 3. `frame-src data:` / `child-src data:` 允许在页面内通过 `<iframe sandbox="allow-scripts" srcdoc="...">` 安全预览知识库 HTML 看板。
  */
-function sendHtml(res: ServerResponse, status: number, page: string, headOnly: boolean) {
+function sendHtml(
+  res: ServerResponse,
+  status: number,
+  page: string,
+  headOnly: boolean,
+  extraHeaders: Record<string, string | string[]> = {},
+) {
   if (res.headersSent || res.writableEnded) return;
   const raw = Buffer.from(page, "utf8");
   res.writeHead(status, {
@@ -242,6 +258,7 @@ function sendHtml(res: ServerResponse, status: number, page: string, headOnly: b
     "referrer-policy": "no-referrer",
     "content-security-policy":
       "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src *; img-src data:; frame-src data: about:; child-src data: about:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'; sandbox allow-scripts allow-downloads",
+    ...extraHeaders,
   });
   res.end(headOnly ? undefined : raw);
 }
@@ -768,14 +785,14 @@ export function renderDropPortalHtml(
   <div class="container">
     <div id="step-auth" class="card auth-card">
       <h1>工作区资料投递箱 & 知识库</h1>
-      <p class="sub">输入口令即可向知识库提问、上传归档文档或查阅看板（单文件 ≤ 32 MB）</p>
-      <div style="margin-bottom:10px;">
-        <label for="submitter">您的称呼 / 部门</label>
-        <input id="submitter" type="text" maxlength="40" autocomplete="off" placeholder="例如：张工-财务部" />
-      </div>
+      <p class="sub">输入口令即可进入对应知识库（登录一次自动记住，刷新或下次打开直接进入 · 单文件 ≤ 32 MB）</p>
       <div style="margin-bottom:14px;">
         <label for="passcode">工作区口令</label>
-        <input id="passcode" type="password" maxlength="64" autocomplete="off" placeholder="请输入 6–64 位投递口令" />
+        <input id="passcode" type="password" maxlength="64" autocomplete="current-password" placeholder="请输入 6–64 位投递口令" />
+      </div>
+      <div style="margin-bottom:14px;">
+        <label for="submitter">您的称呼 / 部门（可选，留空默认使用口令绑定称呼）</label>
+        <input id="submitter" type="text" maxlength="40" autocomplete="name" placeholder="例如：张工-财务部（可留空）" />
       </div>
       <button id="btn-auth" type="button" style="width:100%;">进入知识库工作台</button>
       <div id="auth-msg" class="status-box hidden"></div>
@@ -1265,8 +1282,8 @@ export function renderDropPortalHtml(
       btnAuth.addEventListener("click", async function() {
         const submitterName = submitterEl.value.trim();
         const passcode = passcodeEl.value.trim();
-        if (!submitterName || !passcode) {
-          showBox(authMsg, "请填写您的称呼和投递口令", true);
+        if (!passcode) {
+          showBox(authMsg, "请输入工作区投递口令", true);
           return;
         }
         btnAuth.disabled = true;
@@ -1288,7 +1305,7 @@ export function renderDropPortalHtml(
           }
           passcodeEl.value = "";
           authMsg.classList.add("hidden");
-          applyAuthenticatedSession(data, submitterName);
+          applyAuthenticatedSession(data, submitterName || data.submitterName);
         } catch (e) {
           showBox(authMsg, "网络请求失败，请重试", true);
           btnAuth.disabled = false;
@@ -1937,7 +1954,7 @@ export function handleDropPortalHttp(
   const clientIp = extractClientIp(req);
   const host = buildDropTenantHost(tenant);
 
-  // 1. 静态投递门户 HTML 页面（顶层 CSP: sandbox allow-scripts 唯一不透明源隔离 + 内嵌 pageTicket + 自动恢复上次记住的登录会话）
+  // 1. 静态投递门户 HTML 页面（顶层 CSP: sandbox allow-scripts allow-downloads 唯一不透明源隔离 + 内嵌 pageTicket + 自动恢复上次记住的登录会话）
   if (pathname === basePrefix || pathname === `${basePrefix}/`) {
     if (req.method !== "GET" && req.method !== "HEAD") {
       sendJson(res, 405, { ok: false, error: "只支持 GET/HEAD" });
@@ -1945,6 +1962,7 @@ export function handleDropPortalHttp(
     }
     const ticket = req.method === "HEAD" ? "" : issuePageTicket(tenant.id, clientIp);
     let preloadedSession: DropPortalPreloadedSession | null = null;
+    const htmlExtraHeaders: Record<string, string | string[]> = {};
     if (req.method === "GET") {
       const cookieToken = extractDropSessionCookie(req, tenant.id);
       if (cookieToken) {
@@ -1957,10 +1975,24 @@ export function handleDropPortalHttp(
           if (bindBatchIdToDropSession(verified.session.sessionToken, creds.batchId, creds.receiptHash)) {
             preloadedSession = buildPortalSessionResponsePayload(verified.session, creds.batchId, creds.receiptToken);
           }
+          if (verified.session.persistent) {
+            htmlExtraHeaders["set-cookie"] = buildDropSessionSetCookie(
+              tenant.id,
+              verified.session.sessionToken,
+              false,
+              isSecureRequest(req),
+            );
+          }
         }
       }
     }
-    sendHtml(res, 200, renderDropPortalHtml(tenant.id, tenant.name, ticket, preloadedSession), req.method === "HEAD");
+    sendHtml(
+      res,
+      200,
+      renderDropPortalHtml(tenant.id, tenant.name, ticket, preloadedSession),
+      req.method === "HEAD",
+      htmlExtraHeaders,
+    );
     return true;
   }
 
@@ -2107,7 +2139,7 @@ export function handleDropPortalHttp(
       res,
       200,
       { ok: true },
-      { "set-cookie": buildDropSessionSetCookie(tenant.id, "", true, isSecureRequest(req)) },
+      { "set-cookie": buildDropSessionCookieClearHeaders(tenant.id, isSecureRequest(req)) },
     );
     return true;
   }
@@ -2129,7 +2161,7 @@ export function handleDropPortalHttp(
     return true;
   }
 
-  // 2c. GET /p/<tenant>/drop/api/board?path=... — 受控读取当前授权工作区下的同名 .html 知识库看板（严禁读取任何原始底表或非同名 HTML）
+  // 2c. GET /p/<tenant>/drop/api/board?path=... — 受控读取当前授权工作区下的同名 .html 知识库看板（严禁读取任何原始底表、非同名 HTML 或未在 Drop 门户开放展示的看板）
   if (pathname === `${basePrefix}/api/board`) {
     if (req.method !== "GET") {
       sendJson(res, 405, { ok: false, error: "只支持 GET" });
@@ -2145,6 +2177,10 @@ export function handleDropPortalHttp(
     const validHtml = validateKbHtmlRelPath(sessCheck.session.workspacePath, sessCheck.session.kbConfig, rawRelPath);
     if (!validHtml.ok) {
       sendJson(res, 403, { ok: false, error: "仅允许预览知识库目录同名的汇总 HTML 看板" });
+      return true;
+    }
+    if (!isKbBoardVisibleOnDrop(sessCheck.session.kbConfig, validHtml.normalizedRel)) {
+      sendJson(res, 403, { ok: false, error: "该知识库看板当前未在投递门户中开放展示" });
       return true;
     }
     const readRes = safeReadWorkspaceTextFileSync(

@@ -1166,6 +1166,7 @@ struct KbHtmlBoard: Identifiable, Hashable {
     var relPath: String
     var title: String
     var category: String
+    var showOnDrop: Bool
     var id: String { relPath }
 }
 
@@ -1345,7 +1346,8 @@ struct KbWorkspaceStatus: Hashable {
             return KbHtmlBoard(
                 relPath: relPath,
                 title: row["title"]?.string?.nilIfEmpty ?? relPath,
-                category: row["category"]?.string ?? ""
+                category: row["category"]?.string ?? "",
+                showOnDrop: row["showOnDrop"]?.bool ?? true
             )
         } ?? []
         let tokens = object["tokens"]?.array?.compactMap(KbDropToken.parse) ?? []
@@ -2060,24 +2062,43 @@ struct KbWorkspaceSheet: View {
                     .foregroundStyle(JieboColor.ink2)
             } else {
                 ForEach(status?.boards ?? []) { board in
-                    Button {
-                        openBoard(board)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(board.title)
-                                .font(JieboFont.text(.body))
-                                .foregroundStyle(JieboColor.ink)
-                            Text(board.category.isEmpty ? board.relPath : "\(board.category) · \(board.relPath)")
-                                .font(JieboFont.text(.footnote))
-                                .foregroundStyle(JieboColor.ink2)
-                                .lineLimit(1)
+                    HStack(spacing: 12) {
+                        Button {
+                            openBoard(board)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(board.title)
+                                    .font(JieboFont.text(.body))
+                                    .foregroundStyle(JieboColor.ink)
+                                Text(board.category.isEmpty ? board.relPath : "\(board.category) · \(board.relPath)")
+                                    .font(JieboFont.text(.footnote))
+                                    .foregroundStyle(JieboColor.ink2)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            Task { await toggleBoardDropVisibility(board) }
+                        } label: {
+                            Text(board.showOnDrop ? "Drop展示" : "Drop隐藏")
+                                .font(JieboFont.text(.caption2, weight: .medium))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .foregroundStyle(board.showOnDrop ? JieboColor.pine : JieboColor.ink2)
+                                .background(
+                                    Capsule()
+                                        .fill(board.showOnDrop ? JieboColor.pine.opacity(0.12) : JieboColor.paper)
+                                )
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(busy)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         } header: {
-            JieboListHeader("看板")
+            JieboListHeader("看板（可选择是否在 Drop 页展示）")
         }
         .listRowBackground(JieboColor.white)
     }
@@ -2442,6 +2463,24 @@ struct KbWorkspaceSheet: View {
         ])
         busy = false
         if apply(reply), reply.ok { store.flash("已吊销") }
+    }
+
+    private func toggleBoardDropVisibility(_ board: KbHtmlBoard) async {
+        busy = true
+        errorText = ""
+        let nextShow = !board.showOnDrop
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(workspaceKey),
+            "dropBoardsAction": .object([
+                "kind": .string("set_visibility"),
+                "boardRelPath": .string(board.relPath),
+                "showOnDrop": .bool(nextShow),
+            ]),
+        ])
+        busy = false
+        if apply(reply), reply.ok {
+            store.flash(nextShow ? "已在 Drop 页面开启展示" : "已从 Drop 页面隐藏")
+        }
     }
 
     private func runWecomWatchAction(kind: String, idOrTitle: String? = nil, forceSync: Bool = false) async {

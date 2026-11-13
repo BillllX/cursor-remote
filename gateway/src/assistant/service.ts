@@ -85,6 +85,7 @@ import {
   initKbWorkspaceFromUi,
   revokeDropTokenFromUi,
   updateDropTokenFromUi,
+  updateKbDropBoardVisibilityFromUi,
 } from "../ingest/hub.ts";
 import { submitDirectIngestBatch } from "../ingest/queue.ts";
 import { loadKbWorkspaceConfig } from "../ingest/contract.ts";
@@ -1544,7 +1545,15 @@ export async function handleOp(
       const categories = Array.isArray(args.categories)
         ? args.categories.filter((x): x is string => typeof x === "string")
         : [];
-      const res = initKbWorkspaceFromUi(dropHostFor(tenant), { workspace, title, categories });
+      const hiddenDropBoards = Array.isArray(args.hiddenDropBoards)
+        ? args.hiddenDropBoards.filter((x): x is string => typeof x === "string")
+        : undefined;
+      const res = initKbWorkspaceFromUi(dropHostFor(tenant), {
+        workspace,
+        title,
+        categories,
+        ...(hiddenDropBoards !== undefined ? { hiddenDropBoards } : {}),
+      });
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
     }
     case "drop_token_create": {
@@ -1574,6 +1583,21 @@ export async function handleOp(
     case "drop_token_update": {
       const workspace = str(args.workspace);
       const host = dropHostFor(tenant);
+      if (args.dropBoardsAction && typeof args.dropBoardsAction === "object") {
+        const dba = args.dropBoardsAction as Record<string, unknown>;
+        const boardRelPath = typeof dba.boardRelPath === "string" ? dba.boardRelPath : undefined;
+        const showOnDrop = typeof dba.showOnDrop === "boolean" ? dba.showOnDrop : undefined;
+        const hiddenDropBoards = Array.isArray(dba.hiddenDropBoards)
+          ? dba.hiddenDropBoards.filter((x): x is string => typeof x === "string")
+          : undefined;
+        const visRes = updateKbDropBoardVisibilityFromUi(host, {
+          workspace,
+          toggleBoardRelPath: boardRelPath,
+          showOnDrop,
+          hiddenDropBoards,
+        });
+        return visRes.ok ? { ok: true, data: visRes.data } : fail(visRes.error);
+      }
       if (args.decideProposal && typeof args.decideProposal === "object") {
         const dp = args.decideProposal as Record<string, unknown>;
         const proposalId = typeof dp.proposalId === "string" ? dp.proposalId : "";

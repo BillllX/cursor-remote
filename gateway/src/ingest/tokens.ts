@@ -283,6 +283,7 @@ function cloneKbConfig(cfg: KbWorkspaceConfig): KbWorkspaceConfig {
     ...cfg,
     allowedCategories: [...cfg.allowedCategories],
     allowedExts: [...cfg.allowedExts],
+    ...(cfg.hiddenDropBoards ? { hiddenDropBoards: [...cfg.hiddenDropBoards] } : {}),
   };
 }
 
@@ -870,12 +871,13 @@ export function revokeDropToken(
 
 /**
  * 外部同事在网页端输入投递口令进行校验并签发上传会话 Token（默认开启 remember=true 持久化记住登录态，访问过一次后无缝自动登入）
+ * submitterName 可选：若留空则自动使用该通行口令配置的同事称呼（record.label）
  */
 export function verifyDropPasscodeAndCreateSession(
   host: DropTenantHost,
   input: {
     passcode: string;
-    submitterName: string;
+    submitterName?: string;
     clientIp: string;
     remember?: boolean;
     preferredWorkspace?: string;
@@ -902,9 +904,12 @@ export function verifyDropPasscodeAndCreateSession(
     };
   }
 
-  const submitter = sanitizeSubmitterName(input.submitterName);
-  if (!submitter.ok) {
-    return { ok: false, status: 400, error: submitter.error };
+  const rawSubmitterInput = typeof input.submitterName === "string" ? input.submitterName.trim() : "";
+  if (rawSubmitterInput) {
+    const submitterCheck = sanitizeSubmitterName(rawSubmitterInput);
+    if (!submitterCheck.ok) {
+      return { ok: false, status: 400, error: submitterCheck.error };
+    }
   }
 
   const passCheck = isValidPasscodeFormat(input.passcode);
@@ -928,6 +933,11 @@ export function verifyDropPasscodeAndCreateSession(
   if (!matchedRecord) {
     recordAuthFailure(host.id, input.clientIp, now);
     return { ok: false, status: 401, error: "投递口令无效或已过期" };
+  }
+
+  const submitter = sanitizeSubmitterName(rawSubmitterInput || matchedRecord.label || "同事访客");
+  if (!submitter.ok) {
+    return { ok: false, status: 400, error: submitter.error };
   }
 
   const authorizedWorkspaces = resolveAuthorizedWorkspacesForToken(host, matchedRecord);
@@ -1049,6 +1059,8 @@ export function verifyDropPasscodeAndCreateSession(
   return { ok: true, session: cloneSessionGrant(grant) };
 }
 
+const PERSISTENT_TOUCH_DEBOUNCE_MS = 10 * 60 * 1000;
+
 /**
  * 校验上传会话 Token（支持从持久化 drop-sessions.json 自动恢复跨网关重启的记住登录会话），
  * 并实时复核口令未被吊销、至少有一个绑定工作区有效。
@@ -1154,6 +1166,7 @@ export function verifyDropSessionToken(
     sess.receiptHash = undefined;
   }
 
+  const prevLastActive = sess.lastActiveAt;
   sess.workspaceId = activeWs.workspaceId;
   sess.workspaceKey = activeWs.workspaceKey;
   sess.workspacePath = activeWs.workspacePath;
@@ -1166,6 +1179,28 @@ export function verifyDropSessionToken(
   sess.expiresAt = Math.min(maxLifetimeDeadline, now + (sess.persistent ? PERSISTENT_SESSION_TTL_MS : SESSION_TTL_MS));
   activeDropSessions.delete(key);
   activeDropSessions.set(key, sess);
+
+  // 将活跃的持久化会话移到磁盘队列末尾（LRU 保活，防止长期使用的设备被新登录挤出）
+  if (sess.persistent && now - prevLastActive >= PERSISTENT_TOUCH_DEBOUNCE_MS) {
+    const pFile = persistentSessionStorePath(host);
+    try {
+      withFileLockSync(pFile, () => {
+        const pData = readPersistentSessionsUnlocked(host);
+        const idx = pData.items.findIndex((x) => x.sessionTokenHash === key && x.tenantId === host.id);
+        if (idx >= 0) {
+          const [rec] = pData.items.splice(idx, 1);
+          if (rec) {
+            rec.lastActiveAt = now;
+            rec.activeWorkspaceId = sess.workspaceId;
+            pData.items.push(rec);
+            writePersistentSessionsUnlocked(host, pData);
+          }
+        }
+      });
+    } catch {
+      // ignore
+    }
+  }
 
   return { ok: true, session: cloneSessionGrant(sess) };
 }
@@ -1431,6 +1466,7 @@ export function setupKbWorkspaceForTenant(
     workspace: string;
     title: string;
     categories: string[];
+    hiddenDropBoards?: string[];
   },
 ): { ok: true; workspaceKey: string; workspaceId: string; config: KbWorkspaceConfig } | { ok: false; error: string } {
   const wsRef = host.resolveWorkspace(input.workspace.trim());
@@ -1441,6 +1477,7 @@ export function setupKbWorkspaceForTenant(
   const initRes = initKbWorkspaceConfig(targetDir, {
     title: input.title,
     allowedCategories: input.categories,
+    ...(input.hiddenDropBoards !== undefined ? { hiddenDropBoards: input.hiddenDropBoards } : {}),
   });
   if (!initRes.ok) return initRes;
   const loaded = loadKbWorkspaceConfig(targetDir, host.workspaceRoot);

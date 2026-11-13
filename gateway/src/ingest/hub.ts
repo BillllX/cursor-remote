@@ -14,8 +14,10 @@ import type {
 import { listColleagueProposals } from "../assistant/proposals.ts";
 import {
   ensureSafePathInWorkspace,
+  isKbBoardVisibleOnDrop,
   loadKbWorkspaceConfig,
   safeReadWorkspaceTextFileSync,
+  updateKbWorkspaceDropBoardVisibility,
   type KbWorkspaceConfig,
 } from "./contract.ts";
 import { readWorkspaceIngestLogs } from "./notify.ts";
@@ -59,9 +61,15 @@ function extractHtmlUpdatedAt(workspaceDir: string, relPath: string, fallbackMti
  * 扫描知识库工作区下所有合法的同名 `.html` 知识库看板：
  * 1. 顶层分类总览看板：`<category>/<category>.html`（`level: "category"`）
  * 2. 主体/专题子目录看板：`<category>/<sub>/<sub>.html`（`level: "subject"`）
+ * @param opts.includeHiddenOnDrop 是否包含在 Drop 门户中被勾选隐藏的看板（管理后台传 true，Drop 门户默认 false）
  */
-export function scanWorkspaceKbHtmlBoards(workspaceDir: string, config: KbWorkspaceConfig): KbHtmlBoardItem[] {
+export function scanWorkspaceKbHtmlBoards(
+  workspaceDir: string,
+  config: KbWorkspaceConfig,
+  opts: { includeHiddenOnDrop?: boolean } = {},
+): KbHtmlBoardItem[] {
   const boards: KbHtmlBoardItem[] = [];
+  const includeHidden = Boolean(opts.includeHiddenOnDrop);
 
   for (const category of config.allowedCategories) {
     const catCheck = ensureSafePathInWorkspace(workspaceDir, category, { expectLeaf: "dir" });
@@ -74,14 +82,18 @@ export function scanWorkspaceKbHtmlBoards(workspaceDir: string, config: KbWorksp
       try {
         const st = lstatSync(topCheck.absPath);
         if (st.isFile() && !st.isSymbolicLink()) {
-          boards.push({
-            relPath: topCheck.normalizedRel,
-            title: `${category}（总览看板）`,
-            category,
-            level: "category",
-            updatedAt: extractHtmlUpdatedAt(workspaceDir, topCheck.normalizedRel, st.mtimeMs),
-            size: st.size,
-          });
+          const showOnDrop = isKbBoardVisibleOnDrop(config, topCheck.normalizedRel);
+          if (includeHidden || showOnDrop) {
+            boards.push({
+              relPath: topCheck.normalizedRel,
+              title: `${category}（总览看板）`,
+              category,
+              level: "category",
+              updatedAt: extractHtmlUpdatedAt(workspaceDir, topCheck.normalizedRel, st.mtimeMs),
+              size: st.size,
+              showOnDrop,
+            });
+          }
         }
       } catch {
         // ignore
@@ -114,14 +126,18 @@ export function scanWorkspaceKbHtmlBoards(workspaceDir: string, config: KbWorksp
       try {
         const st = lstatSync(subHtmlCheck.absPath);
         if (st.isFile() && !st.isSymbolicLink()) {
-          boards.push({
-            relPath: subHtmlCheck.normalizedRel,
-            title: subName,
-            category,
-            level: "subject",
-            updatedAt: extractHtmlUpdatedAt(workspaceDir, subHtmlCheck.normalizedRel, st.mtimeMs),
-            size: st.size,
-          });
+          const showOnDrop = isKbBoardVisibleOnDrop(config, subHtmlCheck.normalizedRel);
+          if (includeHidden || showOnDrop) {
+            boards.push({
+              relPath: subHtmlCheck.normalizedRel,
+              title: subName,
+              category,
+              level: "subject",
+              updatedAt: extractHtmlUpdatedAt(workspaceDir, subHtmlCheck.normalizedRel, st.mtimeMs),
+              size: st.size,
+              showOnDrop,
+            });
+          }
         }
       } catch {
         // ignore
@@ -422,7 +438,9 @@ export function getKbWorkspaceStatusForUi(
     };
   }
 
-  const boards = scanWorkspaceKbHtmlBoards(kbLoaded.workspaceRealPath, kbLoaded.config);
+  const boards = scanWorkspaceKbHtmlBoards(kbLoaded.workspaceRealPath, kbLoaded.config, {
+    includeHiddenOnDrop: true,
+  });
   const allTokens = listDropTokens(host, { includeRevoked: false });
   const wsTokens = allTokens.filter((t) =>
     t.workspaces ? t.workspaces.some((w) => w.workspaceId === wsRef.workspaceId) : t.workspaceId === wsRef.workspaceId,
@@ -469,11 +487,39 @@ export function initKbWorkspaceFromUi(
     workspace: string;
     title: string;
     categories: string[];
+    hiddenDropBoards?: string[];
   },
 ): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
   const setupRes = setupKbWorkspaceForTenant(host, input);
   if (!setupRes.ok) return setupRes;
   return getKbWorkspaceStatusForUi(host, setupRes.workspaceKey);
+}
+
+export function updateKbDropBoardVisibilityFromUi(
+  host: DropTenantHost,
+  input: {
+    workspace: string;
+    hiddenDropBoards?: string[];
+    toggleBoardRelPath?: string;
+    showOnDrop?: boolean;
+  },
+): { ok: true; data: KbWorkspaceStatusData } | { ok: false; error: string } {
+  const wsRef = host.resolveWorkspace(input.workspace.trim());
+  if (!wsRef) {
+    return { ok: false, error: `找不到子工作区：${input.workspace}` };
+  }
+  const targetDir = resolve(host.workspaceRoot, wsRef.key);
+  const updated = updateKbWorkspaceDropBoardVisibility(
+    targetDir,
+    {
+      hiddenDropBoards: input.hiddenDropBoards,
+      toggleBoardRelPath: input.toggleBoardRelPath,
+      showOnDrop: input.showOnDrop,
+    },
+    host.workspaceRoot,
+  );
+  if (!updated.ok) return updated;
+  return getKbWorkspaceStatusForUi(host, wsRef.key);
 }
 
 export function createDropTokenFromUi(

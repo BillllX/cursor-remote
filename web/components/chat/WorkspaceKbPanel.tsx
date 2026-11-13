@@ -245,7 +245,7 @@ export function WorkspaceKbPanel({
             setWatchNoteDraft("");
           }
         } else {
-          setNotice("已更新同事通行权限配置");
+          setNotice("已更新知识库与通行配置");
         }
       } else if (op === "drop_token_revoke") {
         setNotice("已更新/吊销投递口令");
@@ -353,6 +353,33 @@ export function WorkspaceKbPanel({
           kind: "start",
           mode: "owner_colleague",
           tokenId,
+        },
+      }),
+    );
+  }
+
+  function handleToggleBoardDropVisibility(boardRelPath: string, showOnDrop: boolean) {
+    sendKbOperation(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: workspaceKey,
+        dropBoardsAction: {
+          kind: "set_visibility",
+          boardRelPath,
+          showOnDrop,
+        },
+      }),
+    );
+  }
+
+  function handleSetAllBoardsDropVisibility(showAll: boolean) {
+    if (!status) return;
+    const hiddenDropBoards = showAll ? [] : status.boards.map((b) => b.relPath);
+    sendKbOperation(
+      buildAssistantOpMessage("drop_token_update", {
+        workspace: workspaceKey,
+        dropBoardsAction: {
+          kind: "set_visibility",
+          hiddenDropBoards,
         },
       }),
     );
@@ -604,37 +631,121 @@ export function WorkspaceKbPanel({
         </div>
       ) : null}
 
-      {/* 2. 知识库 HTML 看板列表（直接点击打开右侧预览） */}
+      {/* 2. 知识库 HTML 看板列表（支持直接打开右侧预览，并勾选哪些看板在 Drop 页面向外部访客展示） */}
       {showKbSection && status?.isKnowledgeBase ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div className="side-label" style={{ margin: 0 }}>
-            知识库 HTML 看板（{status.boards.length}）
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span className="side-label" style={{ margin: 0 }}>
+                知识库 HTML 看板（{status.boards.length}）
+              </span>
+              {status.boards.length > 0 ? (
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                  Drop 页展示 {status.boards.filter((b) => b.showOnDrop !== false).length} / {status.boards.length}
+                </span>
+              ) : null}
+            </div>
+            {status.boards.length > 1 ? (
+              <div style={{ display: "flex", gap: 4 }}>
+                <button
+                  type="button"
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--line)",
+                    borderRadius: 5,
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    color: "var(--ink)",
+                    cursor: "pointer",
+                  }}
+                  disabled={loading || status.boards.every((b) => b.showOnDrop !== false)}
+                  onClick={() => handleSetAllBoardsDropVisibility(true)}
+                >
+                  全部展示
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    background: "transparent",
+                    border: "1px solid var(--line)",
+                    borderRadius: 5,
+                    padding: "2px 6px",
+                    fontSize: 11,
+                    color: "var(--muted)",
+                    cursor: "pointer",
+                  }}
+                  disabled={loading || status.boards.every((b) => b.showOnDrop === false)}
+                  onClick={() => handleSetAllBoardsDropVisibility(false)}
+                >
+                  全部隐藏
+                </button>
+              </div>
+            ) : null}
           </div>
           {status.boards.length === 0 ? (
             <div style={{ fontSize: 12, color: "var(--muted)" }}>暂无同名 .html 看板。上传文档归档后会自动生成。</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              {status.boards.map((board) => (
-                <button
-                  key={board.relPath}
-                  type="button"
-                  className="tree-file"
-                  style={{ borderRadius: 6, padding: "5px 8px" }}
-                  title={`点击打开预览：${board.relPath}`}
-                  onClick={() => onOpenBoard(board.relPath)}
-                >
-                  <FileGlyph path={board.relPath} />
-                  <span className="tree-file-copy">
-                    <span className="tree-file-name" style={{ fontSize: 12 }}>
-                      {board.title}
-                    </span>
-                    <span className="tree-file-path" style={{ fontSize: 11 }}>
-                      {board.relPath}
-                      {board.updatedAt ? ` · 更新于 ${formatShortTime(board.updatedAt)}` : ""}
-                    </span>
-                  </span>
-                </button>
-              ))}
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {status.boards.map((board) => {
+                const shownOnDrop = board.showOnDrop !== false;
+                return (
+                  <div
+                    key={board.relPath}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      borderRadius: 6,
+                      border: "1px solid var(--line)",
+                      padding: "4px 8px",
+                      opacity: shownOnDrop ? 1 : 0.72,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      className="tree-file"
+                      style={{ flex: 1, minWidth: 0, border: 0, padding: "2px 0", background: "transparent" }}
+                      title={`点击打开预览：${board.relPath}`}
+                      onClick={() => onOpenBoard(board.relPath)}
+                    >
+                      <FileGlyph path={board.relPath} />
+                      <span className="tree-file-copy">
+                        <span className="tree-file-name" style={{ fontSize: 12 }}>
+                          {board.title}
+                        </span>
+                        <span className="tree-file-path" style={{ fontSize: 11 }}>
+                          {board.relPath}
+                          {board.updatedAt ? ` · 更新于 ${formatShortTime(board.updatedAt)}` : ""}
+                        </span>
+                      </span>
+                    </button>
+                    <label
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        fontSize: 11,
+                        color: shownOnDrop ? "var(--accent, #2f6b52)" : "var(--muted)",
+                        fontWeight: shownOnDrop ? 600 : 400,
+                        cursor: loading ? "not-allowed" : "pointer",
+                        flex: "none",
+                        margin: 0,
+                        userSelect: "none",
+                      }}
+                      title="勾选后该页面会在 /p/<租户>/drop 页面向同事展示；取消勾选则不在 Drop 页面展示"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={shownOnDrop}
+                        disabled={loading}
+                        onChange={(e) => handleToggleBoardDropVisibility(board.relPath, e.target.checked)}
+                      />
+                      <span>{shownOnDrop ? "Drop页展示" : "Drop已隐藏"}</span>
+                    </label>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
