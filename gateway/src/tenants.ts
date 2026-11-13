@@ -30,6 +30,10 @@ const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export type DiskSlot = {
   chatId: string;
   agentId: string | null;
+  /** Codex CLI 线程 ID（与 Cursor agentId 独立持久化） */
+  codexThreadId?: string | null;
+  /** 最近一轮执行的引擎标识 */
+  lastEngine?: "cursor" | "codex" | "native";
   cwd: string;
   model?: string;
   edited: string[];

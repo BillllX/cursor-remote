@@ -40,6 +40,7 @@ import { send } from "../ws/send.ts";
 import { ensureAgent } from "./agent.ts";
 import { sanitizeImages } from "./attachments.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
+import { codexRoute, runCodexChat } from "./codexRunner.ts";
 import { runExternalChat } from "./external.ts";
 import { finishRun } from "./finish.ts";
 import { attachReseedContext, diskChatContextStats } from "./history.ts";
@@ -218,6 +219,8 @@ export async function handlePrompt(
     const nativeDir = nativeStateDir(conn, slot);
     if (nativeDir) deleteSession(nativeDir, slot.chatId);
     slot.agentId = null;
+    slot.codexThreadId = null;
+    slot.lastEngine = undefined;
     slot.run = null;
     slot.finished = true;
     slot.edited = [];
@@ -278,6 +281,7 @@ export async function handlePrompt(
   if (slot.policy !== nextPolicy || slot.dialect !== nextDialect || slot.mode !== mode) {
     await disposeSlot(slot);
     slot.agentId = null;
+    slot.codexThreadId = null;
     slot.reseed = true;
     gatewayState.promptSeedBySlot.delete(slot);
   }
@@ -287,7 +291,8 @@ export async function handlePrompt(
   slot.model = usedModel;
   slot.mode = mode;
   conn.model = usedModel;
-  const externalEarly = externalRoute(usedModel);
+  const codexEarly = codexRoute(usedModel);
+  const externalEarly = codexEarly ? null : externalRoute(usedModel);
   if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
   const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
   let assistantBlock = "";
@@ -366,10 +371,52 @@ export async function handlePrompt(
   if (autoApprove) slot.runStats.replays += 1;
   else slot.runStats = { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 };
 
+  // Codex CLI 双引擎分流：前置拦截 `codex:<model>`，支持多模型交叉评审与排队续跑
+  if (codexEarly) {
+    let codexReviewAppended = false;
+    if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
+      const panel = slot.reviewRoster || [];
+      const apiKey = gatewayEnv.cursorApiKey();
+      if (panel.length < 2) {
+        send(ws, {
+          type: "text-delta",
+          chatId: slot.chatId,
+          text: "目录里除了当前模型，没有足够的其他模型可以并行评审。\n\n",
+        });
+        prompt += "\n\n目录里除了当前模型，没有足够的其他模型可以并行评审。直接告诉用户，不要用同一个模型假装多家。";
+        codexReviewAppended = true;
+      } else if (apiKey) {
+        prompt += await runReviewPanel(ws, conn, slot, panel, userText, cwd, apiKey, epoch, { files });
+        codexReviewAppended = true;
+        if (slot.finished || slot.epoch !== epoch) {
+          drainPending(ws, conn, slot, epoch);
+          return;
+        }
+      }
+    }
+    await runCodexChat(ws, conn, slot, codexEarly, {
+      prompt,
+      compactPrompt,
+      userText: text.trim(),
+      images: safeImages,
+      history: safeHistory,
+      epoch: slot.epoch,
+      cwd,
+      mode,
+      confirmWrites,
+      autoApprove,
+      reviewAppended: codexReviewAppended,
+      prewarmedSkills: prewarmedSkills.length ? prewarmedSkills : undefined,
+    });
+    drainPending(ws, conn, slot, epoch);
+    return;
+  }
+
   // P11：第三方模型（"minimax:MiniMax-M2" 等）默认走自研 Agent；providers.json 里 tools: false 的退回纯问答。
   // 历史由客户端随 prompt 上行（iOS 是会话内容权威源）
   const external = externalEarly;
   if (external && external.provider.tools) {
+    slot.lastEngine = "native";
     if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
       send(ws, {
         type: "text-delta",
@@ -394,6 +441,7 @@ export async function handlePrompt(
     return;
   }
   if (external) {
+    slot.lastEngine = "native";
     if (wantsMultiModelReview(userText) && !autoApprove && !keepTranscript) {
       send(ws, {
         type: "text-delta",
@@ -700,6 +748,13 @@ export async function handlePrompt(
       }
     }
     const baseFullPrompt = prompt;
+    if (slot.lastEngine && slot.lastEngine !== "cursor") {
+      if (slot.agent) await disposeSlot(slot);
+      slot.agentId = null;
+      slot.reseed = true;
+      gatewayState.promptSeedBySlot.delete(slot);
+    }
+    slot.lastEngine = "cursor";
     const staticRulesHash = loadStaticRulesFingerprint(cwd, conn.tenant);
     const panelKey = (slot.reviewRoster || []).map((r) => `${r.name}:${r.modelId}`).join(",");
     let turnProgressed = false;
@@ -718,7 +773,7 @@ export async function handlePrompt(
         panelKey,
       });
       if (reseededNow) {
-        prompt = attachReseedContext(conn.tenant, slot.chatId, userText, baseFullPrompt);
+        prompt = attachReseedContext(conn.tenant, slot.chatId, userText, baseFullPrompt, safeHistory);
         slot.reseed = false;
         turnProgressed = false;
         lastAttemptInterruptedBeforeTool = false;
@@ -1195,8 +1250,7 @@ export async function handlePrompt(
           slot.openTools.clear();
         }
         startedCalls.clear();
-        lastAttemptInterruptedBeforeTool =
-          (attemptSawThinking && !attemptSawToolCall) || pendingThinkingBeforeTool;
+        lastAttemptInterruptedBeforeTool = (attemptSawThinking && !attemptSawToolCall) || pendingThinkingBeforeTool;
         const reason = err instanceof Error ? err.message : String(err);
         const isNoProgressResume = /repeated resume attempts made no progress/i.test(reason);
         const isMissingAgent = /agent[-_ ].*not found/i.test(reason);

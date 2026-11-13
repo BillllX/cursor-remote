@@ -55,6 +55,8 @@ export function persistTenant(tenant: Tenant, slots = liveSlotsOf(tenant)) {
     byId.set(slot.chatId, {
       chatId: slot.chatId,
       agentId: slot.agentId,
+      codexThreadId: slot.codexThreadId || null,
+      lastEngine: slot.lastEngine,
       cwd: requireCwd(slot.cwd, tenant.workspaceRoot),
       model: slot.model,
       edited: slot.edited,
@@ -137,6 +139,8 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     cwd: requireCwd(diskChatCwd(tenant, chatId) || saved?.cwd, tenant.workspaceRoot),
     model: saved?.model,
     agentId: saved?.agentId || null,
+    codexThreadId: saved?.codexThreadId || null,
+    lastEngine: saved?.lastEngine,
     agent: null,
     run: null,
     epoch: 0,

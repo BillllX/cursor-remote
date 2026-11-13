@@ -7,6 +7,7 @@ import { log } from "../log.ts";
 import { chatIdOf } from "../runtime/chats.ts";
 import { cwdOf } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
+import type { ChatHistoryItem } from "../providers.ts";
 import type { Tenant } from "../tenants.ts";
 import { fitTurnsFromEnd } from "../ws/frame.ts";
 import { send } from "../ws/send.ts";
@@ -97,18 +98,43 @@ export function diskChatContextStats(
   };
 }
 
+export function turnsFromChatHistory(history: ChatHistoryItem[] | undefined): { user: string; assistant: string }[] {
+  if (!Array.isArray(history) || !history.length) return [];
+  const out: { user: string; assistant: string }[] = [];
+  let pendingUser = "";
+  for (const item of history) {
+    if (!item || typeof item.text !== "string") continue;
+    const text = item.text.trim();
+    if (!text) continue;
+    if (item.role === "user") {
+      if (pendingUser) out.push({ user: pendingUser, assistant: "" });
+      pendingUser = text;
+    } else if (item.role === "assistant") {
+      out.push({ user: pendingUser, assistant: text });
+      pendingUser = "";
+    }
+  }
+  if (pendingUser) out.push({ user: pendingUser, assistant: "" });
+  return out;
+}
+
 export function attachReseedContext(
   tenant: Tenant | null | undefined,
   chatId: string,
   currentText: string,
   prompt: string,
+  fallbackHistory?: ChatHistoryItem[],
 ) {
   const wanted = currentText.trim();
-  const prior = diskChatTurns(tenant, chatId).filter((turn) => {
-    if (!wanted) return Boolean(turn.user || turn.assistant);
-    if (turn.user === wanted && !turn.assistant) return false;
-    return Boolean(turn.user || turn.assistant);
-  });
+  const filterPrior = (rows: { user: string; assistant: string }[]) =>
+    rows.filter((turn) => {
+      if (!wanted) return Boolean(turn.user || turn.assistant);
+      if (turn.user === wanted && !turn.assistant) return false;
+      return Boolean(turn.user || turn.assistant);
+    });
+  const diskPrior = filterPrior(diskChatTurns(tenant, chatId));
+  const fallbackPrior = filterPrior(turnsFromChatHistory(fallbackHistory));
+  const prior = fallbackPrior.length > diskPrior.length ? fallbackPrior : diskPrior;
   if (!prior.length) return prompt;
   const pieces: string[] = [];
   let used = 0;

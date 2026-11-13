@@ -24,6 +24,7 @@ import { sendCheckpoints } from "../../workspace/checkpoints.ts";
 import { emitWorkspaces } from "../../workspace/workspaces.ts";
 import { workspaceAgentsMessage } from "../../workspace/agents.ts";
 import { send } from "../send.ts";
+import { codexModelIds } from "../../chat/codexRunner.ts";
 import { cachedModels, listModels } from "../../chat/models.ts";
 import type { MessageOf, WsConnCtx } from "./types.ts";
 import { deviceRegistry } from "../../device/registry.ts";
@@ -79,7 +80,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       cwd: conn.cwd,
       hasApiKey: Boolean(apiKey),
       model: conn.model,
-      models: [...models, ...externalModelIds()], // P11：第三方模型（provider:model）合并下发
+      models: [...models, ...codexModelIds(tenant), ...externalModelIds()], // P11：Codex CLI 与第三方模型合并下发
       agentId: null,
       runningChatIds: runningChatIds(tenant),
       queuedChatIds: queuedChatIds(tenant),

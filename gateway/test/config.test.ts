@@ -39,6 +39,10 @@ describe("config 默认值", () => {
       assert.equal(gatewayEnv.cursorApiKey(), "");
       assert.equal(gatewayEnv.defaultModel(), "composer-2.5");
       assert.equal(gatewayEnv.cursorApiEndpoint(), "https://api2.cursor.sh");
+      assert.equal(gatewayEnv.codexApiKey(), "");
+      assert.equal(gatewayEnv.codexBaseUrl(), "");
+      assert.equal(gatewayEnv.codexHome(), "");
+      assert.equal(gatewayEnv.codexCliModels(), "");
       assert.equal(gatewayEnv.stateDir(), resolve(homedir(), ".cursor-remote"));
       // sandboxMasks 原表达式 env.CURSOR_REMOTE_STATE_DIR || ""：未设置不套默认目录
       assert.equal(gatewayEnv.stateDirOverride(), "");

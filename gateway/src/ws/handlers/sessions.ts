@@ -61,6 +61,8 @@ export async function onNewSession({ ws, conn, tenant }: WsCtx, message: Message
   await disposeSlot(slot);
   deleteSession(tenant.stateDir, slot.chatId);
   slot.agentId = null;
+  slot.codexThreadId = null;
+  slot.lastEngine = undefined;
   slot.edited = [];
   slot.checkpoints = [];
   slot.openTools.clear();
@@ -128,6 +130,7 @@ export async function onSetPolicy({ ws, conn }: WsCtx, message: MessageOf<"set_p
       slot.approvedKeys.clear();
       await disposeSlot(slot);
       slot.agentId = null;
+      slot.codexThreadId = null;
       slot.reseed = true;
     }
   }

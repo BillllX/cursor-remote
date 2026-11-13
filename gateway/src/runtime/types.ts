@@ -62,6 +62,10 @@ export type Slot = {
   /** 该会话最近一次 prompt 的模式；Loop 没指定 mode 时沿用 */
   mode?: AgentMode;
   agentId: string | null;
+  /** Codex CLI 线程 ID（与 Cursor SDK 的 agentId 独立保存，避免串号） */
+  codexThreadId?: string | null;
+  /** 该会话最近一轮实际执行的底层引擎，用于跨引擎切换时自动触发 reseed */
+  lastEngine?: "cursor" | "codex" | "native";
   agent: AgentHandle | null;
   run: RunHandle | null;
   epoch: number;

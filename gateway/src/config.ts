@@ -83,6 +83,32 @@ export const ENV_SPECS = [
   },
 
   {
+    name: "CODEX_API_KEY",
+    type: "string",
+    group: "Codex CLI",
+    doc: "Codex CLI API Key（可选；未设时使用 CODEX_HOME/auth.json 的登录凭证）",
+  },
+  {
+    name: "CODEX_BASE_URL",
+    type: "string",
+    group: "Codex CLI",
+    doc: "Codex CLI OpenAI 兼容网关地址（可选）",
+  },
+  {
+    name: "CODEX_HOME",
+    type: "string",
+    default: "~/.codex",
+    group: "Codex CLI",
+    doc: "Codex CLI 状态与登录凭证目录，缺省 ~/.codex",
+  },
+  {
+    name: "CODEX_CLI_MODELS",
+    type: "string",
+    group: "Codex CLI",
+    doc: "逗号分隔的 Codex CLI 暴露模型列表；未设时自动读取 CODEX_HOME/models_cache.json 并回退默认列表",
+  },
+
+  {
     name: "CURSOR_REMOTE_STATE_DIR",
     type: "string",
     default: "~/.cursor-remote",
@@ -270,6 +296,12 @@ export const gatewayEnv = {
   cursorApiKey: () => raw("CURSOR_API_KEY")?.trim() || "",
   defaultModel: () => raw("CURSOR_REMOTE_MODEL") || "composer-2.5",
   cursorApiEndpoint: () => (raw("CURSOR_API_ENDPOINT") || "https://api2.cursor.sh").replace(/\/$/, ""),
+
+  /** Codex CLI 配置 */
+  codexApiKey: () => raw("CODEX_API_KEY")?.trim() || "",
+  codexBaseUrl: () => (raw("CODEX_BASE_URL") || "").trim().replace(/\/$/, ""),
+  codexHome: () => (raw("CODEX_HOME") || "").trim(),
+  codexCliModels: () => (raw("CODEX_CLI_MODELS") || "").trim(),
 
   /** 未 resolve 的状态目录 */
   stateDir: () => raw("CURSOR_REMOTE_STATE_DIR") || resolve(homedir(), ".cursor-remote"),
