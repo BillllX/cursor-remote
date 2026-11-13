@@ -60,9 +60,17 @@ function pickExplore(lead: string, catalog: string[]): { id: string } | "inherit
 }
 
 function pickReviewer(lead: string, catalog: string[]): { id: string } | "inherit" {
-  const leadVendor = vendorHint(lead);
-  const pool = catalog.filter(
-    (id) => id.trim() && id.trim() !== lead && !/fast|small/i.test(id),
+  const leadKey = lead.trim().replace(/^codex:/i, "").toLowerCase();
+  const leadVendor = vendorHint(leadKey || lead);
+  const pool = rankModelsByFreshness(
+    catalog.filter(
+      (id) =>
+        id.trim() &&
+        !id.includes(":") &&
+        id.trim().toLowerCase() !== leadKey &&
+        id.trim().toLowerCase() !== lead.trim().toLowerCase() &&
+        !isLiteModel(id),
+    ),
   );
   const otherVendor = pool.find((id) => vendorHint(id) !== leadVendor);
   if (otherVendor) return { id: otherVendor };
@@ -87,22 +95,90 @@ const VENDOR_RANK = [
 ];
 
 function isLiteModel(id: string): boolean {
-  return /(^|-)(fast|small|mini|nano)(-|$)/i.test(id);
+  return /(^|-)(fast|small|mini|nano|flash|lite)(-|$)/i.test(id);
+}
+
+/**
+ * 计算同厂商模型的新旧与档位优先级分值（分值越高代表越新、档位越强）：
+ * 1. 非轻量（非 fast/small/mini/nano/flash/lite）优先；
+ * 2. 提取模型 ID 中的主次版本号（如 `claude-opus-5-6` -> 5.6，`gpt-6.1-sol` -> 6.1，`grok-4.7` -> 4.7，`glm-5.2` -> 5.2）；
+ *    忽略 8 位日期戳（如 20250514），避免旧模型的日期后缀压过新代数主版本号；
+ * 3. 同代数下按旗舰档位加权（opus / pro / max / ultra / sol > sonnet / terra > 其它 > haiku / mini）。
+ */
+export function scoreModelFreshness(id: string): number {
+  const n = id.trim().toLowerCase();
+  if (!n) return -1e9;
+  let score = 0;
+  if (!isLiteModel(n)) {
+    score += 1_000_000;
+  }
+
+  // 剥离常见的 8 位日期后缀（如 -20250514）和上下文窗口标记（如 1m / 200k）以免干扰版本号提取
+  const cleaned = n
+    .replace(/\b20\d{6}\b/g, "")
+    .replace(/\b\d+[km]\b/g, "");
+
+  // 提取版本号：支持 `5.6`、`5-6`（跟在字母或连字符后且次版本为单数字，如 opus-5-5、sonnet-4-6）或单主版本 `6`
+  let major = 0;
+  let minor = 0;
+  const dotMatch = cleaned.match(/(?:^|[-_a-z])(\d{1,2})\.(\d{1,2})(?=$|[-_a-z])/);
+  const dashMatch = cleaned.match(/(?:^|[-_a-z])(\d{1,2})-(\d)(?=$|[-_a-z])/);
+  const singleMatch = cleaned.match(/(?:^|[-_a-z])(\d{1,2})(?=$|[-_a-z])/);
+
+  if (dotMatch) {
+    major = Number(dotMatch[1]);
+    minor = Number(dotMatch[2]);
+  } else if (dashMatch) {
+    major = Number(dashMatch[1]);
+    minor = Number(dashMatch[2]);
+  } else if (singleMatch) {
+    major = Number(singleMatch[1]);
+  }
+
+  score += major * 10_000 + minor * 100;
+
+  // 同代数下的旗舰档位微调
+  if (/(^|[-_])(opus|pro|max|ultra|sol)($|[-_])/.test(n)) score += 30;
+  else if (/(^|[-_])(sonnet|terra|plus|astra)($|[-_])/.test(n)) score += 20;
+  else if (/(^|[-_])(luna|codex|thinking|high)($|[-_])/.test(n)) score += 10;
+  else if (/(^|[-_])(haiku|mini|nano|flash|lite|small|fast)($|[-_])/.test(n)) score -= 20;
+
+  return score;
+}
+
+/** 对候选模型列表按“非轻量 + 最新代数 + 旗舰档位”从高到低排序（同分保持原目录顺序） */
+export function rankModelsByFreshness(ids: string[]): string[] {
+  return ids
+    .map((id, idx) => ({ id, idx, score: scoreModelFreshness(id) }))
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx))
+    .map((item) => item.id);
 }
 
 export function rosterKey(rows: ReviewBinding[]): string {
   return rows.map((row) => `${row.name}=${row.modelId}`).join("|");
 }
 
-/** 从目录里挑最多 4 个、彼此不同的评审模型。主模型本身不进名单。 */
-export function pickReviewPanel(lead: string, catalog: string[]): ReviewBinding[] {
-  const leadKey = lead.trim().toLowerCase();
+export type PickReviewPanelOptions = {
+  /** 可选的模型健康检查回调；返回 false 的模型会被自动跳过（如被管理员禁用或处于 429 冷却中） */
+  isHealthy?: (modelId: string) => boolean;
+};
+
+/** 从目录里挑最多 4 个、彼此不同的最新可用评审模型。主模型本身不进名单。 */
+export function pickReviewPanel(
+  lead: string,
+  catalog: string[],
+  options?: PickReviewPanelOptions,
+): ReviewBinding[] {
+  const leadKey = lead.trim().replace(/^codex:/i, "").toLowerCase();
+  const leadFullKey = lead.trim().toLowerCase();
+  const isHealthy = options?.isHealthy;
   const unique: string[] = [];
   const seen = new Set<string>();
   for (const raw of catalog) {
     const id = raw.trim();
     const key = id.toLowerCase();
-    if (!id || id.includes(":") || key === leadKey || seen.has(key)) continue;
+    if (!id || id.includes(":") || key === leadKey || key === leadFullKey || seen.has(key)) continue;
+    if (isHealthy && !isHealthy(id)) continue;
     seen.add(key);
     unique.push(id);
   }
@@ -113,8 +189,8 @@ export function pickReviewPanel(lead: string, catalog: string[]): ReviewBinding[
     list.push(id);
     byVendor.set(vendor, list);
   }
-  const best = (ids: string[]) => ids.find((id) => !isLiteModel(id)) || ids[0];
-  const leadVendor = vendorHint(lead);
+  const best = (ids: string[]) => rankModelsByFreshness(ids)[0] || ids[0];
+  const leadVendor = vendorHint(leadKey || lead);
   const order = [...VENDOR_RANK.filter((vendor) => vendor !== leadVendor), leadVendor];
   const picked: string[] = [];
   for (const vendor of order) {
@@ -124,7 +200,7 @@ export function pickReviewPanel(lead: string, catalog: string[]): ReviewBinding[
     if (picked.length >= PANEL_CAP) break;
   }
   if (picked.length < 2) {
-    const orderedFallback = [...unique.filter((id) => !isLiteModel(id)), ...unique.filter((id) => isLiteModel(id))];
+    const orderedFallback = rankModelsByFreshness(unique);
     for (const id of orderedFallback) {
       if (picked.some((item) => item.toLowerCase() === id.toLowerCase())) continue;
       picked.push(id);

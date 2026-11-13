@@ -374,6 +374,7 @@ export function startIngestRuntime(opts: {
 
   bindWorkspaceScheduleAgentPromptDeps({
     apiKey: apiKeyFn,
+    listModels: listModelsFn,
     prompt: promptFn,
     sandbox: sandboxFn,
   });

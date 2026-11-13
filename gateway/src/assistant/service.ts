@@ -11,7 +11,7 @@ import type {
   JSONValue,
   ServerMessage,
 } from "../../../shared/protocol.ts";
-import { BACKGROUND_MODEL, modelAvailable, runBackground } from "./background.ts";
+import { modelAvailable, resolvePreferredBackgroundModel, runBackground } from "./background.ts";
 import { dropChatFromIndex, indexTurn, scrubChatIndex } from "./chatIndex.ts";
 import { describeLocal } from "./cron.ts";
 import { listApprovals, recoverApprovals, type PendingApproval } from "./approvals.ts";
@@ -1062,7 +1062,12 @@ export async function buildState(
   opts: { memory?: boolean; revision?: number } = {},
 ): Promise<AssistantState> {
   const ref = refOf(tenant);
-  const model = await modelAvailable().catch(() => ({ ok: false, reason: "模型目录读取失败" }));
+  const preferredBgModel = resolvePreferredBackgroundModel(ref);
+  const model = await modelAvailable(ref).catch(() => ({
+    ok: false,
+    model: preferredBgModel,
+    reason: "模型目录读取失败",
+  }));
   const snapshotAt = Date.now();
   const day = describeLocal(snapshotAt, DEFAULT_TZ).slice(0, 10);
   const inbox = listInbox(ref, STATE_INBOX_LIMIT);
@@ -1084,7 +1089,7 @@ export async function buildState(
   const state: AssistantState = {
     revision: opts.revision ?? readAssistantRevision(ref),
     name: assistantName(tenant),
-    background: { model: BACKGROUND_MODEL, ok: model.ok, reason: model.reason },
+    background: { model: model.model || preferredBgModel, ok: model.ok, reason: model.reason },
     pushKey: vapid().publicKey,
     pushApns: apnsReady(),
     inbox,
@@ -1368,6 +1373,9 @@ export async function handleOp(
     case "memory_settings": {
       const next: Parameters<typeof writeSettings>[1] = {};
       if (typeof args.paused === "boolean") next.paused = args.paused;
+      if (typeof args.backgroundModel === "string") {
+        next.backgroundModel = args.backgroundModel.trim() || undefined;
+      }
       if (args.allowSensitive && typeof args.allowSensitive === "object") {
         const allow: Record<string, boolean> = {};
         for (const [key, value] of Object.entries(args.allowSensitive as Record<string, unknown>)) {

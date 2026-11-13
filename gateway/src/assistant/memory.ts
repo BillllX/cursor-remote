@@ -54,6 +54,8 @@ export type MemorySettings = {
   paused: boolean;
   /** 打开的敏感类别才允许记 */
   allowSensitive: Partial<Record<SensitiveTopic, boolean>>;
+  /** 可选：该租户自定义的后台任务（定时任务、记忆更新、知识库归档/问答）首选模型 ID */
+  backgroundModel?: string;
 };
 
 type EntriesFile = { rev: number; entries: MemoryEntry[] };

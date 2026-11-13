@@ -1,5 +1,9 @@
 import type { AgentOptions, RunResult } from "@cursor/sdk";
-import { BACKGROUND_MODEL } from "../assistant/background.ts";
+import {
+  promptWithModelFallback,
+  resolveBackgroundModelChain,
+  resolvePreferredBackgroundModel,
+} from "../assistant/background.ts";
 import type { ColleagueProposalChannel } from "../assistant/proposals.ts";
 import { hasControlChars, loadKbWorkspaceConfig, type KbWorkspaceConfig } from "./contract.ts";
 import {
@@ -324,11 +328,13 @@ export async function runKbQaAsk(
       qaRunnerDeps.listModels(apiKey).catch(() => [] as string[]),
       timeoutAndAbortPromise,
     ]);
-    if (!catalog.includes(BACKGROUND_MODEL)) {
+    const chain = resolveBackgroundModelChain(catalog, { ref: host });
+    if (!chain.length) {
+      const preferred = resolvePreferredBackgroundModel(host);
       return {
         ok: false,
         status: 503,
-        error: `问答模型 ${BACKGROUND_MODEL} 当前不可用`,
+        error: `问答模型 ${preferred} 当前不可用`,
       };
     }
 
@@ -355,9 +361,9 @@ export async function runKbQaAsk(
 
     const sandboxEnabled = qaRunnerDeps.sandbox ? qaRunnerDeps.sandbox(host.id) : true;
 
-    const options: AgentOptions = {
+    const buildOptions = (modelId: string): AgentOptions => ({
       apiKey,
-      model: { id: BACKGROUND_MODEL },
+      model: { id: modelId },
       tools: [...QA_AGENT_TOOLS],
       local: {
         cwd: ensured.sessionDir,
@@ -365,7 +371,7 @@ export async function runKbQaAsk(
         settingSources: [],
         customTools,
       },
-    };
+    });
 
     const promptText = buildQaPrompt({
       config: kbLoaded.config,
@@ -376,7 +382,11 @@ export async function runKbQaAsk(
       authorizedWorkspaces: initialSession.authorizedWorkspaces,
     });
 
-    const p = qaRunnerDeps.prompt(promptText, options);
+    const p = promptWithModelFallback({
+      catalog,
+      ref: host,
+      runWithModel: (modelId) => qaRunnerDeps!.prompt(promptText, buildOptions(modelId)),
+    }).then((r) => r.result);
     promptPromise = p;
     void p.finally(() => {
       releaseConcurrency();

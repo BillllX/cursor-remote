@@ -1159,7 +1159,7 @@ export type AssistantState = {
     rev: number;
     core: { rev: number; fields: Record<string, string> };
     entries: AssistantMemoryEntry[];
-    settings: { paused: boolean; allowSensitive: Record<string, boolean | undefined> };
+    settings: { paused: boolean; allowSensitive: Record<string, boolean | undefined>; backgroundModel?: string };
     sensitive: Record<string, string>;
     coreTokens: number;
     coreBudget: number;

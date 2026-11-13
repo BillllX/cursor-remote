@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { AgentOptions, RunResult } from "@cursor/sdk";
-import { BACKGROUND_MODEL, BACKGROUND_TOOLS } from "../assistant/background.ts";
+import { BACKGROUND_TOOLS, promptWithModelFallback, resolvePreferredBackgroundModel } from "../assistant/background.ts";
 import { clip } from "../assistant/store.ts";
+import { cachedModels } from "../chat/models.ts";
 import { readControlledWeb } from "../assistant/webRead.ts";
 import { isInside } from "../pathInside.ts";
 import {
@@ -16,13 +17,11 @@ import {
 } from "./contract.ts";
 import { submitDirectIngestBatch } from "./queue.ts";
 import { checkAndOptionallySyncWecomItems, ingestWecomMailToKb, searchWecomResources } from "./wecomSource.ts";
-import type {
-  WorkspaceScheduleExecutorKind,
-  WorkspaceTaskExecutor,
-} from "./workspaceScheduleTypes.ts";
+import type { WorkspaceScheduleExecutorKind, WorkspaceTaskExecutor } from "./workspaceScheduleTypes.ts";
 
 export type ScheduleAgentPromptDeps = {
   apiKey: () => string;
+  listModels?: (apiKey: string) => Promise<string[]>;
   prompt: (message: string, options: AgentOptions) => Promise<RunResult>;
   sandbox?: (tenantId: string) => boolean;
 };
@@ -249,7 +248,12 @@ const executeWorkspaceScript: WorkspaceTaskExecutor = async ({ host, schedule, w
   const { payload, cursorState } = schedule;
   const relScript = (payload.scriptRelPath || "").trim();
   if (!relScript) {
-    return { phase: "completed", status: "failed", summary: "未指定脚本路径 scriptRelPath", error: "缺少 scriptRelPath" };
+    return {
+      phase: "completed",
+      status: "failed",
+      summary: "未指定脚本路径 scriptRelPath",
+      error: "缺少 scriptRelPath",
+    };
   }
   const scriptCheck = ensureSafePathInWorkspace(workspacePath, relScript, { expectLeaf: "file" });
   if (!scriptCheck.ok || !existsSync(scriptCheck.absPath)) {
@@ -362,7 +366,12 @@ const executeWorkspaceScript: WorkspaceTaskExecutor = async ({ host, schedule, w
     }
     const st = lstatSync(outCheck.absPath);
     if (!st.isFile() || st.isSymbolicLink() || !isInside(realpathSync(outCheck.absPath), realpathSync(workspacePath))) {
-      return { phase: "completed", status: "failed", summary: "脚本输出文件不是安全的工作区普通文件", error: "输出文件越界" };
+      return {
+        phase: "completed",
+        status: "failed",
+        summary: "脚本输出文件不是安全的工作区普通文件",
+        error: "输出文件越界",
+      };
     }
     if (st.size > maxBytes) {
       const err = `脚本产出文件体积（${st.size} bytes）超过单文件上限（${maxBytes} bytes）`;
@@ -413,7 +422,7 @@ const executeWorkspaceScript: WorkspaceTaskExecutor = async ({ host, schedule, w
     phase: "completed",
     status: "succeeded",
     summary: clip(execRes.stdout || `脚本 ${relScript} 执行成功`, 300),
-     ...(payload.outputRelPath ? { updatedFiles: [payload.outputRelPath.trim()] } : {}),
+    ...(payload.outputRelPath ? { updatedFiles: [payload.outputRelPath.trim()] } : {}),
     nextCursorState: nextCursor,
   };
 };
@@ -442,16 +451,25 @@ const executeAgentPrompt: WorkspaceTaskExecutor = async ({ host, schedule, works
   const timeoutMs = Math.max(10, Math.min(3600, Math.floor(schedule.payload.timeoutSeconds ?? 1200))) * 1000;
   let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    const res = await Promise.race([
-      agentPromptDeps.prompt(fullPrompt, {
-        apiKey,
-        model: { id: BACKGROUND_MODEL },
-        tools: [...BACKGROUND_TOOLS],
-        local: {
-          cwd: workspacePath,
-          sandboxOptions: { enabled: sandboxEnabled },
-          settingSources: [],
-        },
+    const preferred = resolvePreferredBackgroundModel(host);
+    const catalog = agentPromptDeps.listModels
+      ? await agentPromptDeps.listModels(apiKey).catch(() => [preferred, ...cachedModels()])
+      : [preferred, ...cachedModels()];
+    const { result: res } = await Promise.race([
+      promptWithModelFallback({
+        catalog: catalog.length ? catalog : [preferred],
+        ref: host,
+        runWithModel: (modelId) =>
+          agentPromptDeps!.prompt(fullPrompt, {
+            apiKey,
+            model: { id: modelId },
+            tools: [...BACKGROUND_TOOLS],
+            local: {
+              cwd: workspacePath,
+              sandboxOptions: { enabled: sandboxEnabled },
+              settingSources: [],
+            },
+          }),
       }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`AI 定时任务执行超时 (>${timeoutMs}ms)`)), timeoutMs);

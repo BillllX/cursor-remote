@@ -1,7 +1,14 @@
 // 多模型评审：评审名单同步与评审面板运行
 import { Agent } from "@cursor/sdk";
 import type { WebSocket } from "ws";
-import { pickReviewPanel, type ReviewBinding, rosterKey, workspaceConfinePrompt } from "../../../shared/crew.ts";
+import {
+  pickReviewPanel,
+  rankModelsByFreshness,
+  type ReviewBinding,
+  rosterKey,
+  vendorHint,
+  workspaceConfinePrompt,
+} from "../../../shared/crew.ts";
 import { gatewayEnv } from "../config.ts";
 import { disposeSlot, persistConn } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
@@ -9,7 +16,8 @@ import { sandboxEnabledForTenant } from "../tenants.ts";
 import { noteOutput, noteRun, noteToolCall } from "../usage.ts";
 import { send } from "../ws/send.ts";
 import { diskChatTurns } from "./history.ts";
-import { listModels } from "./models.ts";
+import { isModelHealthy, recordModelFailure, recordModelSuccess } from "./modelHealth.ts";
+import { cachedModels, listModels } from "./models.ts";
 
 /** 多模型并行评审单路超时上限：10 分钟 */
 export const REVIEW_TIMEOUT_MS = 10 * 60_000;
@@ -19,7 +27,7 @@ const MAX_REVIEW_SOURCE_CHARS = 24_000;
 export async function syncReviewRoster(conn: Conn, slot: Slot, lead: string) {
   const apiKey = gatewayEnv.cursorApiKey();
   const catalog = apiKey ? await listModels(apiKey) : [];
-  const next = pickReviewPanel(lead, catalog);
+  const next = pickReviewPanel(lead, catalog, { isHealthy: isModelHealthy });
   const known = slot.reviewRoster;
   const same = known ? rosterKey(known) === rosterKey(next) : false;
   if (same) return;
@@ -31,6 +39,38 @@ export async function syncReviewRoster(conn: Conn, slot: Slot, lead: string) {
   }
   slot.reviewRoster = next;
   if (stale) persistConn(conn);
+}
+
+/**
+ * 当评审途中某个模型因管理员策略禁用或 429 配额耗尽失败时，从目录中挑选一个尚未使用且健康的最新替补模型：
+ * 优先选同厂商的最新可用模型，其次选其他厂商的最新可用模型。
+ */
+export function pickReplacementReviewer(
+  failedModelId: string,
+  lead: string,
+  catalog: string[],
+  usedModels: Set<string>,
+): string | null {
+  const leadKey = lead
+    .trim()
+    .replace(/^codex:/i, "")
+    .toLowerCase();
+  const leadFullKey = lead.trim().toLowerCase();
+  const failedVendor = vendorHint(failedModelId);
+  const candidates = rankModelsByFreshness(
+    catalog.filter((raw) => {
+      const id = raw.trim();
+      const key = id.toLowerCase();
+      if (!id || id.includes(":") || key === leadKey || key === leadFullKey) return false;
+      if (usedModels.has(key)) return false;
+      return isModelHealthy(id);
+    }),
+  );
+  if (!candidates.length) return null;
+  const sameVendor = candidates.find((id) => vendorHint(id) === failedVendor);
+  const chosen = sameVendor || candidates[0]!;
+  usedModels.add(chosen.toLowerCase());
+  return chosen;
 }
 
 function clipReviewError(err: unknown): string {
@@ -100,6 +140,8 @@ export type RunReviewPanelOptions = {
   recentTurns?: Array<{ user: string; assistant: string }>;
   timeoutMs?: number;
   promptFn?: ReviewPromptFn;
+  catalog?: string[];
+  leadModel?: string;
 };
 
 export async function runReviewPanel(
@@ -121,18 +163,35 @@ export async function runReviewPanel(
   });
   const timeoutMs = options?.timeoutMs ?? REVIEW_TIMEOUT_MS;
   const promptFn = options?.promptFn ?? ((msg, opts) => Agent.prompt(msg, opts));
+  const catalog = options?.catalog ?? (apiKey ? await listModels(apiKey) : cachedModels());
+  const leadModel = options?.leadModel ?? slot.model ?? conn.model ?? "";
+  const usedModels = new Set<string>(panel.map((r) => r.modelId.trim().toLowerCase()));
+  if (leadModel) {
+    usedModels.add(leadModel.trim().toLowerCase());
+    usedModels.add(
+      leadModel
+        .trim()
+        .replace(/^codex:/i, "")
+        .toLowerCase(),
+    );
+  }
 
   send(ws, {
     type: "text-delta",
     chatId: slot.chatId,
     text: `正在用 ${panel.map((row) => row.modelId).join("、")} 分别评审。\n\n`,
   });
-  const jobs = panel.map(async (row) => {
+
+  const runSingleReviewer = async (
+    name: string,
+    modelId: string,
+    allowFallback: boolean,
+  ): Promise<{ name: string; modelId: string; ok: boolean; text: string } | null> => {
     const callId = crypto.randomUUID();
     if (slot.finished || slot.epoch !== epoch) return null;
-    const args = { subagent_type: row.name, description: `${row.modelId} 评审` };
+    const args = { subagent_type: name, description: `${modelId} 评审` };
     if (!slot.openTools) slot.openTools = new Map();
-    slot.openTools.set(callId, { name: "task", args, agent: "reviewer", model: row.modelId });
+    slot.openTools.set(callId, { name: "task", args, agent: "reviewer", model: modelId });
     slot.runStats.toolStarts += 1;
     send(ws, {
       type: "tool-started",
@@ -141,7 +200,7 @@ export async function runReviewPanel(
       name: "task",
       args,
       agent: "reviewer",
-      model: row.modelId,
+      model: modelId,
     });
     const started = Date.now();
     const finish = (status: "completed" | "error", result: string) => {
@@ -158,7 +217,7 @@ export async function runReviewPanel(
         status,
         result,
         agent: "reviewer",
-        model: row.modelId,
+        model: modelId,
       });
     };
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
@@ -167,7 +226,7 @@ export async function runReviewPanel(
       const result = await Promise.race([
         promptFn(
           [
-            `你是独立评审，绑定模型 ${row.modelId}。只评审，不要改文件，不要派子代理。`,
+            `你是独立评审，绑定模型 ${modelId}。只评审，不要改文件，不要派子代理。`,
             workspaceConfinePrompt(cwd),
             "对照仓库里的相关代码。列出具体问题，按 CRITICAL / MAJOR / MINOR。没有问题的部分直接说可行。用中文。",
             "",
@@ -176,7 +235,7 @@ export async function runReviewPanel(
           ].join("\n"),
           {
             apiKey,
-            model: { id: row.modelId },
+            model: { id: modelId },
             local: { cwd, sandboxOptions: { enabled: sandbox } },
             disallowedTools: ["edit", "delete", "shell", "task", "mcp", "applyAgentDiff", "generateImage"],
           },
@@ -197,21 +256,50 @@ export async function runReviewPanel(
       }
       const text = (result.result || "").trim() || result.error?.message || "没有返回正文";
       const ok = result.status === "finished" && Boolean(result.result?.trim());
-      finish(ok ? "completed" : "error", text);
-      return { name: row.name, modelId: row.modelId, ok, text };
+      if (ok) {
+        recordModelSuccess(modelId);
+        finish("completed", text);
+        return { name, modelId, ok: true, text };
+      }
+      const healthEntry = recordModelFailure(modelId, result.error?.message || text);
+      finish("error", text);
+      if (allowFallback && healthEntry) {
+        const replacement = pickReplacementReviewer(modelId, leadModel, catalog, usedModels);
+        if (replacement) {
+          const idx = slot.reviewRoster?.findIndex((r) => r.name === name) ?? -1;
+          if (idx >= 0 && slot.reviewRoster) {
+            slot.reviewRoster[idx] = { name, modelId: replacement };
+          }
+          return runSingleReviewer(name, replacement, false);
+        }
+      }
+      return { name, modelId, ok: false, text };
     } catch (err) {
       if (slot.finished || slot.epoch !== epoch) {
         slot.openTools?.delete(callId);
         return null;
       }
       const text = clipReviewError(err);
+      const healthEntry = recordModelFailure(modelId, err);
       finish("error", text);
-      return { name: row.name, modelId: row.modelId, ok: false, text };
+      if (allowFallback && healthEntry) {
+        const replacement = pickReplacementReviewer(modelId, leadModel, catalog, usedModels);
+        if (replacement) {
+          const idx = slot.reviewRoster?.findIndex((r) => r.name === name) ?? -1;
+          if (idx >= 0 && slot.reviewRoster) {
+            slot.reviewRoster[idx] = { name, modelId: replacement };
+          }
+          return runSingleReviewer(name, replacement, false);
+        }
+      }
+      return { name, modelId, ok: false, text };
     } finally {
       if (timeoutTimer !== undefined) clearTimeout(timeoutTimer);
       if (cancelPollTimer !== undefined) clearInterval(cancelPollTimer);
     }
-  });
+  };
+
+  const jobs = panel.map((row) => runSingleReviewer(row.name, row.modelId, true));
   const rows = (await Promise.all(jobs)).filter((row): row is NonNullable<typeof row> => Boolean(row));
   return reviewsForLead(rows);
 }

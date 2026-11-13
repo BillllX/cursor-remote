@@ -1,5 +1,10 @@
 import type { AgentOptions, RunResult } from "@cursor/sdk";
-import { BACKGROUND_MODEL, BACKGROUND_TOOLS } from "../assistant/background.ts";
+import {
+  BACKGROUND_TOOLS,
+  promptWithModelFallback,
+  resolveBackgroundModelChain,
+  resolvePreferredBackgroundModel,
+} from "../assistant/background.ts";
 import { endRunRecord, startRunRecord } from "../assistant/runs.ts";
 import { clip } from "../assistant/store.ts";
 import { loadKbWorkspaceConfig, type KbWorkspaceConfig } from "./contract.ts";
@@ -120,11 +125,13 @@ export async function runIngestBatchJob(
   }
 
   const catalog = await runnerDeps.listModels(apiKey).catch(() => [] as string[]);
-  if (!catalog.includes(BACKGROUND_MODEL)) {
+  const chain = resolveBackgroundModelChain(catalog, { ref: host });
+  if (!chain.length) {
+    const preferred = resolvePreferredBackgroundModel(host);
     return {
       status: "failed",
       statusMessage: "后台归档模型当前不可用",
-      errorReason: `后台模型 ${BACKGROUND_MODEL} 不在当前可用模型目录中`,
+      errorReason: `后台模型 ${preferred} 不在当前可用模型目录中`,
     };
   }
 
@@ -132,7 +139,7 @@ export async function runIngestBatchJob(
     origin: "delegate",
     label: `知识库归档：${config.title} (${meta.batchId})`,
     cwd: workspacePath,
-    model: BACKGROUND_MODEL,
+    model: chain[0]!,
   });
 
   let runClosed = false;
@@ -146,9 +153,9 @@ export async function runIngestBatchJob(
 
   // 默认启用 SDK 沙箱隔离；对于显式配置 sandbox: false 的受信宿主环境（如不支持 Linux bwrap 的服务器），跟随租户级 sandbox 配置，同时始终保持只读工具集与 customTools 强路径围栏
   const sandboxEnabled = runnerDeps.sandbox ? runnerDeps.sandbox(host.id) : true;
-  const options: AgentOptions = {
+  const buildOptions = (modelId: string): AgentOptions => ({
     apiKey,
-    model: { id: BACKGROUND_MODEL },
+    model: { id: modelId },
     tools: [...BACKGROUND_TOOLS],
     local: {
       cwd: workspacePath,
@@ -156,7 +163,7 @@ export async function runIngestBatchJob(
       settingSources: [],
       customTools,
     },
-  };
+  });
 
   const promptText = buildIngestPrompt(meta, config);
   const timeoutMs = opts.timeoutMs ?? INGEST_RUNNER_MAX_MS;
@@ -167,8 +174,12 @@ export async function runIngestBatchJob(
   let errorReason: string | undefined;
 
   try {
-    const result = await Promise.race([
-      runnerDeps.prompt(promptText, options),
+    const { result } = await Promise.race([
+      promptWithModelFallback({
+        catalog,
+        ref: host,
+        runWithModel: (modelId) => runnerDeps!.prompt(promptText, buildOptions(modelId)),
+      }),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
           runClosed = true;

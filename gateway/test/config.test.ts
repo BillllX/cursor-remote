@@ -38,6 +38,7 @@ describe("config 默认值", () => {
       assert.equal(gatewayEnv.logLevel(), "info");
       assert.equal(gatewayEnv.cursorApiKey(), "");
       assert.equal(gatewayEnv.defaultModel(), "composer-2.5");
+      assert.equal(gatewayEnv.backgroundModel(), "");
       assert.equal(gatewayEnv.cursorApiEndpoint(), "https://api2.cursor.sh");
       assert.equal(gatewayEnv.codexApiKey(), "");
       assert.equal(gatewayEnv.codexBaseUrl(), "");

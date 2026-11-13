@@ -68,6 +68,13 @@ export const ENV_SPECS = [
   { name: "CURSOR_API_KEY", type: "string", group: "Cursor", doc: "Cursor User API Key，必填；读取时去首尾空格" },
   { name: "CURSOR_REMOTE_MODEL", type: "string", default: "composer-2.5", group: "Cursor", doc: "默认模型" },
   {
+    name: "CURSOR_REMOTE_BACKGROUND_MODEL",
+    type: "string",
+    default: "grok-4.7",
+    group: "Cursor",
+    doc: "后台任务（定时任务、记忆整理、知识库归档/问答）首选模型；不可用时自动按健康表回退到目录内可用模型",
+  },
+  {
     name: "CURSOR_API_ENDPOINT",
     type: "string",
     default: "https://api2.cursor.sh",
@@ -295,6 +302,7 @@ export const gatewayEnv = {
   /** 去首尾空格；未设置为空串 */
   cursorApiKey: () => raw("CURSOR_API_KEY")?.trim() || "",
   defaultModel: () => raw("CURSOR_REMOTE_MODEL") || "composer-2.5",
+  backgroundModel: () => raw("CURSOR_REMOTE_BACKGROUND_MODEL")?.trim() || "",
   cursorApiEndpoint: () => (raw("CURSOR_API_ENDPOINT") || "https://api2.cursor.sh").replace(/\/$/, ""),
 
   /** Codex CLI 配置 */

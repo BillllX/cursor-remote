@@ -11,6 +11,7 @@ import { cwdOf, disposeSlot, persistConn } from "../runtime/slots.ts";
 import type { AgentHandle, Conn, Slot } from "../runtime/types.ts";
 import { sandboxEnabledForTenant, workspaceFenceForTenant } from "../tenants.ts";
 import { diskChatTurns } from "./history.ts";
+import { isModelHealthy, recordModelFailure } from "./modelHealth.ts";
 import { listModels } from "./models.ts";
 
 function isAgentMissing(err: unknown) {
@@ -50,7 +51,7 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
   }
   const base = { apiKey, model: { id: modelId }, local };
   const overlay = slot.dialect === false ? undefined : dialectOverlay;
-  const panel = [...(slot.reviewRoster ?? pickReviewPanel(modelId, catalog))];
+  const panel = [...(slot.reviewRoster ?? pickReviewPanel(modelId, catalog, { isHealthy: isModelHealthy }))];
 
   const open = async (next: ReviewBinding[] | null, resumeId: string | null) => {
     const opts = next
@@ -60,7 +61,7 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
     return Agent.create(opts);
   };
 
-  // 某个评审模型被拒时丢掉这一个再试，保留 explore / builder 和其余评审。
+  // 某个评审模型被拒时登记熔断并丢掉这一个再试，保留 explore / builder 和其余评审。
   // Agent.resume 会不会吃进新的 agents 没有类型保证，名单变化时上层会另开 agent。
   const openWithCrewFallback = async (resumeId: string | null) => {
     let next = panel;
@@ -73,6 +74,7 @@ export async function ensureAgent(conn: Conn, slot: Slot): Promise<AgentHandle> 
         if (bare) throw err;
         if (next.length) {
           const dropped = next[next.length - 1];
+          recordModelFailure(dropped.modelId, err);
           slotLog(slot).error("drop reviewer after crew reject", dropped.modelId, err);
           next = next.slice(0, -1);
           continue;
