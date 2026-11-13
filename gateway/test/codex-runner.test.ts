@@ -333,9 +333,10 @@ describe("域 2：流式事件增量切片、工具映射、4 参数 Token 计�
       },
     );
 
-    // 验证 ThreadOptions 包含 skipGitRepoCheck: true 与 workspace-write
+    // 验证 ThreadOptions 包含 skipGitRepoCheck: true、danger-full-access 与 networkAccessEnabled: true（与 Cursor CLI 关闭沙箱一致）
     assert.equal(capturedThreadOpts?.skipGitRepoCheck, true);
-    assert.equal(capturedThreadOpts?.sandboxMode, "workspace-write");
+    assert.equal(capturedThreadOpts?.sandboxMode, "danger-full-access");
+    assert.equal(capturedThreadOpts?.networkAccessEnabled, true);
     assert.equal(capturedThreadOpts?.approvalPolicy, "never");
     assert.ok(capturedCodexOpts?.env?.CODEX_HOME);
 
@@ -490,13 +491,15 @@ describe("域 3：跨引擎互切 Reseed（含 safeHistory 兜底）、同引擎
   });
 });
 
-describe("域 4–6：模式只读约束、confirmWrites 事前审批卡、图片临时文件清理与异常/取消不死锁", () => {
-  test("Plan 与 Ask 模式强制 sandboxMode=read-only；沙箱租户直接拦截", async () => {
+describe("域 4–6：关闭内置沙箱与 Cursor CLI 对齐、confirmWrites 事前审批卡、图片临时文件清理与异常/取消不死锁", () => {
+  test("非沙箱管理员租户统一使用 danger-full-access 关闭内置沙箱并开启网络访问；受限沙箱租户直接拦截", async () => {
     const { ws, conn, slot, tenant } = makeConnAndSlot("chat-plan-readonly");
     let modeUsed: string | undefined;
+    let netEnabled: boolean | undefined;
     const fakeCodex: CodexClientLike = {
       startThread(opts) {
         modeUsed = opts?.sandboxMode;
+        netEnabled = opts?.networkAccessEnabled;
         return {
           async runStreamed() {
             async function* gen(): AsyncGenerator<ThreadEvent> {
@@ -531,7 +534,8 @@ describe("域 4–6：模式只读约束、confirmWrites 事前审批卡、图�
       },
       { createCodex: () => fakeCodex },
     );
-    assert.equal(modeUsed, "read-only");
+    assert.equal(modeUsed, "danger-full-access");
+    assert.equal(netEnabled, true);
 
     // 沙箱受限租户调用时拒绝启动 Codex
     const sandboxed = makeConnAndSlot("chat-sandboxed-block", { sandbox: true, admin: false });

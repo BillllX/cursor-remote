@@ -258,10 +258,12 @@ export async function runCodexChat(
   const tempImagePaths: string[] = [];
 
   try {
-    // 写权限门禁：Ask 和 Plan 模式物理强制 read-only；仅 Agent 模式可进入 workspace-write
-    const sandboxMode: SandboxMode = mode === "agent" ? "workspace-write" : "read-only";
+    // 与 Cursor CLI（非沙箱管理员租户 sandboxOptions.enabled = false）保持完全一致：
+    // 关闭 Codex CLI 内置 Linux 沙箱（danger-full-access）并开启网络访问，使子进程可正常访问外网与跨子工作区路径；
+    // Ask 模式下若发生误改，在回合结束时与 Cursor CLI 一样通过 undoEdits 自动还原。
+    const sandboxMode: SandboxMode = "danger-full-access";
 
-    // 当 Agent 模式开启 confirmWrites 时，在启动 workspace-write 子进程前先发标准 approval 卡片等待用户批准
+    // 当 Agent 模式开启 confirmWrites 时，在启动写操作子进程前先发标准 approval 卡片等待用户批准
     if (mode === "agent" && input.confirmWrites && !input.autoApprove) {
       const approvalCallId = `codex-write-${epoch}`;
       const approvalToolName = "codex_workspace_write";
@@ -373,6 +375,7 @@ export async function runCodexChat(
       model: route.model,
       workingDirectory: cwd,
       sandboxMode,
+      networkAccessEnabled: true,
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     };

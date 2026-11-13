@@ -16,7 +16,20 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 id cursor-remote >/dev/null 2>&1 || useradd --system --home "$DATA_ROOT" --shell /usr/sbin/nologin cursor-remote
-mkdir -p "$DATA_ROOT/workspace" "$DATA_ROOT/tenants" "$DATA_ROOT/.local/bin" /etc/cursor-remote "$APP_ROOT"
+mkdir -p "$DATA_ROOT/workspace" "$DATA_ROOT/tenants" "$DATA_ROOT/.local/bin" "$DATA_ROOT/.codex" /etc/cursor-remote "$APP_ROOT"
+chmod 700 "$DATA_ROOT/.codex"
+if [ ! -f "$DATA_ROOT/.codex/config.toml" ]; then
+  cat > "$DATA_ROOT/.codex/config.toml" <<EOF
+sandbox_mode = "danger-full-access"
+
+[sandbox_workspace_write]
+network_access = true
+
+[projects."${DATA_ROOT}/tenants/default/workspace"]
+trust_level = "trusted"
+EOF
+  chmod 600 "$DATA_ROOT/.codex/config.toml"
+fi
 chmod 755 "${ROOT}/scripts/jiebo-publish.mjs"
 mkdir -p /usr/local/bin
 ln -sfn "${APP_ROOT}/scripts/jiebo-publish.mjs" "$DATA_ROOT/.local/bin/jiebo-publish"

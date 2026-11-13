@@ -65,6 +65,35 @@ ssh root@<vps> 'cd /opt/cursor-remote-gateway && git pull && systemctl restart c
 
 重启会打断所有在跑的 Agent，挑维护窗口。`gateway/src/` 与 `shared/` 必须一起更新（tsx 直接跑源码，缺文件会起不来）。
 
+### Codex CLI 双引擎接入与模型健康兜底（VPS 生产配置）
+
+网关支持 `codex:<model>` 前缀与 Cursor CLI 双引擎并存（复用 ChatGPT / Codex 企业账号配额，仅向 `sandbox: false` 的受信任管理员租户开放）：
+
+1. **免服务器连内网 SSO 的企业账号 OAuth 登录**：
+   - 服务器无需访问公司内网 SSO。在 VPS 上以 `cursor-remote` 用户运行标准浏览器 OAuth 登录：
+     ```bash
+     sudo -u cursor-remote HOME=/var/lib/cursor-remote CODEX_HOME=/var/lib/cursor-remote/.codex npx -y @openai/codex@0.167.2 login
+     ```
+   - 复制终端输出的 `https://auth.openai.com/oauth/authorize?...` 链接，在**连着公司内网的本地电脑浏览器**打开并完成内网 SSO 认证；
+   - 浏览器跳转到 `http://127.0.0.1:1455/auth/callback?code=...&state=...`（本地显示无法访问属正常现象），将该完整回调 URL 复制到 VPS 上执行 `curl -s "<回调URL>"`，即可落盘生成 `/var/lib/cursor-remote/.codex/auth.json`（权限 `600`）与 `models_cache.json`；
+   - **自动续期**：后续 Token 刷新全程由 VPS 直接请求公网 `https://auth.openai.com/oauth/token` 滚动续期，不再经过公司内网 SSO。请勿将同一份 `auth.json` 拷贝到多台机器共用，以免 Refresh Token Rotation 互踢失效。
+2. **关闭 Codex CLI 内置沙箱并开启外网访问（与 Cursor CLI 保持一致）**：
+   - 对非沙箱受信任管理员租户，`gateway/src/chat/codexRunner.ts` 已统一传入 `sandboxMode: "danger-full-access"` 与 `networkAccessEnabled: true`（Ask 模式误改由网关 `undoEdits` 兜底还原）；
+   - 同时在 `/var/lib/cursor-remote/.codex/config.toml`（权限 `600`，属主 `cursor-remote:cursor-remote`）中固化以下配置，确保任何子进程调用均可正常访问外网与跨子工作区目录：
+     ```toml
+     sandbox_mode = "danger-full-access"
+
+     [sandbox_workspace_write]
+     network_access = true
+
+     [projects."/var/lib/cursor-remote/tenants/default/workspace"]
+     trust_level = "trusted"
+     ```
+3. **评审模型动态择新补位与后台任务模型兜底**：
+   - 网关通过 `$CURSOR_REMOTE_STATE_DIR/model-health.json` 维护被动熔断健康表（团队管理员封禁 `Model Blocked` 自动冷却 24 小时，`429` 限流冷却 10 分钟）；
+   - 多模型评审（Review Panel）每次按语义代数自动挑选各厂商当前健康且最新的旗舰模型，评审途中遇封禁或限流当场换替补模型重跑；
+   - 定时巡检、记忆整理、知识库归档与问答等后台任务支持在 `/etc/cursor-remote/gateway.env` 设置 `CURSOR_REMOTE_BACKGROUND_MODEL=grok-4.7`（或通过租户 `assistant/memory/settings.json` 的 `backgroundModel` 动态设置），首选模型不可用时自动按健康表顺延兜底。
+
 ## 本机开发
 
 ```bash
@@ -98,10 +127,10 @@ npm run dev
 
 ## 端口
 
-| 服务 | 端口 | 作用 |
-| --- | --- | --- |
-| web（VPS） | 3020 → `/cursor-remote` | 公网聊天界面 |
-| gateway（VPS） | 8787 | 收动作、调 Cursor SDK、读写工作区 |
+| 服务           | 端口                    | 作用                              |
+| -------------- | ----------------------- | --------------------------------- |
+| web（VPS）     | 3020 → `/cursor-remote` | 公网聊天界面                      |
+| gateway（VPS） | 8787                    | 收动作、调 Cursor SDK、读写工作区 |
 
 ## 对外预览
 
@@ -133,15 +162,15 @@ jiebo-publish stop
 
 个人助理的收件箱（待批 / 委派结果 / 提醒 / 简报）会推送到两个通道：网页走 Web Push（VAPID，网关自动生成密钥），iPhone 走 APNs。APNs 在 `gateway.env` 里配置，**不配则安静跳过**，`assistant_state.pushApns` 为 `false`：
 
-| 变量 | 说明 |
-|---|---|
-| `APNS_TEAM_ID` | Apple Developer Team ID |
-| `APNS_KEY_ID` | APNs auth key（.p8）的 Key ID |
-| `APNS_PRIVATE_KEY` | `.p8` 全文，换行可写成 `\n`；与下一项二选一 |
-| `APNS_PRIVATE_KEY_PATH` | `.p8` 文件路径（权限收紧，别进 git） |
-| `APNS_BUNDLE_ID` | 默认 topic；订阅自带 `bundleId` 时以订阅为准 |
-| `APNS_DEFAULT_ENV` | 可选，`sandbox` 或 `production`（默认）；订阅没声明 `environment` 时用 |
-| `APNS_HOST_OVERRIDE` | 仅测试：覆盖 APNs 主机，如 `http://127.0.0.1:PORT`（h2c 明文）。生产不要设 |
+| 变量                    | 说明                                                                       |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `APNS_TEAM_ID`          | Apple Developer Team ID                                                    |
+| `APNS_KEY_ID`           | APNs auth key（.p8）的 Key ID                                              |
+| `APNS_PRIVATE_KEY`      | `.p8` 全文，换行可写成 `\n`；与下一项二选一                                |
+| `APNS_PRIVATE_KEY_PATH` | `.p8` 文件路径（权限收紧，别进 git）                                       |
+| `APNS_BUNDLE_ID`        | 默认 topic；订阅自带 `bundleId` 时以订阅为准                               |
+| `APNS_DEFAULT_ENV`      | 可选，`sandbox` 或 `production`（默认）；订阅没声明 `environment` 时用     |
+| `APNS_HOST_OVERRIDE`    | 仅测试：覆盖 APNs 主机，如 `http://127.0.0.1:PORT`（h2c 明文）。生产不要设 |
 
 改完需要 `systemctl restart cursor-remote-gateway`。订阅存在租户目录 `assistant/push-subs.json`（`{ web, apns }`，每通道最多 20 条），APNs 返回 410 或 400 且原因为 `BadDeviceToken` / `Unregistered` / `DeviceTokenNotForTopic` 时自动删订阅，其它错误只写 `push-log.jsonl`。不用外网的冒烟：`npm run smoke:apns -w gateway`。详见 `docs/iphone-assistant-first.md` §7.1。
 
