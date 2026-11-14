@@ -445,6 +445,10 @@ struct PhoneSettingsScreen: View {
     @State private var avatarPickerOpen = false
     @State private var unblockTarget: ImUser?
 
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("jiebo.phone.agentMode") private var phoneMode = AgentMode.agent.rawValue
+
     init() {}
 
     private var state: AssistantState? { store.assistantState }
@@ -452,6 +456,18 @@ struct PhoneSettingsScreen: View {
     var body: some View {
         List {
             profileSections
+
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                phoneChatPreferences
+                if let switchPhoneSpace {
+                    Section {
+                        phoneSpaceButton(.workspace, title: "工作台", symbol: "rectangle.3.group", badge: store.workspaceUnreadCount, switchSpace: switchPhoneSpace)
+                        phoneSpaceButton(.messages, title: "消息", symbol: "bubble.left.and.bubble.right", badge: im.totalUnread, switchSpace: switchPhoneSpace)
+                    } header: {
+                        JieboListHeader("工作与消息")
+                    }
+                }
+            }
 
             Section {
                 Button {
@@ -817,6 +833,54 @@ struct PhoneSettingsScreen: View {
     }
 
     // MARK: 行
+
+    private var phoneChatPreferences: some View {
+        Section {
+            Picker("模式", selection: $phoneMode) {
+                ForEach(AgentMode.allCases, id: \.rawValue) { mode in
+                    Text(mode == .agent ? "Agent · 动手" : mode.label).tag(mode.rawValue)
+                }
+            }
+            .pickerStyle(.navigationLink)
+            Picker("模型", selection: Binding(
+                get: { store.lastModel.nilIfEmpty ?? store.model },
+                set: { store.rememberModel($0) }
+            )) {
+                ForEach(ModelCatalog.groups(from: ModelCatalog.withCurrentModel(store.models, current: store.lastModel.nilIfEmpty ?? store.model))) { group in
+                    Section(group.label) {
+                        ForEach(group.models) { item in
+                            Text(item.name).tag(item.id)
+                        }
+                    }
+                }
+            }
+            .pickerStyle(.navigationLink)
+        } header: {
+            JieboListHeader("聊天偏好")
+        } footer: {
+            Text("用于此 iPhone 的小驳和工作台，默认动手模式，模型沿用上次选择。更改从下一条消息生效。")
+        }
+        .listRowBackground(JieboColor.white)
+    }
+
+    private func phoneSpaceButton(_ tab: PhoneTab, title: String, symbol: String, badge: Int, switchSpace: @escaping (PhoneTab) -> Void) -> some View {
+        Button {
+            // 设置也可能由工作台以表单打开；先关闭表单，再交给当前窗口切换空间。
+            dismiss()
+            switchSpace(tab)
+        } label: {
+            HStack {
+                Label(title, systemImage: symbol)
+                Spacer()
+                if badge > 0 { ImUnreadBadge(count: badge) }
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(JieboColor.dim)
+            }
+            .foregroundStyle(JieboColor.ink)
+        }
+        .listRowBackground(JieboColor.white)
+        .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 条未读" : title)
+    }
 
     private func settingsRow(symbol: String, title: String, trailing: String?, chevron: Bool) -> some View {
         HStack(spacing: 12) {

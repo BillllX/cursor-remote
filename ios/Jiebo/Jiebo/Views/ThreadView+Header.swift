@@ -63,6 +63,11 @@ extension ThreadView {
     var phoneHeader: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
+                if let switchPhoneSpace {
+                    phoneIcon("chevron.left", label: "返回小驳") {
+                        switchPhoneSpace(.assistant)
+                    }
+                }
                 phoneIcon("line.3.horizontal", label: "菜单", action: openDrawer)
                 VStack(spacing: 1) {
                     Text(headerTitle)
@@ -75,16 +80,37 @@ extension ThreadView {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                if store.canUndo(resolvedChatId) {
-                    phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动") {
-                        store.undoLast(chatId: resolvedChatId)
+                if switchPhoneSpace != nil {
+                    Menu {
+                        if store.canUndo(resolvedChatId) {
+                            Button("还原上一轮的改动", systemImage: "arrow.uturn.backward") {
+                                store.undoLast(chatId: resolvedChatId)
+                            }
+                        }
+                        Button("文件", systemImage: "folder") {
+                            store.openFilesOnWorkbench(chatId: resolvedChatId)
+                        }
+                        Button("终端输出", systemImage: "terminal") {
+                            store.openTerminalOnWorkbench(chatId: resolvedChatId)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .foregroundStyle(JieboColor.ink2)
+                            .frame(width: 44, height: 44)
                     }
-                }
-                phoneIcon("folder", label: "文件") {
-                    store.openFilesOnWorkbench(chatId: resolvedChatId)
-                }
-                phoneIcon("terminal", label: "终端输出") {
-                    store.openTerminalOnWorkbench(chatId: resolvedChatId)
+                    .accessibilityLabel("更多工作台操作")
+                } else {
+                    if store.canUndo(resolvedChatId) {
+                        phoneIcon("arrow.uturn.backward", label: "还原上一轮的改动") {
+                            store.undoLast(chatId: resolvedChatId)
+                        }
+                    }
+                    phoneIcon("folder", label: "文件") {
+                        store.openFilesOnWorkbench(chatId: resolvedChatId)
+                    }
+                    phoneIcon("terminal", label: "终端输出") {
+                        store.openTerminalOnWorkbench(chatId: resolvedChatId)
+                    }
                 }
             }
             .padding(.horizontal, 12)

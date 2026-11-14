@@ -209,6 +209,7 @@ struct ChatHome: View {
 // MARK: 列表
 
 struct ChatListView: View {
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     @Environment(ImStore.self) private var im
     @Environment(ChatStore.self) private var store
     @Environment(\.assistantSceneToken) private var sceneToken
@@ -268,12 +269,21 @@ struct ChatListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button(action: openSettings) {
-                    Image(systemName: NavigationIconId.account.symbol)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink2)
+                if let switchPhoneSpace {
+                    Button {
+                        switchPhoneSpace(.assistant)
+                    } label: {
+                        Label("小驳", systemImage: "chevron.left")
+                    }
+                    .accessibilityLabel("返回小驳")
+                } else {
+                    Button(action: openSettings) {
+                        Image(systemName: NavigationIconId.account.symbol)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                    .accessibilityLabel("设置")
                 }
-                .accessibilityLabel("设置")
             }
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {

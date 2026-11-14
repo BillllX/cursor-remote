@@ -13,6 +13,7 @@ struct ComposerView: View {
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
     var style: ComposerStyle = .assistant
+    @AppStorage("jiebo.phone.agentMode") private var phoneMode = AgentMode.agent.rawValue
     @FocusState var focused: Bool
     /// 打字写进这个对象，不写进视图状态。这样每个字不会把整条输入栏和会话回合再画一遍。
     @State var draftBuffer = ComposerDraftBuffer()
@@ -85,7 +86,9 @@ struct ComposerView: View {
             }
             GlassEffectContainer(spacing: 12) {
                 VStack(alignment: .leading, spacing: 16) {
-                    assistantStatusLine
+                    if UIDevice.current.userInterfaceIdiom == .pad {
+                        assistantStatusLine
+                    }
                     assistantCapsuleRow
                 }
             }
@@ -93,10 +96,10 @@ struct ComposerView: View {
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, floating ? 8 : 16)
-        // 胶囊本身仍是玻璃。底栏铺一层纸色，避免正文从字缝里透出来盖住模式和输入。
+        .padding(.horizontal, UIDevice.current.userInterfaceIdiom == .pad ? 16 : 0)
+        .padding(.top, UIDevice.current.userInterfaceIdiom == .pad ? 8 : 0)
+        .padding(.bottom, UIDevice.current.userInterfaceIdiom == .pad ? (floating ? 8 : 16) : (floating ? 0 : 8))
+        // 底栏铺主题底色，避免正文从输入区域透出。
         .background {
             if floating {
                 LinearGradient(
@@ -129,8 +132,15 @@ struct ComposerView: View {
             }
         }
         .onAppear {
+            store.applyPhoneChatPreferences(chatId: chatId)
             replaceDraft(sceneDraft(for: chatId))
             store.refreshCheckpoints(chatId: chatId)
+        }
+        .onChange(of: phoneMode) { _, _ in
+            store.applyPhoneChatPreferences(chatId: chatId)
+        }
+        .onChange(of: store.lastModel) { _, _ in
+            store.applyPhoneChatPreferences(chatId: chatId)
         }
         .onDisappear {
             stopVoice()
@@ -140,6 +150,7 @@ struct ComposerView: View {
         .onChange(of: chatId) { oldId, _ in
             stopVoice()
             flushDraft(currentChatId: oldId)
+            store.applyPhoneChatPreferences(chatId: chatId)
             replaceDraft(sceneDraft(for: chatId))
             store.refreshCheckpoints(chatId: chatId)
         }

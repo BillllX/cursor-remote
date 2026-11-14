@@ -19,6 +19,7 @@ extension EnvironmentValues {
 }
 
 struct ThreadView: View {
+    @Environment(\.switchPhoneSpace) var switchPhoneSpace
     @Environment(ChatStore.self) var store
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @Environment(\.dynamicTypeSize) var dynamicTypeSize

@@ -222,6 +222,7 @@ extension ChatStore {
             openWorkspaceSwitcher()
             return
         }
+        applyPhoneChatPreferences(chatId: chatId)
         guard let session = chatSession(chatId) else { return }
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
         let targetModel = model(for: chatId)
@@ -462,6 +463,17 @@ extension ChatStore {
             ? "已断开。这台设备已改了\(what)，连上后才会告诉服务器。"
             : "正在连接。这台设备已改了\(what)，连上后才会告诉服务器。")
         return true
+    }
+
+    /// 手机隐藏选择条后，统一从设备偏好决定下一轮参数，不影响在途回合。
+    func applyPhoneChatPreferences(chatId: String) {
+        guard UIDevice.current.userInterfaceIdiom == .phone,
+              unlocked, !cachedOnlyIds.contains(chatId), chatSession(chatId) != nil
+        else { return }
+        let preferredMode = AgentMode(rawValue: UserDefaults.standard.string(forKey: "jiebo.phone.agentMode") ?? "") ?? .agent
+        if mode(for: chatId) != preferredMode { chooseMode(preferredMode, chatId: chatId) }
+        let preferredModel = lastModel.nilIfEmpty ?? model(for: chatId)
+        if model(for: chatId) != preferredModel { chooseModel(preferredModel, chatId: chatId) }
     }
 
     func chooseModel(_ id: String, chatId requestedId: String? = nil) {

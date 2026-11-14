@@ -200,11 +200,6 @@ private struct PhoneDrawer: View {
     private var workspaceTitle: String { store.workspaceTitle(anchoredTo: workspaceAnchor) }
     private var selectedChatId: String { sceneSession?.workbenchChatId ?? store.activeId }
 
-    private var loopLive: Bool {
-        guard let row = store.loops[selectedChatId] else { return false }
-        return row.status == "armed" || row.status == "running"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             brandBar
@@ -235,13 +230,6 @@ private struct PhoneDrawer: View {
                 }
                 .padding(.bottom, 12)
             }
-
-            toolStrip
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(JieboColor.line).frame(height: 1)
-                }
 
             footer
         }
@@ -361,54 +349,6 @@ private struct PhoneDrawer: View {
 
     private var workspacePrimaryActions: some View {
         HStack(spacing: 6) {
-            Button(action: openKnowledge) {
-                HStack(spacing: 5) {
-                    Image(systemName: "books.vertical")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                    Text("看板")
-                        .font(JieboFont.text(.caption, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .background(
-                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                        .fill(JieboColor.white.opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScaleButtonStyle())
-            .accessibilityLabel("看板与知识库")
-
-            Button(action: openMemory) {
-                HStack(spacing: 5) {
-                    Image(systemName: NavigationIconId.memory.symbol)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
-                    Text("规则与记忆")
-                        .font(JieboFont.text(.caption, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, minHeight: 38)
-                .background(
-                    RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                        .fill(JieboColor.white.opacity(0.6))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
-                        )
-                )
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(PressScaleButtonStyle())
-            .accessibilityLabel("规则与记忆")
-
             Button(action: openSkills) {
                 HStack(spacing: 5) {
                     Image(systemName: "sparkles")
@@ -433,68 +373,6 @@ private struct PhoneDrawer: View {
             .buttonStyle(PressScaleButtonStyle())
             .accessibilityLabel("技能工厂")
         }
-    }
-
-    private var toolStrip: some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 0),
-                    GridItem(.flexible(), spacing: 0),
-                    GridItem(.flexible(), spacing: 0)
-                ], spacing: 0) {
-                    ForEach(ToolLayer.workTools) { layer in
-                        toolButton(layer)
-                    }
-                }
-            } else {
-                HStack(spacing: 0) {
-                    ForEach(ToolLayer.workTools) { layer in
-                        toolButton(layer)
-                    }
-                }
-            }
-        }
-    }
-
-    private func toolButton(_ layer: ToolLayer) -> some View {
-        let on = store.toolSelected(layer)
-        let marked = layer == .loop && loopLive
-        return Button {
-            store.toggleTool(layer)
-            close()
-        } label: {
-            VStack(spacing: 4) {
-                ZStack(alignment: .topTrailing) {
-                    Image(systemName: layer.symbol)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(on ? JieboColor.pine : JieboColor.ink2)
-                        .frame(width: 32, height: 32)
-                        .background(on ? JieboColor.pine.opacity(0.12) : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .stroke(on ? JieboColor.pine.opacity(0.28) : JieboColor.line, lineWidth: 1)
-                        )
-                    Circle()
-                        .fill(JieboColor.ok)
-                        .frame(width: 7, height: 7)
-                        .offset(x: 2, y: -2)
-                        .opacity(marked ? 1 : 0)
-                }
-                Text(layer.title)
-                    .font(JieboFont.text(.caption2, weight: on ? .semibold : .regular))
-                    .foregroundStyle(on ? JieboColor.ink : JieboColor.dim)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressScaleButtonStyle())
-        .animation(JieboMotion.fade(reduceMotion), value: on)
-        .accessibilityLabel(marked ? "\(layer.title)，\(StatusLegendId.running.label)" : layer.title)
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 
     // MARK: 对话

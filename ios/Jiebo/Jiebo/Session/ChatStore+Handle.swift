@@ -94,7 +94,10 @@ extension ChatStore {
             if let readyAssistantChatId { deletedIds.remove(readyAssistantChatId) }
             let current = chats.first { $0.id == activeId }
             cwd = current?.cwd ?? nextCwd
-            let preferred = current?.sessionModel ?? lastModel.nilIfEmpty ?? model
+            // 手机共用设置中的模型偏好，重连时不让旧会话覆盖上次选择。
+            let preferred = UIDevice.current.userInterfaceIdiom == .phone
+                ? (lastModel.nilIfEmpty ?? current?.sessionModel ?? model)
+                : (current?.sessionModel ?? lastModel.nilIfEmpty ?? model)
             var catalog = serverModels.isEmpty ? [serverModel.nilIfEmpty ?? ModelCatalog.defaultModel] : serverModels
             catalog = ModelCatalog.withCurrentModel(catalog, current: preferred)
             catalog = ModelCatalog.withCurrentModel(catalog, current: model)

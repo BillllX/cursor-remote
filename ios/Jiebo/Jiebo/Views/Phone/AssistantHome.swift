@@ -5,6 +5,7 @@ import UIKit
 /// 整个 iPhone 上只有这里有 ComposerView（它由 ThreadView 内部创建），ActionDock 通过 ThreadView 的 dock 插槽放在输入框正上方。
 struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
+    @Environment(ImStore.self) private var im
     @Environment(PhoneRouter.self) private var router
 
     private var assistantTargetChatId: String {
@@ -168,14 +169,24 @@ struct AssistantHome: View {
     }
 
     private var settingsButton: some View {
-        Button {
+        let unread = store.workspaceUnreadCount + im.totalUnread
+        return Button {
             router.go(.settings)
         } label: {
             Image(systemName: NavigationIconId.account.symbol)
                 .font(JieboFont.text(.body, weight: .semibold))
                 .foregroundStyle(JieboColor.ink)
+                .frame(minWidth: 44, minHeight: 44)
+                .overlay(alignment: .topTrailing) {
+                    if unread > 0 {
+                        Circle()
+                            .fill(JieboColor.sparkText)
+                            .frame(width: 7, height: 7)
+                            .padding(7)
+                    }
+                }
         }
-        .accessibilityLabel("记忆与设置")
+        .accessibilityLabel(unread > 0 ? "设置、工作台与消息，\(unread) 条未读" : "设置、工作台与消息")
     }
 
     // MARK: 降级（§4.1.6）
