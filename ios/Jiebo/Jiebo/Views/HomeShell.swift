@@ -543,10 +543,10 @@ struct ImUnreadBadge: View {
     var body: some View {
         Text(ImFormat.badge(count))
             .font(JieboFont.text(.caption2, weight: .semibold))
-            .foregroundStyle(Color.white)
+            .foregroundStyle(JieboColor.unreadBadgeForeground)
             .padding(.horizontal, 5)
             .frame(minWidth: 16, minHeight: 16)
-            .background(JieboTheme.shared.palette == .sticker ? JieboColor.sparkText : JieboColor.danger)
+            .background(JieboColor.unreadBadgeBackground)
             .clipShape(Capsule())
             .accessibilityHidden(true)
     }

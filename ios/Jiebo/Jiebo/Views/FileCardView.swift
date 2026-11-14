@@ -242,17 +242,19 @@ struct TurnFileCards: View {
 /// 卡片出现时请求缩略图；键、连接、能力、写入状态任一变化再推一次（同一键 ThumbnailStore 只真正发一次）；
 /// 滑出屏幕撤掉还没发出的请求
 private struct ThumbRequest: ViewModifier {
+    @Environment(\.colorScheme) private var thumbnailColorScheme
     @Environment(ChatStore.self) private var store
     let file: TurnFile
     let chatId: String
     let writing: Bool
     @State private var onScreen = false
+    @State private var requestedKeys: Set<String> = []
 
     /// 末位：状态回到 .none（内存淘汰、被撤）时也算变化，卡片还在就重新要
     private var trigger: String {
         let key = ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key
         let idle = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store) == .none
-        return "\(key)|\(store.connected)|\(store.gatewayFeatures.contains("read_req_id"))|\(writing)|\(idle)"
+        return "\(thumbnailColorScheme)|\(key)|\(store.connected)|\(store.gatewayFeatures.contains("read_req_id"))|\(writing)|\(idle)"
     }
 
     /// HTML / SVG / Canvas 要拉起离屏网页。首屏是普通 VStack，滑出视口的卡片也会 onAppear，所以这几类等进视口再截。
@@ -266,6 +268,7 @@ private struct ThumbRequest: ViewModifier {
     private func request() {
         // 正在写的文件内容不完整，等写完再截
         guard !writing else { return }
+        requestedKeys.insert(ThumbnailStore.shared.cacheKey(for: file, chatId: chatId, store: store).key)
         ThumbnailStore.shared.request(file: file, chatId: chatId, store: store)
     }
 
@@ -303,7 +306,10 @@ private struct ThumbRequest: ViewModifier {
                 }
                 request()
             }
-            .onDisappear { ThumbnailStore.shared.cancel(file: file, chatId: chatId, store: store) }
+            .onDisappear {
+                for key in requestedKeys { ThumbnailStore.shared.cancel(key: key) }
+                requestedKeys.removeAll()
+            }
     }
 }
 
@@ -354,6 +360,7 @@ private struct TurnFileMenu: ViewModifier {
 
 /// 大卡：上面 16:10 预览，下面文件名和类型（同系统链接预览的版式）
 struct TurnFileLargeCard: View {
+    @Environment(\.colorScheme) private var thumbnailColorScheme
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
     let file: TurnFile
@@ -370,6 +377,7 @@ struct TurnFileLargeCard: View {
 
     var body: some View {
         let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
+        let _ = thumbnailColorScheme
         let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
         Button {
             ThumbnailStore.shared.loadOnce(file: file, chatId: chatId, store: store)
@@ -410,6 +418,7 @@ struct TurnFileLargeCard: View {
 
 /// 画廊里的一张：固定宽度，预览 + 两行文字
 struct TurnFileTile: View {
+    @Environment(\.colorScheme) private var thumbnailColorScheme
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
     @ScaledMetric(relativeTo: .body) private var baseWidth: CGFloat = 248
@@ -421,6 +430,7 @@ struct TurnFileTile: View {
 
     var body: some View {
         let state = TurnFileState(file: file, turn: turn, restoring: store.restoringTurnIds.contains(turn.id), localReview: store.localTurnReviews[turn.id])
+        let _ = thumbnailColorScheme
         let thumb = ThumbnailStore.shared.thumbnail(for: file, chatId: chatId, store: store)
         Button {
             ThumbnailStore.shared.loadOnce(file: file, chatId: chatId, store: store)

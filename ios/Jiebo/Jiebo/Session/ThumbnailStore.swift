@@ -8,6 +8,27 @@ import SwiftUI
 import UIKit
 import WebKit
 
+/// 请求、缓存键和离屏渲染共用不可变主题快照，排队时切换主题也不会串色。
+struct CanvasThumbnailTheme {
+    let palette: String
+    let kind: String
+
+    @MainActor
+    static func capture() -> CanvasThumbnailTheme {
+        let appearance = JieboTheme.shared.appearance
+        let dark: Bool
+        switch appearance {
+        case .light: dark = false
+        case .dark: dark = true
+        case .system: dark = ThumbWebJob.hostWindow?.traitCollection.userInterfaceStyle == .dark
+        }
+        return CanvasThumbnailTheme(palette: JieboTheme.shared.palette.rawValue, kind: dark ? "dark" : "light")
+    }
+
+    // 单独升级画布缓存，清除旧版可能写错主题的截图，普通文件缓存保持不变。
+    var cacheSuffix: String { "|canvas-v2:\(palette):\(kind)" }
+}
+
 /// 文件大卡的缩略图状态。none/failed 都显示原来的图标占位
 enum ThumbState: Equatable {
     case none
@@ -40,6 +61,7 @@ final class ThumbnailStore {
         var tenant: String
         var bytes: Int?
         var sha: String?
+        var canvasTheme: CanvasThumbnailTheme?
         /// 有 sha 的快照内容不变，才落盘
         var persist: Bool { sha != nil }
     }
@@ -97,7 +119,8 @@ final class ThumbnailStore {
               !store.tenantId.isEmpty,
               !sourceChatId.isEmpty, sourceChatId != "boot"
         else { return }
-        let (key, sha) = cacheKey(for: file, chatId: chatId, store: store)
+        let canvasTheme = file.kind == .canvas ? CanvasThumbnailTheme.capture() : nil
+        let (key, sha) = cacheKey(for: file, chatId: chatId, store: store, canvasTheme: canvasTheme)
         chatStore = store
         guard !attempted.contains(key) else {
             // 重连、能力到齐时卡片会再来一次：顺手把断线期间留着的队列推出去
@@ -112,7 +135,8 @@ final class ThumbnailStore {
             chatId: sourceChatId,
             tenant: store.tenantId,
             bytes: file.size.map { Int($0) },
-            sha: sha
+            sha: sha,
+            canvasTheme: canvasTheme
         )
         // 读盘期间也算 loading：骨架要 0.3 秒后才淡入，命中缓存时看不到它
         states[key] = .loading
@@ -154,7 +178,11 @@ final class ThumbnailStore {
 
     /// 卡片消失：还没发出的请求撤掉，退回未请求
     func cancel(file: TurnFile, chatId: String, store: ChatStore) {
-        let key = cacheKey(for: file, chatId: chatId, store: store).key
+        cancel(key: cacheKey(for: file, chatId: chatId, store: store).key)
+    }
+
+    /// 使用卡片实际请求过的键，切换主题后也能取消旧主题的排队任务。
+    func cancel(key: String) {
         if diskLoading.removeValue(forKey: key) != nil {
             forget(key)
         } else if let index = waiting.firstIndex(where: { $0.key == key }) {
@@ -242,11 +270,11 @@ final class ThumbnailStore {
 
     // MARK: 内部
 
-    func cacheKey(for file: TurnFile, chatId: String, store: ChatStore) -> (key: String, sha: String?) {
+    func cacheKey(for file: TurnFile, chatId: String, store: ChatStore, canvasTheme: CanvasThumbnailTheme? = nil) -> (key: String, sha: String?) {
         let chatId = file.sourceChatId ?? chatId
         let sha = store.gatewayFeatures.contains("read_sha") ? file.sha : nil
         let themeKey = file.kind == .canvas
-            ? "|canvas:\(JieboTheme.shared.palette.rawValue):\(JieboTheme.shared.appearance.rawValue):\(UITraitCollection.current.userInterfaceStyle.rawValue)"
+            ? (canvasTheme ?? CanvasThumbnailTheme.capture()).cacheSuffix
             : ""
         if let sha { return ("\(store.tenantId)|\(chatId)|\(file.path)|\(sha)\(themeKey)", sha) }
         // 没有 sha 时，同样大小的改写也得换键：把差异指纹和增删行数一起算进去
@@ -424,7 +452,8 @@ final class ThumbnailStore {
                   let text = await ThumbRender.text(content: content, url: url),
                   !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else { return .done(nil) }
-            return .web(.canvas(source: text, path: job.path, chatId: job.chatId))
+            guard let theme = job.canvasTheme else { return .done(nil) }
+            return .web(.canvas(source: text, path: job.path, chatId: job.chatId, theme: theme))
         case .text, .binary, .audio:
             return .done(nil)
         }
@@ -471,7 +500,7 @@ private final class ThumbGate {
 private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     enum Source {
         case html(String)
-        case canvas(source: String, path: String, chatId: String)
+        case canvas(source: String, path: String, chatId: String, theme: CanvasThumbnailTheme)
     }
 
     private let source: Source
@@ -609,8 +638,8 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
     // MARK: canvas 协议
 
     private func sendLoad() {
-        guard !loaded, let webView, case .canvas(let text, let path, let chatId) = source,
-              let window = webView.window
+        guard !loaded, let webView, case .canvas(let text, let path, let chatId, let theme) = source,
+              webView.window != nil
         else { return }
         seq += 1
         let payload: [String: Any] = [
@@ -619,8 +648,8 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
             "source": text,
             "path": path,
             "chatId": chatId,
-            "palette": JieboTheme.shared.palette.rawValue,
-            "theme": Self.themeKind(window),
+            "palette": theme.palette,
+            "theme": theme.kind,
         ]
         webView.callAsyncJavaScript(
             "window.postMessage(payload, '*')",
@@ -712,18 +741,10 @@ private final class ThumbWebJob: NSObject, WKNavigationDelegate, WKScriptMessage
         return "<!doctype html><html><head><meta charset=\"utf-8\">\(lockDownMeta)</head><body>\(result)</body></html>"
     }
 
-    private static var hostWindow: UIWindow? {
+    fileprivate static var hostWindow: UIWindow? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let windows = scenes.flatMap { $0.windows }
         return windows.first(where: { $0.isKeyWindow }) ?? windows.first
-    }
-
-    private static func themeKind(_ window: UIWindow) -> String {
-        switch JieboTheme.shared.appearance {
-        case .light: return "light"
-        case .dark: return "dark"
-        case .system: return window.traitCollection.userInterfaceStyle == .dark ? "dark" : "light"
-        }
     }
 
     private static let canvasBridge = """

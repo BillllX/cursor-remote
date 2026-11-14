@@ -279,6 +279,9 @@ enum JieboColor {
     static var runBg: Color { JieboTheme.shared.palette == .sticker ? Color(light: 0xFFF0EB, dark: 0x34201B) : Color(light: 0xF2E8D2, dark: 0x2C2617) }
     static let spark = Color(light: 0xE04F33, dark: 0xFF7357)
     static let sparkText = Color(light: 0xC83E22, dark: 0xFF7357)
+    /// 徽章背景单独保持深橙色，确保浅深模式的白色小字都满足对比度要求。
+    static let unreadBadgeBackground = Color(light: 0xC83E22, dark: 0xC83E22)
+    static let unreadBadgeForeground = Color.white
     static let dangerBg = Color(light: 0xF8E5E0, dark: 0x3A1D1B)
     /// 待批、暂停这类“要你处理”的提醒色。与网页 --warn-fg / --warn-bg 一致。
     static let warnFg = Color(light: 0x7A581B, dark: 0xE0B570)
@@ -291,7 +294,8 @@ enum JieboFont {
     /// relativeTo：跟 Dynamic Type 一起缩放
     static func display(_ size: CGFloat) -> Font {
         if JieboTheme.shared.palette == .sticker {
-            return .system(size: UIFontMetrics(forTextStyle: .title2).scaledValue(for: size), weight: .bold)
+            // 使用公开字体字面与语义缩放，中文和拉丁文字均保持无衬线。
+            return .custom("PingFangSC-Semibold", size: size, relativeTo: .title2)
         }
         return .custom("Songti SC Bold", size: size, relativeTo: .title2)
     }
