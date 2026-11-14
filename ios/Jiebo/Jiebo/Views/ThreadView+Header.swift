@@ -64,9 +64,16 @@ extension ThreadView {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 if let switchPhoneSpace {
-                    phoneIcon("chevron.left", label: "返回小驳") {
+                    Button {
                         switchPhoneSpace(.assistant)
+                    } label: {
+                        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                            .accessibilityHidden(true)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(PressScaleButtonStyle())
+                    .accessibilityLabel("返回小驳")
                 }
                 phoneIcon("line.3.horizontal", label: "菜单", action: openDrawer)
                 VStack(spacing: 1) {

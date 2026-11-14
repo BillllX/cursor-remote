@@ -273,8 +273,12 @@ struct ChatListView: View {
                     Button {
                         switchPhoneSpace(.assistant)
                     } label: {
-                        Label("小驳", systemImage: "chevron.left")
+                        AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                            .accessibilityHidden(true)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(PressScaleButtonStyle())
                     .accessibilityLabel("返回小驳")
                 } else {
                     Button(action: openSettings) {
