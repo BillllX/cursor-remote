@@ -93,12 +93,13 @@ struct InboxHome: View {
         } label: {
             Text(title)
                 .font(JieboFont.text(.subheadline, weight: .semibold))
-                .foregroundStyle(selected ? JieboColor.pine : JieboColor.ink2)
+                .foregroundStyle(selected ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine) : JieboColor.ink2)
                 .padding(.horizontal, 14)
                 .frame(minHeight: 36)
-                .background(selected ? JieboColor.pine.opacity(0.12) : JieboColor.white)
+                .background(selected ? (JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.pine.opacity(0.12)) : JieboColor.white)
                 .clipShape(Capsule())
-                .overlay(Capsule().stroke(selected ? JieboColor.pine.opacity(0.35) : JieboColor.line, lineWidth: 1))
+                .overlay(Capsule().stroke(JieboColor.line, lineWidth: JieboStroke.outline))
+
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])

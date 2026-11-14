@@ -289,7 +289,7 @@ private extension View {
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             )
     }
 }

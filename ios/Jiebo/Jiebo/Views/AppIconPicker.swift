@@ -5,6 +5,7 @@ import UIKit
 /// 其余名字要和 Assets 里的 App Icon 集合同名。编译时 actool 会把它们写进
 /// `CFBundleIcons` 和 `CFBundleIcons~ipad`，iPhone 和 iPad 才能换。
 enum AppIconChoice: String, CaseIterable, Identifiable {
+    case sticker
     case cyber
     case porcelain
     case plush
@@ -23,6 +24,7 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .sticker: "贴纸"
         case .cyber: "赛博"
         case .porcelain: "瓷"
         case .plush: "毛绒"

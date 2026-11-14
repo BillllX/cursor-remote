@@ -337,16 +337,16 @@ struct CollapsedSidebarRail: View {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: symbol)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(on ? (tint ?? JieboColor.pine) : (tint ?? JieboColor.ink2))
+                    .foregroundStyle(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : (tint ?? JieboColor.pine)) : (tint ?? JieboColor.ink2))
                     .frame(width: 36, height: 36)
-                    .background(on ? (tint ?? JieboColor.pine).opacity(0.12) : Color.clear)
+                    .background(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.pine : (tint ?? JieboColor.pine).opacity(0.12)) : Color.clear)
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
                             .stroke(on ? (tint ?? JieboColor.pine).opacity(0.42) : JieboColor.line, lineWidth: 1)
                     )
                     .overlay(alignment: .leading) {
-                        if on {
+                        if on && JieboTheme.shared.palette != .sticker {
                             Capsule()
                                 .fill(tint ?? JieboColor.pine)
                                 .frame(width: 3, height: 22)

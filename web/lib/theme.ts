@@ -1,5 +1,6 @@
-/** 只留两套。浅色、深色各有两种观感：接驳偏暖，素墨偏冷。id 与 iOS JieboPalette 的 rawValue 一致。 */
+/** 接驳、素墨与贴纸配色；id 与 iOS JieboPalette 的 rawValue 一致。 */
 export const PALETTES = [
+  { id: "sticker", name: "贴纸", note: "黑白线框 · 珊瑚火花" },
   { id: "jiebo", name: "接驳", note: "暖白纸色 · 松绿强调" },
   { id: "night", name: "素墨", note: "冷白近黑 · 墨黑与赭金强调" },
 ] as const;
@@ -20,6 +21,7 @@ export const DEFAULT_PALETTE: PaletteId = "jiebo";
 
 /** 旧版九套配色按观感归到两套里：暖色系归接驳，中性、冷色系归素墨。 */
 const LEGACY_PALETTES: Record<string, PaletteId> = {
+  sticker: "sticker",
   jiebo: "jiebo",
   paper: "jiebo",
   pine: "jiebo",
@@ -45,6 +47,10 @@ export type SurfaceInk = {
 
 /** 与 web/app/themes.css、iOS JieboSurfaces 同一组色值。 */
 const SURFACES: Record<PaletteId, { light: SurfaceInk; dark: SurfaceInk }> = {
+  sticker: {
+    light: { bg: "#fafafa", sidebar: "#ffffff", panel: "#ffffff", text: "#141416", muted: "#606066", border: "#141416", accent: "#141416", user: "#ffffff", fillFg: "#ffffff" },
+    dark: { bg: "#0e0e10", sidebar: "#0e0e10", panel: "#17171a", text: "#f5f3ee", muted: "#b8b8be", border: "#f5f3ee", accent: "#f5f3ee", user: "#17171a", fillFg: "#0e0e10" },
+  },
   jiebo: {
     light: { bg: "#f3eee4", sidebar: "#ebe5d9", panel: "#fffcf8", text: "#1c1916", muted: "#5c574f", border: "#ddd5c7", accent: "#1a4f41", user: "#e2ebe4", fillFg: "#fffcf8" },
     dark: { bg: "#141512", sidebar: "#101210", panel: "#1b1d1a", text: "#ede8de", muted: "#b6b0a4", border: "#2c2f2b", accent: "#8fbfb0", user: "#22322c", fillFg: "#141512" },

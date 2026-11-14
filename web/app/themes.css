@@ -289,3 +289,44 @@ html[data-theme="dark"] {
     transition: none;
   }
 }
+
+/* 供 iOS 内嵌画布和网页主题选择共用，保持页面内外同色。 */
+html[data-palette="sticker"] {
+  --font-display: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+  --shadow: none;
+  --shadow-card: none;
+  --shadow-float: none;
+  --border-strong: var(--border);
+}
+html[data-palette="sticker"][data-theme="light"] {
+  --bg: #fafafa;
+  --bg-sidebar: #ffffff;
+  --bg-panel: #ffffff;
+  --bg-composer: #ffffff;
+  --bg-user: #ffffff;
+  --text: #141416;
+  --muted: #606066;
+  --dim: #606066;
+  --border: #141416;
+  --accent: #141416;
+  --fill: #141416;
+  --fill-fg: #ffffff;
+  --run: #c83e22;
+  --run-bg: #fff0eb;
+}
+html[data-palette="sticker"][data-theme="dark"] {
+  --bg: #0e0e10;
+  --bg-sidebar: #0e0e10;
+  --bg-panel: #17171a;
+  --bg-composer: #17171a;
+  --bg-user: #17171a;
+  --text: #f5f3ee;
+  --muted: #b8b8be;
+  --dim: #b8b8be;
+  --border: #f5f3ee;
+  --accent: #f5f3ee;
+  --fill: #f5f3ee;
+  --fill-fg: #0e0e10;
+  --run: #ff7357;
+  --run-bg: #34201b;
+}

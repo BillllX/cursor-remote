@@ -57,7 +57,7 @@ struct TurnView: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             )
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
@@ -127,7 +127,7 @@ struct TurnView: View, Equatable {
                         .clipShape(UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14, bottomTrailingRadius: 4, topTrailingRadius: 14, style: .continuous))
                         .overlay(
                             UnevenRoundedRectangle(topLeadingRadius: 14, bottomLeadingRadius: 14, bottomTrailingRadius: 4, topTrailingRadius: 14, style: .continuous)
-                                .stroke(JieboColor.pine.opacity(0.1), lineWidth: 1)
+                                .stroke(JieboTheme.shared.palette == .sticker ? JieboColor.line : JieboColor.pine.opacity(0.1), lineWidth: JieboStroke.outline)
                         )
                         .frame(maxWidth: JieboMeasure.bubble, alignment: .trailing)
                         .contextMenu {
@@ -226,7 +226,7 @@ struct TurnView: View, Equatable {
                 .overlay {
                     if thinkingOpen {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
+                            .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                     }
                 }
                 .onAppear { syncThinkingOpen() }

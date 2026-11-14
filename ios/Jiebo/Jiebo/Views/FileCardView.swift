@@ -183,7 +183,7 @@ struct TurnFileCards: View {
                 .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                 .overlay(
                     RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                        .stroke(JieboColor.line, lineWidth: 1)
+                        .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                 )
                 .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
             }
@@ -392,7 +392,7 @@ struct TurnFileLargeCard: View {
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             )
             .contentShape(RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous))
         }
@@ -442,7 +442,7 @@ struct TurnFileTile: View {
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             )
             .contentShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         }
@@ -685,7 +685,7 @@ private struct TurnFileTrailing: View {
             .clipShape(Capsule())
             .fixedSize()
         } else {
-            Image(systemName: "chevron.right")
+            Image(systemName: JieboTheme.shared.palette == .sticker ? "arrow.down.right" : "chevron.right")
                 .font(JieboFont.text(.caption2, weight: .semibold))
                 .foregroundStyle(JieboColor.dim)
                 .accessibilityHidden(true)

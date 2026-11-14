@@ -5,10 +5,14 @@ struct JieboMark: View {
     var size: CGFloat = 64
 
     var body: some View {
-        Image("BrandMark")
-            .resizable()
-            .scaledToFit()
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
+        Group {
+            if JieboTheme.shared.palette == .sticker {
+                StickerRobotFace()
+            } else {
+                Image("BrandMark").resizable().scaledToFit()
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }

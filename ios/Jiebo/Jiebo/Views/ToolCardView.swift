@@ -135,7 +135,7 @@ struct ToolCardView: View {
         .overlay {
             if showBorder {
                 RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             }
         }
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
@@ -578,7 +578,7 @@ struct QuestionCardView: View {
                         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                         )
                     } else if !question.options.isEmpty {
                         Text(question.options.map(\.label).joined(separator: "  ·  "))

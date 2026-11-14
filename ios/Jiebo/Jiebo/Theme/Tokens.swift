@@ -2,7 +2,7 @@ import Observation
 import SwiftUI
 import UIKit
 
-/// 一套配色的表面色。与 web/app/themes.css 对齐。成功 / 失败 / 运行中不在这里，它们只跟明暗走。
+/// 一套配色的表面色，与 web/app/themes.css 对齐；语义状态色单独维护。
 struct JieboSurfaces {
     var bg: UInt32
     var sidebar: UInt32
@@ -15,12 +15,13 @@ struct JieboSurfaces {
 }
 
 enum JieboPalette: String, CaseIterable, Identifiable {
-    case jiebo, neutral, paper, sand, pine, cool, ink, night, clay
+    case sticker, jiebo, neutral, paper, sand, pine, cool, ink, night, clay
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .sticker: "贴纸"
         case .jiebo: "接驳"
         case .neutral: "中性"
         case .paper: "纸墨"
@@ -35,6 +36,7 @@ enum JieboPalette: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
+        case .sticker: "黑白线框 · 珊瑚火花"
         case .jiebo: "暖白纸色 · 松绿强调"
         case .neutral: "冷灰底 · 近黑强调"
         case .paper: "暖纸色 · 松绿强调"
@@ -64,6 +66,8 @@ enum JieboPalette: String, CaseIterable, Identifiable {
 
     var light: JieboSurfaces {
         switch self {
+        case .sticker:
+            JieboSurfaces(bg: 0xFAFAFA, sidebar: 0xFFFFFF, panel: 0xFFFFFF, text: 0x141416, muted: 0x606066, border: 0x141416, accent: 0x141416, user: 0xFFFFFF)
         case .jiebo:
             JieboSurfaces(bg: 0xF3EEE4, sidebar: 0xEBE5D9, panel: 0xFFFCF8, text: 0x1C1916, muted: 0x5C574F, border: 0xDDD5C7, accent: 0x1A4F41, user: 0xE2EBE4)
         case .neutral:
@@ -87,6 +91,8 @@ enum JieboPalette: String, CaseIterable, Identifiable {
 
     var dark: JieboSurfaces {
         switch self {
+        case .sticker:
+            JieboSurfaces(bg: 0x0E0E10, sidebar: 0x0E0E10, panel: 0x17171A, text: 0xF5F3EE, muted: 0xB8B8BE, border: 0xF5F3EE, accent: 0xF5F3EE, user: 0x17171A)
         case .jiebo:
             JieboSurfaces(bg: 0x141512, sidebar: 0x101210, panel: 0x1B1D1A, text: 0xEDE8DE, muted: 0xB6B0A4, border: 0x2C2F2B, accent: 0x8FBFB0, user: 0x22322C)
         case .neutral:
@@ -147,23 +153,17 @@ final class JieboTheme {
 
     static let paletteKey = "jiebo.theme"
     static let appearanceKey = "jiebo.appearance"
-    /// 旧版默认写过「中性」。对齐网页品牌默认时，只迁这一次。
-    static let brandDefaultKey = "jiebo.theme.brandDefault"
+    private static let stickerDefaultKey = "jiebo.theme.sticker.v1"
 
     private init() {
         let storedPalette = UserDefaults.standard.string(forKey: Self.paletteKey) ?? ""
         let storedAppearance = UserDefaults.standard.string(forKey: Self.appearanceKey) ?? ""
-        let branded = UserDefaults.standard.bool(forKey: Self.brandDefaultKey)
-        let resolved: JieboPalette
-        if !branded && (storedPalette.isEmpty || storedPalette == JieboPalette.neutral.rawValue) {
-            resolved = .jiebo
-        } else {
-            resolved = JieboPalette(rawValue: storedPalette) ?? .jiebo
-        }
+        // 旧版本无法区分默认值和用户手选；保留所有有效旧选择，新安装使用贴纸。
+        let resolved = JieboPalette(rawValue: storedPalette) ?? .sticker
         palette = resolved
         appearance = JieboAppearance(rawValue: storedAppearance) ?? .system
-        if !branded {
-            UserDefaults.standard.set(true, forKey: Self.brandDefaultKey)
+        if !UserDefaults.standard.bool(forKey: Self.stickerDefaultKey) {
+            UserDefaults.standard.set(true, forKey: Self.stickerDefaultKey)
             UserDefaults.standard.set(resolved.rawValue, forKey: Self.paletteKey)
         }
     }
@@ -238,7 +238,7 @@ enum JieboColor {
             let dark = isDark(traits, appearance: currentAppearance)
             let ink = dark ? currentPalette.dark : currentPalette.light
             _ = (palette, appearance)
-            return UIColor(hex: blend(ink.panel, ink.border, 0.45))
+            return UIColor(hex: blend(ink.panel, ink.border, currentPalette == .sticker ? 0.04 : 0.45))
         })
     }
 
@@ -274,9 +274,11 @@ enum JieboColor {
     static let clay = Color(light: 0xA35C3C, dark: 0xE09478)
     static let okBg = Color(light: 0xE1EEE3, dark: 0x16301F)
     static let okBgSoft = Color(light: 0xE5EFE5, dark: 0x14241A)
-    /// 进行中用赭金，不用蓝色。与网页 --run 一致。
-    static let run = Color(light: 0x8A6526, dark: 0xD4B47A)
-    static let runBg = Color(light: 0xF2E8D2, dark: 0x2C2617)
+    /// 贴纸进行中使用火花色，旧主题保留赭金；破坏操作始终用 danger。
+    static var run: Color { JieboTheme.shared.palette == .sticker ? sparkText : Color(light: 0x8A6526, dark: 0xD4B47A) }
+    static var runBg: Color { JieboTheme.shared.palette == .sticker ? Color(light: 0xFFF0EB, dark: 0x34201B) : Color(light: 0xF2E8D2, dark: 0x2C2617) }
+    static let spark = Color(light: 0xE04F33, dark: 0xFF7357)
+    static let sparkText = Color(light: 0xC83E22, dark: 0xFF7357)
     static let dangerBg = Color(light: 0xF8E5E0, dark: 0x3A1D1B)
     /// 待批、暂停这类“要你处理”的提醒色。与网页 --warn-fg / --warn-bg 一致。
     static let warnFg = Color(light: 0x7A581B, dark: 0xE0B570)
@@ -288,7 +290,10 @@ enum JieboFont {
     /// 直接点名粗体字面。再套 .weight(.bold) 时，系统改不了宋体的字重，控制台会一直报错。
     /// relativeTo：跟 Dynamic Type 一起缩放
     static func display(_ size: CGFloat) -> Font {
-        .custom("Songti SC Bold", size: size, relativeTo: .title2)
+        if JieboTheme.shared.palette == .sticker {
+            return .system(size: UIFontMetrics(forTextStyle: .title2).scaledValue(for: size), weight: .bold)
+        }
+        return .custom("Songti SC Bold", size: size, relativeTo: .title2)
     }
 
     static func ui(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -496,10 +501,16 @@ extension View {
         frame(minWidth: size, minHeight: size).contentShape(Rectangle())
     }
 
-    /// 浮在内容上的控件层（输入胶囊、回到底部、浮动提示）直接使用 iOS 26 Liquid Glass。
+    /// 浮动控件按主题分派：贴纸使用实底描边，旧主题保留 Liquid Glass。
     /// 内容层（消息、卡片）不要套它。
+    @ViewBuilder
     func jieboGlass<S: Shape>(in shape: S, interactive: Bool = false) -> some View {
-        glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        if JieboTheme.shared.palette == .sticker {
+            background(JieboColor.white, in: shape)
+                .overlay(shape.stroke(JieboColor.line, lineWidth: JieboStroke.outline))
+        } else {
+            glassEffect(interactive ? .regular.interactive() : .regular, in: shape)
+        }
     }
 }
 
@@ -546,4 +557,9 @@ struct ShimmerText: View {
             }
         }
     }
+}
+
+/// 贴纸表面统一使用清晰轮廓，旧主题沿用原有细线。
+enum JieboStroke {
+    static var outline: CGFloat { JieboTheme.shared.palette == .sticker ? 1.25 : 1 }
 }

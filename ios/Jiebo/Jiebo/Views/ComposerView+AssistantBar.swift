@@ -89,7 +89,7 @@ extension ComposerView {
             .pickerStyle(.menu)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(chatMode.label)
+                Text(JieboTheme.shared.palette == .sticker ? "✦ 接驳 · \(chatMode.label)" : chatMode.label)
                     .foregroundStyle(chatMode == .agent ? JieboColor.ink2 : JieboColor.pine)
                     .fixedSize(horizontal: true, vertical: false)
                 Text("·")
@@ -169,9 +169,9 @@ extension ComposerView {
         return Button(action: toggleVoice) {
             Image(systemName: recording ? "mic.fill" : "mic")
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(recording ? JieboColor.pine : JieboColor.ink2)
+                .foregroundStyle(recording ? JieboColor.sparkText : JieboColor.ink2)
                 .frame(width: 36, height: 36)
-                .background(recording ? JieboColor.pine.opacity(0.14) : Color.clear)
+                .background(recording ? JieboColor.sparkText.opacity(0.14) : Color.clear)
                 .clipShape(Circle())
                 .symbolEffect(.pulse, isActive: recording && !reduceMotion)
                 .hitTarget()
@@ -182,13 +182,13 @@ extension ComposerView {
     }
 }
 
-/// iPhone 助理输入胶囊的底：最低支持 iOS 26，直接使用可交互 Liquid Glass（聚焦时描一圈强调色）。
+/// 输入胶囊跟随主题选择实底或玻璃表面，聚焦时加深描边。
 private struct CapsuleSurface: ViewModifier {
     var focused: Bool
 
     func body(content: Content) -> some View {
         content
             .jieboGlass(in: Capsule(), interactive: true)
-            .overlay(Capsule().stroke(JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: 1))
+            .overlay(Capsule().stroke(JieboTheme.shared.palette == .sticker ? JieboColor.ink : JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: focused ? 2 : JieboStroke.outline))
     }
 }

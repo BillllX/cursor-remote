@@ -93,7 +93,7 @@ extension ThreadView {
                 .tracking(0.64)
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
-            Text("今天想先做点什么？")
+            (Text("今天想先") + Text("推进").foregroundColor(JieboColor.sparkText) + Text("哪件事？"))
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)
@@ -152,6 +152,9 @@ extension ThreadView {
                     .foregroundStyle(JieboColor.ink)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 0)
+                Image(systemName: "arrow.down.right")
+                    .foregroundStyle(JieboColor.ink)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -160,7 +163,7 @@ extension ThreadView {
             .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
+                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
             }
             .contentShape(Rectangle())
         }
@@ -190,7 +193,7 @@ extension ThreadView {
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
+                            .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                     )
             }
             .buttonStyle(PressScaleButtonStyle())

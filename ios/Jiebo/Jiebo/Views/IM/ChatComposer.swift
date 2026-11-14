@@ -120,7 +120,7 @@ struct ChatComposer: View {
                         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                         )
                 }
                 if canSend {

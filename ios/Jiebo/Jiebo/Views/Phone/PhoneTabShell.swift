@@ -359,12 +359,12 @@ private struct PhoneSpaceBar: View {
                 }
             }
             .font(JieboFont.text(.subheadline, weight: .semibold))
-            .foregroundStyle(selected ? JieboColor.pine : JieboColor.ink2)
+            .foregroundStyle(selected ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine) : JieboColor.ink2)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background {
                 if selected {
-                    Capsule().fill(JieboColor.white.opacity(0.72))
+                    Capsule().fill(JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.white.opacity(0.72))
                 }
             }
             .contentShape(Capsule())

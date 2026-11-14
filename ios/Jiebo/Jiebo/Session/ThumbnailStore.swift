@@ -245,11 +245,14 @@ final class ThumbnailStore {
     func cacheKey(for file: TurnFile, chatId: String, store: ChatStore) -> (key: String, sha: String?) {
         let chatId = file.sourceChatId ?? chatId
         let sha = store.gatewayFeatures.contains("read_sha") ? file.sha : nil
-        if let sha { return ("\(store.tenantId)|\(chatId)|\(file.path)|\(sha)", sha) }
+        let themeKey = file.kind == .canvas
+            ? "|canvas:\(JieboTheme.shared.palette.rawValue):\(JieboTheme.shared.appearance.rawValue):\(UITraitCollection.current.userInterfaceStyle.rawValue)"
+            : ""
+        if let sha { return ("\(store.tenantId)|\(chatId)|\(file.path)|\(sha)\(themeKey)", sha) }
         // 没有 sha 时，同样大小的改写也得换键：把差异指纹和增删行数一起算进去
         let size = file.size.map { String(Int($0)) } ?? "-"
         let edit = "\(file.diffSha ?? "-"):\(file.added ?? -1):\(file.removed ?? -1)"
-        return ("\(store.tenantId)|\(chatId)|\(file.path)|size:\(size)|\(edit)", nil)
+        return ("\(store.tenantId)|\(chatId)|\(file.path)|size:\(size)|\(edit)\(themeKey)", nil)
     }
 
     private func enqueue(_ job: Pending) {

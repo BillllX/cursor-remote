@@ -214,7 +214,7 @@ struct SidebarView: View {
                     .fill(JieboColor.white.opacity(0.4))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                            .stroke(JieboColor.line, lineWidth: 1)
+                            .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                     )
             )
             .contentShape(Rectangle())
@@ -244,7 +244,7 @@ struct SidebarView: View {
                         .fill(JieboColor.white.opacity(0.6))
                         .overlay(
                             RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                         )
                 )
                 .contentShape(Rectangle())
@@ -270,7 +270,7 @@ struct SidebarView: View {
                         .fill(JieboColor.white.opacity(0.6))
                         .overlay(
                             RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                         )
                 )
                 .contentShape(Rectangle())
@@ -296,7 +296,7 @@ struct SidebarView: View {
                         .fill(JieboColor.white.opacity(0.6))
                         .overlay(
                             RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                                .stroke(JieboColor.line, lineWidth: 1)
+                                .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                         )
                 )
                 .contentShape(Rectangle())
@@ -338,9 +338,9 @@ struct SidebarView: View {
                 ZStack(alignment: .topTrailing) {
                     Image(systemName: layer.symbol)
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(on ? JieboColor.pine : JieboColor.ink2)
+                        .foregroundStyle(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine) : JieboColor.ink2)
                         .frame(width: 32, height: 32)
-                        .background(on ? JieboColor.pine.opacity(0.12) : Color.clear)
+                        .background(on ? (JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.pine.opacity(0.12)) : Color.clear)
                         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -453,7 +453,7 @@ struct SidebarView: View {
         } label: {
             HStack(spacing: 8) {
                 Capsule()
-                    .fill(selected ? JieboColor.pine : Color.clear)
+                    .fill(selected && JieboTheme.shared.palette != .sticker ? JieboColor.pine : Color.clear)
                     .frame(width: 3, height: 22)
                     .accessibilityHidden(true)
                 Text(chat.title)
@@ -463,12 +463,12 @@ struct SidebarView: View {
                 if selected {
                     Text("当前")
                         .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.pine)
+                        .foregroundStyle(JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
-                        .background(JieboColor.pine.opacity(0.12))
+                        .background(JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.pine.opacity(0.12))
                         .clipShape(Capsule())
                         .accessibilityHidden(true)
                 } else if !live, let touched = chat.touchedAt {
@@ -493,7 +493,7 @@ struct SidebarView: View {
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(selected ? JieboColor.pine.opacity(0.42) : Color.clear, lineWidth: 1)
+                    .stroke(selected ? (JieboTheme.shared.palette == .sticker ? JieboColor.line : JieboColor.pine.opacity(0.42)) : Color.clear, lineWidth: JieboStroke.outline)
             )
             .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 10, style: .continuous))
             .hoverEffect(.highlight)

@@ -483,12 +483,12 @@ private struct PadDomainSwitcher: View {
                 }
             }
             .font(JieboFont.text(.subheadline, weight: .semibold))
-            .foregroundStyle(router.domain == domain ? JieboColor.pine : JieboColor.ink2)
+            .foregroundStyle(router.domain == domain ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine) : JieboColor.ink2)
             .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: 44)
             .background {
                 if router.domain == domain {
-                    Capsule().fill(JieboColor.white.opacity(0.72))
+                    Capsule().fill(JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.white.opacity(0.72))
                 }
             }
             .contentShape(Capsule())
@@ -543,10 +543,10 @@ struct ImUnreadBadge: View {
     var body: some View {
         Text(ImFormat.badge(count))
             .font(JieboFont.text(.caption2, weight: .semibold))
-            .foregroundStyle(JieboColor.fillFg)
+            .foregroundStyle(Color.white)
             .padding(.horizontal, 5)
             .frame(minWidth: 16, minHeight: 16)
-            .background(JieboColor.danger)
+            .background(JieboTheme.shared.palette == .sticker ? JieboColor.sparkText : JieboColor.danger)
             .clipShape(Capsule())
             .accessibilityHidden(true)
     }

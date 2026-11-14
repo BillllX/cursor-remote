@@ -117,7 +117,7 @@ private struct JieboWidgetFamilyLayout: View {
             }
         }
         .containerBackground(for: .widget) {
-            CyberBackdrop()
+            StickerCardBackdrop()
         }
     }
 
@@ -155,7 +155,7 @@ private struct JieboWidgetFamilyLayout: View {
             if showsSmallStatus {
                 Text(displayStatus)
                     .font(.caption)
-                    .foregroundStyle(Cyber.dim)
+                    .foregroundStyle(Sticker.dim)
                     .lineLimit(1)
                     .layoutPriority(1)
             }
@@ -192,7 +192,7 @@ private struct JieboWidgetFamilyLayout: View {
             if !tight {
                 Text(displayStatus)
                     .font(.subheadline)
-                    .foregroundStyle(Cyber.dim)
+                    .foregroundStyle(Sticker.dim)
                     .lineLimit(1)
                     .layoutPriority(2)
             }
@@ -247,7 +247,7 @@ private struct JieboWidgetFamilyLayout: View {
                     if !tight {
                         Text(displayStatus)
                             .font(.subheadline)
-                            .foregroundStyle(Cyber.dim)
+                            .foregroundStyle(Sticker.dim)
                             .lineLimit(1)
                     }
                     updatedLabel
@@ -290,7 +290,7 @@ private struct JieboWidgetFamilyLayout: View {
             Link(destination: inboxURL) {
                 Text("未读 \(countText(entry.snapshot.unreadCount))")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(entry.snapshot.unreadCount > 0 ? Cyber.cyan : Cyber.text)
+                    .foregroundStyle(entry.snapshot.unreadCount > 0 ? Sticker.cyan : Sticker.text)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .contentShape(Rectangle())
@@ -306,7 +306,7 @@ private struct JieboWidgetFamilyLayout: View {
             Link(destination: todoURL) {
                 Text("待办 \(countText(entry.snapshot.todoCount))")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(entry.snapshot.todoCount > 0 ? Cyber.cyan : Cyber.text)
+                    .foregroundStyle(entry.snapshot.todoCount > 0 ? Sticker.cyan : Sticker.text)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
                     .contentShape(Rectangle())
@@ -324,14 +324,14 @@ private struct JieboWidgetFamilyLayout: View {
     private var smallFooter: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text("待办 \(countText(entry.snapshot.todoCount)) · 未读 \(countText(entry.snapshot.unreadCount))")
-                .foregroundStyle(Cyber.text)
+                .foregroundStyle(Sticker.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .layoutPriority(1)
             Spacer(minLength: 4)
             Text(shortUpdated(now: entry.date))
                 .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(Cyber.dim)
+                .foregroundStyle(Sticker.dim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
         }
@@ -340,32 +340,35 @@ private struct JieboWidgetFamilyLayout: View {
 
     private func brand(showsCode: Bool, detail: String?) -> some View {
         HStack(spacing: 5) {
-            Text("JIEBO")
+            Text("✦ 小驳")
                 .font(.system(.caption2, design: .monospaced, weight: .bold))
-                .foregroundStyle(Cyber.cyan)
+                .foregroundStyle(Sticker.panel)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Sticker.text, in: Capsule())
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
             Circle()
-                .fill(Cyber.pip(entry.snapshot.assistantStatus))
+                .fill(Sticker.pip(entry.snapshot.assistantStatus))
                 .frame(width: 6, height: 6)
             if showsCode {
                 Text("// \(statusCode)")
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(Cyber.dim)
+                    .foregroundStyle(Sticker.dim)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             if entry.snapshot.isStale {
-                Text("STALE 已过期")
+                Text("已过期")
                     .font(.system(.caption2, design: .monospaced, weight: .bold))
-                    .foregroundStyle(Cyber.magenta)
+                    .foregroundStyle(Sticker.magenta)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             if let detail {
                 Text(detail)
                     .font(.caption2)
-                    .foregroundStyle(Cyber.dim)
+                    .foregroundStyle(Sticker.dim)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -384,7 +387,7 @@ private struct JieboWidgetFamilyLayout: View {
                 .accessibilityHidden(true)
             Text(highlightSummary)
                 .font(font)
-                .foregroundStyle(Cyber.text)
+                .foregroundStyle(Sticker.text)
                 .lineLimit(minLines...upper)
                 .minimumScaleFactor(0.85)
                 .redacted(reason: shouldHideSummary ? .placeholder : [])
@@ -402,17 +405,17 @@ private struct JieboWidgetFamilyLayout: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(highlightMark)
                     .font(.system(.caption2, design: .monospaced, weight: .bold))
-                    .foregroundStyle(Cyber.magenta)
+                    .foregroundStyle(Sticker.magenta)
                     .lineLimit(1)
                 summaryText(font: font, minLines: minLines, maxLines: maxLines)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, pad)
             .frame(maxWidth: .infinity, maxHeight: expands ? .infinity : nil, alignment: .topLeading)
-            .background(Cyber.panel)
+            .background(Sticker.panel)
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Cyber.line, lineWidth: 1)
+                    .stroke(Sticker.line, lineWidth: 1.25)
             }
             .contentShape(Rectangle())
         }
@@ -433,7 +436,7 @@ private struct JieboWidgetFamilyLayout: View {
         return Link(destination: url) {
             Text("\(title) \(countText(value))")
                 .font(font)
-                .foregroundStyle(value > 0 ? Cyber.cyan : Cyber.text)
+                .foregroundStyle(value > 0 ? Sticker.cyan : Sticker.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .padding(.horizontal, 10)
@@ -444,10 +447,10 @@ private struct JieboWidgetFamilyLayout: View {
                     maxHeight: blockMaxHeight,
                     alignment: fillsHeight ? .center : .leading
                 )
-                .background(Cyber.panel)
+                .background(Sticker.panel)
                 .overlay {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Cyber.line, lineWidth: 1)
+                        .stroke(Sticker.line, lineWidth: 1.25)
                 }
                 .contentShape(Rectangle())
         }
@@ -545,7 +548,7 @@ private struct JieboWidgetFamilyLayout: View {
     private var updatedLabel: some View {
         Text(shortUpdated(now: entry.date))
             .font(.system(.caption2, design: .monospaced))
-            .foregroundStyle(Cyber.dim)
+            .foregroundStyle(Sticker.dim)
             .lineLimit(1)
     }
 
@@ -566,87 +569,37 @@ private struct JieboWidgetFamilyLayout: View {
     }
 }
 
-private enum Cyber {
-    static let void = Color(red: 0.027, green: 0.031, blue: 0.055)
-    static let panel = Color(red: 0.06, green: 0.08, blue: 0.12)
-    static let text = Color(red: 0.90, green: 0.97, blue: 0.96)
-    static let dim = Color(red: 0.60, green: 0.72, blue: 0.76)
-    static let cyan = Color(red: 0.25, green: 0.96, blue: 0.91)
-    static let magenta = Color(red: 1.0, green: 0.20, blue: 0.58)
-    static let line = Color(red: 0.25, green: 0.96, blue: 0.91).opacity(0.38)
+/// Widget 遵循系统明暗，保留隐私遮盖、过期判断与原有深链行为。
+private enum Sticker {
+    static let void = Color(uiColor: .systemGroupedBackground)
+    static let panel = Color(uiColor: .secondarySystemGroupedBackground)
+    static let text = Color(uiColor: .label)
+    static let dim = Color(uiColor: .secondaryLabel)
+    static let cyan = Color(uiColor: .label)
+    static let magenta = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1, green: 0.451, blue: 0.341, alpha: 1)
+            : UIColor(red: 0.784, green: 0.243, blue: 0.133, alpha: 1)
+    })
+    static let line = Color(uiColor: .label)
 
     static func pip(_ status: WidgetSnapshot.AssistantStatus) -> Color {
         switch status {
-        case .available: return cyan
-        case .working, .syncing: return Color(red: 0.45, green: 0.78, blue: 1)
-        case .needsAttention: return magenta
+        case .available: return text
+        case .working, .syncing, .needsAttention: return magenta
         case .offline, .loggedOut: return dim
         }
     }
 }
 
-private struct CyberBackdrop: View {
+private struct StickerCardBackdrop: View {
     var body: some View {
-        ZStack {
-            Cyber.void
-            CyberGrid()
-            VStack {
-                LinearGradient(colors: [Cyber.cyan, Cyber.magenta], startPoint: .leading, endPoint: .trailing)
-                    .frame(height: 2)
-                Spacer()
+        Sticker.panel
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Sticker.line, lineWidth: 1.25)
+                    .padding(6)
             }
-            HudCorners()
-        }
-    }
-}
-
-private struct CyberGrid: View {
-    var body: some View {
-        Canvas { context, size in
-            let step: CGFloat = 16
-            var path = Path()
-            var x: CGFloat = 0
-            while x <= size.width {
-                path.move(to: CGPoint(x: x, y: 0))
-                path.addLine(to: CGPoint(x: x, y: size.height))
-                x += step
-            }
-            var y: CGFloat = 0
-            while y <= size.height {
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addLine(to: CGPoint(x: size.width, y: y))
-                y += step
-            }
-            context.stroke(path, with: .color(Cyber.cyan.opacity(0.07)), lineWidth: 0.5)
-        }
-        .allowsHitTesting(false)
-    }
-}
-
-private struct HudCorners: View {
-    var body: some View {
-        GeometryReader { geo in
-            let length: CGFloat = 10
-            let inset: CGFloat = 8
-            Path { path in
-                let w = geo.size.width
-                let h = geo.size.height
-                path.move(to: CGPoint(x: inset, y: inset + length))
-                path.addLine(to: CGPoint(x: inset, y: inset))
-                path.addLine(to: CGPoint(x: inset + length, y: inset))
-                path.move(to: CGPoint(x: w - inset - length, y: inset))
-                path.addLine(to: CGPoint(x: w - inset, y: inset))
-                path.addLine(to: CGPoint(x: w - inset, y: inset + length))
-                path.move(to: CGPoint(x: inset, y: h - inset - length))
-                path.addLine(to: CGPoint(x: inset, y: h - inset))
-                path.addLine(to: CGPoint(x: inset + length, y: h - inset))
-                path.move(to: CGPoint(x: w - inset - length, y: h - inset))
-                path.addLine(to: CGPoint(x: w - inset, y: h - inset))
-                path.addLine(to: CGPoint(x: w - inset, y: h - inset - length))
-            }
-            .stroke(Cyber.cyan.opacity(0.7), lineWidth: 1)
-        }
-        .allowsHitTesting(false)
     }
 }
 

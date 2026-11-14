@@ -12,20 +12,22 @@ struct LoginView: View {
         @Bindable var store = store
         ZStack {
             JieboColor.paper.ignoresSafeArea()
-            Circle()
-                .fill(JieboColor.pine.opacity(0.22))
-                .frame(width: 280, height: 280)
-                .blur(radius: 40)
-                .offset(x: -120, y: -220)
-            Circle()
-                .fill(JieboColor.clay.opacity(0.18))
-                .frame(width: 240, height: 240)
-                .blur(radius: 36)
-                .offset(x: 140, y: 180)
+            if JieboTheme.shared.palette != .sticker {
+                Circle()
+                    .fill(JieboColor.pine.opacity(0.22))
+                    .frame(width: 280, height: 280)
+                    .blur(radius: 40)
+                    .offset(x: -120, y: -220)
+                Circle()
+                    .fill(JieboColor.clay.opacity(0.18))
+                    .frame(width: 240, height: 240)
+                    .blur(radius: 36)
+                    .offset(x: 140, y: 180)
+            }
             VStack(spacing: 0) {
                 Spacer()
                 VStack(alignment: .leading, spacing: 14) {
-                    JieboMark(size: 44)
+                    JieboMark(size: 64)
                     Text("接驳")
                         .font(JieboFont.display(30))
                         .tracking(1.2)
@@ -42,7 +44,7 @@ struct LoginView: View {
                             .background(JieboColor.composer, in: RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: JieboRadius.lg, style: .continuous)
-                                    .stroke(JieboColor.line, lineWidth: 1)
+                                    .stroke(JieboColor.line, lineWidth: JieboStroke.outline)
                             }
                             .focused($focused)
                             .onSubmit { store.login() }

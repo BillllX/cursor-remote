@@ -85,7 +85,7 @@ extension ChatStore {
     }
 }
 
-/// 使用原设定图透明姿态，只做不会破坏造型的整体位移、缩放和倾斜。
+/// 贴纸机器人沿用八态与前后台、减少动态效果的生命周期。
 struct AssistantAvatarView: View {
     let phase: AssistantAvatarPhase
     var size: CGFloat
@@ -103,11 +103,17 @@ struct AssistantAvatarView: View {
 
     var body: some View {
         ZStack {
-            Image(displayedPhase.assetName)
-                .resizable()
-                .scaledToFit()
-                .id(displayedPhase)
-                .transition(.opacity)
+            if JieboTheme.shared.palette == .sticker {
+                StickerRobotFace(phase: displayedPhase)
+                    .id(displayedPhase)
+                    .transition(.opacity)
+            } else {
+                Image(displayedPhase.assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .id(displayedPhase)
+                    .transition(.opacity)
+            }
         }
         .frame(width: size, height: size)
         .scaleEffect(x: motionScale.width, y: motionScale.height, anchor: .bottom)
@@ -204,6 +210,82 @@ struct AssistantAvatarView: View {
         case .approval: return .degrees(-0.8 * Double(motionGain))
         case .failure: return .degrees(-0.5 * Double(motionGain))
         default: return .zero
+        }
+    }
+}
+
+/// 圆团轮廓、微倾双胶囊眼与右上星点，延续接驳自己的图标造型。
+/// 导航栏省略外围细节，完整尺寸才显示声波、思考星芒与执行轨迹。
+struct StickerRobotFace: View {
+    var phase: AssistantAvatarPhase = .idle
+
+    var body: some View {
+        GeometryReader { proxy in
+            let side = min(proxy.size.width, proxy.size.height)
+            let compact = side <= 36
+            ZStack {
+                RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                    .fill(JieboColor.white)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                            .stroke(JieboColor.ink, lineWidth: max(1.8, side * 0.026))
+                    }
+                    .frame(width: side * 0.77, height: side * 0.66)
+                    .rotationEffect(.degrees(-7))
+                HStack(spacing: side * 0.13) {
+                    eye(side: side)
+                    eye(side: side)
+                }
+                .rotationEffect(.degrees(-7))
+                .offset(x: phase == .thinking ? side * 0.025 : 0,
+                        y: phase == .failure ? side * 0.04 : 0)
+                if phase != .offline {
+                    Image(systemName: badgeSymbol)
+                        .font(.system(size: side * (compact ? 0.23 : 0.22), weight: .bold))
+                        .foregroundStyle(phase == .failure ? JieboColor.danger : JieboColor.spark)
+                        .background(JieboColor.paper, in: Circle())
+                        .offset(x: side * 0.33, y: -side * 0.32)
+                }
+                if !compact && (phase == .listening || phase == .executing) {
+                    Image(systemName: phase == .listening ? "wave.3.right" : "arrow.triangle.2.circlepath")
+                        .font(.system(size: side * 0.15, weight: .medium))
+                        .foregroundStyle(JieboColor.ink)
+                        .offset(x: -side * 0.43, y: -side * 0.23)
+                }
+                if !compact && phase == .thinking {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: side * 0.12, weight: .bold))
+                        .foregroundStyle(JieboColor.spark)
+                        .offset(x: side * 0.12, y: -side * 0.43)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func eye(side: CGFloat) -> some View {
+        if phase == .success {
+            Image(systemName: "chevron.up")
+                .font(.system(size: side * 0.16, weight: .heavy))
+                .foregroundStyle(JieboColor.ink)
+        } else {
+            Capsule()
+                .fill(phase == .executing ? JieboColor.sparkText : JieboColor.ink)
+                .frame(width: side * (phase == .offline ? 0.16 : 0.09),
+                       height: side * (phase == .offline ? 0.045 : phase == .failure ? 0.13 : phase == .listening ? 0.25 : 0.21))
+        }
+    }
+
+    private var badgeSymbol: String {
+        switch phase {
+        case .idle, .thinking: "sparkle"
+        case .listening, .executing: "circle.fill"
+        case .approval: "exclamationmark.circle.fill"
+        case .success: "heart.fill"
+        case .failure: "exclamationmark.triangle.fill"
+        case .offline: "minus"
         }
     }
 }

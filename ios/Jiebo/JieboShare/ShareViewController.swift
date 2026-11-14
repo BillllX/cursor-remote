@@ -55,7 +55,7 @@ final class ShareViewController: UIViewController {
     }
 }
 
-/// 分享扩展品牌视觉令牌（对齐主 App 接驳纸墨松绿体系，自适应浅色/深色）
+/// 分享扩展品牌视觉令牌（对齐主 App 黑白贴纸体系，自适应浅色/深色）
 private enum ShareBrandColor {
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: UIColor { traits in
@@ -69,13 +69,13 @@ private enum ShareBrandColor {
         })
     }
 
-    static let paper = dynamic(light: 0xF3EEE4, dark: 0x141512)
-    static let white = dynamic(light: 0xFFFCF8, dark: 0x1B1D1A)
-    static let ink = dynamic(light: 0x1C1916, dark: 0xEDE8DE)
-    static let ink2 = dynamic(light: 0x5C574F, dark: 0xB6B0A4)
-    static let dim = dynamic(light: 0x746D62, dark: 0x8A8478)
-    static let line = dynamic(light: 0xDDD5C7, dark: 0x2C2F2B)
-    static let pine = dynamic(light: 0x1A4F41, dark: 0x8FBFB0)
+    static let paper = dynamic(light: 0xFAFAFA, dark: 0x0E0E10)
+    static let white = dynamic(light: 0xFFFFFF, dark: 0x17171A)
+    static let ink = dynamic(light: 0x141416, dark: 0xF5F3EE)
+    static let ink2 = dynamic(light: 0x606066, dark: 0xB8B8BE)
+    static let dim = dynamic(light: 0x606066, dark: 0xB8B8BE)
+    static let line = dynamic(light: 0x141416, dark: 0xF5F3EE)
+    static let pine = dynamic(light: 0x141416, dark: 0xF5F3EE)
     static let danger = dynamic(light: 0xB42318, dark: 0xE07068)
 }
 
@@ -204,7 +204,7 @@ private struct ShareRoot: View {
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .stroke(ShareBrandColor.line, lineWidth: 1)
+                                    .stroke(ShareBrandColor.line, lineWidth: 1.25)
                             )
                     }
                     if !loading, pendingBytes > 0 {
