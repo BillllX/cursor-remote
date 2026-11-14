@@ -93,7 +93,7 @@ extension ThreadView {
                 .tracking(0.64)
                 .foregroundStyle(JieboColor.ink)
                 .multilineTextAlignment(.center)
-            (Text("今天想先") + Text("推进").foregroundColor(JieboColor.sparkText) + Text("哪件事？"))
+            Text("今天想先\(Text("推进").foregroundStyle(JieboColor.sparkText))哪件事？")
                 .font(JieboFont.text(.subheadline))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)

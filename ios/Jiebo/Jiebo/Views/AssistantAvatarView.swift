@@ -116,6 +116,8 @@ struct AssistantAvatarView: View {
             }
         }
         .frame(width: size, height: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(displayedPhase.accessibilityLabel)
         .scaleEffect(x: motionScale.width, y: motionScale.height, anchor: .bottom)
         .rotationEffect(motionRotation, anchor: .bottom)
         .offset(x: motionOffset.width, y: motionOffset.height)
@@ -261,7 +263,6 @@ struct StickerRobotFace: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
-        .accessibilityHidden(true)
     }
 
     @ViewBuilder

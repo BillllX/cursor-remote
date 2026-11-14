@@ -343,7 +343,12 @@ struct CollapsedSidebarRail: View {
                     .clipShape(RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous))
                     .overlay(
                         RoundedRectangle(cornerRadius: JieboRadius.sm, style: .continuous)
-                            .stroke(on ? (tint ?? JieboColor.pine).opacity(0.42) : JieboColor.line, lineWidth: 1)
+                            .stroke(
+                                on
+                                    ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : (tint ?? JieboColor.pine).opacity(0.42))
+                                    : JieboColor.line,
+                                lineWidth: JieboStroke.outline
+                            )
                     )
                     .overlay(alignment: .leading) {
                         if on && JieboTheme.shared.palette != .sticker {

@@ -2270,7 +2270,7 @@ struct KbWorkspaceSheet: View {
                         if !log.updatedHtmls.isEmpty {
                             ForEach(log.updatedHtmls, id: \.self) { htmlRel in
                                 Button("打开看板：\(htmlRel)") {
-                                    openBoard(KbHtmlBoard(relPath: htmlRel, title: htmlRel, category: ""))
+                                    openBoard(KbHtmlBoard(relPath: htmlRel, title: htmlRel, category: "", showOnDrop: true))
                                 }
                                 .buttonStyle(.borderless)
                                 .font(JieboFont.text(.footnote, weight: .medium))

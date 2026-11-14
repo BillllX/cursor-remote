@@ -344,7 +344,12 @@ struct SidebarView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .stroke(on ? JieboColor.pine.opacity(0.28) : JieboColor.line, lineWidth: 1)
+                                .stroke(
+                                    on
+                                        ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine.opacity(0.28))
+                                        : JieboColor.line,
+                                    lineWidth: JieboStroke.outline
+                                )
                         )
                     Circle()
                         .fill(JieboColor.ok)
