@@ -112,7 +112,7 @@ enum AssistantToolText {
 
     static func isSkillTool(_ name: String) -> Bool {
         let base = baseName(name)
-        return base == "skill_use" || base == "skill_propose" || base == "skill_list"
+        return base == "skill_use" || base == "skill_propose" || base == "skill_list" || base == "skill_verify"
             || base == "skill_verify" || base == "skill_proposal_decide" || base == "skill_proposal_list"
     }
 
@@ -163,7 +163,7 @@ enum AssistantToolText {
             return name.isEmpty ? "申请新建文件夹" : "申请新建文件夹：\(name)"
         case "skill_use":
             let title = skillTitle(for: tool)
-            return "已运用技能：\(title)"
+            return "查阅技能：\(title)"
         case "skill_propose":
             let title = skillTitle(for: tool)
             return "提议新技能：\(title)"
@@ -247,7 +247,7 @@ struct AssistantActionRow: View {
     private var statusText: String {
         if tool.status == "running" { return "处理中" }
         if failed { return "未完成" }
-        if baseTool == "skill_use" { return "已加载" }
+        if baseTool == "skill_use" { return "已查阅" }
         if baseTool == "skill_propose" {
             if localDecision == "approved" { return "已批准" }
             if localDecision == "rejected" { return "已拒绝" }

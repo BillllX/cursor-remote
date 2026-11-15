@@ -1,0 +1,109 @@
+{
+  "at": "2026-11-15T16:09:07.598Z",
+  "baseline": "88410d5",
+  "kind": "实施后不同模型源码验证",
+  "panel": [
+    {
+      "name": "reviewer",
+      "modelId": "claude-opus-5-5"
+    },
+    {
+      "name": "review-2",
+      "modelId": "gemini-4-carbon"
+    },
+    {
+      "name": "review-3",
+      "modelId": "grok-4.7"
+    },
+    {
+      "name": "review-4",
+      "modelId": "glm-5.2"
+    }
+  ],
+  "results": [
+    {
+      "model": "claude-opus-5-5",
+      "status": "error",
+      "text": "Model Blocked This model has been blocked by your team admin settings."
+    },
+    {
+      "model": "glm-5.2",
+      "status": "completed",
+      "text": "# 评审结论\n\n## CRITICAL\n\n无阻断缺陷。\n\n## MAJOR\n\n无。\n\n## MINOR\n\n### M1. `skill_use` 首次调用对未查阅技能会重复执行 `useSkill` 处理器\n\n`gateway/src/chat/codexSkillBridge.ts:219-229`\n\n```startLine:219:gateway/src/chat/codexSkillBridge.ts\n          else {\n            const check = useSkill(tenant!, initialCwd, args.id, {\n              cursor: args.cursor,\n              limit: args.limit,\n              recordView: false,\n            });\n            if (check.ok && !args.cursor) {\n              const key = `${args.id}:${check.version}`;\n              result = viewed.has(key) ? check : useSkill(tenant!, initialCwd, args.id, { limit: args.limit });\n              if (result.ok) viewed.add(key);\n            } else result = check;\n```\n\n触发条件：同一 socket 连接内首次对某技能调用 `skill_use`（无 cursor）。\n影响：第一次 `useSkill`（`recordView:false`）已读盘+校验，若 `viewed` 无该 key，立即发起第二次 `useSkill`（默认 `recordView:true`）再读一次盘并记一次查阅。功能正确（去重 + 计数 +1），但单次调用产生两次 SOP 读盘与哈希校验，属非阻断的冗余开销。续页（带 cursor）与已查阅技能不触发。建议：可在首次调用时直接传 `recordView:true`，去掉第二次调用，靠 `viewed` 集合做\"同连接内去重\"。\n\n### M2. `.mjs` 转发器 stdin EOF 即 `stop(0)`，但网关侧 socket `close` 不区分主动关闭与异常断开\n\n`gateway/src/chat/codexSkillBridge.mjs:20`\n\n```startLine:20:gateway/src/chat/codexSkillBridge.mjs\nsocket.on(\"close\", () => stop());\n```\n\n触发条件：网关主动 `socket.destroy()`（如本轮取消、`close()`）或网络异常断开。\n影响：两种情况都走 `stop()`（默认 code=0），无法在转发器侧区分\"本轮正常结束\"与\"网关异常踢断\"。实际后续行为一致（进程退出、stdin/stdout destroy），不影响正确性，仅日志层面无法区分。非阻断。\n\n### M3. iOS `ToolKind.from` 对 `mcp:jiebo:skill_*` 的归类依赖前缀正则，未显式覆盖 `skill_mark_used`\n\n`ios/Jiebo/Jiebo/Session/ChatModels.swift:131`\n\n```startLine:131:ios/Jiebo/Jiebo/Session/ChatModels.swift\n        if n.range(of: \"(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)\", options: .regularExpression) != nil { return .other }\n```\n\n触发条件：Codex 桥接回传 `mcp:jiebo:skill_use` 等工具调用，iOS 侧 `ToolCall.name` 为 `mcp:jiebo:skill_use`。\n影响：`baseName` 会剥离 `mcp:jiebo:` 得到 `skill_use`，`ToolKind.from` 用 `n.range(of:)` 在小写全名上匹配 `(^|__|[./:])skill_(...)`。对 `mcp:jiebo:skill_use`，`:` 前缀命中，归类为 `.other`，符合预期。`ThreadAssistantRows.swift` 的 `isSkillTool` 也通过 `baseName` 正确识别。Web 侧 `ToolCard.tsx` 用 `baseToolName = name.split(/__|[./:]/).at(-1)` 同样正确。双端展示一致，无阻断。仅记录：`skill_mark_used` 在 iOS `isSkillTool` 中未列出（`ThreadAssistantRows.swift:113`），但桥接不挂载 `skill_mark_used`，所以本轮不会出现该工具名，无实际影响。\n\n## 可行部分（明确说明）\n\n- **授权失效**：`authorize()` 在每条消息处理前调用，复核 `conn.authed`、`tenant.admin`、`sandboxEnabledForTenant`、`slot.tenantId/epoch/finished`、`signal.aborted`，并实时 `realpathSync` 校验 `cwd` 与 `workspaceRoot` 未被替换且 `cwd` 仍在 `initialRoot` 内、`slot.cwd` 仍等于 `initialCwd`。取消/越界/换租户立即抛\"本轮桥接已结束或工作区授权已失效\"。`close()` 内 `signal.removeEventListener(\"abort\", onAbort)` + 销毁所有 socket + `server.close()` + `rmSync(dir)`。测试\"每次调用复核管理员准入与工作区，取消后回收转发进程\"覆盖。可行。\n- **提示词承诺挂载**：`codexRunner.ts:351` 无条件追加 `codexCapabilityPrompt(Boolean(skillBridge))`，启用时声明只挂 `skill_list/skill_use/skill_verify`，关闭时明确\"技能桥接关闭，不能调用网关技能工具\"，并要求\"不要声称已使用这些能力，也不要因工具不可用而自动用 Shell 模拟业务写入\"。compactPrompt 路径同样追加。可行。\n- **重启后线程恢复**：`slot.codexThreadId` 经 `persistTenant`→`DiskSlot.codexThreadId`→`hydrateConn`→`makeSlot` 持久化与恢复；`runCodexChat` 中 `slot.codexThreadId ? resumeThread : startThread`；跨引擎互切时 `needReseed` 清空 `codexThreadId`。测试\"落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程\"覆盖。可行。\n- **传输生命周期**：`.mjs` 转发器 stdin EOF/网关断连/`SIGTERM`/`SIGINT` 均 `stop()` 退出；超限输入（>1MB）`stop(1)`；网关侧 socket 10s 超时、`MAX_FRAME`/`MAX_PENDING` 限制、`closed` 标志防新连接。`close()` 幂等。可行。\n- **分页完整性/版本与统计**：`useSkill` 游标格式 `<sha256>:<offset>`，校验 `match[1] !== version` 拒绝旧游标；`offset===0 && recordView!==false` 才记查阅，续页不记；桥接 `viewed` 集合按 `id:version` 去重，版本变化后允许重新记一次。测试\"长 SOP 完整分页、版本变化与停用阻断续页\"覆盖。可行。\n- **双端展示**：iOS `ToolRunSummaryView.chineseVerb` 与 `ThreadAssistantRows.AssistantToolText.friendly` 覆盖 `skill_use/skill_propose/skill_list/skill_verify/skill_proposal_decide/skill_proposal_list`；Web `ToolCard.tsx` 同口径。`stripSkillSandboxTags` 双端一致剥离 `<untrusted_skill_reference>` 包裹。可行。\n- **凭据隔离**：token 仅经 `env`（`JIEBO_MCP_TOKEN`）与 `env_vars` 转发，`config` 只列变量名不含值；测试断言 `JSON.stringify(bridge.config)` 与 `child.spawnargs` 均不含 token；smoke 校验 `~/.codex/config.toml` 与 `auth.json` 不含本轮 token。可行。\n- **CODEX_SKILL_BRIDGE 默认 0**：`runCodexChat:349` 仅当 `gatewayEnv.codexSkillBridge()` 为真才启动桥接，否则 `config` 为 `{ mcp_servers: { jiebo: { enabled: false } } }`，capability prompt 声明关闭。可行。\n- **不挂 skill_mark_used 与业务写**：`CODEX_SKILL_TOOLS` 仅含三项；`tools/call` 校验 `def` 存在性，`skill_propose` 等返回 -32602。可行。\n- **不恢复 execution 层**：桥接仅复用 `listSkillSummaries/useSkill/verifySkill` 三个只读处理器，无 `markSkillUsed/proposeSkillPackage/decideSkillProposal` 调用。可行。\n- **Codex danger-full-access 不属本桥接安全边界**：`codexRunner.ts:264` 显式 `sandboxMode = \"danger-full-access\"`，`codexCapabilityPrompt` 声明\"桥接鉴权不限制 Codex 自身的 Shell、文件或网络权限\"。符合范围声明。可行。\n\n## 测试覆盖增强建议（非阻断）\n\n1. **桥接并发 socket 上限**：`sockets.size >= 4` 时新连接 `socket.destroy()`，但无测试覆盖\"第 5 条连接被拒\"。建议补一条断言。\n2. **`skill_use` limit 边界**：测试覆盖 `limit:100`，未覆盖 `limit:2400`（上限）与 `limit:2401`（应 -32602）。建议补边界用例。\n3. **`skill_list` scope 过滤**：测试仅 `query:\"canvas\"`，未覆盖 `scope:\"platform\"/\"workspace\"/\"repo\"` 过滤行为。建议补。\n4. **桥接 close 后再调用**：`close()` 幂等（`if (closed) return`），但无测试覆盖\"close 后再 close 不抛错\"。建议补。\n\n以上均为非阻断增强，不影响本轮合并。"
+    },
+    {
+      "model": "gemini-4-carbon",
+      "status": "error",
+      "text": "评审超时"
+    },
+    {
+      "model": "grok-4.7",
+      "status": "error",
+      "text": "评审超时"
+    }
+  ],
+  "summary": "\n网关已经用不同模型分别评审过上面的内容。你只汇总一致结论、分歧和必须先改的点。\n不要再派 reviewer 或 review-* 重复评审，也不要说你又调用了这些模型。\n## reviewer（claude-opus-5-5）\n这次没评成：Model Blocked This model has been blocked by your team admin settings.\n\n## review-2（gemini-4-carbon）\n这次没评成：评审超时\n\n## review-3（grok-4.7）\n这次没评成：评审超时\n\n## review-4（glm-5.2）\n# 评审结论\n\n## CRITICAL\n\n无阻断缺陷。\n\n## MAJOR\n\n无。\n\n## MINOR\n\n### M1. `skill_use` 首次调用对未查阅技能会重复执行 `useSkill` 处理器\n\n`gateway/src/chat/codexSkillBridge.ts:219-229`\n\n```startLine:219:gateway/src/chat/codexSkillBridge.ts\n          else {\n            const check = useSkill(tenant!, initialCwd, args.id, {\n              cursor: args.cursor,\n              limit: args.limit,\n              recordView: false,\n            });\n            if (check.ok && !args.cursor) {\n              const key = `${args.id}:${check.version}`;\n              result = viewed.has(key) ? check : useSkill(tenant!, initialCwd, args.id, { limit: args.limit });\n              if (result.ok) viewed.add(key);\n            } else result = check;\n```\n\n触发条件：同一 socket 连接内首次对某技能调用 `skill_use`（无 cursor）。\n影响：第一次 `useSkill`（`recordView:false`）已读盘+校验，若 `viewed` 无该 key，立即发起第二次 `useSkill`（默认 `recordView:true`）再读一次盘并记一次查阅。功能正确（去重 + 计数 +1），但单次调用产生两次 SOP 读盘与哈希校验，属非阻断的冗余开销。续页（带 cursor）与已查阅技能不触发。建议：可在首次调用时直接传 `recordView:true`，去掉第二次调用，靠 `viewed` 集合做\"同连接内去重\"。\n\n### M2. `.mjs` 转发器 stdin EOF 即 `stop(0)`，但网关侧 socket `close` 不区分主动关闭与异常断开\n\n`gateway/src/chat/codexSkillBridge.mjs:20`\n\n```startLine:20:gateway/src/chat/codexSkillBridge.mjs\nsocket.on(\"close\", () => stop());\n```\n\n触发条件：网关主动 `socket.destroy()`（如本轮取消、`close()`）或网络异常断开。\n影响：两种情况都走 `stop()`（默认 code=0），无法在转发器侧区分\"本轮正常结束\"与\"网关异常踢断\"。实际后续行为一致（进程退出、stdin/stdout destroy），不影响正确性，仅日志层面无法区分。非阻断。\n\n### M3. iOS `ToolKind.from` 对 `mcp:jiebo:skill_*` 的归类依赖前缀正则，未显式覆盖 `skill_mark_used`\n\n`ios/Jiebo/Jiebo/Session/ChatModels.swift:131`\n\n```startLine:131:ios/Jiebo/Jiebo/Session/ChatModels.swift\n        if n.range(of: \"(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)\", options: .regularExpression) != nil { return .other }\n```\n\n触发条件：Codex 桥接回传 `mcp:jiebo:skill_use` 等工具调用，iOS 侧 `ToolCall.name` 为 `mcp:jiebo:skill_use`。\n影响：`baseName` 会剥离 `mcp:jiebo:` 得到 `skill_use`，`ToolKind.from` 用 `n.range(of:)` 在小写全名上匹配 `(^|__|[./:])skill_(...)`。对 `mcp:jiebo:skill_use`，`:` 前缀命中，归类为 `.other`，符合预期。`ThreadAssistantRows.swift` 的 `isSkillTool` 也通过 `baseName` 正确识别。Web 侧 `ToolCard.tsx` 用 `baseToolName = name.split(/__|[./:]/).at(-1)` 同样正确。双端展示一致，无阻断。仅记录：`skill_mark_used` 在 iOS `isSkillTool` 中未列出（`ThreadAssistantRows.swift:113`），但桥接不挂载 `skill_mark_used`，所以本轮不会出现该工具名，无实际影响。\n\n## 可行部分（明确说明）\n\n- **授权失效**：`authorize()` 在每条消息处理前调用，复核 `conn.authed`、`tenant.admin`、`sandboxEnabledForTenant`、`slot.tenantId/epoch/finished`、`signal.aborted`，并实时 `realpathSync` 校验 `cwd` 与 `workspaceRoot` 未被替换且 `cwd` 仍在 `initialRoot` 内、`slot.cwd` 仍等于 `initialCwd`。取消/越界/换租户立即抛\"本轮桥接已结束或工作区授权已失效\"。`close()` 内 `signal.removeEventListener(\"abort\", onAbort)` + 销毁所有 socket + `server.close()` + `rmSync(dir)`。测试\"每次调用复核管理员准入与工作区，取消后回收转发进程\"覆盖。可行。\n- **提示词承诺挂载**：`codexRunner.ts:351` 无条件追加 `codexCapabilityPrompt(Boolean(skillBridge))`，启用时声明只挂 `skill_list/skill_use/skill_verify`，关闭时明确\"技能桥接关闭，不能调用网关技能工具\"，并要求\"不要声称已使用这些能力，也不要因工具不可用而自动用 Shell 模拟业务写入\"。compactPrompt 路径同样追加。可行。\n- **重启后线程恢复**：`slot.codexThreadId` 经 `persistTenant`→`DiskSlot.codexThreadId`→`hydrateConn`→`makeSlot` 持久化与恢复；`runCodexChat` 中 `slot.codexThreadId ? resumeThread : startThread`；跨引擎互切时 `needReseed` 清空 `codexThreadId`。测试\"落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程\"覆盖。可行。\n- **传输生命周期**：`.mjs` 转发器 stdin EOF/网关断连/`SIGTERM`/`SIGINT` 均 `stop()` 退出；超限输入（>1MB）`stop(1)`；网关侧 socket 10s 超时、`MAX_FRAME`/`MAX_PENDING` 限制、`closed` 标志防新连接。`close()` 幂等。可行。\n- **分页完整性/版本与统计**：`useSkill` 游标格式 `<sha256>:<offset>`，校验 `match[1] !== version` 拒绝旧游标；`offset===0 && recordView!==false` 才记查阅，续页不记；桥接 `viewed` 集合按 `id:version` 去重，版本变化后允许重新记一次。测试\"长 SOP 完整分页、版本变化与停用阻断续页\"覆盖。可行。\n- **双端展示**：iOS `ToolRunSummaryView.chineseVerb` 与 `ThreadAssistantRows.AssistantToolText.friendly` 覆盖 `skill_use/skill_propose/skill_list/skill_verify/skill_proposal_decide/skill_proposal_list`；Web `ToolCard.tsx` 同口径。`stripSkillSandboxTags` 双端一致剥离 `<untrusted_skill_reference>` 包裹。可行。\n- **凭据隔离**：token 仅经 `env`（`JIEBO_MCP_TOKEN`）与 `env_vars` 转发，`config` 只列变量名不含值；测试断言 `JSON.stringify(bridge.config)` 与 `child.spawnargs` 均不含 token；smoke 校验 `~/.codex/config.toml` 与 `auth.json` 不含本轮 token。可行。\n- **CODEX_SKILL_BRIDGE 默认 0**：`runCodexChat:349` 仅当 `gatewayEnv.codexSkillBridge()` 为真才启动桥接，否则 `config` 为 `{ mcp_servers: { jiebo: { enabled: false } } }`，capability prompt 声明关闭。可行。\n- **不挂 skill_mark_used 与业务写**：`CODEX_SKILL_TOOLS` 仅含三项；`tools/call` 校验 `def` 存在性，`skill_propose` 等返回 -32602。可行。\n- **不恢复 execution 层**：桥接仅复用 `listSkillSummaries/useSkill/verifySkill` 三个只读处理器，无 `markSkillUsed/proposeSkillPackage/decideSkillProposal` 调用。可行。\n- **Codex danger-full-access 不属本桥接安全边界**：`codexRunner.ts:264` 显式 `sandboxMode = \"danger-full-access\"`，`codexCapabilityPrompt` 声明\"桥接鉴权不限制 Codex 自身的 Shell、文件或网络权限\"。符合范围声明。可行。\n\n## 测试覆盖增强建议（非阻断）\n\n1. **桥接并发 socket 上限**：`sockets.size >= 4` 时新连接 `socket.destroy()`，但无测试覆盖\"第 5 条连接被拒\"。建议补一条断言。\n2. **`skill_use` limit 边界**：测试覆盖 `limit:100`，未覆盖 `limit:2400`（上限）与 `limit:2401`（应 -32602）。建议补边界用例。\n3. **`skill_list` scope 过滤**：测试仅 `query:\"canvas\"`，未覆盖 `scope:\"platform\"/\"workspace\"/\"repo\"` 过滤行为。建议补。\n4. **桥接 close 后再调用**：`close()` 幂等（`if (closed) return`），但无测试覆盖\"close 后再 close 不抛错\"。建议补。\n\n以上均为非阻断增强，不影响本轮合并。",
+  "retryAt": "2026-11-15T16:14:22.476Z",
+  "retryScope": "超时两路改用内联最终核心源码，各重试一次",
+  "retryPanel": [
+    {
+      "name": "review-2",
+      "modelId": "gemini-4-carbon"
+    },
+    {
+      "name": "review-3",
+      "modelId": "grok-4.7"
+    }
+  ],
+  "retryResults": [
+    {
+      "model": "gemini-4-carbon",
+      "status": "completed",
+      "text": "结论：**无阻断问题（CRITICAL: 0，MAJOR: 0，MINOR: 4）**，阶段 0/1 核心实现可放行。\n\n### 分项结论\n- **授权**：可行。凭据仅经 `env` 与 `env_vars` 注入 `.mjs`，不落盘、不入 `config`/`argv`；临时目录 `0700`、socket `0600` 且限制路径 `<=100` 字节；逐请求以 `timingSafeEqual` 校验定长 token，并通过 `authorize()` 实时复核 `authed`、`admin`、非沙箱、`epoch`、`aborted` 及 `realpath` 边界；工具白名单与 `Object.hasOwn` 参数白名单闭环，提示词边界声明清晰。\n- **取消**：可行。`close()` 幂等收敛，取消或异常时主动销毁全部连接、关闭监听并删除临时目录；`listen` 后二次校验 `signal.aborted` 消除启动期取消竞态；`.mjs` 在网关断连、信号或流异常时立即退出，无残留子进程。\n- **统计**：可行。本轮 `viewed` 以 `${id}:${version}` 去重，仅首页（`offset === 0`）首次查阅记录一次 `view`，续页与同轮重读不重复计数，SOP 变更后哈希更新允许重记，且未挂载 `skill_mark_used`。\n- **传输与分页**：双向流控（`pause`/`drain`）、1MB 帧上限、`MAX_PENDING` 并发与请求 ID 去重均可行；存在以下 4 项 MINOR 边界问题。\n\n### 可复现问题\n1. **[MINOR] `skill_use` 对空串 `cursor: \"\"` 误报游标无效**\n   - **触发条件**：模型首轮调用 `skill_use` 显式传入 `{\"id\": \"xxx\", \"cursor\": \"\"}`（LLM 调用可选 string 字段常见行为）。桥接层放行空串，`useSkill` 因 `opts.cursor !== undefined` 进入正则匹配并返回 `ok: false`。建议将空串归一化为 `undefined` 或在 Schema 增加 `minLength`。\n2. **[MINOR] `useSkill` 分页按 UTF-16 码元 `slice` 可能截断代理对**\n   - **触发条件**：SOP 含 Emoji 或扩展区汉字（占 2 个 UTF-16 码元），且 `offset + limit` 恰好落在该字符中间，导致相邻两页边界产生孤立代理并退化为 ``。建议切点位于高位代理后回退 1 个码元。\n3. **[MINOR] `.mjs` 在 `stdin` EOF 时立即退出，未等待在途响应**\n   - **触发条件**：调用方发送请求后半关闭 `stdin`（如单次管道调用），`process.stdin` 的 `end` 事件会先于 socket 回包触发 `stop()` 销毁连接并退出，丢失未返回响应。\n4. **[MINOR] `id` 格式正则未同步声明到 `inputSchema`**\n   - **触发条件**：模型向 `skill_use`/`skill_verify` 传入单字符、大写或含 `_` 的 `id` 时，触发 `-32602` 协议参数错误而非业务层“未找到技能”提示。建议在 Schema 补齐 `pattern` 与 `minLength: 2`。"
+    },
+    {
+      "model": "grok-4.7",
+      "status": "error",
+      "text": "评审超时"
+    }
+  ],
+  "retrySummary": "\n网关已经用不同模型分别评审过上面的内容。你只汇总一致结论、分歧和必须先改的点。\n不要再派 reviewer 或 review-* 重复评审，也不要说你又调用了这些模型。\n## review-2（gemini-4-carbon）\n结论：**无阻断问题（CRITICAL: 0，MAJOR: 0，MINOR: 4）**，阶段 0/1 核心实现可放行。\n\n### 分项结论\n- **授权**：可行。凭据仅经 `env` 与 `env_vars` 注入 `.mjs`，不落盘、不入 `config`/`argv`；临时目录 `0700`、socket `0600` 且限制路径 `<=100` 字节；逐请求以 `timingSafeEqual` 校验定长 token，并通过 `authorize()` 实时复核 `authed`、`admin`、非沙箱、`epoch`、`aborted` 及 `realpath` 边界；工具白名单与 `Object.hasOwn` 参数白名单闭环，提示词边界声明清晰。\n- **取消**：可行。`close()` 幂等收敛，取消或异常时主动销毁全部连接、关闭监听并删除临时目录；`listen` 后二次校验 `signal.aborted` 消除启动期取消竞态；`.mjs` 在网关断连、信号或流异常时立即退出，无残留子进程。\n- **统计**：可行。本轮 `viewed` 以 `${id}:${version}` 去重，仅首页（`offset === 0`）首次查阅记录一次 `view`，续页与同轮重读不重复计数，SOP 变更后哈希更新允许重记，且未挂载 `skill_mark_used`。\n- **传输与分页**：双向流控（`pause`/`drain`）、1MB 帧上限、`MAX_PENDING` 并发与请求 ID 去重均可行；存在以下 4 项 MINOR 边界问题。\n\n### 可复现问题\n1. **[MINOR] `skill_use` 对空串 `cursor: \"\"` 误报游标无效**\n   - **触发条件**：模型首轮调用 `skill_use` 显式传入 `{\"id\": \"xxx\", \"cursor\": \"\"}`（LLM 调用可选 string 字段常见行为）。桥接层放行空串，`useSkill` 因 `opts.cursor !== undefined` 进入正则匹配并返回 `ok: false`。建议将空串归一化为 `undefined` 或在 Schema 增加 `minLength`。\n2. **[MINOR] `useSkill` 分页按 UTF-16 码元 `slice` 可能截断代理对**\n   - **触发条件**：SOP 含 Emoji 或扩展区汉字（占 2 个 UTF-16 码元），且 `offset + limit` 恰好落在该字符中间，导致相邻两页边界产生孤立代理并退化为 ``。建议切点位于高位代理后回退 1 个码元。\n3. **[MINOR] `.mjs` 在 `stdin` EOF 时立即退出，未等待在途响应**\n   - **触发条件**：调用方发送请求后半关闭 `stdin`（如单次管道调用），`process.stdin` 的 `end` 事件会先于 socket 回包触发 `stop()` 销毁连接并退出，丢失未返回响应。\n4. **[MINOR] `id` 格式正则未同步声明到 `inputSchema`**\n   - **触发条件**：模型向 `skill_use`/`skill_verify` 传入单字符、大写或含 `_` 的 `id` 时，触发 `-32602` 协议参数错误而非业务层“未找到技能”提示。建议在 Schema 补齐 `pattern` 与 `minLength: 2`。\n\n## review-3（grok-4.7）\n这次没评成：评审超时",
+  "adjudication": [
+    {
+      "source": "GLM M1",
+      "status": "已修复",
+      "detail": "技能处理器以本轮版本集合实现单次读盘统计去重。"
+    },
+    {
+      "source": "GLM M2",
+      "status": "非阻断保留",
+      "detail": "关闭网关连接时代理退出码不单独区分原因；不开放业务写，不依赖该退出码核对业务结果。"
+    },
+    {
+      "source": "GLM M3",
+      "status": "本期不适用",
+      "detail": "skill_mark_used 未挂载。"
+    },
+    {
+      "source": "Gemini M1",
+      "status": "已修复",
+      "detail": "空 cursor 按首页处理。"
+    },
+    {
+      "source": "Gemini M2",
+      "status": "已修复",
+      "detail": "按 Unicode 码点分页并拒绝半个代理对游标。"
+    },
+    {
+      "source": "Gemini M3",
+      "status": "已修复",
+      "detail": "stdin EOF 等待已发送请求的响应与 stdout 刷出，最多5秒；断连与取消仍立即回收。"
+    },
+    {
+      "source": "Gemini M4",
+      "status": "已修复",
+      "detail": "Schema 补齐 id 的 minLength 和 pattern。"
+    }
+  ],
+  "verificationLimit": "模型意见来自所记录的源码轮次；采纳意见后的最终改动以57项回归、类型检查及CLI实验复验，不声称成功模型被再次调用。"
+}

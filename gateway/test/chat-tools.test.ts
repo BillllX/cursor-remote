@@ -55,11 +55,21 @@ describe("summarizeToolArgs / presentToolArgs", () => {
     assert.equal("secret" in out, false);
     assert.equal(out.prompt, `${"p".repeat(500)}\n…`);
   });
-  test("没有白名单字段时原样返回；非对象原样返回", () => {
+  test("没有白名单字段时不广播未知参数；非对象原样返回", () => {
     const args = { other: 1 };
-    assert.equal(summarizeToolArgs(args), args);
+    assert.deepEqual(summarizeToolArgs(args), {});
     assert.equal(summarizeToolArgs("x"), "x");
     assert.equal(summarizeToolArgs(null), null);
+  });
+  test("技能 ID、游标保留且统一限制大文本", () => {
+    const out = summarizeToolArgs({ id: "skill-a", cursor: "c".repeat(5000), limit: 100, secret: "s" }) as Record<
+      string,
+      unknown
+    >;
+    assert.equal(out.id, "skill-a");
+    assert.equal(out.limit, 100);
+    assert.ok(String(out.cursor).length < 2100);
+    assert.equal("secret" in out, false);
   });
   test("提问工具保留 questions 与选项（支持嵌套 args），丢掉无效项", () => {
     const shown = presentToolArgs("AskQuestion", {

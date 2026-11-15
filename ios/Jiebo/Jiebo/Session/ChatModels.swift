@@ -128,6 +128,7 @@ enum ToolKind: String {
     /// 对齐网页 web/lib/chat/toolKinds.ts 的 toolKind
     static func from(name: String, args: JSONValue?) -> ToolKind {
         let n = name.lowercased()
+        if n.range(of: "(^|__|[./:])skill_(use|propose|list|verify|mark_used|proposal_)", options: .regularExpression) != nil { return .other }
         if n.range(of: "todo|createplan", options: .regularExpression) != nil { return .other }
         if n.range(of: "shell|bash|terminal|command", options: .regularExpression) != nil { return .shell }
         if n.range(of: "grep|glob|search|find|ripgrep", options: .regularExpression) != nil { return .search }

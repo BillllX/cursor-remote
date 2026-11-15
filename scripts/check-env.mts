@@ -22,6 +22,8 @@ export type EnvFinding = {
 export const ALLOW_NAMED: Record<string, string[]> = {
   // MCP 子进程只拿这几个系统变量
   "native/mcp.ts": ["PATH", "HOME", "LANG"],
+  // 零依赖 Codex stdio 子进程，只读取本轮桥接专用环境，不加载网关配置模块
+  "chat/codexSkillBridge.mjs": ["JIEBO_MCP_TOKEN", "JIEBO_MCP_SOCKET"],
   // 在 PATH 里找 rg
   "native/tools/fs.ts": ["PATH"],
   // sandboxMasks 遮住 HOME 目录

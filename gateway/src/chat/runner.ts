@@ -1,11 +1,6 @@
 // 对话运行核心：handlePrompt 与排队续跑（drainPending/kickGlobalQueue 与 handlePrompt 互相调用，放在同一文件）
 import { WebSocket } from "ws";
-import {
-  crewAgentToken,
-  crewRoleOf,
-  resolveCrewModel,
-  wantsMultiModelReview,
-} from "../../../shared/crew.ts";
+import { crewAgentToken, crewRoleOf, resolveCrewModel, wantsMultiModelReview } from "../../../shared/crew.ts";
 import { dialectOverlay } from "../../../shared/dialect.ts";
 import { isPlane, parsePolicy, toolFingerprint } from "../../../shared/policy.ts";
 import { normalizeAgentMode, type AgentMode, type PolicyId } from "../../../shared/protocol.ts";
@@ -291,7 +286,7 @@ export async function handlePrompt(
   let assistantBlock = "";
   if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
     try {
-      assistantBlock = userRootPreamble(conn.tenant);
+      assistantBlock = userRootPreamble(conn.tenant, { includeToolInstructions: !codexEarly });
     } catch (err) {
       slotLog(slot).error("assistant preamble", err);
     }
@@ -300,7 +295,7 @@ export async function handlePrompt(
   const skillRunnerRole = "foreground" as const;
   let skillsBlock = "";
   let prewarmedSkills: Array<{ id: string; name: string }> = [];
-  const consumesSkillsPrompt = !externalEarly || Boolean(externalEarly.provider.tools);
+  const consumesSkillsPrompt = !codexEarly && (!externalEarly || Boolean(externalEarly.provider.tools));
   if (conn.tenant && consumesSkillsPrompt) {
     try {
       const rendered = skillsCatalogWithMetaFor(conn.tenant, cwd, {

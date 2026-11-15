@@ -1,0 +1,437 @@
+TAP version 13
+# Subtest: snapshotFromResult
+    # Subtest: 字符串结果当作 stdout
+    ok 1 - 字符串结果当作 stdout
+      ---
+      duration_ms: 1.240643
+      type: 'test'
+      ...
+    # Subtest: 优先取 value / result 里的输出，空串变 undefined
+    ok 2 - 优先取 value / result 里的输出，空串变 undefined
+      ---
+      duration_ms: 0.165605
+      type: 'test'
+      ...
+    # Subtest: 非对象、空串返回空
+    ok 3 - 非对象、空串返回空
+      ---
+      duration_ms: 0.095767
+      type: 'test'
+      ...
+    1..3
+ok 1 - snapshotFromResult
+  ---
+  duration_ms: 2.425288
+  type: 'suite'
+  ...
+# Subtest: parseShellDelta
+    # Subtest: callId 依次回落 call_id / toolCallId / id
+    ok 1 - callId 依次回落 call_id / toolCallId / id
+      ---
+      duration_ms: 0.227473
+      type: 'test'
+      ...
+    # Subtest: 只有 stderr 时判为 stderr 流
+    ok 2 - 只有 stderr 时判为 stderr 流
+      ---
+      duration_ms: 0.110287
+      type: 'test'
+      ...
+    # Subtest: 没有内容返回 null
+    ok 3 - 没有内容返回 null
+      ---
+      duration_ms: 0.086338
+      type: 'test'
+      ...
+    1..3
+ok 2 - parseShellDelta
+  ---
+  duration_ms: 0.639441
+  type: 'suite'
+  ...
+# Subtest: summarizeToolArgs / presentToolArgs
+    # Subtest: 只保留白名单字段，过长 prompt 截到 500 字
+    ok 1 - 只保留白名单字段，过长 prompt 截到 500 字
+      ---
+      duration_ms: 0.382658
+      type: 'test'
+      ...
+    # Subtest: 没有白名单字段时不广播未知参数；非对象原样返回
+    ok 2 - 没有白名单字段时不广播未知参数；非对象原样返回
+      ---
+      duration_ms: 0.135177
+      type: 'test'
+      ...
+    # Subtest: 技能 ID、游标保留且统一限制大文本
+    ok 3 - 技能 ID、游标保留且统一限制大文本
+      ---
+      duration_ms: 0.246663
+      type: 'test'
+      ...
+    # Subtest: 提问工具保留 questions 与选项（支持嵌套 args），丢掉无效项
+    ok 4 - 提问工具保留 questions 与选项（支持嵌套 args），丢掉无效项
+      ---
+      duration_ms: 0.586262
+      type: 'test'
+      ...
+    # Subtest: 提问工具没有有效问题时退回通用摘要
+    ok 5 - 提问工具没有有效问题时退回通用摘要
+      ---
+      duration_ms: 0.181524
+      type: 'test'
+      ...
+    1..5
+ok 3 - summarizeToolArgs / presentToolArgs
+  ---
+  duration_ms: 1.878596
+  type: 'suite'
+  ...
+# Subtest: pathFromTool / isMutatingTool / shellPublishes
+    # Subtest: 路径字段按 path、file、target、file_path 的顺序取第一个非空的
+    ok 1 - 路径字段按 path、file、target、file_path 的顺序取第一个非空的
+      ---
+      duration_ms: 0.171976
+      type: 'test'
+      ...
+    # Subtest: 写入类工具与会改文件的 shell 命令算写入
+    ok 2 - 写入类工具与会改文件的 shell 命令算写入
+      ---
+      duration_ms: 0.936531
+      type: 'test'
+      ...
+    # Subtest: shell 里调用 jiebo-publish（含带路径）才算发布
+    ok 3 - shell 里调用 jiebo-publish（含带路径）才算发布
+      ---
+      duration_ms: 0.31844
+      type: 'test'
+      ...
+    1..3
+ok 4 - pathFromTool / isMutatingTool / shellPublishes
+  ---
+  duration_ms: 1.558024
+  type: 'suite'
+  ...
+# Subtest: toolEscapesWorkspace
+    # Subtest: 路径参数在工作区外算越界，工作区内不算
+    ok 1 - 路径参数在工作区外算越界，工作区内不算
+      ---
+      duration_ms: 0.312819
+      type: 'test'
+      ...
+    # Subtest: shell 的 working_directory 是根本身不算越界，跑到外面算
+    ok 2 - shell 的 working_directory 是根本身不算越界，跑到外面算
+      ---
+      duration_ms: 0.903944
+      type: 'test'
+      ...
+    # Subtest: 重定向到工作区外的绝对路径算越界，/dev/* 不算
+    ok 3 - 重定向到工作区外的绝对路径算越界，/dev/* 不算
+      ---
+      duration_ms: 0.489926
+      type: 'test'
+      ...
+    # Subtest: 写入类命令的目标是工作区外的绝对路径或 ~ 路径算越界
+    ok 4 - 写入类命令的目标是工作区外的绝对路径或 ~ 路径算越界
+      ---
+      duration_ms: 3.438668
+      type: 'test'
+      ...
+    # Subtest: 读取类、工作区内、/dev 和相对路径不算越界
+    ok 5 - 读取类、工作区内、/dev 和相对路径不算越界
+      ---
+      duration_ms: 1.774728
+      type: 'test'
+      ...
+    # Subtest: 写入命令检查放过 /tmp、os.tmpdir() 及其子路径和 /dev 下的设备，按路径前缀而不是字符串前缀
+    ok 6 - 写入命令检查放过 /tmp、os.tmpdir() 及其子路径和 /dev 下的设备，按路径前缀而不是字符串前缀
+      ---
+      duration_ms: 1.074707
+      type: 'test'
+      ...
+    # Subtest: 重定向和 tee 的检查不受这条放行影响：/tmp 仍算越界
+    ok 7 - 重定向和 tee 的检查不受这条放行影响：/tmp 仍算越界
+      ---
+      duration_ms: 0.115506
+      type: 'test'
+      ...
+    1..7
+ok 5 - toolEscapesWorkspace
+  ---
+  duration_ms: 8.40468
+  type: 'suite'
+  ...
+# Subtest: shellWriteTargets 包装命令和会删源的命令
+    # Subtest: 包装命令按各自的选项跳过，带值选项的值不当命令
+    ok 1 - 包装命令按各自的选项跳过，带值选项的值不当命令
+      ---
+      duration_ms: 0.809456
+      type: 'test'
+      ...
+    # Subtest: 认不出的包装选项：后面每个非选项词都当命令开头试一遍
+    ok 2 - 认不出的包装选项：后面每个非选项词都当命令开头试一遍
+      ---
+      duration_ms: 0.174715
+      type: 'test'
+      ...
+    # Subtest: mv 的源和目标都算写入；rsync 只有 --remove-source-files 才算源
+    ok 3 - mv 的源和目标都算写入；rsync 只有 --remove-source-files 才算源
+      ---
+      duration_ms: 0.251703
+      type: 'test'
+      ...
+    # Subtest: toolEscapesWorkspace 拦 mv 把工作区外的文件挪进来
+    ok 4 - toolEscapesWorkspace 拦 mv 把工作区外的文件挪进来
+      ---
+      duration_ms: 0.416488
+      type: 'test'
+      ...
+    1..4
+ok 6 - shellWriteTargets 包装命令和会删源的命令
+  ---
+  duration_ms: 1.792627
+  type: 'suite'
+  ...
+# Subtest: toolEscapesWorkspace 按真实路径判断符号链接
+    # Subtest: 临时目录里链到 /etc 的链接不算临时位置
+    ok 1 - 临时目录里链到 /etc 的链接不算临时位置
+      ---
+      duration_ms: 0.544933
+      type: 'test'
+      ...
+    # Subtest: 工作区里链到外面的链接，绝对路径和相对路径都算越界
+    ok 2 - 工作区里链到外面的链接，绝对路径和相对路径都算越界
+      ---
+      duration_ms: 0.593972
+      type: 'test'
+      ...
+    # Subtest: 工作区根本身经链接访问也按真实路径认
+    ok 3 - 工作区根本身经链接访问也按真实路径认
+      ---
+      duration_ms: 0.34198
+      type: 'test'
+      ...
+    # Subtest: realpath 失败（循环链接、不存在）不抛
+    ok 4 - realpath 失败（循环链接、不存在）不抛
+      ---
+      duration_ms: 0.538434
+      type: 'test'
+      ...
+    1..4
+ok 7 - toolEscapesWorkspace 按真实路径判断符号链接
+  ---
+  duration_ms: 3.156176
+  type: 'suite'
+  ...
+# Subtest: 域 1：Codex 路由、认证检测、models_cache 解析与环境白名单隔离
+    # Subtest: codexRoute 精确识别统一前缀 codex:<model>，拒绝空模型或非法字符
+    ok 1 - codexRoute 精确识别统一前缀 codex:<model>，拒绝空模型或非法字符
+      ---
+      duration_ms: 2.057158
+      type: 'test'
+      ...
+    # Subtest: hasCodexAuth 与 codexModelIds：覆盖无凭证、损坏 auth.json、有效 auth.json、损坏/缺失 models_cache 回退及沙箱租户拦截
+    ok 2 - hasCodexAuth 与 codexModelIds：覆盖无凭证、损坏 auth.json、有效 auth.json、损坏/缺失 models_cache 回退及沙箱租户拦截
+      ---
+      duration_ms: 5.077489
+      type: 'test'
+      ...
+    # Subtest: buildCodexChildEnv 剥离网关敏感密钥并显式绑定 CODEX_HOME
+    ok 3 - buildCodexChildEnv 剥离网关敏感密钥并显式绑定 CODEX_HOME
+      ---
+      duration_ms: 0.440167
+      type: 'test'
+      ...
+    1..3
+ok 8 - 域 1：Codex 路由、认证检测、models_cache 解析与环境白名单隔离
+  ---
+  duration_ms: 8.996192
+  type: 'suite'
+  ...
+# Subtest: 域 2：流式事件增量切片、工具映射、4 参数 Token 计量与防重复 captureText
+    # Subtest: item.updated 累加全文切片为增量 delta，工具完成时计 1 次 noteToolCall，Loop captureText 不重复
+    ok 1 - item.updated 累加全文切片为增量 delta，工具完成时计 1 次 noteToolCall，Loop captureText 不重复
+      ---
+      duration_ms: 95.38399
+      type: 'test'
+      ...
+    1..1
+ok 9 - 域 2：流式事件增量切片、工具映射、4 参数 Token 计量与防重复 captureText
+  ---
+  duration_ms: 95.561466
+  type: 'suite'
+  ...
+# Subtest: 域 3：跨引擎互切 Reseed（含 safeHistory 兜底）、同引擎续轮与 4 处重置清理
+    # Subtest: attachReseedContext 在磁盘 turns 未落盘时自动回退使用客户端上行 history
+    ok 1 - attachReseedContext 在磁盘 turns 未落盘时自动回退使用客户端上行 history
+      ---
+      duration_ms: 0.483265
+      type: 'test'
+      ...
+    # Subtest: 从 Cursor 切到 Codex 时清空旧 codexThreadId 并注入 Reseed；同引擎第 2 轮调用 resumeThread 并用 compactPrompt
+    ok 2 - 从 Cursor 切到 Codex 时清空旧 codexThreadId 并注入 Reseed；同引擎第 2 轮调用 resumeThread 并用 compactPrompt
+      ---
+      duration_ms: 134.00873
+      type: 'test'
+      ...
+    1..2
+ok 10 - 域 3：跨引擎互切 Reseed（含 safeHistory 兜底）、同引擎续轮与 4 处重置清理
+  ---
+  duration_ms: 134.889684
+  type: 'suite'
+  ...
+# Subtest: 域 4–6：关闭内置沙箱与 Cursor CLI 对齐、confirmWrites 事前审批卡、图片临时文件清理与异常/取消不死锁
+    # Subtest: 非沙箱管理员租户统一使用 danger-full-access 关闭内置沙箱并开启网络访问；受限沙箱租户直接拦截
+    ok 1 - 非沙箱管理员租户统一使用 danger-full-access 关闭内置沙箱并开启网络访问；受限沙箱租户直接拦截
+      ---
+      duration_ms: 58.421841
+      type: 'test'
+      ...
+# [error] [t=default c=chat-image-error-cleanup] codexRunner 401 Unauthorized: token_expired（Codex 登录凭证已失效或过期，请在服务器执行 codex login 重新完成认证）
+    # Subtest: Agent 模式开启 confirmWrites 时先发含 callId/name 的标准 approval 卡，拒绝时不启动子进程
+    ok 2 - Agent 模式开启 confirmWrites 时先发含 callId/name 的标准 approval 卡，拒绝时不启动子进程
+      ---
+      duration_ms: 63.333634
+      type: 'test'
+      ...
+    # Subtest: 图片附件落盘为 local_image 传给 SDK，流内抛错（含 401 提示）后 finally 自动清理临时图片且不死锁
+    ok 3 - 图片附件落盘为 local_image 传给 SDK，流内抛错（含 401 提示）后 finally 自动清理临时图片且不死锁
+      ---
+      duration_ms: 70.525711
+      type: 'test'
+      ...
+    # Subtest: handlePrompt 完整集成：当 fresh=true 时清空 codexThreadId
+    ok 4 - handlePrompt 完整集成：当 fresh=true 时清空 codexThreadId
+      ---
+      duration_ms: 8.000882
+      type: 'test'
+      ...
+    1..4
+ok 11 - 域 4–6：关闭内置沙箱与 Cursor CLI 对齐、confirmWrites 事前审批卡、图片临时文件清理与异常/取消不死锁
+  ---
+  duration_ms: 200.719526
+  type: 'suite'
+  ...
+# Subtest: 技能桥接启用时 runner 注入能力和私有环境，错误结果正确展示并清理 socket
+ok 12 - 技能桥接启用时 runner 注入能力和私有环境，错误结果正确展示并清理 socket
+  ---
+  duration_ms: 65.006034
+  type: 'test'
+  ...
+# Subtest: 落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程
+ok 13 - 落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程
+  ---
+  duration_ms: 3.494015
+  type: 'test'
+  ...
+# Subtest: Codex 助理保留身份和上下文，不承诺未挂载业务工具
+ok 14 - Codex 助理保留身份和上下文，不承诺未挂载业务工具
+  ---
+  duration_ms: 1.156736
+  type: 'test'
+  ...
+# Subtest: 真实 .mjs 握手、工具白名单、参数校验、统计去重和凭据隔离
+ok 15 - 真实 .mjs 握手、工具白名单、参数校验、统计去重和凭据隔离
+  ---
+  duration_ms: 77.525191
+  type: 'test'
+  ...
+# Subtest: 长 SOP 完整分页、版本变化与停用阻断续页
+ok 16 - 长 SOP 完整分页、版本变化与停用阻断续页
+  ---
+  duration_ms: 53.417719
+  type: 'test'
+  ...
+# Subtest: 每次调用复核管理员准入与工作区，取消后回收转发进程
+ok 17 - 每次调用复核管理员准入与工作区，取消后回收转发进程
+  ---
+  duration_ms: 34.350008
+  type: 'test'
+  ...
+# Subtest: 错误令牌不能连接，分片 JSON 可解析，EOF 退出
+ok 18 - 错误令牌不能连接，分片 JSON 可解析，EOF 退出
+  ---
+  duration_ms: 34.400407
+  type: 'test'
+  ...
+# Subtest: 超限输入使转发器退出，网关清理 socket
+ok 19 - 超限输入使转发器退出，网关清理 socket
+  ---
+  duration_ms: 45.6297
+  type: 'test'
+  ...
+# Subtest: 槽位持久化后重建保留 Agent 默认值、线程与策略
+ok 20 - 槽位持久化后重建保留 Agent 默认值、线程与策略
+  ---
+  duration_ms: 36.98559
+  type: 'test'
+  ...
+# Subtest: Unicode 单字符分页完整，空游标作为首页，伪造半个字符游标拒绝
+ok 21 - Unicode 单字符分页完整，空游标作为首页，伪造半个字符游标拒绝
+  ---
+  duration_ms: 43.877214
+  type: 'test'
+  ...
+# Subtest: stdin EOF 等待已经发出的响应后退出
+ok 22 - stdin EOF 等待已经发出的响应后退出
+  ---
+  duration_ms: 40.562022
+  type: 'test'
+  ...
+# Subtest: Skill 工厂 Phase 1 & Phase 2：四分类注册表、渐进披露预算、五道安全门禁与 SHA-256 审批锁
+    # Subtest: 1. 四分类注册表与多 Runner 可见性：channel_guard 可观测但绝不注入 Prompt、也不可由模型直接调用执行
+    ok 1 - 1. 四分类注册表与多 Runner 可见性：channel_guard 可观测但绝不注入 Prompt、也不可由模型直接调用执行
+      ---
+      duration_ms: 10.451279
+      type: 'test'
+      ...
+    # Subtest: 2. skill_use 不可信沙箱标签、≤2,400 字截断与计数三分离（viewedCount vs adoptedCount）
+    ok 2 - 2. skill_use 不可信沙箱标签、≤2,400 字截断与计数三分离（viewedCount vs adoptedCount）
+      ---
+      duration_ms: 9.342761
+      type: 'test'
+      ...
+    # Subtest: 3. Agent 保留 skill_propose，只读后台委派硬性剥离
+    ok 3 - 3. Agent 保留 skill_propose，只读后台委派硬性剥离
+      ---
+      duration_ms: 4.191334
+      type: 'test'
+      ...
+    # Subtest: 4. Skill 工厂五道安全门禁：拦截 USER 根越界、密钥、个人隐私、未授权工具、危险命令与符号链接
+    ok 4 - 4. Skill 工厂五道安全门禁：拦截 USER 根越界、密钥、个人隐私、未授权工具、危险命令与符号链接
+      ---
+      duration_ms: 4.00647
+      type: 'test'
+      ...
+    # Subtest: 5. 提案审批闭环、SHA-256 篡改阻断、O_NOFOLLOW 软链防御与记忆自动晋升（state=done）
+    ok 5 - 5. 提案审批闭环、SHA-256 篡改阻断、O_NOFOLLOW 软链防御与记忆自动晋升（state=done）
+      ---
+      duration_ms: 27.457673
+      type: 'test'
+      ...
+    # Subtest: 6. L2 高置信度自动预热（Auto-Prewarm）仅递增 prewarmedCount，且前台助理支持 skill_proposal_list / skill_proposal_decide
+    ok 6 - 6. L2 高置信度自动预热（Auto-Prewarm）仅递增 prewarmedCount，且前台助理支持 skill_proposal_list / skill_proposal_decide
+      ---
+      duration_ms: 7.777369
+      type: 'test'
+      ...
+    # Subtest: 7. v2.2 控权开关（skill_update_meta 全链路拦截 disabled）與已上架声明式技能在线编辑重签（skill_edit_approved CAS + 五道门禁）
+    ok 7 - 7. v2.2 控权开关（skill_update_meta 全链路拦截 disabled）與已上架声明式技能在线编辑重签（skill_edit_approved CAS + 五道门禁）
+      ---
+      duration_ms: 11.633654
+      type: 'test'
+      ...
+    1..7
+ok 23 - Skill 工厂 Phase 1 & Phase 2：四分类注册表、渐进披露预算、五道安全门禁与 SHA-256 审批锁
+  ---
+  duration_ms: 76.162993
+  type: 'suite'
+  ...
+1..23
+# tests 57
+# suites 12
+# pass 57
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10034.057864

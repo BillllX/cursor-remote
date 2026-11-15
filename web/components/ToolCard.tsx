@@ -335,7 +335,7 @@ export default function ToolCard({
   const label =
     roleLabel ||
     (baseToolName === "skill_use"
-      ? "已运用技能"
+      ? "查阅技能"
       : baseToolName === "skill_propose"
         ? "提议新技能"
         : baseToolName === "skill_list"
@@ -420,7 +420,7 @@ export default function ToolCard({
           ) : tool.status === "error" ? (
             "Error"
           ) : baseToolName === "skill_use" ? (
-            "已加载"
+            "已查阅"
           ) : baseToolName === "skill_propose" ? (
             skillDecision === "approved" ? "已批准上架" : skillDecision === "rejected" ? "已拒绝" : "待启用"
           ) : (

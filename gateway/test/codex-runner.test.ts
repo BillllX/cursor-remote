@@ -17,6 +17,7 @@ import {
   readCodexModelSlugs,
   runCodexChat,
 } from "../src/chat/codexRunner.ts";
+import { userRootPreamble } from "../src/assistant/service.ts";
 import { attachReseedContext } from "../src/chat/history.ts";
 import { handlePrompt } from "../src/chat/runner.ts";
 import { resolveApprovalWait } from "../src/runtime/approvals.ts";
@@ -471,7 +472,7 @@ describe("域 3：跨引擎互切 Reseed（含 safeHistory 兜底）、同引擎
     assert.equal(calls.length, 2);
     assert.equal(calls[1].method, "resume");
     assert.equal(calls[1].id, "fresh-codex-thread-202");
-    assert.equal(calls[1].input, "COMPACT_PROMPT_2");
+    assert.match(String(calls[1].input), /^COMPACT_PROMPT_2\n\n<gateway_capabilities>/);
 
     // 验证持久化与 onNewSession / onSetPolicy 清空 codexThreadId
     persistTenant(tenant, conn.slots);
@@ -717,4 +718,115 @@ describe("域 4–6：关闭内置沙箱与 Cursor CLI 对齐、confirmWrites �
     assert.equal(slot.codexThreadId, null, "fresh=true 必须清空 codexThreadId");
     assert.equal(slot.finished, true);
   });
+});
+
+test("技能桥接启用时 runner 注入能力和私有环境，错误结果正确展示并清理 socket", async () => {
+  const { ws, messages, conn, slot, tenant } = makeConnAndSlot("bridge-runner");
+  const epoch = ++slot.epoch;
+  slot.finished = false;
+  let captured: CodexOptions | undefined;
+  let prompt = "";
+  const fake: CodexClientLike = {
+    startThread() {
+      return {
+        async runStreamed(input) {
+          prompt = String(input);
+          assert.ok(existsSync(captured!.env!.JIEBO_MCP_SOCKET));
+          async function* events(): AsyncGenerator<ThreadEvent> {
+            yield { type: "thread.started", thread_id: "bridge-runner-thread" };
+            yield {
+              type: "item.completed",
+              item: {
+                id: "skill-error",
+                type: "mcp_tool_call",
+                server: "jiebo",
+                tool: "skill_use",
+                arguments: { id: "missing-skill" },
+                status: "completed",
+                result: {
+                  content: [{ type: "text", text: '{"ok":false,"error":"找不到技能"}' }],
+                  structured_content: null,
+                },
+              },
+            };
+          }
+          return { events: events() };
+        },
+      };
+    },
+    resumeThread() {
+      throw new Error("不应续接");
+    },
+  };
+  await withEnv({ CODEX_SKILL_BRIDGE: "1" }, async () => {
+    await runCodexChat(
+      ws,
+      conn,
+      slot,
+      { model: "gpt-6.1-sol", full: "codex:gpt-6.1-sol" },
+      {
+        prompt: "测试技能",
+        userText: "测试技能",
+        images: [],
+        history: [],
+        epoch,
+        cwd: tenant.workspaceRoot,
+        mode: "agent",
+        confirmWrites: false,
+        autoApprove: false,
+      },
+      {
+        createCodex(options) {
+          captured = options;
+          return fake;
+        },
+      },
+    );
+  });
+  assert.match(prompt, /skill_list、skill_use、skill_verify/);
+  assert.ok(!JSON.stringify(captured!.config).includes(captured!.env!.JIEBO_MCP_TOKEN));
+  assert.equal(existsSync(captured!.env!.JIEBO_MCP_SOCKET), false);
+  assert.equal(messages.find((m) => m.type === "tool-completed" && m.callId === "skill-error")?.status, "error");
+});
+
+test("落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程", async () => {
+  const { ws, conn, slot, tenant } = makeConnAndSlot("restart-first-prompt");
+  slot.codexThreadId = "restart-thread";
+  slot.lastEngine = "codex";
+  slot.mode = "agent";
+  slot.policy = "plane";
+  slot.dialect = false;
+  persistTenant(tenant, conn.slots);
+  conn.slots.delete(slot.chatId);
+  const hydrated = slotOf(conn, slot.chatId);
+  const emptyHome = join(dir, "restart-empty-home");
+  mkdirSync(emptyHome, { recursive: true });
+  // 没有认证时不执行真实模型，只检验真实首轮入口的策略比较与分流。
+  await withEnv({ CODEX_HOME: emptyHome, CODEX_API_KEY: "", CURSOR_API_KEY: "" }, async () => {
+    await handlePrompt(
+      ws,
+      conn,
+      hydrated,
+      "恢复后第一句",
+      "codex:gpt-6.1-sol",
+      "agent",
+      undefined,
+      undefined,
+      false,
+      false,
+      false,
+      "plane",
+      false,
+    );
+  });
+  assert.equal(hydrated.codexThreadId, "restart-thread");
+  assert.equal(hydrated.reseed, false);
+});
+
+test("Codex 助理保留身份和上下文，不承诺未挂载业务工具", () => {
+  const { tenant } = makeConnAndSlot("codex-context-only");
+  const text = userRootPreamble(tenant, { includeToolInstructions: false });
+  assert.match(text, /你是用户的个人助理/);
+  assert.doesNotMatch(text, /你有一组助理工具|todo_add|delegate|work_preference_add/);
+  assert.match(userRootPreamble(tenant), /你有一组助理工具/);
 });

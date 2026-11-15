@@ -126,6 +126,8 @@ export function summarizeToolArgs(args: unknown): unknown {
   if (args == null || typeof args !== "object") return args;
   const record = args as Record<string, unknown>;
   const keep = [
+    "id",
+    "cursor",
     "path",
     "file",
     "target",
@@ -185,7 +187,12 @@ export function summarizeToolArgs(args: unknown): unknown {
   if (typeof out.prompt === "string" && out.prompt.length > 500) {
     out.prompt = `${out.prompt.slice(0, 500)}\n…`;
   }
-  return Object.keys(out).length ? out : args;
+  // 未命中白名单也不能回传任意大参数或未知秘密；文本统一限长。
+  for (const key of Object.keys(out)) {
+    if (typeof out[key] === "string" && out[key].length > 2000) out[key] = `${out[key].slice(0, 2000)}\n…`;
+    else if (out[key] !== null && typeof out[key] === "object") out[key] = JSON.stringify(out[key]).slice(0, 2000);
+  }
+  return out;
 }
 
 export function pathFromTool(args: unknown): string {

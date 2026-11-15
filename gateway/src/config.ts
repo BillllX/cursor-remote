@@ -29,6 +29,13 @@ export type EnvSpec = {
 
 export const ENV_SPECS = [
   {
+    name: "CODEX_SKILL_BRIDGE",
+    type: "boolean",
+    default: "0",
+    group: "Codex CLI",
+    doc: "启用 Codex 技能只读 MCP 桥接，默认关闭；不开放业务写工具",
+  },
+  {
     name: "GATEWAY_PORT",
     type: "number",
     default: "8787",
@@ -306,6 +313,7 @@ export const gatewayEnv = {
   cursorApiEndpoint: () => (raw("CURSOR_API_ENDPOINT") || "https://api2.cursor.sh").replace(/\/$/, ""),
 
   /** Codex CLI 配置 */
+  codexSkillBridge: () => raw("CODEX_SKILL_BRIDGE") === "1",
   codexApiKey: () => raw("CODEX_API_KEY")?.trim() || "",
   codexBaseUrl: () => (raw("CODEX_BASE_URL") || "").trim().replace(/\/$/, ""),
   codexHome: () => (raw("CODEX_HOME") || "").trim(),

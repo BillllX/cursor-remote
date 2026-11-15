@@ -94,6 +94,13 @@ ssh root@<vps> 'cd /opt/cursor-remote-gateway && git pull && systemctl restart c
    - 多模型评审（Review Panel）每次按语义代数自动挑选各厂商当前健康且最新的旗舰模型，评审途中遇封禁或限流当场换替补模型重跑；
    - 定时巡检、记忆整理、知识库归档与问答等后台任务支持在 `/etc/cursor-remote/gateway.env` 设置 `CURSOR_REMOTE_BACKGROUND_MODEL=grok-4.7`（或通过租户 `assistant/memory/settings.json` 的 `backgroundModel` 动态设置），首选模型不可用时自动按健康表顺延兜底。
 
+4. **Codex 技能 MCP 桥接（阶段 0/1）**：
+   - `CODEX_SKILL_BRIDGE=1` 才启用，默认关闭；仅允许非沙箱管理员租户在当前会话工作区调用 `skill_list`、`skill_use`、`skill_verify`。未开放业务写和采用计数工具。
+   - `skill_use` 每页最多 2,400 字符，返回 `nextCursor` 时继续调用；正文更新后旧游标失效。同轮同技能同版本首页重试及续页不重复计查阅。
+   - 使用固定 `.mjs` stdio 入口和每轮私有 Unix socket。临时令牌仅走环境及 `env_vars`，不写 SDK config、命令行或共享 `CODEX_HOME`；结束和取消时回收。
+   - 本轮能力每次补发；桥接关闭时不注入网关技能目录或助理业务工具承诺，助理身份与已有记忆照常保留。桥接鉴权不约束 Codex 自身的 Shell、文件或网络权限。
+   - 在仓库根目录运行 `npm run smoke:codex-skills -w gateway` 可验证真实锁版 CLI 握手、调用、同进程续轮和独立进程重启恢复。需已有 Codex 登录；探针只读取临时工作区技能，不操作业务台账。
+
 ## 本机开发
 
 ```bash

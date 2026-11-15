@@ -26,7 +26,7 @@ import {
  *    - SKILL.md 不能自授或编译新工具，requiredTools 必须属于服务端 ALLOWED_SKILL_TOOLS 白名单。
  *    - 提案经静态安全门禁（密钥、个人隐私、路径围栏、危险命令、工具白名单）后写入 skill-proposals.json 与 .jiebo/skills-staging/。
  *    - 批准上架时将完整内容 SHA-256 写入 skill-lock.json；读取时用 O_NOFOLLOW 校验哈希，篡改即标为 tampered 并拒绝加载。
- *    - skill_use 返回正文硬截断 ≤ 2,400 字符，并包裹 <untrusted_skill_reference trust="reference_only"> 隔离标签。
+ *    - skill_use 每页正文 ≤ 2,400 字符，使用版本绑定游标续读，并包裹 <untrusted_skill_reference trust="reference_only"> 隔离标签。
  * 3. 计数三分离：
  *    - prewarmedCount（目录/预热匹配）、viewedCount（skill_use 查阅）、adoptedCount（显式调用 skill_mark_used 采用）。
  */
@@ -364,7 +364,7 @@ const BUILTIN_SKILLS: readonly BuiltinSkillDef[] = [
       "1. **组件导出白名单**：仅从 `cursor/canvas` 导入 `Stack, Row, Grid, Divider, Spacer, Table, Text, H1, H2, H3, Code, Link, Card, CardHeader, CardBody, Button, Pill, Stat, Callout, TextInput, TextArea, Checkbox, Toggle, Select, IconButton, Swatch, UsageBar, CollapsibleSection, TodoList, TodoListCard, DiffStats, DiffView, computeDAGLayout, BarChart, LineChart, PieChart, useHostTheme, useCanvasState, useCanvasAction, useState, useEffect, useMemo, useRef, mergeStyle`。",
       "2. **高频崩溃禁区与移动端窄屏适配**：",
       "   - `<Table>` 表头必须写 `headers={[...]}`（严禁写 `columns`），列数控制在 4~5 列以内；",
-      "   - `<Grid>` 写 `columns={number | string}`（不要写 `cols`），多列响应式优先用 `columns=\"repeat(auto-fit, minmax(280px, 1fr))\"`（避免写死 `columns={2}` 在手机窄屏挤成两窄列）；`gap` 传数字（如 `gap={12}`）；",
+      '   - `<Grid>` 写 `columns={number | string}`（不要写 `cols`），多列响应式优先用 `columns="repeat(auto-fit, minmax(280px, 1fr))"`（避免写死 `columns={2}` 在手机窄屏挤成两窄列）；`gap` 传数字（如 `gap={12}`）；',
       "   - `<Row>` 默认不换行（`flexWrap: nowrap`），放多个元素须显式传 `wrap`；",
       "   - `<CardHeader>` 为 28px 单行栏，用 `children` 传标题、`trailing` 传右侧徽标，严禁传 `title`/`subtitle` 或嵌套 `<H1>`；",
       "   - `<UsageBar>` 分段数组属性名必须写 `segments={[{ id, value, color }]}`（严禁写 `items`）；`<Stat>` 仅传 `value, label, tone, style`；`<BarChart>`/`<LineChart>` 横轴 `categories` 不超过 7 个短标签。",
@@ -969,6 +969,8 @@ export type UseSkillResult =
       requiredTools: string[];
       truncated: boolean;
       content: string;
+      version: string;
+      nextCursor?: string;
       stats: SkillUsageStats;
     }
   | { ok: false; error: string; health?: SkillHealthStatus };
@@ -977,7 +979,13 @@ export function useSkill(
   tenant: WorkspaceRoot,
   cwd: string,
   id: string,
-  opts: { runnerRole?: SkillRunnerRole; workspaceNames?: string[] } = {},
+  opts: {
+    runnerRole?: SkillRunnerRole;
+    workspaceNames?: string[];
+    cursor?: string;
+    limit?: number;
+    viewedVersions?: Set<string>;
+  } = {},
 ): UseSkillResult {
   const targetId = id.trim();
   if (!targetId) return { ok: false, error: "请提供要调用的技能 ID。" };
@@ -1020,11 +1028,45 @@ export function useSkill(
     };
   }
 
-  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
-  const stats = recordStatEvent(ref, found.id, "view");
+  if (found.health !== "healthy") {
+    return { ok: false, error: found.healthReason || "技能健康检查未通过，拒绝读取。", health: found.health };
+  }
   const rawBody = found.body.trim();
-  const truncated = rawBody.length > MAX_SKILL_USE_CHARS;
-  const clippedBody = truncated ? `${rawBody.slice(0, MAX_SKILL_USE_CHARS)}\n…（已按 2,400 字符上限截断）` : rawBody;
+  const version = createHash("sha256").update(rawBody).digest("hex");
+  let offset = 0;
+  if (opts.cursor) {
+    const match = /^([a-f0-9]{64}):([1-9][0-9]{0,6})$/.exec(opts.cursor);
+    if (!match || match[1] !== version || Number(match[2]) >= rawBody.length) {
+      return { ok: false, error: "分页游标无效或 SOP 已更新，请从首页重新读取。" };
+    }
+    offset = Number(match[2]);
+    const current = rawBody.charCodeAt(offset);
+    const previous = rawBody.charCodeAt(offset - 1);
+    if (current >= 0xdc00 && current <= 0xdfff && previous >= 0xd800 && previous <= 0xdbff) {
+      return { ok: false, error: "分页游标不在完整字符边界，请从首页重新读取。" };
+    }
+  }
+  if (
+    opts.limit !== undefined &&
+    (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > MAX_SKILL_USE_CHARS)
+  ) {
+    return { ok: false, error: "limit 必须为 1 至 2400 的整数。" };
+  }
+  // 按 Unicode 码点计页长，保证 Emoji 和扩展汉字不会被拆成孤立代理。
+  let end = offset;
+  const pageSize = opts.limit ?? MAX_SKILL_USE_CHARS;
+  for (let count = 0; end < rawBody.length && count < pageSize; count++) {
+    end += rawBody.codePointAt(end)! > 0xffff ? 2 : 1;
+  }
+  const truncated = end < rawBody.length;
+  const nextCursor = truncated ? `${version}:${end}` : undefined;
+  const clippedBody = rawBody.slice(offset, end);
+  const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
+  // 续页和同轮重试不重复记查阅；正文版本变化后允许重新记一次。
+  const viewKey = `${found.id}:${version}`;
+  const firstView = offset === 0 && !opts.viewedVersions?.has(viewKey);
+  const stats = firstView ? recordStatEvent(ref, found.id, "view") : found.stats;
+  if (offset === 0) opts.viewedVersions?.add(viewKey);
 
   const sandboxedContent = [
     `<untrusted_skill_reference id="${found.id}" kind="${found.kind}" trust="reference_only">`,
@@ -1043,6 +1085,8 @@ export function useSkill(
     health: found.health,
     requiredTools: found.requiredTools,
     truncated,
+    version,
+    nextCursor,
     content: sandboxedContent,
     stats,
   };

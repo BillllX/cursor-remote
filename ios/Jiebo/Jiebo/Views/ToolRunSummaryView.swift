@@ -97,7 +97,7 @@ extension ToolCardView {
         let crew = Crew.label(name: tool.name, args: tool.args, agent: tool.agent)
         if !crew.isEmpty { return crew }
         switch AssistantToolText.baseName(tool.name) {
-        case "skill_use": return "已运用技能"
+        case "skill_use": return "查阅技能"
         case "skill_propose": return "提议新技能"
         case "skill_list": return "查询技能库"
         case "skill_verify": return "核验技能"

@@ -20,6 +20,7 @@ import {
   persistBodies,
   type BodyStore,
 } from "./chatBodies.ts";
+import type { PolicyId } from "../../shared/policy.ts";
 import { gatewayEnv } from "./config.ts";
 import { ATOMIC_TMP_RE, atomicWriteFileSync, sweepStaleTmp } from "./fsAtomic.ts";
 import { log } from "./log.ts";
@@ -32,6 +33,8 @@ export type DiskSlot = {
   agentId: string | null;
   /** Codex CLI 线程 ID（与 Cursor agentId 独立持久化） */
   codexThreadId?: string | null;
+  policy?: PolicyId;
+  dialect?: boolean;
   /** 最近一轮执行的引擎标识 */
   lastEngine?: "cursor" | "codex" | "native";
   cwd: string;

@@ -29,6 +29,7 @@ import { noteModelTokens, noteOutput, noteToolCall } from "../usage.ts";
 import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
+import { codexCapabilityPrompt, startCodexSkillBridge, type SkillBridge } from "./codexSkillBridge.ts";
 import { finishRun } from "./finish.ts";
 import { attachReseedContext } from "./history.ts";
 import { emitToolOutput, presentToolArgs, rememberEdit, rememberShellCall, summarizeToolArgs } from "./tools.ts";
@@ -255,6 +256,7 @@ export async function runCodexChat(
   const abort = new AbortController();
   slot.externalAbort = abort;
   const tempImagePaths: string[] = [];
+  let skillBridge: SkillBridge | undefined;
 
   try {
     // 与 Cursor CLI（非沙箱管理员租户 sandboxOptions.enabled = false）保持完全一致：
@@ -344,6 +346,12 @@ export async function runCodexChat(
       effectivePrompt = input.compactPrompt;
     }
 
+    if (gatewayEnv.codexSkillBridge()) {
+      skillBridge = await startCodexSkillBridge(conn, slot, cwd, epoch, abort.signal);
+    }
+    // 完整提示和 compact 续轮都补发当前实际能力，覆盖历史中已撤销的工具承诺。
+    effectivePrompt = `${effectivePrompt}\n\n${codexCapabilityPrompt(Boolean(skillBridge))}`;
+
     // 图片落盘到租户受控状态目录下的临时文件，供 local_image 传参，finally 中清理
     let sdkInput: Input = effectivePrompt;
     if (input.images.length > 0) {
@@ -366,7 +374,8 @@ export async function runCodexChat(
     const codexOptions: CodexOptions = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      env: buildCodexChildEnv(),
+      env: { ...buildCodexChildEnv(), ...skillBridge?.env },
+      config: skillBridge?.config ?? { mcp_servers: { jiebo: { enabled: false } } },
     };
     const codex = deps.createCodex ? deps.createCodex(codexOptions) : new Codex(codexOptions);
     const threadOpts: ThreadOptions = {
@@ -501,7 +510,16 @@ export async function runCodexChat(
           const name = `mcp:${item.server}:${item.tool}`;
           ensureToolStarted(item.id, name, item.arguments);
           if (phase === "completed") {
-            const failed = item.status === "failed" || Boolean(item.error);
+            const resultText = summarizeMcpResult(item);
+            let bridgeFailed = false;
+            if (item.server === "jiebo") {
+              try {
+                bridgeFailed = JSON.parse(resultText)?.ok === false;
+              } catch {
+                /* 非 JSON 结果沿用 SDK 状态。 */
+              }
+            }
+            const failed = item.status === "failed" || Boolean(item.error) || bridgeFailed;
             completeTool(item.id, name, failed ? "error" : "completed", summarizeMcpResult(item));
           }
           break;
@@ -590,6 +608,7 @@ export async function runCodexChat(
     send(ws, { type: "error", chatId: slot.chatId, message: formatted });
     finishRun(ws, slot, "error", Date.now() - t0, epoch);
   } finally {
+    await skillBridge?.close();
     if (slot.externalAbort === abort) slot.externalAbort = null;
     if (slot.approvalCallId && !slot.awaitingApproval) slot.approvalCallId = null;
     for (const imgPath of tempImagePaths) {

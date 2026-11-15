@@ -1,0 +1,95 @@
+{
+  "baseline": "88410d59f43a86272beebce726e028dc7f6e00f7",
+  "scope": "阶段0/1，三项技能工具；业务写未开放；默认关闭；未提交、推送、部署",
+  "gatewayTests": {
+    "command": "node --import tsx --test gateway/test/codex-skill-bridge.test.ts gateway/test/skills-factory.test.ts gateway/test/codex-runner.test.ts gateway/test/chat-tools.test.ts",
+    "pass": 57,
+    "fail": 0
+  },
+  "webToolTests": {
+    "pass": 9,
+    "fail": 0
+  },
+  "gatewayTypes": "通过",
+  "changedFilesESLint": "通过",
+  "webProductTypes": "通过（剔除test目录）",
+  "iOS": "iPad P0静态契约通过；本机无swiftc，未做原生编译/设备验证",
+  "cliVersion": "0.167.2",
+  "sdkVersion": "0.167.2",
+  "realCli": [
+    {
+      "phase": "start-and-resume",
+      "model": "gpt-6.1-sol",
+      "thread": "01a1dfff-449a-7e20-b329-b1e58a051d9a",
+      "tools": [
+        "skill_list",
+        "skill_use",
+        "skill_use",
+        "skill_verify",
+        "skill_verify"
+      ],
+      "cancellationPassed": false,
+      "ok": true
+    },
+    {
+      "phase": "restart-resume",
+      "model": "gpt-6.1-sol",
+      "thread": "01a1dfff-449a-7e20-b329-b1e58a051d9a",
+      "tools": [
+        "skill_verify"
+      ],
+      "cancellationPassed": true,
+      "ok": true
+    }
+  ],
+  "limitations": [
+    {
+      "check": "npm run check:env",
+      "result": "6处已有违规",
+      "filesUnchangedFromHEAD": true,
+      "files": [
+        "gateway/src/ingest/http.ts",
+        "gateway/src/ingest/qaStorage.ts",
+        "gateway/src/ingest/wecomSource.ts",
+        "gateway/src/ingest/workspaceScheduleExecutors.ts"
+      ]
+    },
+    {
+      "check": "npx tsc -p web/tsconfig.json --noEmit",
+      "result": "被已有协作/记忆中心测试夹具类型错误阻断，产品代码单独检查通过"
+    }
+  ],
+  "sha256": {
+    "gateway/src/chat/codexSkillBridge.ts": "0cf12a973252f9d0b6b4e10c8cf3d8d392202d532e7be1dc04929b3d4288d425",
+    "gateway/src/chat/codexSkillBridge.mjs": "80ff766da6f94ca98c1076ce7ef4bf142f2827f4aedbb6196e72d2b0142ed4c1",
+    "gateway/src/chat/codexRunner.ts": "85c3986a4bed335d12c95f863126dfd61ef3d789b6687f1ad37dd37826373af2",
+    "gateway/src/chat/runner.ts": "f4d456e5a8cb73f5093c40008eed972d03ff106e547a97cc9e997b2a73afb26a",
+    "gateway/src/chat/tools.ts": "08c940dd2870dfb00cda08d7dcd7f04e0c88bbedbda16e24c58fc24c7c994768",
+    "gateway/src/assistant/skills.ts": "4bc463e2b7a96a7f219351318a82542342c0b0b66baf3aa6a1c4ad6a99804095",
+    "gateway/src/assistant/service.ts": "cda99d861332abf858fa61ff74ea47c35f8eb8db7ab476976964f470baaf226e",
+    "gateway/src/assistant/tools.ts": "e4933e89493ef339bdd96daddf571d30111795544110c516a82b716ff6900d48",
+    "gateway/src/runtime/slots.ts": "b26ff628bf18c5bd243d4bb3c4a6973b2aa01657899e70c93e3838587a5e282f",
+    "gateway/src/tenants.ts": "7b723f988a4722e2eee3d9d1ccdbc3fb3a23b7edb3ca3dcaa5b6a0b7f12250dd",
+    "gateway/src/config.ts": "fce3f05bd442c64b258f77f2c4a836c4eb995baaf914fa000eb6e20c90158e09"
+  },
+  "contextPreservation": "Codex 助理保留身份、已有记忆和时钟，仅关闭未挂载工具的操作承诺；单独回归通过。",
+  "modelValidation": {
+    "valid": [
+      "glm-5.2",
+      "gemini-4-carbon"
+    ],
+    "blocked": [
+      "claude-opus-5-5"
+    ],
+    "timeoutAfterRetry": [
+      "grok-4.7"
+    ],
+    "critical": 0,
+    "major": 0,
+    "acceptedMinorFindings": "已修复并通过最终57项回归及真实CLI复验"
+  },
+  "cliConfigMerge": {
+    "ok": true,
+    "method": "锁版 CLI 在临时 CODEX_HOME 配置原有 preserved 服务，按 SDK 同形 dotted config 参数添加 jiebo，mcp get --json 分别成功读取两项；不覆盖已有服务。"
+  }
+}

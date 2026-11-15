@@ -183,7 +183,7 @@ export type ToolHost = {
   }) => Promise<unknown> | unknown;
   /** Skill 工厂与智能技能调度工具集（可选挂载，保持既有单元测试对基础 host 的精确键断言） */
   skillList?: (args: { scope?: "platform" | "workspace" | "repo"; query?: string }) => unknown;
-  skillUse?: (args: { id: string }) => unknown;
+  skillUse?: (args: { id: string; cursor?: string; limit?: number }) => unknown;
   skillMarkUsed?: (args: { id: string }) => unknown;
   skillVerify?: (args: { id: string }) => unknown;
   skillProposalList?: (args: { status?: "pending" | "approved" | "rejected" }) => unknown;
@@ -1405,12 +1405,14 @@ function mountSkillTools(
   }
   if (host.skillUse) {
     target.skill_use = tool(
-      "按需查阅指定技能（Skill）的完整 SOP 手册、组件契约或受控验证命令。查阅本身仅记 viewedCount；当你确实采用该技能完成任务后，请调用 skill_mark_used(id) 记录真实采用。",
+      "按需查阅指定技能（Skill）的完整 SOP 手册、组件契约或受控验证命令。查阅本身仅记 viewedCount；返回 truncated 时必须用 nextCursor 继续读取；采用后调用 skill_mark_used(id) 记录。",
       {
         id: S("要查阅的技能 ID（如 canvas-artifact-builder、jiebo-gateway-arch、ios-swiftui-motion）"),
+        cursor: S("续读游标，使用上一页返回的 nextCursor；首页不传"),
+        limit: { type: "integer", minimum: 1, maximum: 2400, description: "每页字符数，默认 2400" },
       },
       ["id"],
-      (args) => host.skillUse!({ id: str(args.id).trim() }),
+      (args) => host.skillUse!({ id: str(args.id).trim(), cursor: typeof args.cursor === "string" ? args.cursor : undefined, limit: typeof args.limit === "number" ? args.limit : undefined }),
     );
   }
   if (host.skillMarkUsed) {

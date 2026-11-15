@@ -34,6 +34,12 @@ describe("toolKind", () => {
     assert.equal(toolKind("x", { glob_pattern: "*.ts" }), "search");
   });
 
+  test("Codex MCP 技能工具含 query 时仍按技能展示", () => {
+    for (const name of ["mcp:jiebo:skill_list", "mcp:jiebo:skill_use", "mcp:jiebo:skill_verify"]) {
+      assert.equal(toolKind(name, { query: "canvas" }), "other");
+    }
+  });
+
   test("mutatingTool 只认 edit 和 write", () => {
     assert.equal(mutatingTool("MultiEdit"), true);
     assert.equal(mutatingTool("Write"), true);

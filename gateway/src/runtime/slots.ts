@@ -1,7 +1,7 @@
 // 租户绑定、连接持久化与会话槽位：建槽/认领/释放、运行计数、会话工作目录
 import { WebSocket } from "ws";
 import type { ReviewBinding } from "../../../shared/crew.ts";
-import { defaultPolicy } from "../../../shared/policy.ts";
+import { defaultPolicy, parsePolicy } from "../../../shared/policy.ts";
 import { bodySummary } from "../chatBodies.ts";
 import { log } from "../log.ts";
 import { allTenants, confinedCwd, type DiskSlot, requireCwd, saveDisk, type Tenant } from "../tenants.ts";
@@ -56,6 +56,8 @@ export function persistTenant(tenant: Tenant, slots = liveSlotsOf(tenant)) {
       chatId: slot.chatId,
       agentId: slot.agentId,
       codexThreadId: slot.codexThreadId || null,
+      policy: slot.policy,
+      dialect: slot.dialect,
       lastEngine: slot.lastEngine,
       cwd: requireCwd(slot.cwd, tenant.workspaceRoot),
       model: slot.model,
@@ -138,6 +140,7 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     chatId,
     cwd: requireCwd(diskChatCwd(tenant, chatId) || saved?.cwd, tenant.workspaceRoot),
     model: saved?.model,
+    mode: "agent",
     agentId: saved?.agentId || null,
     codexThreadId: saved?.codexThreadId || null,
     lastEngine: saved?.lastEngine,
@@ -156,11 +159,11 @@ function makeSlot(tenant: Tenant, chatId: string, saved: DiskSlot | undefined, o
     openTools: new Map(),
     reseed: false,
     externalAbort: null,
-    policy: defaultPolicy(),
+    policy: parsePolicy(saved?.policy, defaultPolicy()),
     approvedKeys: new Set(),
     approvalCallId: null,
     runStats: { toolStarts: 0, intercepts: 0, approvals: 0, replays: 0 },
-    dialect: true,
+    dialect: saved?.dialect ?? true,
     reviewRoster: rosterFromDisk(saved?.reviewRoster),
     rolledAtTurn: typeof saved?.rolledAtTurn === "number" ? saved.rolledAtTurn : undefined,
   };
