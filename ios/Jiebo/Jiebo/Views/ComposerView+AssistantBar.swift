@@ -102,7 +102,7 @@ extension ComposerView {
         }
         .menuOrder(.fixed)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityLabel("模式 \(chatMode.label)，模型 \(ModelCatalog.label(for: chatModel))")
+        .accessibilityLabel("模型 \(ModelCatalog.label(for: chatModel))")
         .accessibilityHint("轻点切换")
     }
 

@@ -197,7 +197,7 @@ final class VoiceDictation {
             await previous?.value
             let session = AVAudioSession.sharedInstance()
             await deactivateAudioSession(session)
-            try? session.setCategory(saved.category, mode: saved.mode, options: saved.options)
+            try? await configureAudioSession(session, category: saved.category, mode: saved.mode, options: saved.options)
         }
         sessionChain = next
     }
@@ -211,7 +211,7 @@ final class VoiceDictation {
                 do {
                     let session = AVAudioSession.sharedInstance()
                     savedSession = (session.category, session.mode, session.categoryOptions)
-                    try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+                    try await configureAudioSession(session, category: .record, mode: .measurement, options: .duckOthers)
                     try await activateAudioSession(session)
                     continuation.resume()
                 } catch {
@@ -249,6 +249,25 @@ private func activateAudioSession(_ session: AVAudioSession) async throws {
         }
     } else {
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+}
+
+/// 改类别会在会话仍活跃时堵住主线程。先离开主线程再改。
+private func configureAudioSession(
+    _ session: AVAudioSession,
+    category: AVAudioSession.Category,
+    mode: AVAudioSession.Mode,
+    options: AVAudioSession.CategoryOptions
+) async throws {
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try session.setCategory(category, mode: mode, options: options)
+                continuation.resume()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
     }
 }
 

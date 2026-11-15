@@ -134,9 +134,6 @@ struct ComposerView: View {
             replaceDraft(sceneDraft(for: chatId))
             store.refreshCheckpoints(chatId: chatId)
         }
-        .onChange(of: phoneMode) { _, _ in
-            store.applyPhoneChatPreferences(chatId: chatId)
-        }
         .onChange(of: store.lastModel) { _, _ in
             store.applyPhoneChatPreferences(chatId: chatId)
         }
