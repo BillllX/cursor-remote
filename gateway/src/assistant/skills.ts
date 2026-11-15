@@ -36,7 +36,7 @@ export type SkillScope = "platform" | "workspace" | "repo";
 export type SkillMode = "read" | "write";
 export type SkillHealthStatus = "healthy" | "degraded" | "broken_ref" | "tampered" | "disabled";
 export type SkillRunnerRole =
-  "foreground" | "ask_plan" | "delegate_readonly" | "loop" | "colleague_qa" | "ingest" | "collab_headless";
+  "foreground" | "delegate_readonly" | "loop" | "colleague_qa" | "ingest" | "collab_headless";
 
 export const SKILL_CATALOG_TOKEN_BUDGET = 200;
 export const SKILL_PREWARM_TOKEN_BUDGET = 450;
@@ -703,7 +703,7 @@ function scanDeclarativeSkillsInDir(
 
 export function runnerAllowsSkill(role: SkillRunnerRole, skill: Pick<SkillManifest, "kind" | "mode">): boolean {
   if (role === "colleague_qa" || role === "ingest") return false;
-  if (role === "ask_plan" || role === "delegate_readonly" || role === "loop" || role === "collab_headless") {
+  if (role === "delegate_readonly" || role === "loop" || role === "collab_headless") {
     return skill.mode === "read";
   }
   return true;
@@ -750,7 +750,6 @@ export function listSkills(
   const base = realOr(tenant.workspaceRoot);
   const cwdReal = realOr(cwd);
   if (!isInside(cwdReal, base)) return [];
-  const searchRoot = existsSync(resolve(cwdReal, "cursor-remote")) ? cwdReal : base;
 
   const byId = new Map<string, SkillManifest>();
   for (const def of BUILTIN_SKILLS) {

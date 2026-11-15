@@ -49,7 +49,7 @@ ws.on("message", (raw) => {
       intervalSec: 30,
       maxTicks: 2,
       model: "minimax:MiniMax-M3",
-      mode: "ask",
+      mode: "agent",
     }));
     return;
   }

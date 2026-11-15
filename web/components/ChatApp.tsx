@@ -8,7 +8,6 @@ import {
   useState,
 } from "react";
 import type {
-  AgentMode,
   AssistantApproval,
   AssistantResultMessage,
   AssistantState,
@@ -26,7 +25,6 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
-import { repairReplyText } from "@shared/replyText";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -140,7 +138,6 @@ export default function ChatApp() {
   const [authError, setAuthError] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [mode, setMode] = useState<AgentMode>("agent");
   const [models, setModels] = useState<string[]>([DEFAULT_MODEL]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -630,8 +627,6 @@ export default function ChatApp() {
   const lastModelRef = useRef("");
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
   const confirmWritesRef = useRef(false);
   confirmWritesRef.current = Boolean(active?.confirmWrites);
   const policyRef = useRef<PolicyId>("baseline");
@@ -674,7 +669,7 @@ export default function ChatApp() {
         type: "prompt",
         text: next.user,
         model: next.model || modelRef.current,
-        mode: next.mode || modeRef.current,
+        mode: "agent",
         chatId,
         files: attachedFiles(next.user),
         images: next.images,
@@ -705,7 +700,7 @@ export default function ChatApp() {
         type: "prompt",
         text: next.user,
         model: next.model || modelRef.current,
-        mode: next.mode || modeRef.current,
+        mode: "agent",
         chatId,
         files: attachedFiles(next.user),
         images: next.images,
@@ -836,10 +831,6 @@ export default function ChatApp() {
                 }
                 if (chat) send({ type: "set_model", model: nextModel, chatId: chat.id });
               }
-              if (chat?.mode) {
-                modeRef.current = chat.mode;
-                setMode(chat.mode);
-              }
               if (chat?.cwd && chat.cwd !== message.cwd) {
                 send({ type: "set_workspace", cwd: chat.cwd, chatId: chat.id });
               }
@@ -941,10 +932,6 @@ export default function ChatApp() {
                     );
                   }
                 }
-              }
-              if (keep.mode) {
-                modeRef.current = keep.mode;
-                setMode(keep.mode);
               }
               if (keep.cwd) {
                 setCwd(keep.cwd);
@@ -2577,7 +2564,7 @@ export default function ChatApp() {
       running: !busyRef.current,
       queued: busyRef.current,
       images: attached.length ? attached : undefined,
-      mode: modeRef.current,
+      mode: "agent",
       model: modelRef.current,
     };
     const current = chatsRef.current.find((item) => item.id === activeIdRef.current);
@@ -2593,7 +2580,7 @@ export default function ChatApp() {
       type: "prompt",
       text: text || "请看附图。",
       model: modelRef.current,
-      mode: modeRef.current,
+      mode: "agent",
       chatId: activeIdRef.current,
       files: attachedFiles(text),
       images: attached.length ? attached : undefined,
@@ -2625,7 +2612,7 @@ export default function ChatApp() {
       tools: [],
       running: !busyRef.current,
       queued: busyRef.current,
-      mode: modeRef.current,
+      mode: "agent",
       model: modelRef.current,
     };
     const current = chatsRef.current.find((item) => item.id === activeIdRef.current);
@@ -2640,7 +2627,7 @@ export default function ChatApp() {
       type: "prompt",
       text,
       model: modelRef.current,
-      mode: modeRef.current,
+      mode: "agent",
       chatId: activeIdRef.current,
       files: attachedFiles(text),
       confirmWrites: confirmWritesRef.current,
@@ -2670,7 +2657,7 @@ export default function ChatApp() {
     applyChats((prev) =>
       prev.map((chat) =>
         chat.id === id
-          ? { ...chat, draft: text, draftImages: images, model: modelRef.current, mode: modeRef.current, cwd: chat.cwd, previewTabs: previewTabsRef.current.map(({ path, line }) => ({ path, line })), previewPath: previewPathRef.current }
+          ? { ...chat, draft: text, draftImages: images, model: modelRef.current, mode: "agent", cwd: chat.cwd, previewTabs: previewTabsRef.current.map(({ path, line }) => ({ path, line })), previewPath: previewPathRef.current }
           : chat,
       ),
     );
@@ -2682,7 +2669,6 @@ export default function ChatApp() {
       openNewChatMenu();
       return;
     }
-    persistMode("agent");
     const nextModel = lastModelRef.current || modelRef.current;
     const empties = chatsRef.current.filter(
       (chat) =>
@@ -2701,7 +2687,7 @@ export default function ChatApp() {
     if (empties.length) {
       const keep = {
         ...empties[0],
-        mode: "agent" as AgentMode,
+        mode: "agent" as const,
         cwd: next,
         model: empties[0].model || nextModel,
       };
@@ -2731,13 +2717,13 @@ export default function ChatApp() {
     }
     setPreviewDrafts({});
     stashView();
-    const chat = {
+    const chat: Chat = {
       id: uid(),
       title: "新对话",
       turns: [],
       draft: "",
       model: nextModel,
-      mode: "agent" as AgentMode,
+      mode: "agent",
       cwd: next,
       confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
@@ -2930,7 +2916,7 @@ export default function ChatApp() {
       tools: [],
       running: !targetBusy,
       queued: targetBusy,
-      mode: modeRef.current,
+      mode: "agent",
       model: modelRef.current,
     };
     lastProgressRef.current[targetId] = Date.now();
@@ -2952,7 +2938,7 @@ export default function ChatApp() {
       type: "prompt",
       text,
       model: modelRef.current,
-      mode: modeRef.current,
+      mode: "agent",
       chatId: targetId,
       files: attachedFiles(text),
       confirmWrites: Boolean(home.confirmWrites),
@@ -3205,10 +3191,6 @@ export default function ChatApp() {
     send({ type: "list_checkpoints", chatId: chat.id });
     send({ type: "list_files", query: "", chatId: chat.id });
     applySessionModel(chat);
-    if (chat.mode) {
-      modeRef.current = chat.mode;
-      setMode(chat.mode);
-    }
     if (chat.cwd) {
       setCwd(chat.cwd);
       if (chat.cwd !== cwdRef.current) {
@@ -3422,13 +3404,6 @@ export default function ChatApp() {
     send({ type: "set_model", model: value, chatId: activeIdRef.current });
     const label = modelLabel(value);
     setNotice(busyRef.current ? `跑完后下一条用 ${label}` : `下一条用 ${label}`);
-  }
-
-  function persistMode(value: AgentMode) {
-    modeRef.current = value;
-    setMode(value);
-    patchActive((chat) => (chat.mode === value ? chat : { ...chat, mode: value }));
-    setNotice(value === "ask" ? "只问，不改文件" : value === "plan" ? "先出方案，再动手" : "可以直接改文件、跑命令");
   }
 
   function handlePickFile(path: string, line?: number, endLine?: number, snippet?: string) {
@@ -4308,7 +4283,7 @@ export default function ChatApp() {
       type: "prompt",
       text: turn.user || "请看附图。",
       model: turn.model || modelRef.current,
-      mode: turn.mode || modeRef.current,
+      mode: "agent",
       chatId: activeIdRef.current,
       files: attachedFiles(turn.user),
       images: turn.images,
@@ -4556,13 +4531,13 @@ export default function ChatApp() {
       const nextModel = lastModelRef.current || modelRef.current;
       // 占位落在 USER 根目录时复用 boot 空壳：不同步、不开会话，助理会话到了就替换它
       const atRoot = !cwdRef.current || Boolean(workspaceRoot && sameCwd(cwdRef.current, workspaceRoot));
-      const chat = {
+      const chat: Chat = {
         id: atRoot ? "boot" : uid(),
         title: "新对话",
         turns: [],
         draft: "",
         model: nextModel,
-        mode: modeRef.current,
+        mode: "agent",
         cwd: cwdRef.current,
         confirmWrites: confirmWritesRef.current,
       policy: policyRef.current,
@@ -4604,10 +4579,6 @@ export default function ChatApp() {
     send({ type: "list_checkpoints", chatId: chat.id });
     send({ type: "list_files", query: "", chatId: chat.id });
     applySessionModel(chat);
-    if (chat.mode) {
-      modeRef.current = chat.mode;
-      setMode(chat.mode);
-    }
     if (chat.cwd) {
       setCwd(chat.cwd);
       if (chat.cwd !== cwdRef.current) {
@@ -4643,44 +4614,6 @@ export default function ChatApp() {
         sameFile(current, path) ? next.at(-1)?.path || "" : current,
       );
       return next;
-    });
-  }
-
-  function applyPlan(turn: Turn) {
-    if (!turnAllowsActions(turn)) {
-      setNotice("请先加载完整内容再执行计划");
-      return;
-    }
-    if (!connected || busyRef.current) return;
-    setMode("agent");
-    modeRef.current = "agent";
-    persistMode("agent");
-    setNotice("按计划开始执行");
-    const text = `请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n${repairReplyText(turn.assistant).slice(0, 4000)}`;
-    const next: Turn = {
-      id: uid(),
-      user: "执行这个计划",
-      assistant: "",
-      thinking: "",
-      tools: [],
-      running: true,
-      mode: "agent",
-      model: modelRef.current,
-    };
-    const current = chatsRef.current.find((item) => item.id === activeIdRef.current);
-    patchActive((chat) => ({ ...chat, turns: [...chat.turns, next] }));
-    lastProgressRef.current[activeIdRef.current] = Date.now();
-    stallNoticedRef.current.delete(activeIdRef.current);
-    send({
-      type: "prompt",
-      text,
-      model: modelRef.current,
-      mode: "agent",
-      chatId: activeIdRef.current,
-      confirmWrites: confirmWritesRef.current,
-      policy: policyRef.current,
-      nameChat: isUntitled(current?.title),
-      turnId: next.id,
     });
   }
 
@@ -5113,7 +5046,6 @@ export default function ChatApp() {
         send={send}
         activeId={activeId}
         model={model}
-        mode={mode}
         setLoopGoal={setLoopGoal}
         setLoopInterval={setLoopInterval}
         setLoopMax={setLoopMax}
@@ -5385,7 +5317,6 @@ export default function ChatApp() {
               lastProgressRef={lastProgressRef}
               activeId={activeId}
               stopChat={stopChat}
-              applyPlan={applyPlan}
               keepTurnFiles={keepTurnFiles}
               restoreTurnFiles={restoreTurnFiles}
               restoringTurnIds={restoringTurnIds}
@@ -5508,8 +5439,6 @@ export default function ChatApp() {
               model={model}
               models={models}
               persistModel={persistModel}
-              mode={mode}
-              persistMode={persistMode}
               persistConfirmWrites={persistConfirmWrites}
               policyRef={policyRef}
               persistPolicy={persistPolicy}

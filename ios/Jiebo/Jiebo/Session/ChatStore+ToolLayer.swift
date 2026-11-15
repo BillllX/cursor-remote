@@ -233,7 +233,7 @@ extension ChatStore {
             intervalSec: intervalSec,
             maxTicks: maxTicks,
             model: model(for: targetId),
-            mode: mode(for: targetId)
+            mode: .agent
         ))
     }
 

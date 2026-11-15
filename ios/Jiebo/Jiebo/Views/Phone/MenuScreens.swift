@@ -447,7 +447,6 @@ struct PhoneSettingsScreen: View {
 
     @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("jiebo.phone.agentMode") private var phoneMode = AgentMode.agent.rawValue
 
     init() {}
 
@@ -836,12 +835,6 @@ struct PhoneSettingsScreen: View {
 
     private var phoneChatPreferences: some View {
         Section {
-            Picker("模式", selection: $phoneMode) {
-                ForEach(AgentMode.allCases, id: \.rawValue) { mode in
-                    Text(mode == .agent ? "Agent · 动手" : mode.label).tag(mode.rawValue)
-                }
-            }
-            .pickerStyle(.navigationLink)
             Picker("模型", selection: Binding(
                 get: { store.lastModel.nilIfEmpty ?? store.model },
                 set: { store.rememberModel($0) }
@@ -858,7 +851,7 @@ struct PhoneSettingsScreen: View {
         } header: {
             JieboListHeader("聊天偏好")
         } footer: {
-            Text("用于此 iPhone 的小驳和工作台，默认动手模式，模型沿用上次选择。更改从下一条消息生效。")
+            Text("用于此 iPhone 的小驳和工作台，模型沿用上次选择。更改从下一条消息生效。")
         }
         .listRowBackground(JieboColor.white)
     }

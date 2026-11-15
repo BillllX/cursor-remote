@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { AgentMode, LoopState, LoopTick, LoopTickStatus } from "../../shared/protocol.ts";
+import { normalizeAgentMode, type AgentMode, type LoopState, type LoopTick, type LoopTickStatus } from "../../shared/protocol.ts";
 import { atomicWriteFileSync } from "./fsAtomic.ts";
 import { stateDir } from "./tenants.ts";
 import { log } from "./log.ts";
@@ -116,7 +116,7 @@ function load() {
         lastSummary: typeof rec.lastSummary === "string" ? rec.lastSummary : undefined,
         nextAt: typeof rec.nextAt === "number" ? rec.nextAt : Date.now() + intervalSec * 1000,
         model: typeof rec.model === "string" ? rec.model : undefined,
-        mode: rec.mode === "agent" || rec.mode === "plan" || rec.mode === "ask" ? rec.mode : undefined,
+        mode: normalizeAgentMode(rec.mode),
         gen: 1,
       };
       loops.set(key(tenantId, chatId), row);
@@ -283,7 +283,7 @@ export function startLoop(input: {
     tick: 0,
     maxTicks: input.maxTicks,
     model: input.model?.trim() || undefined,
-    mode: input.mode,
+    mode: normalizeAgentMode(input.mode),
     lastSummary: "已开始，等待下一拍。",
     nextAt: Date.now() + input.intervalSec * 1000,
     gen: (prev?.gen ?? 0) + 1,

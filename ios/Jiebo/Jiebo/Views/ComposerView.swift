@@ -13,7 +13,6 @@ struct ComposerView: View {
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
     var style: ComposerStyle = .assistant
-    @AppStorage("jiebo.phone.agentMode") private var phoneMode = AgentMode.agent.rawValue
     @FocusState var focused: Bool
     /// 打字写进这个对象，不写进视图状态。这样每个字不会把整条输入栏和会话回合再画一遍。
     @State var draftBuffer = ComposerDraftBuffer()
@@ -62,7 +61,6 @@ struct ComposerView: View {
         store.composerChromeByChat[chatId] ?? ComposerChrome(model: store.model)
     }
     var chatBusy: Bool { store.liveBusyIds.contains(chatId) }
-    var chatMode: AgentMode { chrome.mode }
     var chatModel: String { chrome.model.isEmpty ? store.model : chrome.model }
     var chatImages: [PendingImage] { store.pendingImages(for: chatId) }
     var chatUploads: [UploadItem] {
@@ -318,11 +316,7 @@ struct ComposerView: View {
             return "跟\(store.assistantName)说点什么"
         }
         if chatBusy { return "正在动手，发送会排队" }
-        switch chatMode {
-        case .ask: return "问一句，不改文件，@ 引用"
-        case .plan: return "描述任务，只出方案"
-        case .agent: return "交代要做的事，@ 引用"
-        }
+        return "交代要做的事，@ 引用"
     }
 
     var canSendNow: Bool {

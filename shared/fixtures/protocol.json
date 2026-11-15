@@ -100,7 +100,7 @@
       "type": "run_meta",
       "chatId": "c-7f3a9e21",
       "dialect": false,
-      "mode": "plan",
+      "mode": "agent",
       "model": "claude-4.6-sonnet",
       "policy": "plane"
     },
@@ -550,7 +550,7 @@
       "chatId": "c-7f3a9e21",
       "clipped": true,
       "durationMs": 9876,
-      "mode": "ask",
+      "mode": "agent",
       "model": "claude-4.6-sonnet",
       "phase": "done",
       "queued": [
@@ -1841,7 +1841,7 @@
           "mimeType": "image/png"
         }
       ],
-      "mode": "plan",
+      "mode": "agent",
       "model": "minimax:MiniMax-M2",
       "nameChat": true,
       "policy": "plane",
@@ -2047,7 +2047,7 @@
       "goal": "每小时检查一次构建",
       "intervalSec": 3600,
       "maxTicks": 24,
-      "mode": "ask",
+      "mode": "agent",
       "model": "composer-2.5"
     },
     {

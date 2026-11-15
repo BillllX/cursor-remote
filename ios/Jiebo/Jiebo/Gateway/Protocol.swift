@@ -2,18 +2,16 @@ import Foundation
 
 // Mirrors shared/protocol.ts. Keep field names and `type` tags in sync with the TypeScript source.
 
-enum AgentMode: String, Sendable, Hashable, CaseIterable {
+enum AgentMode: RawRepresentable, Sendable, Hashable, CaseIterable {
     case agent
-    case plan
-    case ask
 
-    var label: String {
-        switch self {
-        case .agent: return "动手"
-        case .plan: return "方案"
-        case .ask: return "只问"
-        }
+    init?(rawValue: String) {
+        guard ["agent", "ask", "plan"].contains(rawValue) else { return nil }
+        self = .agent
     }
+
+    var rawValue: String { "agent" }
+    var label: String { "Agent" }
 }
 
 enum RunMetaPrewarmStash {

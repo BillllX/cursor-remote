@@ -1,7 +1,7 @@
 [
   {
-    "id": "zh-ask",
-    "mode": "ask",
+    "id": "zh-readonly",
+    "mode": "agent",
     "confirmWrites": false,
     "prompt": "用中文说明 lib.js 里 add 做什么，不要改任何文件。",
     "timeoutMs": 120000,

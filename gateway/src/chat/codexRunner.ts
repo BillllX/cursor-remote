@@ -26,7 +26,6 @@ import { persistConn } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
 import { sandboxEnabledForTenant, stateDir } from "../tenants.ts";
 import { noteModelTokens, noteOutput, noteToolCall } from "../usage.ts";
-import { undoEdits } from "../workspace/checkpoints.ts";
 import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
@@ -248,7 +247,7 @@ export async function runCodexChat(
     return;
   }
 
-  if (!input.autoApprove && (mode === "agent" || mode === "plan")) {
+  if (!input.autoApprove) {
     recordRunCheckpoint(ws, conn, slot, cwd, mode);
   }
   ensureTurnBaseline(slot, cwd, mode);
@@ -259,8 +258,7 @@ export async function runCodexChat(
 
   try {
     // 与 Cursor CLI（非沙箱管理员租户 sandboxOptions.enabled = false）保持完全一致：
-    // 关闭 Codex CLI 内置 Linux 沙箱（danger-full-access）并开启网络访问，使子进程可正常访问外网与跨子工作区路径；
-    // Ask 模式下若发生误改，在回合结束时与 Cursor CLI 一样通过 undoEdits 自动还原。
+    // 关闭 Codex CLI 内置 Linux 沙箱（danger-full-access）并开启网络访问，使子进程可正常访问外网与跨子工作区路径。
     const sandboxMode: SandboxMode = "danger-full-access";
 
     // 当 Agent 模式开启 confirmWrites 时，在启动写操作子进程前先发标准 approval 卡片等待用户批准
@@ -575,23 +573,7 @@ export async function runCodexChat(
 
     if (!live()) return;
 
-    if (mode === "ask" && slot.edited.length) {
-      const undone = undoEdits(cwd, slot.edited);
-      slot.edited = [];
-      if (undone.paths.length) {
-        send(ws, {
-          type: "text-delta",
-          chatId: slot.chatId,
-          text: `\n\nAsk 模式已还原误改：${undone.paths.join(", ")}`,
-        });
-        send(ws, {
-          type: "undone",
-          chatId: slot.chatId,
-          paths: undone.paths,
-          error: undone.error,
-        });
-      }
-    } else if (slot.edited.length) {
+    if (slot.edited.length) {
       await pushWorkspace(ws, slot, conn, slot.edited);
     }
     await settleWorkspacePushes(ws);

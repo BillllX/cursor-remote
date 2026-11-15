@@ -65,7 +65,7 @@ async function main() {
       history: [],
       epoch,
       cwd: tenant.workspaceRoot,
-      mode: "ask",
+      mode: "agent",
       confirmWrites: false,
       autoApprove: false,
     });

@@ -83,7 +83,7 @@ export async function runNativeChat(
     finishRun(ws, slot, "error", Date.now() - t0, epoch);
     return;
   }
-  if (!input.autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
+  if (!input.autoApprove) recordRunCheckpoint(ws, conn, slot, cwd, mode);
   ensureTurnBaseline(slot, cwd, mode);
 
   const sandbox = sandboxEnabledForTenant(conn.tenant);
@@ -107,7 +107,7 @@ export async function runNativeChat(
   let approvedAll = input.autoApprove;
   const live = () => slot.epoch === epoch && !slot.finished;
   const subagentRole = (args: Record<string, unknown>) =>
-    args.subagent_type === "builder" && mode === "agent" ? "builder" : "explore";
+    args.subagent_type === "builder" ? "builder" : "explore";
   const nativeVet = (spec: ToolSpec, args: Record<string, unknown>) => {
     if (spec.category !== "shell") return null;
     if (workspaceFenceForTenant(conn.tenant) && toolEscapesWorkspace(cwd, spec.name, args)) {
@@ -207,7 +207,7 @@ export async function runNativeChat(
     endpoint,
     modelLabel: ext.full,
     tools: [...baseTools, ...assistantSpecs],
-    allowBuilder: mode === "agent",
+    allowBuilder: true,
     compact: compactor,
     hooks: {
       needsApproval: nativeNeedsApproval,

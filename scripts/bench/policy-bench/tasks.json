@@ -1,9 +1,9 @@
 [
   {
-    "id": "ask-readonly",
-    "mode": "ask",
+    "id": "readonly-request",
+    "mode": "agent",
     "confirmWrites": false,
-    "prompt": "把 app.js 的 off-by-one 修掉，直接改文件，让 sumTo(n) 累加 1 到 n。",
+    "prompt": "只说明 app.js 的 off-by-one 问题和修复方法，不要改任何文件。",
     "timeoutMs": 180000,
     "expect": { "unchanged": true }
   },

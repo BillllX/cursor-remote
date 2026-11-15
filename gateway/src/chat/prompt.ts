@@ -67,7 +67,7 @@ export function loadDynamicMemoryContext(cwd: string, tenant?: Tenant | null, qu
 
 /**
  * 同一 SDK agentId 会话在首轮已注入完整 wrapPrompt 与静态规则（AGENTS.md 等）且未发生变化时，
- * 后续轮次使用的紧凑续接包装：省去每轮重复发送 ~5,000 字符的相同静态说明，仅保留核心模式守卫与本轮动态记忆。
+ * 后续轮次使用的紧凑续接包装：省去每轮重复发送 ~5,000 字符的相同静态说明，仅保留核心守卫与本轮动态记忆。
  */
 export function wrapFollowupPrompt(
   text: string,
@@ -88,12 +88,7 @@ export function wrapFollowupPrompt(
     body = `Workspace memory for this turn:\n${dynamicMemory.trim()}\n\n${body}`;
   }
   const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n` : "";
-  if (mode === "ask") {
-    return `${bound}[ASK MODE (read-only)：沿用本会话首轮规则，严禁修改任何文件、严禁执行写命令或 jiebo-publish，仅用中文文字回答。]\n\n${body}`;
-  }
-  if (mode === "plan") {
-    return `${bound}[Plan mode：沿用本会话首轮规则，只出中文分步方案，不要改文件或跑写命令；可派 explore，不要派 builder。]\n\n${body}`;
-  }
+  void mode;
   return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写当前工作区相对路径 .cursor-remote/canvases/<kebab>.canvas.tsx，严禁加 ../ 前缀或写到父目录，并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；生成超 15KB/300 行的数据报表或长画布时严禁单次 Write 硬塞大字符串，优先用短脚本从磁盘读取数据生成或分块写入；超 30s 命令显式传 block_until_ms: 120000）。]\n\n${body}`;
 }
 
@@ -119,32 +114,10 @@ export function wrapPrompt(
   }
   const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n\n` : "";
   const publishPrompt = confine ? (atUserRoot ? PUBLISH_AGENT_PROMPT : PUBLISH_DENIED_PROMPT) : PUBLISH_OWNER_PROMPT;
-  const planPublish = confine
-    ? atUserRoot
-      ? "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。网站只能在这个 USER 工作区里做。"
-      : "不要执行 jiebo-publish，也不要把它写进方案。对外网站只能在 USER 工作区里创建。"
-    : "不要执行 jiebo-publish。需要外网地址时，把 jiebo-publish start -- <启动命令> 写进方案。这个用户的任意会话都能创建对外网站。";
   const crewStay = confine
     ? "Subagents must stay inside the current workspace."
     : "Subagents have the same reach as the USER workspace and may edit any directory under this user's root.";
-  if (mode === "ask") {
-    return `${bound}ASK MODE (read-only). You must not modify the workspace.
-Do not call write, edit, delete, apply patch, or any mutating shell command (rm, mv, git commit, npm install, etc.).
-Do not run jiebo-publish.
-If the user wants a change, explain what you would do and stop. Answer in text only.
-Do not spawn subagents. Any suggested change must stay inside the current workspace.
-
-${body}`;
-  }
-  if (mode === "plan") {
-    return `${bound}Plan mode: 只出方案，不要改文件，不要跑会改系统的命令。用中文分步写清楚。用户点「执行这个计划」后才会动手。
-${confine ? "方案里的每一步都只能动当前工作区里的文件，不要提议改工作区外的路径。" : "方案可以动这个用户根目录下的各个子工作区，和 USER 工作区权限相同。"}
-${planPublish}
-可以派出 explore 子代理做只读摸底。不要派出 builder。
-${reviewPanelPrompt(panel)}
-
-${body}`;
-  }
+  void mode;
   const canvasCwdHint = cwd
     ? ` (relative to the current session workspace root ${cwd}; never prefix with ../ or write to a parent directory's .cursor-remote/canvases/)`
     : " (relative to the current session workspace root; never prefix with ../ or write to a parent directory)";

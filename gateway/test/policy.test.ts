@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
-  askDisallowedTools,
   defaultPolicy,
   isPlane,
   isPolicyProtectedPath,
   parsePolicy,
-  planDisallowedTools,
   toolCategory,
   toolFingerprint,
 } from "../../shared/policy.ts";
@@ -42,26 +40,6 @@ describe("parsePolicy / defaultPolicy / isPlane", () => {
     assert.equal(isPlane("baseline"), false);
     assert.equal(isPlane(undefined), false);
     assert.equal(isPlane("Plane"), false);
-  });
-});
-
-describe("禁用工具清单", () => {
-  test("ask 模式禁掉写文件、shell、mcp、子代理", () => {
-    const tools = askDisallowedTools();
-    for (const name of ["edit", "delete", "shell", "mcp", "task", "applyAgentDiff", "generateImage"]) {
-      assert.ok(tools.includes(name), name);
-    }
-  });
-
-  test("plan 模式只禁写文件，shell 仍可用", () => {
-    assert.deepEqual(planDisallowedTools(), ["edit", "delete", "applyAgentDiff"]);
-    assert.ok(!planDisallowedTools().includes("shell"));
-  });
-
-  test("每次返回新数组，调用方改了也不影响下一次", () => {
-    const first = askDisallowedTools();
-    first.length = 0;
-    assert.ok(askDisallowedTools().length > 0);
   });
 });
 

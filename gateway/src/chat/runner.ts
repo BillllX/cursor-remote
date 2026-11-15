@@ -3,20 +3,12 @@ import { WebSocket } from "ws";
 import {
   crewAgentToken,
   crewRoleOf,
-  isCrewRole,
-  isCrewToolName,
   resolveCrewModel,
   wantsMultiModelReview,
 } from "../../../shared/crew.ts";
 import { dialectOverlay } from "../../../shared/dialect.ts";
-import {
-  askDisallowedTools,
-  isPlane,
-  parsePolicy,
-  planDisallowedTools,
-  toolFingerprint,
-} from "../../../shared/policy.ts";
-import type { AgentMode, PolicyId } from "../../../shared/protocol.ts";
+import { isPlane, parsePolicy, toolFingerprint } from "../../../shared/policy.ts";
+import { normalizeAgentMode, type AgentMode, type PolicyId } from "../../../shared/protocol.ts";
 import { clockLine, noteWorkspaceTurnStart, skillsCatalogWithMetaFor, userRootPreamble } from "../assistant/service.ts";
 import { gatewayEnv } from "../config.ts";
 import { broadcastFileChanged } from "../fileEvents.ts";
@@ -33,7 +25,7 @@ import type { Conn, RunHandle, Slot } from "../runtime/types.ts";
 import { continueTranscript, emitOwnerRunSnapshot, flushTranscript, openTranscript } from "../sync/transcript.ts";
 import { allTenants, workspaceFenceForTenant } from "../tenants.ts";
 import { noteOutput, noteToolCall } from "../usage.ts";
-import { nativeStateDir, rollbackToLatestCheckpoint, undoEdits } from "../workspace/checkpoints.ts";
+import { nativeStateDir, rollbackToLatestCheckpoint } from "../workspace/checkpoints.ts";
 import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { isUserWorkspace, mayPublishHere } from "../workspace/workspaces.ts";
 import { send } from "../ws/send.ts";
@@ -202,6 +194,7 @@ export async function handlePrompt(
   turnId?: string,
   keepTranscript = false,
 ): Promise<void | "busy"> {
+  mode = normalizeAgentMode(mode);
   const nextPolicy = parsePolicy(policy ?? slot.policy ?? conn.policy);
   const nextDialect = dialect !== false;
   // P11：history 白名单——只放行 user/assistant 的字符串文本，
@@ -304,7 +297,7 @@ export async function handlePrompt(
     }
   }
   const fence = workspaceFenceForTenant(conn.tenant);
-  const skillRunnerRole = mode === "ask" || mode === "plan" ? ("ask_plan" as const) : ("foreground" as const);
+  const skillRunnerRole = "foreground" as const;
   let skillsBlock = "";
   let prewarmedSkills: Array<{ id: string; name: string }> = [];
   const consumesSkillsPrompt = !externalEarly || Boolean(externalEarly.provider.tools);
@@ -465,11 +458,11 @@ export async function handlePrompt(
 
   let replayApproved = false;
 
-  if (!autoApprove && (mode === "agent" || mode === "plan")) recordRunCheckpoint(ws, conn, slot, cwd, mode);
+  if (!autoApprove) recordRunCheckpoint(ws, conn, slot, cwd, mode);
   ensureTurnBaseline(slot, cwd, mode);
 
   let run: RunHandle | null = null;
-  let blockedAsk = false;
+  let blockedGuard = false;
   const blockedCalls = new Set<string>();
   const startedCalls = new Set<string>();
   const crewMeta = new Map<string, { agent?: string; model?: string; parentCallId?: string }>();
@@ -510,36 +503,7 @@ export async function handlePrompt(
     return true;
   };
 
-  const blockReadonlyWrite = (name: string, args: unknown, callId: string) => {
-    if ((mode !== "ask" && mode !== "plan") || (!isMutatingTool(name, args) && !shellPublishes(name, args)))
-      return false;
-    if (blockedCalls.has(callId)) return true;
-    blockedAsk = true;
-    blockedCalls.add(callId);
-    slot.runStats.intercepts += 1;
-    const reason = mode === "plan" ? "Plan 模式只出方案，点「执行这个计划」才会改文件。" : "Ask 模式已拦截写操作";
-    send(ws, {
-      type: "tool-completed",
-      chatId: slot.chatId,
-      callId,
-      name,
-      status: "error",
-      result: reason,
-    });
-    send(ws, {
-      type: "text-delta",
-      chatId: slot.chatId,
-      text:
-        mode === "plan"
-          ? "\n\nPlan 不会改文件。要动手请点这条回复下的「执行这个计划」。"
-          : "\n\nAsk 模式不会改文件或跑会改系统的命令。这次写操作已拦截。",
-    });
-    if (run) void cancelRun(run);
-    return true;
-  };
-
   const blockUnapprovedWrite = (name: string, args: unknown, callId: string) => {
-    if (mode !== "agent" && mode !== "plan") return false;
     if (!confirmWrites || autoApprove) return false;
     if (!isMutatingTool(name, args)) return false;
     if (isPlane(slot.policy) && slot.approvedKeys.has(toolFingerprint(name, args))) return false;
@@ -587,35 +551,6 @@ export async function handlePrompt(
     return true;
   };
 
-  const blockCrew = (name: string, args: unknown, callId: string) => {
-    if (!isCrewToolName(name) && !isCrewRole(crewRoleOf(name, args))) return false;
-    const role = crewRoleOf(name, args);
-    let reason = "";
-    if (mode === "ask") reason = "Ask 模式不会派子代理。";
-    else if (mode === "plan" && role === "builder") {
-      reason = "Plan 模式不会派 builder 改代码。";
-    }
-    if (!reason) return false;
-    if (blockedCalls.has(callId)) return true;
-    blockedAsk = true;
-    blockedCalls.add(callId);
-    send(ws, {
-      type: "tool-completed",
-      chatId: slot.chatId,
-      callId,
-      name,
-      status: "error",
-      result: reason,
-    });
-    send(ws, {
-      type: "text-delta",
-      chatId: slot.chatId,
-      text: `\n\n${reason}`,
-    });
-    if (run) void cancelRun(run);
-    return true;
-  };
-
   const blockExploreWrite = (name: string, args: unknown, callId: string, parentCallId?: string) => {
     const agent =
       crewRoleOf(name, args) ||
@@ -623,7 +558,7 @@ export async function handlePrompt(
       crewMeta.get(callId)?.agent;
     if (agent !== "explore" || !isMutatingTool(name, args)) return false;
     if (blockedCalls.has(callId)) return true;
-    blockedAsk = true;
+    blockedGuard = true;
     blockedCalls.add(callId);
     send(ws, {
       type: "tool-completed",
@@ -667,10 +602,8 @@ export async function handlePrompt(
       model: meta.model,
     });
     if (
-      !blockCrew(name, args, callId) &&
       !blockExploreWrite(name, args, callId, meta.parentCallId) &&
       !blockOffRootPublish(name, args, callId) &&
-      !blockReadonlyWrite(name, args, callId) &&
       !blockUnapprovedWrite(name, args, callId) &&
       !blockOutsideWorkspace(name, args, callId)
     ) {
@@ -810,16 +743,13 @@ export async function handlePrompt(
 
       const sendOpts: {
         model: { id: string };
-        mode: "plan" | "agent";
+        mode: "agent";
         local: { force: boolean };
-        disallowedTools?: string[];
       } = {
         model: { id: usedModel },
-        mode: mode === "plan" ? "plan" : "agent",
+        mode: "agent",
         local: { force: true },
       };
-      if (isPlane(slot.policy) && mode === "ask") sendOpts.disallowedTools = askDisallowedTools();
-      if (isPlane(slot.policy) && mode === "plan") sendOpts.disallowedTools = planDisallowedTools();
 
       let attemptClosed = false;
       const runWatch: {
@@ -990,14 +920,7 @@ export async function handlePrompt(
 
       try {
         const startSend = async (opts: typeof sendOpts) => agent.send(payload, { ...opts, onDelta });
-        try {
-          run = await startSend(sendOpts);
-        } catch (err) {
-          if (!sendOpts.disallowedTools) throw err;
-          slotLog(slot).error("disallowedTools rejected, retrying without them", err);
-          const { disallowedTools: _drop, ...rest } = sendOpts;
-          run = await startSend(rest);
-        }
+        run = await startSend(sendOpts);
         gatewayState.promptSeedBySlot.set(slot, seedKey);
 
         if (slot.epoch !== epoch || slot.finished) {
@@ -1011,7 +934,7 @@ export async function handlePrompt(
           return;
         }
         slot.run = run;
-        if (blockedAsk) await cancelRun(run);
+        if (blockedGuard) await cancelRun(run);
         if (slot.awaitingApproval && !autoApprove) {
           attemptClosed = true;
           await cancelRun(run);
@@ -1188,23 +1111,7 @@ export async function handlePrompt(
               };
             }
             attemptClosed = true;
-            if (mode === "ask" && slot.edited.length) {
-              const undone = undoEdits(cwd, slot.edited);
-              slot.edited = [];
-              if (undone.paths.length) {
-                send(ws, {
-                  type: "text-delta",
-                  chatId: slot.chatId,
-                  text: `\n\nAsk 模式已还原误改：${undone.paths.join(", ")}`,
-                });
-                send(ws, {
-                  type: "undone",
-                  chatId: slot.chatId,
-                  paths: undone.paths,
-                  error: undone.error,
-                });
-              }
-            } else if (slot.edited.length) {
+            if (slot.edited.length) {
               // pushWorkspace 现在是异步的；等它发完再收尾，保持“文件推送在 done 之前”的顺序
               await pushWorkspace(ws, slot, conn, slot.edited);
             }
@@ -1217,7 +1124,7 @@ export async function handlePrompt(
         attemptClosed = true;
         const canRetry =
           !replayApproved &&
-          !blockedAsk &&
+          !blockedGuard &&
           !slot.awaitingApproval &&
           !slot.finished &&
           slot.epoch === epoch &&
@@ -1229,7 +1136,7 @@ export async function handlePrompt(
         run = null;
         await cancelRun(failedRun);
         // cancelRun 异步等待期间，若用户已取消、切了新会话或进入审批，不再继续旧栈重试
-        if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedAsk) {
+        if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedGuard) {
           return;
         }
         if (slot.run === failedRun) slot.run = null;
@@ -1257,7 +1164,7 @@ export async function handlePrompt(
         if (isNoProgressResume || isMissingAgent) {
           flushTranscript(slot, false);
           await disposeSlot(slot);
-          if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedAsk) {
+          if (slot.finished || slot.epoch !== epoch || slot.awaitingApproval || replayApproved || blockedGuard) {
             return;
           }
           if (isMissingAgent) {

@@ -17,8 +17,9 @@ import { send } from "../ws/send.ts";
 
 export function recordRunCheckpoint(ws: WebSocket, conn: Conn, slot: Slot, cwd: string, mode: AgentMode) {
   try {
+    void mode;
     const stamp = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-    const kind = mode === "plan" ? "Plan" : "Agent";
+    const kind = "Agent";
     let label = `${kind} · ${stamp}`;
     if (slot.checkpoints.some((item) => item.label === label)) {
       label = `${kind} · ${stamp} · ${slot.checkpoints.length + 1}`;
@@ -42,7 +43,7 @@ export function recordRunCheckpoint(ws: WebSocket, conn: Conn, slot: Slot, cwd: 
 
 /** 新回合没建检查点（autoApprove、检查点失败）时补一个只用于文件清单的 tree 基线，不进还原点列表 */
 export function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
-  if (mode !== "agent" && mode !== "plan") return;
+  void mode;
   const turnId = slot.transcript?.turnId;
   if (!turnId || slot.turnBase?.turnId === turnId) return;
   // 先占位：建不成也不在同一轮的重放里补建，否则基线会落在半轮的位置

@@ -567,56 +567,6 @@
   transform: scale(0.94);
 }
 
-.lab-modes {
-  position: relative;
-  display: flex;
-  align-items: center;
-  isolation: isolate;
-}
-
-.lab-mode-thumb {
-  position: absolute;
-  top: 0;
-  left: 0;
-  height: 32px;
-  border-radius: 999px;
-  background: #ececee;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0;
-}
-
-.lab-mode-thumb.live {
-  opacity: 1;
-  transition:
-    transform 280ms var(--ease),
-    width 280ms var(--ease),
-    opacity 180ms var(--ease);
-}
-
-.lab-mode {
-  position: relative;
-  z-index: 1;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  height: 32px;
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 500;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: color 200ms var(--ease);
-}
-
-.lab-mode:hover {
-  color: var(--text);
-}
-
-.lab-mode.on {
-  color: var(--text);
-}
-
 .lab-grow {
   flex: 1;
 }
@@ -781,8 +731,6 @@
   .lab-chevron,
   .lab-send,
   .lab-send svg,
-  .lab-mode-thumb,
-  .lab-mode,
   .lab-icon-btn,
   .lab-icon-btn svg,
   .lab-model {

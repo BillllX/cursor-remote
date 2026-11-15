@@ -34,7 +34,6 @@ type ThreadProps = {
   lastProgressRef: RefObject<Record<string, number>>;
   activeId: string;
   stopChat: (chatId: string) => void;
-  applyPlan: (turn: Turn) => void;
   keepTurnFiles: (turn: Turn) => void;
   restoreTurnFiles: (turn: Turn) => void;
   restoringTurnIds: Readonly<Record<string, boolean>>;
@@ -71,7 +70,6 @@ export function Thread({
   lastProgressRef,
   activeId,
   stopChat,
-  applyPlan,
   keepTurnFiles,
   restoreTurnFiles,
   restoringTurnIds,
@@ -93,7 +91,6 @@ export function Thread({
     keepTool,
     rejectTool,
     stopChat,
-    applyPlan,
     keepTurnFiles,
     restoreTurnFiles,
     loadTurnBody,

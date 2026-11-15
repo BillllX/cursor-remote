@@ -1,6 +1,6 @@
 // 循环任务（Loop）浮窗
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import type { AgentMode, ClientMessage, LoopState } from "@shared/protocol";
+import type { ClientMessage, LoopState } from "@shared/protocol";
 
 type LoopOverlayProps = {
   wideIDE?: boolean;
@@ -14,7 +14,6 @@ type LoopOverlayProps = {
   send: (message: ClientMessage) => void;
   activeId: string;
   model: string;
-  mode: AgentMode;
   setLoopGoal: Dispatch<SetStateAction<string>>;
   setLoopInterval: Dispatch<SetStateAction<string>>;
   setLoopMax: Dispatch<SetStateAction<string>>;
@@ -36,7 +35,6 @@ export function LoopOverlay({
   send,
   activeId,
   model,
-  mode,
   setLoopGoal,
   setLoopInterval,
   setLoopMax,
@@ -82,7 +80,7 @@ export function LoopOverlay({
             intervalSec,
             maxTicks,
             model,
-            mode,
+            mode: "agent",
           });
         }}
       >

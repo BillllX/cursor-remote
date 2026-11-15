@@ -78,7 +78,7 @@ ssh root@<vps> 'cd /opt/cursor-remote-gateway && git pull && systemctl restart c
    - 浏览器跳转到 `http://127.0.0.1:1455/auth/callback?code=...&state=...`（本地显示无法访问属正常现象），将该完整回调 URL 复制到 VPS 上执行 `curl -s "<回调URL>"`，即可落盘生成 `/var/lib/cursor-remote/.codex/auth.json`（权限 `600`）与 `models_cache.json`；
    - **自动续期**：后续 Token 刷新全程由 VPS 直接请求公网 `https://auth.openai.com/oauth/token` 滚动续期，不再经过公司内网 SSO。请勿将同一份 `auth.json` 拷贝到多台机器共用，以免 Refresh Token Rotation 互踢失效。
 2. **关闭 Codex CLI 内置沙箱并开启外网访问（与 Cursor CLI 保持一致）**：
-   - 对非沙箱受信任管理员租户，`gateway/src/chat/codexRunner.ts` 已统一传入 `sandboxMode: "danger-full-access"` 与 `networkAccessEnabled: true`（Ask 模式误改由网关 `undoEdits` 兜底还原）；
+   - 对非沙箱受信任管理员租户，`gateway/src/chat/codexRunner.ts` 已统一传入 `sandboxMode: "danger-full-access"` 与 `networkAccessEnabled: true`；
    - 同时在 `/var/lib/cursor-remote/.codex/config.toml`（权限 `600`，属主 `cursor-remote:cursor-remote`）中固化以下配置，确保任何子进程调用均可正常访问外网与跨子工作区目录：
      ```toml
      sandbox_mode = "danger-full-access"

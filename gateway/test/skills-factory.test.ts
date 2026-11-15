@@ -80,17 +80,17 @@ describe("Skill 工厂 Phase 1 & Phase 2：四分类注册表、渐进披露预�
     assert.equal(listSkills(tenant, subWs, { runnerRole: "colleague_qa" }).length, 0);
     assert.equal(renderSkillsCatalogForPrompt(tenant, subWs, { runnerRole: "colleague_qa" }), "");
 
-    // Ask / Plan 与只读委派自动剥离 mode=write 的高危手册（如 shanghai-deploy-smoke）
-    const askSkills = listSkills(tenant, subWs, { runnerRole: "ask_plan" });
+    // 只读委派自动剥离 mode=write 的高危手册（如 shanghai-deploy-smoke）
+    const askSkills = listSkills(tenant, subWs, { runnerRole: "delegate_readonly" });
     assert.equal(
       askSkills.some((s) => s.id === "shanghai-deploy-smoke"),
       false,
-      "Ask/Plan 只读模式不得暴露 mode=write 的上海站部署手册",
+      "只读委派不得暴露 mode=write 的上海站部署手册",
     );
     assert.equal(
       askSkills.some((s) => s.id === "canvas-artifact-builder"),
       true,
-      "Ask/Plan 模式可查阅只读的 Canvas 构建规范",
+      "只读委派可查阅只读的 Canvas 构建规范",
     );
   });
 
@@ -112,22 +112,20 @@ describe("Skill 工厂 Phase 1 & Phase 2：四分类注册表、渐进披露预�
     assert.equal(marked.stats.adoptedCount, 1, "显式调用 skill_mark_used 后才增加 adoptedCount");
   });
 
-  test("3. Ask/Plan 与只读后台委派硬性剥离 skill_propose（防 toolSpecs 默认 network 提权漏洞）", () => {
+  test("3. Agent 保留 skill_propose，只读后台委派硬性剥离", () => {
     const { tenant, subWs } = makeTenantEnv("t-mode-strip");
 
     const fgTools = workspaceToolsFor(tenant, "c-fg", subWs, { readonly: false });
     assert.ok("skill_propose" in fgTools, "前台可写工作区会话应挂载 skill_propose");
     assert.ok("skill_list" in fgTools && "skill_use" in fgTools && "skill_mark_used" in fgTools);
 
-    // 转换成 Native ToolSpec 后，Ask / Plan 必须剥离 skill_propose
+    // 转换成 Native ToolSpec 后，Agent 保留完整工具
     const specs = toolSpecs(fgTools);
     const proposeSpec = specs.find((s) => s.name === "skill_propose");
     assert.equal(proposeSpec?.category, "write", "skill_propose 必须归类为 write");
-    const askNames = new Set(toolsForMode("ask", specs).map((s) => s.name));
-    const planNames = new Set(toolsForMode("plan", specs).map((s) => s.name));
-    assert.equal(askNames.has("skill_propose"), false, "Ask 模式必须剥离 skill_propose");
-    assert.equal(planNames.has("skill_propose"), false, "Plan 模式必须剥离 skill_propose");
-    assert.equal(askNames.has("skill_use"), true, "Ask 模式保留只读 skill_use");
+    const agentNames = new Set(toolsForMode("agent", specs).map((s) => s.name));
+    assert.equal(agentNames.has("skill_propose"), true, "Agent 模式保留 skill_propose");
+    assert.equal(agentNames.has("skill_use"), true, "Agent 模式保留 skill_use");
 
     // 后台只读委派 (readonly: true) 绝不挂载 skill_propose
     const roTools = workspaceToolsFor(tenant, "c-ro", subWs, { readonly: true });

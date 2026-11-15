@@ -204,12 +204,6 @@ struct WorkbenchView: View {
             }
             guard store.unlocked else { return }
             let home = store.activeId
-            for mode in [AgentMode.agent, .plan, .ask, .agent] {
-                withAnimation(JieboMotion.snappy(false)) {
-                    store.chooseMode(mode)
-                }
-                try? await Task.sleep(for: .milliseconds(700))
-            }
             if let other = store.currentWorkspaceChats.first(where: { $0.id != home })?.id {
                 withAnimation(JieboMotion.fade(false)) {
                     store.select(other)
@@ -230,13 +224,6 @@ struct WorkbenchView: View {
                 if store.toolLayer == .loop { store.toggleTool(.loop) }
             }
             try? await Task.sleep(for: .milliseconds(500))
-            withAnimation(JieboMotion.snappy(false)) {
-                store.chooseMode(.plan)
-            }
-            try? await Task.sleep(for: .milliseconds(600))
-            withAnimation(JieboMotion.snappy(false)) {
-                store.chooseMode(.agent)
-            }
             #endif
         }
     }

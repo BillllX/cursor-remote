@@ -287,7 +287,7 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
     }
   });
 
-  test("写操作工具在 toolSpecs 中标记为 write（Ask/Plan 模式自动剥离），且 isMutatingTool 识别为写工具", () => {
+  test("写操作工具在 toolSpecs 中标记为 write，Agent 工具集保留写工具且 isMutatingTool 可识别", () => {
     const { host, addWorkspace } = makeTestEnv();
     addWorkspace("GEO评估");
 
@@ -316,13 +316,12 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
     assert.equal(ingestSubmitSpec?.category, "write");
     assert.equal(listSpec?.category, "network");
 
-    // Ask / Plan 模式下 toolsForMode 自动过滤掉 category === "write" 的工具
-    const askModeNames = new Set(toolsForMode("ask", specs).map((t) => t.name));
-    assert.equal(askModeNames.has("kb_workspace_init"), false);
-    assert.equal(askModeNames.has("drop_token_create"), false);
-    assert.equal(askModeNames.has("drop_token_revoke"), false);
-    assert.equal(askModeNames.has("kb_ingest_submit"), false);
-    assert.equal(askModeNames.has("drop_token_list"), true);
+    const agentToolNames = new Set(toolsForMode("agent", specs).map((t) => t.name));
+    assert.equal(agentToolNames.has("kb_workspace_init"), true);
+    assert.equal(agentToolNames.has("drop_token_create"), true);
+    assert.equal(agentToolNames.has("drop_token_revoke"), true);
+    assert.equal(agentToolNames.has("kb_ingest_submit"), true);
+    assert.equal(agentToolNames.has("drop_token_list"), true);
 
     // summarizeToolArgs 保留 workspace/fileName 并对 passcode 脱敏
     const summarized = summarizeToolArgs({
@@ -430,10 +429,10 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
       true,
     );
 
-    // 3. 子工作区 Ask 模式下剥离 kb_ingest_submit，且只读后台委派 (readonly: true) 绝不挂载 kb_ingest_submit
+    // 3. 前台 Agent 有完整工具，且只读后台委派 (readonly: true) 绝不挂载 kb_ingest_submit
     const wsToolSpecs = toolSpecs(wsTools);
-    const wsAskNames = new Set(toolsForMode("ask", wsToolSpecs).map((t) => t.name));
-    assert.equal(wsAskNames.has("kb_ingest_submit"), false);
+    const wsAgentNames = new Set(toolsForMode("agent", wsToolSpecs).map((t) => t.name));
+    assert.equal(wsAgentNames.has("kb_ingest_submit"), true);
 
     const readonlyDelegateTools = workspaceToolsFor(
       { id: host.id, stateDir: host.stateDir, name: "Default", workspaceRoot: host.workspaceRoot },
@@ -448,7 +447,7 @@ describe("Step 2: Scoped 投递口令与小驳工具 (tokens.ts)", () => {
     const { host, addWorkspace } = makeTestEnv();
     const fintopia = addWorkspace("Fintopia集团");
     const sannong = addWorkspace("sannongxin");
-    const keda = addWorkspace("keda");
+    addWorkspace("keda");
 
     for (const ws of ["Fintopia集团", "sannongxin", "keda"]) {
       assert.equal(

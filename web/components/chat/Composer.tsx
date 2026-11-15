@@ -1,15 +1,15 @@
-// 输入框：提及芯片、图片/文件附件、模式与模型选择、发送/停止
-import type { AgentMode, CheckpointInfo, PolicyId, PromptImage } from "@shared/protocol";
+// 输入框：提及芯片、图片/文件附件、模型选择、发送/停止
+import type { CheckpointInfo, PolicyId, PromptImage } from "@shared/protocol";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { isOpenableMention, mentionChips } from "../../lib/chat/mentions";
-import { IconAgent, IconAsk, IconPlan, IconShield, IconWrite } from "../chromeIcons";
+import { IconShield, IconWrite } from "../chromeIcons";
 import ModelPicker from "../ModelPicker";
 
-const QUICK_COMPOSER_SKILLS: ReadonlyArray<{ id: string; name: string; readOnly: boolean }> = [
-  { id: "canvas-artifact-builder", name: "交互式画布构建与 SSR 验真", readOnly: true },
-  { id: "jiebo-gateway-arch", name: "Jiebo 网关与双端架构速查", readOnly: true },
-  { id: "ios-swiftui-motion", name: "iOS SwiftUI 规范与契约审查", readOnly: true },
-  { id: "kb-drop-ingest", name: "多源知识库投递与看板归档", readOnly: false },
+const QUICK_COMPOSER_SKILLS: ReadonlyArray<{ id: string; name: string }> = [
+  { id: "canvas-artifact-builder", name: "交互式画布构建与 SSR 验真" },
+  { id: "jiebo-gateway-arch", name: "Jiebo 网关与双端架构速查" },
+  { id: "ios-swiftui-motion", name: "iOS SwiftUI 规范与契约审查" },
+  { id: "kb-drop-ingest", name: "多源知识库投递与看板归档" },
 ];
 
 export function Composer({
@@ -22,8 +22,6 @@ export function Composer({
   model,
   models,
   setModel,
-  mode,
-  setMode,
   confirmWrites,
   setConfirmWrites,
   policy,
@@ -59,8 +57,6 @@ export function Composer({
   model: string;
   models: string[];
   setModel: (value: string) => void;
-  mode: AgentMode;
-  setMode: (value: AgentMode) => void;
   confirmWrites: boolean;
   setConfirmWrites: (value: boolean) => void;
   policy: PolicyId;
@@ -105,9 +101,6 @@ export function Composer({
   const [moreOpen, setMoreOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [density, setDensity] = useState<"full" | "mid" | "compact" | "tight">("full");
-  const modesRef = useRef<HTMLDivElement | null>(null);
-  const thumbLive = useRef(false);
-  const [thumb, setThumb] = useState({ x: 0, w: 0, live: false });
   const chips = mentionChips(text);
   const canSend = Boolean(text.trim() || images.length) && !uploading;
   useLayoutEffect(() => {
@@ -144,30 +137,6 @@ export function Composer({
       observer?.disconnect();
     };
   }, []);
-  useEffect(() => {
-    const root = modesRef.current;
-    if (!root) return;
-    const applyThumb = () => {
-      const activeBtn = root.querySelector<HTMLElement>(".mode-btn.on");
-      if (!activeBtn) return;
-      setThumb({ x: activeBtn.offsetLeft, w: activeBtn.offsetWidth, live: thumbLive.current });
-      if (!thumbLive.current) {
-        requestAnimationFrame(() => {
-          thumbLive.current = true;
-          setThumb((prev) => ({ ...prev, live: true }));
-        });
-      }
-    };
-    applyThumb();
-    const ro = new ResizeObserver(applyThumb);
-    ro.observe(root);
-    root.querySelectorAll(".mode-btn").forEach((btn) => ro.observe(btn));
-    root.addEventListener("transitionend", applyThumb);
-    return () => {
-      ro.disconnect();
-      root.removeEventListener("transitionend", applyThumb);
-    };
-  }, [mode, density]);
   function flushDraft() {
     const el = inputRef.current;
     const value = el ? el.value : text;
@@ -283,17 +252,7 @@ export function Composer({
             aria-controls={mentioning ? mentionListId : undefined}
             aria-activedescendant={mentioning && fileHits.length ? `${mentionListId}-${mentionPick}` : undefined}
             defaultValue={draft}
-            placeholder={
-              !connected
-                ? "正在连服务器…"
-                : busy
-                  ? "正在动手，Enter 会排队"
-                  : mode === "ask"
-                    ? "问一句，不改文件，@ 引用"
-                    : mode === "plan"
-                      ? "描述任务，只出方案，@ 引用"
-                      : "交代要做的事，@ 引用文件"
-            }
+            placeholder={!connected ? "正在连服务器…" : busy ? "正在动手，Enter 会排队" : "交代要做的事，@ 引用文件"}
             autoCorrect="off"
             autoCapitalize="off"
             autoComplete="off"
@@ -380,26 +339,6 @@ export function Composer({
               }}
             />
           </label>
-          <div className="mode-switch" role="tablist" aria-label="工作方式" ref={modesRef}>
-            <span
-              className={`mode-thumb${thumb.live ? " live" : ""}`}
-              style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
-              aria-hidden="true"
-            />
-            {(["agent", "plan", "ask"] as AgentMode[]).map((item) => (
-              <button
-                key={item}
-                type="button"
-                className={`mode-btn${mode === item ? " on" : ""}`}
-                title={item === "agent" ? "动手" : item === "plan" ? "方案" : "只问"}
-                aria-label={item === "agent" ? "动手" : item === "plan" ? "方案" : "只问"}
-                onClick={() => setMode(item)}
-              >
-                {item === "agent" ? <IconAgent /> : item === "plan" ? <IconPlan /> : <IconAsk />}
-                <span className="mode-label">{item === "agent" ? "动手" : item === "plan" ? "方案" : "只问"}</span>
-              </button>
-            ))}
-          </div>
           <ModelPicker
             model={model}
             models={models}
@@ -410,7 +349,7 @@ export function Composer({
           <button
             type="button"
             className={`mode-btn confirm-btn policy-btn${policy === "plane" ? " on" : ""}`}
-            title={policy === "plane" ? "策略层：Ask 硬只读、按条放行、方言 overlay" : "现状路径，用于对照"}
+            title={policy === "plane" ? "策略层：写操作按条放行、方言 overlay" : "现状路径，用于对照"}
             aria-label={policy === "plane" ? "策略层" : "现状"}
             onClick={() => setPolicy(policy === "plane" ? "baseline" : "plane")}
           >
@@ -443,8 +382,7 @@ export function Composer({
             {skillsOpen ? (
               <div className="composer-menu" role="menu" aria-label="快捷技能">
                 <div className="composer-menu-label">运用技能（Skill）</div>
-                {QUICK_COMPOSER_SKILLS.filter((sk) => (mode === "ask" || mode === "plan" ? sk.readOnly : true)).map(
-                  (sk) => (
+                {QUICK_COMPOSER_SKILLS.map((sk) => (
                     <button
                       key={sk.id}
                       type="button"
@@ -463,8 +401,7 @@ export function Composer({
                     >
                       ⚡ {sk.name}
                     </button>
-                  ),
-                )}
+                  ))}
               </div>
             ) : null}
           </div>
@@ -537,7 +474,7 @@ export function Composer({
                   </>
                 ) : (
                   <button type="button" disabled>
-                    {mode === "ask" ? "只问不会打检查点" : "动手或出方案时会记下检查点"}
+                    还没有检查点
                   </button>
                 )}
               </div>

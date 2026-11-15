@@ -309,42 +309,6 @@
   opacity: 0.7;
 }
 
-.mode-switch {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 2px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  overflow: visible;
-  background: color-mix(in srgb, var(--text) 5%, transparent);
-  flex: 0 1 auto;
-  min-width: 0;
-  isolation: isolate;
-}
-
-.mode-thumb {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 0;
-  border-radius: var(--radius-sm);
-  background: var(--bg-panel);
-  box-shadow: var(--shadow-card), inset 0 0 0 1px var(--border);
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0;
-}
-
-.mode-thumb.live {
-  opacity: 1;
-  transition:
-    transform 280ms var(--ease-out),
-    width 280ms var(--ease-out),
-    opacity 180ms var(--ease-out);
-}
-
 .mode-btn {
   position: relative;
   z-index: 1;
@@ -390,7 +354,6 @@ button[aria-pressed="true"] .rail-icon-tint {
   opacity: 0.2;
 }
 
-.mode-label,
 .confirm-label,
 .pill-label {
   overflow: hidden;

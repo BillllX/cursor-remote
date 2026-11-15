@@ -106,7 +106,7 @@ async function main() {
   const proj = `${root}/smoke-proj-${randomUUID().slice(0, 6)}`;
   const other = `${root}/smoke-other-${randomUUID().slice(0, 6)}`;
   const chatId = `md-smoke-${randomUUID().slice(0, 8)}`;
-  const meta = { id: chatId, title: "多设备冒烟", cwd: proj, mode: "ask", confirmWrites: false, policy: "baseline" };
+  const meta = { id: chatId, title: "多设备冒烟", cwd: proj, mode: "agent", confirmWrites: false, policy: "baseline" };
 
   // 1. A 建会话：B 收到 reason=changed 的广播 digest
   a.send({ type: "new_session", chatId, cwd: proj });
@@ -133,7 +133,7 @@ async function main() {
   const turnId = randomUUID();
   const aMark = a.mark();
   bMark = b.mark();
-  a.send({ type: "prompt", chatId, text: "你好", model, mode: "ask", turnId });
+  a.send({ type: "prompt", chatId, text: "你好", model, mode: "agent", turnId });
   const firstSnap = await b.waitFor(
     (m) => m.type === "run_snapshot" && m.chatId === chatId && m.phase === "running",
     "B 收到运行中快照",

@@ -20,4 +20,20 @@ describe("parseClient", () => {
   test("只检查 type 是字符串，不校验具体类型（未知 type 交给分发处理）", () => {
     assert.deepEqual(parseClient('{"type":"no_such_type","x":1}'), { type: "no_such_type", x: 1 });
   });
+
+  test("旧客户端 prompt / loop_start 的 ask、plan 在入口统一归一为 agent", () => {
+    assert.deepEqual(parseClient('{"type":"prompt","text":"x","chatId":"c","mode":"ask"}'), {
+      type: "prompt",
+      text: "x",
+      chatId: "c",
+      mode: "agent",
+    });
+    assert.deepEqual(parseClient('{"type":"loop_start","chatId":"c","goal":"x","intervalSec":30,"mode":"plan"}'), {
+      type: "loop_start",
+      chatId: "c",
+      goal: "x",
+      intervalSec: 30,
+      mode: "agent",
+    });
+  });
 });

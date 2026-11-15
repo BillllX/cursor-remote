@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { JieboMark as Mark } from "../../components/JieboMark";
-
-type Mode = "动手" | "方案" | "只问";
 
 type ToolState = "idle" | "running" | "done";
 
@@ -82,16 +80,13 @@ export default function LabPage() {
   ]);
   const [activeId, setActiveId] = useState("new");
   const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<Mode>("动手");
   const [toolOpen, setToolOpen] = useState(true);
   const [toolState, setToolState] = useState<ToolState>("done");
   const [justDone, setJustDone] = useState(false);
   const [busy, setBusy] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const modesRef = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
-  const [thumb, setThumb] = useState({ x: 0, w: 0, live: false });
 
   const active = chats.find((chat) => chat.id === activeId) || chats[0];
   const empty = active.turns.length === 0 && !busy;
@@ -184,31 +179,6 @@ export default function LabPage() {
     setToolState("done");
     inputRef.current?.focus();
   };
-
-  const modes = useMemo(() => ["动手", "方案", "只问"] as Mode[], []);
-  const thumbLive = useRef(false);
-
-  useEffect(() => {
-    const root = modesRef.current;
-    if (!root) return;
-
-    const apply = () => {
-      const activeBtn = root.querySelector<HTMLElement>(".lab-mode.on");
-      if (!activeBtn) return;
-      setThumb({ x: activeBtn.offsetLeft, w: activeBtn.offsetWidth, live: thumbLive.current });
-      if (!thumbLive.current) {
-        requestAnimationFrame(() => {
-          thumbLive.current = true;
-          setThumb((prev) => ({ ...prev, live: true }));
-        });
-      }
-    };
-
-    apply();
-    const ro = new ResizeObserver(apply);
-    ro.observe(root);
-    return () => ro.disconnect();
-  }, [mode]);
 
   return (
     <div className="lab">
@@ -349,7 +319,7 @@ export default function LabPage() {
               ref={inputRef}
               className="lab-input"
               rows={1}
-              placeholder="问一句…"
+              placeholder="交代要做的事…"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -363,23 +333,6 @@ export default function LabPage() {
               <button type="button" className="lab-icon-btn" aria-label="附件">
                 <PlusIcon />
               </button>
-              <div className="lab-modes" ref={modesRef}>
-                <span
-                  className={`lab-mode-thumb${thumb.live ? " live" : ""}`}
-                  style={{ width: thumb.w, transform: `translateX(${thumb.x}px)` }}
-                  aria-hidden="true"
-                />
-                {modes.map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`lab-mode${mode === item ? " on" : ""}`}
-                    onClick={() => setMode(item)}
-                  >
-                    {item}
-                  </button>
-                ))}
-              </div>
               <span className="lab-grow" />
               <button type="button" className="lab-model">
                 Auto

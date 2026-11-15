@@ -2,7 +2,7 @@
 // 对照 baseline / plane 两条 harness 路径。
 // 用法:
 //   JIEBO_WS_URL=ws://127.0.0.1:<端口> CURSOR_REMOTE_TOKEN=xxx node scripts/bench/policy-bench.mjs
-//   --models composer-2.5,kimi-k3-max --policies baseline,plane --tasks ask-readonly
+//   --models composer-2.5,kimi-k3-max --policies baseline,plane --tasks readonly-request
 // JIEBO_WS_URL（或 POLICY_BENCH_WS）必填，没有默认值
 import WebSocket from "ws";
 import { randomUUID } from "node:crypto";
@@ -99,7 +99,7 @@ function scoreExpect(root, expect = {}) {
     const srcApp = readRel(FIXTURE, "app.js") || "";
     if (lib !== srcLib || app !== srcApp) {
       ok = false;
-      reasons.push("Ask 不该改文件");
+      reasons.push("只读请求不该改文件");
     }
   }
   for (const [rel, needle] of Object.entries(expect.filesContain || {})) {
@@ -191,7 +191,7 @@ async function runCase({ task, model, policy, workspaceRoot }) {
       m.type === "tool-completed" &&
       m.chatId === chatId &&
       m.status === "error" &&
-      /拦截|Ask 模式|Plan 模式|只读/.test(String(m.result || "")),
+      /拦截|只读/.test(String(m.result || "")),
   );
   const approvals = inbox.filter((m) => m.type === "approval" && m.chatId === chatId);
   const expect = scoreExpect(cwd, task.expect);

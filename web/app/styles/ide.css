@@ -154,12 +154,6 @@
 }
 
 @media (pointer: coarse) {
-  .mode-switch .mode-btn {
-    height: 34px;
-    min-height: 34px;
-    padding: 0 12px;
-  }
-
   .model-picker-btn {
     height: 40px;
     font-size: var(--fs-md);

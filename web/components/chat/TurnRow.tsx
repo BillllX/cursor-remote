@@ -30,7 +30,6 @@ export type TurnRowActions = {
   keepTool: (turnId: string, tool: ToolCall) => void;
   rejectTool: (turn: Turn, tool: ToolCall) => void;
   stopChat: (chatId: string) => void;
-  applyPlan: (turn: Turn) => void;
   keepTurnFiles: (turn: Turn) => void;
   restoreTurnFiles: (turn: Turn) => void;
   loadTurnBody: (chatId: string, turnId: string) => void;
@@ -49,7 +48,7 @@ export type TurnRowProps = {
   findHit: boolean;
   /** 查找栏打开时的关键词，否则 undefined */
   findQuery: string | undefined;
-  /** 未连上或有回合在跑：重试、执行计划按钮禁用 */
+  /** 未连上或有回合在跑：重试按钮禁用 */
   locked: boolean;
   /** 正在等待网关还原回执 */
   restoring?: boolean;
@@ -344,16 +343,6 @@ function TurnRowView({
           {turn.error ? <div className="error-line">{friendlyError(turn.error)}</div> : null}
           {!turn.running && !turn.queued && !turn.error && /approval/i.test(turn.status || "") ? (
             <div className="run-meta">{runMeta(turn.status, turn.durationMs)}</div>
-          ) : null}
-          {turn.mode === "plan" && assistant && !turn.running && !turn.queued ? (
-            <button
-              type="button"
-              className="apply-plan"
-              disabled={locked || actionsDisabled}
-              onClick={() => actions.applyPlan(turn)}
-            >
-              执行这个计划
-            </button>
           ) : null}
           {turn.files?.length && !turn.running && !turn.queued ? (
             <div className="turn-files">

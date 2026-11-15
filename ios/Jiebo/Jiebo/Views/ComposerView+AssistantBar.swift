@@ -64,17 +64,9 @@ extension ComposerView {
         .accessibilityHint(queued ? "当前回复结束后再发" : "")
     }
 
-    /// 胶囊上方一行小字：当前模式和模型。原来只藏在「＋」里，看不出这次会不会动手改文件
+    /// 胶囊上方一行小字：当前模型。
     var assistantStatusLine: some View {
         Menu {
-            Picker(selection: Binding(get: { chatMode }, set: { store.chooseMode($0, chatId: chatId) })) {
-                ForEach(AgentMode.allCases, id: \.self) { item in
-                    Text(item.label).tag(item)
-                }
-            } label: {
-                Label("模式", systemImage: "slider.horizontal.3")
-            }
-            .pickerStyle(.menu)
             Picker(selection: Binding(get: { chatModel }, set: { store.chooseModel($0, chatId: chatId) })) {
                 ForEach(ModelCatalog.groups(from: store.models)) { group in
                     Section(group.label) {
@@ -89,8 +81,8 @@ extension ComposerView {
             .pickerStyle(.menu)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(JieboTheme.shared.palette == .sticker ? "✦ 接驳 · \(chatMode.label)" : chatMode.label)
-                    .foregroundStyle(chatMode == .agent ? JieboColor.ink2 : JieboColor.pine)
+                Text(JieboTheme.shared.palette == .sticker ? "✦ 接驳" : "Agent")
+                    .foregroundStyle(JieboColor.ink2)
                     .fixedSize(horizontal: true, vertical: false)
                 Text("·")
                 Text(ModelCatalog.label(for: chatModel))

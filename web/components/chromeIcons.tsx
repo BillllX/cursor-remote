@@ -1,38 +1,3 @@
-export function IconAgent({ size = 14 }: { size?: number }) {
-  return (
-    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M5.2 11.2 3.5 13M8 3.2l1.3 3.1 3.3.3-2.5 2.2.8 3.2L8 10.4 4.9 12l.8-3.2-2.5-2.2 3.3-.3L8 3.2Z"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-export function IconPlan({ size = 14 }: { size?: number }) {
-  return (
-    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="M4 4.5h8M4 8h8M4 11.5h5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-export function IconAsk({ size = 14 }: { size?: number }) {
-  return (
-    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path
-        d="M5.8 6.1a2.2 2.2 0 1 1 2.5 2.1V9.2M8.2 11.6h.01"
-        stroke="currentColor"
-        strokeWidth="1.35"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
 export function IconWrite({ size = 14 }: { size?: number }) {
   return (
     <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">

@@ -253,12 +253,6 @@ struct TurnView: View, Equatable {
                             live: turn.running,
                             transform: linkMentions
                         )
-                        if turn.mode == .plan, !turn.running, !turn.queued {
-                            ActionButton(title: "执行这个计划", kind: .primary) {
-                                store.applyPlan(turn.id, chatId: chatId)
-                            }
-                            .padding(.top, 2)
-                        }
                     }
                     .contextMenu {
                         if !assistantText.isEmpty {

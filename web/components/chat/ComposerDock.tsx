@@ -1,7 +1,6 @@
 // 输入区：回到最新、委派/审批/排队行与输入框
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type {
-  AgentMode,
   AssistantApproval,
   AssistantState,
   CheckpointInfo,
@@ -39,8 +38,6 @@ type ComposerDockProps = {
   model: string;
   models: string[];
   persistModel: (value: string) => void;
-  mode: AgentMode;
-  persistMode: (value: AgentMode) => void;
   persistConfirmWrites: (value: boolean) => void;
   policyRef: RefObject<PolicyId>;
   persistPolicy: (value: PolicyId) => void;
@@ -88,8 +85,6 @@ export function ComposerDock({
   model,
   models,
   persistModel,
-  mode,
-  persistMode,
   persistConfirmWrites,
   policyRef,
   persistPolicy,
@@ -219,8 +214,6 @@ export function ComposerDock({
           model={model}
           models={models}
           setModel={persistModel}
-          mode={mode}
-          setMode={persistMode}
           confirmWrites={Boolean(active?.confirmWrites)}
           setConfirmWrites={persistConfirmWrites}
           policy={policyRef.current}

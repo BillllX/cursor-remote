@@ -1,14 +1,3 @@
-.apply-plan {
-  margin-top: 10px;
-  height: 28px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
-  padding: 0 12px;
-  color: var(--accent);
-  font-size: var(--fs-sm);
-}
-
 .ask-card {
   display: grid;
   gap: 10px;

@@ -129,7 +129,7 @@ iPhone 从小驳菜单进入「产物中心」，仍在现有小驳导航栈内�
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `protocol.ts`                                     | 客户端消息 39 种、服务端消息 47 种，三端唯一协议来源                                                                                      |
 | `protocol-fixtures.ts` → `fixtures/protocol.json` | 每种消息的金样本；`npm run gen:protocol-fixtures` 生成，iOS 契约测试解码它                                                                |
-| `policy.ts`                                       | baseline / plane 两种策略、工具类别、ask / plan 模式禁用工具                                                                              |
+| `policy.ts`                                       | baseline / plane 两种策略、工具类别与写操作审批辅助                                                                                        |
 | `dialect.ts`                                      | 中文系模型（glm、kimi、qwen、deepseek 等）的提示补充                                                                                      |
 | `toolNames.ts`                                    | “工具是否改写 / 写入 / 删除 / 写文件”按整词判定；网关和网页共用，iOS 的 `ChatModels.swift` 里 `enum ToolNames` 逐字照搬，改规则要两边同改 |
 | `crew.ts`、`preview.ts`、`publishPrompt.ts`       | 评审角色、预览 MIME、对外发布提示词                                                                                                       |

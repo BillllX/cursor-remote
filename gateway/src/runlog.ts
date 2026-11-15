@@ -1,5 +1,5 @@
 import { repairReplyText } from "../../shared/replyText.ts";
-import type { AgentMode, HistoryTurn, ServerMessage, TurnFile } from "../../shared/protocol.ts";
+import { normalizeAgentMode, type AgentMode, type HistoryTurn, type ServerMessage, type TurnFile } from "../../shared/protocol.ts";
 
 export type RunTool = NonNullable<HistoryTurn["tools"]>[number];
 
@@ -502,7 +502,7 @@ export function diskSnapshot(
     tools: Array.isArray(row.tools) ? (row.tools as RunTool[]) : undefined,
     task: typeof row.task === "string" ? row.task : undefined,
     model: typeof row.model === "string" ? row.model : undefined,
-    mode: row.mode === "agent" || row.mode === "plan" || row.mode === "ask" ? row.mode : undefined,
+    mode: row.mode == null ? undefined : normalizeAgentMode(row.mode),
   };
 }
 

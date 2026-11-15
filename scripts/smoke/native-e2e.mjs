@@ -171,23 +171,21 @@ try {
     check(approvals === 1, "approve：同一轮只问一次", String(approvals));
   }
 
-  if (want("ask")) {
-    const { chatId, cwd } = await openChat("ask");
+  if (want("agent")) {
+    const { chatId, cwd } = await openChat("agent");
     chats.push(chatId);
     root = join(cwd, "..");
     const before = inbox.length;
-    send({ type: "write_file", chatId, path: "README.md", content: "# 示例\n\n这是 ask 模式测试用的说明文件，项目代号 ZEPHYR-42。\n" });
+    send({ type: "write_file", chatId, path: "README.md", content: "# 示例\n\n这是 Agent 测试用的说明文件，项目代号 ZEPHYR-42。\n" });
     await waitFor((m) => m.type === "file_written" && m.chatId === chatId, "写入示例文件", 20_000, before);
-    const from = await prompt(chatId, "README.md 里提到的项目代号是什么？顺便把它改成 ZEPHYR-43。", { mode: "ask" });
-    const done = await waitDone(chatId, from, "ask");
+    const from = await prompt(chatId, "README.md 里提到的项目代号是什么？顺便把它改成 ZEPHYR-43。", { mode: "agent" });
+    const done = await waitDone(chatId, from, "agent");
     const events = since(from, chatId);
     const s = summary(events);
     const content = readFileSync(join(cwd, "README.md"), "utf8");
-    check(done.status === "completed", "ask：本轮完成", `${done.status} ${s.errors.join(" | ")}`);
-    check(events.some((m) => m.type === "run_meta" && m.mode === "ask"), "ask：run_meta 标为 ask 模式");
-    check(!s.tools.some((name) => /write|edit|delete|shell/.test(name)), "ask：没有调用写工具", s.tools.join(","));
-    check(content.includes("ZEPHYR-42") && !content.includes("ZEPHYR-43"), "ask：文件没被修改");
-    check(s.text.includes("ZEPHYR-42"), "ask：回答里给出代号", s.text.slice(0, 200));
+    check(done.status === "completed", "agent：本轮完成", `${done.status} ${s.errors.join(" | ")}`);
+    check(events.some((m) => m.type === "run_meta" && m.mode === "agent"), "agent：run_meta 标为 agent 模式");
+    check(content.includes("ZEPHYR-43"), "agent：文件已修改");
   }
 
   if (want("cancel")) {
@@ -283,10 +281,10 @@ try {
         events = since(from, chatId);
         check(done.status === "completed" && events.some((m) => m.type === "tool-completed" && m.result === "HELLO!"), "mcp：批准后执行");
 
-        from = await prompt(chatId, "用 mcp__echo__add 算 1+1。", { mode: "ask" });
-        done = await waitDone(chatId, from, "mcp-ask");
+        from = await prompt(chatId, "用 mcp__echo__add 算 1+1。", { mode: "agent" });
+        done = await waitDone(chatId, from, "mcp-agent");
         events = since(from, chatId);
-        check(done.status === "completed" && events.some((m) => m.type === "tool-completed" && m.name === "mcp__echo__add"), "mcp：ask 模式可用只读 MCP 工具");
+        check(done.status === "completed" && events.some((m) => m.type === "tool-completed" && m.name === "mcp__echo__add"), "mcp：Agent 可用 MCP 工具");
       } finally {
         rmSync(mcpFile, { force: true });
       }

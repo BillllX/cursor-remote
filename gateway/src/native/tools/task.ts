@@ -11,7 +11,7 @@ export type TaskOptions = {
   modelLabel: string;
   /** 父级可用的工具（不含 task 本身，子 Agent 不能再派子 Agent） */
   tools: ToolSpec[];
-  /** ask / plan 模式只能派只读的 explore */
+  /** 是否允许派出可写的 builder；explore 的只读边界独立于聊天模式。 */
   allowBuilder: boolean;
   maxSteps?: number;
   /** 与主 Agent 同一套上下文压缩 */
@@ -53,7 +53,7 @@ export function taskTool(options: TaskOptions): ToolSpec {
       const role = args.subagent_type === "builder" && options.allowBuilder ? "builder" : "explore";
       const tools = role === "builder" ? options.tools : options.tools.filter((t) => t.category === "read" || t.category === "network");
       const system = [
-        buildSystemPrompt({ cwd: ctx.cwd, mode: role === "builder" ? "agent" : "ask", tools, modelLabel: options.modelLabel }),
+        buildSystemPrompt({ cwd: ctx.cwd, mode: "agent", tools, modelLabel: options.modelLabel }),
         "",
         `你是主 Agent 派出的子 Agent（${role}）。主 Agent 只看得到你最后一条回复：完成后用简洁的中文汇报结论、关键文件路径和没解决的问题。`,
       ].join("\n");

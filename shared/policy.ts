@@ -15,20 +15,12 @@ export function isPlane(policy: PolicyId | string | undefined): boolean {
   return policy === "plane";
 }
 
-export function askDisallowedTools(): string[] {
-  return ["edit", "delete", "shell", "mcp", "task", "applyAgentDiff", "generateImage"];
-}
-
-export function planDisallowedTools(): string[] {
-  return ["edit", "delete", "applyAgentDiff"];
-}
-
 export function isPolicyProtectedPath(rel: string): boolean {
   const n = rel.replace(/\\/g, "/").replace(/^\/+/, "");
   return /(^|\/)\.cursor\/(hooks\.json|sandbox\.json|permissions\.json)$/i.test(n);
 }
 
-export function toolCategory(name: string, args?: unknown): ToolCategory {
+export function toolCategory(name: string, _args?: unknown): ToolCategory {
   const n = name.toLowerCase();
   if (/(write|strreplace|apply.?patch|editnotebook|multiedit|delete|unlink|createfile|applyagentdiff)/.test(n)) {
     return "write";

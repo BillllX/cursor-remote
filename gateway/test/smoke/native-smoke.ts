@@ -187,7 +187,7 @@ try {
 
   r = await tool("delete_file").run({ path: "src/dollar.ts" }, ctx);
   check(r.ok && !existsSync(join(ws, "src/dollar.ts")), "delete_file");
-  check(toolsForMode("ask").every((t) => t.category === "read"), "ask 模式只给只读工具");
+  check(toolsForMode("agent").some((t) => t.category === "write"), "agent 模式提供写工具");
 
   // ---------- 适配器 ----------
   queue.push({
@@ -412,7 +412,7 @@ try {
     (err: Error) => err.name === "AbortError",
   );
   check(aborted && Date.now() - t1 < 4000, "shell：取消即终止并抛 AbortError");
-  check(toolsForMode("ask", [sh]).every((t) => t.name !== "run_shell") && toolsForMode("agent", [sh]).some((t) => t.name === "run_shell"), "shell：只在 agent 模式提供");
+  check(toolsForMode("agent", [sh]).some((t) => t.name === "run_shell"), "shell：agent 模式提供");
   check(shellEnv({ PATH: "/bin", CURSOR_API_KEY: "x", HOME: "/h" }).CURSOR_API_KEY === undefined, "shell：shellEnv 丢弃非白名单变量");
   const preAborted = new AbortController();
   preAborted.abort();
@@ -523,7 +523,7 @@ try {
     adapter: adapterFor("anthropic"),
     endpoint: anthroEndpoint,
     messages: baseMessages,
-    tools: toolsForMode("ask"),
+    tools: toolsForMode("agent"),
     cwd: ws,
     signal: new AbortController().signal,
     hooks: makeHooks({ thinking: (d) => thoughts.push(d) }),
@@ -557,7 +557,7 @@ try {
   queue.push({ kind: "sse", chunks: [sseText("看完了")] });
   const xmlBase = requests.length;
   const xmlText: string[] = [];
-  result = await runNativeLoop({ adapter: adapterFor("xml"), endpoint: xmlEndpoint, messages: baseMessages, tools: toolsForMode("ask"), cwd: ws, signal: new AbortController().signal, hooks: makeHooks({ text: (d) => xmlText.push(d) }) });
+  result = await runNativeLoop({ adapter: adapterFor("xml"), endpoint: xmlEndpoint, messages: baseMessages, tools: toolsForMode("agent"), cwd: ws, signal: new AbortController().signal, hooks: makeHooks({ text: (d) => xmlText.push(d) }) });
   const x1 = requests[xmlBase] as { tools?: unknown; messages: Array<{ role: string; content: string }> };
   const x2 = requests[xmlBase + 1] as { messages: Array<{ role: string; content: string }> };
   check(result.status === "completed" && result.steps === 2, "xml：工具循环跑通", result.error);
@@ -583,7 +583,7 @@ try {
   t1 = Date.now();
   const mcpAborted = await byName("mcp__echo__slow")!.run({ ms: 5000 }, { cwd: ws, signal: mcpAbort.signal }).then(() => false, (err: Error) => err.name === "AbortError");
   check(mcpAborted && Date.now() - t1 < 2000, "mcp：取消即返回");
-  check(toolsForMode("ask", mcp.tools).some((t) => t.name === "mcp__echo__add") && !toolsForMode("ask", mcp.tools).some((t) => t.name === "mcp__echo__shout"), "mcp：ask 模式只给只读 MCP 工具");
+  check(toolsForMode("agent", mcp.tools).some((t) => t.name === "mcp__echo__add") && toolsForMode("agent", mcp.tools).some((t) => t.name === "mcp__echo__shout"), "mcp：agent 模式提供完整 MCP 工具");
   mcp = await mcpTools([mcpDir], { allowStdio: false });
   check(mcp.tools.length === 0, "mcp：沙箱租户不拉起 stdio 服务");
   const { spawn } = await import("node:child_process");
@@ -664,7 +664,7 @@ try {
     adapter: adapterFor("openai"),
     endpoint,
     modelLabel: "mock",
-    tools: toolsForMode("ask"),
+    tools: toolsForMode("agent"),
     allowBuilder: false,
     hooks: {
       needsApproval: () => false,

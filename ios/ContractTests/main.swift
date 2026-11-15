@@ -314,7 +314,7 @@ func sample(_ which: ClientCase) -> ClientMessage {
         return .prompt(
             text: "登录页白屏，帮我看看",
             model: "claude-4.6-sonnet",
-            mode: .plan,
+            mode: .agent,
             chatId: chat,
             files: ["src/login.ts"],
             images: [PromptImage(data: "iVBORw0KGgo=", mimeType: "image/png")],
@@ -355,7 +355,7 @@ func sample(_ which: ClientCase) -> ClientMessage {
     case .loadState: return .loadState
     case .adminStats: return .adminStats
     case .loopStart:
-        return .loopStart(chatId: chat, goal: "每小时检查一次构建", intervalSec: 3600, maxTicks: 24, model: "composer-2.5", mode: .ask)
+        return .loopStart(chatId: chat, goal: "每小时检查一次构建", intervalSec: 3600, maxTicks: 24, model: "composer-2.5", mode: .agent)
     case .loopStop: return .loopStop(chatId: chat)
     case .assistantGet: return .assistantGet(memory: true, knownRevision: 17, reqId: "rq-assistant-1", generation: 3)
     case .assistantOp:
@@ -2232,7 +2232,10 @@ guard let fixtureData = FileManager.default.contents(atPath: options.fixtures),
       let serverSamples = fixtures["server"]?.array
 else { fail("读不到或解析不了 \(options.fixtures)") }
 
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies()
+let legacyModeProblems = AgentMode(rawValue: "ask") == .agent && AgentMode(rawValue: "plan") == .agent
+    ? []
+    : ["AgentMode：旧 ask/plan 没有归一为 agent"]
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + legacyModeProblems
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

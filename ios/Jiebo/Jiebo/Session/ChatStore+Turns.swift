@@ -61,7 +61,7 @@ extension ChatStore {
         var next = Turn.blank(
             user: turn.user,
             model: turn.model ?? model(for: targetId),
-            mode: turn.mode ?? mode(for: targetId),
+            mode: .agent,
             running: true
         )
         next.id = turn.id
@@ -80,7 +80,7 @@ extension ChatStore {
         send(.prompt(
             text: visible,
             model: next.model,
-            mode: next.mode,
+            mode: .agent,
             chatId: chat.id,
             files: mentions.isEmpty ? nil : mentions,
             images: turn.images.isEmpty ? nil : turn.images,
@@ -112,56 +112,6 @@ extension ChatStore {
               !refreshingChatIds.contains(chat.id)
         else { return false }
         return true
-    }
-
-    func applyPlan(_ turnId: String, chatId requestedId: String? = nil) {
-        let targetId = requestedId ?? activeId
-        guard client.isOpen else {
-            flash(linkState == .offline ? "已断开，点按重连后再执行" : "正在连接，连上后再执行")
-            return
-        }
-        guard !isBusy(targetId) else {
-            flash("等当前这条跑完再执行")
-            return
-        }
-        guard let chat = chatSession(targetId),
-              let turn = chat.turns.first(where: { $0.id == turnId }),
-              !turn.deferred
-        else { return }
-        guard !cachedOnlyIds.contains(chat.id) else {
-            flash("这条对话还没对上服务器，稍后再执行")
-            return
-        }
-        chooseMode(.agent, chatId: targetId)
-        let visible = "执行这个计划"
-        let text = "请按你上一条计划开始执行，直接改文件，不要再只出方案。\n\n\(ReplyText.repair(String(turn.assistant.prefix(4000))))"
-        let targetModel = model(for: targetId)
-        let next = Turn.blank(user: visible, model: targetModel, mode: .agent, running: true)
-        patch(chat.id) { item in
-            var row = item
-            row.turns.append(next)
-            row.mode = .agent
-            return row
-        }
-        // 旧正文还在补齐时追加的回合：同 submit，补齐完成后补一次全量回推
-        if !chat.turnsComplete { localTurnsPendingSync.insert(chat.id) }
-        flash("按计划开始执行")
-        send(.prompt(
-            text: text,
-            model: targetModel,
-            mode: .agent,
-            chatId: chat.id,
-            files: nil,
-            images: nil,
-            confirmWrites: workspaceAgent(chatId: targetId) == nil ? chat.confirmWrites : false,
-            autoApprove: workspaceAgent(chatId: targetId) == nil ? nil : false,
-            fresh: nil,
-            nameChat: chat.isUntitled,
-            policy: chat.policy,
-            history: ChatStore.externalHistory(model: targetModel, turns: chat.turns),
-            turnId: next.id
-        ))
-        markProgress(chat.id)
     }
 
     func dropQueuedTurn(_ turnId: String, chatId requestedId: String? = nil) {
@@ -226,7 +176,7 @@ extension ChatStore {
         guard let session = chatSession(chatId) else { return }
         let untitled = chats.first { $0.id == chatId }?.isUntitled ?? true
         let targetModel = model(for: chatId)
-        let targetMode = mode(for: chatId)
+        let targetMode = AgentMode.agent
         // P11：第三方模型无状态——历史随 prompt 上行；须在本地 turn 追加前组装（否则把当前消息也装进去）
         let history = ChatStore.externalHistory(model: targetModel, turns: session.turns)
         // 对齐网页端：纯图时本地占位「（附图）」，prompt.text 留空由网关兜底
@@ -470,8 +420,6 @@ extension ChatStore {
         guard UIDevice.current.userInterfaceIdiom == .phone,
               unlocked, !cachedOnlyIds.contains(chatId), chatSession(chatId) != nil
         else { return }
-        let preferredMode = AgentMode(rawValue: UserDefaults.standard.string(forKey: "jiebo.phone.agentMode") ?? "") ?? .agent
-        if mode(for: chatId) != preferredMode { chooseMode(preferredMode, chatId: chatId) }
         let preferredModel = lastModel.nilIfEmpty ?? model(for: chatId)
         if model(for: chatId) != preferredModel { chooseModel(preferredModel, chatId: chatId) }
     }
@@ -489,16 +437,6 @@ extension ChatStore {
             return next
         }
         send(.setModel(model: id, chatId: targetId))
-    }
-
-    func chooseMode(_ value: AgentMode, chatId requestedId: String? = nil) {
-        let targetId = requestedId ?? activeId
-        if targetId == activeId { mode = value }
-        patch(targetId) { chat in
-            var next = chat
-            next.mode = value
-            return next
-        }
     }
 
     /// 待批决定还没对上服务器、或还没登录时不发，卡片留着。没连上时先在这台设备记下，并说明连上后才告诉服务器。

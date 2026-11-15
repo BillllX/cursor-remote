@@ -1,4 +1,9 @@
-export type AgentMode = "agent" | "plan" | "ask";
+export type AgentMode = "agent";
+
+/** 旧客户端和旧落盘数据可能仍带 ask / plan；运行时一律按 Agent 执行。 */
+export function normalizeAgentMode(_value: unknown): AgentMode {
+  return "agent";
+}
 
 /** 跨端设备桥只传 JSON，避免原生对象或二进制意外进入 WS。 */
 export type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };

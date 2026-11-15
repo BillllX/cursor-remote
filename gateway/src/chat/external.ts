@@ -31,7 +31,7 @@ export async function runExternalChat(
     type: "run_meta",
     chatId: slot.chatId,
     model: ext.full,
-    mode: "ask", // 第三方一律按问答对待（无工具），UI 不显示工具相关徽标
+    mode: "agent",
     policy: slot.policy,
     dialect: false,
   });

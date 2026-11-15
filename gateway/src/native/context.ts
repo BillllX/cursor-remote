@@ -28,8 +28,7 @@ export function buildSystemPrompt(opts: {
     has("task") ? "- 大范围调研用 task 派 explore 子 Agent，把结果收回来再继续；子 Agent 看不到当前对话，prompt 里要写全背景。" : "",
     "- 完成后用简短的中文说明做了什么、改了哪些文件；没完成的要说清楚卡在哪。",
   ];
-  if (opts.mode === "ask") lines.push("", "当前是 Ask 模式：只能读，不能改文件。用户要改动时，说明你会怎么改然后停下。");
-  if (opts.mode === "plan") lines.push("", "当前是 Plan 模式：只读摸底后给出分步方案，不要改文件。");
+  void opts.mode;
   lines.push("", "回答用中文（除非用户用别的语言提问），代码块标语言。");
   return lines.filter((line, i, arr) => line || arr[i - 1]).join("\n");
 }
