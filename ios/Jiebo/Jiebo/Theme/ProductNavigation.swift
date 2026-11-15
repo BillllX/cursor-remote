@@ -2,7 +2,7 @@ import Foundation
 
 /// 与 Web `NavigationIconId` 对齐的跨端导航语义。视图使用语义 ID，不直接选择同义图标。
 enum NavigationIconId: String, CaseIterable {
-    case assistant, collab, workspace, account, overview, chats, files, search, git, memory, terminal, loop, stats
+    case assistant, collab, workspace, account, overview, chats, files, search, git, memory, terminal, loop, stats, kb, schedules, skills, settings
 
     var symbol: String {
         switch self {
@@ -19,6 +19,10 @@ enum NavigationIconId: String, CaseIterable {
         case .terminal: return "terminal"
         case .loop: return "arrow.triangle.2.circlepath"
         case .stats: return "chart.bar"
+        case .kb: return "books.vertical"
+        case .schedules: return "calendar"
+        case .skills: return "wand.and.stars"
+        case .settings: return "gearshape"
         }
     }
 
@@ -37,6 +41,10 @@ enum NavigationIconId: String, CaseIterable {
         case .terminal: return "终端输出"
         case .loop: return "Loop"
         case .stats: return "使用统计"
+        case .kb: return "知识库与看板"
+        case .schedules: return "定时与自动化"
+        case .skills: return "技能工厂"
+        case .settings: return "设置"
         }
     }
 

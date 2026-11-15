@@ -253,7 +253,7 @@ struct MemoryCenterSkillsPane: View {
                                 .foregroundStyle(JieboColor.dim)
                             ScrollView(.horizontal, showsIndicators: true) {
                                 Text(prop.formattedMarkdown)
-                                    .font(JieboFont.mono(.caption2))
+                                    .font(JieboFont.monoText(.caption2))
                                     .foregroundStyle(JieboColor.ink)
                                     .padding(8)
                             }
@@ -310,8 +310,8 @@ struct MemoryCenterSkillsPane: View {
                 Spacer()
                 StatusTag(
                     text: Self.healthLabel(sk.health),
-                    fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.errFg : JieboColor.warnFg),
-                    bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.errBg : JieboColor.warnBg)
+                    fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.danger : JieboColor.warnFg),
+                    bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.dangerBg : JieboColor.warnBg)
                 )
             }
             Text(sk.summary)
@@ -345,7 +345,7 @@ struct MemoryCenterSkillsPane: View {
                     if let body = sk.body, !body.isEmpty {
                         ScrollView(.horizontal, showsIndicators: true) {
                             Text(body)
-                                .font(JieboFont.mono(.caption2))
+                                .font(JieboFont.monoText(.caption2))
                                 .foregroundStyle(JieboColor.ink)
                                 .padding(8)
                         }
@@ -478,7 +478,7 @@ struct MemoryCenterSkillDetailPane: View {
                     .font(JieboFont.text(.caption, weight: .semibold))
                     .foregroundStyle(JieboColor.dim)
                 Text(prop.formattedMarkdown)
-                    .font(JieboFont.mono(.caption2))
+                    .font(JieboFont.monoText(.caption2))
                     .foregroundStyle(JieboColor.ink)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -506,8 +506,8 @@ struct MemoryCenterSkillDetailPane: View {
                     Spacer()
                     StatusTag(
                         text: MemoryCenterSkillsPane.healthLabel(sk.health),
-                        fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.errFg : JieboColor.warnFg),
-                        bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.errBg : JieboColor.warnBg)
+                        fg: sk.health == "healthy" ? JieboColor.ok : (sk.health == "tampered" ? JieboColor.danger : JieboColor.warnFg),
+                        bg: sk.health == "healthy" ? JieboColor.ok.opacity(0.12) : (sk.health == "tampered" ? JieboColor.dangerBg : JieboColor.warnBg)
                     )
                 }
                 Text(sk.summary)
@@ -605,7 +605,7 @@ struct MemoryCenterSkillDetailPane: View {
                         .font(JieboFont.text(.caption, weight: .semibold))
                         .foregroundStyle(JieboColor.dim)
                     Text(sk.body ?? "（该能力未附带独立正文）")
-                        .font(JieboFont.mono(.caption2))
+                        .font(JieboFont.monoText(.caption2))
                         .foregroundStyle(JieboColor.ink)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)

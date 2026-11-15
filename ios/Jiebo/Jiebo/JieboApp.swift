@@ -8,12 +8,14 @@ struct JieboApp: App {
     @State private var im = ImStore()
     @State private var deviceBridge = DeviceBridgeCoordinator()
     @State private var theme = JieboTheme.shared
+    @State private var coldLaunch = ColdLaunchController()
     var body: some Scene {
         WindowGroup {
             JieboSceneRoot()
                 .environment(store)
                 .environment(im)
                 .environment(deviceBridge)
+                .environment(coldLaunch)
                 .preferredColorScheme(theme.appearance.colorScheme)
         }
         .commands {
@@ -35,6 +37,10 @@ private struct JieboSceneRoot: View {
     var body: some View {
         RootView()
             .environment(\.sceneSessionState, scene)
+            #if DEBUG
+            .modifier(NavigationRegressionFrame())
+            #endif
+            .modifier(ColdLaunchPresentation(sceneToken: scene.token))
             .onAppear {
                 im.attach(store, uploader: ImHTTPUploader())
                 store.imSink = im

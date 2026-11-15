@@ -16,7 +16,6 @@ struct PhoneShell: View {
                     destination(route)
                 }
         }
-        .task { await bootstrap() }
     }
 
     @ViewBuilder
@@ -48,65 +47,4 @@ struct PhoneShell: View {
         }
     }
 
-    // MARK: 冷启动对齐（§3.2）
-
-    /// 等 unlocked（自动登录时可能要等网络）→ 再等助理会话 id 到手（最多 8 秒）→ 选中助理会话 → bootstrapped
-    @MainActor
-    private func bootstrap() async {
-        store.assistantOnly = router.locksActiveChatToAssistant
-        while !store.unlocked, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(100))
-        }
-        var waited = 0
-        while !(store.unlocked && store.assistantChatId != nil), waited < 80, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(100))
-            waited += 1
-        }
-        guard !Task.isCancelled else { return }
-        store.assistantOnly = router.locksActiveChatToAssistant
-        if router.locksActiveChatToAssistant {
-            // 旧网关没有助理会话：openAssistantChat 只记下意图，助理页显示降级说明
-            store.openAssistantChat()
-        }
-        if store.assistantChatId != nil {
-            PushRegistrar.shared.start(store: store, im: im) // 幂等
-        }
-        router.bootstrapped = true
-        #if DEBUG
-        applyDebugArguments()
-        #endif
-    }
-
-    // MARK: DEBUG 启动参数（§8 P5）
-
-    #if DEBUG
-    /// --phone-route=root|inbox|today|delegations|todos|plans|runs|artifacts|settings|memory
-    /// runs 仍可用，打开的是委派。
-    /// --phone-delegation=<id>
-    @MainActor
-    private func applyDebugArguments() {
-        let arguments = ProcessInfo.processInfo.arguments
-        func value(of prefix: String) -> String? {
-            guard let found = arguments.first(where: { $0.hasPrefix(prefix) }) else { return nil }
-            return String(found.dropFirst(prefix.count))
-        }
-        if let route = value(of: "--phone-route=") {
-            switch route {
-            case "inbox": router.go(.inbox)
-            case "today": router.popToRoot()
-            case "delegations": router.go(.worklist(.delegation))
-            case "todos": router.go(.worklist(.todo))
-            case "plans": router.go(.worklist(.plan))
-            case "runs": router.go(.worklist(.delegation))
-            case "artifacts": router.go(.artifacts)
-            case "settings": router.path = [.settings]
-            case "memory": router.path = [.settings, .memory]
-            default: router.path = []
-            }
-        }
-        if let id = value(of: "--phone-delegation="), !id.isEmpty {
-            router.delegationDetail = DelegationRef(id: id)
-        }
-    }
-    #endif
 }

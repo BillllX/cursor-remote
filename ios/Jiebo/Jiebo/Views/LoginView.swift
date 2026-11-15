@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LoginView: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @FocusState private var focused: Bool
 
     private var canEnter: Bool {
@@ -78,7 +79,8 @@ struct LoginView: View {
             }
             .padding(32)
         }
-        .onAppear { focused = true }
+        .onAppear { focused = !coldLaunchVisible }
+        .onChange(of: coldLaunchVisible) { _, showing in focused = !showing }
     }
 
     /// 核对访问码时不要再写「已连上」：线是通的，身份还没对上。

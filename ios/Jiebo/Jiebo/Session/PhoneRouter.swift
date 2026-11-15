@@ -16,12 +16,6 @@ enum PhoneRoute: Hashable {
     case colleagues             // 小驳跨工作区同事与知识库通行证管理
 }
 
-enum PhoneTab: Hashable {
-    case assistant
-    case workspace
-    case messages
-}
-
 /// 待处理这一页里的栏目。通知是原来的收件箱；待办、计划、委派不再从侧栏另开一页。
 enum InboxLane: Hashable {
     case notices
@@ -52,9 +46,18 @@ extension EnvironmentValues {
 @Observable
 @MainActor
 final class PhoneRouter {
-    var selectedTab: PhoneTab = .assistant
+    private var navigation = PhoneNavigationState<PhoneRoute>()
+    var selectedTab: PhoneTab {
+        get { navigation.selectedTab }
+        set { navigation.select(newValue) }
+    }
+    var visitedWorkspace: Bool { navigation.visitedWorkspace }
+    var revision: UInt64 { navigation.revision }
     /// 小驳空间的导航栈。待处理、通知详情都在这条栈上。
-    var path: [PhoneRoute] = []
+    var path: [PhoneRoute] {
+        get { navigation.path }
+        set { navigation.path = newValue }
+    }
     var inboxLane: InboxLane = .notices
     /// 工作台左抽屉开着。底部空间栏要让开，抽屉底栏才点得到。
     var workbenchDrawerOpen = false
@@ -85,6 +88,8 @@ extension EnvironmentValues {
 }
 
 extension PhoneRouter {
+    func invalidatePendingNavigation() { navigation.invalidatePendingNavigation() }
+
     private func dismissKeyboard() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
@@ -95,9 +100,12 @@ extension PhoneRouter {
         workbenchDrawerOpen = false
         selectedTab = .assistant
         switch route {
-        case .inbox, .inboxItem:
+        case .inbox:
             inboxLane = .notices
             path = [.inbox]
+        case .inboxItem(let id):
+            inboxLane = .notices
+            path = [.inbox, .inboxItem(id)]
         case .worklist(let column):
             inboxLane = .work(column)
             path = [route]
@@ -109,14 +117,11 @@ extension PhoneRouter {
         }
     }
 
-    /// 三个大模块之间切换。回到小驳时落在聊天页，不留着上次推上去的页面。
+    /// 空间切换保留阅读位置；只有明确的聊天/语音入口才 popToRoot。
     func openSpace(_ tab: PhoneTab) {
         guard tab != .messages else { return }
         dismissKeyboard()
         workbenchDrawerOpen = false
-        if tab == .assistant {
-            path = []
-        }
         selectedTab = tab
     }
 
@@ -136,10 +141,8 @@ extension PhoneRouter {
         dismissKeyboard()
         workbenchDrawerOpen = false
         selectedTab = .assistant
-        if path.last != .inbox {
-            path.append(.inbox)
-        }
-        path.append(.inboxItem(id))
+        inboxLane = .notices
+        path = [.inbox, .inboxItem(id)]
     }
 
     func queueVoice(_ capture: AssistantCaptureBridge.Capture) {
@@ -161,7 +164,7 @@ extension PhoneRouter {
         }
         if let chatId, store.isAssistantChat(chatId) {
             popToRoot()
-            store.openAssistantChat()
+            store.prepareAssistantThread()
             return
         }
         if let chatId, let row = store.assistantState?.delegations.first(where: { $0.childChatId == chatId }) {

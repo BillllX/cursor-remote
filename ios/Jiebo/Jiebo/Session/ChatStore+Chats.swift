@@ -274,7 +274,6 @@ extension ChatStore {
         previewLoading = false
         exportTask?.cancel() // P10：在途导出同样不带到新会话（Grok R1 M1）——页签虽全局存活，
         exportLoading = false // 但「下载中切会话」是被动场景，完成时弹 sheet 会打断新上下文
-        requestFileIndex() // 冷启动/切会话都靠这里补拉（select 不再单独调）
         notedCheckpointId = nil
         refreshCheckpoints(chatId: newId)
         searchHits = []
@@ -291,6 +290,7 @@ extension ChatStore {
             treeTruncated = false
             gitStatus = [:]
         }
+        requestFileIndex() // Clear the old workspace first, then restore the target's cached index.
         ensureTurnsLoaded(newId) // P8 slim：点开的会话若只有元数据壳，启动分页加载
         if !assistantOnly, isWorkspaceChat(newId) {
             syncWorkbenchAgentViewing(chatId: newId, active: true)

@@ -92,14 +92,11 @@ if (phoneShell.includes('Tab("')) {
   throw new Error("iPhone 不得恢复底部 TabView");
 }
 for (const moduleEntry of [
-  "ZStack {",
-  "PhoneShell()",
-  ".opacity(router.selectedTab == .assistant ? 1 : 0)",
-  "if router.selectedTab == .workspace {\n                PhoneWorkbench(embedsPreview: false)",
-  "if router.selectedTab == .messages {\n                ChatHome()",
+  "ZStack {", "PhoneShell()", "if router.visitedWorkspace",
+  "PhoneWorkbench(embedsPreview: false)", "PhoneSpaceVisibility(active:",
   ".environment(\\.switchPhoneSpace",
 ]) {
-  requireSource(phoneShell, moduleEntry, "iPhone 三模块保持");
+  requireSource(phoneShell, moduleEntry, "iPhone 常驻空间切换");
 }
 
 // 委派 → 产物 → Preview，以及产物续作固定助理 chatId 且不 select 工作台。

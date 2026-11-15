@@ -631,7 +631,7 @@ func checkProductNavigation() -> [String] {
     var problems: [String] = []
     let navigationKeys = [
         "assistant", "collab", "workspace", "account", "overview", "chats", "files",
-        "search", "git", "memory", "terminal", "loop", "stats",
+        "search", "git", "memory", "terminal", "loop", "stats", "kb", "schedules", "skills", "settings",
     ]
     let statusKeys = [
         "normal", "running", "attention", "publishing", "succeeded", "cancelled",

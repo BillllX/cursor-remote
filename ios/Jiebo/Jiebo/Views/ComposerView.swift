@@ -46,6 +46,9 @@ struct ComposerView: View {
     @Environment(\.assistantSceneToken) private var assistantSceneToken
     @Environment(\.assistantVoicePresenterActive) private var assistantVoicePresenterActive
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.homeActive) private var homeActive
+    @Environment(\.coldLaunchVisible) private var coldLaunchVisible
+    private var canFocus: Bool { homeActive && !coldLaunchVisible && scenePhase == .active }
 
     var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
     var isAssistantSession: Bool { store.isAssistantChat(chatId) }
@@ -118,8 +121,8 @@ struct ComposerView: View {
         .confirmationDialog(
             "确认上传大文件？",
             isPresented: Binding(
-                get: { store.uploadConfirmation != nil },
-                set: { if !$0 { store.resolveUploadConfirmation(false) } }
+                get: { homeActive && !coldLaunchVisible && store.uploadConfirmation != nil },
+                set: { if homeActive && !$0 { store.resolveUploadConfirmation(false) } }
             ),
             titleVisibility: .visible
         ) {
@@ -131,24 +134,33 @@ struct ComposerView: View {
             }
         }
         .onAppear {
-            store.applyPhoneChatPreferences(chatId: chatId)
+            if homeActive { store.applyPhoneChatPreferences(chatId: chatId) }
             replaceDraft(sceneDraft(for: chatId))
-            store.refreshCheckpoints(chatId: chatId)
+            if homeActive { store.refreshCheckpoints(chatId: chatId) }
         }
         .onChange(of: store.lastModel) { _, _ in
-            store.applyPhoneChatPreferences(chatId: chatId)
+            if homeActive { store.applyPhoneChatPreferences(chatId: chatId) }
         }
         .onDisappear {
             stopVoice()
             flushDraft()
         }
+        .onChange(of: homeActive) { _, active in
+            if !active {
+                focused = false
+                stopVoice()
+                flushDraft()
+            } else {
+                store.applyPhoneChatPreferences(chatId: chatId)
+            }
+        }
         .animation(JieboMotion.snappy(reduceMotion), value: dictation.active)
         .onChange(of: chatId) { oldId, _ in
             stopVoice()
             flushDraft(currentChatId: oldId)
-            store.applyPhoneChatPreferences(chatId: chatId)
+            if homeActive { store.applyPhoneChatPreferences(chatId: chatId) }
             replaceDraft(sceneDraft(for: chatId))
-            store.refreshCheckpoints(chatId: chatId)
+            if homeActive { store.refreshCheckpoints(chatId: chatId) }
         }
         .onChange(of: store.draft(for: chatId)) { _, value in
             if let sceneSession {
@@ -158,7 +170,7 @@ struct ComposerView: View {
                 guard visible.isEmpty, !incoming.isEmpty else { return }
                 sceneSession.saveDraft(value, for: chatId)
                 replaceDraft(value)
-                focused = true
+                focused = canFocus
                 return
             }
             if value == ignoreDraftEcho { return }
@@ -190,12 +202,12 @@ struct ComposerView: View {
             sceneSession?.saveDraft(next, for: chatId)
             store.saveDraft(next, forChat: chatId)
             replaceDraft(next)
-            if scenePhase == .active && ownsSceneEditing {
-                focused = true
+            if canFocus && ownsSceneEditing {
+                focused = canFocus
             }
         }
         .onChange(of: focusNonce) { _, _ in
-            focused = true
+            focused = canFocus
         }
         .onReceive(NotificationCenter.default.publisher(for: .assistantVoiceComposerRequested)) { notification in
             handleAssistantVoice(notification)
@@ -203,7 +215,7 @@ struct ComposerView: View {
         .onReceive(NotificationCenter.default.publisher(for: .assistantComposerFocusRequested)) { notification in
             guard let delivery = notification.object as? PadSceneCommandDelivery,
                   delivery.sceneToken == assistantSceneToken,
-                  assistantVoicePresenterActive,
+                  assistantVoicePresenterActive, canFocus,
                   store.isAssistantChat(chatId)
             else { return }
             focused = true
@@ -295,7 +307,7 @@ struct ComposerView: View {
     private func handleAssistantVoice(_ notification: Notification) {
         guard let delivery = notification.object as? AssistantVoiceDelivery,
               delivery.sceneToken == assistantSceneToken,
-              assistantVoicePresenterActive,
+              assistantVoicePresenterActive, canFocus,
               dictation.phase == .idle,
               store.isAssistantChat(chatId)
         else { return }

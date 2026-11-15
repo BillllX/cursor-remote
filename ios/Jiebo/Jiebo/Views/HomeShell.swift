@@ -43,9 +43,13 @@ struct HomeShell: View {
     @Environment(ImStore.self) private var im
     @Environment(DeviceBridgeCoordinator.self) private var deviceBridge
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var padRouter = PadRouter()
     @State private var fallbackSceneToken = UUID().uuidString
+    #if DEBUG
+    @State private var ranPadRegression = false
+    #endif
 
     private var sceneToken: String { sceneSession?.token ?? fallbackSceneToken }
 
@@ -82,12 +86,12 @@ struct HomeShell: View {
     private var confirmationBinding: Binding<DeviceWriteConfirmation?> {
         Binding(
             get: {
-                deviceBridge.isConfirmationPresenter(token: sceneToken)
+                !coldLaunchVisible && deviceBridge.isConfirmationPresenter(token: sceneToken)
                     ? deviceBridge.confirmation
                     : nil
             },
             set: { value in
-                if value == nil, deviceBridge.confirmation != nil {
+                if !coldLaunchVisible, value == nil, deviceBridge.confirmation != nil {
                     deviceBridge.resolveConfirmation(allowed: false)
                 }
             }
@@ -97,11 +101,11 @@ struct HomeShell: View {
     private var mailDraftPresented: Binding<Bool> {
         Binding(
             get: {
-                deviceBridge.isConfirmationPresenter(token: sceneToken) &&
+                !coldLaunchVisible && deviceBridge.isConfirmationPresenter(token: sceneToken) &&
                     deviceBridge.mailDraft != nil
             },
             set: { shown in
-                if !shown { deviceBridge.dismissMailDraft() }
+                if !coldLaunchVisible && !shown { deviceBridge.dismissMailDraft() }
             }
         )
     }
@@ -139,6 +143,17 @@ struct HomeShell: View {
         .environment(\.openPadDomain, { padRouter.openDomain($0) })
         .environment(\.assistantSceneToken, sceneToken)
         .focusedSceneValue(\.padCommandActions, padCommandActions)
+        #if DEBUG
+        .task(id: "\(coldLaunchVisible):\(store.unlocked)") {
+            guard !coldLaunchVisible, store.unlocked, !ranPadRegression,
+                  ProcessInfo.processInfo.arguments.contains("--pad-navigation-smoke") else { return }
+            ranPadRegression = true
+            await NavigationRegression.runPad(store: store, router: padRouter, sceneSession: sceneSession, sceneToken: sceneToken)
+        }
+        #endif
+        .onChange(of: coldLaunchVisible) { _, visible in
+            if !visible { dispatchPush(); dispatchWidgetDeepLink() }
+        }
         .onAppear {
             AssistantScenePresenter.shared.register(token: sceneToken, active: scenePhase == .active)
             bootstrapPadRouter()
@@ -291,7 +306,7 @@ struct HomeShell: View {
     }
 
     private func dispatchWidgetDeepLink() {
-        guard padRouter.bootstrapped,
+        guard !coldLaunchVisible, padRouter.bootstrapped,
               let route = WidgetDeepLinkRouting.shared.consume(for: sceneToken)
         else { return }
         switch route {
@@ -330,7 +345,7 @@ struct HomeShell: View {
 
     /// iPad 点通知：先映射业务域，再在助理状态刷新后定位实体；不再消费后丢弃。
     private func dispatchPush() {
-        guard padRouter.bootstrapped,
+        guard !coldLaunchVisible, padRouter.bootstrapped,
               AssistantScenePresenter.shared.isPresenter(token: sceneToken),
               let target = PushRouting.shared.consume()
         else { return }

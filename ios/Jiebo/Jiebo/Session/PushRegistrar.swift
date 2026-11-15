@@ -85,6 +85,7 @@ final class PushRegistrar {
     private var loopTask: Task<Void, Never>?
     /// 已向系统请求过授权（授权弹窗只在登录后第一次出现）
     private var authRequested = false
+    private var launchPresentationActive = true
     private var deviceToken: String?
     /// 上一次成功发出的订阅指纹（租户 + token + 环境 + bundleId）；相同则不重复发
     private var reportedKey: String?
@@ -127,6 +128,11 @@ final class PushRegistrar {
                 try? await Task.sleep(for: .seconds(2))
             }
         }
+    }
+
+    func launchPresentationEnded() {
+        launchPresentationActive = false
+        syncIfPossible()
     }
 
     /// 条件满足就同步一次：请求授权 / 注册远程通知 / 上报订阅 / 更新角标。可重复调用
@@ -210,7 +216,11 @@ final class PushRegistrar {
     }
 
     private func requestAuthorizationIfNeeded(_ store: ChatStore) {
-        guard !authRequested, needsNotificationPrompt(store) else { return }
+        #if DEBUG
+        // Automated navigation probes do not answer system permission prompts.
+        if ProcessInfo.processInfo.arguments.contains("--phone-navigation-smoke") || ProcessInfo.processInfo.arguments.contains("--pad-navigation-smoke") { return }
+        #endif
+        guard !launchPresentationActive, !authRequested, needsNotificationPrompt(store) else { return }
         authRequested = true
         Task { @MainActor in
             let center = UNUserNotificationCenter.current()

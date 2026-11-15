@@ -9,6 +9,18 @@ final class SceneSessionState {
     let token = UUID().uuidString
     var chatDestination: ChatDestination?
     var workbenchChatId: String?
+    @ObservationIgnored private var phoneWorkspaceChats: [String: String] = [:]
+
+    func rememberPhoneWorkspaceChat(_ id: String, in store: ChatStore) {
+        guard store.isWorkspaceChat(id), let path = store.chatSession(id)?.cwd else { return }
+        phoneWorkspaceChats[normPath(path)] = id
+    }
+
+    func phoneWorkspaceChat(in path: String, store: ChatStore) -> String? {
+        guard let id = phoneWorkspaceChats[normPath(path)],
+              store.isWorkspaceChat(id), sameCwd(store.chatSession(id)?.cwd, path) else { return nil }
+        return id
+    }
     /// 仅保存本窗口的页签键；页签内容仍是 ChatStore 中的规范化服务数据。
     private var preview = ScenePreviewState()
     var previewKey: String? { preview.selected }

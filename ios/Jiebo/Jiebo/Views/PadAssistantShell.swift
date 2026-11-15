@@ -7,6 +7,7 @@ struct PadAssistantShell: View {
     @Environment(PadRouter.self) private var router
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
@@ -207,6 +208,12 @@ struct PadAssistantShell: View {
             syncPreviewPresentation()
             store.requestAssistant(memory: router.assistantSection == .memory)
         }
+        #if DEBUG
+        .onChange(of: router.regressionSheet) { _, sheet in
+            settingsOpen = sheet == "settings"
+            skillsOpen = sheet == "skills"
+        }
+        #endif
         .onChange(of: router.assistantSection) { _, section in
             sceneSession?.dismissPreview()
             store.requestAssistant(memory: section == .memory, force: true)
@@ -231,10 +238,12 @@ struct PadAssistantShell: View {
             else { return }
             columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
         }
-        .task(id: router.pendingVoiceCapture?.id) {
-            guard let capture = router.takePendingVoice() else { return }
-            // 等固定会话 ThreadView 的唯一 Composer 完成挂载，再交给它启动听写。
+        .task(id: "\(coldLaunchVisible):\(router.pendingVoiceCapture?.id ?? "")") {
+            guard !coldLaunchVisible, let capture = router.pendingVoiceCapture else { return }
+            // Keep the capture queued until the intro and composer mounting are complete.
             await Task.yield()
+            guard !Task.isCancelled, router.assistantSection == .today else { return }
+            _ = router.takePendingVoice()
             let delivery = AssistantVoiceDelivery(sceneToken: sceneToken, capture: capture)
             NotificationCenter.default.post(name: .assistantVoiceComposerRequested, object: delivery)
         }
@@ -358,7 +367,7 @@ struct PadAssistantShell: View {
     private var detachedPreviewFile: Binding<PreviewFile?> {
         Binding(
             get: {
-                router.assistantSection == .today || store.fileBrowserOpen ? nil : store.previewFile
+                coldLaunchVisible || router.assistantSection == .today || store.fileBrowserOpen ? nil : store.previewFile
             },
             set: { store.previewFile = $0 }
         )
@@ -367,7 +376,7 @@ struct PadAssistantShell: View {
     private var detachedExportFile: Binding<PreviewFile?> {
         Binding(
             get: {
-                router.assistantSection == .today || store.fileBrowserOpen ? nil : store.exportFile
+                coldLaunchVisible || router.assistantSection == .today || store.fileBrowserOpen ? nil : store.exportFile
             },
             set: { store.exportFile = $0 }
         )

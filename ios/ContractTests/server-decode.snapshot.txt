@@ -111,7 +111,7 @@
 .runMeta(
   chatId: "c-7f3a9e21"
   model: "claude-4.6-sonnet"
-  mode: .plan
+  mode: .agent
 )
 
 ## server[8] text-delta #1
@@ -469,7 +469,7 @@
   ]
   task: "检查路由守卫"
   model: "claude-4.6-sonnet"
-  mode: .ask
+  mode: .agent
   awaitingApproval: JSON {"args": {"path": "slides.md"}, "callId": "call-w1", "name": "write"}
   queued: [
     JSON {"turnId": "t-queued-1", "userText": "再加个测试"}
@@ -602,6 +602,12 @@
         body: "新建工作区 notes · 整理讲稿"
         createdAt: 1739000001000
         read: true
+        decisionKind: nil
+        snoozedUntil: nil
+        resolved: false
+        attention: nil
+        todoId: nil
+        eventId: nil
         actionPrompt: "请继续处理这个捕获"
         chatId: "c-child-5b10"
         scheduleId: "s_morning"
@@ -1092,6 +1098,12 @@
   body: "新建工作区 notes · 整理讲稿"
   createdAt: 1739000001000
   read: true
+  decisionKind: nil
+  snoozedUntil: nil
+  resolved: false
+  attention: nil
+  todoId: nil
+  eventId: nil
   actionPrompt: "请继续处理这个捕获"
   chatId: "c-child-5b10"
   scheduleId: "s_morning"

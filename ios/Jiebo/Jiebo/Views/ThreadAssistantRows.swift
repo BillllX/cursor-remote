@@ -122,7 +122,7 @@ enum AssistantToolText {
         let propObj = payload?["proposal"]?.object
         let id = tool.args?.string(in: "id", "skillId", "query") ?? propObj?["skillId"]?.string ?? ""
         let resultName = payload?["name"]?.string?.nilIfEmpty ?? propObj?["name"]?.string?.nilIfEmpty
-        let argName = tool.args?.string(in: "name")?.nilIfEmpty
+        let argName = tool.args?.string(in: "name").nilIfEmpty
         let displayName = resultName ?? argName ?? knownSkillNames[id]
         if let displayName, !id.isEmpty, displayName != id {
             return "\(displayName) (\(id))"

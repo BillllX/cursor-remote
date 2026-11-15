@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// iPad 窄窗，以及 iPhone 的「工作区」页：打开就是当前工作区对话。
 /// 抽屉只放工作区：当前工作区（切换、工具、对话）→ 底部设置菜单。
@@ -7,6 +8,7 @@ struct PhoneWorkbench: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.sceneSessionState) private var sceneSession
+    @Environment(\.homeActive) private var homeActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var embedsPreview = true
     @State private var drawerOpen = false
@@ -34,12 +36,17 @@ struct PhoneWorkbench: View {
     var body: some View {
         @Bindable var store = store
         ZStack(alignment: .leading) {
-            ThreadView(
-                chrome: .phoneLegacy,
-                chatId: sceneSession?.workbenchChatId,
-                openDrawer: {
-                withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
-            })
+            Group {
+                if phoneRouter != nil {
+                    PhoneRetainedThreads(chatId: sceneSession?.workbenchChatId ?? "boot") {
+                        withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
+                    }
+                } else {
+                    ThreadView(chrome: .phoneLegacy, chatId: sceneSession?.workbenchChatId) {
+                        withAnimation(JieboMotion.panel(reduceMotion)) { drawerOpen = true }
+                    }
+                }
+            }
             .background { WorkbenchShortcuts() }
             .accessibilityHidden(previewPanelOpen || drawerOpen)
             if let layer = store.toolLayer {
@@ -120,15 +127,30 @@ struct PhoneWorkbench: View {
             SkillsWorkspaceSheet()
         }
         .chatActionAlerts($chatActions)
-        .task { preferRunningChat() }
+        .task {
+            guard homeActive else { return }
+            // Release the assistant-only guard before selecting a workspace, including push/file entry points.
+            if phoneRouter?.selectedTab == .workspace { store.assistantOnly = false }
+            preferRunningChat()
+        }
+        .onChange(of: homeActive) { _, active in
+            if active { adoptWorkbenchChatIfNeeded() }
+            else { drawerOpen = false }
+        }
         .onChange(of: store.activeId) { _, nextId in
+            guard homeActive else { return }
             if store.isWorkspaceChat(nextId) {
                 sceneSession?.workbenchChatId = nextId
             } else {
                 adoptWorkbenchChatIfNeeded()
             }
         }
-        .onChange(of: store.chats.count) { _, _ in adoptWorkbenchChatIfNeeded() }
+        .onChange(of: store.chats.count) { _, _ in
+            if homeActive { adoptWorkbenchChatIfNeeded() }
+        }
+        .onChange(of: sceneSession?.workbenchChatId) { _, id in
+            if phoneRouter != nil, let id { sceneSession?.rememberPhoneWorkspaceChat(id, in: store) }
+        }
         .onChange(of: drawerOpen) { _, open in
             phoneRouter?.workbenchDrawerOpen = open
         }
@@ -170,7 +192,7 @@ struct PhoneWorkbench: View {
     /// 工作台还停在助理会话或空占位时，换成上次打开的子工作区。已经在子工作区里就不抢。
     /// 窗口记下的会话还要成为活动会话，文件列表才会落在这个工作区，而不是用户根目录。
     private func adoptWorkbenchChatIfNeeded() {
-        guard let sceneSession else { return }
+        guard homeActive, let sceneSession else { return }
         if let current = sceneSession.workbenchChatId, store.isWorkspaceChat(current) {
             store.activateWorkspaceChat(current)
             return
@@ -181,6 +203,7 @@ struct PhoneWorkbench: View {
     }
 }
 private struct PhoneDrawer: View {
+    @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(ChatStore.self) private var store
     @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -401,6 +424,7 @@ private struct PhoneDrawer: View {
         let selected = chat.id == selectedChatId
         let live = store.chatShowsRunning(chat)
         return Button {
+            phoneRouter?.invalidatePendingNavigation()
             sceneSession?.workbenchChatId = chat.id
             store.rememberWorkspaceChat(chat.id)
             store.activateWorkspaceChat(chat.id)
@@ -509,5 +533,37 @@ private struct PhoneDrawer: View {
 struct WorkbenchShortcuts: View {
     var body: some View {
         EmptyView()
+    }
+}
+
+private struct PhoneRetainedThreads: View {
+    @Environment(\.homeActive) private var homeActive
+    @Environment(ChatStore.self) private var store
+    let chatId: String
+    let openDrawer: () -> Void
+    @State private var history = PhoneThreadHistory()
+
+    var body: some View {
+        ZStack {
+            if chatId == "boot" {
+                ThreadView(chrome: .phoneLegacy, chatId: "boot", openDrawer: openDrawer)
+            }
+            ForEach(history.displaying(chatId).filter { store.isWorkspaceChat($0) }, id: \.self) { id in
+                ThreadView(chrome: .phoneLegacy, chatId: id, openDrawer: openDrawer)
+                    .environment(\.homeActive, homeActive && id == chatId)
+                    .opacity(id == chatId ? 1 : 0)
+                    .allowsHitTesting(homeActive && id == chatId)
+                    .accessibilityHidden(!homeActive || id != chatId)
+                    .zIndex(id == chatId ? 1 : 0)
+            }
+        }
+        .onAppear { history.visit(chatId) }
+        .onChange(of: chatId) { _, id in
+            history.visit(id)
+            AppLaunchMetrics.event("PhoneWorkspaceThreadSelected")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            history.trim(to: chatId)
+        }
     }
 }

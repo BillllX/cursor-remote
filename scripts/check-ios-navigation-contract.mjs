@@ -91,6 +91,7 @@ const iosConversationalLabels = new Map([
   ["workspace", "文件夹"],
   ["search", "搜索"],
   ["git", "改动"],
+  ["memory", "记忆与规则"],
 ]);
 const productNavigationLabels = new Map(
   [...product.matchAll(/\{ id: "([^"]+)", label: "([^"]+)", icon: "([^"]+)" \}/g)]
@@ -124,20 +125,19 @@ for (const [source, needle, title] of [
   [assistantHome, "NavigationIconId.account.symbol", "小驳页设置入口"],
   [assistantHome, "StatusLegendId.attention", "小驳页待处理状态"],
   [chatHome, "NavigationIconId.account.symbol", "聊天主页设置入口"],
-  [readFileSync("ios/Jiebo/Jiebo/Views/Phone/PhoneTabShell.swift", "utf8"), "NavigationIconId.assistant.symbol", "手机三空间里的小驳"],
+  [readFileSync("ios/Jiebo/Jiebo/Views/ThreadView+Header.swift", "utf8"), 'accessibilityLabel("返回小驳")', "工作台返回小驳入口"],
   [menuScreens, "NavigationIconId.memory.symbol", "设置页记忆入口"],
   [menuScreens, "NavigationIconId.stats.symbol", "设置页统计入口"],
   [memoryViews, "NavigationIconId.account.symbol", "记忆中心个人/设置入口"],
   [memoryViews, '"记得的我"', "记忆中心四入口：记得的我"],
   [memoryViews, '"这个文件夹"', "记忆中心四入口：这个文件夹"],
   [memoryViews, '"要你看一眼"', "记忆中心四入口：要你看一眼"],
-  [memoryViews, '"规则与诊断"', "记忆中心规则分组"],
+  [memoryViews, '"规则、诊断与备份"', "记忆中心规则分组"],
   [memoryViews, '"文件夹规则"', "记忆中心直达文件夹规则"],
   [adminStats, "NavigationIconId.stats.symbol", "统计空态"],
   [rootView, "StatusLegendId.running", "RootView 运行状态"],
-  [home, "StatusLegendId.attention", "iPad 域切换待处理状态"],
-  [sidebar, 'row.status == "armed" || row.status == "running"', "iPad Loop 活动状态"],
-  [phoneWorkbench, 'row.status == "armed" || row.status == "running"', "窄屏 Loop 活动状态"],
+  [readFileSync("ios/Jiebo/Jiebo/Views/PadAssistantExperience.swift", "utf8"), "没有待处理事项", "iPad 收件箱待处理状态"],
+  [readFileSync("ios/Jiebo/Jiebo/Views/LoopSheet.swift", "utf8"), 'row.status == "armed" || row.status == "running"', "Loop 功能页活动状态"],
   [sidebar, "PhoneSettingsScreen()", "iPad 账户入口"],
   [phoneWorkbench, "PhoneSettingsScreen()", "窄屏账户入口"],
 ]) {

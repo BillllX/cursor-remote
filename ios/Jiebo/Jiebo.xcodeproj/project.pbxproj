@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        PNV00202 /* NavigationRegression.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00201 /* NavigationRegression.swift */; };
+        PNV00102 /* PhoneNavigationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00101 /* PhoneNavigationState.swift */; };
 		A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000100 /* JieboApp.swift */; };
 		A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000101 /* Tokens.swift */; };
 		A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000102 /* JieboMark.swift */; };
@@ -158,6 +160,9 @@
 		WIDG0204 /* WidgetSnapshotBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0103 /* WidgetSnapshotBridge.swift */; };
 		WIDG0205 /* WidgetDeepLinkRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = WIDG0104 /* WidgetDeepLinkRouting.swift */; };
 		WIDG0D15 /* JieboWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = WIDG0018 /* JieboWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+        CLN00102 /* ColdLaunchState.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLN00101 /* ColdLaunchState.swift */; };
+        CLN00202 /* StickerLaunchSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLN00201 /* StickerLaunchSound.swift */; };
+        CLN00302 /* ColdLaunchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CLN00301 /* ColdLaunchView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -193,6 +198,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        PNV00201 /* NavigationRegression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationRegression.swift; sourceTree = "<group>"; };
+        PNV00101 /* PhoneNavigationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneNavigationState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -346,6 +353,9 @@
 		P3S000102 /* SceneEditingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneEditingPolicy.swift; sourceTree = "<group>"; };
 		P3I000101 /* CollabRunGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollabRunGraphView.swift; sourceTree = "<group>"; };
 		DVC100106 /* DeviceViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViews.swift; sourceTree = "<group>"; };
+        CLN00101 /* ColdLaunchState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColdLaunchState.swift; sourceTree = "<group>"; };
+        CLN00201 /* StickerLaunchSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StickerLaunchSound.swift; sourceTree = "<group>"; };
+        CLN00301 /* ColdLaunchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColdLaunchView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -518,6 +528,10 @@
 				BOOTC001 /* AppBootstrapCache.swift */,
 				BOOTC002 /* ChatStore+Bootstrap.swift */,
 				BOOTC005 /* AppLaunchMetrics.swift */,
+                CLN00201 /* StickerLaunchSound.swift */,
+                CLN00101 /* ColdLaunchState.swift */,
+                PNV00101 /* PhoneNavigationState.swift */,
+                PNV00201 /* NavigationRegression.swift */,
 				A1B2C3D4E5F6071829000192 /* ThumbnailStore.swift */,
 				A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */,
 				A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */,
@@ -536,6 +550,7 @@
 				PADP00104 /* PadAssistantExperience.swift */,
 				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
 				AVA000101 /* AssistantAvatarView.swift */,
+                CLN00301 /* ColdLaunchView.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
@@ -931,6 +946,11 @@
 				BOOTC003 /* AppBootstrapCache.swift in Sources */,
 				BOOTC004 /* ChatStore+Bootstrap.swift in Sources */,
 				BOOTC006 /* AppLaunchMetrics.swift in Sources */,
+                CLN00302 /* ColdLaunchView.swift in Sources */,
+                CLN00202 /* StickerLaunchSound.swift in Sources */,
+                CLN00102 /* ColdLaunchState.swift in Sources */,
+                PNV00102 /* PhoneNavigationState.swift in Sources */,
+                PNV00202 /* NavigationRegression.swift in Sources */,
 				A1B2C3D4E5F6071829000392 /* ThumbnailStore.swift in Sources */,
 				A1B2C3D4E5F6071829000323 /* HtmlRewrite.swift in Sources */,
 				A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */,

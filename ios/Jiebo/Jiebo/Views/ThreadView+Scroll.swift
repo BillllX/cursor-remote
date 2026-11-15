@@ -62,7 +62,7 @@ extension ThreadView {
                                 Color.clear
                                     .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, minY in
                                         // VStack 会一次性建好子视图，不能用 onAppear；看哨兵是否进视口
-                                        guard minY >= -12, minY < viewportHeight - 48 else { return }
+                                        guard homeActive, minY >= -12, minY < viewportHeight - 48 else { return }
                                         guard !stickToBottom else { return }
                                         loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
                                     }
@@ -86,7 +86,7 @@ extension ThreadView {
                                 Color.clear
                                     .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
                                         let visible = minY >= -12 && minY < viewportHeight - 48
-                                        guard visible, !stickToBottom else {
+                                        guard homeActive, visible, !stickToBottom else {
                                             if !visible { earlierDiskArmed = true }
                                             return
                                         }
@@ -120,7 +120,7 @@ extension ThreadView {
                                 Color.clear
                                     .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
                                         let visible = minY >= -12 && minY < viewportHeight - 48
-                                        guard visible, !stickToBottom else {
+                                        guard homeActive, visible, !stickToBottom else {
                                             if !visible { earlierNetworkArmed = true }
                                             return
                                         }
@@ -238,6 +238,7 @@ extension ThreadView {
                 releaseFollow()
             })
             .onChange(of: threadChat?.turns.count) { _, _ in
+                guard homeActive else { return }
                 if let anchor = earlierNetworkAnchorId {
                     restoreEarlierNetworkAnchor(anchor, proxy: proxy)
                     return
@@ -249,17 +250,17 @@ extension ThreadView {
                 if !loading, earlierNetworkAnchorId != nil { earlierNetworkAnchorId = nil }
             }
             .onChange(of: liveTail) { _, _ in
-                guard pinExceeded, stickToBottom else { return }
+                guard homeActive, pinExceeded, stickToBottom else { return }
                 scheduleStreamScroll(proxy)
             }
             .onChange(of: pinHeightRevision) { _, _ in
                 // 以真实布局高度兜底 80ms Markdown 排版、文件卡、回执和首次跨过 pinExceeded 的时序。
-                guard pinExceeded, stickToBottom else { return }
+                guard homeActive, pinExceeded, stickToBottom else { return }
                 scheduleStreamScroll(proxy)
             }
             .onChange(of: threadChat?.turns.last?.running) { _, running in
                 // 流式时不追；停更后代码和表格还会长高，超出钉顶才再贴一次底
-                guard running == false, pinExceeded, stickToBottom else { return }
+                guard homeActive, running == false, pinExceeded, stickToBottom else { return }
                 cancelStreamScroll()
                 scrollToEndNow(proxy)
                 followTask?.cancel()
@@ -279,6 +280,13 @@ extension ThreadView {
                 } else if pinnedTurnId != nil, newHeight > pinnedMinHeight {
                     pinnedMinHeight = newHeight
                 }
+            }
+            .onChange(of: homeActive) { _, active in
+                guard active, stickToBottom,
+                      let last = threadChat?.turns.last?.id, viewportHeight > 1 else { return }
+                // Only catch up a following reader. Reading older messages remains untouched.
+                if last != pinnedTurnId { pinToTurn(last, proxy: proxy, height: viewportHeight) }
+                else if pinExceeded { scrollToEndNow(proxy) }
             }
             .onChange(of: resolvedChatId) { _, id in
                 // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
@@ -435,7 +443,7 @@ extension ThreadView {
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, generation == streamScrollGeneration else { return }
             streamScrollTask = nil
-            guard pinExceeded, stickToBottom else { return }
+            guard homeActive, pinExceeded, stickToBottom else { return }
             scrollToEndNow(proxy)
         }
     }

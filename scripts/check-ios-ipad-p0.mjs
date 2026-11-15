@@ -70,17 +70,16 @@ requireSource(
   "if UIDevice.current.userInterfaceIdiom == .phone {\n                PhoneTabShell()",
   "iPhone 三 Tab 路径",
 );
-if (
-  phone.includes('Tab("') ||
-  !phone.includes("ZStack {") ||
-  !phone.includes("PhoneShell()") ||
-  !phone.includes(".opacity(router.selectedTab == .assistant ? 1 : 0)") ||
-  !phone.includes("if router.selectedTab == .workspace {\n                PhoneWorkbench(embedsPreview: false)") ||
-  !phone.includes("if router.selectedTab == .messages {\n                ChatHome()") ||
-  !phone.includes(".environment(\\.switchPhoneSpace")
-) {
-  throw new Error("iPhone 三大模块切换源码契约被改变");
-}
+// iPhone retains view identity, but only the selected surface owns input/presentation.
+for (const needle of [
+  "PhoneShell()", "if router.visitedWorkspace", "PhoneWorkbench(embedsPreview: false)",
+  "PhoneSpaceVisibility(active:", ".environment(\\.homeActive, active)",
+  ".allowsHitTesting(active)", ".accessibilityHidden(!active)", ".environment(\\.switchPhoneSpace",
+]) requireSource(phone, needle, "iPhone 常驻空间与可见性隔离");
+if (phone.includes('Tab("')) throw new Error("iPhone 不得恢复底部 TabView");
+const thread = read("ios/Jiebo/Jiebo/Views/ThreadView.swift");
+requireSource(thread, "guard homeActive, active ??", "隐藏会话释放编辑租约");
+requireSource(thread, "!homeActive || coldLaunchVisible || store.fileBrowserOpen", "隐藏会话不得弹预览");
 if (router.includes("PhoneRouter") || home.includes("store.assistantOnly = true")) {
   throw new Error("iPad 路由不得复用 PhoneRouter 或启用 assistantOnly");
 }
@@ -169,3 +168,8 @@ if (sharePhase.includes("PADP001") || sharePhase.includes("PADP002")) {
 }
 
 console.log("iPad P0 静态契约：路由、迁移、推送、pbx、单 Composer 与 iPhone 路径通过");
+
+const phoneHome = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");
+requireSource(phoneHome, "switchPhoneSpace?(.workspace)", "工作台使用统一空间入口");
+requireSource(phone, "store.assistantOnly = tab == .assistant\n        router.openSpace(tab)", "工作台切换前解除助理会话限制");
+requireSource(phone, "guard !router.bootstrapped else { return }", "场景容器只初始化一次");

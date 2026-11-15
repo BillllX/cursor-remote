@@ -10,17 +10,15 @@ struct AssistantHome: View {
     @State private var skillsOpen = false
     @State private var modelPickerOpen = false
     @Environment(PhoneRouter.self) private var router
+    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
 
     private var assistantTargetChatId: String {
-        store.assistantChatId ?? store.activeId
+        store.assistantChatId ?? "boot"
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if router.selectedTab != .assistant {
-                // 工作台和即时消息各自有对话。这里再留一块会跟着 activeId 把那边的输入租约占住或清掉。
-                Color.clear
-            } else if store.assistantChatId == nil, router.bootstrapped {
+            if store.assistantChatId == nil, router.bootstrapped {
                 unsupportedCard
             } else {
                 if let attentionLine {
@@ -69,7 +67,8 @@ struct AssistantHome: View {
                     .padding(.top, 8)
                     .accessibilityAddTraits(.updatesFrequently)
                 }
-                ThreadView(chrome: .embedded, dock: AnyView(ActionDock()))
+                ThreadView(chrome: .embedded, chatId: assistantTargetChatId, dock: AnyView(ActionDock()))
+                    .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -90,7 +89,7 @@ struct AssistantHome: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { router.go(.worklist(.todo)) } label: {
-                    Image(systemName: "calendar")
+                    Image(systemName: NavigationIconId.schedules.symbol)
                         .font(JieboFont.text(.body, weight: .semibold))
                         .foregroundStyle(JieboColor.ink)
                         .frame(width: 44, height: 44)
@@ -140,12 +139,12 @@ struct AssistantHome: View {
                     }
                     .padding(.horizontal, 16)
                     List {
-                        Section { sidebarRoute("文件", symbol: "folder", route: .artifacts) }
+                        Section { sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts) }
                         conversationSection
                         Section("记忆与能力") {
                             sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)
                             Button { closeSidebar { skillsOpen = true } } label: {
-                                Label("技能工厂", systemImage: "wand.and.stars")
+                                Label("技能工厂", systemImage: NavigationIconId.skills.symbol)
                                     .frame(minHeight: 44)
                             }
                             sidebarRoute("同事与访问管理", symbol: NavigationIconId.collab.symbol, route: .colleagues)
@@ -158,7 +157,11 @@ struct AssistantHome: View {
                     Divider()
                     sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
                         .padding(.horizontal, 16)
-                    Button { closeSidebar { router.openSpace(.workspace) } } label: {
+                    Button {
+                        closeSidebar {
+                            switchPhoneSpace?(.workspace)
+                        }
+                    } label: {
                         HStack {
                             Label("工作台", systemImage: "rectangle.3.group")
                             Spacer()
@@ -304,7 +307,7 @@ struct AssistantHome: View {
         }
         .accessibilityLabel(
             badge > 0
-                ? "收件箱，\(badge) 条未读消息"
+                ? "收件箱，\(StatusLegendId.attention.accessibilityLabel(count: badge))"
                 : "收件箱"
         )
     }

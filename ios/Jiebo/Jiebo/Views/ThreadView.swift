@@ -24,6 +24,8 @@ struct ThreadView: View {
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @Environment(\.dynamicTypeSize) var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.homeActive) var homeActive
+    @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @Environment(\.assistantSceneToken) private var sceneToken
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var editingOwnership = SceneEditingOwnership.shared
@@ -107,16 +109,35 @@ struct ThreadView: View {
             ActivityView(items: [file.url])
         }
         .onAppear {
+            #if DEBUG
+            if !sceneToken.isEmpty { PhoneNavigationDiagnostics.mounted[editorViewId] = resolvedChatId }
+            #endif
             claimEditing()
-            store.ensureTurnsLoaded(resolvedChatId)
+            if homeActive { store.ensureTurnsLoaded(resolvedChatId) }
         }
         .onDisappear {
+            #if DEBUG
+            PhoneNavigationDiagnostics.mounted[editorViewId] = nil
+            #endif
             releaseEditing(resource: editingResource, sceneToken: sceneToken)
         }
         .onChange(of: resolvedChatId) { oldId, newId in
+            #if DEBUG
+            if !sceneToken.isEmpty { PhoneNavigationDiagnostics.mounted[editorViewId] = newId }
+            #endif
             releaseEditing(resource: resource(for: oldId), sceneToken: sceneToken)
             claimEditing()
-            store.ensureTurnsLoaded(newId)
+            if homeActive { store.ensureTurnsLoaded(newId) }
+        }
+        .onChange(of: homeActive) { _, active in
+            claimEditing()
+            if active {
+                store.ensureTurnsLoaded(resolvedChatId)
+                AppLaunchMetrics.event("PhoneThreadVisible")
+            } else {
+                cancelStreamScroll()
+                followTask?.cancel()
+            }
         }
         .onChange(of: sceneToken) { oldToken, _ in
             releaseEditing(resource: editingResource, sceneToken: oldToken)
@@ -140,12 +161,21 @@ struct ThreadView: View {
     var threadBusy: Bool { threadChat.map { store.chatShowsRunning($0) } ?? false }
     var editingResource: String { resource(for: resolvedChatId) }
     var ownsEditing: Bool {
+        // Retain the hidden composer and draft buffer, but never its editing lease.
+        if !homeActive { return true }
         if editingOwnership.isOwner(resource: editingResource, sceneToken: sceneToken) { return true }
         // 没有任何窗口占着时，这一块就是唯一的输入区，不要提示去另一窗口。
         return !editingOwnership.hasClaimant(resource: editingResource)
     }
 
     private func claimEditing(active: Bool? = nil) {
+        guard homeActive, active ?? (scenePhase == .active) else {
+            releaseEditing(resource: editingResource, sceneToken: sceneToken)
+            return
+        }
+        #if DEBUG
+        if !sceneToken.isEmpty { PhoneNavigationDiagnostics.editors[editorViewId] = sceneToken }
+        #endif
         editingOwnership.claim(
             resource: editingResource,
             sceneToken: sceneToken,
@@ -155,6 +185,9 @@ struct ThreadView: View {
     }
 
     private func releaseEditing(resource: String, sceneToken: String) {
+        #if DEBUG
+        PhoneNavigationDiagnostics.editors[editorViewId] = nil
+        #endif
         editingOwnership.release(resource: resource, sceneToken: sceneToken, viewId: editorViewId)
     }
 
@@ -374,16 +407,16 @@ struct ThreadView: View {
     /// 两层抢同一个 item 会 present 失败/连闪（Grok R2 MINOR）。cover 关闭后绑定自动恢复。
     var previewFileBinding: Binding<PreviewFile?> {
         Binding(
-            get: { store.fileBrowserOpen ? nil : store.previewFile },
-            set: { store.previewFile = $0 }
+            get: { !homeActive || coldLaunchVisible || store.fileBrowserOpen ? nil : store.previewFile },
+            set: { if homeActive { store.previewFile = $0 } }
         )
     }
 
     /// P10：同上——cover 期间分享 sheet 由 FileBrowserCover 自己 present
     var exportFileBinding: Binding<PreviewFile?> {
         Binding(
-            get: { store.fileBrowserOpen ? nil : store.exportFile },
-            set: { store.exportFile = $0 }
+            get: { !homeActive || coldLaunchVisible || store.fileBrowserOpen ? nil : store.exportFile },
+            set: { if homeActive { store.exportFile = $0 } }
         )
     }
 

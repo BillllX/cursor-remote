@@ -5,6 +5,7 @@ import UIKit
 /// 当前项打勾，新建走右上角 + 和 alert，不夹带主题、退出这类账号操作。
 struct WorkspacePickerSheet: View {
     @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sceneSessionState) private var sceneSession
     @State private var query = ""
@@ -181,6 +182,21 @@ struct WorkspacePickerSheet: View {
         .presentationDragIndicator(.visible)
     }
 
+    private func openWorkspace(_ item: WorkspaceItem) {
+        phoneRouter?.invalidatePendingNavigation()
+        if phoneRouter != nil,
+           let id = sceneSession?.phoneWorkspaceChat(in: item.path, store: store) {
+            store.workspaceSheetOpen = false
+            store.activateWorkspaceChat(id)
+        } else {
+            store.switchWorkspace(to: item.path)
+        }
+        if store.isWorkspaceChat(store.activeId) {
+            sceneSession?.workbenchChatId = store.activeId
+        }
+        dismiss()
+    }
+
     private func detailLine(_ stat: WorkspaceStat?) -> String? {
         guard let stat, stat.chats > 0 else { return nil }
         let when = agoText(stat.touched, long: true)
@@ -192,9 +208,7 @@ struct WorkspacePickerSheet: View {
         let manage = store.isTopLevelWorkspace(item.path)
         let chatCount = store.chatCountUnder(item.path)
         return Button {
-            store.switchWorkspace(to: item.path)
-            sceneSession?.workbenchChatId = store.activeId
-            dismiss()
+            openWorkspace(item)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: "folder")
@@ -267,9 +281,7 @@ struct WorkspacePickerSheet: View {
         .contextMenu {
             Section {
                 Button {
-                    store.switchWorkspace(to: item.path)
-                    sceneSession?.workbenchChatId = store.activeId
-                    dismiss()
+                    openWorkspace(item)
                 } label: {
                     Label("打开", systemImage: "folder")
                 }

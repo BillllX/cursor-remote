@@ -377,6 +377,9 @@ final class PadRouter {
     var dropFeedback: String?
     var activeSemanticDragKind: PadSemanticTransfer.Kind?
     var bootstrapped = false
+    #if DEBUG
+    var regressionSheet: String?
+    #endif
     private(set) var sectionHistory: [PadAssistantSection] = [.today]
     private(set) var sectionHistoryIndex = 0
 
