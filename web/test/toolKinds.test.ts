@@ -35,7 +35,14 @@ describe("toolKind", () => {
   });
 
   test("Codex MCP 技能工具含 query 时仍按技能展示", () => {
-    for (const name of ["mcp:jiebo:skill_list", "mcp:jiebo:skill_use", "mcp:jiebo:skill_verify"]) {
+    for (const name of [
+      "mcp:jiebo:skill_list",
+      "mcp:jiebo:skill_use",
+      "mcp:jiebo:skill_verify",
+      "mcp:jiebo:skill_propose",
+      "mcp:jiebo:skill_proposal_list",
+      "mcp:jiebo:skill_proposal_decide",
+    ]) {
       assert.equal(toolKind(name, { query: "canvas" }), "other");
     }
   });
@@ -48,12 +55,17 @@ describe("toolKind", () => {
 
   test("工作区记忆检索和采用续期静默，提议仍可见", () => {
     assert.equal(silentAssistantTool("workspace_memory_search"), true);
+    assert.equal(silentAssistantTool("mcp:jiebo:workspace_memory_search"), true);
     assert.equal(silentAssistantTool("mcp__jiebo__workspace_memory_mark_used"), true);
+    assert.equal(silentAssistantTool("mcp:jiebo:workspace_memory_propose"), false);
     assert.equal(silentAssistantTool("workspace_memory_propose"), false);
     assert.equal(silentAssistantTool("skill_mark_used"), true);
+    assert.equal(silentAssistantTool("mcp:jiebo:skill_mark_used"), true);
     assert.equal(silentAssistantTool("mcp__custom-user-tools__skill_mark_used"), true);
     assert.equal(silentAssistantTool("skill_use"), false);
     assert.equal(silentAssistantTool("skill_propose"), false);
+    assert.equal(silentAssistantTool("mcp:jiebo:skill_propose"), false);
+    assert.equal(silentAssistantTool("mcp:jiebo:memory_search"), true);
   });
 
   test("shellRows 提取 stdout/stderr/exitCode、失败态、执行目录与轮次元数据", () => {

@@ -340,7 +340,7 @@ describe("域 2：流式事件增量切片、工具映射、4 参数 Token 计�
     assert.equal(capturedThreadOpts?.networkAccessEnabled, true);
     assert.equal(capturedThreadOpts?.approvalPolicy, "never");
     assert.ok(capturedCodexOpts?.env?.CODEX_HOME);
-    assert.equal(capturedCodexOpts?.config, undefined);
+    assert.ok(capturedCodexOpts?.config?.mcp_servers, "非沙箱管理员默认启用 jiebo MCP 桥接");
 
     // 验证 text-delta 切片不重复，且 captureText 只被 send.ts 触发一次
     const textDeltas = messages.filter((m) => m.type === "text-delta").map((m) => m.text);
@@ -721,8 +721,11 @@ describe("域 4–6：关闭内置沙箱与 Cursor CLI 对齐、confirmWrites �
   });
 });
 
-test("技能桥接启用时 runner 注入能力和私有环境，错误结果正确展示并清理 socket", async () => {
+test("默认开启全量业务与技能桥接并清理 socket；CODEX_SKILL_BRIDGE=0 时下发含合法 command 的禁用配置防 invalid transport", async () => {
   const { ws, messages, conn, slot, tenant } = makeConnAndSlot("bridge-runner");
+  const subWs = join(tenant.workspaceRoot, "sub-proj");
+  mkdirSync(subWs, { recursive: true });
+  slot.cwd = subWs;
   const epoch = ++slot.epoch;
   slot.finished = false;
   let captured: CodexOptions | undefined;
@@ -759,7 +762,7 @@ test("技能桥接启用时 runner 注入能力和私有环境，错误结果正
       throw new Error("不应续接");
     },
   };
-  await withEnv({ CODEX_SKILL_BRIDGE: "1" }, async () => {
+  await withEnv({ CODEX_SKILL_BRIDGE: undefined }, async () => {
     await runCodexChat(
       ws,
       conn,
@@ -771,7 +774,7 @@ test("技能桥接启用时 runner 注入能力和私有环境，错误结果正
         images: [],
         history: [],
         epoch,
-        cwd: tenant.workspaceRoot,
+        cwd: subWs,
         mode: "agent",
         confirmWrites: false,
         autoApprove: false,
@@ -784,10 +787,57 @@ test("技能桥接启用时 runner 注入能力和私有环境，错误结果正
       },
     );
   });
-  assert.match(prompt, /skill_list、skill_use、skill_verify/);
+  assert.match(prompt, /workspace_memory_propose/);
+  assert.match(prompt, /skill_propose/);
   assert.ok(!JSON.stringify(captured!.config).includes(captured!.env!.JIEBO_MCP_TOKEN));
   assert.equal(existsSync(captured!.env!.JIEBO_MCP_SOCKET), false);
   assert.equal(messages.find((m) => m.type === "tool-completed" && m.callId === "skill-error")?.status, "error");
+
+  // 显式关闭 CODEX_SKILL_BRIDGE=0 时：不写入 mcp_servers.jiebo 配置，防止 CLI 报 invalid transport
+  let disabledOptions: CodexOptions | undefined;
+  let disabledPrompt = "";
+  const epochOff = ++slot.epoch;
+  slot.finished = false;
+  await withEnv({ CODEX_SKILL_BRIDGE: "0" }, async () => {
+    await runCodexChat(
+      ws,
+      conn,
+      slot,
+      { model: "gpt-6.1-sol", full: "codex:gpt-6.1-sol" },
+      {
+        prompt: "关闭桥接测试",
+        userText: "关闭桥接测试",
+        images: [],
+        history: [],
+        epoch: epochOff,
+        cwd: subWs,
+        mode: "agent",
+        confirmWrites: false,
+        autoApprove: false,
+      },
+      {
+        createCodex(options) {
+          disabledOptions = options;
+          return {
+            startThread() {
+              throw new Error("已有线程应走 resume");
+            },
+            resumeThread() {
+              return {
+                async runStreamed(input) {
+                  disabledPrompt = String(input);
+                  async function* events(): AsyncGenerator<ThreadEvent> {}
+                  return { events: events() };
+                },
+              };
+            },
+          };
+        },
+      },
+    );
+  });
+  assert.equal(disabledOptions?.config, undefined);
+  assert.match(disabledPrompt, /未挂载工具/);
 });
 
 test("桥接开关打开时，非管理员不挂载 jiebo，Codex 仍可执行", async () => {

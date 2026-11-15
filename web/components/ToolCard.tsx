@@ -23,8 +23,31 @@ const KNOWN_SKILL_NAMES: Record<string, string> = {
   "kb-drop-ingest": "多源知识库投递与 HTML 看板归档",
   "shanghai-deploy-smoke": "上海站发布与 UI 登录态冒烟手册",
   "ios-swiftui-motion": "iOS SwiftUI 界面规范与动效性能审查",
+  "skill-factory-guide": "技能工厂提案与审批上架手册",
   "wechat-push-guard": "微信主动推送守卫",
   "weixin-ilink-channel": "微信 iLink 扫码配对与长轮询通道",
+};
+
+const KNOWN_GATEWAY_TOOL_LABELS: Record<string, string> = {
+  workspace_memory_propose: "记录工作区记忆",
+  kb_ingest_submit: "归档知识库",
+  kb_workspace_init: "初始化知识库",
+  wecom_search: "检索企微",
+  wecom_watch_check: "检查企微关注项",
+  wecom_watch_sync: "同步企微归档",
+  wecom_watch_manage: "企微关注清单",
+  workspace_schedule_manage: "工作区定时任务",
+  delegate: "委派工作区",
+  delegation_status: "查看委派进度",
+  create_workspace: "申请新建工作区",
+  web_read: "读取网页",
+  inbox_post: "投递收件箱",
+  wx_qrcode_generate: "生成微信绑定码",
+  colleague_proposal_list: "同事提案列表",
+  colleague_proposal_decide: "审批同事提案",
+  gateway_calendar_events_list: "查询网关日程",
+  gateway_calendar_event_add: "新增网关日程",
+  gateway_calendar_event_update: "更新网关日程",
 };
 
 function unwrapToolPayload(value: unknown, depth = 0): Record<string, unknown> {
@@ -273,9 +296,9 @@ export default function ToolCard({
   const [showProposalFull, setShowProposalFull] = useState(false);
   const args = tool.args;
   const kind = toolKind(tool.name, args);
-  const pathFromArgs = field(args, "path", "file", "target", "file_path", "uri");
+  const pathFromArgs = field(args, "path", "file", "target", "file_path", "uri", "url", "fileName");
   const command = field(args, "command");
-  const pattern = field(args, "pattern", "query", "globPattern", "glob", "glob_pattern");
+  const pattern = field(args, "pattern", "query", "keyword", "globPattern", "glob", "glob_pattern");
   const diff = extractDiff(tool);
   const path = diff.path || pathFromArgs;
   const roleLabel = crewLabel(tool.name, args, tool.agent);
@@ -314,16 +337,22 @@ export default function ToolCard({
     }
     return displayName || skillIdArg || "全部已集成技能";
   })();
+  const gatewayLabel = KNOWN_GATEWAY_TOOL_LABELS[baseToolName] || "";
+  const gatewayTitle =
+    gatewayLabel &&
+    field(args, "fileName", "workspace", "title", "text", "idOrTitle", "url", "keyword", "name", "proposalId");
   const rawTitle =
     isSkillTool
       ? friendlySkillTitle
-      : kind === "shell"
-        ? command || tool.name
-        : kind === "search"
-          ? pattern || tool.name
-          : roleLabel || /task|todo|agent|explore|builder|reviewer/i.test(tool.name)
-            ? field(args, "content", "description", "title") || ""
-            : path || (tool.name === "tool" ? pattern : tool.name);
+      : gatewayTitle
+        ? gatewayTitle
+        : kind === "shell"
+          ? command || tool.name
+          : kind === "search"
+            ? pattern || (gatewayLabel ? field(args, "scope") : "") || tool.name
+            : roleLabel || /task|todo|agent|explore|builder|reviewer/i.test(tool.name)
+              ? field(args, "content", "description", "title") || ""
+              : path || (tool.name === "tool" ? pattern : gatewayLabel ? baseToolName : tool.name);
   const title =
     isSkillTool
       ? rawTitle
@@ -346,7 +375,9 @@ export default function ToolCard({
               ? "审批技能"
               : baseToolName === "skill_proposal_list"
                 ? "技能提案列表"
-                : kind === "shell"
+                : gatewayLabel
+                  ? gatewayLabel
+                  : kind === "shell"
                   ? "Ran"
                   : kind === "search"
                     ? "Searched"

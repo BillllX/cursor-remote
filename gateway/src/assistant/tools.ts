@@ -1287,6 +1287,7 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         activeHours: {
           type: "object",
           properties: { start: S("开始时刻 HH:MM"), end: S("结束时刻 HH:MM") },
+          additionalProperties: false,
           description: "可选，允许运行的时间窗（如 { start: \"08:00\", end: \"22:00\" }）",
         },
         tz: S("可选，IANA 时区（默认 Asia/Shanghai）"),
@@ -1381,6 +1382,13 @@ function mountSkillTools(
     | "skillPropose"
   >,
 ) {
+  const skillIdSchema = (description: string): SDKJsonValue => ({
+    type: "string",
+    minLength: 2,
+    maxLength: 48,
+    pattern: "^[a-z0-9][a-z0-9-]{1,47}$",
+    description,
+  });
   if (host.skillList) {
     target.skill_list = tool(
       "列出当前工作区已集成的技能（含平台通道守卫、原生工具能力、受控操作手册与工作区 .jiebo/skills/ 技能包），返回 ID、分类、健康状态与历史采用统计。",
@@ -1390,7 +1398,7 @@ function mountSkillTools(
           enum: ["platform", "workspace", "repo"],
           description: "可选，按作用域筛选：platform / workspace / repo",
         },
-        query: S("可选，按名称、ID 或触发关键词过滤"),
+        query: { type: "string", maxLength: 200, description: "可选，按名称、ID 或触发关键词过滤" },
       },
       [],
       (args) =>
@@ -1407,8 +1415,8 @@ function mountSkillTools(
     target.skill_use = tool(
       "按需查阅指定技能（Skill）的完整 SOP 手册、组件契约或受控验证命令。查阅本身仅记 viewedCount；返回 truncated 时必须用 nextCursor 继续读取；采用后调用 skill_mark_used(id) 记录。",
       {
-        id: S("要查阅的技能 ID（如 canvas-artifact-builder、jiebo-gateway-arch、ios-swiftui-motion）"),
-        cursor: S("续读游标，使用上一页返回的 nextCursor；首页不传"),
+        id: skillIdSchema("要查阅的技能 ID（如 canvas-artifact-builder、jiebo-gateway-arch、ios-swiftui-motion）"),
+        cursor: { type: "string", maxLength: 80, description: "续读游标，使用上一页返回的 nextCursor；首页不传" },
         limit: { type: "integer", minimum: 1, maximum: 2400, description: "每页字符数，默认 2400" },
       },
       ["id"],
@@ -1419,7 +1427,7 @@ function mountSkillTools(
     target.skill_mark_used = tool(
       "仅在确实采用某个已集成技能（Skill）的 SOP 或规范完成分析/实现后调用，按稳定 ID 更新 adoptedCount 与 lastAdoptedAt。仅仅看过但未采用时不要调用。",
       {
-        id: S("已采用的技能 ID"),
+        id: skillIdSchema("已采用的技能 ID"),
       },
       ["id"],
       (args) => host.skillMarkUsed!({ id: str(args.id).trim() }),
@@ -1429,7 +1437,7 @@ function mountSkillTools(
     target.skill_verify = tool(
       "核验指定技能的健康状态（检查 SKILL.md 的 SHA-256 审批锁完整性、requiredTools 白名单合规性及 refs 引用文件是否存在）。",
       {
-        id: S("要核验的技能 ID"),
+        id: skillIdSchema("要核验的技能 ID"),
       },
       ["id"],
       (args) => host.skillVerify!({ id: str(args.id).trim() }),
@@ -1478,7 +1486,7 @@ function mountSkillTools(
     target.skill_propose = tool(
       "Skill 工厂生产工具：提议在当前子工作区内创建或升级一个声明式技能包（.jiebo/skills/<id>/SKILL.md）。会经过密钥、个人隐私、工具白名单、危险命令与路径围栏静态校验，写入隔离区等待用户批准上架。",
       {
-        id: S("技能 ID（2~48 位小写字母、数字或连字符，如 kb-archive-batch）"),
+        id: skillIdSchema("技能 ID（2~48 位小写字母、数字或连字符，如 kb-archive-batch）"),
         name: S("技能中文名称"),
         summary: S("一句话职责与适用时机摘要（≤100字）"),
         scope: { type: "string", enum: ["workspace", "repo"], description: "可选，默认 workspace" },
@@ -1718,6 +1726,7 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
         activeHours: {
           type: "object",
           properties: { start: S("开始时刻 HH:MM"), end: S("结束时刻 HH:MM") },
+          additionalProperties: false,
           description: "可选，允许运行的时间窗",
         },
         tz: S("可选，IANA 时区"),

@@ -478,6 +478,36 @@ const BUILTIN_SKILLS: readonly BuiltinSkillDef[] = [
       "4. **改动后必跑契约检查（G4）**：每次修改 `ios/Jiebo/` 或 `shared/protocol.ts` 后，必须在 `cursor-remote/` 下执行 `bash scripts/check-ios-protocol.sh`（传 `block_until_ms: 120000`）。",
     ].join("\n"),
   },
+  {
+    id: "skill-factory-guide",
+    name: "技能工厂提案与审批上架手册",
+    summary: "在子工作区使用 skill_propose 提议创建或升级声明式技能包、通过五道安全门禁并经用户批准签名上架的 SOP",
+    kind: "manual_runbook",
+    scope: "workspace",
+    mode: "read",
+    entry: "cursor-remote/gateway/src/assistant/skills.ts",
+    triggers: {
+      keywords: ["skill_propose", "技能工厂", "技能上架", "新建技能", "升级技能", "SKILL.md"],
+      globs: ["**/.jiebo/skills/**/*.md"],
+    },
+    requiredTools: ["skill_list", "skill_use", "skill_verify", "workspace_memory_search"],
+    refs: ["cursor-remote/gateway/src/assistant/skills.ts", "cursor-remote/gateway/src/assistant/tools.ts"],
+    pinned: false,
+    autoPrewarm: false,
+    body: [
+      "# 技能工厂（Skill Factory）提案与审批上架 SOP",
+      "1. **适用范围与目录边界**：声明式技能包只能创建在具体子工作区或其子目录内（正式路径 `.jiebo/skills/<id>/SKILL.md`），严禁写入 USER 根目录。",
+      "2. **提议流程（禁止直写正式目录）**：",
+      "   - 先调 `skill_list` 检查是否已有同名或相近技能；若由工作区记忆提炼升级，可先调 `workspace_memory_search` 获取记忆稳定 ID 填入 `promotedFromMemoryIds`（批准上架后原记忆自动标为 `done` 释放常驻预算）。",
+      "   - 调用 `skill_propose` 提交草案（必填 `id`、`name`、`summary`、`body`，其中 `id` 为 2~48 位小写字母、数字或连字符）。",
+      "   - 严禁直接用文件工具或 Shell 往 `.jiebo/skills/<id>/SKILL.md` 写入文件冒充已上架：未经审批签名的文件缺少 `skill-lock.json` 的 SHA-256 指纹锁，会被网关判定为 `tampered` 并阻断加载。",
+      "3. **五道静态安全门禁**：",
+      "   - 不得包含密钥/Token/口令或用户的个人隐私信息；",
+      "   - `requiredTools` 仅限服务端白名单既有工具（如 `read, grep, glob, ls, edit, write, shell, kb_ingest_submit, wecom_search, wecom_watch_check, wecom_watch_sync, wecom_watch_manage, workspace_schedule_manage, workspace_memory_search, workspace_memory_propose, workspace_memory_mark_used, web_read, delegate, skill_list, skill_use, skill_mark_used, skill_verify`），SKILL.md 不能自授新权限；",
+      "   - `body` 不得包含高危系统指令（如 `sudo`、`rm -rf /`、`curl ... | bash`）；`refs` 必须为工作区内安全相对路径（不含 `..` 或绝对路径）。",
+      "4. **审批与核验**：`skill_propose` 通过门禁后写入 `.jiebo/skills-staging/<id>/SKILL.md` 并在对话卡片与记忆中心展示「批准并上架 / 拒绝」按钮；用户批准后网关原子落盘并写入 SHA-256 锁，后续可用 `skill_verify(id)` 核验健康状态。",
+    ].join("\n"),
+  },
 ];
 
 // ---------- SKILL.md 解析与格式化 ----------
@@ -1096,7 +1126,7 @@ export function markSkillUsed(
   tenant: WorkspaceRoot,
   cwd: string,
   id: string,
-  opts: { runnerRole?: SkillRunnerRole; workspaceNames?: string[] } = {},
+  opts: { runnerRole?: SkillRunnerRole; workspaceNames?: string[]; adoptedVersions?: Set<string> } = {},
 ): { ok: true; id: string; stats: SkillUsageStats } | { ok: false; error: string } {
   const targetId = id.trim();
   if (!targetId) return { ok: false, error: "请提供技能 ID。" };
@@ -1110,7 +1140,11 @@ export function markSkillUsed(
   if (found.health === "tampered") return { ok: false, error: "该技能完整性校验异常，不能续期计数。" };
   if (found.health === "disabled") return { ok: false, error: "该技能当前已停用，不能续期计数。" };
   const ref: TenantRef = { id: tenant.id, stateDir: tenant.stateDir };
-  const stats = recordStatEvent(ref, found.id, "adopt");
+  const version = createHash("sha256").update(found.body.trim()).digest("hex");
+  const adoptKey = `${found.id}:${version}`;
+  const firstAdopt = !opts.adoptedVersions?.has(adoptKey);
+  const stats = firstAdopt ? recordStatEvent(ref, found.id, "adopt") : found.stats;
+  opts.adoptedVersions?.add(adoptKey);
   return { ok: true, id: found.id, stats };
 }
 

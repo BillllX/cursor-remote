@@ -29,10 +29,22 @@ import { noteModelTokens, noteOutput, noteToolCall } from "../usage.ts";
 import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
-import { codexCapabilityPrompt, startCodexSkillBridge, type SkillBridge } from "./codexSkillBridge.ts";
+import {
+  canStartCodexSkillBridge,
+  codexCapabilityPrompt,
+  startCodexSkillBridge,
+  type SkillBridge,
+} from "./codexSkillBridge.ts";
 import { finishRun } from "./finish.ts";
 import { attachReseedContext } from "./history.ts";
-import { emitToolOutput, presentToolArgs, rememberEdit, rememberShellCall, summarizeToolArgs } from "./tools.ts";
+import {
+  emitToolOutput,
+  isMutatingTool,
+  presentToolArgs,
+  rememberEdit,
+  rememberShellCall,
+  summarizeToolArgs,
+} from "./tools.ts";
 
 /** 统一模型路由前缀（禁止混用其他前缀） */
 export const CODEX_MODEL_PREFIX = "codex:";
@@ -347,11 +359,11 @@ export async function runCodexChat(
     }
 
     // 开关只对非沙箱管理员挂载。其他能用 Codex 的租户继续跑，不因桥接准入失败而中断。
-    if (gatewayEnv.codexSkillBridge() && conn.tenant?.admin && !sandboxEnabledForTenant(conn.tenant)) {
+    if (canStartCodexSkillBridge(conn.tenant)) {
       skillBridge = await startCodexSkillBridge(conn, slot, cwd, epoch, abort.signal);
     }
     // 完整提示和 compact 续轮都补发当前实际能力，覆盖历史中已撤销的工具承诺。
-    effectivePrompt = `${effectivePrompt}\n\n${codexCapabilityPrompt(Boolean(skillBridge))}`;
+    effectivePrompt = `${effectivePrompt}\n\n${codexCapabilityPrompt(skillBridge ? skillBridge.toolNames : [])}`;
 
     // 图片落盘到租户受控状态目录下的临时文件，供 local_image 传参，finally 中清理
     let sdkInput: Input = effectivePrompt;
@@ -376,7 +388,7 @@ export async function runCodexChat(
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       env: { ...buildCodexChildEnv(), ...skillBridge?.env },
-      // 桥接关闭时不要写入只有 enabled=false 的 mcp_servers.jiebo。
+      // 桥接关闭或非管理员时不要写入只有 enabled=false 的 mcp_servers.jiebo：
       // Codex 0.167 会把它当成缺少 transport 的服务器，加载 config.toml 直接退出。
       ...(skillBridge ? { config: skillBridge.config } : {}),
     };
@@ -517,13 +529,27 @@ export async function runCodexChat(
             let bridgeFailed = false;
             if (item.server === "jiebo") {
               try {
-                bridgeFailed = JSON.parse(resultText)?.ok === false;
+                const parsed = JSON.parse(resultText);
+                if (parsed && typeof parsed === "object") {
+                  const rec = parsed as Record<string, unknown>;
+                  bridgeFailed =
+                    rec.ok === false ||
+                    rec.status === "no_device" ||
+                    (!("ok" in rec) && typeof rec.error === "string" && Boolean(rec.error));
+                }
               } catch {
                 /* 非 JSON 结果沿用 SDK 状态。 */
               }
             }
             const failed = item.status === "failed" || Boolean(item.error) || bridgeFailed;
-            completeTool(item.id, name, failed ? "error" : "completed", summarizeMcpResult(item));
+            completeTool(item.id, name, failed ? "error" : "completed", resultText);
+            if (
+              !failed &&
+              item.server === "jiebo" &&
+              (isMutatingTool(name, item.arguments) || item.tool === "workspace_memory_propose")
+            ) {
+              pushWorkspace(ws, slot, conn);
+            }
           }
           break;
         }

@@ -28,6 +28,7 @@ import { ensureAgent } from "./agent.ts";
 import { sanitizeImages } from "./attachments.ts";
 import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
 import { codexRoute, runCodexChat } from "./codexRunner.ts";
+import { canStartCodexSkillBridge } from "./codexSkillBridge.ts";
 import { runExternalChat } from "./external.ts";
 import { finishRun } from "./finish.ts";
 import { attachReseedContext, diskChatContextStats } from "./history.ts";
@@ -280,13 +281,16 @@ export async function handlePrompt(
   slot.mode = mode;
   conn.model = usedModel;
   const codexEarly = codexRoute(usedModel);
+  const codexBridgeOn = Boolean(codexEarly && canStartCodexSkillBridge(conn.tenant));
   const externalEarly = codexEarly ? null : externalRoute(usedModel);
   if (!externalEarly) await syncReviewRoster(conn, slot, usedModel);
   const atUserRoot = Boolean(conn.tenant && isUserWorkspace(cwd, conn.tenant.workspaceRoot));
   let assistantBlock = "";
   if (conn.tenant && isAssistantChat(conn.tenant, slot.chatId)) {
     try {
-      assistantBlock = userRootPreamble(conn.tenant, { includeToolInstructions: !codexEarly });
+      assistantBlock = userRootPreamble(conn.tenant, {
+        includeToolInstructions: !codexEarly || codexBridgeOn,
+      });
     } catch (err) {
       slotLog(slot).error("assistant preamble", err);
     }
@@ -295,7 +299,8 @@ export async function handlePrompt(
   const skillRunnerRole = "foreground" as const;
   let skillsBlock = "";
   let prewarmedSkills: Array<{ id: string; name: string }> = [];
-  const consumesSkillsPrompt = !codexEarly && (!externalEarly || Boolean(externalEarly.provider.tools));
+  const consumesSkillsPrompt =
+    (!codexEarly || codexBridgeOn) && (!externalEarly || Boolean(externalEarly.provider.tools));
   if (conn.tenant && consumesSkillsPrompt) {
     try {
       const rendered = skillsCatalogWithMetaFor(conn.tenant, cwd, {

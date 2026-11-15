@@ -103,6 +103,16 @@ extension ToolCardView {
         case "skill_verify": return "核验技能"
         case "skill_proposal_decide": return "审批技能"
         case "skill_proposal_list": return "技能提案列表"
+        case "workspace_memory_propose": return "记录工作区记忆"
+        case "kb_ingest_submit": return "归档知识库"
+        case "wecom_search": return "检索企微"
+        case "wecom_watch_check": return "检查企微关注项"
+        case "wecom_watch_sync": return "同步企微归档"
+        case "wecom_watch_manage": return "企微关注清单"
+        case "workspace_schedule_manage": return "管理定时任务"
+        case "delegate": return "委派工作区"
+        case "create_workspace": return "申请新建工作区"
+        case "web_read": return "读取网页"
         default: break
         }
         switch tool.kind {
@@ -125,5 +135,6 @@ extension ToolCardView {
             && tool.kind == .other
             && tool.name.range(of: "task", options: .caseInsensitive) == nil
             && !isImageTool(tool)
+            && chineseVerb(tool) == "调用工具"
     }
 }

@@ -256,11 +256,17 @@ function dropHostFor(tenant: AssistantTenant): DropTenantHost {
   };
 }
 
+export type SessionSkillDedupOpts = {
+  readonly?: boolean;
+  viewedSkillVersions?: Set<string>;
+  adoptedSkillVersions?: Set<string>;
+};
+
 function toolHost(
   tenant: AssistantTenant,
   role: ToolRole,
   chatId?: string,
-  opts?: { readonly?: boolean },
+  opts?: SessionSkillDedupOpts,
 ): ToolHost {
   const ref = refOf(tenant);
   const dropHost = role === "chat" || role === "schedule" ? dropHostFor(tenant) : undefined;
@@ -272,11 +278,17 @@ function toolHost(
     onChanged: () => publishState(tenant),
     delegate:
       role === "chat" || role === "schedule"
-        ? (args) => deps!.delegate({ tenant, ...args, parentChatId: chatId, background: role === "schedule" })
+        ? (args) =>
+            deps
+              ? deps.delegate({ tenant, ...args, parentChatId: chatId, background: role === "schedule" })
+              : Promise.resolve(JSON.stringify({ ok: false, error: "助理委派服务尚未初始化" }))
         : undefined,
     createWorkspace:
       role === "chat" && chatId
-        ? (args) => deps!.createWorkspace({ tenant, ...args, parentChatId: chatId })
+        ? (args) =>
+            deps
+              ? deps.createWorkspace({ tenant, ...args, parentChatId: chatId })
+              : Promise.resolve(JSON.stringify({ ok: false, error: "新建工作区服务尚未初始化" }))
         : undefined,
     delegationStatus: (id) => delegationStatusText(ref, id),
     workspaces: () => deps?.workspaces(tenant) ?? [],
@@ -613,7 +625,9 @@ function toolHost(
             useSkill(tenant, tenant.workspaceRoot, id, {
               runnerRole: role === "chat" ? "foreground" : "loop",
               workspaceNames: deps?.workspaces(tenant) ?? [],
-              cursor, limit,
+              cursor,
+              limit,
+              viewedVersions: opts?.viewedSkillVersions,
             })
         : undefined,
     skillMarkUsed:
@@ -622,6 +636,7 @@ function toolHost(
             markSkillUsed(tenant, tenant.workspaceRoot, id, {
               runnerRole: role === "chat" ? "foreground" : "loop",
               workspaceNames: deps?.workspaces(tenant) ?? [],
+              adoptedVersions: opts?.adoptedSkillVersions,
             })
         : undefined,
     skillVerify:
@@ -648,7 +663,7 @@ export function workspaceToolsFor(
   tenant: AssistantTenant,
   chatId: string,
   cwd: string,
-  opts: { readonly?: boolean } = {},
+  opts: SessionSkillDedupOpts = {},
 ): Record<string, SDKCustomTool> {
   const anyKbLoaded = loadKbWorkspaceConfig(cwd, tenant.workspaceRoot);
   const dropHost = anyKbLoaded.ok ? dropHostFor(tenant) : undefined;
@@ -677,8 +692,18 @@ export function workspaceToolsFor(
         query: args.query,
         includeChannelGuards: true,
       }),
-    skillUse: ({ id, cursor, limit }) => useSkill(tenant, cwd, id, { runnerRole: skillRunnerRole, cursor, limit }),
-    skillMarkUsed: ({ id }) => markSkillUsed(tenant, cwd, id, { runnerRole: skillRunnerRole }),
+    skillUse: ({ id, cursor, limit }) =>
+      useSkill(tenant, cwd, id, {
+        runnerRole: skillRunnerRole,
+        cursor,
+        limit,
+        viewedVersions: opts.viewedSkillVersions,
+      }),
+    skillMarkUsed: ({ id }) =>
+      markSkillUsed(tenant, cwd, id, {
+        runnerRole: skillRunnerRole,
+        adoptedVersions: opts.adoptedSkillVersions,
+      }),
     skillVerify: ({ id }) => verifySkill(tenant, cwd, id),
     skillPropose: !opts.readonly
       ? (args) => {
@@ -911,7 +936,7 @@ export function answerMemoryCard(tenant: AssistantTenant, chatId: string, callId
 export function foregroundTools(
   tenant: AssistantTenant,
   chatId: string,
-  opts?: { readonly?: boolean },
+  opts?: SessionSkillDedupOpts,
 ): Record<string, SDKCustomTool> {
   return assistantTools(toolHost(tenant, "chat", chatId, opts));
 }
@@ -920,7 +945,7 @@ export function foregroundTools(
 export function chatToolHost(
   tenant: AssistantTenant,
   chatId: string,
-  opts?: { readonly?: boolean },
+  opts?: SessionSkillDedupOpts,
 ): ToolHost {
   return toolHost(tenant, "chat", chatId, opts);
 }

@@ -106,6 +106,7 @@ enum AssistantToolText {
         "kb-drop-ingest": "多源知识库投递与 HTML 看板归档",
         "shanghai-deploy-smoke": "上海站发布与 UI 登录态冒烟手册",
         "ios-swiftui-motion": "iOS SwiftUI 界面规范与动效性能审查",
+        "skill-factory-guide": "技能工厂提案与审批上架手册",
         "wechat-push-guard": "微信主动推送守卫",
         "weixin-ilink-channel": "微信 iLink 扫码配对与长轮询通道",
     ]

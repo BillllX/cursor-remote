@@ -176,6 +176,27 @@ export function summarizeToolArgs(args: unknown): unknown {
     "range",
     "idOrTitle",
     "forceSync",
+    "summary",
+    "body",
+    "skillId",
+    "proposalId",
+    "approve",
+    "expectedRev",
+    "decisionNote",
+    "task",
+    "reason",
+    "section",
+    "text",
+    "refs",
+    "due",
+    "url",
+    "startIso",
+    "endIso",
+    "start",
+    "end",
+    "status",
+    "kind",
+    "cron",
   ];
   const out: Record<string, unknown> = {};
   for (const key of keep) {
@@ -221,9 +242,13 @@ export function shellPublishes(name: string, args: unknown) {
 export function isMutatingTool(name: string, args: unknown): boolean {
   const n = name.toLowerCase();
   if (/todo|createplan/.test(n)) return false;
-  if (/(^|__)wecom_watch_manage$/.test(n)) {
+  if (/(^|__|:)wecom_watch_manage$/.test(n)) {
     const rec = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
     return rec.action === "add" || rec.action === "remove";
+  }
+  if (/(^|__|:)workspace_schedule_manage$/.test(n)) {
+    const rec = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    return rec.action === "upsert" || rec.action === "toggle" || rec.action === "run_now" || rec.action === "remove";
   }
   if (
     /(kb_workspace_init|drop_token_create|drop_token_update|drop_token_revoke|kb_ingest_submit|wecom_watch_sync|gateway_calendar_event_add|gateway_calendar_event_update|colleague_proposal_decide|skill_propose|skill_proposal_decide)/.test(
