@@ -114,7 +114,7 @@ struct TurnView: View, Equatable {
                             }
                             if turn.user != "（附图）" || turn.images.isEmpty {
                                 Text(turn.user)
-                                    .font(JieboFont.text(.callout))
+                                    .font(JieboFont.text(.body))
                                     .foregroundStyle(JieboColor.ink)
                                     .textSelection(.enabled)
                                     .lineSpacing(4)

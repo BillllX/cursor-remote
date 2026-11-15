@@ -32,7 +32,7 @@ struct PhoneShell: View {
         case .inboxItem(let id):
             InboxDetailView(itemId: id)
         case .worklist(let column):
-            DelegationListScreen(column: column)
+            DelegationListScreen(column: column, embeddedInInbox: true)
         case .artifacts:
             ArtifactCenterView()
         case .settings:

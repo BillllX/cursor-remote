@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// iPhone 默认聚焦小驳；工作台与消息由设置进入，继续复用各自的路由状态。
+/// iPhone 默认聚焦小驳；工作台通过小驳侧边栏切换，消息暂时隐藏，继续复用各自的路由状态。
 struct PhoneTabShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -32,9 +32,6 @@ struct PhoneTabShell: View {
                 .accessibilityHidden(router.selectedTab != .assistant)
             if router.selectedTab == .workspace {
                 PhoneWorkbench(embedsPreview: false)
-            }
-            if router.selectedTab == .messages {
-                ChatHome()
             }
         }
         .environment(router)
@@ -195,10 +192,8 @@ struct PhoneTabShell: View {
         guard AssistantScenePresenter.shared.isPresenter(token: sceneToken),
               let target = PushRouting.shared.pending
         else { return }
-        if target.isIm, let convId = target.convId {
+        if target.isIm {
             _ = PushRouting.shared.consume()
-            router.selectedTab = .messages
-            openConversation(convId)
             return
         }
         if target.isWorkspace, let chatId = target.chatId {

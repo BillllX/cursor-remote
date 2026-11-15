@@ -13,6 +13,12 @@ export type InboxItem = {
   /** 幂等键：同一个键只写一次（例如调度的单次运行 id） */
   key?: string;
   /** 点开条目后交给助理的真实输入；只用于尚未处理的外部捕获。 */
+  decision?: { kind: "proposal" | "skill" | "wechat"; id: string; rev?: number; openId?: string };
+  snoozedUntil?: number;
+  resolved?: boolean;
+  attention?: "confirmation" | "content" | "reminder" | "recovery" | "suggestion" | "notice";
+  todoId?: string;
+  eventId?: string;
   actionPrompt?: string;
   chatId?: string;
   runId?: string;
@@ -51,7 +57,20 @@ function file(ref: TenantRef) {
 }
 
 export function listInbox(ref: TenantRef, limit = 100): InboxItem[] {
-  return readJson<InboxFile>(file(ref), { items: [] }).items.slice(-limit).reverse();
+  return readJson<InboxFile>(file(ref), { items: [] })
+    .items.slice(-limit)
+    .reverse()
+    .map((item) => {
+      // Older persisted notifications have stable server-issued keys, but no structured decision.
+      if (!item.decision && item.kind === "approval" && item.key) {
+        if (item.key.startsWith("proposal:")) item.decision = { kind: "proposal", id: item.key.slice(9) };
+        const skill = /^skill-proposal:(.+):(\d+)$/.exec(item.key);
+        if (skill) item.decision = { kind: "skill", id: skill[1]!, rev: Number(skill[2]) };
+        const wx = /^wxbind:([^:]+):(.+)$/.exec(item.key);
+        if (wx) item.decision = { kind: "wechat", id: wx[1]!, openId: wx[2]! };
+      }
+      return item;
+    });
 }
 
 export function inboxByKey(ref: TenantRef, key: string): InboxItem | undefined {
@@ -69,6 +88,17 @@ export function postInbox(
   }
   const item: InboxItem = {
     ...input,
+    attention:
+      input.attention ??
+      (input.kind === "approval"
+        ? "confirmation"
+        : input.kind === "run"
+          ? "recovery"
+          : input.kind === "reminder"
+            ? "reminder"
+            : input.actionPrompt
+              ? "content"
+              : "notice"),
     id: newId("i"),
     title: clip(input.title, 120),
     body: clip(input.body, 4000),
@@ -87,13 +117,14 @@ export function postInbox(
   return { item, created: true };
 }
 
-export function markInboxRead(ref: TenantRef, ids: string[] | "all") {
+export function markInboxRead(ref: TenantRef, ids: string[] | "all", resolve = false) {
   const data = readJson<InboxFile>(file(ref), { items: [] });
   let changed = 0;
   for (const item of data.items) {
-    if (item.read) continue;
+    if (item.read && (!resolve || item.resolved)) continue;
     if (ids === "all" || ids.includes(item.id)) {
       item.read = true;
+      if (resolve) item.resolved = true;
       changed += 1;
     }
   }
@@ -114,4 +145,35 @@ export function scrubInbox(ref: TenantRef, needles: string[]) {
   }
   if (changed) writeJson(file(ref), data);
   return changed;
+}
+
+export function snoozeInbox(ref: TenantRef, id: string, minutes: number, now = Date.now()) {
+  const data = readJson<InboxFile>(file(ref), { items: [] });
+  const item = data.items.find((row) => row.id === id);
+  if (!item || item.resolved || item.kind !== "reminder") return false;
+  if (![15, 60, 1440].includes(minutes)) return false;
+  item.snoozedUntil = now + minutes * 60_000;
+  item.read = true;
+  writeJson(file(ref), data);
+  return true;
+}
+
+export function wakeSnoozedInbox(ref: TenantRef, now = Date.now()) {
+  const data = readJson<InboxFile>(file(ref), { items: [] });
+  const due = data.items.filter((item) => !item.resolved && item.snoozedUntil && item.snoozedUntil <= now);
+  if (!due.length) return 0;
+  for (const item of due) {
+    delete item.snoozedUntil;
+    item.read = false;
+  }
+  writeJson(file(ref), data);
+  for (const item of due)
+    for (const listener of listeners) {
+      try {
+        listener(ref, item);
+      } catch (err) {
+        log.error("snoozed inbox listener", err);
+      }
+    }
+  return due.length;
 }

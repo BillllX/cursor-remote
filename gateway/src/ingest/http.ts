@@ -2979,6 +2979,7 @@ export function handleDropPortalHttp(
       postInbox(host, {
         kind: "approval",
         key: `wxbind:${sessCheck.session.tokenId}:${openId}`,
+        decision: { kind: "wechat", id: sessCheck.session.tokenId, openId: openId },
         title: `[微信通道绑定确认] ${sessCheck.session.submitterName} 请求绑定微信`,
         body: [
           `通行口令：${updated.record.label} (${sessCheck.session.tokenId})`,

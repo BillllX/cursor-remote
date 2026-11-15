@@ -1,3 +1,4 @@
+import type { CalendarEvent } from "./calendarEvents.ts";
 import type {
   AssistantApproval,
   AssistantInboxItem,
@@ -25,6 +26,7 @@ export type ProjectionRun = Omit<BackgroundRun, "status"> & { status: string };
 
 export type TaskProjectionInput = {
   todos: Todo[];
+  calendarEvents?: CalendarEvent[];
   schedules: Schedule[];
   delegations: Delegation[];
   approvals: AssistantApproval[];
@@ -195,6 +197,24 @@ function projectTasks(input: TaskProjectionInput, now: number): PersonalTask[] {
           args: { id: todo.id },
         },
       ],
+    });
+  }
+
+  for (const event of input.calendarEvents ?? []) {
+    if (event.status === "cancelled") continue;
+    tasks.push({
+      id: `calendar_event:${event.id}`,
+      kind: "calendar_event",
+      title: event.title,
+      phase: event.endAt <= now ? "completed" : event.startAt <= now ? "in_progress" : "planned",
+      status: event.endAt <= now ? "done" : "scheduled",
+      priority: "normal",
+      dueAt: event.startAt,
+      createdAt: event.createdAt,
+      updatedAt: event.updatedAt,
+      detail: [event.startIso + " — " + event.endIso, event.location, event.notes].filter(Boolean).join("\n"),
+      sources: [source("calendar_event", event.id)],
+      actions: [],
     });
   }
 

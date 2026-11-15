@@ -73,6 +73,12 @@ export type AssistantInboxItem = {
   body: string;
   createdAt: number;
   read: boolean;
+  decision?: { kind: "proposal" | "skill" | "wechat"; id: string; rev?: number; openId?: string };
+  snoozedUntil?: number;
+  resolved?: boolean;
+  attention?: "confirmation" | "content" | "reminder" | "recovery" | "suggestion" | "notice";
+  todoId?: string;
+  eventId?: string;
   actionPrompt?: string;
   chatId?: string;
   scheduleId?: string;
@@ -1005,7 +1011,7 @@ export type AssistantApproval = {
 };
 
 /** 个人任务是现有事实源的只读投影；kind/phase 新值按向后兼容方式追加。 */
-export type PersonalTaskKind = "todo" | "schedule" | "delegation" | "background_run";
+export type PersonalTaskKind = "calendar_event" | "todo" | "schedule" | "delegation" | "background_run";
 export type PersonalTaskPhase = "needs_me" | "in_progress" | "planned" | "completed";
 export type PersonalTaskPriority = "high" | "normal" | "low";
 
@@ -1173,6 +1179,8 @@ export type AssistantState = {
 
 /** assistant_op 的操作名；args 由网关逐项校验 */
 export type AssistantOp =
+  | "inbox_decide"
+  | "inbox_snooze"
   | "inbox_read"
   | "todo_add"
   | "todo_done"

@@ -2,6 +2,34 @@ import Foundation
 
 /// iPhone 纯助理壳用到的 ChatStore 辅助。只读/只标已读，**不会切换 activeId**。
 extension ChatStore {
+    func resolveInboxItem(_ item: AssistantInboxItem) {
+        guard unlocked, connected else { flash("请连接后再处理通知"); return }
+        assistantOp("inbox_read", args: ["ids": .array([.string(item.id)]), "resolve": .bool(true)])
+        requestAssistant(force: true)
+    }
+
+    func archiveInboxItems(_ ids: Set<String>) async -> Bool {
+        guard unlocked, connected else { flash("请连接后再归档"); return false }
+        let eligible = (assistantState?.inbox ?? []).filter {
+            ids.contains($0.id) && $0.kind != "approval" && $0.decisionKind == nil && !$0.resolved
+        }
+        guard !eligible.isEmpty else { return true }
+        let result = await assistantOpData("inbox_read", args: [
+            "ids": .array(eligible.map { .string($0.id) }), "resolve": .bool(true)
+        ])
+        guard result.ok else { flash(result.error ?? "归档失败，请重试"); return false }
+        let archived = Set(eligible.map(\.id))
+        if let state = assistantState {
+            for index in state.inbox.indices where archived.contains(state.inbox[index].id) {
+                assistantState?.inbox[index].read = true
+                assistantState?.inbox[index].resolved = true
+            }
+        }
+        syncLocalAssistantMutation()
+        requestAssistant(force: true)
+        return true
+    }
+
     /// 只标已读，不跳转。还没登录不改。没连上时先在这台设备标，并说明连上后才告诉服务器。
     func markInboxRead(_ item: AssistantInboxItem) {
         guard !item.read else { return }

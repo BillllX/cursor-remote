@@ -17,7 +17,7 @@ import { describeLocal } from "./cron.ts";
 import { listApprovals, recoverApprovals, type PendingApproval } from "./approvals.ts";
 import { listDelegations, recoverDelegations, type Delegation } from "./delegations.ts";
 import { executeSchedule, latestBrief, runEpisodes, runIntegrator, runMaintenance, tidyMemoriesNow, type JobRunner } from "./jobs.ts";
-import { listInbox, markInboxRead, onInbox, postInbox, PUSH_KINDS } from "./inbox.ts";
+import { snoozeInbox, wakeSnoozedInbox, listInbox, markInboxRead, onInbox, postInbox, PUSH_KINDS } from "./inbox.ts";
 import {
   CORE_FIELDS,
   CORE_TOKEN_BUDGET,
@@ -598,6 +598,7 @@ function toolHost(
                 postInbox(ref, {
                   kind: "info",
                   title: "Apple 设备未连接",
+                  attention: "recovery",
                   body: "打开并连接 iPhone 或 iPad 后，再试一次日历、提醒事项或通讯录操作。",
                   key: `device:no-device:${chatId ?? "assistant"}`,
                   chatId,
@@ -1112,7 +1113,7 @@ export async function buildState(
     inbox: listInbox(ref, 300),
   });
   const projection = buildTaskProjection(
-    { inbox, todos, schedules, delegations, approvals, runs, brief },
+    { inbox, todos, schedules, delegations, approvals, runs, brief, calendarEvents: listCalendarEvents(ref) },
     { now: snapshotAt, day },
   );
   const state: AssistantState = {
@@ -1312,8 +1313,40 @@ export async function handleOp(
   const ref = refOf(tenant);
   const fail = (error: string) => ({ ok: false, error });
   switch (op) {
+    case "inbox_snooze":
+      return snoozeInbox(ref, str(args.id), Number(args.minutes)) ? { ok: true } : fail("这条提醒不能延后。");
+    case "inbox_decide": {
+      const item = listInbox(ref, 300).find(row => row.id === str(args.id));
+      if (!item?.decision) return fail("这条申请不支持直接审批。");
+      if (item.resolved) return fail("这条申请已处理，请刷新。");
+      if (typeof args.approve !== "boolean") return fail("请选择同意或拒绝。");
+      const decision = item.decision;
+      const host = dropHostFor(tenant);
+      let result: { ok: boolean; error?: string };
+      if (decision.kind === "proposal") {
+        result = await decideColleagueProposal(host, { proposalId: decision.id, approve: args.approve });
+      } else if (decision.kind === "skill") {
+        result = decideSkillProposal(tenant, { proposalId: decision.id, approve: args.approve, expectedRev: decision.rev });
+      } else {
+        const token = listDropTokens(host).find(row => row.id === decision.id);
+        if (!token || token.wxBinding?.openId !== decision.openId || token.wxBinding?.status !== "pending_owner") {
+          return fail("绑定申请已变化，请到连接管理查看最新状态。");
+        }
+        result = updateDropTokenFromUi(host, { workspace: "__all__", tokenId: decision.id, wxStatus: args.approve ? "active" : "revoked" });
+      }
+      if (!result.ok) return fail(result.error ?? "处理失败，请重试。");
+      markInboxRead(ref, [item.id], true);
+      return { ok: true };
+    }
     case "inbox_read": {
       const ids = Array.isArray(args.ids) ? args.ids.filter((id): id is string => typeof id === "string") : "all";
+      // Archiving never settles approvals. Those require their own decision endpoint.
+      if (args.resolve === true) {
+        const eligible = listInbox(ref, 300)
+          .filter(item => (ids === "all" || ids.includes(item.id)) && item.kind !== "approval" && !item.decision)
+          .map(item => item.id);
+        return { ok: true, data: { changed: markInboxRead(ref, eligible, true) } };
+      }
       return { ok: true, data: { changed: markInboxRead(ref, ids) } };
     }
     case "todo_add": {
@@ -2264,8 +2297,9 @@ function tick() {
     const ref = refOf(tenant);
     if (!existsSync(assistantDir(ref))) continue;
     if (refreshProjectionCondition(tenant, now)) void publishState(tenant);
+    wakeSnoozedInbox(ref, now);
     for (const todo of takeDueReminders(ref, now)) {
-      postInbox(ref, { kind: "reminder", title: todo.text, body: `待办到点了${todo.due ? `（${todo.due}）` : ""}。`, key: `todo:${todo.id}` });
+      postInbox(ref, { kind: "reminder", todoId: todo.id, title: todo.text, body: `待办到点了${todo.due ? `（${todo.due}）` : ""}。`, key: `todo:${todo.id}` });
     }
     for (const ev of takeDueCalendarEventReminders(ref, now)) {
       postInbox(ref, {
@@ -2273,6 +2307,7 @@ function tick() {
         title: ev.title,
         body: `日程即将开始（${ev.startIso}${ev.location ? ` · ${ev.location}` : ""}）。`,
         key: `calev:${ev.id}:${ev.rev}`,
+        eventId: ev.id,
       });
     }
     void flushProposalReceiptOutbox(dropHostFor(tenant)).catch((err) => log.error("flush proposal outbox", err));
@@ -2320,6 +2355,7 @@ export function startAssistant(next: AssistantDeps) {
     for (const item of recoverDelegations(ref)) {
       postInbox(ref, {
         kind: "delegation",
+      attention: "recovery",
         title: `委派被中断：${item.title}`,
         body: "网关重启时这个委派还没完成，可以到子会话里继续。",
         key: `interrupted:${item.id}`,

@@ -1,25 +1,57 @@
 import SwiftUI
 
-/// 产物中心只展示网关从既有事实源派生的 Artifact，不在本地另建索引。
+/// 文件中心只展示网关从既有事实源派生的 Artifact，不在本地另建索引。
 struct ArtifactCenterView: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     var embedded = false
+    @State private var searchText = ""
     @State private var kindFilter = ArtifactKindFilter.all
     @State private var presentation = ArtifactPresentation.recent
 
-    private var artifacts: [Artifact] {
+    private var allFiles: [Artifact] {
         (store.assistantState?.artifacts ?? [])
-            .filter { kindFilter.matches($0) }
+            .filter { $0.kind == "file" && kindFilter.matches($0) }
+            .filter { searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText) }
             .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    private func versionKey(_ file: Artifact) -> String {
+        guard let path = file.path, let chat = file.sourceChatId else { return file.id }
+        return chat + "\n" + path
+    }
+
+    private var artifacts: [Artifact] {
+        var seen = Set<String>()
+        return allFiles.filter { seen.insert(versionKey($0)).inserted }
+    }
+
+    private func versions(_ file: Artifact) -> [Artifact] {
+        allFiles.filter { versionKey($0) == versionKey(file) }
     }
 
     var body: some View {
         Group {
-            if store.assistantState?.artifacts == nil {
-                ContentUnavailableView("产物中心不可用", systemImage: "square.stack.3d.up", description: Text("当前网关版本还没有提供产物投影。"))
+            if store.assistantState == nil {
+                ContentUnavailableView {
+                    Label(store.assistantStatePendingTitle ?? "正在加载文件…", systemImage: "square.stack.3d.up")
+                } actions: {
+                    Button("重新加载") { store.requestAssistant(force: true) }
+                        .disabled(!store.connected)
+                }
+            } else if store.assistantState?.artifacts == nil {
+                ContentUnavailableView("文件中心不可用", systemImage: "square.stack.3d.up", description: Text("当前网关版本还没有提供文件投影。"))
             } else if artifacts.isEmpty {
-                ContentUnavailableView("没有符合条件的产物", systemImage: "line.3.horizontal.decrease.circle", description: Text("换一个类型筛选，或先让小驳生成、捕获内容。"))
+                ContentUnavailableView {
+                    Label(kindFilter == .all ? "还没有文件" : "没有符合条件的文件",
+                          systemImage: kindFilter == .all ? "square.stack.3d.up" : "line.3.horizontal.decrease.circle")
+                } description: {
+                    Text(kindFilter == .all ? "让小驳生成文件或捕获内容后，会显示在这里。" : "试试查看全部类型的文件。")
+                } actions: {
+                    if kindFilter != .all {
+                        Button("清除筛选") { kindFilter = .all }
+                    }
+                }
             } else {
                 List {
                     ForEach(groups) { group in
@@ -29,6 +61,18 @@ struct ArtifactCenterView: View {
                                     router.popToRoot()
                                     _ = store.continueArtifact(artifact)
                                 })
+                                let history = versions(artifact)
+                                if history.count > 1 {
+                                    DisclosureGroup("历史版本（\(history.count - 1)）") {
+                                        ForEach(Array(history.dropFirst())) { previous in
+                                            ArtifactRow(artifact: previous, onContinue: {
+                                                router.popToRoot()
+                                                _ = store.continueArtifact(previous)
+                                            })
+                                        }
+                                    }
+                                    .font(JieboFont.text(.caption))
+                                }
                             }
                         } header: {
                             JieboListHeader(group.title)
@@ -40,8 +84,9 @@ struct ArtifactCenterView: View {
                 .background(JieboColor.paper)
             }
         }
-        .navigationTitle(embedded ? "助理中心" : "产物中心")
+        .navigationTitle(embedded ? "助理中心" : "文件中心")
         .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, prompt: "搜索文件")
         .toolbar {
             if !embedded {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -71,12 +116,7 @@ struct ArtifactCenterView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Picker("产物类型", selection: $kindFilter) {
-                ForEach(ArtifactKindFilter.allCases) { item in
-                    Text(item.title).tag(item)
-                }
-            }
-            .pickerStyle(.segmented)
+
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -176,6 +216,11 @@ private struct ArtifactRow: View {
                 Spacer(minLength: 0)
             }
 
+            if let file = artifact.turnFile {
+                Text(TurnFileStyle.caption(file))
+                    .font(JieboFont.text(.caption))
+                    .foregroundStyle(JieboColor.dim)
+            }
             sourceLine
             citation
             actions
@@ -213,14 +258,18 @@ private struct ArtifactRow: View {
                     Button {
                         excerptExpanded.toggle()
                     } label: {
-                        Text(excerpt)
+                        Text(excerptExpanded ? "收起来源摘录" : excerpt)
                             .font(JieboFont.text(.caption))
                             .foregroundStyle(JieboColor.ink2)
-                            .lineLimit(excerptExpanded ? nil : 2)
+                            .lineLimit(2)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(excerptExpanded ? "收起来源摘录" : "展开来源摘录")
+                    if excerptExpanded {
+                        ChunkedAssistantMessage(text: ReplyText.repair(excerpt))
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }

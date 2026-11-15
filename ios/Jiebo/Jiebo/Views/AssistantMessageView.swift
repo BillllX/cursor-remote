@@ -72,7 +72,7 @@ struct StreamingAssistantText: View {
 
 /// 正文按围栏外的空行切成段，每段是一个 equatable 的 AssistantMessage：
 /// 流式时只有最后一段在变，前面的段不再重新拆块、解析表格和排版
-private struct ChunkedAssistantMessage: View, Equatable {
+struct ChunkedAssistantMessage: View, Equatable {
     let text: String
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance

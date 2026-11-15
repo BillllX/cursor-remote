@@ -40,7 +40,7 @@ enum AssistantWorkColumn: String, CaseIterable, Identifiable, Hashable {
     }
 
     static func matching(_ kind: String) -> AssistantWorkColumn {
-        if kind == "schedule" || kind.hasPrefix("schedule:") { return .plan }
+        if kind == "calendar_event" || kind == "schedule" || kind.hasPrefix("schedule:") { return .plan }
         if kind == "delegation" || kind == "background_run" || kind.hasPrefix("delegation:") || kind.hasPrefix("run:") {
             return .delegation
         }

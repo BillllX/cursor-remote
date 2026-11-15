@@ -24,6 +24,7 @@ struct ComposerView: View {
     @State private var ignoreDraftEcho: String?
     @State private var photoItems: [PhotosPickerItem] = []
     @State var viewerItem: AttachmentViewerItem?
+    @State var modelPickerOpen = false
     @State var photoPickerOpen = false
     @State var filePickerOpen = false
     @State var fileBrowserOpen = false

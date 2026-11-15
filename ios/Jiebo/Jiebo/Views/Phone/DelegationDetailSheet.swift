@@ -83,7 +83,7 @@ struct DelegationDetailSheet: View {
         }
         if row.status == "done" || row.status == "failed", let result = row.result?.nilIfEmpty {
             AssistantSection("汇报") {
-                ProseLines(text: ReplyText.repair(result))
+                ChunkedAssistantMessage(text: ReplyText.repair(result))
                     .textSelection(.enabled)
                     .assistantCard()
             }

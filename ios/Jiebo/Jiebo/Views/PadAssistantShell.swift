@@ -12,6 +12,7 @@ struct PadAssistantShell: View {
     @State private var preferredCompactColumn = NavigationSplitViewColumn.sidebar
     @State private var containerWidth: CGFloat = 0
     @State private var settingsOpen = false
+    @State private var skillsOpen = false
 
     private var projection: PadAssistantProjection {
         PadAssistantProjection(state: store.assistantState)
@@ -24,8 +25,8 @@ struct PadAssistantShell: View {
             preferredCompactColumn: $preferredCompactColumn
         ) {
             List {
-                Section("核心日常") {
-                    ForEach([PadAssistantSection.today, .inbox, .todos, .memory]) { section in
+                Section("对话与任务") {
+                    ForEach([PadAssistantSection.today, .inbox, .todos, .artifacts]) { section in
                         let isTaskGroup = section == .todos && (router.assistantSection == .todos || router.assistantSection == .delegations || router.assistantSection == .plans)
                         let selected = router.assistantSection == section || isTaskGroup
                         PadSectionNavigationRow(
@@ -48,8 +49,12 @@ struct PadAssistantShell: View {
                         .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }
-                Section("归档与外部通道") {
-                    ForEach([PadAssistantSection.artifacts, .colleagues]) { section in
+                Section("记忆与能力") {
+                    Button { skillsOpen = true } label: {
+                        Label("技能工厂", systemImage: "wand.and.stars")
+                            .frame(minHeight: 44)
+                    }
+                    ForEach([PadAssistantSection.memory, .colleagues]) { section in
                         PadSectionNavigationRow(
                             section: section,
                             selected: router.assistantSection == section,
@@ -77,24 +82,37 @@ struct PadAssistantShell: View {
                 max: router.layoutMode.sidebarWidth.maximum
             )
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                Button {
-                    settingsOpen = true
-                } label: {
-                    Label("设置", systemImage: NavigationIconId.account.symbol)
+                VStack(spacing: 0) {
+                    Button { settingsOpen = true } label: {
+                        Label("设置", systemImage: NavigationIconId.account.symbol)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .padding(.horizontal, 16)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(JieboColor.ink)
+                    Button {
+                        router.openDomain(.workbench)
+                    } label: {
+                        HStack {
+                            Label("工作台", systemImage: "rectangle.3.group")
+                            Spacer()
+                            if store.workspaceUnreadCount > 0 {
+                                PendingBadge(count: store.workspaceUnreadCount)
+                            }
+                        }
                         .font(JieboFont.text(.subheadline, weight: .medium))
                         .foregroundStyle(JieboColor.ink)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                         .padding(.horizontal, 16)
                         .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(JieboColor.paper)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("设置")
-                .accessibilityHint("打开设置")
                 .background(JieboColor.paper)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(JieboColor.line).frame(height: 1)
-                }
+                .overlay(alignment: .top) { Divider() }
             }
+            .sheet(isPresented: $skillsOpen) { SkillsWorkspaceSheet() }
             .sheet(isPresented: $settingsOpen) {
                 NavigationStack {
                     PhoneSettingsScreen()

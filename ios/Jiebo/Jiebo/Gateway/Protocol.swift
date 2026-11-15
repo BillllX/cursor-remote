@@ -829,11 +829,28 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var body: String
     var createdAt: Double
     var read: Bool
+    var decisionKind: String? = nil
+    var snoozedUntil: Double? = nil
+    var resolved: Bool = false
+    var attention: String? = nil
+    var todoId: String? = nil
+    var eventId: String? = nil
     var actionPrompt: String?
     var chatId: String?
     var scheduleId: String?
     var delegationId: String?
     var capture: AssistantCaptureSource?
+
+    var needsAttention: Bool {
+        guard !resolved, snoozedUntil == nil else { return false }
+        if let attention { return attention != "notice" }
+        switch kind {
+        case "approval", "reminder", "run": return true
+        case "info": return actionPrompt != nil || title == "Apple 设备未连接"
+        case "delegation": return !title.hasPrefix("委派完成")
+        default: return false
+        }
+    }
 
     static func from(_ json: JSONValue) -> AssistantInboxItem? {
         guard let row = json.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
@@ -844,6 +861,12 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
             body: row["body"]?.string ?? "",
             createdAt: row["createdAt"]?.number ?? 0,
             read: row["read"]?.bool ?? false,
+            decisionKind: row["decision"]?.object?["kind"]?.string,
+            snoozedUntil: row["snoozedUntil"]?.number,
+            resolved: row["resolved"]?.bool ?? false,
+            attention: row["attention"]?.string,
+            todoId: row["todoId"]?.string,
+            eventId: row["eventId"]?.string,
             actionPrompt: row["actionPrompt"]?.string?.nilIfEmpty,
             chatId: row["chatId"]?.string?.nilIfEmpty,
             scheduleId: row["scheduleId"]?.string?.nilIfEmpty,

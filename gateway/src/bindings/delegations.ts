@@ -170,6 +170,7 @@ export async function startDelegation(req: DelegateRequest): Promise<string> {
     if (record.notifyPolicy === "collab_only") return;
     postInbox(tenant, {
       kind: "delegation",
+      attention: ok ? "notice" : "recovery",
       title: `委派${ok ? "完成" : "失败"}：${title}`,
       body: text.slice(0, 3000) || "（没有输出）",
       key: `delegation:${record.id}`,

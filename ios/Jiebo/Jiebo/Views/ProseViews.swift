@@ -110,10 +110,10 @@ private enum ProseInline {
 
     private static func baseSize(for kind: Kind) -> CGFloat {
         switch kind {
-        case .body: return 16
+        case .body: return 17
         case .heading(let level): return headingSize(level)
         case .tableHeader, .tableMono: return 12
-        case .tableBody: return 16
+        case .tableBody: return 17
         }
     }
 

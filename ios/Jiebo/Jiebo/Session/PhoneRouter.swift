@@ -100,10 +100,10 @@ extension PhoneRouter {
             path = [.inbox]
         case .worklist(let column):
             inboxLane = .work(column)
-            path = [.inbox]
+            path = [route]
         case .artifacts:
             inboxLane = .artifacts
-            path = [.inbox]
+            path = [route]
         default:
             path = [route]
         }
@@ -111,6 +111,7 @@ extension PhoneRouter {
 
     /// 三个大模块之间切换。回到小驳时落在聊天页，不留着上次推上去的页面。
     func openSpace(_ tab: PhoneTab) {
+        guard tab != .messages else { return }
         dismissKeyboard()
         workbenchDrawerOpen = false
         if tab == .assistant {

@@ -14,8 +14,9 @@ struct DelegationListScreen: View {
     var column: AssistantWorkColumn
     var embeddedInInbox: Bool = false
     @State private var openedTask: PersonalTask?
-    @State private var showCompleted = false
-    @State private var newTodo = ""
+    @State private var showCompleted = true
+    @State private var calendarMode = false
+    @State private var selectedDate = Date()
 
     init(column: AssistantWorkColumn, embeddedInInbox: Bool = false) {
         self.column = column
@@ -31,7 +32,12 @@ struct DelegationListScreen: View {
     ]
 
     private var rows: [PersonalTask] {
-        (store.assistantState?.personalTasks ?? []).filter { AssistantWorkColumn.matching($0.kind) == column }
+        (store.assistantState?.personalTasks ?? []).filter { task in
+            guard embeddedInInbox || AssistantWorkColumn.matching(task.kind) == column else { return false }
+            guard calendarMode else { return true }
+            guard let at = task.dueAt else { return true }
+            return Calendar.current.isDate(Date(timeIntervalSince1970: at / 1000), inSameDayAs: selectedDate)
+        }
     }
 
     private var legacyRows: [AssistantDelegation] {
@@ -40,6 +46,18 @@ struct DelegationListScreen: View {
 
     var body: some View {
         List {
+            if embeddedInInbox {
+                Section {
+                    Picker("显示方式", selection: $calendarMode) {
+                        Text("列表").tag(false)
+                        Text("日历").tag(true)
+                    }.pickerStyle(.segmented)
+                    if calendarMode {
+                        DatePicker("日期", selection: $selectedDate, displayedComponents: .date)
+                            .datePickerStyle(.graphical)
+                    }
+                }
+            } else {
             Section {
                 Picker("任务栏目", selection: Binding(
                     get: { column },
@@ -59,29 +77,14 @@ struct DelegationListScreen: View {
                 .listRowBackground(JieboColor.paper)
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             }
-            if column == .todo {
-                Section {
-                    HStack(spacing: 8) {
-                        TextField("添加待办", text: $newTodo)
-                            .font(JieboFont.text(.subheadline))
-                            .submitLabel(.done)
-                            .onSubmit(addTodo)
-                        Button("添加", action: addTodo)
-                            .font(JieboFont.text(.subheadline, weight: .semibold))
-                            .foregroundStyle(JieboColor.pine)
-                            .disabled(newTodo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .frame(minHeight: 44)
-                    .listRowBackground(JieboColor.white)
-                }
             }
             if column == .todo, rows.isEmpty, store.assistantState != nil {
                 Section {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("还没有待办")
+                        Text(embeddedInInbox ? "暂无日程" : "还没有待办")
                             .font(JieboFont.text(.subheadline, weight: .medium))
                             .foregroundStyle(JieboColor.ink2)
-                        Text(column.emptyDetail)
+                        Text(embeddedInInbox ? "告诉小驳要做什么，它会帮你添加任务或提醒。" : column.emptyDetail)
                             .font(JieboFont.text(.caption))
                             .foregroundStyle(JieboColor.dim)
                     }
@@ -139,11 +142,18 @@ struct DelegationListScreen: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle(embeddedInInbox ? "助理中心" : column.title)
+        .navigationTitle(embeddedInInbox ? "日程" : column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .overlay {
-            if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
+            if store.assistantState == nil {
+                ContentUnavailableView {
+                    Label(store.assistantStatePendingTitle ?? "正在加载任务…", systemImage: "checklist")
+                } actions: {
+                    Button("重新加载") { store.requestAssistant(force: true) }
+                        .disabled(!store.connected)
+                }
+            } else if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
                 ContentUnavailableView(
                     "还没有\(column.title)",
                     systemImage: column.symbol,
@@ -160,19 +170,12 @@ struct DelegationListScreen: View {
         .onChange(of: store.assistantState?.personalTasks?.map(\.id) ?? []) { _, _ in openPendingTask() }
     }
 
-    private func addTodo() {
-        let text = newTodo.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        guard store.queueTodoChange("todo_add", args: ["text": .string(text)], pending: "添加这条待办") else { return }
-        newTodo = ""
-    }
-
     /// 今日摘要或推送带过来的那一条。列表还没到就先留着，到了再打开。
     private func openPendingTask() {
         guard let id = router.pendingWorkTaskId else { return }
         guard store.assistantState?.personalTasks != nil else { return }
         router.pendingWorkTaskId = nil
-        guard let task = rows.first(where: {
+        guard let task = (store.assistantState?.personalTasks ?? []).first(where: {
             $0.id == id
                 || $0.id == "todo:\(id)"
                 || $0.id == "schedule:\(id)"
@@ -276,7 +279,7 @@ struct DelegationListScreen: View {
     private func taskIcon(_ kind: String) -> String {
         switch kind {
         case "todo": return "checkmark.circle"
-        case "schedule": return "calendar"
+        case "schedule", "calendar_event": return "calendar"
         case "delegation": return "paperplane"
         case "background_run": return "gearshape.2"
         default: return "square.stack.3d.up"
@@ -373,6 +376,7 @@ private struct PersonalTaskSheet: View {
         switch currentTask.kind {
         case "todo": return "待办"
         case "schedule": return "计划"
+        case "calendar_event": return "日程"
         case "background_run": return "后台运行"
         default: return "任务"
         }
@@ -395,7 +399,7 @@ private struct PersonalTaskSheet: View {
                             .foregroundStyle(JieboColor.dim)
                     }
                     if let detail = active.detail?.nilIfEmpty {
-                        ProseLines(text: ReplyText.repair(detail))
+                        ChunkedAssistantMessage(text: ReplyText.repair(detail))
                             .textSelection(.enabled)
                     }
                     if sourceTodo != nil {
@@ -445,7 +449,6 @@ struct PhoneSettingsScreen: View {
     @State private var avatarPickerOpen = false
     @State private var unblockTarget: ImUser?
 
-    @Environment(\.switchPhoneSpace) private var switchPhoneSpace
     @Environment(\.dismiss) private var dismiss
 
     init() {}
@@ -458,14 +461,6 @@ struct PhoneSettingsScreen: View {
 
             if UIDevice.current.userInterfaceIdiom == .phone {
                 phoneChatPreferences
-                if let switchPhoneSpace {
-                    Section {
-                        phoneSpaceButton(.workspace, title: "工作台", symbol: "rectangle.3.group", badge: store.workspaceUnreadCount, switchSpace: switchPhoneSpace)
-                        phoneSpaceButton(.messages, title: "消息", symbol: "bubble.left.and.bubble.right", badge: im.totalUnread, switchSpace: switchPhoneSpace)
-                    } header: {
-                        JieboListHeader("工作与消息")
-                    }
-                }
             }
 
             Section {
@@ -556,7 +551,7 @@ struct PhoneSettingsScreen: View {
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(JieboColor.white)
-                    .accessibilityHint("再显示小驳、待处理、工作台和消息的说明")
+                    .accessibilityHint("再显示小驳、待处理和工作台的说明")
                 }
 
                 settingsRow(
@@ -856,24 +851,6 @@ struct PhoneSettingsScreen: View {
         .listRowBackground(JieboColor.white)
     }
 
-    private func phoneSpaceButton(_ tab: PhoneTab, title: String, symbol: String, badge: Int, switchSpace: @escaping (PhoneTab) -> Void) -> some View {
-        Button {
-            // 设置也可能由工作台以表单打开；先关闭表单，再交给当前窗口切换空间。
-            dismiss()
-            switchSpace(tab)
-        } label: {
-            HStack {
-                Label(title, systemImage: symbol)
-                Spacer()
-                if badge > 0 { ImUnreadBadge(count: badge) }
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(JieboColor.dim)
-            }
-            .foregroundStyle(JieboColor.ink)
-        }
-        .listRowBackground(JieboColor.white)
-        .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 条未读" : title)
-    }
 
     private func settingsRow(symbol: String, title: String, trailing: String?, chevron: Bool) -> some View {
         HStack(spacing: 12) {
@@ -1466,6 +1443,7 @@ struct AssistantColleaguesScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.openURL) private var openURL
 
+    @State private var accessManagement = false
     @State private var status: KbWorkspaceStatus?
     @State private var busy = false
     @State private var errorText = ""
@@ -1490,7 +1468,7 @@ struct AssistantColleaguesScreen: View {
 
     var body: some View {
         List {
-            portalSection
+            if accessManagement { portalSection }
             if !errorText.isEmpty {
                 Section {
                     Text(errorText)
@@ -1503,12 +1481,20 @@ struct AssistantColleaguesScreen: View {
                 proposalsSection
             }
             tokensSection
-            createSection
+            if accessManagement { createSection }
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle("同事与通行证")
+        .navigationTitle(embedded ? "助理中心" : "同事")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(accessManagement ? "完成管理" : "访问管理") {
+                    accessManagement.toggle()
+                }
+                .accessibilityHint("管理门户、访问凭证和新增同事权限")
+            }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await reload() }
         .task { await reload() }

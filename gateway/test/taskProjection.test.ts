@@ -237,3 +237,31 @@ describe("Personal Task 只读投影", () => {
     assert.equal(projection.dayThread.length, 4);
   });
 });
+
+test("calendar events join the task calendar and cancelled events stay out", () => {
+  const event = {
+    id: "meeting",
+    rev: 1,
+    title: "Meeting",
+    startIso: "2026-10-23T13:00:00+08:00",
+    endIso: "2026-10-23T14:00:00+08:00",
+    startAt: NOW + 3600000,
+    endAt: NOW + 7200000,
+    status: "confirmed" as const,
+    visibility: "private" as const,
+    busy: "busy" as const,
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+  const projected = buildTaskProjection(
+    input({ calendarEvents: [event, { ...event, id: "cancelled", status: "cancelled" }] }),
+    { now: NOW },
+  );
+  const meeting = projected.personalTasks.find((row) => row.id === "calendar_event:meeting");
+  assert.equal(meeting?.dueAt, event.startAt);
+  assert.equal(meeting?.phase, "planned");
+  assert.equal(
+    projected.personalTasks.some((row) => row.id === "calendar_event:cancelled"),
+    false,
+  );
+});

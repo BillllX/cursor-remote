@@ -68,7 +68,7 @@ extension ThreadView {
                 starterRow(axis: .vertical)
             }
             .padding(.top, 8)
-            Text(chrome == .phoneLegacy ? "菜单在左上角 · 可粘贴图片" : "对话列表在左侧 · 可粘贴图片")
+            Text(chrome == .phoneLegacy ? "点按左上角查看对话 · 可粘贴图片" : "对话列表在左侧 · 可粘贴图片")
                 .font(JieboFont.text(.footnote))
                 .foregroundStyle(JieboColor.dim)
                 .multilineTextAlignment(.center)

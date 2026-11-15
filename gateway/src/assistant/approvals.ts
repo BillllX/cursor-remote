@@ -1,3 +1,4 @@
+import { listInbox, markInboxRead } from "./inbox.ts";
 import type { AssistantApproval } from "../../../shared/protocol.ts";
 import { assistantPath, clip, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 
@@ -68,6 +69,7 @@ export function settleApproval(ref: TenantRef, chatId: string, callId?: string) 
   if (!gone.length) return [];
   data.items = data.items.filter((item) => !gone.includes(item));
   writeJson(file(ref), data);
+  resolveApprovalNotices(ref, gone);
   return gone;
 }
 
@@ -77,6 +79,7 @@ export function recoverApprovals(ref: TenantRef) {
   if (!data.items.length) return [];
   const stale = data.items;
   writeJson(file(ref), { items: [] });
+  resolveApprovalNotices(ref, stale);
   return stale;
 }
 
@@ -96,4 +99,10 @@ export function summarizeArgs(args: unknown) {
     parts.push(row.paths.filter((item): item is string => typeof item === "string").slice(0, 3).join("、"));
   }
   return clip(parts.join(" · "), 400);
+}
+
+function resolveApprovalNotices(ref: TenantRef, approvals: PendingApproval[]) {
+  const keys = new Set(approvals.map(item => `approval:${item.chatId}:${item.callId}`));
+  const ids = listInbox(ref, 300).filter(item => item.key && keys.has(item.key)).map(item => item.id);
+  if (ids.length) markInboxRead(ref, ids, true);
 }

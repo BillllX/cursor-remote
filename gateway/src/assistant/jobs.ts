@@ -266,6 +266,7 @@ export async function executeSchedule(
     kind: "reminder",
     title: schedule.title,
     body: result.text || "（没有输出）",
+    attention: "notice",
     key: occurrence.occurrenceId,
     scheduleId: schedule.id,
   });

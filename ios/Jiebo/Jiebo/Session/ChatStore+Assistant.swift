@@ -6,11 +6,8 @@ import UIKit
 extension ChatStore {
     // MARK: 个人助理
 
-    /// 入口角标：未读收件箱 + 待批
-    var assistantBadgeCount: Int {
-        guard let state = assistantState else { return 0 }
-        return state.unreadInbox + state.approvals.count
-    }
+    /// 角标表示未读消息；已读不代表审批完成或任务完成。
+    var assistantBadgeCount: Int { assistantState?.unreadInbox ?? 0 }
 
     /// 停在审批上的委派子会话里，父会话是 parentId 的那些
     /// 待批已经出现在哪。用来把「等待你的确认」写成能找到按钮的一句。

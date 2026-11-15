@@ -37,7 +37,7 @@ extension EnvironmentValues {
     }
 }
 
-/// iPhone 继续走原三 Tab；iPad 使用 scene-local PadRouter 驱动三个正式业务域。
+/// 小驳为默认首页，工作台由侧边栏进入；消息暂时隐藏。
 struct HomeShell: View {
     @Environment(ChatStore.self) private var store
     @Environment(ImStore.self) private var im
@@ -118,14 +118,21 @@ struct HomeShell: View {
                     WorkbenchView()
                         .environment(\.homeActive, true)
                 case .messages:
-                    ChatHome()
-                        .environment(\.homeActive, true)
+                    PadAssistantShell()
                 }
             }
             // 当前域才挂载：工作台、聊天和小驳各留一个 Composer。
             // 底栏单独占一行，输入区和侧栏底部留在它上方。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            PadDomainSwitcher()
+            if router.domain == .workbench {
+                Button {
+                    router.openDomain(.assistant)
+                } label: {
+                    Label("返回小驳", systemImage: NavigationIconId.assistant.symbol)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .background(JieboColor.paper)
+            }
         }
         .environment(router)
         .environment(\.openDelegation, { padRouter.openDelegation($0) })
@@ -266,7 +273,8 @@ struct HomeShell: View {
         guard !padRouter.bootstrapped else { return }
         let saved = UserDefaults.standard.string(forKey: PadDomain.storageKey)?.nilIfEmpty
         let legacy = UserDefaults.standard.string(forKey: HomeMode.storageKey)
-        let migrated = PadRouter.migratedDomain(padRawValue: saved, legacyRawValue: legacy)
+        let restored = PadRouter.migratedDomain(padRawValue: saved, legacyRawValue: legacy)
+        let migrated: PadDomain = restored == .messages ? .assistant : restored
         padRouter.domain = migrated
         UserDefaults.standard.set(migrated.rawValue, forKey: PadDomain.storageKey)
         padRouter.bootstrapped = true
@@ -326,11 +334,7 @@ struct HomeShell: View {
               AssistantScenePresenter.shared.isPresenter(token: sceneToken),
               let target = PushRouting.shared.consume()
         else { return }
-        if target.isIm, let convId = target.convId {
-            padRouter.route(target)
-            openConversation(convId)
-            return
-        }
+        if target.isIm { return }
         if target.isWorkspace, let chatId = target.chatId {
             padRouter.openDomain(.workbench)
             openWorkspace(chatId)
@@ -447,68 +451,6 @@ struct HomeShell: View {
     }
 }
 
-private struct PadDomainSwitcher: View {
-    @Environment(ChatStore.self) private var store
-    @Environment(ImStore.self) private var im
-    @Environment(PadRouter.self) private var router
-
-    var body: some View {
-        HStack(spacing: 4) {
-            domainButton(.assistant, badge: store.assistantBadgeCount, shortcut: "1")
-            domainButton(.workbench, badge: store.workspaceUnreadCount, shortcut: "2")
-            domainButton(.messages, badge: im.totalUnread, shortcut: "3")
-        }
-        .padding(4)
-        .jieboGlass(in: Capsule(), interactive: true)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity)
-        .background(JieboColor.paper)
-        .overlay(alignment: .top) {
-            Rectangle().fill(JieboColor.line).frame(height: 1)
-        }
-    }
-
-    private func domainButton(_ domain: PadDomain, badge: Int, shortcut: Character) -> some View {
-        Button {
-            router.openDomain(domain)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: domain.symbol)
-                    .accessibilityHidden(true)
-                Text(domain.title)
-                    .lineLimit(1)
-                if badge > 0 {
-                    ImUnreadBadge(count: badge)
-                }
-            }
-            .font(JieboFont.text(.subheadline, weight: .semibold))
-            .foregroundStyle(router.domain == domain ? (JieboTheme.shared.palette == .sticker ? JieboColor.fillFg : JieboColor.pine) : JieboColor.ink2)
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background {
-                if router.domain == domain {
-                    Capsule().fill(JieboTheme.shared.palette == .sticker ? JieboColor.pine : JieboColor.white.opacity(0.72))
-                }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(domainAccessibilityLabel(domain, badge: badge))
-        .accessibilityHint(Text(verbatim: "切换到\(domain.title)，快捷键 Command \(shortcut)"))
-        .accessibilityAddTraits(router.domain == domain ? .isSelected : [])
-    }
-
-    private func domainAccessibilityLabel(_ domain: PadDomain, badge: Int) -> String {
-        guard badge > 0 else { return domain.title }
-        let status = domain == .assistant
-            ? StatusLegendId.attention.accessibilityLabel(count: badge)
-            : StatusLegendId.unread.accessibilityLabel(count: badge)
-        return "\(domain.title)，\(status)"
-    }
-}
-
-/// 第一次打开时用一句话说明三个地方分别干什么。关掉之后不再出现。
 struct FirstUseHint: View {
     @AppStorage("jiebo.firstUseHintDismissed.v3") private var dismissed = false
 
@@ -516,8 +458,8 @@ struct FirstUseHint: View {
         if !dismissed {
             HStack(alignment: .center, spacing: 12) {
                 Text(UIDevice.current.userInterfaceIdiom == .phone
-                     ? "小驳用来吩咐。助理中心在右上角，含通知、待办、计划、委派和产物。底部可以切换小驳、工作台和消息。"
-                     : "小驳用来吩咐。待处理在小驳里，含通知、待办、计划和委派。工作台改文件、看终端。消息是跟人聊。底部可以切换这三处。")
+                     ? "小驳用来吩咐。助理中心在右上角，含通知、任务和产物。左上角打开侧边栏，设置与工作台固定在侧边栏底部。"
+                     : "小驳用来吩咐。待处理、任务和产物在小驳侧栏中。设置与工作台入口固定在侧栏底部，用来改文件、看终端。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)
                     .fixedSize(horizontal: false, vertical: true)

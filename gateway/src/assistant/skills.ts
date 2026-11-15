@@ -1389,6 +1389,7 @@ export function proposeSkillPackage(tenant: WorkspaceRoot, cwd: string, input: P
     title: `新技能待启用：${name}`,
     body: `${summary}\n作用文件夹：${layer} · 权限：${mode === "write" ? "读写" : "只读"} · 已通过安全门禁（#${sha256.slice(0, 8)}）`,
     key: `skill-proposal:${proposal.id}:${proposal.rev}`,
+    decision: { kind: "skill", id: proposal.id, rev: proposal.rev },
     chatId: input.chatId,
   });
 

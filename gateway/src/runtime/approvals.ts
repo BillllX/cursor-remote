@@ -122,6 +122,7 @@ function noteDelegationExpired(slot: Slot) {
   }
   postInbox(tenant, {
     kind: "delegation",
+      attention: "recovery",
     title: `委派「${record?.title ?? ""}」的审批超时`,
     body: "24 小时没人答，已按拒绝处理。子会话里可以重新交代。",
     key: `approval-expired:${slot.chatId}:${slot.approvalCallId ?? ""}`,

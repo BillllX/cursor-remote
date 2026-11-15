@@ -920,7 +920,7 @@ private struct PadBriefDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PadDetailTitle("今日简报", symbol: "sun.max.fill")
-            ProseLines(text: ReplyText.repair(store.assistantState?.brief?.text.nilIfEmpty ?? "今天还没有生成简报。"))
+            ChunkedAssistantMessage(text: ReplyText.repair(store.assistantState?.brief?.text.nilIfEmpty ?? "今天还没有生成简报。"))
                 .textSelection(.enabled)
             let events = projection.dayThread.filter { $0.kind != "brief" }
             AssistantSection("今日脉络") {
@@ -992,7 +992,7 @@ private struct PadInboxDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             PadDetailTitle(item.title.nilIfEmpty ?? "小驳消息", symbol: "tray")
-            ProseLines(text: ReplyText.repair(item.body.nilIfEmpty ?? "这条消息没有更多内容。"))
+            ChunkedAssistantMessage(text: ReplyText.repair(item.body.nilIfEmpty ?? "这条消息没有更多内容。"))
                 .textSelection(.enabled)
             AssistantMutedText(assistantFormatMillis(item.createdAt))
             if let delegationId = item.delegationId {
@@ -1056,7 +1056,7 @@ private struct PadTaskDetail: View {
                     .foregroundStyle(JieboColor.warnFg)
             }
             if let detail = task.detail?.nilIfEmpty {
-                ProseLines(text: ReplyText.repair(detail))
+                ChunkedAssistantMessage(text: ReplyText.repair(detail))
                     .textSelection(.enabled)
             }
             if let due = TodoDue.label(sourceTodo?.due ?? task.due) {
@@ -1204,7 +1204,7 @@ private struct PadDelegationDetail: View {
 
                 if let result = delegation.result?.nilIfEmpty {
                     AssistantSection("汇报") {
-                        ProseLines(text: ReplyText.repair(result))
+                        ChunkedAssistantMessage(text: ReplyText.repair(result))
                             .textSelection(.enabled)
                             .assistantCard()
                     }
@@ -1381,7 +1381,7 @@ private struct PadReceiptCard: View {
                 .font(JieboFont.text(.subheadline, weight: .semibold))
                 .foregroundStyle(info.color)
             if let summary = receipt.summary?.nilIfEmpty {
-                ProseLines(text: ReplyText.repair(summary))
+                ChunkedAssistantMessage(text: ReplyText.repair(summary))
             }
             AssistantMutedText(assistantFormatMillis(receipt.at))
         }

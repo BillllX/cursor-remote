@@ -211,6 +211,7 @@ export function createCalendarProposal(
   postInbox(host, {
     kind: "approval",
     key: `proposal:${proposal.id}`,
+    decision: { kind: "proposal", id: proposal.id },
     title: `[日历申请] ${proposal.proposerName}：${title}`,
     body: [
       `提案编号：${proposal.id}`,
@@ -318,6 +319,7 @@ export function createKnowledgeUpdateProposal(
   postInbox(host, {
     kind: "approval",
     key: `proposal:${proposal.id}`,
+    decision: { kind: "proposal", id: proposal.id },
     title: `[知识库更新申请] ${proposal.proposerName} → ${wsRef.key}`,
     body: [
       `提案编号：${proposal.id}`,

@@ -105,8 +105,6 @@ struct AssistantAvatarView: View {
         ZStack {
             if JieboTheme.shared.palette == .sticker {
                 StickerRobotFace(phase: displayedPhase)
-                    .id(displayedPhase)
-                    .transition(.opacity)
             } else {
                 Image(displayedPhase.assetName)
                     .resizable()
@@ -137,7 +135,7 @@ struct AssistantAvatarView: View {
         }
         .task(id: motionKey) {
             motionActive = false
-            guard !reduceMotion, scenePhase == .active else { return }
+            guard !reduceMotion, scenePhase == .active, JieboTheme.shared.palette != .sticker else { return }
             await Task.yield()
             withAnimation(motionAnimation.repeatForever(autoreverses: true)) {
                 motionActive = true
@@ -151,7 +149,7 @@ struct AssistantAvatarView: View {
     }
 
     private var motionKey: String {
-        "\(displayedPhase.rawValue):\(reduceMotion):\(scenePhase == .active)"
+        "\(displayedPhase.rawValue):\(reduceMotion):\(scenePhase == .active):\(JieboTheme.shared.palette.rawValue)"
     }
 
     private var motionAnimation: Animation {
@@ -221,47 +219,89 @@ struct AssistantAvatarView: View {
 struct StickerRobotFace: View {
     var phase: AssistantAvatarPhase = .idle
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var appeared = false
+    @State private var startedAt = Date()
+
+    private var animates: Bool {
+        appeared && !reduceMotion && scenePhase == .active && phase != .offline
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let side = min(proxy.size.width, proxy.size.height)
             let compact = side <= 36
-            ZStack {
-                RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
-                    .fill(JieboColor.white)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
-                            .stroke(JieboColor.ink, lineWidth: max(1.8, side * 0.026))
+            // Small navigation marks need fewer updates; all motion stops off screen.
+            TimelineView(.animation(minimumInterval: compact ? 1.0 / 15 : 1.0 / 30, paused: !animates)) { context in
+                let time = animates ? max(0, context.date.timeIntervalSince(startedAt)) : 0
+                let beat = sin(time * .pi * 2 / 2.8)
+                let blinkCycle = time.truncatingRemainder(dividingBy: 4.7)
+                let blink = animates && blinkCycle > 3.9 && blinkCycle < 4.06
+                let gaze = phase == .thinking ? sin(time * 1.5) * side * 0.035 : 0
+                ZStack {
+                    RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                        .fill(JieboColor.white)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: side * 0.32, style: .continuous)
+                                .stroke(JieboColor.ink, lineWidth: max(1.8, side * 0.026))
+                        }
+                        .frame(width: side * 0.77, height: side * 0.66)
+                        .rotationEffect(.degrees(-7))
+                    HStack(spacing: side * 0.13) {
+                        eye(side: side)
+                            .scaleEffect(x: 1, y: blink ? 0.12 : 1)
+                        eye(side: side)
+                            .scaleEffect(x: 1, y: blink ? 0.12 : 1)
                     }
-                    .frame(width: side * 0.77, height: side * 0.66)
                     .rotationEffect(.degrees(-7))
-                HStack(spacing: side * 0.13) {
-                    eye(side: side)
-                    eye(side: side)
+                    .offset(x: gaze + (phase == .listening ? side * 0.02 : 0),
+                            y: phase == .failure ? side * 0.04 : 0)
+                    if phase != .offline {
+                        Image(systemName: badgeSymbol)
+                            .font(.system(size: side * (compact ? 0.23 : 0.22), weight: .bold))
+                            .foregroundStyle(phase == .failure ? JieboColor.danger : JieboColor.spark)
+                            .background(JieboColor.paper, in: Circle())
+                            .scaleEffect(badgeScale(time: time, beat: beat))
+                            .rotationEffect(.degrees(phase == .thinking ? beat * 18 : 0))
+                            .offset(x: side * 0.33, y: -side * 0.32)
+                    }
+                    if !compact && (phase == .listening || phase == .executing) {
+                        Image(systemName: phase == .listening ? "wave.3.right" : "arrow.triangle.2.circlepath")
+                            .font(.system(size: side * 0.15, weight: .medium))
+                            .foregroundStyle(JieboColor.ink)
+                            .rotationEffect(.degrees(phase == .executing ? time * 180 : 0))
+                            .opacity(phase == .listening ? 0.6 + 0.4 * sin(time * 6) : 1)
+                            .offset(x: -side * 0.43, y: -side * 0.23)
+                    }
+                    if !compact && phase == .thinking {
+                        Image(systemName: "sparkle")
+                            .font(.system(size: side * 0.12, weight: .bold))
+                            .foregroundStyle(JieboColor.spark)
+                            .scaleEffect(1 + beat * 0.22)
+                            .offset(x: side * 0.12, y: -side * 0.43)
+                    }
                 }
-                .rotationEffect(.degrees(-7))
-                .offset(x: phase == .thinking ? side * 0.025 : 0,
-                        y: phase == .failure ? side * 0.04 : 0)
-                if phase != .offline {
-                    Image(systemName: badgeSymbol)
-                        .font(.system(size: side * (compact ? 0.23 : 0.22), weight: .bold))
-                        .foregroundStyle(phase == .failure ? JieboColor.danger : JieboColor.spark)
-                        .background(JieboColor.paper, in: Circle())
-                        .offset(x: side * 0.33, y: -side * 0.32)
-                }
-                if !compact && (phase == .listening || phase == .executing) {
-                    Image(systemName: phase == .listening ? "wave.3.right" : "arrow.triangle.2.circlepath")
-                        .font(.system(size: side * 0.15, weight: .medium))
-                        .foregroundStyle(JieboColor.ink)
-                        .offset(x: -side * 0.43, y: -side * 0.23)
-                }
-                if !compact && phase == .thinking {
-                    Image(systemName: "sparkle")
-                        .font(.system(size: side * 0.12, weight: .bold))
-                        .foregroundStyle(JieboColor.spark)
-                        .offset(x: side * 0.12, y: -side * 0.43)
-                }
+                .scaleEffect(x: 1 - beat * 0.008, y: 1 + beat * 0.018, anchor: .bottom)
+                .rotationEffect(.degrees(phase == .listening ? -2 + beat * 2 : phase == .approval ? -3 : 0))
+                .offset(y: phase == .success ? -side * 0.08 * abs(sin(min(time, 0.8) / 0.8 * .pi)) : -side * 0.018 * beat)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .onAppear { startedAt = Date(); appeared = true }
+        .onDisappear { appeared = false }
+        .onChange(of: phase) { _, _ in startedAt = Date() }
+        .onChange(of: scenePhase) { _, next in
+            if next == .active { startedAt = Date() }
+        }
+    }
+
+    private func badgeScale(time: Double, beat: Double) -> Double {
+        switch phase {
+        case .success: return 1 + 0.35 * sin(min(time, 1) * .pi)
+        case .listening, .executing: return 1 + 0.2 * sin(time * 6)
+        case .thinking, .idle: return 1 + 0.12 * beat
+        default: return 1
         }
     }
 
@@ -290,3 +330,23 @@ struct StickerRobotFace: View {
         }
     }
 }
+
+#if DEBUG
+#Preview("贴纸形象八态") {
+    ScrollView {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 28) {
+            ForEach(AssistantAvatarPhase.allCases, id: \.self) { phase in
+                VStack(spacing: 12) {
+                    StickerRobotFace(phase: phase).frame(width: 112, height: 112)
+                    HStack {
+                        StickerRobotFace(phase: phase).frame(width: 32, height: 32)
+                        Text(phase.accessibilityLabel).font(.caption)
+                    }
+                }
+            }
+        }
+        .padding(24)
+    }
+    .background(JieboColor.paper)
+}
+#endif

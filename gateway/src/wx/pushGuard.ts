@@ -806,6 +806,7 @@ export async function checkWechatQrBindingStatus(
       postInbox(host, {
         kind: "approval",
         key: `wxbind:${sess.tokenId}:${rawOpenId}`,
+        decision: { kind: "wechat", id: sess.tokenId, openId: rawOpenId },
         title: `[微信扫码绑定确认] ${sess.targetLabel} 已扫码请求绑定微信`,
         body: [
           `通行口令：${upRes.record.label} (${sess.tokenId})`,

@@ -458,6 +458,7 @@ final class PadRouter {
     }
 
     func openDomain(_ next: PadDomain) {
+        guard next != .messages else { return }
         domain = next
         if next == .assistant, selection == nil {
             assistantSection = .today
@@ -505,6 +506,7 @@ final class PadRouter {
 
     func route(_ target: PushTarget, presentSelection: Bool = true) {
         let destination = Self.destination(for: target)
+        guard destination.domain != .messages else { return }
         domain = destination.domain
         if let section = destination.section { setAssistantSection(section) }
         selection = presentSelection ? destination.selection : nil

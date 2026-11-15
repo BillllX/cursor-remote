@@ -318,6 +318,7 @@ export function maybeRunDailySuggestionScan(
     postInbox(ref, {
       kind: "reminder",
       title: "工作区记忆整理建议",
+      attention: "suggestion",
       body: `共 ${withDay.active.length} 条建议（低/中风险需你确认）。打开记忆中心查看。`,
       key: `mc-suggestions:${weekKey}`,
     });

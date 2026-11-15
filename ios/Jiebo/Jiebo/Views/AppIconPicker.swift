@@ -6,6 +6,7 @@ import UIKit
 /// `CFBundleIcons` 和 `CFBundleIcons~ipad`，iPhone 和 iPad 才能换。
 enum AppIconChoice: String, CaseIterable, Identifiable {
     case sticker
+    case paper
     case cyber
     case porcelain
     case plush
@@ -25,6 +26,7 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .sticker: "贴纸"
+        case .paper: "小驳纸贴"
         case .cyber: "赛博"
         case .porcelain: "瓷"
         case .plush: "毛绒"

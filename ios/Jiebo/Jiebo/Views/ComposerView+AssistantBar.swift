@@ -66,19 +66,9 @@ extension ComposerView {
 
     /// 胶囊上方一行小字：当前模型。
     var assistantStatusLine: some View {
-        Menu {
-            Picker(selection: Binding(get: { chatModel }, set: { store.chooseModel($0, chatId: chatId) })) {
-                ForEach(ModelCatalog.groups(from: store.models)) { group in
-                    Section(group.label) {
-                        ForEach(group.models) { item in
-                            Text(item.name).tag(item.id)
-                        }
-                    }
-                }
-            } label: {
-                Label("模型", systemImage: "cpu")
-            }
-            .pickerStyle(.menu)
+        Button {
+            focused = false
+            modelPickerOpen = true
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(JieboTheme.shared.palette == .sticker ? "✦ 接驳" : "Agent")
@@ -100,7 +90,12 @@ extension ComposerView {
             .jieboGlass(in: Capsule(), interactive: true)
             .contentShape(Capsule())
         }
-        .menuOrder(.fixed)
+        .buttonStyle(.plain)
+        .sheet(isPresented: $modelPickerOpen) {
+            AssistantModelPicker(models: store.models, selected: chatModel) {
+                store.chooseModel($0, chatId: chatId)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("模型 \(ModelCatalog.label(for: chatModel))")
         .accessibilityHint("轻点切换")
