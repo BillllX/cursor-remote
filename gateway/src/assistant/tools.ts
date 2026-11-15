@@ -1417,7 +1417,11 @@ function mountSkillTools(
       {
         id: skillIdSchema("要查阅的技能 ID（如 canvas-artifact-builder、jiebo-gateway-arch、ios-swiftui-motion）"),
         cursor: { type: "string", maxLength: 80, description: "续读游标，使用上一页返回的 nextCursor；首页不传" },
-        limit: { type: "integer", minimum: 1, maximum: 2400, description: "每页字符数，默认 2400" },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          description: "可选，每页最大字符数（1~2400，默认 2400，超出按 2400 自动分页；首页通常不传即可）",
+        },
       },
       ["id"],
       (args) => host.skillUse!({ id: str(args.id).trim(), cursor: typeof args.cursor === "string" ? args.cursor : undefined, limit: typeof args.limit === "number" ? args.limit : undefined }),

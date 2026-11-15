@@ -1076,15 +1076,12 @@ export function useSkill(
       return { ok: false, error: "分页游标不在完整字符边界，请从首页重新读取。" };
     }
   }
-  if (
-    opts.limit !== undefined &&
-    (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > MAX_SKILL_USE_CHARS)
-  ) {
-    return { ok: false, error: "limit 必须为 1 至 2400 的整数。" };
+  if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1)) {
+    return { ok: false, error: "limit 必须为大于等于 1 的整数。" };
   }
-  // 按 Unicode 码点计页长，保证 Emoji 和扩展汉字不会被拆成孤立代理。
+  // 按 Unicode 码点计页长，保证 Emoji 和扩展汉字不会被拆成孤立代理；超出单页上限时自动钳制为 MAX_SKILL_USE_CHARS。
   let end = offset;
-  const pageSize = opts.limit ?? MAX_SKILL_USE_CHARS;
+  const pageSize = opts.limit !== undefined ? Math.min(opts.limit, MAX_SKILL_USE_CHARS) : MAX_SKILL_USE_CHARS;
   for (let count = 0; end < rawBody.length && count < pageSize; count++) {
     end += rawBody.codePointAt(end)! > 0xffff ? 2 : 1;
   }

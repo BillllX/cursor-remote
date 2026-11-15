@@ -110,18 +110,23 @@ function stableJson(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(rec[k])}`).join(",")}}`;
 }
 
-function validateJsonSchema(schema: Record<string, unknown> | undefined, value: unknown): boolean {
-  if (!schema || typeof schema !== "object") return true;
+function describeSchemaError(
+  schema: Record<string, unknown> | undefined,
+  value: unknown,
+  path = "参数",
+): string | null {
+  if (!schema || typeof schema !== "object") return null;
   const type = schema.type;
   if (type === "object") {
-    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return `${path} 必须为对象`;
     const rec = value as Record<string, unknown>;
     const props =
       schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
         ? (schema.properties as Record<string, Record<string, unknown>>)
         : {};
-    if (schema.additionalProperties === false && Object.keys(rec).some((k) => !Object.hasOwn(props, k))) {
-      return false;
+    if (schema.additionalProperties === false) {
+      const unknownKey = Object.keys(rec).find((k) => !Object.hasOwn(props, k));
+      if (unknownKey !== undefined) return `不支持的参数字段 "${unknownKey}"`;
     }
     if (Array.isArray(schema.required)) {
       for (const reqKey of schema.required) {
@@ -129,53 +134,59 @@ function validateJsonSchema(schema: Record<string, unknown> | undefined, value: 
           typeof reqKey === "string" &&
           (!Object.hasOwn(rec, reqKey) || rec[reqKey] === undefined || rec[reqKey] === null)
         ) {
-          return false;
+          return `缺少必填参数 "${reqKey}"`;
         }
       }
     }
     for (const key of Object.keys(rec)) {
       const propVal = rec[key];
       if (propVal === undefined) continue;
-      if (Object.hasOwn(props, key) && !validateJsonSchema(props[key], propVal)) {
-        return false;
+      if (Object.hasOwn(props, key)) {
+        const childErr = describeSchemaError(props[key], propVal, key);
+        if (childErr) return childErr;
       }
     }
-    return true;
+    return null;
   }
   if (type === "string") {
-    if (typeof value !== "string") return false;
-    if (typeof schema.minLength === "number" && value.length < schema.minLength) return false;
-    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) return false;
-    if (typeof schema.pattern === "string" && !new RegExp(schema.pattern).test(value)) return false;
-    if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
-    return true;
+    if (typeof value !== "string") return `"${path}" 必须为字符串`;
+    if (typeof schema.minLength === "number" && value.length < schema.minLength)
+      return `"${path}" 长度不能少于 ${schema.minLength} 个字符`;
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength)
+      return `"${path}" 长度不能超过 ${schema.maxLength} 个字符`;
+    if (typeof schema.pattern === "string" && !new RegExp(schema.pattern).test(value))
+      return `"${path}" 格式不匹配要求（${schema.pattern}）`;
+    if (Array.isArray(schema.enum) && !schema.enum.includes(value))
+      return `"${path}" 仅支持枚举值 [${schema.enum.join(", ")}]`;
+    return null;
   }
   if (type === "integer") {
-    if (typeof value !== "number" || !Number.isInteger(value)) return false;
-    if (typeof schema.minimum === "number" && value < schema.minimum) return false;
-    if (typeof schema.maximum === "number" && value > schema.maximum) return false;
-    return true;
+    if (typeof value !== "number" || !Number.isInteger(value)) return `"${path}" 必须为整数`;
+    if (typeof schema.minimum === "number" && value < schema.minimum) return `"${path}" 不能小于 ${schema.minimum}`;
+    if (typeof schema.maximum === "number" && value > schema.maximum) return `"${path}" 不能大于 ${schema.maximum}`;
+    return null;
   }
   if (type === "number") {
-    if (typeof value !== "number" || !Number.isFinite(value)) return false;
-    if (typeof schema.minimum === "number" && value < schema.minimum) return false;
-    if (typeof schema.maximum === "number" && value > schema.maximum) return false;
-    return true;
+    if (typeof value !== "number" || !Number.isFinite(value)) return `"${path}" 必须为有效数字`;
+    if (typeof schema.minimum === "number" && value < schema.minimum) return `"${path}" 不能小于 ${schema.minimum}`;
+    if (typeof schema.maximum === "number" && value > schema.maximum) return `"${path}" 不能大于 ${schema.maximum}`;
+    return null;
   }
   if (type === "boolean") {
-    return typeof value === "boolean";
+    return typeof value === "boolean" ? null : `"${path}" 必须为布尔值`;
   }
   if (type === "array") {
-    if (!Array.isArray(value)) return false;
+    if (!Array.isArray(value)) return `"${path}" 必须为数组`;
     if (schema.items && typeof schema.items === "object" && !Array.isArray(schema.items)) {
       const itemSchema = schema.items as Record<string, unknown>;
-      for (const item of value) {
-        if (!validateJsonSchema(itemSchema, item)) return false;
+      for (let i = 0; i < value.length; i++) {
+        const itemErr = describeSchemaError(itemSchema, value[i], `${path}[${i}]`);
+        if (itemErr) return itemErr;
       }
     }
-    return true;
+    return null;
   }
-  return true;
+  return null;
 }
 
 function normalizeToolOutput(raw: unknown): McpToolCallPayload {
@@ -372,8 +383,9 @@ export async function startCodexSkillBridge(
             reply(id, undefined, { code: -32602, message: "工具未挂载" });
             return;
           }
-          if (!validateJsonSchema(defMeta.inputSchema, args)) {
-            reply(id, undefined, { code: -32602, message: "工具参数无效" });
+          const schemaErr = describeSchemaError(defMeta.inputSchema, args);
+          if (schemaErr) {
+            reply(id, undefined, { code: -32602, message: `工具参数无效：${schemaErr}` });
             return;
           }
           const activeTools = buildActiveTools();

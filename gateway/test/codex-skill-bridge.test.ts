@@ -180,14 +180,25 @@ test("子工作区全量工具挂载、参数校验、统计去重、记忆读�
     assert.equal(toolNames.includes("skill_proposal_decide"), false);
     assert.equal(toolNames.includes("memory_save"), false);
 
-    // JSON Schema 参数边界拦截
-    assert.equal((await f.call("skill_propose", { id: "no" })).error.code, -32602);
-    assert.equal((await f.call("skill_use", { id: "../../secret" })).error.code, -32602);
-    assert.equal((await f.call("skill_use", { id: "canvas-artifact-builder", limit: 2401 })).error.code, -32602);
-    assert.equal((await f.call("skill_use", { id: "canvas-artifact-builder", limit: 0 })).error.code, -32602);
-    assert.equal((await f.call("skill_list", { unexpected: "no" })).error.code, -32602);
+    // JSON Schema 参数边界拦截（带字段级原因说明）与超大 limit 自动钳制防呆
+    const missingReq = await f.call("skill_propose", { id: "valid-id" });
+    assert.equal(missingReq.error.code, -32602);
+    assert.match(missingReq.error.message || "", /name/);
+    const badId = await f.call("skill_use", { id: "../../secret" });
+    assert.equal(badId.error.code, -32602);
+    assert.match(badId.error.message || "", /id/);
+    const zeroLimit = await f.call("skill_use", { id: "canvas-artifact-builder", limit: 0 });
+    assert.equal(zeroLimit.error.code, -32602);
+    assert.match(zeroLimit.error.message || "", /limit/);
+    const unknownKey = await f.call("skill_list", { unexpected: "no" });
+    assert.equal(unknownKey.error.code, -32602);
+    assert.match(unknownKey.error.message || "", /unexpected/);
     assert.equal((await f.call("skill_list", { constructor: "no" })).error.code, -32602);
     assert.equal((await f.call("unmounted_tool", {})).error.code, -32602);
+
+    // 模型传超大 limit（如 20000）时自动钳制为单页上限 2,400 字符正常返回，不触发 -32602 报错
+    const clamped = await f.call("skill_use", { id: "skill-factory-guide", limit: 20000 });
+    assert.equal(clamped.payload.ok, true);
 
     // 内置技能工厂 SOP 可查可读
     const listedFactory = await f.call("skill_list", { query: "技能工厂" });
@@ -390,6 +401,10 @@ test("长 SOP 完整分页、版本变化与停用阻断续页", async () => {
       }).ok,
     );
     await f.init();
+    const oversizedPage = (await f.call("skill_use", { id: "long-bridge-sop", limit: 20000 })).payload;
+    assert.equal(oversizedPage.ok, true);
+    assert.equal(oversizedPage.truncated, true);
+    assert.equal(Array.from(bodyOf(oversizedPage.content)).length, 2400);
     let page = (await f.call("skill_use", { id: "long-bridge-sop", limit: 1000 })).payload;
     const firstCursor = page.nextCursor;
     const count = page.stats.viewedCount;
