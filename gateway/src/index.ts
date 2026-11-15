@@ -39,6 +39,7 @@ import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
 import { deviceRegistry } from "./device/registry.ts";
 import { startIngestRuntime } from "./ingest/notify.ts";
+import { initializeSdkSandbox } from "./runtime/sdkSandbox.ts";
 
 loadDotEnv([resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]);
 
@@ -50,6 +51,11 @@ const PROXY_WEB = gatewayEnv.proxyWeb();
 defaultModel();
 
 loadTenants();
+// 先配置 SDK 沙箱，避免管理员请求或后台任务抢先污染进程级能力缓存。
+if (gatewayEnv.cursorApiKey() && allTenants().some(sandboxEnabledForTenant)) {
+  await initializeSdkSandbox(gatewayEnv.cursorApiKey());
+  log.info("服务端 SDK 沙箱已初始化，租户隔离保持启用");
+}
 const sweptTmp = sweepStateTmp(
   [stateDir(), ...allTenants().map((tenant) => tenant.stateDir)],
   allTenants().map((tenant) => tenant.workspaceRoot),
