@@ -346,7 +346,8 @@ export async function runCodexChat(
       effectivePrompt = input.compactPrompt;
     }
 
-    if (gatewayEnv.codexSkillBridge()) {
+    // 开关只对非沙箱管理员挂载。其他能用 Codex 的租户继续跑，不因桥接准入失败而中断。
+    if (gatewayEnv.codexSkillBridge() && conn.tenant?.admin && !sandboxEnabledForTenant(conn.tenant)) {
       skillBridge = await startCodexSkillBridge(conn, slot, cwd, epoch, abort.signal);
     }
     // 完整提示和 compact 续轮都补发当前实际能力，覆盖历史中已撤销的工具承诺。
@@ -375,7 +376,9 @@ export async function runCodexChat(
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       env: { ...buildCodexChildEnv(), ...skillBridge?.env },
-      config: skillBridge?.config ?? { mcp_servers: { jiebo: { enabled: false } } },
+      // 桥接关闭时不要写入只有 enabled=false 的 mcp_servers.jiebo。
+      // Codex 0.167 会把它当成缺少 transport 的服务器，加载 config.toml 直接退出。
+      ...(skillBridge ? { config: skillBridge.config } : {}),
     };
     const codex = deps.createCodex ? deps.createCodex(codexOptions) : new Codex(codexOptions);
     const threadOpts: ThreadOptions = {

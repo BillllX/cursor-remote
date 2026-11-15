@@ -340,6 +340,7 @@ describe("域 2：流式事件增量切片、工具映射、4 参数 Token 计�
     assert.equal(capturedThreadOpts?.networkAccessEnabled, true);
     assert.equal(capturedThreadOpts?.approvalPolicy, "never");
     assert.ok(capturedCodexOpts?.env?.CODEX_HOME);
+    assert.equal(capturedCodexOpts?.config, undefined);
 
     // 验证 text-delta 切片不重复，且 captureText 只被 send.ts 触发一次
     const textDeltas = messages.filter((m) => m.type === "text-delta").map((m) => m.text);
@@ -787,6 +788,58 @@ test("技能桥接启用时 runner 注入能力和私有环境，错误结果正
   assert.ok(!JSON.stringify(captured!.config).includes(captured!.env!.JIEBO_MCP_TOKEN));
   assert.equal(existsSync(captured!.env!.JIEBO_MCP_SOCKET), false);
   assert.equal(messages.find((m) => m.type === "tool-completed" && m.callId === "skill-error")?.status, "error");
+});
+
+test("桥接开关打开时，非管理员不挂载 jiebo，Codex 仍可执行", async () => {
+  const { ws, conn, slot, tenant } = makeConnAndSlot("bridge-non-admin", { admin: false, sandbox: false });
+  const epoch = ++slot.epoch;
+  slot.finished = false;
+  let captured: CodexOptions | undefined;
+  let prompt = "";
+  const fake: CodexClientLike = {
+    startThread() {
+      return {
+        async runStreamed(input) {
+          prompt = String(input);
+          async function* events(): AsyncGenerator<ThreadEvent> {
+            yield { type: "thread.started", thread_id: "bridge-non-admin-thread" };
+          }
+          return { events: events() };
+        },
+      };
+    },
+    resumeThread() {
+      throw new Error("不应续接");
+    },
+  };
+  await withEnv({ CODEX_SKILL_BRIDGE: "1" }, async () => {
+    await runCodexChat(
+      ws,
+      conn,
+      slot,
+      { model: "gpt-6.1-sol", full: "codex:gpt-6.1-sol" },
+      {
+        prompt: "普通执行",
+        userText: "普通执行",
+        images: [],
+        history: [],
+        epoch,
+        cwd: tenant.workspaceRoot,
+        mode: "agent",
+        confirmWrites: false,
+        autoApprove: false,
+      },
+      {
+        createCodex(options) {
+          captured = options;
+          return fake;
+        },
+      },
+    );
+  });
+  assert.equal(captured?.config, undefined);
+  assert.equal(captured?.env?.JIEBO_MCP_SOCKET, undefined);
+  assert.match(prompt, /技能桥接关闭/);
 });
 
 test("落盘后重新水合并首次 handlePrompt，不误清原 Codex 线程", async () => {
