@@ -145,22 +145,50 @@ function saveText(path: string, content: string, revision: string) {
   }
   return { revision: digest(content) };
 }
+function readShareLedger(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function isLegacyShareLedger(value: unknown) {
+  if (!value || typeof value !== "object") return false;
+  const legacy = value as { version?: unknown; workspaces?: unknown; invitations?: unknown };
+  return (
+    legacy.version === 1 &&
+    !!legacy.workspaces &&
+    typeof legacy.workspaces === "object" &&
+    !Array.isArray(legacy.workspaces) &&
+    Array.isArray(legacy.invitations)
+  );
+}
+
 export class WorkspaceSharing {
   private readonly ledger: string;
+  private readonly previousLedger: string;
   constructor(
     stateDirectory: string,
     private readonly tenants: () => Tenant[],
   ) {
-    this.ledger = join(stateDirectory, "workspace-sharing.json");
+    this.ledger = join(stateDirectory, "workspace-share-grants.json");
+    this.previousLedger = join(stateDirectory, "workspace-sharing.json");
   }
 
-  private getGrants(): Grant[] {
-    try {
-      return JSON.parse(readFileSync(this.ledger, "utf8")) as Grant[];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
+  private ledgerForGrants() {
+    if (existsSync(this.ledger)) return this.ledger;
+    const previous = readShareLedger(this.previousLedger);
+    // 已上线版本写入的数组继续使用原路径，旧试点的目录和成员结构不转换为新版授权。
+    return previous === undefined || isLegacyShareLedger(previous) ? this.ledger : this.previousLedger;
+  }
+
+  private getGrants(ledger = this.ledgerForGrants()): Grant[] {
+    const value = readShareLedger(ledger);
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw new WorkspaceShareError("共享名单暂时无法读取，请联系管理员");
+    return value as Grant[];
   }
 
   private locate(owner: Tenant, id: string) {
@@ -270,8 +298,9 @@ export class WorkspaceSharing {
       )
         throw new WorkspaceShareError("所选同事不可用");
       const memberIds = [...new Set(request.memberIds)].sort();
-      return withFileLockSync(this.ledger, () => {
-        const grants = this.getGrants(),
+      const ledger = this.ledgerForGrants();
+      return withFileLockSync(ledger, () => {
+        const grants = this.getGrants(ledger),
           previous = selected(grants);
         if (request.memberRevision !== digest(JSON.stringify(previous)))
           throw new WorkspaceShareError("共享名单已更新，请重新打开", "CONFLICT");
@@ -284,7 +313,7 @@ export class WorkspaceSharing {
             ino: workspace.ino,
             members: memberIds,
           });
-        atomicWriteFileSync(this.ledger, JSON.stringify(next), { mode: 0o600, fsync: true });
+        atomicWriteFileSync(ledger, JSON.stringify(next), { mode: 0o600, fsync: true });
         return {
           affected: [...new Set([...previous, ...memberIds])],
           memberIds,

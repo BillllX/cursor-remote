@@ -155,3 +155,30 @@ test("共享范围排除个人根目录、隐藏文件、软硬链接，旧成�
     assert.throws(() => f.call(f.member, "read", { workspace: row.id, path }));
   }
 });
+
+test("旧试点台账保留原样，新共享名单使用独立文件", linuxOnly, (t) => {
+  const f = fixture(t);
+  const oldLedger = join(f.root, "workspace-sharing.json");
+  const oldContent = JSON.stringify({ version: 1, workspaces: { demo: { members: [f.other.id] } }, invitations: [] });
+  writeFileSync(oldLedger, oldContent);
+
+  assert.deepEqual(f.list(f.other), []);
+  f.share([f.member.id]);
+  assert.equal(f.list(f.member).length, 1);
+  assert.deepEqual(f.list(f.other), []);
+  assert.equal(readFileSync(oldLedger, "utf8"), oldContent);
+  assert.equal(JSON.parse(readFileSync(join(f.root, "workspace-share-grants.json"), "utf8")).length, 1);
+});
+
+test("兼容早期新版共享数组，撤权写回原台账", linuxOnly, (t) => {
+  const f = fixture(t);
+  f.share([f.member.id]);
+  const current = join(f.root, "workspace-share-grants.json");
+  const previous = join(f.root, "workspace-sharing.json");
+  renameSync(current, previous);
+
+  assert.equal(f.list(f.member).length, 1);
+  f.share([]);
+  assert.deepEqual(f.list(f.member), []);
+  assert.deepEqual(JSON.parse(readFileSync(previous, "utf8")), []);
+});
