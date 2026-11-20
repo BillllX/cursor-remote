@@ -1,0 +1,65 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: var(--bg, Canvas);
+  color: var(--fg, CanvasText);
+  overflow: auto;
+  padding: 20px;
+}
+.panel {
+  max-width: 1180px;
+  margin: auto;
+}
+.header,
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.header {
+  justify-content: space-between;
+}
+.toolbar {
+  margin: 12px 0;
+}
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+}
+.panel label {
+  display: block;
+  margin: 12px 0;
+}
+.panel textarea {
+  width: 100%;
+  min-height: 160px;
+  font: inherit;
+  background: inherit;
+  color: inherit;
+  border: 1px solid;
+  padding: 8px;
+}
+.panel input {
+  display: block;
+  width: 100%;
+  background: inherit;
+  color: inherit;
+  border: 1px solid;
+  padding: 8px;
+}
+.panel button {
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.panel button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}

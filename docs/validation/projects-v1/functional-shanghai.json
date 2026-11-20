@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "suite": "shared-project-functional",
+    "testAuthorModel": "gpt-6.1-sol",
+    "execution": "real ProjectStore and native tool loop with isolated temporary SQLite/blob storage and injected fixture model adapter; no external model API",
+    "host": "VM-0-11-opencloudos",
+    "sourceCommit": "1c1b7389a1dd90190655219067a033366a82c49e",
+    "worktreeContentSha256": "8f0b9546a52dc4fcea399604922c0eece1ed1c49066563b701db1c8d2fa6bb5c",
+    "worktreeHashScope": [
+      "gateway",
+      "shared",
+      "scripts",
+      "web",
+      "package.json",
+      "package-lock.json"
+    ],
+    "worktreeHashExcludes": [
+      "node_modules",
+      ".next",
+      ".git",
+      ".env*",
+      "*.tsbuildinfo",
+      "symlinks"
+    ],
+    "worktreeHashedFiles": 634,
+    "node": "v22.19.0",
+    "startedAt": "2026-11-16T08:51:25.496Z",
+    "command": "node --import tsx --test gateway/test/project-functional.test.ts"
+  },
+  "completion": {
+    "suite": "shared-project-functional",
+    "finishedAt": "2026-11-16T08:51:27.390Z",
+    "exitCode": 0,
+    "signal": null
+  },
+  "counts": {
+    "tests": 15,
+    "pass": 15,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "rawLog": "functional-shanghai.log",
+  "remoteHarnessExitCode": 0
+}

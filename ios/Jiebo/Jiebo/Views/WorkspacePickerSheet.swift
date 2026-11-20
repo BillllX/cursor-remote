@@ -8,6 +8,7 @@ struct WorkspacePickerSheet: View {
     @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sceneSessionState) private var sceneSession
+    @State private var sharedOpen = false
     @State private var query = ""
     /// 正在改名 / 删除 / 清空对话的目标
     @State private var renaming: WorkspaceItem?
@@ -31,6 +32,9 @@ struct WorkspacePickerSheet: View {
         let duplicates = Set(Dictionary(grouping: all, by: \.name).filter { $0.value.count > 1 }.keys)
         NavigationStack {
             List {
+                if store.gatewayFeatures.contains("shared_workspaces_v1") {
+                    Section { Button("共享项目") { sharedOpen = true } }
+                }
                 if all.isEmpty {
                     Section {
                         if store.workspacesSyncInFlight {
@@ -97,6 +101,7 @@ struct WorkspacePickerSheet: View {
             .background(JieboColor.paper)
             .navigationTitle("切换文件夹")
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $sharedOpen) { SharedProjectsView().environment(store) }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: all.count > 6 ? "搜索 \(all.count) 个文件夹" : "搜索文件夹")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

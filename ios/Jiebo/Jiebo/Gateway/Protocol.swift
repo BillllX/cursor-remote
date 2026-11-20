@@ -359,7 +359,7 @@ struct ClientInfo: Sendable, Equatable {
             // Collab 沿用网关现有双 capability 门槛；iOS P3 只读取状态，不发送 collab_op。
             caps: [
                 "sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "im_group", "im_collab",
-                "workspace_agents", "device_bridge", "device_bridge_v2", "mobile_compact_v1", "deferred_turn",
+                "shared_workspaces_v1", "workspace_agents", "device_bridge", "device_bridge_v2", "mobile_compact_v1", "deferred_turn",
             ]
         )
     }
@@ -388,6 +388,7 @@ struct DeviceInvoke: Sendable, Hashable {
 }
 
 enum ClientMessage {
+    case project(JSONValue)
     case hello(token: String?)
     case setWorkspace(cwd: String, chatId: String?, create: Bool?)
     case listWorkspaces
@@ -482,6 +483,7 @@ enum ClientMessage {
 
     func json() -> JSONValue {
         switch self {
+        case .project(let value): return value
         case .hello(let token):
             var object: [String: JSONValue] = ["type": .string("hello")]
             if let token, !token.isEmpty { object["token"] = .string(token) }
@@ -1438,6 +1440,7 @@ struct AssistantState: Sendable, Hashable {
 }
 
 enum ServerMessage {
+    case project(JSONValue)
     case ready(
         cwd: String,
         hasApiKey: Bool,
@@ -1992,6 +1995,8 @@ enum ServerMessage {
         case "memory_written":
             guard let entry = object["entry"].flatMap(AssistantMemoryEntry.from) else { return .ignored(type) }
             return .memoryWritten(chatId: object["chatId"]?.string?.nilIfEmpty, entry: entry)
+        case _ where type.hasPrefix("project_"):
+            return .project(.object(object))
         case "pong":
             return .pong
         case _ where type.hasPrefix("im_") || type == "collab_state":

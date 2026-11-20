@@ -198,7 +198,7 @@ func checkServer(_ options: Options, samples: [JSONValue]) -> [String] {
 /// 与 ClientMessage 一一对应。ClientMessage 加了 case，clientCase(of:) 的 switch 编译不过；
 /// 这里补上 case 后 sample(_:) 的 switch 又编译不过，逼着补样本
 enum ClientCase: String, CaseIterable {
-    case hello, setWorkspace, listWorkspaces, createWorkspace, renameWorkspace, deleteWorkspace
+    case project, hello, setWorkspace, listWorkspaces, createWorkspace, renameWorkspace, deleteWorkspace
     case workspaceAgentList, workspaceAgentOpen, workspaceAgentProfile, workspaceAgentRead, workspaceAgentViewing
     case prompt, cancel
     case dropQueued, setModel, newSession, deleteSession, resumeSession, syncState, approvalReply, setPolicy
@@ -211,6 +211,7 @@ enum ClientCase: String, CaseIterable {
 
 func clientCase(of message: ClientMessage) -> ClientCase {
     switch message {
+    case .project: return .project
     case .hello: return .hello
     case .setWorkspace: return .setWorkspace
     case .listWorkspaces: return .listWorkspaces
@@ -284,6 +285,7 @@ let slimChat: JSONValue = .object([
 /// 可选参数都给值，布尔取非默认值
 func sample(_ which: ClientCase) -> ClientMessage {
     switch which {
+    case .project: return .project(.object(["type": .string("project_request"), "protocol": .number(1), "requestId": .string("00000000-0000-4000-8000-000000000001"), "action": .string("project_list"), "payload": .object([:])]))
     case .hello: return .hello(token: "example-token")
     case .deviceResult:
         return .deviceResult(

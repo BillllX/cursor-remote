@@ -246,6 +246,7 @@ extension ChatStore {
     }
 
     func resetTenantSession() {
+        projects.reset()
         // 必须先恢复所有等待中的 continuation；否则旧租户 Task 会永远悬挂，之后还可能读取新凭据。
         cancelUploadConfirmations()
         syncTask?.cancel()

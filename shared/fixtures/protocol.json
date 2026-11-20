@@ -1734,9 +1734,41 @@
       "finishedSeq": 9,
       "readSeq": 9,
       "unread": 0
+    },
+    {
+      "type": "project_result",
+      "data": {
+        "items": []
+      },
+      "ok": true,
+      "requestId": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "project_event",
+      "authzRevision": 1,
+      "eventSeq": 1,
+      "kind": "project_created",
+      "payload": {},
+      "revision": 0,
+      "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "project_access_revoked",
+      "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "project_summary_changed",
+      "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"
     }
   ],
   "client": [
+    {
+      "type": "project_request",
+      "action": "project_list",
+      "payload": {},
+      "protocol": 1,
+      "requestId": "00000000-0000-4000-8000-000000000001"
+    },
     {
       "type": "hello",
       "client": {

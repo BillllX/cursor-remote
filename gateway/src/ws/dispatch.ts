@@ -1,3 +1,4 @@
+import { onProjectRequest } from "./handlers/projects.ts";
 // 客户端上行消息的分发：解析 → ping → hello（登录）→ 鉴权门槛 → 按 type 查注册表；表里没有的 type 静默忽略。
 // 处理函数在同一个 try 里 await，同步、异步抛出的错误都走下面同一个 catch；不按连接排队。
 import type { RawData } from "ws";
@@ -78,6 +79,7 @@ import { onDevicePermissionReport, onDeviceResult } from "../device/handler.ts";
 
 /** 鉴权之后的“消息类型 → 处理函数”注册表 */
 export const handlers: HandlerTable = {
+  project_request: onProjectRequest,
   assistant_get: onAssistantGet,
   assistant_op: onAssistantOp,
   loop_start: onLoopStart,

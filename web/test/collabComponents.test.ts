@@ -36,6 +36,8 @@ describe("协作组件视图模型", () => {
           taskId: `task-${index}`,
           version: 1,
           workspaceId: `workspace-${index}`,
+          attempt: 1,
+          attempts: [{ attempt: 1, status, startedAt: 1 }],
           status,
         })),
       },
@@ -51,6 +53,8 @@ describe("协作组件视图模型", () => {
     const base = {
       version: 1,
       workspaceId: "workspace-1",
+      attempt: 1,
+      attempts: [],
     };
     const runs = [
       {

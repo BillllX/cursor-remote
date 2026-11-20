@@ -84,7 +84,6 @@ describe("collab reducer", () => {
   test("历史和实时消息按 clientId 去重，ack 原位确认乐观消息", () => {
     const pending: ImMessage & { pending: boolean } = {
       convId: "grp~default",
-      snapshotSeq: 1,
       seq: Number.MAX_SAFE_INTEGER,
       from: "me",
       author: { kind: "tenant", tenantId: "me" },
@@ -98,12 +97,11 @@ describe("collab reducer", () => {
     state = collabReducer(state, {
       type: "ack",
       convId: "grp~default",
-      snapshotSeq: 2,
       clientId: "client-1",
       seq: 3,
       at: 11,
     });
-    const stored = { ...pending, seq: 3, at: 11 };
+    const stored: ImMessage & { pending?: boolean } = { ...pending, seq: 3, at: 11 };
     delete stored.pending;
     state = collabReducer(state, {
       type: "history",
@@ -119,12 +117,14 @@ describe("collab reducer", () => {
     let state = collabReducer(emptyCollabState(), {
       type: "state",
       convId: "grp~default",
+      snapshotSeq: 1,
       runs: [run(1)],
       removedRunIds: [],
     });
     state = collabReducer(state, {
       type: "state",
       convId: "grp~default",
+      snapshotSeq: 2,
       runs: [],
       removedRunIds: ["run-1"],
     });
@@ -143,7 +143,7 @@ describe("collab reducer", () => {
       body: { text: "private" },
       clientId: "dm-1",
     };
-    assert.equal(collabActionFromServer({ type: "im_message", message: dmMessage, unread: 1 }), undefined);
+    assert.equal(collabActionFromServer({ type: "im_message", message: dmMessage, unread: 1, ticket: { exp: 1, sig: "x" } }), undefined);
     assert.equal(
       collabActionFromServer({
         type: "im_history",

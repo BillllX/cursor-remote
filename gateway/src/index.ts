@@ -1,3 +1,4 @@
+import { handleProjectHttp } from "./projects/http.ts";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { createServer } from "node:http";
@@ -111,6 +112,10 @@ process.on("uncaughtException", (err) => {
 const httpServer = createServer((req, res) => {
   if (publish.handleHttp(req, res)) return;
   const url = new URL(req.url || "/", "http://127.0.0.1");
+  if (url.pathname.startsWith("/upload/projects/") || url.pathname.startsWith("/media/projects/")) {
+    void handleProjectHttp(req, res, url).catch(() => { if (!res.headersSent) res.writeHead(500).end(); else res.destroy(); });
+    return;
+  }
   if (url.pathname === "/health") {
     const body = healthPayload();
     res.writeHead(body.ok ? 200 : 503, { "content-type": "application/json" });

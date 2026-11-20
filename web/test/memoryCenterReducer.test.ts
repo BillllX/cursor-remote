@@ -342,6 +342,7 @@ describe("memoryCenterReducer", () => {
         missingRefs: [],
         effectiveState: "hot" as const,
         pinned: false,
+        revision: "r1",
       },
       {
         id: "b",
@@ -353,6 +354,7 @@ describe("memoryCenterReducer", () => {
         missingRefs: [],
         effectiveState: "hot" as const,
         pinned: true,
+        revision: "r1",
       },
     ];
     assert.deepEqual(
@@ -373,6 +375,7 @@ describe("memoryCenterReducer", () => {
         missingRefs: [],
         effectiveState: "hot" as const,
         pinned: true,
+        revision: "r1",
       },
       {
         id: "b",
@@ -384,6 +387,7 @@ describe("memoryCenterReducer", () => {
         missingRefs: [],
         effectiveState: "hot" as const,
         pinned: false,
+        revision: "r1",
       },
     ];
     const picked = injectionRoundItems(items, {
@@ -428,6 +432,7 @@ describe("memoryCenterReducer", () => {
         missingRefs: [],
         effectiveState: "cold" as const,
         state: "cold" as const,
+        revision: "r2",
       },
     ];
     assert.equal(filterItemsByState(items, "cold").length, 1);
@@ -534,7 +539,7 @@ describe("memory center mutate reducer", () => {
       reqId: "mbad",
       ok: true,
       data: { scope: "ws", action: "update", detail: { scope: { id: 9 }, items: [], rules: [], diagnostics: null } },
-    });
+    } as unknown as AssistantResultMessage);
     assert.ok(applied);
     assert.match(applied!.mutationError, /无法解析/);
   });

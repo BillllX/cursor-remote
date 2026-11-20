@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import type { AssistantResultMessage } from "@shared/protocol";
 import {
   initialMemoryCenterImportUiState,
   reduceMemoryCenterImportResult,
@@ -74,7 +75,7 @@ describe("memoryCenterImportReducer", () => {
   test("malformed export data no throw", () => {
     const next = reduceMemoryCenterImportResult(
       initialMemoryCenterImportUiState,
-      { type: "assistant_result", op: "memory_center_export", ok: true, data: { bad: true } },
+      { type: "assistant_result", op: "memory_center_export", ok: true, data: { bad: true } } as unknown as AssistantResultMessage,
       "r1",
       "r1",
     );

@@ -1141,9 +1141,14 @@ export const serverSamples: ServerMessage[] = [
   },
   { type: "workspace_agent_opened", path: CWD, chatId: CHAT },
   { type: "workspace_agent_update", chatId: CHAT, unread: 0, readSeq: 9, finishedSeq: 9 },
+  { type: "project_result", requestId: "00000000-0000-4000-8000-000000000001", ok: true, data: { items: [] } },
+  { type: "project_event", workspaceId: "wsa_00000000-0000-4000-8000-000000000001", eventSeq: 1, kind: "project_created", revision: 0, authzRevision: 1, payload: {} },
+  { type: "project_access_revoked", workspaceId: "wsa_00000000-0000-4000-8000-000000000001" },
+  { type: "project_summary_changed", workspaceId: "wsa_00000000-0000-4000-8000-000000000001" },
 ];
 
 export const clientSamples: ClientMessage[] = [
+  { type: "project_request", protocol: 1, requestId: "00000000-0000-4000-8000-000000000001", action: "project_list", payload: {} },
   {
     type: "hello",
     token: "example-token",

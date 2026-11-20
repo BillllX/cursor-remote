@@ -67,6 +67,9 @@ export type Tenant = {
   sandbox: boolean;
   /** IM 可见性分组：imHidden 相同的租户互相可见（验收账号设 true，和正式用户互不可见） */
   imHidden?: boolean;
+  projectSharingEnabled?: boolean;
+  projectSharingDomain?: string;
+  projectSandboxVerified?: boolean;
   workspaceRoot: string;
   stateDir: string;
   stateFile: string;
@@ -395,6 +398,9 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
       admin?: unknown;
       sandbox?: unknown;
       imHidden?: unknown;
+      projectSharingEnabled?: unknown;
+      projectSharingDomain?: unknown;
+      projectSandboxVerified?: unknown;
     };
     const id = typeof rec.id === "string" ? rec.id.trim() : "";
     const token = typeof rec.token === "string" ? rec.token : "";
@@ -411,15 +417,17 @@ function loadTenantsFile(file: string, dataRoot: string): Tenant[] {
     if (seenHash.has(digest)) throw new Error(`tenants.json：租户 ${id} 的口令和别人重复。`);
     seenId.add(id);
     seenHash.add(digest);
-    tenants.push(
-      makeTenant(id, name, token, {
+    const made = makeTenant(id, name, token, {
         workspaceRoot: resolve(dataRoot, "tenants", id, "workspace"),
         stateDir: resolve(dataRoot, "tenants", id),
         admin,
         sandbox: !(rec.sandbox === false || rec.sandbox === "false" || id === "billxu"),
         imHidden: rec.imHidden === true || rec.imHidden === "true",
-      }),
-    );
+      });
+    made.projectSharingEnabled = rec.projectSharingEnabled === true;
+    made.projectSharingDomain = typeof rec.projectSharingDomain === "string" ? rec.projectSharingDomain : undefined;
+    made.projectSandboxVerified = rec.projectSandboxVerified === true;
+    tenants.push(made);
   }
   if (!tenants.length) throw new Error("tenants.json 里没有有效租户。");
   return tenants;

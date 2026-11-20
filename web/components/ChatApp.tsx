@@ -25,6 +25,8 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
+import { ProjectPanel } from "./projects/ProjectPanel";
+import { ProjectChannel } from "../lib/projects/channel";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -132,6 +134,8 @@ export default function ChatApp() {
   groupMenuRef.current = groupMenu;
   const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
+  const [projectsOpen,setProjectsOpen] = useState(false);
+  const projectChannel = useRef(new ProjectChannel());
   const [unlocked, setUnlocked] = useState(false);
   /** null = 还没读本地令牌；true = 有上次登录的令牌，先进主界面、后台自动登录，网关拒绝或退出登录才回登录页 */
   const [resuming, setResuming] = useState<boolean | null>(null);
@@ -2422,6 +2426,9 @@ export default function ChatApp() {
         } catch {
           return;
         }
+        if (message.type === "project_result" || message.type === "project_event" || message.type === "project_access_revoked" || message.type === "project_summary_changed") {
+          projectChannel.current.publish(message); return;
+        }
         if ((message.type === "text-delta" || message.type === "thinking-delta") && message.chatId) {
           queueDelta(message);
           return;
@@ -3350,6 +3357,7 @@ export default function ChatApp() {
   }
 
   function logout() {
+    setProjectsOpen(false); projectChannel.current.clear();
     localStorage.removeItem(TOKEN_KEY);
     tokenRef.current = "";
     tenantIdRef.current = "";
@@ -4896,7 +4904,9 @@ export default function ChatApp() {
         >
           <IconRail name="account" />
         </button>
+        <button type="button" title="共享项目" aria-label="共享项目" onClick={()=>setProjectsOpen(true)}>共享</button>
       </nav>
+      {projectsOpen && <ProjectPanel send={send} channel={projectChannel.current} connected={connected} token={token} onClose={()=>setProjectsOpen(false)}/> }
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

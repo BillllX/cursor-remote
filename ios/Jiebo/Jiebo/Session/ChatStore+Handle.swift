@@ -1014,6 +1014,8 @@ extension ChatStore {
             flash("\(assistantName) 记住了：\(entry.topic.nilIfEmpty ?? String(entry.text.prefix(24)))")
         case .deviceInvoke(let invoke):
             deviceInvokeHandler?(invoke)
+        case .project(let value):
+            projects.handle(value)
         case .im(let event):
             imSink?.handle(event)
         case .pong, .ignored:

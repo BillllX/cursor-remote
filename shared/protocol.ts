@@ -1,3 +1,4 @@
+import type { ProjectRequest, ProjectResult, ProjectEvent, ProjectNotice } from "./projectTypes.ts";
 export type AgentMode = "agent";
 
 /** 旧客户端和旧落盘数据可能仍带 ask / plan；运行时一律按 Agent 执行。 */
@@ -1523,6 +1524,7 @@ export type ImErrorCode =
   | "internal";
 
 export type ClientMessage =
+  | ProjectRequest
   | { type: "hello"; token?: string; client?: HelloClient }
   | { type: "set_workspace"; cwd: string; chatId?: string; create?: boolean }
   | { type: "list_workspaces" }
@@ -1801,6 +1803,7 @@ export type LoopState = {
 };
 
 export type ServerMessage =
+  | ProjectResult | ProjectEvent | ProjectNotice
   | {
       type: "ready";
       cwd: string;

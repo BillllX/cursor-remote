@@ -1515,3 +1515,15 @@
   readSeq: 9
   finishedSeq: 9
 )
+
+## server[88] project_result #1
+.project(JSON {"data": {"items": []}, "ok": true, "requestId": "00000000-0000-4000-8000-000000000001", "type": "project_result"})
+
+## server[89] project_event #1
+.project(JSON {"authzRevision": 1, "eventSeq": 1, "kind": "project_created", "payload": {}, "revision": 0, "type": "project_event", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
+
+## server[90] project_access_revoked #1
+.project(JSON {"type": "project_access_revoked", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
+
+## server[91] project_summary_changed #1
+.project(JSON {"type": "project_summary_changed", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})

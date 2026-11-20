@@ -106,8 +106,9 @@ enum ChatDestination: Hashable {
 @Observable
 @MainActor
 final class ChatStore {
+    let projects = ProjectClientStore()
     var connected = false {
-        didSet { refreshWidgetSnapshotIfNeeded() }
+        didSet { if !connected { projects.reset() }; refreshWidgetSnapshotIfNeeded() }
     }
     @ObservationIgnored var gatewayReady = false
     /// 连不上已超过 offlineGrace：客户端仍在后台重连，界面从「连接中」改报「已断开」

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import type { AssistantResultMessage } from "@shared/protocol";
 import {
   applyActivityResult,
   initialActivityState,
@@ -101,7 +102,7 @@ describe("memoryCenterActivityReducer", () => {
       reqId: "bad",
       ok: true,
       data: { entries: [{ auditId: "x" }] },
-    });
+    } as unknown as AssistantResultMessage);
     assert.match(applied!.activityError, /格式/);
   });
 
@@ -154,6 +155,7 @@ describe("memoryCenterActivityReducer", () => {
       reqId: "r1",
       ok: false,
       error: "冲突",
+      data: { code: "conflict" },
     });
     assert.equal(failSecond!.suggestions!.entries.length, 1);
     assert.equal(failSecond!.suggestionById.s1.error, "冲突");

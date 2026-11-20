@@ -1,0 +1,138 @@
+{
+  "suite": "shared-project-security",
+  "testAuthorModel": "gpt-6-astra",
+  "execution": "real ProjectStore, two-process SQLite contention and real Unix socket service with temporary accounts/storage; no external model API",
+  "host": "VM-0-11-opencloudos",
+  "sourceCommit": "1c1b7389a1dd90190655219067a033366a82c49e",
+  "worktreeContentSha256": "9697c8e98274f11f84ec209334eaef8ce1ba0a6c96248d1e3b713ec00827cf0f",
+  "worktreeHashScope": [
+    "gateway",
+    "shared",
+    "scripts",
+    "web",
+    "package.json",
+    "package-lock.json"
+  ],
+  "worktreeHashExcludes": [
+    "node_modules",
+    ".next",
+    ".git",
+    ".env*",
+    "*.tsbuildinfo",
+    "symlinks"
+  ],
+  "worktreeHashedFiles": 637,
+  "node": "v22.19.0",
+  "startedAt": "2026-11-16T08:52:54.115Z",
+  "command": "node --import tsx --test gateway/test/project-security.test.ts",
+  "finishedAt": "2026-11-16T08:52:56.103Z",
+  "exitCode": 0,
+  "signal": null,
+  "tests": 20,
+  "pass": 20,
+  "fail": 0,
+  "skipped": 0,
+  "log": "security-shanghai.log",
+  "scopeLimitations": [
+    "Suite uses temporary local accounts and storage; cross-OS-user isolation is verified separately in the dedicated Shanghai fixture.",
+    "No external model API execution; model field identifies the test author.",
+    "No production deployment or production data access."
+  ],
+  "osIsolation": {
+    "host": "VM-0-11-opencloudos",
+    "fixture": "/opt/cursor-remote-project-fixture",
+    "unit": "cursor-remote-project-fixture",
+    "state": "active/running",
+    "enabled": false,
+    "preservedForGatewayE2E": true,
+    "log": "security-isolation-shanghai.log",
+    "checks": [
+      {
+        "actor": "cr-project-outsider",
+        "probe": "open-read",
+        "path": "store/projects.sqlite",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "open-read",
+        "path": "server/key",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "open-read",
+        "path": "client/key",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "traverse",
+        "path": "store",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "traverse",
+        "path": "server",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "traverse",
+        "path": "client",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "traverse",
+        "path": "runtime",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "actor": "cr-project-outsider",
+        "probe": "socket-connect",
+        "denied": true,
+        "code": "EACCES"
+      },
+      {
+        "isolationFailures": 0
+      },
+      {
+        "actor": "cr-test",
+        "probe": "open-read",
+        "path": "store/projects.sqlite",
+        "denied": true,
+        "code": "EACCES",
+        "expectedDenied": true
+      },
+      {
+        "actor": "cr-test",
+        "probe": "open-read",
+        "path": "server/key",
+        "denied": true,
+        "code": "EACCES",
+        "expectedDenied": true
+      },
+      {
+        "actor": "cr-test",
+        "probe": "open-read",
+        "path": "client/key",
+        "denied": false,
+        "code": null,
+        "expectedDenied": false
+      },
+      {
+        "gatewayBoundaryFailures": 0
+      }
+    ],
+    "limitation": "SQLite file mode is 0644 inside a 0700 store directory; actual cross-user read attempts were denied."
+  }
+}
