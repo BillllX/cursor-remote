@@ -225,7 +225,7 @@ struct ThreadView: View {
             Group {
                 if let approval = delegated.first {
                     delegatedApprovalBanner(approval, more: delegated.count - 1)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion).combined(with: .opacity))
                 }
             }
             .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)

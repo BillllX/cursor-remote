@@ -8,6 +8,8 @@ struct LinkStatusDot: View {
     var syncing = false
     var size: CGFloat = 6
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.homeActive) private var homeActive
 
     private var color: Color {
         switch state {
@@ -34,7 +36,7 @@ struct LinkStatusDot: View {
 
     var body: some View {
         Group {
-            if reduceMotion || !(ripples || breathes) {
+            if reduceMotion || !homeActive || scenePhase != .active || !(ripples || breathes) {
                 dot(opacity: 1)
                     .background {
                         if ripples {

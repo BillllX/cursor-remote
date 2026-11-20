@@ -145,14 +145,10 @@ struct DelegationListScreen: View {
         .navigationTitle(embeddedInInbox ? "日程" : column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
+        .accessibilityHidden(store.assistantState == nil)
         .overlay {
             if store.assistantState == nil {
-                ContentUnavailableView {
-                    Label(store.assistantStatePendingTitle ?? "正在加载任务…", systemImage: "checklist")
-                } actions: {
-                    Button("重新加载") { store.requestAssistant(force: true) }
-                        .disabled(!store.connected)
-                }
+                AssistantLoadingView(title: "正在加载日程…")
             } else if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
                 ContentUnavailableView(
                     "还没有\(column.title)",

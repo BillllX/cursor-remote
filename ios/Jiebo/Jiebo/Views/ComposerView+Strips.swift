@@ -104,7 +104,7 @@ extension ComposerView {
                 }
                 .padding(.horizontal, 2)
             }
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .transition(.jieboPanel(from: .top, reduceMotion: reduceMotion).combined(with: .opacity))
         }
     }
 
@@ -168,7 +168,7 @@ extension ComposerView {
                 .padding(.trailing, 22)
                 .padding(.bottom, 2)
             }
-            .transition(.move(edge: .top).combined(with: .opacity))
+            .transition(.jieboPanel(from: .top, reduceMotion: reduceMotion).combined(with: .opacity))
             .fullScreenCover(item: $viewerItem) { item in
                 AttachmentViewer(item: item)
             }

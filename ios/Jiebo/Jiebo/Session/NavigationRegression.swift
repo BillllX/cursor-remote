@@ -10,7 +10,7 @@ enum NavigationRegression {
     @MainActor
     static func runPhone(store: ChatStore, router: PhoneRouter, sceneSession: SceneSessionState?,
                          sceneToken: String, switchSpace: (PhoneTab) -> Void) async {
-        var checks: [String: Bool] = [:]
+        var checks = await composerInputChecks()
         func settle() async { try? await Task.sleep(for: .milliseconds(450)) }
         func oneEditor() -> Bool {
             PhoneNavigationDiagnostics.editors.values.filter { $0 == sceneToken }.count == 1
@@ -136,7 +136,7 @@ enum NavigationRegression {
     }
 
     static func runPad(store: ChatStore, router: PadRouter, sceneSession: SceneSessionState?, sceneToken: String) async {
-        var checks: [String: Bool] = [:]
+        var checks = await composerInputChecks()
         var skipped: [String] = []
         let orientation = argument("--pad-test-orientation=")
         let suffix = argument("--pad-test-width=") ?? orientation ?? "full"
@@ -295,6 +295,47 @@ enum NavigationRegression {
 
     private static func argument(_ prefix: String) -> String? {
         ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(prefix) }).map { String($0.dropFirst(prefix.count)) }
+    }
+
+    /// Real UITextInput composition and key-command handlers, with an isolated submit closure.
+    /// Nothing from this fixture is sent to the server or put into the user's draft.
+    private static func composerInputChecks() async -> [String: Bool] {
+        var checks: [String: Bool] = [:]
+        let editor = ComposerTextView()
+        editor.font = .preferredFont(forTextStyle: .body)
+        editor.frame = CGRect(x: 0, y: 0, width: 260, height: 44)
+        editor.submitOnReturn = true
+        var sends = 0
+        var published = ""
+        editor.onSubmit = { sends += 1 }
+        editor.onCommittedChange = { published = $0.text }
+        let enter = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(ComposerTextView.handleHardwareReturn(_:)))
+        let shiftEnter = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(ComposerTextView.insertHardwareNewline(_:)))
+        editor.setMarkedText("hello", selectedRange: NSRange(location: 5, length: 0))
+        checks["IME fixture has marked text"] = editor.markedTextRange != nil
+        editor.replaceDraft(editor.text)
+        checks["unchanged draft preserves IME composition"] = editor.markedTextRange != nil
+        editor.handleHardwareReturn(enter)
+        checks["first Return commits English without sending"] = sends == 0 && editor.markedTextRange == nil && published == "hello"
+        try? await Task.sleep(for: .milliseconds(20))
+        editor.handleHardwareReturn(enter)
+        checks["second Return submits committed text"] = sends == 1 && published == "hello"
+        editor.replaceDraft("")
+        editor.setMarkedText("world", selectedRange: NSRange(location: 5, length: 0))
+        editor.unmarkText() // Some input methods commit before delivering the command.
+        editor.handleHardwareReturn(enter)
+        checks["IME confirmation and command in same event do not send"] = sends == 1 && editor.text == "world"
+        try? await Task.sleep(for: .milliseconds(20))
+        editor.insertHardwareNewline(shiftEnter)
+        checks["Shift Return inserts newline"] = editor.text.hasSuffix("\n") && sends == 1
+        editor.insertText("soft\n")
+        checks["software Return and multiline text do not send"] = editor.text.hasSuffix("soft\n") && sends == 1
+        let longText = String(repeating: "长文本 English 🙂\n", count: 200)
+        editor.replaceDraft(longText)
+        checks["long draft stays within six lines"] = editor.editorHeight(for: 260) <= ceil(editor.font!.lineHeight * 6)
+        editor.insertText("end")
+        checks["long draft keeps final keystrokes"] = editor.text == longText + "end"
+        return checks
     }
 
     private static func captureWebContent(containing text: String, in directory: URL) async -> Bool {

@@ -13,7 +13,7 @@ struct ComposerView: View {
     /// 外部递增时把光标放进输入框（空会话快捷句）。
     var focusNonce: Int = 0
     var style: ComposerStyle = .assistant
-    @FocusState var focused: Bool
+    @State var focused = false
     /// 打字写进这个对象，不写进视图状态。这样每个字不会把整条输入栏和会话回合再画一遍。
     @State var draftBuffer = ComposerDraftBuffer()
     /// 外部改草稿时递增，输入框据此把文字灌进去。
@@ -84,7 +84,7 @@ struct ComposerView: View {
             mentionStrip
             if dictation.active {
                 voicePanel
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion).combined(with: .opacity))
             }
             GlassEffectContainer(spacing: 12) {
                 VStack(alignment: .leading, spacing: 16) {
@@ -344,7 +344,7 @@ struct ComposerView: View {
             focused: $focused,
             submitOnReturn: submitOnReturn,
             onEdit: noteTyped,
-            onSubmit: commitAndSend
+            onSubmit: { commitAndSend(keepFocus: true) }
         )
         .padding(.horizontal, horizontal)
         .padding(.vertical, vertical)
@@ -408,8 +408,9 @@ struct ComposerView: View {
         store.saveDraft(pendingText, forChat: pendingId)
     }
 
-    func commitAndSend() {
-        focused = false
+    func commitAndSend(keepFocus: Bool = false) {
+        guard canFocus, ownsSceneEditing, canSendNow else { return }
+        focused = keepFocus
         draftBuffer.persistTask?.cancel()
         draftBuffer.pendingChatId = nil
         ignoreDraftEcho = ""
@@ -433,116 +434,4 @@ final class ComposerDraftBuffer {
     var pendingChatId: String?
     var pendingText = ""
     var persistTask: Task<Void, Never>?
-}
-
-/// 只有这一层跟着每个字重绘。按钮、会话回合和玻璃底留在外面。
-private struct ComposerEntryField: View {
-    var placeholder: String
-    var lineLimit: ClosedRange<Int>
-    var buffer: ComposerDraftBuffer
-    var revision: Int
-    var focused: FocusState<Bool>.Binding
-    var submitOnReturn: Bool
-    var onEdit: (String) -> Void
-    var onSubmit: () -> Void
-    @State private var text = ""
-    @State private var appliedRevision = -1
-
-    var body: some View {
-        TextField(placeholder, text: $text, axis: .vertical)
-            .font(JieboFont.text(.body))
-            .foregroundStyle(JieboColor.ink)
-            .lineLimit(lineLimit)
-            .focused(focused)
-            .background(TextViewKeyboardInsetLock())
-            .onAppear { adoptBuffer(revision) }
-            .onChange(of: revision) { _, revision in adoptBuffer(revision) }
-            .onChange(of: text) { _, value in
-                guard value != buffer.text else { return }
-                buffer.text = value
-                onEdit(value)
-            }
-            .onKeyPress(keys: [.return]) { press in
-                guard submitOnReturn else { return .ignored }
-                if press.modifiers.contains(.shift) { return .ignored }
-                onSubmit()
-                return .handled
-            }
-    }
-
-    private func adoptBuffer(_ revision: Int) {
-        guard revision != appliedRevision else { return }
-        appliedRevision = revision
-        if text != buffer.text { text = buffer.text }
-    }
-}
-
-/// 多行输入框是 UITextView。键盘弹起时它会按键盘高度再垫一层内边距，字和光标就离开可见区域，发送也点不中。
-struct TextViewKeyboardInsetLock: UIViewRepresentable {
-    func makeUIView(context: Context) -> Anchor { Anchor() }
-    func updateUIView(_ uiView: Anchor, context: Context) {
-        if !uiView.didLock { uiView.lock() }
-    }
-
-    final class Anchor: UIView {
-        fileprivate var didLock = false
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            isUserInteractionEnabled = false
-            backgroundColor = .clear
-        }
-
-        required init?(coder: NSCoder) { return nil }
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            lock()
-        }
-
-        func lock() {
-            guard !didLock else { return }
-            DispatchQueue.main.async { [weak self] in
-                self?.lockNow()
-            }
-        }
-
-        private func lockNow() {
-            guard !didLock else { return }
-            if let textView = ancestorTextView() ?? siblingTextView() {
-                guard textView.contentInsetAdjustmentBehavior != .never else {
-                    didLock = true
-                    return
-                }
-                textView.contentInsetAdjustmentBehavior = .never
-                textView.contentInset.bottom = 0
-                textView.verticalScrollIndicatorInsets.bottom = 0
-                didLock = true
-            }
-        }
-
-        private func ancestorTextView() -> UITextView? {
-            var view: UIView? = superview
-            for _ in 0..<8 {
-                if let textView = view as? UITextView { return textView }
-                view = view?.superview
-            }
-            return nil
-        }
-
-        /// 背景层往往和文本视图并列，不在它里面。只看附近两层，避免锁到消息列表里的文本。
-        private func siblingTextView() -> UITextView? {
-            let parents = [superview, superview?.superview]
-            for parent in parents {
-                guard let parent else { continue }
-                if let textView = parent as? UITextView { return textView }
-                for child in parent.subviews {
-                    if let textView = child as? UITextView { return textView }
-                    if let textView = child.subviews.first(where: { $0 is UITextView }) as? UITextView {
-                        return textView
-                    }
-                }
-            }
-            return nil
-        }
-    }
 }

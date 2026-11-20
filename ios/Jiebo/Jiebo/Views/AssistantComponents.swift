@@ -82,6 +82,7 @@ struct ActionButton: View {
     var fullWidth = false
     var action: () -> Void
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(title: String, kind: Kind = .outline, fullWidth: Bool = false, action: @escaping () -> Void) {
         self.title = title
@@ -96,9 +97,9 @@ struct ActionButton: View {
             Text(title)
                 .font(JieboFont.text(.footnote, weight: kind == .primary ? .semibold : .medium))
                 .foregroundStyle(foreground)
-                .lineLimit(1)
+                .lineLimit(fullWidth || dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 // 不折行：横排放不下时让 ViewThatFits 换成竖排
-                .fixedSize(horizontal: !fullWidth, vertical: false)
+                .fixedSize(horizontal: !fullWidth && !dynamicTypeSize.isAccessibilitySize, vertical: true)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .frame(minWidth: 44, maxWidth: fullWidth ? .infinity : nil, minHeight: 32)
@@ -115,7 +116,7 @@ struct ActionButton: View {
                 .padding(.vertical, 6)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .opacity(isEnabled ? 1 : 0.45)
     }
 
@@ -820,7 +821,7 @@ struct PhoneNoticeOverlay: ViewModifier {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
-                .transition(.move(edge: .top).combined(with: .opacity))
+                .transition(.jieboPanel(from: .top, reduceMotion: reduceMotion).combined(with: .opacity))
             }
             .animation(JieboMotion.fade(reduceMotion), value: text)
             .animation(JieboMotion.fade(reduceMotion), value: store.connected)

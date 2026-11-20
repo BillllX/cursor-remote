@@ -413,7 +413,12 @@ enum JieboMotion {
 
     /// 点按打开的面板和侧栏。临界阻尼，没有过冲。
     static func panel(_ reduceMotion: Bool) -> Animation {
-        reduceMotion ? reduced() : .smooth(duration: 0.35)
+        reduceMotion ? reduced() : .smooth(duration: 0.28)
+    }
+
+    /// 常驻页面只交叉淡化，保留阅读位置，不给整页增加横向移动。
+    static func space(_ reduceMotion: Bool) -> Animation {
+        .easeOut(duration: reduceMotion ? 0.12 : 0.18)
     }
 
     /// 带位移的过渡，和点按打开的面板同一套。
@@ -489,11 +494,13 @@ enum JieboGlass {
 struct PressScaleButtonStyle: ButtonStyle {
     var enabled: Bool = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(!reduceMotion && configuration.isPressed && enabled ? 0.98 : 1)
-            .animation(reduceMotion ? nil : .smooth(duration: 0.12), value: configuration.isPressed)
+            .opacity(configuration.isPressed && enabled && isEnabled ? 0.72 : 1)
+            .scaleEffect(!reduceMotion && configuration.isPressed && enabled && isEnabled ? 0.98 : 1)
+            .animation(JieboMotion.quick(reduceMotion), value: configuration.isPressed)
     }
 }
 

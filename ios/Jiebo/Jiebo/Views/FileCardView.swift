@@ -573,33 +573,46 @@ private struct TurnFileThumbnail: View {
 /// 减少动态效果时只留静态浅色。
 private struct ThumbSkeleton: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.homeActive) private var homeActive
+    @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
-    @State private var sweep = false
+    @State private var appeared = false
 
     var body: some View {
         GeometryReader { proxy in
-            if reduceMotion {
+            if reduceMotion || !homeActive || scenePhase != .active || !appeared {
                 JieboColor.shimmer
             } else {
-                LinearGradient(
-                    colors: [Color.clear, JieboColor.shimmer, Color.clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: proxy.size.width * 0.5)
-                .offset(x: sweep ? proxy.size.width : -proxy.size.width * 0.5)
+                ThumbSweep(width: proxy.size.width)
             }
         }
         .opacity(visible ? 1 : 0)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
         .task {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { visible = true }
-            guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { sweep = true }
+            withAnimation(JieboMotion.fade(reduceMotion)) { visible = true }
         }
+    }
+}
+
+/// 卸载这层即可停止 Core Animation 循环，不让隐藏的工作区继续扫光。
+private struct ThumbSweep: View {
+    let width: CGFloat
+    @State private var sweep = false
+
+    var body: some View {
+        LinearGradient(colors: [.clear, JieboColor.shimmer, .clear], startPoint: .leading, endPoint: .trailing)
+            .frame(width: width * 0.5)
+            .offset(x: sweep ? width : -width * 0.5)
+            .task {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { sweep = true }
+            }
     }
 }
 

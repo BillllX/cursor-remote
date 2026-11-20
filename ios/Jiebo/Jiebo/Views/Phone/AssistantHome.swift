@@ -29,7 +29,7 @@ struct AssistantHome: View {
                             } label: {
                                 Text(attentionLine)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScaleButtonStyle())
                             .disabled(store.linkState != .offline)
                             .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
                         } else if store.isThreadSyncBusy(assistantTargetChatId) {
@@ -38,7 +38,7 @@ struct AssistantHome: View {
                             } label: {
                                 Text(attentionLine)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScaleButtonStyle())
                             .accessibilityHint("再拉一次这条会话")
                         } else if store.backgroundAttentionTitle == attentionLine {
                             Button {
@@ -46,7 +46,7 @@ struct AssistantHome: View {
                             } label: {
                                 Text(attentionLine)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScaleButtonStyle())
                             .accessibilityHint("再向服务器确认后台模型")
                         } else if attentionLine == ChatStore.failedRetryTitle, let chatId = store.assistantChatId {
                             Button {
@@ -54,7 +54,7 @@ struct AssistantHome: View {
                             } label: {
                                 Text(attentionLine)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(PressScaleButtonStyle())
                             .accessibilityHint("上一句回到输入框")
                         } else {
                             Text(attentionLine)
@@ -68,7 +68,7 @@ struct AssistantHome: View {
                     .accessibilityAddTraits(.updatesFrequently)
                 }
                 ThreadView(chrome: .embedded, chatId: assistantTargetChatId, dock: AnyView(ActionDock()))
-                    .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty)
+                    .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,83 +106,75 @@ struct AssistantHome: View {
             }
         }
         .modifier(AssistantToolbarMinimize())
+        .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
         .accessibilityHidden(sidebarOpen)
         .disabled(sidebarOpen)
         .overlay {
-            if sidebarOpen {
+            JieboDrawer(isPresented: sidebarOpen, close: { closeSidebar() }) {
                 sidebar
-                    .transition(.opacity)
             }
         }
     }
 
-    private func closeSidebar(then action: () -> Void = {}) {
-        withAnimation(JieboMotion.panel(reduceMotion)) { sidebarOpen = false }
-        action()
+    private func closeSidebar(then action: @escaping () -> Void = {}) {
+        let revision = router.revision
+        withAnimation(JieboMotion.panel(reduceMotion)) { sidebarOpen = false } completion: {
+            guard router.selectedTab == .assistant, router.revision == revision else { return }
+            action()
+        }
     }
 
     private var sidebar: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .onTapGesture { closeSidebar() }
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("小驳").font(JieboFont.text(.title2, weight: .semibold))
-                        Spacer()
-                        Button { closeSidebar() } label: {
-                            Image(systemName: "xmark").frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel("关闭侧边栏")
-                    }
-                    .padding(.horizontal, 16)
-                    List {
-                        Section { sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts) }
-                        conversationSection
-                        Section("记忆与能力") {
-                            sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)
-                            Button { closeSidebar { skillsOpen = true } } label: {
-                                Label("技能工厂", systemImage: NavigationIconId.skills.symbol)
-                                    .frame(minHeight: 44)
-                            }
-                            sidebarRoute("同事与访问管理", symbol: NavigationIconId.collab.symbol, route: .colleagues)
-                            sidebarRoute("连接与设备权限", symbol: "checkmark.shield", route: .connections)
-                        }
-                    }
-                    .listStyle(.insetGrouped)
-                    .font(JieboFont.text(.subheadline))
-                    .scrollContentBackground(.hidden)
-                    Divider()
-                    sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
-                        .padding(.horizontal, 16)
-                    Button {
-                        closeSidebar {
-                            switchPhoneSpace?(.workspace)
-                        }
-                    } label: {
-                        HStack {
-                            Label("工作台", systemImage: "rectangle.3.group")
-                            Spacer()
-                            if store.workspaceUnreadCount > 0 {
-                                PendingBadge(count: store.workspaceUnreadCount)
-                            }
-                        }
-                        .frame(minHeight: 44)
-                        .padding(16)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("小驳").font(JieboFont.text(.title2, weight: .semibold))
+                Spacer()
+                Button { closeSidebar() } label: {
+                    Image(systemName: "xmark").frame(width: 44, height: 44)
                 }
-                .foregroundStyle(JieboColor.ink)
-                .frame(width: min(320, geometry.size.width * 0.86))
-                .frame(maxHeight: .infinity)
-                .background(JieboColor.paper)
-                .accessibilityAddTraits(.isModal)
-                .accessibilityAction(.escape) { closeSidebar() }
+                .accessibilityLabel("关闭侧边栏")
             }
+            .padding(.horizontal, 16)
+            List {
+                Section { sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts) }
+                conversationSection
+                Section("记忆与能力") {
+                    sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)
+                    Button { closeSidebar { skillsOpen = true } } label: {
+                        Label("技能工厂", systemImage: NavigationIconId.skills.symbol)
+                            .frame(minHeight: 44)
+                    }
+                    sidebarRoute("同事与访问管理", symbol: NavigationIconId.collab.symbol, route: .colleagues)
+                    sidebarRoute("连接与设备权限", symbol: "checkmark.shield", route: .connections)
+                }
+            }
+            .listStyle(.insetGrouped)
+            .font(JieboFont.text(.subheadline))
+            .scrollContentBackground(.hidden)
+            Divider()
+            sidebarRoute("设置", symbol: NavigationIconId.account.symbol, route: .settings)
+                .padding(.horizontal, 16)
+            Button {
+                closeSidebar {
+                    switchPhoneSpace?(.workspace)
+                }
+            } label: {
+                HStack {
+                    Label("工作台", systemImage: "rectangle.3.group")
+                    Spacer()
+                    if store.workspaceUnreadCount > 0 {
+                        PendingBadge(count: store.workspaceUnreadCount)
+                    }
+                }
+                .frame(minHeight: 44)
+                .padding(16)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleButtonStyle())
         }
+        .foregroundStyle(JieboColor.ink)
+        .frame(maxHeight: .infinity)
+        .background(JieboColor.paper)
     }
 
     private var conversationSection: some View {
@@ -209,7 +201,7 @@ struct AssistantHome: View {
             }
             .frame(minHeight: 44)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
 
     }
 
@@ -223,7 +215,7 @@ struct AssistantHome: View {
             .frame(minHeight: 44)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityLabel(badge > 0 ? "\(title)，\(badge) 项待处理" : title)
     }
 
@@ -444,7 +436,7 @@ struct AssistantModelPicker: View {
                 .foregroundStyle(vendor == id ? JieboColor.fillFg : JieboColor.ink2)
                 .background(vendor == id ? JieboColor.pine : JieboColor.white, in: Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityAddTraits(vendor == id ? .isSelected : [])
     }
 
@@ -480,7 +472,7 @@ struct AssistantModelPicker: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(model.id == selected ? .isSelected : [])
     }

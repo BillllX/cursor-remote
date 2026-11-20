@@ -47,21 +47,16 @@ struct PhoneWorkbench: View {
                     }
                 }
             }
+            .environment(\.homeActive, homeActive && !drawerOpen)
             .background { WorkbenchShortcuts() }
             .accessibilityHidden(previewPanelOpen || drawerOpen)
             if let layer = store.toolLayer {
                 ToolLayerOverlay(layer: layer)
                     .id(layer)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion).combined(with: .opacity))
                     .accessibilityHidden(previewPanelOpen || drawerOpen)
             }
-            if drawerOpen {
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .onTapGesture { closeDrawer() }
-                    .accessibilityLabel("关闭菜单")
-                    .accessibilityAddTraits(.isButton)
-                    .transition(.opacity)
+            JieboDrawer(isPresented: drawerOpen, close: closeDrawer) {
                 PhoneDrawer(
                     close: closeDrawer,
                     openWorkspaces: { closeDrawer(then: store.openWorkspaceSwitcher) },
@@ -76,11 +71,8 @@ struct PhoneWorkbench: View {
                     renameChat: { chat in closeDrawer { chatActions.beginRename(chat) } },
                     deleteChat: { chat in closeDrawer { chatActions.delete = chat } }
                 )
-                .transition(.jieboPanel(from: .leading, reduceMotion: reduceMotion))
-                .accessibilityHidden(previewPanelOpen)
-                .accessibilityAddTraits(.isModal)
-                .accessibilityAction(.escape) { closeDrawer() }
             }
+            .accessibilityHidden(previewPanelOpen || !drawerOpen)
             if embedsPreview, previewPanelOpen, let tab = activePreviewTab {
                 Color.black.opacity(0.28)
                     .ignoresSafeArea()
@@ -167,6 +159,7 @@ struct PhoneWorkbench: View {
         withAnimation(JieboMotion.panel(reduceMotion)) {
             drawerOpen = false
         } completion: {
+            guard homeActive else { return }
             action()
         }
     }
@@ -256,8 +249,7 @@ private struct PhoneDrawer: View {
 
             footer
         }
-        .frame(width: 300)
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JieboColor.sidebar.ignoresSafeArea())
         .overlay(alignment: .trailing) {
             Rectangle().fill(JieboColor.line).frame(width: 1).ignoresSafeArea()

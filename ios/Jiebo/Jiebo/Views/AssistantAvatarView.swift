@@ -92,6 +92,7 @@ struct AssistantAvatarView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.homeActive) private var homeActive
     @State private var displayedPhase: AssistantAvatarPhase
     @State private var motionActive = false
 
@@ -135,7 +136,7 @@ struct AssistantAvatarView: View {
         }
         .task(id: motionKey) {
             motionActive = false
-            guard !reduceMotion, scenePhase == .active, JieboTheme.shared.palette != .sticker else { return }
+            guard !reduceMotion, homeActive, scenePhase == .active, JieboTheme.shared.palette != .sticker else { return }
             await Task.yield()
             withAnimation(motionAnimation.repeatForever(autoreverses: true)) {
                 motionActive = true
@@ -149,7 +150,7 @@ struct AssistantAvatarView: View {
     }
 
     private var motionKey: String {
-        "\(displayedPhase.rawValue):\(reduceMotion):\(scenePhase == .active):\(JieboTheme.shared.palette.rawValue)"
+        "\(displayedPhase.rawValue):\(reduceMotion):\(homeActive):\(scenePhase == .active):\(JieboTheme.shared.palette.rawValue)"
     }
 
     private var motionAnimation: Animation {
@@ -221,11 +222,12 @@ struct StickerRobotFace: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.homeActive) private var homeActive
     @State private var appeared = false
     @State private var startedAt = Date()
 
     private var animates: Bool {
-        appeared && !reduceMotion && scenePhase == .active && phase != .offline
+        appeared && homeActive && !reduceMotion && scenePhase == .active && phase != .offline
     }
 
     var body: some View {

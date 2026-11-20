@@ -385,23 +385,28 @@ struct PadAssistantShell: View {
     @ViewBuilder
     private var sectionContent: some View {
         Group {
-            switch router.assistantSection {
-            case .today:
-                PadTodayExperience(projection: projection)
-            case .inbox:
-                PadInboxExperience(projection: projection)
-            case .todos:
-                PadTaskExperience(projection: projection, column: .todo)
-            case .plans:
-                PadTaskExperience(projection: projection, column: .plan)
-            case .delegations:
-                PadTaskExperience(projection: projection, column: .delegation)
-            case .artifacts:
-                PadArtifactExperience(projection: projection)
-            case .colleagues:
-                AssistantColleaguesScreen()
-            case .memory:
-                MemoryCenterPanelView()
+            if store.assistantState == nil, router.assistantSection != .today,
+               router.assistantSection != .memory, router.assistantSection != .colleagues {
+                AssistantLoadingView(title: "正在加载\(router.assistantSection.title)…")
+            } else {
+                switch router.assistantSection {
+                case .today:
+                    PadTodayExperience(projection: projection)
+                case .inbox:
+                    PadInboxExperience(projection: projection)
+                case .todos:
+                    PadTaskExperience(projection: projection, column: .todo)
+                case .plans:
+                    PadTaskExperience(projection: projection, column: .plan)
+                case .delegations:
+                    PadTaskExperience(projection: projection, column: .delegation)
+                case .artifacts:
+                    PadArtifactExperience(projection: projection)
+                case .colleagues:
+                    AssistantColleaguesScreen()
+                case .memory:
+                    MemoryCenterPanelView()
+                }
             }
         }
         .modifier(PadNoticeHost(enabled: router.assistantSection != .today && !router.inspectorPresented))

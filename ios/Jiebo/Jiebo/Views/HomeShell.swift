@@ -473,8 +473,8 @@ struct FirstUseHint: View {
         if !dismissed {
             HStack(alignment: .center, spacing: 12) {
                 Text(UIDevice.current.userInterfaceIdiom == .phone
-                     ? "小驳用来吩咐。助理中心在右上角，含通知、任务和产物。左上角打开侧边栏，设置与工作台固定在侧边栏底部。"
-                     : "小驳用来吩咐。待处理、任务和产物在小驳侧栏中。设置与工作台入口固定在侧栏底部，用来改文件、看终端。")
+                     ? "右上角查看收件箱和日程，侧边栏里找文件、设置与工作台。"
+                     : "侧边栏切换栏目，底部进入设置与工作台。")
                     .font(JieboFont.text(.footnote))
                     .foregroundStyle(JieboColor.ink)
                     .fixedSize(horizontal: false, vertical: true)

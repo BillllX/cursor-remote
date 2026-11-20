@@ -135,7 +135,7 @@ struct WorkbenchView: View {
                     if let layer = store.toolLayer {
                         ToolLayerOverlay(layer: layer)
                             .id(layer)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                            .transition(.jieboPanel(from: .trailing, reduceMotion: reduceMotion).combined(with: .opacity))
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

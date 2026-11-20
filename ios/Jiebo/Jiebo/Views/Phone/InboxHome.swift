@@ -179,10 +179,11 @@ struct InboxHome: View {
         }
         .onChange(of: showHistory) { _, _ in selected.removeAll(); selecting = false }
         .refreshable { store.requestAssistant(force: true) }
+        .accessibilityHidden(state == nil)
         .overlay {
             if (showHistory || pendingCount == 0) && items.isEmpty {
                 if state == nil {
-                    AssistantMutedText(store.assistantStatePendingTitle ?? "正在加载…")
+                    AssistantLoadingView(title: "正在加载收件箱…")
                 } else {
                     ContentUnavailableView(
                         showHistory ? "暂无通知记录" : "没有待处理的事",
@@ -196,7 +197,7 @@ struct InboxHome: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(selecting ? "完成" : "选择") {
                     selecting.toggle(); selected.removeAll()
-                }.disabled(archiving)
+                }.disabled(archiving || state == nil || items.isEmpty)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {

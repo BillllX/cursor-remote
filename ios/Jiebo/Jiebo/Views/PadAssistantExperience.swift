@@ -46,8 +46,7 @@ struct PadTodayExperience: View {
                     .id(chatId)
                 }
             } else if store.unlocked, store.connected, store.assistantState == nil {
-                ProgressView("正在打开小驳主会话…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                AssistantLoadingView(title: "正在打开小驳主会话…")
             } else {
                 VStack(spacing: 12) {
                     Spacer(minLength: 40)
@@ -108,6 +107,7 @@ struct PadTodayExperience: View {
 
 private struct PadTodayTimeline: View {
     @Environment(PadRouter.self) private var router
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let projection: PadAssistantProjection
 
     private var events: [DayThreadEvent] {
@@ -149,7 +149,7 @@ private struct PadTodayTimeline: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
-        .frame(maxHeight: 112)
+        .frame(height: dynamicTypeSize.isAccessibilitySize ? 220 : 112)
         .background(JieboColor.paper)
         .accessibilityLabel("今日脉络")
     }
@@ -159,6 +159,7 @@ private struct PadEntitySummary: View {
     let symbol: String
     let title: String
     let detail: String
+    @ScaledMetric(relativeTo: .body) private var cardWidth = 230
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
@@ -177,7 +178,8 @@ private struct PadEntitySummary: View {
             }
         }
         .padding(10)
-        .frame(minWidth: 230, maxWidth: 230, minHeight: 72, alignment: .leading)
+        .frame(width: cardWidth, alignment: .leading)
+        .frame(minHeight: 72)
         .background(JieboColor.white)
         .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
         .overlay {
@@ -330,9 +332,7 @@ struct PadInboxExperience: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .jieboGlass(in: Capsule(), interactive: true)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
+            .background(JieboColor.paper)
         }
         .overlay {
             if visibleContentIsEmpty {
@@ -357,13 +357,14 @@ private struct PadInboxRow: View {
     let symbol: String
     var transfer: PadSemanticTransfer?
     let action: () -> Void
+    @ScaledMetric(relativeTo: .body) private var iconWidth = 22
 
     var body: some View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: symbol)
                     .foregroundStyle(JieboColor.pine)
-                    .frame(width: 22)
+                    .frame(width: iconWidth)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(JieboFont.text(.subheadline, weight: .semibold))
@@ -383,7 +384,7 @@ private struct PadInboxRow: View {
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleButtonStyle())
         .listRowBackground(JieboColor.white)
         .modifier(PadOptionalDraggable(transfer: transfer))
     }

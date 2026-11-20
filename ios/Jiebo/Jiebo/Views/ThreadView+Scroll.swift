@@ -193,7 +193,7 @@ extension ThreadView {
                         .buttonStyle(.plain)
                         .accessibilityValue(threadChat?.turns.last?.running == true ? "有新内容正在生成" : "")
                         .padding(.bottom, 10)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.jieboPanel(from: .bottom, reduceMotion: reduceMotion).combined(with: .opacity))
                         .accessibilityLabel("滚动到最新消息")
                     }
                 }

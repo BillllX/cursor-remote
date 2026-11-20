@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        UIX00202 /* ComposerEntryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = UIX00201 /* ComposerEntryField.swift */; };
+        UIX00102 /* PresentationComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = UIX00101 /* PresentationComponents.swift */; };
         PNV00202 /* NavigationRegression.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00201 /* NavigationRegression.swift */; };
         PNV00102 /* PhoneNavigationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00101 /* PhoneNavigationState.swift */; };
 		A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000100 /* JieboApp.swift */; };
@@ -198,6 +200,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        UIX00201 /* ComposerEntryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerEntryField.swift; sourceTree = "<group>"; };
+        UIX00101 /* PresentationComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationComponents.swift; sourceTree = "<group>"; };
         PNV00201 /* NavigationRegression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationRegression.swift; sourceTree = "<group>"; };
         PNV00101 /* PhoneNavigationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneNavigationState.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -551,6 +555,8 @@
 				A1B2C3D4E5F6071829000703 /* AssistantComponents.swift */,
 				AVA000101 /* AssistantAvatarView.swift */,
                 CLN00301 /* ColdLaunchView.swift */,
+                UIX00101 /* PresentationComponents.swift */,
+                UIX00201 /* ComposerEntryField.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
@@ -947,6 +953,8 @@
 				BOOTC004 /* ChatStore+Bootstrap.swift in Sources */,
 				BOOTC006 /* AppLaunchMetrics.swift in Sources */,
                 CLN00302 /* ColdLaunchView.swift in Sources */,
+                UIX00102 /* PresentationComponents.swift in Sources */,
+                UIX00202 /* ComposerEntryField.swift in Sources */,
                 CLN00202 /* StickerLaunchSound.swift in Sources */,
                 CLN00102 /* ColdLaunchState.swift in Sources */,
                 PNV00102 /* PhoneNavigationState.swift in Sources */,

@@ -33,23 +33,28 @@ struct ArtifactCenterView: View {
     var body: some View {
         Group {
             if store.assistantState == nil {
-                ContentUnavailableView {
-                    Label(store.assistantStatePendingTitle ?? "正在加载文件…", systemImage: "square.stack.3d.up")
-                } actions: {
-                    Button("重新加载") { store.requestAssistant(force: true) }
-                        .disabled(!store.connected)
-                }
+                AssistantLoadingView(title: "正在加载文件…")
             } else if store.assistantState?.artifacts == nil {
                 ContentUnavailableView("文件中心不可用", systemImage: "square.stack.3d.up", description: Text("当前网关版本还没有提供文件投影。"))
             } else if artifacts.isEmpty {
-                ContentUnavailableView {
-                    Label(kindFilter == .all ? "还没有文件" : "没有符合条件的文件",
-                          systemImage: kindFilter == .all ? "square.stack.3d.up" : "line.3.horizontal.decrease.circle")
-                } description: {
-                    Text(kindFilter == .all ? "让小驳生成文件或捕获内容后，会显示在这里。" : "试试查看全部类型的文件。")
-                } actions: {
-                    if kindFilter != .all {
-                        Button("清除筛选") { kindFilter = .all }
+                if !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ContentUnavailableView {
+                        Label("没有找到文件", systemImage: "magnifyingglass")
+                    } description: {
+                        Text("试试其他关键词，或清除搜索查看全部文件。")
+                    } actions: {
+                        ActionButton(title: "清除搜索") { searchText = "" }
+                    }
+                } else {
+                    ContentUnavailableView {
+                        Label(kindFilter == .all ? "还没有文件" : "没有符合条件的文件",
+                              systemImage: kindFilter == .all ? "square.stack.3d.up" : "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text(kindFilter == .all ? "让小驳生成文件或捕获内容后，会显示在这里。" : "试试查看全部类型的文件。")
+                    } actions: {
+                        if kindFilter != .all {
+                            Button("清除筛选") { kindFilter = .all }
+                        }
                     }
                 }
             } else {
@@ -84,6 +89,8 @@ struct ArtifactCenterView: View {
                 .background(JieboColor.paper)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(JieboColor.paper)
         .navigationTitle(embedded ? "助理中心" : "文件中心")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $searchText, prompt: "搜索文件")
@@ -100,7 +107,7 @@ struct ArtifactCenterView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            filters
+            if embedded { filters }
         }
         .task { if !embedded { store.requestAssistant() } }
     }

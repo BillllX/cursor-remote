@@ -383,10 +383,13 @@ struct PhoneTabShell: View {
 /// Identity stays mounted; only the selected surface owns input, accessibility and presentation.
 private struct PhoneSpaceVisibility: ViewModifier {
     let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func body(content: Content) -> some View {
         content
             .environment(\.homeActive, active)
-            .opacity(active ? 1 : 0)
+            .animation(JieboMotion.space(reduceMotion)) { surface in
+                surface.opacity(active ? 1 : 0)
+            }
             .allowsHitTesting(active)
             .accessibilityHidden(!active)
             .zIndex(active ? 1 : 0)

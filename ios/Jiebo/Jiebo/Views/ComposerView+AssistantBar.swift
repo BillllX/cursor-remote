@@ -9,7 +9,7 @@ extension ComposerView {
             assistantAttachMenu
             entryField(
                 lineLimit: 1 ... 6,
-                submitOnReturn: UIDevice.current.userInterfaceIdiom == .pad,
+                submitOnReturn: true,
                 vertical: 11,
                 horizontal: 0
             )
@@ -43,12 +43,12 @@ extension ComposerView {
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .transition(.scale.combined(with: .opacity))
+        .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
         .accessibilityLabel("停止回复")
     }
 
     private func sendButton(queued: Bool) -> some View {
-        Button(action: commitAndSend) {
+        Button { commitAndSend() } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: assistantSendGlyph, weight: .semibold))
                 .foregroundStyle(JieboColor.fillFg)
@@ -58,8 +58,7 @@ extension ComposerView {
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .transition(.scale.combined(with: .opacity))
-        .keyboardShortcut(.return, modifiers: .command)
+        .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
         .accessibilityLabel(queued ? "排队发送" : "发送")
         .accessibilityHint(queued ? "当前回复结束后再发" : "")
     }
@@ -164,7 +163,7 @@ extension ComposerView {
                 .hitTarget()
         }
         .buttonStyle(PressScaleButtonStyle())
-        .transition(.scale.combined(with: .opacity))
+        .transition(reduceMotion ? .opacity : .scale.combined(with: .opacity))
         .accessibilityLabel(recording ? "结束录音" : "语音输入")
     }
 }
