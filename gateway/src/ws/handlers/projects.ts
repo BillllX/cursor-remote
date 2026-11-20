@@ -8,9 +8,12 @@ const subscriptions = new WeakMap<
   WsCtx["conn"],
   Map<string, { cursor: number; timer: ReturnType<typeof setTimeout>; busy: boolean; tenantId: string }>
 >();
+const generations = new WeakMap<WsCtx["conn"], object>();
 export function closeProjectSubscriptions(conn: WsCtx["conn"]) {
   const rows = subscriptions.get(conn);
   if (rows) for (const s of rows.values()) clearTimeout(s.timer);
+  rows?.clear();
+  generations.delete(conn);
   subscriptions.delete(conn);
 }
 export async function onProjectRequest(ctx: WsCtx, input: ProjectRequest) {
@@ -25,11 +28,15 @@ export async function onProjectRequest(ctx: WsCtx, input: ProjectRequest) {
     });
     return;
   }
+  const generation = generations.get(conn) ?? {};
+  generations.set(conn, generation);
+  const current = () =>
+    generations.get(conn) === generation && conn.authed && conn.tenant?.id === tenant.id && ws.readyState === 1;
   try {
     const request = decodeProjectRequest(input),
       data = await projectRequest(tenant, request);
     // await 期间可能发生同 socket 重新登录；旧结果不得发给新账号。
-    if (!conn.authed || conn.tenant?.id !== tenant.id) return;
+    if (!current()) return;
     send(ws, { type: "project_result", requestId, ok: true, data });
     if (request.action === "project_unsubscribe") {
       const sub = subscriptions.get(conn)?.get(request.workspaceId!);
@@ -79,7 +86,7 @@ export async function onProjectRequest(ctx: WsCtx, input: ProjectRequest) {
             workspaceId: id,
             payload: { afterEventSeq: sub.cursor, limit: 100 },
           })) as { items: import("../../../../shared/projectTypes.ts").ProjectEvent[] };
-          if (map!.get(id) !== sub || conn.tenant?.id !== tenant.id || !conn.authed) return;
+          if (map!.get(id) !== sub || !current()) return;
           for (const event of result.items) {
             send(ws, event);
             sub.cursor = event.eventSeq;
@@ -105,6 +112,6 @@ export async function onProjectRequest(ctx: WsCtx, input: ProjectRequest) {
       sub.timer.unref();
     }
   } catch (e) {
-    send(ws, { type: "project_result", requestId, ok: false, error: publicProjectError(e) });
+    if (current()) send(ws, { type: "project_result", requestId, ok: false, error: publicProjectError(e) });
   }
 }

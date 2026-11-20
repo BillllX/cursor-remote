@@ -662,3 +662,42 @@ test("真实 Unix 服务拒绝未签名与伪造身份，并在重启后拒绝�
     (e: unknown) => e instanceof Error && "code" in e && e.code === "NOT_ACCESSIBLE",
   );
 });
+
+test("真实 Unix 服务接受协议允许的最大文件并原样读取", async (t) => {
+  const { startProjectService } = await import("../src/projects/service.ts");
+  const { ProjectStoreClient } = await import("../src/projects/ipc.ts");
+  const { PROJECT_LIMITS } = await import("../../shared/projectTypes.ts");
+  const dir = mkdtempSync(join(tmpdir(), "project-ipc-upload-"));
+  const socketPath = join(dir, "store.sock"),
+    keyFile = join(dir, "key"),
+    accountsFile = join(dir, "accounts.json");
+  writeFileSync(keyFile, Buffer.alloc(32, 7), { mode: 0o600 });
+  writeFileSync(accountsFile, JSON.stringify(accounts), { mode: 0o600 });
+  const service = await startProjectService({ directory: join(dir, "data"), socketPath, keyFile, accountsFile });
+  t.after(async () => {
+    await service.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const client = new ProjectStoreClient({ socketPath, keyFile });
+  const { workspaceId } = await client.call<TestResult>("owner", "request", {
+    request: request("project_create", { operationId: randomUUID(), title: "文件边界" }),
+  });
+  const bytes = Buffer.alloc(PROJECT_LIMITS.fileBytes, 129);
+  const { uploadId, size } = await client.call<{ uploadId: string; size: number }>("owner", "upload", {
+    workspaceId,
+    base64: bytes.toString("base64"),
+  });
+  assert.equal(size, bytes.length);
+  await client.call("owner", "request", {
+    request: request(
+      "project_commit",
+      { operationId: randomUUID(), expectedRevision: 0, changes: [{ kind: "put", path: "large.bin", uploadId }] },
+      workspaceId,
+    ),
+  });
+  const { ticket } = await client.call<TestResult>("owner", "request", {
+    request: request("project_file_read", { path: "large.bin" }, workspaceId),
+  });
+  const { base64 } = await client.call<{ base64: string }>("owner", "resource", { workspaceId, ticket });
+  assert.ok(bytes.equals(Buffer.from(base64, "base64")));
+});

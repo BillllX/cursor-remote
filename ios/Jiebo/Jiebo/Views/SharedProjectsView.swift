@@ -111,6 +111,9 @@ struct SharedProjectsView: View {
                 store.projects.online = store.connected && store.unlocked
                 do { try await store.projects.refresh() } catch { store.projects.notice = error.localizedDescription }
             }
+            .onChange(of: projectId) { _, _ in
+                fileText = ""; filePath = ""; draft = ""; chatId = ""; members = []
+            }
             .onChange(of: store.connected) { _, connected in
                 store.projects.online = connected && store.unlocked
                 if !connected { fileText = ""; draft = ""; members = [] }

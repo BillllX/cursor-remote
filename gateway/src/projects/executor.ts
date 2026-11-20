@@ -5,7 +5,7 @@ import { runNativeLoop } from "../native/loop.ts";
 import type { Adapter, ChatMessage, ModelEndpoint, ToolSpec } from "../native/types.ts";
 import { appendProjectMessage } from "./chats.ts";
 import type { ProjectStore } from "./store/main.ts";
-import type { ProjectRun } from "./runs.ts";
+import { finishProjectRun, type ProjectRun } from "./runs.ts";
 export type ProjectModelProfile = {
   id: string;
   providerId: string;
@@ -29,6 +29,7 @@ export class ProjectExecutor {
     readonly store: ProjectStore,
     readonly profiles: ProjectModelProfile[],
     readonly adapterOverride?: Adapter,
+    readonly refreshPolicy?: () => void,
   ) {
     for (const p of profiles)
       if (
@@ -43,8 +44,13 @@ export class ProjectExecutor {
           inputByteMicros: p.inputByteMicros,
           outputTokenMicros: p.outputTokenMicros,
         });
-    store.exec("UPDATE runs SET status='interrupted',generation=generation+1 WHERE status IN ('queued','running')");
-    store.exec("UPDATE budget_ledger SET status='pending' WHERE status='reserved'");
+    store.tx(() => {
+      for (const run of store.all<ProjectRun>("SELECT * FROM runs WHERE status IN ('queued','running')")) {
+        finishProjectRun(store, run, "interrupted");
+      }
+      // 上次进程可能在完成运行后、写计费前退出。
+      store.exec("UPDATE budget_ledger SET status='pending' WHERE status='reserved'");
+    });
   }
   start() {
     this.stopped = false;
@@ -62,10 +68,35 @@ export class ProjectExecutor {
     for (const c of this.running.values()) c.abort();
     for (let i = 0; i < 100 && this.running.size; i++) await new Promise((r) => setTimeout(r, 10));
   }
+  private assertRunAllowed(run: ProjectRun) {
+    const { p } = this.store.access(run.actor, run.project, "editor", true);
+    const profile = this.store.models.get(run.model);
+    const config = JSON.parse(p.config);
+    if (
+      !profile ||
+      !Array.isArray(config.allowedModelIds) ||
+      !config.allowedModelIds.includes(run.model) ||
+      !Array.isArray(config.approvedProviderIds) ||
+      !config.approvedProviderIds.includes(profile.providerId)
+    ) {
+      throw new ProjectError("ENGINE_UNAVAILABLE");
+    }
+  }
+
   pump() {
+    try {
+      this.refreshPolicy?.();
+    } catch {
+      /* 策略失效时服务已清空授权。 */
+    }
     for (const [id, c] of this.running) {
       const run = this.store.one<ProjectRun>("SELECT * FROM runs WHERE id=?", id);
-      if (!run || run.status !== "running") c.abort();
+      try {
+        if (!run || run.status !== "running") c.abort();
+        else this.assertRunAllowed(run);
+      } catch {
+        c.abort();
+      }
     }
     const queue = this.store.all<ProjectRun>("SELECT * FROM runs WHERE status='queued' ORDER BY created,id LIMIT 20");
     for (const run of queue) {
@@ -94,7 +125,8 @@ export class ProjectExecutor {
       s.one<{ reserved: number }>("SELECT reserved FROM budget_ledger WHERE run=?", run.id)?.reserved || 0;
     const guard = () => {
       if (abort.signal.aborted) throw new ProjectError("NOT_ACCESSIBLE");
-      s.access(run.actor, run.project, "editor", true);
+      this.refreshPolicy?.();
+      this.assertRunAllowed(run);
       const now = s.one<ProjectRun>("SELECT * FROM runs WHERE id=?", run.id);
       if (!now || now.status !== "running" || now.generation !== run.generation)
         throw new ProjectError("NOT_ACCESSIBLE");
@@ -121,8 +153,9 @@ export class ProjectExecutor {
     let flusher: ReturnType<typeof setInterval> | undefined;
     try {
       if (!profile) throw new ProjectError("ENGINE_UNAVAILABLE");
+      this.refreshPolicy?.();
       s.tx(() => {
-        s.access(run.actor, run.project, "editor", true);
+        this.assertRunAllowed(run);
         s.exec("UPDATE runs SET status='running' WHERE id=? AND status='queued'", run.id);
         messageSeq = appendProjectMessage(s, run.project, run.chat, "assistant", run.actor, "", run.id);
         s.exec(
@@ -281,11 +314,20 @@ export class ProjectExecutor {
         unknown = true;
         const turn = await baseAdapter(input);
         unknown = false;
+        const usage = turn.usage;
+        const inputTokens = usage?.inputTokens ?? -1;
+        const outputTokens = usage?.outputTokens ?? -1;
+        // 缺失、异常或无法区分的零用量按报价上限结算，避免少计。
         const cost =
-          typeof turn.usage?.inputTokens === "number" && typeof turn.usage?.outputTokens === "number"
-            ? turn.usage.inputTokens * profile.inputByteMicros + turn.usage.outputTokens * profile.outputTokenMicros
+          Number.isSafeInteger(inputTokens) &&
+          Number.isSafeInteger(outputTokens) &&
+          inputTokens > 0 &&
+          outputTokens >= 0 &&
+          !usage?.cacheReadTokens &&
+          !usage?.cacheWriteTokens
+            ? inputTokens * profile.inputByteMicros + outputTokens * profile.outputTokenMicros
             : quote;
-        if (!Number.isFinite(cost) || cost > quote) {
+        if (!Number.isSafeInteger(cost) || cost < 0 || cost > quote) {
           unknown = true;
           throw new ProjectError("BUDGET_EXCEEDED");
         }
@@ -336,16 +378,9 @@ export class ProjectExecutor {
       try {
         s.tx(() => {
           const current = s.one<ProjectRun>("SELECT * FROM runs WHERE id=?", run.id);
-          if (current?.status === "running") {
-            s.exec("UPDATE runs SET status='failed',error='项目任务停止或模型执行失败' WHERE id=?", run.id);
-            if (messageSeq)
-              s.exec(
-                "UPDATE messages SET status='failed' WHERE project=? AND chat=? AND seq=?",
-                run.project,
-                run.chat,
-                messageSeq,
-              );
-            s.event(run.project, "run_failed", { runId: run.id });
+          if (current?.status === "running" || current?.status === "queued") {
+            finishProjectRun(s, current, "failed");
+            s.exec("UPDATE runs SET error=? WHERE id=?", "项目任务停止或模型执行失败", run.id);
           }
         });
       } catch {

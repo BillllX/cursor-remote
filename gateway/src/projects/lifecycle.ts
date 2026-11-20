@@ -1,3 +1,4 @@
+import { cancelProjectRuns } from "./runs.ts";
 import { randomUUID } from "node:crypto";
 import { ProjectError, type ProjectRequest } from "../../../shared/projectTypes.ts";
 import { exact, record } from "../../../shared/projectValidation.ts";
@@ -109,10 +110,7 @@ export function projectLifecycle(s: ProjectStoreCore, actor: string, r: ProjectR
     id,
   );
   s.exec("UPDATE invites SET status='revoked' WHERE project=? AND status='pending'", id);
-  s.exec(
-    "UPDATE runs SET status='cancelled',generation=generation+1 WHERE project=? AND status IN ('queued','running','proposed','conflict')",
-    id,
-  );
+  cancelProjectRuns(s, id);
   s.event(id, "project_state_changed", { state });
   return { state, authzRevision: p.authz + 1 };
 }

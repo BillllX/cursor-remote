@@ -1,12 +1,19 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ProjectError, type ProjectRequest } from "../../../shared/projectTypes.ts";
-import { stateDir, type Tenant } from "../tenants.ts";
+import { sandboxEnabledForTenant, stateDir, type Tenant } from "../tenants.ts";
 import { ProjectStoreClient, type ProjectClientSettings } from "./ipc.ts";
 let cached: { key: string; client: ProjectStoreClient } | undefined;
+export function projectTenantEligible(tenant: Tenant) {
+  return Boolean(
+    tenant.projectSharingEnabled &&
+    tenant.projectSharingDomain &&
+    tenant.projectSandboxVerified &&
+    sandboxEnabledForTenant(tenant),
+  );
+}
 export function projectClient(tenant: Tenant) {
-  if (!tenant.projectSharingEnabled || !tenant.projectSharingDomain || !tenant.projectSandboxVerified)
-    throw new ProjectError("NOT_ACCESSIBLE", "共享项目未开通");
+  if (!projectTenantEligible(tenant)) throw new ProjectError("NOT_ACCESSIBLE", "共享项目未开通");
   const file = join(stateDir(), "projects-client.json");
   if (!existsSync(file)) throw new ProjectError("PROJECT_UNAVAILABLE", "共享项目存储服务尚未安装");
   const raw = readFileSync(file, "utf8");

@@ -1,3 +1,4 @@
+import { cancelProjectRuns } from "./runs.ts";
 import { randomUUID } from "node:crypto";
 import { ProjectError, type ProjectRequest, type ProjectRole } from "../../../shared/projectTypes.ts";
 import { type MemberRow, type ProjectStoreCore, rank } from "./store/core.ts";
@@ -135,11 +136,7 @@ export function projectMembership(s: ProjectStoreCore, actor: string, r: Project
       id,
       targetId,
     );
-  s.exec(
-    "UPDATE runs SET status='cancelled',generation=generation+1 WHERE project=? AND actor=? AND status IN ('queued','running','proposed','conflict')",
-    id,
-    targetId,
-  );
+  cancelProjectRuns(s, id, targetId);
   s.bumpAuthz(id);
   s.event(id, "membership_changed", { tenantId: targetId });
   return { changed: true };

@@ -41,6 +41,9 @@ export function sandboxMasks(extra: string[] = []): string[] {
   const env = process.env;
   const list = [
     "/etc/cursor-remote",
+    "/etc/cursor-remote-projects",
+    "/run/cursor-remote-projects",
+    "/var/lib/cursor-remote-projects",
     "/root",
     "/home",
     "/run/user",

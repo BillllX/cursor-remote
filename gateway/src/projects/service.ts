@@ -3,7 +3,12 @@ import { createServer, type Server } from "node:net";
 import { chmodSync, readFileSync } from "node:fs";
 import { ProjectError, type ProjectPrincipal } from "../../../shared/projectTypes.ts";
 import { ProjectStore } from "./store/main.ts";
-import { publicProjectError, verifyProjectEnvelope } from "./ipc.ts";
+import {
+  PROJECT_IPC_REQUEST_BYTES,
+  PROJECT_IPC_RESPONSE_BYTES,
+  publicProjectError,
+  verifyProjectEnvelope,
+} from "./ipc.ts";
 export type ProjectServiceOptions = {
   directory: string;
   socketPath: string;
@@ -24,34 +29,50 @@ export async function startProjectService(
         .map((r) => [r.nonce, r.expires]),
     );
   const reload = () => {
-    const accounts = JSON.parse(readFileSync(options.accountsFile, "utf8")) as ProjectPrincipal[];
-    if (!Array.isArray(accounts)) throw new Error("账户策略文件不合法");
-    store.setAccounts(accounts);
+    try {
+      const accounts = JSON.parse(readFileSync(options.accountsFile, "utf8")) as ProjectPrincipal[];
+      if (
+        !Array.isArray(accounts) ||
+        accounts.some(
+          (a) =>
+            !a ||
+            typeof a.id !== "string" ||
+            typeof a.sharingEnabled !== "boolean" ||
+            typeof a.sandboxVerified !== "boolean" ||
+            (a.sharingDomain !== null && typeof a.sharingDomain !== "string"),
+        ) ||
+        new Set(accounts.map((a) => a.id)).size !== accounts.length
+      )
+        throw new Error("账户策略文件不合法");
+      store.setAccounts(accounts);
+    } catch (error) {
+      store.setAccounts([]);
+      throw error;
+    }
   };
   reload();
   const profiles = options.modelsFile
     ? (JSON.parse(readFileSync(options.modelsFile, "utf8")) as ProjectModelProfile[])
     : [];
-  const executor = new ProjectExecutor(store, profiles);
-  executor.start();
+  const executor = new ProjectExecutor(store, profiles, undefined, reload);
   const server = createServer({ allowHalfOpen: true }, (socket) => {
-    let bytes = 0,
-      body = "",
-      done = false;
+    let bytes = 0;
+    let done = false;
+    const chunks: Buffer[] = [];
     socket.setTimeout(30000, () => socket.destroy());
     socket.on("data", (chunk) => {
       if (done) return;
       bytes += chunk.length;
-      if (bytes > 38 * 1024 * 1024) {
+      if (bytes > PROJECT_IPC_REQUEST_BYTES) {
         done = true;
         socket.destroy();
         return;
       }
-      body += chunk.toString();
-      if (!body.includes("\n")) return;
+      chunks.push(chunk);
+      if (!chunk.includes(10)) return;
       done = true;
       try {
-        const command = verifyProjectEnvelope(JSON.parse(body), key, seen);
+        const command = verifyProjectEnvelope(JSON.parse(Buffer.concat(chunks, bytes).toString("utf8")), key, seen);
         store.exec("DELETE FROM ipc_nonces WHERE expires<?", Date.now());
         store.exec("INSERT INTO ipc_nonces VALUES(?,?)", command.nonce, command.timestamp + 30000);
         reload();
@@ -74,21 +95,34 @@ export async function startProjectService(
               .readResource(command.principal, String(command.workspaceId), String(command.ticket))
               .toString("base64"),
           };
-        socket.end(JSON.stringify({ ok: true, data }) + "\n");
+        const response = JSON.stringify({ ok: true, data }) + "\n";
+        if (Buffer.byteLength(response) > PROJECT_IPC_RESPONSE_BYTES) throw new ProjectError("LIMIT_EXCEEDED");
+        socket.end(response);
       } catch (e) {
         socket.end(JSON.stringify({ ok: false, error: publicProjectError(e) }) + "\n");
       }
     });
     socket.on("error", () => {});
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.socketPath, () => {
-      server.removeListener("error", reject);
-      chmodSync(options.socketPath, 0o660);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(options.socketPath, () => {
+        server.removeListener("error", reject);
+        try {
+          chmodSync(options.socketPath, 0o660);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
     });
-  });
+  } catch (error) {
+    server.close();
+    store.close();
+    throw error;
+  }
+  executor.start();
   return {
     server,
     store,

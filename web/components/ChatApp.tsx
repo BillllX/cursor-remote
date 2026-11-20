@@ -135,6 +135,7 @@ export default function ChatApp() {
   const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
   const [projectsOpen,setProjectsOpen] = useState(false);
+  const [projectsAvailable,setProjectsAvailable] = useState(false);
   const projectChannel = useRef(new ProjectChannel());
   const [unlocked, setUnlocked] = useState(false);
   /** null = 还没读本地令牌；true = 有上次登录的令牌，先进主界面、后台自动登录，网关拒绝或退出登录才回登录页 */
@@ -484,6 +485,9 @@ export default function ChatApp() {
   }, [activeId]);
 
   function resetTenantSession() {
+    setProjectsOpen(false);
+    setProjectsAvailable(false);
+    projectChannel.current.clear();
     const boot: Chat = { id: "boot", title: "新对话", turns: [] };
     chatsRef.current = [boot];
     setChats([boot]);
@@ -550,6 +554,11 @@ export default function ChatApp() {
         assistantStateRef.current = next;
         setAssistantState(next);
       }
+    }
+    if (message.type === "project_request") {
+      const ws = wsRef.current;
+      if (unlockedRef.current && ws?.readyState === WebSocket.OPEN) ws.send(wire(message));
+      return;
     }
     if (message.type !== "hello" && !unlockedRef.current) {
       outboxRef.current = [...outboxRef.current, message].slice(-50);
@@ -778,6 +787,7 @@ export default function ChatApp() {
               resetTenantSession();
             }
             if (nextTenant) tenantIdRef.current = nextTenant;
+            setProjectsAvailable(message.features?.includes("shared_workspaces_v1") ?? false);
             setIsAdmin(Boolean(message.admin));
             if (!message.admin) {
               setAdminOpen(false);
@@ -4904,9 +4914,9 @@ export default function ChatApp() {
         >
           <IconRail name="account" />
         </button>
-        <button type="button" title="共享项目" aria-label="共享项目" onClick={()=>setProjectsOpen(true)}>共享</button>
+        {projectsAvailable && <button type="button" title="共享项目" aria-label="共享项目" onClick={()=>setProjectsOpen(true)}>共享</button>}
       </nav>
-      {projectsOpen && <ProjectPanel send={send} channel={projectChannel.current} connected={connected} token={token} onClose={()=>setProjectsOpen(false)}/> }
+      {projectsAvailable && projectsOpen && <ProjectPanel send={send} channel={projectChannel.current} connected={connected} token={token} onClose={()=>setProjectsOpen(false)}/> }
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

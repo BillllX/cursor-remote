@@ -638,3 +638,51 @@ test("项目执行器：模型调用后费用未知保留预留并阻止预算�
     await e.executor.stop();
   }
 });
+
+test("取消尚未领取的任务立即释放额度，下一条任务可入队", (t) => {
+  const f = fixture(t);
+  const { enqueue, status } = execution(f, async () => turn());
+  const first = enqueue();
+  f.mutate("owner", "project_run_cancel", { runId: first.runId }, f.project.workspaceId);
+  assert.equal(status(first.runId), "cancelled");
+  assert.equal(status(enqueue().runId), "queued");
+});
+
+test("撤销供应商授权后不会发起下一轮调用，助手消息进入终态", async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  const { executor, enqueue, status } = execution(f, async () => {
+    calls++;
+    f.mutate(
+      "owner",
+      "project_config_set",
+      {
+        expectedConfigRevision: 1,
+        patch: { approvedProviderIds: [] },
+      },
+      f.project.workspaceId,
+    );
+    return turn([call("project_list_tree", {})]);
+  });
+  const { runId } = enqueue();
+  executor.pump();
+  await until(() => status(runId) === "failed");
+  assert.equal(calls, 1);
+  assert.equal(f.store.one<{ status: string }>("SELECT status FROM messages WHERE run=?", runId)?.status, "failed");
+});
+
+test("失去账号准入的排队任务终止，不会反复领取或调用模型", async (t) => {
+  const f = fixture(t);
+  let calls = 0;
+  const { executor, enqueue, status } = execution(f, async () => {
+    calls++;
+    return turn();
+  });
+  const { runId } = enqueue();
+  f.store.setAccounts(f.accounts.filter((account) => account.id !== "owner"));
+  executor.pump();
+  await until(() => status(runId) === "failed");
+  executor.pump();
+  assert.equal(calls, 0);
+  assert.equal(f.store.one<{ reserved: number }>("SELECT reserved FROM budget_ledger WHERE run=?", runId)?.reserved, 0);
+});

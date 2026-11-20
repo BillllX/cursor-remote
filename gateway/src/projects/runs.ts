@@ -17,6 +17,25 @@ export type ProjectRun = {
   created: number;
   error: string | null;
 };
+/** 与调用方的权限变更或恢复事务一起写入。只有已领取的任务可能产生外部费用。 */
+export function finishProjectRun(s: ProjectStoreCore, run: ProjectRun, status: "cancelled" | "interrupted" | "failed") {
+  s.exec("UPDATE runs SET status=?,generation=generation+1 WHERE id=?", status, run.id);
+  s.exec("UPDATE messages SET status=? WHERE run=? AND status='running'", status, run.id);
+  if (run.status === "queued") {
+    s.exec("UPDATE budget_ledger SET reserved=0,status='settled' WHERE run=? AND status='reserved'", run.id);
+  } else if (run.status === "running") {
+    s.exec("UPDATE budget_ledger SET status='pending' WHERE run=? AND status='reserved'", run.id);
+  }
+  s.event(run.project, "run_" + status, { runId: run.id, chatId: run.chat });
+}
+
+export function cancelProjectRuns(s: ProjectStoreCore, id: string, actor?: string) {
+  const where = "SELECT * FROM runs WHERE project=? AND status IN ('queued','running','proposed','conflict')";
+  const runs =
+    actor === undefined ? s.all<ProjectRun>(where, id) : s.all<ProjectRun>(where + " AND actor=?", id, actor);
+  for (const run of runs) finishProjectRun(s, run, "cancelled");
+}
+
 export function enqueueProjectRun(s: ProjectStoreCore, actor: string, id: string, chat: string, model: string) {
   const { p } = s.access(actor, id, "editor", true),
     cfg = JSON.parse(p.config),
@@ -80,12 +99,7 @@ export function projectRuns(s: ProjectStoreCore, actor: string, r: ProjectReques
     if (actor !== run.actor && m.role !== "owner" && !(m.role === "admin" && author?.role !== "owner"))
       throw new ProjectError("FORBIDDEN");
     if (["applied", "failed", "cancelled", "interrupted"].includes(run.status)) return { status: run.status };
-    s.exec("UPDATE runs SET status='cancelled',generation=generation+1 WHERE id=?", run.id);
-    s.exec(
-      "UPDATE budget_ledger SET status=CASE WHEN status='reserved' THEN 'pending' ELSE status END WHERE run=?",
-      run.id,
-    );
-    s.event(id, "run_cancelled", { runId: run.id });
+    finishProjectRun(s, run, "cancelled");
     return { status: "cancelled" };
   }
   if (actor !== run.actor && m.role !== "owner") throw new ProjectError("FORBIDDEN");

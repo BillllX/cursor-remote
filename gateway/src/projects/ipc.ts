@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createConnection } from "node:net";
 import { readFileSync } from "node:fs";
-import { ProjectError, type ProjectErrorCode } from "../../../shared/projectTypes.ts";
+import { PROJECT_LIMITS, ProjectError, type ProjectErrorCode } from "../../../shared/projectTypes.ts";
 export const PROJECT_ERROR_CODES: ProjectErrorCode[] = [
   "BAD_REQUEST",
   "CAP_REQUIRED",
@@ -35,6 +35,9 @@ export function publicProjectError(e: unknown) {
     };
   return { code: "INTERNAL" as const, message: "项目服务处理失败" };
 }
+const base64Size = (bytes: number) => Math.ceil(bytes / 3) * 4;
+export const PROJECT_IPC_REQUEST_BYTES = base64Size(base64Size(PROJECT_LIMITS.fileBytes) + 4096) + 1024;
+export const PROJECT_IPC_RESPONSE_BYTES = base64Size(PROJECT_LIMITS.fileBytes) + 4096;
 export type ProjectTransportCommand = {
   principal: string;
   method: "request" | "upload" | "resource" | "health";
@@ -99,23 +102,23 @@ export class ProjectStoreClient {
     );
     return new Promise((resolve, reject) => {
       const socket = createConnection(this.settings.socketPath);
-      let bytes = 0,
-        buffer = "";
+      let bytes = 0;
+      const chunks: Buffer[] = [];
       socket.setTimeout(30000, () => socket.destroy(new Error("timeout")));
       socket.once("connect", () => socket.end(JSON.stringify(envelope) + "\n"));
       socket.on("data", (chunk) => {
         bytes += chunk.length;
-        if (bytes > 40 * 1024 * 1024) {
+        if (bytes > PROJECT_IPC_RESPONSE_BYTES) {
           socket.destroy();
           reject(new ProjectError("LIMIT_EXCEEDED"));
           return;
         }
-        buffer += chunk.toString();
+        chunks.push(chunk);
       });
       socket.on("error", () => reject(new ProjectError("PROJECT_UNAVAILABLE", "项目存储服务不可用")));
       socket.once("end", () => {
         try {
-          const result = JSON.parse(buffer);
+          const result = JSON.parse(Buffer.concat(chunks, bytes).toString("utf8"));
           if (!result.ok) {
             const e = result.error;
             throw new ProjectError(

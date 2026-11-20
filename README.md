@@ -199,3 +199,7 @@ jiebo-publish stop
 - 这一步不和 Mac 同步文件；外网改的是 VPS 磁盘
 - 不接官方 Cloud Agent（`cloud: { repos }`）；文件留在这台 VPS 上
 - 不做每租户 unix 用户或进程隔离；同一台机器上的 Agent shell 理论上能读到邻居目录
+
+## 共享项目部署
+
+东京站独立共享项目服务的安装、试点验收及回滚见 [东京站共享项目部署手册](docs/tokyo-project-service.md)。

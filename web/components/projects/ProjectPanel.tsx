@@ -42,17 +42,44 @@ export function ProjectPanel({
     >(),
   );
   const selectedRef = useRef(selected);
-  selectedRef.current = selected;
+  const selectionEpoch = useRef(0);
+  const clearProject = useCallback(() => {
+    selectionEpoch.current++;
+    selectedRef.current = null;
+    setSelected(null);
+    setEntries([]);
+    setChats([]);
+    setChatId("");
+    setMessages([]);
+    setMembers([]);
+    setRuns([]);
+    setPath("docs/新文档.txt");
+    setText("");
+    setDirty(false);
+    setDraft("");
+    setModelId("");
+  }, []);
   const call = useCallback(
     <T,>(action: ProjectAction, payload: Record<string, unknown> = {}, id?: string): Promise<T> => {
       if (!connected) return Promise.reject(new Error("离线：尚未保存到项目"));
+      const epoch = selectionEpoch.current;
+      if (id && action !== "project_unsubscribe" && selectedRef.current?.workspaceId !== id)
+        return Promise.reject(new Error("项目已切换或关闭"));
       const requestId = crypto.randomUUID();
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.current.delete(requestId);
           reject(new Error("请求超时，请刷新确认后重试"));
         }, 30000);
-        pending.current.set(requestId, { resolve: (v) => resolve(v as T), reject, timer });
+        pending.current.set(requestId, {
+          resolve: (v) => {
+            if (id && action !== "project_unsubscribe" && selectionEpoch.current !== epoch) {
+              reject(new Error("项目已切换或关闭"));
+            } else resolve(v as T);
+          },
+          reject,
+          timer,
+        });
         send({ type: "project_request", protocol: 1, requestId, action, workspaceId: id, payload });
       });
     },
@@ -84,7 +111,8 @@ export function ProjectPanel({
         runs: typeof runs;
         eventSeq: number;
       }>("project_snapshot", {}, id);
-      if (selectedRef.current && selectedRef.current.workspaceId !== id) return;
+      if (selectedRef.current?.workspaceId !== id) return;
+      selectedRef.current = snapshot.summary;
       setSelected(snapshot.summary);
       setChats(snapshot.chatSummaries);
       setRuns(snapshot.runs || []);
@@ -98,13 +126,10 @@ export function ProjectPanel({
     if (connected) {
       void refresh().catch((e) => setNotice(e.message));
     } else {
-      setSelected(null);
-      setEntries([]);
-      setMessages([]);
-      setMembers([]);
-      setNotice("离线：共享内容已关闭，内存草稿尚未保存");
+      clearProject();
+      setNotice("离线：共享内容已关闭");
     }
-  }, [connected, refresh]);
+  }, [connected, refresh, clearProject]);
   useEffect(
     () =>
       channel.subscribe((lastMessage) => {
@@ -126,12 +151,7 @@ export function ProjectPanel({
           lastMessage.type === "project_access_revoked" &&
           lastMessage.workspaceId === selectedRef.current?.workspaceId
         ) {
-          setSelected(null);
-          setEntries([]);
-          setMessages([]);
-          setMembers([]);
-          setText("");
-          setDirty(false);
+          clearProject();
           setNotice("项目权限已变化，请刷新项目列表");
           void refresh().catch(() => {});
         } else if (
@@ -147,7 +167,7 @@ export function ProjectPanel({
           else setNotice("项目状态已更新，请刷新");
         }
       }),
-    [channel, call, chatId, dirty, refresh],
+    [channel, call, chatId, dirty, refresh, clearProject],
   );
   async function act(work: () => Promise<void>) {
     setBusy(true);
@@ -161,14 +181,11 @@ export function ProjectPanel({
     }
   }
   async function open(p: ProjectSummary) {
-    if (dirty && !confirm("有未保存草稿，切换将清除，继续吗？")) return;
+    if ((dirty || draft.trim()) && !confirm("有未保存草稿，切换将清除，继续吗？")) return;
     if (selected) void call("project_unsubscribe", {}, selected.workspaceId).catch(() => {});
-    setSelected(p);
+    clearProject();
     selectedRef.current = p;
-    setText("");
-    setDirty(false);
-    setMessages([]);
-    setChatId("");
+    setSelected(p);
     await load(p.workspaceId);
   }
   async function upload(bytes: Blob) {
@@ -302,7 +319,7 @@ export function ProjectPanel({
                     void act(async () => {
                       if (!confirm("确认退出项目？")) return;
                       await call("project_leave", { operationId: crypto.randomUUID() }, selected.workspaceId);
-                      setSelected(null);
+                      clearProject();
                       await refresh();
                     })
                   }
