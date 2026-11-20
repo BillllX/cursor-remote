@@ -33,6 +33,7 @@ type SidebarProps = {
   workspaceSection: WorkspaceNavId;
   openWorkspaceDomain: () => void;
   openWorkspaceSwitcher: () => void;
+  onShareWorkspace?: (path:string,name:string)=>void;
   openWorkspaceKb: () => void;
   openWorkspaceSchedules: () => void;
   openWorkspaceSkills: () => void;
@@ -126,6 +127,7 @@ export function Sidebar({
   workspaceSection,
   openWorkspaceDomain,
   openWorkspaceSwitcher,
+  onShareWorkspace,
   openWorkspaceKb,
   openWorkspaceSchedules,
   openWorkspaceSkills,
@@ -233,6 +235,7 @@ export function Sidebar({
             managementDisabled={!canManageWorkspace}
             managementHint="当前没有可管理的子工作区；请先切换或新建工作区。"
             onSwitchWorkspace={openWorkspaceSwitcher}
+            onShare={canManageWorkspace && currentGroup && onShareWorkspace ? ()=>onShareWorkspace(currentGroup.path,currentGroup.name) : undefined}
             onNavigate={(id) => {
               if (id === "kb") openWorkspaceKb();
               else if (id === "schedules") openWorkspaceSchedules();

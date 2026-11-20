@@ -25,6 +25,7 @@ type WorkspaceOverlayProps = {
     chats: number;
     touched: number;
     dup: boolean;
+    ownerName?: string;
     path: string;
     name: string;
     user?: boolean;
@@ -139,7 +140,9 @@ export function WorkspaceOverlay({
                   <span className={styles.name}>
                     <Highlight text={item.name} query={workspaceQuery} />
                   </span>
-                  {item.dup || (relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
+                  {item.ownerName ? (
+                    <span className={styles.path}>来自 {item.ownerName}</span>
+                  ) : item.dup || (relToCwd(item.path, workspaceRoot) || item.path) !== item.name ? (
                     <span className={styles.path}>{relToCwd(item.path, workspaceRoot) || item.path}</span>
                   ) : null}
                 </span>

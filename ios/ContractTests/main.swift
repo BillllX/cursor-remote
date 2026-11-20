@@ -285,7 +285,7 @@ let slimChat: JSONValue = .object([
 /// 可选参数都给值，布尔取非默认值
 func sample(_ which: ClientCase) -> ClientMessage {
     switch which {
-    case .project: return .project(.object(["type": .string("project_request"), "protocol": .number(1), "requestId": .string("00000000-0000-4000-8000-000000000001"), "action": .string("project_list"), "payload": .object([:])]))
+    case .project: return .project(.object(["type": .string("workspace_share"), "requestId": .string("00000000-0000-4000-8000-000000000001"), "action": .string("list")]))
     case .hello: return .hello(token: "example-token")
     case .deviceResult:
         return .deviceResult(

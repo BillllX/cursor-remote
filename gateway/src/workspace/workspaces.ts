@@ -215,6 +215,7 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
   emitWorkspaces(ws, tenant);
   broadcastDigest(tenant, ws);
   broadcastWorkspaceAgents(tenant);
+  return true;
 }
 
 /**
@@ -260,6 +261,7 @@ export function deleteWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn, rawPa
   send(ws, { type: "workspace_removed", path: target.dir, name: target.name, mode });
   emitWorkspaces(ws, tenant);
   broadcastWorkspaceAgents(tenant);
+  return true;
 }
 
 export function emitWorkspaces(ws: WebSocket, tenant: Tenant) {

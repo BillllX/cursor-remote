@@ -10,6 +10,7 @@ type Props = {
   managementDisabled: boolean;
   managementHint: string;
   onSwitchWorkspace: () => void;
+  onShare?: () => void;
   onNavigate: (id: WorkspaceNavId) => void;
   onSessionTool: (id: "loop" | "terminal") => void;
 };
@@ -55,28 +56,35 @@ export function WorkspaceNavigation({
   managementDisabled,
   managementHint,
   onSwitchWorkspace,
+  onShare,
   onNavigate,
 }: Props) {
   return (
     <>
-      <button
-        type="button"
-        className="workspace-switcher"
-        title={workspacePath}
-        aria-label={`切换工作区，当前为 ${workspaceName}`}
-        onClick={onSwitchWorkspace}
-      >
-        <span className="side-label">当前工作区</span>
-        <span className="workspace-switcher-name">
-          <IconRail name="workspace" size={14} />
-          {workspaceName}
-          <span aria-hidden="true">⌄</span>
-        </span>
-      </button>
+      <div className="workspace-switcher-row">
+        <button
+          type="button"
+          className="workspace-switcher"
+          title={workspacePath}
+          aria-label={`切换工作区，当前为 ${workspaceName}`}
+          onClick={onSwitchWorkspace}
+        >
+          <span className="side-label">当前工作区</span>
+          <span className="workspace-switcher-name">
+            <IconRail name="workspace" size={14} />
+            {workspaceName}
+            <span aria-hidden="true">⌄</span>
+          </span>
+        </button>
+        {onShare && (
+          <button className="workspace-share-button" type="button" onClick={onShare}>
+            共享
+          </button>
+        )}
+      </div>
       <nav className="workspace-nav" aria-label="工作区功能">
         {WORKSPACE_NAV.map((item) => {
-          const needsSubWorkspace =
-            item.id === "kb" || item.id === "schedules" || item.id === "management";
+          const needsSubWorkspace = item.id === "kb" || item.id === "schedules" || item.id === "management";
           const isDisabled = needsSubWorkspace && managementDisabled;
           return (
             <button

@@ -25,8 +25,9 @@ import type {
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
-import { ProjectPanel } from "./projects/ProjectPanel";
-import { ProjectChannel } from "../lib/projects/channel";
+import { ShareWorkspaceDialog, SharedWorkspaceFiles, type ShareCall } from "./workspace-sharing/Sharing";
+import { WorkspaceShareClient } from "../lib/workspaceShareClient";
+import { WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -134,9 +135,12 @@ export default function ChatApp() {
   groupMenuRef.current = groupMenu;
   const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
-  const [projectsOpen,setProjectsOpen] = useState(false);
-  const [projectsAvailable,setProjectsAvailable] = useState(false);
-  const projectChannel = useRef(new ProjectChannel());
+  const [sharingAvailable,setSharingAvailable] = useState(false);
+  const [sharedWorkspaces,setSharedWorkspaces] = useState<SharedWorkspace[]>([]);
+  const [sharedId,setSharedId] = useState("");
+  const [shareTarget,setShareTarget] = useState<{path:string;name:string}>();
+  const workspaceShare = useRef(new WorkspaceShareClient());
+  const sharedWorkspace = sharedWorkspaces.find(item=>item.id===sharedId);
   const [unlocked, setUnlocked] = useState(false);
   /** null = 还没读本地令牌；true = 有上次登录的令牌，先进主界面、后台自动登录，网关拒绝或退出登录才回登录页 */
   const [resuming, setResuming] = useState<boolean | null>(null);
@@ -381,7 +385,7 @@ export default function ChatApp() {
         workspaces.find((workspace) => !sameCwd(workspace.path, workspaceRoot))?.path ||
         cwd)
       : cwd);
-  const { duplicateGroupNames, otherMenuWorkspaces, sidebarGroups, moreGroups, workspaceChoices } = useWorkspaceGroups({
+  const { duplicateGroupNames, otherMenuWorkspaces, sidebarGroups, moreGroups, workspaceChoices: personalChoices } = useWorkspaceGroups({
     chats,
     workspaceRoot,
     workspaces,
@@ -400,6 +404,9 @@ export default function ChatApp() {
       ),
     [chats, sidebarGroups, workspaceContextCwd, cwd, workspaceRoot],
   );
+  const workspaceChoices = workspacePickerMode==="switch" ? [...personalChoices, ...sharedWorkspaces
+    .filter(item=>[item.name,item.ownerName].some(value=>value.toLowerCase().includes(workspaceQuery.trim().toLowerCase())))
+    .map(item=>({path:"share:"+item.id,name:item.name,ownerName:item.ownerName,recent:false,chats:0,touched:0,dup:false}))] : personalChoices;
   const workspacePick = Math.min(workspaceIndex, Math.max(0, workspaceChoices.length - 1));
   const workspaceExact = workspaceChoices.some(
     (item) => item.name.toLowerCase() === workspaceQuery.trim().toLowerCase(),
@@ -485,9 +492,8 @@ export default function ChatApp() {
   }, [activeId]);
 
   function resetTenantSession() {
-    setProjectsOpen(false);
-    setProjectsAvailable(false);
-    projectChannel.current.clear();
+    clearWorkspaceSharing();
+    setSharingAvailable(false);
     const boot: Chat = { id: "boot", title: "新对话", turns: [] };
     chatsRef.current = [boot];
     setChats([boot]);
@@ -555,7 +561,7 @@ export default function ChatApp() {
         setAssistantState(next);
       }
     }
-    if (message.type === "project_request") {
+    if (message.type === "workspace_share") {
       const ws = wsRef.current;
       if (unlockedRef.current && ws?.readyState === WebSocket.OPEN) ws.send(wire(message));
       return;
@@ -576,6 +582,25 @@ export default function ChatApp() {
     outboxRef.current = [...outboxRef.current, message].slice(-50);
   }, []);
 
+  const callShare = useCallback<ShareCall>((action) => workspaceShare.current.request(send, action),[send]);
+  const sharedListVersion = useRef(0);
+  const refreshSharedWorkspaces = useCallback(async () => {
+    const version=++sharedListVersion.current;
+    try {
+      const {items}=await callShare<{items:SharedWorkspace[]}>({action:"list"});
+      if(version!==sharedListVersion.current)return;
+      setSharedWorkspaces(items);
+      setSharedId(id=>items.some(item=>item.id===id)?id:"");
+    } catch { /* 连接错误由网关断线状态处理，打开切换器时可重试。 */ }
+  },[callShare]);
+  function clearWorkspaceSharing() {
+    previewShareBases.current.clear();
+    sharedListVersion.current++;
+    workspaceShare.current.clear();
+    setSharedWorkspaces([]);
+    setSharedId("");
+    setShareTarget(undefined);
+  }
   const flushOutbox = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -787,7 +812,9 @@ export default function ChatApp() {
               resetTenantSession();
             }
             if (nextTenant) tenantIdRef.current = nextTenant;
-            setProjectsAvailable(message.features?.includes("shared_workspaces_v1") ?? false);
+            const canShare=message.features?.includes(WORKSPACE_SHARE_CAP) ?? false;
+            setSharingAvailable(canShare);
+            if(!canShare) clearWorkspaceSharing();
             setIsAdmin(Boolean(message.admin));
             if (!message.admin) {
               setAdminOpen(false);
@@ -798,6 +825,7 @@ export default function ChatApp() {
             const reconnected = unlockedRef.current;
             if (reconnected) setNotice("已重新连上服务器");
             unlockedRef.current = true;
+            if(canShare) void refreshSharedWorkspaces();
             setUnlocked(true);
             setVerifying(false);
             if (verifyTimerRef.current) window.clearTimeout(verifyTimerRef.current);
@@ -1609,6 +1637,12 @@ export default function ChatApp() {
           }
           break;
         case "file_written":
+          if (!message.error) {
+            const submitted=saveSnapshotRef.current[relToCwd(message.path,cwdRef.current)||message.path];
+            if(typeof submitted==="string") {
+              for(const tab of previewTabsRef.current) if(sameFile(tab.path,message.path,cwdRef.current)) previewShareBases.current.set((message.chatId||activeIdRef.current)+"\0"+tab.path,submitted);
+            }
+          }
           if (message.error) {
             setError(message.error);
             break;
@@ -2436,8 +2470,14 @@ export default function ChatApp() {
         } catch {
           return;
         }
-        if (message.type === "project_result" || message.type === "project_event" || message.type === "project_access_revoked" || message.type === "project_summary_changed") {
-          projectChannel.current.publish(message); return;
+        if (wsRef.current !== ws) return;
+        if (message.type === "workspace_share_result") {
+          workspaceShare.current.resolve(message);
+          return;
+        }
+        if (message.type === "workspace_share_changed") {
+          void refreshSharedWorkspaces();
+          return;
         }
         if ((message.type === "text-delta" || message.type === "thinking-delta") && message.chatId) {
           queueDelta(message);
@@ -2452,6 +2492,7 @@ export default function ChatApp() {
       };
       ws.onclose = () => {
         if (wsRef.current !== ws) return;
+        clearWorkspaceSharing();
         flushDeltas();
         setConnected(false);
         holdSnapshotRef.current.clear();
@@ -2786,6 +2827,7 @@ export default function ChatApp() {
   }
 
   function openWorkspaceSwitcher() {
+    if(sharingAvailable) void refreshSharedWorkspaces();
     setWorkspacePickerMode("switch");
     send({ type: "list_workspaces" });
     setWorkspaceCreating(false);
@@ -2797,6 +2839,21 @@ export default function ChatApp() {
   }
 
   function switchWorkspace(path: string) {
+    if(path.startsWith("share:")) {
+      const row=sharedWorkspaces.find(item=>"share:"+item.id===path);
+      if(!row)return;
+      setShareTarget(undefined);
+      setSharedId(row.id);
+      setWorkspaceMenuOpen(false);
+      setFilesOpen(false);
+      setSearchOpen(false);
+      setAssistantOpen(false);
+      setManagementOpen(false);
+      setNavOpen(false);
+      setCollabOpen(false);
+      return;
+    }
+    setSharedId("");
     const target = chatsRef.current
       .filter((chat) => !isAssistantChat(chat.id) && sameCwd(chat.cwd || workspaceRoot, path))
       .sort((a, b) => (b.touchedAt || 0) - (a.touchedAt || 0))[0];
@@ -3009,12 +3066,14 @@ export default function ChatApp() {
   }
 
   function openAssistantFromRail() {
+    setSharedId("");
     prepareAssistantDomain();
     setAssistantOpen(false);
     openAssistantChat();
   }
 
   function openWorkspaceDomain() {
+    setSharedId("");
     setCollabOpen(false);
     replaceCollabRoute({ active: false });
     setNavOpen(false);
@@ -3030,11 +3089,15 @@ export default function ChatApp() {
     } else if (otherMenuWorkspaces[0]) {
       lastWorkspacePathRef.current = otherMenuWorkspaces[0].path;
       setEmptyWorkspacePath(otherMenuWorkspaces[0].path);
+    } else {
+      openWorkspaceSwitcher();
+      return;
     }
     chooseSide("chats");
   }
 
   function openCollabDomain() {
+    setSharedId("");
     setNavOpen(false);
     setAssistantOpen(false);
     setManagementOpen(false);
@@ -3367,7 +3430,8 @@ export default function ChatApp() {
   }
 
   function logout() {
-    setProjectsOpen(false); projectChannel.current.clear();
+    clearWorkspaceSharing();
+    setSharingAvailable(false);
     localStorage.removeItem(TOKEN_KEY);
     tokenRef.current = "";
     tenantIdRef.current = "";
@@ -4204,7 +4268,8 @@ export default function ChatApp() {
     send({ type: "restore", chatId, checkpointId });
   }
 
-  function saveFile(path: string, content: string) {
+  const previewShareBases = useRef(new Map<string,string>());
+  async function saveFile(path: string, content: string) {
     if (content.length > PREVIEW_SAVE_LIMIT) {
       setNotice("内容超过 500KB，不在这里保存");
       return;
@@ -4216,7 +4281,15 @@ export default function ChatApp() {
     }
     const rel = relToCwd(path, cwdRef.current) || path;
     saveSnapshotRef.current[rel] = content;
-    send({ type: "write_file", path, content, chatId });
+    const tab = previewTabsRef.current.find(item=>sameFile(item.path,path,cwdRef.current));
+    const original = previewShareBases.current.get(chatId+"\0"+path) ?? tab?.content;
+    let revision: string | undefined;
+    if (typeof original === "string" && globalThis.crypto?.subtle) {
+      const hash = await crypto.subtle.digest("SHA-256",new TextEncoder().encode(original));
+      revision = Array.from(new Uint8Array(hash),byte=>byte.toString(16).padStart(2,"0")).join("");
+    }
+    if(activeIdRef.current!==chatId)return;
+    send({ type: "write_file", path, content, chatId, revision });
   }
 
   function dirtyDraftMap() {
@@ -4914,9 +4987,9 @@ export default function ChatApp() {
         >
           <IconRail name="account" />
         </button>
-        {projectsAvailable && <button type="button" title="共享项目" aria-label="共享项目" onClick={()=>setProjectsOpen(true)}>共享</button>}
       </nav>
-      {projectsAvailable && projectsOpen && <ProjectPanel send={send} channel={projectChannel.current} connected={connected} token={token} onClose={()=>setProjectsOpen(false)}/> }
+      {shareTarget && <ShareWorkspaceDialog key={shareTarget.path} {...shareTarget} call={callShare}
+        close={()=>setShareTarget(undefined)} />}
       <SettingsOverlay
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -5203,6 +5276,8 @@ export default function ChatApp() {
         }}
         onClick={() => setNavOpen(false)}
       />
+      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare}
+        onSwitch={openWorkspaceSwitcher} onUnavailable={()=>{setSharedId("");void refreshSharedWorkspaces();setNotice("共享工作区已不可访问");}} /> : <>
       <Sidebar
         navDrag={navDrag}
         cwd={workspaceContextCwd}
@@ -5226,6 +5301,7 @@ export default function ChatApp() {
         workspaceSection={workspaceSection}
         openWorkspaceDomain={openWorkspaceDomain}
         openWorkspaceSwitcher={openWorkspaceSwitcher}
+        onShareWorkspace={sharingAvailable ? (path,name)=>setShareTarget({path,name}) : undefined}
         openWorkspaceKb={openWorkspaceKb}
         openWorkspaceSchedules={openWorkspaceSchedules}
         openWorkspaceSkills={openWorkspaceSkills}
@@ -5377,6 +5453,10 @@ export default function ChatApp() {
             }}
             drafts={previewDrafts}
             onDraft={(path, value) => {
+              const key = activeIdRef.current+"\0"+path;
+              const base = previewTabsRef.current.find(tab=>sameFile(tab.path,path,cwdRef.current))?.content;
+              if(value==null)previewShareBases.current.delete(key);
+              else if(typeof base==="string" && !previewShareBases.current.has(key))previewShareBases.current.set(key,base);
               setPreviewDrafts((prev) => {
                 if (value == null) {
                   if (!(path in prev)) return prev;
@@ -5481,6 +5561,7 @@ export default function ChatApp() {
               setDraftCaret={setDraftCaret}
             /> : null}
       </main>
+      </>}
         </>
       )}
     </div>

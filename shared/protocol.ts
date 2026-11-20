@@ -1,3 +1,4 @@
+import type { WorkspaceShareRequest, WorkspaceShareResult, WorkspaceShareChanged } from "./workspaceShare.ts";
 import type { ProjectRequest, ProjectResult, ProjectEvent, ProjectNotice } from "./projectTypes.ts";
 export type AgentMode = "agent";
 
@@ -1524,6 +1525,7 @@ export type ImErrorCode =
   | "internal";
 
 export type ClientMessage =
+  | WorkspaceShareRequest
   | ProjectRequest
   | { type: "hello"; token?: string; client?: HelloClient }
   | { type: "set_workspace"; cwd: string; chatId?: string; create?: boolean }
@@ -1578,7 +1580,7 @@ export type ClientMessage =
   // sha：读这一轮结束时的快照（TurnFile.sha），不读工作区；diff: true 时 sha 指 TurnFile.diffSha。
   // 快照被清理时回 error "历史版本已清理"。reqId 在 file_content 原样回显
   | { type: "read_file"; path: string; chatId?: string; diff?: boolean; sha?: string; reqId?: string }
-  | { type: "write_file"; path: string; content: string; chatId?: string }
+  | { type: "write_file"; path: string; content: string; chatId?: string; revision?: string }
   /** 保存 Canvas 的源码快照及客户端渲染出的静态 HTML；sourceSha 缺省时由网关读取当前源码并存快照 */
   | { type: "canvas_version_save"; chatId: string; path: string; sourceSha?: string; html: string }
   | { type: "canvas_versions"; chatId: string; path: string }
@@ -1803,6 +1805,8 @@ export type LoopState = {
 };
 
 export type ServerMessage =
+  | WorkspaceShareResult
+  | WorkspaceShareChanged
   | ProjectResult | ProjectEvent | ProjectNotice
   | {
       type: "ready";

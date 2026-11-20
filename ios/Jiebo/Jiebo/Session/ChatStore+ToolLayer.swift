@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import Photos
@@ -281,7 +282,8 @@ extension ChatStore {
         }
         let previous = tab.content ?? ""
         previewSaves.append(PreviewSave(path: tab.path, chatId: chatId, previous: previous, snapshot: content))
-        send(.writeFile(path: tab.path, content: content, chatId: chatId))
+        let revision = tab.content.map { value in SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
+        send(.writeFile(path: tab.path, content: content, chatId: chatId, revision: revision))
         if let index = previewTabs.firstIndex(where: { $0.path == tab.path && $0.diff == tab.diff }) {
             previewTabs[index].content = content
         }

@@ -1,4 +1,3 @@
-import { closeProjectSubscriptions } from "./handlers/projects.ts";
 // 每条 WebSocket 连接：建连接状态、登记到连接表，挂 error / message / close 监听
 import type { IncomingMessage } from "node:http";
 import type { WebSocket } from "ws";
@@ -37,7 +36,6 @@ export function onConnection(ws: WebSocket, req: IncomingMessage) {
   ws.on("message", (data) => handleMessage({ ws, conn, state }, data));
 
   ws.on("close", () => {
-    closeProjectSubscriptions(conn);
     closeMemoryWatcher(ws);
     deviceRegistry.close(conn);
     if (conn.authed) persistConn(conn);

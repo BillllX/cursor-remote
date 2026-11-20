@@ -36,11 +36,25 @@ import {
 } from "../../canvasVersions.ts";
 import { publishedCanvasUrl } from "../../publish.ts";
 import { chatIdOf } from "../../runtime/chats.ts";
-import { confinedCwd } from "../../tenants.ts";
+import { allTenants, confinedCwd, stateDir } from "../../tenants.ts";
+import { WorkspaceSharing, WorkspaceShareError } from "../../workspace/sharing.ts";
 
 export function onWriteFile({ ws, conn }: WsCtx, message: MessageOf<"write_file">) {
   const cwd = message.chatId ? cwdOf(conn, slotOf(conn, message.chatId)) : conn.cwd;
-  const written = writeWorkspaceFile(cwd, message.path, message.content);
+  let written;
+  try {
+    const shares = new WorkspaceSharing(stateDir(), allTenants);
+    const shared =
+      conn.tenant && shares.saveOwnedFile(conn.tenant, cwd, message.path, message.content, message.revision);
+    written = shared
+      ? { path: workspacePath(cwd, message.path) ?? message.path }
+      : writeWorkspaceFile(cwd, message.path, message.content);
+  } catch (error) {
+    written = {
+      path: message.path,
+      error: error instanceof WorkspaceShareError ? error.message : "无法安全保存共享文件，请刷新后重试",
+    };
+  }
   send(ws, {
     type: "file_written",
     chatId: message.chatId,
@@ -313,9 +327,7 @@ export async function onReadFile({ ws, conn, tenant }: WsCtx, message: MessageOf
   if (echo.sha != null) {
     // 快照只按 sha 寻址，path 只用来定 kind 和显示名
     const rel =
-      workspacePath(cwd, message.path) ||
-      extractSafeCanvasRel(message.path, tenant.workspaceRoot) ||
-      message.path;
+      workspacePath(cwd, message.path) || extractSafeCanvasRel(message.path, tenant.workspaceRoot) || message.path;
     file = message.diff
       ? readSnapshotDiff(tenant.stateDir, rel, echo.sha)
       : readSnapshotFile(tenant.stateDir, rel, echo.sha);

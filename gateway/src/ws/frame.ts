@@ -37,6 +37,16 @@ export function frameFor(sock: WebSocket, message: ServerMessage): string | null
 }
 
 export function shrinkMessage(message: ServerMessage, budget: number): ServerMessage | null {
+  if (message.type === "workspace_share_result") {
+    // 不让被截断的文件内容带着原始版本号进入可保存的编辑器。
+    return {
+      type: "workspace_share_result",
+      requestId: message.requestId,
+      ok: false,
+      code: "INVALID",
+      error: "内容超过设备接收上限",
+    };
+  }
   if (message.type === "file_content") return fitFileContent(message, budget);
   if (message.type === "search_hits") return fitSearchHits(message, budget);
   if (message.type === "im_history") return fitImHistory(message, budget);

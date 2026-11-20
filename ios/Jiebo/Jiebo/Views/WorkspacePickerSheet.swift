@@ -8,7 +8,7 @@ struct WorkspacePickerSheet: View {
     @Environment(PhoneRouter.self) private var phoneRouter: PhoneRouter?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.sceneSessionState) private var sceneSession
-    @State private var sharedOpen = false
+    @State private var shareTarget: WorkspaceItem?
     @State private var query = ""
     /// 正在改名 / 删除 / 清空对话的目标
     @State private var renaming: WorkspaceItem?
@@ -32,9 +32,6 @@ struct WorkspacePickerSheet: View {
         let duplicates = Set(Dictionary(grouping: all, by: \.name).filter { $0.value.count > 1 }.keys)
         NavigationStack {
             List {
-                if store.gatewayFeatures.contains("shared_workspaces_v1") {
-                    Section { Button("共享项目") { sharedOpen = true } }
-                }
                 if all.isEmpty {
                     Section {
                         if store.workspacesSyncInFlight {
@@ -95,17 +92,39 @@ struct WorkspacePickerSheet: View {
                         .listRowBackground(JieboColor.white)
                     }
                 }
+                let sharedRows = store.workspaceSharing.items.filter {
+                    needle.isEmpty || $0.name.lowercased().contains(needle) || $0.ownerName.lowercased().contains(needle)
+                }
+                if !sharedRows.isEmpty {
+                    Section("共享给我") {
+                        ForEach(sharedRows) { item in
+                            NavigationLink {
+                                SharedWorkspaceFileView(workspace: item)
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    Label(item.name, systemImage: "folder")
+                                    Text("来自 \(item.ownerName)").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
             .navigationTitle("切换文件夹")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $sharedOpen) { SharedProjectsView().environment(store) }
+            .sheet(item: $shareTarget) { item in ShareWorkspaceSheet(name: item.name, path: item.path).environment(store) }
+            .task { if store.gatewayFeatures.contains("workspace_share_v1") { await store.workspaceSharing.refresh() } }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: all.count > 6 ? "搜索 \(all.count) 个文件夹" : "搜索文件夹")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
+                }
+                if store.gatewayFeatures.contains("workspace_share_v1"),
+                   let item = all.first(where: { sameCwd($0.path, currentPath) && store.isTopLevelWorkspace($0.path) }) {
+                    ToolbarItem(placement: .primaryAction) { Button("共享") { shareTarget = item } }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -260,6 +279,11 @@ struct WorkspacePickerSheet: View {
         ].compactMap { $0 }.joined(separator: "，"))
         .accessibilityHint("切换到这个文件夹")
         .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
+        .contextMenu {
+            if manage && store.gatewayFeatures.contains("workspace_share_v1") {
+                Button { shareTarget = item } label: { Label("共享", systemImage: "person.badge.plus") }
+            }
+        }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if manage {
                 Button(role: .destructive) { deleting = item } label: {

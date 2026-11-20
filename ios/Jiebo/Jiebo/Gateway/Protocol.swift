@@ -359,7 +359,7 @@ struct ClientInfo: Sendable, Equatable {
             // Collab 沿用网关现有双 capability 门槛；iOS P3 只读取状态，不发送 collab_op。
             caps: [
                 "sync_chat", "stored_digest", "slim_state", "slim_chats", "im", "im_group", "im_collab",
-                "shared_workspaces_v1", "workspace_agents", "device_bridge", "device_bridge_v2", "mobile_compact_v1", "deferred_turn",
+                "workspace_share_v1", "workspace_agents", "device_bridge", "device_bridge_v2", "mobile_compact_v1", "deferred_turn",
             ]
         )
     }
@@ -435,7 +435,7 @@ enum ClientMessage {
     /// P5：读工作区文件内容（diff=true 拿 unified diff）；应答是 file_content。
     /// sha 读某一轮的快照（diff=true 时它指 diffSha）；reqId 原样回显。两者只发给声明了 read_sha / read_req_id 的网关
     case readFile(path: String, chatId: String?, diff: Bool, sha: String? = nil, reqId: String? = nil)
-    case writeFile(path: String, content: String, chatId: String?)
+    case writeFile(path: String, content: String, chatId: String?, revision: String? = nil)
     case undo(chatId: String)
     case ping
     /// P4b：单会话增量上传（只带变化的那个会话）
@@ -626,13 +626,14 @@ enum ClientMessage {
             if let sha, !sha.isEmpty { object["sha"] = .string(sha) }
             if let reqId, !reqId.isEmpty { object["reqId"] = .string(reqId) }
             return .object(object)
-        case .writeFile(let path, let content, let chatId):
+        case .writeFile(let path, let content, let chatId, let revision):
             var object: [String: JSONValue] = [
                 "type": .string("write_file"),
                 "path": .string(path),
                 "content": .string(content),
             ]
             if let chatId { object["chatId"] = .string(chatId) }
+            if let revision { object["revision"] = .string(revision) }
             return .object(object)
         case .undo(let chatId):
             return .object(["type": .string("undo"), "chatId": .string(chatId)])
@@ -1995,7 +1996,7 @@ enum ServerMessage {
         case "memory_written":
             guard let entry = object["entry"].flatMap(AssistantMemoryEntry.from) else { return .ignored(type) }
             return .memoryWritten(chatId: object["chatId"]?.string?.nilIfEmpty, entry: entry)
-        case _ where type.hasPrefix("project_"):
+        case _ where type.hasPrefix("project_") || type.hasPrefix("workspace_share_"):
             return .project(.object(object))
         case "pong":
             return .pong

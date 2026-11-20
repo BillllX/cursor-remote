@@ -11,8 +11,8 @@
         UIX00102 /* PresentationComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = UIX00101 /* PresentationComponents.swift */; };
         PNV00202 /* NavigationRegression.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00201 /* NavigationRegression.swift */; };
         PNV00102 /* PhoneNavigationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00101 /* PhoneNavigationState.swift */; };
-		F103EC7D000000000000001B /* SharedProjectsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F103EC7D000000000000000B /* SharedProjectsView.swift */; };
-		F103EC7D000000000000001A /* ProjectClientStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F103EC7D000000000000000A /* ProjectClientStore.swift */; };
+		F103EC7D000000000000001B /* WorkspaceSharingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F103EC7D000000000000000B /* WorkspaceSharingView.swift */; };
+		F103EC7D000000000000001A /* WorkspaceShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F103EC7D000000000000000A /* WorkspaceShareStore.swift */; };
 		A1B2C3D4E5F6071829000300 /* JieboApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000100 /* JieboApp.swift */; };
 		A1B2C3D4E5F6071829000301 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000101 /* Tokens.swift */; };
 		A1B2C3D4E5F6071829000302 /* JieboMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000102 /* JieboMark.swift */; };
@@ -206,8 +206,8 @@
         UIX00101 /* PresentationComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationComponents.swift; sourceTree = "<group>"; };
         PNV00201 /* NavigationRegression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationRegression.swift; sourceTree = "<group>"; };
         PNV00101 /* PhoneNavigationState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneNavigationState.swift; sourceTree = "<group>"; };
-		F103EC7D000000000000000B /* SharedProjectsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedProjectsView.swift; sourceTree = "<group>"; };
-		F103EC7D000000000000000A /* ProjectClientStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectClientStore.swift; sourceTree = "<group>"; };
+		F103EC7D000000000000000B /* WorkspaceSharingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSharingView.swift; sourceTree = "<group>"; };
+		F103EC7D000000000000000A /* WorkspaceShareStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceShareStore.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000014 /* Jiebo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Jiebo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D4E5F6071829000015 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -512,7 +512,7 @@
 				P3S000102 /* SceneEditingPolicy.swift */,
 				A1B2C3D4E5F6071829000108 /* ChatModels.swift */,
 				A1B2C3D4E5F6071829000109 /* ChatStore.swift */,
-				F103EC7D000000000000000A /* ProjectClientStore.swift */,
+				F103EC7D000000000000000A /* WorkspaceShareStore.swift */,
 				A1B2C3D4E5F6071829000714 /* ChatStore+Lifecycle.swift */,
 				A1B2C3D4E5F6071829000715 /* ChatStore+Turns.swift */,
 				A1B2C3D4E5F6071829000716 /* ChatStore+Chats.swift */,
@@ -563,7 +563,7 @@
                 UIX00101 /* PresentationComponents.swift */,
                 UIX00201 /* ComposerEntryField.swift */,
 				A1B2C3D4E5F6071829000110 /* RootView.swift */,
-				F103EC7D000000000000000B /* SharedProjectsView.swift */,
+				F103EC7D000000000000000B /* WorkspaceSharingView.swift */,
 				A1B2C3D4E5F6071829000111 /* LoginView.swift */,
 				A1B2C3D4E5F6071829000112 /* SidebarView.swift */,
 				A1B2C3D4E5F6071829000735 /* WorkspacePickerSheet.swift */,
@@ -910,8 +910,8 @@
 				A1B2C3D4E5F6071829000307 /* KeychainStore.swift in Sources */,
 				A1B2C3D4E5F6071829000308 /* ChatModels.swift in Sources */,
 				A1B2C3D4E5F6071829000309 /* ChatStore.swift in Sources */,
-				F103EC7D000000000000001B /* SharedProjectsView.swift in Sources */,
-				F103EC7D000000000000001A /* ProjectClientStore.swift in Sources */,
+				F103EC7D000000000000001B /* WorkspaceSharingView.swift in Sources */,
+				F103EC7D000000000000001A /* WorkspaceShareStore.swift in Sources */,
 				A1B2C3D4E5F6071829000814 /* ChatStore+Lifecycle.swift in Sources */,
 				A1B2C3D4E5F6071829000815 /* ChatStore+Turns.swift in Sources */,
 				A1B2C3D4E5F6071829000816 /* ChatStore+Chats.swift in Sources */,

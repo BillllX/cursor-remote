@@ -1759,6 +1759,17 @@
     {
       "type": "project_summary_changed",
       "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "workspace_share_result",
+      "data": {
+        "items": []
+      },
+      "ok": true,
+      "requestId": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "type": "workspace_share_changed"
     }
   ],
   "client": [
@@ -2307,6 +2318,11 @@
     {
       "type": "im_presence",
       "foreground": false
+    },
+    {
+      "type": "workspace_share",
+      "action": "list",
+      "requestId": "00000000-0000-4000-8000-000000000001"
     }
   ]
 }

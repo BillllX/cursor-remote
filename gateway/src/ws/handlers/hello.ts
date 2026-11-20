@@ -1,5 +1,5 @@
-import { projectTenantEligible } from "../../projects/runtime.ts";
-import { closeProjectSubscriptions } from "./projects.ts";
+import { workspaceSharingSupported } from "../../workspace/sharing.ts";
+import { WORKSPACE_SHARE_CAP } from "../../../../shared/workspaceShare.ts";
 // 登录：校验口令、绑定租户、下发 ready 与当前状态（鉴权之前唯一可用的业务消息）
 import { resolve } from "node:path";
 import { defaultPolicy } from "../../../../shared/policy.ts";
@@ -34,7 +34,6 @@ import { deviceRegistry } from "../../device/registry.ts";
 export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hello">) {
   // 同一 socket 可以再次 hello；无论新鉴权是否成功，都先摘掉所有旧租户 memory 订阅。
   closeMemoryWatcher(ws);
-  closeProjectSubscriptions(conn);
   if (loginBlocked(conn.ip, state.loginHits)) {
     send(ws, { type: "auth", ok: false, message: "试太多次了，过几分钟再试。" });
     return;
@@ -96,7 +95,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       assistantName: assistantName(tenant),
       assistantChatId: assistantChatIdOf(tenant),
       features: [
-        ...(conn.caps.has("shared_workspaces_v1") && projectTenantEligible(tenant) ? ["shared_workspaces_v1"] : []),
+        ...(conn.caps.has(WORKSPACE_SHARE_CAP) && workspaceSharingSupported() ? [WORKSPACE_SHARE_CAP] : []),
         "turn_files",
         "read_sha",
         "read_req_id",

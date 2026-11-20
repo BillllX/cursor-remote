@@ -1,4 +1,3 @@
-import { handleProjectHttp } from "./projects/http.ts";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { createServer } from "node:http";
@@ -113,7 +112,7 @@ const httpServer = createServer((req, res) => {
   if (publish.handleHttp(req, res)) return;
   const url = new URL(req.url || "/", "http://127.0.0.1");
   if (url.pathname.startsWith("/upload/projects/") || url.pathname.startsWith("/media/projects/")) {
-    void handleProjectHttp(req, res, url).catch(() => { if (!res.headersSent) res.writeHead(500).end(); else res.destroy(); });
+    res.writeHead(410).end();
     return;
   }
   if (url.pathname === "/health") {

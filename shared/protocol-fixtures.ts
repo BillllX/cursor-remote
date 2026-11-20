@@ -1145,6 +1145,8 @@ export const serverSamples: ServerMessage[] = [
   { type: "project_event", workspaceId: "wsa_00000000-0000-4000-8000-000000000001", eventSeq: 1, kind: "project_created", revision: 0, authzRevision: 1, payload: {} },
   { type: "project_access_revoked", workspaceId: "wsa_00000000-0000-4000-8000-000000000001" },
   { type: "project_summary_changed", workspaceId: "wsa_00000000-0000-4000-8000-000000000001" },
+  { type:"workspace_share_result", requestId:"00000000-0000-4000-8000-000000000001", ok:true, data:{items:[]} },
+  { type:"workspace_share_changed" },
 ];
 
 export const clientSamples: ClientMessage[] = [
@@ -1354,6 +1356,7 @@ export const clientSamples: ClientMessage[] = [
   { type: "im_profile", nickname: "爱丽丝", avatar: BLOB_AVATAR, notifyPreview: true },
   { type: "im_block", tenantId: "mallory", on: true },
   { type: "im_presence", foreground: false },
+  { type:"workspace_share", requestId:"00000000-0000-4000-8000-000000000001", action:"list" },
 ];
 
 function sortKeys(value: unknown): unknown {

@@ -1,3 +1,4 @@
+import { notifyWorkspaceShares } from "./workspaceShare.ts";
 // 工作区：切换、列出、新建、改名、删除
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
@@ -91,10 +92,11 @@ export function onCreateWorkspace({ ws, tenant }: WsCtx, message: MessageOf<"cre
   emitWorkspaces(ws, tenant);
 }
 
-export async function onRenameWorkspace({ ws, conn, tenant }: WsCtx, message: MessageOf<"rename_workspace">) {
-  await renameWorkspace(ws, tenant, conn, String(message.path || ""), String(message.name || ""));
+export async function onRenameWorkspace({ ws, conn, tenant, state }: WsCtx, message: MessageOf<"rename_workspace">) {
+  if (await renameWorkspace(ws, tenant, conn, String(message.path || ""), String(message.name || "")))
+    notifyWorkspaceShares(state);
 }
 
-export function onDeleteWorkspace({ ws, conn, tenant }: WsCtx, message: MessageOf<"delete_workspace">) {
-  deleteWorkspace(ws, tenant, conn, String(message.path || ""));
+export function onDeleteWorkspace({ ws, conn, tenant, state }: WsCtx, message: MessageOf<"delete_workspace">) {
+  if (deleteWorkspace(ws, tenant, conn, String(message.path || ""))) notifyWorkspaceShares(state);
 }

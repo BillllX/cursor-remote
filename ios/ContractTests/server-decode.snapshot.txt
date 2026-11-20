@@ -1527,3 +1527,9 @@
 
 ## server[91] project_summary_changed #1
 .project(JSON {"type": "project_summary_changed", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
+
+## server[92] workspace_share_result #1
+.project(JSON {"data": {"items": []}, "ok": true, "requestId": "00000000-0000-4000-8000-000000000001", "type": "workspace_share_result"})
+
+## server[93] workspace_share_changed #1
+.project(JSON {"type": "workspace_share_changed"})

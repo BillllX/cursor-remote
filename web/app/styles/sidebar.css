@@ -736,3 +736,7 @@
 .dot.off {
   background: var(--danger);
 }
+
+.workspace-switcher-row { display: flex; align-items: center; gap: 4px; }
+.workspace-switcher-row .workspace-switcher { flex: 1; min-width: 0; }
+.workspace-share-button { flex: none; font: inherit; padding: 6px; }

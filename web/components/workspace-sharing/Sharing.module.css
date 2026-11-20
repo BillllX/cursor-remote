@@ -1,0 +1,77 @@
+.dialog {
+  padding: 18px;
+}
+.dialog h2,
+.workbench h1 {
+  margin: 0;
+}
+.dialog footer,
+.workbench header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.people {
+  display: grid;
+  gap: 4px;
+  max-height: 38vh;
+  overflow: auto;
+}
+.people label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+}
+.people small,
+.workbench header span {
+  opacity: 0.75;
+}
+.workbench:global(.main) {
+  display: block;
+  padding: 20px;
+  overflow: auto;
+  min-width: 0;
+}
+.columns {
+  display: grid;
+  grid-template-columns: minmax(130px, 24%) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 16px;
+}
+.columns nav {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+}
+.columns button {
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.columns textarea {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  margin-bottom: 8px;
+  padding: 10px;
+  color: inherit;
+  background: inherit;
+  border: 1px solid currentColor;
+}
+@media (min-width: 960px) {
+  :global(.app.ide) .workbench:global(.main) {
+    grid-column: 2 / -1;
+  }
+}
+@media (max-width: 600px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+  .columns nav {
+    max-height: 36vh;
+    overflow: auto;
+  }
+}

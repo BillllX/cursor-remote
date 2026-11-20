@@ -69,6 +69,10 @@ extension ChatStore {
             }
             let reconnected = unlocked
             unlocked = true
+            if gatewayFeatures.contains("workspace_share_v1") {
+                workspaceSharing.sendFrame = { [weak self] value in self?.send(.project(value)) }
+                Task { await workspaceSharing.refresh() }
+            } else { workspaceSharing.reset() }
             gatewayReady = true
             verifying = false
             verifyTask?.cancel()
@@ -1015,7 +1019,7 @@ extension ChatStore {
         case .deviceInvoke(let invoke):
             deviceInvokeHandler?(invoke)
         case .project(let value):
-            projects.handle(value)
+            workspaceSharing.handle(value)
         case .im(let event):
             imSink?.handle(event)
         case .pong, .ignored:
