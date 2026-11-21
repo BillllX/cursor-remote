@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// 小驳里的待处理（规格 §4.2）：待批 + 收件箱。从聊天页右上角推进来。
-/// 绝不调用 store.openAssistantInboxItem / select：收件箱条目指向的会话可能是工作区子会话，
-/// 一律走 router.open（委派 → 详情 sheet，助理 → 回助理页，其它 → 只提示）。
+/// 小驳里的待处理：待批 + 收件箱。点一条通知先看全文。
+/// 待办、计划、委派和审批放在全文下面；工作区主会话再进工作区页。
+/// 打不开的会话只在全文下说明，不拿提示把正文挡掉。
 struct InboxHome: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
@@ -321,12 +321,11 @@ struct InboxHome: View {
     }
 
     private func actionTitle(_ item: AssistantInboxItem) -> String {
-        if item.actionPrompt != nil { return "查看内容并处理" }
-        if item.scheduleId != nil { return "查看日程" }
+        if item.decisionKind != nil || item.kind == "approval" { return "查看申请" }
+        if item.actionPrompt != nil { return "查看内容" }
         switch item.kind {
-        case "approval": return "查看申请并确认"
-        case "run": return "查看原因与任务"
-        case "delegation": return "查看任务"
+        case "run": return "查看原因"
+        case "delegation": return "查看委派通知"
         case "memory": return "查看记忆通知"
         case "reminder": return "查看提醒"
         default: return "查看详情"
@@ -335,20 +334,7 @@ struct InboxHome: View {
 
     private func open(_ item: AssistantInboxItem) {
         store.markInboxRead(item)
-        if item.decisionKind != nil { router.openInboxItem(item.id); return }
-        if item.attention == "suggestion" || item.kind == "memory" {
-            router.go(.memory)
-        } else if let eventId = item.eventId {
-            router.openWorkTask("calendar_event:\(eventId)", column: .plan)
-        } else if let todoId = item.todoId {
-            router.openWorkTask("todo:\(todoId)", column: .todo)
-        } else if let scheduleId = item.scheduleId {
-            router.openWorkTask("schedule:\(scheduleId)", column: .plan)
-        } else if item.delegationId != nil || item.chatId != nil {
-            router.open(chatId: item.chatId, delegationId: item.delegationId, store: store)
-        } else {
-            router.openInboxItem(item.id)
-        }
+        router.openInboxItem(item.id)
     }
 }
 
@@ -384,22 +370,7 @@ struct InboxDetailView: View {
                             .padding(.top, 6)
                     }
                     InboxItemActions(item: row)
-                    if row.scheduleId != nil || row.actionPrompt != nil {
-                        HStack(spacing: 8) {
-                            if let scheduleId = row.scheduleId {
-                                ActionButton(title: "查看计划", kind: .outline) {
-                                    router.openWorkTask("schedule:\(scheduleId)", column: .plan)
-                                }
-                            }
-                            if row.actionPrompt != nil && row.decisionKind == nil {
-                                ActionButton(title: "交给小驳处理", kind: .primary) {
-                                    store.openAssistantInboxItem(row)
-                                    router.popToRoot()
-                                }
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
+                    InboxDetailDestinations(item: row)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -419,6 +390,175 @@ struct InboxDetailView: View {
     }
 }
 
+
+/// 通知全文下面，只放这台手机打得开的去处。
+private struct InboxDetailDestinations: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(PhoneRouter.self) private var router
+    let item: AssistantInboxItem
+
+    var body: some View {
+        if matchingDraft != nil || matchingApproval != nil || showPendingList || hasLinks || sessionNote != nil {
+            destinations
+        }
+    }
+
+    private var destinations: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let draft = matchingDraft {
+                DraftActionCard(draft: draft) { id in
+                    router.delegationDetail = DelegationRef(id: id)
+                }
+            } else if let approval = matchingApproval {
+                ApprovalCard(approval: approval, onOpenDelegation: openDelegation)
+            } else if showPendingList {
+                ActionButton(title: "查看待确认", kind: .outline) { router.go(.inbox) }
+            }
+            if hasLinks {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { links }
+                    VStack(alignment: .leading, spacing: 8) { links }
+                }
+            }
+            if let note = sessionNote {
+                Text(note)
+                    .font(JieboFont.text(.footnote))
+                    .foregroundStyle(JieboColor.ink2)
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private var hasLinks: Bool {
+        item.eventId != nil || item.todoId != nil || item.scheduleId != nil
+            || showMemory || showDelegation || workspaceChatId != nil || showAssistant
+            || (item.actionPrompt != nil && item.decisionKind == nil)
+    }
+
+    @ViewBuilder private var links: some View {
+        if item.actionPrompt != nil && item.decisionKind == nil {
+            ActionButton(title: "交给小驳处理", kind: .primary) {
+                store.openAssistantInboxItem(item)
+                router.popToRoot()
+            }
+        }
+        if let eventId = item.eventId {
+            ActionButton(title: "查看日程", kind: .outline) {
+                router.openWorkTask("calendar_event:\(eventId)", column: .plan)
+            }
+        }
+        if let todoId = item.todoId {
+            ActionButton(title: "查看待办", kind: .outline) {
+                router.openWorkTask("todo:\(todoId)", column: .todo)
+            }
+        }
+        if let scheduleId = item.scheduleId {
+            ActionButton(title: "查看计划", kind: .outline) {
+                router.openWorkTask("schedule:\(scheduleId)", column: .plan)
+            }
+        }
+        if showMemory {
+            ActionButton(title: "查看记忆", kind: .outline) { router.go(.memory) }
+        }
+        if showDelegation, let delegationId = liveDelegationId {
+            ActionButton(title: "查看委派", kind: .outline) {
+                router.delegationDetail = DelegationRef(id: delegationId)
+            }
+        }
+        if let chatId = workspaceChatId {
+            ActionButton(title: "打开工作区", kind: .outline) { router.openWorkspaceChat(chatId) }
+        }
+        if showAssistant {
+            ActionButton(title: "回到小驳", kind: .outline) {
+                router.popToRoot()
+                store.prepareAssistantThread()
+            }
+        }
+    }
+
+    private var showMemory: Bool { item.attention == "suggestion" || item.kind == "memory" }
+
+    private var showDelegation: Bool {
+        matchingDraft == nil && matchingApproval == nil && liveDelegationId != nil
+    }
+
+    /// 没有更具体的去处时，才提供回到小驳主会话。交给小驳已经会回到那里。
+    private var showAssistant: Bool {
+        guard let chatId = item.chatId, store.isAssistantChat(chatId) else { return false }
+        if item.actionPrompt != nil || showMemory { return false }
+        if item.eventId != nil || item.todoId != nil || item.scheduleId != nil { return false }
+        if liveDelegationId != nil || workspaceChatId != nil { return false }
+        return true
+    }
+
+    private var liveDelegationId: String? {
+        if let id = item.delegationId,
+           store.assistantState?.delegations.contains(where: { $0.id == id }) == true {
+            return id
+        }
+        if let chatId = item.chatId,
+           let row = store.assistantState?.delegations.first(where: { $0.childChatId == chatId }) {
+            return row.id
+        }
+        return nil
+    }
+
+    private var workspaceChatId: String? {
+        guard let chatId = item.chatId, store.workspaceAgent(chatId: chatId) != nil else { return nil }
+        return chatId
+    }
+
+    private var openDelegation: (() -> Void)? {
+        guard let id = matchingApproval?.delegationId else { return nil }
+        return { router.delegationDetail = DelegationRef(id: id) }
+    }
+
+    private var matchingDraft: DraftCard? {
+        guard item.kind == "approval", item.decisionKind == nil,
+              let drafts = store.assistantState?.draftCards
+        else { return nil }
+        let approvals = store.assistantState?.approvals ?? []
+        return drafts.first { draft in
+            guard let approvalId = draft.sources.first(where: { $0.kind == "approval" })?.id,
+                  let approval = approvals.first(where: { $0.id == approvalId })
+            else { return false }
+            return approvalMatches(approval)
+        }
+    }
+
+    private var matchingApproval: AssistantApproval? {
+        guard item.kind == "approval", item.decisionKind == nil, matchingDraft == nil else { return nil }
+        return (store.assistantState?.approvals ?? []).first(where: approvalMatches)
+    }
+
+    private func approvalMatches(_ approval: AssistantApproval) -> Bool {
+        if let delegationId = item.delegationId { return approval.delegationId == delegationId }
+        guard let chatId = item.chatId, approval.chatId == chatId, approval.delegationId == nil else { return false }
+        let sameChat = (store.assistantState?.approvals ?? []).filter {
+            $0.chatId == chatId && $0.delegationId == nil
+        }
+        return sameChat.count == 1
+    }
+
+    private var showPendingList: Bool {
+        guard item.kind == "approval", item.decisionKind == nil else { return false }
+        if matchingDraft != nil || matchingApproval != nil { return false }
+        guard let state = store.assistantState else { return false }
+        if state.draftCards != nil { return state.draftCards?.isEmpty == false }
+        return !state.approvals.isEmpty
+    }
+
+    private var sessionNote: String? {
+        if liveDelegationId != nil { return nil }
+        if let chatId = item.chatId {
+            if store.isAssistantChat(chatId) || store.workspaceAgent(chatId: chatId) != nil { return nil }
+            guard store.workspaceAgentsLoaded else { return nil }
+            return item.delegationId == nil ? "这段对话在电脑或 iPad 上" : "这段过程在电脑或 iPad 上"
+        }
+        if item.delegationId != nil { return "这段过程在电脑或 iPad 上" }
+        return nil
+    }
+}
 
 /// Shared controls keep list and detail behavior identical; state changes only after server acknowledgement.
 private struct InboxItemActions: View {

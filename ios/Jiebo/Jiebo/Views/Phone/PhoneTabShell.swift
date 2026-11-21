@@ -128,6 +128,15 @@ struct PhoneTabShell: View {
         .onChange(of: store.returnToAssistantRequest) { _, _ in
             router.popToRoot()
         }
+        .onChange(of: router.workspaceOpenToken) { _, token in
+            guard token > 0, let chatId = router.pendingWorkspaceChatId else { return }
+            router.pendingWorkspaceChatId = nil
+            store.assistantOnly = false
+            if router.selectedTab != .workspace {
+                router.selectedTab = .workspace
+            }
+            openWorkspace(chatId)
+        }
         .onChange(of: router.selectedTab) { old, new in
             AppLaunchMetrics.event("PhoneSpaceSelected")
             if old == .workspace, new != .workspace {
@@ -304,11 +313,6 @@ struct PhoneTabShell: View {
         guard router.bootstrapped, resolvingPush != target else { return }
         pushTask?.cancel()
         resolvingPush = target
-        if target.kind == "approval" {
-            router.go(.inbox)
-        } else {
-            router.selectedTab = .assistant
-        }
         let revision = router.revision
         pushTask = Task { @MainActor in
             defer { if resolvingPush == target { resolvingPush = nil } }
@@ -330,25 +334,22 @@ struct PhoneTabShell: View {
         guard !Task.isCancelled, PushRouting.shared.pending == target else { return }
         _ = PushRouting.shared.consume()
         guard router.revision == revision else { return } // A later user navigation wins.
-        if let itemId = target.itemId,
+        if let itemId = target.itemId?.nilIfEmpty,
            let item = store.assistantState?.inbox.first(where: { $0.id == itemId }) {
             store.markInboxRead(item)
+            router.openInboxItem(item.id)
+            return
         }
-        if target.kind == "approval" {
-            router.go(.inbox)
-        } else if target.kind == "reminder", let itemId = target.itemId?.nilIfEmpty {
+        if router.open(chatId: target.chatId, delegationId: target.delegationId, store: store) {
+            return
+        }
+        if let itemId = target.itemId?.nilIfEmpty,
+           itemId.hasPrefix("todo:") || itemId.hasPrefix("schedule:") || itemId.hasPrefix("calendar_event:")
+            || itemId.hasPrefix("delegation:") {
             router.openWorkTask(itemId, column: AssistantWorkColumn.matching(itemId))
-        } else if target.delegationId != nil || target.chatId != nil {
-            router.open(chatId: target.chatId, delegationId: target.delegationId, store: store)
-        } else if let itemId = target.itemId?.nilIfEmpty {
-            if store.assistantState?.inbox.contains(where: { $0.id == itemId }) == true {
-                router.openInboxItem(itemId)
-            } else {
-                router.openWorkTask(itemId, column: AssistantWorkColumn.matching(itemId))
-            }
-        } else {
-            router.popToRoot()
+            return
         }
+        router.go(.inbox)
     }
 
     private func openWorkspace(_ chatId: String) {

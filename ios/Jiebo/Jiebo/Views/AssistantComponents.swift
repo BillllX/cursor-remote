@@ -740,7 +740,7 @@ struct ApprovalCard: View {
 // MARK: 提示条（push 页 / sheet 用）
 
 /// `store.notice` / `store.bannerError` 的横幅画在 ThreadView（助理根页）里；push 页和 sheet 盖住了根页，
-/// 用户看不到「这个会话在电脑或 iPad 上查看」「停止失败的原因」「已发送测试通知」之类的提示。
+/// 用户看不到「停止失败的原因」「已发送测试通知」之类的提示。
 /// 在这些页面上自己画一条。根页不要加（ThreadView 已经画了，会重复）。
 struct PhoneNoticeOverlay: ViewModifier {
     @Environment(ChatStore.self) private var store

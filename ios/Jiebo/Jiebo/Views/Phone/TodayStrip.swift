@@ -287,17 +287,8 @@ struct TodayStrip: View {
         if let inboxId = event.sources.first(where: { $0.kind == "inbox" })?.id,
            let item = store.assistantState?.inbox.first(where: { $0.id == inboxId })
         {
-            if item.kind == "approval" {
-                router.go(.inbox)
-            } else if let delegationId = item.delegationId {
-                router.delegationDetail = DelegationRef(id: delegationId)
-            } else if item.kind == "brief" {
-                withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
-            } else if let scheduleId = item.scheduleId {
-                router.openWorkTask("schedule:\(scheduleId)", column: .plan)
-            } else {
-                router.openInboxItem(item.id)
-            }
+            store.markInboxRead(item)
+            router.openInboxItem(item.id)
             return
         }
         if let delegationId = event.sources.first(where: { $0.kind == "delegation" })?.id

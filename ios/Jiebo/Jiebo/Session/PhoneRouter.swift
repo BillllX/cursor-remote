@@ -65,6 +65,9 @@ final class PhoneRouter {
     var delegationDetail: DelegationRef?
     /// 进入待办、计划或委派后要打开的那一条。栏目页取走后清空。
     var pendingWorkTaskId: String?
+    /// 通知里要打开的工作区主会话。壳看到 workspaceOpenToken 变化后切到工作区页。
+    var pendingWorkspaceChatId: String?
+    private(set) var workspaceOpenToken: UInt64 = 0
     /// 只由当前前台 scene 接收，再定向交给小驳页唯一可见的 Composer。
     var pendingVoiceCapture: AssistantCaptureBridge.Capture?
     var bootstrapped = false
@@ -155,22 +158,36 @@ extension PhoneRouter {
         return pendingVoiceCapture
     }
 
-    /// 收件箱条目 / 推送 / 委派卡等「要打开某个会话」的统一入口。
-    /// 绝不切换 store.activeId 到工作区会话（iPhone 不变量）。
-    func open(chatId: String?, delegationId: String?, store: ChatStore) {
+    /// 通知全文之外，打开手机上真能到的地方。打不开时返回 false，调用方把说明留在全文里。
+    @discardableResult
+    func open(chatId: String?, delegationId: String?, store: ChatStore) -> Bool {
         if let delegationId, store.assistantState?.delegations.contains(where: { $0.id == delegationId }) == true {
+            selectedTab = .assistant
             delegationDetail = DelegationRef(id: delegationId)
-            return
+            return true
         }
         if let chatId, store.isAssistantChat(chatId) {
             popToRoot()
             store.prepareAssistantThread()
-            return
+            return true
+        }
+        if let chatId, store.workspaceAgent(chatId: chatId) != nil {
+            openWorkspaceChat(chatId)
+            return true
         }
         if let chatId, let row = store.assistantState?.delegations.first(where: { $0.childChatId == chatId }) {
+            selectedTab = .assistant
             delegationDetail = DelegationRef(id: row.id)
-            return
+            return true
         }
-        store.flash("这个会话在电脑或 iPad 上查看")
+        return false
+    }
+
+    /// 切到工作区页并打开这个主会话。壳负责等会话同步到位。
+    func openWorkspaceChat(_ id: String) {
+        dismissKeyboard()
+        workbenchDrawerOpen = false
+        pendingWorkspaceChatId = id
+        workspaceOpenToken &+= 1
     }
 }
