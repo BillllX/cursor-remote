@@ -612,6 +612,7 @@
         chatId: "c-child-5b10"
         scheduleId: "s_morning"
         delegationId: "d_q7w3"
+        workspaceRun: nil
         capture: AssistantCaptureSource(
           kind: "link"
           title: "受控来源"
@@ -1115,6 +1116,7 @@
   chatId: "c-child-5b10"
   scheduleId: "s_morning"
   delegationId: "d_q7w3"
+  workspaceRun: nil
   capture: AssistantCaptureSource(
     kind: "link"
     title: "受控来源"

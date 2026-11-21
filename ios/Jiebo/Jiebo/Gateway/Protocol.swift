@@ -825,6 +825,29 @@ enum AssistantDefaults {
 
 // MARK: 个人助理（assistant_state 及增量）。kind/status 等枚举一律存 String：网关加新值不能让整条消息解不出来
 
+struct AssistantWorkspaceRun: Sendable, Hashable {
+    var runId: String
+    var scheduleId: String
+    var workspaceKey: String
+    var status: String
+    var files: [String]
+
+    static func from(_ json: JSONValue?) -> Self? {
+        guard let row = json?.object,
+              let id = row["runId"]?.string?.nilIfEmpty,
+              let schedule = row["scheduleId"]?.string?.nilIfEmpty,
+              let workspace = row["workspaceKey"]?.string?.nilIfEmpty else { return nil }
+        let files = row["files"]?.array?.compactMap(\.string).filter { path in
+            !path.isEmpty && !path.hasPrefix("/") && !path.contains("\\") &&
+                path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+                    !$0.isEmpty && $0 != "." && $0 != ".."
+                }
+        } ?? []
+        return Self(runId: id, scheduleId: schedule, workspaceKey: workspace,
+                    status: row["status"]?.string ?? "failed", files: files)
+    }
+}
+
 struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var id: String
     var kind: String
@@ -842,6 +865,7 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var chatId: String?
     var scheduleId: String?
     var delegationId: String?
+    var workspaceRun: AssistantWorkspaceRun? = nil
     var capture: AssistantCaptureSource?
 
     var needsAttention: Bool {
@@ -874,6 +898,7 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
             chatId: row["chatId"]?.string?.nilIfEmpty,
             scheduleId: row["scheduleId"]?.string?.nilIfEmpty,
             delegationId: row["delegationId"]?.string?.nilIfEmpty,
+            workspaceRun: AssistantWorkspaceRun.from(row["workspaceRun"]),
             capture: AssistantCaptureSource.from(row["capture"])
         )
     }

@@ -24,6 +24,13 @@ export type InboxItem = {
   runId?: string;
   scheduleId?: string;
   delegationId?: string;
+  workspaceRun?: {
+    runId: string;
+    scheduleId: string;
+    workspaceKey: string;
+    status: "succeeded" | "no_change" | "partial" | "failed";
+    files: string[];
+  };
   /** 捕获入口已校验的结构化字段；投影只能读这里，不能从正文反解析 URL。 */
   capture?: {
     kind: "text" | "link" | "location" | "file";

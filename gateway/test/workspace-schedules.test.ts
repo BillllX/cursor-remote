@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { listInbox } from "../src/assistant/inbox.ts";
 import { assistantPath } from "../src/assistant/store.ts";
 import { claimOutputs, outputKeys, releaseOutputs } from "../src/outputClaims.ts";
 import { getWorkspaceAutomationStatus } from "../src/ingest/hub.ts";
@@ -413,6 +414,11 @@ test("月报按期预检、隔离生成版本、重启找回；不改原排期",
     assert.equal(reconcileStaleWorkspaceSchedules(host), 0);
     const receipts = listWorkspaceScheduleRuns(host, { scheduleId: id }).filter((row) => row.runId === activeRunId);
     assert.equal(receipts.length, 1);
+    const notices = listInbox(host).filter((row) => row.workspaceRun?.runId === activeRunId);
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0]?.workspaceRun?.status, "succeeded");
+    assert.equal(notices[0]?.workspaceRun?.files.length, 1);
+    assert.equal(notices[0]?.attention, "notice");
     assert.equal(receipts[0]?.status, "succeeded");
     assert.equal(receipts[0]?.period, "2024-10");
     assert.equal(listWorkspaceSchedules(host)[0]?.nextRunAt, nextRunAt);

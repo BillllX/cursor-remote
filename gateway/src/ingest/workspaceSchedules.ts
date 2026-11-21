@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { claimOutputs, outputKeys, releaseOutputs } from "../outputClaims.ts";
 import { ensureSafePathInWorkspace, loadKbWorkspaceConfig } from "./contract.ts";
 import { createHash, randomBytes } from "node:crypto";
+import { postInbox } from "../assistant/inbox.ts";
 import { localParts, validTimeZone } from "../assistant/cron.ts";
 import { DEFAULT_TZ } from "../assistant/schedules.ts";
 import { assistantPath, clip, readJson, readJsonl, writeJsonl, type TenantRef } from "../assistant/store.ts";
@@ -508,6 +509,22 @@ function finalizeScheduleRunUnlocked(
     ...(outcome.error ? { error: clip(outcome.error, 300) } : {}),
   });
 
+  const workspace = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
+  const files = workspace ? (outcome.updatedFiles ?? []).filter((path) => {
+    const safe = ensureSafePathInWorkspace(workspace.path, path, { expectLeaf: "file" });
+    return safe.ok && existsSync(safe.absPath);
+  }) : [];
+  postInbox(host, {
+    kind: "run",
+    title: item.title,
+    body: outcome.error || outcome.summary,
+    attention: outcome.status === "failed" || outcome.status === "partial" ? "recovery" : "notice",
+    key: `workspace-result:${outcome.runId}`,
+    workspaceRun: {
+      runId: outcome.runId, scheduleId: item.id, workspaceKey: workspace?.key ?? item.workspaceKeySnapshot,
+      status: outcome.status, files,
+    },
+  });
   return updated;
 }
 

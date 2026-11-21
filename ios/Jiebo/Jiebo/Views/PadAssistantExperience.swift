@@ -665,79 +665,18 @@ struct PadArtifactExperience: View {
 
 /// iPad 版行动区只依赖 PadRouter，不注入 PhoneRouter。
 struct PadActionDock: View {
-    @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
 
     var body: some View {
-        let projection = PadAssistantProjection(state: store.assistantState)
-        let approvals = (store.assistantState?.approvals ?? []).sorted { $0.createdAt > $1.createdAt }
-        let running = store.runningDelegations
-        if projection.draftCards.isEmpty, approvals.isEmpty, running.isEmpty {
-            EmptyView()
-        } else {
-            VStack(spacing: 6) {
-                if projection.draftCardsAvailable {
-                    ForEach(projection.draftCards.prefix(1)) { draft in
-                        DraftActionCard(draft: draft) { router.openDelegation($0) }
-                    }
-                    if projection.draftCards.count > 1 {
-                        PadDockLink("还有 \(projection.draftCards.count - 1) 项待确认") {
-                            router.openAssistant(section: .inbox, selection: nil)
-                        }
-                    }
-                } else {
-                    ForEach(approvals.prefix(1)) { approval in
-                        ApprovalCard(
-                            approval: approval,
-                            onOpenDelegation: approval.delegationId.map { id in
-                                { router.openDelegation(id) }
-                            }
-                        )
-                    }
-                }
-                ForEach(running.prefix(2)) { delegation in
-                    PadDockLink("\(delegation.title.nilIfEmpty ?? "委派") · \(delegation.statusLabel)") {
-                        router.openDelegation(delegation.id)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-        }
-    }
-}
-
-private struct PadDockLink: View {
-    let title: String
-    let action: () -> Void
-
-    init(_ title: String, action: @escaping () -> Void) {
-        self.title = title
-        self.action = action
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack {
-                Text(title)
-                    .font(JieboFont.text(.footnote, weight: .medium))
-                    .foregroundStyle(JieboColor.ink2)
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(JieboFont.text(.caption2, weight: .semibold))
-                    .foregroundStyle(JieboColor.dim)
-            }
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(JieboColor.white)
-            .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: JieboRadius.md, style: .continuous)
-                    .stroke(JieboColor.line, lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
+        AssistantReceiptDock()
+            .environment(\.assistantReceiptNavigation, AssistantReceiptNavigation(
+                openInbox: { router.openAssistant(section: .inbox, selection: nil) },
+                openInboxItem: { router.openAssistant(section: .inbox, selection: .inboxItem($0)) },
+                openDelegation: { router.openDelegation($0) },
+                preparePreview: { router.openPreview() },
+                openDelegations: { router.openAssistant(section: .delegations, selection: nil) },
+                openAutomation: { router.openAssistant(section: .automation, selection: nil) }
+            ))
     }
 }
 

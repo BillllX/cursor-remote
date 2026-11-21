@@ -85,6 +85,13 @@ export type AssistantInboxItem = {
   chatId?: string;
   scheduleId?: string;
   delegationId?: string;
+  workspaceRun?: {
+    runId: string;
+    scheduleId: string;
+    workspaceKey: string;
+    status: "succeeded" | "no_change" | "partial" | "failed";
+    files: string[];
+  };
   /** Share Assistant 已校验并持久化的结构化来源；产物投影不得从 body/actionPrompt 猜链接。 */
   capture?: {
     kind: "text" | "link" | "location" | "file";

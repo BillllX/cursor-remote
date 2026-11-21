@@ -201,6 +201,7 @@ SOURCES=(
   "$APP/Session/MemoryCenterExtrasReducer.swift"
   "$APP/Session/MemoryCenterLayoutMetrics.swift"
   "$APP/Session/AssistantScenePresenter.swift"
+  "$APP/Session/AssistantReceipt.swift"
   "$APP/Session/AppBootstrapCache.swift"
   "$APP/Session/SceneEditingPolicy.swift"
   "$APP/Session/PadInspectorState.swift"

@@ -4,6 +4,8 @@ import ImageIO
 
 struct TurnView: View, Equatable {
     @Environment(ChatStore.self) private var store
+    @Environment(\.assistantReceiptNavigation) private var receiptNavigation
+    @Environment(\.sceneSessionState) private var sceneSession
     @Environment(\.threadChatId) private var environmentChatId
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.sizeCategory) private var sizeCategory
@@ -359,6 +361,18 @@ struct TurnView: View, Equatable {
                 TurnReviewBar(turn: turn)
             }
             if isLastAssistant, !turn.running, !turn.assistant.isEmpty {
+                if let file = turn.cardFiles.first, file.sha != nil {
+                    ActionButton(title: file.kind == .html ? "查看看板" : "打开产物", kind: .outline) {
+                        receiptNavigation?.preparePreview()
+                        store.openTurnFile(file, chatId: chatId)
+                        sceneSession?.presentPreview(from: store)
+                    }
+                } else if hasAutomationResult {
+                    ActionButton(title: "查看定时与自动化", kind: .outline) {
+                        receiptNavigation?.openAutomation()
+                    }
+                }
+
                 assistantActionRow
             } else if !turn.running, !turn.assistant.isEmpty {
                 // 更早的轮次只留复制：发了新消息以后，上一轮的按钮不该整个消失
@@ -410,6 +424,16 @@ struct TurnView: View, Equatable {
     }
 
     /// 最后一轮的复制 / 重试 / 分享：只放图标（系统同款），每个 44pt 热区；更早的轮次走长按菜单
+    private var hasAutomationResult: Bool {
+        guard receiptNavigation != nil else { return false }
+        return turn.tools.contains { tool in
+            guard tool.status == "completed",
+                  AssistantToolText.baseName(tool.name) == "workspace_schedule_manage",
+                  let result = AssistantToolText.resultObject(tool.result) else { return false }
+            return result["ok"]?.bool == true
+        }
+    }
+
     private var assistantActionRow: some View {
         HStack(spacing: 0) {
             actionIcon("doc.on.doc", label: "复制回复") { copy(turn.assistant) }

@@ -352,3 +352,43 @@ struct StickerRobotFace: View {
     .background(JieboColor.paper)
 }
 #endif
+
+
+/// 只有用户主动点按时才俏皮地偏一下头，仍使用真实工作状态的表情。
+struct AssistantPlayfulAvatar: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var greeting = false
+    let phase: AssistantAvatarPhase
+    let size: CGFloat
+
+    var body: some View {
+        Button {
+            guard !greeting else { return }
+            JieboHaptic.selection()
+            guard !reduceMotion else { return }
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { greeting = true }
+        } label: {
+            AssistantAvatarView(phase: phase, size: size)
+                .rotationEffect(.degrees(greeting ? -12 : 0), anchor: .bottom)
+                .scaleEffect(x: greeting ? 1.08 : 1, y: greeting ? 0.94 : 1, anchor: .bottom)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("和小驳打个招呼")
+        .accessibilityValue(phase.accessibilityLabel)
+        .task(id: greeting) {
+            guard greeting else { return }
+            try? await Task.sleep(for: .milliseconds(260))
+            guard !Task.isCancelled else { return }
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.6)) { greeting = false }
+        }
+        .onChange(of: scenePhase) { _, state in
+            if state != .active { greeting = false }
+        }
+        .onChange(of: reduceMotion) { _, value in
+            if value { greeting = false }
+        }
+    }
+}

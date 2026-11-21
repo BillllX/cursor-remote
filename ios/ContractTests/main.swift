@@ -2226,6 +2226,57 @@ func checkTrafficOptimizationPolicies() -> [String] {
     return problems
 }
 
+func checkAssistantReceipts() -> [String] {
+    var problems: [String] = []
+    let now = 1_800_000_000_000.0
+    guard var state = AssistantState.from(.object(["name": .string("小驳")])) else {
+        return ["结果回执：无法建立最小状态"]
+    }
+    let item = AssistantInboxItem(id: "notice", kind: "run", title: "投诉巡检", body: "未发现变化",
+                                 createdAt: now, read: false)
+    state.inbox = [item]
+    let noFile = AssistantReceipt.results(in: state, now: now).first
+    if noFile?.primaryTitle != "查看结果" || noFile?.artifact != nil { problems.append("无文件的巡检不能出现文件按钮") }
+
+    state.inbox[0].workspaceRun = AssistantWorkspaceRun(runId: "run1", scheduleId: "monthly", workspaceKey: "业务",
+                                                       status: "succeeded", files: ["投诉/投诉.html"])
+    if AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看看板" {
+        problems.append("有真实 HTML 路径时应能查看看板")
+    }
+    state.inbox[0].workspaceRun?.status = "failed"
+    state.inbox[0].workspaceRun?.files = []
+    if AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看原因" {
+        problems.append("失败时应展示原因入口")
+    }
+    state.inbox[0].read = true
+    if !AssistantReceipt.results(in: state, now: now).isEmpty { problems.append("已读历史不应再次弹出结果") }
+    if AssistantReceipt.results(in: state, now: now, recentOnly: false).count != 1 {
+        problems.append("已读结果仍应可从原入口打开")
+    }
+    state.inbox[0].read = false
+    if !AssistantReceipt.results(in: state, now: now + 700_000).isEmpty { problems.append("过期结果不应弹出") }
+
+    let malformed: JSONValue = .object([
+        "runId": .string("r1"), "scheduleId": .string("s1"), "workspaceKey": .string("业务"),
+        "status": .string("succeeded"),
+        "files": .array([.string("../越界.md"), .string("/绝对.md"), .string("月报.md")]),
+    ])
+    if AssistantWorkspaceRun.from(malformed)?.files != ["月报.md"] {
+        problems.append("结果文件路径必须限制在所属工作区")
+    }
+
+    let defaults = UserDefaults(suiteName: "receipt-test-" + UUID().uuidString)!
+    let key = AssistantReceiptMemory.scope(server: "server-a", tenant: "a")
+    AssistantReceiptMemory.record("d:1", scope: key, defaults: defaults)
+    if !AssistantReceiptMemory.contains("d:1", scope: key, defaults: defaults) ||
+        AssistantReceiptMemory.contains("d:2", scope: key, defaults: defaults) ||
+        AssistantReceiptMemory.contains("d:1", scope: AssistantReceiptMemory.scope(server: "server-b", tenant: "a"), defaults: defaults) {
+        problems.append("动效播放记录应按服务器、租户和轮次隔离")
+    }
+    print("助理结果回执：\(problems.isEmpty ? "通过" : "\(problems.count) 条不符")")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -2237,7 +2288,7 @@ else { fail("读不到或解析不了 \(options.fixtures)") }
 let legacyModeProblems = AgentMode(rawValue: "ask") == .agent && AgentMode(rawValue: "plan") == .agent
     ? []
     : ["AgentMode：旧 ask/plan 没有归一为 agent"]
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + legacyModeProblems
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + checkAssistantReceipts() + legacyModeProblems
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)

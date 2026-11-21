@@ -201,6 +201,14 @@ struct PadAssistantShell: View {
             }
         }
         .modifier(PadAssistantSearch(enabled: router.assistantSection != .memory && router.assistantSection != .colleagues && router.assistantSection != .automation))
+        .environment(\.assistantReceiptNavigation, AssistantReceiptNavigation(
+            openInbox: { router.openAssistant(section: .inbox, selection: nil) },
+            openInboxItem: { router.openAssistant(section: .inbox, selection: .inboxItem($0)) },
+            openDelegation: { router.openDelegation($0) },
+            preparePreview: { router.openPreview() },
+                openDelegations: { router.openAssistant(section: .delegations, selection: nil) },
+                openAutomation: { router.openAssistant(section: .automation, selection: nil) }
+        ))
         .environment(\.assistantVoicePresenterActive, router.assistantSection == .today)
         .task {
             showDetailIfCompact()

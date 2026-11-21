@@ -230,7 +230,7 @@ struct ThreadView: View {
             }
             .animation(JieboMotion.fade(reduceMotion), value: delegated.first?.id)
             if chrome == .embedded, let dock {
-                dock
+                dock.environment(\.assistantReadingHistory, !stickToBottom)
             }
             Group {
                 if chrome == .embedded, store.bannerError.isEmpty, let turn = embeddedUndoTurn {

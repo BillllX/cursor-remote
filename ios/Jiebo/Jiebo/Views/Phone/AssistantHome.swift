@@ -71,6 +71,13 @@ struct AssistantHome: View {
                     .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
             }
         }
+        .environment(\.assistantReceiptNavigation, AssistantReceiptNavigation(
+            openInbox: { router.go(.inbox) },
+            openInboxItem: { router.openInboxItem($0) },
+            openDelegation: { router.delegationDetail = DelegationRef(id: $0) },
+                openDelegations: { router.go(.worklist(.delegation)) },
+                openAutomation: { router.go(.automation) }
+        ))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(JieboColor.paper.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
@@ -235,19 +242,14 @@ struct AssistantHome: View {
     // MARK: 导航栏
 
     private var titleView: some View {
-        HStack(spacing: 8) {
-            AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
-                .overlay(alignment: .bottomTrailing) {
-                    LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))
-                        .offset(x: 1, y: 2)
-                }
-            Text("小驳")
-                .font(JieboFont.text(.headline, weight: .semibold))
-                .foregroundStyle(JieboColor.ink)
-                .lineLimit(1)
-        }
+        AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32)
+            .overlay(alignment: .bottomTrailing) {
+                LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))
+                    .offset(x: 1, y: 2)
+            }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(titleAccessibility)
+        .accessibilityHint("点按和小驳打个招呼")
     }
 
     private var titleAccessibility: String {
