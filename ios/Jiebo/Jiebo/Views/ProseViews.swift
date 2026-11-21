@@ -352,10 +352,8 @@ private struct ProseLineRow: View, Equatable {
                 if let level = heading?.level { return .heading(level: level) }
                 return .body
             }()
-            HStack(alignment: .firstTextBaseline, spacing: 0) {
-                if indent > 0 {
-                    Color.clear.frame(width: min(CGFloat(indent) * markerWidth / 4, markerWidth * 2))
-                }
+            // 多行富文本按顶部排版，避免首行基线参与整行高度计算时产生错位。
+            HStack(alignment: .top, spacing: 0) {
                 if let item {
                     Text(item.marker)
                         .font(JieboFont.uiScaled(JieboReading.body, sizeCategory: sizeCategory))
@@ -370,6 +368,9 @@ private struct ProseLineRow: View, Equatable {
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // 缩进只占水平空间，不能用可伸展的透明视图撑高一行。
+            .padding(.leading, min(CGFloat(indent) * markerWidth / 4, markerWidth * 2))
+            .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -686,5 +687,42 @@ private struct ChatReadingPreview: View {
 
 #Preview("聊天排版 · 系统大字体") {
     ChatReadingPreview().dynamicTypeSize(.accessibility2)
+}
+/// 复现编号加粗标题后接缩进长段落，检查每段的实际高度及换行。
+private struct ChatListReadingPreview: View {
+    var body: some View {
+        ScrollView {
+            ChunkedAssistantMessage(text: """
+            2. **串起完整流程**
+
+               先分段拉取五张投诉子表，校验分页、行列数和哈希。通过后再刷新投诉看板及相关牌照摘要。读取时使用已配置的企微授权。
+
+            3. **补齐成功条件**
+
+               只有本次在线核验完整、看板刷新成功，任务才算成功。授权过期、拉取截断或刷新报错，都要返回失败原因。源表无变化时，也应留下本次核验时间。
+
+            4. **整理旧版本干扰**
+
+               修正刷新脚本选择源文件的规则，确保使用**完整核验通过的版本**，避免误选之前自动同步产生的截断快照。
+
+            5. **从定时任务入口立即试跑**
+
+               修改后手动触发同一个任务，核对运行日志、数据核验时间和看板结果，确认整条流程跑通。
+
+            这样能直接验证定时任务本身是否具备执行能力。**上面是修改方案，目前还没有更改配置。**
+            """)
+            .padding(24)
+        }
+        .background(JieboColor.paper)
+        .preferredColorScheme(.dark)
+    }
+}
+
+#Preview("编号长文 · 窄屏", traits: .fixedLayout(width: 320, height: 740)) {
+    ChatListReadingPreview()
+}
+
+#Preview("编号长文 · 系统大字体") {
+    ChatListReadingPreview().dynamicTypeSize(.accessibility2)
 }
 #endif
