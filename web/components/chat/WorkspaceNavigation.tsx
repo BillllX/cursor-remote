@@ -12,6 +12,7 @@ type Props = {
   onSwitchWorkspace: () => void;
   onShare?: () => void;
   onNavigate: (id: WorkspaceNavId) => void;
+  visibleItems?: readonly WorkspaceNavId[];
   onSessionTool: (id: "loop" | "terminal") => void;
 };
 
@@ -58,6 +59,7 @@ export function WorkspaceNavigation({
   onSwitchWorkspace,
   onShare,
   onNavigate,
+  visibleItems,
 }: Props) {
   return (
     <>
@@ -90,7 +92,7 @@ export function WorkspaceNavigation({
         )}
       </div>
       <nav className="workspace-nav" aria-label="工作区功能">
-        {WORKSPACE_NAV.map((item) => {
+        {WORKSPACE_NAV.filter((item) => !visibleItems || visibleItems.includes(item.id)).map((item) => {
           const needsSubWorkspace = item.id === "kb" || item.id === "schedules" || item.id === "management";
           const isDisabled = needsSubWorkspace && managementDisabled;
           return (

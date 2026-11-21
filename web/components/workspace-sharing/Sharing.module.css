@@ -246,3 +246,121 @@
     min-height: 44px;
   }
 }
+.sharedLayout {
+  display: grid;
+  grid-template-columns: minmax(160px, 225px) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.sharedNav {
+  padding: 12px;
+  overflow: auto;
+  background: var(--bg-panel);
+  border-inline-end: 1px solid var(--border);
+}
+.sharedContent {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.sharedContent .columns :global(.file-tree) {
+  max-height: none;
+}
+.fileActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fileActions h2 {
+  flex: 1 1 min-content;
+}
+.fileActions label {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.fileActions label:focus-within {
+  outline: 2px solid var(--accent);
+}
+.fileActions input {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  inset: 0;
+  cursor: pointer;
+}
+.htmlPreview {
+  display: block;
+  width: 100%;
+  min-height: 55vh;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.fileText,
+.managementPanel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.managementPanel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+.managementPanel form {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  max-width: 56ch;
+}
+.managementPanel label {
+  display: grid;
+  gap: 4px;
+}
+.managementPanel textarea {
+  min-height: 88px;
+}
+.managementPanel details {
+  margin-bottom: 12px;
+}
+.managementRow {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+}
+@media (max-width: 720px) {
+  .sharedLayout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .sharedNav {
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .sharedNav :global(.workspace-nav) {
+    display: flex;
+    overflow-x: auto;
+  }
+  .sharedNav :global(.workspace-nav-item) {
+    flex: none;
+  }
+}
+.personRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+.manageMember {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.manageMember input {
+  accent-color: var(--accent);
+}

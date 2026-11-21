@@ -2,6 +2,7 @@ import { workspaceSharingSupported } from "../../workspace/sharing.ts";
 import {
   WORKSPACE_SHARE_ASK_CAP,
   WORKSPACE_SHARE_EDIT_CAP,
+  WORKSPACE_SHARE_MANAGE_CAP,
   WORKSPACE_SHARE_CAP,
 } from "../../../../shared/workspaceShare.ts";
 // 登录：校验口令、绑定租户、下发 ready 与当前状态（鉴权之前唯一可用的业务消息）
@@ -100,7 +101,7 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       assistantChatId: assistantChatIdOf(tenant),
       features: [
         ...(conn.caps.has(WORKSPACE_SHARE_CAP) && workspaceSharingSupported()
-          ? [WORKSPACE_SHARE_CAP, WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP]
+          ? [WORKSPACE_SHARE_CAP, WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_MANAGE_CAP]
           : []),
         "turn_files",
         "read_sha",

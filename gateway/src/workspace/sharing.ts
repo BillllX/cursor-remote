@@ -24,7 +24,15 @@ import { workspaceAgentById, readWorkspaceAgentFile, workspaceKey } from "./agen
 import type { Tenant } from "../tenants.ts";
 import type { SharedWorkspace, WorkspaceShareRequest } from "../../../shared/workspaceShare.ts";
 
-type Grant = { owner: string; workspace: string; dev: number; ino: number; members: string[]; epoch?: string };
+type Grant = {
+  owner: string;
+  workspace: string;
+  dev: number;
+  ino: number;
+  members: string[];
+  managers?: string[];
+  epoch?: string;
+};
 const MAX_TEXT_BYTES = 128 * 1024;
 const MAX_ENTRIES = 400;
 export class WorkspaceShareError extends Error {
@@ -147,7 +155,7 @@ function saveText(path: string, content: string, revision: string) {
   }
   return { revision: digest(content) };
 }
-function createText(path: string, content: string) {
+function createText(path: string, content: string | Buffer) {
   const tmp = join(path, "..", ".share-" + randomUUID());
   const fd = openSync(tmp, "wx", 0o600);
   try {
@@ -223,7 +231,7 @@ export class WorkspaceSharing {
     const root = resolve(realpathSync(owner.workspaceRoot), entry.key);
     const st = lstatSync(root);
     if (!st.isDirectory() || st.isSymbolicLink()) throw unavailable();
-    return { root, name: entry.key, dev: st.dev, ino: st.ino };
+    return { root, name: entry.item.displayName ?? entry.key, dev: st.dev, ino: st.ino };
   }
 
   private owned(actor: Tenant, path: unknown) {
@@ -284,11 +292,46 @@ export class WorkspaceSharing {
     if (!owner || !grant || !eligible(owner, actor)) throw unavailable();
     try {
       const { root, dev, ino } = this.locate(owner, grant.workspace);
-      if (dev === grant.dev && ino === grant.ino) return { root, grant };
+      if (dev === grant.dev && ino === grant.ino) return { root, grant, owner };
     } catch {
       // 目录可能已在其他连接上删除。
     }
     throw unavailable();
+  }
+
+  openSharedFile(actor: Tenant, workspaceId: unknown, rawPath: string) {
+    const { root, grant } = this.resolveMember(actor, workspaceId);
+    const parts = pathParts(rawPath);
+    const name = parts.pop()!;
+    return withDirectory(root, grant, parts, (dir) => {
+      const fd = openSync(join(fdPath(dir), name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const st = fstatSync(fd);
+      if (!st.isFile() || st.nlink !== 1) {
+        closeSync(fd);
+        throw new WorkspaceShareError("此文件无法预览");
+      }
+      return fd;
+    });
+  }
+
+  uploadSharedFile(actor: Tenant, workspaceId: unknown, rawPath: string, bytes: Buffer) {
+    const { root, grant } = this.resolveMember(actor, workspaceId);
+    const parts = pathParts(rawPath);
+    const name = parts.pop()!;
+    return withDirectory(root, grant, parts, (dir) => createText(join(fdPath(dir), name), bytes));
+  }
+
+  readSharedPolicy(actor: Tenant, workspaceId: unknown, kind: "rules" | "memory") {
+    const { root, grant } = this.resolveMember(actor, workspaceId);
+    try {
+      return withDirectory(root, grant, kind === "memory" ? [".jiebo"] : [], (dir) =>
+        readText(join(fdPath(dir), kind === "memory" ? "memory.md" : "AGENTS.md")).content.slice(0, 40_000),
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+      if (error instanceof WorkspaceShareError) throw error;
+      throw new WorkspaceShareError("无法读取此工作区的规则或记忆");
+    }
   }
 
   memberEpoch(actor: Tenant, workspaceId: unknown) {
@@ -336,7 +379,12 @@ export class WorkspaceSharing {
         try {
           const workspace = this.locate(owner, g.workspace);
           if (workspace.dev === g.dev && workspace.ino === g.ino)
-            items.push({ id: shareId(g), name: workspace.name, ownerName: owner.name });
+            items.push({
+              id: shareId(g),
+              name: workspace.name,
+              ownerName: owner.name,
+              ...(g.managers?.includes(actor.id) ? { canManage: true } : {}),
+            });
         } catch {
           /* 已移除或不可用的目录不出现在列表。 */
         }
@@ -348,19 +396,20 @@ export class WorkspaceSharing {
       const people = this.tenants()
         .filter((t) => eligible(actor, t))
         .map(({ id, name }) => ({ id, name }));
-      const selected = (grants: Grant[]) =>
-        grants
-          .find(
-            (g) =>
-              g.owner === actor.id &&
-              g.workspace === workspace.id &&
-              g.dev === workspace.dev &&
-              g.ino === workspace.ino,
-          )
-          ?.members.filter((id) => people.some((p) => p.id === id)) ?? [];
+      const matchingGrant = (grants: Grant[]) =>
+        grants.find(
+          (g) =>
+            g.owner === actor.id && g.workspace === workspace.id && g.dev === workspace.dev && g.ino === workspace.ino,
+        );
+      const membersOf = (grant?: Grant) => grant?.members.filter((id) => people.some((p) => p.id === id)) ?? [];
+      const managersOf = (grant?: Grant) => grant?.managers?.filter((id) => membersOf(grant).includes(id)) ?? [];
+      const revisionOf = (members: string[], managers: string[]) =>
+        digest(JSON.stringify(managers.length ? [members, managers] : members));
       if (request.action === "people") {
-        const memberIds = selected(this.getGrants());
-        return { people, memberIds, memberRevision: digest(JSON.stringify(memberIds)) };
+        const grant = matchingGrant(this.getGrants());
+        const memberIds = membersOf(grant);
+        const managerIds = managersOf(grant);
+        return { people, memberIds, managerIds, memberRevision: revisionOf(memberIds, managerIds) };
       }
       if (
         !Array.isArray(request.memberIds) ||
@@ -371,20 +420,33 @@ export class WorkspaceSharing {
       const memberIds = [...new Set(request.memberIds)].sort();
       const ledger = this.ledgerForGrants();
       return withFileLockSync(ledger, () => {
-        const grants = this.getGrants(ledger),
-          previous = selected(grants);
-        if (request.memberRevision !== digest(JSON.stringify(previous)))
+        const grants = this.getGrants(ledger);
+        const previousGrant = matchingGrant(grants);
+        const previous = membersOf(previousGrant);
+        const previousManagers = managersOf(previousGrant);
+        if (request.memberRevision !== revisionOf(previous, previousManagers))
           throw new WorkspaceShareError("共享名单已更新，请重新打开", "CONFLICT");
-        const previousGrant = grants.find((g) => g.owner === actor.id && g.workspace === workspace.id);
+        if (
+          request.managerIds !== undefined &&
+          (!Array.isArray(request.managerIds) ||
+            request.managerIds.length > memberIds.length ||
+            request.managerIds.some((id) => !memberIds.includes(id)))
+        )
+          throw new WorkspaceShareError("只有获共享的成员可设为管理员");
+        const managerIds = [
+          ...new Set(request.managerIds ?? previousManagers.filter((id) => memberIds.includes(id))),
+        ].sort();
         const result = {
           affected: [...new Set([...previous, ...memberIds])],
           memberIds,
-          memberRevision: digest(JSON.stringify(memberIds)),
+          managerIds,
+          memberRevision: revisionOf(memberIds, managerIds),
         };
         if (
           previousGrant?.dev === workspace.dev &&
           previousGrant.ino === workspace.ino &&
-          JSON.stringify(previousGrant.members) === JSON.stringify(memberIds)
+          JSON.stringify(previousGrant.members) === JSON.stringify(memberIds) &&
+          JSON.stringify(previousGrant.managers ?? []) === JSON.stringify(managerIds)
         )
           return result;
         const next = grants.filter((g) => g.owner !== actor.id || g.workspace !== workspace.id);
@@ -395,6 +457,7 @@ export class WorkspaceSharing {
             dev: workspace.dev,
             ino: workspace.ino,
             members: memberIds,
+            managers: managerIds,
             epoch: randomUUID(),
           });
         atomicWriteFileSync(ledger, JSON.stringify(next), { mode: 0o600, fsync: true });

@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { closeSync, createReadStream, existsSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, createReadStream, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { basename } from "node:path";
 import type { MediaTicket, PreviewKind } from "../../shared/protocol.ts";
@@ -253,6 +253,30 @@ export function sendMediaFile(
     res.end();
   });
   stream.pipe(res);
+}
+
+/** 接管已验证的文件描述符，避免授权后再通过路径打开文件。 */
+export function sendMediaDescriptor(req: IncomingMessage, res: ServerResponse, fd: number, path: string, kind: PreviewKind) {
+  let streaming = false;
+  try {
+    const { size } = fstatSync(fd);
+    const limit = isByteKind(kind) ? sizeLimit(kind) : Math.max(sizeLimit(kind), 2_000_000);
+    if (size > limit) { res.writeHead(413).end(); return; }
+    const range = parseRange(req.headers.range, size);
+    if (req.headers.range && !range) { res.writeHead(416, { "content-range": `bytes */${size}` }).end(); return; }
+    const bytes = Buffer.alloc(16);
+    const n = readSync(fd, bytes, 0, bytes.length, 0);
+    const mime = imageMimeFrom(bytes.subarray(0, n), mimeOf(path, kind));
+    res.writeHead(range ? 206 : 200, headersFor(mime, size, path, range));
+    if (req.method === "HEAD") { res.end(); return; }
+    const stream = createReadStream("", { fd, autoClose: true, start: range?.start ?? 0, end: range?.end });
+    streaming = true;
+    res.once("close", () => stream.destroy());
+    stream.once("error", () => res.destroy());
+    stream.pipe(res);
+  } finally {
+    if (!streaming) closeSync(fd);
+  }
 }
 
 export { isByteKind, sizeLimit };

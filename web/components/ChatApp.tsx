@@ -27,7 +27,7 @@ import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import { ShareWorkspaceDialog, SharedWorkspaceFiles, type ShareCall } from "./workspace-sharing/Sharing";
 import { WorkspaceShareClient } from "../lib/workspaceShareClient";
-import { WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
+import { WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_MANAGE_CAP, WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -137,6 +137,7 @@ export default function ChatApp() {
   const [token, setToken] = useState("");
   const [sharedAskAvailable, setSharedAskAvailable] = useState(false);
   const [sharedEditAvailable, setSharedEditAvailable] = useState(false);
+  const [sharedManageAvailable, setSharedManageAvailable] = useState(false);
   const [sharingAvailable,setSharingAvailable] = useState(false);
   const [sharedWorkspaces,setSharedWorkspaces] = useState<SharedWorkspace[]>([]);
   const [sharedId,setSharedId] = useState("");
@@ -818,6 +819,7 @@ export default function ChatApp() {
             setSharingAvailable(canShare);
             setSharedAskAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_ASK_CAP)));
             setSharedEditAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_EDIT_CAP)));
+            setSharedManageAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_MANAGE_CAP)));
             if(!canShare) clearWorkspaceSharing();
             setIsAdmin(Boolean(message.admin));
             if (!message.admin) {
@@ -4992,7 +4994,7 @@ export default function ChatApp() {
           <IconRail name="account" />
         </button>
       </nav>
-      {shareTarget && <ShareWorkspaceDialog key={shareTarget.path} {...shareTarget} call={callShare}
+      {shareTarget && <ShareWorkspaceDialog key={shareTarget.path} {...shareTarget} canManageSharing={sharedManageAvailable} call={callShare}
         close={()=>setShareTarget(undefined)} />}
       <SettingsOverlay
         open={settingsOpen}
@@ -5280,7 +5282,7 @@ export default function ChatApp() {
         }}
         onClick={() => setNavOpen(false)}
       />
-      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare} canAsk={sharedAskAvailable} canEdit={sharedEditAvailable} models={models} defaultModel={model} connected={connected && unlocked}
+      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare} token={token} canManage={sharedManageAvailable} canAsk={sharedAskAvailable} canEdit={sharedEditAvailable} models={models} defaultModel={model} connected={connected && unlocked}
         onSwitch={openWorkspaceSwitcher} onUnavailable={()=>{setSharedId("");void refreshSharedWorkspaces();setNotice("共享工作区已不可访问");}} /> : <>
       <Sidebar
         navDrag={navDrag}

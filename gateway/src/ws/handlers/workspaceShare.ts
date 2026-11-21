@@ -1,6 +1,7 @@
 import { allTenants, stateDir } from "../../tenants.ts";
 import { WorkspaceSharing, WorkspaceShareError } from "../../workspace/sharing.ts";
 import { applySharedWorkspaceChanges, askSharedWorkspace } from "../../workspace/shareAsk.ts";
+import { manageSharedWorkspace } from "../../workspace/shareManage.ts";
 import { noteOutput, noteTurn } from "../../usage.ts";
 import { WORKSPACE_SHARE_CAP } from "../../../../shared/workspaceShare.ts";
 import { send } from "../send.ts";
@@ -29,6 +30,12 @@ export async function onWorkspaceShare({ ws, conn, tenant, state }: WsCtx, messa
   if (typeof requestId !== "string" || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
   try {
     const sharing = new WorkspaceSharing(stateDir(), allTenants);
+    if (message.action === "manage") {
+      const data = manageSharedWorkspace(sharing, tenant, message);
+      send(ws, { type: "workspace_share_result", requestId, ok: true, data });
+      if (message.section === "management" && message.operation === "rename") notifyWorkspaceShares(state);
+      return;
+    }
     if (message.action === "apply") {
       const data = applySharedWorkspaceChanges(sharing, tenant, message);
       send(ws, { type: "workspace_share_result", requestId, ok: true, data });

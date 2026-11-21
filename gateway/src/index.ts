@@ -27,6 +27,7 @@ import { compactTenantChats } from "./sync/storedState.ts";
 import { delegationWorkspaces, requestWorkspace, startDelegation } from "./bindings/delegations.ts";
 import { dispatchLoop, loopBusy, publishLoop } from "./bindings/loops.ts";
 import { listModels } from "./chat/models.ts";
+import { handleSharedWorkspaceFile } from "./http/sharedWorkspace.ts";
 import { healthPayload } from "./http/health.ts";
 import { handleImMedia, handleImSend, handleImUpload, handleImUploadAndSend } from "./im/http.ts";
 import { imRuntime } from "./im/runtime.ts";
@@ -111,6 +112,10 @@ process.on("uncaughtException", (err) => {
 const httpServer = createServer((req, res) => {
   if (publish.handleHttp(req, res)) return;
   const url = new URL(req.url || "/", "http://127.0.0.1");
+  if ((url.pathname === "/media" || url.pathname === "/upload") && url.searchParams.has("shared")) {
+    void handleSharedWorkspaceFile(req, res, url);
+    return;
+  }
   if (url.pathname.startsWith("/upload/projects/") || url.pathname.startsWith("/media/projects/")) {
     res.writeHead(410).end();
     return;

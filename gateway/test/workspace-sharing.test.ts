@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  closeSync,
   mkdirSync,
   mkdtempSync,
   renameSync,
@@ -17,6 +18,7 @@ import { createBodyStore } from "../src/chatBodies.ts";
 import { emptyDisk, type Tenant } from "../src/tenants.ts";
 import { migrateWorkspaceAgent, removeWorkspaceAgent } from "../src/workspace/agents.ts";
 import { applySharedWorkspaceChanges, askSharedWorkspace } from "../src/workspace/shareAsk.ts";
+import { manageSharedWorkspace } from "../src/workspace/shareManage.ts";
 import { WorkspaceSharing, workspaceSharingSupported } from "../src/workspace/sharing.ts";
 import type { SharedWorkspace, WorkspaceShareRequest } from "../../shared/workspaceShare.ts";
 
@@ -345,4 +347,49 @@ test("共享 Agent 直写也保留并发保存的最新版本", linuxOnly, async
   assert.deepEqual(answer.changes?.applied, []);
   assert.match(answer.changes!.failed[0]!.error, /已被修改/);
   assert.equal(readFileSync(file, "utf8"), "同事的新保存");
+});
+
+test("已有共享成员继续上传与读取，管理规则必须由所有者单独授权", linuxOnly, (t) => {
+  const f = fixture(t, "-manage");
+  f.share([f.member.id, f.other.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  writeFileSync(join(f.workspace, "AGENTS.md"), "本工作区规则");
+  writeFileSync(join(f.owner.workspaceRoot, "AGENTS.md"), "所有者根目录规则");
+  const data = Buffer.from([0, 255, 7, 1]);
+  f.service.uploadSharedFile(f.member, workspace, "资料/原件.zip", data);
+  const fd = f.service.openSharedFile(f.member, workspace, "资料/原件.zip");
+  try {
+    assert.deepEqual(readFileSync(fd), data);
+  } finally {
+    closeSync(fd);
+  }
+  assert.throws(
+    () => f.service.uploadSharedFile(f.member, workspace, "资料/原件.zip", Buffer.from("overwrite")),
+    /已存在/,
+  );
+  assert.throws(() => f.service.uploadSharedFile(f.member, workspace, "../越界文件", data), /路径无效/);
+  const memoryView: WorkspaceShareRequest = {
+    type: "workspace_share",
+    requestId: randomUUID(),
+    action: "manage",
+    workspace,
+    section: "memory",
+    operation: "list",
+  };
+  assert.throws(() => manageSharedWorkspace(f.service, f.member, memoryView), /所有者授予/);
+  const previous = f.people().memberRevision;
+  const fields = { workspace: f.workspace, memberIds: [f.member.id, f.other.id], memberRevision: previous };
+  assert.throws(() => f.call(f.owner, "set", { ...fields, managerIds: ["unshared"] }), /只有获共享/);
+  f.call(f.owner, "set", { ...fields, managerIds: [f.member.id] });
+  assert.equal(f.list(f.member)[0]!.canManage, true);
+  assert.equal(f.list(f.other)[0]!.canManage, undefined);
+  assert.deepEqual(manageSharedWorkspace(f.service, f.member, memoryView), { rules: "本工作区规则", memory: "" });
+  assert.throws(() => manageSharedWorkspace(f.service, f.other, memoryView), /所有者授予/);
+  assert.throws(() => f.call(f.owner, "set", fields), /名单已更新/);
+  // 旧版客户端更新普通成员时保留已有管理员，直到撤回其共享。
+  f.share([f.member.id]);
+  assert.equal(f.list(f.member)[0]!.canManage, true);
+  f.share([]);
+  assert.throws(() => manageSharedWorkspace(f.service, f.member, memoryView), /不可访问/);
+  assert.throws(() => f.service.openSharedFile(f.member, workspace, "资料/原件.zip"), /不可访问/);
 });
