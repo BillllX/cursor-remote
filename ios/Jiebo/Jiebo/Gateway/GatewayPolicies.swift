@@ -616,15 +616,13 @@ final class AppTrafficMeter: @unchecked Sendable {
     }
 
     private func write(_ value: AppTrafficBucket) {
-        guard let directory else { return }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let directory = TrafficStoreDirectory.ensure(directory) else { return }
         Self.atomicWrite(value, to: Self.bucketURL(directory: directory, owner: processID, epoch: value.epoch))
     }
 
     private static func loadOrCreateEpoch(directory: URL?) -> Epoch {
         let fallback = Epoch(id: "memory", startedAt: Date())
-        guard let directory else { return fallback }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let directory = TrafficStoreDirectory.ensure(directory) else { return fallback }
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordinatedError: NSError?
         var result: Epoch?
@@ -648,8 +646,7 @@ final class AppTrafficMeter: @unchecked Sendable {
 
     /// reset 与首次创建共用文件协调区，避免 App/扩展同时创建时后写覆盖先写。
     private static func replaceEpoch(_ value: Epoch, directory: URL?) {
-        guard let directory else { return }
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let directory = TrafficStoreDirectory.ensure(directory) else { return }
         let coordinator = NSFileCoordinator(filePresenter: nil)
         var coordinatedError: NSError?
         let epochURL = directory.appendingPathComponent("epoch.json")
@@ -680,6 +677,33 @@ final class AppTrafficMeter: @unchecked Sendable {
                   value.epoch == epoch
             else { return nil }
             return value
+        }
+    }
+
+    /// 流量目录在本进程只创建一次。每次落盘都调用 createDirectory 会让系统警告过度写盘。
+    private enum TrafficStoreDirectory {
+        private static let lock = NSLock()
+        private static var ready = Set<String>()
+
+        static func ensure(_ directory: URL?) -> URL? {
+            guard let directory else { return nil }
+            let key = directory.path
+            lock.lock()
+            let prepared = ready.contains(key)
+            lock.unlock()
+            if prepared { return directory }
+            let manager = FileManager.default
+            if !manager.fileExists(atPath: key) {
+                do {
+                    try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+                } catch {
+                    guard manager.fileExists(atPath: key) else { return nil }
+                }
+            }
+            lock.lock()
+            ready.insert(key)
+            lock.unlock()
+            return directory
         }
     }
 
