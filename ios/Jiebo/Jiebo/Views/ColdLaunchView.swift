@@ -136,24 +136,29 @@ struct StickerLaunchFrame: View {
             let side = min(size.width, size.height, 420)
             let t = reducedMotion ? 0 : time
             let corners = StickerLaunchTimeline.corners(in: size, at: t)
-            let settled = StickerLaunchTimeline.cornerProgress(3, at: t)
+            let settled = StickerLaunchTimeline.contourSettled(at: t)
             let radius = side * 0.20 * (1 - settled) + min(size.width * 0.115, 48) * settled
             let reveal = StickerLaunchTimeline.reveal(at: t)
+            let contour = StickerContour(corners: corners, radius: radius,
+                                         flex: (0..<4).map { StickerLaunchTimeline.edgeFlex($0, at: t) * side * 0.12 })
+            let motion = StickerLaunchTimeline.faceMotion(at: t)
+            let twinkle = StickerLaunchTimeline.ease((t - 0.05) / 0.28)
             ZStack {
                 Color("LaunchBackground")
-                StickerContour(corners: corners, radius: radius)
-                    .fill(face)
-                    .overlay {
-                        StickerContour(corners: corners, radius: radius)
-                            .stroke(ink, style: StrokeStyle(lineWidth: 4.5 - 1.5 * settled, lineJoin: .round))
-                    }
-                eyes(side: side, time: t)
-                    .position(x: size.width / 2, y: size.height / 2)
+                contour.fill(face).overlay {
+                    contour.stroke(ink, style: StrokeStyle(lineWidth: 4.5 - 1.5 * settled, lineJoin: .round))
+                }
+                eyes(side: side)
+                    .scaleEffect(x: 1 + motion.squash, y: (1 - motion.squash) * StickerLaunchTimeline.eyeScale(at: t))
+                    .rotationEffect(.degrees(motion.tilt))
+                    .position(x: size.width / 2 + side * motion.x, y: size.height / 2 + side * motion.y)
                 Image(systemName: "sparkle")
                     .font(.system(size: side * 0.12, weight: .bold))
                     .foregroundStyle(Color(red: 0.88, green: 0.31, blue: 0.20))
-                    .rotationEffect(.degrees(-10))
-                    .position(x: size.width / 2 + side * 0.245, y: size.height / 2 - side * 0.26)
+                    .scaleEffect(1 + 0.18 * twinkle)
+                    .rotationEffect(.degrees(-10 + 22 * twinkle))
+                    .position(x: size.width / 2 + side * (0.245 + 0.035 * twinkle),
+                              y: size.height / 2 - side * (0.26 + 0.035 * twinkle))
                     .opacity(1 - StickerLaunchTimeline.ease((t - 0.32) / 0.4))
             }
             .mask {
@@ -176,21 +181,20 @@ struct StickerLaunchFrame: View {
         .allowsHitTesting(false)
     }
 
-    private func eyes(side: CGFloat, time: Double) -> some View {
+    private func eyes(side: CGFloat) -> some View {
         HStack(spacing: side * 0.09) {
             Capsule().fill(ink)
             Capsule().fill(ink)
         }
         .frame(width: side * 0.23, height: side * 0.15)
-        .scaleEffect(x: 1, y: StickerLaunchTimeline.eyeScale(at: time))
-        .rotationEffect(.degrees(-7 * (1 - StickerLaunchTimeline.cornerProgress(0, at: time))))
     }
 }
 
-/// Rounded quadrilateral. Each vertex is pulled independently, rather than scaling the mascot.
+/// 四个圆角分别受力，角与角之间用缓弧表现贴纸的拉伸。
 private struct StickerContour: Shape {
     let corners: [CGPoint]
     let radius: CGFloat
+    let flex: [CGFloat]
 
     func path(in rect: CGRect) -> Path {
         guard corners.count == 4 else { return Path() }
@@ -204,8 +208,23 @@ private struct StickerContour: Shape {
         path.move(to: toward(corners[0], corners[3]))
         for index in 0..<4 {
             let corner = corners[index]
-            if index > 0 { path.addLine(to: toward(corner, corners[index - 1])) }
-            path.addQuadCurve(to: toward(corner, corners[(index + 1) % 4]), control: corner)
+            let next = corners[(index + 1) % 4]
+            let start = toward(corner, next)
+            let end = toward(next, corner)
+            path.addQuadCurve(to: start, control: corner)
+            let dx = end.x - start.x
+            let dy = end.y - start.y
+            let length = max(1, hypot(dx, dy))
+            // 两端保持原来的边方向，中间才鼓起，圆角接缝不会突然拐折。
+            let bulge = min(length * 0.22, abs(flex[index])) * (flex[index] < 0 ? -1 : 1)
+            let bow = CGPoint(x: dy / length * bulge, y: -dx / length * bulge)
+            let mid = CGPoint(x: (start.x + end.x) / 2 + bow.x, y: (start.y + end.y) / 2 + bow.y)
+            path.addCurve(to: mid,
+                          control1: CGPoint(x: start.x + dx * 0.20, y: start.y + dy * 0.20),
+                          control2: CGPoint(x: mid.x - dx * 0.16, y: mid.y - dy * 0.16))
+            path.addCurve(to: end,
+                          control1: CGPoint(x: mid.x + dx * 0.16, y: mid.y + dy * 0.16),
+                          control2: CGPoint(x: end.x - dx * 0.20, y: end.y - dy * 0.20))
         }
         path.closeSubpath()
         return path
@@ -213,10 +232,10 @@ private struct StickerContour: Shape {
 }
 
 #if DEBUG
-#Preview("冷启动 · 四角拉开") {
+#Preview("冷启动 · 贴纸弹开") {
     ZStack {
         Color.orange
-        StickerLaunchFrame(time: 1.35)
+        StickerLaunchFrame(time: 1.62)
     }.ignoresSafeArea()
 }
 #Preview("冷启动 · 中心揭幕") {
