@@ -698,7 +698,8 @@ export type WorkspaceScheduleSummaryItem = {
   title: string;
   enabled: boolean;
   executorKind: WorkspaceScheduleExecutorKind;
-  scheduleMode: "interval" | "daily_times";
+  scheduleMode: "interval" | "daily_times" | "monthly";
+  monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
   intervalMinutes: number;
   dailyTimes?: string[];
   activeHours?: { start: string; end: string };
@@ -874,7 +875,10 @@ export type AssistantOpArgsMap = {
       title?: string;
       enabled?: boolean;
       executorKind?: WorkspaceScheduleExecutorKind;
-      scheduleMode?: "interval" | "daily_times";
+      scheduleMode?: "interval" | "daily_times" | "monthly";
+      expectedUpdatedAt?: number;
+      createOnly?: boolean;
+      monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
       intervalMinutes?: number;
       dailyTimes?: string[];
       activeHours?: { start: string; end: string } | null;

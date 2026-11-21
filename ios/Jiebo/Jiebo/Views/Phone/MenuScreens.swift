@@ -1325,6 +1325,12 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
     var executorKind: String
     var scheduleMode: String
     var intervalMinutes: Int
+    var dailyTimes: [String]
+    var monthlyDay: Int
+    var monthlyTime: String
+    var shortMonth: String
+    var tz: String
+    var updatedAt: Double?
     var state: String
     var nextRunAt: Double?
     var lastFinishedAt: Double?
@@ -1342,6 +1348,12 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
             executorKind: row["executorKind"]?.string ?? "wecom_watch_sync",
             scheduleMode: row["scheduleMode"]?.string ?? "interval",
             intervalMinutes: Int(row["intervalMinutes"]?.number ?? 60),
+            dailyTimes: row["dailyTimes"]?.array?.compactMap(\.string) ?? [],
+            monthlyDay: Int(row["monthly"]?.object?["day"]?.number ?? 5),
+            monthlyTime: row["monthly"]?.object?["time"]?.string ?? "09:00",
+            shortMonth: row["monthly"]?.object?["shortMonth"]?.string ?? "skip",
+            tz: row["tz"]?.string ?? "Asia/Shanghai",
+            updatedAt: row["updatedAt"]?.number,
             state: row["state"]?.string ?? "idle",
             nextRunAt: row["nextRunAt"]?.number,
             lastFinishedAt: row["lastFinishedAt"]?.number,
@@ -1349,6 +1361,136 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
             lastSummary: row["lastSummary"]?.string?.nilIfEmpty,
             payloadSummary: row["payloadSummary"]?.string ?? ""
         )
+    }
+}
+
+struct KbWorkspaceScheduleRun: Identifiable, Hashable {
+    var id: String
+    var scheduleId: String
+    var status: String
+    var trigger: String
+    var finishedAt: Double
+    var summary: String
+    var files: [String]
+
+    static func parse(_ item: JSONValue) -> Self? {
+        guard let row = item.object, let id = row["runId"]?.string,
+              let scheduleId = row["scheduleId"]?.string else { return nil }
+        return Self(id: id, scheduleId: scheduleId, status: row["status"]?.string ?? "",
+                    trigger: row["trigger"]?.string ?? "scheduled", finishedAt: row["finishedAt"]?.number ?? 0,
+                    summary: row["error"]?.string?.nilIfEmpty ?? row["summary"]?.string ?? "",
+                    files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [])
+    }
+}
+
+private struct WorkspaceScheduleEditor: View {
+    let item: KbWorkspaceScheduleItem
+    let save: ([String: JSONValue]) async -> String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var title: String
+    @State private var mode: String
+    @State private var interval: Int
+    @State private var daily: String
+    @State private var day: Int
+    @State private var time: Date
+    @State private var shortMonth: String
+    @State private var busy = false
+    @State private var error: String?
+    private static let clockZone = TimeZone(secondsFromGMT: 0) ?? .current
+
+    init(item: KbWorkspaceScheduleItem, save: @escaping ([String: JSONValue]) async -> String?) {
+        self.item = item
+        self.save = save
+        _title = State(initialValue: item.title)
+        _mode = State(initialValue: item.scheduleMode)
+        _interval = State(initialValue: item.intervalMinutes)
+        _daily = State(initialValue: item.dailyTimes.joined(separator: "、"))
+        _day = State(initialValue: item.monthlyDay)
+        let parts = item.monthlyTime.split(separator: ":").compactMap { Int($0) }
+        let seconds = (parts.first ?? 9) * 3600 + (parts.dropFirst().first ?? 0) * 60
+        _time = State(initialValue: Date(timeIntervalSince1970: Double(seconds)))
+        _shortMonth = State(initialValue: item.shortMonth)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("规则") {
+                    TextField("名称", text: $title)
+                    Picker("触发频率", selection: $mode) {
+                        Text("固定间隔").tag("interval")
+                        Text("每天").tag("daily_times")
+                        Text("每月").tag("monthly")
+                    }
+                    if mode == "interval" {
+                        Stepper("完成后间隔 \(interval) 分钟", value: $interval, in: 5...10080)
+                    } else if mode == "daily_times" {
+                        TextField("每天运行时间（例如 09:00、18:30）", text: $daily)
+                    } else {
+                        Picker("每月第几日", selection: $day) {
+                            ForEach(1...31, id: \.self) { Text("\($0) 日").tag($0) }
+                        }
+                        DatePicker("运行时刻", selection: $time, displayedComponents: .hourAndMinute)
+                            .environment(\.timeZone, Self.clockZone)
+                        if day > 28 {
+                            Picker("当月没有这一天", selection: $shortMonth) {
+                                Text("跳过当月").tag("skip")
+                                Text("当月最后一天运行").tag("last_day")
+                            }
+                        }
+                    }
+                    LabeledContent("规则时区", value: item.tz)
+                }
+                if let error {
+                    Section { Text(error).foregroundStyle(JieboColor.danger) }
+                }
+            }
+            .disabled(busy)
+            .navigationTitle("编辑计划")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }.disabled(busy)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(busy ? "正在保存…" : "保存") { Task { await submit() } }
+                        .disabled(busy || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .interactiveDismissDisabled(busy)
+    }
+
+    private func submit() async {
+        guard !busy else { return }
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        var fields: [String: JSONValue] = [
+            "kind": .string("upsert"), "id": .string(item.id), "title": .string(cleaned),
+            "executorKind": .string(item.executorKind), "scheduleMode": .string(mode),
+        ]
+        if let rev = item.updatedAt { fields["expectedUpdatedAt"] = .number(rev) }
+        switch mode {
+        case "daily_times":
+            let values = daily.split { ",，、 \n\t".contains($0) }.map(String.init)
+            let clock = #"^([01]?\d|2[0-3]):[0-5]\d$"#
+            guard !values.isEmpty, values.allSatisfy({ $0.range(of: clock, options: .regularExpression) != nil }) else {
+                error = "请用 HH:MM 填写每天的运行时间。"
+                return
+            }
+            fields["dailyTimes"] = .array(values.map { .string($0) })
+        case "monthly":
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = Self.clockZone
+            let parts = calendar.dateComponents([.hour, .minute], from: time)
+            let clock = String(format: "%02d:%02d", parts.hour ?? 9, parts.minute ?? 0)
+            fields["monthly"] = .object(["day": .number(Double(day)), "time": .string(clock), "shortMonth": .string(shortMonth)])
+        default:
+            fields["intervalMinutes"] = .number(Double(interval))
+        }
+        busy = true
+        error = await save(fields)
+        busy = false
+        if error == nil { dismiss() }
     }
 }
 
@@ -1365,6 +1507,7 @@ struct KbWorkspaceStatus: Hashable {
     var wecomWatchItems: [KbWecomWatchedItem]
     var ingestLogs: [KbWorkspaceIngestLog]
     var workspaceSchedules: [KbWorkspaceScheduleItem]
+    var workspaceScheduleRuns: [KbWorkspaceScheduleRun]
     var wecomWatchMessage: String?
     var workspaceScheduleMessage: String?
     var dropPortalPath: String
@@ -1425,6 +1568,7 @@ struct KbWorkspaceStatus: Hashable {
             wecomWatchItems: wecomWatchItems,
             ingestLogs: ingestLogs,
             workspaceSchedules: workspaceSchedules,
+            workspaceScheduleRuns: object["workspaceScheduleRuns"]?.array?.compactMap(KbWorkspaceScheduleRun.parse) ?? [],
             wecomWatchMessage: wecomWatchMessage,
             workspaceScheduleMessage: workspaceScheduleMessage,
             dropPortalPath: object["dropPortalPath"]?.string ?? ""
@@ -1979,6 +2123,10 @@ struct KbWorkspaceSheet: View {
     @State private var expiresDays = ""
     @State private var revokeTarget: KbDropToken?
 
+    @State private var scheduleEditor: KbWorkspaceScheduleItem?
+    @State private var scheduleConfirmation: KbWorkspaceScheduleItem?
+    @State private var deletingSchedule = false
+
     /// 网关认的是相对工作区根目录的 key，不认绝对路径
     private var workspaceKey: String {
         store.relToCwd(workspacePath, root: store.workspaceRoot.nilIfEmpty)
@@ -2045,6 +2193,22 @@ struct KbWorkspaceSheet: View {
                 let reply = await store.assistantOpData("kb_workspace_status", args: ["workspace": .string(workspaceKey)])
                 apply(reply, silent: true)
             }
+        }
+        .sheet(item: $scheduleEditor) { item in
+            WorkspaceScheduleEditor(item: item, save: saveSchedule)
+        }
+        .alert(
+            deletingSchedule ? "删除自动化？" : "立即运行自动化？",
+            isPresented: Binding(get: { scheduleConfirmation != nil }, set: { if !$0 { scheduleConfirmation = nil } }),
+            presenting: scheduleConfirmation
+        ) { item in
+            Button(deletingSchedule ? "删除" : "立即运行", role: deletingSchedule ? .destructive : nil) {
+                let kind = deletingSchedule ? "remove" : "run_now"
+                Task { await runWorkspaceScheduleAction(kind: kind, idOrTitle: item.id) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { item in
+            Text(deletingSchedule ? "《\(item.title)》将停止后续运行。" : "《\(item.title)》会正式运行，可能更新数据或产物。")
         }
         .confirmationDialog(
             "吊销这个投递口令？",
@@ -2147,52 +2311,62 @@ struct KbWorkspaceSheet: View {
         Section {
             if let schedules = status?.workspaceSchedules, !schedules.isEmpty {
                 ForEach(schedules) { item in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(item.title)
-                                .font(JieboFont.text(.body, weight: .medium))
-                                .foregroundStyle(JieboColor.ink)
-                            Spacer()
-                            Text(scheduleStateLabel(item))
-                                .font(JieboFont.text(.caption2, weight: .medium))
-                                .foregroundStyle(
-                                    (item.state != "idle" || item.lastStatus == "failed")
-                                        ? JieboColor.danger
-                                        : JieboColor.pine
-                                )
+                    DisclosureGroup {
+                        if let summary = item.lastSummary, !summary.isEmpty { Text(summary) }
+                        if let message = status?.workspaceScheduleRuns.first(where: { $0.scheduleId == item.id })?.summary,
+                           !message.isEmpty, message != item.lastSummary {
+                            Text(message).foregroundStyle(JieboColor.ink2)
                         }
-                        Text("\(item.payloadSummary) · 上次：\(shortTimeText(item.lastFinishedAt ?? 0))")
-                            .font(JieboFont.text(.footnote))
-                            .foregroundStyle(JieboColor.ink2)
-                        if let summary = item.lastSummary, !summary.isEmpty {
-                            Text(summary)
-                                .font(JieboFont.text(.footnote))
-                                .foregroundStyle(item.lastStatus == "failed" ? JieboColor.danger : JieboColor.ink)
-                                .lineLimit(3)
-                        }
-                        HStack(spacing: 14) {
-                            Button(item.state == "idle" ? "立即执行" : "运行锁定中") {
-                                Task { await runWorkspaceScheduleAction(kind: "run_now", idOrTitle: item.id) }
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(JieboColor.pine)
-                            .disabled(busy || item.state != "idle")
+                        Menu("管理自动化") {
+                            Button("立即运行") { confirmSchedule(item, deleting: false) }
+                                .disabled(busy || item.state != "idle")
+                            Button("编辑计划") { scheduleEditor = item }
+                                .disabled(busy || item.state != "idle")
                             Button(item.enabled ? "暂停" : "启用") {
                                 Task { await runWorkspaceScheduleAction(kind: "toggle", idOrTitle: item.id, enabled: !item.enabled) }
                             }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(JieboColor.pine)
                             .disabled(busy)
-                            Button("删除") {
-                                Task { await runWorkspaceScheduleAction(kind: "remove", idOrTitle: item.id) }
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(JieboColor.danger)
-                            .disabled(busy || item.state != "idle")
+                            Button("删除", role: .destructive) { confirmSchedule(item, deleting: true) }
+                                .disabled(busy || item.state != "idle")
                         }
-                        .font(JieboFont.text(.footnote, weight: .medium))
+                        DisclosureGroup("运行记录") {
+                            let runs = status?.workspaceScheduleRuns.filter { $0.scheduleId == item.id } ?? []
+                            if runs.isEmpty {
+                                Text("暂无运行记录").foregroundStyle(JieboColor.ink2)
+                            }
+                            ForEach(runs) { run in
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("\(scheduleResultLabel(run.status)) · \(run.trigger == "manual" ? "手动运行" : "定时触发")")
+                                        .font(JieboFont.text(.subheadline, weight: .medium))
+                                    Text(scheduleTime(run.finishedAt, tz: item.tz))
+                                    if !run.summary.isEmpty { Text(run.summary) }
+                                    ForEach(Array(Set(run.files)).sorted(), id: \.self) { path in
+                                        Button(path) {
+                                            openBoard(KbHtmlBoard(relPath: path, title: path, category: "", showOnDrop: false))
+                                        }
+                                        .buttonStyle(.borderless)
+                                    }
+                                }
+                                .font(JieboFont.text(.footnote))
+                            }
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(JieboFont.text(.body, weight: .medium))
+                            Text("\(scheduleStateLabel(item)) · \(scheduleCadence(item))")
+                                .font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2)
+                            if item.enabled, let next = item.nextRunAt {
+                                Text("下次 \(scheduleTime(next, tz: item.tz))")
+                                    .font(JieboFont.text(.footnote)).foregroundStyle(JieboColor.ink2)
+                            }
+                            if let result = item.lastStatus {
+                                Text("上次结果 · \(scheduleResultLabel(result))")
+                                    .font(JieboFont.text(.footnote))
+                                    .foregroundStyle(result == "failed" ? JieboColor.danger : JieboColor.ink2)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
-                    .padding(.vertical, 2)
                 }
             } else {
                 Text("还没有配置定时任务。可对小驳说「每小时自动检查同步企微关注文件」直接创建。")
@@ -2200,7 +2374,7 @@ struct KbWorkspaceSheet: View {
                     .foregroundStyle(JieboColor.ink2)
             }
         } header: {
-            JieboListHeader("通用定时任务")
+            JieboListHeader("工作区自动化")
         }
         .listRowBackground(JieboColor.white)
     }
@@ -2539,6 +2713,7 @@ struct KbWorkspaceSheet: View {
     }
 
     private func runWorkspaceScheduleAction(kind: String, idOrTitle: String, enabled: Bool? = nil) async {
+        guard !busy else { return }
         busy = true
         errorText = ""
         var actionObj: [String: JSONValue] = [
@@ -2560,8 +2735,51 @@ struct KbWorkspaceSheet: View {
         if item.state == "running_step1" { return "正在执行" }
         if item.state == "running_step2" { return "归档更新中" }
         if !item.enabled { return "已暂停" }
-        if item.lastStatus == "failed" { return "上次异常" }
-        return "待命运行中"
+        return "已启用"
+    }
+
+    private func saveSchedule(_ action: [String: JSONValue]) async -> String? {
+        guard !busy else { return "有操作正在处理，请稍后再试。" }
+        busy = true
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(workspaceKey),
+            "workspaceScheduleAction": .object(action),
+        ])
+        busy = false
+        guard apply(reply, silent: true) else { return reply.error ?? "保存失败，请重试。" }
+        store.flash(status?.workspaceScheduleMessage ?? "已保存自动化")
+        return nil
+    }
+
+    private func confirmSchedule(_ item: KbWorkspaceScheduleItem, deleting: Bool) {
+        deletingSchedule = deleting
+        scheduleConfirmation = item
+    }
+
+    private func scheduleCadence(_ item: KbWorkspaceScheduleItem) -> String {
+        if item.scheduleMode == "monthly" {
+            let policy = item.shortMonth == "skip" ? " · 短月跳过" : " · 短月月底运行"
+            return "每月 \(item.monthlyDay) 日 \(item.monthlyTime)" + (item.monthlyDay > 28 ? policy : "")
+        }
+        if item.scheduleMode == "daily_times" { return "每天 \(item.dailyTimes.joined(separator: "、"))" }
+        return "完成后间隔 \(item.intervalMinutes) 分钟"
+    }
+
+    private func scheduleTime(_ ms: Double, tz: String) -> String {
+        let value = Date(timeIntervalSince1970: ms / 1000)
+        var format = Date.FormatStyle.dateTime.year().month().day().hour().minute()
+        format.timeZone = TimeZone(identifier: tz) ?? .current
+        return "\(value.formatted(format))（\(tz)）"
+    }
+
+    private func scheduleResultLabel(_ status: String) -> String {
+        switch status {
+        case "succeeded": return "已完成"
+        case "no_change": return "无变化"
+        case "partial": return "部分完成"
+        case "failed": return "失败"
+        default: return "状态待更新"
+        }
     }
 
     private func watchStatusLabel(_ item: KbWecomWatchedItem) -> String {

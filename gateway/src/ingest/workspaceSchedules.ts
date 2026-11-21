@@ -16,6 +16,7 @@ import {
   normalizeDailyTimes,
   type WorkspaceScheduleExecutorKind,
   type WorkspaceScheduleMode,
+  type WorkspaceScheduleMonthly,
   type WorkspaceSchedulePayload,
   type WorkspaceScheduleRecord,
   type WorkspaceScheduleRunRecord,
@@ -119,6 +120,9 @@ export type UpsertWorkspaceScheduleInput = {
   scheduleMode?: WorkspaceScheduleMode;
   intervalMinutes?: number;
   dailyTimes?: string[];
+  monthly?: WorkspaceScheduleMonthly;
+  expectedUpdatedAt?: number;
+  createOnly?: boolean;
   activeHours?: { start: string; end: string } | null;
   tz?: string;
 };
@@ -149,25 +153,15 @@ export function upsertWorkspaceSchedule(
     return { ok: false, error: `不支持的任务执行器类型：${String(input.executorKind)}` };
   }
 
-  const scheduleMode: WorkspaceScheduleMode = input.scheduleMode === "daily_times" ? "daily_times" : "interval";
+  if (input.scheduleMode && !["interval", "daily_times", "monthly"].includes(input.scheduleMode)) {
+    return { ok: false, error: "不支持的触发频率" };
+  }
   const intervalMinutes = Math.max(5, Math.min(10_080, Math.floor(input.intervalMinutes ?? 60)));
   const dailyTimes = normalizeDailyTimes(input.dailyTimes);
-  if (scheduleMode === "daily_times" && dailyTimes.length === 0) {
-    return { ok: false, error: "每日定时模式（daily_times）请至少配置一个 HH:MM 时刻（如 08:45）" };
-  }
   const activeHours = normalizeActiveHours(input.activeHours);
-  const tz = input.tz && validTimeZone(input.tz) ? input.tz : DEFAULT_TZ;
-  const payload: WorkspaceSchedulePayload = { ...(input.payload ?? {}) };
-
-  if (input.executorKind === "http_api_ingest" && !payload.url?.trim()) {
-    return { ok: false, error: "HTTP/API 抓取任务必须提供 url 参数" };
-  }
-  if (input.executorKind === "workspace_script" && !payload.scriptRelPath?.trim()) {
-    return { ok: false, error: "工作区脚本任务必须提供 scriptRelPath 参数" };
-  }
-  if (input.executorKind === "agent_prompt" && !payload.prompt?.trim()) {
-    return { ok: false, error: "AI Agent 定时任务必须提供 prompt 指令内容" };
-  }
+  if (input.tz && !validTimeZone(input.tz)) return { ok: false, error: "请选择有效时区" };
+  const tz = input.tz || DEFAULT_TZ;
+  const payload = input.payload ?? {};
 
   return withFileLockSync(schedulesLockPath(host), () => {
     const file = readSchedulesUnlocked(host);
@@ -184,6 +178,9 @@ export function upsertWorkspaceSchedule(
       return { ok: false as const, error: `未找到定时任务：${input.id}` };
     }
     const prev = existingIdx >= 0 ? file.items[existingIdx] : undefined;
+    if (input.createOnly && file.items.some((item) => item.workspaceId === wsRef.workspaceId && item.title === title)) {
+      return { ok: false as const, error: "此工作区已有同名自动化，请编辑现有规则或使用其他名称。" };
+    }
     if (prev && prev.workspaceId !== wsRef.workspaceId) {
       return { ok: false as const, error: `定时任务 ${prev.id} 属于工作区「${prev.workspaceKeySnapshot}」，不可跨工作区覆盖或迁移` };
     }
@@ -195,11 +192,35 @@ export function upsertWorkspaceSchedule(
       ...(prev?.payload ?? {}),
       ...Object.fromEntries(Object.entries(payload).filter(([, v]) => v !== undefined)),
     };
+    if (prev && input.expectedUpdatedAt !== undefined && prev.updatedAt !== input.expectedUpdatedAt) {
+      return { ok: false as const, error: "规则已更新，请刷新后重新编辑。" };
+    }
+    if (prev && input.expectedUpdatedAt !== undefined && prev.state !== "idle") {
+      return { ok: false as const, error: "当前运行完成后即可编辑。" };
+    }
+    if (input.executorKind === "http_api_ingest" && !mergedPayload.url?.trim()) {
+      return { ok: false as const, error: "请填写来源 URL" };
+    }
+    if (input.executorKind === "workspace_script" && !mergedPayload.scriptRelPath?.trim()) {
+      return { ok: false as const, error: "请填写脚本相对路径" };
+    }
+    if (input.executorKind === "agent_prompt" && !mergedPayload.prompt?.trim()) {
+      return { ok: false as const, error: "请填写分析指令" };
+    }
     const enabled = input.enabled ?? prev?.enabled ?? true;
-    const effectiveMode = input.scheduleMode ?? prev?.scheduleMode ?? scheduleMode;
+    const effectiveMode = input.scheduleMode ?? prev?.scheduleMode ?? "interval";
     const effectiveInterval = input.intervalMinutes !== undefined ? intervalMinutes : (prev?.intervalMinutes ?? 60);
     const effectiveDailyTimes =
       input.dailyTimes !== undefined ? dailyTimes : normalizeDailyTimes(prev?.dailyTimes);
+    const monthly = input.monthly ?? prev?.monthly;
+    if (effectiveMode === "monthly" && (!monthly || !Number.isInteger(monthly.day) ||
+        monthly.day < 1 || monthly.day > 31 || !normalizeDailyTimes([monthly.time]).length ||
+        !["skip", "last_day"].includes(monthly.shortMonth))) {
+      return { ok: false as const, error: "请选择每月日期、时刻和短月份处理方式" };
+    }
+    if (effectiveMode === "daily_times" && !effectiveDailyTimes.length) {
+      return { ok: false as const, error: "请填写至少一个有效的每日时刻" };
+    }
     const effectiveActiveHours =
       input.activeHours === null
         ? undefined
@@ -213,6 +234,7 @@ export function upsertWorkspaceSchedule(
             scheduleMode: effectiveMode,
             intervalMinutes: effectiveInterval,
             dailyTimes: effectiveDailyTimes,
+            monthly,
             activeHours: effectiveActiveHours,
             tz: effectiveTz,
           },
@@ -231,6 +253,7 @@ export function upsertWorkspaceSchedule(
       scheduleMode: effectiveMode,
       intervalMinutes: effectiveInterval,
       ...(effectiveDailyTimes.length > 0 ? { dailyTimes: effectiveDailyTimes } : {}),
+      ...(effectiveMode === "monthly" ? { monthly } : {}),
       ...(effectiveActiveHours ? { activeHours: effectiveActiveHours } : {}),
       tz: effectiveTz,
       cursorState: prev?.cursorState ?? {},
@@ -252,7 +275,7 @@ export function upsertWorkspaceSchedule(
       lastStatus: prev?.lastStatus,
       lastSummary: prev?.lastSummary,
       lastUpdatedFiles: prev?.lastUpdatedFiles,
-      lastError: enabled ? undefined : prev?.lastError,
+      lastError: prev?.lastError,
       consecutiveFailures: enabled && !prev?.enabled ? 0 : (prev?.consecutiveFailures ?? 0),
       createdAt: prev?.createdAt ?? now,
       updatedAt: now,
@@ -295,6 +318,7 @@ export function toggleWorkspaceSchedule(
             scheduleMode: cur.scheduleMode,
             intervalMinutes: cur.intervalMinutes,
             dailyTimes: cur.dailyTimes,
+            monthly: cur.monthly,
             activeHours: cur.activeHours,
             tz: cur.tz,
           },
@@ -419,6 +443,7 @@ function finalizeScheduleRunUnlocked(
           scheduleMode: item.scheduleMode,
           intervalMinutes: item.intervalMinutes,
           dailyTimes: item.dailyTimes,
+            monthly: item.monthly,
           activeHours: item.activeHours,
           tz: item.tz,
         },
@@ -483,7 +508,7 @@ function finalizeScheduleRunUnlocked(
 export async function triggerWorkspaceScheduleNow(
   host: DropTenantHost,
   idOrTitle: string,
-  opts: { trigger?: "scheduled" | "manual"; workspace?: string; now?: number } = {},
+  opts: { trigger?: "scheduled" | "manual"; workspace?: string; now?: number; onClaim?: (record: WorkspaceScheduleRecord) => void } = {},
 ): Promise<{
   ok: boolean;
   schedule?: WorkspaceScheduleRecord;
@@ -548,6 +573,7 @@ export async function triggerWorkspaceScheduleNow(
   const executor = getWorkspaceTaskExecutor(claimed.executorKind);
 
   try {
+    opts.onClaim?.(claimed);
     const outcome = executor
       ? await executor({ host, schedule: claimed, workspacePath, now })
       : {
@@ -698,6 +724,29 @@ export async function triggerWorkspaceScheduleNow(
   } finally {
     inFlightScheduleKeys.delete(flightKey);
   }
+}
+
+/** UI 在记录持久化后即可收到回执，执行结果由运行记录刷新。 */
+export function startWorkspaceScheduleForUi(host: DropTenantHost, id: string, workspace?: string):
+  Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  return new Promise((resolve, reject) => {
+    let claimed = false;
+    void triggerWorkspaceScheduleNow(host, id, {
+      workspace,
+      onClaim(record) {
+        claimed = true;
+        resolve({ ok: true, message: `已开始运行《${record.title}》，可在运行记录查看进度。` });
+      },
+    }).then(
+      (result) => {
+        if (!result.ok && !claimed) resolve({ ok: false, error: result.error || result.message });
+      },
+      (error: unknown) => {
+        if (!claimed) reject(error);
+        else log.error("workspace-schedule-ui", error);
+      },
+    );
+  });
 }
 
 /**

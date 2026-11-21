@@ -9,7 +9,8 @@ export type WorkspaceScheduleExecutorKind =
   | "workspace_script"
   | "agent_prompt";
 
-export type WorkspaceScheduleMode = "interval" | "daily_times";
+export type WorkspaceScheduleMode = "interval" | "daily_times" | "monthly";
+export type WorkspaceScheduleMonthly = { day: number; time: string; shortMonth: "skip" | "last_day" };
 
 export type WorkspaceScheduleState = "idle" | "running_step1" | "running_step2";
 
@@ -63,6 +64,7 @@ export type WorkspaceScheduleRecord = {
   intervalMinutes: number;
   /** 每日固定触发时刻列表（如 ["08:45", "18:30"]） */
   dailyTimes?: string[];
+  monthly?: WorkspaceScheduleMonthly;
   /** 允许运行的时间窗（如 { start: "08:00", end: "22:00" }） */
   activeHours?: { start: string; end: string };
   tz: string;
@@ -198,6 +200,7 @@ export function computeNextWorkspaceScheduleRunAt(
     scheduleMode: WorkspaceScheduleMode;
     intervalMinutes: number;
     dailyTimes?: string[];
+  monthly?: WorkspaceScheduleMonthly;
     activeHours?: { start: string; end: string };
     tz?: string;
   },
@@ -206,10 +209,25 @@ export function computeNextWorkspaceScheduleRunAt(
   const tz = spec.tz && validTimeZone(spec.tz) ? spec.tz : DEFAULT_TZ;
   const safeInterval = Math.max(5, Math.min(10_080, Math.floor(spec.intervalMinutes || 60)));
 
+  if (spec.scheduleMode === "monthly" && spec.monthly) {
+    const { day, time, shortMonth } = spec.monthly;
+    const clock = parseHhMm(time);
+    if (clock && Number.isInteger(day) && day >= 1 && day <= 31) {
+      const base = localParts(baseNow, tz);
+      for (let offset = 0; offset <= 2; offset++) {
+        const month = new Date(Date.UTC(base.year, base.month - 1 + offset, 1));
+        const lastDay = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate();
+        if (day > lastDay && shortMonth === "skip") continue;
+        const next = localToUtc(month.getUTCFullYear(), month.getUTCMonth() + 1, Math.min(day, lastDay), clock.hour, clock.minute, tz);
+        if (next > baseNow) return next;
+      }
+    }
+  }
+
   if (spec.scheduleMode === "daily_times") {
     const times = normalizeDailyTimes(spec.dailyTimes);
     const effectiveTimes = times.length > 0 ? times : ["09:00"];
-    const baseParts = localParts(baseNow + 60_000, tz);
+    const baseParts = localParts(baseNow, tz);
     for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
       const cal = new Date(Date.UTC(baseParts.year, baseParts.month - 1, baseParts.day + dayOffset));
       const y = cal.getUTCFullYear();

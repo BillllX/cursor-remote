@@ -104,6 +104,7 @@ import {
   removeWorkspaceSchedule,
   toggleWorkspaceSchedule,
   triggerWorkspaceScheduleNow,
+  startWorkspaceScheduleForUi,
   upsertWorkspaceSchedule,
   type WorkspaceScheduleExecutorKind,
 } from "../ingest/workspaceSchedules.ts";
@@ -557,6 +558,7 @@ function toolHost(
                 enabled: args.enabled,
                 executorKind: args.executorKind,
                 scheduleMode: args.scheduleMode,
+                monthly: args.monthly,
                 intervalMinutes: args.intervalMinutes,
                 dailyTimes: args.dailyTimes,
                 activeHours: args.activeHours,
@@ -839,6 +841,7 @@ export function workspaceToolsFor(
                 enabled: args.enabled,
                 executorKind: args.executorKind,
                 scheduleMode: args.scheduleMode,
+                monthly: args.monthly,
                 intervalMinutes: args.intervalMinutes,
                 dailyTimes: args.dailyTimes,
                 activeHours: args.activeHours,
@@ -1896,11 +1899,17 @@ export async function handleOp(
             ? wsa.executorKind
             : "wecom_watch_sync") as WorkspaceScheduleExecutorKind;
           const scheduleMode =
-            wsa.scheduleMode === "daily_times"
-              ? "daily_times"
+            wsa.scheduleMode === "daily_times" || wsa.scheduleMode === "monthly"
+              ? wsa.scheduleMode
               : wsa.scheduleMode === "interval"
                 ? "interval"
                 : undefined;
+          const rawMonthly = wsa.monthly && typeof wsa.monthly === "object" ? wsa.monthly as Record<string, unknown> : undefined;
+          const shortMonth = rawMonthly?.shortMonth;
+          const monthly = rawMonthly && typeof rawMonthly.day === "number" && typeof rawMonthly.time === "string" &&
+            (shortMonth === "skip" || shortMonth === "last_day")
+            ? { day: rawMonthly.day, time: rawMonthly.time, shortMonth } as const : undefined;
+          if (wsa.monthly !== undefined && !monthly) return fail("每月触发配置不完整");
           const intervalMinutes = typeof wsa.intervalMinutes === "number" ? wsa.intervalMinutes : undefined;
           const dailyTimes = Array.isArray(wsa.dailyTimes)
             ? wsa.dailyTimes.filter((x): x is string => typeof x === "string")
@@ -1928,6 +1937,9 @@ export async function handleOp(
             enabled: typeof wsa.enabled === "boolean" ? wsa.enabled : undefined,
             executorKind,
             scheduleMode,
+            monthly,
+            createOnly: wsa.createOnly === true,
+            expectedUpdatedAt: typeof wsa.expectedUpdatedAt === "number" ? wsa.expectedUpdatedAt : undefined,
             intervalMinutes,
             dailyTimes,
             activeHours,
@@ -1987,11 +1999,8 @@ export async function handleOp(
         }
 
         if (kind === "run_now") {
-          const runRes = await triggerWorkspaceScheduleNow(host, idOrTitle, {
-            trigger: "manual",
-            workspace: scopedWorkspace,
-          });
-          if (!runRes.ok) return fail(runRes.error || runRes.message);
+          const runRes = await startWorkspaceScheduleForUi(host, idOrTitle, scopedWorkspace);
+          if (!runRes.ok) return fail(runRes.error);
           const statusRes = getKbWorkspaceStatusForUi(host, workspace);
           if (!statusRes.ok) return fail(statusRes.error);
           return {

@@ -15,6 +15,7 @@ import {
   removeWorkspaceSchedule,
   toggleWorkspaceSchedule,
   triggerWorkspaceScheduleNow,
+  startWorkspaceScheduleForUi,
   upsertWorkspaceSchedule,
 } from "../src/ingest/workspaceSchedules.ts";
 
@@ -229,6 +230,91 @@ test("workspace_script 执行器与 toggle / remove / 崩溃自愈对账", async
     assert.equal(removed.ok, true);
     assert.ok(typeof registerWorkspaceTaskExecutor === "function");
   } finally {
+    cleanup();
+  }
+});
+
+test("月度规则按时区处理短月与跨年", () => {
+  const spec = {
+    scheduleMode: "monthly",
+    intervalMinutes: 60,
+    tz: "Asia/Shanghai",
+    monthly: { day: 31, time: "09:00", shortMonth: "skip" },
+  } as const;
+  const januaryRun = Date.parse("2028-01-31T01:00:00Z");
+  assert.equal(computeNextWorkspaceScheduleRunAt(spec, januaryRun), Date.parse("2028-03-31T01:00:00Z"));
+  assert.equal(
+    computeNextWorkspaceScheduleRunAt({ ...spec, monthly: { ...spec.monthly, shortMonth: "last_day" } }, januaryRun),
+    Date.parse("2028-02-29T01:00:00Z"),
+  );
+  assert.equal(
+    computeNextWorkspaceScheduleRunAt(spec, Date.parse("2027-12-31T01:00:00Z")),
+    Date.parse("2028-01-31T01:00:00Z"),
+  );
+});
+
+test("编辑计划保留执行指令，防止重名创建和过期表单覆盖", () => {
+  const { host, cleanup } = createTestHost();
+  try {
+    const seed = {
+      workspace: "Fintopia集团",
+      title: "投诉月报",
+      executorKind: "agent_prompt",
+      payload: { prompt: "汇总投诉" },
+      enabled: false,
+      createOnly: true,
+    } as const;
+    const base = Date.parse("2027-12-31T00:00:00Z");
+    const created = upsertWorkspaceSchedule(host, seed, base);
+    assert.ok(created.ok);
+    assert.equal(created.item.nextRunAt, null);
+    assert.equal(upsertWorkspaceSchedule(host, { ...seed, enabled: true }, base).ok, false);
+    const edit = {
+      id: created.item.id,
+      expectedUpdatedAt: created.item.updatedAt,
+      workspace: seed.workspace,
+      title: seed.title,
+      executorKind: seed.executorKind,
+      scheduleMode: "monthly",
+      monthly: { day: 5, time: "09:00", shortMonth: "skip" },
+    } as const;
+    const updated = upsertWorkspaceSchedule(host, edit, base + 1);
+    assert.ok(updated.ok);
+    assert.equal(updated.item.payload.prompt, seed.payload.prompt);
+    assert.equal(updated.item.enabled, false);
+    assert.equal(upsertWorkspaceSchedule(host, edit, base + 2).ok, false);
+    const enabled = toggleWorkspaceSchedule(host, created.item.id, true, seed.workspace, base + 3);
+    assert.ok(enabled.ok);
+    assert.equal(enabled.item.nextRunAt, Date.parse("2028-01-05T01:00:00Z"));
+  } finally {
+    cleanup();
+  }
+});
+
+test("正式运行先确认已开始，执行中重复请求不会再启动", async () => {
+  const { host, cleanup } = createTestHost();
+  let finish!: () => void;
+  let executions = 0;
+  registerWorkspaceTaskExecutor("agent_prompt", async () => {
+    executions += 1;
+    await new Promise<void>((resolve) => { finish = resolve; });
+    return { phase: "completed", status: "succeeded", summary: "已交付" };
+  });
+  try {
+    const created = upsertWorkspaceSchedule(host, {
+      workspace: "Fintopia集团", title: "月报运行回执", executorKind: "agent_prompt",
+      payload: { prompt: "汇总投诉" },
+    });
+    assert.ok(created.ok);
+    assert.ok((await startWorkspaceScheduleForUi(host, created.item.id, "Fintopia集团")).ok);
+    assert.equal(listWorkspaceSchedules(host)[0].state, "running_step1");
+    assert.equal((await startWorkspaceScheduleForUi(host, created.item.id, "Fintopia集团")).ok, false);
+    assert.equal(executions, 1);
+    finish();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(listWorkspaceScheduleRuns(host)[0].status, "succeeded");
+  } finally {
+    finish?.();
     cleanup();
   }
 });

@@ -54,6 +54,7 @@ export function WorkspaceKbPanel({
   viewMode = "all",
 }: WorkspaceKbPanelProps) {
   const [status, setStatus] = useState<KbWorkspaceStatusData | null>(null);
+  const [lastScheduleResult, setLastScheduleResult] = useState<KbWorkspaceStatusData["workspaceScheduleResult"]>();
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState("");
 
@@ -156,6 +157,7 @@ export function WorkspaceKbPanel({
     setExpandedLogBatchIds({});
     pendingReqIdsRef.current.clear();
     setStatus(null);
+    setLastScheduleResult(undefined);
     sendKbOperation(buildAssistantOpMessage("kb_workspace_status", { workspace: workspaceKey }));
   }, [workspaceKey, sendKbOperation, clearPollTimer]);
 
@@ -234,6 +236,7 @@ export function WorkspaceKbPanel({
         setNotice("已创建同事通行口令（默认永久有效）");
       } else if (op === "drop_token_update") {
         if (data.workspaceScheduleResult) {
+          setLastScheduleResult(data.workspaceScheduleResult);
           setNotice(data.workspaceScheduleResult.message);
         } else if (data.wecomWatchResult) {
           setNotice(data.wecomWatchResult.message);
@@ -1360,11 +1363,12 @@ export function WorkspaceKbPanel({
       {/* 通用工程级定时任务（无论是否开启知识库均支持配置） */}
       {showSchedulesSection && status ? (
         <WorkspaceScheduleSection
+          key={workspaceKey}
           workspaceKey={workspaceKey}
           schedules={status.workspaceSchedules ?? []}
           runs={status.workspaceScheduleRuns ?? []}
           loading={loading}
-          lastScheduleResult={status.workspaceScheduleResult}
+          lastScheduleResult={lastScheduleResult}
           sendKbOperation={sendKbOperation}
           onOpenBoard={onOpenBoard}
           setErrorText={setErrorText}

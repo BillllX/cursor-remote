@@ -160,7 +160,8 @@ export type ToolHost = {
     title?: string;
     enabled?: boolean;
     executorKind?: "wecom_watch_sync" | "wecom_mail_poll" | "http_api_ingest" | "workspace_script" | "agent_prompt";
-    scheduleMode?: "interval" | "daily_times";
+    scheduleMode?: "interval" | "daily_times" | "monthly";
+    monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
     intervalMinutes?: number;
     dailyTimes?: string[];
     activeHours?: { start: string; end: string } | null;
@@ -260,6 +261,28 @@ function tool(
 }
 
 const S = (description: string): SDKJsonValue => ({ type: "string", description });
+
+const monthlyScheduleSchema: SDKJsonValue = {
+  type: "object",
+  properties: {
+    day: { type: "integer", minimum: 1, maximum: 31, description: "每月第几日" },
+    time: S("运行时刻 HH:MM"),
+    shortMonth: { type: "string", enum: ["skip", "last_day"], description: "短月份跳过或在月底运行" },
+  },
+  required: ["day", "time", "shortMonth"],
+  additionalProperties: false,
+};
+
+function monthlySchedule(value: SDKJsonValue | undefined): Parameters<NonNullable<ToolHost["workspaceScheduleManage"]>>[0]["monthly"] {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("每月触发配置不完整");
+  const { day, time, shortMonth } = value;
+  if (typeof day !== "number" || typeof time !== "string" || (shortMonth !== "skip" && shortMonth !== "last_day")) {
+    throw new Error("请填写每月日期、运行时刻和短月份处理方式");
+  }
+  return { day, time, shortMonth };
+}
+
 
 function deviceParams(args: Args): Record<string, JSONValue> {
   return { ...args } as Record<string, JSONValue>;
@@ -1275,9 +1298,10 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         },
         scheduleMode: {
           type: "string",
-          enum: ["interval", "daily_times"],
-          description: "调度模式：interval=按固定间隔分钟数（跑完后算下次），daily_times=每日固定时刻列表",
+          enum: ["interval", "daily_times", "monthly"],
+          description: "调度模式：interval=按固定间隔分钟数（跑完后算下次），daily_times=每日固定时刻列表，monthly=每月按日期和时刻运行",
         },
+        monthly: monthlyScheduleSchema,
         intervalMinutes: { type: "number", description: "interval 模式的间隔分钟数（5~10080，默认 60）" },
         dailyTimes: {
           type: "array",
@@ -1330,7 +1354,8 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
             | "workspace_script"
             | "agent_prompt"
             | undefined,
-          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "monthly" | undefined,
+          monthly: monthlySchedule(args.monthly),
           intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
           dailyTimes: Array.isArray(args.dailyTimes)
             ? args.dailyTimes.filter((x): x is string => typeof x === "string")
@@ -1724,7 +1749,8 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
           type: "string",
           enum: ["wecom_watch_sync", "wecom_mail_poll", "http_api_ingest", "workspace_script", "agent_prompt"],
         },
-        scheduleMode: { type: "string", enum: ["interval", "daily_times"] },
+        scheduleMode: { type: "string", enum: ["interval", "daily_times", "monthly"] },
+        monthly: monthlyScheduleSchema,
         intervalMinutes: { type: "number", description: "间隔分钟数（默认 60）" },
         dailyTimes: { type: "array", items: { type: "string" }, description: "每日固定时刻列表，如 [\"08:45\", \"18:30\"]" },
         activeHours: {
@@ -1765,7 +1791,8 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
             | "workspace_script"
             | "agent_prompt"
             | undefined,
-          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "monthly" | undefined,
+          monthly: monthlySchedule(args.monthly),
           intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
           dailyTimes: Array.isArray(args.dailyTimes)
             ? args.dailyTimes.filter((x): x is string => typeof x === "string")
