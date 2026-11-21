@@ -83,12 +83,53 @@ struct SharedWorkspaceFileView: View {
     @State private var notice = ""
     @State private var busy = false
     @State private var openTarget: String?
+    @State private var question = ""
+    @State private var asking = false
+    @State private var askError = ""
+    @State private var answers: [(question: String, answer: String, result: JSONValue)] = []
+    @State private var filesOpen = false
+    @State private var confirmWrites = true
+    @State private var applying = false
+    @State private var composerBuffer = ComposerDraftBuffer()
+    @State private var composerRevision = 0
+    @State private var composerFocused = false
+    @State private var selectedModel = ""
+    private var canAsk: Bool { store.gatewayFeatures.contains("workspace_share_ask_v1") }
+    private var canEdit: Bool { store.gatewayFeatures.contains("workspace_share_edit_v1") }
 
     private var dirty: Bool { draft != saved }
     private var available: Bool { store.workspaceSharing.items.contains { $0.id == workspace.id } }
 
     var body: some View {
         List {
+            if canAsk && !filesOpen {
+                ForEach(answers.indices, id: \.self) { index in
+                    let turn = answers[index]
+                    Section {
+                        Text(turn.question).font(.headline)
+                        Text(turn.answer).textSelection(.enabled)
+                        let sources = turn.result["sources"]?.array?.compactMap(\.string) ?? []
+                        if !sources.isEmpty { Text("读取了 " + sources.joined(separator: "、")).font(.caption) }
+                        if let plan = turn.result["pending"], let id = plan["id"]?.string {
+                            ForEach(plan["changes"]?.array ?? [], id: \.self) { change in
+                                DisclosureGroup(change["path"]?.string ?? "文件") {
+                                    Text(change["preview"]?.string ?? "").textSelection(.enabled)
+                                }
+                            }
+                            Button("批准写入") { Task { await resolveChanges(index, id: id) } }.disabled(applying)
+                            Button("拒绝") { Task { await resolveChanges(index, id: id, discard: true) } }.disabled(applying)
+                        }
+                        let applied = turn.result["changes"]?["applied"]?.array?.compactMap(\.string) ?? []
+                        if !applied.isEmpty { Text("已写入 " + applied.joined(separator: "、")).font(.caption) }
+                        ForEach(turn.result["changes"]?["failed"]?.array ?? [], id: \.self) { failure in
+                            Text((failure["path"]?.string ?? "") + " · " + (failure["error"]?.string ?? "写入失败"))
+                        }
+                    }
+                }
+                if asking { ProgressView("Agent 正在处理…") }
+                if !askError.isEmpty { Text(askError).foregroundStyle(.secondary) }
+            }
+            if filesOpen || !canAsk {
             Section("来自 \(workspace.ownerName)") {
                 if !folder.isEmpty {
                     Button("返回上一级") { folder = folder.split(separator: "/").dropLast().joined(separator: "/") }.disabled(busy)
@@ -123,6 +164,17 @@ struct SharedWorkspaceFileView: View {
                 }
             }
             if !notice.isEmpty { Text(notice) }
+            }
+        }
+        .toolbar {
+            if canAsk {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(filesOpen ? "对话" : "文件") { filesOpen.toggle() }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            if canAsk && !filesOpen { sharedComposer }
         }
         .navigationTitle(store.workspaceSharing.items.first { $0.id == workspace.id }?.name ?? workspace.name)
         .task(id: folder) { await loadFiles() }
@@ -133,6 +185,84 @@ struct SharedWorkspaceFileView: View {
                 if let target = openTarget { Task { await open(target) } }
                 openTarget = nil
             }
+        }
+    }
+
+    private var sharedComposer: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                let availableModels = store.models.filter { !$0.contains(":") }
+                Menu(ModelCatalog.label(for: selectedModel.isEmpty ? (availableModels.first ?? "") : selectedModel)) {
+                    ForEach(availableModels, id: \.self) { model in
+                        Button(ModelCatalog.label(for: model)) { selectedModel = model }
+                    }
+                }
+                if canEdit { Toggle("确认写", isOn: $confirmWrites).toggleStyle(.button) }
+            }
+            HStack(alignment: .bottom, spacing: 6) {
+                ComposerEntryField(placeholder: "交代要做的事", lineLimit: 1 ... 6, buffer: composerBuffer,
+                    revision: composerRevision, focused: $composerFocused, submitOnReturn: true,
+                    onEdit: { question = $0 }, onSubmit: { Task { await askAgent() } })
+                    .padding(.vertical, 10).padding(.leading, 12)
+                if asking {
+                    Button {
+                        Task { _ = try? await store.workspaceSharing.request("cancel", workspace: workspace.id) }
+                    } label: { Image(systemName: "stop.fill").frame(width: 36, height: 36) }
+                    .accessibilityLabel("停止回复")
+                } else {
+                    Button { Task { await askAgent() } } label: {
+                        Image(systemName: "arrow.up").frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("发送")
+                    .disabled(question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .padding(4)
+            .modifier(CapsuleSurface(focused: composerFocused))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    private func resolveChanges(_ index: Int, id: String, discard: Bool = false) async {
+        guard !applying else { return }
+        applying = true
+        defer { applying = false }
+        do {
+            let applied = try await store.workspaceSharing.request("apply", workspace: workspace.id,
+                fields: ["changeId": .string(id), "discard": .bool(discard)])
+            guard available, answers.indices.contains(index), var result = answers[index].result.object else { return }
+            result.removeValue(forKey: "pending")
+            if !discard { result["changes"] = applied }
+            answers[index].result = .object(result)
+            if !discard { await loadFiles() }
+        } catch { askError = error.localizedDescription }
+    }
+
+    private func askAgent() async {
+        let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !asking, available, !text.isEmpty else { return }
+        asking = true
+        askError = ""
+        defer { asking = false }
+        let history = answers.suffix(4).map { turn in
+            JSONValue.object(["question": .string(turn.question), "answer": .string(turn.answer)])
+        }
+        do {
+            var fields: [String: JSONValue] = ["question": .string(text), "path": .string(path), "history": .array(history)]
+            if canEdit { fields["confirmWrites"] = .bool(confirmWrites) }
+            if !selectedModel.isEmpty { fields["model"] = .string(selectedModel) }
+            let result = try await store.workspaceSharing.request("ask", workspace: workspace.id, fields: fields)
+            guard available, let answer = result["answer"]?.string else { return }
+            answers.append((text, answer, result))
+            if question.trimmingCharacters(in: .whitespacesAndNewlines) == text {
+                question = ""
+                composerBuffer.text = ""
+                composerRevision += 1
+            }
+            if result["changes"] != nil { await loadFiles() }
+        } catch {
+            if (error as? WorkspaceShareFailure)?.code == "UNAVAILABLE" { dismiss() }
+            else { askError = error.localizedDescription }
         }
     }
 

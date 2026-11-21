@@ -27,7 +27,7 @@ import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import { ShareWorkspaceDialog, SharedWorkspaceFiles, type ShareCall } from "./workspace-sharing/Sharing";
 import { WorkspaceShareClient } from "../lib/workspaceShareClient";
-import { WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
+import { WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -135,6 +135,8 @@ export default function ChatApp() {
   groupMenuRef.current = groupMenu;
   const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
+  const [sharedAskAvailable, setSharedAskAvailable] = useState(false);
+  const [sharedEditAvailable, setSharedEditAvailable] = useState(false);
   const [sharingAvailable,setSharingAvailable] = useState(false);
   const [sharedWorkspaces,setSharedWorkspaces] = useState<SharedWorkspace[]>([]);
   const [sharedId,setSharedId] = useState("");
@@ -814,6 +816,8 @@ export default function ChatApp() {
             if (nextTenant) tenantIdRef.current = nextTenant;
             const canShare=message.features?.includes(WORKSPACE_SHARE_CAP) ?? false;
             setSharingAvailable(canShare);
+            setSharedAskAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_ASK_CAP)));
+            setSharedEditAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_EDIT_CAP)));
             if(!canShare) clearWorkspaceSharing();
             setIsAdmin(Boolean(message.admin));
             if (!message.admin) {
@@ -5276,7 +5280,7 @@ export default function ChatApp() {
         }}
         onClick={() => setNavOpen(false)}
       />
-      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare}
+      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare} canAsk={sharedAskAvailable} canEdit={sharedEditAvailable} models={models} defaultModel={model} connected={connected && unlocked}
         onSwitch={openWorkspaceSwitcher} onUnavailable={()=>{setSharedId("");void refreshSharedWorkspaces();setNotice("共享工作区已不可访问");}} /> : <>
       <Sidebar
         navDrag={navDrag}

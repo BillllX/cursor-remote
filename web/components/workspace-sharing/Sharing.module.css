@@ -75,3 +75,28 @@
     overflow: auto;
   }
 }
+.columns[hidden] {
+  display: none;
+}
+.questions {
+  display: flex;
+  flex-direction: column;
+  min-height: 360px;
+  height: calc(100% - 64px);
+}
+.questions :global(.composer-dock) {
+  position: relative;
+}
+.questions pre {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.answer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.empty {
+  text-align: center;
+  color: var(--muted);
+}

@@ -1,8 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { SharedFileEntry, SharedWorkspace, SharePerson, WorkspaceShareRequest } from "@shared/workspaceShare";
+import type {
+  SharedFileEntry,
+  SharedWorkspace,
+  SharedWorkspaceTurn,
+  SharedWorkspaceAnswer,
+  SharedWorkspaceApplied,
+  SharePerson,
+  WorkspaceShareRequest,
+} from "@shared/workspaceShare";
 import { useFocusTrap } from "../../lib/useFocusTrap";
+import { Composer } from "../chat/Composer";
 import styles from "./Sharing.module.css";
 
 export type ShareCall = <T>(action: Omit<WorkspaceShareRequest, "type" | "requestId">) => Promise<T>;
@@ -113,19 +122,235 @@ export function ShareWorkspaceDialog({
   );
 }
 
+function SharedWorkspaceQuestions({
+  workspace,
+  filePath,
+  call,
+  onUnavailable,
+  canEdit,
+  models,
+  defaultModel,
+  connected,
+  refreshFiles,
+}: {
+  workspace: SharedWorkspace;
+  filePath?: string;
+  call: ShareCall;
+  onUnavailable: () => void;
+  canEdit: boolean;
+  models: string[];
+  defaultModel: string;
+  connected: boolean;
+  refreshFiles: () => void;
+}) {
+  const [question, setQuestion] = useState("");
+  const [turns, setTurns] = useState<(SharedWorkspaceTurn & SharedWorkspaceAnswer)[]>([]);
+  const [pending, setPending] = useState("");
+  const [error, setError] = useState("");
+  const [pickedModel, setModel] = useState("");
+  const [confirmWrites, setConfirmWrites] = useState(true);
+  const [applying, setApplying] = useState(false);
+  const mounted = useRef(true);
+  const bottom = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: "end" });
+  }, [turns, pending]);
+  const cursorModels = models.filter((model) => !model.includes(":"));
+  const model = cursorModels.includes(pickedModel)
+    ? pickedModel
+    : cursorModels.includes(defaultModel)
+      ? defaultModel
+      : cursorModels[0] || "";
+  function fail(failure: unknown) {
+    const err = failure as Error & { code?: string };
+    if (err.code === "UNAVAILABLE") onUnavailable();
+    else setError(err.message);
+  }
+  async function ask(raw?: string) {
+    const text = (raw ?? question).trim();
+    if (!text || pending || !connected) return;
+    setPending(text);
+    setQuestion("");
+    setError("");
+    try {
+      const answer = await call<SharedWorkspaceAnswer>({
+        action: "ask",
+        workspace: workspace.id,
+        path: filePath,
+        question: text,
+        model,
+        confirmWrites: canEdit ? confirmWrites : undefined,
+        history: turns.slice(-4).map(({ question, answer }) => ({ question, answer })),
+      });
+      if (!mounted.current) return;
+      setTurns((previous) => [...previous, { question: text, ...answer }]);
+      if (answer.changes?.applied.length) refreshFiles();
+    } catch (failure) {
+      if (!mounted.current) return;
+      fail(failure);
+      setQuestion((current) => current || text);
+    } finally {
+      if (mounted.current) setPending("");
+    }
+  }
+  function updateTurn(index: number, changes?: SharedWorkspaceApplied) {
+    setTurns((previous) => previous.map((turn, i) => (i === index ? { ...turn, pending: undefined, changes } : turn)));
+  }
+  async function apply(index: number, changeId: string, discard = false) {
+    setApplying(true);
+    setError("");
+    try {
+      const changes = await call<SharedWorkspaceApplied>({
+        action: "apply",
+        workspace: workspace.id,
+        changeId,
+        discard,
+      });
+      if (!mounted.current) return;
+      updateTurn(index, discard ? undefined : changes);
+      if (changes.applied.length) refreshFiles();
+    } catch (failure) {
+      if (mounted.current) fail(failure);
+    } finally {
+      if (mounted.current) setApplying(false);
+    }
+  }
+  return (
+    <section className={styles.questions} aria-label="工作区 Agent">
+      <div className="thread" role="log" aria-live="polite">
+        <div className="thread-inner">
+          {!turns.length && !pending && <p className={styles.empty}>交代 Agent 查阅资料或修改文件</p>}
+          {turns.map((turn, index) => (
+            <article className="turn" key={index}>
+              <div className="turn-user">
+                <div className="user-bubble">{turn.question}</div>
+              </div>
+              <div className="assistant">
+                <p className={styles.answer}>{turn.answer}</p>
+                {turn.sources.length > 0 && <small>读取了 {turn.sources.join("、")}</small>}
+                {turn.pending && (
+                  <div className="approval-row">
+                    <div>
+                      {turn.pending.changes.map((change) => (
+                        <details key={change.path}>
+                          <summary>
+                            {change.kind === "write" ? "修改" : "新建"} {change.path}
+                          </summary>
+                          {change.preview && <pre>{change.preview}</pre>}
+                        </details>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="pill"
+                      disabled={applying}
+                      onClick={() => void apply(index, turn.pending!.id)}
+                    >
+                      批准写入
+                    </button>
+                    <button
+                      type="button"
+                      className="pill"
+                      disabled={applying}
+                      onClick={() => void apply(index, turn.pending!.id, true)}
+                    >
+                      拒绝
+                    </button>
+                  </div>
+                )}
+                {turn.changes && (
+                  <div role="status">
+                    {turn.changes.applied.length > 0 && <p>已写入 {turn.changes.applied.join("、")}</p>}
+                    {turn.changes.failed.map(({ path, error }) => (
+                      <p key={path}>
+                        {path} · {error}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          ))}
+          {pending && (
+            <article className="turn">
+              <div className="turn-user">
+                <div className="user-bubble">{pending}</div>
+              </div>
+              <p>Agent 正在处理…</p>
+            </article>
+          )}
+          {error && <p role="alert">{error}</p>}
+          <div ref={bottom} />
+        </div>
+      </div>
+      <div className="composer-dock">
+        <div className="composer-wrap">
+          <Composer
+            sharedScope={{ editable: canEdit }}
+            draft={question}
+            epoch={0}
+            images={[]}
+            model={model}
+            models={cursorModels}
+            setModel={setModel}
+            confirmWrites={confirmWrites}
+            setConfirmWrites={setConfirmWrites}
+            policy="baseline"
+            setPolicy={() => {}}
+            busy={Boolean(pending)}
+            connected={connected}
+            onSubmit={(raw) => void ask(raw)}
+            onStop={() => void call({ action: "cancel", workspace: workspace.id }).catch(fail)}
+            onUndo={() => {}}
+            onRestore={() => {}}
+            checkpoints={[]}
+            onAddImages={() => {}}
+            onRemoveImage={() => {}}
+            fileHits={[]}
+            mentionQuery={null}
+            onDraftChange={setQuestion}
+            onPickFile={() => {}}
+            onOpenFile={() => {}}
+            onRemoveMention={() => {}}
+            onDismissMention={() => {}}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 type OpenFile = { path: string; content: string; revision: string };
 export function SharedWorkspaceFiles({
   workspace,
   call,
+  canAsk,
+  canEdit,
+  models,
+  defaultModel,
+  connected,
   onSwitch,
   onUnavailable,
 }: {
   workspace: SharedWorkspace;
   call: ShareCall;
+  canAsk: boolean;
+  canEdit: boolean;
+  models: string[];
+  defaultModel: string;
+  connected: boolean;
   onSwitch: () => void;
   onUnavailable: () => void;
 }) {
   const [dir, setDir] = useState("");
+  const [filesOpen, setFilesOpen] = useState(!canAsk);
+  const [filesRevision, refreshFiles] = useState(0);
   const [entries, setEntries] = useState<SharedFileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [file, setFile] = useState<OpenFile>();
@@ -164,7 +389,7 @@ export function SharedWorkspaceFiles({
     };
     // 项目和目录变化时重新读取，当前文件编辑状态由独立操作维护。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace.id, dir, call]);
+  }, [workspace.id, dir, call, filesRevision]);
   async function read(path: string) {
     const result = await call<Omit<OpenFile, "path">>({ action: "read", workspace: workspace.id, path });
     return { path, ...result };
@@ -233,8 +458,26 @@ export function SharedWorkspaceFiles({
         >
           切换工作区
         </button>
+        {canAsk && (
+          <button type="button" className="pill" aria-pressed={filesOpen} onClick={() => setFilesOpen(!filesOpen)}>
+            文件
+          </button>
+        )}
       </header>
-      <div className={styles.columns}>
+      {canAsk && (
+        <SharedWorkspaceQuestions
+          workspace={workspace}
+          filePath={file?.path}
+          call={call}
+          onUnavailable={onUnavailable}
+          canEdit={canEdit}
+          models={models}
+          defaultModel={defaultModel}
+          connected={connected}
+          refreshFiles={() => refreshFiles((version) => version + 1)}
+        />
+      )}
+      <div className={styles.columns} hidden={!filesOpen}>
         <nav aria-label="文件">
           <h2>文件</h2>
           {dir && (

@@ -1,5 +1,9 @@
 import { workspaceSharingSupported } from "../../workspace/sharing.ts";
-import { WORKSPACE_SHARE_CAP } from "../../../../shared/workspaceShare.ts";
+import {
+  WORKSPACE_SHARE_ASK_CAP,
+  WORKSPACE_SHARE_EDIT_CAP,
+  WORKSPACE_SHARE_CAP,
+} from "../../../../shared/workspaceShare.ts";
 // 登录：校验口令、绑定租户、下发 ready 与当前状态（鉴权之前唯一可用的业务消息）
 import { resolve } from "node:path";
 import { defaultPolicy } from "../../../../shared/policy.ts";
@@ -95,7 +99,9 @@ export function onHello({ ws, conn, state }: WsConnCtx, message: MessageOf<"hell
       assistantName: assistantName(tenant),
       assistantChatId: assistantChatIdOf(tenant),
       features: [
-        ...(conn.caps.has(WORKSPACE_SHARE_CAP) && workspaceSharingSupported() ? [WORKSPACE_SHARE_CAP] : []),
+        ...(conn.caps.has(WORKSPACE_SHARE_CAP) && workspaceSharingSupported()
+          ? [WORKSPACE_SHARE_CAP, WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP]
+          : []),
         "turn_files",
         "read_sha",
         "read_req_id",

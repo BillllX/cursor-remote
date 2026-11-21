@@ -1,4 +1,8 @@
-import type { WorkspaceShareRequest, WorkspaceShareResult } from "@shared/workspaceShare";
+import {
+  WORKSPACE_SHARE_ASK_TIMEOUT_MS,
+  type WorkspaceShareRequest,
+  type WorkspaceShareResult,
+} from "@shared/workspaceShare";
 
 export class WorkspaceShareClient {
   private readonly pending = new Map<string, { settle: (frame: WorkspaceShareResult) => void; cancel: () => void }>();
@@ -16,10 +20,13 @@ export class WorkspaceShareClient {
         finish();
         reject(new Error("共享连接已断开"));
       };
-      const timer = setTimeout(() => {
-        finish();
-        reject(new Error("共享请求超时，请重试"));
-      }, 12000);
+      const timer = setTimeout(
+        () => {
+          finish();
+          reject(new Error("共享请求超时，请重试"));
+        },
+        action.action === "ask" ? WORKSPACE_SHARE_ASK_TIMEOUT_MS + 10_000 : 12_000,
+      );
       this.pending.set(requestId, {
         cancel,
         settle: (frame) => {

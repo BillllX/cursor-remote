@@ -38,11 +38,12 @@ final class WorkspaceShareStore {
         frame["requestId"] = .string(id)
         frame["action"] = .string(action)
         if let workspace { frame["workspace"] = .string(workspace) }
+        let timeout = action == "ask" ? 100 : 12
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             sendFrame(.object(frame))
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(12))
+                try? await Task.sleep(for: .seconds(timeout))
                 self?.pending.removeValue(forKey: id)?.resume(throwing: WorkspaceShareFailure(message: "共享请求超时，请重试"))
             }
         }

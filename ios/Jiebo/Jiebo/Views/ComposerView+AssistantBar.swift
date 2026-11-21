@@ -169,7 +169,7 @@ extension ComposerView {
 }
 
 /// 输入胶囊跟随主题选择实底或玻璃表面，聚焦时加深描边。
-private struct CapsuleSurface: ViewModifier {
+struct CapsuleSurface: ViewModifier {
     var focused: Bool
 
     func body(content: Content) -> some View {

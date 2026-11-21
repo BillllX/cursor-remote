@@ -16,10 +16,11 @@ import { randomUUID } from "node:crypto";
 import { createBodyStore } from "../src/chatBodies.ts";
 import { emptyDisk, type Tenant } from "../src/tenants.ts";
 import { migrateWorkspaceAgent, removeWorkspaceAgent } from "../src/workspace/agents.ts";
+import { applySharedWorkspaceChanges, askSharedWorkspace } from "../src/workspace/shareAsk.ts";
 import { WorkspaceSharing, workspaceSharingSupported } from "../src/workspace/sharing.ts";
 import type { SharedWorkspace, WorkspaceShareRequest } from "../../shared/workspaceShare.ts";
 
-function fixture(t: import("node:test").TestContext) {
+function fixture(t: import("node:test").TestContext, suffix = "") {
   const root = mkdtempSync(join(tmpdir(), "workspace-share-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   function account(id: string, name: string, imHidden = false): Tenant {
@@ -41,7 +42,7 @@ function fixture(t: import("node:test").TestContext) {
     };
   }
   const owner = account("owner", "刘青"),
-    member = account("editor", "王琳"),
+    member = account("editor" + suffix, "王琳"),
     other = account("other", "王琳"),
     hidden = account("hidden", "隐藏", true);
   const tenantList = () => [owner, member, other, hidden];
@@ -181,4 +182,167 @@ test("兼容早期新版共享数组，撤权写回原台账", linuxOnly, (t) =>
   f.share([]);
   assert.deepEqual(f.list(f.member), []);
   assert.deepEqual(JSON.parse(readFileSync(previous, "utf8")), []);
+});
+
+test("共享 Agent 只用授权资料回答，并返回实际读取的来源", linuxOnly, async (t) => {
+  const f = fixture(t);
+  f.share([f.member.id]);
+  const [workspace] = f.list(f.member);
+  const req = {
+    type: "workspace_share",
+    requestId: randomUUID(),
+    action: "ask",
+    workspace: workspace!.id,
+    question: "继续看记录",
+    history: [{ question: "先找记录", answer: "找到了" }],
+  } as const;
+  const deps: NonNullable<Parameters<typeof askSharedWorkspace>[4]> = {
+    apiKey: () => "fixture",
+    models: async () => ["fixture-model"],
+    prompt: async (text, options) => {
+      assert.match(text, /先找记录/);
+      assert.deepEqual(options.tools, ["mcp"]);
+      assert.deepEqual(options.local?.settingSources, []);
+      assert.notEqual(options.local?.cwd, f.workspace);
+      const tools = options.local?.customTools;
+      assert.ok(tools);
+      assert.deepEqual(Object.keys(tools).sort(), ["find_shared_files", "list_shared_files", "read_shared_file"]);
+      const search = await tools.find_shared_files!.execute({ keyword: "记录" }, {});
+      assert.deepEqual(search, { matches: ["资料/记录.txt"], truncated: false });
+      const read = tools.read_shared_file!;
+      assert.deepEqual(await read.execute({ path: "资料/记录.txt" }, {}), {
+        path: "资料/记录.txt",
+        content: "原内容",
+        more: false,
+      });
+      assert.match(JSON.stringify(await read.execute({ path: "../private.txt" }, {})), /无法访问/);
+      return { id: "run", status: "finished", result: "记录里的原内容" };
+    },
+  };
+  const signal = new AbortController().signal;
+  const request = { ...req, history: [...req.history] };
+  await assert.rejects(askSharedWorkspace(f.service, f.hidden, request, signal, deps), /不可访问/);
+  assert.deepEqual(await askSharedWorkspace(f.service, f.member, request, signal, deps), {
+    answer: "记录里的原内容",
+    sources: ["资料/记录.txt"],
+  });
+  assert.equal(f.owner.disk.chats.length, 0);
+});
+
+test("共享 Agent 问答期间撤权会阻止后续读取和答案返回", linuxOnly, async (t) => {
+  const f = fixture(t);
+  f.share([f.other.id]);
+  const [workspace] = f.list(f.other);
+  await assert.rejects(
+    askSharedWorkspace(
+      f.service,
+      f.other,
+      {
+        type: "workspace_share",
+        requestId: randomUUID(),
+        action: "ask",
+        workspace: workspace!.id,
+        question: "查一下记录",
+      },
+      new AbortController().signal,
+      {
+        apiKey: () => "fixture",
+        models: async () => ["fixture-model"],
+        prompt: async (_text, options) => {
+          f.share([]);
+          const result = await options.local?.customTools?.read_shared_file?.execute({ path: "资料/记录.txt" }, {});
+          assert.match(JSON.stringify(result), /无法访问/);
+          return { id: "run", status: "finished", result: "答案不能返回" };
+        },
+      },
+    ),
+    /不可访问/,
+  );
+});
+
+test("共享 Agent 批准后写入原文件并新建文件，拒绝重复确认和其他成员确认", linuxOnly, async (t) => {
+  const f = fixture(t, "-approval");
+  f.share([f.member.id, f.other.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  const req = {
+    type: "workspace_share",
+    requestId: randomUUID(),
+    action: "ask",
+    workspace,
+    question: "更新记录并新建目录及文件",
+    confirmWrites: true,
+  } as const;
+  const answer = await askSharedWorkspace(f.service, f.member, req, new AbortController().signal, {
+    apiKey: () => "fixture",
+    models: async () => ["fixture-model"],
+    prompt: async (_text, options) => {
+      const tools = options.local!.customTools!;
+      const read = tools.read_shared_file!;
+      const change = tools.change_shared_file!;
+      assert.match(
+        JSON.stringify(await change.execute({ kind: "write", path: "资料/记录.txt", content: "不能盲改" }, {})),
+        /无法访问/,
+      );
+      await read.execute({ path: "资料/记录.txt" }, {});
+      assert.match(
+        JSON.stringify(await change.execute({ kind: "write", path: "资料/记录.txt", content: "新版" }, {})),
+        /planned/,
+      );
+      assert.match(JSON.stringify(await change.execute({ kind: "mkdir", path: "交付" }, {})), /planned/);
+      assert.match(
+        JSON.stringify(await change.execute({ kind: "create", path: "交付/说明.md", content: "说明" }, {})),
+        /planned/,
+      );
+      assert.match(
+        JSON.stringify(await change.execute({ kind: "create", path: "../越界.md", content: "不要写" }, {})),
+        /无法访问/,
+      );
+      return { id: "run", status: "finished", result: "已准备三项修改" };
+    },
+  });
+  const file = join(f.workspace, "资料", "记录.txt");
+  assert.equal(readFileSync(file, "utf8"), "原内容");
+  const apply = { ...req, action: "apply" as const, changeId: answer.pending!.id };
+  assert.throws(() => applySharedWorkspaceChanges(f.service, f.other, apply), /失效/);
+  assert.deepEqual(applySharedWorkspaceChanges(f.service, f.member, apply), {
+    applied: ["资料/记录.txt", "交付", "交付/说明.md"],
+    failed: [],
+  });
+  assert.equal(readFileSync(file, "utf8"), "新版");
+  assert.equal(readFileSync(join(f.workspace, "交付", "说明.md"), "utf8"), "说明");
+  assert.throws(() => applySharedWorkspaceChanges(f.service, f.member, apply), /失效/);
+});
+
+test("共享 Agent 直写也保留并发保存的最新版本", linuxOnly, async (t) => {
+  const f = fixture(t, "-direct");
+  f.share([f.member.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  const file = join(f.workspace, "资料", "记录.txt");
+  const answer = await askSharedWorkspace(
+    f.service,
+    f.member,
+    {
+      type: "workspace_share",
+      requestId: randomUUID(),
+      action: "ask",
+      workspace,
+      question: "修改记录",
+      confirmWrites: false,
+    },
+    new AbortController().signal,
+    {
+      apiKey: () => "fixture",
+      models: async () => ["fixture-model"],
+      prompt: async (_text, options) => {
+        const tools = options.local!.customTools!;
+        await tools.read_shared_file!.execute({ path: "资料/记录.txt" }, {});
+        await tools.change_shared_file!.execute({ kind: "write", path: "资料/记录.txt", content: "旧版基准" }, {});
+        writeFileSync(file, "同事的新保存");
+        return { id: "run", status: "finished", result: "已准备修改" };
+      },
+    },
+  );
+  assert.deepEqual(answer.changes?.applied, []);
+  assert.match(answer.changes!.failed[0]!.error, /已被修改/);
+  assert.equal(readFileSync(file, "utf8"), "同事的新保存");
 });

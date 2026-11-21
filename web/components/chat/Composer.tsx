@@ -47,6 +47,7 @@ export function Composer({
   caret,
   onCaretApplied,
   centered,
+  sharedScope,
 }: {
   draft: string;
   epoch: number;
@@ -82,6 +83,7 @@ export function Composer({
   caret?: number | null;
   onCaretApplied?: () => void;
   centered?: boolean;
+  sharedScope?: { editable: boolean };
 }) {
   const mentioning = mentionQuery != null;
   const mentionListId = useId();
@@ -146,7 +148,7 @@ export function Composer({
     return value;
   }
   function sendNow() {
-    if (!canSend || sendLockRef.current) return;
+    if (!canSend || (sharedScope && busy) || sendLockRef.current) return;
     sendLockRef.current = true;
     onSubmit(flushDraft());
     queueMicrotask(() => {
@@ -168,7 +170,7 @@ export function Composer({
         onDrop={(event) => {
           event.preventDefault();
           const list = Array.from(event.dataTransfer.files);
-          if (!list.length) return;
+          if (!list.length || sharedScope) return;
           if (onDropFiles) onDropFiles(list);
           else onAddImages(list);
         }}
@@ -252,7 +254,17 @@ export function Composer({
             aria-controls={mentioning ? mentionListId : undefined}
             aria-activedescendant={mentioning && fileHits.length ? `${mentionListId}-${mentionPick}` : undefined}
             defaultValue={draft}
-            placeholder={!connected ? "正在连服务器…" : busy ? "正在动手，Enter 会排队" : "交代要做的事，@ 引用文件"}
+            placeholder={
+              !connected
+                ? "正在连服务器…"
+                : busy
+                  ? sharedScope
+                    ? "正在动手…"
+                    : "正在动手，Enter 会排队"
+                  : sharedScope
+                    ? "交代要做的事"
+                    : "交代要做的事，@ 引用文件"
+            }
             autoCorrect="off"
             autoCapitalize="off"
             autoComplete="off"
@@ -260,7 +272,7 @@ export function Composer({
             enterKeyHint="send"
             onPaste={(event) => {
               const files = [...event.clipboardData.files];
-              if (!files.length) return;
+              if (!files.length || sharedScope) return;
               event.preventDefault();
               if (onDropFiles) onDropFiles(files);
               else onAddImages(files);
@@ -320,25 +332,27 @@ export function Composer({
           />
         </div>
         <div className="composer-bar">
-          <label className="pill icon composer-attach" title="添加文件或图片" aria-label="添加文件或图片">
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-            <input
-              type="file"
-              multiple
-              className="composer-file-input"
-              onClick={(event) => {
-                event.currentTarget.value = "";
-              }}
-              onChange={(event) => {
-                const list = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
-                if (!list.length) return;
-                if (onDropFiles) onDropFiles(list);
-                else onAddImages(list);
-              }}
-            />
-          </label>
+          {!sharedScope && (
+            <label className="pill icon composer-attach" title="添加文件或图片" aria-label="添加文件或图片">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 3.2v9.6M3.2 8h9.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+              <input
+                type="file"
+                multiple
+                className="composer-file-input"
+                onClick={(event) => {
+                  event.currentTarget.value = "";
+                }}
+                onChange={(event) => {
+                  const list = event.currentTarget.files ? Array.from(event.currentTarget.files) : [];
+                  if (!list.length) return;
+                  if (onDropFiles) onDropFiles(list);
+                  else onAddImages(list);
+                }}
+              />
+            </label>
+          )}
           <ModelPicker
             model={model}
             models={models}
@@ -346,146 +360,154 @@ export function Composer({
             dismiss={moreOpen}
             onOpen={() => setMoreOpen(false)}
           />
-          <button
-            type="button"
-            className={`mode-btn confirm-btn policy-btn${policy === "plane" ? " on" : ""}`}
-            title={policy === "plane" ? "策略层：写操作按条放行、方言 overlay" : "现状路径，用于对照"}
-            aria-label={policy === "plane" ? "策略层" : "现状"}
-            onClick={() => setPolicy(policy === "plane" ? "baseline" : "plane")}
-          >
-            <span className="confirm-label">{policy === "plane" ? "策略层" : "现状"}</span>
-          </button>
-          <button
-            type="button"
-            className={`mode-btn confirm-btn${confirmWrites ? " on" : ""}`}
-            title={confirmWrites ? "写入前先问你" : "直接写入"}
-            aria-label={confirmWrites ? "确认写" : "直写"}
-            onClick={() => setConfirmWrites(!confirmWrites)}
-          >
-            {confirmWrites ? <IconShield /> : <IconWrite />}
-            <span className="confirm-label">{confirmWrites ? "确认写" : "直写"}</span>
-          </button>
-          <span className="grow" />
-          <div className="composer-more">
+          {!sharedScope && (
             <button
               type="button"
-              className="pill icon"
-              title="选择要运用的技能（Skill）"
-              aria-label="选择要运用的技能"
-              onClick={() => {
-                setSkillsOpen((open) => !open);
-                setMoreOpen(false);
-              }}
+              className={`mode-btn confirm-btn policy-btn${policy === "plane" ? " on" : ""}`}
+              title={policy === "plane" ? "策略层：写操作按条放行、方言 overlay" : "现状路径，用于对照"}
+              aria-label={policy === "plane" ? "策略层" : "现状"}
+              onClick={() => setPolicy(policy === "plane" ? "baseline" : "plane")}
             >
-              ⚡
+              <span className="confirm-label">{policy === "plane" ? "策略层" : "现状"}</span>
             </button>
-            {skillsOpen ? (
-              <div className="composer-menu" role="menu" aria-label="快捷技能">
-                <div className="composer-menu-label">运用技能（Skill）</div>
-                {QUICK_COMPOSER_SKILLS.map((sk) => (
+          )}
+          {(!sharedScope || sharedScope.editable) && (
+            <button
+              type="button"
+              className={`mode-btn confirm-btn${confirmWrites ? " on" : ""}`}
+              title={confirmWrites ? "写入前先问你" : "直接写入"}
+              aria-label={confirmWrites ? "确认写" : "直写"}
+              onClick={() => setConfirmWrites(!confirmWrites)}
+            >
+              {confirmWrites ? <IconShield /> : <IconWrite />}
+              <span className="confirm-label">{confirmWrites ? "确认写" : "直写"}</span>
+            </button>
+          )}
+          <span className="grow" />
+          {!sharedScope && (
+            <>
+              <div className="composer-more">
+                <button
+                  type="button"
+                  className="pill icon"
+                  title="选择要运用的技能（Skill）"
+                  aria-label="选择要运用的技能"
+                  onClick={() => {
+                    setSkillsOpen((open) => !open);
+                    setMoreOpen(false);
+                  }}
+                >
+                  ⚡
+                </button>
+                {skillsOpen ? (
+                  <div className="composer-menu" role="menu" aria-label="快捷技能">
+                    <div className="composer-menu-label">运用技能（Skill）</div>
+                    {QUICK_COMPOSER_SKILLS.map((sk) => (
+                      <button
+                        key={sk.id}
+                        type="button"
+                        onClick={() => {
+                          const prefix = `[请运用技能 ${sk.id}（${sk.name}）] `;
+                          const current = inputRef.current ? inputRef.current.value : text;
+                          const nextVal = current.includes(sk.id) ? current : `${prefix}${current}`;
+                          setText(nextVal);
+                          if (inputRef.current) {
+                            inputRef.current.value = nextVal;
+                            inputRef.current.focus();
+                          }
+                          onDraftChange(nextVal, nextVal.length);
+                          setSkillsOpen(false);
+                        }}
+                      >
+                        ⚡ {sk.name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              <div className="composer-more">
+                <button
+                  type="button"
+                  className="pill icon"
+                  title="更多"
+                  onClick={() => {
+                    setSkillsOpen(false);
+                    setMoreOpen((open) => {
+                      const next = !open;
+                      if (next) onOpenMenu?.();
+                      return next;
+                    });
+                  }}
+                >
+                  ···
+                </button>
+                {moreOpen ? (
+                  <div className="composer-menu">
                     <button
-                      key={sk.id}
                       type="button"
+                      className={confirmWrites ? "on" : ""}
                       onClick={() => {
-                        const prefix = `[请运用技能 ${sk.id}（${sk.name}）] `;
-                        const current = inputRef.current ? inputRef.current.value : text;
-                        const nextVal = current.includes(sk.id) ? current : `${prefix}${current}`;
-                        setText(nextVal);
-                        if (inputRef.current) {
-                          inputRef.current.value = nextVal;
-                          inputRef.current.focus();
-                        }
-                        onDraftChange(nextVal, nextVal.length);
-                        setSkillsOpen(false);
+                        setConfirmWrites(!confirmWrites);
+                        setMoreOpen(false);
                       }}
                     >
-                      ⚡ {sk.name}
+                      {confirmWrites ? "确认写入 · 开" : "确认写入"}
                     </button>
-                  ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="composer-more">
-            <button
-              type="button"
-              className="pill icon"
-              title="更多"
-              onClick={() => {
-                setSkillsOpen(false);
-                setMoreOpen((open) => {
-                  const next = !open;
-                  if (next) onOpenMenu?.();
-                  return next;
-                });
-              }}
-            >
-              ···
-            </button>
-            {moreOpen ? (
-              <div className="composer-menu">
-                <button
-                  type="button"
-                  className={confirmWrites ? "on" : ""}
-                  onClick={() => {
-                    setConfirmWrites(!confirmWrites);
-                    setMoreOpen(false);
-                  }}
-                >
-                  {confirmWrites ? "确认写入 · 开" : "确认写入"}
-                </button>
-                <button
-                  type="button"
-                  className={`narrow-only${policy === "plane" ? " on" : ""}`}
-                  onClick={() => {
-                    setPolicy(policy === "plane" ? "baseline" : "plane");
-                    setMoreOpen(false);
-                  }}
-                >
-                  {policy === "plane" ? "策略层 · 开（点一下切回现状）" : "现状路径（点一下切到策略层）"}
-                </button>
-                {!busy ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onUndo();
-                      setMoreOpen(false);
-                    }}
-                  >
-                    撤销上一次
-                  </button>
-                ) : null}
-                {checkpoints.length ? (
-                  <>
-                    <div className="composer-menu-label">检查点 · {checkpoints.length}</div>
-                    {checkpoints.map((item) => (
+                    <button
+                      type="button"
+                      className={`narrow-only${policy === "plane" ? " on" : ""}`}
+                      onClick={() => {
+                        setPolicy(policy === "plane" ? "baseline" : "plane");
+                        setMoreOpen(false);
+                      }}
+                    >
+                      {policy === "plane" ? "策略层 · 开（点一下切回现状）" : "现状路径（点一下切到策略层）"}
+                    </button>
+                    {!busy ? (
                       <button
-                        key={`${item.id}-${item.createdAt}`}
                         type="button"
-                        disabled={busy}
                         onClick={() => {
-                          if (busy) return;
-                          onRestore(item.id);
+                          onUndo();
                           setMoreOpen(false);
                         }}
                       >
-                        还原 · {item.label}
+                        撤销上一次
                       </button>
-                    ))}
-                  </>
-                ) : (
-                  <button type="button" disabled>
-                    还没有检查点
-                  </button>
-                )}
+                    ) : null}
+                    {checkpoints.length ? (
+                      <>
+                        <div className="composer-menu-label">检查点 · {checkpoints.length}</div>
+                        {checkpoints.map((item) => (
+                          <button
+                            key={`${item.id}-${item.createdAt}`}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => {
+                              if (busy) return;
+                              onRestore(item.id);
+                              setMoreOpen(false);
+                            }}
+                          >
+                            还原 · {item.label}
+                          </button>
+                        ))}
+                      </>
+                    ) : (
+                      <button type="button" disabled>
+                        还没有检查点
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
+            </>
+          )}
           {busy ? (
             <button className="send stop" type="button" onClick={onStop} title="Esc 停止">
               ■
             </button>
           ) : null}
-          <button className="send" type="submit" disabled={!canSend}>
+          <button className="send" type="submit" aria-label="发送" disabled={!canSend || Boolean(sharedScope && busy)}>
             ↑
           </button>
         </div>
