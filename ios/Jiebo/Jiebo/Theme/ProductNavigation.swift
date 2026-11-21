@@ -91,3 +91,9 @@ enum StatusLegendId: String, CaseIterable {
         return "\(label) \(count)"
     }
 }
+
+/// 与 Web 共享工作区按钮使用同一成员权限语义。
+enum WorkspaceShareChrome {
+    static let title = "共享工作区"
+    static let symbol = "person.badge.plus"
+}

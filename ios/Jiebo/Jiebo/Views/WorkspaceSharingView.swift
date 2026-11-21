@@ -7,39 +7,92 @@ struct ShareWorkspaceSheet: View {
     let path: String
     @State private var people: [JSONValue] = []
     @State private var selected: Set<String> = []
+    @State private var savedSelection: Set<String> = []
+    @State private var loading = true
     @State private var revision = ""
     @State private var query = ""
     @State private var error = ""
     @State private var saving = false
 
+    private var filtered: [JSONValue] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return people.filter { row in
+            needle.isEmpty || [row["name"]?.string, row["id"]?.string]
+                .compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(needle) }
+        }
+    }
+
+    private var duplicateNames: Set<String> {
+        let groups = Dictionary(grouping: people.compactMap { $0["name"]?.string }, by: { $0 })
+        return Set(groups.filter { $0.value.count > 1 }.keys)
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                Text("所选同事登录后可直接打开此工作区、查看和编辑普通文件。个人对话、记忆和凭证各自保留。")
-                TextField("搜索同事姓名", text: $query)
-                ForEach(people.filter { row in
-                    query.isEmpty || [row["name"]?.string, row["id"]?.string].compactMap { $0 }.contains { $0.localizedCaseInsensitiveContains(query) }
-                }, id: \.self) { row in
-                    if let id = row["id"]?.string {
-                        Toggle(isOn: Binding(get: { selected.contains(id) }, set: { on in
-                            if on { selected.insert(id) } else { selected.remove(id) }
-                        })) {
-                            VStack(alignment: .leading) {
-                                Text(row["name"]?.string ?? id)
-                                Text(id).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }.disabled(saving)
-                    }
+                Section {
+                    Text("所选同事可在工作区列表打开此目录，并使用 Agent 处理共享文件。")
+                        .font(.subheadline)
+                        .foregroundStyle(JieboColor.dim)
+                } header: {
+                    JieboListHeader(name)
                 }
-                if !error.isEmpty { Text(error).foregroundStyle(.secondary) }
-                else if revision.isEmpty { ProgressView("正在读取同事名单…") }
-                else if people.isEmpty { Text("没有可共享的同事") }
+                Section {
+                    ForEach(filtered, id: \.self) { row in
+                        if let id = row["id"]?.string {
+                            let name = row["name"]?.string ?? id
+                            Button {
+                                if selected.contains(id) { selected.remove(id) }
+                                else { selected.insert(id) }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: NavigationIconId.account.symbol).foregroundStyle(JieboColor.dim)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(name).foregroundStyle(JieboColor.ink)
+                                        if duplicateNames.contains(name) {
+                                            Text(id).font(.caption).foregroundStyle(JieboColor.dim)
+                                        }
+                                    }
+                                    Spacer()
+                                    if selected.contains(id) {
+                                        Image(systemName: "checkmark").foregroundStyle(JieboColor.pine)
+                                    }
+                                }
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityAddTraits(selected.contains(id) ? .isSelected : [])
+                            .disabled(saving)
+                        }
+                    }
+                    if loading { ProgressView("正在读取同事名单…") }
+                    else if filtered.isEmpty && error.isEmpty {
+                        Text(people.isEmpty ? "没有可共享的同事" : "没有匹配的同事")
+                            .foregroundStyle(JieboColor.dim)
+                    }
+                    if !error.isEmpty {
+                        Text(error).foregroundStyle(JieboColor.danger)
+                        Button("重新读取名单") { Task { await load() } }.disabled(saving || loading)
+                    }
+                } header: {
+                    JieboListHeader("同事")
+                } footer: {
+                    if !revision.isEmpty { Text("已选 \(selected.count) 位同事") }
+                }
             }
-            .navigationTitle("共享「\(name)」")
+            .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(JieboColor.paper)
+            .navigationTitle(WorkspaceShareChrome.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "按姓名搜索")
+            .interactiveDismissDisabled(saving)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { Task { await save() } }.disabled(saving || revision.isEmpty)
+                    Button(saving ? "正在保存…" : "保存") { Task { await save() } }
+                        .disabled(saving || loading || revision.isEmpty || selected == savedSelection)
                 }
             }
             .task { await load() }
@@ -47,16 +100,21 @@ struct ShareWorkspaceSheet: View {
     }
 
     private func load() async {
+        loading = true
+        error = ""
+        defer { loading = false }
         do {
             let value = try await store.workspaceSharing.request("people", workspace: path)
             people = value["people"]?.array ?? []
             selected = Set(value["memberIds"]?.array?.compactMap(\.string) ?? [])
+            savedSelection = selected
             revision = value["memberRevision"]?.string ?? ""
         } catch { self.error = error.localizedDescription }
     }
 
     private func save() async {
-        guard !saving else { return }
+        guard !saving, !loading, !revision.isEmpty, selected != savedSelection else { return }
+        error = ""
         saving = true
         defer { saving = false }
         do {
@@ -169,7 +227,10 @@ struct SharedWorkspaceFileView: View {
         .toolbar {
             if canAsk {
                 ToolbarItem(placement: .primaryAction) {
-                    Button(filesOpen ? "对话" : "文件") { filesOpen.toggle() }
+                    Button { filesOpen.toggle() } label: {
+                        Image(systemName: (filesOpen ? NavigationIconId.chats : .files).symbol).hitTarget()
+                    }
+                    .accessibilityLabel(filesOpen ? "返回对话" : NavigationIconId.files.label)
                 }
             }
         }
@@ -177,6 +238,7 @@ struct SharedWorkspaceFileView: View {
             if canAsk && !filesOpen { sharedComposer }
         }
         .navigationTitle(store.workspaceSharing.items.first { $0.id == workspace.id }?.name ?? workspace.name)
+        .navigationBarTitleDisplayMode(.inline)
         .task(id: folder) { await loadFiles() }
         .onChange(of: available) { _, value in if !value { dismiss() } }
         .alert("放弃未保存的修改？", isPresented: Binding(get: { openTarget != nil }, set: { if !$0 { openTarget = nil } })) {

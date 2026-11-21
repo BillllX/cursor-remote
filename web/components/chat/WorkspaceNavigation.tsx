@@ -1,5 +1,5 @@
 import { SESSION_TOOLS, WORKSPACE_NAV, type WorkspaceNavId } from "../../lib/productNavigation";
-import { IconRail } from "../chromeIcons";
+import { IconRail, IconShareWorkspace } from "../chromeIcons";
 
 type Props = {
   workspaceName: string;
@@ -72,13 +72,20 @@ export function WorkspaceNavigation({
           <span className="side-label">当前工作区</span>
           <span className="workspace-switcher-name">
             <IconRail name="workspace" size={14} />
-            {workspaceName}
+            <span className="workspace-switcher-label">{workspaceName}</span>
             <span aria-hidden="true">⌄</span>
           </span>
         </button>
         {onShare && (
-          <button className="workspace-share-button" type="button" onClick={onShare}>
-            共享
+          <button
+            className="workspace-share-button"
+            type="button"
+            title="共享工作区"
+            aria-label="共享工作区"
+            aria-haspopup="dialog"
+            onClick={onShare}
+          >
+            <IconShareWorkspace />
           </button>
         )}
       </div>

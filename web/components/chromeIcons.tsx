@@ -1,3 +1,12 @@
+export function IconShareWorkspace({ size = 16 }: { size?: number }) {
+  return (
+    <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="5.7" cy="5" r="2.3" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M1.8 12.8v-.9a3.9 3.9 0 0 1 7.8 0v.9M12 5.9v4.4m-2.2-2.2h4.4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconWrite({ size = 14 }: { size?: number }) {
   return (
     <svg className="chrome-icon" width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden="true">

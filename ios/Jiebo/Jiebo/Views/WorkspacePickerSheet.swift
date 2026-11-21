@@ -124,7 +124,12 @@ struct WorkspacePickerSheet: View {
                 }
                 if store.gatewayFeatures.contains("workspace_share_v1"),
                    let item = all.first(where: { sameCwd($0.path, currentPath) && store.isTopLevelWorkspace($0.path) }) {
-                    ToolbarItem(placement: .primaryAction) { Button("共享") { shareTarget = item } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button { shareTarget = item } label: {
+                            Image(systemName: WorkspaceShareChrome.symbol).hitTarget()
+                        }
+                        .accessibilityLabel(WorkspaceShareChrome.title)
+                    }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -281,7 +286,7 @@ struct WorkspacePickerSheet: View {
         .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
         .contextMenu {
             if manage && store.gatewayFeatures.contains("workspace_share_v1") {
-                Button { shareTarget = item } label: { Label("共享", systemImage: "person.badge.plus") }
+                Button { shareTarget = item } label: { Label(WorkspaceShareChrome.title, systemImage: WorkspaceShareChrome.symbol) }
             }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {

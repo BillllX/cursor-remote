@@ -11,6 +11,8 @@ import type {
   WorkspaceShareRequest,
 } from "@shared/workspaceShare";
 import { useFocusTrap } from "../../lib/useFocusTrap";
+import { FileGlyph } from "../FileTree";
+import { IconClose, IconRail } from "../chromeIcons";
 import { Composer } from "../chat/Composer";
 import styles from "./Sharing.module.css";
 
@@ -33,6 +35,7 @@ export function ShareWorkspaceDialog({
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
   const dialog = useFocusTrap<HTMLDivElement>(true);
   useEffect(() => {
     let active = true;
@@ -49,7 +52,7 @@ export function ShareWorkspaceDialog({
     return () => {
       active = false;
     };
-  }, [path, call]);
+  }, [path, call, reload]);
   async function save() {
     if (!data || busy) return;
     setBusy(true);
@@ -63,59 +66,120 @@ export function ShareWorkspaceDialog({
       setBusy(false);
     }
   }
-  const filtered = data?.people.filter((p) =>
-    [p.name, p.id].some((s) => s.toLowerCase().includes(query.trim().toLowerCase())),
+  const search = query.trim().toLowerCase();
+  const filtered = data?.people.filter((person) =>
+    [person.name, person.id].some((value) => value.toLowerCase().includes(search)),
   );
+  const names = new Map<string, number>();
+  for (const { name } of data?.people ?? []) names.set(name, (names.get(name) ?? 0) + 1);
+  const changed = Boolean(
+    data && (selected.length !== data.memberIds.length || selected.some((id) => !data.memberIds.includes(id))),
+  );
+  function reloadPeople() {
+    setData(undefined);
+    setError("");
+    setReload((version) => version + 1);
+  }
   return (
-    <div className="search-overlay open" onClick={close}>
+    <div className="search-overlay workspace-modal-overlay open" onClick={busy ? undefined : close}>
       <div
         ref={dialog}
-        className={`search-box ${styles.dialog}`}
+        className={`search-box workspace-modal-box ${styles.dialog}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="workspace-share-title"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") close();
+        aria-describedby="workspace-share-description"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && !busy) {
+            event.stopPropagation();
+            close();
+          }
         }}
       >
-        <h2 id="workspace-share-title">共享「{name}」</h2>
-        <p>所选同事登录后可直接打开此工作区、查看和编辑普通文件。个人对话、记忆和凭证各自保留。</p>
-        <input
-          className="search-input"
-          aria-label="搜索同事"
-          placeholder="按姓名搜索"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className={styles.people}>
-          {filtered?.map((p) => (
-            <label key={p.id}>
-              <input
-                type="checkbox"
-                checked={selected.includes(p.id)}
-                disabled={busy}
-                onChange={(e) =>
-                  setSelected((previous) =>
-                    e.target.checked ? [...previous, p.id] : previous.filter((id) => id !== p.id),
-                  )
-                }
-              />
-              <span>
-                {p.name} <small>{p.id}</small>
-              </span>
-            </label>
-          ))}
-          {data && !filtered?.length && <p>没有匹配的同事</p>}
+        <header className="workspace-modal-head">
+          <div className="workspace-modal-heading">
+            <h2 className="workspace-modal-title" id="workspace-share-title">
+              共享工作区
+            </h2>
+            <div className="workspace-modal-sub">{name}</div>
+          </div>
+          <button
+            type="button"
+            className="files-browser-close workspace-modal-close"
+            aria-label="关闭"
+            onClick={close}
+            disabled={busy}
+          >
+            <IconClose size={16} />
+          </button>
+        </header>
+        <div className={`workspace-modal-body ${styles.shareBody}`} aria-busy={!data && !error}>
+          <p className="workspace-modal-sub" id="workspace-share-description">
+            所选同事可在工作区列表打开此目录，并使用 Agent 处理共享文件。
+          </p>
+          <label className={styles.search}>
+            <IconRail name="search" />
+            <input
+              className="search-input"
+              type="search"
+              aria-label="搜索同事"
+              placeholder="按姓名搜索"
+              autoFocus
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          {filtered?.length ? (
+            <div className={styles.people} role="group" aria-label="同事">
+              {filtered.map((person) => (
+                <label className={styles.person} key={person.id}>
+                  <IconRail name="account" />
+                  <span>
+                    {person.name}
+                    {(names.get(person.name) ?? 0) > 1 && <small>{person.id}</small>}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(person.id)}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setSelected((previous) =>
+                        event.target.checked ? [...previous, person.id] : previous.filter((id) => id !== person.id),
+                      )
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+          ) : (
+            !error && (
+              <p className={styles.muted} role="status">
+                {!data ? "正在读取同事名单…" : data.people.length ? "没有匹配的同事" : "没有可共享的同事"}
+              </p>
+            )
+          )}
+          {error && (
+            <div className={styles.shareError}>
+              <p role="alert">{error}</p>
+              <button className="workspace-modal-btn" type="button" onClick={reloadPeople}>
+                重新读取名单
+              </button>
+            </div>
+          )}
         </div>
-        <p role="status">{error || (!data ? "正在读取同事名单…" : `已选 ${selected.length} 位同事`)}</p>
-        <footer>
-          <button type="button" onClick={close}>
-            取消
-          </button>
-          <button type="button" disabled={!data || busy} onClick={() => void save()}>
-            {busy ? "正在保存…" : "保存共享名单"}
-          </button>
+        <footer className={styles.dialogFooter}>
+          <span className={styles.muted} role="status">
+            {data ? `已选 ${selected.length} 位同事` : ""}
+          </span>
+          <div className="workspace-modal-actions">
+            <button type="button" className="workspace-modal-btn" onClick={close} disabled={busy}>
+              取消
+            </button>
+            <button type="button" className="new-chat primary" disabled={!changed || busy} onClick={() => void save()}>
+              {busy ? "正在保存…" : "保存"}
+            </button>
+          </div>
         </footer>
       </div>
     </div>
@@ -353,6 +417,7 @@ export function SharedWorkspaceFiles({
   const [filesRevision, refreshFiles] = useState(0);
   const [entries, setEntries] = useState<SharedFileEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [directoryState, setDirectoryState] = useState<"loading" | "ready" | "failed">("loading");
   const [file, setFile] = useState<OpenFile>();
   const [draft, setDraft] = useState("");
   const [comparison, setComparison] = useState<OpenFile>();
@@ -379,10 +444,14 @@ export function SharedWorkspaceFiles({
         if (current) {
           setEntries(result.items);
           setTruncated(result.truncated);
+          setDirectoryState("ready");
         }
       })
       .catch((error) => {
-        if (current) fail(error);
+        if (current) {
+          setDirectoryState("failed");
+          fail(error);
+        }
       });
     return () => {
       current = false;
@@ -442,61 +511,93 @@ export function SharedWorkspaceFiles({
       setBusy(false);
     }
   }
+  function openDirectory(path: string) {
+    setDirectoryState("loading");
+    setEntries([]);
+    setTruncated(false);
+    setDir(path);
+  }
   const filePath = (name: string) => (dir ? dir + "/" + name : name);
   return (
     <main className={`main ${styles.workbench}`} aria-label="工作区">
-      <header>
-        <div>
-          <h1>{workspace.name}</h1>
-          <span>来自 {workspace.ownerName}</span>
+      <header className={styles.workbenchHeader}>
+        <div className={styles.workspaceIdentity}>
+          <IconRail name="workspace" size={18} />
+          <div>
+            <h1>{workspace.name}</h1>
+            <span>来自 {workspace.ownerName}</span>
+          </div>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (!dirty || confirm("当前文件有未保存的修改。确认切换工作区？")) onSwitch();
-          }}
-        >
-          切换工作区
-        </button>
-        {canAsk && (
-          <button type="button" className="pill" aria-pressed={filesOpen} onClick={() => setFilesOpen(!filesOpen)}>
-            文件
+        <div className={styles.workbenchActions}>
+          <button
+            className="workspace-modal-btn"
+            type="button"
+            onClick={() => {
+              if (!dirty || confirm("当前文件有未保存的修改。确认切换工作区？")) onSwitch();
+            }}
+          >
+            切换工作区
           </button>
-        )}
+          {canAsk && (
+            <button
+              type="button"
+              className={`pill${filesOpen ? " on" : ""}`}
+              aria-pressed={filesOpen}
+              onClick={() => setFilesOpen(!filesOpen)}
+            >
+              <IconRail name="files" size={14} /> 文件
+            </button>
+          )}
+        </div>
       </header>
       {canAsk && (
-        <SharedWorkspaceQuestions
-          workspace={workspace}
-          filePath={file?.path}
-          call={call}
-          onUnavailable={onUnavailable}
-          canEdit={canEdit}
-          models={models}
-          defaultModel={defaultModel}
-          connected={connected}
-          refreshFiles={() => refreshFiles((version) => version + 1)}
-        />
+        <div className={styles.conversation} hidden={filesOpen}>
+          <SharedWorkspaceQuestions
+            workspace={workspace}
+            filePath={file?.path}
+            call={call}
+            onUnavailable={onUnavailable}
+            canEdit={canEdit}
+            models={models}
+            defaultModel={defaultModel}
+            connected={connected}
+            refreshFiles={() => refreshFiles((version) => version + 1)}
+          />
+        </div>
       )}
       <div className={styles.columns} hidden={!filesOpen}>
         <nav aria-label="文件">
-          <h2>文件</h2>
+          <h2>{dir ? dir.split("/").at(-1) : "文件"}</h2>
           {dir && (
-            <button type="button" onClick={() => setDir(dir.split("/").slice(0, -1).join("/"))}>
+            <button
+              className="tree-file"
+              type="button"
+              onClick={() => openDirectory(dir.split("/").slice(0, -1).join("/"))}
+            >
               返回上一级
             </button>
           )}
           {entries.map((e) => (
             <button
               key={e.name}
+              className={`tree-file${file?.path === filePath(e.name) ? ` ${styles.selectedFile}` : ""}`}
               type="button"
               disabled={busy}
-              onClick={() => (e.directory ? setDir(filePath(e.name)) : void open(filePath(e.name)))}
+              aria-current={file?.path === filePath(e.name) ? "true" : undefined}
+              title={e.name}
+              onClick={() => (e.directory ? openDirectory(filePath(e.name)) : void open(filePath(e.name)))}
             >
-              {e.directory ? "▸ " : ""}
-              {e.name}
+              <FileGlyph path={e.name} dir={e.directory} />
+              <span className="tree-file-name">{e.name}</span>
             </button>
           ))}
-          {truncated && <p>这个文件夹只显示前 400 项。</p>}
+          {truncated && <p className={styles.muted}>这个文件夹只显示前 400 项。</p>}
+          {directoryState === "loading" && (
+            <p className={styles.muted} role="status">
+              正在读取文件…
+            </p>
+          )}
+          {directoryState === "ready" && !entries.length && <p className={styles.muted}>这个文件夹暂无文件</p>}
         </nav>
         <section aria-label="文件内容">
           {file ? (
@@ -508,12 +609,17 @@ export function SharedWorkspaceFiles({
                 onChange={(e) => setDraft(e.target.value)}
                 readOnly={busy}
               />
-              <button type="button" disabled={busy || !dirty || !!comparison} onClick={() => void save()}>
+              <button
+                className="new-chat primary"
+                type="button"
+                disabled={busy || !dirty || !!comparison}
+                onClick={() => void save()}
+              >
                 保存文件
               </button>
             </>
           ) : (
-            <p>从文件列表打开一个文本文件。</p>
+            <p className={styles.muted}>选择一个文本文件查看或编辑</p>
           )}
           {comparison && (
             <>
@@ -521,6 +627,7 @@ export function SharedWorkspaceFiles({
               <textarea aria-label="最新保存的版本" value={comparison.content} readOnly />
               <button
                 type="button"
+                className="workspace-modal-btn"
                 onClick={() => {
                   setFile(comparison);
                   setComparison(undefined);
