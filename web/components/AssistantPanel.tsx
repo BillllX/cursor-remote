@@ -11,6 +11,7 @@ import type {
 } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import MemoryCenterPanel from "./assistant/MemoryCenterPanel";
+import { AssistantAutomationSection } from "./assistant/AssistantAutomationSection";
 import { AssistantColleaguesSection } from "./assistant/AssistantColleaguesSection";
 import {
   initialAssistantMemoryNavigation,
@@ -21,7 +22,7 @@ import {
 import { MemoMarkdown, REMARK_PLUGINS, SIMPLE_MD_COMPONENTS } from "./chat/markdown";
 import { closeInboxNotification, registerAssistantPush } from "../lib/assistantPush";
 
-export type AssistantView = "overview" | "inbox" | "colleagues" | "memory" | "notify";
+export type AssistantView = "overview" | "inbox" | "colleagues" | "memory" | "notify" | "schedules";
 
 export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = {
   running: "进行中",
@@ -43,6 +44,9 @@ type Props = {
   onClose: () => void;
   dialogRef: RefObject<HTMLDivElement | null>;
   initialView?: AssistantView;
+  initialAutomationWorkspace?: string;
+  assistantResults: AssistantResultMessage[];
+  onOpenAutomationArtifact: (workspaceKey: string, path: string) => void;
   initialMemoryScopeId?: string;
   initialMemorySource?: AssistantMemorySource;
   openRequest: number;
@@ -80,6 +84,9 @@ export default function AssistantPanel({
   onClose,
   dialogRef,
   initialView = "overview",
+  initialAutomationWorkspace,
+  assistantResults,
+  onOpenAutomationArtifact,
   initialMemoryScopeId,
   initialMemorySource = "assistant",
   openRequest,
@@ -227,9 +234,10 @@ export default function AssistantPanel({
   const isWorkspaceMemoryMode = memoryNavigation.source === "workspace" && tab === "memory";
   const isPersonalMemoryMode = memoryNavigation.source !== "workspace" && tab === "memory";
   const isColleaguesMode = tab === "colleagues";
-  const isFocusedSingleOverlay = isWorkspaceMemoryMode || isPersonalMemoryMode || isColleaguesMode;
+  const isAutomationMode = tab === "schedules";
+  const isFocusedSingleOverlay = isWorkspaceMemoryMode || isPersonalMemoryMode || isColleaguesMode || isAutomationMode;
 
-  const modalTitle = isWorkspaceMemoryMode
+  const modalTitle = isAutomationMode ? "定时与自动化" : isWorkspaceMemoryMode
     ? "规则与记忆"
     : isPersonalMemoryMode
       ? `${name} · 个人记忆`
@@ -237,7 +245,7 @@ export default function AssistantPanel({
         ? "同事与通行证"
         : `${name} · 助理`;
 
-  const modalSubtitle = isWorkspaceMemoryMode
+  const modalSubtitle = isAutomationMode ? "查看和管理小驳及各工作区的定时任务" : isWorkspaceMemoryMode
     ? "管理当前工作区的文件夹硬规则（AGENTS.md / .cursor/rules）、项目记忆（.jiebo/memory.md）与注入诊断"
     : isPersonalMemoryMode
       ? "管理跨所有工作区生效的个人记忆（关于我 / 偏好 / 近况 / 人物 / 通用工作偏好）"
@@ -331,8 +339,8 @@ export default function AssistantPanel({
         <div
           id="assistant-tabpanel"
           className="assistant-body"
-          role="tabpanel"
-          aria-labelledby={`assistant-tab-${tab}`}
+          role={isFocusedSingleOverlay ? undefined : "tabpanel"}
+          aria-labelledby={isFocusedSingleOverlay ? undefined : `assistant-tab-${tab}`}
         >
           {tab === "overview" ? (
             <>
@@ -704,6 +712,17 @@ export default function AssistantPanel({
               </Section>
             </>
           ) : null}
+
+          {isAutomationMode && (
+            <AssistantAutomationSection
+              key={openRequest}
+              initialWorkspaceKey={initialAutomationWorkspace}
+              state={state}
+              results={assistantResults}
+              send={send}
+              onOpenArtifact={onOpenAutomationArtifact}
+            />
+          )}
 
           {tab === "colleagues" ? (
             <AssistantColleaguesSection

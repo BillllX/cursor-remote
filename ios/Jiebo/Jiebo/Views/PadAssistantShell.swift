@@ -27,7 +27,7 @@ struct PadAssistantShell: View {
         ) {
             List {
                 Section("对话与任务") {
-                    ForEach([PadAssistantSection.today, .inbox, .todos, .artifacts]) { section in
+                    ForEach([PadAssistantSection.today, .inbox, .todos, .automation, .artifacts]) { section in
                         let isTaskGroup = section == .todos && (router.assistantSection == .todos || router.assistantSection == .delegations || router.assistantSection == .plans)
                         let selected = router.assistantSection == section || isTaskGroup
                         PadSectionNavigationRow(
@@ -201,7 +201,7 @@ struct PadAssistantShell: View {
                     }
             }
         }
-        .modifier(PadAssistantSearch(enabled: router.assistantSection != .memory && router.assistantSection != .colleagues))
+        .modifier(PadAssistantSearch(enabled: router.assistantSection != .memory && router.assistantSection != .colleagues && router.assistantSection != .automation))
         .environment(\.assistantVoicePresenterActive, router.assistantSection == .today)
         .task {
             showDetailIfCompact()
@@ -386,7 +386,7 @@ struct PadAssistantShell: View {
     private var sectionContent: some View {
         Group {
             if store.assistantState == nil, router.assistantSection != .today,
-               router.assistantSection != .memory, router.assistantSection != .colleagues {
+               router.assistantSection != .memory, router.assistantSection != .colleagues, router.assistantSection != .automation {
                 AssistantLoadingView(title: "正在加载\(router.assistantSection.title)…")
             } else {
                 switch router.assistantSection {
@@ -400,6 +400,8 @@ struct PadAssistantShell: View {
                     PadTaskExperience(projection: projection, column: .plan)
                 case .delegations:
                     PadTaskExperience(projection: projection, column: .delegation)
+                case .automation:
+                    AssistantAutomationScreen()
                 case .artifacts:
                     PadArtifactExperience(projection: projection)
                 case .colleagues:
@@ -449,7 +451,7 @@ private struct PadSectionNavigationRow: View {
         case .plans: .plans
         case .delegations: .delegations
         case .artifacts: .artifacts
-        case .colleagues, .memory: nil
+        case .colleagues, .memory, .automation: nil
         }
         return target?.accepts(kind) == true
     }

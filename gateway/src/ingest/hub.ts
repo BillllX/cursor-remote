@@ -325,6 +325,7 @@ function buildWorkspaceScheduleRunsForUi(
     runId: r.runId,
     scheduleId: r.scheduleId,
     workspaceKey: r.workspaceKey,
+    workspaceId: r.workspaceId,
     title: r.title,
     executorKind: r.executorKind,
     trigger: r.trigger,
@@ -337,6 +338,35 @@ function buildWorkspaceScheduleRunsForUi(
     ...(r.updatedFiles?.length ? { updatedFiles: r.updatedFiles } : {}),
     ...(r.error ? { error: r.error } : {}),
   }));
+}
+
+/** 助理自动化查询只包含管理页面需要的工作区、任务与最近运行记录。 */
+export function getWorkspaceAutomationStatus(
+  host: DropTenantHost,
+  workspaces: { id: string; key: string }[],
+): KbWorkspaceStatusData {
+  const keysById = new Map(workspaces.map(({ id, key }) => [id, key]));
+  const workspaceSchedules = buildWorkspaceSchedulesForUi(host).flatMap((row) => {
+    const key = keysById.get(row.workspaceId);
+    return key ? [{ ...row, workspaceKey: key }] : [];
+  });
+  const workspaceScheduleRuns = buildWorkspaceScheduleRunsForUi(host, undefined, 50).flatMap((row) => {
+    const key = row.workspaceId && keysById.get(row.workspaceId);
+    return key ? [{ ...row, workspaceKey: key }] : [];
+  });
+  return {
+    workspaceKey: "",
+    workspaceId: "",
+    title: "定时与自动化",
+    isKnowledgeBase: false,
+    allowedCategories: [],
+    boards: [],
+    tokens: [],
+    dropPortalPath: "",
+    automationWorkspaces: workspaces,
+    workspaceSchedules,
+    workspaceScheduleRuns,
+  };
 }
 
 /**

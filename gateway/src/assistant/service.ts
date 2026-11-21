@@ -82,6 +82,7 @@ import {
 import {
   createDropTokenFromUi,
   getKbWorkspaceStatusForUi,
+  getWorkspaceAutomationStatus,
   initKbWorkspaceFromUi,
   revokeDropTokenFromUi,
   updateDropTokenFromUi,
@@ -1608,6 +1609,17 @@ export async function handleOp(
       return { ok: true, data: { itemId: item.id, web: listSubscriptions(ref).length, apns: apnsReady() ? listApnsSubscriptions(ref).length : 0 } };
     }
     case "kb_workspace_status": {
+      if (args.automationOnly === true) {
+        const fullTenant = getTenant(tenant.id);
+        const workspaces = fullTenant ? (() => {
+          const agents = readWorkspaceAgentFile(fullTenant);
+          return workspaceAgentDirectories(fullTenant).flatMap(({ key }) => {
+            const item = agents.items[key];
+            return item ? [{ id: item.workspaceId, key }] : [];
+          });
+        })() : [];
+        return { ok: true, data: getWorkspaceAutomationStatus(dropHostFor(tenant), workspaces) };
+      }
       const workspace = str(args.workspace);
       const res = getKbWorkspaceStatusForUi(dropHostFor(tenant), workspace);
       return res.ok ? { ok: true, data: res.data } : fail(res.error);
@@ -1882,6 +1894,10 @@ export async function handleOp(
         const wsa = args.workspaceScheduleAction as Record<string, unknown>;
         const kind = typeof wsa.kind === "string" ? wsa.kind : "";
         const scopedWorkspace = !workspace || workspace === "__all__" ? undefined : workspace;
+        const getStatus = () => wsa.summaryOnly === true
+          ? { ok: true as const, data: getWorkspaceAutomationStatus(host, []) }
+          : getKbWorkspaceStatusForUi(host, workspace);
+
         const idOrTitle =
           typeof wsa.idOrTitle === "string" && wsa.idOrTitle.trim()
             ? wsa.idOrTitle.trim()
@@ -1965,7 +1981,7 @@ export async function handleOp(
             },
           });
           if (!upRes.ok) return fail(upRes.error);
-          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          const statusRes = getStatus();
           if (!statusRes.ok) return fail(statusRes.error);
           return {
             ok: true,
@@ -1984,7 +2000,7 @@ export async function handleOp(
           const enabled = wsa.enabled;
           const togRes = toggleWorkspaceSchedule(host, idOrTitle, enabled, scopedWorkspace);
           if (!togRes.ok) return fail(togRes.error);
-          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          const statusRes = getStatus();
           if (!statusRes.ok) return fail(statusRes.error);
           return {
             ok: true,
@@ -2001,7 +2017,7 @@ export async function handleOp(
         if (kind === "run_now") {
           const runRes = await startWorkspaceScheduleForUi(host, idOrTitle, scopedWorkspace);
           if (!runRes.ok) return fail(runRes.error);
-          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          const statusRes = getStatus();
           if (!statusRes.ok) return fail(statusRes.error);
           return {
             ok: true,
@@ -2018,7 +2034,7 @@ export async function handleOp(
         if (kind === "remove") {
           const remRes = removeWorkspaceSchedule(host, idOrTitle, scopedWorkspace);
           if (!remRes.ok) return fail(remRes.error);
-          const statusRes = getKbWorkspaceStatusForUi(host, workspace);
+          const statusRes = getStatus();
           if (!statusRes.ok) return fail(statusRes.error);
           return {
             ok: true,

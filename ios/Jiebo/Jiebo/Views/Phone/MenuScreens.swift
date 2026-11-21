@@ -1319,6 +1319,7 @@ struct KbWorkspaceIngestLog: Identifiable, Hashable {
 
 struct KbWorkspaceScheduleItem: Identifiable, Hashable {
     var id: String
+    var workspaceId: String
     var workspaceKey: String
     var title: String
     var enabled: Bool
@@ -1342,6 +1343,7 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
         guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
         return KbWorkspaceScheduleItem(
             id: id,
+            workspaceId: row["workspaceId"]?.string ?? "",
             workspaceKey: row["workspaceKey"]?.string ?? "",
             title: row["title"]?.string?.nilIfEmpty ?? id,
             enabled: row["enabled"]?.bool ?? true,
@@ -1366,7 +1368,9 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
 
 struct KbWorkspaceScheduleRun: Identifiable, Hashable {
     var id: String
+    var workspaceId: String
     var scheduleId: String
+    var title: String
     var status: String
     var trigger: String
     var finishedAt: Double
@@ -1376,7 +1380,7 @@ struct KbWorkspaceScheduleRun: Identifiable, Hashable {
     static func parse(_ item: JSONValue) -> Self? {
         guard let row = item.object, let id = row["runId"]?.string,
               let scheduleId = row["scheduleId"]?.string else { return nil }
-        return Self(id: id, scheduleId: scheduleId, status: row["status"]?.string ?? "",
+        return Self(id: id, workspaceId: row["workspaceId"]?.string ?? "", scheduleId: scheduleId, title: row["title"]?.string ?? "", status: row["status"]?.string ?? "",
                     trigger: row["trigger"]?.string ?? "scheduled", finishedAt: row["finishedAt"]?.number ?? 0,
                     summary: row["error"]?.string?.nilIfEmpty ?? row["summary"]?.string ?? "",
                     files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [])
@@ -2870,5 +2874,302 @@ struct KbWorkspaceSheet: View {
         guard let ms, ms > 0 else { return "长期有效" }
         let date = Date(timeIntervalSince1970: ms / 1000)
         return date.formatted(date: .abbreviated, time: .omitted) + " 到期"
+    }
+}
+
+/// 小驳里的统一自动化列表。切换归属只改变筛选，不切换工作区会话。
+struct AssistantAutomationScreen: View {
+    @Environment(ChatStore.self) private var store
+    @Environment(\.sceneSessionState) private var sceneSession
+
+    private enum Filter: Hashable {
+        case all, personal, workspace(String)
+    }
+
+    private struct Scope: Identifiable {
+        let id: String
+        let key: String
+    }
+
+    @State private var filter: Filter = .all
+    @State private var scopes: [Scope] = []
+    @State private var rules: [KbWorkspaceScheduleItem] = []
+    @State private var runs: [KbWorkspaceScheduleRun] = []
+    @State private var loaded = false
+    @State private var reading = false
+    @State private var busy = false
+    @State private var error: String?
+    @State private var notice: String?
+    @State private var confirmation: KbWorkspaceScheduleItem?
+    @State private var editor: KbWorkspaceScheduleItem?
+
+    var body: some View {
+        List {
+            Section {
+                Picker("归属", selection: $filter) {
+                    Text("全部").tag(Filter.all)
+                    Text("小驳").tag(Filter.personal)
+                    ForEach(scopes) { scope in
+                        Text(scope.key).tag(Filter.workspace(scope.id))
+                    }
+                }
+                if let error {
+                    Text(error).foregroundStyle(JieboColor.danger)
+                }
+                if let notice {
+                    Text(notice).foregroundStyle(JieboColor.ink2)
+                }
+            }
+            if filter == .all || filter == .personal { personalSection }
+            if filter != .personal { workspaceSections }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("定时与自动化")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable {
+            store.requestAssistant()
+            await reload()
+        }
+        .task {
+            store.requestAssistant()
+            await reload()
+        }
+        .task(id: rules.contains { $0.state != "idle" }) {
+            while !Task.isCancelled && rules.contains(where: { $0.state != "idle" }) {
+                try? await Task.sleep(for: .seconds(4))
+                if !Task.isCancelled { await reload() }
+            }
+        }
+        .sheet(item: $editor) { item in
+            WorkspaceScheduleEditor(item: item) { fields in
+                await workspaceAction(item.workspaceId, fields: fields)
+            }
+        }
+        .alert(
+            "立即运行自动化？",
+            isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
+            presenting: confirmation
+        ) { item in
+            Button("立即运行") { Task { await act(item, kind: "run_now") } }
+            Button("取消", role: .cancel) {}
+        } message: { item in
+            Text("《\(item.title)》会正式运行，可能更新数据或产物。")
+        }
+    }
+
+    private var personalSection: some View {
+        Section("小驳") {
+            if let schedules = store.assistantState?.schedules {
+                if schedules.isEmpty { Text("小驳还没有定时任务。") }
+                ForEach(schedules) { item in
+                    VStack(alignment: .leading, spacing: 6) {
+                        scheduleLabel(item.title, status: item.enabled ? "已启用" : "已暂停",
+                                      next: item.enabled ? item.nextAt : nil, tz: item.tz)
+                        if let status = item.lastStatus { Text("上次结果 · \(resultLabel(status))") }
+                        if let reason = item.pausedReason { Text(reason) }
+                        Button(item.enabled ? "暂停" : "启用") {
+                            Task { await togglePersonal(item) }
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(busy)
+                    }
+                }
+            } else {
+                ProgressView("正在读取小驳的定时…")
+            }
+        }
+    }
+
+    private var visibleScopes: [Scope] {
+        scopes.filter { scope in
+            switch filter {
+            case .all: return rules.contains { $0.workspaceId == scope.id } || runs.contains { $0.workspaceId == scope.id }
+            case .personal: return false
+            case .workspace(let id): return scope.id == id
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var workspaceSections: some View {
+        if !loaded && error == nil {
+            Section { ProgressView("正在读取工作区自动化…") }
+        } else if loaded && visibleScopes.isEmpty {
+            Section { Text("各工作区还没有自动化。") }
+        }
+        ForEach(visibleScopes) { scope in
+            Section(scope.key) {
+                let scopedRules = rules.filter { $0.workspaceId == scope.id }
+                let archivedRuns = runs.filter { run in
+                    run.workspaceId == scope.id && !scopedRules.contains { $0.id == run.scheduleId }
+                }
+                if scopedRules.isEmpty { Text("此工作区还没有自动化。") }
+                ForEach(scopedRules) { item in
+                    workspaceRow(item, scope: scope)
+                }
+                if !archivedRuns.isEmpty {
+                    DisclosureGroup("已删除规则的运行记录") {
+                        ForEach(archivedRuns) { run in
+                            historyRow(run, scope: scope, tz: "UTC", showTitle: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func workspaceRow(_ item: KbWorkspaceScheduleItem, scope: Scope) -> some View {
+        DisclosureGroup {
+            if let summary = item.lastSummary, !summary.isEmpty { Text(summary) }
+            Menu("管理自动化") {
+                Button("立即运行") { confirmation = item }.disabled(busy || item.state != "idle")
+                Button("编辑计划") { editor = item }.disabled(busy || item.state != "idle")
+                Button(item.enabled ? "暂停" : "启用") {
+                    Task { await act(item, kind: "toggle") }
+                }
+                .disabled(busy)
+            }
+            DisclosureGroup("运行记录") {
+                let history = runs.filter { $0.scheduleId == item.id && $0.workspaceId == scope.id }
+                if history.isEmpty { Text("暂无运行记录。") }
+                ForEach(history) { run in
+                    historyRow(run, scope: scope, tz: item.tz)
+                }
+            }
+        } label: {
+            scheduleLabel(item.title, status: workspaceStatus(item),
+                          next: item.enabled ? item.nextRunAt : nil, tz: item.tz)
+        }
+    }
+
+    private func historyRow(_ run: KbWorkspaceScheduleRun, scope: Scope, tz: String, showTitle: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if showTitle { Text(run.title).font(JieboFont.text(.subheadline, weight: .medium)) }
+            Text("\(resultLabel(run.status)) · \(run.trigger == "manual" ? "手动运行" : "定时触发")")
+                .font(JieboFont.text(.subheadline, weight: .medium))
+            Text(dateText(run.finishedAt, tz: tz))
+            if !run.summary.isEmpty { Text(run.summary) }
+            ForEach(Array(Set(run.files)).sorted(), id: \.self) { path in
+                Button(path) { openArtifact(path, scope: scope) }.buttonStyle(.borderless)
+            }
+        }
+        .font(JieboFont.text(.footnote))
+    }
+
+    private func scheduleLabel(_ title: String, status: String, next: Double?, tz: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(JieboFont.text(.body, weight: .medium))
+            Text(status)
+            if let next { Text("下次运行 · \(dateText(next, tz: tz))") }
+        }
+        .font(JieboFont.text(.footnote))
+        .padding(.vertical, 4)
+    }
+
+    private func workspaceStatus(_ item: KbWorkspaceScheduleItem) -> String {
+        if item.state == "running_step1" { return "正在执行" }
+        if item.state == "running_step2" { return "等待归档" }
+        let enabled = item.enabled ? "已启用" : "已暂停"
+        return item.lastStatus.map { enabled + " · 上次" + resultLabel($0) } ?? enabled
+    }
+
+    private func dateText(_ ms: Double, tz: String) -> String {
+        var format = Date.FormatStyle.dateTime.year().month().day().hour().minute()
+        format.timeZone = TimeZone(identifier: tz) ?? .current
+        return "\(Date(timeIntervalSince1970: ms / 1000).formatted(format))（\(tz)）"
+    }
+
+    private func resultLabel(_ status: String) -> String {
+        switch status {
+        case "succeeded", "done": return "已完成"
+        case "no_change": return "无变化"
+        case "partial": return "部分完成"
+        case "failed": return "失败"
+        case "running": return "正在执行"
+        case "skipped": return "已跳过"
+        case "interrupted": return "已中断"
+        default: return "状态待更新"
+        }
+    }
+
+    private func reload() async {
+        guard !reading else { return }
+        reading = true
+        defer { reading = false }
+        let reply = await store.assistantOpData("kb_workspace_status", args: [
+            "workspace": .string("__all__"), "automationOnly": .bool(true),
+        ])
+        guard !Task.isCancelled else { return }
+        guard reply.ok, let row = reply.data?.object else {
+            error = reply.error ?? "读取自动化失败，请下拉重试。"
+            return
+        }
+        guard let available = row["automationWorkspaces"]?.array else {
+            error = "当前网关版本暂不支持工作区汇总。"
+            return
+        }
+        scopes = available.compactMap { value in
+            guard let fields = value.object, let id = fields["id"]?.string,
+                  let key = fields["key"]?.string else { return nil }
+            return Scope(id: id, key: key)
+        }
+        rules = row["workspaceSchedules"]?.array?.compactMap(KbWorkspaceScheduleItem.parse) ?? []
+        runs = row["workspaceScheduleRuns"]?.array?.compactMap(KbWorkspaceScheduleRun.parse) ?? []
+        if case .workspace(let id) = filter, !scopes.contains(where: { $0.id == id }) { filter = .all }
+        loaded = true
+    }
+
+    private func togglePersonal(_ item: AssistantSchedule) async {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        notice = nil
+        let reply = await store.assistantOpData("schedule_set", args: [
+            "id": .string(item.id), "enabled": .bool(!item.enabled),
+        ])
+        store.requestAssistant()
+        busy = false
+        if reply.ok { notice = "已更新小驳的定时任务" }
+        else { error = reply.error ?? "操作未完成，请核对当前状态。" }
+    }
+
+    private func act(_ item: KbWorkspaceScheduleItem, kind: String) async {
+        var fields: [String: JSONValue] = ["kind": .string(kind), "id": .string(item.id)]
+        if kind == "toggle" { fields["enabled"] = .bool(!item.enabled) }
+        error = await workspaceAction(item.workspaceId, fields: fields)
+    }
+
+    private func workspaceAction(_ id: String, fields: [String: JSONValue]) async -> String? {
+        guard !busy else { return "有操作正在处理，请稍后再试。" }
+        busy = true
+        error = nil
+        notice = nil
+        var action = fields
+        action["summaryOnly"] = .bool(true)
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(id), "workspaceScheduleAction": .object(action),
+        ])
+        if reply.ok {
+            notice = reply.data?.object?["workspaceScheduleResult"]?.object?["message"]?.string ?? "已更新自动化"
+        }
+        // 操作回执可能晚于一次轮询。先等待该轮结束，再主动读最新状态。
+        while reading && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+        if !Task.isCancelled { await reload() }
+        busy = false
+        return reply.ok ? nil : reply.error ?? "操作未完成，请核对当前状态。"
+    }
+
+    private func openArtifact(_ path: String, scope: Scope) {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard let chatId = store.assistantChatId, !store.workspaceRoot.isEmpty,
+              !scope.key.contains("/"), !path.contains("\\"),
+              parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            error = "无法预览此产物路径。"
+            return
+        }
+        let workspace = URL(fileURLWithPath: store.workspaceRoot).appendingPathComponent(scope.key)
+        let artifact = workspace.appendingPathComponent(path)
+        store.openPreview(artifact.path, chatId: chatId)
+        sceneSession?.presentPreview(from: store)
     }
 }

@@ -136,7 +136,10 @@ struct AssistantHome: View {
             }
             .padding(.horizontal, 16)
             List {
-                Section { sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts) }
+                Section {
+                    sidebarRoute("定时与自动化", symbol: NavigationIconId.schedules.symbol, route: .automation)
+                    sidebarRoute("文件", symbol: NavigationIconId.files.symbol, route: .artifacts)
+                }
                 conversationSection
                 Section("记忆与能力") {
                     sidebarRoute("记忆与规则", symbol: NavigationIconId.memory.symbol, route: .memory)

@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { getWorkspaceAutomationStatus } from "../src/ingest/hub.ts";
 import { setupKbWorkspaceForTenant, type DropTenantHost } from "../src/ingest/tokens.ts";
 import { setWecomCliRunnerForTest, addOrUpdateWecomWatchItem } from "../src/ingest/wecomSource.ts";
 import {
@@ -315,6 +316,27 @@ test("正式运行先确认已开始，执行中重复请求不会再启动", as
     assert.equal(listWorkspaceScheduleRuns(host)[0].status, "succeeded");
   } finally {
     finish?.();
+    cleanup();
+  }
+});
+
+test("小驳自动化快照按工作区稳定 ID 归属，目录改名后仍显示原规则", () => {
+  const { host, cleanup } = createTestHost();
+  try {
+    const created = upsertWorkspaceSchedule(host, {
+      workspace: "Fintopia集团", title: "投诉月报", executorKind: "agent_prompt",
+      payload: { prompt: "汇总投诉" },
+    });
+    assert.ok(created.ok);
+    const workspaces = [{ id: "ws_fintopia", key: "Fintopia新目录" }, { id: "ws_empty", key: "空工作区" }];
+    const combined = getWorkspaceAutomationStatus(host, workspaces);
+    assert.deepEqual(combined.automationWorkspaces, workspaces);
+    assert.equal(combined.workspaceSchedules?.[0]?.id, created.item.id);
+    assert.equal(combined.workspaceSchedules?.[0]?.workspaceKey, "Fintopia新目录");
+    assert.deepEqual(getWorkspaceAutomationStatus(host, [workspaces[1]]).workspaceSchedules, []);
+    assert.deepEqual(combined.tokens, []);
+    assert.equal(combined.ownerWx, undefined);
+  } finally {
     cleanup();
   }
 });

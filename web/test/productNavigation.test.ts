@@ -63,10 +63,10 @@ describe("Web 产品信息架构", () => {
     );
   });
 
-  test("助理侧栏按竖向承载对话、今日待办、收件箱、个人记忆与独立技能工厂", () => {
+  test("助理侧栏包含定时与自动化入口", () => {
     assert.deepEqual(
       ASSISTANT_SIDEBAR_NAV.map((item) => item.id),
-      ["chat", "overview", "inbox", "memory", "skills"],
+      ["chat", "overview", "inbox", "schedules", "memory", "skills"],
     );
     assert.equal(
       ASSISTANT_SIDEBAR_NAV.some((item) =>

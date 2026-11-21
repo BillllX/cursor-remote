@@ -52,6 +52,9 @@ const control = { margin: 0, minWidth: 0, width: "100%" } as const;
 
 type WorkspaceScheduleSectionProps = {
   workspaceKey: string;
+  heading?: string;
+  showCreate?: boolean;
+  summaryOnly?: boolean;
   schedules: WorkspaceScheduleSummaryItem[];
   runs: WorkspaceScheduleRunSummaryItem[];
   loading: boolean;
@@ -63,6 +66,9 @@ type WorkspaceScheduleSectionProps = {
 
 export function WorkspaceScheduleSection({
   workspaceKey,
+  heading = "工作区自动化",
+  showCreate = true,
+  summaryOnly = false,
   schedules,
   runs,
   loading,
@@ -131,6 +137,7 @@ export function WorkspaceScheduleSection({
         workspace: workspaceKey,
         workspaceScheduleAction: {
           kind: "upsert",
+          ...(summaryOnly ? { summaryOnly: true } : {}),
           ...(saved ? { id: saved.id, expectedUpdatedAt: saved.updatedAt } : { enabled: false, createOnly: true }),
           title: title.trim(),
           executorKind: kind,
@@ -155,6 +162,7 @@ export function WorkspaceScheduleSection({
         workspace: workspaceKey,
         workspaceScheduleAction: {
           kind,
+          ...(summaryOnly ? { summaryOnly: true } : {}),
           idOrTitle: item.id,
           ...(kind === "toggle" ? { enabled: !item.enabled } : {}),
         },
@@ -190,12 +198,12 @@ export function WorkspaceScheduleSection({
   return (
     <section
       style={{ ...stack, paddingTop: 12, borderTop: "1px solid var(--line)" }}
-      aria-label="工作区自动化"
+      aria-label={heading}
       aria-busy={loading}
     >
       <div style={{ ...actions, alignItems: "center", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0, fontSize: 14 }}>工作区自动化</h3>
-        {!editing && (
+        <h3 style={{ margin: 0, fontSize: 14 }}>{heading}</h3>
+        {showCreate && !editing && (
           <button type="button" className="new-chat" disabled={loading} onClick={() => openForm("new")}>
             新建自动化
           </button>

@@ -188,6 +188,7 @@ export default function ChatApp() {
     () => typeof window !== "undefined" && readCollabRoute(window.location.search).active,
   );
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantAutomationWorkspace, setAssistantAutomationWorkspace] = useState<string>();
   const [assistantInitialView, setAssistantInitialView] = useState<AssistantView>("overview");
   const [assistantMemoryScopeId, setAssistantMemoryScopeId] = useState<string>();
   const [assistantMemorySource, setAssistantMemorySource] = useState<AssistantMemorySource>("assistant");
@@ -2943,8 +2944,9 @@ export default function ChatApp() {
     setSidePane("chats");
   }
 
-  function openAssistantView(view: AssistantView) {
+  function openAssistantView(view: AssistantView, automationWorkspace?: string) {
     prepareAssistantDomain();
+    setAssistantAutomationWorkspace(automationWorkspace);
     setAssistantInitialView(view);
     setAssistantMemoryScopeId(undefined);
     setAssistantMemorySource("assistant");
@@ -3174,19 +3176,9 @@ export default function ChatApp() {
   }
 
   function openWorkspaceSchedules() {
-    setNavOpen(false);
-    setFilesOpen(false);
-    setGrepOpen(false);
-    setLoopOpen(false);
-    setTerminalOpen(false);
-    setAssistantOpen(false);
-    setSkillsOpen(false);
-    setSettingsOpen(false);
-    setSidePane("chats");
-    setWorkspaceSection("schedules");
-    setGroupMenu(null);
-    setManagementMode("schedules");
-    setManagementOpen(true);
+    const group = currentWorkspaceGroup;
+    const key = group ? relToCwd(group.path, workspaceRoot).split("/")[0] : undefined;
+    openAssistantView("schedules", key || undefined);
   }
 
   function openWorkspaceManagement() {
@@ -3693,11 +3685,11 @@ export default function ChatApp() {
     applyDraft(stripMention(draftRef.current, token));
   }
 
-  function openFile(path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string) {
+  function openFile(path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string, keepAbsolutePath = false) {
     const lineHash = /#L(\d+)(?:-L?\d+)?$/i.exec(path);
     const cleanPath = lineHash ? path.slice(0, lineHash.index) : path;
     const targetLine = line ?? (lineHash ? Number(lineHash[1]) : undefined);
-    const rel = relToCwd(cleanPath, cwdRef.current) || cleanPath;
+    const rel = keepAbsolutePath ? cleanPath : relToCwd(cleanPath, cwdRef.current) || cleanPath;
     const kind = kindFromPath(rel);
     const dirty = Boolean(gitLetterOf(rel, gitStatus, cwdRef.current));
     const diff =
@@ -3709,7 +3701,7 @@ export default function ChatApp() {
             dirty &&
             (kind === "text" || kind === "image" || kind === "svg");
     const current = previewTabsRef.current.find((tab) => sameFile(tab.path, rel, cwdRef.current));
-    const sendPath = current?.path || rel;
+    const sendPath = keepAbsolutePath ? cleanPath : current?.path || rel;
     const cached = !diff && !sha ? peekPreviewText(rel) : undefined;
     previewWantedRef.current.add(sendPath);
     previewWantedRef.current.add(rel);
@@ -3727,6 +3719,7 @@ export default function ChatApp() {
           sameFile(tab.path, rel, cwdRef.current)
             ? {
                 ...tab,
+                path: sendPath,
                 line: targetLine,
                 diff,
                 kind,
@@ -5091,6 +5084,17 @@ export default function ChatApp() {
         open={assistantOpen}
         dialogRef={assistantTrap}
         initialView={assistantInitialView}
+        initialAutomationWorkspace={assistantAutomationWorkspace}
+        assistantResults={assistantResults}
+        onOpenAutomationArtifact={(key, path) => {
+          if (!assistantChatId || !workspaceRoot || !key || key.includes("/") || path.split("/").some((part) => !part || part === "." || part === "..") || path.includes("\\")) {
+            setNotice("无法预览此产物路径");
+            return;
+          }
+          const workspacePath = workspaceRoot.replace(/\/$/, "") + "/" + key;
+          setAssistantOpen(false);
+          openFile(workspacePath + "/" + path, undefined, false, undefined, assistantChatId, true);
+        }}
         initialMemoryScopeId={assistantMemoryScopeId}
         initialMemorySource={assistantMemorySource}
         initialDelegationId={assistantDelegationId}

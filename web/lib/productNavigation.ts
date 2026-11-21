@@ -31,6 +31,7 @@ export const ASSISTANT_SIDEBAR_NAV = [
   { id: "chat", label: "对话", glyph: "chats" },
   { id: "overview", label: "今日与待办", glyph: "overview" },
   { id: "inbox", label: "收件箱", glyph: "chats" },
+  { id: "schedules", label: "定时与自动化", glyph: "schedules" },
   { id: "memory", label: "个人记忆", glyph: "memory" },
   { id: "skills", label: "技能工厂", glyph: "skills" },
 ] as const;

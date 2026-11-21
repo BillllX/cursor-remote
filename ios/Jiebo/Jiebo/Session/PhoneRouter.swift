@@ -7,6 +7,7 @@ enum PhoneRoute: Hashable {
     case inboxItem(String)      // AssistantInboxItem.id
     case worklist(AssistantWorkColumn)
     case artifacts
+    case automation
     case settings
     case memory                 // 资料菜单和设置页都能进来
     /// 记忆再往下的一层。必须跟 memory 同一条栈。

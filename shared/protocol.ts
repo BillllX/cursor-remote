@@ -723,6 +723,7 @@ export type WorkspaceScheduleSummaryItem = {
 
 export type WorkspaceScheduleRunSummaryItem = {
   runId: string;
+  workspaceId?: string;
   scheduleId: string;
   workspaceKey: string;
   title: string;
@@ -766,6 +767,8 @@ export type KbWorkspaceStatusData = {
   wecomWatchResult?: KbWecomWatchActionResult;
   /** 当前工作区（或跨工作区）已配置的通用工程级定时任务列表 */
   workspaceSchedules?: WorkspaceScheduleSummaryItem[];
+  /** 助理自动化列表中的可管理工作区。 */
+  automationWorkspaces?: { id: string; key: string }[];
   /** 当前工作区的通用定时任务历史运行记录（按时间倒序） */
   workspaceScheduleRuns?: WorkspaceScheduleRunSummaryItem[];
   /** 当触发 workspaceScheduleAction 时返回的即时结果 */
@@ -809,7 +812,7 @@ export type AssistantOpArgsMap = {
     resolutions: Array<{ changeId: string; resolution: "keep_current" | "use_snapshot" | "duplicate" }>;
   };
   memory_center_import_rollback: { importId: string };
-  kb_workspace_status: { workspace: string };
+  kb_workspace_status: { workspace: string; automationOnly?: boolean };
   kb_workspace_init: {
     workspace: string;
     title: string;
@@ -868,6 +871,7 @@ export type AssistantOpArgsMap = {
       note?: string;
     };
     workspaceScheduleAction?: {
+      summaryOnly?: boolean;
       kind: "upsert" | "toggle" | "run_now" | "remove";
       targetWorkspace?: string;
       id?: string;

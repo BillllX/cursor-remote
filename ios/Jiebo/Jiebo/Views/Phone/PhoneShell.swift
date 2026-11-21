@@ -32,6 +32,8 @@ struct PhoneShell: View {
             InboxDetailView(itemId: id)
         case .worklist(let column):
             DelegationListScreen(column: column, embeddedInInbox: true)
+        case .automation:
+            AssistantAutomationScreen()
         case .artifacts:
             ArtifactCenterView()
         case .settings:
