@@ -81,11 +81,11 @@ struct ChunkedAssistantMessage: View, Equatable {
         lhs.text == rhs.text && lhs.palette == rhs.palette && lhs.appearance == rhs.appearance
     }
 
-    /// 段间距 = 原来一行空行的高度（5 + 12 + 5）
-    private static let gap: CGFloat = 22
+    /// 正文、标题与段距一起跟随系统大字体，流式分段与缓存方式保持一致。
+    @ScaledMetric(relativeTo: .body) private var paragraphSpacing = JieboReading.paragraphSpacing
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Self.gap) {
+        VStack(alignment: .leading, spacing: paragraphSpacing) {
             ForEach(Array(ChunkMemo.shared.chunks(text).enumerated()), id: \.offset) { _, chunk in
                 AssistantMessage(text: chunk)
                     .equatable()

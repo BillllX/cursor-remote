@@ -6,6 +6,8 @@ struct TurnView: View, Equatable {
     @Environment(ChatStore.self) private var store
     @Environment(\.threadChatId) private var environmentChatId
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.sizeCategory) private var sizeCategory
+    @ScaledMetric(relativeTo: .body) private var messageLineSpacing = JieboReading.lineSpacing
     var turn: Turn
     var canAnswer = false
     /// iPhone 助理页：记忆类工具不出卡片，delegate / create_workspace 写成人话
@@ -120,10 +122,10 @@ struct TurnView: View, Equatable {
                             }
                             if turn.user != "（附图）" || turn.images.isEmpty {
                                 Text(turn.user)
-                                    .font(JieboFont.text(.body))
+                                    .font(JieboFont.uiScaled(JieboReading.body, sizeCategory: sizeCategory))
                                     .foregroundStyle(JieboColor.ink)
                                     .textSelection(.enabled)
-                                    .lineSpacing(4)
+                                    .lineSpacing(messageLineSpacing)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }

@@ -110,20 +110,10 @@ private enum ProseInline {
 
     private static func baseSize(for kind: Kind) -> CGFloat {
         switch kind {
-        case .body: return 17
-        case .heading(let level): return headingSize(level)
+        case .body: return JieboReading.body
+        case .heading(let level): return JieboReading.headingSize(level)
         case .tableHeader, .tableMono: return 12
         case .tableBody: return 17
-        }
-    }
-
-    private static func headingSize(_ level: Int) -> CGFloat {
-        switch level {
-        case 1: return 22
-        case 2: return 19
-        case 3: return 16
-        case 4: return 15
-        default: return 15
         }
     }
 
@@ -157,11 +147,7 @@ private enum ProseInline {
         switch kind {
         case .body, .tableBody:
             return .systemFont(ofSize: pointSize, weight: .regular)
-        case .heading(let level):
-            if level <= 2 {
-                return UIFont(name: "Songti SC Bold", size: pointSize)
-                    ?? .systemFont(ofSize: pointSize, weight: .bold)
-            }
+        case .heading:
             return .systemFont(ofSize: pointSize, weight: .semibold)
         case .tableHeader:
             return .systemFont(ofSize: pointSize, weight: .medium)
@@ -174,9 +160,6 @@ private enum ProseInline {
         switch kind {
         case .body, .tableBody:
             return .systemFont(ofSize: pointSize, weight: .semibold)
-        case .heading(let level) where level <= 2:
-            return UIFont(name: "Songti SC Bold", size: pointSize)
-                ?? .systemFont(ofSize: pointSize, weight: .bold)
         case .heading:
             return .systemFont(ofSize: pointSize, weight: .bold)
         case .tableHeader:
@@ -191,13 +174,15 @@ private enum ProseInline {
 struct ProseLines: View {
     @Environment(\.sizeCategory) private var sizeCategory
     let text: String
+    @ScaledMetric(relativeTo: .body) private var sourceLineSpacing = JieboReading.sourceLineSpacing
+    @ScaledMetric(relativeTo: .body) private var blockSpacing = JieboReading.paragraphSpacing
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: blockSpacing) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 switch segment {
                 case .lines(let lines):
-                    VStack(alignment: .leading, spacing: 5) {
+                    VStack(alignment: .leading, spacing: sourceLineSpacing) {
                         ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                             if line.allSatisfy({ $0 == " " || $0 == "\t" }) {
                                 Color.clear.frame(height: 12)
@@ -324,6 +309,10 @@ struct ProseLines: View {
 private struct ProseLineRow: View, Equatable {
     let line: String
     let sizeCategory: ContentSizeCategory
+    @ScaledMetric(relativeTo: .body) private var bodyLineSpacing = JieboReading.lineSpacing
+    @ScaledMetric(relativeTo: .headline) private var headingLineSpacing = JieboReading.headingLineSpacing
+    @ScaledMetric(relativeTo: .body) private var markerWidth: CGFloat = 24
+    @ScaledMetric(relativeTo: .body) private var quoteInset: CGFloat = 16
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance
 
@@ -342,19 +331,19 @@ private struct ProseLineRow: View, Equatable {
             Rectangle()
                 .fill(JieboColor.line)
                 .frame(height: 1)
-                .padding(.vertical, 6)
+                .padding(.vertical, 10)
         } else if let quote = blockquote(of: body) {
-            HStack(alignment: .top, spacing: 10) {
-                Capsule()
-                    .fill(JieboColor.pine.opacity(0.45))
-                    .frame(width: 3)
-                Text(ProseInline.attributed(quote, sizeCategory: sizeCategory, kind: .body))
-                    .foregroundStyle(JieboColor.ink2)
-                    .tint(JieboColor.pine)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(ProseInline.attributed(quote, sizeCategory: sizeCategory, kind: .body))
+                .foregroundStyle(JieboColor.ink)
+                .tint(JieboColor.pine)
+                .lineSpacing(bodyLineSpacing)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, quoteInset)
+                .overlay(alignment: .leading) {
+                    Capsule().fill(JieboColor.line).frame(width: 3)
+                }
         } else {
             let heading = headingLevel(of: body)
             let item = listItem(of: body)
@@ -363,18 +352,19 @@ private struct ProseLineRow: View, Equatable {
                 if let level = heading?.level { return .heading(level: level) }
                 return .body
             }()
-            HStack(alignment: .top, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
                 if indent > 0 {
-                    Color.clear.frame(width: CGFloat(indent) * 8)
+                    Color.clear.frame(width: min(CGFloat(indent) * markerWidth / 4, markerWidth * 2))
                 }
                 if let item {
                     Text(item.marker)
-                        .font(JieboFont.text(.footnote, weight: .medium))
-                        .foregroundStyle(JieboColor.dim)
-                        .frame(width: 22, alignment: .leading)
-                        .padding(.top, 2)
+                        .font(JieboFont.uiScaled(JieboReading.body, sizeCategory: sizeCategory))
+                        .foregroundStyle(JieboColor.ink2)
+                        .fixedSize()
+                        .frame(minWidth: markerWidth, alignment: .leading)
                 }
                 Text(ProseInline.attributed(display, sizeCategory: sizeCategory, kind: inlineKind))
+                    .lineSpacing(heading == nil ? bodyLineSpacing : headingLineSpacing)
                     .foregroundStyle(JieboColor.ink)
                     .tint(JieboColor.pine)
                     .multilineTextAlignment(.leading)
@@ -651,3 +641,50 @@ private struct HairlineTable: View {
         return JieboColor.ink
     }
 }
+
+#if DEBUG
+/// 用同一段混排检查长句、列表续行、引用和中英数字，不依赖登录或业务数据。
+private struct ChatReadingPreview: View {
+    var body: some View {
+        ScrollView {
+            ChunkedAssistantMessage(text: """
+            ## 净水器怎么选，先看住多久
+
+            长期居住可以把机器和滤芯一起算进总账。短期租住则先看搬家是否方便，再决定要不要安装厨下 RO。
+
+            ### 安装前确认两件事
+            - 厨下要有电源和下水空间；租房如果不方便改装，可以考虑台式净饮机。
+            - 看清滤芯价格、额定总净水量和更换周期，别只比较机器的促销价。
+
+            > 真算 5 年总账：把机器钱、滤芯钱和日常用水一起计算，才更接近真实花费。
+
+            **例如：**机器 ¥1,999，滤芯每年 ¥360。把数字列清楚，再决定是否值得。
+
+            1. 先确认厨房条件。
+            2. 再核对近 12 个月的用水需求；长条目换行后，文字应当继续对齐正文。
+
+            ---
+
+            最后记一句：挑适合自己家使用方式的就好。
+            """)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 24)
+            .frame(maxWidth: JieboMeasure.thread)
+            .frame(maxWidth: .infinity)
+        }
+        .background(JieboColor.paper)
+    }
+}
+
+#Preview("聊天排版 · 浅色") {
+    ChatReadingPreview().preferredColorScheme(.light)
+}
+
+#Preview("聊天排版 · 深色") {
+    ChatReadingPreview().preferredColorScheme(.dark)
+}
+
+#Preview("聊天排版 · 系统大字体") {
+    ChatReadingPreview().dynamicTypeSize(.accessibility2)
+}
+#endif

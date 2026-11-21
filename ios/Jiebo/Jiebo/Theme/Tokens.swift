@@ -395,6 +395,24 @@ enum JieboMeasure {
     static let bubble: CGFloat = 520
 }
 
+/// 聊天阅读排版独立于按钮、导航和代码字号，避免全局放大后界面变拥挤。
+enum JieboReading {
+    static let body: CGFloat = 18
+    static let lineSpacing: CGFloat = 6
+    static let paragraphSpacing: CGFloat = 20
+    static let sourceLineSpacing: CGFloat = 8
+    static let headingLineSpacing: CGFloat = 4
+
+    static func headingSize(_ level: Int) -> CGFloat {
+        switch level {
+        case 1: return 24
+        case 2: return 21
+        case 3: return 19
+        default: return 18
+        }
+    }
+}
+
 enum JieboMotion {
     /// 减少动态效果时仍给一个很短的淡化，不把反馈直接切掉。
     static func reduced() -> Animation {
