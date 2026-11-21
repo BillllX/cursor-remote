@@ -174,7 +174,8 @@ struct CapsuleSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .jieboGlass(in: Capsule(), interactive: true)
+            // 输入胶囊不要用可交互玻璃。按键时玻璃跟着文字重采样，候选栏每字母都会顿一下。
+            .jieboGlass(in: Capsule(), interactive: false)
             .overlay(Capsule().stroke(JieboTheme.shared.palette == .sticker ? JieboColor.ink : JieboColor.pine.opacity(focused ? 0.35 : 0), lineWidth: focused ? 2 : JieboStroke.outline))
     }
 }
