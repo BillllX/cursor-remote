@@ -75,10 +75,15 @@ export function normalizeAppearance(value: string | null): AppearanceId {
 
 export function readThemeChoice(): { palette: PaletteId; appearance: AppearanceId } {
   if (typeof window === "undefined") return { palette: DEFAULT_PALETTE, appearance: "system" };
-  return {
-    palette: normalizePalette(localStorage.getItem(THEME_KEY)),
-    appearance: normalizeAppearance(localStorage.getItem(APPEARANCE_KEY)),
-  };
+  try {
+    return {
+      palette: normalizePalette(localStorage.getItem(THEME_KEY)),
+      appearance: normalizeAppearance(localStorage.getItem(APPEARANCE_KEY)),
+    };
+  } catch {
+    const { palette, theme } = document.documentElement.dataset;
+    return { palette: normalizePalette(palette ?? null), appearance: normalizeAppearance(theme ?? null) };
+  }
 }
 
 declare global {

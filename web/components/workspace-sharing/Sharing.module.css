@@ -364,3 +364,76 @@
 .manageMember input {
   accent-color: var(--accent);
 }
+
+.sessionLayout {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.sessionLayout[hidden] {
+  display: none;
+}
+.sharedFiles {
+  flex: 0 1 190px;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+.sharedFiles :global(.file-tree) {
+  max-height: none;
+}
+.previewPane {
+  position: relative;
+  display: flex;
+  flex: 0 1 49%;
+  min-width: 0;
+  flex-direction: column;
+}
+.previewPane > :global(.file-preview) {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.previewExpanded {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+.previewConflict {
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.previewConflict pre {
+  max-height: 25vh;
+  overflow: auto;
+}
+.sharedStatus {
+  margin: 0;
+  padding: 6px 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 720px) {
+  .sharedFiles {
+    flex-basis: 145px;
+  }
+  .previewPane {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+  }
+}
+
+.threadToolbar {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.threadToolbar select {
+  min-width: 0;
+  color: var(--text);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+}

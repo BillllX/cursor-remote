@@ -1,6 +1,6 @@
 import { allTenants, stateDir } from "../../tenants.ts";
 import { WorkspaceSharing, WorkspaceShareError } from "../../workspace/sharing.ts";
-import { applySharedWorkspaceChanges, askSharedWorkspace } from "../../workspace/shareAsk.ts";
+import { applySharedWorkspaceChanges, askSharedWorkspace, sharedHistoryForClient } from "../../workspace/shareAsk.ts";
 import { manageSharedWorkspace } from "../../workspace/shareManage.ts";
 import { noteOutput, noteTurn } from "../../usage.ts";
 import { WORKSPACE_SHARE_CAP } from "../../../../shared/workspaceShare.ts";
@@ -30,6 +30,17 @@ export async function onWorkspaceShare({ ws, conn, tenant, state }: WsCtx, messa
   if (typeof requestId !== "string" || !/^[a-f0-9-]{36}$/i.test(requestId)) return;
   try {
     const sharing = new WorkspaceSharing(stateDir(), allTenants);
+    if (message.action === "history") {
+      const data = sharedHistoryForClient(
+        sharing,
+        tenant,
+        message.workspace || "",
+        message.beforeTurn,
+        message.threadId,
+      );
+      send(ws, { type: "workspace_share_result", requestId, ok: true, data });
+      return;
+    }
     if (message.action === "manage") {
       const data = manageSharedWorkspace(sharing, tenant, message);
       send(ws, { type: "workspace_share_result", requestId, ok: true, data });
@@ -59,7 +70,19 @@ export async function onWorkspaceShare({ ws, conn, tenant, state }: WsCtx, messa
       checkConnection.unref();
       ws.once("close", stop);
       try {
-        const result = await askSharedWorkspace(sharing, tenant, message, abort.signal);
+        const result = await askSharedWorkspace(
+          sharing,
+          tenant,
+          message,
+          abort.signal,
+          undefined,
+          message.stream === true
+            ? (progress) => {
+                if (conn.authed && conn.tenant === tenant && conn.caps === caps && !abort.signal.aborted)
+                  send(ws, { type: "workspace_share_result", requestId, ok: true, progress });
+              }
+            : undefined,
+        );
         if (!conn.authed || conn.tenant !== tenant || conn.caps !== caps || abort.signal.aborted) return;
         noteTurn(tenant.id, message.question?.length ?? 0);
         noteOutput(tenant.id, result.answer.length);

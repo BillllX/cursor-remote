@@ -17,7 +17,8 @@ import { randomUUID } from "node:crypto";
 import { createBodyStore } from "../src/chatBodies.ts";
 import { emptyDisk, type Tenant } from "../src/tenants.ts";
 import { migrateWorkspaceAgent, removeWorkspaceAgent } from "../src/workspace/agents.ts";
-import { applySharedWorkspaceChanges, askSharedWorkspace } from "../src/workspace/shareAsk.ts";
+import { applySharedWorkspaceChanges, askSharedWorkspace, sharedHistoryForClient } from "../src/workspace/shareAsk.ts";
+import { sharedHistory, saveSharedTurn } from "../src/workspace/shareHistory.ts";
 import { manageSharedWorkspace } from "../src/workspace/shareManage.ts";
 import { WorkspaceSharing, workspaceSharingSupported } from "../src/workspace/sharing.ts";
 import type { SharedWorkspace, WorkspaceShareRequest } from "../../shared/workspaceShare.ts";
@@ -198,6 +199,13 @@ test("共享 Agent 只用授权资料回答，并返回实际读取的来源", l
     question: "继续看记录",
     history: [{ question: "先找记录", answer: "找到了" }],
   } as const;
+  saveSharedTurn(f.service, f.member, workspace!.id, {
+    id: "previous",
+    createdAt: Date.now(),
+    question: "先找记录",
+    answer: "找到了",
+    sources: [],
+  });
   const deps: NonNullable<Parameters<typeof askSharedWorkspace>[4]> = {
     apiKey: () => "fixture",
     models: async () => ["fixture-model"],
@@ -392,4 +400,98 @@ test("已有共享成员继续上传与读取，管理规则必须由所有者�
   f.share([]);
   assert.throws(() => manageSharedWorkspace(f.service, f.member, memoryView), /不可访问/);
   assert.throws(() => f.service.openSharedFile(f.member, workspace, "资料/原件.zip"), /不可访问/);
+});
+
+test("共享记录按成员隔离、落盘可恢复，撤权后拒绝历史访问", linuxOnly, (t) => {
+  const f = fixture(t, "-history");
+  f.share([f.member.id, f.other.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  const turn = {
+    id: "turn-1",
+    createdAt: Date.now(),
+    question: "我的问题",
+    answer: "## 标题\n\n| 指标 | 值 |\n| --- | --- |\n| A | 1 |",
+    sources: ["资料/记录.txt"],
+  };
+  saveSharedTurn(f.service, f.member, workspace, turn);
+  saveSharedTurn(f.service, f.member, workspace, turn);
+  const reloaded = new WorkspaceSharing(f.root, f.tenantList);
+  assert.deepEqual(sharedHistory(reloaded, f.member, workspace), [turn]);
+  assert.deepEqual(sharedHistory(reloaded, f.other, workspace), []);
+  f.share([]);
+  assert.throws(() => sharedHistory(reloaded, f.member, workspace), /不可访问/);
+});
+
+test("已有共享记录进入默认会话，分页和新会话各自隔离", linuxOnly, (t) => {
+  const f = fixture(t, "-page");
+  f.share([f.member.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  const threadId = randomUUID();
+  for (let index = 0; index < 33; index++) {
+    saveSharedTurn(f.service, f.member, workspace, {
+      id: `legacy-${index}`,
+      createdAt: index,
+      question: `原问题 ${index}`,
+      answer: "原回答",
+      sources: [],
+    });
+  }
+  saveSharedTurn(f.service, f.member, workspace, {
+    id: "new-turn",
+    threadId,
+    createdAt: 35,
+    question: "另一个话题",
+    answer: "新回答",
+    sources: [],
+  });
+  const first = sharedHistoryForClient(f.service, f.member, workspace);
+  assert.equal(first.turns[0]?.id, "legacy-3");
+  assert.equal(first.hasMore, true);
+  assert.ok(first.threads.some((row) => row.id === threadId));
+  const older = sharedHistoryForClient(f.service, f.member, workspace, first.turns[0]?.id);
+  assert.deepEqual(
+    older.turns.map((row) => row.id),
+    ["legacy-0", "legacy-1", "legacy-2"],
+  );
+  assert.equal(older.hasMore, false);
+  assert.deepEqual(
+    sharedHistoryForClient(f.service, f.member, workspace, undefined, threadId).turns.map((row) => row.id),
+    ["new-turn"],
+  );
+});
+
+test("共享流在撤权后不再发送正文", linuxOnly, async (t) => {
+  const f = fixture(t, "-stream");
+  f.share([f.member.id]);
+  const workspace = f.list(f.member)[0]!.id;
+  const visible: string[] = [];
+  await assert.rejects(
+    askSharedWorkspace(
+      f.service,
+      f.member,
+      {
+        type: "workspace_share",
+        action: "ask",
+        requestId: randomUUID(),
+        workspace,
+        question: "继续",
+      },
+      new AbortController().signal,
+      {
+        apiKey: () => "fixture",
+        models: async () => ["fixture-model"],
+        prompt: async (_text, _options, _signal, progress) => {
+          progress?.({ kind: "text", text: "撤权前" });
+          f.share([]);
+          progress?.({ kind: "text", text: "撤权后" });
+          return { id: "fixture", status: "finished", result: "不可返回" };
+        },
+      },
+      (event) => {
+        if (event.kind === "text") visible.push(event.text);
+      },
+    ),
+    /不可访问/,
+  );
+  assert.deepEqual(visible, ["撤权前"]);
 });

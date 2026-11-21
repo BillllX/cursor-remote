@@ -142,6 +142,7 @@ export default function FilePreview({
   onCanvasPublish,
   onCanvasRestore,
   sheetRef,
+  isolated = false,
 }: {
   tabs: PreviewTab[];
   activePath: string;
@@ -170,6 +171,7 @@ export default function FilePreview({
   onCanvasSaveVersion?: (path: string, sourceSha: string | undefined, html: string) => void;
   onCanvasPublish?: (path: string, sha: string) => void;
   onCanvasRestore?: (path: string, sha: string) => void;
+  isolated?: boolean;
   sheetRef?: Ref<HTMLElement | null>;
 }) {
   const active = tabs.find((tab) => sameTab(tab.path, activePath)) ?? tabs[0];
@@ -666,6 +668,7 @@ export default function FilePreview({
             {canvasKeep ? (
               <div className={`canvas-host-keep${canvasVisible ? "" : " is-idle"}`}>
                 <CanvasHost
+                  isolated={isolated}
                   source={canvasVisible ? active.content || "" : canvasKeep.content || ""}
                   path={canvasVisible ? active.path : canvasKeep.path}
                   chatId={chatId || ""}
@@ -706,7 +709,7 @@ export default function FilePreview({
           <MarkdownDiffPreview path={active.path} content={active.content} chatId={chatId} media={active.media} onOpen={onOpenFile} />
         ) : live && kind === "html" ? (
           active.content != null ? (
-            <HtmlPreview path={active.path} content={active.content} chatId={chatId} media={active.media} onElementSelect={onComposerInsert} />
+            isolated ? <iframe className="html-frame" title={active.path} sandbox="" referrerPolicy="no-referrer" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">${active.content}`} /> : <HtmlPreview path={active.path} content={active.content} chatId={chatId} media={active.media} onElementSelect={onComposerInsert} />
           ) : (
             <LoadingPreview key={active.path} onRetry={onOpenFile ? () => onOpenFile(active.path) : undefined} />
           )

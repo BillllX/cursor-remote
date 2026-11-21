@@ -142,6 +142,7 @@ struct SharedWorkspaceFileView: View {
     @State private var busy = false
     @State private var openTarget: String?
     @State private var question = ""
+    @State private var historyLoaded = false
     @State private var asking = false
     @State private var askError = ""
     @State private var answers: [(question: String, answer: String, result: JSONValue)] = []
@@ -165,7 +166,7 @@ struct SharedWorkspaceFileView: View {
                     let turn = answers[index]
                     Section {
                         Text(turn.question).font(.headline)
-                        Text(turn.answer).textSelection(.enabled)
+                        ChunkedAssistantMessage(text: turn.answer).equatable()
                         let sources = turn.result["sources"]?.array?.compactMap(\.string) ?? []
                         if !sources.isEmpty { Text("读取了 " + sources.joined(separator: "、")).font(.caption) }
                         if let plan = turn.result["pending"], let id = plan["id"]?.string {
@@ -186,6 +187,7 @@ struct SharedWorkspaceFileView: View {
                 }
                 if asking { ProgressView("Agent 正在处理…") }
                 if !askError.isEmpty { Text(askError).foregroundStyle(.secondary) }
+                if !historyLoaded { Button("恢复会话记录") { Task { await loadHistory() } } }
             }
             if filesOpen || !canAsk {
             Section("来自 \(workspace.ownerName)") {
@@ -240,6 +242,7 @@ struct SharedWorkspaceFileView: View {
         .navigationTitle(store.workspaceSharing.items.first { $0.id == workspace.id }?.name ?? workspace.name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: folder) { await loadFiles() }
+        .task { await loadHistory() }
         .onChange(of: available) { _, value in if !value { dismiss() } }
         .alert("放弃未保存的修改？", isPresented: Binding(get: { openTarget != nil }, set: { if !$0 { openTarget = nil } })) {
             Button("取消", role: .cancel) { openTarget = nil }
@@ -300,9 +303,22 @@ struct SharedWorkspaceFileView: View {
         } catch { askError = error.localizedDescription }
     }
 
+    private func loadHistory() async {
+        guard store.gatewayFeatures.contains("workspace_share_history_v1") else { historyLoaded = true; return }
+        do {
+            let result = try await store.workspaceSharing.request("history", workspace: workspace.id)
+            guard available, !Task.isCancelled else { return }
+            answers = (result["turns"]?.array ?? []).compactMap { turn in
+                guard let question = turn["question"]?.string, let answer = turn["answer"]?.string else { return nil }
+                return (question, answer, turn)
+            }
+            historyLoaded = true
+        } catch { askError = error.localizedDescription }
+    }
+
     private func askAgent() async {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !asking, available, !text.isEmpty else { return }
+        guard !asking, historyLoaded, available, !text.isEmpty else { return }
         asking = true
         askError = ""
         defer { asking = false }

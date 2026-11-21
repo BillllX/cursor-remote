@@ -27,7 +27,7 @@ import { buildAssistantOpMessage } from "@shared/assistantOp";
 import { DEFAULT_ASSISTANT_NAME } from "@shared/protocol";
 import { ShareWorkspaceDialog, SharedWorkspaceFiles, type ShareCall } from "./workspace-sharing/Sharing";
 import { WorkspaceShareClient } from "../lib/workspaceShareClient";
-import { WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_MANAGE_CAP, WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
+import { WORKSPACE_SHARE_HISTORY_CAP, WORKSPACE_SHARE_ASK_CAP, WORKSPACE_SHARE_EDIT_CAP, WORKSPACE_SHARE_MANAGE_CAP, WORKSPACE_SHARE_CAP, type SharedWorkspace } from "@shared/workspaceShare";
 import AssistantPanel, { type AssistantView } from "./AssistantPanel";
 import type { AssistantMemorySource } from "./assistant/assistantMemoryNavigation";
 import { isDeleteToolName } from "@shared/toolNames";
@@ -135,6 +135,7 @@ export default function ChatApp() {
   groupMenuRef.current = groupMenu;
   const [groupPrefsReady, setGroupPrefsReady] = useState(false);
   const [token, setToken] = useState("");
+  const [sharedHistoryAvailable, setSharedHistoryAvailable] = useState(false);
   const [sharedAskAvailable, setSharedAskAvailable] = useState(false);
   const [sharedEditAvailable, setSharedEditAvailable] = useState(false);
   const [sharedManageAvailable, setSharedManageAvailable] = useState(false);
@@ -585,7 +586,7 @@ export default function ChatApp() {
     outboxRef.current = [...outboxRef.current, message].slice(-50);
   }, []);
 
-  const callShare = useCallback<ShareCall>((action) => workspaceShare.current.request(send, action),[send]);
+  const callShare = useCallback<ShareCall>((action, onProgress) => workspaceShare.current.request(send, action, onProgress),[send]);
   const sharedListVersion = useRef(0);
   const refreshSharedWorkspaces = useCallback(async () => {
     const version=++sharedListVersion.current;
@@ -817,6 +818,7 @@ export default function ChatApp() {
             if (nextTenant) tenantIdRef.current = nextTenant;
             const canShare=message.features?.includes(WORKSPACE_SHARE_CAP) ?? false;
             setSharingAvailable(canShare);
+            setSharedHistoryAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_HISTORY_CAP)));
             setSharedAskAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_ASK_CAP)));
             setSharedEditAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_EDIT_CAP)));
             setSharedManageAvailable(canShare && Boolean(message.features?.includes(WORKSPACE_SHARE_MANAGE_CAP)));
@@ -5282,7 +5284,7 @@ export default function ChatApp() {
         }}
         onClick={() => setNavOpen(false)}
       />
-      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare} token={token} canManage={sharedManageAvailable} canAsk={sharedAskAvailable} canEdit={sharedEditAvailable} models={models} defaultModel={model} connected={connected && unlocked}
+      {sharedWorkspace ? <SharedWorkspaceFiles key={sharedWorkspace.id} workspace={sharedWorkspace} call={callShare} token={token} canHistory={sharedHistoryAvailable} canManage={sharedManageAvailable} canAsk={sharedAskAvailable} canEdit={sharedEditAvailable} models={models} defaultModel={model} connected={connected && unlocked}
         onSwitch={openWorkspaceSwitcher} onUnavailable={()=>{setSharedId("");void refreshSharedWorkspaces();setNotice("共享工作区已不可访问");}} /> : <>
       <Sidebar
         navDrag={navDrag}

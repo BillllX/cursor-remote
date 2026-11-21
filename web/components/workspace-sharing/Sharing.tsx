@@ -1,28 +1,33 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SharedFileEntry,
   SharedWorkspace,
   SharedWorkspaceTurn,
   SharedWorkspaceAnswer,
   SharedWorkspaceApplied,
+  SharedWorkspaceProgress,
   SharePerson,
   WorkspaceShareRequest,
 } from "@shared/workspaceShare";
 import { useFocusTrap } from "../../lib/useFocusTrap";
+import remarkGfm from "remark-gfm";
+import { MemoMarkdown, markdownComponents } from "../chat/markdown";
 import FileTree from "../FileTree";
 import { WorkspaceNavigation } from "../chat/WorkspaceNavigation";
 import { SharedWorkspaceManagement, type SharedSection } from "./Management";
-import MarkdownPreview from "../MarkdownPreview";
-import MediaPreview from "../MediaPreview";
+import FilePreview from "../FilePreview";
 import { kindFromPath, isByteKind } from "@shared/preview";
 import type { WorkspaceNavId } from "../../lib/productNavigation";
 import { IconClose, IconRail } from "../chromeIcons";
 import { Composer } from "../chat/Composer";
 import styles from "./Sharing.module.css";
 
-export type ShareCall = <T>(action: Omit<WorkspaceShareRequest, "type" | "requestId">) => Promise<T>;
+export type ShareCall = <T>(
+  action: Omit<WorkspaceShareRequest, "type" | "requestId">,
+  progress?: (event: SharedWorkspaceProgress) => void,
+) => Promise<T>;
 type People = { people: SharePerson[]; memberIds: string[]; managerIds?: string[]; memberRevision: string };
 
 export function ShareWorkspaceDialog({
@@ -234,6 +239,9 @@ function SharedWorkspaceQuestions({
   defaultModel,
   connected,
   refreshFiles,
+  onOpenFile,
+  canHistory,
+  composerInsert,
 }: {
   workspace: SharedWorkspace;
   filePath?: string;
@@ -243,11 +251,22 @@ function SharedWorkspaceQuestions({
   models: string[];
   defaultModel: string;
   connected: boolean;
-  refreshFiles: () => void;
+  refreshFiles: (changedPaths?: string[]) => void;
+  onOpenFile: (path: string) => void;
+  canHistory: boolean;
+  composerInsert?: { text: string };
 }) {
   const [question, setQuestion] = useState("");
-  const [turns, setTurns] = useState<(SharedWorkspaceTurn & SharedWorkspaceAnswer)[]>([]);
+  const [historyReady, setHistoryReady] = useState(!canHistory);
+  const [historyReload, setHistoryReload] = useState(0);
+  const [turns, setTurns] = useState<(SharedWorkspaceTurn & SharedWorkspaceAnswer & { id?: string })[]>([]);
   const [pending, setPending] = useState("");
+  const [liveAnswer, setLiveAnswer] = useState("");
+  const [liveTool, setLiveTool] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [threadId, setThreadId] = useState("default");
+  const [threads, setThreads] = useState<{ id: string; title: string }[]>([]);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState("");
   const [pickedModel, setModel] = useState("");
   const [confirmWrites, setConfirmWrites] = useState(true);
@@ -262,7 +281,40 @@ function SharedWorkspaceQuestions({
   }, []);
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
-  }, [turns, pending]);
+  }, [pending, liveAnswer]);
+  useEffect(() => {
+    if (composerInsert) setQuestion((previous) => [previous, composerInsert.text].filter(Boolean).join("\n"));
+  }, [composerInsert]);
+  const components = useMemo(() => markdownComponents(onOpenFile), [onOpenFile]);
+  useEffect(() => {
+    if (!canHistory || !connected) return;
+    let current = true;
+    setHistoryReady(false);
+    void call<{
+      turns: (SharedWorkspaceTurn & SharedWorkspaceAnswer & { id: string })[];
+      hasMore?: boolean;
+      threads?: { id: string; title: string }[];
+    }>({
+      action: "history",
+      workspace: workspace.id,
+      threadId,
+    })
+      .then(({ turns, hasMore, threads }) => {
+        if (current) {
+          setTurns(turns);
+          setHasMore(Boolean(hasMore));
+          setThreads(threads ?? []);
+          setHistoryReady(true);
+          setError("");
+        }
+      })
+      .catch((failure: Error) => {
+        if (current) setError(failure.message);
+      });
+    return () => {
+      current = false;
+    };
+  }, [canHistory, call, workspace.id, connected, historyReload, threadId]);
   const cursorModels = models.filter((model) => !model.includes(":"));
   const model = cursorModels.includes(pickedModel)
     ? pickedModel
@@ -274,31 +326,87 @@ function SharedWorkspaceQuestions({
     if (err.code === "UNAVAILABLE") onUnavailable();
     else setError(err.message);
   }
+  function switchThread(next: string) {
+    if (next === threadId || pending || applying || loadingOlder) return;
+    setTurns([]);
+    setQuestion("");
+    setError("");
+    setHistoryReady(false);
+    setHasMore(false);
+    setThreadId(next);
+  }
+  async function loadOlder() {
+    const beforeTurn = turns[0]?.id;
+    if (!beforeTurn || loadingOlder || pending) return;
+    setLoadingOlder(true);
+    try {
+      const page = await call<{
+        turns: (SharedWorkspaceTurn & SharedWorkspaceAnswer & { id: string })[];
+        hasMore: boolean;
+      }>({
+        action: "history",
+        workspace: workspace.id,
+        beforeTurn,
+        threadId,
+      });
+      if (!mounted.current) return;
+      setTurns((previous) => [...page.turns, ...previous]);
+      setHasMore(page.hasMore);
+    } catch (error) {
+      if (mounted.current) fail(error);
+    } finally {
+      if (mounted.current) setLoadingOlder(false);
+    }
+  }
   async function ask(raw?: string) {
     const text = (raw ?? question).trim();
-    if (!text || pending || !connected) return;
+    if (!text || pending || !connected || !historyReady) return;
     setPending(text);
+    setLiveAnswer("");
+    setLiveTool("");
     setQuestion("");
     setError("");
     try {
-      const answer = await call<SharedWorkspaceAnswer>({
-        action: "ask",
-        workspace: workspace.id,
-        path: filePath,
-        question: text,
-        model,
-        confirmWrites: canEdit ? confirmWrites : undefined,
-        history: turns.slice(-4).map(({ question, answer }) => ({ question, answer })),
-      });
+      const answer = await call<SharedWorkspaceAnswer>(
+        {
+          stream: true,
+          history: canHistory ? undefined : turns.slice(-4).map(({ question, answer }) => ({ question, answer })),
+          threadId,
+          action: "ask",
+          workspace: workspace.id,
+          path: filePath,
+          question: text,
+          model,
+          confirmWrites: canEdit ? confirmWrites : undefined,
+        },
+        (event) => {
+          if (!mounted.current) return;
+          if (event.kind === "reset") {
+            setLiveAnswer("");
+            setLiveTool("");
+          }
+          if (event.kind === "text") setLiveAnswer((previous) => (previous + event.text).slice(0, 12000));
+          if (event.kind === "tool") setLiveTool(event.text);
+        },
+      );
       if (!mounted.current) return;
       setTurns((previous) => [...previous, { question: text, ...answer }]);
-      if (answer.changes?.applied.length) refreshFiles();
+      setThreads((previous) =>
+        previous.some((thread) => thread.id === threadId)
+          ? previous
+          : [{ id: threadId, title: threadId === "default" ? "共享会话" : text.slice(0, 36) }, ...previous],
+      );
+      if (answer.changes?.applied.length) refreshFiles(answer.changes.applied);
     } catch (failure) {
       if (!mounted.current) return;
       fail(failure);
       setQuestion((current) => current || text);
     } finally {
-      if (mounted.current) setPending("");
+      if (mounted.current) {
+        setPending("");
+        setLiveAnswer("");
+        setLiveTool("");
+      }
     }
   }
   function updateTurn(index: number, changes?: SharedWorkspaceApplied) {
@@ -316,7 +424,7 @@ function SharedWorkspaceQuestions({
       });
       if (!mounted.current) return;
       updateTurn(index, discard ? undefined : changes);
-      if (changes.applied.length) refreshFiles();
+      if (changes.applied.length) refreshFiles(changes.applied);
     } catch (failure) {
       if (mounted.current) fail(failure);
     } finally {
@@ -325,17 +433,73 @@ function SharedWorkspaceQuestions({
   }
   return (
     <section className={styles.questions} aria-label="工作区 Agent">
+      {canHistory && (
+        <div className={styles.threadToolbar}>
+          <select
+            aria-label="共享会话"
+            value={threadId}
+            disabled={Boolean(pending) || applying || loadingOlder}
+            onChange={(event) => switchThread(event.target.value)}
+          >
+            {!threads.some((thread) => thread.id === "default") && <option value="default">共享会话</option>}
+            {threads.map((thread) => (
+              <option key={thread.id} value={thread.id}>
+                {thread.title}
+              </option>
+            ))}
+            {threadId !== "default" && !threads.some((thread) => thread.id === threadId) && (
+              <option value={threadId}>新会话</option>
+            )}
+          </select>
+          <button
+            type="button"
+            className="pill"
+            disabled={Boolean(pending) || applying || loadingOlder}
+            onClick={() => switchThread(crypto.randomUUID())}
+          >
+            新建会话
+          </button>
+        </div>
+      )}
       <div className="thread" role="log" aria-live="polite">
         <div className="thread-inner">
-          {!turns.length && !pending && <p className={styles.empty}>交代 Agent 查阅资料或修改文件</p>}
+          {hasMore && (
+            <button
+              className="pill"
+              type="button"
+              disabled={loadingOlder || Boolean(pending)}
+              onClick={() => void loadOlder()}
+            >
+              加载更早消息
+            </button>
+          )}
+          {!historyReady && <p role="status">正在恢复会话记录…</p>}
+          {!historyReady && error && (
+            <button type="button" className="pill" onClick={() => setHistoryReload((value) => value + 1)}>
+              重新读取
+            </button>
+          )}
+          {historyReady && !turns.length && !pending && <p className={styles.empty}>交代 Agent 查阅资料或修改文件</p>}
           {turns.map((turn, index) => (
-            <article className="turn" key={index}>
+            <article className="turn" key={turn.id ?? index}>
               <div className="turn-user">
                 <div className="user-bubble">{turn.question}</div>
               </div>
               <div className="assistant">
-                <p className={styles.answer}>{turn.answer}</p>
-                {turn.sources.length > 0 && <small>读取了 {turn.sources.join("、")}</small>}
+                <div className="markdown">
+                  <MemoMarkdown remarkPlugins={[remarkGfm]} components={components}>
+                    {turn.answer}
+                  </MemoMarkdown>
+                </div>
+                {turn.sources.length > 0 && (
+                  <div aria-label="引用文件">
+                    {turn.sources.map((path) => (
+                      <button key={path} type="button" className="cite-ref" onClick={() => onOpenFile(path)}>
+                        {path}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {turn.pending && (
                   <div className="approval-row">
                     <div>
@@ -384,7 +548,16 @@ function SharedWorkspaceQuestions({
               <div className="turn-user">
                 <div className="user-bubble">{pending}</div>
               </div>
-              <p>Agent 正在处理…</p>
+              {liveTool && <small role="status">{liveTool}</small>}
+              {liveAnswer ? (
+                <div className="assistant markdown">
+                  <MemoMarkdown remarkPlugins={[remarkGfm]} components={components}>
+                    {liveAnswer}
+                  </MemoMarkdown>
+                </div>
+              ) : (
+                <p>Agent 正在处理…</p>
+              )}
             </article>
           )}
           {error && <p role="alert">{error}</p>}
@@ -406,7 +579,7 @@ function SharedWorkspaceQuestions({
             policy="baseline"
             setPolicy={() => {}}
             busy={Boolean(pending)}
-            connected={connected}
+            connected={connected && historyReady}
             onSubmit={(raw) => void ask(raw)}
             onStop={() => void call({ action: "cancel", workspace: workspace.id }).catch(fail)}
             onUndo={() => {}}
@@ -442,6 +615,7 @@ export function SharedWorkspaceFiles({
   call,
   token,
   canManage,
+  canHistory,
   canAsk,
   canEdit,
   models,
@@ -454,6 +628,7 @@ export function SharedWorkspaceFiles({
   call: ShareCall;
   token: string;
   canManage: boolean;
+  canHistory: boolean;
   canAsk: boolean;
   canEdit: boolean;
   models: string[];
@@ -467,8 +642,10 @@ export function SharedWorkspaceFiles({
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [uploadDir, setUploadDir] = useState("");
   const [file, setFile] = useState<OpenFile>();
-  const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<"preview" | "edit">("preview");
+  const [draft, setDraft] = useState<string | null>(null);
+  const [previewExpanded, setPreviewExpanded] = useState(false);
+  const [composerInsert, setComposerInsert] = useState<{ text: string }>();
+  const onDraft = useCallback((_path: string, value: string | null) => setDraft(value), []);
   const [comparison, setComparison] = useState<OpenFile>();
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -477,7 +654,7 @@ export function SharedWorkspaceFiles({
   const pendingDirs = useRef(new Set<string>());
   const foldersRef = useRef(folders);
   foldersRef.current = folders;
-  const dirty = Boolean(file?.revision && file.content !== draft);
+  const dirty = Boolean(file?.revision && draft !== null && file.content !== draft);
   const visibleItems = SHARED_NAV.filter(
     (item) => item === "files" || (item === "chats" ? canAsk : canManage && workspace.canManage),
   );
@@ -524,7 +701,8 @@ export function SharedWorkspaceFiles({
     // 共享工作区切换时父组件会按工作区 ID 重新挂载。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section]);
-  function refreshFiles() {
+  function refreshFiles(changedPaths?: string[]) {
+    if (file && changedPaths?.includes(file.path) && !dirty) void open(file.path);
     for (const path of new Set(["", ...Object.keys(foldersRef.current)])) void loadFolder(path, true);
   }
   async function requestFile(path: string, body?: File) {
@@ -570,9 +748,7 @@ export function SharedWorkspaceFiles({
       if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
       objectUrl.current = opened.url || "";
       setFile(opened);
-      setDraft(opened.content);
-      setMode("preview");
-      setSection("files");
+      setDraft(null);
     } catch (error) {
       fail(error);
     } finally {
@@ -580,7 +756,7 @@ export function SharedWorkspaceFiles({
     }
   }
   async function save() {
-    if (!file?.revision || !dirty) return;
+    if (!file?.revision || !dirty || draft === null || busy || comparison) return;
     setBusy(true);
     setStatus("");
     setComparison(undefined);
@@ -594,6 +770,7 @@ export function SharedWorkspaceFiles({
       });
       if (active.current) {
         setFile({ ...file, revision, content: draft });
+        setDraft(null);
         setStatus("已保存");
       }
     } catch (error) {
@@ -631,27 +808,20 @@ export function SharedWorkspaceFiles({
     }
     if (!active.current) return;
     setBusy(false);
-    if (uploaded.length) void loadFolder(uploadDir, true);
+    if (uploaded.length) {
+      void loadFolder(uploadDir, true);
+      if (!dirty && uploaded.length === 1) void open(uploadDir ? `${uploadDir}/${uploaded[0]}` : uploaded[0]!);
+    }
     setStatus([uploaded.length ? `已上传 ${uploaded.length} 个文件` : "", ...errors].filter(Boolean).join("；"));
   }
-  function preview() {
-    if (!file) return <p className={styles.muted}>从文件树选择文件</p>;
-    if (file.kind === "html")
-      return (
-        <iframe
-          className={styles.htmlPreview}
-          title={file.path}
-          sandbox=""
-          referrerPolicy="no-referrer"
-          srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">${file.content}`}
-        />
-      );
-    if (file.kind === "markdown")
-      return <MarkdownPreview path={file.path} content={file.content} onOpen={(path) => void open(path)} />;
-    if (file.url && (["image", "svg", "pdf", "audio", "video"] as string[]).includes(file.kind))
-      return <MediaPreview kind={file.kind} path={file.path} url={file.url} onReload={() => void open(file.path)} />;
-    if (file.url) return <p className={styles.muted}>可下载原文件后查看</p>;
-    return <pre className={styles.fileText}>{file.content}</pre>;
+  function closePreview() {
+    if (busy || (dirty && !confirm("放弃未保存的修改？"))) return;
+    if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
+    objectUrl.current = "";
+    setFile(undefined);
+    setDraft(null);
+    setComparison(undefined);
+    setPreviewExpanded(false);
   }
 
   return (
@@ -674,118 +844,110 @@ export function SharedWorkspaceFiles({
           />
         </aside>
         <div className={styles.sharedContent}>
-          {canAsk && (
-            <div className={styles.conversation} hidden={section !== "chats"}>
-              <SharedWorkspaceQuestions
-                workspace={workspace}
-                filePath={file?.path}
-                call={call}
-                onUnavailable={onUnavailable}
-                canEdit={canEdit}
-                models={models}
-                defaultModel={defaultModel}
-                connected={connected}
-                refreshFiles={refreshFiles}
-              />
-            </div>
-          )}
-          {section === "files" && (
-            <div className={styles.columns}>
-              <nav aria-label="文件树">
-                <div className={styles.fileActions}>
-                  <h2>文件树</h2>
-                  {canManage && (
-                    <label className="workspace-modal-btn">
-                      上传文件
-                      <input
-                        type="file"
-                        multiple
-                        aria-label="上传文件"
-                        disabled={busy}
-                        onChange={(event) => {
-                          if (event.target.files) void upload(event.target.files);
-                          event.target.value = "";
-                        }}
-                      />
-                    </label>
-                  )}
-                  <button type="button" className="workspace-modal-btn" onClick={refreshFiles}>
-                    刷新
-                  </button>
-                </div>
-                {canManage && (
-                  <p className={styles.muted}>
-                    上传到 {uploadDir || "工作区根目录"}{" "}
-                    {uploadDir && (
-                      <button type="button" className="pill" onClick={() => setUploadDir("")}>
-                        改为根目录
-                      </button>
-                    )}
-                  </p>
-                )}
-                <FileTree
-                  paths={paths}
-                  variant="browser"
-                  loadingDirs={loading}
-                  truncated={folders[""]?.truncated}
-                  truncatedDirs={Object.fromEntries(
-                    Object.entries(folders).map(([path, value]) => [path, value.truncated]),
-                  )}
-                  onExpandDir={(path) => {
-                    setUploadDir(path);
-                    void loadFolder(path);
-                  }}
-                  onPick={(path) => void open(path)}
+          <div className={styles.sessionLayout} hidden={section !== "chats" && section !== "files"}>
+            {canAsk && (
+              <div className={styles.conversation} hidden={section !== "chats" && section !== "files"}>
+                <SharedWorkspaceQuestions
+                  workspace={workspace}
+                  filePath={file?.path}
+                  call={call}
+                  onUnavailable={onUnavailable}
+                  canEdit={canEdit}
+                  models={models}
+                  defaultModel={defaultModel}
+                  connected={connected}
+                  refreshFiles={refreshFiles}
+                  canHistory={canHistory}
+                  composerInsert={composerInsert}
+                  onOpenFile={(path) => void open(path)}
                 />
-              </nav>
-              <section aria-label="文件内容">
-                {file && (
+              </div>
+            )}
+            {section === "files" && (
+              <div className={styles.sharedFiles}>
+                <nav aria-label="文件树">
                   <div className={styles.fileActions}>
-                    <h2>{file.path}</h2>
-                    {file.revision && (
-                      <button
-                        type="button"
-                        className="pill"
-                        aria-pressed={mode === "edit"}
-                        onClick={() => setMode(mode === "edit" ? "preview" : "edit")}
-                      >
-                        {mode === "edit" ? "预览" : "编辑"}
-                      </button>
+                    <h2>文件树</h2>
+                    {canManage && (
+                      <label className="workspace-modal-btn">
+                        上传文件
+                        <input
+                          type="file"
+                          multiple
+                          aria-label="上传文件"
+                          disabled={busy}
+                          onChange={(event) => {
+                            if (event.target.files) void upload(event.target.files);
+                            event.target.value = "";
+                          }}
+                        />
+                      </label>
                     )}
-                    {file.url && (
-                      <a className="pill" href={file.url} download={file.path.split("/").at(-1)}>
-                        下载原件
-                      </a>
-                    )}
-                  </div>
-                )}
-                {file && mode === "edit" ? (
-                  <>
-                    <textarea
-                      aria-label="文件编辑"
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      readOnly={busy}
-                    />
-                    <button
-                      className="new-chat primary"
-                      type="button"
-                      disabled={busy || !dirty || !!comparison}
-                      onClick={() => void save()}
-                    >
-                      保存文件
+                    <button type="button" className="workspace-modal-btn" onClick={() => refreshFiles()}>
+                      刷新
                     </button>
-                  </>
-                ) : (
-                  preview()
-                )}
+                  </div>
+                  {canManage && (
+                    <p className={styles.muted}>
+                      上传到 {uploadDir || "工作区根目录"}{" "}
+                      {uploadDir && (
+                        <button type="button" className="pill" onClick={() => setUploadDir("")}>
+                          改为根目录
+                        </button>
+                      )}
+                    </p>
+                  )}
+                  <FileTree
+                    paths={paths}
+                    variant="browser"
+                    loadingDirs={loading}
+                    truncated={folders[""]?.truncated}
+                    truncatedDirs={Object.fromEntries(
+                      Object.entries(folders).map(([path, value]) => [path, value.truncated]),
+                    )}
+                    onExpandDir={(path) => {
+                      setUploadDir(path);
+                      void loadFolder(path);
+                    }}
+                    onPick={(path) => void open(path)}
+                  />
+                </nav>
+              </div>
+            )}
+            {file && (
+              <div className={`${styles.previewPane}${previewExpanded ? ` ${styles.previewExpanded}` : ""}`}>
+                <FilePreview
+                  isolated
+                  tabs={[{ ...file, content: file.url ? undefined : file.content }]}
+                  activePath={file.path}
+                  onSelect={() => {}}
+                  onCloseTab={closePreview}
+                  onCloseAll={closePreview}
+                  onCite={(path, line) => {
+                    setComposerInsert({ text: `@${path}${line ? `:${line}` : ""}` });
+                    setSection("chats");
+                  }}
+                  onComposerInsert={(text) => {
+                    setComposerInsert({ text });
+                    setSection("chats");
+                  }}
+                  expanded={previewExpanded}
+                  onToggleExpand={() => setPreviewExpanded((value) => !value)}
+                  onOpenFile={(path) => void open(path)}
+                  drafts={draft === null ? {} : { [file.path]: draft }}
+                  onDraft={onDraft}
+                  onSave={file.revision ? () => void save() : undefined}
+                />
                 {comparison && (
-                  <>
-                    <h3>最新保存的版本</h3>
-                    <textarea aria-label="最新保存的版本" value={comparison.content} readOnly />
+                  <div className={styles.previewConflict}>
+                    <p>文件已被其他操作更新</p>
+                    <details>
+                      <summary>查看最新保存版本</summary>
+                      <pre>{comparison.content}</pre>
+                    </details>
                     <button
+                      className="pill"
                       type="button"
-                      className="workspace-modal-btn"
                       onClick={() => {
                         setFile(comparison);
                         setComparison(undefined);
@@ -793,11 +955,15 @@ export function SharedWorkspaceFiles({
                     >
                       基于新版保留草稿
                     </button>
-                  </>
+                  </div>
                 )}
-                <p role="status">{status}</p>
-              </section>
-            </div>
+              </div>
+            )}
+          </div>
+          {status && (
+            <p className={styles.sharedStatus} role="status">
+              {status}
+            </p>
           )}
           {canManage && workspace.canManage && section !== "files" && section !== "chats" && (
             <SharedWorkspaceManagement

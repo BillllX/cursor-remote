@@ -1,6 +1,7 @@
 import {
   WORKSPACE_SHARE_ASK_TIMEOUT_MS,
   type WorkspaceShareRequest,
+  type SharedWorkspaceProgress,
   type WorkspaceShareResult,
 } from "@shared/workspaceShare";
 
@@ -9,6 +10,7 @@ export class WorkspaceShareClient {
   request<T>(
     send: (message: WorkspaceShareRequest) => void,
     action: Omit<WorkspaceShareRequest, "type" | "requestId">,
+    onProgress?: (event: SharedWorkspaceProgress) => void,
   ): Promise<T> {
     const requestId = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
@@ -30,6 +32,10 @@ export class WorkspaceShareClient {
       this.pending.set(requestId, {
         cancel,
         settle: (frame) => {
+          if (frame.progress) {
+            onProgress?.(frame.progress);
+            return;
+          }
           finish();
           if (frame.ok) resolve(frame.data as T);
           else reject(Object.assign(new Error(frame.error || "共享操作未完成"), { code: frame.code }));

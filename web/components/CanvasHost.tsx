@@ -9,11 +9,13 @@ export default function CanvasHost({
   chatId,
   onAction,
   onError,
+  isolated = false,
 }: {
   source: string;
   path: string;
   chatId: string;
   onAction?: (action: CanvasAction) => void;
+  isolated?: boolean;
   onError?: (message: string | null) => void;
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -39,11 +41,13 @@ export default function CanvasHost({
     if (!payloadRef.current.source.trim()) return;
     const seq = ++seqRef.current;
     expectRef.current = seq;
-    win.postMessage({ type: "canvas:load", seq, ...payloadRef.current }, "*");
+    const { palette, theme } = document.documentElement.dataset;
+    win.postMessage({ type: "canvas:load", seq, ...payloadRef.current, ...(isolated ? { palette, theme } : {}) }, "*");
   };
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
+      if (event.source !== frameRef.current?.contentWindow) return;
       const data = event.data as
         | { type: string; message?: string | null; action?: CanvasAction; seq?: number }
         | undefined;
@@ -143,7 +147,7 @@ export default function CanvasHost({
         className="canvas-frame"
         title={path}
         src={src}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox={isolated ? "allow-scripts" : "allow-scripts allow-same-origin"}
         onLoad={() => {
           const win = frameRef.current?.contentWindow;
           if (!win) return;

@@ -1,3 +1,4 @@
+import { sharedHistory, saveSharedTurn, updateSharedTurn, sharedThreadId } from "./shareHistory.ts";
 import { randomUUID } from "node:crypto";
 import { Agent, type AgentOptions, type RunResult, type SDKCustomTool, type SDKCustomToolResult } from "@cursor/sdk";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -15,6 +16,7 @@ import {
   type SharedFileEntry,
   type SharedWorkspaceAnswer,
   type SharedWorkspaceApplied,
+  type SharedWorkspaceProgress,
   type WorkspaceShareRequest,
 } from "../../../shared/workspaceShare.ts";
 
@@ -28,6 +30,33 @@ const pending = new Map<
   string,
   { actor: string; workspace: string; epoch: string; changes: SharedFileChange[]; expiry: number }
 >();
+
+export function sharedHistoryForClient(
+  sharing: WorkspaceSharing,
+  actor: Tenant,
+  workspace: string,
+  beforeTurn?: string,
+  requestedThreadId?: string,
+) {
+  const threadId = sharedThreadId(requestedThreadId);
+  const allTurns = sharedHistory(sharing, actor, workspace);
+  const threads = new Map<string, { id: string; title: string }>();
+  for (const turn of allTurns) {
+    const id = turn.threadId ?? "default";
+    if (!threads.has(id)) threads.set(id, { id, title: id === "default" ? "共享会话" : turn.question.slice(0, 36) });
+  }
+  const history = allTurns.filter((turn) => (turn.threadId ?? "default") === threadId);
+  const end = beforeTurn ? history.findIndex((turn) => turn.id === beforeTurn) : history.length;
+  if (end < 0) throw new WorkspaceShareError("未找到历史记录位置");
+  const start = Math.max(0, end - 30);
+  const turns = history.slice(start, end).map((turn) => {
+    const plan = turn.pending && pending.get(turn.pending.id);
+    if (!turn.pending || (plan && plan.expiry > Date.now() && plan.epoch === sharing.memberEpoch(actor, workspace)))
+      return turn;
+    return { ...turn, pending: undefined, answer: `${turn.answer}\n\n> 此轮待确认修改已过期，请重新发起任务。` };
+  });
+  return { turns, hasMore: start > 0, threads: [...threads.values()].reverse() };
+}
 
 function applyChanges(sharing: WorkspaceSharing, actor: Tenant, workspace: string, changes: SharedFileChange[]) {
   const result: SharedWorkspaceApplied = { applied: [], failed: [] };
@@ -59,11 +88,18 @@ export function applySharedWorkspaceChanges(sharing: WorkspaceSharing, actor: Te
   )
     throw new WorkspaceShareError("待确认的修改已失效，请重新发起任务");
   pending.delete(id);
-  if (request.discard === true) return { applied: [], failed: [] };
-  return applyChanges(sharing, actor, plan.workspace, plan.changes);
+  const result =
+    request.discard === true ? { applied: [], failed: [] } : applyChanges(sharing, actor, plan.workspace, plan.changes);
+  updateSharedTurn(sharing, actor, plan.workspace, id, request.discard ? undefined : result);
+  return result;
 }
 
-async function runPrompt(text: string, options: AgentOptions, signal: AbortSignal): Promise<RunResult> {
+async function runPrompt(
+  text: string,
+  options: AgentOptions,
+  signal: AbortSignal,
+  progress?: (event: SharedWorkspaceProgress) => void,
+): Promise<RunResult> {
   signal.throwIfAborted();
   const agent = await Agent.create(options);
   let closed = false;
@@ -82,7 +118,16 @@ async function runPrompt(text: string, options: AgentOptions, signal: AbortSigna
   signal.addEventListener("abort", cancel, { once: true });
   try {
     signal.throwIfAborted();
-    const run = await Promise.race([agent.send(text), abort]);
+    const run = await Promise.race([
+      agent.send(text, {
+        onDelta: ({ update }) => {
+          const delta = update as { type?: string; text?: string };
+          if (delta.type === "text-delta" && typeof delta.text === "string")
+            progress?.({ kind: "text", text: delta.text });
+        },
+      }),
+      abort,
+    ]);
     return await Promise.race([run.wait(), abort]);
   } finally {
     signal.removeEventListener("abort", cancel);
@@ -102,6 +147,7 @@ export async function askSharedWorkspace(
   request: WorkspaceShareRequest,
   connection: AbortSignal,
   deps = runtime,
+  onProgress?: (event: SharedWorkspaceProgress) => void,
 ): Promise<SharedWorkspaceAnswer> {
   const workspace = request.workspace;
   const epoch = sharing.memberEpoch(actor, workspace);
@@ -113,13 +159,28 @@ export async function askSharedWorkspace(
   assertAccess();
   const question = sanitizeQaQuestion(request.question);
   if (!question.ok) throw new WorkspaceShareError(question.error);
-  // 历史来自当前客户端，只作为问答上下文，网关不会写入所有者的会话。
-  const history = Array.isArray(request.history)
-    ? request.history.slice(-4).flatMap((turn) => {
-        if (typeof turn?.question !== "string" || typeof turn?.answer !== "string") return [];
-        return [{ question: turn.question.slice(0, 1500), answer: turn.answer.slice(0, 2500) }];
-      })
-    : [];
+  const progress = onProgress
+    ? (event: SharedWorkspaceProgress) => {
+        try {
+          assertAccess();
+        } catch {
+          return;
+        }
+        onProgress(event);
+      }
+    : undefined;
+  const threadId = sharedThreadId(request.threadId);
+  const stored = sharedHistory(sharing, actor, workspace || "").filter(
+    (turn) => (turn.threadId ?? "default") === threadId,
+  );
+  const completed = stored.find((turn) => turn.id === request.requestId);
+  if (completed) return completed;
+  const history = stored.slice(-12).map((turn) => ({
+    question: turn.question.slice(0, 4000),
+    answer: turn.answer.slice(0, 8000),
+    changes: turn.changes,
+    awaitingApproval: Boolean(turn.pending),
+  }));
   const apiKey = deps.apiKey();
   if (!apiKey) throw new WorkspaceShareError("站点尚未配置共享问答模型");
   const now = Date.now();
@@ -164,6 +225,7 @@ export async function askSharedWorkspace(
         try {
           signal.throwIfAborted();
           assertAccess();
+          progress?.({ kind: "tool", text: description });
           if (++calls > MAX_TOOL_CALLS) return "本轮读取次数已用完，请根据已获取资料回答。";
           return await execute(args, context);
         } catch {
@@ -278,6 +340,7 @@ export async function askSharedWorkspace(
       ref: actor,
       preferredModel: models.find((model) => model === request.model),
       runWithModel: (model) => {
+        progress?.({ kind: "reset", text: "" });
         changes.clear();
         reads.clear();
         sources.clear();
@@ -290,6 +353,7 @@ export async function askSharedWorkspace(
             local: { cwd, sandboxOptions: { enabled: true }, settingSources: [], customTools },
           },
           signal,
+          progress,
         );
       },
     });
@@ -299,7 +363,18 @@ export async function askSharedWorkspace(
     if (!answer) throw new WorkspaceShareError("共享 Agent 未能完成回答，请稍后重试");
     const response: SharedWorkspaceAnswer = { answer, sources: [...sources] };
     const prepared = [...changes.values()];
-    if (!prepared.length || typeof workspace !== "string") return response;
+    const saveResponse = () => {
+      assertAccess();
+      saveSharedTurn(sharing, actor, workspace!, {
+        ...response,
+        id: request.requestId,
+        createdAt: Date.now(),
+        threadId,
+        question: question.question,
+      });
+      return response;
+    };
+    if (!prepared.length || typeof workspace !== "string") return saveResponse();
     if (request.confirmWrites === false) response.changes = applyChanges(sharing, actor, workspace, prepared);
     else {
       if (pending.size >= 128) throw new WorkspaceShareError("待确认的修改过多，请稍后再试");
@@ -310,7 +385,7 @@ export async function askSharedWorkspace(
         changes: prepared.map(({ path, kind, content }) => ({ path, kind, preview: content?.slice(0, 3000) ?? "" })),
       };
     }
-    return response;
+    return saveResponse();
   } catch (error) {
     assertAccess();
     if (timeout.aborted) throw new WorkspaceShareError("Agent 回答超时，请缩小问题范围后重试");

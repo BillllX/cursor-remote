@@ -1,3 +1,4 @@
+export const WORKSPACE_SHARE_HISTORY_CAP = "workspace_share_history_v1";
 export const WORKSPACE_SHARE_CAP = "workspace_share_v1";
 export const WORKSPACE_SHARE_ASK_CAP = "workspace_share_ask_v1";
 export const WORKSPACE_SHARE_MANAGE_CAP = "workspace_share_manage_v1";
@@ -7,7 +8,7 @@ export type SharedWorkspace = { id: string; name: string; ownerName: string; can
 export type SharePerson = { id: string; name: string };
 export type SharedFileEntry = { name: string; directory: boolean };
 export type WorkspaceShareAction =
-  "list" | "people" | "set" | "files" | "read" | "write" | "ask" | "apply" | "cancel" | "manage";
+  "list" | "people" | "set" | "files" | "read" | "write" | "ask" | "apply" | "cancel" | "manage" | "history";
 export type WorkspaceShareRequest = {
   type: "workspace_share";
   requestId: string;
@@ -20,6 +21,9 @@ export type WorkspaceShareRequest = {
   content?: string;
   revision?: string;
   question?: string;
+  beforeTurn?: string;
+  threadId?: string;
+  stream?: boolean;
   section?: "skills" | "schedules" | "memory" | "management";
   operation?: "list" | "propose" | "pause" | "rename";
   parameters?: Record<string, string>;
@@ -33,6 +37,7 @@ export type WorkspaceShareResult = {
   type: "workspace_share_result";
   requestId: string;
   ok: boolean;
+  progress?: SharedWorkspaceProgress;
   data?: unknown;
   error?: string;
   code?: "CONFLICT" | "UNAVAILABLE" | "INVALID";
@@ -48,3 +53,5 @@ export type SharedWorkspaceAnswer = {
   pending?: { id: string; changes: SharedWorkspaceChange[] };
   changes?: SharedWorkspaceApplied;
 };
+
+export type SharedWorkspaceProgress = { kind: "reset" | "text" | "tool"; text: string };
