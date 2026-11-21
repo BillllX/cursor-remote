@@ -1,87 +1,17 @@
 import SwiftUI
 
-/// 助理形象只消费客户端已有状态，不改变网关协议。
-enum AssistantAvatarPhase: String, CaseIterable {
-    case idle
-    case listening
-    case thinking
-    case executing
-    case approval
-    case success
-    case failure
-    case offline
-
-    var assetName: String {
-        switch self {
-        case .idle: "AssistantPoseIdle"
-        case .listening: "AssistantPoseListening"
-        case .thinking: "AssistantPoseThinking"
-        case .executing: "AssistantPoseExecuting"
-        case .approval: "AssistantPoseApproval"
-        case .success: "AssistantPoseSuccess"
-        case .failure: "AssistantPoseFailure"
-        case .offline: "AssistantPoseOffline"
-        }
-    }
-
-    var accessibilityLabel: String {
-        switch self {
-        case .idle: "小驳空闲"
-        case .listening: "小驳正在接收输入"
-        case .thinking: "小驳正在思考"
-        case .executing: "小驳正在执行"
-        case .approval: "小驳正在等待确认"
-        case .success: "小驳已完成"
-        case .failure: "小驳执行失败"
-        case .offline: "小驳已离线"
-        }
-    }
-
-    var canComplete: Bool {
-        self == .thinking || self == .executing
-    }
-}
-
 extension ChatStore {
-    /// 优先级：离线 > 等待确认 > 失败 > 执行 > 思考 > 接收输入 > 空闲。
     var assistantAvatarPhase: AssistantAvatarPhase {
-        guard connected else { return .offline }
-
-        let turns = assistantChat?.turns ?? []
-        let liveTurn = turns.last {
-            $0.running
-                || $0.queued
-                || $0.pendingTool != nil
-                || $0.tools.contains { $0.status == "running" }
-        }
-        let hasApproval = liveTurn?.pendingTool != nil
-            || !(assistantState?.approvals.isEmpty ?? true)
-            || !(assistantState?.draftCards?.isEmpty ?? true)
-        if hasApproval { return .approval }
-
-        if liveTurn == nil, let last = turns.last {
-            let status = last.status?.lowercased() ?? ""
-            let failed = last.error?.nilIfEmpty != nil
-                || last.tools.contains { $0.status == "error" }
-                || status.contains("error")
-                || status.contains("fail")
-            if failed { return .failure }
-        }
-        if liveTurn == nil, assistantState?.background.ok == false { return .failure }
-
-        let toolRunning = liveTurn?.tools.contains { $0.status == "running" } == true
-        if toolRunning || !runningDelegations.isEmpty { return .executing }
-        if liveTurn?.running == true || liveTurn?.queued == true { return .thinking }
-        if let chatId = assistantChatId,
-           runningChatIds.contains(chatId) || queuedChatIds.contains(chatId) {
-            return .thinking
-        }
-
-        if let chatId = assistantChatId,
-           !draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return .listening
-        }
-        return .idle
+        let chatId = assistantChatId ?? ""
+        return AssistantAvatarState.resolve(
+            connected: connected,
+            turns: assistantChat?.turns ?? [],
+            chatBusy: runningChatIds.contains(chatId) || queuedChatIds.contains(chatId),
+            hasApproval: !(assistantState?.approvals.isEmpty ?? true)
+                || !(assistantState?.draftCards?.isEmpty ?? true),
+            hasDelegation: !runningDelegations.isEmpty,
+            hasDraft: !draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        )
     }
 }
 

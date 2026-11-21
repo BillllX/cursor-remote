@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 const read = (path) => readFileSync(path, "utf8");
 const project = read("ios/Jiebo/Jiebo.xcodeproj/project.pbxproj");
 const avatar = read("ios/Jiebo/Jiebo/Views/AssistantAvatarView.swift");
+const state = read("ios/Jiebo/Jiebo/Session/AssistantAvatarState.swift");
 const phone = read("ios/Jiebo/Jiebo/Views/Phone/AssistantHome.swift");
 const emptyState = read("ios/Jiebo/Jiebo/Views/ThreadView+EmptyState.swift");
 const pad = read("ios/Jiebo/Jiebo/Views/PadAssistantExperience.swift");
@@ -18,14 +19,13 @@ for (const phase of ["Idle", "Listening", "Thinking", "Executing", "Approval", "
   if (!filename || !existsSync(`${directory}/${filename}`)) {
     throw new Error(`助理姿态资源不完整：${phase}`);
   }
-  requireSource(avatar, `case .${phase.toLowerCase()}`, `助理状态 ${phase}`);
-  requireSource(avatar, `"AssistantPose${phase}"`, `助理资源映射 ${phase}`);
+  requireSource(state, `case .${phase.toLowerCase()}`, `助理状态 ${phase}`);
+  requireSource(state, `"AssistantPose${phase}"`, `助理资源映射 ${phase}`);
 }
 
 for (const needle of [
   "runningChatIds.contains(chatId)",
   "queuedChatIds.contains(chatId)",
-  '$0.tools.contains { $0.status == "running" }',
   "assistantState?.approvals",
   "assistantState?.draftCards",
   "@Environment(\\.accessibilityReduceMotion)",
@@ -34,13 +34,13 @@ for (const needle of [
   requireSource(avatar, needle, "助理状态与动画契约");
 }
 
-requireSource(phone, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)", "iPhone 导航栏形象");
+requireSource(phone, "AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32)", "iPhone 导航栏形象");
 requireSource(
   phone,
-  "LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(store.activeId))",
+  "LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))",
   "iPhone 状态点在形象下方",
 );
-requireSource(emptyState, "AssistantAvatarView(", "助理空状态形象");
+requireSource(emptyState, "AssistantPlayfulAvatar(", "助理空状态形象");
 requireSource(pad, "AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)", "iPad 今日标题形象");
 requireSource(avatar, "private let motionGain: CGFloat = 1.75", "助理动作幅度");
 

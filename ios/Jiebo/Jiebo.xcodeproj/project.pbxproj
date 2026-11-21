@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
         ACR00202 /* AssistantReceiptCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACR00201 /* AssistantReceiptCard.swift */; };
         ACR00102 /* AssistantReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACR00101 /* AssistantReceipt.swift */; };
+        AVS00102 /* AssistantAvatarState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AVS00101 /* AssistantAvatarState.swift */; };
         UIX00202 /* ComposerEntryField.swift in Sources */ = {isa = PBXBuildFile; fileRef = UIX00201 /* ComposerEntryField.swift */; };
         UIX00102 /* PresentationComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = UIX00101 /* PresentationComponents.swift */; };
         PNV00202 /* NavigationRegression.swift in Sources */ = {isa = PBXBuildFile; fileRef = PNV00201 /* NavigationRegression.swift */; };
@@ -206,6 +207,7 @@
 /* Begin PBXFileReference section */
         ACR00201 /* AssistantReceiptCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantReceiptCard.swift; sourceTree = "<group>"; };
         ACR00101 /* AssistantReceipt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantReceipt.swift; sourceTree = "<group>"; };
+        AVS00101 /* AssistantAvatarState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantAvatarState.swift; sourceTree = "<group>"; };
         UIX00201 /* ComposerEntryField.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerEntryField.swift; sourceTree = "<group>"; };
         UIX00101 /* PresentationComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentationComponents.swift; sourceTree = "<group>"; };
         PNV00201 /* NavigationRegression.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationRegression.swift; sourceTree = "<group>"; };
@@ -546,6 +548,7 @@
                 PNV00101 /* PhoneNavigationState.swift */,
                 PNV00201 /* NavigationRegression.swift */,
                 ACR00101 /* AssistantReceipt.swift */,
+                AVS00101 /* AssistantAvatarState.swift */,
 				A1B2C3D4E5F6071829000192 /* ThumbnailStore.swift */,
 				A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */,
 				A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */,
@@ -975,6 +978,7 @@
                 PNV00202 /* NavigationRegression.swift in Sources */,
                 ACR00202 /* AssistantReceiptCard.swift in Sources */,
                 ACR00102 /* AssistantReceipt.swift in Sources */,
+                AVS00102 /* AssistantAvatarState.swift in Sources */,
 				A1B2C3D4E5F6071829000392 /* ThumbnailStore.swift in Sources */,
 				A1B2C3D4E5F6071829000323 /* HtmlRewrite.swift in Sources */,
 				A1B2C3D4E5F6071829000321 /* PreviewPanelView.swift in Sources */,

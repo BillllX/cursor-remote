@@ -2277,6 +2277,43 @@ func checkAssistantReceipts() -> [String] {
     return problems
 }
 
+func checkAssistantAvatarState() -> [String] {
+    var problems: [String] = []
+    guard var turn = Turn.from(.object(["id": .string("avatar"), "status": .string("completed")])) else {
+        return ["头像：无法建立回合"]
+    }
+    turn.tools = [ToolCall(callId: "retry", name: "Bash", args: nil, result: nil, status: "error")]
+    func expect(_ actual: AssistantAvatarPhase, _ wanted: AssistantAvatarPhase, _ reason: String) {
+        if actual != wanted { problems.append("头像：\(reason)，得到 \(actual)") }
+    }
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .idle, "重试成功后加载历史不能误报失败")
+    turn.tools[0].status = "running"
+    turn.running = true
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .idle, "终态应覆盖残留工具及运行标记")
+    turn.status = "error"
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .failure, "真实失败仍应显示")
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn], hasDelegation: true), .executing, "新委派优先于旧错误")
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn], chatBusy: true), .thinking, "实时运行优先于旧错误")
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn], hasApproval: true), .approval, "等待确认优先")
+    expect(AssistantAvatarState.resolve(connected: false, turns: [turn], hasDelegation: true), .offline, "断线状态优先")
+    turn.status = nil
+    turn.tools = []
+    turn.running = false
+    turn.error = "执行失败"
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .failure, "兼容无终态的旧错误")
+    turn.error = nil
+    turn.running = true
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .thinking, "当前回合运行中")
+    turn.tools = [ToolCall(callId: "active", name: "Bash", args: nil, result: nil, status: "running")]
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn]), .executing, "当前工具运行中")
+    var latest = turn
+    latest.running = false
+    latest.tools = []
+    latest.status = "completed"
+    expect(AssistantAvatarState.resolve(connected: true, turns: [turn, latest], hasDraft: true), .listening, "历史工具不能让头像一直忙碌")
+    return problems
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -2288,7 +2325,7 @@ else { fail("读不到或解析不了 \(options.fixtures)") }
 let legacyModeProblems = AgentMode(rawValue: "ask") == .agent && AgentMode(rawValue: "plan") == .agent
     ? []
     : ["AgentMode：旧 ask/plan 没有归一为 agent"]
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + checkAssistantReceipts() + legacyModeProblems
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + checkAssistantReceipts() + checkAssistantAvatarState() + legacyModeProblems
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)
