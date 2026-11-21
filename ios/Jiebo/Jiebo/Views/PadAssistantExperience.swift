@@ -464,21 +464,6 @@ struct PadTaskExperience: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("任务栏目", selection: Binding(
-                get: { column },
-                set: { next in
-                    router.openAssistant(section: next.section, selection: nil)
-                }
-            )) {
-                Text("待办").tag(AssistantWorkColumn.todo)
-                Text("委派").tag(AssistantWorkColumn.delegation)
-                Text("提醒计划").tag(AssistantWorkColumn.plan)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(JieboColor.paper)
-
             List {
                 if !projection.personalTasksAvailable, !projection.personalTasks.isEmpty {
                     Section {
@@ -1001,9 +986,9 @@ private struct PadInboxDetail: View {
                     router.openDelegation(delegationId)
                 }
             }
-            if let scheduleId = item.scheduleId {
-                ActionButton(title: "查看计划", kind: .outline) {
-                    router.openAssistant(section: .plans, selection: .task("schedule:\(scheduleId)"))
+            if item.scheduleId != nil || item.todoId != nil || item.eventId != nil {
+                ActionButton(title: "查看定时与自动化", kind: .outline) {
+                    router.openAssistant(section: .automation, selection: nil)
                 }
             }
             if item.actionPrompt != nil {
@@ -1172,6 +1157,7 @@ private struct PadDelegationDetail: View {
     @Environment(PadRouter.self) private var router
     @Environment(\.sceneSessionState) private var sceneSession
 
+
     private var delegation: AssistantDelegation? {
         store.assistantState?.delegations.first { $0.id == delegationId }
     }
@@ -1263,6 +1249,8 @@ private struct PadDelegationDetail: View {
                     }
                 }
 
+                if let reason = delegation.waitReason { AssistantMutedText(reason) }
+                DelegationQueueAction(item: delegation, fullWidth: true)
                 if delegation.status == "running" || delegation.status == "awaiting" {
                     ActionButton(title: "停止这项委派", kind: .destructive, fullWidth: true) {
                         store.cancelDelegation(delegation.id)

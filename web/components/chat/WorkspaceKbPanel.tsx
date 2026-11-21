@@ -54,6 +54,7 @@ export function WorkspaceKbPanel({
   viewMode = "all",
 }: WorkspaceKbPanelProps) {
   const [status, setStatus] = useState<KbWorkspaceStatusData | null>(null);
+  const [backfillPreview, setBackfillPreview] = useState<KbWorkspaceStatusData["workspaceBackfill"]>();
   const [lastScheduleResult, setLastScheduleResult] = useState<KbWorkspaceStatusData["workspaceScheduleResult"]>();
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState("");
@@ -235,7 +236,9 @@ export function WorkspaceKbPanel({
         setImTenantIdDraft("");
         setNotice("已创建同事通行口令（默认永久有效）");
       } else if (op === "drop_token_update") {
-        if (data.workspaceScheduleResult) {
+        if (data.workspaceBackfill) {
+          setBackfillPreview(data.workspaceBackfill);
+        } else if (data.workspaceScheduleResult) {
           setLastScheduleResult(data.workspaceScheduleResult);
           setNotice(data.workspaceScheduleResult.message);
         } else if (data.wecomWatchResult) {
@@ -1368,6 +1371,7 @@ export function WorkspaceKbPanel({
           schedules={status.workspaceSchedules ?? []}
           runs={status.workspaceScheduleRuns ?? []}
           loading={loading}
+          backfillPreview={backfillPreview}
           lastScheduleResult={lastScheduleResult}
           sendKbOperation={sendKbOperation}
           onOpenBoard={onOpenBoard}

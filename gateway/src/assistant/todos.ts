@@ -69,14 +69,25 @@ function sameTodo(todo: Todo, text: string, due?: string) {
 
 export function addTodo(
   ref: TenantRef,
-  input: { text: string; due?: string; chatId?: string; source?: TodoSource; quote?: string },
+  input: { text: string; due?: string; chatId?: string; source?: TodoSource; quote?: string; exactReminder?: boolean },
 ) {
   const text = clip(input.text || "", 300);
   if (!text) return { ok: false as const, error: "待办内容为空。" };
   const data = readJson<TodosFile>(file(ref), { todos: [] });
   const parsed = parseDue(input.due);
   if (!parsed.ok) return { ok: false as const, error: DUE_ERROR };
-  const existing = data.todos.find((todo) => !todo.done && sameTodo(todo, text, parsed.due));
+  if (input.exactReminder && parsed.remindAt === undefined) {
+    return { ok: false as const, error: "请填写具体的提醒时间和时区。" };
+  }
+  const existing = data.todos.find((todo) => {
+    if (todo.done) return false;
+    if (input.exactReminder) {
+      const point = parsed.remindAt;
+      // 一次提醒按绝对时刻去重，跨时区的相同瞬间也视为同一条。
+      return !todo.reminded && todo.remindAt === point && sameTodo({ ...todo, due: undefined }, text);
+    }
+    return sameTodo(todo, text, parsed.due);
+  });
   if (existing) return { ok: true as const, value: existing, duplicate: true };
   const quote = input.quote?.trim() ? clip(input.quote.trim(), 120) : undefined;
   const todo: Todo = {

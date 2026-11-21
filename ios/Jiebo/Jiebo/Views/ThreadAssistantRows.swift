@@ -23,10 +23,12 @@ struct TodoReceipt: Identifiable, Hashable {
                   let id = result["id"]?.string
             else { return nil }
             let todo = todos?.first(where: { $0.id == id })
+            let due = todo?.due ?? (result["due"]?.string?.nilIfEmpty ?? tool.args?.string(in: "due").nilIfEmpty)
+            guard TodoDue.parse(due)?.timed == true else { return nil }
             return TodoReceipt(
                 callId: tool.callId,
                 text: todo?.text ?? tool.args?.string(in: "text") ?? "",
-                due: todo?.due ?? (result["due"]?.string?.nilIfEmpty ?? tool.args?.string(in: "due").nilIfEmpty),
+                due: due,
                 duplicate: result["duplicate"]?.bool == true,
                 todo: todo,
                 known: todos != nil
@@ -37,17 +39,15 @@ struct TodoReceipt: Identifiable, Hashable {
 
 /// 「已记：周三 15:00 交报告  撤销 · 改」。撤销即删掉这条待办
 struct TodoReceiptRow: View {
-    @Environment(ChatStore.self) private var store
     var receipt: TodoReceipt
-    var edit: (AssistantTodo) -> Void
 
     private var removed: Bool { receipt.known && receipt.todo == nil }
     private var done: Bool { receipt.todo?.done == true }
 
     private var head: String {
         if removed { return "已撤销" }
-        if done { return "已完成" }
-        return receipt.duplicate ? "待办里已有" : "已记"
+        if done { return "已取消" }
+        return receipt.duplicate ? "提醒已存在" : "已设提醒"
     }
 
     var body: some View {
@@ -63,14 +63,7 @@ struct TodoReceiptRow: View {
                 .font(JieboFont.text(.footnote))
                 .lineLimit(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if let todo = receipt.todo, !todo.done {
-                if !receipt.duplicate {
-                    receiptButton("撤销") {
-                        store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办")
-                    }
-                }
-                receiptButton("改") { edit(todo) }
-            }
+
         }
         .padding(.horizontal, 10)
         .frame(minHeight: 40)
@@ -79,14 +72,7 @@ struct TodoReceiptRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func receiptButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .font(JieboFont.text(.footnote, weight: .semibold))
-            .foregroundStyle(JieboColor.pine)
-            .buttonStyle(.plain)
-            .frame(minWidth: 36, minHeight: 40)
-            .contentShape(Rectangle())
-    }
+
 }
 
 enum AssistantToolText {
@@ -330,5 +316,98 @@ struct AssistantActionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(openDelegation != nil && delegateRefs.delegationId != nil ? .isButton : [])
         .accessibilityHint(openDelegation != nil && delegateRefs.delegationId != nil ? "轻点两下查看委派详情" : "")
+    }
+}
+
+/// 委派的状态和交付跟着小驳的原回合更新，预览文件时仍留在当前会话。
+struct AssistantDelegationReceipt: View {
+    @Environment(ChatStore.self) private var store
+    let item: AssistantDelegation
+    let turn: Turn
+    let chatId: String
+    @State private var editing = false
+    @State private var note = ""
+    @State private var sendError = false
+
+    private var inProgress: Bool { item.status == "queued" || item.status == "running" || item.status == "awaiting" }
+    private var status: String {
+        switch item.status {
+        case "queued": "排队中"
+        case "cancelled": "已取消"
+        case "running": "进行中"
+        case "awaiting": "等你处理"
+        case "done": "已交付"
+        case "failed": item.interrupted == true ? "已中断" : "未交付"
+        default: "状态待同步"
+        }
+    }
+
+    private var files: [TurnFile] {
+        var paths = Set<String>()
+        return turn.cardFiles.reversed().filter {
+            $0.sourceChatId == item.childChatId && paths.insert($0.path).inserted
+        }.reversed()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(item.title).font(JieboFont.text(.footnote, weight: .semibold))
+                Spacer(minLength: 8)
+                Text(status).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.ink2)
+            }
+            Text(item.workspace + ((item.attempt ?? 1) > 1 ? " · 第 \(item.attempt ?? 1) 轮" : ""))
+                .font(JieboFont.text(.caption)).foregroundStyle(JieboColor.ink2)
+            if let deliverable = item.deliverable {
+                Text("预期交付：\(deliverable)").font(JieboFont.text(.footnote))
+            }
+            if let task = item.task {
+                DisclosureGroup("原任务") {
+                    Text(task).font(JieboFont.text(.footnote)).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .font(JieboFont.text(.caption))
+            }
+            if let result = item.result {
+                ChunkedAssistantMessage(text: ReplyText.repair(result)).textSelection(.enabled)
+            }
+            if !files.isEmpty {
+                Text("关联产物").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.ink2)
+                TurnFileCards(turn: turn, chatId: chatId, files: files)
+            }
+            if item.status == "awaiting" {
+                ForEach((store.assistantState?.approvals ?? []).filter { $0.delegationId == item.id }) { approval in
+                    ApprovalCard(approval: approval, style: .plain)
+                }
+            }
+            if let reason = item.waitReason { AssistantMutedText(reason) }
+            DelegationQueueAction(item: item)
+            if !inProgress {
+                if editing {
+                    TextField("补充要求", text: $note, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(2...5)
+                    if sendError {
+                        Text("还没能发送，请稍后再试。").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.danger)
+                    }
+                    HStack {
+                        ActionButton(title: "交给小驳", kind: .primary) {
+                            sendError = !store.continueDelegation(item, note: String(note.prefix(4000)))
+                            if !sendError { note = ""; editing = false }
+                        }
+                        .disabled(!store.connected || note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        ActionButton(title: "收起", kind: .outline) { editing = false }
+                    }
+                } else if item.interrupted != true {
+                    ActionButton(title: "继续这项委派", kind: .outline) { editing = true }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
+        .background(JieboColor.white)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md))
+        .overlay(RoundedRectangle(cornerRadius: JieboRadius.md).stroke(JieboColor.line))
+        .accessibilityElement(children: .contain)
     }
 }

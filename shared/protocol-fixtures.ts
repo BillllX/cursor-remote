@@ -94,6 +94,9 @@ const delegation: AssistantDelegation = {
   childChatId: CHILD_CHAT,
   workspace: CWD,
   title: "整理讲稿",
+  task: "整理会议讨论并标出待补证据",
+  deliverable: "讲稿及参考资料",
+  attempt: 2,
   mode: "foreground",
   status: "awaiting",
   createdAt: T0,
@@ -1010,6 +1013,8 @@ export const serverSamples: ServerMessage[] = [
   },
   { type: "inbox_item", item: inboxItem },
   { type: "delegation_state", delegation, approval },
+  { type: "delegation_state", delegation: { ...delegation, status: "failed", interrupted: true, result: "网关重启，委派中断。" } },
+  { type: "delegation_state", delegation: { ...delegation, status: "queued", waitReason: "等待同一产物更新完成", expectedFiles: ["月报.md"] } },
   { type: "memory_written", chatId: ASSISTANT_CHAT, entry: memoryEntry },
   { type: "pong" },
   {

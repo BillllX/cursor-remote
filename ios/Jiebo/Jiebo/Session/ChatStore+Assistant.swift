@@ -441,6 +441,24 @@ extension ChatStore {
         }
     }
 
+    /// 原对话里的续作只发送补充要求，保留用户在输入框里准备的文字和图片。
+    @discardableResult
+    func continueDelegation(_ item: AssistantDelegation, note: String) -> Bool {
+        let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard connected, unlocked, let chatId = assistantChatId,
+              item.parentChatId == chatId, chatSession(chatId) != nil, !cachedOnlyIds.contains(chatId),
+              !text.isEmpty
+        else { return false }
+        let savedImages = pendingImages(for: chatId)
+        if chatId == activeId { pendingImages = [] }
+        imagesByChat[chatId] = nil
+        let prompt = "继续委派（\(item.id)）：\(text)"
+        submitAssistantHandoffPrompt(prompt, assistantChatId: chatId)
+        if chatId == activeId { pendingImages = savedImages }
+        if !savedImages.isEmpty { imagesByChat[chatId] = savedImages }
+        return true
+    }
+
     /// iPhone 兼容入口：保持原有切到小驳主会话的行为。
     @discardableResult
     func continueArtifact(_ artifact: Artifact) -> Bool {

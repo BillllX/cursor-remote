@@ -27,8 +27,8 @@ export function readJson<T>(file: string, fallback: T): T {
   }
 }
 
-export function writeJson(file: string, data: unknown) {
-  atomicWriteFileSync(file, JSON.stringify(data, null, 1), { mkdir: true });
+export function writeJson(file: string, data: unknown, fsync = false) {
+  atomicWriteFileSync(file, JSON.stringify(data, null, 1), { mkdir: true, fsync });
 }
 
 export function appendJsonl(file: string, row: unknown) {
@@ -55,9 +55,10 @@ export function readJsonl<T>(file: string): T[] {
   }
 }
 
-export function writeJsonl(file: string, rows: unknown[]) {
+export function writeJsonl(file: string, rows: unknown[], fsync = false) {
   atomicWriteFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n") + (rows.length ? "\n" : ""), {
     mkdir: true,
+    fsync,
   });
 }
 

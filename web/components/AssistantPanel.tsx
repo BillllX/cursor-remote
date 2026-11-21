@@ -1,5 +1,6 @@
 "use client";
 
+import { DelegationActionButton, type DelegationAction } from "./chat/DelegationReceipt";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { buildAssistantOpMessage, type BuildAssistantOpMessage } from "@shared/assistantOp";
 import type {
@@ -25,6 +26,8 @@ import { closeInboxNotification, registerAssistantPush } from "../lib/assistantP
 export type AssistantView = "overview" | "inbox" | "colleagues" | "memory" | "notify" | "schedules";
 
 export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = {
+  queued: "排队中",
+  cancelled: "已取消",
   running: "进行中",
   awaiting: "待批",
   done: "完成",
@@ -33,6 +36,8 @@ export const DELEGATION_STATUS: Record<AssistantDelegation["status"], string> = 
 
 /** 状态标签沿用侧栏会话的 chat-mark 小标，色调只用主题里的 run / ok / danger / warn */
 const DELEGATION_TONE: Record<AssistantDelegation["status"], string> = {
+  queued: "warn",
+  cancelled: "",
   running: "run",
   awaiting: "warn",
   done: "ok",
@@ -56,6 +61,8 @@ type Props = {
   send: (message: ClientMessage) => void;
   onOpenInboxItem: (item: { chatId?: string; id: string }) => void;
   onOpenChat: (chatId: string) => void;
+  assistantChatId?: string;
+  onDelegationAction?: DelegationAction;
   onHandoffToAssistant?: (prompt: string) => void;
   onOpenFile?: (path: string) => void;
   onOpenSkills?: () => void;
@@ -97,6 +104,8 @@ export default function AssistantPanel({
   onOpenInboxItem,
   onOpenChat,
   onHandoffToAssistant,
+  assistantChatId,
+  onDelegationAction,
   onOpenFile,
   onOpenSkills,
   initialInboxId,
@@ -111,14 +120,9 @@ export default function AssistantPanel({
   const [memoryLoaded, setMemoryLoaded] = useState(false);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
-  const [todoDraft, setTodoDraft] = useState("");
-  const [todoDueDraft, setTodoDueDraft] = useState("");
-  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
-  const [editTodoText, setEditTodoText] = useState("");
-  const [editTodoDue, setEditTodoDue] = useState("");
   const [selectedDelegationId, setSelectedDelegationId] = useState<string | null>(null);
   const [selectedInboxId, setSelectedInboxId] = useState<string | null>(null);
-  const [highlightedScheduleId, setHighlightedScheduleId] = useState<string | null>(null);
+  const [scheduleLink, setScheduleLink] = useState<{ id: string; request: number } | null>(null);
   const [skillProposals, setSkillProposals] = useState<SkillFactoryProposalItem[]>([]);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -227,8 +231,6 @@ export default function AssistantPanel({
 
   const approvals = state?.approvals || [];
   const backgroundOk = state?.background.ok ?? false;
-  const todosOpen = (state?.todos || []).filter((t) => !t.done);
-  const todosDone = (state?.todos || []).filter((t) => t.done);
   const brief = state?.brief?.text?.trim();
 
   const isWorkspaceMemoryMode = memoryNavigation.source === "workspace" && tab === "memory";
@@ -312,8 +314,8 @@ export default function AssistantPanel({
                 [
                   "overview",
                   approvals.length + pendingSkillProposals.length
-                    ? `今日与待办 · ${approvals.length + pendingSkillProposals.length}`
-                    : "今日与待办",
+                    ? `今日 · ${approvals.length + pendingSkillProposals.length}`
+                    : "今日",
                 ],
                 ["inbox", unread ? `收件箱 · ${unread}` : "收件箱"],
               ] as const
@@ -452,184 +454,10 @@ export default function AssistantPanel({
                   <Empty>今天还没有简报。每日简报的日程到点后会生成。</Empty>
                 )}
               </Section>
-              <Section title="待办">
-                <form
-                  className="assistant-inline-form"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    const text = todoDraft.trim();
-                    if (!text) return;
-                    const due = todoDueDraft.trim();
-                    op("todo_add", due ? { text, due } : { text });
-                    setTodoDraft("");
-                    setTodoDueDraft("");
-                  }}
-                >
-                  <input
-                    className="side-input"
-                    value={todoDraft}
-                    onChange={(e) => setTodoDraft(e.target.value)}
-                    placeholder="加一条待办"
-                  />
-                  <input
-                    className="side-input"
-                    style={{ maxWidth: 140 }}
-                    value={todoDueDraft}
-                    onChange={(e) => setTodoDueDraft(e.target.value)}
-                    placeholder="截止时间（选填）"
-                  />
-                  <button type="submit" className="new-chat primary">
-                    添加
-                  </button>
-                </form>
-                {todosOpen.length ? (
-                  <ul className="assistant-list">
-                    {todosOpen.map((todo) => (
-                      <li key={todo.id} className="assistant-item">
-                        {editingTodoId === todo.id ? (
-                          <form
-                            className="assistant-inline-form"
-                            onSubmit={(event) => {
-                              event.preventDefault();
-                              const nextText = editTodoText.trim();
-                              if (!nextText) return;
-                              op("todo_update", {
-                                id: todo.id,
-                                text: nextText,
-                                due: editTodoDue.trim(),
-                              });
-                              setEditingTodoId(null);
-                            }}
-                          >
-                            <input
-                              className="side-input"
-                              value={editTodoText}
-                              onChange={(e) => setEditTodoText(e.target.value)}
-                              placeholder="待办内容"
-                              autoFocus
-                            />
-                            <input
-                              className="side-input"
-                              style={{ maxWidth: 130 }}
-                              value={editTodoDue}
-                              onChange={(e) => setEditTodoDue(e.target.value)}
-                              placeholder="截止时间（空则清除）"
-                            />
-                            <button type="submit" className="pill">
-                              保存
-                            </button>
-                            <button type="button" className="pill" onClick={() => setEditingTodoId(null)}>
-                              取消
-                            </button>
-                          </form>
-                        ) : (
-                          <>
-                            <div className="assistant-item-head">
-                              <span className="assistant-item-title">{todo.text}</span>
-                              {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
-                              <button type="button" className="pill" onClick={() => op("todo_done", { id: todo.id })}>
-                                完成
-                              </button>
-                              <button
-                                type="button"
-                                className="pill"
-                                onClick={() => {
-                                  setEditingTodoId(todo.id);
-                                  setEditTodoText(todo.text);
-                                  setEditTodoDue(todo.due || "");
-                                }}
-                              >
-                                编辑
-                              </button>
-                              <button
-                                type="button"
-                                className="pill"
-                                onClick={() => op("todo_remove", { id: todo.id })}
-                              >
-                                删除
-                              </button>
-                            </div>
-                            {todo.quote ? <div className="loop-meta">来源：{todo.quote}</div> : null}
-                          </>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <Empty>没有未完成的待办。</Empty>
-                )}
-                {todosDone.length ? (
-                  <details className="assistant-done-todos" style={{ marginTop: 8 }}>
-                    <summary className="loop-meta" style={{ cursor: "pointer", userSelect: "none" }}>
-                      已完成 · {todosDone.length}
-                    </summary>
-                    <ul className="assistant-list" style={{ marginTop: 6 }}>
-                      {todosDone.map((todo) => (
-                        <li key={todo.id} className="assistant-item">
-                          <div className="assistant-item-head">
-                            <span className="assistant-item-title" style={{ textDecoration: "line-through", opacity: 0.72 }}>
-                              {todo.text}
-                            </span>
-                            {todo.due ? <span className="chat-mark">{todo.due}</span> : null}
-                            <button type="button" className="pill" onClick={() => op("todo_undo", { id: todo.id })}>
-                              撤销完成
-                            </button>
-                            <button type="button" className="pill" onClick={() => op("todo_remove", { id: todo.id })}>
-                              删除
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
-              </Section>
-              <Section title="个人提醒与简报">
-                {state?.schedules?.length ? (
-                  <ul className="assistant-list">
-                    {state.schedules.map((row) => (
-                      <li
-                        key={row.id}
-                        className={`assistant-item${highlightedScheduleId === row.id ? " unread" : ""}`}
-                      >
-                        <div className="assistant-item-head">
-                          <span className="assistant-item-title">{row.title}</span>
-                          <span className={`chat-mark ${row.enabled ? "ok" : "warn"}`}>{row.enabled ? "启用" : "暂停"}</span>
-                          <button
-                            type="button"
-                            className="pill"
-                            onClick={() => op("schedule_set", { id: row.id, enabled: !row.enabled })}
-                          >
-                            {row.enabled ? "暂停" : "启用"}
-                          </button>
-                          <button
-                            type="button"
-                            className="pill"
-                            onClick={() => {
-                              if (window.confirm(`删除提醒「${row.title}」？`)) {
-                                op("schedule_remove", { id: row.id });
-                              }
-                            }}
-                          >
-                            删除
-                          </button>
-                        </div>
-                        <div className="loop-meta">
-                          {row.cron}
-                          {row.pausedReason ? ` · ${row.pausedReason}` : ""}
-                        </div>
-                        {row.prompt ? <div className="assistant-item-body">{row.prompt}</div> : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <Empty>还没有个人提醒或每日简报日程。</Empty>
-                )}
-              </Section>
               <Section title="委派">
-                {state?.delegations?.length ? (
+                {state?.delegations.some((row) => row.status === "queued" || row.status === "running" || row.status === "awaiting" || row.interrupted || row.id === selectedDelegationId) ? (
                   <ul className="assistant-list">
-                    {state.delegations.slice(0, 12).map((row) => {
+                    {state.delegations.filter((row) => row.status === "queued" || row.status === "running" || row.status === "awaiting" || row.interrupted || row.id === selectedDelegationId).map((row) => {
                       const expanded = selectedDelegationId === row.id;
                       return (
                         <li key={row.id} className="assistant-item">
@@ -640,7 +468,7 @@ export default function AssistantPanel({
                           >
                             <span className="assistant-item-title">{row.title}</span>
                             <span className={`chat-mark ${DELEGATION_TONE[row.status] ?? ""}`}>
-                              {DELEGATION_STATUS[row.status] ?? row.status}
+                              {row.interrupted ? "已中断" : DELEGATION_STATUS[row.status] ?? row.status}
                             </span>
                             <button
                               type="button"
@@ -666,6 +494,7 @@ export default function AssistantPanel({
                           <div className="loop-meta">
                             {row.workspace} · {new Date(row.createdAt).toLocaleString()}
                           </div>
+                          {row.waitReason && <div className="loop-meta">{row.waitReason}</div>}
                           {row.result ? (
                             expanded ? (
                               <div className="markdown assistant-markdown" style={{ marginTop: 8 }}>
@@ -687,13 +516,16 @@ export default function AssistantPanel({
                                   打开父会话
                                 </button>
                               ) : null}
-                              {onHandoffToAssistant ? (
+                              {(row.status === "queued" || (row.interrupted && row.parentChatId === assistantChatId)) && (
+                                <DelegationActionButton item={row} action={onDelegationAction} />
+                              )}
+                              {onHandoffToAssistant && !row.interrupted && row.status !== "queued" ? (
                                 <button
                                   type="button"
                                   className="pill"
                                   onClick={() =>
                                     onHandoffToAssistant(
-                                      `请帮我跟进委派任务「${row.title}」（工作区：${row.workspace}，状态：${DELEGATION_STATUS[row.status] ?? row.status}）${row.result ? `：\n\n${row.result.slice(0, 1200)}` : ""}`,
+                                      `请帮我跟进委派任务「${row.title}」（工作区：${row.workspace}，状态：${row.interrupted ? "已中断" : DELEGATION_STATUS[row.status] ?? row.status}）${row.result ? `：\n\n${row.result.slice(0, 1200)}` : ""}`,
                                     )
                                   }
                                 >
@@ -707,7 +539,7 @@ export default function AssistantPanel({
                     })}
                   </ul>
                 ) : (
-                  <Empty>还没有委派。在助理会话里让{name}把事交给某个子工作区就会出现在这里。</Empty>
+                  <Empty>当前没有正在处理的委派。已结束的委派可在原对话或收件箱查看。</Empty>
                 )}
               </Section>
             </>
@@ -717,6 +549,7 @@ export default function AssistantPanel({
             <AssistantAutomationSection
               key={openRequest}
               initialWorkspaceKey={initialAutomationWorkspace}
+              highlightedScheduleId={scheduleLink?.request === openRequest ? scheduleLink.id : null}
               state={state}
               results={assistantResults}
               send={send}
@@ -846,11 +679,11 @@ export default function AssistantPanel({
                               type="button"
                               className="pill"
                               onClick={() => {
-                                setHighlightedScheduleId(item.scheduleId!);
-                                selectTab("overview");
+                                if (item.scheduleId) setScheduleLink({ id: item.scheduleId, request: openRequest });
+                                selectTab("schedules");
                               }}
                             >
-                              查看日程
+                              查看自动化
                             </button>
                           ) : null}
                           {item.kind === "approval" && item.title.startsWith("新技能待启用：") ? (

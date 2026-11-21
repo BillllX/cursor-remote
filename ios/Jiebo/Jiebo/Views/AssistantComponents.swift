@@ -308,13 +308,15 @@ struct TodoEditSheet: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     var todo: AssistantTodo
+    var reminderOnly: Bool
     @State private var text: String
     @State private var hasDate: Bool
     @State private var timed: Bool
     @State private var date: Date
 
-    init(todo: AssistantTodo) {
+    init(todo: AssistantTodo, reminderOnly: Bool = false) {
         self.todo = todo
+        self.reminderOnly = reminderOnly
         let parsed = TodoDue.parse(todo.due)
         _text = State(initialValue: todo.text)
         _hasDate = State(initialValue: parsed != nil)
@@ -330,34 +332,38 @@ struct TodoEditSheet: View {
     }
 
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var newDue: String { hasDate ? TodoDue.encode(date, timed: timed) : "" }
+    private var newDue: String { reminderOnly || hasDate ? TodoDue.encode(date, timed: reminderOnly || timed) : "" }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("待办内容", text: $text, axis: .vertical)
+                    TextField(reminderOnly ? "提醒内容" : "待办内容", text: $text, axis: .vertical)
                         .font(JieboFont.text(.body))
                         .listRowBackground(JieboColor.white)
                 }
                 Section {
-                    Toggle("日期", isOn: $hasDate.animation())
-                        .tint(JieboColor.pine)
-                        .listRowBackground(JieboColor.white)
-                    if hasDate {
-                        DatePicker("哪天", selection: $date, displayedComponents: .date)
-                            .listRowBackground(JieboColor.white)
-                        Toggle("具体时间", isOn: $timed.animation())
+                    if !reminderOnly {
+                        Toggle("日期", isOn: $hasDate.animation())
                             .tint(JieboColor.pine)
                             .listRowBackground(JieboColor.white)
-                        if timed {
+                    }
+                    if reminderOnly || hasDate {
+                        DatePicker("哪天", selection: $date, displayedComponents: .date)
+                            .listRowBackground(JieboColor.white)
+                        if !reminderOnly {
+                            Toggle("具体时间", isOn: $timed.animation())
+                                .tint(JieboColor.pine)
+                                .listRowBackground(JieboColor.white)
+                        }
+                        if reminderOnly || timed {
                             DatePicker("几点", selection: $date, displayedComponents: .hourAndMinute)
                                 .listRowBackground(JieboColor.white)
                         }
                     }
                 } footer: {
-                    if hasDate {
-                        Text(timed ? "到点会提醒；订阅了苹果日历的话，日历里也会出现。" : "订阅了苹果日历的话，会作为全天事件出现。")
+                    if reminderOnly || hasDate {
+                        Text(reminderOnly || timed ? "到点会提醒；订阅了苹果日历的话，日历里也会出现。" : "订阅了苹果日历的话，会作为全天事件出现。")
                     }
                 }
                 if let quote = todo.quote {
@@ -369,17 +375,19 @@ struct TodoEditSheet: View {
                             .listRowBackground(JieboColor.white)
                     }
                 }
-                Section {
-                    Button("删除这条", role: .destructive) {
-                        guard store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办") else { return }
-                        dismiss()
+                if !reminderOnly {
+                    Section {
+                        Button("删除这条", role: .destructive) {
+                            guard store.queueTodoChange("todo_remove", args: ["id": .string(todo.id)], pending: "删除这条待办") else { return }
+                            dismiss()
+                        }
+                        .listRowBackground(JieboColor.white)
                     }
-                    .listRowBackground(JieboColor.white)
                 }
             }
             .scrollContentBackground(.hidden)
             .background(JieboColor.paper)
-            .navigationTitle("改待办")
+            .navigationTitle(reminderOnly ? "编辑提醒" : "改待办")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -387,7 +395,7 @@ struct TodoEditSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存", action: save)
-                        .disabled(trimmed.isEmpty)
+                        .disabled(trimmed.isEmpty || (reminderOnly && date <= Date()))
                 }
             }
         }

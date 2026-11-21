@@ -106,7 +106,7 @@ export function postInbox(
     read: input.read ?? false,
   };
   data.items = [...data.items, item].slice(-MAX_ITEMS);
-  writeJson(file(ref), data);
+  writeJson(file(ref), data, item.kind === "delegation");
   for (const listener of listeners) {
     try {
       listener(ref, item);

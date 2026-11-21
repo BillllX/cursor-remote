@@ -88,12 +88,7 @@ struct TodayStrip: View {
                         eventRow(event)
                     }
                 }
-                HStack(spacing: 8) {
-                    briefJump("查看待办") { router.go(.worklist(.todo)) }
-                    briefJump("查看计划") { router.go(.worklist(.plan)) }
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+
             }
         }
         .background(JieboColor.white)
@@ -157,16 +152,13 @@ struct TodayStrip: View {
     private var legacySummary: some View {
         let state = store.assistantState
         let brief = state?.brief?.text.nilIfEmpty
-        let todoCount = state?.todos.filter { !$0.done }.count ?? 0
         let nextLabel = nextScheduleLabel(state)
         return Group {
-            if brief != nil || todoCount > 0 || nextLabel != nil {
+            if brief != nil || nextLabel != nil {
                 Button {
                     JieboHaptic.selection()
-                    if todoCount > 0, brief == nil, nextLabel == nil {
-                        router.go(.worklist(.todo))
-                    } else if brief == nil, nextLabel != nil {
-                        router.go(.worklist(.plan))
+                    if brief == nil, nextLabel != nil {
+                        router.go(.automation)
                     } else {
                         withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
                     }
@@ -178,7 +170,7 @@ struct TodayStrip: View {
                             .frame(width: 32)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(todoCount > 0 ? "待办 \(todoCount)" : (brief != nil ? "今日简报" : "下一个计划"))
+                            Text(brief != nil ? "今日简报" : "下次运行")
                                 .font(JieboFont.text(.headline, weight: .semibold))
                                 .foregroundStyle(JieboColor.ink)
                             if let detail = nextLabel ?? brief {
@@ -211,19 +203,6 @@ struct TodayStrip: View {
                 .padding(.vertical, 8)
             }
         }
-    }
-
-    private func briefJump(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(JieboFont.text(.caption, weight: .semibold))
-                .foregroundStyle(JieboColor.pine)
-                .padding(.horizontal, 12)
-                .frame(minHeight: 32)
-                .background(JieboColor.pine.opacity(0.12))
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private var greeting: String {
@@ -297,10 +276,8 @@ struct TodayStrip: View {
             router.delegationDetail = DelegationRef(id: delegationId)
         } else if event.kind == "brief" {
             withAnimation(JieboMotion.snappy(reduceMotion)) { expanded = true }
-        } else if let source = event.sources.first(where: { $0.kind == "todo" }) {
-            router.openWorkTask(event.taskId ?? "todo:\(source.id)", column: .todo)
-        } else if let source = event.sources.first(where: { $0.kind == "schedule" }) {
-            router.openWorkTask(event.taskId ?? "schedule:\(source.id)", column: .plan)
+        } else if event.sources.contains(where: { ["todo", "schedule", "calendar_event"].contains($0.kind) }) {
+            router.go(.automation)
         } else if let source = event.sources.first(where: { $0.kind == "run" }) {
             router.openWorkTask(event.taskId ?? "run:\(source.id)", column: .delegation)
         } else if let taskId = event.taskId, taskId.hasPrefix("run:") {

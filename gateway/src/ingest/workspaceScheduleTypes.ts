@@ -12,7 +12,7 @@ export type WorkspaceScheduleExecutorKind =
 export type WorkspaceScheduleMode = "interval" | "daily_times" | "monthly";
 export type WorkspaceScheduleMonthly = { day: number; time: string; shortMonth: "skip" | "last_day" };
 
-export type WorkspaceScheduleState = "idle" | "running_step1" | "running_step2";
+export type WorkspaceScheduleState = "idle" | "waiting_output" | "running_step1" | "running_step2";
 
 export type WorkspaceScheduleRunStatus = "succeeded" | "no_change" | "partial" | "failed";
 
@@ -39,6 +39,10 @@ export type WorkspaceSchedulePayload = {
   args?: string[];
   /** workspace_script: 脚本产出的待入库相对文件路径（如 output/latest.csv），不填则将 stdout 作为产物 */
   outputRelPath?: string;
+  /** 月报检查所需的工作区相对路径。 */
+  reportInputs?: string[];
+  /** 归档等间接写入的路径，例如会更新的 HTML 看板。 */
+  outputTargets?: string[];
   /** workspace_script / agent_prompt: 是否将产物投入知识库归档队列刷新 HTML 看板（默认 true） */
   ingestToKb?: boolean;
   /** workspace_script / agent_prompt: 超时秒数（脚本默认 60s；AI 定时分析默认 1200s 即 20 分钟，最大 3600s 即 60 分钟） */
@@ -75,8 +79,10 @@ export type WorkspaceScheduleRecord = {
   /** 两阶段单飞互斥锁状态 */
   state: WorkspaceScheduleState;
   activeRunId?: string;
-  activeTrigger?: "scheduled" | "manual";
+  activeTrigger?: "scheduled" | "manual" | "backfill";
   activeStartedAt?: number;
+  activePeriod?: string;
+  activeOutputRelPath?: string;
   activeBatchIds?: string[];
   submittedBatchIds?: string[];
   pendingBatchErrors?: string[];
@@ -105,7 +111,8 @@ export type WorkspaceScheduleRunRecord = {
   workspaceKey: string;
   title: string;
   executorKind: WorkspaceScheduleExecutorKind;
-  trigger: "scheduled" | "manual";
+  trigger: "scheduled" | "manual" | "backfill";
+  period?: string;
   startedAt: number;
   finishedAt: number;
   durationMs: number;

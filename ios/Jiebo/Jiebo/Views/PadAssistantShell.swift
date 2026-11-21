@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// iPad 小驳域：今日、收件箱，以及分开的待办、计划、委派。
+/// iPad 小驳域：今日、收件箱、委派与统一自动化。
 /// 只有“今日”挂载固定助理会话，因此任何可见时刻都只有一个可编辑 Composer。
 struct PadAssistantShell: View {
     @Environment(ChatStore.self) private var store
@@ -27,15 +27,14 @@ struct PadAssistantShell: View {
         ) {
             List {
                 Section("对话与任务") {
-                    ForEach([PadAssistantSection.today, .inbox, .todos, .automation, .artifacts]) { section in
-                        let isTaskGroup = section == .todos && (router.assistantSection == .todos || router.assistantSection == .delegations || router.assistantSection == .plans)
-                        let selected = router.assistantSection == section || isTaskGroup
+                    ForEach([PadAssistantSection.today, .inbox, .delegations, .automation, .artifacts]) { section in
+                        let selected = router.assistantSection == section
                         PadSectionNavigationRow(
                             section: section,
                             selected: selected,
                             onOpen: {
                                 router.openAssistant(
-                                    section: isTaskGroup ? router.assistantSection : section,
+                                    section: section,
                                     selection: section == .today ? .assistantChat : nil
                                 )
                                 showDetailIfCompact()
@@ -394,10 +393,8 @@ struct PadAssistantShell: View {
                     PadTodayExperience(projection: projection)
                 case .inbox:
                     PadInboxExperience(projection: projection)
-                case .todos:
-                    PadTaskExperience(projection: projection, column: .todo)
-                case .plans:
-                    PadTaskExperience(projection: projection, column: .plan)
+                case .todos, .plans:
+                    AssistantAutomationScreen()
                 case .delegations:
                     PadTaskExperience(projection: projection, column: .delegation)
                 case .automation:

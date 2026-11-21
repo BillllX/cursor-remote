@@ -24,7 +24,7 @@ import { log } from "./log.ts";
 import { agentSocketPath, handleMedia, handleState, handleStateTurn, handleUpload } from "./http/routes.ts";
 import { isAbortError } from "./runtime/abort.ts";
 import { compactTenantChats } from "./sync/storedState.ts";
-import { delegationWorkspaces, requestWorkspace, startDelegation } from "./bindings/delegations.ts";
+import { delegationWorkspaces, inspectInterruptedDelegation, reconcileDelegation, requestWorkspace, retryBackgroundDelegation, startDelegation } from "./bindings/delegations.ts";
 import { dispatchLoop, loopBusy, publishLoop } from "./bindings/loops.ts";
 import { listModels } from "./chat/models.ts";
 import { handleSharedWorkspaceFile } from "./http/sharedWorkspace.ts";
@@ -297,6 +297,9 @@ startAssistant({
   publish: publishLoop,
   globalStateDir: stateDir(),
   delegate: startDelegation,
+  retryBackgroundDelegation,
+  reconcileDelegation,
+  inspectInterruptedDelegation,
   createWorkspace: requestWorkspace,
   workspaces: (tenant) => {
     const full = getTenant(tenant.id);

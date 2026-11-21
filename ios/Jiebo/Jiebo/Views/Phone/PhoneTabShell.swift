@@ -282,13 +282,8 @@ struct PhoneTabShell: View {
             store.prepareAssistantThread()
         case .inbox:
             router.go(.inbox)
-        case .todo(let id):
-            let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                router.go(.worklist(.todo))
-            } else {
-                router.openWorkTask(trimmed.hasPrefix("todo:") ? trimmed : "todo:\(trimmed)", column: .todo)
-            }
+        case .todo:
+            router.go(.automation)
         }
     }
 

@@ -429,8 +429,8 @@ final class PadRouter {
         case "reminder":
             return PadPushDestination(
                 domain: .assistant,
-                section: target.itemId.map(AssistantWorkColumn.section(forTaskId:)) ?? .todos,
-                selection: target.itemId.map(PadSelection.task)
+                section: .automation,
+                selection: nil
             )
         case "brief":
             return PadPushDestination(domain: .assistant, section: .today, selection: .brief)
@@ -474,13 +474,20 @@ final class PadRouter {
 
     func openAssistant(section: PadAssistantSection = .today, selection next: PadSelection? = .assistantChat) {
         domain = .assistant
-        setAssistantSection(section)
-        selection = next
+        let legacyTaskSection = section == .todos || section == .plans
+        let target = legacyTaskSection ? PadAssistantSection.automation : section
+        setAssistantSection(target)
+        let visibleSelection = legacyTaskSection ? nil : next
+        selection = visibleSelection
         inspectorMode = .detail
-        inspectorPresented = next?.hasInspectorDetail == true
+        inspectorPresented = visibleSelection?.hasInspectorDetail == true
     }
 
     func select(_ next: PadSelection?) {
+        if case .task(let id) = next, ["todo:", "schedule:", "calendar_event:"].contains(where: { id.hasPrefix($0) }) {
+            openAssistant(section: .automation, selection: nil)
+            return
+        }
         inspectorNavigation.select(next)
         inspectorPresented = next?.hasInspectorDetail == true
     }

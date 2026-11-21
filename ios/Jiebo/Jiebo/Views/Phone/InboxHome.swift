@@ -442,20 +442,8 @@ private struct InboxDetailDestinations: View {
                 router.popToRoot()
             }
         }
-        if let eventId = item.eventId {
-            ActionButton(title: "查看日程", kind: .outline) {
-                router.openWorkTask("calendar_event:\(eventId)", column: .plan)
-            }
-        }
-        if let todoId = item.todoId {
-            ActionButton(title: "查看待办", kind: .outline) {
-                router.openWorkTask("todo:\(todoId)", column: .todo)
-            }
-        }
-        if let scheduleId = item.scheduleId {
-            ActionButton(title: "查看计划", kind: .outline) {
-                router.openWorkTask("schedule:\(scheduleId)", column: .plan)
-            }
+        if item.eventId != nil || item.todoId != nil || item.scheduleId != nil {
+            ActionButton(title: "查看定时与自动化", kind: .outline) { router.go(.automation) }
         }
         if showMemory {
             ActionButton(title: "查看记忆", kind: .outline) { router.go(.memory) }

@@ -1,5 +1,7 @@
 // 对话线程：查找条、提示、骨架屏与回合列表（单个回合的渲染在 TurnRow，带 memo）
-import type { Dispatch, RefObject, SetStateAction } from "react";
+import type { DelegationAction } from "./DelegationReceipt";
+import { useMemo, type Dispatch, type RefObject, type SetStateAction } from "react";
+import type { AssistantDelegation } from "@shared/protocol";
 import type { Components } from "react-markdown";
 import { friendlyError } from "../../lib/chat/format";
 import { PERF, perfCountThread } from "../../lib/chat/perf";
@@ -17,6 +19,10 @@ type ThreadProps = {
   notice: string;
   bodyPending: boolean;
   active: Chat;
+  delegations?: AssistantDelegation[];
+  openDelegation?: (id: string) => void;
+  onDelegationAction?: DelegationAction;
+  submitDelegationFollowUp?: (prompt: string) => void;
   loadingOlder: boolean;
   threadFindHits: Turn[];
   threadFindHi: number;
@@ -53,6 +59,10 @@ export function Thread({
   notice,
   bodyPending,
   active,
+  delegations,
+  openDelegation,
+  submitDelegationFollowUp,
+  onDelegationAction,
   loadingOlder,
   threadFindHits,
   threadFindHi,
@@ -95,7 +105,20 @@ export function Thread({
     restoreTurnFiles,
     loadTurnBody,
     releaseTurnBody,
+    openDelegation: (id: string) => openDelegation?.(id),
+    onDelegationAction: (...args: Parameters<DelegationAction>) => onDelegationAction?.(...args) ?? Promise.resolve("该入口暂不可用。"),
+    submitDelegationFollowUp: (prompt: string) => submitDelegationFollowUp?.(prompt),
   });
+  const delegationRows = useMemo(() => {
+    const index = new Map<string, AssistantDelegation[]>();
+    for (const item of delegations ?? []) {
+      if (item.parentChatId !== activeId || !item.parentTurnId) continue;
+      const rows = index.get(item.parentTurnId) ?? [];
+      rows.push(item);
+      index.set(item.parentTurnId, rows);
+    }
+    return index;
+  }, [delegations, activeId]);
   // 每行依赖的派生值（前一有效回合、是否末轮）一次扫描算好，行组件只收原始值
   const rows = planTurnRows(active.turns);
   const findHitId = threadFindHits[threadFindHi]?.id;
@@ -139,6 +162,7 @@ export function Thread({
           <TurnRow
             key={turn.id}
             turn={turn}
+            delegations={delegationRows.get(turn.id)}
             hideUser={hideUser}
             isLast={isLast}
             deferred={deferrable && !threadFindOpen}

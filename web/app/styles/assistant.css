@@ -282,3 +282,29 @@
     opacity: 1;
   }
 }
+
+.assistant-delegation-receipt {
+  margin-block: 8px;
+}
+
+.assistant-delegation-receipt .pill {
+  justify-self: start;
+}
+
+.assistant-delegation-followup,
+.assistant-delegation-followup label {
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-delegation-followup textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  background: var(--bg-panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font: inherit;
+}

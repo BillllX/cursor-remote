@@ -87,14 +87,6 @@ struct AssistantHome: View {
                 }
                 .accessibilityLabel("打开小驳侧边栏")
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { router.go(.worklist(.todo)) } label: {
-                    Image(systemName: NavigationIconId.schedules.symbol)
-                        .font(JieboFont.text(.body, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink)
-                        .frame(width: 44, height: 44)
-                }.accessibilityLabel("日程")
-            }
             ToolbarItem(placement: .topBarTrailing) { inboxButton }
         }
         .sheet(isPresented: $skillsOpen) { SkillsWorkspaceSheet() }

@@ -239,6 +239,9 @@ function buildAssistantOpMessageImpl(operation: AssistantOp, args?: Record<strin
   if (operation === "skill_edit_approved") {
     return { ...base, op: operation, args: args as AssistantOpArgsMap["skill_edit_approved"] };
   }
+  if (operation === "delegation_retarget") return { ...base, op: operation, args };
+  if (operation === "delegation_recover") return { ...base, op: operation, args };
+  if (operation === "delegation_cancel") return { ...base, op: operation, args };
   if (operation === "memory_export" || operation === "memory_tidy" || operation === "push_test") {
     return { ...base, op: operation };
   }

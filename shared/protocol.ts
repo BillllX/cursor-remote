@@ -704,7 +704,7 @@ export type WorkspaceScheduleSummaryItem = {
   dailyTimes?: string[];
   activeHours?: { start: string; end: string };
   tz: string;
-  state: "idle" | "running_step1" | "running_step2";
+  state: "idle" | "waiting_output" | "running_step1" | "running_step2";
   activeRunId?: string;
   activeStartedAt?: number;
   activeBatchIds?: string[];
@@ -717,6 +717,9 @@ export type WorkspaceScheduleSummaryItem = {
   lastError?: string;
   consecutiveFailures: number;
   payloadSummary: string;
+  outputRelPath?: string;
+  reportInputs?: string[];
+  outputTargets?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -728,7 +731,8 @@ export type WorkspaceScheduleRunSummaryItem = {
   workspaceKey: string;
   title: string;
   executorKind: WorkspaceScheduleExecutorKind;
-  trigger: "scheduled" | "manual";
+  trigger: "scheduled" | "manual" | "backfill";
+  period?: string;
   startedAt: number;
   finishedAt: number;
   durationMs: number;
@@ -740,7 +744,7 @@ export type WorkspaceScheduleRunSummaryItem = {
 };
 
 export type WorkspaceScheduleActionResult = {
-  action: "upsert" | "toggle" | "run_now" | "remove";
+  action: "upsert" | "toggle" | "run_now" | "backfill" | "remove";
   message: string;
 };
 
@@ -773,6 +777,15 @@ export type KbWorkspaceStatusData = {
   workspaceScheduleRuns?: WorkspaceScheduleRunSummaryItem[];
   /** 当触发 workspaceScheduleAction 时返回的即时结果 */
   workspaceScheduleResult?: WorkspaceScheduleActionResult;
+  workspaceBackfill?: {
+    scheduleId: string;
+    period: string;
+    token: string;
+    versions: number;
+    files: string[];
+    missingInputs: string[];
+    inputsDeclared: boolean;
+  };
   /** 主人自己绑定的个人微信通知通道（用于接收同事提案审批通知） */
   ownerWx?: {
     botId: string;
@@ -872,7 +885,10 @@ export type AssistantOpArgsMap = {
     };
     workspaceScheduleAction?: {
       summaryOnly?: boolean;
-      kind: "upsert" | "toggle" | "run_now" | "remove";
+      kind: "upsert" | "toggle" | "run_now" | "backfill_preview" | "backfill" | "remove";
+      period?: string;
+      token?: string;
+      newVersion?: boolean;
       targetWorkspace?: string;
       id?: string;
       idOrTitle?: string;
@@ -898,6 +914,8 @@ export type AssistantOpArgsMap = {
       scriptRelPath?: string;
       args?: string[];
       outputRelPath?: string;
+      reportInputs?: string[];
+      outputTargets?: string[];
       ingestToKb?: boolean;
       timeoutSeconds?: number;
       prompt?: string;
@@ -1000,8 +1018,15 @@ export type AssistantDelegation = {
   childChatId: string;
   workspace: string;
   title: string;
+  task?: string;
+  deliverable?: string;
+  expectedFiles?: string[];
+  requiresFile?: boolean;
+  attempt?: number;
+  interrupted?: boolean;
+  waitReason?: string;
   mode: "foreground" | "background";
-  status: "running" | "awaiting" | "done" | "failed";
+  status: "queued" | "running" | "awaiting" | "done" | "failed" | "cancelled";
   createdAt: number;
   endedAt?: number;
   result?: string;
@@ -1239,6 +1264,8 @@ export type AssistantOp =
   | "approval_answer"
   /** args: { delegationId }；停掉一项在跑或等批准的前台委派 */
   | "delegation_cancel"
+  | "delegation_recover"
+  | "delegation_retarget"
   /** 知识库工作区状态、HTML 看板与投递口令管理 */
   | "kb_workspace_status"
   | "kb_workspace_init"

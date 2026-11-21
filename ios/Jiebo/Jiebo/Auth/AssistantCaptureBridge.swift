@@ -32,7 +32,7 @@ enum AssistantCaptureBridge {
             case .ask: return "问小驳"
             case .summarize: return "总结"
             case .remember: return "记住"
-            case .createTask: return "建任务"
+            case .createTask: return "设置提醒"
             case .readLater: return "稍后读"
             case .archiveToKb: return "归档入库"
             case .custom: return "自定义"

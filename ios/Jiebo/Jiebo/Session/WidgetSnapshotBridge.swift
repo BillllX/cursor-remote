@@ -46,7 +46,10 @@ final class WidgetSnapshotBridge {
 
         let state = store.assistantState
         let unread = state?.unreadInbox ?? 0
-        let openTodos = state?.todos.filter { !$0.done } ?? []
+        let reminders = (state?.todos ?? []).filter {
+            guard !$0.done, let due = TodoDue.parse($0.due) else { return false }
+            return due.timed && due.date > now
+        }
         let attention = unread + (state?.approvals.count ?? 0)
         let isWorking = state?.delegations.contains { $0.status == "running" } == true
             || state?.runs.contains { $0.endedAt == nil && ["running", "queued"].contains($0.status) } == true
@@ -71,7 +74,7 @@ final class WidgetSnapshotBridge {
         }
 
         let highlight: WidgetSnapshot.Highlight?
-        if let todo = openTodos.first {
+        if let todo = reminders.first {
             highlight = .init(kind: .todo, id: todo.id, summary: todo.text)
         } else if let item = state?.inbox.filter({ !$0.read }).max(by: { $0.createdAt < $1.createdAt }) {
             highlight = .init(kind: .inbox, id: item.id, summary: item.title)
@@ -85,7 +88,7 @@ final class WidgetSnapshotBridge {
             assistantStatus: status,
             statusText: statusText,
             unreadCount: unread,
-            todoCount: openTodos.count,
+            todoCount: reminders.count,
             highlight: highlight,
             updatedAt: now,
             staleAfter: now.addingTimeInterval(WidgetSnapshot.staleInterval),

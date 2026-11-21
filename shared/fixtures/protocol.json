@@ -778,8 +778,10 @@
         ],
         "delegations": [
           {
+            "attempt": 2,
             "childChatId": "c-child-5b10",
             "createdAt": 1739000000000,
+            "deliverable": "讲稿及参考资料",
             "endedAt": 1739000060000,
             "id": "d_q7w3",
             "mode": "foreground",
@@ -787,6 +789,7 @@
             "parentTurnId": "t-1739000000000-k2",
             "result": "讲稿已整理成 slides.md",
             "status": "awaiting",
+            "task": "整理会议讨论并标出待补证据",
             "title": "整理讲稿",
             "workspace": "/workspace/demo/notes"
           }
@@ -1366,8 +1369,10 @@
         "tool": "write"
       },
       "delegation": {
+        "attempt": 2,
         "childChatId": "c-child-5b10",
         "createdAt": 1739000000000,
+        "deliverable": "讲稿及参考资料",
         "endedAt": 1739000060000,
         "id": "d_q7w3",
         "mode": "foreground",
@@ -1375,7 +1380,49 @@
         "parentTurnId": "t-1739000000000-k2",
         "result": "讲稿已整理成 slides.md",
         "status": "awaiting",
+        "task": "整理会议讨论并标出待补证据",
         "title": "整理讲稿",
+        "workspace": "/workspace/demo/notes"
+      }
+    },
+    {
+      "type": "delegation_state",
+      "delegation": {
+        "attempt": 2,
+        "childChatId": "c-child-5b10",
+        "createdAt": 1739000000000,
+        "deliverable": "讲稿及参考资料",
+        "endedAt": 1739000060000,
+        "id": "d_q7w3",
+        "interrupted": true,
+        "mode": "foreground",
+        "parentChatId": "c-assistant-01",
+        "parentTurnId": "t-1739000000000-k2",
+        "result": "网关重启，委派中断。",
+        "status": "failed",
+        "task": "整理会议讨论并标出待补证据",
+        "title": "整理讲稿",
+        "workspace": "/workspace/demo/notes"
+      }
+    },
+    {
+      "type": "delegation_state",
+      "delegation": {
+        "attempt": 2,
+        "childChatId": "c-child-5b10",
+        "createdAt": 1739000000000,
+        "deliverable": "讲稿及参考资料",
+        "endedAt": 1739000060000,
+        "expectedFiles": ["月报.md"],
+        "id": "d_q7w3",
+        "mode": "foreground",
+        "parentChatId": "c-assistant-01",
+        "parentTurnId": "t-1739000000000-k2",
+        "result": "讲稿已整理成 slides.md",
+        "status": "queued",
+        "task": "整理会议讨论并标出待补证据",
+        "title": "整理讲稿",
+        "waitReason": "等待同一产物更新完成",
         "workspace": "/workspace/demo/notes"
       }
     },

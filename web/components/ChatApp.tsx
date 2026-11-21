@@ -207,6 +207,7 @@ export default function ChatApp() {
   const assistantStateRef = useRef<AssistantState | null>(null);
   const [lastAssistantResult, setLastAssistantResult] = useState<AssistantResultMessage | null>(null);
   const [assistantResultTick, setAssistantResultTick] = useState(0);
+  const delegationRequests = useRef(new Map<string, (error?: string) => void>());
   const [assistantResults, setAssistantResults] = useState<AssistantResultMessage[]>([]);
   const [inboxDeepLink, setInboxDeepLink] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
@@ -1207,6 +1208,9 @@ export default function ChatApp() {
           setAssistantState((prev) => applyAssistantMessage(prev, message));
           break;
         case "assistant_result":
+          if (message.reqId && (message.op === "delegation_recover" || message.op === "delegation_cancel" || message.op === "delegation_retarget")) {
+            delegationRequests.current.get(message.reqId)?.(message.ok ? undefined : message.error || "操作未完成。");
+          }
           setLastAssistantResult(message);
           setAssistantResultTick((tick) => tick + 1);
           setAssistantResults((results) => [...results.slice(-99), message]);
@@ -3212,6 +3216,24 @@ export default function ChatApp() {
     requestAnimationFrame(() => document.querySelector<HTMLElement>("main.main")?.focus());
   }
 
+  function actOnDelegation(op: "delegation_recover" | "delegation_cancel" | "delegation_retarget", id: string, attempt: number, path?: string) {
+    if (!unlockedRef.current) return Promise.resolve("尚未连接，请稍后再试。");
+    const message = buildAssistantOpMessage(op, { delegationId: id, attempt, ...(op === "delegation_cancel" ? { queuedOnly: true } : {}), ...(path ? { outputPath: path } : {}) });
+    return new Promise<string | undefined>((resolve) => {
+      const done = (error?: string) => {
+        clearTimeout(timer);
+        delegationRequests.current.delete(message.reqId!);
+        resolve(error);
+      };
+      const timer = setTimeout(() => {
+        send({ type: "assistant_get" });
+        done("暂未收到回执，请核对委派状态。");
+      }, 15000);
+      delegationRequests.current.set(message.reqId!, done);
+      send(message);
+    });
+  }
+
   function answerDelegation(approval: AssistantApproval, allow: boolean) {
     send(
       buildAssistantOpMessage("approval_answer", {
@@ -5111,6 +5133,8 @@ export default function ChatApp() {
         basePath={process.env.NEXT_PUBLIC_BASE_PATH || ""}
         onOpenInboxItem={(item) => openAssistantInboxItem(item)}
         onOpenChat={openChatById}
+        assistantChatId={assistantChatId}
+        onDelegationAction={actOnDelegation}
         onHandoffToAssistant={submitAssistantHandoffPrompt}
         onOpenFile={(relPath) => openFile(relPath)}
         onOpenSkills={openWorkspaceSkills}
@@ -5408,6 +5432,10 @@ export default function ChatApp() {
               notice={notice}
               bodyPending={bodyPending}
               active={active}
+              delegations={assistantActive ? assistantState?.delegations : undefined}
+              openDelegation={openAssistantDelegation}
+              onDelegationAction={actOnDelegation}
+              submitDelegationFollowUp={submitAssistantHandoffPrompt}
               loadingOlder={loadingOlder}
               threadFindHits={threadFindHits}
               threadFindHi={threadFindHi}

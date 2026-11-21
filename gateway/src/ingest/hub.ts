@@ -311,6 +311,9 @@ function buildWorkspaceSchedulesForUi(host: DropTenantHost, workspaceKey?: strin
     ...(s.lastError ? { lastError: s.lastError } : {}),
     consecutiveFailures: s.consecutiveFailures ?? 0,
     payloadSummary: summarizeSchedulePayload(s),
+    ...(s.payload.outputRelPath ? { outputRelPath: s.payload.outputRelPath } : {}),
+    ...(s.payload.reportInputs?.length ? { reportInputs: s.payload.reportInputs } : {}),
+    ...(s.payload.outputTargets?.length ? { outputTargets: s.payload.outputTargets } : {}),
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
   }));
@@ -329,6 +332,7 @@ function buildWorkspaceScheduleRunsForUi(
     title: r.title,
     executorKind: r.executorKind,
     trigger: r.trigger,
+    ...(r.period ? { period: r.period } : {}),
     startedAt: r.startedAt,
     finishedAt: r.finishedAt,
     durationMs: r.durationMs,

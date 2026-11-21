@@ -10,7 +10,7 @@ import {
 } from "../../assistant/service.ts";
 import { readAssistantRevision } from "../../assistant/revision.ts";
 import { send } from "../send.ts";
-import { answerDelegationApproval, cancelDelegation } from "../../bindings/delegations.ts";
+import { answerDelegationApproval, cancelDelegation, recoverDelegation, retargetDelegation } from "../../bindings/delegations.ts";
 import type { AssistantResultMessage } from "../../../../shared/protocol.ts";
 import type { MessageOf, WsCtx } from "./types.ts";
 
@@ -83,7 +83,11 @@ export async function onAssistantOp({ ws, tenant }: WsCtx, message: MessageOf<"a
       ? answerDelegationApproval(tenant, args)
       : message.op === "delegation_cancel"
         ? await cancelDelegation(ws, tenant, args)
-        : await handleOp(tenant, message.op, args);
+        : message.op === "delegation_recover"
+          ? await recoverDelegation(ws, tenant, args)
+          : message.op === "delegation_retarget"
+            ? retargetDelegation(tenant, args)
+            : await handleOp(tenant, message.op, args);
   send(ws, { type: "assistant_result", reqId: message.reqId, op: message.op, ...result } as AssistantResultMessage);
   if (result.ok) void publishState(tenant);
 }

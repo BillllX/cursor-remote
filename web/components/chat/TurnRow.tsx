@@ -4,8 +4,10 @@
 //   - 全部是原始值、稳定引用的对象（mdComponents、lastProgressRef、actions），不放每次渲染新建的对象 / 数组 / 内联函数；
 //   - 回调统一放进 actions（由 Thread 用 useStableActions 生成，引用不变、调用时转给最新实现），所以不用自定义 comparator，
 //     也就不会有过期闭包的问题。
+import type { DelegationAction } from "./DelegationReceipt";
 import { memo, type CSSProperties, type RefObject } from "react";
 import type { Components } from "react-markdown";
+import type { AssistantDelegation } from "@shared/protocol";
 import { repairReplyText } from "@shared/replyText";
 import { formatDuration, friendlyError, isProgressBlurb, runMeta } from "../../lib/chat/format";
 import { PERF, perfCountRow } from "../../lib/chat/perf";
@@ -18,10 +20,14 @@ import { modelLabel } from "../../lib/models";
 import { JieboGlyph } from "../JieboMark";
 import ToolCard, { mutatingTool, parseAskQuestions, QuestionCard, toolKind, toolPath } from "../ToolCard";
 import { CiteText, Highlight, MemoMarkdown, REMARK_PLUGINS } from "./markdown";
+import { DelegationReceipt } from "./DelegationReceipt";
 import { StallHint } from "./StallHint";
 
 /** 行里要用的全部回调；Thread 保证这个对象和里面的函数引用终身不变 */
 export type TurnRowActions = {
+  openDelegation?: (id: string) => void;
+  onDelegationAction?: DelegationAction;
+  submitDelegationFollowUp?: (prompt: string) => void;
   openFile: (path: string, line?: number, asDiff?: boolean, sha?: string, sourceChatId?: string) => void;
   editTurn: (turn: Turn) => void;
   retryTurn: (turn: Turn) => void;
@@ -38,6 +44,7 @@ export type TurnRowActions = {
 
 export type TurnRowProps = {
   turn: Turn;
+  delegations?: AssistantDelegation[];
   /** 和前一个有效回合的用户消息相同，不重复画用户气泡 */
   hideUser: boolean;
   /** 整个列表的最后一个回合（只有它的提问卡片能作答） */
@@ -61,9 +68,36 @@ export type TurnRowProps = {
 
 type ToolGroup = ToolCall[];
 
+/** 普通工具回执可能来自 MCP 的多层包装。 */
+function delegationReceiptId(value: unknown, depth = 0): string | undefined {
+  if (!value || depth >= 4) return undefined;
+  if (typeof value === "string") {
+    const json = value.trim();
+    if (!json.startsWith("{") && !json.startsWith("[")) return undefined;
+    try { return delegationReceiptId(JSON.parse(json), depth + 1); } catch { return undefined; }
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const id = delegationReceiptId(entry, depth + 1);
+      if (id) return id;
+    }
+    return undefined;
+  }
+  if (typeof value !== "object") return undefined;
+  const row = value as Record<string, unknown>;
+  if (row.ok === true && typeof row.id === "string" && typeof row.childChatId === "string") return row.id;
+  return delegationReceiptId(row.content, depth + 1) ?? delegationReceiptId(row.result, depth + 1) ??
+    delegationReceiptId(row.text, depth + 1);
+}
+
 /** 工具分组：搜索连续合并；同一文件的读 / 写 / 改连续合并；带父调用的挂到父卡片下面 */
-function groupTools(turn: Turn) {
-  const visible = turn.tools.filter((tool) => !/todo/i.test(tool.name) && !silentAssistantTool(tool.name));
+function groupTools(turn: Turn, delegations?: AssistantDelegation[]) {
+  const visible = turn.tools.filter((tool) => {
+    if (/todo/i.test(tool.name) || silentAssistantTool(tool.name)) return false;
+    if (!delegations?.length || !/(^|__|[./:])delegate$/i.test(tool.name)) return true;
+    const id = delegationReceiptId(tool.result);
+    return !delegations.some((item) => item.id === id);
+  });
   const ids = new Set(visible.map((tool) => tool.callId));
   const kids = new Map<string, ToolCall[]>();
   const roots: ToolCall[] = [];
@@ -100,8 +134,8 @@ function groupTools(turn: Turn) {
   return { groups, kids };
 }
 
-function renderTools(turn: Turn, isLast: boolean, actions: TurnRowActions) {
-  const { groups, kids } = groupTools(turn);
+function renderTools(turn: Turn, isLast: boolean, actions: TurnRowActions, delegations?: AssistantDelegation[]) {
+  const { groups, kids } = groupTools(turn, delegations);
   const card = (tool: ToolCall) => {
     const asked = parseAskQuestions(tool.name, tool.args);
     if (asked) {
@@ -194,6 +228,7 @@ function renderTools(turn: Turn, isLast: boolean, actions: TurnRowActions) {
 
 function TurnRowView({
   turn,
+  delegations,
   hideUser,
   isLast,
   deferred,
@@ -207,6 +242,7 @@ function TurnRowView({
   lastProgressRef,
   actions,
 }: TurnRowProps) {
+  const regularFiles = (turn.files ?? []).filter((file) => !delegations?.some((row) => row.childChatId === file.sourceChatId));
   // 仅测量开关打开时计数（?perf=1），默认这里什么都不做
   if (PERF) perfCountRow(turn.id);
   // 旧回合的占位高度：跳过渲染时用它撑住滚动条，渲染过一次后 `auto` 会改用浏览器记下的真实高度
@@ -324,7 +360,7 @@ function TurnRowView({
               ))}
             </ul>
           ) : null}
-          {renderTools(turn, isLast, actions)}
+          {renderTools(turn, isLast, actions, delegations)}
           {assistant && !(isProgressBlurb(assistant) && !turn.running) ? (
             <div className={`markdown${turn.running ? " streaming" : ""}`}>
               <MemoMarkdown remarkPlugins={REMARK_PLUGINS} components={mdComponents}>
@@ -344,10 +380,11 @@ function TurnRowView({
           {!turn.running && !turn.queued && !turn.error && /approval/i.test(turn.status || "") ? (
             <div className="run-meta">{runMeta(turn.status, turn.durationMs)}</div>
           ) : null}
-          {turn.files?.length && !turn.running && !turn.queued ? (
+          {delegations?.map((item) => <DelegationReceipt key={item.id} item={item} files={turn.files ?? []} actions={actions} locked={locked} />)}
+          {regularFiles.length && !turn.running && !turn.queued ? (
             <div className="turn-files">
-              <div className="turn-files-title">本回合文件 · {turn.files.length}</div>
-              {turn.files.map((file) => (
+              <div className="turn-files-title">本回合文件 · {regularFiles.length}</div>
+              {regularFiles.map((file) => (
                 <div
                   className="turn-file"
                   key={`${file.sourceChatId || ""}:${file.sourceTurnId || ""}:${file.path}:${file.sha || ""}`}

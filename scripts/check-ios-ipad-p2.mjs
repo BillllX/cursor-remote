@@ -35,11 +35,11 @@ requireSource(home, ".focusedSceneValue(\\.padCommandActions", "scene-local Comm
 for (const key of ['key: "1"', 'key: "2"', 'key: "3"']) {
   requireSource(commands, key, `三域快捷键 ${key}`);
 }
-for (const section of [".today", ".inbox", ".todos", ".plans", ".delegations", ".artifacts", ".memory"]) {
-  requireSource(commands, `sectionButton(${section}`, `七栏目快捷键 ${section}`);
+for (const section of [".today", ".inbox", ".automation", ".delegations", ".artifacts", ".memory", ".colleagues"]) {
+  requireSource(commands, `sectionButton(${section}`, `小驳栏目快捷键 ${section}`);
 }
-if (commands.includes("sectionButton(.tasks")) {
-  throw new Error("PadAppCommands 不得保留旧 .tasks 快捷键");
+if ([".tasks", ".todos", ".plans"].some((section) => commands.includes(`sectionButton(${section}`))) {
+  throw new Error("PadAppCommands 不得保留独立的个人任务快捷键");
 }
 for (const title of ["搜索", "新建", "打开文件", "刷新", "关闭检查器或预览", "上一处", "下一处"]) {
   requireSource(commands, `Button("${title}`, `键盘菜单 ${title}`);

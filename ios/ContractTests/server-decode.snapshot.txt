@@ -656,9 +656,16 @@
       AssistantDelegation(
         id: "d_q7w3"
         parentChatId: "c-assistant-01"
+        parentTurnId: "t-1739000000000-k2"
         childChatId: "c-child-5b10"
         workspace: "/workspace/demo/notes"
         title: "整理讲稿"
+        task: "整理会议讨论并标出待补证据"
+        deliverable: "讲稿及参考资料"
+        attempt: 2
+        interrupted: nil
+        waitReason: nil
+        expectedFiles: nil
         mode: "foreground"
         status: "awaiting"
         createdAt: 1739000000000
@@ -1125,9 +1132,16 @@
   delegation: AssistantDelegation(
     id: "d_q7w3"
     parentChatId: "c-assistant-01"
+    parentTurnId: "t-1739000000000-k2"
     childChatId: "c-child-5b10"
     workspace: "/workspace/demo/notes"
     title: "整理讲稿"
+    task: "整理会议讨论并标出待补证据"
+    deliverable: "讲稿及参考资料"
+    attempt: 2
+    interrupted: nil
+    waitReason: nil
+    expectedFiles: nil
     mode: "foreground"
     status: "awaiting"
     createdAt: 1739000000000
@@ -1147,7 +1161,57 @@
   )
 )
 
-## server[73] memory_written #1
+## server[73] delegation_state #2
+.delegationState(
+  delegation: AssistantDelegation(
+    id: "d_q7w3"
+    parentChatId: "c-assistant-01"
+    parentTurnId: "t-1739000000000-k2"
+    childChatId: "c-child-5b10"
+    workspace: "/workspace/demo/notes"
+    title: "整理讲稿"
+    task: "整理会议讨论并标出待补证据"
+    deliverable: "讲稿及参考资料"
+    attempt: 2
+    interrupted: true
+    waitReason: nil
+    expectedFiles: nil
+    mode: "foreground"
+    status: "failed"
+    createdAt: 1739000000000
+    endedAt: 1739000060000
+    result: "网关重启，委派中断。"
+  )
+  approval: nil
+)
+
+## server[74] delegation_state #3
+.delegationState(
+  delegation: AssistantDelegation(
+    id: "d_q7w3"
+    parentChatId: "c-assistant-01"
+    parentTurnId: "t-1739000000000-k2"
+    childChatId: "c-child-5b10"
+    workspace: "/workspace/demo/notes"
+    title: "整理讲稿"
+    task: "整理会议讨论并标出待补证据"
+    deliverable: "讲稿及参考资料"
+    attempt: 2
+    interrupted: nil
+    waitReason: "等待同一产物更新完成"
+    expectedFiles: [
+      "月报.md"
+    ]
+    mode: "foreground"
+    status: "queued"
+    createdAt: 1739000000000
+    endedAt: 1739000060000
+    result: "讲稿已整理成 slides.md"
+  )
+  approval: nil
+)
+
+## server[75] memory_written #1
 .memoryWritten(
   chatId: "c-assistant-01"
   entry: AssistantMemoryEntry(
@@ -1167,10 +1231,10 @@
   )
 )
 
-## server[74] pong #1
+## server[76] pong #1
 .pong
 
-## server[75] im_contacts #1
+## server[77] im_contacts #1
 .im(.contacts(
   me: ImMe(
     id: "alice"
@@ -1196,10 +1260,10 @@
   )
 ))
 
-## server[76] im_group_created #1
+## server[78] im_group_created #1
 .ignored("im_group_created")
 
-## server[77] collab_state #1
+## server[79] collab_state #1
 .im(.collabState(CollabStatePage(
   convId: "grp~00000000-0000-4000-8000-000000000001"
   snapshotSeq: 3
@@ -1233,10 +1297,10 @@
   cursor: nil
 )))
 
-## server[78] collab_result #1
+## server[80] collab_result #1
 .ignored("collab_result")
 
-## server[79] im_list #1
+## server[81] im_list #1
 .im(.list(
   convs: [
     ImConvRow(
@@ -1283,7 +1347,7 @@
   cursor: "WzEsMTczOTAwMDAwMDAwMCwiZG1-YWxpY2V-Ym9iLTIiXQ"
 ))
 
-## server[80] im_history #1
+## server[82] im_history #1
 .im(.history(
   convId: "dm~alice~bob-2"
   messages: [
@@ -1410,7 +1474,7 @@
   after: 10
 ))
 
-## server[81] im_ack #1
+## server[83] im_ack #1
 .im(.ack(
   clientId: "c-ios-1739000000000-1"
   convId: "dm~alice~bob-2"
@@ -1419,7 +1483,7 @@
   rejected: true
 ))
 
-## server[82] im_message #1
+## server[84] im_message #1
 .im(.message(
   .0: ImMessage(
     convId: "dm~alice~bob-2"
@@ -1440,7 +1504,7 @@
   unread: 2
 ))
 
-## server[83] im_update #1
+## server[85] im_update #1
 .im(.update(ImUpdate(
   what: "settings"
   convId: "dm~alice~bob-2"
@@ -1469,14 +1533,14 @@
   unread: 1
 )))
 
-## server[84] im_error #1
+## server[86] im_error #1
 .im(.error(
   clientId: "c-ios-1739000000000-1"
   code: "rate_limited"
   message: "发得太快了，稍等一会儿再发"
 ))
 
-## server[85] workspace_agents #1
+## server[87] workspace_agents #1
 .workspaceAgents(
   items: [
     WorkspaceAgentItem(
@@ -1502,13 +1566,13 @@
   cursor: "notes"
 )
 
-## server[86] workspace_agent_opened #1
+## server[88] workspace_agent_opened #1
 .workspaceAgentOpened(
   path: "/workspace/demo/notes"
   chatId: "c-7f3a9e21"
 )
 
-## server[87] workspace_agent_update #1
+## server[89] workspace_agent_update #1
 .workspaceAgentUpdate(
   chatId: "c-7f3a9e21"
   unread: 0
@@ -1516,20 +1580,20 @@
   finishedSeq: 9
 )
 
-## server[88] project_result #1
+## server[90] project_result #1
 .project(JSON {"data": {"items": []}, "ok": true, "requestId": "00000000-0000-4000-8000-000000000001", "type": "project_result"})
 
-## server[89] project_event #1
+## server[91] project_event #1
 .project(JSON {"authzRevision": 1, "eventSeq": 1, "kind": "project_created", "payload": {}, "revision": 0, "type": "project_event", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
 
-## server[90] project_access_revoked #1
+## server[92] project_access_revoked #1
 .project(JSON {"type": "project_access_revoked", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
 
-## server[91] project_summary_changed #1
+## server[93] project_summary_changed #1
 .project(JSON {"type": "project_summary_changed", "workspaceId": "wsa_00000000-0000-4000-8000-000000000001"})
 
-## server[92] workspace_share_result #1
+## server[94] workspace_share_result #1
 .project(JSON {"data": {"items": []}, "ok": true, "requestId": "00000000-0000-4000-8000-000000000001", "type": "workspace_share_result"})
 
-## server[93] workspace_share_changed #1
+## server[95] workspace_share_changed #1
 .project(JSON {"type": "workspace_share_changed"})

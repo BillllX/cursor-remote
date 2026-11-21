@@ -1,3 +1,4 @@
+import { getDelegation } from "./delegations.ts";
 import { postInbox } from "./inbox.ts";
 import { assistantPath, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 
@@ -65,6 +66,8 @@ export function recoverRuns(ref: TenantRef) {
   }
   writeJson(file(ref), data);
   for (const run of stale) {
+    // 委派状态恢复负责投递最终回执；不先发一条与自动重试矛盾的通用消息。
+    if (run.origin === "delegate" && run.chatId && getDelegation(ref, run.chatId)) continue;
     postInbox(ref, {
       kind: "run",
       title: `后台运行被中断：${run.label}`,

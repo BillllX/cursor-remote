@@ -111,8 +111,13 @@ extension PhoneRouter {
             inboxLane = .notices
             path = [.inbox, .inboxItem(id)]
         case .worklist(let column):
-            inboxLane = .work(column)
-            path = [route]
+            if column == .delegation {
+                inboxLane = .work(column)
+                path = [route]
+            } else {
+                pendingWorkTaskId = nil
+                path = [.automation]
+            }
         case .artifacts:
             inboxLane = .artifacts
             path = [route]
@@ -131,7 +136,7 @@ extension PhoneRouter {
 
     /// 打开对应栏目，并在列表出现后展开这一条，而不是整页今日。
     func openWorkTask(_ id: String, column: AssistantWorkColumn) {
-        pendingWorkTaskId = id
+        pendingWorkTaskId = column == .delegation ? id : nil
         go(.worklist(column))
     }
 

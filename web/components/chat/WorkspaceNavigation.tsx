@@ -29,7 +29,7 @@ export function SessionToolsBar({
     <div className="session-tools" role="toolbar" aria-label="当前会话工具">
       <span className="side-label">开发运行工具</span>
       <div className="session-tools-row">
-        {SESSION_TOOLS.map((item) => (
+        {SESSION_TOOLS.filter((item) => item.id !== "loop" || loopLive).map((item) => (
           <button
             key={item.id}
             type="button"

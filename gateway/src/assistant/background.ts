@@ -50,6 +50,7 @@ export type BackgroundRequest = {
   /** 失败时是否进收件箱；整理者这类安静任务可以关掉 */
   inboxOnFailure?: boolean;
   timeoutMs?: number;
+  onStart?: () => boolean;
 };
 
 export type BackgroundResult =
@@ -257,6 +258,11 @@ export async function runBackground(ref: TenantRef, req: BackgroundRequest): Pro
     return { ok: false, error };
   }
 
+  // 模型目录查询期间可能有其他后台任务抢先取得名额。
+  if (runningCount(ref) >= BACKGROUND_MAX_PER_TENANT) {
+    return { ok: false, busy: true, error: "同时在跑的后台任务已满" };
+  }
+  if (req.onStart && !req.onStart()) return { ok: false, error: "任务已取消" };
   const initialModel = chain[0]!;
   const run = startRunRecord(ref, {
     origin: req.origin,
@@ -266,6 +272,9 @@ export async function runBackground(ref: TenantRef, req: BackgroundRequest): Pro
     model: initialModel,
   });
 
+  const preamble = req.origin === "delegate"
+    ? "你是只读委派执行者。只可读、搜索和检索记忆，不运行命令、不写文件、不调用有副作用的工具。用中文汇报。"
+    : BACKGROUND_PREAMBLE;
   const timeoutMs = req.timeoutMs ?? BACKGROUND_MAX_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -275,7 +284,7 @@ export async function runBackground(ref: TenantRef, req: BackgroundRequest): Pro
         ref,
         preferredModel: req.preferredModel,
         runWithModel: (modelId) =>
-          deps!.prompt(`${BACKGROUND_PREAMBLE}\n\n${req.prompt}`, {
+          deps!.prompt(`${preamble}\n\n${req.prompt}`, {
             apiKey,
             model: { id: modelId },
             tools: [...BACKGROUND_TOOLS],

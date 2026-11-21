@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { assistantPath } from "../src/assistant/store.ts";
+import { claimOutputs, outputKeys, releaseOutputs } from "../src/outputClaims.ts";
 import { getWorkspaceAutomationStatus } from "../src/ingest/hub.ts";
 import { setupKbWorkspaceForTenant, type DropTenantHost } from "../src/ingest/tokens.ts";
 import { setWecomCliRunnerForTest, addOrUpdateWecomWatchItem } from "../src/ingest/wecomSource.ts";
 import {
+  bindWorkspaceScheduleAgentPromptDeps,
   computeNextWorkspaceScheduleRunAt,
+  getWorkspaceTaskExecutor,
   listWorkspaceScheduleRuns,
   listWorkspaceSchedules,
   notifyWorkspaceSchedulesOnBatchCompleted,
+  previewWorkspaceBackfill,
   reconcileStaleWorkspaceSchedules,
   registerWorkspaceTaskExecutor,
   removeWorkspaceSchedule,
@@ -296,6 +301,7 @@ test("正式运行先确认已开始，执行中重复请求不会再启动", as
   const { host, cleanup } = createTestHost();
   let finish!: () => void;
   let executions = 0;
+  const original = getWorkspaceTaskExecutor("agent_prompt")!;
   registerWorkspaceTaskExecutor("agent_prompt", async () => {
     executions += 1;
     await new Promise<void>((resolve) => { finish = resolve; });
@@ -316,6 +322,7 @@ test("正式运行先确认已开始，执行中重复请求不会再启动", as
     assert.equal(listWorkspaceScheduleRuns(host)[0].status, "succeeded");
   } finally {
     finish?.();
+    registerWorkspaceTaskExecutor("agent_prompt", original);
     cleanup();
   }
 });
@@ -337,6 +344,80 @@ test("小驳自动化快照按工作区稳定 ID 归属，目录改名后仍显�
     assert.deepEqual(combined.tokens, []);
     assert.equal(combined.ownerWx, undefined);
   } finally {
+    cleanup();
+  }
+});
+
+test("月报按期预检、隔离生成版本、重启找回；不改原排期", async () => {
+  const { host, cleanup } = createTestHost();
+  const cwd = join(host.workspaceRoot, "Fintopia集团");
+  const prompts: string[] = [];
+  bindWorkspaceScheduleAgentPromptDeps({
+    apiKey: () => "test",
+    listModels: async () => ["grok-4.7"],
+    prompt: async (prompt) => {
+      prompts.push(prompt);
+      return { id: "test", status: "finished", result: "三个渠道的数据已核对。", messages: [] };
+    },
+  });
+  try {
+    const configured = upsertWorkspaceSchedule(host, {
+      workspace: "Fintopia集团", title: "三农信投诉月报", executorKind: "agent_prompt", enabled: true,
+      scheduleMode: "monthly", monthly: { day: 5, time: "09:00", shortMonth: "skip" },
+      payload: { prompt: "核对三个渠道", ingestToKb: false, reportInputs: ["投诉台账.csv"], outputRelPath: "最新月报.md" },
+    });
+    assert.ok(configured.ok);
+    const { id, nextRunAt } = configured.item;
+    const lookup = () => previewWorkspaceBackfill(host, id, "ws_fintopia", "2024-10");
+    const absent = lookup();
+    assert.ok(absent.ok);
+    assert.deepEqual(absent.preview.missingInputs, ["投诉台账.csv"]);
+    writeFileSync(join(cwd, "投诉台账.csv"), "月份,渠道\n2024-10,金融办");
+    const ready = lookup();
+    assert.ok(ready.ok);
+    assert.notEqual(ready.preview.token, absent.preview.token);
+    assert.equal(ready.preview.versions, 0);
+    const refused = await triggerWorkspaceScheduleNow(host, id, { trigger: "backfill", backfill: { period: "2024-10", token: absent.preview.token, newVersion: false } });
+    assert.equal(refused.ok, false);
+    const run = (token: string, newVersion: boolean) => triggerWorkspaceScheduleNow(host, id, { trigger: "backfill", backfill: { period: "2024-10", token, newVersion } });
+    assert.ok((await run(ready.preview.token, false)).ok);
+    assert.match(prompts[0]!, /唯一统计月份为 2024-10/);
+    const older = lookup();
+    assert.ok(older.ok);
+    assert.equal(older.preview.versions, 1);
+    assert.match(readFileSync(join(cwd, older.preview.files[0]!), "utf8"), /三个渠道/);
+    assert.equal((await run(older.preview.token, false)).ok, false);
+    assert.ok((await run(older.preview.token, true)).ok);
+    assert.equal(listWorkspaceSchedules(host)[0]?.nextRunAt, nextRunAt);
+
+    // 另一个委派持有同一目标时排队，其他产物不被锁住。
+    const keys = outputKeys(cwd, ["最新月报.md"]);
+    assert.ok(claimOutputs(keys, "delegate"));
+    const pending = triggerWorkspaceScheduleNow(host, id, { trigger: "manual" });
+    assert.equal(listWorkspaceSchedules(host)[0]?.state, "waiting_output");
+    assert.ok(claimOutputs(outputKeys(cwd, ["无关财务报告.md"]), "unrelated"));
+    releaseOutputs(keys, "delegate");
+    await new Promise<void>((resolve) => setTimeout(resolve, 1050));
+    assert.ok((await pending).ok);
+    releaseOutputs(outputKeys(cwd, ["无关财务报告.md"]), "unrelated");
+    assert.equal(listWorkspaceSchedules(host)[0]?.nextRunAt, nextRunAt);
+
+    // 写入报告之后、记录终态之前的磁盘状态：按本次 runId 精确认领结果。
+    const statePath = assistantPath(host, "workspace-schedules.json");
+    const state = JSON.parse(readFileSync(statePath, "utf8"));
+    const activeRunId = "wsrun_crashed";
+    Object.assign(state.items[0], { state: "running_step1", activeRunId, activeTrigger: "backfill", activePeriod: "2024-10" });
+    writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(join(cwd, "自动化报告", id, `2024-10-${activeRunId}.md`), "# 已落盘的月报");
+    assert.equal(reconcileStaleWorkspaceSchedules(host), 1);
+    assert.equal(reconcileStaleWorkspaceSchedules(host), 0);
+    const receipts = listWorkspaceScheduleRuns(host, { scheduleId: id }).filter((row) => row.runId === activeRunId);
+    assert.equal(receipts.length, 1);
+    assert.equal(receipts[0]?.status, "succeeded");
+    assert.equal(receipts[0]?.period, "2024-10");
+    assert.equal(listWorkspaceSchedules(host)[0]?.nextRunAt, nextRunAt);
+  } finally {
+    bindWorkspaceScheduleAgentPromptDeps(null);
     cleanup();
   }
 });

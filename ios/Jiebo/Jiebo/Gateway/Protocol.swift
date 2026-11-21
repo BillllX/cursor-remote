@@ -948,9 +948,16 @@ struct AssistantMemoryEntry: Sendable, Hashable, Identifiable {
 struct AssistantDelegation: Sendable, Hashable, Identifiable {
     var id: String
     var parentChatId: String?
+    var parentTurnId: String? = nil
     var childChatId: String
     var workspace: String
     var title: String
+    var task: String? = nil
+    var deliverable: String? = nil
+    var attempt: Int? = nil
+    var interrupted: Bool? = nil
+    var waitReason: String? = nil
+    var expectedFiles: [String]? = nil
     /// "foreground" | "background"
     var mode: String
     /// "running" | "awaiting" | "done" | "failed"
@@ -964,9 +971,16 @@ struct AssistantDelegation: Sendable, Hashable, Identifiable {
         return AssistantDelegation(
             id: id,
             parentChatId: row["parentChatId"]?.string?.nilIfEmpty,
+            parentTurnId: row["parentTurnId"]?.string?.nilIfEmpty,
             childChatId: row["childChatId"]?.string ?? "",
             workspace: row["workspace"]?.string ?? "",
             title: row["title"]?.string ?? "",
+            task: row["task"]?.string?.nilIfEmpty,
+            deliverable: row["deliverable"]?.string?.nilIfEmpty,
+            attempt: row["attempt"]?.int,
+            interrupted: row["interrupted"]?.bool,
+            waitReason: row["waitReason"]?.string,
+            expectedFiles: row["expectedFiles"]?.array?.compactMap(\.string),
             mode: row["mode"]?.string ?? "background",
             status: row["status"]?.string ?? "running",
             createdAt: row["createdAt"]?.number ?? 0,

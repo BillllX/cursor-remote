@@ -89,7 +89,7 @@ enum NavigationRegression {
         switchSpace(.assistant)
         router.go(.worklist(.todo))
         await settle()
-        checks["schedule route"] = router.path == [.worklist(.todo)]
+        checks["schedule route"] = router.path == [.automation]
         router.go(.artifacts)
         await settle()
         checks["files route"] = router.path == [.artifacts]
@@ -156,7 +156,8 @@ enum NavigationRegression {
         for section in PadAssistantSection.allCases {
             router.openAssistant(section: section, selection: section == .today ? .assistantChat : nil)
             await settle()
-            checks["section " + section.rawValue] = router.assistantSection == section && router.domain == .assistant
+            let expectedSection: PadAssistantSection = section == .todos || section == .plans ? .automation : section
+            checks["section " + section.rawValue] = router.assistantSection == expectedSection && router.domain == .assistant
             checks["editor ownership " + section.rawValue] = editorCount() == (section == .today ? 1 : 0)
             checks["render " + section.rawValue] = capture(section.rawValue, in: directory)
         }
@@ -175,8 +176,8 @@ enum NavigationRegression {
         if let task = projection.personalTasks.first {
             router.openAssistant(section: .todos, selection: .task(task.id))
             await settle()
-            checks["task inspector"] = router.inspectorPresented
-            _ = capture("task-inspector", in: directory)
+            checks["legacy task opens automation"] = router.assistantSection == .automation && !router.inspectorPresented
+            _ = capture("automation", in: directory)
             router.dismissInspector()
         } else { skipped.append("task detail: no task data") }
         router.openAssistant()

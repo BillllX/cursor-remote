@@ -12,16 +12,8 @@ struct DelegationListScreen: View {
     @Environment(ChatStore.self) private var store
     @Environment(PhoneRouter.self) private var router
     var column: AssistantWorkColumn
-    var embeddedInInbox: Bool = false
     @State private var openedTask: PersonalTask?
     @State private var showCompleted = true
-    @State private var calendarMode = false
-    @State private var selectedDate = Date()
-
-    init(column: AssistantWorkColumn, embeddedInInbox: Bool = false) {
-        self.column = column
-        self.embeddedInInbox = embeddedInInbox
-    }
 
     private let groups: [(phase: String, title: String)] = [
         ("needs_me", "需要我"),
@@ -33,10 +25,8 @@ struct DelegationListScreen: View {
 
     private var rows: [PersonalTask] {
         (store.assistantState?.personalTasks ?? []).filter { task in
-            guard embeddedInInbox || AssistantWorkColumn.matching(task.kind) == column else { return false }
-            guard calendarMode else { return true }
-            guard let at = task.dueAt else { return true }
-            return Calendar.current.isDate(Date(timeIntervalSince1970: at / 1000), inSameDayAs: selectedDate)
+            guard AssistantWorkColumn.matching(task.kind) == column else { return false }
+            return true
         }
     }
 
@@ -46,52 +36,6 @@ struct DelegationListScreen: View {
 
     var body: some View {
         List {
-            if embeddedInInbox {
-                Section {
-                    Picker("显示方式", selection: $calendarMode) {
-                        Text("列表").tag(false)
-                        Text("日历").tag(true)
-                    }.pickerStyle(.segmented)
-                    if calendarMode {
-                        DatePicker("日期", selection: $selectedDate, displayedComponents: .date)
-                            .datePickerStyle(.graphical)
-                    }
-                }
-            } else {
-            Section {
-                Picker("任务栏目", selection: Binding(
-                    get: { column },
-                    set: { next in
-                        if embeddedInInbox {
-                            router.inboxLane = .work(next)
-                        } else {
-                            router.go(.worklist(next))
-                        }
-                    }
-                )) {
-                    Text("待办").tag(AssistantWorkColumn.todo)
-                    Text("委派").tag(AssistantWorkColumn.delegation)
-                    Text("提醒计划").tag(AssistantWorkColumn.plan)
-                }
-                .pickerStyle(.segmented)
-                .listRowBackground(JieboColor.paper)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-            }
-            }
-            if column == .todo, rows.isEmpty, store.assistantState != nil {
-                Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(embeddedInInbox ? "暂无日程" : "还没有待办")
-                            .font(JieboFont.text(.subheadline, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                        Text(embeddedInInbox ? "告诉小驳要做什么，它会帮你添加任务或提醒。" : column.emptyDetail)
-                            .font(JieboFont.text(.caption))
-                            .foregroundStyle(JieboColor.dim)
-                    }
-                    .padding(.vertical, 8)
-                    .listRowBackground(JieboColor.white)
-                }
-            }
             if store.assistantState?.personalTasks != nil {
                 ForEach(groups, id: \.phase) { group in
                     let items = rows.filter { bucket($0) == group.phase }
@@ -142,13 +86,13 @@ struct DelegationListScreen: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
         .background(JieboColor.paper)
-        .navigationTitle(embeddedInInbox ? "日程" : column.title)
+        .navigationTitle(column.title)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { store.requestAssistant(force: true) }
         .accessibilityHidden(store.assistantState == nil)
         .overlay {
             if store.assistantState == nil {
-                AssistantLoadingView(title: "正在加载日程…")
+                AssistantLoadingView(title: "正在加载委派…")
             } else if column != .todo, rows.isEmpty && (column != .delegation || legacyRows.isEmpty || store.assistantState?.personalTasks != nil) {
                 ContentUnavailableView(
                     "还没有\(column.title)",
@@ -157,7 +101,7 @@ struct DelegationListScreen: View {
                 )
             }
         }
-        .task { if !embeddedInInbox { store.requestAssistant() } }
+        .task { store.requestAssistant() }
         .sheet(item: $openedTask) { task in
             PersonalTaskSheet(task: task)
         }
@@ -1338,6 +1282,9 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
     var lastStatus: String?
     var lastSummary: String?
     var payloadSummary: String
+    var outputRelPath: String?
+    var reportInputs: [String] = []
+    var outputTargets: [String] = []
 
     static func parse(_ item: JSONValue) -> KbWorkspaceScheduleItem? {
         guard let row = item.object, let id = row["id"]?.string, !id.isEmpty else { return nil }
@@ -1361,7 +1308,10 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
             lastFinishedAt: row["lastFinishedAt"]?.number,
             lastStatus: row["lastStatus"]?.string?.nilIfEmpty,
             lastSummary: row["lastSummary"]?.string?.nilIfEmpty,
-            payloadSummary: row["payloadSummary"]?.string ?? ""
+            payloadSummary: row["payloadSummary"]?.string ?? "",
+            outputRelPath: row["outputRelPath"]?.string,
+            reportInputs: row["reportInputs"]?.array?.compactMap(\.string) ?? [],
+            outputTargets: row["outputTargets"]?.array?.compactMap(\.string) ?? []
         )
     }
 }
@@ -1376,6 +1326,9 @@ struct KbWorkspaceScheduleRun: Identifiable, Hashable {
     var finishedAt: Double
     var summary: String
     var files: [String]
+    var period: String?
+
+    var triggerLabel: String { trigger == "backfill" ? "补跑" : trigger == "manual" ? "手动运行" : "定时触发" }
 
     static func parse(_ item: JSONValue) -> Self? {
         guard let row = item.object, let id = row["runId"]?.string,
@@ -1383,7 +1336,7 @@ struct KbWorkspaceScheduleRun: Identifiable, Hashable {
         return Self(id: id, workspaceId: row["workspaceId"]?.string ?? "", scheduleId: scheduleId, title: row["title"]?.string ?? "", status: row["status"]?.string ?? "",
                     trigger: row["trigger"]?.string ?? "scheduled", finishedAt: row["finishedAt"]?.number ?? 0,
                     summary: row["error"]?.string?.nilIfEmpty ?? row["summary"]?.string ?? "",
-                    files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [])
+                    files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [], period: row["period"]?.string)
     }
 }
 
@@ -1398,6 +1351,9 @@ private struct WorkspaceScheduleEditor: View {
     @State private var day: Int
     @State private var time: Date
     @State private var shortMonth: String
+    @State private var output: String
+    @State private var inputs: String
+    @State private var targets: String
     @State private var busy = false
     @State private var error: String?
     private static let clockZone = TimeZone(secondsFromGMT: 0) ?? .current
@@ -1414,6 +1370,9 @@ private struct WorkspaceScheduleEditor: View {
         let seconds = (parts.first ?? 9) * 3600 + (parts.dropFirst().first ?? 0) * 60
         _time = State(initialValue: Date(timeIntervalSince1970: Double(seconds)))
         _shortMonth = State(initialValue: item.shortMonth)
+        _output = State(initialValue: item.outputRelPath ?? "")
+        _inputs = State(initialValue: item.reportInputs.joined(separator: "\n"))
+        _targets = State(initialValue: item.outputTargets.joined(separator: "\n"))
     }
 
     var body: some View {
@@ -1445,6 +1404,21 @@ private struct WorkspaceScheduleEditor: View {
                     }
                     LabeledContent("规则时区", value: item.tz)
                 }
+                Section("产物写入协调") {
+                    TextField("会更新的路径（每行一项）", text: $targets, axis: .vertical)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Text("例如 投诉/投诉.html。其他文件照常处理。").font(.footnote)
+                }
+                if item.executorKind == "agent_prompt" {
+                    Section("产物与资料") {
+                        TextField("固定产物路径（可选）", text: $output)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        if mode == "monthly" {
+                            TextField("必需资料路径（每行一项）", text: $inputs, axis: .vertical)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        }
+                    }
+                }
                 if let error {
                     Section { Text(error).foregroundStyle(JieboColor.danger) }
                 }
@@ -1473,6 +1447,15 @@ private struct WorkspaceScheduleEditor: View {
             "executorKind": .string(item.executorKind), "scheduleMode": .string(mode),
         ]
         if let rev = item.updatedAt { fields["expectedUpdatedAt"] = .number(rev) }
+        fields["outputTargets"] = .array(targets.split(whereSeparator: \.isNewline).map {
+            .string(String($0).trimmingCharacters(in: .whitespacesAndNewlines))
+        }.filter { $0.string?.isEmpty == false })
+        if item.executorKind == "agent_prompt" {
+            fields["outputRelPath"] = .string(output.trimmingCharacters(in: .whitespacesAndNewlines))
+            fields["reportInputs"] = .array(inputs.split(whereSeparator: \.isNewline).map {
+                .string(String($0).trimmingCharacters(in: .whitespacesAndNewlines))
+            }.filter { $0.string?.isEmpty == false })
+        }
         switch mode {
         case "daily_times":
             let values = daily.split { ",，、 \n\t".contains($0) }.map(String.init)
@@ -2340,7 +2323,7 @@ struct KbWorkspaceSheet: View {
                             }
                             ForEach(runs) { run in
                                 VStack(alignment: .leading, spacing: 6) {
-                                    Text("\(scheduleResultLabel(run.status)) · \(run.trigger == "manual" ? "手动运行" : "定时触发")")
+                                    Text("\(scheduleResultLabel(run.status)) · \(run.triggerLabel)\(run.period.map { " · " + $0 } ?? "")")
                                         .font(JieboFont.text(.subheadline, weight: .medium))
                                     Text(scheduleTime(run.finishedAt, tz: item.tz))
                                     if !run.summary.isEmpty { Text(run.summary) }
@@ -2736,6 +2719,7 @@ struct KbWorkspaceSheet: View {
     }
 
     private func scheduleStateLabel(_ item: KbWorkspaceScheduleItem) -> String {
+        if item.state == "waiting_output" { return "等待同一产物更新" }
         if item.state == "running_step1" { return "正在执行" }
         if item.state == "running_step2" { return "归档更新中" }
         if !item.enabled { return "已暂停" }
@@ -2901,7 +2885,27 @@ struct AssistantAutomationScreen: View {
     @State private var error: String?
     @State private var notice: String?
     @State private var confirmation: KbWorkspaceScheduleItem?
+    private enum StopAction: Identifiable {
+        case schedule(AssistantSchedule)
+        case reminder(AssistantTodo)
+
+        var id: String {
+            switch self {
+            case .schedule(let item): return "schedule:" + item.id
+            case .reminder(let item): return "reminder:" + item.id
+            }
+        }
+
+        var isReminder: Bool {
+            if case .reminder = self { return true }
+            return false
+        }
+    }
+
+    @State private var stopAction: StopAction?
+    @State private var reminderEditor: AssistantTodo?
     @State private var editor: KbWorkspaceScheduleItem?
+    @State private var backfillItem: KbWorkspaceScheduleItem?
 
     var body: some View {
         List {
@@ -2945,6 +2949,14 @@ struct AssistantAutomationScreen: View {
                 await workspaceAction(item.workspaceId, fields: fields)
             }
         }
+        .sheet(item: $backfillItem) { item in
+            WorkspaceBackfillSheet(item: item, openFile: { path in
+                if let scope = scopes.first(where: { $0.id == item.workspaceId }) { openArtifact(path, scope: scope) }
+            }) { fields in
+                await workspaceAction(item.workspaceId, fields: fields)
+            }
+        }
+        .sheet(item: $reminderEditor) { TodoEditSheet(todo: $0, reminderOnly: true) }
         .alert(
             "立即运行自动化？",
             isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }),
@@ -2955,12 +2967,37 @@ struct AssistantAutomationScreen: View {
         } message: { item in
             Text("《\(item.title)》会正式运行，可能更新数据或产物。")
         }
+        .confirmationDialog(
+            stopAction?.isReminder == true ? "取消这条提醒？" : "删除这条定时？",
+            isPresented: Binding(get: { stopAction != nil }, set: { if !$0 { stopAction = nil } }),
+            titleVisibility: .visible,
+            presenting: stopAction
+        ) { action in
+            Button(action.isReminder ? "取消提醒" : "删除定时", role: .destructive) {
+                Task { await stopPersonal(action) }
+            }
+            Button("返回", role: .cancel) {}
+        }
+
+    }
+
+    private var upcomingReminders: [AssistantTodo] {
+        (store.assistantState?.todos ?? []).filter {
+            guard !$0.done, let due = TodoDue.parse($0.due) else { return false }
+            return due.timed && due.date > Date()
+        }
+    }
+
+    private var calendarEvents: [PersonalTask] {
+        (store.assistantState?.personalTasks ?? []).filter { $0.kind == "calendar_event" && $0.phase != "completed" }
     }
 
     private var personalSection: some View {
         Section("小驳") {
             if let schedules = store.assistantState?.schedules {
-                if schedules.isEmpty { Text("小驳还没有定时任务。") }
+                if schedules.isEmpty && upcomingReminders.isEmpty && calendarEvents.isEmpty {
+                    Text("小驳还没有定时任务或提醒。")
+                }
                 ForEach(schedules) { item in
                     VStack(alignment: .leading, spacing: 6) {
                         scheduleLabel(item.title, status: item.enabled ? "已启用" : "已暂停",
@@ -2972,7 +3009,25 @@ struct AssistantAutomationScreen: View {
                         }
                         .buttonStyle(.borderless)
                         .disabled(busy)
+                        Button("删除定时", role: .destructive) { stopAction = .schedule(item) }
+                            .buttonStyle(.borderless)
+                            .disabled(busy)
                     }
+                }
+                ForEach(upcomingReminders) { reminder in
+                    VStack(alignment: .leading, spacing: 6) {
+                        scheduleLabel(reminder.text, status: "一次提醒", next: nil, tz: "")
+                        if let due = TodoDue.parse(reminder.due) { Text(due.date.formatted()) }
+                        Button("编辑提醒") { reminderEditor = reminder }
+                            .buttonStyle(.borderless)
+                            .disabled(busy)
+                        Button("取消提醒", role: .destructive) { stopAction = .reminder(reminder) }
+                            .buttonStyle(.borderless)
+                            .disabled(busy)
+                    }
+                }
+                ForEach(calendarEvents) { event in
+                    scheduleLabel(event.title, status: "日历事件", next: event.dueAt, tz: TimeZone.current.identifier)
                 }
             } else {
                 ProgressView("正在读取小驳的定时…")
@@ -3023,6 +3078,9 @@ struct AssistantAutomationScreen: View {
             if let summary = item.lastSummary, !summary.isEmpty { Text(summary) }
             Menu("管理自动化") {
                 Button("立即运行") { confirmation = item }.disabled(busy || item.state != "idle")
+                if item.scheduleMode == "monthly" && item.executorKind == "agent_prompt" {
+                    Button("按期补跑") { backfillItem = item }.disabled(busy || item.state != "idle")
+                }
                 Button("编辑计划") { editor = item }.disabled(busy || item.state != "idle")
                 Button(item.enabled ? "暂停" : "启用") {
                     Task { await act(item, kind: "toggle") }
@@ -3045,7 +3103,7 @@ struct AssistantAutomationScreen: View {
     private func historyRow(_ run: KbWorkspaceScheduleRun, scope: Scope, tz: String, showTitle: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if showTitle { Text(run.title).font(JieboFont.text(.subheadline, weight: .medium)) }
-            Text("\(resultLabel(run.status)) · \(run.trigger == "manual" ? "手动运行" : "定时触发")")
+            Text("\(resultLabel(run.status)) · \(run.triggerLabel)\(run.period.map { " · " + $0 } ?? "")")
                 .font(JieboFont.text(.subheadline, weight: .medium))
             Text(dateText(run.finishedAt, tz: tz))
             if !run.summary.isEmpty { Text(run.summary) }
@@ -3067,6 +3125,7 @@ struct AssistantAutomationScreen: View {
     }
 
     private func workspaceStatus(_ item: KbWorkspaceScheduleItem) -> String {
+        if item.state == "waiting_output" { return "等待同一产物更新" }
         if item.state == "running_step1" { return "正在执行" }
         if item.state == "running_step2" { return "等待归档" }
         let enabled = item.enabled ? "已启用" : "已暂停"
@@ -3117,6 +3176,24 @@ struct AssistantAutomationScreen: View {
         runs = row["workspaceScheduleRuns"]?.array?.compactMap(KbWorkspaceScheduleRun.parse) ?? []
         if case .workspace(let id) = filter, !scopes.contains(where: { $0.id == id }) { filter = .all }
         loaded = true
+    }
+
+    private func stopPersonal(_ action: StopAction) async {
+        guard !busy else { return }
+        busy = true
+        error = nil
+        notice = nil
+        let reply: (ok: Bool, error: String?, data: JSONValue?)
+        switch action {
+        case .schedule(let item):
+            reply = await store.assistantOpData("schedule_remove", args: ["id": .string(item.id)])
+        case .reminder(let item):
+            reply = await store.assistantOpData("todo_done", args: ["id": .string(item.id)])
+        }
+        store.requestAssistant(force: true)
+        busy = false
+        if reply.ok { notice = action.isReminder ? "已取消提醒" : "已删除定时" }
+        else { error = reply.error ?? "操作未完成，请核对当前状态。" }
     }
 
     private func togglePersonal(_ item: AssistantSchedule) async {
@@ -3171,5 +3248,106 @@ struct AssistantAutomationScreen: View {
         let artifact = workspace.appendingPathComponent(path)
         store.openPreview(artifact.path, chatId: chatId)
         sceneSession?.presentPreview(from: store)
+    }
+}
+
+
+private struct WorkspaceBackfillSheet: View {
+    let item: KbWorkspaceScheduleItem
+    let openFile: (String) -> Void
+    let run: ([String: JSONValue]) async -> String?
+    @Environment(ChatStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var year: Int
+    @State private var month: Int
+    @State private var preview: [String: JSONValue]?
+    @State private var busy = false
+    @State private var error: String?
+
+    init(item: KbWorkspaceScheduleItem, openFile: @escaping (String) -> Void, run: @escaping ([String: JSONValue]) async -> String?) {
+        self.item = item
+        self.openFile = openFile
+        self.run = run
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: item.tz) ?? .current
+        let previous = calendar.date(byAdding: .month, value: -1, to: .now) ?? .now
+        _year = State(initialValue: calendar.component(.year, from: previous))
+        _month = State(initialValue: calendar.component(.month, from: previous))
+    }
+
+    private var calendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: item.tz) ?? .current
+        return calendar
+    }
+
+    private var period: String { String(format: "%04d-%02d", year, month) }
+
+    private var latest: DateComponents {
+        let previous = calendar.date(byAdding: .month, value: -1, to: .now) ?? .now
+        return calendar.dateComponents([.year, .month], from: previous)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("选择统计期") {
+                    Picker("年份", selection: $year) {
+                        ForEach((2000...(latest.year ?? 2000)).reversed(), id: \.self) { Text("\($0) 年").tag($0) }
+                    }
+                    Picker("月份", selection: $month) {
+                        ForEach(1...(year == latest.year ? latest.month ?? 12 : 12), id: \.self) { Text("\($0) 月").tag($0) }
+                    }
+                    Button("检查该期") { Task { await check() } }
+                }
+                if let preview, preview["period"]?.string == period {
+                    let versions = preview["versions"]?.int ?? 0
+                    let missing = preview["missingInputs"]?.array?.compactMap(\.string) ?? []
+                    Section("检查结果") {
+                        Text(versions > 0 ? "已有 \(versions) 次结果" : "没有找到该期的历史结果")
+                        Text("补跑不会改变下次运行时间，结果会另存。")
+                        if !missing.isEmpty { Text("缺少资料：" + missing.joined(separator: "、")) }
+                        if preview["inputsDeclared"]?.bool != true { Text("规则未声明必需资料，运行时将检查数据覆盖范围。") }
+                        ForEach(preview["files"]?.array?.compactMap(\.string) ?? [], id: \.self) { path in
+                            Button(path) { dismiss(); openFile(path) }
+                        }
+                        Button(versions > 0 ? "生成新版本" : "补跑该期") {
+                            guard let token = preview["token"]?.string else { return }
+                            Task {
+                                busy = true
+                                error = await run(["kind": .string("backfill"), "id": .string(item.id), "period": .string(period),
+                                                   "token": .string(token), "newVersion": .bool(versions > 0)])
+                                busy = false
+                                if error == nil { dismiss() }
+                            }
+                        }
+                        .disabled(!missing.isEmpty)
+                    }
+                }
+                if busy { ProgressView() }
+                if let error { Text(error).foregroundStyle(JieboColor.danger) }
+            }
+            .disabled(busy)
+            .navigationTitle("按期补跑")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(busy) } }
+        }
+        .interactiveDismissDisabled(busy)
+        .onChange(of: year) { _, value in if value == latest.year { month = min(month, latest.month ?? 12) } }
+        .onChange(of: period) { _, _ in preview = nil; error = nil }
+    }
+
+    private func check() async {
+        busy = true
+        error = nil
+        preview = nil
+        let reply = await store.assistantOpData("drop_token_update", args: [
+            "workspace": .string(item.workspaceId),
+            "workspaceScheduleAction": .object(["kind": .string("backfill_preview"), "id": .string(item.id),
+                                                  "period": .string(period), "summaryOnly": .bool(true)]),
+        ])
+        preview = reply.data?.object?["workspaceBackfill"]?.object
+        if !reply.ok { error = reply.error ?? "未能检查该期。" }
+        busy = false
     }
 }

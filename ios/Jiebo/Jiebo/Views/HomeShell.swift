@@ -314,20 +314,8 @@ struct HomeShell: View {
             padRouter.openAssistant()
         case .inbox:
             padRouter.openAssistant(section: .inbox, selection: nil)
-        case .todo(let id):
-            guard store.assistantState != nil else {
-                store.requestAssistant()
-                padRouter.openAssistant(section: .todos, selection: nil)
-                return
-            }
-            let tasks = PadAssistantProjection(state: store.assistantState).personalTasks
-            guard let taskID = tasks.first(where: {
-                $0.id == id || $0.id == "todo:\(id)" || $0.sources.contains(where: { $0.id == id })
-            })?.id else {
-                padRouter.openAssistant(section: .todos, selection: nil)
-                return
-            }
-            padRouter.openAssistant(section: .todos, selection: .task(taskID))
+        case .todo:
+            padRouter.openAssistant(section: .automation, selection: nil)
         }
     }
 

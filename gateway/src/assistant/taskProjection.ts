@@ -159,12 +159,12 @@ function projectDrafts(approvals: AssistantApproval[]): DraftCard[] {
   }));
 }
 
-function linkedRun(delegation: Delegation, runs: ProjectionRun[]) {
-  return runs.find(
+function linkedRuns(delegation: Delegation, runs: ProjectionRun[]) {
+  return runs.filter(
     (run) =>
       run.origin === "delegate" &&
       ((run.chatId && run.chatId === delegation.childChatId) ||
-        (run.label === delegation.title && Math.abs(run.startedAt - delegation.createdAt) < DAY_MS)),
+        (!run.chatId && run.label === delegation.title && Math.abs(run.startedAt - delegation.createdAt) < DAY_MS)),
   );
 }
 
@@ -258,12 +258,13 @@ function projectTasks(input: TaskProjectionInput, now: number): PersonalTask[] {
   }
 
   for (const delegation of input.delegations) {
-    const run = linkedRun(delegation, input.runs);
-    if (run) linkedRunIds.add(run.runId);
+    const runs = linkedRuns(delegation, input.runs);
+    for (const run of runs) linkedRunIds.add(run.runId);
     const approval = input.approvals.find(
       (item) => item.delegationId === delegation.id || item.chatId === delegation.childChatId,
     );
     const needsMe = delegation.status === "awaiting" || Boolean(approval);
+    if (delegation.status === "cancelled") continue;
     const failed = delegation.status === "failed";
     const phase =
       needsMe || failed
@@ -274,7 +275,7 @@ function projectTasks(input: TaskProjectionInput, now: number): PersonalTask[] {
             ? "completed"
             : "planned";
     const sources = [source("delegation", delegation.id)];
-    if (run) sources.push(source("run", run.runId));
+    if (runs[0]) sources.push(source("run", runs[0].runId));
     tasks.push({
       id: `delegation:${delegation.id}`,
       kind: "delegation",
@@ -283,7 +284,7 @@ function projectTasks(input: TaskProjectionInput, now: number): PersonalTask[] {
       status: needsMe ? "waiting_user" : delegation.status,
       priority: needsMe || failed ? "high" : delegation.status === "done" ? "low" : "normal",
       attention: needsMe ? "等待你批准" : failed ? clip(delegation.result, 240) || "委派失败" : undefined,
-      detail: clip(delegation.result || delegation.task, 500) || undefined,
+      detail: clip(delegation.waitReason || delegation.result || delegation.task, 500) || undefined,
       createdAt: delegation.createdAt,
       updatedAt: delegation.endedAt,
       sources,
@@ -292,7 +293,7 @@ function projectTasks(input: TaskProjectionInput, now: number): PersonalTask[] {
           ? receipt(`receipt:delegation:${delegation.id}`, delegation.status, delegation.endedAt, delegation.result)
           : undefined,
       actions:
-        delegation.status === "running" || delegation.status === "awaiting"
+        ["queued", "running", "awaiting"].includes(delegation.status)
           ? [{ label: "取消", op: "delegation_cancel", args: { delegationId: delegation.id } }]
           : undefined,
     });
@@ -371,6 +372,8 @@ function projectDayThread(
   const highInboxKinds = new Set(["approval", "delegation", "reminder"]);
   for (const item of input.inbox) {
     if (item.read || !highInboxKinds.has(item.kind)) continue;
+    // 成功交付在原对话和收件箱可查，今日把注意力留给待处理和中断。
+    if (item.kind === "delegation" && (item.attention === "notice" || item.title.startsWith("委派完成："))) continue;
     const dedupe =
       item.kind === "approval"
         ? `approval:${item.delegationId || item.chatId || item.id}`
@@ -393,6 +396,7 @@ function projectDayThread(
 
   for (const task of tasks) {
     if (!task.receipt || !timestampDay(task.receipt.at, day)) continue;
+    if (task.kind === "delegation" && task.receipt.status === "done") continue;
     events.push({
       id: `event:${task.receipt.id}`,
       dedupe: task.receipt.id,

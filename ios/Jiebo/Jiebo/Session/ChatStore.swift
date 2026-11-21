@@ -31,7 +31,7 @@ enum ToolLayer: String, CaseIterable, Identifiable {
     case files, search, git, terminal, loop
 
     /// 工作台自己的工具。小驳是独立空间，不从这里进入。
-    static let workTools: [ToolLayer] = [.files, .search, .git, .terminal, .loop]
+    static let workTools: [ToolLayer] = [.files, .search, .git, .terminal]
 
     var id: String { rawValue }
 

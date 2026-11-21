@@ -23,12 +23,18 @@ struct TurnView: View, Equatable {
     var calendarInvite: AssistantCalendar? = nil
     var palette: JieboPalette = JieboTheme.shared.palette
     var appearance: JieboAppearance = JieboTheme.shared.appearance
-    @State private var editingTodo: AssistantTodo?
     @State private var thinkingOpen = false
     @State private var thinkingPinned = false
     @State private var shareItem: ShareItem?
     @State private var viewerItem: AttachmentViewerItem?
     private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
+    private var delegationRows: [AssistantDelegation] {
+        guard store.isAssistantChat(chatId) else { return [] }
+        return (store.assistantState?.delegations ?? []).filter {
+            $0.parentChatId == chatId && $0.parentTurnId == turn.id
+        }
+    }
+
     private var assistantText: String { ReplyText.repair(turn.assistant) }
     private var thinkingText: String { ReplyText.repair(turn.thinking) }
 
@@ -236,7 +242,10 @@ struct TurnView: View, Equatable {
                 if let asked = AskedForm.parse(tool) {
                     QuestionCardView(asked: asked, canAnswer: canAnswer)
                 } else if embedded, let text = AssistantToolText.friendly(tool) {
-                    AssistantActionRow(tool: tool, text: text)
+                    let id = AssistantToolText.resultObject(tool.result)?["id"]?.string
+                    if AssistantToolText.baseName(tool.name) != "delegate" || !delegationRows.contains(where: { $0.id == id }) {
+                        AssistantActionRow(tool: tool, text: text)
+                    }
                 }
             }
             if processTools.count >= 2 {
@@ -294,14 +303,11 @@ struct TurnView: View, Equatable {
             if !captured.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(captured) { receipt in
-                        TodoReceiptRow(receipt: receipt) { editingTodo = $0 }
+                        TodoReceiptRow(receipt: receipt)
                     }
                     if let calendarInvite, !turn.running {
                         CalendarInviteCard(calendar: calendarInvite, compact: true)
                     }
-                }
-                .sheet(item: $editingTodo) { todo in
-                    TodoEditSheet(todo: todo)
                 }
             }
             if !turn.deferred, let error = turn.error, !error.isEmpty, !turn.running {
@@ -337,8 +343,15 @@ struct TurnView: View, Equatable {
                 .accessibilityElement(children: .contain)
             }
             // 顺序：正文 → 文件 → 审阅 → 操作。审阅条是对上面这些文件的决定，放在它们之后
-            if !turn.deferred, !turn.cardFiles.isEmpty {
-                TurnFileCards(turn: turn, chatId: chatId)
+            let delegated = delegationRows
+            ForEach(delegated) { item in
+                AssistantDelegationReceipt(item: item, turn: turn, chatId: chatId)
+            }
+            let regularFiles = turn.cardFiles.filter { file in
+                !delegated.contains { $0.childChatId == file.sourceChatId }
+            }
+            if !turn.deferred, !regularFiles.isEmpty {
+                TurnFileCards(turn: turn, chatId: chatId, files: regularFiles)
             }
             if !turn.deferred, turn.needsFileReview, reviewMark == nil {
                 TurnReviewBar(turn: turn)

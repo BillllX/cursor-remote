@@ -4,6 +4,7 @@ import type {
   WorkspaceScheduleExecutorKind,
   WorkspaceScheduleRunSummaryItem,
   WorkspaceScheduleSummaryItem,
+  KbWorkspaceStatusData,
 } from "@shared/protocol";
 import { buildAssistantOpMessage } from "@shared/assistantOp";
 
@@ -58,7 +59,8 @@ type WorkspaceScheduleSectionProps = {
   schedules: WorkspaceScheduleSummaryItem[];
   runs: WorkspaceScheduleRunSummaryItem[];
   loading: boolean;
-  lastScheduleResult?: { action: "upsert" | "toggle" | "run_now" | "remove"; message: string };
+  lastScheduleResult?: KbWorkspaceStatusData["workspaceScheduleResult"];
+  backfillPreview?: KbWorkspaceStatusData["workspaceBackfill"];
   sendKbOperation: (message: ClientMessage, silent?: boolean) => void;
   onOpenBoard: (relPath: string) => void;
   setErrorText: (msg: string) => void;
@@ -73,10 +75,29 @@ export function WorkspaceScheduleSection({
   runs,
   loading,
   lastScheduleResult,
+  backfillPreview,
   sendKbOperation,
   onOpenBoard,
   setErrorText,
 }: WorkspaceScheduleSectionProps) {
+  const [backfilling, setBackfilling] = useState<string>();
+  const [period, setPeriod] = useState("");
+  const [reportInputs, setReportInputs] = useState("");
+  const [reportOutput, setReportOutput] = useState("");
+  const [outputTargets, setOutputTargets] = useState("");
+  const preview = backfillPreview?.scheduleId === backfilling && backfillPreview?.period === period
+    ? backfillPreview : undefined;
+  function backfill(kind: "backfill" | "backfill_preview", item: WorkspaceScheduleSummaryItem) {
+    if (!period || (kind === "backfill" && !preview)) return;
+    setErrorText("");
+    sendKbOperation(buildAssistantOpMessage("drop_token_update", {
+      workspace: workspaceKey,
+      workspaceScheduleAction: {
+        kind, id: item.id, period, ...(summaryOnly ? { summaryOnly: true } : {}),
+        ...(kind === "backfill" ? { token: preview!.token, newVersion: preview!.versions > 0 } : {}),
+      },
+    }));
+  }
   const [editing, setEditing] = useState<WorkspaceScheduleSummaryItem | "new" | null>(null);
   const [formError, setFormError] = useState("");
   const [pending, setPending] = useState<{ action: "run_now" | "remove"; item: WorkspaceScheduleSummaryItem } | null>(
@@ -96,6 +117,7 @@ export function WorkspaceScheduleSection({
 
   useEffect(() => {
     if (lastScheduleResult?.action === "upsert") setEditing(null);
+    if (lastScheduleResult?.action === "backfill") setBackfilling(undefined);
   }, [lastScheduleResult]);
 
   function openForm(item: WorkspaceScheduleSummaryItem | "new") {
@@ -111,6 +133,9 @@ export function WorkspaceScheduleSection({
     setTime(saved?.monthly?.time ?? "09:00");
     setShortMonth(saved?.monthly?.shortMonth ?? "skip");
     setDetail("");
+    setReportInputs(saved?.reportInputs?.join("\n") ?? "");
+    setReportOutput(saved?.outputRelPath ?? "");
+    setOutputTargets(saved?.outputTargets?.join("\n") ?? "");
     setQuiet("3");
     setRunner("python3");
   }
@@ -150,6 +175,8 @@ export function WorkspaceScheduleSection({
           ...(!saved && kind === "http_api_ingest" ? { url: detail.trim() } : {}),
           ...(!saved && kind === "workspace_script" ? { runner, scriptRelPath: detail.trim() } : {}),
           ...(!saved && kind === "agent_prompt" ? { prompt: detail.trim() } : {}),
+          outputTargets: outputTargets.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
+          ...(kind === "agent_prompt" ? { outputRelPath: reportOutput.trim(), reportInputs: reportInputs.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) } : {}),
         },
       }),
     );
@@ -177,7 +204,7 @@ export function WorkspaceScheduleSection({
       <div key={run.runId} style={{ ...surface, marginTop: 8 }}>
         {showTitle && <strong>{run.title}</strong>}
         <div>
-          {runLabels[run.status]} · {run.trigger === "manual" ? "手动运行" : "定时触发"} ·{" "}
+          {runLabels[run.status]} · {run.trigger === "backfill" ? "补跑" : run.trigger === "manual" ? "手动运行" : "定时触发"}{run.period && ` · ${run.period}`} ·{" "}
           {formatTime(run.finishedAt, tz)}
           {showTitle && "（UTC）"}
         </div>
@@ -415,6 +442,17 @@ export function WorkspaceScheduleSection({
               />
             </label>
           )}
+          <details>
+            <summary>产物写入协调</summary>
+            <label>会更新的路径（每行一项）<textarea style={control} value={outputTargets} onChange={(event) => setOutputTargets(event.target.value)} placeholder="例如 投诉/投诉.html" /></label>
+            <p>同时写到同一份产物时会等待，其他文件照常处理。</p>
+          </details>
+          {kind === "agent_prompt" && (
+            <>
+              <label>固定产物路径（可选）<input style={control} value={reportOutput} onChange={(event) => setReportOutput(event.target.value)} placeholder="例如 投诉/月报.md" /></label>
+              {mode === "monthly" && <label>必需资料路径（每行一项，可选）<textarea style={control} value={reportInputs} onChange={(event) => setReportInputs(event.target.value)} /></label>}
+            </>
+          )}
           {formError && (
             <p role="alert" style={{ margin: 0, color: "var(--danger)" }}>
               {formError}
@@ -434,7 +472,7 @@ export function WorkspaceScheduleSection({
       {schedules.map((item) => {
         const busy = item.state !== "idle";
         const status =
-          item.state === "running_step1"
+          item.state === "waiting_output" ? "等待同一产物更新" : item.state === "running_step1"
             ? "正在执行"
             : item.state === "running_step2"
               ? "等待归档"
@@ -477,6 +515,12 @@ export function WorkspaceScheduleSection({
               >
                 立即运行
               </button>
+              {item.scheduleMode === "monthly" && item.executorKind === "agent_prompt" && (
+                <button className="new-chat" type="button" disabled={loading || busy || !!pending} onClick={() => {
+                  setPeriod(""); setBackfilling(item.id);
+                }}>按期补跑</button>
+              )}
+
               <button
                 className="new-chat"
                 type="button"
@@ -525,6 +569,26 @@ export function WorkspaceScheduleSection({
                     取消
                   </button>
                 </div>
+              </div>
+            )}
+            {backfilling === item.id && (
+              <div role="group" aria-label="按期补跑" style={surface}>
+                <label>统计月份 <input type="month" placeholder="YYYY-MM" value={period} onChange={(event) => { setPeriod(event.target.value); }} /></label>
+                <div style={actions}>
+                  <button className="new-chat" type="button" disabled={loading || busy || !/^20[0-9]{2}-(0[1-9]|1[0-2])$/.test(period)} onClick={() => backfill("backfill_preview", item)}>检查该期</button>
+                  <button className="new-chat" type="button" onClick={() => setBackfilling(undefined)}>收起</button>
+                </div>
+                {preview && (
+                  <>
+                    <div role="status">{preview.versions ? `已有 ${preview.versions} 次结果` : "没有找到该期的历史结果"}。补跑不改变下次运行时间。</div>
+                    {preview.files.map((path) => <button className="new-chat" type="button" key={path} onClick={() => onOpenBoard(path)}>{path}</button>)}
+                    {preview.missingInputs.length > 0 && <p>缺少资料：{preview.missingInputs.join("、")}</p>}
+                    {!preview.inputsDeclared && <p>规则未声明必需资料，运行时将检查数据覆盖范围。</p>}
+                    <button className="new-chat primary" type="button" disabled={loading || busy || !!preview.missingInputs.length} onClick={() => backfill("backfill", item)}>
+                      {preview.versions ? "生成新版本" : "补跑该期"}
+                    </button>
+                  </>
+                )}
               </div>
             )}
             <details>

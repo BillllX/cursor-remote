@@ -127,14 +127,15 @@ describe("Personal Task 只读投影", () => {
       chatId: "child-1",
       startedAt: item.createdAt,
     });
-    const unrelated = run({ runId: "r-other", label: "整理", origin: "delegate", chatId: "child-2" });
-    const tasks = buildTaskProjection(input({ delegations: [item], runs: [linked, unrelated] }), {
+    const older = run({ ...linked, runId: "r-older", status: "interrupted" });
+    const unrelated = run({ runId: "r-other", label: linked.label, origin: "delegate", chatId: "child-2" });
+    const tasks = buildTaskProjection(input({ delegations: [item], runs: [linked, older, unrelated] }), {
       now: NOW,
       day: DAY,
     }).personalTasks;
 
     assert.equal(
-      tasks.some((task) => task.id === "run:r-linked"),
+      tasks.some((task) => task.id === "run:r-linked" || task.id === "run:r-older"),
       false,
     );
     assert.equal(
@@ -264,4 +265,20 @@ test("calendar events join the task calendar and cancelled events stay out", () 
     projected.personalTasks.some((row) => row.id === "calendar_event:cancelled"),
     false,
   );
+});
+
+test("委派成功交付不再复制到今日，未交付仍可见", () => {
+  const projection = buildTaskProjection(input({
+    delegations: [
+      delegation({ id: "ok", childChatId: "c-ok", title: "复核报告", status: "done", endedAt: NOW - 200 }),
+      delegation({ id: "blocked", childChatId: "c-blocked", title: "待补资料", status: "failed", endedAt: NOW - 100 }),
+    ],
+    inbox: [
+      inboxItem({ id: "i-ok", kind: "delegation", title: "委派完成：复核报告", delegationId: "ok", attention: "notice" }),
+      inboxItem({ id: "i-blocked", kind: "delegation", title: "委派失败：待补资料", delegationId: "blocked", attention: "recovery" }),
+    ],
+  }), { now: NOW, day: DAY });
+  assert.ok(projection.personalTasks.some((task) => task.id === "delegation:ok" && task.receipt?.status === "done"));
+  assert.ok(!projection.dayThread.some((event) => event.taskId === "delegation:ok"));
+  assert.ok(projection.dayThread.some((event) => event.taskId === "delegation:blocked"));
 });

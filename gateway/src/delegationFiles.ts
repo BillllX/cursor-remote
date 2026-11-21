@@ -32,10 +32,12 @@ export function mergeTurnFiles(base: TurnFile[], incoming: TurnFile[]): TurnFile
   if (out.length <= MAX_TURN_FILES) return out;
   // 委派交付物是父会话里唯一能发现子工作区产物的入口，超限时优先保住它们。
   const incomingKeys = new Set(incoming.map(fileKey));
-  return [
+  const keep = new Set([
     ...out.filter((file) => incomingKeys.has(fileKey(file))),
     ...out.filter((file) => !incomingKeys.has(fileKey(file))),
-  ].slice(0, MAX_TURN_FILES);
+  ].slice(0, MAX_TURN_FILES).map(fileKey));
+  // 新旧版本仍按回填顺序排列，卡片取同一路径最后一个时不会选回旧版。
+  return out.filter((file) => keep.has(fileKey(file)));
 }
 
 function sameFiles(a: TurnFile[], b: TurnFile[]) {
@@ -48,7 +50,7 @@ function sameFiles(a: TurnFile[], b: TurnFile[]) {
  */
 export function attachDelegatedFiles(
   tenant: Tenant,
-  childSlot: Slot,
+  childSlot: Pick<Slot, "chatId" | "delegationId">,
   childTurnId: string,
   files: TurnFile[],
 ): { chatId: string; turnId: string; files: TurnFile[] } | null {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 委派详情（规格 §4.4）：只读。没有输入框，没有「继续聊」；文件只能从卡片打开预览。
+/// 委派详情展示执行过程和产物，可从这里恢复中断的委派。
 /// 子会话只从 store.chats 里按 id 取来只读渲染，绝不 select（iPhone 的 activeId 永远是助理）。
 struct DelegationDetailSheet: View {
     let delegationId: String
@@ -90,6 +90,8 @@ struct DelegationDetailSheet: View {
         }
         processSection
         filesSection
+        if let reason = row.waitReason { AssistantMutedText(reason) }
+        DelegationQueueAction(item: row, fullWidth: true)
         stopSection(row)
     }
 

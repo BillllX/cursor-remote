@@ -4,6 +4,8 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { AgentOptions, RunResult } from "@cursor/sdk";
 import { BACKGROUND_TOOLS, promptWithModelFallback, resolvePreferredBackgroundModel } from "../assistant/background.ts";
+import { atomicWriteFileSync } from "../fsAtomic.ts";
+import { outputKeys } from "../outputClaims.ts";
 import { clip } from "../assistant/store.ts";
 import { cachedModels } from "../chat/models.ts";
 import { readControlledWeb } from "../assistant/webRead.ts";
@@ -446,6 +448,7 @@ const executeAgentPrompt: WorkspaceTaskExecutor = async ({ host, schedule, works
     `你是工作区「${schedule.workspaceKeySnapshot}」的定时任务执行器（任务名：${schedule.title}）。`,
     "请只读分析本工作区内的数据并按以下任务指令输出简明中文结论：",
     promptText,
+    schedule.activePeriod ? `本轮唯一统计月份为 ${schedule.activePeriod}。按该时区（${schedule.tz}）从月初（含）到次月月初（不含）筛选；不要用执行当天替代统计月份。列出数据来源、覆盖范围和缺失资料；缺数据就明确标注，不推测。` : "",
   ].join("\n\n");
 
   const timeoutMs = Math.max(10, Math.min(3600, Math.floor(schedule.payload.timeoutSeconds ?? 1200))) * 1000;
@@ -480,8 +483,24 @@ const executeAgentPrompt: WorkspaceTaskExecutor = async ({ host, schedule, works
       return { phase: "completed", status: "failed", summary: err, error: err };
     }
     const text = (res.result || "").trim();
+    let reportFiles: string[] | undefined;
+    if (schedule.activeOutputRelPath) {
+      if (!/\.md$/i.test(schedule.activeOutputRelPath)) throw new Error("分析报告的固定产物须以 .md 结尾。");
+      if (!text) return { phase: "completed", status: "failed", summary: "分析没有返回可交付内容。", error: "报告为空" };
+      const archive = schedule.activePeriod && schedule.activeRunId
+        ? `自动化报告/${schedule.id}/${schedule.activePeriod}-${schedule.activeRunId}.md`
+        : schedule.activeOutputRelPath;
+      const targets = [...new Set([schedule.activeOutputRelPath, archive])];
+      for (const path of targets) {
+        const [target] = outputKeys(workspacePath, [path]);
+        if (!target) throw new Error("报告路径不存在。");
+        const content = `# ${schedule.title}${schedule.activePeriod ? ` · ${schedule.activePeriod}` : ""}\n\n${text}\n`;
+        atomicWriteFileSync(target, content, { mkdir: true, fsync: true });
+      }
+      reportFiles = [archive];
+    }
     const kbLoaded = loadKbWorkspaceConfig(workspacePath, host.workspaceRoot);
-    if (schedule.payload.ingestToKb !== false && kbLoaded.ok && text) {
+    if (schedule.activeTrigger !== "backfill" && schedule.payload.ingestToKb !== false && kbLoaded.ok && text) {
       const fileName = `${schedule.title.replace(/[^\w\u4e00-\u9fa5.-]/g, "_")}_定时分析报告.md`;
       const submitted = submitDirectIngestBatch(host, {
         workspaceKeyOrId: schedule.workspaceId,
@@ -497,12 +516,14 @@ const executeAgentPrompt: WorkspaceTaskExecutor = async ({ host, schedule, works
         phase: "awaiting_ingest",
         batchIds: [submitted.batchId],
         preSummary: clip(text, 240),
+        updatedFiles: reportFiles,
       };
     }
     return {
       phase: "completed",
       status: "succeeded",
       summary: clip(text || "定时 AI 分析已完成", 500),
+      updatedFiles: reportFiles,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

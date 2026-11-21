@@ -18,7 +18,7 @@ private struct JieboWidgetProvider: TimelineProvider {
                 statusText: "小驳随时在",
                 unreadCount: 2,
                 todoCount: 3,
-                highlight: .init(kind: .todo, id: "preview", summary: "整理今天最重要的一件事"),
+                highlight: .init(kind: .todo, id: "preview", summary: "15:00 提醒提交报告"),
                 updatedAt: Date(),
                 staleAfter: Date().addingTimeInterval(WidgetSnapshot.staleInterval),
                 privacyMode: false
@@ -200,10 +200,10 @@ private struct JieboWidgetFamilyLayout: View {
                 .layoutPriority(1)
             HStack(spacing: 8) {
                 countBlock(
-                    title: "待办",
+                    title: "提醒",
                     value: entry.snapshot.todoCount,
                     url: todoURL,
-                    label: "打开待办，待办 \(entry.snapshot.todoCount) 项",
+                    label: "打开提醒，提醒 \(entry.snapshot.todoCount) 项",
                     fillsHeight: false,
                     font: countFont,
                     minHeight: 44
@@ -255,10 +255,10 @@ private struct JieboWidgetFamilyLayout: View {
                 .frame(width: leftWidth, height: proxy.size.height, alignment: .topLeading)
                 VStack(spacing: 10) {
                     countBlock(
-                        title: "待办",
+                        title: "提醒",
                         value: entry.snapshot.todoCount,
                         url: todoURL,
-                        label: "打开待办，待办 \(entry.snapshot.todoCount) 项",
+                        label: "打开提醒，提醒 \(entry.snapshot.todoCount) 项",
                         fillsHeight: true,
                         font: extraLargeCountFont,
                         minHeight: 60
@@ -304,7 +304,7 @@ private struct JieboWidgetFamilyLayout: View {
     private var mediumFooter: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Link(destination: todoURL) {
-                Text("待办 \(countText(entry.snapshot.todoCount))")
+                Text("提醒 \(countText(entry.snapshot.todoCount))")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(entry.snapshot.todoCount > 0 ? Sticker.cyan : Sticker.text)
                     .lineLimit(1)
@@ -312,7 +312,7 @@ private struct JieboWidgetFamilyLayout: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("打开待办，待办 \(entry.snapshot.todoCount) 项")
+            .accessibilityLabel("打开提醒，提醒 \(entry.snapshot.todoCount) 项")
             Spacer(minLength: 6)
             if !tight {
                 updatedLabel
@@ -323,7 +323,7 @@ private struct JieboWidgetFamilyLayout: View {
 
     private var smallFooter: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text("待办 \(countText(entry.snapshot.todoCount)) · 未读 \(countText(entry.snapshot.unreadCount))")
+            Text("提醒 \(countText(entry.snapshot.todoCount)) · 未读 \(countText(entry.snapshot.unreadCount))")
                 .foregroundStyle(Sticker.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -538,7 +538,7 @@ private struct JieboWidgetFamilyLayout: View {
     private var smallAccessibilityLabel: String {
         let stale = entry.snapshot.isStale ? "已过期，" : ""
         let summary = shouldHideSummary ? "" : "\(highlightSummary)，"
-        return "小驳，\(stale)\(summary)\(displayStatus)，待办 \(entry.snapshot.todoCount) 项，未读 \(entry.snapshot.unreadCount) 项"
+        return "小驳，\(stale)\(summary)\(displayStatus)，提醒 \(entry.snapshot.todoCount) 项，未读 \(entry.snapshot.unreadCount) 项"
     }
 
     private func countText(_ value: Int) -> String {
@@ -611,7 +611,7 @@ struct JieboAssistantWidget: Widget {
             JieboWidgetEntryView(entry: entry)
         }
         .configurationDisplayName("小驳助理")
-        .description("快速查看助理状态、待办与助理中心摘要。")
+        .description("快速查看助理状态、提醒与助理中心摘要。")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
     }
 }

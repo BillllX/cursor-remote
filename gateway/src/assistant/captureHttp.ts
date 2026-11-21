@@ -21,8 +21,8 @@ const MIME_RE = /^[\w.+-]{1,64}\/[\w.+-]{1,64}$/;
 const activeUploads = new Map<string, number>();
 const activeKeys = new Set<string>();
 
-type Intent = "总结" | "记住" | "建任务" | "稍后读" | "归档入库" | "自定义";
-const INTENTS = new Set<Intent>(["总结", "记住", "建任务", "稍后读", "归档入库", "自定义"]);
+type Intent = "总结" | "记住" | "建任务" | "设置提醒" | "稍后读" | "归档入库" | "自定义";
+const INTENTS = new Set<Intent>(["总结", "记住", "建任务", "设置提醒", "稍后读", "归档入库", "自定义"]);
 
 type CaptureInput = {
   clientId: string;

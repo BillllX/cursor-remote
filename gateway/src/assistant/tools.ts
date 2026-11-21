@@ -36,7 +36,7 @@ export type ToolHost = {
   chatId?: string;
   onMemoryWritten?: (entry: MemoryEntry) => void;
   onChanged?: () => void;
-  delegate?: (args: { workspace: string; task: string; title?: string }) => Promise<string>;
+  delegate?: (args: { workspace: string; task: string; title?: string; delegationId?: string; deliverable?: string; expectedFiles?: string[]; requiresFile?: boolean }) => Promise<string>;
   delegationStatus?: (id?: string) => string;
   /** 请用户确认后新建工作区；用户同意才会真正建 */
   createWorkspace?: (args: { name: string; reason: string }) => Promise<string>;
@@ -394,21 +394,9 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         }
         const route = personalWriteRoute(text, kind, validUntil);
         if (route.route === "todo") {
-          const todo = addTodo(ref, {
-            text,
-            due: route.due,
-            chatId: host.chatId,
-            source: role === "chat" ? "chat" : undefined,
-          });
-          if (!todo.ok) return { ok: false, error: todo.error };
-          if (!todo.duplicate) changed();
           return {
-            ok: true,
-            routed: "todo",
-            id: todo.value.id,
-            due: todo.value.due,
-            duplicate: todo.duplicate,
-            note: "这是还没到的安排，已记成待办，没有写进长期记忆。",
+            ok: false,
+            error: "这是未来安排。若用户需要一次提醒，请明确钟点与时区后使用 todo_add；若是日历事件，请使用日历工具。",
           };
         }
         const result = saveMemory(
@@ -700,15 +688,16 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
     );
     out.todo_add = tool(
       [
-        "加一条待办。due 可以是日期 YYYY-MM-DD；要到点提醒就写带时区的 ISO 时间，如 2026-10-03T09:00:00+08:00（不带时区会被拒绝）。",
-        "从对话里记下的，quote 填用户的原话。同一天已有同样的未完成待办时不会重复加，返回 duplicate=true。",
+        "设置一次性提醒。due 必须是含钟点和时区的 ISO 时间，如 2026-10-03T09:00:00+08:00。",
+        "从对话里记下的，quote 填用户的原话。同一时刻已有同样的提醒时不会重复加，返回 duplicate=true。",
       ].join(""),
-      { text: S("待办内容，一句话"), due: S("可选"), quote: S("可选，用户原话") },
-      ["text"],
+      { text: S("提醒内容，一句话"), due: S("带时区的 ISO 时间"), quote: S("可选，用户原话") },
+      ["text", "due"],
       (args) => {
         const result = addTodo(ref, {
           text: str(args.text),
-          due: str(args.due) || undefined,
+          due: str(args.due),
+          exactReminder: true,
           chatId: host.chatId,
           source: role === "chat" ? "chat" : undefined,
           quote: str(args.quote) || undefined,
@@ -739,7 +728,7 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       return result.ok ? { ok: true } : { ok: false, error: result.error };
     });
     out.todo_update = tool(
-      "改一条待办的内容或日期。due 规则同 todo_add，传空串表示去掉日期。",
+      "改一条待办的内容或日期。支持修改已有提醒或历史记录，传空串表示去掉日期。",
       { id: S("待办 id"), text: S("可选，新内容"), due: S("可选，新日期或时间") },
       ["id"],
       (args) => {
@@ -812,12 +801,28 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
       [
         "把一件事交给某个子工作区去做：在那里开一个关联的子会话执行任务，完成后汇报到收件箱。",
         role === "schedule" ? "后台委派只能读和分析，产出改动方案。" : "子会话可以直接改文件，不用再问用户批准；做完汇报到收件箱。",
-        "任务说明里只写完成任务必需的信息，不要带用户的个人记忆。",
+        "任务说明里只写完成任务必需的信息、不带个人记忆。明确交付物；修改已有交付时传 delegationId，沿用原子会话。",
         names.length ? `可用的子工作区：${names.join("、")}。` : "",
       ].join(""),
-      { workspace: S("子工作区名字"), task: S("完整的任务说明"), title: S("可选，简短标题") },
+      {
+        workspace: S("子工作区名字；续作时填原工作区"),
+        task: S("完整的任务说明；续作只需写本次补充要求"),
+        title: S("可选，简短标题"),
+        delegationId: S("可选，续作时填原委派 id"),
+        deliverable: S("可选，一句话描述用户要收到的交付"),
+        expectedFiles: { type: "array", items: { type: "string" }, description: "可选，用户指定的交付文件相对路径" },
+        requiresFile: { type: "boolean", description: "用户要求生成或修改文件时为 true；纯文字交付可省略" },
+      },
       ["workspace", "task"],
-      async (args) => host.delegate!({ workspace: str(args.workspace), task: str(args.task), title: str(args.title) || undefined }),
+      async (args) => host.delegate!({
+        workspace: str(args.workspace),
+        task: str(args.task),
+        title: str(args.title) || undefined,
+        delegationId: str(args.delegationId) || undefined,
+        deliverable: str(args.deliverable) || undefined,
+        expectedFiles: Array.isArray(args.expectedFiles) ? args.expectedFiles.filter((path): path is string => typeof path === "string") : undefined,
+        requiresFile: typeof args.requiresFile === "boolean" ? args.requiresFile : undefined,
+      }),
     );
     if (role === "chat" && host.createWorkspace) {
       out.create_workspace = tool(

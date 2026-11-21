@@ -1,3 +1,4 @@
+import { addTodo } from "../src/assistant/todos.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -349,11 +350,23 @@ test("知识库工作区与只读委派模式工具边界及置顶个人助理�
       }
     }
 
+    const noClock = await assistant.call("todo_add", { text: "没有钟点", due: "2026-11-20" });
+    assert.equal(noClock.payload.ok, false);
+    const legacyTodo = addTodo(assistant.tenant, { text: "周五复盘 Fintopia 归档看板", due: "2026-11-20" });
+    assert.ok(legacyTodo.ok);
     const addedTodo = await assistant.call("todo_add", {
       text: "周五复盘 Fintopia 归档看板",
-      due: "2026-11-20",
+      due: "2026-11-20T15:00:00+08:00",
     });
     assert.equal(addedTodo.payload.ok, true);
+    assert.notEqual(addedTodo.payload.id, legacyTodo.value.id);
+    assert.equal(addedTodo.payload.due, "2026-11-20T15:00:00+08:00");
+    const repeated = await assistant.call("todo_add", {
+      text: "周五复盘 Fintopia 归档看板",
+      due: "2026-11-20T07:00:00Z",
+    });
+    assert.equal(repeated.payload.id, addedTodo.payload.id);
+    assert.equal(repeated.payload.duplicate, true);
     const todos = await assistant.call("todo_list", {});
     assert.ok(JSON.stringify(todos.payload).includes("周五复盘 Fintopia 归档看板"));
 

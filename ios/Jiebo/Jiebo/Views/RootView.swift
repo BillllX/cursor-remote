@@ -240,7 +240,7 @@ struct CollapsedSidebarRail: View {
     var body: some View {
         VStack(spacing: 8) {
             railButton("sidebar.right", label: "展开侧栏", action: expand)
-            ForEach(ToolLayer.workTools) { layer in
+            ForEach(ToolLayer.workTools + (loopLive ? [.loop] : [])) { layer in
                 railButton(
                     layer.symbol,
                     label: marked(layer) ? "\(layer.title)，\(StatusLegendId.running.label)" : layer.title,

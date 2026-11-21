@@ -1,5 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { validTimeZone } from "../assistant/cron.ts";
+import { existsSync, statSync } from "node:fs";
+import { claimOutputs, outputKeys, releaseOutputs } from "../outputClaims.ts";
+import { ensureSafePathInWorkspace, loadKbWorkspaceConfig } from "./contract.ts";
+import { createHash, randomBytes } from "node:crypto";
+import { localParts, validTimeZone } from "../assistant/cron.ts";
 import { DEFAULT_TZ } from "../assistant/schedules.ts";
 import { assistantPath, clip, readJson, readJsonl, writeJsonl, type TenantRef } from "../assistant/store.ts";
 import { atomicWriteFileSync, withFileLockSync } from "../fsAtomic.ts";
@@ -63,13 +66,14 @@ function readSchedulesUnlocked(ref: TenantRef): SchedulesFile {
 }
 
 function writeSchedulesUnlocked(ref: TenantRef, data: SchedulesFile): void {
-  atomicWriteFileSync(schedulesFilePath(ref), `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  atomicWriteFileSync(schedulesFilePath(ref), `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600, fsync: true });
 }
 
 function appendRunRecordUnlocked(ref: TenantRef, record: WorkspaceScheduleRunRecord): void {
   const rows = readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(ref));
+  if (rows.some((row) => row.runId === record.runId)) return;
   rows.push(record);
-  writeJsonl(runsFilePath(ref), rows.slice(-MAX_RUN_HISTORY));
+  writeJsonl(runsFilePath(ref), rows.slice(-MAX_RUN_HISTORY), true);
 }
 
 export function listWorkspaceSchedules(
@@ -207,6 +211,12 @@ export function upsertWorkspaceSchedule(
     if (input.executorKind === "agent_prompt" && !mergedPayload.prompt?.trim()) {
       return { ok: false as const, error: "请填写分析指令" };
     }
+    try {
+      outputKeys(wsRef.path, [mergedPayload.outputRelPath, ...(mergedPayload.reportInputs ?? []), ...(mergedPayload.outputTargets ?? [])].filter((path): path is string => Boolean(path)));
+      if (input.executorKind === "agent_prompt" && mergedPayload.outputRelPath && !/\.md$/i.test(mergedPayload.outputRelPath)) throw new Error("分析报告的固定产物须以 .md 结尾。");
+      if ((mergedPayload.outputTargets?.length ?? 0) > 12) throw new Error("最多声明 12 项需要协调的产物。");
+      if (mergedPayload.reportInputs && mergedPayload.reportInputs.length > 12) throw new Error("最多声明 12 项月报资料。");
+    } catch (err) { return { ok: false as const, error: err instanceof Error ? err.message : "产物或资料路径无效。" }; }
     const enabled = input.enabled ?? prev?.enabled ?? true;
     const effectiveMode = input.scheduleMode ?? prev?.scheduleMode ?? "interval";
     const effectiveInterval = input.intervalMinutes !== undefined ? intervalMinutes : (prev?.intervalMinutes ?? 60);
@@ -425,7 +435,7 @@ function finalizeScheduleRunUnlocked(
   item: WorkspaceScheduleRecord,
   outcome: {
     runId: string;
-    trigger: "scheduled" | "manual";
+    trigger: "scheduled" | "manual" | "backfill";
     startedAt: number;
     finishedAt: number;
     status: WorkspaceScheduleRunStatus;
@@ -437,7 +447,7 @@ function finalizeScheduleRunUnlocked(
   },
 ): WorkspaceScheduleRecord {
   const nextFailures = outcome.status === "failed" ? (item.consecutiveFailures ?? 0) + 1 : 0;
-  const nextRunAt = item.enabled
+  const nextRunAt = outcome.trigger !== "scheduled" ? item.nextRunAt : item.enabled
     ? computeNextWorkspaceScheduleRunAt(
         {
           scheduleMode: item.scheduleMode,
@@ -453,10 +463,12 @@ function finalizeScheduleRunUnlocked(
 
   const updated: WorkspaceScheduleRecord = {
     ...item,
-    cursorState: outcome.nextCursorState ?? item.pendingCursorState ?? item.cursorState,
+    cursorState: outcome.trigger === "backfill" ? item.cursorState : outcome.nextCursorState ?? item.pendingCursorState ?? item.cursorState,
     state: "idle",
     activeRunId: undefined,
     activeTrigger: undefined,
+    activePeriod: undefined,
+    activeOutputRelPath: undefined,
     activeStartedAt: undefined,
     activeBatchIds: undefined,
     submittedBatchIds: undefined,
@@ -485,6 +497,7 @@ function finalizeScheduleRunUnlocked(
     title: item.title,
     executorKind: item.executorKind,
     trigger: outcome.trigger,
+    ...(item.activePeriod ? { period: item.activePeriod } : {}),
     startedAt: outcome.startedAt,
     finishedAt: outcome.finishedAt,
     durationMs: Math.max(0, outcome.finishedAt - outcome.startedAt),
@@ -498,6 +511,71 @@ function finalizeScheduleRunUnlocked(
   return updated;
 }
 
+function previousReportMonth(now: number, tz: string) {
+  const { year, month } = localParts(now, tz);
+  const prior = new Date(Date.UTC(year, month - 2, 1));
+  return prior.toISOString().slice(0, 7);
+}
+
+type BackfillRequest = { period: string; token: string; newVersion: boolean };
+function buildBackfillPreview(host: DropTenantHost, item: WorkspaceScheduleRecord, workspacePath: string, period: string, now: number) {
+  if (item.executorKind !== "agent_prompt" || item.scheduleMode !== "monthly") return { ok: false as const, error: "只有按月执行的分析报告支持按期补跑。" };
+  if (!/^20[0-9]{2}-(0[1-9]|1[0-2])$/.test(period) || period > previousReportMonth(now, item.tz)) {
+    return { ok: false as const, error: "请选择已经结束的统计月份。" };
+  }
+  const history = readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(host))
+    .filter((row) => row.scheduleId === item.id && row.period === period && row.status !== "failed");
+  const files = [...new Set(history.flatMap((row) => row.updatedFiles ?? []))].filter((path) => {
+    const found = ensureSafePathInWorkspace(workspacePath, path, { expectLeaf: "file" });
+    return found.ok && existsSync(found.absPath);
+  });
+  const sources = (item.payload.reportInputs ?? []).map((path) => {
+    const found = ensureSafePathInWorkspace(workspacePath, path, { expectLeaf: "file" });
+    if (!found.ok) return { path };
+    try {
+      const stat = statSync(found.absPath);
+      return { path, size: stat.size, mtime: stat.mtimeMs };
+    } catch { return { path }; }
+  });
+  const missingInputs = sources.filter((source) => source.mtime === undefined).map((source) => source.path);
+  const versions = history.length;
+  const token = createHash("sha256").update(JSON.stringify([item.id, item.updatedAt, period, history.map((row) => row.runId), files, sources])).digest("hex");
+  return { ok: true as const, preview: { scheduleId: item.id, period, token, versions, files, missingInputs, inputsDeclared: Boolean(item.payload.reportInputs?.length) } };
+}
+
+export function previewWorkspaceBackfill(host: DropTenantHost, id: string, workspace: string | undefined, period: string) {
+  const item = listWorkspaceSchedules(host, { workspace }).find((row) => row.id === id);
+  if (!item) return { ok: false as const, error: "未找到这条月报规则。" };
+  const target = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
+  if (!target) return { ok: false as const, error: "原工作区已不可用。" };
+  return buildBackfillPreview(host, item, target.path, period, Date.now());
+}
+
+function archivedReport(item: Pick<WorkspaceScheduleRecord, "id" | "activePeriod" | "activeRunId">) {
+  return item.activePeriod && item.activeRunId ? `自动化报告/${item.id}/${item.activePeriod}-${item.activeRunId}.md` : undefined;
+}
+
+function scheduleOutputKeys(item: WorkspaceScheduleRecord, path: string) {
+  const paths = [item.activeOutputRelPath || item.payload.outputRelPath].filter((file): file is string => Boolean(file));
+  const archive = archivedReport(item);
+  if (archive) paths.push(archive);
+  if (item.activeTrigger !== "backfill") paths.push(...(item.payload.outputTargets ?? []));
+  return outputKeys(path, paths);
+}
+
+export function restoreScheduleOutputClaims(host: DropTenantHost) {
+  for (const item of listWorkspaceSchedules(host)) {
+    if (item.state !== "running_step2" || !item.activeRunId) continue;
+    const target = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
+    if (target) {
+      try {
+        claimOutputs(scheduleOutputKeys(item, target.path), item.activeRunId, () =>
+          readSchedulesUnlocked(host).items.some((row) => row.activeRunId === item.activeRunId));
+      } catch (error) { log.warn("恢复产物占用失败", item.id, error); }
+    }
+  }
+}
+
 /**
  * 触发执行单条定时任务（支持后台扫描器自动触发或用户在面板/对话中点击「立即运行」）：
  * 1. 在文件锁 + 内存 Set 双重互斥下，仅当 `state === "idle"` 时才抢占为 `running_step1`；
@@ -508,7 +586,7 @@ function finalizeScheduleRunUnlocked(
 export async function triggerWorkspaceScheduleNow(
   host: DropTenantHost,
   idOrTitle: string,
-  opts: { trigger?: "scheduled" | "manual"; workspace?: string; now?: number; onClaim?: (record: WorkspaceScheduleRecord) => void } = {},
+  opts: { trigger?: "scheduled" | "manual" | "backfill"; workspace?: string; now?: number; onClaim?: (record: WorkspaceScheduleRecord) => void; backfill?: BackfillRequest } = {},
 ): Promise<{
   ok: boolean;
   schedule?: WorkspaceScheduleRecord;
@@ -543,11 +621,30 @@ export async function triggerWorkspaceScheduleNow(
       return { ok: false as const, error: `任务关联的工作区不存在：${cur.workspaceKeySnapshot}` };
     }
 
+    const period = opts.backfill?.period ?? (trigger === "scheduled" && cur.executorKind === "agent_prompt" && cur.scheduleMode === "monthly" ? previousReportMonth(cur.nextRunAt ?? now, cur.tz) : undefined);
+    if (trigger === "backfill") {
+      if (!opts.backfill || !period) return { ok: false as const, error: "请先检查补跑月份。" };
+      const checked = buildBackfillPreview(host, cur, wsRef.path, period, now);
+      if (!checked.ok) return checked;
+      if (checked.preview.token !== opts.backfill.token) return { ok: false as const, error: "该期的资料或结果已变化，请重新检查。" };
+      if (checked.preview.missingInputs.length) return { ok: false as const, error: "缺少已声明的月报资料，请补齐后再运行。" };
+      if (checked.preview.versions && !opts.backfill.newVersion) return { ok: false as const, error: "该期已有结果，请明确选择生成新版本。" };
+    }
     const runId = `wsrun_${Date.now()}_${randomBytes(4).toString("hex")}`;
+    const activeOutputRelPath = period
+      ? trigger !== "backfill" && cur.payload.outputRelPath || `自动化报告/${cur.id}/${period}-${runId}.md`
+      : cur.payload.outputRelPath;
+    let keys: string[];
+    try { keys = scheduleOutputKeys({ ...cur, activeOutputRelPath, activePeriod: period, activeRunId: runId, activeTrigger: trigger }, wsRef.path); }
+    catch (err) { return { ok: false as const, error: err instanceof Error ? err.message : "产物路径无效。" }; }
+    const active = () => inFlightScheduleKeys.has(flightKey) || readSchedulesUnlocked(host).items.some((row) => row.activeRunId === runId && row.state === "running_step2");
+    const holding = claimOutputs(keys, runId, active);
     const claimed: WorkspaceScheduleRecord = {
       ...cur,
       workspaceKeySnapshot: wsRef.key,
-      state: "running_step1",
+      state: holding ? "running_step1" : "waiting_output",
+      activeOutputRelPath,
+      activePeriod: period,
       activeRunId: runId,
       activeTrigger: trigger,
       activeStartedAt: now,
@@ -562,20 +659,39 @@ export async function triggerWorkspaceScheduleNow(
     file.items[idx] = claimed;
     writeSchedulesUnlocked(host, file);
     inFlightScheduleKeys.add(flightKey);
-    return { ok: true as const, claimed, workspacePath: wsRef.path, flightKey, runId };
+    return { ok: true as const, claimed, workspacePath: wsRef.path, flightKey, runId, keys, active };
   });
 
   if (!claimRes.ok) {
     return { ok: false, message: claimRes.error, error: claimRes.error };
   }
 
-  const { claimed, workspacePath, flightKey, runId } = claimRes;
+  const { claimed, workspacePath, flightKey, runId, keys, active } = claimRes;
   const executor = getWorkspaceTaskExecutor(claimed.executorKind);
 
   try {
     opts.onClaim?.(claimed);
-    const outcome = executor
-      ? await executor({ host, schedule: claimed, workspacePath, now })
+    if (claimed.state === "waiting_output") {
+      while (!claimOutputs(keys, runId, active)) {
+        if (!inFlightScheduleKeys.has(flightKey) || Date.now() > (claimed.leaseUntil ?? 0)) throw new Error("等待同一产物更新超时。");
+        await new Promise<void>((resolve) => { setTimeout(resolve, 1000).unref(); });
+      }
+      const ready = withFileLockSync(schedulesLockPath(host), () => {
+        const file = readSchedulesUnlocked(host);
+        const current = file.items.find((item) => item.id === claimed.id && item.activeRunId === runId && item.state === "waiting_output");
+        if (!current) return false;
+        current.state = "running_step1";
+        current.leaseUntil = Date.now() + STEP1_LEASE_MS;
+        writeSchedulesUnlocked(host, file);
+        return true;
+      });
+      if (!ready) throw new Error("这次运行已被中断。");
+    }
+    const missing = claimed.activePeriod && (claimed.payload.reportInputs ?? []).find((path) =>
+      !ensureSafePathInWorkspace(workspacePath, path, { expectLeaf: "file" }).ok);
+    const outcome = missing
+      ? { phase: "completed" as const, status: "failed" as const, summary: `缺少声明的月报资料：${missing}`, error: `缺少声明的月报资料：${missing}` }
+      : executor ? await executor({ host, schedule: claimed, workspacePath, now })
       : {
           phase: "completed" as const,
           status: "failed" as const,
@@ -723,19 +839,22 @@ export async function triggerWorkspaceScheduleNow(
     return { ok: false, schedule: failedRec, message: `任务执行失败：${errMsg}`, error: errMsg };
   } finally {
     inFlightScheduleKeys.delete(flightKey);
+    if (!active()) releaseOutputs(keys, runId);
   }
 }
 
 /** UI 在记录持久化后即可收到回执，执行结果由运行记录刷新。 */
-export function startWorkspaceScheduleForUi(host: DropTenantHost, id: string, workspace?: string):
+export function startWorkspaceScheduleForUi(host: DropTenantHost, id: string, workspace?: string, backfill?: BackfillRequest):
   Promise<{ ok: true; message: string } | { ok: false; error: string }> {
   return new Promise((resolve, reject) => {
     let claimed = false;
     void triggerWorkspaceScheduleNow(host, id, {
       workspace,
+      backfill,
+      trigger: backfill ? "backfill" : "manual",
       onClaim(record) {
         claimed = true;
-        resolve({ ok: true, message: `已开始运行《${record.title}》，可在运行记录查看进度。` });
+        resolve({ ok: true, message: record.state === "waiting_output" ? `《${record.title}》已排队，正在等待同一产物。` : `已开始运行《${record.title}》，可在运行记录查看进度。` });
       },
     }).then(
       (result) => {
@@ -879,17 +998,30 @@ export function reconcileStaleWorkspaceSchedules(host: DropTenantHost, now = Dat
       const flightKey = `${host.id}:${item.id}`;
       const leaseExpired = Boolean(item.leaseUntil && now > item.leaseUntil);
 
-      if (item.state === "running_step1") {
-        if (!inFlightScheduleKeys.has(flightKey) || leaseExpired) {
-          inFlightScheduleKeys.delete(flightKey);
+      if (item.state === "running_step1" || item.state === "waiting_output") {
+        if (!inFlightScheduleKeys.has(flightKey)) {
+          const archive = archivedReport(item);
+          const workspace = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
+          const saved = archive && workspace ? ensureSafePathInWorkspace(workspace.path, archive, { expectLeaf: "file" }) : undefined;
+          let savedReport = false;
+          if (saved?.ok) {
+            try { savedReport = statSync(saved.absPath).size > 0; } catch { /* 文件还未交付 */ }
+          }
+          const known = item.activeRunId && readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(host)).find((row) => row.runId === item.activeRunId);
+          const needsIngest = Boolean(savedReport && workspace && item.activeTrigger !== "backfill" &&
+            item.payload.ingestToKb !== false && loadKbWorkspaceConfig(workspace.path, host.workspaceRoot).ok);
           file.items[i] = finalizeScheduleRunUnlocked(host, item, {
             runId: item.activeRunId ?? `wsrun_${now}`,
             trigger: item.activeTrigger ?? "scheduled",
             startedAt: item.activeStartedAt ?? now,
-            finishedAt: now,
-            status: "failed",
-            summary: leaseExpired ? "任务第一阶段执行超时，已自动释放锁" : "网关进程重启恢复，已重置中断任务锁",
-            error: leaseExpired ? "step1_lease_expired" : "process_restarted",
+            finishedAt: known ? known.finishedAt : now,
+            status: known ? known.status : savedReport ? needsIngest ? "partial" : "succeeded" : "failed",
+            summary: known ? known.summary : savedReport
+              ? needsIngest ? "已找回本期报告；归档状态尚未确认，请核对后再处理。" : "网关重启后已找回本期报告，无需重跑。"
+              : item.state === "waiting_output" ? "网关重启，排队中的运行尚未开始。" : "网关重启，运行中断。",
+            updatedFiles: known ? known.updatedFiles : savedReport && archive ? [archive] : undefined,
+            batchIds: known ? known.batchIds : undefined,
+            error: known ? known.error : savedReport ? undefined : "process_restarted",
           });
           mutated = true;
           recovered += 1;

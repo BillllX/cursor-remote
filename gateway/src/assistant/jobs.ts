@@ -204,7 +204,9 @@ export async function runEpisodes(ref: TenantRef, runner: JobRunner, now = Date.
 
 export function briefPrompt(ref: TenantRef, now = Date.now(), tz = DEFAULT_TZ) {
   const day = describeLocal(now, tz).slice(0, 10);
-  const todos = listTodos(ref).map((todo) => `- ${todo.text}${todo.due ? `（${todo.due}）` : ""}`);
+  const reminders = listTodos(ref)
+    .filter((todo) => todo.remindAt && todo.remindAt >= now && todo.remindAt - now < 36 * 3_600_000)
+    .map((todo) => `- ${todo.text}（${todo.due}）`);
   const schedules = listSchedules(ref)
     .filter((row) => row.enabled && row.nextAt && row.nextAt - now < 36 * 3_600_000 && row.kind !== "brief")
     .map((row) => `- ${describeLocal(row.nextAt!, row.tz).slice(11)} ${row.title}`);
@@ -215,11 +217,11 @@ export function briefPrompt(ref: TenantRef, now = Date.now(), tz = DEFAULT_TZ) {
   const core = readCore(ref).fields;
   return [
     `任务：给用户写 ${day} 的每日简报。`,
-    "分三段，段与段之间空一行：今天要做的（待办和日程）、需要你处理的（收件箱里的待批和未读）、提醒（近况里今天相关的事）。",
+    "分三段，段与段之间空一行：今天要关注的（一次提醒和定时）、需要你处理的（收件箱里的待批和未读）、提醒（近况里今天相关的事）。",
     "每段最多 5 条，没有就写“无”。可以用 memory_search 查和今天相关的记忆。不要编造。",
     "",
-    "待办：",
-    todos.join("\n") || "（无）",
+    "一次提醒：",
+    reminders.join("\n") || "（无）",
     "今天和明天的日程：",
     schedules.join("\n") || "（无）",
     "收件箱未读：",
