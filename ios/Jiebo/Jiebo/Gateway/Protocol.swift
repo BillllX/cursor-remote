@@ -844,7 +844,7 @@ struct AssistantWorkspaceRun: Sendable, Hashable {
                 }
         } ?? []
         return Self(runId: id, scheduleId: schedule, workspaceKey: workspace,
-                    status: row["status"]?.string ?? "failed", files: files)
+                    status: row["status"]?.string ?? "", files: files)
     }
 }
 
@@ -868,11 +868,30 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var workspaceRun: AssistantWorkspaceRun? = nil
     var capture: AssistantCaptureSource?
 
+    var effectiveAttention: String? {
+        switch workspaceRun?.status {
+        case "succeeded", "no_change": return "notice"
+        case "failed", "partial", "blocked": return "recovery"
+        default: return attention ?? (kind == "run" ? "recovery" : nil)
+        }
+    }
+
+    var requiresRecovery: Bool { effectiveAttention == "recovery" }
+
+    var runStatusTitle: String {
+        if requiresRecovery { return "需要恢复" }
+        switch workspaceRun?.status {
+        case "succeeded": return "已完成"
+        case "no_change": return "无变动"
+        default: return "运行结果"
+        }
+    }
+
     var needsAttention: Bool {
         guard !resolved, snoozedUntil == nil else { return false }
-        if let attention { return attention != "notice" }
+        if let effectiveAttention { return effectiveAttention != "notice" }
         switch kind {
-        case "approval", "reminder", "run": return true
+        case "approval", "reminder": return true
         case "info": return actionPrompt != nil || title == "Apple 设备未连接"
         case "delegation": return !title.hasPrefix("委派完成")
         default: return false

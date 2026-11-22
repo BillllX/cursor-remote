@@ -126,7 +126,7 @@ describe("助理投影 revision", () => {
 
   test("旧 revision 文件按投影 schema 只迁移并 bump 一次", () => {
     const tenant = ref("schema-migration");
-    writeJson(assistantPath(tenant, "revision.json"), { revision: 8 });
+    writeJson(assistantPath(tenant, "revision.json"), { schema: ASSISTANT_PROJECTION_SCHEMA - 1, revision: 8 });
     assert.equal(readAssistantRevision(tenant), 9);
     assert.equal(readAssistantRevision(tenant), 9);
     assert.deepEqual(JSON.parse(readFileSync(assistantPath(tenant, "revision.json"), "utf8")), {

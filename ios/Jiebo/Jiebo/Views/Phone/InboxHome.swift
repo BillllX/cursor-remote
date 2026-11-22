@@ -253,7 +253,7 @@ struct InboxHome: View {
                             .foregroundStyle(item.read ? JieboColor.ink2 : JieboColor.ink)
                             .multilineTextAlignment(.leading)
                             .lineLimit(2)
-                        kindTag(item.kind)
+                        kindTag(item)
                         if item.needsAttention { Text("待处理").font(JieboFont.text(.caption)).foregroundStyle(JieboColor.warnFg) }
 
                     }
@@ -282,8 +282,8 @@ struct InboxHome: View {
     }
 
     @ViewBuilder
-    private func kindTag(_ kind: String) -> some View {
-        switch kind {
+    private func kindTag(_ item: AssistantInboxItem) -> some View {
+        switch item.kind {
         case "approval":
             StatusTag(text: "待批", fg: JieboColor.warnFg, bg: JieboColor.warnBg)
         case "delegation":
@@ -293,7 +293,9 @@ struct InboxHome: View {
         case "brief":
             StatusTag(text: "简报", fg: JieboColor.ink2, bg: JieboColor.mist)
         case "run":
-            StatusTag(text: "需要恢复", fg: JieboColor.warnFg, bg: JieboColor.warnBg)
+            StatusTag(text: item.runStatusTitle,
+                      fg: item.requiresRecovery ? JieboColor.warnFg : JieboColor.ink2,
+                      bg: item.requiresRecovery ? JieboColor.warnBg : JieboColor.mist)
         case "memory":
             StatusTag(text: "记忆", fg: JieboColor.ink2, bg: JieboColor.mist)
         default:
@@ -306,7 +308,7 @@ struct InboxHome: View {
     }
 
     private func category(_ item: AssistantInboxItem) -> String {
-        switch item.attention {
+        switch item.effectiveAttention {
         case "confirmation": return "待确认"
         case "content": return "待处理内容"
         case "reminder": return "到期提醒"
@@ -324,7 +326,7 @@ struct InboxHome: View {
         if item.decisionKind != nil || item.kind == "approval" { return "查看申请" }
         if item.actionPrompt != nil { return "查看内容" }
         switch item.kind {
-        case "run": return "查看原因"
+        case "run": return item.requiresRecovery ? "查看原因" : "查看结果"
         case "delegation": return "查看委派通知"
         case "memory": return "查看记忆通知"
         case "reminder": return "查看提醒"

@@ -3,7 +3,7 @@ import { assistantPath, readJson, writeJson, type TenantRef } from "./store.ts";
 type StoredRevision = { schema?: unknown; revision?: unknown };
 
 /** 构成 AssistantState 的字段或语义变化时递增；部署后每个租户只迁移、bump 一次。 */
-export const ASSISTANT_PROJECTION_SCHEMA = 2;
+export const ASSISTANT_PROJECTION_SCHEMA = 3;
 
 const validRevision = (value: unknown): value is number =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0;

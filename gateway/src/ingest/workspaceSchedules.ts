@@ -14,6 +14,7 @@ import { listIngestQueue } from "./queue.ts";
 import type { DropTenantHost } from "./tokens.ts";
 import { rollbackWecomWatchLedgerOnBatchFailed } from "./wecomSource.ts";
 import { getWorkspaceTaskExecutor } from "./workspaceScheduleExecutors.ts";
+import { WORKSPACE_RESULT_KEY_PREFIX, workspaceScheduleRunsPath } from "./workspaceScheduleResult.ts";
 import {
   computeNextWorkspaceScheduleRunAt,
   normalizeActiveHours,
@@ -31,7 +32,6 @@ export * from "./workspaceScheduleTypes.ts";
 export * from "./workspaceScheduleExecutors.ts";
 
 const SCHEDULES_FILENAME = "workspace-schedules.json";
-const RUNS_FILENAME = "workspace-schedule-runs.jsonl";
 const MAX_SCHEDULES_PER_TENANT = 100;
 const MAX_RUN_HISTORY = 500;
 const STEP1_LEASE_MS = 65 * 60_000;
@@ -54,10 +54,6 @@ function schedulesLockPath(ref: TenantRef): string {
   return assistantPath(ref, `${SCHEDULES_FILENAME}.lock`);
 }
 
-function runsFilePath(ref: TenantRef): string {
-  return assistantPath(ref, RUNS_FILENAME);
-}
-
 function readSchedulesUnlocked(ref: TenantRef): SchedulesFile {
   const raw = readJson<Partial<SchedulesFile>>(schedulesFilePath(ref), { version: 1, items: [] });
   const items = Array.isArray(raw?.items)
@@ -71,10 +67,10 @@ function writeSchedulesUnlocked(ref: TenantRef, data: SchedulesFile): void {
 }
 
 function appendRunRecordUnlocked(ref: TenantRef, record: WorkspaceScheduleRunRecord): void {
-  const rows = readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(ref));
+  const rows = readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(ref));
   if (rows.some((row) => row.runId === record.runId)) return;
   rows.push(record);
-  writeJsonl(runsFilePath(ref), rows.slice(-MAX_RUN_HISTORY), true);
+  writeJsonl(workspaceScheduleRunsPath(ref), rows.slice(-MAX_RUN_HISTORY), true);
 }
 
 export function listWorkspaceSchedules(
@@ -98,7 +94,7 @@ export function listWorkspaceScheduleRuns(
   opts?: { workspace?: string; scheduleId?: string; limit?: number },
 ): WorkspaceScheduleRunRecord[] {
   const limit = Math.max(1, Math.min(100, Math.floor(opts?.limit ?? 30)));
-  const rows = readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(host));
+  const rows = readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(host));
   const q = opts?.workspace?.trim();
   const resolved = q && q !== "__all__" ? host.resolveWorkspace(q) : null;
   const filtered = rows.filter((r) => {
@@ -518,8 +514,7 @@ function finalizeScheduleRunUnlocked(
     kind: "run",
     title: item.title,
     body: outcome.error || outcome.summary,
-    attention: outcome.status === "failed" || outcome.status === "partial" ? "recovery" : "notice",
-    key: `workspace-result:${outcome.runId}`,
+    key: `${WORKSPACE_RESULT_KEY_PREFIX}${outcome.runId}`,
     workspaceRun: {
       runId: outcome.runId, scheduleId: item.id, workspaceKey: workspace?.key ?? item.workspaceKeySnapshot,
       status: outcome.status, files,
@@ -540,7 +535,7 @@ function buildBackfillPreview(host: DropTenantHost, item: WorkspaceScheduleRecor
   if (!/^20[0-9]{2}-(0[1-9]|1[0-2])$/.test(period) || period > previousReportMonth(now, item.tz)) {
     return { ok: false as const, error: "请选择已经结束的统计月份。" };
   }
-  const history = readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(host))
+  const history = readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(host))
     .filter((row) => row.scheduleId === item.id && row.period === period && row.status !== "failed");
   const files = [...new Set(history.flatMap((row) => row.updatedFiles ?? []))].filter((path) => {
     const found = ensureSafePathInWorkspace(workspacePath, path, { expectLeaf: "file" });
@@ -1024,7 +1019,7 @@ export function reconcileStaleWorkspaceSchedules(host: DropTenantHost, now = Dat
           if (saved?.ok) {
             try { savedReport = statSync(saved.absPath).size > 0; } catch { /* 文件还未交付 */ }
           }
-          const known = item.activeRunId && readJsonl<WorkspaceScheduleRunRecord>(runsFilePath(host)).find((row) => row.runId === item.activeRunId);
+          const known = item.activeRunId && readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(host)).find((row) => row.runId === item.activeRunId);
           const needsIngest = Boolean(savedReport && workspace && item.activeTrigger !== "backfill" &&
             item.payload.ingestToKb !== false && loadKbWorkspaceConfig(workspace.path, host.workspaceRoot).ok);
           file.items[i] = finalizeScheduleRunUnlocked(host, item, {

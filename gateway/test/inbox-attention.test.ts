@@ -1,9 +1,49 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { postInbox, listInbox, markInboxRead } from "../src/assistant/inbox.ts";
+import { postInbox, listInbox, markInboxRead, type InboxItem } from "../src/assistant/inbox.ts";
+import { assistantPath, writeJson, writeJsonl } from "../src/assistant/store.ts";
+import { workspaceScheduleRunsPath } from "../src/ingest/workspaceScheduleResult.ts";
+
+test("旧工作区运行通知按同一次运行兼容投影，原始通知与失败历史保持完整", () => {
+  const ref = { id: "test", stateDir: mkdtempSync(join(tmpdir(), "inbox-workspace-run-")) };
+  try {
+    const items: InboxItem[] = [
+      {
+        id: "script", kind: "run", title: "投诉台账刷新", createdAt: 100, read: true, resolved: true,
+        key: "workspace-result:wsrun_script", attention: "recovery",
+        workspaceRun: { runId: "wsrun_script", scheduleId: "script-rule", workspaceKey: "业务",
+          status: "succeeded", files: ["运行状态.json"] },
+        body: '{"runId":"脚本运行号","说明":"尚未保存完…',
+      },
+      { id: "check", kind: "run", title: "巡检", body: "已巡检 13 份关注文件，均无新变动",
+        createdAt: 200, read: false, key: "workspace-result:wsrun_check" },
+      { id: "failed", kind: "run", title: "巡检失败", body: "连接失败", createdAt: 300, read: true,
+        key: "workspace-result:wsrun_failed", attention: "notice" },
+      { id: "blocked", kind: "run", title: "后台任务没有运行", body: "模型不可用", createdAt: 400, read: false,
+        key: "model-missing:check", attention: "recovery" },
+    ];
+    const inboxPath = assistantPath(ref, "inbox.json");
+    writeJson(inboxPath, { items });
+    const runsPath = workspaceScheduleRunsPath(ref);
+    writeJsonl(runsPath, [
+      { runId: "wsrun_script", scheduleId: "script-rule", executorKind: "workspace_script", status: "succeeded" },
+      { runId: "wsrun_check", scheduleId: "check-rule", executorKind: "wecom_watch_sync", status: "no_change" },
+      { runId: "wsrun_failed", scheduleId: "check-rule", executorKind: "wecom_watch_sync", status: "failed" },
+    ]);
+    const before = [inboxPath, runsPath].map((path) => readFileSync(path, "utf8"));
+    const [blocked, failed, check, script] = listInbox(ref);
+    assert.deepEqual(script, { ...items[0], attention: "notice", body: "脚本执行成功。可查看本次运行记录。" });
+    assert.deepEqual(check, { ...items[1], attention: "notice" });
+    assert.deepEqual(failed, { ...items[2], attention: "recovery" });
+    assert.deepEqual(blocked, items[3]);
+    assert.deepEqual([inboxPath, runsPath].map((path) => readFileSync(path, "utf8")), before);
+  } finally {
+    rmSync(ref.stateDir, { recursive: true, force: true });
+  }
+});
 
 test("reading does not resolve an actionable notification; resolution survives reload", () => {
   const ref = { id: "test", stateDir: mkdtempSync(join(tmpdir(), "inbox-attention-")) };

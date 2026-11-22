@@ -20,6 +20,7 @@ import {
 import { submitDirectIngestBatch } from "./queue.ts";
 import { checkAndOptionallySyncWecomItems, ingestWecomMailToKb, searchWecomResources } from "./wecomSource.ts";
 import type { WorkspaceScheduleExecutorKind, WorkspaceTaskExecutor } from "./workspaceScheduleTypes.ts";
+import { summarizeSuccessfulScriptOutput } from "./workspaceScheduleResult.ts";
 
 export type ScheduleAgentPromptDeps = {
   apiKey: () => string;
@@ -423,7 +424,7 @@ const executeWorkspaceScript: WorkspaceTaskExecutor = async ({ host, schedule, w
   return {
     phase: "completed",
     status: "succeeded",
-    summary: clip(execRes.stdout || `脚本 ${relScript} 执行成功`, 300),
+    summary: summarizeSuccessfulScriptOutput(execRes.stdout || `脚本 ${relScript} 执行成功`),
     ...(payload.outputRelPath ? { updatedFiles: [payload.outputRelPath.trim()] } : {}),
     nextCursorState: nextCursor,
   };

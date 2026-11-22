@@ -62,7 +62,7 @@ struct AssistantReceipt: Identifiable, Hashable {
                 $0.kind == "file" && $0.sha != nil && $0.sourceChatId != nil && $0.provenance?.inboxId == item.id
             }
             return AssistantReceipt(id: "inbox:\(item.id)", kind: item.kind, title: item.title, summary: item.body,
-                                    createdAt: item.createdAt, needsAttention: item.attention == "recovery" || item.workspaceRun?.status == "failed" || item.workspaceRun?.status == "partial",
+                                    createdAt: item.createdAt, needsAttention: item.requiresRecovery,
                                     delegationId: item.delegationId, inboxId: item.id,
                                     artifact: artifact, workspaceRun: item.workspaceRun)
         }

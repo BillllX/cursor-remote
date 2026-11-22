@@ -1,4 +1,12 @@
-import { assistantPath, clip, newId, readJson, writeJson, type TenantRef } from "./store.ts";
+import { assistantPath, clip, newId, readJson, readJsonl, writeJson, type TenantRef } from "./store.ts";
+import {
+  isStructuredScriptOutput,
+  summarizeSuccessfulScriptOutput,
+  WORKSPACE_RESULT_KEY_PREFIX,
+  workspaceRunAttention,
+  workspaceScheduleRunsPath,
+} from "../ingest/workspaceScheduleResult.ts";
+import type { WorkspaceScheduleRunRecord, WorkspaceScheduleRunStatus } from "../ingest/workspaceScheduleTypes.ts";
 import { log } from "../log.ts";
 
 export type InboxKind = "approval" | "delegation" | "reminder" | "brief" | "run" | "memory" | "info";
@@ -28,7 +36,7 @@ export type InboxItem = {
     runId: string;
     scheduleId: string;
     workspaceKey: string;
-    status: "succeeded" | "no_change" | "partial" | "failed";
+    status: WorkspaceScheduleRunStatus;
     files: string[];
   };
   /** 捕获入口已校验的结构化字段；投影只能读这里，不能从正文反解析 URL。 */
@@ -64,17 +72,39 @@ function file(ref: TenantRef) {
 }
 
 export function listInbox(ref: TenantRef, limit = 100): InboxItem[] {
+  let runsById: Map<string, WorkspaceScheduleRunRecord> | undefined;
   return readJson<InboxFile>(file(ref), { items: [] })
     .items.slice(-limit)
     .reverse()
     .map((item) => {
-      // Older persisted notifications have stable server-issued keys, but no structured decision.
+      // 旧审批通知只有稳定的服务端幂等键。
       if (!item.decision && item.kind === "approval" && item.key) {
         if (item.key.startsWith("proposal:")) item.decision = { kind: "proposal", id: item.key.slice(9) };
         const skill = /^skill-proposal:(.+):(\d+)$/.exec(item.key);
         if (skill) item.decision = { kind: "skill", id: skill[1]!, rev: Number(skill[2]) };
         const wx = /^wxbind:([^:]+):(.+)$/.exec(item.key);
         if (wx) item.decision = { kind: "wechat", id: wx[1]!, openId: wx[2]! };
+      }
+      if (item.kind === "run") {
+        const workspaceRun = item.workspaceRun;
+        const status = workspaceRun?.status;
+        if (status) item.attention = workspaceRunAttention(status);
+
+        // 按同一次运行的幂等键关联历史，保留通知 ID、已读、归档与原始记录。
+        const key = item.key;
+        if (key?.startsWith(WORKSPACE_RESULT_KEY_PREFIX) &&
+            (!status || (status === "succeeded" && isStructuredScriptOutput(item.body)))) {
+          runsById ??= new Map(readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(ref))
+            .map((run) => [run.runId, run]));
+          const run = runsById.get(key.slice(WORKSPACE_RESULT_KEY_PREFIX.length));
+          if (run && (!workspaceRun || (workspaceRun.runId === run.runId &&
+              workspaceRun.scheduleId === run.scheduleId && status === run.status))) {
+            item.attention = workspaceRunAttention(run.status);
+            if (run.status === "succeeded" && run.executorKind === "workspace_script") {
+              item.body = summarizeSuccessfulScriptOutput(item.body);
+            }
+          }
+        }
       }
       return item;
     });
@@ -96,6 +126,7 @@ export function postInbox(
   const item: InboxItem = {
     ...input,
     attention:
+      (input.kind === "run" && input.workspaceRun ? workspaceRunAttention(input.workspaceRun.status) : undefined) ??
       input.attention ??
       (input.kind === "approval"
         ? "confirmation"

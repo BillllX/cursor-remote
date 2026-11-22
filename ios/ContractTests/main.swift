@@ -2233,20 +2233,46 @@ func checkAssistantReceipts() -> [String] {
         return ["结果回执：无法建立最小状态"]
     }
     let item = AssistantInboxItem(id: "notice", kind: "run", title: "投诉巡检", body: "未发现变化",
-                                 createdAt: now, read: false)
+                                 createdAt: now, read: false, attention: "notice")
     state.inbox = [item]
     let noFile = AssistantReceipt.results(in: state, now: now).first
     if noFile?.primaryTitle != "查看结果" || noFile?.artifact != nil { problems.append("无文件的巡检不能出现文件按钮") }
 
     state.inbox[0].workspaceRun = AssistantWorkspaceRun(runId: "run1", scheduleId: "monthly", workspaceKey: "业务",
                                                        status: "succeeded", files: ["投诉/投诉.html"])
-    if AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看看板" {
+    state.inbox[0].attention = "recovery"
+    if state.inbox[0].needsAttention || state.inbox[0].requiresRecovery || state.inbox[0].runStatusTitle != "已完成" ||
+        AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看看板" {
         problems.append("有真实 HTML 路径时应能查看看板")
     }
-    state.inbox[0].workspaceRun?.status = "failed"
+    state.inbox[0].workspaceRun?.status = "no_change"
     state.inbox[0].workspaceRun?.files = []
-    if AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看原因" {
-        problems.append("失败时应展示原因入口")
+    state.inbox[0].attention = nil
+    if state.inbox[0].needsAttention || state.inbox[0].requiresRecovery || state.inbox[0].runStatusTitle != "无变动" ||
+        AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看结果" {
+        problems.append("缺少 attention 的无变动通知也应展示运行结果")
+    }
+    for status in ["failed", "partial", "blocked"] {
+        state.inbox[0].workspaceRun?.status = status
+        state.inbox[0].attention = "notice"
+        if !state.inbox[0].needsAttention || !state.inbox[0].requiresRecovery || state.inbox[0].runStatusTitle != "需要恢复" ||
+            AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看原因" {
+            problems.append("\(status) 应展示原因入口")
+        }
+    }
+    state.inbox[0].workspaceRun = nil
+    state.inbox[0].attention = nil
+    if !state.inbox[0].requiresRecovery || !state.inbox[0].needsAttention {
+        problems.append("没有结构化状态的旧后台故障通知应保留恢复入口")
+    }
+    let legacyNotice = AssistantInboxItem.from(.object([
+        "id": .string("legacy"), "kind": .string("run"), "attention": .string("notice"),
+        "workspaceRun": .object([
+            "runId": .string("r1"), "scheduleId": .string("s1"), "workspaceKey": .string("业务"),
+        ]),
+    ]))
+    if legacyNotice?.runStatusTitle != "运行结果" || legacyNotice?.needsAttention != false {
+        problems.append("旧通知缺少运行状态时应尊重 attention")
     }
     state.inbox[0].read = true
     if !AssistantReceipt.results(in: state, now: now).isEmpty { problems.append("已读历史不应再次弹出结果") }

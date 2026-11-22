@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { listInbox } from "../src/assistant/inbox.ts";
+import { listInbox, type InboxItem } from "../src/assistant/inbox.ts";
 import { assistantPath } from "../src/assistant/store.ts";
 import { claimOutputs, outputKeys, releaseOutputs } from "../src/outputClaims.ts";
 import { getWorkspaceAutomationStatus } from "../src/ingest/hub.ts";
@@ -198,7 +198,7 @@ test("workspace_script 执行器与 toggle / remove / 崩溃自愈对账", async
     mkdirSync(join(wsPath, "scripts"), { recursive: true });
     writeFileSync(
       join(wsPath, "scripts", "gen.js"),
-      `process.stdout.write("日期,余额\\n2026-11-11,1000\\n");`,
+      `console.log(JSON.stringify({ runId: "script-run", details: "x".repeat(400), 说明: "已核验五表并刷新看板" }));`,
       "utf8",
     );
 
@@ -220,11 +220,29 @@ test("workspace_script 执行器与 toggle / remove / 崩溃自愈对账", async
     const r1 = await triggerWorkspaceScheduleNow(host, up.item.id);
     assert.equal(r1.ok, true);
     assert.equal(r1.schedule?.lastStatus, "succeeded");
+    const success = listInbox(host)[0];
+    assert.equal(success?.workspaceRun?.status, "succeeded");
+    assert.equal(success?.attention, "notice");
+    assert.equal(success?.body, "已核验五表并刷新看板");
+    assert.equal(listWorkspaceScheduleRuns(host)[0]?.summary, success?.body);
 
     // 第二次跑同样输出：哈希未变 -> no_change
     const r2 = await triggerWorkspaceScheduleNow(host, up.item.id);
     assert.equal(r2.ok, true);
     assert.equal(r2.schedule?.lastStatus, "no_change");
+    assert.equal(listInbox(host)[0]?.workspaceRun?.status, "no_change");
+    assert.equal(listInbox(host)[0]?.attention, "notice");
+
+    writeFileSync(join(wsPath, "scripts", "gen.js"), 'console.error("上游连接失败"); process.exit(1);');
+    await triggerWorkspaceScheduleNow(host, up.item.id);
+    const failed = listInbox(host)[0];
+    assert.equal(failed?.workspaceRun?.status, "failed");
+    assert.equal(failed?.attention, "recovery");
+    assert.equal(failed?.body, "上游连接失败");
+    const persisted = JSON.parse(readFileSync(assistantPath(host, "inbox.json"), "utf8")) as { items: InboxItem[] };
+    assert.deepEqual(persisted.items.map(({ workspaceRun, attention }) => [workspaceRun?.status, attention]), [
+      ["succeeded", "notice"], ["no_change", "notice"], ["failed", "recovery"],
+    ]);
 
     const toggled = toggleWorkspaceSchedule(host, up.item.id, false);
     assert.equal(toggled.ok, true);
