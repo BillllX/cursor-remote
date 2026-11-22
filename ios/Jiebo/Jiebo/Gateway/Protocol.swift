@@ -831,6 +831,7 @@ struct AssistantWorkspaceRun: Sendable, Hashable {
     var workspaceKey: String
     var status: String
     var files: [String]
+    var snapshots: [TurnFile] = []
 
     static func from(_ json: JSONValue?) -> Self? {
         guard let row = json?.object,
@@ -844,7 +845,22 @@ struct AssistantWorkspaceRun: Sendable, Hashable {
                 }
         } ?? []
         return Self(runId: id, scheduleId: schedule, workspaceKey: workspace,
-                    status: row["status"]?.string ?? "", files: files)
+                    status: row["status"]?.string ?? "", files: files,
+                    snapshots: row["snapshots"]?.array?.compactMap(TurnFile.from) ?? [])
+    }
+}
+
+struct AssistantDelegationDelivery: Sendable, Hashable {
+    let attempt: Int
+    let status: String
+    let files: [TurnFile]
+
+    static func from(_ json: JSONValue?) -> Self? {
+        guard let row = json?.object,
+              let attempt = row["attempt"]?.int, attempt > 0,
+              let status = row["status"]?.string, ["done", "failed", "cancelled"].contains(status)
+        else { return nil }
+        return Self(attempt: attempt, status: status, files: row["files"]?.array?.compactMap(TurnFile.from) ?? [])
     }
 }
 
@@ -865,8 +881,16 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
     var chatId: String?
     var scheduleId: String?
     var delegationId: String?
+    var delegationReceipt: AssistantDelegationDelivery? = nil
     var workspaceRun: AssistantWorkspaceRun? = nil
     var capture: AssistantCaptureSource?
+
+    var resultSnapshots: [TurnFile] {
+        let files = delegationReceipt?.status == "done"
+            ? delegationReceipt?.files ?? []
+            : workspaceRun?.snapshots ?? []
+        return files.filter { $0.sha != nil }
+    }
 
     var effectiveAttention: String? {
         switch workspaceRun?.status {
@@ -917,6 +941,7 @@ struct AssistantInboxItem: Sendable, Hashable, Identifiable {
             chatId: row["chatId"]?.string?.nilIfEmpty,
             scheduleId: row["scheduleId"]?.string?.nilIfEmpty,
             delegationId: row["delegationId"]?.string?.nilIfEmpty,
+            delegationReceipt: AssistantDelegationDelivery.from(row["delegationReceipt"]),
             workspaceRun: AssistantWorkspaceRun.from(row["workspaceRun"]),
             capture: AssistantCaptureSource.from(row["capture"])
         )
@@ -1002,6 +1027,7 @@ struct AssistantDelegation: Sendable, Hashable, Identifiable {
     var interrupted: Bool? = nil
     var waitReason: String? = nil
     var expectedFiles: [String]? = nil
+    var deliveredFiles: [TurnFile]? = nil
     /// "foreground" | "background"
     var mode: String
     /// "running" | "awaiting" | "done" | "failed"
@@ -1025,6 +1051,7 @@ struct AssistantDelegation: Sendable, Hashable, Identifiable {
             interrupted: row["interrupted"]?.bool,
             waitReason: row["waitReason"]?.string,
             expectedFiles: row["expectedFiles"]?.array?.compactMap(\.string),
+            deliveredFiles: row["deliveredFiles"]?.array?.compactMap(TurnFile.from),
             mode: row["mode"]?.string ?? "background",
             status: row["status"]?.string ?? "running",
             createdAt: row["createdAt"]?.number ?? 0,

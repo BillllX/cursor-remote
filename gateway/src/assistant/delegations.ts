@@ -1,6 +1,10 @@
 import { atomicWriteFileSync } from "../fsAtomic.ts";
 import { assistantPath, clip, newId, readJson, type TenantRef } from "./store.ts";
 
+import type { TurnFile } from "../../../shared/protocol.ts";
+
+export type DelegationDelivery = { text: string; files: TurnFile[] };
+
 export type DelegationStatus = "queued" | "running" | "awaiting" | "done" | "failed" | "cancelled";
 
 export type Delegation = {
@@ -19,6 +23,9 @@ export type Delegation = {
   /** 本轮原始要求，包含续作时的补充。仅服务端用于恢复。 */
   activeTask?: string;
   activeTurnId?: string;
+  /** 中断前的候选产物，完成或重启对账时重新核对。 */
+  inheritedFiles?: TurnFile[];
+  deliveredFiles?: TurnFile[];
   waitReason?: string;
   backgroundRestarts?: number;
   interrupted?: boolean;
@@ -35,7 +42,7 @@ export type Delegation = {
   result?: string;
 };
 
-export function publicDelegation({ activeTask: _task, activeTurnId: _turn, backgroundRestarts: _restarts, receiptPending: _pending, ...item }: Delegation) {
+export function publicDelegation({ activeTask: _task, activeTurnId: _turn, backgroundRestarts: _restarts, receiptPending: _pending, inheritedFiles: _inherited, ...item }: Delegation) {
   return item;
 }
 
@@ -93,7 +100,7 @@ export function createDelegationRecord(
   return item;
 }
 
-export function updateDelegation(ref: TenantRef, id: string, patch: Partial<Pick<Delegation, "status" | "result" | "endedAt" | "attempt" | "mode" | "deliverable" | "expectedFiles" | "requiresFile" | "activeTask" | "activeTurnId" | "waitReason" | "interrupted" | "receiptPending">>) {
+export function updateDelegation(ref: TenantRef, id: string, patch: Partial<Pick<Delegation, "status" | "result" | "endedAt" | "attempt" | "mode" | "deliverable" | "expectedFiles" | "requiresFile" | "activeTask" | "activeTurnId" | "inheritedFiles" | "deliveredFiles" | "waitReason" | "interrupted" | "receiptPending">>) {
   const data = readJson<DelegationsFile>(file(ref), { items: [] });
   const item = data.items.find((row) => row.id === id);
   if (!item) return;
@@ -111,7 +118,7 @@ export function activeDelegationFor(ref: TenantRef, workspace: string) {
 }
 
 /** 只重跑标记过的纯只读任务一次；等待审批及可写任务交回用户。 */
-export function recoverDelegations(ref: TenantRef, retryReadOnly?: (item: Delegation) => void, reconcile?: (item: Delegation) => string | undefined, inspect?: (item: Delegation) => string | undefined) {
+export function recoverDelegations(ref: TenantRef, retryReadOnly?: (item: Delegation) => void, reconcile?: (item: Delegation) => DelegationDelivery | undefined, inspect?: (item: Delegation) => string | undefined) {
   const data = readJson<DelegationsFile>(file(ref), { items: [] });
   const stale: Delegation[] = [];
   const retry: Delegation[] = [];
@@ -124,7 +131,7 @@ export function recoverDelegations(ref: TenantRef, retryReadOnly?: (item: Delega
     if (item.notifyPolicy === "collab_only" || (item.status !== "running" && item.status !== "awaiting" && item.status !== "queued")) continue;
     const delivered = item.status === "running" && reconcile?.(item);
     if (delivered) {
-      Object.assign(item, { status: "done", result: clip(delivered, 4000), endedAt: Date.now(), interrupted: false, receiptPending: true });
+      Object.assign(item, { status: "done", result: clip(delivered.text, 4000), deliveredFiles: delivered.files, inheritedFiles: undefined, endedAt: Date.now(), interrupted: false, receiptPending: true });
       reconciled = true;
       continue;
     }

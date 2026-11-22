@@ -16,7 +16,7 @@ import { dropChatFromIndex, indexTurn, scrubChatIndex } from "./chatIndex.ts";
 import { describeLocal } from "./cron.ts";
 import { listApprovals, recoverApprovals, type PendingApproval } from "./approvals.ts";
 import { deliverDelegationReceipt } from "./delegationReceipts.ts";
-import { getDelegation, listDelegations, publicDelegation, recoverDelegations, type Delegation } from "./delegations.ts";
+import { getDelegation, listDelegations, publicDelegation, recoverDelegations, type Delegation, type DelegationDelivery } from "./delegations.ts";
 import { executeSchedule, latestBrief, runEpisodes, runIntegrator, runMaintenance, tidyMemoriesNow, type JobRunner } from "./jobs.ts";
 import { snoozeInbox, wakeSnoozedInbox, listInbox, markInboxRead, onInbox, postInbox, PUSH_KINDS } from "./inbox.ts";
 import {
@@ -193,7 +193,7 @@ export type AssistantDeps = {
   globalStateDir: string;
   delegate: (req: DelegateRequest) => Promise<string>;
   inspectInterruptedDelegation?: (tenant: AssistantTenant, item: Delegation) => string | undefined;
-  reconcileDelegation?: (tenant: AssistantTenant, item: Delegation) => string | undefined;
+  reconcileDelegation?: (tenant: AssistantTenant, item: Delegation) => DelegationDelivery | undefined;
   retryBackgroundDelegation?: (tenant: AssistantTenant, item: Delegation) => void;
   workspaces: (tenant: AssistantTenant) => string[];
   createWorkspace: (req: CreateWorkspaceRequest) => Promise<string>;
@@ -1115,7 +1115,14 @@ export async function buildState(
   const inbox = listInbox(ref, STATE_INBOX_LIMIT);
   const todos = listTodos(ref, { includeDone: true });
   const schedules = listSchedules(ref);
-  const delegations = listDelegations(ref, Number.MAX_SAFE_INTEGER).filter((row, index) => index < 20 || row.interrupted || ["queued", "running", "awaiting"].includes(row.status));
+  const allDelegations = listDelegations(ref, Number.MAX_SAFE_INTEGER);
+  const isActive = (row: Delegation) => row.interrupted || ["queued", "running", "awaiting"].includes(row.status);
+  const delegations = [
+    ...allDelegations.filter(isActive),
+    ...allDelegations.filter((row) => !isActive(row))
+      .sort((a, b) => (b.endedAt ?? b.createdAt) - (a.endedAt ?? a.createdAt))
+      .slice(0, 20),
+  ];
   const approvals = listApprovals(ref);
   const runs = listRuns(ref, 20);
   const brief = latestBrief(ref, day);

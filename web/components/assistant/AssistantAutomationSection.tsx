@@ -11,7 +11,7 @@ type Props = {
   state: AssistantState | null;
   results: AssistantResultMessage[];
   send: (message: ClientMessage) => void;
-  onOpenArtifact: (workspaceKey: string, path: string) => void;
+  onOpenArtifact: (workspaceKey: string, path: string, sha?: string) => void;
 };
 
 const personalStatuses: Record<string, string> = {
@@ -375,7 +375,7 @@ export function AssistantAutomationSection({
           backfillPreview={preview}
           lastScheduleResult={saved?.workspace === id ? saved.result : undefined}
           sendKbOperation={(message) => update(message, id)}
-          onOpenBoard={(path) => onOpenArtifact(key, path)}
+          onOpenBoard={(path, sha) => onOpenArtifact(key, path, sha)}
           setErrorText={setError}
         />
       ))}

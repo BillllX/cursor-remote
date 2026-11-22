@@ -30,7 +30,7 @@ type WorkspaceManagementOverlayProps = {
   deleteWorkspaceConfirm: (path: string, name: string) => void;
   send: (message: ClientMessage) => void;
   assistantResults: AssistantResultMessage[];
-  openFile: (path: string, line?: number, asDiff?: boolean) => void;
+  openFile: (path: string, line?: number, asDiff?: boolean, sha?: string) => void;
   setNotice: Dispatch<SetStateAction<string>>;
 };
 
@@ -187,8 +187,8 @@ export function WorkspaceManagementOverlay({
                 send={send}
                 assistantResults={assistantResults}
                 viewMode={modalMode === "kb" ? "kb" : modalMode === "schedules" ? "schedules" : "tokens"}
-                onOpenBoard={(boardRelPath) => {
-                  openFile(boardRelPath);
+                onOpenBoard={(boardRelPath, sha) => {
+                  openFile(boardRelPath, undefined, false, sha);
                   setManagementOpen(false);
                 }}
                 setNotice={(msg) => setNotice(msg)}

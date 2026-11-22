@@ -433,11 +433,21 @@ private struct InboxDetailDestinations: View {
 
     private var hasLinks: Bool {
         item.eventId != nil || item.todoId != nil || item.scheduleId != nil
-            || showMemory || showDelegation || workspaceChatId != nil || showAssistant
+            || showMemory || showDelegation || workspaceChatId != nil || showAssistant || !item.resultSnapshots.isEmpty
             || (item.actionPrompt != nil && item.decisionKind == nil)
     }
 
     @ViewBuilder private var links: some View {
+        if store.supportsReadSha {
+            ForEach(item.resultSnapshots) { file in
+                ActionButton(title: "查看本次版本 · \(file.path)", kind: .outline) {
+                    guard let chat = item.chatId ?? store.assistantChatId else { return }
+                    if store.openResultSnapshot(file, chatId: chat, workspaceKey: item.workspaceRun?.workspaceKey) {
+                        router.popToRoot()
+                    }
+                }
+            }
+        }
         if item.actionPrompt != nil && item.decisionKind == nil {
             ActionButton(title: "交给小驳处理", kind: .primary) {
                 store.openAssistantInboxItem(item)

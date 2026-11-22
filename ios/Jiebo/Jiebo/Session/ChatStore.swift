@@ -160,6 +160,7 @@ final class ChatStore {
     @ObservationIgnored var assistantMemoryRevision: Int?
     /// 只由网络确认推进；缓存水合不伪装成网关响应。
     var assistantStateRevision: UInt64 = 0
+    var assistantCompletionEvent: UInt64 = 0
     @ObservationIgnored var assistantNetworkConfirmed = false {
         didSet { refreshWidgetSnapshotIfNeeded() }
     }

@@ -116,7 +116,7 @@ struct AssistantReceiptCard: View {
 
     @ViewBuilder private var actions: some View {
         ActionButton(title: receipt.primaryTitle, kind: .primary, action: openPrimary)
-        if !receipt.needsAttention && (receipt.artifact != nil || receipt.workspaceRun?.files.isEmpty == false) {
+        if !receipt.needsAttention && receipt.snapshot != nil {
             Button("查看本次运行", action: openDetails)
                 .font(JieboFont.text(.footnote)).frame(minHeight: 44).buttonStyle(.plain)
                 .foregroundStyle(JieboColor.ink2)
@@ -136,18 +136,14 @@ struct AssistantReceiptCard: View {
         }
         if current.needsAttention {
             openDetails()
-        } else if let artifact = current.artifact, let file = artifact.turnFile, let chat = artifact.sourceChatId {
+        } else if let file = current.snapshot,
+                  let chat = current.sourceChatId ?? current.artifact?.sourceChatId ?? store.assistantChatId,
+                  store.supportsReadSha {
             navigation?.preparePreview()
-            store.openTurnFile(file, chatId: chat)
-            sceneSession?.presentPreview(from: store)
-            markRead(current)
-        } else if let run = current.workspaceRun, let path = run.files.first,
-                  let chat = store.assistantChatId, !store.workspaceRoot.isEmpty,
-                  !run.workspaceKey.contains("/"), !run.workspaceKey.contains("\\"),
-                  run.workspaceKey != ".", run.workspaceKey != ".." {
-            navigation?.preparePreview()
-            let workspace = URL(fileURLWithPath: store.workspaceRoot).appendingPathComponent(run.workspaceKey)
-            store.openPreview(workspace.appendingPathComponent(path).path, chatId: chat)
+            guard store.openResultSnapshot(file, chatId: chat, workspaceKey: current.workspaceRun?.workspaceKey) else {
+                openDetails()
+                return
+            }
             sceneSession?.presentPreview(from: store)
             markRead(current)
         } else {
@@ -157,10 +153,10 @@ struct AssistantReceiptCard: View {
 
     private func openDetails() {
         guard let current = currentReceipt() else { return }
-        if let id = current.delegationId, let navigation {
-            navigation.openDelegation(id)
-        } else if let id = current.inboxId, let navigation {
+        if let id = current.inboxId, let navigation {
             navigation.openInboxItem(id)
+        } else if let id = current.delegationId, let navigation {
+            navigation.openDelegation(id)
         } else {
             detailsOpen = true
         }
@@ -197,9 +193,12 @@ struct AssistantReceiptDock: View {
             let receipts = AssistantReceipt.results(in: store.assistantState, now: context.date.timeIntervalSince1970 * 1000)
                 .filter { !AssistantReceiptMemory.contains($0.id, scope: scope + ".dismissed") }
             let receipt = receipts.first
-            let drafts = (store.assistantState?.draftCards ?? []).filter { $0.status == "waiting_user" }
+            let now = context.date.timeIntervalSince1970 * 1000
+            let drafts = (store.assistantState?.draftCards ?? []).filter {
+                $0.status == "waiting_user" && ($0.expiresAt <= 0 || $0.expiresAt > now)
+            }
                 .sorted { $0.createdAt > $1.createdAt }
-            let approvals = store.assistantState?.approvals ?? []
+            let approvals = (store.assistantState?.approvals ?? []).filter { $0.expiresAt <= 0 || $0.expiresAt > now }
             let skills = store.memoryCenterSkillProposals.filter { $0.status == "pending" }
             let pendingCount = max(drafts.count, approvals.count) + skills.count
             let running = (store.assistantState?.delegations ?? []).filter { ["queued", "running", "awaiting"].contains($0.status) }

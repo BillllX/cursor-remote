@@ -5108,14 +5108,18 @@ export default function ChatApp() {
         initialView={assistantInitialView}
         initialAutomationWorkspace={assistantAutomationWorkspace}
         assistantResults={assistantResults}
-        onOpenAutomationArtifact={(key, path) => {
+        onOpenDelegationFile={(chatId, path, sha) => {
+          setAssistantOpen(false);
+          openFile(path, undefined, false, sha, chatId, true);
+        }}
+        onOpenAutomationArtifact={(key, path, sha) => {
           if (!assistantChatId || !workspaceRoot || !key || key.includes("/") || path.split("/").some((part) => !part || part === "." || part === "..") || path.includes("\\")) {
             setNotice("无法预览此产物路径");
             return;
           }
           const workspacePath = workspaceRoot.replace(/\/$/, "") + "/" + key;
           setAssistantOpen(false);
-          openFile(workspacePath + "/" + path, undefined, false, undefined, assistantChatId, true);
+          openFile(workspacePath + "/" + path, undefined, false, sha, assistantChatId, true);
         }}
         initialMemoryScopeId={assistantMemoryScopeId}
         initialMemorySource={assistantMemorySource}

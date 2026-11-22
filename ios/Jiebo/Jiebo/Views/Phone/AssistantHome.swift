@@ -242,7 +242,7 @@ struct AssistantHome: View {
     // MARK: 导航栏
 
     private var titleView: some View {
-        AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32)
+        AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)
             .overlay(alignment: .bottomTrailing) {
                 LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))
                     .offset(x: 1, y: 2)

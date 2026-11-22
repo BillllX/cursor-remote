@@ -518,6 +518,8 @@ extension ChatStore {
             }
             touchChat(target)
         case .done(let id, let status, let duration):
+            let assistantCompleted = id == assistantChatId && AssistantAvatarPhase.isSuccessful(status) &&
+                (runningChatIds.contains(id) || assistantChat?.turns.last?.running == true)
             runningChatIds.removeAll { $0 == id }
             queuedChatIds.removeAll { $0 == id }
             syncLiveBusy(id)
@@ -527,6 +529,7 @@ extension ChatStore {
             }
             touchChat(id)
             scheduleSync()
+            if assistantCompleted { assistantCompletionEvent &+= 1 }
             scheduleBodyCache(id) // 通常还脏着，要等 sync_ack 后那次触发才真写
             if id == activeId { refreshCheckpoints() }
         case .runSnapshot(
@@ -1008,7 +1011,13 @@ extension ChatStore {
                 assistantState?.inbox.insert(item, at: 0)
             }
         case .delegationState(let delegation, let approval):
+            let previous = assistantState?.delegations.first { $0.id == delegation.id }
             applyDelegationState(delegation, approval: approval)
+            if delegation.status == "done", let previous,
+               (previous.attempt ?? 1) == (delegation.attempt ?? 1),
+               ["queued", "running", "awaiting"].contains(previous.status) {
+                assistantCompletionEvent &+= 1
+            }
         case .memoryWritten(_, let entry):
             if let index = assistantState?.memory?.entries.firstIndex(where: { $0.id == entry.id }) {
                 assistantState?.memory?.entries[index] = entry

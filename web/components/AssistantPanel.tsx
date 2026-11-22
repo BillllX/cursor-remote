@@ -51,7 +51,7 @@ type Props = {
   initialView?: AssistantView;
   initialAutomationWorkspace?: string;
   assistantResults: AssistantResultMessage[];
-  onOpenAutomationArtifact: (workspaceKey: string, path: string) => void;
+  onOpenAutomationArtifact: (workspaceKey: string, path: string, sha?: string) => void;
   initialMemoryScopeId?: string;
   initialMemorySource?: AssistantMemorySource;
   openRequest: number;
@@ -59,6 +59,7 @@ type Props = {
   name: string;
   state: AssistantState | null;
   send: (message: ClientMessage) => void;
+  onOpenDelegationFile: (chatId: string, path: string, sha: string) => void;
   onOpenInboxItem: (item: { chatId?: string; id: string }) => void;
   onOpenChat: (chatId: string) => void;
   assistantChatId?: string;
@@ -101,6 +102,7 @@ export default function AssistantPanel({
   name,
   state,
   send,
+  onOpenDelegationFile,
   onOpenInboxItem,
   onOpenChat,
   onHandoffToAssistant,
@@ -647,6 +649,28 @@ export default function AssistantPanel({
                               交给{name}处理
                             </button>
                           ) : null}
+                          {item.delegationReceipt?.status === "done" && item.delegationReceipt.files.map((file) => {
+                            const chatId = file.sourceChatId ?? item.chatId;
+                            const sha = file.sha;
+                            return chatId && sha ? (
+                              <button type="button" className="pill" key={file.path}
+                                onClick={() => {
+                                  if (!item.read) op("inbox_read", { ids: [item.id] });
+                                  onOpenDelegationFile(chatId, file.path, sha);
+                                }}>
+                                查看本次版本 · {file.path}
+                              </button>
+                            ) : null;
+                          })}
+                          {item.workspaceRun?.snapshots?.map(({ path, sha }) => sha && (
+                            <button type="button" className="pill" key={path}
+                              onClick={() => {
+                                if (!item.read) op("inbox_read", { ids: [item.id] });
+                                onOpenAutomationArtifact(item.workspaceRun!.workspaceKey, path, sha);
+                              }}>
+                              查看本次版本 · {path}
+                            </button>
+                          ))}
                           {item.chatId ? (
                             <button
                               type="button"

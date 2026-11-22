@@ -62,7 +62,7 @@ type WorkspaceScheduleSectionProps = {
   lastScheduleResult?: KbWorkspaceStatusData["workspaceScheduleResult"];
   backfillPreview?: KbWorkspaceStatusData["workspaceBackfill"];
   sendKbOperation: (message: ClientMessage, silent?: boolean) => void;
-  onOpenBoard: (relPath: string) => void;
+  onOpenBoard: (relPath: string, sha?: string) => void;
   setErrorText: (msg: string) => void;
 };
 
@@ -209,15 +209,15 @@ export function WorkspaceScheduleSection({
           {showTitle && "（UTC）"}
         </div>
         <div>{run.error || run.summary}</div>
-        {!!run.updatedFiles?.length && (
+        {!!run.snapshots?.length ? (
           <div style={actions}>
-            {run.updatedFiles.map((path) => (
-              <button type="button" className="new-chat" key={path} onClick={() => onOpenBoard(path)}>
-                {path}
+            {run.snapshots.map(({ path, sha }) => sha && (
+              <button type="button" className="new-chat" key={path} onClick={() => onOpenBoard(path, sha)}>
+                查看本次版本 · {path}
               </button>
             ))}
           </div>
-        )}
+        ) : !!run.updatedFiles?.length && <div>未保留本次文件版本</div>}
       </div>
     );
   }

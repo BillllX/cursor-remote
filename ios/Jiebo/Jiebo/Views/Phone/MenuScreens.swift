@@ -1327,6 +1327,7 @@ struct KbWorkspaceScheduleRun: Identifiable, Hashable {
     var summary: String
     var files: [String]
     var period: String?
+    var snapshots: [TurnFile] = []
 
     var triggerLabel: String { trigger == "backfill" ? "补跑" : trigger == "manual" ? "手动运行" : "定时触发" }
 
@@ -1336,7 +1337,8 @@ struct KbWorkspaceScheduleRun: Identifiable, Hashable {
         return Self(id: id, workspaceId: row["workspaceId"]?.string ?? "", scheduleId: scheduleId, title: row["title"]?.string ?? "", status: row["status"]?.string ?? "",
                     trigger: row["trigger"]?.string ?? "scheduled", finishedAt: row["finishedAt"]?.number ?? 0,
                     summary: row["error"]?.string?.nilIfEmpty ?? row["summary"]?.string ?? "",
-                    files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [], period: row["period"]?.string)
+                    files: row["updatedFiles"]?.array?.compactMap(\.string) ?? [], period: row["period"]?.string,
+                    snapshots: row["snapshots"]?.array?.compactMap(TurnFile.from).filter { $0.sha != nil } ?? [])
     }
 }
 
@@ -2327,11 +2329,16 @@ struct KbWorkspaceSheet: View {
                                         .font(JieboFont.text(.subheadline, weight: .medium))
                                     Text(scheduleTime(run.finishedAt, tz: item.tz))
                                     if !run.summary.isEmpty { Text(run.summary) }
-                                    ForEach(Array(Set(run.files)).sorted(), id: \.self) { path in
-                                        Button(path) {
-                                            openBoard(KbHtmlBoard(relPath: path, title: path, category: "", showOnDrop: false))
+                                    if run.snapshots.isEmpty, !run.files.isEmpty { Text("未保留本次文件版本") }
+                                    ForEach(run.snapshots) { file in
+                                        Button("查看本次版本 · \(file.path)") {
+                                            guard let source = store.preferredWorkspaceChatId(anchoredTo: chatId) ?? chatId,
+                                                  store.openResultSnapshot(file, chatId: source) else { return }
+                                            sceneSession?.presentPreview(from: store)
+                                            dismiss()
                                         }
                                         .buttonStyle(.borderless)
+                                        .disabled(!store.supportsReadSha)
                                     }
                                 }
                                 .font(JieboFont.text(.footnote))
@@ -3107,8 +3114,11 @@ struct AssistantAutomationScreen: View {
                 .font(JieboFont.text(.subheadline, weight: .medium))
             Text(dateText(run.finishedAt, tz: tz))
             if !run.summary.isEmpty { Text(run.summary) }
-            ForEach(Array(Set(run.files)).sorted(), id: \.self) { path in
-                Button(path) { openArtifact(path, scope: scope) }.buttonStyle(.borderless)
+            if run.snapshots.isEmpty, !run.files.isEmpty { Text("未保留本次文件版本") }
+            ForEach(run.snapshots) { file in
+                Button("查看本次版本 · \(file.path)") { openArtifact(file.path, scope: scope, snapshot: file) }
+                    .buttonStyle(.borderless)
+                    .disabled(!store.supportsReadSha)
             }
         }
         .font(JieboFont.text(.footnote))
@@ -3236,7 +3246,7 @@ struct AssistantAutomationScreen: View {
         return reply.ok ? nil : reply.error ?? "操作未完成，请核对当前状态。"
     }
 
-    private func openArtifact(_ path: String, scope: Scope) {
+    private func openArtifact(_ path: String, scope: Scope, snapshot: TurnFile? = nil) {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
         guard let chatId = store.assistantChatId, !store.workspaceRoot.isEmpty,
               !scope.key.contains("/"), !path.contains("\\"),
@@ -3246,7 +3256,11 @@ struct AssistantAutomationScreen: View {
         }
         let workspace = URL(fileURLWithPath: store.workspaceRoot).appendingPathComponent(scope.key)
         let artifact = workspace.appendingPathComponent(path)
-        store.openPreview(artifact.path, chatId: chatId)
+        if let snapshot {
+            guard store.openResultSnapshot(snapshot, chatId: chatId, workspaceKey: scope.key) else { return }
+        } else {
+            store.openPreview(artifact.path, chatId: chatId)
+        }
         sceneSession?.presentPreview(from: store)
     }
 }

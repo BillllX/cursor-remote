@@ -1,3 +1,4 @@
+import type { AssistantInboxItem, TurnFile } from "../../../shared/protocol.ts";
 import { assistantPath, clip, newId, readJson, readJsonl, writeJson, type TenantRef } from "./store.ts";
 import {
   isStructuredScriptOutput,
@@ -32,12 +33,14 @@ export type InboxItem = {
   runId?: string;
   scheduleId?: string;
   delegationId?: string;
+  delegationReceipt?: AssistantInboxItem["delegationReceipt"];
   workspaceRun?: {
     runId: string;
     scheduleId: string;
     workspaceKey: string;
     status: WorkspaceScheduleRunStatus;
     files: string[];
+    snapshots?: TurnFile[];
   };
   /** 捕获入口已校验的结构化字段；投影只能读这里，不能从正文反解析 URL。 */
   capture?: {
@@ -119,10 +122,12 @@ export function postInbox(
   input: Omit<InboxItem, "id" | "createdAt" | "read"> & { read?: boolean },
 ): { item: InboxItem; created: boolean } {
   const data = readJson<InboxFile>(file(ref), { items: [] });
-  if (input.key) {
-    const known = data.items.find((item) => item.key === input.key);
-    if (known) return { item: known, created: false };
-  }
+  const known = input.key ? data.items.find((item) => item.key === input.key) : undefined;
+  // 找回本轮交付时原位更新中断回执，重复对账仍保持幂等。
+  const recovered = known?.kind === "delegation" && input.delegationReceipt?.status === "done" &&
+    (known.delegationReceipt?.status === "failed" ||
+      (!known.delegationReceipt && known.title.startsWith("委派被中断")));
+  if (known && !recovered) return { item: known, created: false };
   const item: InboxItem = {
     ...input,
     attention:
@@ -137,13 +142,13 @@ export function postInbox(
             : input.actionPrompt
               ? "content"
               : "notice"),
-    id: newId("i"),
+    id: known?.id ?? newId("i"),
     title: clip(input.title, 120),
     body: clip(input.body, 4000),
     createdAt: Date.now(),
     read: input.read ?? false,
   };
-  data.items = [...data.items, item].slice(-MAX_ITEMS);
+  data.items = [...data.items.filter((row) => row.id !== known?.id), item].slice(-MAX_ITEMS);
   writeJson(file(ref), data, item.kind === "delegation");
   for (const listener of listeners) {
     try {

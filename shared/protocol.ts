@@ -85,12 +85,14 @@ export type AssistantInboxItem = {
   chatId?: string;
   scheduleId?: string;
   delegationId?: string;
+  delegationReceipt?: { attempt: number; status: "done" | "failed" | "cancelled"; files: TurnFile[] };
   workspaceRun?: {
     runId: string;
     scheduleId: string;
     workspaceKey: string;
     status: "succeeded" | "no_change" | "partial" | "failed";
     files: string[];
+    snapshots?: TurnFile[];
   };
   /** Share Assistant 已校验并持久化的结构化来源；产物投影不得从 body/actionPrompt 猜链接。 */
   capture?: {
@@ -747,6 +749,7 @@ export type WorkspaceScheduleRunSummaryItem = {
   summary: string;
   batchIds?: string[];
   updatedFiles?: string[];
+  snapshots?: TurnFile[];
   error?: string;
 };
 
@@ -1029,6 +1032,7 @@ export type AssistantDelegation = {
   deliverable?: string;
   expectedFiles?: string[];
   requiresFile?: boolean;
+  deliveredFiles?: TurnFile[];
   attempt?: number;
   interrupted?: boolean;
   waitReason?: string;

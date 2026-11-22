@@ -37,8 +37,8 @@ enum AssistantAvatarPhase: String, CaseIterable {
         }
     }
 
-    var canComplete: Bool {
-        self == .thinking || self == .executing
+    static func isSuccessful(_ status: String?) -> Bool {
+        ["completed", "finished", "succeeded", "success", "done"].contains(status?.lowercased() ?? "")
     }
 }
 
@@ -50,7 +50,7 @@ struct AssistantAvatarState {
         guard connected else { return .offline }
         let last = turns.last
         let status = last?.status?.lowercased() ?? ""
-        let succeeded = ["completed", "succeeded", "success", "done"].contains(status)
+        let succeeded = AssistantAvatarPhase.isSuccessful(status)
         let failed = ["error", "failed", "failure"].contains(status)
         let terminal = succeeded || failed || ["cancelled", "canceled", "stopped"].contains(status)
         let live = terminal ? nil : last

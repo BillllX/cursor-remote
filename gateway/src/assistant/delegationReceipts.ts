@@ -17,6 +17,7 @@ export function deliverDelegationReceipt(ref: TenantRef, item: Delegation) {
     key,
     chatId: current.childChatId,
     delegationId: current.id,
+    delegationReceipt: { attempt: current.attempt ?? 1, status: current.status, files: current.deliveredFiles ?? [] },
   });
   updateDelegation(ref, current.id, { receiptPending: false });
 }

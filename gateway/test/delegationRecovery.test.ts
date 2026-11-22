@@ -65,3 +65,20 @@ test("中断回执写入后即使没清理待发送标记，重启也不重复�
   assert.deepEqual(listInbox(ref).map((item) => item.id), [first?.id]);
   assert.equal(getDelegation(ref, record.id)?.receiptPending, false);
 });
+
+test("找回交付后在原位置更新本轮中断回执", (t) => {
+  const { ref, add, clean } = fixture();
+  t.after(clean);
+  const record = add({ attempt: 2 });
+  const [interrupted] = recoverDelegations(ref);
+  deliverDelegationReceipt(ref, interrupted!);
+  const [first] = listInbox(ref);
+  const files = [{ path: "月报.md", op: "added", kind: "markdown", sha: "snapshot" }] as const;
+  const done = updateDelegation(ref, record.id, {
+    status: "done", result: "已找回月报", deliveredFiles: [...files], receiptPending: true,
+  })!;
+  deliverDelegationReceipt(ref, done);
+  const results = listInbox(ref);
+  assert.deepEqual(results.map((row) => row.id), [first?.id]);
+  assert.deepEqual(results[0]?.delegationReceipt, { status: "done", attempt: 2, files });
+});

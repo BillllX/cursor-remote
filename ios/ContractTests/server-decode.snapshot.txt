@@ -612,6 +612,7 @@
         chatId: "c-child-5b10"
         scheduleId: "s_morning"
         delegationId: "d_q7w3"
+        delegationReceipt: nil
         workspaceRun: nil
         capture: AssistantCaptureSource(
           kind: "link"
@@ -667,6 +668,7 @@
         interrupted: nil
         waitReason: nil
         expectedFiles: nil
+        deliveredFiles: nil
         mode: "foreground"
         status: "awaiting"
         createdAt: 1739000000000
@@ -1116,6 +1118,7 @@
   chatId: "c-child-5b10"
   scheduleId: "s_morning"
   delegationId: "d_q7w3"
+  delegationReceipt: nil
   workspaceRun: nil
   capture: AssistantCaptureSource(
     kind: "link"
@@ -1144,6 +1147,7 @@
     interrupted: nil
     waitReason: nil
     expectedFiles: nil
+    deliveredFiles: nil
     mode: "foreground"
     status: "awaiting"
     createdAt: 1739000000000
@@ -1178,6 +1182,7 @@
     interrupted: true
     waitReason: nil
     expectedFiles: nil
+    deliveredFiles: nil
     mode: "foreground"
     status: "failed"
     createdAt: 1739000000000
@@ -1204,6 +1209,7 @@
     expectedFiles: [
       "月报.md"
     ]
+    deliveredFiles: nil
     mode: "foreground"
     status: "queued"
     createdAt: 1739000000000

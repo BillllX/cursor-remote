@@ -3,12 +3,14 @@ import SwiftUI
 extension ChatStore {
     var assistantAvatarPhase: AssistantAvatarPhase {
         let chatId = assistantChatId ?? ""
+        let now = Date().timeIntervalSince1970 * 1000
         return AssistantAvatarState.resolve(
             connected: connected,
             turns: assistantChat?.turns ?? [],
-            chatBusy: runningChatIds.contains(chatId) || queuedChatIds.contains(chatId),
-            hasApproval: !(assistantState?.approvals.isEmpty ?? true)
-                || !(assistantState?.draftCards?.isEmpty ?? true),
+            chatBusy: runningChatIds.contains(chatId) || queuedChatIds.contains(chatId)
+                || assistantState?.delegations.contains { $0.status == "queued" } == true,
+            hasApproval: assistantState?.approvals.contains { $0.expiresAt <= 0 || $0.expiresAt > now } == true
+                || assistantState?.draftCards?.contains { $0.status == "waiting_user" && ($0.expiresAt <= 0 || $0.expiresAt > now) } == true,
             hasDelegation: !runningDelegations.isEmpty,
             hasDraft: !draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
@@ -19,6 +21,7 @@ extension ChatStore {
 struct AssistantAvatarView: View {
     let phase: AssistantAvatarPhase
     var size: CGFloat
+    var completionEvent: UInt64
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -26,9 +29,10 @@ struct AssistantAvatarView: View {
     @State private var displayedPhase: AssistantAvatarPhase
     @State private var motionActive = false
 
-    init(phase: AssistantAvatarPhase, size: CGFloat) {
+    init(phase: AssistantAvatarPhase, size: CGFloat, completionEvent: UInt64 = 0) {
         self.phase = phase
         self.size = size
+        self.completionEvent = completionEvent
         _displayedPhase = State(initialValue: phase)
     }
 
@@ -51,12 +55,12 @@ struct AssistantAvatarView: View {
         .rotationEffect(motionRotation, anchor: .bottom)
         .offset(x: motionOffset.width, y: motionOffset.height)
         .animation(JieboMotion.fade(reduceMotion), value: displayedPhase)
-        .onChange(of: phase) { oldPhase, newPhase in
-            if oldPhase.canComplete, newPhase == .idle {
-                displayedPhase = .success
-            } else {
-                displayedPhase = newPhase
-            }
+        .onChange(of: phase) { _, newPhase in
+            displayedPhase = newPhase
+        }
+        .onChange(of: completionEvent) { _, _ in
+            guard scenePhase == .active, homeActive, phase == .idle else { return }
+            displayedPhase = .success
         }
         .task(id: completionKey) {
             guard displayedPhase == .success, phase == .idle else { return }
@@ -76,7 +80,7 @@ struct AssistantAvatarView: View {
     }
 
     private var completionKey: String {
-        "\(phase.rawValue):\(displayedPhase.rawValue)"
+        "\(phase.rawValue):\(displayedPhase.rawValue):\(completionEvent)"
     }
 
     private var motionKey: String {
@@ -291,6 +295,7 @@ struct AssistantPlayfulAvatar: View {
     @State private var greeting = false
     let phase: AssistantAvatarPhase
     let size: CGFloat
+    var completionEvent: UInt64 = 0
 
     var body: some View {
         Button {
@@ -299,7 +304,7 @@ struct AssistantPlayfulAvatar: View {
             guard !reduceMotion else { return }
             withAnimation(.spring(response: 0.25, dampingFraction: 0.5)) { greeting = true }
         } label: {
-            AssistantAvatarView(phase: phase, size: size)
+            AssistantAvatarView(phase: phase, size: size, completionEvent: completionEvent)
                 .rotationEffect(.degrees(greeting ? -12 : 0), anchor: .bottom)
                 .scaleEffect(x: greeting ? 1.08 : 1, y: greeting ? 0.94 : 1, anchor: .bottom)
                 .frame(minWidth: 44, minHeight: 44)

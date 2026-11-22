@@ -2240,13 +2240,19 @@ func checkAssistantReceipts() -> [String] {
 
     state.inbox[0].workspaceRun = AssistantWorkspaceRun(runId: "run1", scheduleId: "monthly", workspaceKey: "业务",
                                                        status: "succeeded", files: ["投诉/投诉.html"])
+    if AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看结果" {
+        problems.append("旧回执只有路径时应展示文字结果")
+    }
+    let snapshot = TurnFile(path: "投诉/投诉.html", kind: .html, op: "modified", size: nil, sha: "snapshot", diffSha: nil, added: nil, removed: nil)
+    state.inbox[0].workspaceRun?.snapshots = [snapshot]
     state.inbox[0].attention = "recovery"
     if state.inbox[0].needsAttention || state.inbox[0].requiresRecovery || state.inbox[0].runStatusTitle != "已完成" ||
         AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看看板" {
-        problems.append("有真实 HTML 路径时应能查看看板")
+        problems.append("有真实 HTML 版本时应能查看看板")
     }
     state.inbox[0].workspaceRun?.status = "no_change"
     state.inbox[0].workspaceRun?.files = []
+    state.inbox[0].workspaceRun?.snapshots = []
     state.inbox[0].attention = nil
     if state.inbox[0].needsAttention || state.inbox[0].requiresRecovery || state.inbox[0].runStatusTitle != "无变动" ||
         AssistantReceipt.results(in: state, now: now).first?.primaryTitle != "查看结果" {
@@ -2292,6 +2298,25 @@ func checkAssistantReceipts() -> [String] {
     }
 
     let defaults = UserDefaults(suiteName: "receipt-test-" + UUID().uuidString)!
+    state.inbox = [
+        AssistantInboxItem(id: "r1", kind: "delegation", title: "报告", body: "产物", createdAt: now - 2,
+                           read: false, chatId: "child", delegationId: "d",
+                           delegationReceipt: .init(attempt: 1, status: "done", files: [snapshot])),
+        AssistantInboxItem(id: "r2", kind: "delegation", title: "补充", body: "仅摘要", createdAt: now - 1,
+                           read: false, chatId: "child", delegationId: "d",
+                           delegationReceipt: .init(attempt: 2, status: "done", files: [])),
+        AssistantInboxItem(id: "r3", kind: "delegation", title: "已取消", body: "", createdAt: now,
+                           read: false, chatId: "child", delegationId: "d",
+                           delegationReceipt: .init(attempt: 3, status: "cancelled", files: [])),
+    ]
+    let rounds = AssistantReceipt.results(in: state, now: now)
+    if rounds.map(\.id) != ["delegation:d:3", "delegation:d:2", "delegation:d:1"] ||
+        rounds.first?.statusTitle != "已取消" ||
+        rounds.first(where: { $0.id == "delegation:d:2" })?.snapshot != nil ||
+        rounds.last?.snapshot?.sha != snapshot.sha {
+        problems.append("委派回执应按轮次保留原版本、纯文字结果和取消记录")
+    }
+
     let key = AssistantReceiptMemory.scope(server: "server-a", tenant: "a")
     AssistantReceiptMemory.record("d:1", scope: key, defaults: defaults)
     if !AssistantReceiptMemory.contains("d:1", scope: key, defaults: defaults) ||
@@ -2305,6 +2330,10 @@ func checkAssistantReceipts() -> [String] {
 
 func checkAssistantAvatarState() -> [String] {
     var problems: [String] = []
+    if !AssistantAvatarPhase.isSuccessful("finished") || AssistantAvatarPhase.isSuccessful("cancelled") ||
+        AssistantAvatarPhase.isSuccessful("error") || AssistantAvatarPhase.isSuccessful(nil) {
+        problems.append("只有明确的完成终态才能触发成功表情")
+    }
     guard var turn = Turn.from(.object(["id": .string("avatar"), "status": .string("completed")])) else {
         return ["头像：无法建立回合"]
     }

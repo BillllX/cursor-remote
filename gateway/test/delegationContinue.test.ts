@@ -151,12 +151,18 @@ test("小驳卡片续作重用原子会话、父回合和委派编号，每轮�
     const saved = getDelegation(tenant, first.id)!;
     const sha = storeArtifact(tenant.stateDir, Buffer.from("# 三农信投诉月报")).sha;
     const chat = tenant.disk.chats.find((raw) => (raw as { id: string }).id === saved.childChatId) as { turns: unknown[] };
-    chat.turns = [{ id: saved.activeTurnId, status: "completed", assistant: "已核对三类投诉数据", files: [{ path: "月报.md", op: "added", kind: "markdown", sha }] }];
-    updateDelegation(tenant, saved.id, { status: "running", expectedFiles: ["月报.md"], receiptPending: false });
+    writeFileSync(join(cwd, "月报.md"), "# 三农信投诉月报");
+    const inherited = { path: "月报.md", op: "added", kind: "markdown", sha } as const;
+    chat.turns = [{ id: saved.activeTurnId, status: "completed", assistant: "已核对三类投诉数据", files: [] }];
+    updateDelegation(tenant, saved.id, { status: "running", expectedFiles: ["月报.md"], inheritedFiles: [inherited], receiptPending: false });
+    writeFileSync(join(cwd, "月报.md"), "# 被其他运行改动");
+    assert.equal(reconcileDelegation(tenant, getDelegation(tenant, saved.id)!), undefined);
+    writeFileSync(join(cwd, "月报.md"), "# 三农信投诉月报");
     recoverDelegations(tenant, undefined, (item) => reconcileDelegation(tenant, item));
     assert.equal(getDelegation(tenant, saved.id)?.status, "done");
     assert.equal(getDelegation(tenant, saved.id)?.result, "已核对三类投诉数据");
     assert.equal(getDelegation(tenant, saved.id)?.receiptPending, true);
+    assert.deepEqual(getDelegation(tenant, saved.id)?.deliveredFiles, [inherited]);
     assert.equal(slots.length, 4);
 
     const keys = outputKeys(cwd, ["月报.md"]);

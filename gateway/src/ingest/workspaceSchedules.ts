@@ -1,6 +1,9 @@
+import type { TurnFile } from "../../../shared/protocol.ts";
+import { kindFromPath } from "../../../shared/preview.ts";
+import { SNAPSHOT_MAX_BYTES, checkArtifactQuota, storeArtifact } from "../turnFiles.ts";
 import { existsSync, statSync } from "node:fs";
 import { claimOutputs, outputKeys, releaseOutputs } from "../outputClaims.ts";
-import { ensureSafePathInWorkspace, loadKbWorkspaceConfig } from "./contract.ts";
+import { ensureSafePathInWorkspace, loadKbWorkspaceConfig, safeReadWorkspaceFileSync } from "./contract.ts";
 import { createHash, randomBytes } from "node:crypto";
 import { postInbox } from "../assistant/inbox.ts";
 import { localParts, validTimeZone } from "../assistant/cron.ts";
@@ -64,13 +67,6 @@ function readSchedulesUnlocked(ref: TenantRef): SchedulesFile {
 
 function writeSchedulesUnlocked(ref: TenantRef, data: SchedulesFile): void {
   atomicWriteFileSync(schedulesFilePath(ref), `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600, fsync: true });
-}
-
-function appendRunRecordUnlocked(ref: TenantRef, record: WorkspaceScheduleRunRecord): void {
-  const rows = readJsonl<WorkspaceScheduleRunRecord>(workspaceScheduleRunsPath(ref));
-  if (rows.some((row) => row.runId === record.runId)) return;
-  rows.push(record);
-  writeJsonl(workspaceScheduleRunsPath(ref), rows.slice(-MAX_RUN_HISTORY), true);
 }
 
 export function listWorkspaceSchedules(
@@ -486,7 +482,36 @@ function finalizeScheduleRunUnlocked(
     updatedAt: outcome.finishedAt,
   };
 
-  appendRunRecordUnlocked(host, {
+  const workspace = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
+  const files = workspace ? (outcome.updatedFiles ?? []).filter((path) => {
+    const safe = ensureSafePathInWorkspace(workspace.path, path, { expectLeaf: "file" });
+    return safe.ok && existsSync(safe.absPath);
+  }) : [];
+  // 回执指向本轮文件内容。重复核销时复用首次落盘的快照，不再读取实时路径。
+  const historyPath = workspaceScheduleRunsPath(host);
+  const history = readJsonl<WorkspaceScheduleRunRecord>(historyPath);
+  const knownRun = history.find((row) => row.runId === outcome.runId);
+  const snapshots: TurnFile[] = knownRun?.snapshots ?? [];
+  if (!knownRun && workspace && outcome.status === "succeeded") {
+    let remaining = SNAPSHOT_MAX_BYTES;
+    for (const path of files.slice(0, 12)) {
+      if (remaining <= 0) break;
+      const read = safeReadWorkspaceFileSync(workspace.path, path, remaining);
+      if (!read.ok) continue;
+      try {
+        const { sha } = storeArtifact(host.stateDir, read.bytes);
+        snapshots.push({ path, kind: kindFromPath(path), op: "modified", sha, size: read.bytes.length });
+        remaining -= read.bytes.length;
+      } catch (err) {
+        log.warn("无法保留定时任务产物快照", outcome.runId, err);
+      }
+    }
+    if (snapshots.length) {
+      try { checkArtifactQuota(host.stateDir); }
+      catch (err) { log.warn("定时任务快照配额检查失败", err); }
+    }
+  }
+  const run: WorkspaceScheduleRunRecord = knownRun ?? {
     runId: outcome.runId,
     scheduleId: item.id,
     workspaceId: item.workspaceId,
@@ -499,25 +524,22 @@ function finalizeScheduleRunUnlocked(
     finishedAt: outcome.finishedAt,
     durationMs: Math.max(0, outcome.finishedAt - outcome.startedAt),
     status: outcome.status,
+    snapshots,
     summary: clip(outcome.summary, 600),
     ...(outcome.batchIds?.length ? { batchIds: outcome.batchIds } : {}),
     ...(outcome.updatedFiles?.length ? { updatedFiles: outcome.updatedFiles } : {}),
     ...(outcome.error ? { error: clip(outcome.error, 300) } : {}),
-  });
+  };
+  if (!knownRun) writeJsonl(historyPath, [...history, run].slice(-MAX_RUN_HISTORY), true);
 
-  const workspace = host.resolveWorkspace(item.workspaceId) ?? host.resolveWorkspace(item.workspaceKeySnapshot);
-  const files = workspace ? (outcome.updatedFiles ?? []).filter((path) => {
-    const safe = ensureSafePathInWorkspace(workspace.path, path, { expectLeaf: "file" });
-    return safe.ok && existsSync(safe.absPath);
-  }) : [];
   postInbox(host, {
     kind: "run",
     title: item.title,
-    body: outcome.error || outcome.summary,
+    body: run.error || run.summary,
     key: `${WORKSPACE_RESULT_KEY_PREFIX}${outcome.runId}`,
     workspaceRun: {
       runId: outcome.runId, scheduleId: item.id, workspaceKey: workspace?.key ?? item.workspaceKeySnapshot,
-      status: outcome.status, files,
+      status: run.status, files: run.updatedFiles?.filter((path) => files.includes(path)) ?? [], snapshots: run.snapshots,
     },
   });
   return updated;

@@ -1,5 +1,5 @@
 // 助理委派与新建工作区的宿主回调（startAssistant 调用留在 index.ts）
-import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { WebSocket } from "ws";
 import { delegationFollowUpId, delegationRecoveryId } from "../../../shared/delegationHandoff.ts";
@@ -22,6 +22,7 @@ import { finishRun } from "../chat/finish.ts";
 import { attachDelegatedFiles } from "../delegationFiles.ts";
 import { broadcastTurnFiles } from "../fileEvents.ts";
 import { isMutatingTool } from "../chat/tools.ts";
+import { safeReadWorkspaceFileSync } from "../ingest/contract.ts";
 import { handlePrompt } from "../chat/runner.ts";
 import { log } from "../log.ts";
 import { hydrateChat } from "../chatBodies.ts";
@@ -129,7 +130,7 @@ export async function requestWorkspace(req: CreateWorkspaceRequest): Promise<str
   return JSON.stringify({ ok: true, name, note: "已建好，可以 delegate 了。" });
 }
 
-function finishDelegation(tenant: Tenant, record: Delegation, ok: boolean, text: string, cancelled = false) {
+function finishDelegation(tenant: Tenant, record: Delegation, ok: boolean, text: string, cancelled = false, deliveredFiles?: TurnFile[]) {
   const current = getDelegation(tenant, record.id);
   if (!current || current.attempt !== record.attempt || (current.status !== "running" && current.status !== "awaiting" && current.status !== "queued")) return;
   settleApproval(tenant, record.childChatId);
@@ -138,6 +139,8 @@ function finishDelegation(tenant: Tenant, record: Delegation, ok: boolean, text:
     status: cancelled ? "cancelled" : ok ? "done" : "failed",
     waitReason: undefined,
     result: text,
+    deliveredFiles: ok ? deliveredFiles ?? [] : undefined,
+    inheritedFiles: undefined,
     endedAt: Date.now(),
     receiptPending: true,
   });
@@ -181,16 +184,30 @@ function persistedDelegationTurn(tenant: Tenant, record: Delegation) {
   if (!record.activeTurnId) return;
   const raw = tenant.disk.chats.find((row) => chatIdOf(row) === record.childChatId);
   const mark = readRunMark(raw);
-  const chat = hydrateChat(tenant.bodies, raw) as { delegationId?: string; turns?: Array<{ id: string; assistant?: string; status?: string; files?: TurnFile[]; tools?: Array<{ name: string; status?: string; args?: unknown }> }> } | undefined;
+  const chat = hydrateChat(tenant.bodies, raw) as { delegationId?: string; cwd?: string; turns?: Array<{ id: string; assistant?: string; status?: string; files?: TurnFile[]; tools?: Array<{ name: string; status?: string; args?: unknown }> }> } | undefined;
   if (chat?.delegationId !== record.id) return;
   const turn = chat.turns?.find((row) => row.id === record.activeTurnId);
   if (!turn) return;
-  return { turn, completed: (mark?.turnId === turn.id && mark.phase === "done" &&
+  return { turn, cwd: chat.cwd ? confinedCwd(chat.cwd, tenant.workspaceRoot) ?? undefined : undefined, completed: (mark?.turnId === turn.id && mark.phase === "done" &&
     ["completed", "finished"].includes(mark.status ?? "")) || ["completed", "finished"].includes(turn.status ?? "") };
 }
 
 function openable(tenant: Tenant, file: TurnFile) {
   return Boolean(file.sha && !readSnapshotFile(tenant.stateDir, file.path, file.sha).error);
+}
+
+function validateDelivery(tenant: Tenant, record: Delegation, cwd: string | undefined, text: string, fresh: TurnFile[]) {
+  const current = fresh.filter((file) => !file.sourceChatId && openable(tenant, file));
+  const freshPaths = new Set(fresh.filter((file) => !file.sourceChatId).map((file) => file.path));
+  const inherited = (record.inheritedFiles ?? []).filter((file) => {
+    if (!cwd || freshPaths.has(file.path) || file.sourceChatId || !openable(tenant, file)) return false;
+    const read = safeReadWorkspaceFileSync(cwd, file.path, 32_000_000);
+    return read.ok && sha256(read.bytes) === file.sha;
+  });
+  const expected = record.expectedFiles ?? [];
+  const files = [...current, ...inherited]
+    .sort((a, b) => Number(expected.includes(b.path)) - Number(expected.includes(a.path)));
+  return { ...assessDelegationDelivery(text, record, files, () => true), files };
 }
 
 function uncertainOperations(tools?: Array<{ name: string; status?: string; args?: unknown }>) {
@@ -216,15 +233,15 @@ export function reconcileDelegation(tenantRef: AssistantTenant, record: Delegati
   const tenant = getTenant(tenantRef.id);
   const prior = tenant && persistedDelegationTurn(tenant, record);
   if (!tenant || !prior?.completed) return;
-  const checked = assessDelegationDelivery(prior.turn.assistant || "", record, prior.turn.files ?? [], (file) => openable(tenant, file));
+  const checked = validateDelivery(tenant, record, prior.cwd, prior.turn.assistant || "", prior.turn.files ?? []);
   if (!checked.ok) return;
   const parent = attachDelegatedFiles(tenant, { chatId: record.childChatId, delegationId: record.id }, prior.turn.id,
-    (prior.turn.files ?? []).filter((file) => openable(tenant, file)));
+    checked.files);
   if (parent) {
     saveDiskNow(tenant);
     broadcastTurnFiles(tenant.id, parent.chatId, parent.turnId, parent.files);
   }
-  return checked.text;
+  return { text: checked.text, files: checked.files };
 }
 
 export function retargetDelegation(tenant: Tenant, args: Record<string, unknown>) {
@@ -300,7 +317,7 @@ export async function startDelegation(req: DelegateRequest, run: typeof handlePr
     if (recoveryId && previous.interrupted) {
       const delivered = reconcileDelegation(tenant, previous);
       if (delivered) {
-        const done = updateDelegation(tenant, previous.id, { status: "done", interrupted: false, result: delivered, endedAt: Date.now(), receiptPending: true });
+        const done = updateDelegation(tenant, previous.id, { status: "done", interrupted: false, result: delivered.text, deliveredFiles: delivered.files, inheritedFiles: undefined, endedAt: Date.now(), receiptPending: true });
         if (done) { deliverDelegationReceipt(tenant, done); publishDelegation(tenant, done); }
         return JSON.stringify({ ok: true, id: previous.id, childChatId: previous.childChatId, note: "已核对并找回原交付。" });
       }
@@ -348,7 +365,8 @@ export async function startDelegation(req: DelegateRequest, run: typeof handlePr
   const delivery = { deliverable, expectedFiles, requiresFile };
   const activeTurnId = crypto.randomUUID();
   const priorTurn = previous?.interrupted ? persistedDelegationTurn(tenant, previous)?.turn : undefined;
-  const preserved = priorTurn?.files ?? [];
+  const preserved = previous?.interrupted ? [...(priorTurn?.files ?? []), ...(previous.inheritedFiles ?? [])]
+    .filter((file, i, all) => all.findIndex((other) => other.path === file.path) === i) : [];
   const uncertain = uncertainOperations(priorTurn?.tools);
   let keys: string[];
   try { keys = outputKeys(cwd, expectedFiles ?? []); }
@@ -358,7 +376,7 @@ export async function startDelegation(req: DelegateRequest, run: typeof handlePr
   const status = background || waiting ? "queued" : "running";
   const waitReason = background ? "等待后台执行名额" : waiting ? "等待同一产物更新完成" : undefined;
   const record = previous
-    ? updateDelegation(tenant, previous.id, { ...delivery, attempt, activeTurnId, waitReason, activeTask: task.slice(0, 8000), interrupted: false, status, mode: "foreground", result: undefined, endedAt: undefined })
+    ? updateDelegation(tenant, previous.id, { ...delivery, attempt, activeTurnId, waitReason, activeTask: task.slice(0, 8000), interrupted: false, status, mode: "foreground", result: undefined, endedAt: undefined, inheritedFiles: preserved, deliveredFiles: undefined })
     : createDelegation(tenant, {
         ...delivery,
         attempt,
@@ -483,20 +501,17 @@ export async function startDelegation(req: DelegateRequest, run: typeof handlePr
       slot.captureDone = undefined;
       const ok = status === "completed" || status === "finished";
       const freshFiles = slot.transcript?.files ?? [];
-      const unchanged = preserved.filter((file) => {
-        if (!file.sha || file.sourceChatId || !openable(tenant!, file)) return false;
-        try {
-          const [path] = outputKeys(cwd!, [file.path]);
-          const stat = lstatSync(path!);
-          return stat.isFile() && stat.size <= 32_000_000 && sha256(readFileSync(path!)) === file.sha;
-        } catch { return false; }
-      });
-      const files = [...unchanged.filter((old) => !freshFiles.some((file) => file.path === old.path)), ...freshFiles];
+      const current = getDelegation(tenant!, record!.id);
+      if (!current || current.attempt !== record!.attempt || !["running", "awaiting", "queued"].includes(current.status)) return;
       const checked = ok
-        ? assessDelegationDelivery(text, delivery, files, (file) => openable(tenant!, file))
-        : { ok: false, text: status === "cancelled" ? "你停掉了这项委派。" : error || `结束状态：${status}` };
+        ? validateDelivery(tenant!, current, cwd!, text, freshFiles)
+        : { ok: false, text: status === "cancelled" ? "你停掉了这项委派。" : error || `结束状态：${status}`, files: [] };
+      if (checked.ok) {
+        const attached = attachDelegatedFiles(tenant!, slot, activeTurnId, checked.files);
+        if (attached) broadcastTurnFiles(tenant!.id, attached.chatId, attached.turnId, attached.files);
+      }
       saveDiskNow(tenant!);
-      finishDelegation(tenant!, record!, checked.ok, checked.text, status === "cancelled");
+      finishDelegation(tenant!, record!, checked.ok, checked.text, status === "cancelled", checked.files);
     }).catch((err) => log.error("保存委派结果失败", record!.id, err)).finally(() => releaseOutputs(keys, owner));
   }
   void dispatch().catch((err) => {

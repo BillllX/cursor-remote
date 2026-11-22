@@ -340,6 +340,7 @@ function buildWorkspaceScheduleRunsForUi(
     summary: r.summary,
     ...(r.batchIds?.length ? { batchIds: r.batchIds } : {}),
     ...(r.updatedFiles?.length ? { updatedFiles: r.updatedFiles } : {}),
+    ...(r.snapshots?.length ? { snapshots: r.snapshots } : {}),
     ...(r.error ? { error: r.error } : {}),
   }));
 }

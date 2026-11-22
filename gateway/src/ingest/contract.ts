@@ -479,6 +479,15 @@ export function safeReadWorkspaceTextFileSync(
   relPath: string,
   maxBytes = 256 * 1024,
 ): { ok: true; text: string; absPath: string } | { ok: false; error: string } {
+  const result = safeReadWorkspaceFileSync(workspaceDir, relPath, maxBytes);
+  return result.ok ? { ok: true, text: result.bytes.toString("utf8"), absPath: result.absPath } : result;
+}
+
+export function safeReadWorkspaceFileSync(
+  workspaceDir: string,
+  relPath: string,
+  maxBytes: number,
+): { ok: true; bytes: Buffer; absPath: string } | { ok: false; error: string } {
   const first = ensureSafePathInWorkspace(workspaceDir, relPath, { expectLeaf: "file" });
   if (!first.ok) return first;
   const flags =
@@ -513,7 +522,7 @@ export function safeReadWorkspaceTextFileSync(
       if (bytesRead <= 0) break;
       offset += bytesRead;
     }
-    return { ok: true, text: buf.subarray(0, offset).toString("utf8"), absPath: second.absPath };
+    return { ok: true, bytes: buf.subarray(0, offset), absPath: second.absPath };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { ok: false, error: `文件不存在：${relPath}` };

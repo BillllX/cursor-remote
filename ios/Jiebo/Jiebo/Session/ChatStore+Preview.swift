@@ -308,6 +308,28 @@ extension ChatStore {
         sendTabRead(tab)
     }
 
+    /// 回执固定读取本轮内容；旧网关或缺少版本时由调用方保留文字结果。
+    @discardableResult
+    func openResultSnapshot(_ file: TurnFile, chatId: String, workspaceKey: String? = nil) -> Bool {
+        guard supportsReadSha, let sha = file.sha else { return false }
+        let source = file.sourceChatId ?? chatId
+        let path: String
+        if let workspaceKey, !workspaceRoot.isEmpty {
+            path = URL(fileURLWithPath: workspaceRoot).appendingPathComponent(workspaceKey)
+                .appendingPathComponent(file.path).path
+        } else {
+            path = file.path
+        }
+        let resolved = relToCwd(path, chatId: source)
+        guard !resolved.isEmpty else { return false }
+        if file.kind == .binary {
+            openMention(resolved, chatId: source, sha: sha)
+        } else {
+            openPreviewTab(path: resolved, kind: file.kind, diff: false, chatId: source, sha: sha)
+        }
+        return true
+    }
+
     /// 从文件卡片打开。代码/纯文本看这一轮的对照，其余可预览类型看文件本身，binary 走 Quick Look。
     /// 一律按卡片所属会话读，绝不 select 过去（iPhone 上 activeId 只能是助理会话）
     func openTurnFile(_ file: TurnFile, chatId: String) {

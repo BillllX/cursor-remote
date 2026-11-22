@@ -38,7 +38,7 @@ type WorkspaceKbPanelProps = {
   workspacePath: string;
   send: (message: ClientMessage) => void;
   assistantResults: AssistantResultMessage[];
-  onOpenBoard: (relPath: string) => void;
+  onOpenBoard: (relPath: string, sha?: string) => void;
   setNotice: (msg: string) => void;
   viewMode?: "kb" | "schedules" | "tokens" | "all";
 };

@@ -71,7 +71,7 @@ struct PadTodayExperience: View {
         .background(JieboColor.paper)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32)
+                AssistantAvatarView(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)
                     .overlay(alignment: .bottomTrailing) {
                         LinkStatusDot(state: store.linkState, syncing: store.assistantThreadSyncBusy)
                             .offset(x: 1, y: 2)
@@ -913,6 +913,7 @@ private struct PadInboxDetail: View {
     let item: AssistantInboxItem
     @Environment(ChatStore.self) private var store
     @Environment(PadRouter.self) private var router
+    @Environment(\.sceneSessionState) private var sceneSession
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -920,6 +921,16 @@ private struct PadInboxDetail: View {
             ChunkedAssistantMessage(text: ReplyText.repair(item.body.nilIfEmpty ?? "这条消息没有更多内容。"))
                 .textSelection(.enabled)
             AssistantMutedText(assistantFormatMillis(item.createdAt))
+            if store.supportsReadSha {
+                ForEach(item.resultSnapshots) { file in
+                    ActionButton(title: "查看本次版本 · \(file.path)", kind: .outline) {
+                        guard let chat = item.chatId ?? store.assistantChatId,
+                              store.openResultSnapshot(file, chatId: chat, workspaceKey: item.workspaceRun?.workspaceKey)
+                        else { return }
+                        sceneSession?.presentPreview(from: store)
+                    }
+                }
+            }
             if let delegationId = item.delegationId {
                 ActionButton(title: "查看委派", kind: .outline) {
                     router.openDelegation(delegationId)

@@ -35,7 +35,7 @@ extension ChatStore {
 
     func approvalHint(for chatId: String, surface: ApprovalSurface) -> ApprovalHint? {
         guard assistantAvatarPhase == .approval else { return nil }
-        if chats.first(where: { $0.id == chatId })?.turns.contains(where: { $0.pendingTool != nil }) == true {
+        if chats.first(where: { $0.id == chatId })?.turns.last?.pendingTool != nil {
             return .inComposer
         }
         if !assistantApprovals(forParent: chatId).isEmpty {

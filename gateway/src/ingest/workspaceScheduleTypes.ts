@@ -1,3 +1,4 @@
+import type { TurnFile } from "../../../shared/protocol.ts";
 import { localParts, localToUtc, validTimeZone } from "../assistant/cron.ts";
 import { DEFAULT_TZ } from "../assistant/schedules.ts";
 import type { DropTenantHost } from "./tokens.ts";
@@ -120,6 +121,7 @@ export type WorkspaceScheduleRunRecord = {
   summary: string;
   batchIds?: string[];
   updatedFiles?: string[];
+  snapshots?: TurnFile[];
   error?: string;
 };
 

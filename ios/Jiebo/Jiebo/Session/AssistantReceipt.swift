@@ -12,20 +12,27 @@ struct AssistantReceipt: Identifiable, Hashable {
     let inboxId: String?
     let artifact: Artifact?
     let workspaceRun: AssistantWorkspaceRun?
+    var deliveredFile: TurnFile? = nil
+    var sourceChatId: String? = nil
+    var cancelled = false
+
+    var snapshot: TurnFile? {
+        deliveredFile ?? workspaceRun?.snapshots.first { $0.sha != nil } ?? artifact?.turnFile
+    }
 
     var primaryTitle: String {
         if needsAttention { return "查看原因" }
-        if let artifact, artifact.turnFile != nil { return Self.fileTitle(artifact.path ?? "") }
-        if let path = workspaceRun?.files.first { return Self.fileTitle(path) }
+        if let snapshot { return Self.fileTitle(snapshot.path) }
         if kind == "reminder" { return "查看提醒" }
         return "查看结果"
     }
 
     var statusTitle: String {
+        if cancelled { return "已取消" }
         if needsAttention { return "需要你处理" }
         if kind == "reminder" { return "提醒到了" }
         if workspaceRun?.status == "no_change" { return "检查完成，暂无变化" }
-        if artifact != nil || workspaceRun?.files.isEmpty == false { return "成果已就绪" }
+        if snapshot != nil { return "成果已就绪" }
         return "有一条新结果"
     }
 
@@ -41,30 +48,43 @@ struct AssistantReceipt: Identifiable, Hashable {
     static func results(in state: AssistantState?, now: Double, recentOnly: Bool = true) -> [AssistantReceipt] {
         guard let state else { return [] }
         let artifacts = state.artifacts ?? []
+        func recent(_ timestamp: Double) -> Bool {
+            now - timestamp <= 600_000 && timestamp <= now + 60_000
+        }
+
+        // 同一轮优先使用持久回执。旧版本的通知用结束时间关联，且不猜测产物。
         let delegations = state.delegations.compactMap { row -> AssistantReceipt? in
-            guard row.status == "done" || row.status == "failed", let ended = row.endedAt else { return nil }
-            let notice = state.inbox.first { $0.delegationId == row.id && $0.createdAt >= ended - 1000 }
-            if recentOnly && (now - ended > 600_000 || ended > now + 60_000 || notice?.read == true) { return nil }
-            let artifact = row.status == "done" ? artifacts.filter {
-                $0.kind == "file" && $0.sha != nil && $0.sourceChatId != nil &&
-                ($0.provenance?.delegationId == row.id || $0.sourceChatId == row.childChatId)
-            }.max { $0.createdAt < $1.createdAt } : nil
-            return AssistantReceipt(id: "delegation:\(row.id):\(row.attempt ?? 1)", kind: "delegation", title: row.title,
-                                    summary: row.result ?? (row.status == "done" ? "执行完成，可查看本次结果。" : "执行未完成，请查看原因。"),
+            guard ["done", "failed", "cancelled"].contains(row.status), let ended = row.endedAt else { return nil }
+            let attempt = row.attempt ?? 1
+            let notice = state.inbox.first {
+                $0.delegationId == row.id && ($0.delegationReceipt?.attempt == attempt ||
+                    ($0.delegationReceipt == nil && $0.createdAt >= ended))
+            }
+            guard notice == nil, !recentOnly || recent(ended) else { return nil }
+            let file = row.status == "done" ? row.deliveredFiles?.first { $0.sha != nil } : nil
+            return AssistantReceipt(id: "delegation:\(row.id):\(attempt)", kind: "delegation", title: row.title,
+                                    summary: row.result ?? "可查看本次执行结果。",
                                     createdAt: ended, needsAttention: row.status == "failed",
-                                    delegationId: row.id, inboxId: notice?.id, artifact: artifact, workspaceRun: nil)
+                                    delegationId: row.id, inboxId: nil, artifact: nil, workspaceRun: nil,
+                                    deliveredFile: file, sourceChatId: row.childChatId, cancelled: row.status == "cancelled")
         }
         let inbox = state.inbox.compactMap { item -> AssistantReceipt? in
             guard ["run", "reminder", "brief", "delegation"].contains(item.kind), !item.resolved, item.snoozedUntil == nil else { return nil }
-            if let id = item.delegationId, state.delegations.contains(where: { $0.id == id }) { return nil }
-            if recentOnly && (item.read || now - item.createdAt > 600_000 || item.createdAt > now + 60_000) { return nil }
+            if recentOnly && (item.read || !recent(item.createdAt)) { return nil }
             let artifact = artifacts.first {
                 $0.kind == "file" && $0.sha != nil && $0.sourceChatId != nil && $0.provenance?.inboxId == item.id
             }
-            return AssistantReceipt(id: "inbox:\(item.id)", kind: item.kind, title: item.title, summary: item.body,
+            let delivery = item.delegationReceipt
+            let file = delivery?.status == "done" ? delivery?.files.first { $0.sha != nil } : nil
+            let id = item.delegationId.flatMap { delegationId in
+                delivery.map { "delegation:\(delegationId):\($0.attempt)" }
+            } ?? "inbox:\(item.id)"
+            return AssistantReceipt(id: id, kind: item.kind, title: item.title, summary: item.body,
                                     createdAt: item.createdAt, needsAttention: item.requiresRecovery,
                                     delegationId: item.delegationId, inboxId: item.id,
-                                    artifact: artifact, workspaceRun: item.workspaceRun)
+                                    artifact: artifact, workspaceRun: item.workspaceRun,
+                                    deliveredFile: file, sourceChatId: item.chatId,
+                                    cancelled: delivery?.status == "cancelled")
         }
         return (delegations + inbox).sorted {
             if $0.needsAttention != $1.needsAttention { return $0.needsAttention }
