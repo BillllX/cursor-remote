@@ -160,10 +160,12 @@ export type ToolHost = {
     title?: string;
     enabled?: boolean;
     executorKind?: "wecom_watch_sync" | "wecom_mail_poll" | "http_api_ingest" | "workspace_script" | "agent_prompt";
-    scheduleMode?: "interval" | "daily_times" | "monthly";
+    scheduleMode?: "interval" | "daily_times" | "weekly" | "monthly";
     monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
     intervalMinutes?: number;
     dailyTimes?: string[];
+    /** 每周运行日：1=周一，7=周日。 */
+    weeklyDays?: number[];
     activeHours?: { start: string; end: string } | null;
     tz?: string;
     watchItemIds?: "all" | string[];
@@ -1303,9 +1305,10 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         },
         scheduleMode: {
           type: "string",
-          enum: ["interval", "daily_times", "monthly"],
-          description: "调度模式：interval=按固定间隔分钟数（跑完后算下次），daily_times=每日固定时刻列表，monthly=每月按日期和时刻运行",
+          enum: ["interval", "daily_times", "weekly", "monthly"],
+          description: "调度模式：interval=按固定间隔分钟数（跑完后算下次），daily_times=每日固定时刻列表，weekly=每周指定星期和时刻，monthly=每月按日期和时刻运行",
         },
+        weeklyDays: { type: "array", items: { type: "integer", minimum: 1, maximum: 7 }, minItems: 1, description: "每周运行日，1=周一，7=周日；与 dailyTimes 配合" },
         monthly: monthlyScheduleSchema,
         intervalMinutes: { type: "number", description: "interval 模式的间隔分钟数（5~10080，默认 60）" },
         dailyTimes: {
@@ -1359,7 +1362,8 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
             | "workspace_script"
             | "agent_prompt"
             | undefined,
-          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "monthly" | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "weekly" | "monthly" | undefined,
+          weeklyDays: args.weeklyDays as number[] | undefined,
           monthly: monthlySchedule(args.monthly),
           intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
           dailyTimes: Array.isArray(args.dailyTimes)
@@ -1754,7 +1758,8 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
           type: "string",
           enum: ["wecom_watch_sync", "wecom_mail_poll", "http_api_ingest", "workspace_script", "agent_prompt"],
         },
-        scheduleMode: { type: "string", enum: ["interval", "daily_times", "monthly"] },
+        scheduleMode: { type: "string", enum: ["interval", "daily_times", "weekly", "monthly"] },
+        weeklyDays: { type: "array", items: { type: "integer", minimum: 1, maximum: 7 }, minItems: 1, description: "每周运行日，1=周一，7=周日；与 dailyTimes 配合" },
         monthly: monthlyScheduleSchema,
         intervalMinutes: { type: "number", description: "间隔分钟数（默认 60）" },
         dailyTimes: { type: "array", items: { type: "string" }, description: "每日固定时刻列表，如 [\"08:45\", \"18:30\"]" },
@@ -1796,7 +1801,8 @@ export function workspaceSessionTools(host: WorkspaceToolHost): Record<string, S
             | "workspace_script"
             | "agent_prompt"
             | undefined,
-          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "monthly" | undefined,
+          scheduleMode: (str(args.scheduleMode).trim() || undefined) as "interval" | "daily_times" | "weekly" | "monthly" | undefined,
+          weeklyDays: args.weeklyDays as number[] | undefined,
           monthly: monthlySchedule(args.monthly),
           intervalMinutes: typeof args.intervalMinutes === "number" ? args.intervalMinutes : undefined,
           dailyTimes: Array.isArray(args.dailyTimes)

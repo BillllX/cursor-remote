@@ -1270,6 +1270,7 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
     var executorKind: String
     var scheduleMode: String
     var intervalMinutes: Int
+    var weeklyDays: [Int]
     var dailyTimes: [String]
     var monthlyDay: Int
     var monthlyTime: String
@@ -1297,6 +1298,7 @@ struct KbWorkspaceScheduleItem: Identifiable, Hashable {
             executorKind: row["executorKind"]?.string ?? "wecom_watch_sync",
             scheduleMode: row["scheduleMode"]?.string ?? "interval",
             intervalMinutes: Int(row["intervalMinutes"]?.number ?? 60),
+            weeklyDays: row["weeklyDays"]?.array?.compactMap { $0.number.map { Int($0) } } ?? [],
             dailyTimes: row["dailyTimes"]?.array?.compactMap(\.string) ?? [],
             monthlyDay: Int(row["monthly"]?.object?["day"]?.number ?? 5),
             monthlyTime: row["monthly"]?.object?["time"]?.string ?? "09:00",
@@ -1349,6 +1351,7 @@ private struct WorkspaceScheduleEditor: View {
     @State private var title: String
     @State private var mode: String
     @State private var interval: Int
+    @State private var weeklyDays: Set<Int>
     @State private var daily: String
     @State private var day: Int
     @State private var time: Date
@@ -1366,6 +1369,7 @@ private struct WorkspaceScheduleEditor: View {
         _title = State(initialValue: item.title)
         _mode = State(initialValue: item.scheduleMode)
         _interval = State(initialValue: item.intervalMinutes)
+        _weeklyDays = State(initialValue: Set(item.weeklyDays.isEmpty ? [3, 6] : item.weeklyDays))
         _daily = State(initialValue: item.dailyTimes.joined(separator: "、"))
         _day = State(initialValue: item.monthlyDay)
         let parts = item.monthlyTime.split(separator: ":").compactMap { Int($0) }
@@ -1385,11 +1389,20 @@ private struct WorkspaceScheduleEditor: View {
                     Picker("触发频率", selection: $mode) {
                         Text("固定间隔").tag("interval")
                         Text("每天").tag("daily_times")
+                        Text("每周").tag("weekly")
                         Text("每月").tag("monthly")
                     }
                     if mode == "interval" {
                         Stepper("完成后间隔 \(interval) 分钟", value: $interval, in: 5...10080)
-                    } else if mode == "daily_times" {
+                    } else if mode == "daily_times" || mode == "weekly" {
+                        if mode == "weekly" {
+                            ForEach(1...7, id: \.self) { d in
+                                Toggle("周" + ["一", "二", "三", "四", "五", "六", "日"][d - 1], isOn: Binding(
+                                    get: { weeklyDays.contains(d) },
+                                    set: { if $0 { weeklyDays.insert(d) } else { weeklyDays.remove(d) } }
+                                ))
+                            }
+                        }
                         TextField("每天运行时间（例如 09:00、18:30）", text: $daily)
                     } else {
                         Picker("每月第几日", selection: $day) {
@@ -1459,7 +1472,11 @@ private struct WorkspaceScheduleEditor: View {
             }.filter { $0.string?.isEmpty == false })
         }
         switch mode {
-        case "daily_times":
+        case "daily_times", "weekly":
+            if mode == "weekly" {
+                guard !weeklyDays.isEmpty else { error = "请选择至少一个运行日。"; return }
+                fields["weeklyDays"] = .array(weeklyDays.sorted().map { .number(Double($0)) })
+            }
             let values = daily.split { ",，、 \n\t".contains($0) }.map(String.init)
             let clock = #"^([01]?\d|2[0-3]):[0-5]\d$"#
             guard !values.isEmpty, values.allSatisfy({ $0.range(of: clock, options: .regularExpression) != nil }) else {
@@ -2755,6 +2772,10 @@ struct KbWorkspaceSheet: View {
         if item.scheduleMode == "monthly" {
             let policy = item.shortMonth == "skip" ? " · 短月跳过" : " · 短月月底运行"
             return "每月 \(item.monthlyDay) 日 \(item.monthlyTime)" + (item.monthlyDay > 28 ? policy : "")
+        }
+        if item.scheduleMode == "weekly" {
+            let days = item.weeklyDays.filter { (1...7).contains($0) }.map { ["一", "二", "三", "四", "五", "六", "日"][$0 - 1] }.joined(separator: "、")
+            return "每周 \(days) \(item.dailyTimes.joined(separator: "、"))"
         }
         if item.scheduleMode == "daily_times" { return "每天 \(item.dailyTimes.joined(separator: "、"))" }
         return "完成后间隔 \(item.intervalMinutes) 分钟"

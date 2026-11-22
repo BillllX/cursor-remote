@@ -293,6 +293,7 @@ function buildWorkspaceSchedulesForUi(host: DropTenantHost, workspaceKey?: strin
     enabled: s.enabled,
     executorKind: s.executorKind,
     scheduleMode: s.scheduleMode,
+    ...(s.weeklyDays ? { weeklyDays: s.weeklyDays } : {}),
     ...(s.monthly ? { monthly: s.monthly } : {}),
     intervalMinutes: s.intervalMinutes,
     ...(s.dailyTimes?.length ? { dailyTimes: s.dailyTimes } : {}),

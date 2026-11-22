@@ -117,6 +117,8 @@ export type UpsertWorkspaceScheduleInput = {
   scheduleMode?: WorkspaceScheduleMode;
   intervalMinutes?: number;
   dailyTimes?: string[];
+  /** 每周运行日：1=周一，7=周日。 */
+  weeklyDays?: number[];
   monthly?: WorkspaceScheduleMonthly;
   expectedUpdatedAt?: number;
   createOnly?: boolean;
@@ -150,7 +152,7 @@ export function upsertWorkspaceSchedule(
     return { ok: false, error: `不支持的任务执行器类型：${String(input.executorKind)}` };
   }
 
-  if (input.scheduleMode && !["interval", "daily_times", "monthly"].includes(input.scheduleMode)) {
+  if (input.scheduleMode && !["interval", "daily_times", "weekly", "monthly"].includes(input.scheduleMode)) {
     return { ok: false, error: "不支持的触发频率" };
   }
   const intervalMinutes = Math.max(5, Math.min(10_080, Math.floor(input.intervalMinutes ?? 60)));
@@ -215,6 +217,14 @@ export function upsertWorkspaceSchedule(
     const effectiveInterval = input.intervalMinutes !== undefined ? intervalMinutes : (prev?.intervalMinutes ?? 60);
     const effectiveDailyTimes =
       input.dailyTimes !== undefined ? dailyTimes : normalizeDailyTimes(prev?.dailyTimes);
+    const weeklyDays = input.weeklyDays ?? prev?.weeklyDays;
+    if (effectiveMode === "weekly" && (!Array.isArray(weeklyDays) || !weeklyDays.length ||
+        !weeklyDays.every((day) => Number.isInteger(day) && day >= 1 && day <= 7) ||
+        !effectiveDailyTimes.length || (input.dailyTimes !== undefined &&
+          (!Array.isArray(input.dailyTimes) || !input.dailyTimes.every((time) =>
+            typeof time === "string" && normalizeDailyTimes([time]).length === 1))))) {
+      return { ok: false as const, error: "请填写每周运行日（1～7）及有效时刻" };
+    }
     const monthly = input.monthly ?? prev?.monthly;
     if (effectiveMode === "monthly" && (!monthly || !Number.isInteger(monthly.day) ||
         monthly.day < 1 || monthly.day > 31 || !normalizeDailyTimes([monthly.time]).length ||
@@ -237,6 +247,7 @@ export function upsertWorkspaceSchedule(
             scheduleMode: effectiveMode,
             intervalMinutes: effectiveInterval,
             dailyTimes: effectiveDailyTimes,
+            weeklyDays,
             monthly,
             activeHours: effectiveActiveHours,
             tz: effectiveTz,
@@ -257,6 +268,7 @@ export function upsertWorkspaceSchedule(
       intervalMinutes: effectiveInterval,
       ...(effectiveDailyTimes.length > 0 ? { dailyTimes: effectiveDailyTimes } : {}),
       ...(effectiveMode === "monthly" ? { monthly } : {}),
+      ...(effectiveMode === "weekly" ? { weeklyDays: [...new Set(weeklyDays)].sort((a, b) => a - b) } : {}),
       ...(effectiveActiveHours ? { activeHours: effectiveActiveHours } : {}),
       tz: effectiveTz,
       cursorState: prev?.cursorState ?? {},

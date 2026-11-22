@@ -63,11 +63,12 @@ export function manageSharedWorkspace(sharing: WorkspaceSharing, actor: Tenant, 
       schedules: items
         .slice(0, 100)
         .map(
-          ({ id, title, enabled, scheduleMode, dailyTimes, intervalMinutes, nextRunAt, lastStatus, executorKind }) => ({
+          ({ id, title, enabled, scheduleMode, weeklyDays, dailyTimes, intervalMinutes, nextRunAt, lastStatus, executorKind }) => ({
             id,
             title,
             enabled,
             scheduleMode,
+            weeklyDays,
             dailyTimes,
             intervalMinutes,
             nextRunAt,

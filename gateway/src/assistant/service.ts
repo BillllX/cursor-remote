@@ -570,6 +570,7 @@ function toolHost(
                 enabled: args.enabled,
                 executorKind: args.executorKind,
                 scheduleMode: args.scheduleMode,
+                weeklyDays: args.weeklyDays,
                 monthly: args.monthly,
                 intervalMinutes: args.intervalMinutes,
                 dailyTimes: args.dailyTimes,
@@ -853,6 +854,7 @@ export function workspaceToolsFor(
                 enabled: args.enabled,
                 executorKind: args.executorKind,
                 scheduleMode: args.scheduleMode,
+                weeklyDays: args.weeklyDays,
                 monthly: args.monthly,
                 intervalMinutes: args.intervalMinutes,
                 dailyTimes: args.dailyTimes,
@@ -1930,7 +1932,7 @@ export async function handleOp(
             ? wsa.executorKind
             : "wecom_watch_sync") as WorkspaceScheduleExecutorKind;
           const scheduleMode =
-            wsa.scheduleMode === "daily_times" || wsa.scheduleMode === "monthly"
+            wsa.scheduleMode === "daily_times" || wsa.scheduleMode === "weekly" || wsa.scheduleMode === "monthly"
               ? wsa.scheduleMode
               : wsa.scheduleMode === "interval"
                 ? "interval"
@@ -1968,6 +1970,7 @@ export async function handleOp(
             enabled: typeof wsa.enabled === "boolean" ? wsa.enabled : undefined,
             executorKind,
             scheduleMode,
+            weeklyDays: wsa.weeklyDays as number[] | undefined,
             monthly,
             createOnly: wsa.createOnly === true,
             expectedUpdatedAt: typeof wsa.expectedUpdatedAt === "number" ? wsa.expectedUpdatedAt : undefined,

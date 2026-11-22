@@ -10,7 +10,7 @@ export type WorkspaceScheduleExecutorKind =
   | "workspace_script"
   | "agent_prompt";
 
-export type WorkspaceScheduleMode = "interval" | "daily_times" | "monthly";
+export type WorkspaceScheduleMode = "interval" | "daily_times" | "weekly" | "monthly";
 export type WorkspaceScheduleMonthly = { day: number; time: string; shortMonth: "skip" | "last_day" };
 
 export type WorkspaceScheduleState = "idle" | "waiting_output" | "running_step1" | "running_step2";
@@ -69,6 +69,8 @@ export type WorkspaceScheduleRecord = {
   intervalMinutes: number;
   /** 每日固定触发时刻列表（如 ["08:45", "18:30"]） */
   dailyTimes?: string[];
+  /** 每周运行日：1=周一，7=周日。 */
+  weeklyDays?: number[];
   monthly?: WorkspaceScheduleMonthly;
   /** 允许运行的时间窗（如 { start: "08:00", end: "22:00" }） */
   activeHours?: { start: string; end: string };
@@ -209,6 +211,8 @@ export function computeNextWorkspaceScheduleRunAt(
     scheduleMode: WorkspaceScheduleMode;
     intervalMinutes: number;
     dailyTimes?: string[];
+    /** 每周运行日：1=周一，7=周日。 */
+    weeklyDays?: number[];
   monthly?: WorkspaceScheduleMonthly;
     activeHours?: { start: string; end: string };
     tz?: string;
@@ -233,12 +237,19 @@ export function computeNextWorkspaceScheduleRunAt(
     }
   }
 
-  if (spec.scheduleMode === "daily_times") {
+  if (spec.scheduleMode === "weekly" && (!spec.weeklyDays?.length ||
+      !spec.weeklyDays.every((day) => Number.isInteger(day) && day >= 1 && day <= 7) ||
+      !normalizeDailyTimes(spec.dailyTimes).length)) {
+    throw new Error("每周触发配置无效");
+  }
+
+  if (spec.scheduleMode === "daily_times" || spec.scheduleMode === "weekly") {
     const times = normalizeDailyTimes(spec.dailyTimes);
     const effectiveTimes = times.length > 0 ? times : ["09:00"];
     const baseParts = localParts(baseNow, tz);
     for (let dayOffset = 0; dayOffset <= 7; dayOffset++) {
       const cal = new Date(Date.UTC(baseParts.year, baseParts.month - 1, baseParts.day + dayOffset));
+      if (spec.scheduleMode === "weekly" && !spec.weeklyDays!.includes(cal.getUTCDay() || 7)) continue;
       const y = cal.getUTCFullYear();
       const m = cal.getUTCMonth() + 1;
       const d = cal.getUTCDate();

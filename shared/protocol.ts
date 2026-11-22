@@ -707,10 +707,12 @@ export type WorkspaceScheduleSummaryItem = {
   title: string;
   enabled: boolean;
   executorKind: WorkspaceScheduleExecutorKind;
-  scheduleMode: "interval" | "daily_times" | "monthly";
+  scheduleMode: "interval" | "daily_times" | "weekly" | "monthly";
   monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
   intervalMinutes: number;
   dailyTimes?: string[];
+  /** 每周运行日：1=周一，7=周日。 */
+  weeklyDays?: number[];
   activeHours?: { start: string; end: string };
   tz: string;
   state: "idle" | "waiting_output" | "running_step1" | "running_step2";
@@ -905,12 +907,14 @@ export type AssistantOpArgsMap = {
       title?: string;
       enabled?: boolean;
       executorKind?: WorkspaceScheduleExecutorKind;
-      scheduleMode?: "interval" | "daily_times" | "monthly";
+      scheduleMode?: "interval" | "daily_times" | "weekly" | "monthly";
       expectedUpdatedAt?: number;
       createOnly?: boolean;
       monthly?: { day: number; time: string; shortMonth: "skip" | "last_day" };
       intervalMinutes?: number;
       dailyTimes?: string[];
+      /** 每周运行日：1=周一，7=周日。 */
+      weeklyDays?: number[];
       activeHours?: { start: string; end: string } | null;
       tz?: string;
       watchItemIds?: "all" | string[];

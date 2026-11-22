@@ -22,6 +22,28 @@ import { checkAndOptionallySyncWecomItems, ingestWecomMailToKb, searchWecomResou
 import type { WorkspaceScheduleExecutorKind, WorkspaceTaskExecutor } from "./workspaceScheduleTypes.ts";
 import { summarizeSuccessfulScriptOutput } from "./workspaceScheduleResult.ts";
 
+/** 只展示状态清单中经过哈希核验的工作区产物，避免过期文件或越界引用。 */
+export function verifiedScriptArtifacts(workspacePath: string, outputData: Buffer): string[] {
+  try {
+    const manifest = JSON.parse(outputData.toString("utf8"));
+    const paths = manifest.updatedFiles ?? manifest["输出文件"];
+    const hashes = manifest.outputHashes ?? manifest["输出哈希"];
+    if (!Array.isArray(paths) || !hashes || typeof hashes !== "object") return [];
+    return [...new Set(paths)].slice(0, 32).flatMap((path) => {
+      if (typeof path !== "string" || typeof hashes[path] !== "string") return [];
+      const safe = ensureSafePathInWorkspace(workspacePath, path, { expectLeaf: "file" });
+      if (!safe.ok) return [];
+      try {
+        const st = lstatSync(safe.absPath);
+        if (!st.isFile() || st.isSymbolicLink() || st.size > DEFAULT_MAX_FILE_BYTES ||
+            !isInside(realpathSync(safe.absPath), realpathSync(workspacePath))) return [];
+        return createHash("sha256").update(readFileSync(safe.absPath)).digest("hex") === hashes[path]
+          ? [safe.normalizedRel] : [];
+      } catch { return []; }
+    }).sort((a, b) => Number(/\.(png|jpe?g|webp)$/i.test(b)) - Number(/\.(png|jpe?g|webp)$/i.test(a)));
+  } catch { return []; }
+}
+
 export type ScheduleAgentPromptDeps = {
   apiKey: () => string;
   listModels?: (apiKey: string) => Promise<string[]>;
@@ -425,7 +447,7 @@ const executeWorkspaceScript: WorkspaceTaskExecutor = async ({ host, schedule, w
     phase: "completed",
     status: "succeeded",
     summary: summarizeSuccessfulScriptOutput(execRes.stdout || `脚本 ${relScript} 执行成功`),
-    ...(payload.outputRelPath ? { updatedFiles: [payload.outputRelPath.trim()] } : {}),
+    updatedFiles: [...new Set([...verifiedScriptArtifacts(workspacePath, outputData), ...(payload.outputRelPath ? [payload.outputRelPath.trim()] : [])])],
     nextCursorState: nextCursor,
   };
 };

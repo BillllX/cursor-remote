@@ -37,6 +37,7 @@ const runLabels: Record<WorkspaceScheduleRunSummaryItem["status"], string> = {
 };
 
 function cadence(item: WorkspaceScheduleSummaryItem) {
+  if (item.scheduleMode === "weekly") return `每周 ${(item.weeklyDays ?? []).map((d) => "一二三四五六日"[d - 1]).join("、")} ${item.dailyTimes?.join("、") ?? "—"}`;
   if (item.scheduleMode === "monthly" && item.monthly) {
     const { day, time, shortMonth } = item.monthly;
     return `每月 ${day} 日 ${time}${day > 28 ? (shortMonth === "skip" ? " · 短月跳过" : " · 短月月底运行") : ""}`;
@@ -107,6 +108,7 @@ export function WorkspaceScheduleSection({
   const [kind, setKind] = useState<WorkspaceScheduleExecutorKind>("wecom_watch_sync");
   const [mode, setMode] = useState<WorkspaceScheduleSummaryItem["scheduleMode"]>("interval");
   const [interval, setInterval] = useState("60");
+  const [weeklyDays, setWeeklyDays] = useState<number[]>([3, 6]);
   const [times, setTimes] = useState("09:00");
   const [day, setDay] = useState("5");
   const [time, setTime] = useState("09:00");
@@ -128,6 +130,7 @@ export function WorkspaceScheduleSection({
     setKind(saved?.executorKind ?? "wecom_watch_sync");
     setMode(saved?.scheduleMode ?? "interval");
     setInterval(String(saved?.intervalMinutes ?? 60));
+    setWeeklyDays(saved?.weeklyDays ?? [3, 6]);
     setTimes(saved?.dailyTimes?.join("、") ?? "09:00");
     setDay(String(saved?.monthly?.day ?? 5));
     setTime(saved?.monthly?.time ?? "09:00");
@@ -148,10 +151,11 @@ export function WorkspaceScheduleSection({
     }
     const dailyTimes = times.trim().split(/[,，、\s]+/);
     const validClock = /^([01]?\d|2[0-3]):[0-5]\d$/;
-    if (mode === "daily_times" && !dailyTimes.every((value) => validClock.test(value))) {
+    if ((mode === "daily_times" || mode === "weekly") && !dailyTimes.every((value) => validClock.test(value))) {
       setFormError("请用 HH:MM 填写每天的运行时间，例如 09:00。多个时间用逗号分隔。");
       return;
     }
+    if (mode === "weekly" && !weeklyDays.length) { setFormError("请选择至少一个运行日。"); return; }
     if (!saved && kind === "http_api_ingest" && !/^https?:\/\//i.test(detail.trim())) {
       setFormError("来源地址需以 http:// 或 https:// 开头。");
       return;
@@ -168,7 +172,8 @@ export function WorkspaceScheduleSection({
           executorKind: kind,
           scheduleMode: mode,
           ...(mode === "interval" ? { intervalMinutes: Number(interval) } : {}),
-          ...(mode === "daily_times" ? { dailyTimes } : {}),
+          ...((mode === "daily_times" || mode === "weekly") ? { dailyTimes } : {}),
+          ...(mode === "weekly" ? { weeklyDays } : {}),
           ...(mode === "monthly" ? { monthly: { day: Number(day), time, shortMonth } } : {}),
           ...(!saved && kind === "wecom_watch_sync" ? { quietPeriodMinutes: Number(quiet) } : {}),
           ...(!saved && kind === "wecom_mail_poll" ? { mailKeyword: detail.trim() || undefined } : {}),
@@ -291,6 +296,7 @@ export function WorkspaceScheduleSection({
             >
               <option value="interval">固定间隔</option>
               <option value="daily_times">每天</option>
+              <option value="weekly">每周</option>
               <option value="monthly">每月</option>
             </select>
           </label>
@@ -309,7 +315,8 @@ export function WorkspaceScheduleSection({
               />
             </label>
           )}
-          {mode === "daily_times" && (
+          {mode === "weekly" && <fieldset><legend>运行日</legend>{Array.from({ length: 7 }, (_, i) => i + 1).map((d) => <label key={d}><input type="checkbox" checked={weeklyDays.includes(d)} onChange={(e) => setWeeklyDays(e.target.checked ? [...weeklyDays, d].sort() : weeklyDays.filter((v) => v !== d))} />周{"一二三四五六日"[d - 1]}</label>)}</fieldset>}
+          {(mode === "daily_times" || mode === "weekly") && (
             <label style={stack}>
               每天运行时间（逗号分隔）
               <input

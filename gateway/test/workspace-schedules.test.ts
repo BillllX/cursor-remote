@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { verifiedScriptArtifacts } from "../src/ingest/workspaceScheduleExecutors.ts";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -450,4 +452,66 @@ test("月报按期预检、隔离生成版本、重启找回；不改原排期",
     bindWorkspaceScheduleAgentPromptDeps(null);
     cleanup();
   }
+});
+
+test("每周调度：周三周六、严格晚于基准、跨周跨年和时区", () => {
+  const spec = { scheduleMode: "weekly" as const, weeklyDays: [3, 6], dailyTimes: ["10:00"], intervalMinutes: 60, tz: "Asia/Shanghai" };
+  let base = Date.parse("2026-11-23T00:00:00+08:00");
+  for (const expected of ["2026-11-25T02:00:00.000Z", "2026-11-28T02:00:00.000Z", "2026-12-02T02:00:00.000Z"]) {
+    base = computeNextWorkspaceScheduleRunAt(spec, base);
+    assert.equal(new Date(base).toISOString(), expected);
+  }
+  assert.equal(new Date(computeNextWorkspaceScheduleRunAt(spec, Date.parse("2026-12-30T10:00:00+08:00"))).toISOString(), "2027-01-02T02:00:00.000Z");
+  assert.equal(new Date(computeNextWorkspaceScheduleRunAt({ ...spec, tz: "America/New_York" }, Date.parse("2026-11-23T00:00:00Z"))).toISOString(), "2026-11-25T15:00:00.000Z");
+  assert.equal(new Date(computeNextWorkspaceScheduleRunAt({ ...spec, weeklyDays: [1], tz: "America/New_York" }, Date.parse("2026-10-26T14:00:00Z"))).toISOString(), "2026-11-02T15:00:00.000Z");
+  assert.equal(new Date(computeNextWorkspaceScheduleRunAt({ ...spec, weeklyDays: [7] }, Date.parse("2026-11-22T10:00:00+08:00"))).toISOString(), "2026-11-29T02:00:00.000Z");
+});
+
+test("每周配置：校验、回读、更新保留脚本参数且不改其他任务", () => {
+  const { host, cleanup } = createTestHost();
+  try {
+    const now = Date.parse("2026-11-23T00:00:00+08:00");
+    const input = { workspace: "Fintopia集团", title: "投诉同步", executorKind: "workspace_script" as const,
+      scheduleMode: "daily_times" as const, dailyTimes: ["19:00"], tz: "Asia/Shanghai",
+      payload: { runner: "python3" as const, scriptRelPath: "投诉/工具/每日更新投诉看板.py", outputRelPath: "投诉/工具/每日更新运行状态.json", timeoutSeconds: 300, ingestToKb: false } };
+    const created = upsertWorkspaceSchedule(host, input, now);
+    assert.ok(created.ok);
+    const other = upsertWorkspaceSchedule(host, { ...input, title: "其他每日任务" }, now);
+    assert.ok(other.ok);
+    for (const weeklyDays of [[], [0], [8], [1.5], ["3"], "3,6", null]) {
+      const result = upsertWorkspaceSchedule(host, { ...input, id: created.item.id, scheduleMode: "weekly", weeklyDays: weeklyDays as number[], dailyTimes: ["10:00"] }, now);
+      assert.equal(result.ok, false);
+    }
+    for (const dailyTimes of [[], ["25:00"], ["10:00", "bad"]]) {
+      assert.equal(upsertWorkspaceSchedule(host, { ...input, id: created.item.id, scheduleMode: "weekly", weeklyDays: [3, 6], dailyTimes }, now).ok, false);
+    }
+    assert.equal(upsertWorkspaceSchedule(host, { ...input, id: created.item.id, scheduleMode: "weekly", weeklyDays: [3, 6], tz: "bad/zone" }, now).ok, false);
+    const result = upsertWorkspaceSchedule(host, { workspace: input.workspace, title: input.title, executorKind: input.executorKind,
+      id: created.item.id, expectedUpdatedAt: created.item.updatedAt, scheduleMode: "weekly", weeklyDays: [6, 3, 3], dailyTimes: ["10:00"], tz: input.tz }, now + 1);
+    assert.ok(result.ok);
+    const rows = listWorkspaceSchedules(host);
+    const saved = rows.find((r) => r.id === created.item.id)!;
+    assert.deepEqual(saved.weeklyDays, [3, 6]);
+    assert.deepEqual(saved.payload, input.payload);
+    assert.equal(new Date(saved.nextRunAt!).toISOString(), "2026-11-25T02:00:00.000Z");
+    assert.deepEqual(rows.find((r) => r.id === other.item.id), JSON.parse(JSON.stringify(other.item)));
+    assert.deepEqual(getWorkspaceAutomationStatus(host, [{ id: "ws_fintopia", key: "Fintopia集团" }]).workspaceSchedules?.find((r) => r.id === saved.id)?.weeklyDays, [3, 6]);
+  } finally { cleanup(); }
+});
+
+
+test("脚本图片清单：有效哈希可展示，过期哈希和越界路径被拒绝", () => {
+  const { host, cleanup } = createTestHost();
+  try {
+    const root = host.resolveWorkspace("Fintopia集团")!.path;
+    const bytes = Buffer.from("图片测试内容");
+    writeFileSync(join(root, "图.png"), bytes);
+    writeFileSync(join(root, "页面.html"), bytes);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const manifest = { 输出文件: ["页面.html", "图.png", "../越界.png", "缺失.png"], 输出哈希: { "页面.html": hash, "图.png": hash, "../越界.png": hash, "缺失.png": hash } };
+    assert.deepEqual(verifiedScriptArtifacts(root, Buffer.from(JSON.stringify(manifest))), ["图.png", "页面.html"]);
+    manifest.输出哈希["图.png"] = "错误哈希";
+    assert.deepEqual(verifiedScriptArtifacts(root, Buffer.from(JSON.stringify(manifest))), ["页面.html"]);
+    assert.deepEqual(verifiedScriptArtifacts(root, Buffer.from("普通脚本输出")), []);
+  } finally { cleanup(); }
 });
