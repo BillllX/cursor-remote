@@ -322,9 +322,11 @@ struct AssistantActionRow: View {
 /// 委派的状态和交付跟着小驳的原回合更新，预览文件时仍留在当前会话。
 struct AssistantDelegationReceipt: View {
     @Environment(ChatStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: AssistantDelegation
     let turn: Turn
     let chatId: String
+    @State private var expanded = false
     @State private var editing = false
     @State private var note = ""
     @State private var sendError = false
@@ -342,6 +344,15 @@ struct AssistantDelegationReceipt: View {
         }
     }
 
+    private var statusColors: (foreground: Color, background: Color) {
+        switch item.status {
+        case "queued", "running": (JieboColor.run, JieboColor.runBg)
+        case "awaiting": (JieboColor.warnFg, JieboColor.warnBg)
+        case "failed": (JieboColor.danger, JieboColor.dangerBg)
+        default: (JieboColor.ink2, JieboColor.mist)
+        }
+    }
+
     private var files: [TurnFile] {
         var paths = Set<String>()
         return turn.cardFiles.reversed().filter {
@@ -351,13 +362,49 @@ struct AssistantDelegationReceipt: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(item.title).font(JieboFont.text(.footnote, weight: .semibold))
-                Spacer(minLength: 8)
-                Text(status).font(JieboFont.text(.caption)).foregroundStyle(JieboColor.ink2)
+            Button {
+                withAnimation(JieboMotion.snappy(reduceMotion)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(JieboFont.text(.caption2, weight: .semibold))
+                        .foregroundStyle(statusColors.foreground)
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.title)
+                            .font(JieboFont.text(.footnote, weight: .semibold))
+                            .foregroundStyle(JieboColor.ink)
+                        Text(item.workspace + ((item.attempt ?? 1) > 1 ? " · 第 \(item.attempt ?? 1) 轮" : ""))
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.ink2)
+                    }
+                    .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                    StatusTag(text: status, fg: statusColors.foreground, bg: statusColors.background)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
             }
-            Text(item.workspace + ((item.attempt ?? 1) > 1 ? " · 第 \(item.attempt ?? 1) 轮" : ""))
-                .font(JieboFont.text(.caption)).foregroundStyle(JieboColor.ink2)
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue(expanded ? "已展开" : "已收起")
+            .accessibilityHint(expanded ? "轻点两下收起委派" : "轻点两下展开委派")
+            if expanded { detail }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, expanded ? 12 : 4)
+        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
+        .background(JieboColor.white)
+        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md))
+        .overlay(RoundedRectangle(cornerRadius: JieboRadius.md).stroke(JieboColor.line))
+        .animation(JieboMotion.fade(reduceMotion), value: item.status)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 8) {
             if let deliverable = item.deliverable {
                 Text("预期交付：\(deliverable)").font(JieboFont.text(.footnote))
             }
@@ -403,11 +450,5 @@ struct AssistantDelegationReceipt: View {
                 }
             }
         }
-        .padding(12)
-        .frame(maxWidth: JieboMeasure.bubble, alignment: .leading)
-        .background(JieboColor.white)
-        .clipShape(RoundedRectangle(cornerRadius: JieboRadius.md))
-        .overlay(RoundedRectangle(cornerRadius: JieboRadius.md).stroke(JieboColor.line))
-        .accessibilityElement(children: .contain)
     }
 }

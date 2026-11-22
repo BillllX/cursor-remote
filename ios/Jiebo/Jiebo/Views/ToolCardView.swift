@@ -9,22 +9,17 @@ struct ToolCardView: View {
     var tool: ToolCall
     var compactPresentation = false
     var showBorder = true
-    /// 摘要展开时：跑的过程中强制展开当前步（不由 userPinned 挡）
-    var forceExpanded = false
     @State private var expanded = false
-    @State private var userPinned = false
     private var chatId: String { environmentChatId.isEmpty ? store.activeId : environmentChatId }
 
     init(
         tool: ToolCall,
         compactPresentation: Bool = false,
-        showBorder: Bool = true,
-        forceExpanded: Bool = false
+        showBorder: Bool = true
     ) {
         self.tool = tool
         self.compactPresentation = compactPresentation
         self.showBorder = showBorder
-        self.forceExpanded = forceExpanded
     }
 
     var body: some View {
@@ -33,12 +28,15 @@ struct ToolCardView: View {
                 // 展开/收起做成独立 Button：容器挂 onTapGesture 会和内部按钮抢手势（P5a 页签同款坑）
                 Button {
                     withAnimation(JieboMotion.snappy(reduceMotion)) {
-                        let next = !expanded
-                        expanded = next
-                        userPinned = next
+                        expanded.toggle()
                     }
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(JieboFont.text(.caption2, weight: .semibold))
+                            .foregroundStyle(statusColor)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .accessibilityHidden(true)
                         Image(systemName: kindSymbol)
                             .font(JieboFont.text(.caption, weight: .semibold))
                             .foregroundStyle(statusColor)
@@ -60,7 +58,7 @@ struct ToolCardView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .combine)
-                .accessibilityValue(statusSpoken)
+                .accessibilityValue(statusSpoken + (expanded ? "，已展开" : "，已收起"))
                 .accessibilityHint(expanded ? "轻点两下收起结果" : "轻点两下展开结果")
                 // P5b：edit/write 工具给文件入口——按类型路由（diff 页签/原文页签/Quick Look）
                 if Self.isImageTool(tool) || Self.imagePath(tool) != nil {
@@ -118,19 +116,16 @@ struct ToolCardView: View {
                     .accessibilityLabel("终端输出")
                     .accessibilityHint("在工作台打开这条命令的输出")
                 }
-                if !compactPresentation { badge }
-                else if tool.status == "running" || tool.status == "error" {
-                    compactStatus
-                }
+                badge
             }
             if expanded {
                 ToolDetail(tool: tool)
             }
         }
-        .padding(.horizontal, compactPresentation ? 8 : (showBorder ? 12 : 0))
+        .padding(.horizontal, compactPresentation || !showBorder ? 8 : 12)
         .padding(.bottom, expanded ? 10 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.clear)
+        .background(tool.status == "running" ? JieboColor.runBg : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: expanded ? 12 : 8, style: .continuous))
         .overlay {
             if showBorder {
@@ -139,25 +134,6 @@ struct ToolCardView: View {
             }
         }
         .animation(JieboMotion.fade(reduceMotion), value: tool.status)
-        .onAppear { syncExpanded() }
-        .onChange(of: tool.status) { _, _ in syncExpanded() }
-        .onChange(of: forceExpanded) { _, _ in syncExpanded() }
-    }
-
-    @ViewBuilder
-    private var compactStatus: some View {
-        switch tool.status {
-        case "running":
-            Text("进行中")
-                .font(JieboFont.text(.caption))
-                .foregroundStyle(JieboColor.run)
-        case "error":
-            Text("失败")
-                .font(JieboFont.text(.caption))
-                .foregroundStyle(JieboColor.danger)
-        default:
-            EmptyView()
-        }
     }
 
     private var statusSpoken: String {
@@ -165,16 +141,6 @@ struct ToolCardView: View {
         case "running": return "进行中"
         case "error": return "失败"
         default: return "已完成"
-        }
-    }
-
-    private func syncExpanded() {
-        if forceExpanded || tool.status == "running" {
-            expanded = true
-            return
-        }
-        if !userPinned {
-            expanded = false
         }
     }
 
@@ -227,6 +193,7 @@ struct ToolCardView: View {
         Text(text)
             .font(JieboFont.text(.caption))
             .foregroundStyle(fg)
+            .fixedSize(horizontal: true, vertical: false)
             .accessibilityHidden(true)
     }
 

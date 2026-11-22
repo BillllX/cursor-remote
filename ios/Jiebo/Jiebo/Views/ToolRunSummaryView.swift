@@ -7,7 +7,6 @@ struct ToolRunSummaryView: View {
     var turnRunning: Bool
     var durationMs: Double?
     @State private var detailOpen = false
-    @State private var userPinned = false
 
     private var runningToolId: String? {
         tools.last(where: { $0.status == "running" })?.callId
@@ -35,16 +34,16 @@ struct ToolRunSummaryView: View {
             Button {
                 withAnimation(JieboMotion.snappy(reduceMotion)) {
                     detailOpen.toggle()
-                    userPinned = true
                 }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.right")
                         .font(JieboFont.text(.caption2, weight: .semibold))
-                        .foregroundStyle(JieboColor.ink2)
+                        .foregroundStyle(turnRunning ? JieboColor.run : JieboColor.ink2)
                         .rotationEffect(.degrees(detailOpen ? 90 : 0))
                     if turnRunning, runningToolId != nil {
                         ShimmerText(text: summaryLine, font: JieboFont.text(.footnote, weight: .medium))
+                            .lineLimit(2)
                     } else {
                         Text(summaryLine)
                             .font(JieboFont.text(.footnote, weight: .medium))
@@ -52,13 +51,21 @@ struct ToolRunSummaryView: View {
                             .lineLimit(2)
                     }
                     Spacer(minLength: 0)
+                    if turnRunning {
+                        Text("进行中")
+                            .font(JieboFont.text(.caption))
+                            .foregroundStyle(JieboColor.run)
+                            .fixedSize()
+                    }
                 }
+                .padding(.horizontal, 8)
                 .frame(minHeight: 44)
+                .background(turnRunning ? JieboColor.runBg : Color.clear, in: RoundedRectangle(cornerRadius: 8))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel(summaryLine)
-            .accessibilityValue(detailOpen ? "已展开" : "已收起")
+            .accessibilityValue((turnRunning ? "进行中，" : "") + (detailOpen ? "已展开" : "已收起"))
             .accessibilityHint(detailOpen ? "轻点两下收起步骤" : "轻点两下展开步骤")
 
             if detailOpen {
@@ -67,8 +74,7 @@ struct ToolRunSummaryView: View {
                         ToolCardView(
                             tool: tool,
                             compactPresentation: true,
-                            showBorder: false,
-                            forceExpanded: detailOpen && turnRunning && tool.callId == runningToolId
+                            showBorder: false
                         )
                     }
                 }
@@ -76,18 +82,7 @@ struct ToolRunSummaryView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { syncExpansion() }
-        .onChange(of: turnRunning) { _, _ in syncExpansion() }
-        .onChange(of: runningToolId) { _, _ in syncExpansion() }
-    }
-
-    private func syncExpansion() {
-        guard !userPinned else { return }
-        if turnRunning {
-            detailOpen = true
-        } else {
-            detailOpen = false
-        }
+        .animation(JieboMotion.fade(reduceMotion), value: turnRunning)
     }
 }
 
