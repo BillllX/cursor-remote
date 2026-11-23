@@ -2,6 +2,23 @@ import Foundation
 
 // Mirrors web/lib/preview.ts — 保持 kind 判定与网页一致。
 
+/// 正文文件链接统一进入应用预览，外部网址仍交给系统。
+func previewPath(from url: URL) -> String? {
+    if url.scheme?.lowercased() == "jiebo-file" {
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "path" })?.value
+    }
+    guard url.scheme == nil, url.host == nil else { return nil }
+    let raw = url.relativeString
+    guard !raw.hasPrefix("#"), !raw.hasPrefix("//") else { return nil }
+    // 只解码一次；百分号属于文件名时不能再次解释为转义序列。
+    var path = raw.removingPercentEncoding ?? raw
+    if path.hasPrefix("@") { path.removeFirst() }
+    if path.hasPrefix("./") { path.removeFirst(2) }
+    guard !path.isEmpty, path.contains("/") || path.contains(".") else { return nil }
+    return path
+}
+
 enum PreviewKind: String, Sendable, Hashable, CaseIterable {
     case text
     case canvas

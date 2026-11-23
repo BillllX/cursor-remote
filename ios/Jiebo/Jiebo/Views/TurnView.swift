@@ -485,7 +485,7 @@ struct TurnView: View, Equatable {
     private static let mentionRegex = try? NSRegularExpression(pattern: #"(^|\s)@([^\s@:，。；、！？,;!?)]+)((?::\d+(?:-\d+)?)?)"#)
     private static let mentionAllowed: CharacterSet = {
         var allowed = CharacterSet.urlQueryAllowed
-        allowed.remove(charactersIn: "&#+=") // query 里这些字符必须编码，否则 openURL 侧解析会断
+        allowed.remove(charactersIn: "&#+=%()[]") // query 里这些字符必须编码，否则 openURL 侧解析会断
         return allowed
     }()
 

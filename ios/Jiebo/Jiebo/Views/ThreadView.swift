@@ -90,9 +90,7 @@ struct ThreadView: View {
         .modifier(ThreadSidebarToggleRemoval(enabled: chrome != .embedded))
         // @文件 链接 → 预览面板（媒体类内部转 Quick Look）；其他链接走系统
         .environment(\.openURL, OpenURLAction { url in
-            guard url.scheme == "jiebo-file",
-                  let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                  let path = components.queryItems?.first(where: { $0.name == "path" })?.value
+            guard let path = previewPath(from: url)
             else { return .systemAction }
             store.openPreview(path, chatId: resolvedChatId)
             sceneSession?.presentPreview(from: store)

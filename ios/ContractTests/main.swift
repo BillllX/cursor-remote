@@ -2369,6 +2369,26 @@ func checkAssistantAvatarState() -> [String] {
     return problems
 }
 
+// 正文链接与网页端一致：本地文件打开预览，外部地址不拦截。
+func checkPreviewLinks() -> [String] {
+    let cases: [(String, String?)] = [
+        ("jiebo-file://open?path=%E6%8A%95%E8%AF%89/a.png", "投诉/a.png"),
+        ("jiebo-file://open?path=a%2520b.png", "a%20b.png"),
+        ("投诉/周度曲线/三农信-金融办-周曲线.png", "投诉/周度曲线/三农信-金融办-周曲线.png"),
+        ("./.cursor-remote/canvases/check.canvas.tsx", ".cursor-remote/canvases/check.canvas.tsx"),
+        (".cursor-remote/uploads/截屏2026-11-23%2010.29.25.jpg", ".cursor-remote/uploads/截屏2026-11-23 10.29.25.jpg"),
+        ("@投诉/工具/周曲线运行说明.txt", "投诉/工具/周曲线运行说明.txt"),
+        ("https://example.com/a.png", nil),
+        ("mailto:user@example.com", nil),
+        ("//example.com/a.png", nil),
+        ("#section", nil),
+    ]
+    return cases.compactMap { raw, expected in
+        guard let url = URL(string: raw) else { return "文件链接无法解析：\(raw)" }
+        return previewPath(from: url) == expected ? nil : "文件链接路由不符：\(raw)"
+    }
+}
+
 // MARK: 入口
 
 let options = parseOptions()
@@ -2380,7 +2400,7 @@ else { fail("读不到或解析不了 \(options.fixtures)") }
 let legacyModeProblems = AgentMode(rawValue: "ask") == .agent && AgentMode(rawValue: "plan") == .agent
     ? []
     : ["AgentMode：旧 ask/plan 没有归一为 agent"]
-let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + checkAssistantReceipts() + checkAssistantAvatarState() + legacyModeProblems
+let problems = checkServer(options, samples: serverSamples) + writeClientSamples(options) + checkToolNames() + checkImBodies() + checkJSONValue() + checkDeviceRequestValidation() + checkProductNavigation() + checkDeferredTurnFiles() + checkTurnFilesState() + checkMemoryCenter() + checkMemoryCenterImportStrictDecoders() + checkMemoryCenterImportMalformedFixturesFile() + checkMemoryCenterServerFixtures(serverSamples) + checkPersonalTaskProjection(serverSamples) + checkBootstrapCacheAndAssistantSync() + checkAssistantSceneElection() + checkSceneEditorElection() + checkScenePreviewState() + checkPadInspectorNavigation() + checkPadLayoutMetrics() + checkPadSemanticDropRules() + checkImDurableOutbox() + checkTrafficOptimizationPolicies() + checkAssistantReceipts() + checkAssistantAvatarState() + checkPreviewLinks() + legacyModeProblems
 if !problems.isEmpty {
     for problem in problems { FileHandle.standardError.write(Data("❌ \(problem)\n".utf8)) }
     exit(1)
