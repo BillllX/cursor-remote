@@ -602,6 +602,7 @@ export type SkillFactorySummaryItem = {
   autoPrewarm: boolean;
   health: SkillFactoryHealthStatus;
   healthReason?: string;
+  healthCode?: "approval_unlinked" | "content_mismatch" | "unauthorized_tools";
   sha256?: string;
   lockedSha256?: string;
   stats: SkillFactoryUsageStats;

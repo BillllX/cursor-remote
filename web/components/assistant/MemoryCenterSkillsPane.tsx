@@ -41,9 +41,9 @@ export function healthToneOf(health: SkillFactorySummaryItem["health"]) {
   return health === "healthy" ? "ok" : health === "tampered" ? "danger" : "warn";
 }
 
-export function healthTextOf(health: SkillFactorySummaryItem["health"]) {
+export function healthTextOf(health: SkillFactorySummaryItem["health"], code?: SkillFactorySummaryItem["healthCode"]) {
   if (health === "healthy") return "正常";
-  if (health === "tampered") return "哈希篡改/未锁";
+  if (health === "tampered") return code === "approval_unlinked" ? "审批记录未关联" : code === "content_mismatch" ? "内容校验不一致" : code === "unauthorized_tools" ? "工具权限异常" : "完整性校验未通过";
   if (health === "broken_ref") return "引用待核实";
   if (health === "degraded") return "降级运行";
   if (health === "disabled") return "已停用";
@@ -178,7 +178,7 @@ export function MemoryCenterSkillDetail({
       <div className="assistant-item-head">
         <span className="assistant-item-title">{activeSkill.name}</span>
         <span className={`chat-mark ${healthToneOf(activeSkill.health)} ${MEMORY_CENTER_CSS.badge}`}>
-          {healthTextOf(activeSkill.health)}
+          {healthTextOf(activeSkill.health, activeSkill.healthCode)}
         </span>
       </div>
       <div className="assistant-item-body">{activeSkill.summary}</div>
@@ -423,7 +423,7 @@ export default function MemoryCenterSkillsPane({
     const isSelected = activeKey === key;
     const isInlineExpanded = !onSelectKey && expandedId === key;
     const healthTone = healthToneOf(sk.health);
-    const healthText = healthTextOf(sk.health);
+    const healthText = healthTextOf(sk.health, sk.healthCode);
     return (
       <li key={sk.id}>
         <div

@@ -106,6 +106,7 @@ export type SkillManifest = {
   autoPrewarm: boolean;
   health: SkillHealthStatus;
   healthReason?: string;
+  healthCode?: "approval_unlinked" | "content_mismatch" | "unauthorized_tools";
   sha256?: string;
   lockedSha256?: string;
   stats: SkillUsageStats;
@@ -144,7 +145,8 @@ type SkillStatsStore = {
   items: Record<string, SkillUsageStats>;
 };
 
-type SkillLockStore = {
+export type SkillLockStore = {
+  migrations?: SkillLockMigration[];
   /** key: relSkillPath (e.g. "cursorremote/cursor-remote/.jiebo/skills/ios-swiftui-motion/SKILL.md") */
   locks: Record<
     string,
@@ -209,7 +211,170 @@ function readStatsStore(ref: TenantRef): SkillStatsStore {
 
 function readLockStore(ref: TenantRef): SkillLockStore {
   const raw = readJson<SkillLockStore>(lockFile(ref), { locks: {} });
-  return { locks: raw && typeof raw.locks === "object" && raw.locks ? raw.locks : {} };
+  return { ...raw, locks: raw && typeof raw.locks === "object" && raw.locks ? raw.locks : {} };
+}
+
+/** 改名凭据与原审批锁一起原子持久化；不得通过相同 ID/哈希跨工作区搜索授权。 */
+export type SkillLockMigration = {
+  id: string;
+  from: string;
+  to: string;
+  workspaceId: string;
+  device: number;
+  inode: number;
+  evidence: string;
+  kind: "rename" | "operator_repair";
+  createdAt: string;
+  completedAt?: string;
+  entries: Record<string, SkillLockStore["locks"][string]>;
+  vacantSource?: { workspaceId: string; device: number; inode: number };
+};
+
+function migrationWorkspace(tenant: WorkspaceRoot, name: string) {
+  if (!name || name.startsWith(".") || /[\\/]/.test(name)) throw new Error("迁移只允许明确的一级工作区路径");
+  const path = resolve(tenant.workspaceRoot, name);
+  rejectSymlink(path);
+  return path;
+}
+
+function migrationIdentity(tenant: WorkspaceRoot, name: string, expectedId: string) {
+  const mapping = readJson<{ items: Record<string, { workspaceId: string; path: string }> }>(
+    resolve(tenant.stateDir, "workspace-agent-chats.json"), { items: {} },
+  );
+  const item = mapping.items[name];
+  if (!item || item.workspaceId !== expectedId || resolve(item.path) !== resolve(tenant.workspaceRoot, name)) {
+    throw new Error("工作区身份与迁移凭据不一致");
+  }
+}
+
+function checkMigrationEntries(tenant: WorkspaceRoot, store: SkillLockStore, receipt: SkillLockMigration, dir: string) {
+  for (const [oldKey, approved] of Object.entries(receipt.entries)) {
+    const suffix = oldKey.slice(receipt.from.length + 1);
+    const nextKey = `${receipt.to}/${suffix}`;
+    if (!oldKey.startsWith(`${receipt.from}/`) || !suffix.endsWith(`/.jiebo/skills/${approved.skillId}/SKILL.md`) && suffix !== `.jiebo/skills/${approved.skillId}/SKILL.md`) {
+      throw new Error("迁移审批路径不合法");
+    }
+    const current = store.locks[oldKey];
+    if (JSON.stringify(current) !== JSON.stringify(approved)) throw new Error(`原审批已变化：${oldKey}`);
+    if (store.locks[nextKey]) throw new Error(`目标审批路径冲突：${nextKey}`);
+    const read = scopedRead.readFileAtScope(dir, suffix, MAX_SKILL_FILE_BYTES);
+    if (!read.ok || read.truncated || sha256Hex(read.text) !== approved.sha256) throw new Error(`技能内容或安全路径校验失败：${nextKey}`);
+    const parsed = parseSkillMarkdown(read.text);
+    if ((parsed.id && parsed.id !== approved.skillId) || parsed.requiredTools.some(t => !ALLOWED_SKILL_TOOLS.has(t))) {
+      throw new Error(`技能身份或工具权限校验失败：${nextKey}`);
+    }
+  }
+}
+
+/** 在目录真实改名前调用；先留下服务端身份与 inode 凭据，崩溃后可受控续办。 */
+export function prepareSkillLockRename(tenant: WorkspaceRoot, from: string, to: string, workspaceId: string) {
+  const source = migrationWorkspace(tenant, from);
+  const target = migrationWorkspace(tenant, to);
+  if (existsSync(target)) throw new Error("目标工作区已存在");
+  migrationIdentity(tenant, from, workspaceId);
+  const stat = statSync(source);
+  if (!stat.isDirectory()) throw new Error("源工作区不是目录");
+  return withFileLockSync(lockFile(tenant), () => {
+    const store = readLockStore(tenant);
+    const receipt: SkillLockMigration = {
+      id: newId("skm"), from, to, workspaceId, device: stat.dev, inode: stat.ino,
+      kind: "rename", evidence: "网关实际改名入口：稳定 workspaceId 与改名前目录 dev/ino",
+      createdAt: new Date().toISOString(),
+      entries: Object.fromEntries(Object.entries(store.locks).filter(([key]) => key.startsWith(`${from}/`))),
+    };
+    checkMigrationEntries(tenant, store, receipt, source);
+    store.migrations = [...(store.migrations ?? []), receipt];
+    writeJson(lockFile(tenant), store);
+    return receipt.id;
+  });
+}
+
+/** 只消费已记录的真实改名凭据；原审批字段逐字保留，审计与新路径一次原子写入。 */
+export function finishSkillLockRename(tenant: WorkspaceRoot, migrationId: string) {
+  return withFileLockSync(lockFile(tenant), () => {
+    const store = readLockStore(tenant);
+    const receipt = store.migrations?.find(item => item.id === migrationId);
+    if (!receipt || receipt.kind !== "rename") throw new Error("缺少可信改名凭据");
+    if (receipt.completedAt) return receipt;
+    const source = migrationWorkspace(tenant, receipt.from);
+    const target = migrationWorkspace(tenant, receipt.to);
+    if (existsSync(source)) throw new Error("源目录仍存在，不能判定为真实迁移");
+    const stat = statSync(target);
+    if (!stat.isDirectory() || stat.dev !== receipt.device || stat.ino !== receipt.inode) throw new Error("目录身份已变化，拒绝复制品");
+    // 正常流程先迁聊天映射；恢复流程也必须先确认目标身份。
+    migrationIdentity(tenant, receipt.to, receipt.workspaceId);
+    checkMigrationEntries(tenant, store, receipt, target);
+    for (const [oldKey, approved] of Object.entries(receipt.entries)) {
+      store.locks[`${receipt.to}/${oldKey.slice(receipt.from.length + 1)}`] = approved;
+      delete store.locks[oldKey];
+    }
+    receipt.completedAt = new Date().toISOString();
+    writeJson(lockFile(tenant), store);
+    return receipt;
+  });
+}
+
+export type SkillLockRepairPlan = {
+  from: string;
+  to: string;
+  workspaceId: string;
+  /** 运维必须明确确认历史路径归属；不能由技能正文或哈希匹配推导此授权。 */
+  evidence: string;
+  entries: Record<string, SkillLockStore["locks"][string]>;
+  vacantSource?: { workspaceId: string; device: number; inode: number };
+};
+
+/** 仅供受控运维 CLI；不挂载模型工具。显式映射、身份 CAS、完整审批快照缺一不可。 */
+export function repairSkillLockPaths(tenant: WorkspaceRoot, plans: SkillLockRepairPlan[], apply = false) {
+  if (!plans.length) throw new Error("修复清单不能为空");
+  return withFileLockSync(lockFile(tenant), () => {
+    const store = readLockStore(tenant);
+    const receipts: SkillLockMigration[] = [];
+    for (const plan of plans) {
+      if (!plan.evidence.trim() || !Object.keys(plan.entries).length) throw new Error("缺少归属证明或原审批快照");
+      const source = migrationWorkspace(tenant, plan.from);
+      const target = migrationWorkspace(tenant, plan.to);
+      if (existsSync(source)) {
+        const vacant = plan.vacantSource;
+        const sourceStat = statSync(source);
+        if (!vacant || vacant.workspaceId === plan.workspaceId || sourceStat.dev !== vacant.device || sourceStat.ino !== vacant.inode || !sourceStat.isDirectory() || readdirSync(source).length) {
+          throw new Error("旧目录仍存在且未证明为不同身份的空目录，拒绝历史路径修复");
+        }
+        migrationIdentity(tenant, plan.from, vacant.workspaceId);
+      }
+      migrationIdentity(tenant, plan.to, plan.workspaceId);
+      const stat = statSync(target);
+      if (!stat.isDirectory()) throw new Error("目标工作区不是目录");
+      const prior = store.migrations?.find(item => item.kind === "operator_repair" && item.completedAt && item.from === plan.from && item.to === plan.to && item.workspaceId === plan.workspaceId && JSON.stringify(item.entries) === JSON.stringify(plan.entries));
+      if (prior) {
+        for (const [key, value] of Object.entries(plan.entries)) {
+          if (store.locks[key] || JSON.stringify(store.locks[`${plan.to}/${key.slice(plan.from.length + 1)}`]) !== JSON.stringify(value)) throw new Error("重复执行时审批记录已改变");
+        }
+        for (const [key, value] of Object.entries(plan.entries)) {
+          const read = scopedRead.readFileAtScope(target, key.slice(plan.from.length + 1), MAX_SKILL_FILE_BYTES);
+          if (!read.ok || read.truncated || sha256Hex(read.text) !== value.sha256) throw new Error("重复执行时技能内容已改变");
+        }
+        receipts.push(prior);
+        continue;
+      }
+      const receipt: SkillLockMigration = { ...plan, id: newId("skm"), kind: "operator_repair", device: stat.dev, inode: stat.ino, createdAt: new Date().toISOString() };
+      checkMigrationEntries(tenant, store, receipt, target);
+      // 必须保留原提案；修复不制造审批、不重新签名。
+      const proposals = readProposalStore(tenant).proposals;
+      for (const [key, lock] of Object.entries(plan.entries)) {
+        if (!proposals.some(p => p.id === lock.proposalId && p.status === "approved" && p.relSkillPath === key && p.sha256 === lock.sha256 && p.skillId === lock.skillId)) throw new Error(`原批准提案无法核验：${key}`);
+      }
+      for (const [key, lock] of Object.entries(plan.entries)) {
+        store.locks[`${plan.to}/${key.slice(plan.from.length + 1)}`] = lock;
+        delete store.locks[key];
+      }
+      receipt.completedAt = new Date().toISOString();
+      store.migrations = [...(store.migrations ?? []), receipt];
+      receipts.push(receipt);
+    }
+    if (apply) writeJson(lockFile(tenant), store);
+    return { applied: apply, receipts };
+  });
 }
 
 function readProposalStore(ref: TenantRef): SkillProposalStore {
@@ -686,13 +851,17 @@ function scanDeclarativeSkillsInDir(
 
     let health: SkillHealthStatus = "healthy";
     let healthReason: string | undefined;
+    let healthCode: SkillManifest["healthCode"];
     if (!locked) {
       health = "tampered";
-      healthReason = "该声明式技能包缺少审批锁（skill-lock.json），未经批准上架的 SKILL.md 已阻断加载。";
-    } else if (locked.sha256 !== sha256) {
+      healthCode = "approval_unlinked";
+      healthReason = "当前路径未关联审批记录，已阻断加载；这不代表内容被篡改。工作区改名后请核验迁移记录，否则需提交审批。";
+    } else if (locked.sha256 !== sha256 || locked.skillId !== id) {
+      healthCode = "content_mismatch";
       health = "tampered";
       healthReason = "磁盘 SKILL.md 内容哈希与审批锁（skill-lock.json）不一致，已阻断加载，请重新提交审批。";
     } else if (unknownTools.length > 0) {
+      healthCode = "unauthorized_tools";
       health = "tampered";
       healthReason = `引用了未授权工具：${unknownTools.join(", ")}`;
     } else if (missingRefs.length > 0) {
@@ -720,6 +889,7 @@ function scanDeclarativeSkillsInDir(
       autoPrewarm: parsed.autoPrewarm && (parsed.mode ?? "read") === "read",
       health,
       healthReason,
+      healthCode,
       sha256,
       lockedSha256: locked?.sha256,
       stats: statsStore.items[id] ?? emptyStats(),
@@ -1003,7 +1173,7 @@ export type UseSkillResult =
       nextCursor?: string;
       stats: SkillUsageStats;
     }
-  | { ok: false; error: string; health?: SkillHealthStatus };
+  | { ok: false; error: string; health?: SkillHealthStatus; healthCode?: SkillManifest["healthCode"] };
 
 export function useSkill(
   tenant: WorkspaceRoot,
@@ -1048,6 +1218,7 @@ export function useSkill(
       ok: false,
       error: found.healthReason || `技能「${targetId}」未通过 SHA-256 完整性校验，已阻断加载。`,
       health: "tampered",
+      healthCode: found.healthCode,
     };
   }
   if (found.health === "disabled") {
@@ -1159,6 +1330,7 @@ export function verifySkill(tenant: WorkspaceRoot, cwd: string, id: string, opts
     mode: found.mode,
     health: found.health,
     healthReason: found.healthReason,
+    healthCode: found.healthCode,
     missingRefs: found.missingRefs,
     sha256: found.sha256,
     lockedSha256: found.lockedSha256,

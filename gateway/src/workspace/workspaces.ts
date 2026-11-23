@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, statSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import type { WebSocket } from "ws";
+import { prepareSkillLockRename, finishSkillLockRename } from "../assistant/skills.ts";
 import { assistantName } from "../assistant/service.ts";
 import { bodySummary } from "../chatBodies.ts";
 import { atomicWriteFileSync } from "../fsAtomic.ts";
@@ -15,6 +16,7 @@ import { broadcastDigest, tombstoneChat } from "../sync/storedState.ts";
 import { confinedCwd, isBillXuTenant, saveDiskNow, type Tenant } from "../tenants.ts";
 import { send } from "../ws/send.ts";
 import {
+  readWorkspaceAgentFile,
   broadcastWorkspaceAgents,
   migrateWorkspaceAgent,
   removeWorkspaceAgent,
@@ -162,7 +164,11 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
   ) {
     return fail("里面有对话正在运行，先停掉再改名。");
   }
+  let migrationId: string;
   try {
+    const identity = readWorkspaceAgentFile(tenant).items[from.name];
+    if (!identity) throw new Error("缺少工作区身份");
+    migrationId = prepareSkillLockRename(tenant, from.name, name, identity.workspaceId);
     renameSync(from.dir, to);
   } catch {
     return fail("改名失败，目录可能被占用。");
@@ -170,13 +176,15 @@ export async function renameWorkspace(ws: WebSocket, tenant: Tenant, conn: Conn,
   // 目录改名成功后、任何 await 和事件发布前同步迁移映射，保留 chatId、资料和未读。
   try {
     migrateWorkspaceAgent(tenant, from.name, name, to);
+    finishSkillLockRename(tenant, migrationId);
   } catch {
     try {
       renameSync(to, from.dir);
+      migrateWorkspaceAgent(tenant, name, from.name, from.dir);
     } catch (rollbackError) {
       log.error("工作区 Agent 映射迁移失败且目录回滚失败", tenant.id, rollbackError);
     }
-    return fail("改名失败：聊天映射没能安全迁移。");
+    return fail("改名失败：聊天映射或技能审批记录没能安全迁移。");
   }
   const move = (path: string) => (underDir(path, from.dir) ? resolve(to, relative(from.dir, resolve(path))) : path);
   for (const item of chats) {
