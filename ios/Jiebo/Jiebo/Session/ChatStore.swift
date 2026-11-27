@@ -110,7 +110,7 @@ final class ChatStore {
     var connected = false {
         didSet { if !connected { workspaceSharing.reset() }; refreshWidgetSnapshotIfNeeded() }
     }
-    @ObservationIgnored var gatewayReady = false
+    var gatewayReady = false
     /// 连不上已超过 offlineGrace：客户端仍在后台重连，界面从「连接中」改报「已断开」
     var linkOffline = false {
         didSet { refreshWidgetSnapshotIfNeeded() }

@@ -127,59 +127,27 @@ struct PadAssistantShell: View {
                 }
             }
         } detail: {
-            VStack(spacing: 0) {
-                if !store.connected {
-                    Button {
-                        store.retryConnection()
-                    } label: {
-                        Text(store.linkState.title)
-                            .font(JieboFont.text(.caption, weight: .medium))
-                            .foregroundStyle(JieboColor.danger)
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .padding(.horizontal, 16)
+            sectionContent
+                .toolbar {
+                    if !store.connected || store.assistantThreadSyncBusy || !store.hasApiKey || store.backgroundAttentionTitle != nil {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Menu {
+                                if !store.connected {
+                                    Button(store.linkState.title) { store.retryConnection() }
+                                        .disabled(store.linkState != .offline)
+                                } else if store.assistantThreadSyncBusy {
+                                    Button(ChatStore.syncingThreadTitle) { store.retryAssistantThreadSync() }
+                                } else if !store.hasApiKey {
+                                    Text(ChatStore.missingApiKeyTitle)
+                                } else if let title = store.backgroundAttentionTitle {
+                                    Button(title) { store.requestAssistant(force: true) }
+                                }
+                            } label: {
+                                Label("助理状态", systemImage: "info.circle")
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .disabled(store.linkState != .offline)
-                    .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
-                } else if store.assistantThreadSyncBusy {
-                    Button {
-                        store.retryAssistantThreadSync()
-                    } label: {
-                        Text(ChatStore.syncingThreadTitle)
-                            .font(JieboFont.text(.caption, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .padding(.horizontal, 16)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("再拉一次这条会话")
-                } else if !store.hasApiKey {
-                    Text(ChatStore.missingApiKeyTitle)
-                        .font(JieboFont.text(.caption, weight: .medium))
-                        .foregroundStyle(JieboColor.danger)
-                        .lineLimit(2)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .background(JieboColor.paper)
-                        .accessibilityAddTraits(.updatesFrequently)
-                } else if store.connected, let title = store.backgroundAttentionTitle {
-                    Button {
-                        store.requestAssistant(force: true)
-                    } label: {
-                        Text(title)
-                            .font(JieboFont.text(.caption, weight: .medium))
-                            .foregroundStyle(JieboColor.ink2)
-                            .lineLimit(3)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .padding(.horizontal, 16)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHint("再向服务器确认后台模型")
                 }
-                sectionContent
-            }
             .navigationTitle(router.assistantSection.title)
             .navigationBarTitleDisplayMode(.inline)
         }

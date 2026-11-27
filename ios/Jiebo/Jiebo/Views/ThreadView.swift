@@ -41,7 +41,7 @@ struct ThreadView: View {
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State var motionChatId = ""
     /// 长会话首屏只排版最近若干轮，往上翻再按批加载；按 chat id 记住已展开到多少轮
-    static let initialRenderedTurns = 12
+    static let initialRenderedTurns = 4
     static let renderedTurnStep = 12
     @State var renderedTurnLimitByChat: [String: Int] = [:]
     @State var loadingEarlierBatch = false

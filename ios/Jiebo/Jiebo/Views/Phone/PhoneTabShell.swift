@@ -76,7 +76,7 @@ struct PhoneTabShell: View {
         .fullScreenCover(isPresented: workspaceFilesPresented) {
             FileBrowserCover()
         }
-        .task(id: "\(store.unlocked):\(store.assistantChatId ?? "")") { await bootstrap() }
+        .task(id: "\(store.unlocked):\(store.assistantChatId ?? "")") { bootstrap() }
         .onChange(of: coldLaunchVisible) { _, visible in
             if !visible {
                 dispatchPush()
@@ -183,24 +183,16 @@ struct PhoneTabShell: View {
 
     // MARK: 冷启动对齐（§3.2）
 
-    /// 页面导航最多等 8 秒；助理数据晚到时仍补上推送注册，不再切换全局活动会话。
+    /// 导航随解锁就绪；会话标识晚到时由同一个 task 补载正文。
     @MainActor
-    private func bootstrap() async {
-        if store.unlocked, store.assistantChatId != nil {
-            PushRegistrar.shared.start(store: store, im: im) // 数据晚到也执行；注册本身幂等。
-        }
-        guard !router.bootstrapped else { return }
+    private func bootstrap() {
         store.assistantOnly = router.locksActiveChatToAssistant
         guard store.unlocked else { return }
-        if store.assistantChatId == nil {
-            try? await Task.sleep(for: .seconds(8))
+        if store.assistantChatId != nil {
+            PushRegistrar.shared.start(store: store, im: im)
+            if router.locksActiveChatToAssistant { store.prepareAssistantThread() }
         }
-        guard !Task.isCancelled else { return }
-        store.assistantOnly = router.locksActiveChatToAssistant
-        if router.locksActiveChatToAssistant {
-            // 旧网关没有助理会话时显示降级说明，页面导航不等待网络。
-            store.prepareAssistantThread()
-        }
+        guard !router.bootstrapped else { return }
         router.bootstrapped = true
         #if DEBUG
         applyDebugArguments()

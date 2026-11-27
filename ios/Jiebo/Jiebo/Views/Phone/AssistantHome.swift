@@ -7,69 +7,30 @@ struct AssistantHome: View {
     @Environment(ChatStore.self) private var store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sidebarOpen = false
+    @State private var delayedSyncChat: String?
     @State private var skillsOpen = false
     @State private var modelPickerOpen = false
     @Environment(PhoneRouter.self) private var router
     @Environment(\.switchPhoneSpace) private var switchPhoneSpace
 
-    private var assistantTargetChatId: String {
-        store.assistantChatId ?? "boot"
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            if store.assistantChatId == nil, router.bootstrapped {
+        Group {
+            if let chatId = store.assistantChatId {
+                ThreadView(chrome: .embedded, chatId: chatId, dock: AnyView(ActionDock()))
+                    .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
+            } else if router.bootstrapped, store.gatewayReady || store.linkState == .offline {
                 unsupportedCard
             } else {
-                if let attentionLine {
-                    Group {
-                        if !store.connected {
-                            Button {
-                                store.retryConnection()
-                            } label: {
-                                Text(attentionLine)
-                            }
-                            .buttonStyle(PressScaleButtonStyle())
-                            .disabled(store.linkState != .offline)
-                            .accessibilityHint(store.linkState == .offline ? "重新连接" : "")
-                        } else if store.isThreadSyncBusy(assistantTargetChatId) {
-                            Button {
-                                store.retryThreadSync(assistantTargetChatId)
-                            } label: {
-                                Text(attentionLine)
-                            }
-                            .buttonStyle(PressScaleButtonStyle())
-                            .accessibilityHint("再拉一次这条会话")
-                        } else if store.backgroundAttentionTitle == attentionLine {
-                            Button {
-                                store.requestAssistant(force: true)
-                            } label: {
-                                Text(attentionLine)
-                            }
-                            .buttonStyle(PressScaleButtonStyle())
-                            .accessibilityHint("再向服务器确认后台模型")
-                        } else if attentionLine == ChatStore.failedRetryTitle, let chatId = store.assistantChatId {
-                            Button {
-                                store.restoreFailedPromptIfDraftEmpty(chatId: chatId)
-                            } label: {
-                                Text(attentionLine)
-                            }
-                            .buttonStyle(PressScaleButtonStyle())
-                            .accessibilityHint("上一句回到输入框")
-                        } else {
-                            Text(attentionLine)
-                        }
-                    }
-                    .font(JieboFont.text(.caption))
-                    .foregroundStyle(store.connected ? JieboColor.ink2 : JieboColor.danger)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .accessibilityAddTraits(.updatesFrequently)
-                }
-                ThreadView(chrome: .embedded, chatId: assistantTargetChatId, dock: AnyView(ActionDock()))
-                    .environment(\.homeActive, router.selectedTab == .assistant && router.path.isEmpty && !sidebarOpen)
+                ProgressView("正在打开小驳主会话…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .task(id: syncingChat) {
+            delayedSyncChat = nil
+            guard let id = syncingChat else { return }
+            // 短暂同步由头像圆点提示；持续等待时才展示可操作的重试提示。
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            if syncingChat == id { delayedSyncChat = id }
         }
         .environment(\.assistantReceiptNavigation, AssistantReceiptNavigation(
             openInbox: { router.go(.inbox) },
@@ -93,6 +54,25 @@ struct AssistantHome: View {
                         .frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel("打开小驳侧边栏")
+            }
+            if let line = attentionLine {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        if store.linkState == .offline {
+                            Button("重新连接") { store.retryConnection() }
+                        } else if line == ChatStore.syncingThreadTitle, let id = syncingChat {
+                            Button(line) { store.retryThreadSync(id) }
+                        } else if line == store.backgroundAttentionTitle {
+                            Button(line) { store.requestAssistant(force: true) }
+                        } else if line == ChatStore.failedRetryTitle, let id = store.assistantChatId {
+                            Button(line) { store.restoreFailedPromptIfDraftEmpty(chatId: id) }
+                        } else {
+                            Text(line)
+                        }
+                    } label: {
+                        Label(line, systemImage: "info.circle")
+                    }
+                }
             }
             ToolbarItem(placement: .topBarTrailing) { inboxButton }
         }
@@ -222,9 +202,14 @@ struct AssistantHome: View {
     }
 
     /// 连接、同步或需要人处理时才出字。平常只留圆点，避免每句都占一行。
+    private var syncingChat: String? {
+        guard store.connected, let id = store.assistantChatId, store.isThreadSyncBusy(id) else { return nil }
+        return id
+    }
+
     private var attentionLine: String? {
-        if !store.connected { return store.linkState.title }
-        if store.isThreadSyncBusy(assistantTargetChatId) { return ChatStore.syncingThreadTitle }
+        if !store.connected { return store.linkState == .offline ? store.linkState.title : nil }
+        if let syncingChat, delayedSyncChat == syncingChat { return ChatStore.syncingThreadTitle }
         if !store.hasApiKey { return ChatStore.missingApiKeyTitle }
         if let hint = store.approvalHint(for: store.assistantChatId ?? "", surface: .phoneAssistant) {
             return hint.title
@@ -244,7 +229,7 @@ struct AssistantHome: View {
     private var titleView: some View {
         AssistantPlayfulAvatar(phase: store.assistantAvatarPhase, size: 32, completionEvent: store.assistantCompletionEvent)
             .overlay(alignment: .bottomTrailing) {
-                LinkStatusDot(state: store.linkState, syncing: store.isThreadSyncBusy(assistantTargetChatId))
+                LinkStatusDot(state: store.linkState, syncing: syncingChat != nil)
                     .offset(x: 1, y: 2)
             }
         .accessibilityElement(children: .ignore)
