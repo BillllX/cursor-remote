@@ -126,7 +126,11 @@ test("小驳卡片续作重用原子会话、父回合和委派编号，每轮�
         assert.match(message, /核对月报/);
         assert.equal(options.local?.cwd, cwd);
         assert.deepEqual(options.tools, ["read", "grep", "glob", "ls", "mcp"]);
-        assert.deepEqual(Object.keys(options.local?.customTools ?? {}), ["workspace_memory_search"]);
+        assert.deepEqual(Object.keys(options.local?.customTools ?? {}).sort(), [
+          "workspace_memory_mark_used",
+          "workspace_memory_propose",
+          "workspace_memory_search",
+        ]);
         return { id: "read-only", status: "finished", result: "复核完成，来源为月报。", messages: [] };
       },
     });

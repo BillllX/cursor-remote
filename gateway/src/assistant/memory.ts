@@ -182,13 +182,36 @@ export type SaveInput = {
   text: string;
   kind?: string;
   basis: MemoryBasis;
+  confidence?: number;
   validFrom?: string;
   validUntil?: string;
   chatId?: string;
   turn?: number;
+  /** 状态更替时被本条新记忆替代的旧条目 ID；新条目独立落盘后自动将该旧条目标为失效 */
+  replacesId?: string;
 };
 
 export type MemoryResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+function applyReplacesOldEntry(
+  ref: TenantRef,
+  data: EntriesFile,
+  newEntry: MemoryEntry,
+  replacesId: string | undefined,
+  actor: MemoryActor,
+  chatId?: string,
+) {
+  const targetId = replacesId?.trim();
+  if (!targetId || targetId === newEntry.id) return;
+  const oldEntry = data.entries.find((item) => item.id === targetId && !item.invalidAt);
+  if (!oldEntry) return;
+  if (newEntry.basis !== "user_said" && oldEntry.basis === "user_said") return;
+  oldEntry.invalidAt = nowIso();
+  oldEntry.invalidReason = clip(`状态更替，已由 ${newEntry.id} 接替`, 120);
+  oldEntry.rev += 1;
+  oldEntry.updatedAt = nowIso();
+  audit(ref, { id: oldEntry.id, op: "invalidate", actor, chatId });
+}
 
 export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor): MemoryResult<MemoryEntry> {
   const settings = readSettings(ref);
@@ -200,9 +223,22 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
   const sensitive = actor === "page" ? null : detectSensitive(ref, text);
   if (sensitive) return { ok: false, error: `内容涉及「${sensitive}」，这一类默认不记；要记的话在记忆页设置里打开。` };
   const data = readEntries(ref);
-  const duplicate = data.entries.find((entry) => !entry.invalidAt && entry.text === text);
+  const folded = foldText(text);
+  const neg = negationCount(text);
+  const duplicate = data.entries.find(
+    (entry) =>
+      !entry.invalidAt &&
+      entry.id !== input.replacesId?.trim() &&
+      (entry.text === text ||
+        (Boolean(folded) && foldText(entry.text) === folded && negationCount(entry.text) === neg) ||
+        (entry.basis === "inferred" && restates(entry.text, text))),
+  );
   if (duplicate) {
     duplicate.lastUsedAt = nowIso();
+    if (text.length > duplicate.text.length && restates(duplicate.text, text)) {
+      duplicate.text = text;
+      duplicate.rev += 1;
+    }
     if (duplicate.basis === "inferred" && input.basis === "user_said") {
       duplicate.basis = "user_said";
       duplicate.confidence = 1;
@@ -212,10 +248,15 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
       duplicate.validUntil = addDays(INFERRED_TTL_DAYS);
       duplicate.seen = (duplicate.seen ?? 1) + 1;
     }
+    applyReplacesOldEntry(ref, data, duplicate, input.replacesId, actor, input.chatId);
     writeEntries(ref, data);
     return { ok: true, value: duplicate };
   }
   const userSaid = input.basis === "user_said";
+  const customConf =
+    typeof input.confidence === "number" && Number.isFinite(input.confidence)
+      ? Math.max(0.1, Math.min(1, input.confidence))
+      : undefined;
   const entry: MemoryEntry = {
     id: newId("m"),
     rev: 1,
@@ -223,7 +264,7 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
     kind: clip(input.kind || "事实", 12),
     text,
     basis: input.basis,
-    confidence: userSaid ? 1 : INFERRED_CONFIDENCE,
+    confidence: userSaid ? 1 : (customConf ?? INFERRED_CONFIDENCE),
     source: input.chatId ? { chatId: input.chatId, turn: input.turn } : undefined,
     validFrom: input.validFrom,
     validUntil: input.validUntil || (userSaid ? undefined : addDays(INFERRED_TTL_DAYS)),
@@ -233,6 +274,7 @@ export function saveMemory(ref: TenantRef, input: SaveInput, actor: MemoryActor)
     seen: userSaid ? undefined : 1,
   };
   data.entries.push(entry);
+  applyReplacesOldEntry(ref, data, entry, input.replacesId, actor, input.chatId);
   writeEntries(ref, data);
   audit(ref, { id: entry.id, op: "save", actor, chatId: input.chatId, text });
   return { ok: true, value: entry };
@@ -802,11 +844,13 @@ export function reopenMatchingPlans(ref: TenantRef, todoText: string, due?: stri
   return opened;
 }
 
-/** 常驻索引只放你说的，和被独立推断出至少两次的。过了结束日的安排退出索引，原文仍可检索。 */
+/** 常驻索引放：你说的、被独立推断出至少两次的、以及关于重要人物或高置信决定的条目。过了结束日的安排退出索引，原文仍可检索。 */
 export function isResident(entry: MemoryEntry, at = today()) {
   const until = residentUntil(entry);
   if (until && until < at) return false;
-  return entry.basis === "user_said" || (entry.seen ?? 1) >= INFERRED_RESIDENT_SEEN;
+  if (entry.basis === "user_said") return true;
+  if ((entry.seen ?? 1) >= INFERRED_RESIDENT_SEEN) return true;
+  return entry.kind === "人物" || (entry.kind === "决定" && entry.confidence >= 0.85);
 }
 
 function foldText(text: string) {

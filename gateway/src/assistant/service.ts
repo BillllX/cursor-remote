@@ -1023,7 +1023,7 @@ export function userRootPreamble(tenant: AssistantTenant, opts: { includeToolIns
     "用户让你在某个项目里干活时，不要自己改文件：用 delegate 交给对应的子工作区，并用 delegation_status 跟进。目标工作区明确就直接委派，只有选错会影响结果时才向用户确认。交办时写清产物与验收口径，用户要求文件时设置 requiresFile，有指定路径时传 expectedFiles。用户说继续、补充或修改已有交付时，用同一委派 id（delegate 的 delegationId）续作，勿重开。收到「恢复委派（编号）」时，用 delegate 指定该编号恢复，不另起任务。未确定是哪一项时先用 delegation_status 核对；仍有歧义再问。",
     "没有合适的工作区时，先用 create_workspace 申请新建（会弹确认卡问用户，被拒绝就不要再建），建好了再 delegate。",
     "委派完成后用一两句话告诉用户结果；做不了或失败了就说清原因，不要假装完成。",
-    "用户说“记住…”时调用 memory_save（basis=user_said）。还没到的安排、以及只属于某一个项目文件夹的命令和路径，不要 memory_save。",
+    "用户说“记住…”、或亲口陈述关于本人的稳定事实、状态/装备更替、长期业务探索方向、重要协作人物关系（即便夹在派发任务或安排日程的复合句中）时，主动调用 memory_save（basis=user_said）。若属新旧状态更替（如淘汰旧设备换新设备），用 memory_save 独立新建当前状态条目并传 replacesId 指向旧条目 id，勿仅用 memory_supplement 挂在旧条目下。还没到的单次安排、以及只属于某一个项目文件夹的命令和路径，不要 memory_save。",
     "只有用户明确要求提醒、定时或安排时才创建相应记录。一次提醒使用带时区和钟点的 todo_add，未给钟点就先确认；周期性提醒或定时工作使用 schedule_set 或 workspace_schedule_manage。只提到将来日期或事情时不要自动建立个人待办。",
     "分享或快捷指令的「设置提醒」和旧版「建任务」都按一次性提醒处理。时间明确后保存，回执说明时间和内容。同一条已存在时不重复创建。",
     block,
@@ -1062,14 +1062,14 @@ export async function runLoopInBackground(tenant: AssistantTenant, input: { chat
   });
 }
 
-/** 后台委派：子工作区里只读分析；只提供文件读取和工作区记忆检索 */
+/** 后台委派：子工作区里只读分析；提供文件读取和工作区记忆检索/沉淀（不含个人记忆工具） */
 export async function runDelegateInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; task: string; label: string; onStart?: () => boolean }) {
   const context = workspaceContext(tenant, input.cwd, input.task);
   const skillsBlock = skillsCatalogFor(tenant, input.cwd, {
     query: input.task,
     runnerRole: "delegate_readonly",
   });
-  const bodyPrompt = `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search。`;
+  const bodyPrompt = `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；若分析确立了新的架构决定、业务口径或排查出关键工程坑点，在最终回复前调用 workspace_memory_propose 沉淀（1~3 条，不要记任务流水账）。`;
   const tools = workspaceToolsFor(tenant, input.chatId, input.cwd, { readonly: true });
   return runBackground(refOf(tenant), {
     origin: "delegate",
@@ -1079,11 +1079,21 @@ export async function runDelegateInBackground(tenant: AssistantTenant, input: { 
     prompt: skillsBlock ? `${skillsBlock}\n\n${bodyPrompt}` : bodyPrompt,
     inboxOnFailure: false,
     onStart: input.onStart,
-    customTools: Object.fromEntries(Object.entries(tools).filter(([name]) => name === "workspace_memory_search")),
+    customTools: Object.fromEntries(
+      Object.entries(tools).filter(
+        ([name]) =>
+          name === "workspace_memory_search" ||
+          name === "workspace_memory_propose" ||
+          name === "workspace_memory_mark_used",
+      ),
+    ),
   });
 }
 
-export function noteUserTurn(tenant: AssistantTenant, row: { chatId: string; turn: number; title: string; user: string; assistant: string }) {
+export function noteUserTurn(
+  tenant: AssistantTenant,
+  row: { chatId: string; turn: number; title: string; user: string; assistant: string; hasExternalToolOutput?: boolean },
+) {
   if (!row.user.trim()) return;
   indexTurn(refOf(tenant), row);
 }

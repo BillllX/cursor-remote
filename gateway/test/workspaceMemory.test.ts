@@ -808,23 +808,59 @@ describe("workspace memory lifecycle and retrieval", () => {
         "",
       ].join("\n"),
     );
-    assert.deepEqual(markWorkspaceMemoryUsed(tenant, cwd, "stable", "2026-10-18"), {
+    const usedDay = new Date().toISOString().slice(0, 10);
+    assert.deepEqual(markWorkspaceMemoryUsed(tenant, cwd, "stable", usedDay), {
       ok: true,
       id: "stable",
-      used: "2026-10-18",
+      used: usedDay,
       uses: 1,
     });
     const once = readFileSync(path, "utf8");
-    assert.match(once, /owner=alice id=stable state=cold uses=1 note=人工 used=2026-10-18/);
+    assert.match(once, new RegExp(`owner=alice id=stable state=cold uses=1 note=人工 used=${usedDay}`));
     assert.match(once, /^# 人工标题[\s\S]*<!-- 文件尾注释 -->\n$/);
     assert.equal(searchWorkspaceMemory(tenant, cwd, "采用")[0].uses, 1);
-    assert.deepEqual(markWorkspaceMemoryUsed(tenant, cwd, "stable", "2026-10-18"), {
+    assert.deepEqual(markWorkspaceMemoryUsed(tenant, cwd, "stable", usedDay), {
       ok: true,
       id: "stable",
-      used: "2026-10-18",
+      used: usedDay,
       uses: 2,
     });
     assert.equal(searchWorkspaceMemory(tenant, cwd, "采用")[0].effectiveState, "hot");
     assert.equal(markWorkspaceMemoryUsed(tenant, cwd, "missing").ok, false);
+  });
+
+  test("L2 工作区与 L3 子仓库多层路由：refs 重复子目录前缀自动归一化，且 L2 会话可检索与注入直属 L3 记忆", () => {
+    const base = join(root, "multi-layer");
+    const tenant = { id: "multi-layer", stateDir: join(root, "state-multi-layer"), workspaceRoot: base };
+    const wsDir = resolve(base, "cursorremote");
+    const repoDir = resolve(wsDir, "cursor-remote");
+    mkdirSync(resolve(repoDir, "gateway", "src"), { recursive: true });
+    writeFileSync(resolve(repoDir, "gateway", "src", "index.ts"), "export const ok = true;\n");
+
+    // 在 L2 (wsDir) 传入 path="cursor-remote" 与带 "cursor-remote/" 前缀的 refs
+    const proposed = proposeWorkspaceMemory(
+      tenant,
+      {
+        chatId: "c-multi",
+        cwd: wsDir,
+        path: "cursor-remote",
+        section: "决定",
+        text: "网关入口统一在 gateway/src/index.ts 初始化双线记忆",
+        refs: "cursor-remote/gateway/src/index.ts",
+      },
+      { confirm: false },
+    );
+    assert.equal(proposed.ok, true);
+    assert.equal(proposed.written, 1);
+
+    const repoMemoryText = readFileSync(resolve(repoDir, ".jiebo/memory.md"), "utf8");
+    assert.match(repoMemoryText, /refs=gateway\/src\/index\.ts/, "refs 应自动剥离重复的 cursor-remote/ 前缀");
+    assert.doesNotMatch(repoMemoryText, /refs=cursor-remote\/gateway/);
+
+    // 在 L2 (wsDir) 搜索与渲染时，能感知直属子仓库 L3 (cursor-remote) 的有效记忆且 missingRefs 为空
+    const hitsAtL2 = searchWorkspaceMemory(tenant, wsDir, "双线记忆");
+    assert.equal(hitsAtL2.length, 1);
+    assert.equal(hitsAtL2[0]?.layer, "cursorremote/cursor-remote");
+    assert.deepEqual(hitsAtL2[0]?.missingRefs, []);
   });
 });

@@ -8,7 +8,33 @@ import { assistantPath, clip, readJson, writeJson, type TenantRef } from "./stor
  */
 
 /** external：用户粘贴的大段文字（超过 2000 字或带代码块），整理者只当外部材料 */
-export type IndexedTurn = { chatId: string; turn: number; title: string; user: string; assistant: string; at: number; external?: boolean };
+export type IndexedTurn = {
+  chatId: string;
+  turn: number;
+  title: string;
+  user: string;
+  assistant: string;
+  at: number;
+  external?: boolean;
+  /** 当轮是否调用了外部网页/微盘/文件快照等非受信读取工具（供整理器强化防污染边界） */
+  hasExternalToolOutput?: boolean;
+};
+
+const TRIVIAL_REPLY_RE = /^([好行对嗯哦收到明白了解好的没问题知道了谢谢謝啦okOK代码]+)[。.!！~～]*$/;
+
+/** 提取仅供后台整理器做指代消解的受控助理摘要：剥离代码块、HTML标签、链接，过滤纯寒暄极短句 */
+export function summarizeAssistantForCoref(assistantText: string, maxChars = 320): string {
+  const cleaned = (assistantText || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[\u0000-\u001f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length < 6 || TRIVIAL_REPLY_RE.test(cleaned)) return "";
+  return clip(cleaned, maxChars);
+}
 
 type IndexFile = { turns: IndexedTurn[] };
 
@@ -32,6 +58,7 @@ export function indexTurn(ref: TenantRef, row: Omit<IndexedTurn, "at" | "externa
   const next: IndexedTurn = {
     ...row,
     external: row.user.length > 2000 || row.user.includes("```"),
+    hasExternalToolOutput: row.hasExternalToolOutput || undefined,
     user: clip(row.user, 2000),
     assistant: clip(row.assistant, 2000),
     title: clip(row.title, 60),

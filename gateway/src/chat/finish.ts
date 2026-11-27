@@ -143,6 +143,8 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
   }
 }
 
+const EXTERNAL_UNTRUSTED_TOOL_RE = /^(web_read|capture_file_read|wecom_search|FetchMcpResource|WebFetch|WebSearch)$/i;
+
 /** 助理会话每轮完成后进会话搜索索引；其他会话不进 */
 function indexUserTurn(slot: Slot) {
   const tenant = getTenant(slot.tenantId);
@@ -151,6 +153,9 @@ function indexUserTurn(slot: Slot) {
   const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as
     { title?: unknown; turns?: unknown[] } | undefined;
   const turns = Array.isArray(chat?.turns) ? chat.turns.length : 1;
+  const hasExternalToolOutput = Array.isArray(transcript.tools)
+    ? transcript.tools.some((tool) => typeof tool?.name === "string" && EXTERNAL_UNTRUSTED_TOOL_RE.test(tool.name))
+    : false;
   try {
     noteUserTurn(tenant, {
       chatId: slot.chatId,
@@ -158,6 +163,7 @@ function indexUserTurn(slot: Slot) {
       title: typeof chat?.title === "string" ? chat.title : "",
       user: transcript.userText || "",
       assistant: transcript.assistant || "",
+      hasExternalToolOutput: hasExternalToolOutput || undefined,
     });
   } catch (err) {
     slotLog(slot).error("index user turn", err);

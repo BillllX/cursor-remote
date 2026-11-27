@@ -164,7 +164,11 @@ function setDispatchState(tenant: Tenant, record: Delegation, status: "queued" |
 }
 
 async function executeReadOnlyDelegation(tenant: Tenant, record: Delegation, cwd: string) {
-  const prompt = [record.activeTask, record.deliverable && `交付要求：${record.deliverable}`, "请写明结论、关键来源和缺口。"].filter(Boolean).join("\n");
+  const prompt = [
+    record.activeTask,
+    record.deliverable && `交付要求：${record.deliverable}`,
+    "请写明结论、关键来源和缺口。若本轮分析确立了新的架构决定、业务口径或排查出关键工程坑点，请在输出最终结论前调用 workspace_memory_propose 记入工作区记忆（1~3 条，不要记任务流水账）。",
+  ].filter(Boolean).join("\n");
   while (setDispatchState(tenant, record, "queued", "等待后台执行名额")) {
     const result = await runDelegateInBackground(tenant, {
       chatId: record.childChatId, cwd, task: prompt, label: `委派：${record.title}`,
@@ -464,6 +468,7 @@ export async function startDelegation(req: DelegateRequest, run: typeof handlePr
       uncertain.length ? `上轮未能确认结果的操作：${uncertain.join("、")}。先在汇报中列出这些待确认事项；本轮不要重放它们。` : "",
       previous ? "这是同一项委派的续作。沿用原有上下文和成果，依据本次要求补充或修改。" : "这是小驳交来的工作区委派。",
       "最终交付请说明结论、关键来源（资料名或工作区相对路径）和缺口；如有文件，请给出相对路径。缺失材料要明示。",
+      "若本轮委派敲定了架构/方案决定、统一了业务口径、新增了标准验证命令或排查出非显而易见的工程坑点，请在输出最终汇报前调用 workspace_memory_propose 沉淀至工作区记忆（1~3 条，不要记单次任务流水账）。",
       delivery.deliverable ? `交付要求：${delivery.deliverable}` : "",
       delivery.expectedFiles?.length ? `本轮需交付的文件：${delivery.expectedFiles.join("、")}。这些路径优先于旧任务文字里曾写过的目标路径。` : delivery.requiresFile ? "本轮需要生成或修改可打开的文件。" : "",
       task,

@@ -1003,7 +1003,38 @@ function searchableDirs(tenant: WorkspaceRoot, cwd: string) {
     dirs.push(cur);
     cur = dirname(cur);
   }
+  for (const childDir of directChildMemoryDirs(base, target)) {
+    if (!dirs.includes(childDir)) dirs.push(childDir);
+  }
   return dirs;
+}
+
+/** 当 cwd 位于 L2 顶层子工作区根目录时，向下探查一层已存在 .jiebo/memory.md 的直接子仓库目录（最多 3 个） */
+function directChildMemoryDirs(base: string, target: string): string[] {
+  if (!within(base, target) || target === base || dirname(target) !== base) return [];
+  const out: string[] = [];
+  let names: string[] = [];
+  try {
+    names = readdirSync(target).sort();
+  } catch {
+    return out;
+  }
+  for (const name of names) {
+    if (out.length >= 3) break;
+    if (name.startsWith(".") || TIDY_SKIP_DIR.has(name)) continue;
+    const child = resolve(target, name);
+    try {
+      const st = lstatSync(child);
+      if (st.isSymbolicLink() || !st.isDirectory()) continue;
+      const paths = safeMemoryPaths(child, base);
+      if (existsSync(paths.memory) && statSync(paths.memory).isFile()) {
+        out.push(paths.dir);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return out;
 }
 
 /** 只检索当前 cwd 的祖先链，明确排除 USER 根和兄弟工作区；检索本身不续期。 */
@@ -1243,7 +1274,8 @@ export function workspaceDynamicMemoryOnly(tenant: WorkspaceRoot, cwd: string, q
   const base = realOr(tenant.workspaceRoot);
   const dirs = layerDirs(tenant.workspaceRoot, cwd);
   if (!dirs.length) return "";
-  const single = dirs.length === 1;
+  const childDirs = directChildMemoryDirs(base, realOr(cwd));
+  const single = dirs.length === 1 && childDirs.length === 0;
   const blocks: string[] = [];
   for (let i = 0; i < dirs.length; i += 1) {
     const dir = dirs[i]!;
@@ -1252,6 +1284,12 @@ export function workspaceDynamicMemoryOnly(tenant: WorkspaceRoot, cwd: string, q
     if (!memory) continue;
     const label = dir === base ? "USER 根目录" : posix(relative(base, dir));
     blocks.push(single ? `### ${MEMORY_FILE}\n${memory}` : `## 层：${label}\n### ${MEMORY_FILE}\n${memory}`);
+  }
+  for (const childDir of childDirs) {
+    const memory = renderMemoryFile(childDir, 400, query, base);
+    if (!memory) continue;
+    const label = posix(relative(base, childDir));
+    blocks.push(`## 层：${label}\n### ${MEMORY_FILE}\n${memory}`);
   }
   return blocks.join("\n\n");
 }
@@ -1271,6 +1309,14 @@ export function layeredRules(root: string, cwd: string, cap = RULES_CHAR_CAP, qu
       return text ? { label, text } : null;
     })
     .filter((row): row is { label: string; text: string } => Boolean(row));
+  for (const childDir of directChildMemoryDirs(base, realOr(cwd))) {
+    const memory = renderMemoryFile(childDir, 400, query, base);
+    if (!memory) continue;
+    layers.push({
+      label: posix(relative(base, childDir)),
+      text: `### ${MEMORY_FILE}\n${memory}`,
+    });
+  }
   if (!layers.length) return "";
   const single = layers.length === 1;
   const kept: string[] = new Array(layers.length).fill("");
@@ -1419,9 +1465,19 @@ export function proposeWorkspaceMemory(
   if (detectSecret(text)) return { ok: false, error: "内容像密钥或密码，按规则不记。" };
   if (leaksPersonal(ref, text)) return { ok: false, error: "这条像是用户的个人信息，工作区记忆不放个人信息。" };
   const section = (SECTIONS as readonly string[]).includes(input.section) ? input.section : "约定";
+  const relFromCwd = posix(relative(cwd, target));
   const refs = (input.refs || "")
     .split(/[\s,，、]+/)
-    .map((item) => item.trim())
+    .map((item) => {
+      const cleaned = item.trim().replace(/^\.\//, "");
+      if (relFromCwd && relFromCwd !== "." && !relFromCwd.startsWith("..") && cleaned.startsWith(`${relFromCwd}/`)) {
+        const stripped = cleaned.slice(relFromCwd.length + 1);
+        if (stripped && (existsSync(resolve(target, stripped)) || !existsSync(resolve(target, cleaned)))) {
+          return stripped;
+        }
+      }
+      return cleaned;
+    })
     .filter((item) => item && !item.includes("..") && !item.startsWith("/"))
     .slice(0, 5);
   const dir = posix(relative(base, target));
