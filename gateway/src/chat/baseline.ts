@@ -1,10 +1,12 @@
 // 每轮运行的检查点与本轮文件基线
 import type { WebSocket } from "ws";
 import type { AgentMode } from "../../../shared/protocol.ts";
+import { getDelegation } from "../assistant/delegations.ts";
 import { slotLog } from "../log.ts";
 import { persistConn } from "../runtime/slots.ts";
 import type { Conn, Slot } from "../runtime/types.ts";
-import { snapshotTree, TREE_BASELINE_MAX_FILES } from "../turnFiles.ts";
+import type { Tenant } from "../tenants.ts";
+import { fingerprintExpectedFiles, snapshotTree, TREE_BASELINE_MAX_FILES } from "../turnFiles.ts";
 import {
   checkpointFiles,
   checkpointGit,
@@ -73,3 +75,12 @@ export function ensureTurnBaseline(slot: Slot, cwd: string, mode: AgentMode) {
 const BASELINE_WARN_MS = 10 * 60_000;
 
 const baselineWarnedAt = new Map<string, number>();
+
+/** 委派回合开始时记录 expectedFiles 指纹，供大目录/脚本改写后补采验收快照 */
+export function stampDelegationExpectedBaseline(slot: Slot, tenant: Tenant | null | undefined, cwd: string) {
+  const turnId = slot.transcript?.turnId;
+  if (!tenant || !turnId || !slot.delegationId || slot.turnBase?.turnId !== turnId || slot.turnBase.expectedFiles) return;
+  const record = getDelegation(tenant, slot.delegationId);
+  if (!record?.expectedFiles?.length || record.activeTurnId !== turnId) return;
+  slot.turnBase.expectedFiles = fingerprintExpectedFiles(cwd, record.expectedFiles);
+}

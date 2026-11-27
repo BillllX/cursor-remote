@@ -28,7 +28,7 @@ import { sandboxEnabledForTenant, stateDir } from "../tenants.ts";
 import { noteModelTokens, noteOutput, noteToolCall } from "../usage.ts";
 import { pushWorkspace, settleWorkspacePushes, workspacePath } from "../workspace/files.ts";
 import { send } from "../ws/send.ts";
-import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
+import { ensureTurnBaseline, recordRunCheckpoint, stampDelegationExpectedBaseline } from "./baseline.ts";
 import {
   canStartCodexSkillBridge,
   codexCapabilityPrompt,
@@ -264,6 +264,7 @@ export async function runCodexChat(
     recordRunCheckpoint(ws, conn, slot, cwd, mode);
   }
   ensureTurnBaseline(slot, cwd, mode);
+  stampDelegationExpectedBaseline(slot, conn.tenant, cwd);
 
   const abort = new AbortController();
   slot.externalAbort = abort;

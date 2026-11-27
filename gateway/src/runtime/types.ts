@@ -107,7 +107,14 @@ export type Slot = {
    * 本轮文件清单的基线，跟 transcript.turnId 走：审批后重放/继续同一轮沿用，不重建。
    * checkpoint 是本轮检查点；没建检查点时 tree 是只用于清单的树；两者都没有表示这一轮建过但没建成
    */
-  turnBase?: { turnId: string; cwd: string; checkpoint?: Checkpoint; tree?: string };
+  turnBase?: {
+    turnId: string;
+    cwd: string;
+    checkpoint?: Checkpoint;
+    tree?: string;
+    /** 委派验收路径在回合开始时的指纹，用于大目录/脚本改写时的补采 */
+    expectedFiles?: import("../turnFiles.ts").ExpectedFileFingerprintMap;
+  };
 };
 
 export type Conn = {

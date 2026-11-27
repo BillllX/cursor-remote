@@ -639,6 +639,88 @@ function capDiff(text: string): string {
   return buf.subarray(0, room).toString("utf8") + DIFF_CUT_MARK;
 }
 
+export type ExpectedFileFingerprint = {
+  exists: boolean;
+  sha?: string;
+  size?: number;
+  mtimeMs?: number;
+  /** 回合开始时缓存的正文，仅用于补采对照，不持久化 */
+  baseline?: Buffer;
+};
+
+export type ExpectedFileFingerprintMap = Map<string, ExpectedFileFingerprint>;
+
+export type ExpectedFilesWatch = {
+  paths: string[];
+  baseline: ExpectedFileFingerprintMap;
+};
+
+/** 委派验收文件在回合开始时的轻量指纹，不受全树 5000 上限影响 */
+export function fingerprintExpectedFile(cwd: string, rel: string): ExpectedFileFingerprint | null {
+  if (!rel || relEscapes(rel)) return null;
+  const abs = resolve(cwd, rel);
+  try {
+    const st = lstatSync(abs);
+    if (st.isSymbolicLink() || !st.isFile()) return { exists: false };
+    if (st.size > SNAPSHOT_MAX_BYTES) {
+      return { exists: true, size: st.size, mtimeMs: st.mtimeMs };
+    }
+    const buf = readFileSync(abs);
+    const kind = kindFromPath(rel);
+    return {
+      exists: true,
+      sha: sha256(buf),
+      size: buf.length,
+      mtimeMs: st.mtimeMs,
+      baseline: isTextKind(kind) && buf.length <= DIFF_MAX_BYTES ? buf : undefined,
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { exists: false };
+    return null;
+  }
+}
+
+export function fingerprintExpectedFiles(cwd: string, rels: string[]): ExpectedFileFingerprintMap {
+  const map: ExpectedFileFingerprintMap = new Map();
+  for (const raw of rels.slice(0, 12)) {
+    const rel = raw.trim().replace(/\\/g, "/");
+    if (!rel || relEscapes(rel)) continue;
+    const fp = fingerprintExpectedFile(cwd, rel);
+    if (fp) map.set(rel, fp);
+  }
+  return map;
+}
+
+function expectedFileChanged(fp: ExpectedFileFingerprint, size: number, sha: string, mtimeMs: number): boolean {
+  if (!fp.exists) return true;
+  if (fp.sha) return fp.sha !== sha;
+  return fp.size !== size || fp.mtimeMs !== mtimeMs;
+}
+
+function syntheticExpectedDiff(rel: string, before: Buffer | undefined, after: Buffer): string {
+  if (!before?.length) {
+    const lines = after.toString("utf8").split("\n");
+    return [
+      `diff --git a/${rel} b/${rel}`,
+      "new file",
+      "--- /dev/null",
+      `+++ b/${rel}`,
+      `@@ -0,0 +1,${Math.max(lines.length, 1)} @@`,
+      ...lines.map((line) => `+${line}`),
+    ].join("\n");
+  }
+  const oldLines = before.toString("utf8").split("\n");
+  const newLines = after.toString("utf8").split("\n");
+  return [
+    `diff --git a/${rel} b/${rel}`,
+    `--- a/${rel}`,
+    `+++ b/${rel}`,
+    `@@ -1,${oldLines.length} +1,${newLines.length} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ].join("\n");
+}
+
 export type TurnFilesInput = {
   cwd: string;
   stateDir: string;
@@ -649,6 +731,8 @@ export type TurnFilesInput = {
   assistantBody?: string;
   /** 没基线或文件不在基线可比范围里时的对照文本（index.ts 里是 readWorkspaceDiff） */
   fallbackDiff: (rel: string) => string | null;
+  /** 委派 expectedFiles：工具/git 漏采时按回合初指纹补快照 */
+  expectedWatch?: ExpectedFilesWatch;
   quota?: { max: number; target: number };
   /** 总预算，默认 TURN_BUDGET_MS */
   budgetMs?: number;
@@ -788,6 +872,66 @@ export function computeTurnFiles(input: TurnFilesInput): TurnFile[] {
         row.removed = counted.removed;
       }
       files.push(row);
+    }
+    if (input.expectedWatch && !overBudget()) {
+      const known = new Set(files.map((file) => file.path));
+      let fallbackLeftForExpected = FALLBACK_DIFF_LIMIT;
+      for (const rel of input.expectedWatch.paths) {
+        if (known.has(rel) || files.length >= MAX_TURN_FILES || overBudget()) continue;
+        const fp = input.expectedWatch.baseline.get(rel);
+        if (!fp) continue;
+        const abs = resolve(cwd, rel);
+        let buf: Buffer;
+        let size: number;
+        let mtimeMs: number;
+        try {
+          const st = lstatSync(abs);
+          if (st.isSymbolicLink() || !st.isFile()) continue;
+          size = st.size;
+          mtimeMs = st.mtimeMs;
+          if (size > SNAPSHOT_MAX_BYTES) continue;
+          buf = readFileSync(abs);
+        } catch {
+          continue;
+        }
+        const sha = sha256(buf);
+        if (!expectedFileChanged(fp, buf.length, sha, mtimeMs)) continue;
+        const kind = kindFromPath(rel);
+        const row: TurnFile = { path: rel, kind, op: fp.exists ? "modified" : "added", size: buf.length };
+        try {
+          const stored = storeArtifact(stateDir, buf);
+          row.sha = stored.sha;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            warnThrottled(`turnFiles.snapshot:${stateDir}`, 10 * 60_000, "验收文件补采快照没存下", errText(err));
+          }
+          files.push(row);
+          known.add(rel);
+          continue;
+        }
+        if (isTextKind(kind)) {
+          let diff: string | null = null;
+          if (fp.baseline) diff = syntheticExpectedDiff(rel, fp.baseline, buf);
+          else if (fallbackLeftForExpected > 0) {
+            fallbackLeftForExpected -= 1;
+            diff = input.fallbackDiff(rel);
+          }
+          if (!diff && !fp.exists) diff = syntheticExpectedDiff(rel, undefined, buf);
+          if (diff) {
+            try {
+              const stored = storeArtifact(stateDir, Buffer.from(capDiff(diff), "utf8"));
+              row.diffSha = stored.sha;
+              const counted = countDiffLines(diff);
+              row.added = counted.added;
+              row.removed = counted.removed;
+            } catch (err) {
+              warnThrottled(`turnFiles.diffSnapshot:${stateDir}`, 10 * 60_000, "验收文件补采对照没存下", errText(err));
+            }
+          }
+        }
+        files.push(row);
+        known.add(rel);
+      }
     }
     return files;
   } finally {

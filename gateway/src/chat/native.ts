@@ -26,7 +26,7 @@ import { nativeStateDir, rollbackToLatestCheckpoint } from "../workspace/checkpo
 import { pushWorkspace, settleWorkspacePushes } from "../workspace/files.ts";
 import { mayPublishHere } from "../workspace/workspaces.ts";
 import { send } from "../ws/send.ts";
-import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
+import { ensureTurnBaseline, recordRunCheckpoint, stampDelegationExpectedBaseline } from "./baseline.ts";
 import { finishRun } from "./finish.ts";
 import { rememberEdit, shellPublishes, summarizeToolArgs, toolEscapesWorkspace } from "./tools.ts";
 
@@ -85,6 +85,7 @@ export async function runNativeChat(
   }
   if (!input.autoApprove) recordRunCheckpoint(ws, conn, slot, cwd, mode);
   ensureTurnBaseline(slot, cwd, mode);
+  stampDelegationExpectedBaseline(slot, conn.tenant, cwd);
 
   const sandbox = sandboxEnabledForTenant(conn.tenant);
   const extraTools = !sandbox || findBwrap() ? [shellTool({ sandbox, masks: [stateDir()] })] : [];

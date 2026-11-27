@@ -113,6 +113,12 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
         baseline = null;
       }
     }
+    const delegation = slot.delegationId ? getDelegation(tenant, slot.delegationId) : undefined;
+    const expectedPaths =
+      delegation?.activeTurnId === transcript.turnId && delegation.expectedFiles?.length
+        ? delegation.expectedFiles
+        : undefined;
+    const expectedBaseline = base?.expectedFiles;
     const files = computeTurnFiles({
       cwd,
       stateDir: tenant.stateDir,
@@ -121,6 +127,10 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
       baseline,
       assistantBody: transcript.assistant,
       fallbackDiff: (rel) => readWorkspaceDiff(cwd, rel).content ?? null,
+      expectedWatch:
+        expectedPaths && expectedBaseline
+          ? { paths: expectedPaths, baseline: expectedBaseline }
+          : undefined,
     });
     const delegated = (transcript.files || []).filter((file) => Boolean(file.sourceChatId));
     const merged = mergeTurnFiles(files, delegated);
@@ -159,10 +169,10 @@ function noteWorkspaceTurn(slot: Slot) {
   const tenant = getTenant(slot.tenantId);
   const transcript = slot.transcript;
   if (!tenant || !transcript || isAssistantChat(tenant, slot.chatId)) return;
-  const delegation = slot.delegationId ? getDelegation(tenant, slot.delegationId) : undefined;
-  if (delegation?.notifyPolicy === "collab_only" && delegation.collabTaskId) {
+  const delegationForTurn = slot.delegationId ? getDelegation(tenant, slot.delegationId) : undefined;
+  if (delegationForTurn?.notifyPolicy === "collab_only" && delegationForTurn.collabTaskId) {
     void emitCollabSideEvent(tenant, {
-      taskId: delegation.collabTaskId,
+      taskId: delegationForTurn.collabTaskId,
       type: "memory_proposal",
       payload: {
         proposalKey: `turn:${transcript.turnId}`,

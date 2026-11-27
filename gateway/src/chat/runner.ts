@@ -26,7 +26,7 @@ import { isUserWorkspace, mayPublishHere } from "../workspace/workspaces.ts";
 import { send } from "../ws/send.ts";
 import { ensureAgent } from "./agent.ts";
 import { sanitizeImages } from "./attachments.ts";
-import { ensureTurnBaseline, recordRunCheckpoint } from "./baseline.ts";
+import { ensureTurnBaseline, recordRunCheckpoint, stampDelegationExpectedBaseline } from "./baseline.ts";
 import { codexRoute, runCodexChat } from "./codexRunner.ts";
 import { canStartCodexSkillBridge } from "./codexSkillBridge.ts";
 import { runExternalChat } from "./external.ts";
@@ -460,6 +460,7 @@ export async function handlePrompt(
 
   if (!autoApprove) recordRunCheckpoint(ws, conn, slot, cwd, mode);
   ensureTurnBaseline(slot, cwd, mode);
+  stampDelegationExpectedBaseline(slot, conn.tenant, cwd);
 
   let run: RunHandle | null = null;
   let blockedGuard = false;
