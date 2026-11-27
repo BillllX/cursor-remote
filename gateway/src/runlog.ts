@@ -22,6 +22,8 @@ export type RunTranscript = {
   error?: string;
   /** 这一轮开始时的时间戳（毫秒） */
   startedAt?: number;
+  /** 这一轮是否携带了用户上传的附件或图片（供外部输入防污染打标） */
+  hasAttachments?: boolean;
   /** 这一轮结束时算出的文件清单 */
   files?: TurnFile[];
 };

@@ -42,11 +42,13 @@ export function openTranscript(
   userText: string,
   epoch: number,
   images?: Array<{ data: string; mimeType: string }>,
+  hasAttachments?: boolean,
 ) {
   slot.transcript = {
     turnId: turnId?.trim() || crypto.randomUUID(),
     userText,
     images: images?.length ? images : undefined,
+    hasAttachments: hasAttachments || undefined,
     assistant: "",
     thinking: "",
     tools: [],

@@ -293,9 +293,11 @@ try {
   await service.runDelegateInBackground({ ...tenant, name: "t" }, { chatId: "c-bg", cwd: resolve(root, "proj"), task: "看看", label: "后台" });
   const bgSeen = seen as { prompt: string; tools: string[] } | null;
   check(
-    ["workspace_memory_propose", "workspace_memory_search", "workspace_memory_mark_used"].every((name) => Boolean(bgSeen?.tools.includes(name))) &&
+    Boolean(bgSeen?.tools.includes("workspace_memory_propose")) &&
+      Boolean(bgSeen?.tools.includes("workspace_memory_search")) &&
+      !bgSeen?.tools.includes("workspace_memory_mark_used") &&
       !bgSeen?.tools.some((name) => name.startsWith("memory_") || name.startsWith("work_preference")),
-    "后台委派：精确拥有工作区记忆工具，没有个人记忆工具",
+    "后台委派：精确拥有只读检索与确认卡提议工具，无 mark_used 与个人记忆工具",
   );
   check(Boolean(bgSeen?.prompt.includes("proj 用 pnpm")) && Boolean(bgSeen?.prompt.includes("回复用中文")), "后台委派：提示词带工作偏好和分层规则");
 

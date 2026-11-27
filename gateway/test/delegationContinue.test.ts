@@ -127,10 +127,16 @@ test("小驳卡片续作重用原子会话、父回合和委派编号，每轮�
         assert.equal(options.local?.cwd, cwd);
         assert.deepEqual(options.tools, ["read", "grep", "glob", "ls", "mcp"]);
         assert.deepEqual(Object.keys(options.local?.customTools ?? {}).sort(), [
-          "workspace_memory_mark_used",
           "workspace_memory_propose",
           "workspace_memory_search",
         ]);
+        const proposeRes = await options.local!.customTools!.workspace_memory_propose.execute(
+          { section: "决定", text: "月报复核口径以审计终稿为准" },
+          {},
+        );
+        const parsedPropose = typeof proposeRes === "string" ? JSON.parse(proposeRes) : proposeRes;
+        assert.equal(parsedPropose.ok, true);
+        assert.equal(parsedPropose.queued, 1, "只读后台委派调用 propose 必须走待确认队列，不得静默直写");
         return { id: "read-only", status: "finished", result: "复核完成，来源为月报。", messages: [] };
       },
     });

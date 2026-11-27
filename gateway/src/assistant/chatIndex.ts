@@ -21,18 +21,32 @@ export type IndexedTurn = {
 };
 
 const TRIVIAL_REPLY_RE = /^([好行对嗯哦收到明白了解好的没问题知道了谢谢謝啦okOK代码]+)[。.!！~～]*$/;
+const OPTION_OR_CONCLUSION_RE =
+  /(?:^|[\s。；;：:，,])(?:方案\s*[一二三四五六七八九十1-9A-D]|选项\s*[一二三四五1-9A-D]|(?:1|①)[.、)）]\s*\S|结论[：:])/;
 
-/** 提取仅供后台整理器做指代消解的受控助理摘要：剥离代码块、HTML标签、链接，过滤纯寒暄极短句 */
+/** 剥离用户话中的闭合/未闭合代码块，仅保留外层用户自然语言短句 */
+export function stripUserCodeFences(text: string): string {
+  return (text || "").replace(/```[\s\S]*?(?:```|$)/g, "［已略去代码块］").replace(/\s+/g, " ").trim();
+}
+
+/** 提取仅供后台整理器做指代消解的受控助理摘要：剥离闭合/未闭合代码块、显式 HTML/XML 标签与链接，优先保留方案/选项段并过滤纯寒暄极短句 */
 export function summarizeAssistantForCoref(assistantText: string, maxChars = 320): string {
   const cleaned = (assistantText || "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/<[^>]+>/g, " ")
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .replace(/<\/?[a-zA-Z][a-zA-Z0-9:_-]*(?:\s+[^<>]{0,120})?\/?>/g, " ")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/https?:\/\/\S+/g, " ")
     .replace(/[\u0000-\u001f]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (cleaned.length < 6 || TRIVIAL_REPLY_RE.test(cleaned)) return "";
+  if (cleaned.length <= maxChars) return cleaned;
+  const hit = OPTION_OR_CONCLUSION_RE.exec(cleaned);
+  if (hit && hit.index > Math.floor(maxChars * 0.25)) {
+    const start = Math.max(0, hit.index - 20);
+    const body = clip(cleaned.slice(start).trim(), Math.max(20, maxChars - 1));
+    return start > 0 ? `…${body}` : body;
+  }
   return clip(cleaned, maxChars);
 }
 
@@ -55,9 +69,13 @@ function save(ref: TenantRef, data: IndexFile) {
 
 export function indexTurn(ref: TenantRef, row: Omit<IndexedTurn, "at" | "external">) {
   const data = readJson<IndexFile>(file(ref), { turns: [] });
+  const hasFence = row.user.includes("```");
+  const outsideFence = hasFence
+    ? row.user.replace(/```[\s\S]*?(?:```|$)/g, " ").replace(/\s+/g, " ").trim()
+    : row.user.trim();
   const next: IndexedTurn = {
     ...row,
-    external: row.user.length > 2000 || row.user.includes("```"),
+    external: row.user.length > 2000 || (hasFence && outsideFence.length < 4),
     hasExternalToolOutput: row.hasExternalToolOutput || undefined,
     user: clip(row.user, 2000),
     assistant: clip(row.assistant, 2000),

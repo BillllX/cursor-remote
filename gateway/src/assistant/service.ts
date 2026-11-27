@@ -273,6 +273,7 @@ export type SessionSkillDedupOpts = {
   readonly?: boolean;
   viewedSkillVersions?: Set<string>;
   adoptedSkillVersions?: Set<string>;
+  anchorTurns?: import("./memory.ts").AnchorTurn[];
 };
 
 function toolHost(
@@ -287,6 +288,7 @@ function toolHost(
     ref,
     role,
     chatId,
+    anchorTurns: opts?.anchorTurns,
     onMemoryWritten: (entry: MemoryEntry) => deps?.publish(tenant.id, { type: "memory_written", chatId, entry }),
     onChanged: () => publishState(tenant),
     delegate:
@@ -698,7 +700,9 @@ export function workspaceToolsFor(
   const writableKb = !opts.readonly && anyKbLoaded.ok;
   const skillRunnerRole: SkillRunnerRole = opts.readonly ? "delegate_readonly" : "foreground";
   return workspaceSessionTools({
-    propose: (args) => proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }, { confirm: memoryNeedsConfirm() }),
+    // P0-2：只读委派/只读上下文强制走确认卡（confirm: true），绝不免确认直写 .jiebo/memory.md
+    propose: (args) =>
+      proposeWorkspaceMemory(tenant, { chatId, cwd, ...args }, { confirm: opts.readonly ? true : memoryNeedsConfirm() }),
     search: ({ query }) => searchWorkspaceMemory(tenant, cwd, query),
     markUsed: ({ id }) => markWorkspaceMemoryUsed(tenant, cwd, id),
     skillList: (args) =>
@@ -1012,7 +1016,9 @@ export function clockLine(clock?: ClientClock, now = Date.now()) {
 /** USER 会话每轮前置：名字 + 记忆数据块。子工作区会话不调用 */
 export function userRootPreamble(tenant: AssistantTenant, opts: { includeToolInstructions?: boolean } = {}) {
   const name = assistantName(tenant);
-  const block = renderMemoryBlock(refOf(tenant));
+  const block = renderMemoryBlock(refOf(tenant), undefined, {
+    includeToolInstructions: opts.includeToolInstructions,
+  });
   const identity = `你是用户的个人助理，名字是「${name}」。这里是${name}的工作区（用户根目录）。`;
   // Codex 保留助理身份和已有记忆，工具能力由本轮桥接单独声明。
   if (opts.includeToolInstructions === false) return [identity, block].filter(Boolean).join("\n");
@@ -1033,13 +1039,13 @@ export function userRootPreamble(tenant: AssistantTenant, opts: { includeToolIns
 }
 
 function runnerFor(tenant: AssistantTenant): JobRunner {
-  return ({ role, label, prompt, origin }) =>
+  return ({ role, label, prompt, origin, anchorTurns }) =>
     runBackground(refOf(tenant), {
       origin,
       label,
       cwd: tenant.workspaceRoot,
       prompt,
-      customTools: assistantTools(toolHost(tenant, role)),
+      customTools: assistantTools(toolHost(tenant, role, undefined, anchorTurns ? { anchorTurns } : undefined)),
       inboxOnFailure: origin !== "integrator",
     });
 }
@@ -1062,14 +1068,14 @@ export async function runLoopInBackground(tenant: AssistantTenant, input: { chat
   });
 }
 
-/** 后台委派：子工作区里只读分析；提供文件读取和工作区记忆检索/沉淀（不含个人记忆工具） */
+/** 后台委派：子工作区里只读分析；提供文件读取、工作区记忆检索与强制确认卡模式的沉淀提议（不含个人记忆工具，不静默写盘） */
 export async function runDelegateInBackground(tenant: AssistantTenant, input: { chatId: string; cwd: string; task: string; label: string; onStart?: () => boolean }) {
   const context = workspaceContext(tenant, input.cwd, input.task);
   const skillsBlock = skillsCatalogFor(tenant, input.cwd, {
     query: input.task,
     runnerRole: "delegate_readonly",
   });
-  const bodyPrompt = `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；若分析确立了新的架构决定、业务口径或排查出关键工程坑点，在最终回复前调用 workspace_memory_propose 沉淀（1~3 条，不要记任务流水账）。`;
+  const bodyPrompt = `${context ? `工作区规则（照着做）：\n${context}\n\n` : ""}${input.task}\n\n这是后台委派：只能读和分析。需要改动时写出具体的改动方案（文件、改什么、为什么），作为最终回复。需要查完整工作区记忆时用 workspace_memory_search；若分析确立了新的架构决定、业务口径或排查出关键工程坑点，在最终回复前调用 workspace_memory_propose 提交待确认沉淀提议（1~3 条，不要记任务流水账；提议会生成确认卡，未获用户确认前不得声称已写入工作区记忆）。`;
   const tools = workspaceToolsFor(tenant, input.chatId, input.cwd, { readonly: true });
   return runBackground(refOf(tenant), {
     origin: "delegate",
@@ -1079,12 +1085,10 @@ export async function runDelegateInBackground(tenant: AssistantTenant, input: { 
     prompt: skillsBlock ? `${skillsBlock}\n\n${bodyPrompt}` : bodyPrompt,
     inboxOnFailure: false,
     onStart: input.onStart,
+    // P0-2：移除会改写文件元数据的 workspace_memory_mark_used，只保留检索与强制确认卡模式的提议
     customTools: Object.fromEntries(
       Object.entries(tools).filter(
-        ([name]) =>
-          name === "workspace_memory_search" ||
-          name === "workspace_memory_propose" ||
-          name === "workspace_memory_mark_used",
+        ([name]) => name === "workspace_memory_search" || name === "workspace_memory_propose",
       ),
     ),
   });

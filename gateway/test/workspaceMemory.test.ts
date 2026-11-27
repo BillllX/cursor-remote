@@ -863,4 +863,74 @@ describe("workspace memory lifecycle and retrieval", () => {
     assert.equal(hitsAtL2[0]?.layer, "cursorremote/cursor-remote");
     assert.deepEqual(hitsAtL2[0]?.missingRefs, []);
   });
+
+  test("v2 加固（T7 / T8 / T13）：L2/L3 多子仓共享 400 token 且不挤掉 AGENTS.md、只读委派强制确认卡、续接轮契约完整", async () => {
+    const { layeredRules, workspaceDynamicMemoryOnly, listProposals, flushChat } = await import("../src/assistant/workspaceMemory.ts");
+    const { workspaceToolsFor } = await import("../src/assistant/service.ts");
+    const { wrapFollowupPrompt } = await import("../src/chat/prompt.ts");
+    const { estimateTokens } = await import("../src/assistant/store.ts");
+
+    // 1. T8 (P1-4): 构造 4 个直属 L3 子仓（字母序靠后的 zeta-repo 含 query 强相关条目）
+    const base = join(root, "multi-budget");
+    const tenant = { id: "multi-budget", stateDir: join(root, "state-multi-budget"), workspaceRoot: base };
+    const wsDir = resolve(base, "hub");
+    mkdirSync(wsDir, { recursive: true });
+    writeFileSync(resolve(wsDir, "AGENTS.md"), "# L2 核心工作区硬约束\n严禁跳过的 L2 根规则：所有变更必须带测试。\n");
+
+    const repos = ["alpha-repo", "beta-repo", "gamma-repo", "zeta-repo"];
+    for (const name of repos) {
+      const rDir = resolve(wsDir, name);
+      mkdirSync(resolve(rDir, ".jiebo"), { recursive: true });
+      const entries = Array.from({ length: 8 }, (_, idx) =>
+        name === "zeta-repo" && idx === 0
+          ? `- 量子结算网关 zeta-repo 采用双活幂等事务队列防止重复扣款 <!-- from=c1 at=2026-11-28 id=z_${idx} -->`
+          : `- ${name} 模块第 ${idx} 条较长架构说明，用于测试多个直属子仓库共享 400 token 预算边界与截断行为 <!-- from=c1 at=2026-11-20 id=${name}_${idx} -->`,
+      );
+      writeFileSync(resolve(rDir, ".jiebo/memory.md"), `# 工作区记忆\n\n## 决定\n${entries.join("\n")}\n`);
+    }
+
+    const dyn = workspaceDynamicMemoryOnly(tenant, wsDir, "量子结算网关 双活幂等");
+    assert.match(dyn, /hub\/zeta-repo/, "按 query 相关度排序时，名字靠后的高相关子仓 zeta-repo 必须优先入选");
+    assert.match(dyn, /双活幂等事务队列/);
+    // 统计全部入选的 L3 记忆正文行（不含层标题与诊断尾注）总 token 不超 400
+    const l3BulletLines = dyn.split("\n").filter((line) => line.startsWith("- "));
+    const l3Tokens = l3BulletLines.reduce((sum, line) => sum + estimateTokens(line), 0);
+    assert.ok(l3Tokens <= 400, `所有直属 L3 子仓共享总预算不得超过 400 token，实际=${l3Tokens}`);
+
+    // 当 RULES_CHAR_CAP 吃紧时，本层 L2 AGENTS.md 必须优先于 L3 子仓记忆保留
+    const tightRules = layeredRules(base, wsDir, 180, "量子结算网关");
+    assert.match(tightRules, /严禁跳过的 L2 根规则/, "预算吃紧时本层 L2 AGENTS.md 必须优先保留，不得被 L3 挤掉");
+
+    // 2. T7 (P0-2): 即使 WORKSPACE_MEMORY_CONFIRM 未设置（默认 false），只读模式调用 workspace_memory_propose 强制走确认卡不直写
+    const prevConfirm = process.env.WORKSPACE_MEMORY_CONFIRM;
+    delete process.env.WORKSPACE_MEMORY_CONFIRM;
+    try {
+      const roBase = join(root, "ro-delegate");
+      const roTenant = { id: "ro-delegate", name: "ro-delegate", stateDir: join(root, "state-ro-delegate"), workspaceRoot: roBase };
+      const roWs = resolve(roBase, "proj");
+      mkdirSync(roWs, { recursive: true });
+      const roTools = workspaceToolsFor(roTenant, "c-ro-1", roWs, { readonly: true });
+      const rawRes = await roTools.workspace_memory_propose.execute(
+        { section: "决定", text: "只读后台委派分析结论应先进入待确认队列" },
+        {},
+      );
+      const parsed = typeof rawRes === "string" ? JSON.parse(rawRes) : rawRes;
+      assert.equal(parsed.ok, true);
+      assert.equal(parsed.queued, 1, "只读模式下必须入待确认队列而非免确认直写");
+      assert.equal(existsSync(resolve(roWs, ".jiebo/memory.md")), false, "用户确认前不得直接写入 .jiebo/memory.md");
+      assert.equal(listProposals(roTenant).proposals.length, 1);
+      const card = flushChat(roTenant, "c-ro-1");
+      assert.ok(card, "委派结束 flushChat 后应生成待确认卡");
+    } finally {
+      if (prevConfirm !== undefined) process.env.WORKSPACE_MEMORY_CONFIRM = prevConfirm;
+    }
+
+    // 3. T13 (P1-5): wrapFollowupPrompt 对子工作区含 section 枚举与 4 不记；对 USER 根目录不注入工作区记忆契约
+    const wsFollowup = wrapFollowupPrompt("继续排查", "agent", undefined, undefined, wsDir, true, false);
+    assert.match(wsFollowup, /section="决定"/);
+    assert.match(wsFollowup, /section="坑"/);
+    assert.match(wsFollowup, /个人隐私\/密钥/);
+    const rootFollowup = wrapFollowupPrompt("继续聊", "agent", undefined, undefined, base, true, true);
+    assert.doesNotMatch(rootFollowup, /workspace_memory_propose/, "USER 根目录续接轮不得注入工作区记忆契约");
+  });
 });

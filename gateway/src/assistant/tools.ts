@@ -34,6 +34,8 @@ export type ToolHost = {
   ref: TenantRef;
   role: ToolRole;
   chatId?: string;
+  /** 后台整理者本批非 external 轮次快照（用于代码级原话锚点硬闸） */
+  anchorTurns?: import("./memory.ts").AnchorTurn[];
   onMemoryWritten?: (entry: MemoryEntry) => void;
   onChanged?: () => void;
   delegate?: (args: { workspace: string; task: string; title?: string; delegationId?: string; deliverable?: string; expectedFiles?: string[]; requiresFile?: boolean }) => Promise<string>;
@@ -345,6 +347,12 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         validFrom: S("可选：开始日期 YYYY-MM-DD"),
         validUntil: S("可选：结束日期 YYYY-MM-DD"),
         replacesId: S("可选：状态更替时被本条新记忆接替的旧记忆 id（如 m_xxx）"),
+        ...(role === "integrator"
+          ? {
+              sourceTurn: { type: "number", description: "可选：该事实对应的用户原话轮次号（用于原话锚点核验）" },
+              confidence: { type: "number", description: "可选：推断置信度 0.1~1（默认 0.6；仅跨轮高置信证据可设 >=0.85）" },
+            }
+          : {}),
       },
       ["topic", "text", "basis"],
       (args) => {
@@ -353,6 +361,14 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
         const kind = str(args.kind) || undefined;
         const validUntil = str(args.validUntil) || undefined;
         const replacesId = str(args.replacesId).trim() || undefined;
+        const sourceTurn =
+          role === "integrator" && typeof args.sourceTurn === "number" && Number.isFinite(args.sourceTurn)
+            ? args.sourceTurn
+            : undefined;
+        const confidence =
+          role === "integrator" && typeof args.confidence === "number" && Number.isFinite(args.confidence)
+            ? args.confidence
+            : undefined;
         const project = projectFactTarget(text, host.workspaces?.() ?? []);
         if (project === "work_preference") {
           if (basis !== "user_said") {
@@ -411,10 +427,13 @@ export function assistantTools(host: ToolHost): Record<string, SDKCustomTool> {
             text,
             basis,
             kind,
+            confidence,
             validFrom: str(args.validFrom) || undefined,
             validUntil,
             chatId: host.chatId,
             replacesId,
+            sourceTurn,
+            anchorTurns: role === "integrator" ? host.anchorTurns : undefined,
           },
           actor,
         );

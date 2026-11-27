@@ -134,6 +134,19 @@ function finishDelegation(tenant: Tenant, record: Delegation, ok: boolean, text:
   const current = getDelegation(tenant, record.id);
   if (!current || current.attempt !== record.attempt || (current.status !== "running" && current.status !== "awaiting" && current.status !== "queued")) return;
   settleApproval(tenant, record.childChatId);
+  // P1-5（方案 C 第二级收口）：仅零成本统计 memoryProposedCount 写观测日志，不触发后台二次补抽
+  const persisted = persistedDelegationTurn(tenant, current);
+  const memoryProposedCount = (persisted?.turn.tools ?? []).filter(
+    (tool) => typeof tool?.name === "string" && /(?:^|:)workspace_memory_propose$/i.test(tool.name),
+  ).length;
+  log.info("delegation memory stats", {
+    delegationId: record.id,
+    workspace: record.workspace,
+    mode: record.mode,
+    ok,
+    cancelled,
+    memoryProposedCount,
+  });
   if (record.notifyPolicy !== "collab_only") flushWorkspaceProposals(tenant, record.childChatId);
   const done = updateDelegation(tenant, record.id, {
     status: cancelled ? "cancelled" : ok ? "done" : "failed",
@@ -167,7 +180,7 @@ async function executeReadOnlyDelegation(tenant: Tenant, record: Delegation, cwd
   const prompt = [
     record.activeTask,
     record.deliverable && `交付要求：${record.deliverable}`,
-    "请写明结论、关键来源和缺口。若本轮分析确立了新的架构决定、业务口径或排查出关键工程坑点，请在输出最终结论前调用 workspace_memory_propose 记入工作区记忆（1~3 条，不要记任务流水账）。",
+    "请写明结论、关键来源和缺口。若本轮分析确立了新的架构决定、业务口径或排查出关键工程坑点，请在输出最终结论前调用 workspace_memory_propose 提交待确认沉淀提议（1~3 条，不要记任务流水账；提议会生成确认卡，未获用户确认前不得声称已写入工作区记忆）。",
   ].filter(Boolean).join("\n");
   while (setDispatchState(tenant, record, "queued", "等待后台执行名额")) {
     const result = await runDelegateInBackground(tenant, {

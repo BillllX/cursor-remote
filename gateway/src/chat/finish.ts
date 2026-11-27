@@ -143,7 +143,31 @@ function attachTurnFiles(slot: Slot): TurnFile[] {
   }
 }
 
-const EXTERNAL_UNTRUSTED_TOOL_RE = /^(web_read|capture_file_read|wecom_search|FetchMcpResource|WebFetch|WebSearch)$/i;
+const EXTERNAL_UNTRUSTED_TOOL_RE =
+  /^(web_read|capture_file_read|wecom_search|wecom_watch_check|wecom_watch_sync|kb_ingest_submit|kb_[a-z0-9_]+|mail_[a-z0-9_]+|calendar_[a-z0-9_]+|reminder_[a-z0-9_]+|contacts_search|workspace_memory_read|skill_use|FetchMcpResource|WebFetch|WebSearch)$/i;
+const DELEGATION_RECEIPT_OR_ATTACHMENT_RE =
+  /^(?:\[?委派(?:完成|失败|已取消|被中断|回执)\]?[：:]|The user attached these workspace files as context:)/i;
+
+/** 归一化工具名（剥离 Codex/MCP 的 mcp:<server>: 前缀）并判断是否属于外部非受信读取/源工具 */
+export function isExternalUntrustedToolName(name: string): boolean {
+  const base = (name || "").trim().replace(/^mcp:[^:]+:/i, "");
+  return EXTERNAL_UNTRUSTED_TOOL_RE.test(base);
+}
+
+/** 综合判断当轮是否包含外部非受信来源输入（工具输出、用户上传附件/图片、或委派回执触发轮） */
+export function detectExternalTurnInput(input: {
+  tools?: Array<{ name?: string }>;
+  hasAttachments?: boolean;
+  isDelegationReceipt?: boolean;
+  userText?: string;
+}): boolean {
+  if (input.hasAttachments || input.isDelegationReceipt) return true;
+  if (input.userText && DELEGATION_RECEIPT_OR_ATTACHMENT_RE.test(input.userText.trim())) return true;
+  if (Array.isArray(input.tools)) {
+    return input.tools.some((tool) => typeof tool?.name === "string" && isExternalUntrustedToolName(tool.name));
+  }
+  return false;
+}
 
 /** 助理会话每轮完成后进会话搜索索引；其他会话不进 */
 function indexUserTurn(slot: Slot) {
@@ -153,9 +177,11 @@ function indexUserTurn(slot: Slot) {
   const chat = tenant.disk.chats.find((item) => chatIdOf(item) === slot.chatId) as
     { title?: unknown; turns?: unknown[] } | undefined;
   const turns = Array.isArray(chat?.turns) ? chat.turns.length : 1;
-  const hasExternalToolOutput = Array.isArray(transcript.tools)
-    ? transcript.tools.some((tool) => typeof tool?.name === "string" && EXTERNAL_UNTRUSTED_TOOL_RE.test(tool.name))
-    : false;
+  const hasExternalToolOutput = detectExternalTurnInput({
+    tools: transcript.tools,
+    hasAttachments: Boolean(transcript.hasAttachments || transcript.images?.length),
+    userText: transcript.userText,
+  });
   try {
     noteUserTurn(tenant, {
       chatId: slot.chatId,

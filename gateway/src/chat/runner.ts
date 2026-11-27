@@ -344,13 +344,14 @@ export async function handlePrompt(
     loadDynamicMemoryContext(cwd, conn.tenant, userText),
     cwd,
     fence,
+    atUserRoot,
   );
   if (skillsBlock) compactPrompt = `${skillsBlock}\n\n${compactPrompt}`;
   if (clock) compactPrompt = `${clock}\n\n${compactPrompt}`;
 
   const epoch = ++slot.epoch;
   if (keepTranscript && slot.transcript) continueTranscript(slot, epoch);
-  else openTranscript(slot, turnId, userText, epoch, safeImages);
+  else openTranscript(slot, turnId, userText, epoch, safeImages, Boolean(files?.length || safeImages?.length));
   emitOwnerRunSnapshot(ws, slot);
   if (conn.tenant && !isAssistantChat(conn.tenant, slot.chatId)) noteWorkspaceTurnStart(conn.tenant, slot.chatId);
   slot.finished = false;

@@ -76,6 +76,7 @@ export function wrapFollowupPrompt(
   dynamicMemory?: string,
   cwd?: string,
   confine = true,
+  atUserRoot = false,
 ): string {
   let body = text;
   if (files?.length) {
@@ -89,7 +90,10 @@ export function wrapFollowupPrompt(
   }
   const bound = cwd && confine ? `${workspaceConfinePrompt(cwd)}\n` : "";
   void mode;
-  return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写当前工作区相对路径 .cursor-remote/canvases/<kebab>.canvas.tsx，严禁加 ../ 前缀或写到父目录，并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；生成超 15KB/300 行的数据报表或长画布时严禁单次 Write 硬塞大字符串，优先用短脚本从磁盘读取数据生成或分块写入；超 30s 命令显式传 block_until_ms: 120000；若本轮敲定了架构/方案决定、确立了业务口径或排查出关键工程坑点，在最终回复前调 workspace_memory_propose 记入 .jiebo/memory.md）。]\n\n${body}`;
+  const wsMemoryGuard = !atUserRoot
+    ? `；若本轮敲定了架构/方案决定（section="决定"）、排查出非显而易见的工程/业务坑点（section="坑"）、确立了工作区业务口径/协作约定（section="约定"）或新增标准命令（section="命令"），在最终回复前调 workspace_memory_propose 记入 .jiebo/memory.md（单次任务流水账、已有规则重复项、个人隐私/密钥、未定案临时猜想严禁写入）`
+    : "";
+  return `${bound}[会话续接：继续严格遵守本会话首轮已注入的 AGENTS.md、工作偏好与 CANVAS / PUBLISH / CREW 硬约束（中文回复；独立分析产物写当前工作区相对路径 .cursor-remote/canvases/<kebab>.canvas.tsx，严禁加 ../ 前缀或写到父目录，并经 compileCanvas+loadCanvasModule+renderToStaticMarkup 验证；生成超 15KB/300 行的数据报表或长画布时严禁单次 Write 硬塞大字符串，优先用短脚本从磁盘读取数据生成或分块写入；超 30s 命令显式传 block_until_ms: 120000${wsMemoryGuard}）。]\n\n${body}`;
 }
 
 export function wrapPrompt(

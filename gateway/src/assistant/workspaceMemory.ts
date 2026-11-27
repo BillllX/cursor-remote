@@ -17,7 +17,9 @@ import {
   splitTerms,
   today,
 } from "./memory.ts";
+import { memoryTextMatch, normalizeMemoryText, type MemoryMatch } from "./memoryMatch.ts";
 import { isValidCalendarDateUtc } from "../../../shared/calendarDateUtc.ts";
+export { memoryTextMatch, normalizeMemoryText, type MemoryMatch };
 import type { InjectionDiagnostics, MemoryInjectionReason, MemoryInjectionSkipReason } from "../../../shared/protocol.ts";
 import { assistantPath, clip, estimateTokens, newId, readJson, writeJson, type TenantRef } from "./store.ts";
 
@@ -516,132 +518,6 @@ export function ensureMemoryJieboGitignore(
   else writeTextAtomic(plan.path, plan.content);
 }
 
-export type MemoryMatch = {
-  matchedId?: string;
-  matchKind: "normalized_exact" | "high_similarity";
-  similarity: number;
-};
-
-const SIMILARITY_THRESHOLD = 0.94;
-const HAN_SIMILARITY_THRESHOLD = 0.97;
-const POLARITY_RE =
-  /不允许|未启用|未开启|不得|不能|不可|不应|不必|无需|不要|禁止|禁用|停用|关闭|必须|务必|应当|需要|允许|启用|开启|否|不|未|无|非|勿|莫|别/g;
-
-/** 常见标点、大小写和空白不承载语义；NFKC 同时统一全角字符。 */
-export function normalizeMemoryText(text: string) {
-  return text
-    .normalize("NFKC")
-    .toLocaleLowerCase()
-    .replace(/重新启动|再次启动/g, "重启")
-    .replace(/并且|以及/g, "和")
-    // 保留 . / \ - _ 等代码标识符边界；只折叠空白与自然语言标点。
-    .replace(/[\s,，。!！?？:：;；'"“”‘’`()（）[\]{}<>《》、]+/g, "");
-}
-
-function criticalTokens(text: string) {
-  // 数字（含中文数字）、路径和 flags 往往正是命令/配置差异；集合不同就绝不做近似合并。
-  const unit = "毫秒|分钟|小时|千字节|兆字节|吉字节|端口|字节|次数|帧|次|遍|个|秒|天|kb|mb|gb|tb|%";
-  const number = "(?:\\b\\d+(?:\\.\\d+)*|[〇零一二两三四五六七八九十百千万亿]+)";
-  return [
-    ...text
-      .normalize("NFKC")
-      .toLocaleLowerCase()
-      .matchAll(new RegExp(`--?[\\w.-]+|(?:[./~][\\w.@%+~/-]+)|(?:${unit})?${number}(?:${unit})?`, "g")),
-  ]
-    .map((match) => match[0])
-    .sort();
-}
-
-function polarityTokens(text: string) {
-  return [...text.normalize("NFKC").matchAll(POLARITY_RE)].map((match) => match[0]).sort();
-}
-
-function hanRatio(text: string) {
-  const meaningful = [...text].filter((char) => /[\p{Letter}\p{Number}]/u.test(char));
-  if (!meaningful.length) return 0;
-  return meaningful.filter((char) => /\p{Script=Han}/u.test(char)).length / meaningful.length;
-}
-
-const SAFE_HAN_TYPO_GROUPS = ["状壮", "查察", "已以", "的地得", "做作"];
-
-function isSafeHanTypo(left: string, right: string) {
-  const a = [...left];
-  const b = [...right];
-  if (a.length !== b.length || a.length < 24) return false;
-  let changed = 0;
-  for (let index = 0; index < a.length; index += 1) {
-    if (a[index] === b[index]) continue;
-    changed += 1;
-    if (changed > 2 || !SAFE_HAN_TYPO_GROUPS.some((group) => group.includes(a[index]) && group.includes(b[index]))) return false;
-  }
-  return changed > 0;
-}
-
-function canonicalSafeHanTypos(text: string) {
-  let out = text;
-  for (const group of SAFE_HAN_TYPO_GROUPS) {
-    const canonical = [...group][0];
-    for (const variant of [...group].slice(1)) out = out.split(variant).join(canonical);
-  }
-  return out;
-}
-
-function grams(text: string) {
-  const chars = [...text];
-  const size = chars.length < 6 ? 2 : 3;
-  return new Set(chars.slice(0, Math.max(0, chars.length - size + 1)).map((_, index) => chars.slice(index, index + size).join("")));
-}
-
-function terms(text: string) {
-  const normalized = text.normalize("NFKC").toLocaleLowerCase();
-  const out = normalized.match(/[a-z0-9_./-]+|[\p{Script=Han}]+/gu) ?? [];
-  return new Set(
-    out.flatMap((term) => {
-      if (!/^\p{Script=Han}+$/u.test(term) || [...term].length < 3) return [term];
-      const chars = [...term];
-      return chars.slice(0, -1).map((char, index) => char + chars[index + 1]);
-    }),
-  );
-}
-
-function dice(left: Set<string>, right: Set<string>) {
-  if (!left.size && !right.size) return 1;
-  let common = 0;
-  for (const value of left) if (right.has(value)) common += 1;
-  return (2 * common) / (left.size + right.size);
-}
-
-function jaccard(left: Set<string>, right: Set<string>) {
-  if (!left.size && !right.size) return 1;
-  let common = 0;
-  for (const value of left) if (right.has(value)) common += 1;
-  return common / (left.size + right.size - common);
-}
-
-/**
- * 保守近似：关键 token 与语义极性必须完全相同；规范化后先精确匹配，否则仅长度 >= 16
- * 且 3-gram Dice(75%) + term Jaccard(25%) >= 0.94 才算重复。高 Han 占比文本提高到
- * 0.97；极性、数字、路径、flag 的细微变化已由前置硬守卫拒绝。已知中文错字只在
- * 长度 >= 24、等长且最多两个形近/同音误字时参与评分归一化，最终仍必须达到阈值。
- */
-export function memoryTextMatch(left: string, right: string): Omit<MemoryMatch, "matchedId"> | null {
-  if (criticalTokens(left).join("\0") !== criticalTokens(right).join("\0")) return null;
-  if (polarityTokens(left).join("\0") !== polarityTokens(right).join("\0")) return null;
-  const a = normalizeMemoryText(left);
-  const b = normalizeMemoryText(right);
-  if (a === b) return { matchKind: "normalized_exact", similarity: 1 };
-  if (Math.min([...a].length, [...b].length) < 16) return null;
-  const mostlyHan = Math.min(hanRatio(a), hanRatio(b)) >= 0.6;
-  const safeTypo = mostlyHan && isSafeHanTypo(a, b);
-  const scoreA = safeTypo ? canonicalSafeHanTypos(a) : a;
-  const scoreB = safeTypo ? canonicalSafeHanTypos(b) : b;
-  const similarity = 0.75 * dice(grams(scoreA), grams(scoreB)) + 0.25 * jaccard(terms(scoreA), terms(scoreB));
-  const threshold = mostlyHan ? HAN_SIMILARITY_THRESHOLD : SIMILARITY_THRESHOLD;
-  return similarity >= threshold
-    ? { matchKind: "high_similarity", similarity: Number(similarity.toFixed(3)) }
-    : null;
-}
-
 function findMemoryMatch(text: string, candidates: { text: string; id?: string }[]): MemoryMatch | null {
   for (const candidate of candidates) {
     const match = memoryTextMatch(text, candidate.text);
@@ -962,10 +838,7 @@ function diverseNewest(rows: RankedMemoryLine[]) {
   }
 }
 
-/** 渲染进提示词：置顶 → query 相关 → 分节轮转；引用失效标待核实，超预算的留在文件里。 */
-export function renderMemoryFile(dir: string, budget: number, query = "", allowedRoot = dir) {
-  const plan = planMemoryInjection(dir, budget, query, allowedRoot);
-  if (!plan) return "";
+function formatMemoryPlan(plan: MemoryInjectionPlan) {
   const out: string[] = [];
   for (const section of plan.sectionOrder) {
     const rows = plan.selected.filter((row) => row.line.section === section);
@@ -974,6 +847,13 @@ export function renderMemoryFile(dir: string, budget: number, query = "", allowe
   }
   out.push(formatInjectionDiagnosticsLine(plan.diagnostics));
   return out.join("\n");
+}
+
+/** 渲染进提示词：置顶 → query 相关 → 分节轮转；引用失效标待核实，超预算的留在文件里。 */
+export function renderMemoryFile(dir: string, budget: number, query = "", allowedRoot = dir) {
+  const plan = planMemoryInjection(dir, budget, query, allowedRoot);
+  if (!plan) return "";
+  return formatMemoryPlan(plan);
 }
 
 export type WorkspaceMemorySearchHit = {
@@ -993,7 +873,7 @@ export type WorkspaceMemorySearchHit = {
 
 type SearchRow = WorkspaceMemorySearchHit & { score: number; depth: number; index: number };
 
-function searchableDirs(tenant: WorkspaceRoot, cwd: string) {
+function searchableDirs(tenant: WorkspaceRoot, cwd: string, query = "") {
   const base = realOr(tenant.workspaceRoot);
   const target = realOr(cwd);
   if (!within(base, target) || target === base) return [];
@@ -1003,41 +883,94 @@ function searchableDirs(tenant: WorkspaceRoot, cwd: string) {
     dirs.push(cur);
     cur = dirname(cur);
   }
-  for (const childDir of directChildMemoryDirs(base, target)) {
+  for (const childDir of directChildMemoryDirs(base, target, query)) {
     if (!dirs.includes(childDir)) dirs.push(childDir);
   }
   return dirs;
 }
 
-/** 当 cwd 位于 L2 顶层子工作区根目录时，向下探查一层已存在 .jiebo/memory.md 的直接子仓库目录（最多 3 个） */
-function directChildMemoryDirs(base: string, target: string): string[] {
+export const L3_SHARED_TOKEN_BUDGET = 400;
+
+/**
+ * 当 cwd 位于 L2 顶层子工作区根目录时，向下探查全部已存在 .jiebo/memory.md 的直接子仓库目录，
+ * 并按本轮 query 相关度降序 + 最近修改时间（mtime）降序排列（不再按字母序盲截前 3 个）。
+ */
+function directChildMemoryDirs(base: string, target: string, query = ""): string[] {
   if (!within(base, target) || target === base || dirname(target) !== base) return [];
-  const out: string[] = [];
   let names: string[] = [];
   try {
-    names = readdirSync(target).sort();
+    names = readdirSync(target);
   } catch {
-    return out;
+    return [];
   }
+  const qTerms = query.trim() ? splitTerms(query) : [];
+  const scored: Array<{ dir: string; name: string; score: number; mtimeMs: number }> = [];
   for (const name of names) {
-    if (out.length >= 3) break;
     if (name.startsWith(".") || TIDY_SKIP_DIR.has(name)) continue;
     const child = resolve(target, name);
     try {
       const st = lstatSync(child);
       if (st.isSymbolicLink() || !st.isDirectory()) continue;
       const paths = safeMemoryPaths(child, base);
-      if (existsSync(paths.memory) && statSync(paths.memory).isFile()) {
-        out.push(paths.dir);
+      if (!existsSync(paths.memory)) continue;
+      const memStat = statSync(paths.memory);
+      if (!memStat.isFile()) continue;
+      let score = 0;
+      if (qTerms.length) {
+        const lines = parseMemoryFile(readText(paths.memory));
+        let maxLine = 0;
+        let sumLine = 0;
+        for (const line of lines) {
+          const state = effectiveMemoryState(line);
+          if (state === "done" || state === "expired") continue;
+          const s = memoryRelevance(line, qTerms);
+          if (s > maxLine) maxLine = s;
+          sumLine += s;
+        }
+        // 同时奖励目录名直接命中 query
+        const nameLow = name.toLowerCase();
+        const nameBonus = qTerms.some((t) => nameLow.includes(t)) ? 10 : 0;
+        score = maxLine * 2 + sumLine + nameBonus;
       }
+      scored.push({ dir: paths.dir, name, score, mtimeMs: memStat.mtimeMs });
     } catch {
       continue;
     }
   }
-  return out;
+  scored.sort((a, b) => b.score - a.score || b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
+  return scored.map((item) => item.dir);
 }
 
-/** 只检索当前 cwd 的祖先链，明确排除 USER 根和兄弟工作区；检索本身不续期。 */
+/** 多个直属 L3 子仓共享总预算（默认 400 token），按相关度与活跃度择优渲染，严格不超总预算。 */
+function renderDirectChildMemories(
+  base: string,
+  target: string,
+  query = "",
+  totalBudget = L3_SHARED_TOKEN_BUDGET,
+): Array<{ label: string; text: string; tokens: number }> {
+  const childDirs = directChildMemoryDirs(base, target, query);
+  const rendered: Array<{ label: string; text: string; tokens: number }> = [];
+  let remaining = totalBudget;
+  for (const childDir of childDirs) {
+    if (remaining < 16) break;
+    const plan = planMemoryInjection(childDir, remaining, query, base);
+    if (!plan || !plan.selected.length) continue;
+    const used = Math.max(
+      1,
+      plan.selected.reduce((sum, row) => sum + row.cost, 0),
+    );
+    if (used > remaining) continue;
+    remaining -= used;
+    rendered.push({
+      label: posix(relative(base, childDir)),
+      text: `### ${MEMORY_FILE}\n${formatMemoryPlan(plan)}`,
+      tokens: used,
+    });
+  }
+  return rendered;
+}
+
+/** 只检索当前 cwd 的祖先链（含 L2 直属 L3 子仓），明确排除 USER 根和兄弟工作区；检索本身不续期。 */
 export function searchWorkspaceMemory(tenant: WorkspaceRoot, cwd: string, query: string, limit = MEMORY_SEARCH_LIMIT) {
   const terms = splitTerms(query);
   if (!terms.length) return [];
@@ -1045,7 +978,7 @@ export function searchWorkspaceMemory(tenant: WorkspaceRoot, cwd: string, query:
   const rows: SearchRow[] = [];
   // 一次 search 只读一次个人记忆，避免逐行重复解析同一批 needles。
   const personalNeedles = readPersonalNeedles({ id: tenant.id, stateDir: tenant.stateDir });
-  for (const [depth, dir] of searchableDirs(tenant, cwd).entries()) {
+  for (const [depth, dir] of searchableDirs(tenant, cwd, query).entries()) {
     let memoryPath: string;
     try {
       memoryPath = safeMemoryPaths(dir, base).memory;
@@ -1274,8 +1207,8 @@ export function workspaceDynamicMemoryOnly(tenant: WorkspaceRoot, cwd: string, q
   const base = realOr(tenant.workspaceRoot);
   const dirs = layerDirs(tenant.workspaceRoot, cwd);
   if (!dirs.length) return "";
-  const childDirs = directChildMemoryDirs(base, realOr(cwd));
-  const single = dirs.length === 1 && childDirs.length === 0;
+  const childBlocks = renderDirectChildMemories(base, realOr(cwd), query, L3_SHARED_TOKEN_BUDGET);
+  const single = dirs.length === 1 && childBlocks.length === 0;
   const blocks: string[] = [];
   for (let i = 0; i < dirs.length; i += 1) {
     const dir = dirs[i]!;
@@ -1285,48 +1218,52 @@ export function workspaceDynamicMemoryOnly(tenant: WorkspaceRoot, cwd: string, q
     const label = dir === base ? "USER 根目录" : posix(relative(base, dir));
     blocks.push(single ? `### ${MEMORY_FILE}\n${memory}` : `## 层：${label}\n### ${MEMORY_FILE}\n${memory}`);
   }
-  for (const childDir of childDirs) {
-    const memory = renderMemoryFile(childDir, 400, query, base);
-    if (!memory) continue;
-    const label = posix(relative(base, childDir));
-    blocks.push(`## 层：${label}\n### ${MEMORY_FILE}\n${memory}`);
+  for (const child of childBlocks) {
+    blocks.push(`## 层：${child.label}\n${child.text}`);
   }
   return blocks.join("\n\n");
 }
 
 /**
  * 按层拼规则：远层在前、近层在后，越近越优先；超出总上限时先砍远层。
+ * P1-4：先完整保留本层及祖先层的 AGENTS.md 与 .jiebo/memory.md，再用剩余字符预算追加直属 L3 子仓共享记忆（严禁 L3 挤掉本层 AGENTS.md）。
  * cwd 在子工作区里时，USER 根目录那层不读（那是助理的人设）。
  */
 export function layeredRules(root: string, cwd: string, cap = RULES_CHAR_CAP, query = "") {
   const base = realOr(root);
   const dirs = layerDirs(root, cwd);
   if (!dirs.length) return "";
-  const layers = dirs
+  const primaryLayers = dirs
     .map((dir, i) => {
       const text = layerText(dir, dir === base ? 0 : i + 1, query, base);
       const label = dir === base ? "USER 根目录" : posix(relative(base, dir));
       return text ? { label, text } : null;
     })
     .filter((row): row is { label: string; text: string } => Boolean(row));
-  for (const childDir of directChildMemoryDirs(base, realOr(cwd))) {
-    const memory = renderMemoryFile(childDir, 400, query, base);
-    if (!memory) continue;
-    layers.push({
-      label: posix(relative(base, childDir)),
-      text: `### ${MEMORY_FILE}\n${memory}`,
-    });
-  }
-  if (!layers.length) return "";
-  const single = layers.length === 1;
-  const kept: string[] = new Array(layers.length).fill("");
+  const childLayers = renderDirectChildMemories(base, realOr(cwd), query, L3_SHARED_TOKEN_BUDGET);
+  if (!primaryLayers.length && !childLayers.length) return "";
+  const single = primaryLayers.length + childLayers.length === 1;
+  const keptPrimary: string[] = new Array(primaryLayers.length).fill("");
   let left = cap;
-  for (let i = layers.length - 1; i >= 0 && left > 0; i -= 1) {
-    const block = single ? layers[i].text : `## 层：${layers[i].label}\n${layers[i].text}`;
-    kept[i] = block.length > left ? `${block.slice(0, left)}\n（这一层太长，后面截掉了）` : block;
+  for (let i = primaryLayers.length - 1; i >= 0 && left > 0; i -= 1) {
+    const block = single ? primaryLayers[i].text : `## 层：${primaryLayers[i].label}\n${primaryLayers[i].text}`;
+    keptPrimary[i] = block.length > left ? `${block.slice(0, left)}\n（这一层太长，后面截掉了）` : block;
     left -= block.length;
   }
-  const body = kept.filter(Boolean).join("\n\n");
+  const keptChildren: string[] = [];
+  for (const child of childLayers) {
+    if (left <= 40) break;
+    const block = single ? child.text : `## 层：${child.label}\n${child.text}`;
+    if (block.length <= left) {
+      keptChildren.push(block);
+      left -= block.length;
+    } else if (left >= 120) {
+      keptChildren.push(`${block.slice(0, left)}\n（这一层太长，后面截掉了）`);
+      left = 0;
+      break;
+    }
+  }
+  const body = [...keptPrimary.filter(Boolean), ...keptChildren].join("\n\n");
   return single ? body : `下面按目录分层，越靠后越具体；冲突时以靠后的为准，且只在那一层目录内生效。\n\n${body}`;
 }
 
