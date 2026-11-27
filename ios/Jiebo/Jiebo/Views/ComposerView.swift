@@ -24,6 +24,7 @@ struct ComposerView: View {
     @State private var ignoreDraftEcho: String?
     @State private var photoItems: [PhotosPickerItem] = []
     @State var viewerItem: AttachmentViewerItem?
+    @State var personalRecordingOpen = false
     @State var modelPickerOpen = false
     @State var photoPickerOpen = false
     @State var filePickerOpen = false
@@ -285,6 +286,16 @@ struct ComposerView: View {
             if case .success(let urls) = result {
                 syncBufferToStore()
                 store.attachFiles(urls, chatId: chatId)
+            }
+        }
+        .sheet(isPresented: $personalRecordingOpen) {
+            PersonalRecordingPanel(store: store)
+        }
+        .task(id: store.unlocked ? store.tenantId : "") {
+            guard isAssistantSession, store.unlocked else { return }
+            while !Task.isCancelled, store.unlocked {
+                await PersonalRecording.shared.recover(store: store)
+                do { try await Task.sleep(for: .seconds(120)) } catch { return }
             }
         }
         .sheet(isPresented: $fileBrowserOpen) {

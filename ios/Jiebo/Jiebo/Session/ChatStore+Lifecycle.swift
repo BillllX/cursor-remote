@@ -100,6 +100,7 @@ extension ChatStore {
     }
 
     func logout() {
+        PersonalRecording.shared.leaveAccount()
         KeychainStore.delete()
         UserDefaults.standard.removeObject(forKey: tenantKey)
         unlocked = false
@@ -124,6 +125,7 @@ extension ChatStore {
     /// App 回到前台：系统可能在后台掐掉了 socket 却没通知，先探活
     func appBecameActive() {
         guard started else { return }
+        Task { await PersonalRecording.shared.recover(store: self) }
         client.probe()
         // 保留 force + knownRevision 的条件请求语义，只合并短时间内重复的 Scene/重连触发。
         requestAssistant(force: true, freshnessWindow: RefreshFreshnessPolicy.assistantForegroundWindow)

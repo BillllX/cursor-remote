@@ -32,12 +32,19 @@ final class VoiceDictation {
     private var savedSession: (category: AVAudioSession.Category, mode: AVAudioSession.Mode, options: AVAudioSession.CategoryOptions)?
     /// 激活和停用串行排队，避免上一次还没停完就再次改会话
     private var sessionChain: Task<Void, Never>?
+    private var leaseToken: AudioSessionLeaseToken?
 
     var active: Bool { phase != .idle }
 
     /// 开始录音。返回给用户看的提示；nil 表示已开始，或启动途中被放弃。
     func start() async -> String? {
         guard phase == .idle else { return nil }
+        switch AudioSessionCoordinator.shared.acquire(for: .dictation) {
+        case .granted(let token):
+            leaseToken = token
+        case .rejected(let reason):
+            return reason
+        }
         phase = .starting
         abandoned = false
         stoppedEarly = false
@@ -52,6 +59,7 @@ final class VoiceDictation {
             if speech == .notDetermined { _ = await Self.requestSpeechAuthorization() }
             if mic == .undetermined, !abandoned { _ = await AVAudioApplication.requestRecordPermission() }
             phase = .idle
+            releaseLease()
             if abandoned { return nil }
             return SFSpeechRecognizer.authorizationStatus() == .authorized && AVAudioApplication.shared.recordPermission == .granted
                 ? "可以用了，再长按一次说话"
@@ -59,10 +67,12 @@ final class VoiceDictation {
         }
         guard speech == .authorized, mic == .granted else {
             phase = .idle
+            releaseLease()
             return "没有麦克风或语音识别权限，到「设置 › 接驳」里打开"
         }
         guard let recognizer, recognizer.isAvailable else {
             phase = .idle
+            releaseLease()
             return "语音识别暂时不可用，稍后再试"
         }
 
@@ -190,6 +200,7 @@ final class VoiceDictation {
         level = 0
         stoppedEarly = false
         phase = .idle
+        releaseLease()
         guard let saved = savedSession else { return }
         savedSession = nil
         let previous = sessionChain
@@ -219,6 +230,13 @@ final class VoiceDictation {
                 }
             }
             sessionChain = Task { _ = await next.value }
+        }
+    }
+
+    private func releaseLease() {
+        if let token = leaseToken {
+            leaseToken = nil
+            AudioSessionCoordinator.shared.release(token, deactivate: false)
         }
     }
 

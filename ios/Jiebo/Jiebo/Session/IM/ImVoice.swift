@@ -20,16 +20,25 @@ final class ImVoiceRecorder {
     private var samples: [Double] = []
     private var startedAt = Date()
     private var file: URL?
+    private var leaseToken: AudioSessionLeaseToken?
 
     func start() async -> String? {
         guard !recording else { return nil }
+        switch AudioSessionCoordinator.shared.acquire(for: .shortRecording) {
+        case .granted(let token):
+            leaseToken = token
+        case .rejected(let reason):
+            return reason
+        }
         ImVoicePlayer.shared.stop()
         await ImVoicePlayer.shared.waitForAudioSession()
         if AVAudioApplication.shared.recordPermission == .undetermined {
             let granted = await AVAudioApplication.requestRecordPermission()
+            releaseLease()
             return granted ? "麦克风权限已开启，请再次按住说话" : "没有麦克风权限，到「设置 › 接驳」里打开"
         }
         guard AVAudioApplication.shared.recordPermission == .granted else {
+            releaseLease()
             return "没有麦克风权限，到「设置 › 接驳」里打开"
         }
         do {
@@ -141,7 +150,15 @@ final class ImVoiceRecorder {
     }
 
     private func stopSession() {
+        releaseLease()
         ImVoicePlayer.shared.deactivateSession()
+    }
+
+    private func releaseLease() {
+        if let token = leaseToken {
+            leaseToken = nil
+            AudioSessionCoordinator.shared.release(token, deactivate: false)
+        }
     }
 
     private static func fileDuration(_ url: URL) -> Double? {
@@ -176,6 +193,10 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
             stop()
             return
         }
+        if AudioSessionCoordinator.shared.isLongRecordingActive {
+            store.showToast("正在录音整理，请先暂停录音")
+            return
+        }
         // 先释放上一条的 player；其下载或结束回调随后到达时不能消费新队列。
         stop()
         self.store = store
@@ -200,7 +221,7 @@ final class ImVoicePlayer: NSObject, AVAudioPlayerDelegate {
     }
 
     /// 等 stop() 排进去的停用做完，再去开麦克风。
-    fileprivate func waitForAudioSession() async {
+    func waitForAudioSession() async {
         await sessionOps?.value
     }
 

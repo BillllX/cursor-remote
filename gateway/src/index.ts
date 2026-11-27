@@ -40,6 +40,8 @@ import { defaultModel, gatewayHost, webUrl } from "./runtime/env.ts";
 import { onConnection } from "./ws/connection.ts";
 import { deviceRegistry } from "./device/registry.ts";
 import { startIngestRuntime } from "./ingest/notify.ts";
+import { handleRecordingsMediaHttp, handleRecordingsUploadHttp } from "./recordings/http.ts";
+import { startRecordingsRuntime } from "./recordings/runtime.ts";
 import { initializeSdkSandbox } from "./runtime/sdkSandbox.ts";
 
 loadDotEnv([resolve(process.cwd(), ".env"), resolve(process.cwd(), "../.env")]);
@@ -147,6 +149,14 @@ const httpServer = createServer((req, res) => {
     res.end(req.method === "HEAD" ? undefined : body);
     return;
   }
+  if ((req.method === "GET" || req.method === "HEAD") && url.pathname.startsWith("/media/recordings/v1/")) {
+    void handleRecordingsMediaHttp(req, res, url).catch((err) => {
+      log.error("recordings media", err instanceof Error ? err.message : err);
+      if (!res.headersSent) res.writeHead(500).end("media failed");
+      else res.destroy();
+    });
+    return;
+  }
   if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/media/im") {
     void handleImMedia(req, res, url).catch((err) => {
       log.error("im media", err instanceof Error ? err.message : err);
@@ -180,6 +190,15 @@ const httpServer = createServer((req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/state") {
     handleState(req, res);
+    return;
+  }
+  if (url.pathname.startsWith("/upload/recordings/v1/")) {
+    void handleRecordingsUploadHttp(req, res, url).catch((err) => {
+      log.error("recordings upload", err instanceof Error ? err.message : err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "录音服务异常" }));
+      }
+    });
     return;
   }
   if (url.pathname === "/upload/im/send-json") {
@@ -320,6 +339,7 @@ httpServer.listen(PORT, gatewayHost(), () => {
     mkdirSync(tenant.stateDir, { recursive: true });
   }
   startIngestRuntime({ tenants: () => tenants });
+  startRecordingsRuntime({ tenants: () => allTenants() });
   log.banner(`cursor-remote gateway  http://${gatewayHost()}:${PORT}`);
   if (tenants.length === 1) {
     log.banner(`工作区                 ${tenants[0].workspaceRoot}`);

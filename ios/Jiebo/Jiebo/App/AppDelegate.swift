@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
+        if identifier == RecordingTransfers.identifier {
+            RecordingTransfers.shared.attach(completionHandler)
+            return
+        }
         ImShareBackgroundQueue.shared.handleEvents(identifier: identifier, completion: completionHandler)
     }
 

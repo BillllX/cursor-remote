@@ -2119,6 +2119,16 @@ enum GatewayConfig {
         derive(path: "/media")
     }
 
+    /// 长录音专用控制与流式上传基址（走 nginx /upload 前缀，不改全站 32MiB 上限）
+    static var recordingsUploadBaseURL: URL {
+        derive(path: "/upload/recordings/v1")
+    }
+
+    /// 长录音鉴权 Range 回放基址（走 nginx /media 前缀）
+    static var recordingsMediaBaseURL: URL {
+        derive(path: "/media/recordings/v1")
+    }
+
     /// 网关返回的站内路径（如知识库投递页 /p/<租户>/drop）换成当前连接对应的 http(s) 地址
     static func pageURL(path: String) -> URL {
         if path.hasPrefix("http://") || path.hasPrefix("https://"), let url = URL(string: path) {

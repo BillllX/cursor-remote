@@ -57,6 +57,11 @@
 		A1B2C3D4E5F6071829000329 /* PhoneWorkbench.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000129 /* PhoneWorkbench.swift */; };
 		A1B2C3D4E5F6071829000330 /* AssistantView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000130 /* AssistantView.swift */; };
 		A1B2C3D4E5F6071829000331 /* VoiceDictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */; };
+		CD1234567890ABCDEF003303 /* RecordingOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001303 /* RecordingOutbox.swift */; };
+		CD1234567890ABCDEF003304 /* RecordingModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001304 /* RecordingModels.swift */; };
+		CD1234567890ABCDEF003305 /* PersonalRecordingViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */; };
+		CD1234567890ABCDEF003302 /* PersonalRecording.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001302 /* PersonalRecording.swift */; };
+		CD1234567890ABCDEF003301 /* AudioSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD1234567890ABCDEF001301 /* AudioSessionCoordinator.swift */; };
 		A1B2C3D4E5F6071829000400 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000015 /* Assets.xcassets */; };
 		A1B2C3D4E5F6071829000800 /* PhoneRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */; };
 		PADP00201 /* PadRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = PADP00101 /* PadRouter.swift */; };
@@ -266,6 +271,11 @@
 		A1B2C3D4E5F6071829000129 /* PhoneWorkbench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneWorkbench.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000130 /* AssistantView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantView.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceDictation.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001303 /* RecordingOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOutbox.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001304 /* RecordingModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingModels.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalRecordingViews.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001302 /* PersonalRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalRecording.swift; sourceTree = "<group>"; };
+		CD1234567890ABCDEF001301 /* AudioSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSessionCoordinator.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F6071829000700 /* PhoneRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneRouter.swift; sourceTree = "<group>"; };
 		PADP00101 /* PadRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadRouter.swift; sourceTree = "<group>"; };
 		PADP00102 /* PadAssistantShell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadAssistantShell.swift; sourceTree = "<group>"; };
@@ -553,6 +563,10 @@
 				A1B2C3D4E5F6071829000123 /* HtmlRewrite.swift */,
 				A1B2C3D4E5F6071829000125 /* WorkspaceGroups.swift */,
 				A1B2C3D4E5F6071829000131 /* VoiceDictation.swift */,
+				CD1234567890ABCDEF001303 /* RecordingOutbox.swift */,
+				CD1234567890ABCDEF001304 /* RecordingModels.swift */,
+				CD1234567890ABCDEF001302 /* PersonalRecording.swift */,
+				CD1234567890ABCDEF001301 /* AudioSessionCoordinator.swift */,
 			);
 			path = Session;
 			sourceTree = "<group>";
@@ -580,6 +594,7 @@
 				A1B2C3D4E5F6071829000737 /* LoopSheet.swift */,
 				A1B2C3D4E5F6071829000739 /* LinkStatusDot.swift */,
 				A1B2C3D4E5F6071829000740 /* ThemeSettingsSheet.swift */,
+				CD1234567890ABCDEF001305 /* PersonalRecordingViews.swift */,
 				ICON000101 /* AppIconPicker.swift */,
 				A1B2C3D4E5F6071829000741 /* ChatRowActions.swift */,
 				A1B2C3D4E5F6071829000113 /* ThreadView.swift */,
@@ -991,6 +1006,11 @@
 				A1B2C3D4E5F6071829000329 /* PhoneWorkbench.swift in Sources */,
 				A1B2C3D4E5F6071829000330 /* AssistantView.swift in Sources */,
 				A1B2C3D4E5F6071829000331 /* VoiceDictation.swift in Sources */,
+				CD1234567890ABCDEF003303 /* RecordingOutbox.swift in Sources */,
+				CD1234567890ABCDEF003304 /* RecordingModels.swift in Sources */,
+				CD1234567890ABCDEF003305 /* PersonalRecordingViews.swift in Sources */,
+				CD1234567890ABCDEF003302 /* PersonalRecording.swift in Sources */,
+				CD1234567890ABCDEF003301 /* AudioSessionCoordinator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1160,10 +1180,10 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
 				INFOPLIST_KEY_NSContactsUsageDescription = "仅在你要求时搜索匹配的联系人姓名、电话和邮箱";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "发送当前位置或在附近搜索地点";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "在聊天里按住说话发送语音，或把说话内容转成文字";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于你主动发起的会议与生活长录音（锁屏时可继续录并在停止后按设置整理）、发送聊天语音及语音输入";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "按你的请求读取提醒事项，并在你确认后新建或修改条目";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "在本机使用 Apple 语音模型将你主动录制的长录音或语音输入转为带时间戳的文字";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1207,10 +1227,10 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "在聊天里拍照发给对方";
 				INFOPLIST_KEY_NSContactsUsageDescription = "仅在你要求时搜索匹配的联系人姓名、电话和邮箱";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "发送当前位置或在附近搜索地点";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "在聊天里按住说话发送语音，或把说话内容转成文字";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "用于你主动发起的会议与生活长录音（锁屏时可继续录并在停止后按设置整理）、发送聊天语音及语音输入";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "把预览的图片保存到相册";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "按你的请求读取提醒事项，并在你确认后新建或修改条目";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把你说的话转成文字，填进输入框，改完再发";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "在本机使用 Apple 语音模型将你主动录制的长录音或语音输入转为带时间戳的文字";
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UIStatusBarStyle = UIStatusBarStyleDarkContent;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

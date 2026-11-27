@@ -6,6 +6,25 @@ extension ComposerView {
     /// iPhone 助理：单行胶囊 — ＋（含 ⋯ 项）、输入、话筒/发送
     var assistantCapsuleRow: some View {
         HStack(alignment: .bottom, spacing: 6) {
+            if isAssistantSession, PersonalRecording.shared.folder != nil {
+                Button { personalRecordingOpen = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: PersonalRecording.shared.recording ? "record.circle.fill" : "pause.circle.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(RecordingFormatting.formatSeconds(PersonalRecording.shared.elapsedSeconds))
+                            .font(JieboFont.mono(11))
+                            .monospacedDigit()
+                    }
+                    .foregroundStyle(PersonalRecording.shared.recording ? JieboColor.danger : JieboColor.warnFg)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(PersonalRecording.shared.recording ? JieboColor.dangerBg : JieboColor.warnBg, in: Capsule())
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PressScaleButtonStyle())
+                .accessibilityLabel(PersonalRecording.shared.recording ? "正在录音，点击查看控制面板" : "录音已暂停，点击查看控制面板")
+            }
             assistantAttachMenu
             entryField(
                 lineLimit: 1 ... 6,
@@ -102,6 +121,9 @@ extension ComposerView {
 
     private var assistantAttachMenu: some View {
         Menu {
+            if isAssistantSession {
+                Button { personalRecordingOpen = true } label: { Label("个人长录音", systemImage: "waveform") }
+            }
             Button { photoPickerOpen = true } label: { Label("照片", systemImage: "photo") }
             Button { filePickerOpen = true } label: { Label("本地文件", systemImage: "doc") }
             if !isAssistantSession {
