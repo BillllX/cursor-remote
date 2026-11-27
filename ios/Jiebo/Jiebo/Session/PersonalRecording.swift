@@ -435,6 +435,7 @@ final class RecordingAudioPlayer: NSObject, AVAudioPlayerDelegate {
 @MainActor @Observable
 final class PersonalRecording {
     static let shared = PersonalRecording()
+    @ObservationIgnored private var recoveringAccounts: Set<String> = []
 
     // 当前录制状态
     private(set) var recording = false
@@ -992,9 +993,15 @@ final class PersonalRecording {
         guard store.unlocked, !store.tenantId.isEmpty else { return }
         ensureSettingsLoaded(tenant: store.tenantId)
         let account = store.tenantId
+        guard recoveringAccounts.insert(account).inserted else { return }
+        defer { recoveringAccounts.remove(account) }
         do {
-            let root = try RecordingOutbox.root(tenant: account)
-            for dir in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
+            let directories = try await Task.detached(priority: .utility) {
+                let root = try RecordingOutbox.root(tenant: account)
+                return try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            }.value
+            guard account == store.tenantId, store.unlocked else { return }
+            for dir in directories {
                 guard account == store.tenantId, store.unlocked else { return }
                 guard UUID(uuidString: dir.lastPathComponent) != nil,
                       dir != folder,

@@ -23,7 +23,7 @@ struct ThreadView: View {
     @Environment(ChatStore.self) var store
     @Environment(\.accessibilityReduceMotion) var reduceMotion
     @Environment(\.dynamicTypeSize) var dynamicTypeSize
-    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.scenePhase) var scenePhase
     @Environment(\.homeActive) var homeActive
     @Environment(\.coldLaunchVisible) private var coldLaunchVisible
     @Environment(\.assistantSceneToken) private var sceneToken
@@ -422,6 +422,7 @@ struct ThreadView: View {
 
     /// 停在底部时才跟随流式输出。松开只认手势，恢复只认「回到最新」和重新钉顶。
     @State var stickToBottom = true
+    @State var readingWindowStart: String?
     /// 钉顶时的可视高度，用来撑当前轮的最小高度。
     @State var viewportHeight: CGFloat = 0
     /// 程序滚动期间，相位和 minY 变化不算用户上滑。

@@ -83,6 +83,20 @@ extension EnvironmentValues {
     }
 }
 
+#if DEBUG
+/// 保留定格检查入口，日常启动直接呈现可操作页面。
+struct LaunchFramePreview: ViewModifier {
+    let sceneToken: String
+    @ViewBuilder func body(content: Content) -> some View {
+        if ProcessInfo.processInfo.arguments.contains(where: { $0.hasPrefix("--launch-frame=") }) {
+            content.modifier(ColdLaunchPresentation(sceneToken: sceneToken))
+        } else {
+            content
+        }
+    }
+}
+#endif
+
 struct ColdLaunchPresentation: ViewModifier {
     @Environment(ColdLaunchController.self) private var launch
     @Environment(\.scenePhase) private var scenePhase

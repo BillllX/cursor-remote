@@ -9,11 +9,13 @@ final class WidgetSnapshotBridge {
     static let widgetKind = "JieboAssistantWidget"
     static let privacyModeKey = "widgetPrivacyMode"
 
+    private let fileQueue = DispatchQueue(label: "ai.jiebo.widget-snapshot", qos: .utility)
     private weak var store: ChatStore?
 
     private init() {}
 
     func attach(_ store: ChatStore) {
+        guard self.store !== store else { return }
         self.store = store
         refresh(from: store)
     }
@@ -24,20 +26,25 @@ final class WidgetSnapshotBridge {
     }
 
     func refresh(from store: ChatStore) {
-        guard let container = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: Self.appGroup
-        ) else { return }
-
         let snapshot = makeSnapshot(from: store)
-        let previous = WidgetSnapshotStore.load(from: container)
-        let stillFresh = previous.map { Date().timeIntervalSince($0.updatedAt) < 15 * 60 } ?? false
-        guard previous?.contentFingerprint != snapshot.contentFingerprint || !stillFresh else { return }
+        let appGroup = Self.appGroup
+        let widgetKind = Self.widgetKind
+        // 串行写入保证登出快照排在之前的已登录快照之后。
+        fileQueue.async {
+            guard let container = FileManager.default.containerURL(
+                forSecurityApplicationGroupIdentifier: appGroup
+            ) else { return }
 
-        do {
-            try WidgetSnapshotStore.save(snapshot, to: container)
-            WidgetCenter.shared.reloadTimelines(ofKind: Self.widgetKind)
-        } catch {
-            print("[Widget] 快照写入失败：\(error.localizedDescription)")
+            let previous = WidgetSnapshotStore.load(from: container)
+            let stillFresh = previous.map { Date().timeIntervalSince($0.updatedAt) < 15 * 60 } ?? false
+            guard previous?.contentFingerprint != snapshot.contentFingerprint || !stillFresh else { return }
+
+            do {
+                try WidgetSnapshotStore.save(snapshot, to: container)
+                WidgetCenter.shared.reloadTimelines(ofKind: widgetKind)
+            } catch {
+                print("[Widget] 快照写入失败：\(error.localizedDescription)")
+            }
         }
     }
 

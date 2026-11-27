@@ -42,13 +42,17 @@ extension ThreadView {
                     }
                     let allTurns = store.uniquedTurns(for: resolvedChatId)
                     let renderLimit = renderedTurnLimit(for: resolvedChatId, total: allTurns.count)
-                    let hiddenCount = max(0, allTurns.count - renderLimit)
-                    let turns = Array(allTurns.suffix(renderLimit))
+                    let defaultStart = max(0, allTurns.count - renderLimit)
+                    let savedStart = stickToBottom ? nil : readingWindowStart.flatMap { id in
+                        allTurns.firstIndex { $0.id == id }
+                    }
+                    let hiddenCount = min(defaultStart, savedStart ?? defaultStart)
+                    let turns = Array(allTurns.dropFirst(hiddenCount))
                     let inviteTurnId = calendarInviteTurnId(turns)
                     if hiddenCount > 0 {
                         let batch = min(hiddenCount, Self.renderedTurnStep)
                         Button {
-                            loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
+                            loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: allTurns.count - hiddenCount)
                         } label: {
                             Text(batch < hiddenCount ? "显示更早 \(batch) 轮（还有 \(hiddenCount) 轮）" : "显示更早 \(hiddenCount) 轮")
                                 .font(JieboFont.text(.footnote, weight: .medium))
@@ -64,7 +68,7 @@ extension ThreadView {
                                         // VStack 会一次性建好子视图，不能用 onAppear；看哨兵是否进视口
                                         guard homeActive, minY >= -12, minY < viewportHeight - 48 else { return }
                                         guard !stickToBottom else { return }
-                                        loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: renderLimit)
+                                        loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: allTurns.count - hiddenCount)
                                     }
                             }
                         }
@@ -164,7 +168,7 @@ extension ThreadView {
             .onAppear {
                 let height = geo.size.height - geo.safeAreaInsets.bottom
                 viewportHeight = height
-                guard height > 1, pinnedMinHeight <= 1, let id = threadChat?.turns.last?.id else { return }
+                guard stickToBottom, height > 1, pinnedMinHeight <= 1, let id = threadChat?.turns.last?.id else { return }
                 pinToTurn(id, proxy: proxy, height: height)
             }
             .onChange(of: geo.size.height - geo.safeAreaInsets.bottom) { _, h in viewportHeight = h }
@@ -173,7 +177,11 @@ extension ThreadView {
                     if !stickToBottom {
                         Button {
                             stickToBottom = true
-                            revealLatest(proxy, animated: true)
+                            if let last = threadChat?.turns.last?.id, last != pinnedTurnId {
+                                pinToTurn(last, proxy: proxy, height: viewportHeight)
+                            } else {
+                                revealLatest(proxy, animated: true)
+                            }
                         } label: {
                             ZStack(alignment: .topTrailing) {
                                 Image(systemName: "arrow.down")
@@ -232,46 +240,39 @@ extension ThreadView {
             }
             .modifier(StartAtBottom())
             .modifier(EmbeddedScrollPhase(enabled: true) {
-                releaseFollow()
+                releaseFollow(userGesture: true)
             })
             .modifier(UnstickDrag(embedded: true) {
-                releaseFollow()
+                releaseFollow(userGesture: true)
             })
             .onChange(of: threadChat?.turns.count) { _, _ in
-                guard homeActive else { return }
+                guard homeActive, scenePhase == .active else { return }
                 if let anchor = earlierNetworkAnchorId {
                     restoreEarlierNetworkAnchor(anchor, proxy: proxy)
                     return
                 }
-                guard let id = threadChat?.turns.last?.id else { return }
+                guard stickToBottom, let id = threadChat?.turns.last?.id, id != pinnedTurnId else { return }
                 pinToTurn(id, proxy: proxy, height: viewportHeight)
             }
             .onChange(of: store.loadingChatIds.contains(resolvedChatId)) { _, loading in
                 if !loading, earlierNetworkAnchorId != nil { earlierNetworkAnchorId = nil }
             }
             .onChange(of: liveTail) { _, _ in
-                guard homeActive, pinExceeded, stickToBottom else { return }
+                guard homeActive, scenePhase == .active, pinExceeded, stickToBottom else { return }
                 scheduleStreamScroll(proxy)
             }
             .onChange(of: pinHeightRevision) { _, _ in
                 // 以真实布局高度兜底 80ms Markdown 排版、文件卡、回执和首次跨过 pinExceeded 的时序。
-                guard homeActive, pinExceeded, stickToBottom else { return }
+                guard homeActive, scenePhase == .active, pinExceeded, stickToBottom else { return }
                 scheduleStreamScroll(proxy)
             }
             .onChange(of: threadChat?.turns.last?.running) { _, running in
                 // 流式时不追；停更后代码和表格还会长高，超出钉顶才再贴一次底
                 guard homeActive, running == false, pinExceeded, stickToBottom else { return }
-                cancelStreamScroll()
-                scrollToEndNow(proxy)
-                followTask?.cancel()
-                followTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled, stickToBottom, pinExceeded else { return }
-                    scrollToEndNow(proxy)
-                }
+                scheduleStreamScroll(proxy)
             }
             .onChange(of: viewportHeight) { _, newHeight in
-                guard newHeight > 1 else { return }
+                guard stickToBottom, newHeight > 1 else { return }
                 if pinnedTurnId != nil, pinnedMinHeight <= 1 {
                     pinnedMinHeight = newHeight
                     if let id = pinnedTurnId {
@@ -281,12 +282,13 @@ extension ThreadView {
                     pinnedMinHeight = newHeight
                 }
             }
-            .onChange(of: homeActive) { _, active in
+            .onChange(of: homeActive && scenePhase == .active) { _, active in
+                if !active { cancelStreamScroll(); return }
                 guard active, stickToBottom,
                       let last = threadChat?.turns.last?.id, viewportHeight > 1 else { return }
                 // Only catch up a following reader. Reading older messages remains untouched.
                 if last != pinnedTurnId { pinToTurn(last, proxy: proxy, height: viewportHeight) }
-                else if pinExceeded { scrollToEndNow(proxy) }
+                else if pinExceeded { scheduleStreamScroll(proxy) }
             }
             .onChange(of: resolvedChatId) { _, id in
                 // 切会话把最后一轮顶对齐，避免把钉顶留白滚进视口。
@@ -304,6 +306,7 @@ extension ThreadView {
                 }
             }
             .onAppear {
+                guard motionChatId != resolvedChatId else { return }
                 motionChatId = resolvedChatId
                 stickToBottom = true
                 if let last = threadChat?.turns.last?.id, viewportHeight > 1 {
@@ -443,7 +446,7 @@ extension ThreadView {
             try? await Task.sleep(for: .milliseconds(16))
             guard !Task.isCancelled, generation == streamScrollGeneration else { return }
             streamScrollTask = nil
-            guard homeActive, pinExceeded, stickToBottom else { return }
+            guard homeActive, scenePhase == .active, pinExceeded, stickToBottom else { return }
             scrollToEndNow(proxy)
         }
     }
@@ -467,8 +470,10 @@ extension ThreadView {
         pinScrollGuardUntil = Date().addingTimeInterval(0.32)
     }
 
-    func releaseFollow() {
-        guard Date() >= pinScrollGuardUntil else { return }
+    func releaseFollow(userGesture: Bool = false) {
+        guard stickToBottom, userGesture || Date() >= pinScrollGuardUntil else { return }
+        let turns = store.uniquedTurns(for: resolvedChatId)
+        readingWindowStart = turns.suffix(renderedTurnLimit(for: resolvedChatId, total: turns.count)).first?.id
         cancelStreamScroll()
         followTask?.cancel()
         scrollingProgrammatically = false
@@ -514,22 +519,17 @@ extension ThreadView {
         let anchorId = Array(allTurns.suffix(limit)).first?.id
         let next = min(allTurns.count, limit + Self.renderedTurnStep)
         renderedTurnLimitByChat[resolvedChatId] = next
+        if !stickToBottom { readingWindowStart = allTurns.suffix(next).first?.id }
         cancelStreamScroll()
         followTask?.cancel()
         followTask = Task { @MainActor in
             defer { loadingEarlierBatch = false }
             guard let anchorId else { return }
             scrollingProgrammatically = true
-            for delay in [0, 48, 120, 260] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled else { return }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(anchorId, anchor: .top)
-                }
-            }
-            scrollingProgrammatically = false
+            defer { scrollingProgrammatically = false }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            scrollWithoutAnimation(proxy, id: anchorId, anchor: .top)
         }
     }
 
@@ -573,11 +573,9 @@ extension ThreadView {
         followTask = Task { @MainActor in
             defer { earlierNetworkAnchorId = nil; scrollingProgrammatically = false }
             scrollingProgrammatically = true
-            for delay in [0, 48, 120] {
-                try? await Task.sleep(for: .milliseconds(delay))
-                guard !Task.isCancelled else { return }
-                scrollWithoutAnimation(proxy, id: anchor, anchor: .top)
-            }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            scrollWithoutAnimation(proxy, id: anchor, anchor: .top)
         }
     }
 }

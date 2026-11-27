@@ -798,14 +798,17 @@ extension ChatStore {
         let epoch = cacheEpoch
         Task { @MainActor [weak self] in
             guard let list = await ChatCache.loadList(tenant: tenant) else { return }
+            let decoded = await Task.detached(priority: .userInitiated) {
+                var seen = Set<String>()
+                return list.chats.compactMap(ChatSession.from).filter {
+                    $0.id != "boot" && seen.insert($0.id).inserted
+                }
+            }.value
             guard let self, self.cacheEpoch == epoch, self.tenantId == tenant, !self.appliedStore,
                   self.activeId == "boot", self.chats.count == 1, self.chats[0].id == "boot",
                   self.chats[0].turns.isEmpty
             else { return }
-            var seen = Set<String>()
-            let rows = list.chats.compactMap(ChatSession.from).filter { chat in
-                chat.id != "boot" && !self.deletedIds.contains(chat.id) && seen.insert(chat.id).inserted
-            }
+            let rows = decoded.filter { !self.deletedIds.contains($0.id) }
             guard !rows.isEmpty else { return }
             let ids = Set(rows.map(\.id))
             // 只在能确定的情况下占 activeId：上次活跃会话就在缓存里，或从没记过、落到助理会话。

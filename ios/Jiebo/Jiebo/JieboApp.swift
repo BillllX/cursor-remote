@@ -40,7 +40,9 @@ private struct JieboSceneRoot: View {
             #if DEBUG
             .modifier(NavigationRegressionFrame())
             #endif
-            .modifier(ColdLaunchPresentation(sceneToken: scene.token))
+            #if DEBUG
+            .modifier(LaunchFramePreview(sceneToken: scene.token))
+            #endif
             .onAppear {
                 im.attach(store, uploader: ImHTTPUploader())
                 store.imSink = im
@@ -50,7 +52,8 @@ private struct JieboSceneRoot: View {
                 im.start()
                 PushRegistrar.shared.start(store: store, im: im)
                 updateActivity(scenePhase)
-                Task { await AssistantCaptureDrain.run(store: store) }
+                PushRegistrar.shared.launchPresentationEnded()
+                AppLaunchMetrics.event("scene_root_appeared")
             }
             .onDisappear {
                 let change = SceneActivityRegistry.shared.remove(token: scene.token)
@@ -71,11 +74,12 @@ private struct JieboSceneRoot: View {
         let active = phase == .active
         let change = SceneActivityRegistry.shared.update(token: scene.token, isActive: active)
         im.setAppActive(change.anyActive)
-        WidgetSnapshotBridge.shared.refresh(from: store)
-        if phase == .background {
+        if phase == .background && !change.anyActive {
+            WidgetSnapshotBridge.shared.refresh(from: store)
             AppTrafficMeter.shared.flush()
         }
         guard change.becameActive else { return }
+        AppLaunchMetrics.event("foreground_active")
         store.appBecameActive()
         // 普通回前台只重读本机权限；登录解锁的 onChange 仍会强制上报。
         deviceBridge.permissionStore.refresh(forceReport: false)

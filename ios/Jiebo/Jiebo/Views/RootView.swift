@@ -6,7 +6,9 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if store.unlocked || store.resumingLogin {
+            if !store.started {
+                JieboColor.paper.ignoresSafeArea()
+            } else if store.unlocked || store.resumingLogin {
                 HomeShell()
             } else {
                 LoginView()
