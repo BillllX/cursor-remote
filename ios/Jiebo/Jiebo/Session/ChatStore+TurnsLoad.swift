@@ -507,8 +507,11 @@ extension ChatStore {
     /// 有 minFrom（段哈希判出的第一个变动位置）时 acc 必须覆盖到它才接缝：from > minFrom 继续往前翻；
     /// from == minFrom == base.count 是纯追加，直接 base + acc
     func applyRefreshPage(chatId: String, rows: [JSONValue], from: Int, hasMore: Bool) {
+        applyRefreshPage(chatId: chatId, page: rows.compactMap(Turn.from), from: from, hasMore: hasMore)
+    }
+
+    func applyRefreshPage(chatId: String, page: [Turn], from: Int, hasMore: Bool) {
         guard var refresh = bodyRefreshes[chatId] else { return }
-        let page = rows.compactMap(Turn.from)
         let known = Set(refresh.acc.map(\.id))
         refresh.acc = page.filter { !known.contains($0.id) } + refresh.acc
         let reached = refresh.minFrom.map { from <= $0 } ?? true

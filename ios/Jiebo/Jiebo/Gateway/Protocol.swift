@@ -387,7 +387,7 @@ struct DeviceInvoke: Sendable, Hashable {
     var approval: DeviceApproval?
 }
 
-enum ClientMessage {
+enum ClientMessage: Sendable {
     case project(JSONValue)
     case hello(token: String?)
     case setWorkspace(cwd: String, chatId: String?, create: Bool?)
@@ -1525,7 +1525,7 @@ struct AssistantState: Sendable, Hashable {
     }
 }
 
-enum ServerMessage {
+enum ServerMessage: Sendable {
     case project(JSONValue)
     case ready(
         cwd: String,

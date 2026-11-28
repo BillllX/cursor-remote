@@ -10,7 +10,7 @@ private let workbenchStreamSignposter = OSSignposter(
 )
 
 extension ChatStore {
-    func handle(_ message: ServerMessage) {
+    func handle(_ message: ServerMessage, predecoded: PredecodedPayload? = nil) {
         let chatId = message.chatId?.nilIfEmpty ?? activeId
         switch message {
         case .textDelta, .thinkingDelta, .toolStarted, .toolCompleted, .toolOutput, .task:
@@ -178,7 +178,11 @@ extension ChatStore {
             if status == "stopped" { row.status = "stopped" }
             loops[chatId] = row
         case .storedState(let rows, let rev, let deleted, let serverRevs):
-            applyStoredState(rows: rows, rev: rev, deleted: deleted, chatRevs: serverRevs)
+            if case .storedState(let decoded) = predecoded {
+                applyStoredState(decoded)
+            } else {
+                applyStoredState(rows: rows, rev: rev, deleted: deleted, chatRevs: serverRevs)
+            }
         case .storedStateDeferred(let rev):
             // stored_state 太大（超 maxMessageBytes）走 HTTP /state；rev 不新就跳过。
             // 但 digest 在途时（load_chats 单条超限的回落）digest 已抬过 rev，不能被短路挡住
@@ -262,7 +266,13 @@ extension ChatStore {
         case .storedChat(let value, let rev):
             serverSupportsP4 = true
             if let id = value.object?["id"]?.string { pendingChatLoads.remove(id) } // 解析失败也别白等安全网
-            guard let remote = ChatSession.from(value), !deletedIds.contains(remote.id) else { break }
+            let decodedChat: ChatSession?
+            if case .storedChat(let readyChat) = predecoded {
+                decodedChat = readyChat
+            } else {
+                decodedChat = ChatSession.from(value)
+            }
+            guard let remote = decodedChat, !deletedIds.contains(remote.id) else { break }
             flushStreamDeltas(remote.id, commitToChats: true)
             pendingChatLoads.remove(remote.id)
             let priorRev = chatRevs[remote.id]
@@ -585,7 +595,12 @@ extension ChatStore {
                 durationMs: duration
             )
         case .history(let id, let rows):
-            let incoming = rows.compactMap(Turn.from)
+            let incoming: [Turn]
+            if case .turns(let readyTurns) = predecoded {
+                incoming = readyTurns
+            } else {
+                incoming = rows.compactMap(Turn.from)
+            }
             guard !incoming.isEmpty else { break }
             // P8 slim：turns 未加载完时，history（fresh UUID）与 load_chat 页（持久 id）
             // id 空间不同，直接合并会重复/覆盖——暂存，加载完成后按老规则应用
@@ -631,16 +646,22 @@ extension ChatStore {
             } else {
                 partialHistories[chatId] = nil
             }
+            let decodedPage: [Turn]
+            if case .turns(let readyTurns) = predecoded {
+                decodedPage = readyTurns
+            } else {
+                decodedPage = rows.compactMap(Turn.from)
+            }
             // 增量补齐：页攒在 bodyRefreshes 里，不并进显示中的基线（同样不走 patch）
             if bodyRefreshes[chatId] != nil {
-                applyRefreshPage(chatId: chatId, rows: rows, from: from, hasMore: hasMore)
+                applyRefreshPage(chatId: chatId, page: decodedPage, from: from, hasMore: hasMore)
                 break
             }
             // 页合并直接改 chats[index]，不走 patch()——加载不是本地编辑，不能误标脏触发回推。
             // 已知限制（Kimi 评审 MINOR4）：from 是位置游标，假设服务端 turns append-only——
             // 分页中途他端增删会索引漂移（去重防重不防漏）；漂移靠 digest→stored_chat 全量
             // 替换（或 deferred 降级重载）自愈，不在这里做复杂对账
-            let page = rows.compactMap(Turn.from)
+            let page = decodedPage
             let existing = Set(chats[index].turns.map(\.id))
             // 缓存基线可能已有同 id 回合但没有 files；分页去重前先合文件状态。
             for remote in page {

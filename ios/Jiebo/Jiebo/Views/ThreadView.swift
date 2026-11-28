@@ -43,10 +43,11 @@ struct ThreadView: View {
     @State var composerFocusNonce = 0
     /// 和当前会话对齐之后，新消息才做进入动画。切会话那一帧两者还不一致，避免整列重播。
     @State var motionChatId = ""
-    /// 长会话首屏只排版最近若干轮，往上翻再按批加载；按 chat id 记住已展开到多少轮
-    static let initialRenderedTurns = 4
-    static let renderedTurnStep = 12
-    @State var renderedTurnLimitByChat: [String: Int] = [:]
+    /// 长会话首屏只排版最近若干轮，向上/向下翻页按步长滑动并限制最大挂载轮数，避免 VStack 单向膨胀
+    nonisolated static let initialRenderedTurns = 4
+    nonisolated static let renderedTurnStep = 12
+    nonisolated static let maxRenderedTurns = 28
+    @State var renderWindowByChat: [String: TurnRenderWindow] = [:]
     @State var loadingEarlierBatch = false
     /// 网络 prepend 前最上方回合；新页到达后原位复锚，避免列表跳动。
     @State var earlierNetworkAnchorId: String?
@@ -436,7 +437,6 @@ struct ThreadView: View {
 
     /// 停在底部时才跟随流式输出。松开只认手势，恢复只认「回到最新」和重新钉顶。
     @State var stickToBottom = true
-    @State var readingWindowStart: String?
     /// 钉顶时的可视高度，用来撑当前轮的最小高度。
     @State var viewportHeight: CGFloat = 0
     /// 当前这一轮撑满一屏。新一轮钉上时清掉上一轮。iPhone 和 iPad 同一套。
@@ -466,12 +466,24 @@ struct ThreadView: View {
     ]
 }
 
+/// 长会话双向渲染窗口边界：控制任意时刻 VStack 挂载轮数 ≤ ThreadView.maxRenderedTurns。
+struct TurnRenderWindow: Equatable {
+    /// 窗口左边界（最旧一轮 id；nil 表示贴尾按 tailLimit 计算）
+    var startTurnId: String?
+    /// 窗口右边界（最新一轮 id；nil 表示贴尾至 allTurns.endIndex）
+    var endTurnId: String?
+    /// 贴尾模式下从尾部往前展示的轮数
+    var tailLimit: Int = ThreadView.initialRenderedTurns
+}
+
 /// 滚动期与流式期高频采样的内部状态机盒（不挂 @Observable，避免 120Hz 滚动与流式贴底反复标脏 ThreadView）。
 @MainActor
 final class ThreadScrollMetrics {
     var pinnedTurnMinY: CGFloat = 0
     var firstTurnId: String?
     var firstTurnMinY: CGFloat = 0
+    var lastTurnId: String?
+    var lastTurnMaxY: CGFloat = 0
     var pinnedContentHeight: CGFloat = 0
     var pinHeightRevision: UInt64 = 0
     var pinBaselineMinY: CGFloat?
@@ -483,6 +495,7 @@ final class ThreadScrollMetrics {
     var streamScrollGeneration: UInt64 = 0
     var earlierAnchorMinY: CGFloat = 0
     var earlierMemoryArmed = true
+    var newerMemoryArmed = true
     var earlierDiskArmed = true
     var earlierNetworkArmed = true
     var lastActiveTurnId: String?
@@ -494,6 +507,8 @@ final class ThreadScrollMetrics {
         pinnedTurnMinY = 0
         firstTurnId = nil
         firstTurnMinY = 0
+        lastTurnId = nil
+        lastTurnMaxY = 0
         pinnedContentHeight = 0
         pinHeightRevision = 0
         pinBaselineMinY = nil
@@ -502,6 +517,7 @@ final class ThreadScrollMetrics {
         pinScrollGuardUntil = Date.distantPast
         earlierAnchorMinY = 0
         earlierMemoryArmed = true
+        newerMemoryArmed = true
         earlierDiskArmed = true
         earlierNetworkArmed = true
         lastActiveTurnId = nil

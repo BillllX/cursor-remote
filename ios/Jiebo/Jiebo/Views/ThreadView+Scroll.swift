@@ -41,18 +41,16 @@ extension ThreadView {
                         .padding(.vertical, 4)
                     }
                     let allTurns = store.uniquedTurns(for: resolvedChatId)
-                    let renderLimit = renderedTurnLimit(for: resolvedChatId, total: allTurns.count)
-                    let defaultStart = max(0, allTurns.count - renderLimit)
-                    let savedStart = stickToBottom ? nil : readingWindowStart.flatMap { id in
-                        allTurns.firstIndex { $0.id == id }
-                    }
-                    let hiddenCount = min(defaultStart, savedStart ?? defaultStart)
-                    let turns = Array(allTurns.dropFirst(hiddenCount))
+                    let windowRange = resolvedWindowRange(for: resolvedChatId, allTurns: allTurns)
+                    let hiddenCount = windowRange.lowerBound
+                    let hiddenAfterCount = max(0, allTurns.count - windowRange.upperBound)
+                    let turns = Array(allTurns[windowRange])
+                    let lastTurnId = allTurns.last?.id
                     let inviteTurnId = calendarInviteTurnId(turns)
                     if hiddenCount > 0 {
                         let batch = min(hiddenCount, Self.renderedTurnStep)
                         Button {
-                            loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: allTurns.count - hiddenCount)
+                            loadEarlierTurns(proxy: proxy, allTurns: allTurns, windowRange: windowRange)
                         } label: {
                             Text(batch < hiddenCount ? "显示更早 \(batch) 轮（还有 \(hiddenCount) 轮）" : "显示更早 \(hiddenCount) 轮")
                                 .font(JieboFont.text(.footnote, weight: .medium))
@@ -73,7 +71,7 @@ extension ThreadView {
                                         }
                                         guard scrollMetrics.earlierMemoryArmed else { return }
                                         scrollMetrics.earlierMemoryArmed = false
-                                        loadEarlierTurns(proxy: proxy, allTurns: allTurns, limit: allTurns.count - hiddenCount)
+                                        loadEarlierTurns(proxy: proxy, allTurns: allTurns, windowRange: windowRange)
                                     }
                             }
                         }
@@ -153,9 +151,38 @@ extension ThreadView {
                             turn,
                             index: index,
                             turns: turns,
+                            lastTurnId: lastTurnId,
                             inviteTurnId: inviteTurnId,
                             proxy: proxy
                         )
+                    }
+                    if hiddenAfterCount > 0 {
+                        let batch = min(hiddenAfterCount, Self.renderedTurnStep)
+                        Button {
+                            loadNewerTurns(proxy: proxy, allTurns: allTurns, windowRange: windowRange)
+                        } label: {
+                            Text(batch < hiddenAfterCount ? "显示较新 \(batch) 轮（还有 \(hiddenAfterCount) 轮）" : "显示较新 \(hiddenAfterCount) 轮")
+                                .font(JieboFont.text(.footnote, weight: .medium))
+                                .foregroundStyle(JieboColor.ink2)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background {
+                            GeometryReader { marker in
+                                Color.clear
+                                    .onChange(of: marker.frame(in: .named("threadScroll")).minY) { _, minY in
+                                        let visible = isBottomSentinelInTriggerZone(minY)
+                                        guard homeActive, visible, !stickToBottom else {
+                                            if !visible { scrollMetrics.newerMemoryArmed = true }
+                                            return
+                                        }
+                                        guard scrollMetrics.newerMemoryArmed else { return }
+                                        scrollMetrics.newerMemoryArmed = false
+                                        loadNewerTurns(proxy: proxy, allTurns: allTurns, windowRange: windowRange)
+                                    }
+                            }
+                        }
                     }
                     Color.clear
                         .frame(height: 1)
@@ -182,10 +209,26 @@ extension ThreadView {
                 Group {
                     if !stickToBottom {
                         Button {
+                            let windowChanged = (renderWindowByChat[resolvedChatId] ?? TurnRenderWindow()) != TurnRenderWindow()
+                            cancelStreamScroll()
+                            armScrollGuard()
+                            scrollMetrics.pinBaselineReady = false
+                            renderWindowByChat[resolvedChatId] = TurnRenderWindow()
+                            scrollMetrics.earlierMemoryArmed = true
+                            scrollMetrics.newerMemoryArmed = true
+                            scrollMetrics.earlierDiskArmed = true
+                            scrollMetrics.earlierNetworkArmed = true
                             stickToBottom = true
-                            readingWindowStart = nil
                             if let last = threadChat?.turns.last?.id, last != pinnedTurnId {
                                 pinToTurn(last, proxy: proxy, height: viewportHeight)
+                            } else if windowChanged {
+                                // 窗口曾收缩/脱离尾部：先保活守卫并等一帧尾窗重新挂载，再定位到最新
+                                scrollMetrics.followTask?.cancel()
+                                scrollMetrics.followTask = Task { @MainActor in
+                                    await Task.yield()
+                                    guard !Task.isCancelled, stickToBottom else { return }
+                                    revealLatest(proxy, animated: true)
+                                }
                             } else {
                                 revealLatest(proxy, animated: true)
                             }
@@ -252,17 +295,27 @@ extension ThreadView {
             .modifier(UnstickDrag(embedded: true) {
                 releaseFollow(userGesture: true)
             })
+            .onChange(of: threadChat?.turns.first?.id) { _, firstId in
+                guard homeActive, scenePhase == .active,
+                      let anchor = earlierNetworkAnchorId,
+                      let firstId, firstId != anchor
+                else { return }
+                restoreEarlierNetworkAnchor(anchor, proxy: proxy)
+            }
             .onChange(of: threadChat?.turns.count) { _, _ in
                 guard homeActive, scenePhase == .active else { return }
-                if let anchor = earlierNetworkAnchorId {
-                    restoreEarlierNetworkAnchor(anchor, proxy: proxy)
-                    return
-                }
+                guard earlierNetworkAnchorId == nil else { return }
                 guard stickToBottom, let id = threadChat?.turns.last?.id, id != pinnedTurnId else { return }
                 pinToTurn(id, proxy: proxy, height: viewportHeight)
             }
             .onChange(of: store.loadingChatIds.contains(resolvedChatId)) { _, loading in
-                if !loading, earlierNetworkAnchorId != nil { earlierNetworkAnchorId = nil }
+                guard !loading, let anchor = earlierNetworkAnchorId else { return }
+                if let firstId = threadChat?.turns.first?.id, firstId != anchor, homeActive, scenePhase == .active {
+                    restoreEarlierNetworkAnchor(anchor, proxy: proxy)
+                } else {
+                    earlierNetworkAnchorId = nil
+                    scrollMetrics.earlierAnchorMinY = 0
+                }
             }
             .background {
                 ThreadStreamScrollObserver(box: store.activeTurnBox(for: resolvedChatId)) {
@@ -318,7 +371,7 @@ extension ThreadView {
                 scrollMetrics.resetForChatSwitch()
                 loadingEarlierBatch = false
                 earlierNetworkAnchorId = nil
-                readingWindowStart = nil
+                renderWindowByChat[id] = TurnRenderWindow()
                 stickToBottom = true
                 motionChatId = id
                 if let last = threadChat?.turns.last?.id, viewportHeight > 1 {
@@ -343,22 +396,56 @@ extension ThreadView {
         }
     }
 
-    func renderedTurnLimit(for chatId: String, total: Int) -> Int {
-        let stored = renderedTurnLimitByChat[chatId] ?? Self.initialRenderedTurns
-        return min(total, max(Self.initialRenderedTurns, stored))
+    func resolvedWindowRange(for chatId: String, allTurns: [Turn]) -> Range<Int> {
+        guard !allTurns.isEmpty else { return 0..<0 }
+        let window = renderWindowByChat[chatId] ?? TurnRenderWindow()
+        let clampedTail = min(Self.maxRenderedTurns, max(Self.initialRenderedTurns, window.tailLimit))
+        if stickToBottom {
+            let start = max(0, allTurns.count - clampedTail)
+            return start..<allTurns.count
+        }
+        if let endId = window.endTurnId,
+           let endIdx = allTurns.firstIndex(where: { $0.id == endId }) {
+            let end = endIdx + 1
+            let start: Int
+            if let startId = window.startTurnId,
+               let startIdx = allTurns.firstIndex(where: { $0.id == startId }),
+               startIdx < end {
+                start = max(startIdx, end - Self.maxRenderedTurns)
+            } else {
+                start = max(0, end - Self.maxRenderedTurns)
+            }
+            return start..<end
+        }
+        let defaultStart = max(0, allTurns.count - clampedTail)
+        let savedStart = window.startTurnId.flatMap { id in
+            allTurns.firstIndex { $0.id == id }
+        }
+        let start = min(defaultStart, savedStart ?? defaultStart)
+        let end = min(allTurns.count, start + Self.maxRenderedTurns)
+        return start..<end
     }
 
     /// 最小高度加在内容列外面，背景里的 GeometryReader 量到的是内容高度，不是撑开后的外框。
     @ViewBuilder
-    func pinnedTurn(_ turn: Turn, index: Int, turns: [Turn], inviteTurnId: String?, proxy: ScrollViewProxy) -> some View {
+    func pinnedTurn(
+        _ turn: Turn,
+        index: Int,
+        turns: [Turn],
+        lastTurnId: String?,
+        inviteTurnId: String?,
+        proxy: ScrollViewProxy
+    ) -> some View {
         let pinned = pinnedTurnId == turn.id
         let isFirst = index == 0
+        let isLast = index == turns.count - 1
+        let isGlobalLast = turn.id == lastTurnId
         TurnView(
             turn: turn,
-            canAnswer: index == turns.count - 1 && !turn.running && !turn.queued,
+            canAnswer: isGlobalLast && !turn.running && !turn.queued,
             embedded: chrome == .embedded,
-            isLastAssistant: turn.id == turns.last?.id,
-            canRestorePrompt: turn.id == turns.last?.id
+            isLastAssistant: isGlobalLast,
+            canRestorePrompt: isGlobalLast
                 && !turn.running
                 && !turn.queued
                 && !(turn.error ?? "").isEmpty
@@ -380,29 +467,37 @@ extension ThreadView {
         )
         .equatable()
         .background {
-            if pinned || isFirst {
+            if pinned || isFirst || isLast {
                 GeometryReader { geo in
                     Color.clear
                         .onAppear {
-                            let minY = geo.frame(in: .named("threadScroll")).minY
+                            let frame = geo.frame(in: .named("threadScroll"))
                             if isFirst {
                                 scrollMetrics.firstTurnId = turn.id
-                                scrollMetrics.firstTurnMinY = minY
+                                scrollMetrics.firstTurnMinY = frame.minY
+                            }
+                            if isLast {
+                                scrollMetrics.lastTurnId = turn.id
+                                scrollMetrics.lastTurnMaxY = frame.maxY
                             }
                             if pinned {
                                 notePinContentHeight(geo.size.height, proxy: proxy)
-                                notePinnedMinY(minY)
+                                notePinnedMinY(frame.minY)
                             }
                         }
                         .onChange(of: geo.size.height) { _, height in
                             if pinned { notePinContentHeight(height, proxy: proxy) }
                         }
-                        .onChange(of: geo.frame(in: .named("threadScroll")).minY) { _, y in
+                        .onChange(of: geo.frame(in: .named("threadScroll"))) { _, frame in
                             if isFirst {
                                 scrollMetrics.firstTurnId = turn.id
-                                scrollMetrics.firstTurnMinY = y
+                                scrollMetrics.firstTurnMinY = frame.minY
                             }
-                            if pinned { notePinnedMinY(y) }
+                            if isLast {
+                                scrollMetrics.lastTurnId = turn.id
+                                scrollMetrics.lastTurnMaxY = frame.maxY
+                            }
+                            if pinned { notePinnedMinY(frame.minY) }
                         }
                 }
             }
@@ -411,6 +506,11 @@ extension ThreadView {
             Color.clear
                 .frame(height: 1)
                 .id("turn-top-\(turn.id)")
+        }
+        .overlay(alignment: .bottom) {
+            Color.clear
+                .frame(height: 1)
+                .id("turn-bottom-\(turn.id)")
         }
         .frame(minHeight: pinned ? pinnedMinHeight : 0, alignment: .top)
         .id(turn.id)
@@ -423,9 +523,24 @@ extension ThreadView {
         return minY >= -12 && minY < upper
     }
 
+    /// 底部哨兵进入视口底沿（含 VStack 18pt 间距）时自动向下滑窗并回收离屏顶部轮次。
+    /// 保证触发瞬间末轮底边 lastTurnMaxY = minY - 18 <= viewportHeight，避免底锚被夹紧导致跳动。
+    func isBottomSentinelInTriggerZone(_ minY: CGFloat) -> Bool {
+        guard viewportHeight > 1 else { return false }
+        return minY > 0 && minY <= viewportHeight + 18
+    }
+
     /// 把这一轮顶对齐到可视区上方。height 还没量到时只记下 id，等 viewportHeight 再滚。
     func pinToTurn(_ id: String, proxy: ScrollViewProxy, height: CGFloat) {
         cancelStreamScroll()
+        // 新发或回到最新钉顶时收敛回默认尾窗，立即释放之前上翻展开的历史视图并重装哨兵
+        if renderWindowByChat[resolvedChatId] != TurnRenderWindow() {
+            renderWindowByChat[resolvedChatId] = TurnRenderWindow()
+        }
+        scrollMetrics.earlierMemoryArmed = true
+        scrollMetrics.newerMemoryArmed = true
+        scrollMetrics.earlierDiskArmed = true
+        scrollMetrics.earlierNetworkArmed = true
         pinnedTurnId = id
         pinExceeded = false
         scrollMetrics.pinnedContentHeight = 0
@@ -516,9 +631,17 @@ extension ThreadView {
     func releaseFollow(userGesture: Bool = false) {
         guard stickToBottom, userGesture || Date() >= scrollMetrics.pinScrollGuardUntil else { return }
         let turns = store.uniquedTurns(for: resolvedChatId)
-        readingWindowStart = turns.suffix(renderedTurnLimit(for: resolvedChatId, total: turns.count)).first?.id
+        let range = resolvedWindowRange(for: resolvedChatId, allTurns: turns)
+        if !range.isEmpty {
+            var window = renderWindowByChat[resolvedChatId] ?? TurnRenderWindow()
+            if window.startTurnId == nil {
+                window.startTurnId = turns[range.lowerBound].id
+                renderWindowByChat[resolvedChatId] = window
+            }
+        }
         cancelStreamScroll()
         scrollMetrics.followTask?.cancel()
+        scrollMetrics.pinBaselineReady = false
         stickToBottom = false
     }
 
@@ -566,25 +689,65 @@ extension ThreadView {
         scrollWithoutAnimation(proxy, id: "turn-top-\(turnId)", anchor: UnitPoint(x: 0.5, y: unitY))
     }
 
-    /// 在列表顶部 prepend 更早轮次后，按原视口偏移锚定原先最上面那一轮，避免整页跳动
-    func loadEarlierTurns(proxy: ScrollViewProxy, allTurns: [Turn], limit: Int) {
-        guard !loadingEarlierBatch else { return }
-        let hidden = allTurns.count - limit
-        guard hidden > 0 else { return }
+    /// 按 1pt 底锚恢复某轮底边在视口中的原相对偏移，供向下滑窗回收顶部旧轮时零跳动复锚。
+    func scrollToTurnBottom(_ proxy: ScrollViewProxy, turnId: String, targetMaxY: CGFloat) {
+        let span = max(1, viewportHeight - 1)
+        let clamped = min(max(targetMaxY - 1, 0), span)
+        let unitY = viewportHeight > 1 ? clamped / span : 1
+        scrollWithoutAnimation(proxy, id: "turn-bottom-\(turnId)", anchor: UnitPoint(x: 0.5, y: unitY))
+    }
+
+    /// 在列表顶部 prepend 更早轮次并按 maxRenderedTurns 回收离屏尾部，按原视口偏移锚定原先最上面那一轮，避免整页跳动
+    func loadEarlierTurns(proxy: ScrollViewProxy, allTurns: [Turn], windowRange: Range<Int>) {
+        guard !loadingEarlierBatch, windowRange.lowerBound > 0 else { return }
         loadingEarlierBatch = true
-        let anchorId = Array(allTurns.suffix(limit)).first?.id
-        let savedMinY = (anchorId != nil && scrollMetrics.firstTurnId == anchorId) ? scrollMetrics.firstTurnMinY : 0
-        let next = min(allTurns.count, limit + Self.renderedTurnStep)
-        renderedTurnLimitByChat[resolvedChatId] = next
-        if !stickToBottom { readingWindowStart = allTurns.suffix(next).first?.id }
+        let anchorId = allTurns[windowRange.lowerBound].id
+        let savedMinY = (scrollMetrics.firstTurnId == anchorId) ? scrollMetrics.firstTurnMinY : 0
+        let nextStart = max(0, windowRange.lowerBound - Self.renderedTurnStep)
+        let nextEnd = min(allTurns.count, min(windowRange.upperBound, nextStart + Self.maxRenderedTurns))
+        renderWindowByChat[resolvedChatId] = TurnRenderWindow(
+            startTurnId: allTurns[nextStart].id,
+            endTurnId: nextEnd < allTurns.count ? allTurns[nextEnd - 1].id : nil,
+            tailLimit: min(Self.maxRenderedTurns, max(Self.initialRenderedTurns, nextEnd - nextStart))
+        )
+        scrollMetrics.newerMemoryArmed = true
+        if nextStart == 0 {
+            scrollMetrics.earlierMemoryArmed = true
+        }
         cancelStreamScroll()
         scrollMetrics.followTask?.cancel()
         scrollMetrics.followTask = Task { @MainActor in
             defer { loadingEarlierBatch = false }
-            guard let anchorId else { return }
             await Task.yield()
             guard !Task.isCancelled else { return }
             scrollToTurnTop(proxy, turnId: anchorId, targetMinY: savedMinY)
+        }
+    }
+
+    /// 向下滑回较新轮次并按 maxRenderedTurns 回收离屏顶部，以原窗口末轮底边原位复锚，消除顶部回收跳动
+    func loadNewerTurns(proxy: ScrollViewProxy, allTurns: [Turn], windowRange: Range<Int>) {
+        guard !loadingEarlierBatch, windowRange.upperBound < allTurns.count, windowRange.upperBound > 0 else { return }
+        loadingEarlierBatch = true
+        let anchorId = allTurns[windowRange.upperBound - 1].id
+        let savedMaxY = (scrollMetrics.lastTurnId == anchorId) ? scrollMetrics.lastTurnMaxY : viewportHeight
+        let nextEnd = min(allTurns.count, windowRange.upperBound + Self.renderedTurnStep)
+        let nextStart = max(0, max(windowRange.lowerBound, nextEnd - Self.maxRenderedTurns))
+        renderWindowByChat[resolvedChatId] = TurnRenderWindow(
+            startTurnId: allTurns[nextStart].id,
+            endTurnId: nextEnd < allTurns.count ? allTurns[nextEnd - 1].id : nil,
+            tailLimit: min(Self.maxRenderedTurns, max(Self.initialRenderedTurns, nextEnd - nextStart))
+        )
+        scrollMetrics.earlierMemoryArmed = true
+        if nextEnd >= allTurns.count {
+            scrollMetrics.newerMemoryArmed = true
+        }
+        cancelStreamScroll()
+        scrollMetrics.followTask?.cancel()
+        scrollMetrics.followTask = Task { @MainActor in
+            defer { loadingEarlierBatch = false }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            scrollToTurnBottom(proxy, turnId: anchorId, targetMaxY: savedMaxY)
         }
     }
 
@@ -597,25 +760,39 @@ extension ThreadView {
         else { return }
         let anchor = allTurns.first?.id
         let savedMinY = (anchor != nil && scrollMetrics.firstTurnId == anchor) ? scrollMetrics.firstTurnMinY : 0
-        let previous = allTurns.count
         loadingEarlierBatch = true
         Task { @MainActor in
             let added = await store.prependCachedTurns(targetChatId)
             guard resolvedChatId == targetChatId else {
-                loadingEarlierBatch = false
+                // 已切会话：onChange(of: resolvedChatId) 已复位锁，不能误清新会话正在拉取的状态
                 return
             }
             guard added else {
                 loadingEarlierBatch = false
                 return
             }
-            let total = store.uniquedTurns(for: targetChatId).count
-            renderedTurnLimitByChat[targetChatId] = min(total, previous + Self.renderedTurnStep)
-            loadingEarlierBatch = false
-            guard let anchor else { return }
-            scrollMetrics.earlierAnchorMinY = savedMinY
-            earlierNetworkAnchorId = anchor
-            restoreEarlierNetworkAnchor(anchor, proxy: proxy)
+            let updatedTurns = store.uniquedTurns(for: targetChatId)
+            if let anchor, let anchorIdx = updatedTurns.firstIndex(where: { $0.id == anchor }) {
+                let nextStart = max(0, anchorIdx - Self.renderedTurnStep)
+                let nextEnd = min(updatedTurns.count, nextStart + Self.maxRenderedTurns)
+                renderWindowByChat[targetChatId] = TurnRenderWindow(
+                    startTurnId: updatedTurns[nextStart].id,
+                    endTurnId: nextEnd < updatedTurns.count ? updatedTurns[nextEnd - 1].id : nil,
+                    tailLimit: min(Self.maxRenderedTurns, max(Self.initialRenderedTurns, nextEnd - nextStart))
+                )
+            }
+            scrollMetrics.earlierMemoryArmed = true
+            scrollMetrics.newerMemoryArmed = true
+            scrollMetrics.earlierDiskArmed = true
+            cancelStreamScroll()
+            scrollMetrics.followTask?.cancel()
+            scrollMetrics.followTask = Task { @MainActor in
+                defer { loadingEarlierBatch = false }
+                guard let anchor else { return }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                scrollToTurnTop(proxy, turnId: anchor, targetMinY: savedMinY)
+            }
         }
     }
 
@@ -635,13 +812,24 @@ extension ThreadView {
 
     func restoreEarlierNetworkAnchor(_ anchor: String, proxy: ScrollViewProxy) {
         let savedMinY = scrollMetrics.earlierAnchorMinY
+        earlierNetworkAnchorId = nil
+        scrollMetrics.earlierAnchorMinY = 0
+        let updatedTurns = store.uniquedTurns(for: resolvedChatId)
+        if let anchorIdx = updatedTurns.firstIndex(where: { $0.id == anchor }), anchorIdx > 0 {
+            let nextStart = max(0, anchorIdx - Self.renderedTurnStep)
+            let nextEnd = min(updatedTurns.count, nextStart + Self.maxRenderedTurns)
+            renderWindowByChat[resolvedChatId] = TurnRenderWindow(
+                startTurnId: updatedTurns[nextStart].id,
+                endTurnId: nextEnd < updatedTurns.count ? updatedTurns[nextEnd - 1].id : nil,
+                tailLimit: min(Self.maxRenderedTurns, max(Self.initialRenderedTurns, nextEnd - nextStart))
+            )
+        }
+        scrollMetrics.earlierMemoryArmed = true
+        scrollMetrics.newerMemoryArmed = true
+        scrollMetrics.earlierNetworkArmed = true
         cancelStreamScroll()
         scrollMetrics.followTask?.cancel()
         scrollMetrics.followTask = Task { @MainActor in
-            defer {
-                earlierNetworkAnchorId = nil
-                scrollMetrics.earlierAnchorMinY = 0
-            }
             await Task.yield()
             guard !Task.isCancelled else { return }
             scrollToTurnTop(proxy, turnId: anchor, targetMinY: savedMinY)

@@ -962,8 +962,8 @@ final class ChatStore {
     /// 运行中可能连续来多个 deferred，300ms 去抖合并成一次拉取。
     var stateFetchTask: Task<Void, Never>?
 
-    enum StateFetchOutcome {
-        case success([String: JSONValue])
+    enum StateFetchOutcome: Sendable {
+        case success(DecodedStoredState)
         case retryable
         case fatal
     }

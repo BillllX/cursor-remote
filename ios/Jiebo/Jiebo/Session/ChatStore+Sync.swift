@@ -62,8 +62,17 @@ extension ChatStore {
         }
     }
 
-    /// stored_state 应用逻辑（WS 直推与 HTTP /state 拉取共用）
+    /// stored_state 应用逻辑（WS 直推与 HTTP /state 拉取共用；兼容未预解码直接调用方）
     func applyStoredState(rows: [JSONValue], rev: Int?, deleted: [String], chatRevs serverRevs: [String: Int]?) {
+        let decoded = DecodedStoredState.decode(rows: rows, rev: rev, deletedIds: deleted, chatRevs: serverRevs)
+        applyStoredState(decoded)
+    }
+
+    /// 应用已在后台预解码的 stored_state：主线程仅做原子合并与状态提交，不重复执行 ChatSession.from / json() 构造。
+    func applyStoredState(_ decoded: DecodedStoredState) {
+        let rev = decoded.rev
+        let deleted = decoded.deletedIds
+        let serverRevs = decoded.chatRevs
         defer { fulfillPendingAssistantOpen() }
         if serverRevs != nil { serverSupportsP4 = true }
         // digest 已把 stateRev 抬到服务端版本，它要的 load_state 回包 rev 不会更新，不能早退
@@ -86,7 +95,11 @@ extension ChatStore {
         chatRevs = serverRevs ?? [:] // 服务端视图全量替换
         // 段哈希跟着全量替换（只有 slim 行带，版本取刚换上的 chatRevs）
         serverSegs = [:]
-        for row in rows { noteServerSegs(row) }
+        for (id, hashes) in decoded.segHashesById {
+            if let rev = chatRevs[id] {
+                serverSegs[id] = SegHashes(rev: rev, hashes: hashes)
+            }
+        }
         if stateReloadPending {
             stateReloadPending = false
             digestTimeoutTask?.cancel()
@@ -112,7 +125,7 @@ extension ChatStore {
                 draft = ""
             }
         }
-        let remote = rows.compactMap(ChatSession.from).filter { !deletedIds.contains($0.id) }
+        let remote = decoded.sessions.filter { !deletedIds.contains($0.id) }
         guard !remote.isEmpty else {
             // 服务端全空（新租户/被清空）：清掉已被删的本地会话（保留脏的/boot），脏会话触发重推
             let kept = chats.filter { !deletedIds.contains($0.id) || hasLocalPriority($0.id) || $0.id == "boot" }
@@ -142,12 +155,6 @@ extension ChatStore {
             if !dirtyChatIds.isEmpty { scheduleSync() }
             ensureFollowedTurnsLoaded()
             return
-        }
-        // 合并前记住服务端原始行（按 id），用于合并后的差异标脏
-        var rowsById: [String: JSONValue] = [:]
-        for row in rows {
-            guard let id = row.object?["id"]?.string else { continue }
-            rowsById[id] = row
         }
         // merge 只保留远端 id：本地独有的脏会话（离线新建未上传）必须追加保留，否则被静默丢弃
         let remoteIds = Set(remote.map(\.id))
@@ -182,10 +189,10 @@ extension ChatStore {
             invalidateTurnListMemo(chat.id)
         }
         // 合并结果与服务端不一致的（本地优先胜出的/本地独有的）标脏，随后 sync_chat 增量重推。
-        // 比较前把服务端行过一遍 from→json 归一化默认值，避免字段缺失造成的假差异。
+        // 直接复用后台预解码的 serverChat + isSyncEquivalent，避免重复 ChatSession.from 与无谓 JSONValue 构造。
         for chat in chats where chat.id != "boot" {
             if dirtyChatIds.contains(chat.id) { continue } // 已脏（含倒回的在途），无需再判
-            guard let row = rowsById[chat.id], !deletedIds.contains(chat.id) else {
+            guard let serverChat = decoded.sessionsById[chat.id], !deletedIds.contains(chat.id) else {
                 dirtyChatIds.insert(chat.id) // 本地独有（新建未同步）
                 continue
             }
@@ -193,17 +200,8 @@ extension ChatStore {
             if let oldRev = oldRevs[chat.id], oldRev == chatRevs[chat.id] { continue }
             // P8 slim：一方缺 turns（元数据壳）时按元数据比较——壳 json() 不写 turns 键，
             // 本地完整版带 turns，直接比必假差异 → sync_chat 风暴
-            if var serverChat = ChatSession.from(row) {
-                var localChat = chat
-                if !serverChat.turnsComplete || !localChat.turnsComplete {
-                    serverChat.turns = []
-                    serverChat.turnsComplete = false
-                    localChat.turns = []
-                    localChat.turnsComplete = false
-                }
-                if serverChat.json() != localChat.json() {
-                    dirtyChatIds.insert(chat.id)
-                }
+            if !serverChat.isSyncEquivalent(to: chat) {
+                dirtyChatIds.insert(chat.id)
             }
         }
         // P8 slim 对账：slim 行看不到 turns——断线期间别端正文变更（chatRev 前进）本地感知不到，
@@ -217,7 +215,7 @@ extension ChatStore {
             markNeedsRefresh(id, rev: nil)
         }
         for chat in chats where chat.id != "boot" && chat.turnsComplete && !hasLocalPriority(chat.id) {
-            guard let row = rowsById[chat.id], row.object?["turns"] == nil else { continue } // 只看 slim 行
+            guard decoded.slimIds.contains(chat.id) else { continue } // 只看 slim 行
             guard let oldRev = bodyRevs[chat.id] ?? oldRevs[chat.id], let newRev = chatRevs[chat.id], newRev != oldRev else { continue }
             markNeedsRefresh(chat.id, rev: oldRev)
         }
@@ -320,13 +318,8 @@ extension ChatStore {
                 let outcome = await Self.fetchState(token: token)
                 guard !Task.isCancelled, self.tenantId == tenantAtStart else { return }
                 switch outcome {
-                case .success(let object):
-                    self.applyStoredState(
-                        rows: object["chats"]?.array ?? [],
-                        rev: object["rev"]?.int,
-                        deleted: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
-                        chatRevs: object["chatRevs"]?.intMap
-                    )
+                case .success(let decoded):
+                    self.applyStoredState(decoded)
                     return
                 case .retryable where attempt < delays.count - 1:
                     continue
@@ -347,7 +340,13 @@ extension ChatStore {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard (200 ..< 300).contains(status) else { return status >= 500 || status == 0 ? .retryable : .fatal }
             guard let object = try JSONValue.parse(data).object else { return .fatal }
-            return .success(object)
+            let decoded = DecodedStoredState.decode(
+                rows: object["chats"]?.array ?? [],
+                rev: object["rev"]?.int,
+                deletedIds: object["deletedIds"]?.array?.compactMap(\.string) ?? [],
+                chatRevs: object["chatRevs"]?.intMap
+            )
+            return .success(decoded)
         } catch {
             return .retryable
         }

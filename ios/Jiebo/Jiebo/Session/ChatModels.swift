@@ -30,18 +30,18 @@ struct DeferredTurnFiles {
 
 /// 回合文件卡片的数据来源。`authoritative` 包括网关明确给出的空数组：
 /// 空数组表示这一轮确认没有文件，不能再退回工具推导。
-enum TurnFilesSource: String, Hashable {
+enum TurnFilesSource: String, Sendable, Hashable {
     case none
     case provisional
     case authoritative
 }
 
-struct TurnFilesState: Hashable {
+struct TurnFilesState: Sendable, Hashable {
     var source: TurnFilesSource
     var files: [TurnFile]
 }
 
-struct ToolCall: Identifiable, Hashable {
+struct ToolCall: Identifiable, Sendable, Hashable {
     var callId: String
     var name: String
     var args: JSONValue?
@@ -97,7 +97,7 @@ enum ToolNames {
     }
 
     private static let cacheLock = NSLock()
-    private static var flagsCache: [String: Flags] = [:]
+    private nonisolated(unsafe) static var flagsCache: [String: Flags] = [:]
 
     /// 驼峰拆成下划线再小写：MultiEdit → multi_edit；按单词匹配，credit 里的 edit 不算
     static func words(_ name: String) -> String {
@@ -150,7 +150,7 @@ enum ToolNames {
     static func writesFiles(_ name: String) -> Bool { flags(for: name).writesFiles }
 }
 
-enum ToolKind: String {
+enum ToolKind: String, Sendable {
     case read, edit, write, shell, search, other
 
     private enum NameResolution {
@@ -168,7 +168,7 @@ enum ToolKind: String {
     private static let todoTaskRe = try! NSRegularExpression(pattern: "todo|task")
 
     private static let cacheLock = NSLock()
-    private static var nameCache: [String: NameResolution] = [:]
+    private nonisolated(unsafe) static var nameCache: [String: NameResolution] = [:]
 
     private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -240,27 +240,27 @@ enum ToolKind: String {
     }
 }
 
-struct PendingTool: Hashable {
+struct PendingTool: Sendable, Hashable {
     var callId: String
     var name: String
     var args: JSONValue?
 }
 
 /// 正在上传的附件（完成后从列表移除，@path 写进草稿）
-struct UploadItem: Identifiable, Hashable {
+struct UploadItem: Identifiable, Sendable, Hashable {
     var id: String
     var name: String
     var chatId: String
     var compressing = false
 }
 
-struct UploadConfirmation: Identifiable, Hashable {
+struct UploadConfirmation: Identifiable, Sendable, Hashable {
     var id: String
     var name: String
     var bytes: Int
 }
 
-struct Turn: Identifiable, Hashable {
+struct Turn: Identifiable, Sendable, Hashable {
     var id: String
     var user: String
     var assistant: String
@@ -677,7 +677,7 @@ extension ToolCall {
     }
 }
 
-struct ChatSession: Identifiable, Hashable {
+struct ChatSession: Identifiable, Sendable, Hashable {
     var id: String
     var title: String
     var turns: [Turn]
@@ -794,6 +794,82 @@ struct ChatSession: Identifiable, Hashable {
             extra: object.filter { !ChatSession.knownKeys.contains($0.key) }
         )
     }
+
+    /// 判断两端同步字段是否等价（语义对齐 json()：忽略 draft/unread/serverPreview；任一方为 slim 壳时仅比元数据）。
+    /// 避免 applyStoredState 重复执行 ChatSession.from 与全量 JSONValue 字典构造。
+    func isSyncEquivalent(to other: ChatSession) -> Bool {
+        guard id == other.id,
+              title == other.title,
+              mode == other.mode,
+              confirmWrites == other.confirmWrites,
+              policy == other.policy,
+              agentId == other.agentId,
+              model == other.model,
+              cwd == other.cwd,
+              extra == other.extra
+        else { return false }
+        guard turnsComplete && other.turnsComplete else { return true }
+        if turns == other.turns { return true }
+        return json() == other.json()
+    }
+}
+
+/// 后台预解码后的 stored_state 负载（WS 与 HTTP /state 共用），主线程只做原子合并与提交。
+struct DecodedStoredState: Sendable {
+    let sessions: [ChatSession]
+    let sessionsById: [String: ChatSession]
+    let segHashesById: [String: [String]]
+    let slimIds: Set<String>
+    let rev: Int?
+    let deletedIds: [String]
+    let chatRevs: [String: Int]?
+
+    static func decode(
+        rows: [JSONValue],
+        rev: Int?,
+        deletedIds: [String],
+        chatRevs: [String: Int]?
+    ) -> DecodedStoredState {
+        var sessions: [ChatSession] = []
+        sessions.reserveCapacity(rows.count)
+        var sessionsById: [String: ChatSession] = [:]
+        sessionsById.reserveCapacity(rows.count)
+        var segHashesById: [String: [String]] = [:]
+        var slimIds: Set<String> = []
+        for row in rows {
+            guard let object = row.object, let id = object["id"]?.string, !id.isEmpty else { continue }
+            if object["turns"] == nil {
+                slimIds.insert(id)
+            } else {
+                slimIds.remove(id)
+            }
+            if let hashes = object["segHashes"]?.array?.compactMap(\.string) {
+                segHashesById[id] = hashes
+            } else {
+                segHashesById.removeValue(forKey: id)
+            }
+            if let session = ChatSession.from(row) {
+                sessions.append(session)
+                sessionsById[id] = session
+            }
+        }
+        return DecodedStoredState(
+            sessions: sessions,
+            sessionsById: sessionsById,
+            segHashesById: segHashesById,
+            slimIds: slimIds,
+            rev: rev,
+            deletedIds: deletedIds,
+            chatRevs: chatRevs
+        )
+    }
+}
+
+/// SocketPump 后台串行队列预解码出的强类型会话负载，严守帧序，避免主线程重解析大数组。
+enum PredecodedPayload: Sendable {
+    case storedState(DecodedStoredState)
+    case storedChat(ChatSession)
+    case turns([Turn])
 }
 
 extension String {

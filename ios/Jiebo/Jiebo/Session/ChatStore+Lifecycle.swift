@@ -224,8 +224,11 @@ extension ChatStore {
                 self.flash("正在连接…")
             }
         }
+        client.onPredecodedMessage = { [weak self] message, predecoded in
+            self?.handle(message, predecoded: predecoded)
+        }
         client.onMessage = { [weak self] message in
-            self?.handle(message)
+            self?.handle(message, predecoded: nil)
         }
     }
 
