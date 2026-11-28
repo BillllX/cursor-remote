@@ -58,14 +58,20 @@ final class ShareViewController: UIViewController {
 /// 分享扩展品牌视觉令牌（对齐主 App 黑白贴纸体系，自适应浅色/深色）
 private enum ShareBrandColor {
     private static func dynamic(light: UInt32, dark: UInt32) -> Color {
-        Color(uiColor: UIColor { traits in
-            let hex = traits.userInterfaceStyle == .dark ? dark : light
-            return UIColor(
-                red: CGFloat((hex >> 16) & 0xFF) / 255,
-                green: CGFloat((hex >> 8) & 0xFF) / 255,
-                blue: CGFloat(hex & 0xFF) / 255,
-                alpha: 1
-            )
+        let lightUI = UIColor(
+            red: CGFloat((light >> 16) & 0xFF) / 255,
+            green: CGFloat((light >> 8) & 0xFF) / 255,
+            blue: CGFloat(light & 0xFF) / 255,
+            alpha: 1
+        )
+        let darkUI = UIColor(
+            red: CGFloat((dark >> 16) & 0xFF) / 255,
+            green: CGFloat((dark >> 8) & 0xFF) / 255,
+            blue: CGFloat(dark & 0xFF) / 255,
+            alpha: 1
+        )
+        return Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark ? darkUI : lightUI
         })
     }
 
@@ -95,6 +101,7 @@ private struct ShareRoot: View {
     @State private var intent = AssistantCaptureBridge.Action.summarize
     @State private var note = ""
     @State private var payloads: [SharePayload] = []
+    @State private var payloadBytes: Int64 = 0
     @State private var loading = true
     @State private var sending = false
     @State private var error = ""
@@ -248,16 +255,28 @@ private struct ShareRoot: View {
             }
         }
         .tint(ShareBrandColor.pine)
-        .onAppear {
-            if let failure = ImShareBackgroundQueue.shared.failureSummary() {
+        .task {
+            // 在后台线程检查并清理失败队列，避免弹窗首帧在主线程拿跨进程 flock 遍历磁盘。
+            let failure: String? = await Task.detached(priority: .utility) {
+                let summary = ImShareBackgroundQueue.shared.failureSummary()
+                if summary != nil {
+                    ImShareBackgroundQueue.shared.discardFailed()
+                }
+                return summary
+            }.value
+            if let failure, error.isEmpty {
                 error = failure
-                ImShareBackgroundQueue.shared.discardFailed()
             }
         }
         .task {
             guard loading else { return }
             do {
-                payloads = try await ShareLoader.load(items)
+                let loaded = try await ShareLoader.load(items)
+                let bytes: Int64 = await Task.detached(priority: .userInitiated) {
+                    loaded.reduce(0) { $0 + $1.byteSize }
+                }.value
+                payloads = loaded
+                payloadBytes = bytes
             } catch {
                 self.error = error.localizedDescription
             }
@@ -274,7 +293,7 @@ private struct ShareRoot: View {
     }
 
     private var pendingBytes: Int64 {
-        payloads.reduce(0) { $0 + $1.byteSize } + Int64(note.utf8.count)
+        payloadBytes + Int64(note.utf8.count)
     }
 
     private static func byteText(_ bytes: Int64) -> String {
@@ -290,57 +309,79 @@ private struct ShareRoot: View {
         sending = true
         error = ""
         notice = ""
+        let currentPayloads = payloads
+        let currentDestination = destination
+        let currentIntent = intent
+        let currentNote = note
+        let currentSelected = selected.sorted()
         Task {
             let sessionIdentifier = ImShareBackgroundQueue.makeSessionIdentifier()
             var enqueued = false
             do {
-                guard !payloads.isEmpty || !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                guard !currentPayloads.isEmpty || currentNote.contains(where: { !$0.isWhitespace }) else {
                     throw ShareError.message("没有可发送的内容")
                 }
-                var order = 0
-                if destination == .assistant {
-                    for payload in payloads {
-                        try ShareSender.enqueueAssistant(
-                            payload, intent: intent, note: note, snapshot: snapshot,
-                            sessionIdentifier: sessionIdentifier, order: order
-                        )
-                        order += 1
-                        enqueued = true
-                    }
-                } else {
-                    guard !selected.isEmpty else { throw ShareError.message("请选择聊天联系人") }
-                    for peer in selected.sorted() {
-                        for payload in payloads {
-                            try ShareSender.enqueue(
-                                payload, to: peer, snapshot: snapshot,
-                                sessionIdentifier: sessionIdentifier, order: order
-                            )
-                            order += 1
-                            enqueued = true
+                // 文件复制、JSON 编码与跨进程 flock 落盘全部移到后台线程，避免点发送瞬间主线程卡顿。
+                enqueued = try await Task.detached(priority: .userInitiated) {
+                    var didEnqueue = false
+                    var order = 0
+                    do {
+                        if currentDestination == .assistant {
+                            for payload in currentPayloads {
+                                try ShareSender.enqueueAssistant(
+                                    payload, intent: currentIntent, note: currentNote, snapshot: snapshot,
+                                    sessionIdentifier: sessionIdentifier, order: order
+                                )
+                                order += 1
+                                didEnqueue = true
+                            }
+                        } else {
+                            guard !currentSelected.isEmpty else { throw ShareError.message("请选择聊天联系人") }
+                            let trimmedNote = currentNote.trimmingCharacters(in: .whitespacesAndNewlines)
+                            for peer in currentSelected {
+                                for payload in currentPayloads {
+                                    try ShareSender.enqueue(
+                                        payload, to: peer, snapshot: snapshot,
+                                        sessionIdentifier: sessionIdentifier, order: order
+                                    )
+                                    order += 1
+                                    didEnqueue = true
+                                }
+                                if !trimmedNote.isEmpty {
+                                    try ShareSender.enqueue(
+                                        .text(trimmedNote), to: peer, snapshot: snapshot,
+                                        sessionIdentifier: sessionIdentifier, order: order
+                                    )
+                                    order += 1
+                                    didEnqueue = true
+                                }
+                            }
                         }
-                    let text = note.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !text.isEmpty {
-                        try ShareSender.enqueue(
-                            .text(text), to: peer, snapshot: snapshot,
-                            sessionIdentifier: sessionIdentifier, order: order
-                        )
-                        order += 1
-                        enqueued = true
+                        return didEnqueue
+                    } catch {
+                        if didEnqueue {
+                            ImShareBackgroundQueue.shared.discardUnstartedBatch(sessionIdentifier)
+                        }
+                        throw error
                     }
-                    }
-                }
+                }.value
                 try await activateBatch(sessionIdentifier)
                 enqueued = false
-                ShareLoader.removePayloadFiles(payloads)
+                await Task.detached(priority: .utility) {
+                    ShareLoader.removePayloadFiles(currentPayloads)
+                }.value
                 notice = "已加入后台发送队列"
                 sending = false
                 try? await Task.sleep(for: .milliseconds(700))
                 complete()
             } catch let sendError {
-                if enqueued {
-                    ImShareBackgroundQueue.shared.discardUnstartedBatch(sessionIdentifier)
-                }
-                ShareLoader.removePayloadFiles(payloads)
+                let shouldDiscard = enqueued
+                await Task.detached(priority: .utility) {
+                    if shouldDiscard {
+                        ImShareBackgroundQueue.shared.discardUnstartedBatch(sessionIdentifier)
+                    }
+                    ShareLoader.removePayloadFiles(currentPayloads)
+                }.value
                 error = sendError.localizedDescription
                 sending = false
             }
@@ -356,7 +397,7 @@ private struct ShareRoot: View {
     }
 }
 
-private enum SharePayload {
+private enum SharePayload: Sendable {
     case image(URL, mime: String, width: Int, height: Int)
     case file(URL, name: String, mime: String)
     case link(URL, title: String?, icon: URL?)

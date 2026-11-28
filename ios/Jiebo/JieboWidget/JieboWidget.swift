@@ -98,9 +98,18 @@ private struct JieboWidgetFamilyLayout: View {
     /// 根上捕获的真实档位。各尺寸的 dynamicTypeSize 钳制包在内容外，改不到这个值。
     let dynamicTypeSize: DynamicTypeSize
 
-    private var todayURL: URL { URL(string: "jiebo://assistant/today")! }
-    private var inboxURL: URL { URL(string: "jiebo://assistant/inbox")! }
-    private var todoURL: URL { URL(string: "jiebo://assistant/todo")! }
+    private static let todayURL = URL(string: "jiebo://assistant/today")!
+    private static let inboxURL = URL(string: "jiebo://assistant/inbox")!
+    private static let todoURL = URL(string: "jiebo://assistant/todo")!
+    private static let gregorianCalendar: Calendar = {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .autoupdatingCurrent
+        return cal
+    }()
+
+    private var todayURL: URL { Self.todayURL }
+    private var inboxURL: URL { Self.inboxURL }
+    private var todoURL: URL { Self.todoURL }
 
     var body: some View {
         Group {
@@ -562,9 +571,8 @@ private struct JieboWidgetFamilyLayout: View {
         if hours < 24 { return "\(hours)小时前" }
         let days = Int(elapsed / 86_400)
         if days < 7 { return "\(days)天前" }
-        let calendar = Calendar(identifier: .gregorian)
-        let month = calendar.component(.month, from: entry.snapshot.updatedAt)
-        let day = calendar.component(.day, from: entry.snapshot.updatedAt)
+        let month = Self.gregorianCalendar.component(.month, from: entry.snapshot.updatedAt)
+        let day = Self.gregorianCalendar.component(.day, from: entry.snapshot.updatedAt)
         return "\(month)月\(day)日"
     }
 }
@@ -576,10 +584,10 @@ private enum Sticker {
     static let text = Color(uiColor: .label)
     static let dim = Color(uiColor: .secondaryLabel)
     static let cyan = Color(uiColor: .label)
+    private static let magentaDarkUI = UIColor(red: 1, green: 0.451, blue: 0.341, alpha: 1)
+    private static let magentaLightUI = UIColor(red: 0.784, green: 0.243, blue: 0.133, alpha: 1)
     static let magenta = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 1, green: 0.451, blue: 0.341, alpha: 1)
-            : UIColor(red: 0.784, green: 0.243, blue: 0.133, alpha: 1)
+        traits.userInterfaceStyle == .dark ? magentaDarkUI : magentaLightUI
     })
     static let line = Color(uiColor: .label)
 

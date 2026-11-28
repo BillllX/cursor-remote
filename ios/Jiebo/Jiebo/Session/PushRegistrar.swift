@@ -79,16 +79,27 @@ final class PushRegistrar {
     static let shared = PushRegistrar()
     static let assistantNotificationsKey = "jiebo.assistantNotificationsEnabled"
 
+    private struct ReportedKey: Equatable {
+        let tenantId: String
+        let token: String
+        let environment: String
+        let bundleId: String
+        let assistantEnabled: Bool
+    }
+
     private weak var store: ChatStore?
     private weak var im: ImStore?
     private var started = false
+    private var isForeground = true
     private var loopTask: Task<Void, Never>?
+    private var loopGeneration: UInt64 = 0
+    private var lifecycleObservers: [NSObjectProtocol] = []
     /// 已向系统请求过授权（授权弹窗只在登录后第一次出现）
     private var authRequested = false
     private var launchPresentationActive = true
     private var deviceToken: String?
-    /// 上一次成功发出的订阅指纹（租户 + token + 环境 + bundleId）；相同则不重复发
-    private var reportedKey: String?
+    /// 上一次成功发出的订阅指纹（租户 + token + 环境 + bundleId + 助理开关）；相同则不重复发
+    private var reportedKey: ReportedKey?
     /// 上一次设置的应用角标数
     private var appliedBadge: Int?
     /// 正在退订、马上登出：不再上报订阅、不再改角标
@@ -96,6 +107,12 @@ final class PushRegistrar {
     private var lastAssistantRequest: Date?
 
     private init() {}
+
+    deinit {
+        for observer in lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
 
     private static var environment: String {
         #if DEBUG
@@ -122,12 +139,71 @@ final class PushRegistrar {
         self.im = im
         guard !started else { return }
         started = true
+        isForeground = UIApplication.shared.applicationState != .background
+        installLifecycleObservers()
+        startLoopIfNeeded()
+    }
+
+    private func installLifecycleObservers() {
+        guard lifecycleObservers.isEmpty else { return }
+        let center = NotificationCenter.default
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isForeground = false
+                self.stopLoop()
+            }
+        })
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isForeground = true
+                self.syncIfPossible()
+                self.startLoopIfNeeded()
+            }
+        })
+    }
+
+    private func startLoopIfNeeded() {
+        guard started, isForeground, loopTask == nil else { return }
+        loopGeneration &+= 1
+        let generation = loopGeneration
         loopTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                self?.syncIfPossible()
-                try? await Task.sleep(for: .seconds(2))
+                guard let self, self.loopGeneration == generation, self.isForeground else { break }
+                self.syncIfPossible()
+                let interval: Duration = self.isSettled ? .seconds(8) : .seconds(2)
+                try? await Task.sleep(for: interval)
+            }
+            if let self, self.loopGeneration == generation {
+                self.loopTask = nil
             }
         }
+    }
+
+    private func stopLoop() {
+        loopGeneration &+= 1
+        loopTask?.cancel()
+        loopTask = nil
+    }
+
+    /// 订阅已上报且核心列表与角标口径已收敛时放宽巡检周期，减少主线程定时空转。
+    private var isSettled: Bool {
+        guard let store, store.unlocked, reportedKey != nil,
+              store.workspaceAgentsLoaded, im?.listLoaded == true
+        else { return false }
+        if Self.assistantNotificationsEnabled && !store.assistantNetworkConfirmed {
+            return false
+        }
+        return true
     }
 
     func launchPresentationEnded() {
@@ -240,13 +316,13 @@ final class PushRegistrar {
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return }
         let environment = Self.environment
         let assistant = Self.assistantNotificationsEnabled
-        let key = [
-            store.tenantId,
-            token,
-            environment,
-            bundleId,
-            assistant ? "assistant+im+workspace" : "im+workspace",
-        ].joined(separator: "|")
+        let key = ReportedKey(
+            tenantId: store.tenantId,
+            token: token,
+            environment: environment,
+            bundleId: bundleId,
+            assistantEnabled: assistant
+        )
         guard key != reportedKey else { return }
         reportedKey = key
         store.assistantOp(

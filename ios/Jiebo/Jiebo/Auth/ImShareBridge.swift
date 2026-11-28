@@ -9,13 +9,13 @@ enum ImShareBridge {
     static let appGroup = "group.ai.jiebo.ipad"
     static let snapshotName = "im-share-directory.json"
 
-    struct Person: Codable, Hashable, Identifiable {
+    struct Person: Codable, Hashable, Identifiable, Sendable {
         var id: String
         var nickname: String
         var recentAt: Double
     }
 
-    struct Snapshot: Codable {
+    struct Snapshot: Codable, Sendable {
         var tenant: String
         var sendURL: String
         var uploadSendURL: String
@@ -52,7 +52,10 @@ enum ImShareBridge {
         guard url.host?.lowercased().hasSuffix("maps.apple.com") == true,
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
-        let values = Dictionary(uniqueKeysWithValues: (parts.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        let values = Dictionary(
+            (parts.queryItems ?? []).map { ($0.name, $0.value ?? "") },
+            uniquingKeysWith: { first, _ in first }
+        )
         let raw = values["ll"] ?? values["coordinate"] ?? ""
         let pair = raw.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
         guard pair.count == 2, (-90 ... 90).contains(pair[0]), (-180 ... 180).contains(pair[1]) else { return nil }
@@ -886,12 +889,14 @@ final class ImShareBackgroundQueue: NSObject, URLSessionDelegate, URLSessionTask
         let files = try FileManager.default.contentsOfDirectory(
             at: jobsDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
         )
+        let decoder = JSONDecoder()
         var jobs: [Job] = []
+        jobs.reserveCapacity(files.count)
         for file in files {
             let name = file.lastPathComponent
             guard name.hasPrefix("job-"), name.hasSuffix(".json") else { continue }
             let data = try Data(contentsOf: file)
-            guard let job = try? JSONDecoder().decode(Job.self, from: data),
+            guard let job = try? decoder.decode(Job.self, from: data),
                   name == "job-\(job.id).json",
                   let identifier = job.sessionIdentifier,
                   Self.isValidSessionIdentifier(identifier)
