@@ -284,12 +284,12 @@ enum DeviceRequestValidator {
     }
 
     private static let isoLock = NSLock()
-    nonisolated(unsafe) private static let isoWithFraction: ISO8601DateFormatter = {
+    private static let isoWithFraction: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
-    nonisolated(unsafe) private static let isoRegular: ISO8601DateFormatter = {
+    private static let isoRegular: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter

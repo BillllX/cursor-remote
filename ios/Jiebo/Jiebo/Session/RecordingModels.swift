@@ -505,18 +505,18 @@ enum RecordingFormatting {
     }
 
     private static let formatterLock = NSLock()
-    nonisolated(unsafe) private static let byteFormatter: ByteCountFormatter = {
+    private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useKB, .useMB, .useGB]
         formatter.countStyle = .file
         return formatter
     }()
-    nonisolated(unsafe) private static let isoFractionalParser: ISO8601DateFormatter = {
+    private static let isoFractionalParser: ISO8601DateFormatter = {
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return parser
     }()
-    nonisolated(unsafe) private static let isoPlainFormatter = ISO8601DateFormatter()
+    private static let isoPlainFormatter = ISO8601DateFormatter()
     private static let shortZhDateFormatter: DateFormatter = {
         let df = DateFormatter()
         df.locale = Locale(identifier: "zh_CN")

@@ -231,7 +231,7 @@ actor AppleEventKitService {
     }
 
     private static let isoLock = NSLock()
-    nonisolated(unsafe) private static let isoFormatter = ISO8601DateFormatter()
+    private static let isoFormatter = ISO8601DateFormatter()
 
     private static func iso(_ date: Date) -> String {
         isoLock.lock()

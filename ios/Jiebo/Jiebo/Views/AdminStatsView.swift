@@ -224,7 +224,7 @@ struct AdminStatsView: View {
     }
 
     private static let cycleFormatterLock = NSLock()
-    nonisolated(unsafe) private static let cycleFormatter: DateFormatter = {
+    private static let cycleFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "zh_CN")
         fmt.timeZone = TimeZone(secondsFromGMT: 0)
