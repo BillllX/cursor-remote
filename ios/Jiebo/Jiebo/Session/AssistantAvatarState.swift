@@ -38,7 +38,13 @@ enum AssistantAvatarPhase: String, CaseIterable {
     }
 
     static func isSuccessful(_ status: String?) -> Bool {
-        ["completed", "finished", "succeeded", "success", "done"].contains(status?.lowercased() ?? "")
+        guard let raw = status, !raw.isEmpty else { return false }
+        switch raw.lowercased() {
+        case "completed", "finished", "succeeded", "success", "done":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -94,8 +100,20 @@ struct AssistantAvatarState {
         guard connected else { return .offline }
         let status = turnSnapshot.status?.lowercased() ?? ""
         let succeeded = AssistantAvatarPhase.isSuccessful(status)
-        let failed = ["error", "failed", "failure"].contains(status)
-        let terminal = succeeded || failed || ["cancelled", "canceled", "stopped"].contains(status)
+        let failed: Bool
+        let cancelled: Bool
+        switch status {
+        case "error", "failed", "failure":
+            failed = true
+            cancelled = false
+        case "cancelled", "canceled", "stopped":
+            failed = false
+            cancelled = true
+        default:
+            failed = false
+            cancelled = false
+        }
+        let terminal = succeeded || failed || cancelled
         if hasApproval || (!terminal && turnSnapshot.hasPendingTool) { return .approval }
         if hasDelegation || (!terminal && turnSnapshot.hasRunningTool) {
             return .executing

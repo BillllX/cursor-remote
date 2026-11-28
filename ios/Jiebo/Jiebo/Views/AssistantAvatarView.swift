@@ -12,7 +12,7 @@ extension ChatStore {
             hasApproval: assistantState?.approvals.contains { $0.expiresAt <= 0 || $0.expiresAt > now } == true
                 || assistantState?.draftCards?.contains { $0.status == "waiting_user" && ($0.expiresAt <= 0 || $0.expiresAt > now) } == true,
             hasDelegation: !runningDelegations.isEmpty,
-            hasDraft: !draft(for: chatId).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            hasDraft: draft(for: chatId).contains { !$0.isWhitespace && !$0.isNewline }
         )
     }
 }
@@ -96,12 +96,32 @@ struct AssistantAvatarView: View {
         }
     }
 
-    private var completionKey: String {
-        "\(phase.rawValue):\(displayedPhase.rawValue):\(completionEvent)"
+    private struct CompletionKey: Equatable {
+        let phase: AssistantAvatarPhase
+        let displayedPhase: AssistantAvatarPhase
+        let completionEvent: UInt64
     }
 
-    private var motionKey: String {
-        "\(displayedPhase.rawValue):\(reduceMotion):\(homeActive):\(scenePhase == .active):\(JieboTheme.shared.palette.rawValue)"
+    private struct MotionKey: Equatable {
+        let displayedPhase: AssistantAvatarPhase
+        let reduceMotion: Bool
+        let homeActive: Bool
+        let isActiveScene: Bool
+        let palette: JieboPalette
+    }
+
+    private var completionKey: CompletionKey {
+        CompletionKey(phase: phase, displayedPhase: displayedPhase, completionEvent: completionEvent)
+    }
+
+    private var motionKey: MotionKey {
+        MotionKey(
+            displayedPhase: displayedPhase,
+            reduceMotion: reduceMotion,
+            homeActive: homeActive,
+            isActiveScene: scenePhase == .active,
+            palette: JieboTheme.shared.palette
+        )
     }
 
     private var motionAnimation: Animation {
@@ -193,6 +213,11 @@ struct StickerRobotFace: View {
         }
     }
 
+    private struct IdleBlinkKey: Equatable {
+        let isIdle: Bool
+        let activeMotionAllowed: Bool
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let side = min(proxy.size.width, proxy.size.height)
@@ -220,7 +245,7 @@ struct StickerRobotFace: View {
         .onChange(of: homeActive) { _, active in
             if active { startedAt = Date() } else { idleBlinking = false }
         }
-        .task(id: "\(phase == .idle):\(activeMotionAllowed)") {
+        .task(id: IdleBlinkKey(isIdle: phase == .idle, activeMotionAllowed: activeMotionAllowed)) {
             idleBlinking = false
             guard phase == .idle, activeMotionAllowed else { return }
             while !Task.isCancelled {

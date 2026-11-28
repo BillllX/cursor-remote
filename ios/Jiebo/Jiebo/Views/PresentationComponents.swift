@@ -53,11 +53,25 @@ struct AssistantLoadingView: View {
     @State private var slow = false
     @State private var retry = 0
 
+    private struct LoadingTaskKey: Equatable {
+        let unlocked: Bool
+        let connected: Bool
+        let gatewayReady: Bool
+        let active: Bool
+        let retry: Int
+    }
+
     private var offline: Bool { store.linkState == .offline }
     private var waiting: Bool { store.unlocked && !offline }
     private var active: Bool { homeActive && scenePhase == .active }
-    private var taskKey: String {
-        "\(store.unlocked):\(store.connected):\(store.gatewayReady):\(active):\(retry)"
+    private var taskKey: LoadingTaskKey {
+        LoadingTaskKey(
+            unlocked: store.unlocked,
+            connected: store.connected,
+            gatewayReady: store.gatewayReady,
+            active: active,
+            retry: retry
+        )
     }
     private var headline: String {
         if !store.unlocked { return "登录后查看" }
